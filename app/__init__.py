@@ -1,0 +1,1 @@
+"""Magick AI Cloud package."""

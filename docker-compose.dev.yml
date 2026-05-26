@@ -1,0 +1,165 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: magick_ai_cloud
+      POSTGRES_USER: magick
+      POSTGRES_PASSWORD: magick
+    ports:
+      - "5433:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U magick -d magick_ai_cloud"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    volumes:
+      - cloud-postgres-dev:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6380:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    volumes:
+      - cloud-redis-dev:/data
+
+  proxy:
+    image: nginx:1.27-alpine
+    depends_on:
+      api:
+        condition: service_started
+      frontend:
+        condition: service_started
+    ports:
+      - "8010:8080"
+    volumes:
+      - ./deploy/nginx.dev.conf:/etc/nginx/conf.d/default.conf:ro
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: magick-ai-cloud-api:dev
+    command: uvicorn app.api.main:app --host 0.0.0.0 --port 8000 --reload
+    env_file:
+      - ./.env
+      - ./.env.local
+    environment:
+      MAGICK_CLOUD_ENVIRONMENT: development
+      MAGICK_CLOUD_LOG_LEVEL: DEBUG
+      MAGICK_CLOUD_DATABASE_URL: postgresql+psycopg://magick:magick@postgres:5432/magick_ai_cloud
+      MAGICK_CLOUD_REDIS_URL: redis://redis:6379/0
+      MAGICK_CLOUD_PORTAL_JWT_SECRET: ${MAGICK_CLOUD_PORTAL_JWT_SECRET:-dev-portal-preview-token-32-bytes}
+      MAGICK_CLOUD_RECOGNITION_EVIDENCE_SNAPSHOT_PATH: ${MAGICK_CLOUD_RECOGNITION_EVIDENCE_SNAPSHOT_PATH:-/app/.runtime/recognition-evidence-snapshot.json}
+      MAGICK_CLOUD_RECOGNITION_EVIDENCE_SOURCE_PATH: ${MAGICK_CLOUD_RECOGNITION_EVIDENCE_SOURCE_PATH:-}
+    expose:
+      - "8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - .:/app
+      - ../scripts:/scripts:ro
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: magick-ai-cloud-worker:dev
+    command: python -m app.workers.runtime_queue
+    env_file:
+      - ./.env
+      - ./.env.local
+    environment:
+      MAGICK_CLOUD_ENVIRONMENT: development
+      MAGICK_CLOUD_LOG_LEVEL: DEBUG
+      MAGICK_CLOUD_DATABASE_URL: postgresql+psycopg://magick:magick@postgres:5432/magick_ai_cloud
+      MAGICK_CLOUD_REDIS_URL: redis://redis:6379/0
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - .:/app
+
+  recognition-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: magick-ai-cloud-recognition-worker:dev
+    command: python -m app.workers.recognition_evidence_refresh --daemon
+    env_file:
+      - ./.env
+      - ./.env.local
+    environment:
+      MAGICK_CLOUD_ENVIRONMENT: development
+      MAGICK_CLOUD_LOG_LEVEL: DEBUG
+      MAGICK_CLOUD_DATABASE_URL: postgresql+psycopg://magick:magick@postgres:5432/magick_ai_cloud
+      MAGICK_CLOUD_REDIS_URL: redis://redis:6379/0
+      MAGICK_CLOUD_RECOGNITION_EVIDENCE_WORKER_ENABLED: ${MAGICK_CLOUD_RECOGNITION_EVIDENCE_WORKER_ENABLED:-false}
+      MAGICK_CLOUD_RECOGNITION_EVIDENCE_WORKER_POLL_SECONDS: ${MAGICK_CLOUD_RECOGNITION_EVIDENCE_WORKER_POLL_SECONDS:-3600}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - .:/app
+
+  ops-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: magick-ai-cloud-ops-worker:dev
+    command: python -m app.workers.ops_cadence
+    env_file:
+      - ./.env
+      - ./.env.local
+    environment:
+      MAGICK_CLOUD_ENVIRONMENT: development
+      MAGICK_CLOUD_LOG_LEVEL: DEBUG
+      MAGICK_CLOUD_DATABASE_URL: postgresql+psycopg://magick:magick@postgres:5432/magick_ai_cloud
+      MAGICK_CLOUD_REDIS_URL: redis://redis:6379/0
+      MAGICK_CLOUD_WORKER_HEARTBEAT_INTERVAL_SECONDS: ${MAGICK_CLOUD_WORKER_HEARTBEAT_INTERVAL_SECONDS:-60}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - .:/app
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.dev
+    image: magick-ai-cloud-frontend:dev
+    command: sh -lc "node node_modules/next/dist/bin/next dev --webpack -H 0.0.0.0"
+    env_file:
+      - ./.env
+      - ./.env.local
+    environment:
+      CLOUD_API_BASE_URL: http://api:8000
+      CLOUD_PUBLIC_BASE_URL: ${MAGICK_CLOUD_PORTAL_PUBLIC_BASE_URL:-http://127.0.0.1:8010}
+      NODE_OPTIONS: --max-old-space-size=1536
+      NEXT_TELEMETRY_DISABLED: "1"
+      DISABLE_DEPENDENCY_CHECK: "true"
+    expose:
+      - "3000"
+    volumes:
+      - ./frontend:/app
+      - ./node_modules/.pnpm:/node_modules/.pnpm
+      - /app/.next
+    depends_on:
+      - api
+
+volumes:
+  cloud-postgres-dev:
+  cloud-redis-dev:

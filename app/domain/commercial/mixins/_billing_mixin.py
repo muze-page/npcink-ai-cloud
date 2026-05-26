@@ -1,0 +1,2749 @@
+"""Commercial service: billing, subscription, and plan operations mixin."""
+from __future__ import annotations
+
+import re
+import secrets
+from collections import Counter, defaultdict
+from collections.abc import Callable
+from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
+from urllib.parse import quote, urlsplit
+from uuid import uuid4
+
+from sqlalchemy.orm import Session
+
+from app.adapters.repositories.commercial_repository import CommercialRepository
+from app.core.callback_security import (
+    RuntimeCallbackTargetValidationError,
+    validate_runtime_callback_target,
+)
+from app.core.config import Settings, get_settings
+from app.core.db import get_session
+from app.core.models import (
+    ACCOUNT_MEMBERSHIP_ROLE_USER_ADMIN,
+    ACCOUNT_MEMBERSHIP_STATUS_ACTIVE,
+    ACCOUNT_MEMBERSHIP_STATUS_DISABLED,
+    ACCOUNT_MEMBERSHIP_STATUS_PENDING_INVITE,
+    ACCOUNT_STATUS_ACTIVE,
+    ENTITLEMENT_SNAPSHOT_STATUS_ACTIVE,
+    PLAN_STATUS_ACTIVE,
+    PLAN_VERSION_STATUS_PUBLISHED,
+    PLATFORM_ADMIN_ROLE_PLATFORM_ADMIN,
+    PLATFORM_ADMIN_STATUS_ACTIVE,
+    PLATFORM_IMPERSONATION_STATUS_ACTIVE,
+    PLATFORM_IMPERSONATION_STATUS_ENDED,
+    PORTAL_ACTION_REQUEST_STATUS_ACKNOWLEDGED,
+    PORTAL_ACTION_REQUEST_STATUS_CANCELED,
+    PORTAL_ACTION_REQUEST_STATUS_OPEN,
+    PORTAL_ACTION_REQUEST_STATUS_RESOLVED,
+    PORTAL_LOGIN_CODE_STATUS_CONSUMED,
+    PORTAL_LOGIN_CODE_STATUS_EXPIRED,
+    PORTAL_LOGIN_CODE_STATUS_LOCKED,
+    PORTAL_LOGIN_CODE_STATUS_PENDING,
+    SITE_API_KEY_STATUS_ACTIVE,
+    SITE_API_KEY_STATUS_EXPIRED,
+    SITE_API_KEY_STATUS_REVOKED,
+    SITE_STATUS_ACTIVE,
+    SITE_STATUS_ARCHIVED,
+    SITE_STATUS_PROVISIONING,
+    SITE_STATUS_SUSPENDED,
+    SUBSCRIPTION_STATUS_ACTIVE,
+    SUBSCRIPTION_STATUS_CANCELED,
+    SUBSCRIPTION_STATUS_PAST_DUE,
+    SUBSCRIPTION_STATUS_SUSPENDED,
+    SUBSCRIPTION_STATUS_TRIALING,
+    CommercialDecisionEvent,
+    BillingSnapshot,
+    PlatformImpersonationSession,
+    PortalActionRequest,
+    ProviderCallRecord,
+    RunRecord,
+    ServiceAuditEvent,
+    Site,
+    SiteApiKey,
+    AccountEntitlementSnapshot,
+    AccountSubscription,
+)
+from app.core.security import build_secret_hash
+from app.core.secrets import (
+    encrypt_runtime_terminal_callback_secret,
+    encrypt_site_api_signing_secret,
+)
+from app.domain.commercial.customer_api_keys import expand_api_key_scopes
+from app.domain.commercial.errors import (
+    CommercialNotFoundError,
+    CommercialPermissionError,
+    CommercialValidationError,
+)
+from app.domain.runtime.errors import (
+    RuntimeConcurrencyExceededError,
+    RuntimeEntitlementDeniedError,
+    RuntimeQuotaExceededError,
+    RuntimeSiteInactiveError,
+    RuntimeSiteNotProvisionedError,
+    RuntimeSubscriptionInactiveError,
+)
+
+ALLOWED_ABILITY_FAMILIES = {
+    "text",
+    "vision",
+    "workflow",
+    "automation",
+    "mcp",
+    "openclaw",
+}
+DEFAULT_RUNTIME_ENTITLEMENTS = {
+    "ability_families": ["*"],
+    "channels": ["*"],
+    "execution_kinds": ["*"],
+    "execution_tiers": ["cloud"],
+    "data_classifications": ["*"],
+}
+DEFAULT_RUNTIME_BUDGETS: dict[str, object] = {
+    "max_runs_per_period": 500,
+    "max_tokens_per_period": 2_000_000,
+    "max_cost_per_period": 50.0,
+}
+DEFAULT_RUNTIME_CONCURRENCY: dict[str, object] = {
+    "max_active_runs": 10,
+}
+DEFAULT_RUNTIME_COMMERCIAL_POLICY = {
+    "subscription": {
+        "grace_period_days": 0,
+        "downgrade_policy": {},
+    },
+    "budgets": {
+        "runs": {
+            "grace_requests": 0,
+            "downgrade_policy": {},
+        },
+        "tokens": {
+            "grace_requests": 0,
+            "downgrade_policy": {},
+        },
+        "cost": {
+            "grace_requests": 0,
+            "downgrade_policy": {},
+        },
+    },
+    "reconciliation": {
+        "tolerance": {
+            "runs": 0.0,
+            "provider_calls": 0.0,
+            "tokens_total": 0.0,
+            "cost": 0.0,
+        }
+    },
+}
+SHADOW_PRICING_TARIFF_VERSION = "shadow-pricing-v1"
+SHADOW_PRICING_TARIFF_REGISTRY: dict[str, dict[str, dict[str, float | str]]] = {
+    "ability": {
+        "magick-ai/workflows/generate-post-draft": {
+            "tariff_class": "medium",
+            "base_run_price": 0.08,
+            "per_1k_tokens_price": 0.018,
+        },
+        "workflow/media_nightly_image_optimize": {
+            "tariff_class": "high",
+            "base_run_price": 0.16,
+            "per_1k_tokens_price": 0.024,
+        },
+    },
+    "ability_family": {
+        "text": {
+            "tariff_class": "medium",
+            "base_run_price": 0.05,
+            "per_1k_tokens_price": 0.014,
+        },
+        "vision": {
+            "tariff_class": "high",
+            "base_run_price": 0.18,
+            "per_1k_tokens_price": 0.028,
+        },
+        "workflow": {
+            "tariff_class": "medium",
+            "base_run_price": 0.07,
+            "per_1k_tokens_price": 0.016,
+        },
+        "automation": {
+            "tariff_class": "low",
+            "base_run_price": 0.03,
+            "per_1k_tokens_price": 0.01,
+        },
+        "mcp": {
+            "tariff_class": "medium",
+            "base_run_price": 0.04,
+            "per_1k_tokens_price": 0.012,
+        },
+        "openclaw": {
+            "tariff_class": "high",
+            "base_run_price": 0.12,
+            "per_1k_tokens_price": 0.02,
+        },
+    },
+}
+PLAN_TIER_REGISTRY: dict[str, dict[str, object]] = {
+    "starter": {
+        "tier_id": "starter",
+        "label": "Starter",
+        "package_alias": "Free",
+        "usage_band": "Low-volume single-site hosted usage.",
+        "positioning": "Baseline package for conservative hosted runs, lighter workflow usage, and operator-managed growth.",
+        "monthly_included_points": 500,
+        "budgets_template": {
+            "max_runs_per_period": 500,
+            "max_tokens_per_period": 200_000,
+            "max_cost_per_period": 5.0,
+        },
+        "concurrency_template": {"max_active_runs": 1},
+        "site_limit": 1,
+        "max_batch_items": 0,
+        "automation_enabled": True,
+        "api_enabled": True,
+        "openclaw_enabled": True,
+        "package_operator_note": "Core capabilities stay available across packages. Free remains the most conservative on points, concurrency, batch headroom, and over-limit handling.",
+        "policy_baseline": {
+            "grace_period_days": 0,
+            "downgrade_policy": "Fail closed when cost or token pressure exceeds the period budget.",
+        },
+        "feature_groups": [
+            "Hosted runtime baseline",
+            "Portal usage visibility",
+            "Operator-managed subscription changes",
+        ],
+    },
+    "pro": {
+        "tier_id": "pro",
+        "label": "Pro",
+        "package_alias": "Basic",
+        "usage_band": "Mid-band workflow and automation usage.",
+        "positioning": "General-purpose package for steadier workflow volume, fuller automation usage, and predictable hosted operations.",
+        "monthly_included_points": 10_000,
+        "budgets_template": {
+            "max_runs_per_period": 10_000,
+            "max_tokens_per_period": 2_000_000,
+            "max_cost_per_period": 99.0,
+        },
+        "concurrency_template": {"max_active_runs": 2},
+        "site_limit": 5,
+        "max_batch_items": 10,
+        "automation_enabled": True,
+        "api_enabled": True,
+        "openclaw_enabled": True,
+        "package_operator_note": "Core capabilities stay available across packages. Basic expands points, concurrency, batch headroom, and grace before operator intervention.",
+        "policy_baseline": {
+            "grace_period_days": 3,
+            "downgrade_policy": "Use short grace before downgrading queue-heavy or high-cost usage.",
+        },
+        "feature_groups": [
+            "Hosted runtime + workflow coverage",
+            "Automation-heavy usage",
+            "Operator-led budget follow-up",
+        ],
+    },
+    "agency": {
+        "tier_id": "agency",
+        "label": "Agency",
+        "package_alias": "Bulk",
+        "usage_band": "High-volume multi-site and sustained workflow usage.",
+        "positioning": "High-headroom package for multi-site operators, continuous automation, and materially higher hosted workload.",
+        "monthly_included_points": 50_000,
+        "budgets_template": {
+            "max_runs_per_period": 50_000,
+            "max_tokens_per_period": 10_000_000,
+            "max_cost_per_period": 499.0,
+        },
+        "concurrency_template": {"max_active_runs": 6},
+        "site_limit": 25,
+        "max_batch_items": 100,
+        "automation_enabled": True,
+        "api_enabled": True,
+        "openclaw_enabled": True,
+        "package_operator_note": "Core capabilities stay available across packages. Bulk provides the highest points budget, concurrency, batch headroom, and policy headroom.",
+        "policy_baseline": {
+            "grace_period_days": 7,
+            "downgrade_policy": "Keep operator visibility high while allowing short-lived overage handling before intervention.",
+        },
+        "feature_groups": [
+            "Higher hosted concurrency",
+            "Multi-site commercial headroom",
+            "Sustained workflow and automation operations",
+        ],
+    },
+}
+DEFAULT_PLAN_TIER_ID = "pro"
+DEFAULT_FREE_PLAN_ID = "plan_free"
+DEFAULT_FREE_PLAN_VERSION_ID = "plan_free_v1"
+DEFAULT_FREE_PLAN_KIND = "default_free"
+DEFAULT_FREE_PLAN_SOURCE = "production_default_free_shell_v1"
+DEFAULT_FREE_SUBSCRIPTION_SOURCE = "production_default_free_bind_v1"
+CANONICAL_TIER_PLAN_IDS = {
+    tier_id: (tier_id, f"{tier_id}_v1") for tier_id in PLAN_TIER_REGISTRY
+}
+TOPUP_PACK_CATALOG_REQUEST_KIND = "topup_pack_catalog"
+TOPUP_PACK_OVERLAY_DECISION_PREFIX = "topup_pack_catalog.overlay."
+ALLOWED_TOPUP_PACK_TIERS = {"starter", "pro", "agency"}
+TOPUP_PACK_EDITABLE_FIELDS = {
+    "label",
+    "points_label",
+    "runs_increment",
+    "tokens_increment",
+    "cost_increment",
+    "operator_note",
+    "recommended_for_tiers",
+    "display_order",
+    "active",
+}
+OPERATOR_MANAGED_POINTS_PACK_REGISTRY: dict[str, dict[str, object]] = {
+    "pack_small": {
+        "pack_id": "pack_small",
+        "label": "Small pack",
+        "points_label": "10,000 points equivalent",
+        "points_equivalent": 10_000,
+        "display_order": 1,
+        "recommended_for_tiers": ["starter", "pro"],
+        "active": True,
+        "runs_increment": 10_000,
+        "tokens_increment": 2_000_000,
+        "cost_increment": 99.0,
+        "operator_note": "Use when the current billing period needs basic-tier-sized budget headroom without rebinding the subscription.",
+    },
+    "pack_medium": {
+        "pack_id": "pack_medium",
+        "label": "Medium pack",
+        "points_label": "35,000 points equivalent",
+        "points_equivalent": 35_000,
+        "display_order": 2,
+        "recommended_for_tiers": ["pro", "agency"],
+        "active": True,
+        "runs_increment": 35_000,
+        "tokens_increment": 7_000_000,
+        "cost_increment": 349.0,
+        "operator_note": "Use when sustained workflow pressure needs materially higher current-period headroom before a package review.",
+    },
+    "pack_large": {
+        "pack_id": "pack_large",
+        "label": "Large pack",
+        "points_label": "150,000 points equivalent",
+        "points_equivalent": 150_000,
+        "display_order": 3,
+        "recommended_for_tiers": ["agency"],
+        "active": True,
+        "runs_increment": 150_000,
+        "tokens_increment": 30_000_000,
+        "cost_increment": 1_499.0,
+        "operator_note": "Use when an operator needs a high-headroom current-period top-up without introducing a wallet or self-serve flow.",
+    },
+}
+
+COMMERCIAL_COVERED_SUBSCRIPTION_STATUSES = {
+    SUBSCRIPTION_STATUS_TRIALING,
+    SUBSCRIPTION_STATUS_ACTIVE,
+}
+
+
+def _subscription_counts_as_covered(subscription: object | None) -> bool:
+    if subscription is None:
+        return False
+    status = str(getattr(subscription, "status", "") or "").strip()
+    plan_id = str(getattr(subscription, "plan_id", "") or "").strip()
+    plan_version_id = str(getattr(subscription, "plan_version_id", "") or "").strip()
+    return (
+        status in COMMERCIAL_COVERED_SUBSCRIPTION_STATUSES
+        and bool(plan_id)
+        and bool(plan_version_id)
+    )
+
+
+class CommercialServiceBillingMixin:
+    def upsert_plan(
+        self,
+        *,
+        plan_id: str,
+        name: str,
+        status: str = PLAN_STATUS_ACTIVE,
+        description: str = "",
+        metadata_json: dict[str, object] | None = None,
+        audit_context: ServiceAuditContext | None = None,
+    ) -> dict[str, object]:
+        with get_session(self.database_url) as session:
+            repository = CommercialRepository(session)
+            plan = repository.upsert_plan(
+                plan_id=plan_id,
+                name=name,
+                status=status,
+                description=description,
+                metadata_json=metadata_json,
+            )
+            payload = self._serialize_plan(plan)
+            self._record_service_audit_in_session(
+                repository=repository,
+                audit_context=audit_context,
+                event_kind="plan.upsert",
+                outcome="succeeded",
+                plan_id=plan.plan_id,
+                scope_kind="plan",
+                scope_id=plan.plan_id,
+                payload_json=payload,
+            )
+            session.commit()
+            return payload
+
+    def publish_plan_version(
+        self,
+        *,
+        plan_id: str,
+        plan_version_id: str,
+        version_label: str,
+        status: str = PLAN_VERSION_STATUS_PUBLISHED,
+        currency: str = "USD",
+        entitlements_json: dict[str, object] | None = None,
+        budgets_json: dict[str, object] | None = None,
+        concurrency_json: dict[str, object] | None = None,
+        policy_json: dict[str, object] | None = None,
+        metadata_json: dict[str, object] | None = None,
+        audit_context: ServiceAuditContext | None = None,
+    ) -> dict[str, object]:
+        with get_session(self.database_url) as session:
+            repository = CommercialRepository(session)
+            if repository.get_plan(plan_id) is None:
+                raise CommercialNotFoundError(
+                    "service.plan_not_found",
+                    f"plan '{plan_id}' was not found",
+                )
+            plan_version = repository.upsert_plan_version(
+                plan_version_id=plan_version_id,
+                plan_id=plan_id,
+                version_label=version_label,
+                status=status,
+                currency=currency or "USD",
+                entitlements_json=self._normalize_entitlements(entitlements_json),
+                budgets_json=self._normalize_budgets(budgets_json),
+                concurrency_json=self._normalize_concurrency(concurrency_json),
+                policy_json=self._normalize_commercial_policy(policy_json),
+                metadata_json=metadata_json,
+            )
+            payload = self._serialize_plan_version(plan_version)
+            self._record_service_audit_in_session(
+                repository=repository,
+                audit_context=audit_context,
+                event_kind="plan_version.publish",
+                outcome="succeeded",
+                plan_id=plan_id,
+                plan_version_id=plan_version.plan_version_id,
+                scope_kind="plan_version",
+                scope_id=plan_version.plan_version_id,
+                payload_json=payload,
+            )
+            session.commit()
+            return payload
+
+    def rebuild_billing_snapshot(
+        self,
+        site_id: str,
+        *,
+        audit_context: ServiceAuditContext | None = None,
+    ) -> dict[str, object]:
+        with get_session(self.database_url) as session:
+            repository = CommercialRepository(session)
+            site = repository.get_site(site_id)
+            if site is None:
+                raise CommercialNotFoundError(
+                    "service.site_not_found",
+                    f"site '{site_id}' was not found",
+                )
+            subscription = repository.get_latest_account_subscription(site.account_id or "")
+            if subscription is None:
+                raise CommercialNotFoundError(
+                    "service.subscription_not_found",
+                    f"no subscription was found for site '{site_id}'",
+                )
+            period_start_at, period_end_at = self._resolve_period(subscription, self.now_factory())
+            snapshot = self._upsert_current_period_billing_snapshot_in_session(
+                repository=repository,
+                site_id=site_id,
+                subscription=subscription,
+                period_start_at=period_start_at,
+                period_end_at=period_end_at,
+            )
+            payload = self._serialize_billing_snapshot(snapshot)
+            self._record_service_audit_in_session(
+                repository=repository,
+                audit_context=audit_context,
+                event_kind="billing_snapshot.rebuild",
+                outcome="succeeded",
+                account_id=subscription.account_id,
+                site_id=site_id,
+                subscription_id=subscription.subscription_id,
+                plan_version_id=subscription.plan_version_id,
+                scope_kind="billing_snapshot",
+                scope_id=snapshot.snapshot_id,
+                payload_json=payload,
+            )
+            session.commit()
+            return payload
+
+    def list_billing_snapshots(self, site_id: str) -> dict[str, object]:
+        with get_session(self.database_url) as session:
+            repository = CommercialRepository(session)
+            if repository.get_site(site_id) is None:
+                raise CommercialNotFoundError(
+                    "service.site_not_found",
+                    f"site '{site_id}' was not found",
+                )
+            snapshots = repository.list_billing_snapshots(site_id)
+            return {
+                "site_id": site_id,
+                "items": [self._serialize_billing_snapshot(item) for item in snapshots],
+            }
+
+    def inspect_commercial_policy(self, site_id: str) -> dict[str, object]:
+        now = self.now_factory()
+        with get_session(self.database_url) as session:
+            repository = CommercialRepository(session)
+            site = repository.get_site(site_id)
+            if site is None:
+                raise CommercialNotFoundError(
+                    "service.site_not_found",
+                    f"site '{site_id}' was not found",
+                )
+
+            subscription = repository.get_latest_account_subscription(site.account_id or "")
+            snapshot = repository.get_active_entitlement_snapshot(
+                site.account_id or "",
+                subscription_id=subscription.subscription_id if subscription else None,
+            )
+            plan_version = (
+                repository.get_plan_version(subscription.plan_version_id)
+                if subscription is not None
+                else None
+            )
+            policy = self._normalize_commercial_policy(
+                snapshot.policy_json
+                if snapshot is not None
+                else getattr(plan_version, "policy_json", None)
+            )
+            period_start_at, period_end_at = self._resolve_period(subscription, now)
+            meter_events = repository.list_usage_meter_events(
+                site_id,
+                subscription_id=subscription.subscription_id if subscription else None,
+                period_start_at=period_start_at,
+                period_end_at=period_end_at,
+                limit=None,
+            )
+            totals = self._aggregate_meter_events(meter_events)
+            budgets = (
+                self._normalize_budgets(snapshot.budgets_json)
+                if snapshot is not None
+                else self._normalize_budgets(
+                    getattr(plan_version, "budgets_json", None)
+                )
+            )
+            budget_state = self._build_budget_policy_state(
+                repository=repository,
+                subscription=subscription,
+                policy=policy,
+                budgets=budgets,
+                totals=totals,
+                period_start_at=period_start_at,
+            )
+            batch_limits = self._resolve_runtime_batch_limits(
+                snapshot=snapshot,
+                plan_version=plan_version,
+            )
+
+            return {
+                "site_id": site_id,
+                "generated_at": self._serialize_datetime(now),
+                "site": self._serialize_site(site),
+                "subscription": (
+                    self._serialize_subscription(subscription) if subscription else None
+                ),
+                "plan_version": (
+                    self._serialize_plan_version(plan_version) if plan_version else None
+                ),
+                "entitlement_snapshot": (
+                    self._serialize_entitlement_snapshot(snapshot) if snapshot else None
+                ),
+                "policy": policy,
+                "period_start_at": self._serialize_datetime(period_start_at),
+                "period_end_at": self._serialize_datetime(period_end_at),
+                "usage_totals": totals,
+                "batch_limits": batch_limits,
+                "subscription_grace": self._build_subscription_grace_state(
+                    subscription=subscription,
+                    policy=policy,
+                    period_end_at=period_end_at,
+                    now=now,
+                ),
+                "budget_state": budget_state,
+            }
+
+    def reconcile_billing_snapshot(self, site_id: str) -> dict[str, object]:
+        now = self.now_factory()
+        with get_session(self.database_url) as session:
+            repository = CommercialRepository(session)
+            site = repository.get_site(site_id)
+            if site is None:
+                raise CommercialNotFoundError(
+                    "service.site_not_found",
+                    f"site '{site_id}' was not found",
+                )
+
+            subscription = repository.get_latest_account_subscription(site.account_id or "")
+            if subscription is None:
+                raise CommercialNotFoundError(
+                    "service.subscription_not_found",
+                    f"no subscription was found for site '{site_id}'",
+                )
+
+            period_start_at, period_end_at = self._resolve_period(subscription, now)
+            meter_events = repository.list_usage_meter_events(
+                site_id,
+                subscription_id=subscription.subscription_id,
+                period_start_at=period_start_at,
+                period_end_at=period_end_at,
+                limit=None,
+            )
+            ledger_totals = self._aggregate_meter_events(meter_events)
+            snapshots = repository.list_billing_snapshots(site_id)
+            current_snapshot = next(
+                (
+                    item
+                    for item in snapshots
+                    if item.subscription_id == subscription.subscription_id
+                    and self._normalize_datetime(item.period_start_at) == period_start_at
+                    and self._normalize_datetime(item.period_end_at) == period_end_at
+                ),
+                None,
+            )
+            snapshot_payload = (
+                self._serialize_billing_snapshot(current_snapshot) if current_snapshot else None
+            )
+            snapshot_totals = (
+                current_snapshot.totals_json if current_snapshot is not None else {}
+            )
+            snapshot = repository.get_active_entitlement_snapshot(
+                site.account_id or "",
+                subscription_id=subscription.subscription_id,
+            )
+            policy = self._normalize_commercial_policy(
+                snapshot.policy_json if snapshot is not None else None
+            )
+            tolerance = self._normalize_reconciliation_tolerance(
+                policy.get("reconciliation") if isinstance(policy, dict) else None
+            )
+            mismatch = self._build_billing_mismatch(
+                ledger_totals=ledger_totals,
+                snapshot_totals=snapshot_totals if isinstance(snapshot_totals, dict) else {},
+                tolerance=tolerance,
+                snapshot_present=current_snapshot is not None,
+            )
+            return {
+                "site_id": site_id,
+                "subscription_id": subscription.subscription_id,
+                "plan_version_id": subscription.plan_version_id,
+                "period_start_at": self._serialize_datetime(period_start_at),
+                "period_end_at": self._serialize_datetime(period_end_at),
+                "ledger_totals": ledger_totals,
+                "snapshot": snapshot_payload,
+                "reconciliation": mismatch,
+            }
+
+    def list_operator_managed_points_packs(
+        self,
+        *,
+        repository: CommercialRepository | None = None,
+    ) -> list[dict[str, object]]:
+        def _normalize_recommended_tiers(value: object) -> list[str]:
+            if not isinstance(value, (list, tuple, set)):
+                return []
+            return [str(item).strip() for item in value if str(item).strip()]
+
+        def _serialize_pack(
+            template: dict[str, object],
+            overlay: dict[str, object] | None,
+        ) -> dict[str, object]:
+            merged = dict(template)
+            if overlay:
+                merged.update(overlay)
+            return {
+                "pack_id": str(merged.get("pack_id") or ""),
+                "label": str(merged.get("label") or ""),
+                "points_label": str(merged.get("points_label") or ""),
+                "points_equivalent": int(merged.get("points_equivalent") or 0),
+                "display_order": int(merged.get("display_order") or 0),
+                "recommended_for_tiers": _normalize_recommended_tiers(
+                    merged.get("recommended_for_tiers")
+                ),
+                "runs_increment": round(
+                    float(self._coerce_float(merged.get("runs_increment"))),
+                    6,
+                ),
+                "tokens_increment": round(
+                    float(self._coerce_float(merged.get("tokens_increment"))),
+                    6,
+                ),
+                "cost_increment": round(
+                    float(self._coerce_float(merged.get("cost_increment"))),
+                    6,
+                ),
+                "operator_note": str(merged.get("operator_note") or ""),
+                "active": bool(merged.get("active", True)),
+                "has_operator_overlay": bool(overlay),
+                "overlay_updated_at": (
+                    str(overlay.get("overlay_updated_at") or "")
+                    if isinstance(overlay, dict)
+                    else ""
+                ),
+            }
+
+        def _build_items(active_repository: CommercialRepository) -> list[dict[str, object]]:
+            overlays = self._load_operator_managed_points_pack_overlays(active_repository)
+            items = [
+                _serialize_pack(
+                    template,
+                    overlays.get(str(template.get("pack_id") or "")),
+                )
+                for template in OPERATOR_MANAGED_POINTS_PACK_REGISTRY.values()
+            ]
+            return sorted(
+                items,
+                key=lambda item: (
+                    int(item.get("display_order") or 0),
+                    str(item.get("pack_id") or ""),
+                ),
+            )
+
+        if repository is not None:
+            return _build_items(repository)
+        with get_session(self.database_url) as session:
+            return _build_items(CommercialRepository(session))
+
+    def list_admin_topup_packs(self) -> dict[str, object]:
+        with get_session(self.database_url) as session:
+            repository = CommercialRepository(session)
+            items = self.list_operator_managed_points_packs(repository=repository)
+            return {
+                "items": items,
+                "summary": {
+                    "total": len(items),
+                    "active": sum(1 for item in items if bool(item.get("active"))),
+                    "inactive": sum(1 for item in items if not bool(item.get("active"))),
+                },
+            }
+
+    def update_operator_managed_points_pack(
+        self,
+        *,
+        pack_id: str,
+        label: str,
+        points_label: str,
+        runs_increment: float,
+        tokens_increment: float,
+        cost_increment: float,
+        operator_note: str,
+        recommended_for_tiers: list[str],
+        display_order: int,
+        active: bool,
+        audit_context: ServiceAuditContext | None = None,
+    ) -> dict[str, object]:
+        normalized_pack_id = str(pack_id or "").strip()
+        if normalized_pack_id not in OPERATOR_MANAGED_POINTS_PACK_REGISTRY:
+            raise CommercialNotFoundError(
+                "service.topup_pack_not_found",
+                f"operator-managed top-up pack '{normalized_pack_id}' was not found",
+            )
+        normalized_tiers = [
+            tier_id
+            for tier_id in [str(item or "").strip() for item in recommended_for_tiers]
+            if tier_id
+        ]
+        invalid_tiers = [tier_id for tier_id in normalized_tiers if tier_id not in ALLOWED_TOPUP_PACK_TIERS]
+        if invalid_tiers:
+            raise CommercialValidationError(
+                "service.topup_pack_invalid_tiers",
+                f"unsupported top-up pack tiers: {', '.join(invalid_tiers)}",
+            )
+        normalized_display_order = max(1, int(display_order or 0))
+        now = self.now_factory()
+        overlay = {
+            "pack_id": normalized_pack_id,
+            "label": str(label or "").strip() or str(
+                OPERATOR_MANAGED_POINTS_PACK_REGISTRY[normalized_pack_id].get("label") or ""
+            ),
+            "points_label": str(points_label or "").strip() or str(
+                OPERATOR_MANAGED_POINTS_PACK_REGISTRY[normalized_pack_id].get("points_label") or ""
+            ),
+            "runs_increment": round(max(0.0, self._coerce_float(runs_increment)), 6),
+            "tokens_increment": round(max(0.0, self._coerce_float(tokens_increment)), 6),
+            "cost_increment": round(max(0.0, self._coerce_float(cost_increment)), 6),
+            "operator_note": str(operator_note or "").strip(),
+            "recommended_for_tiers": normalized_tiers,
+            "display_order": normalized_display_order,
+            "active": bool(active),
+            "overlay_updated_at": self._serialize_datetime(now),
+        }
+        with get_session(self.database_url) as session:
+            repository = CommercialRepository(session)
+            repository.upsert_operator_managed_topup_pack_overlay(
+                pack_id=normalized_pack_id,
+                label=str(overlay.get("label") or ""),
+                points_label=str(overlay.get("points_label") or ""),
+                runs_increment=self._coerce_float(overlay.get("runs_increment")),
+                tokens_increment=self._coerce_float(overlay.get("tokens_increment")),
+                cost_increment=self._coerce_float(overlay.get("cost_increment")),
+                operator_note=str(overlay.get("operator_note") or ""),
+                recommended_for_tiers_json=list(overlay.get("recommended_for_tiers") or []),
+                display_order=int(overlay.get("display_order") or 1),
+                active=bool(overlay.get("active", True)),
+                updated_at=now,
+            )
+            self._record_commercial_decision_in_session(
+                repository=repository,
+                account_id=None,
+                site_id=None,
+                subscription_id=None,
+                plan_version_id=None,
+                run_id=None,
+                request_kind=TOPUP_PACK_CATALOG_REQUEST_KIND,
+                decision="allow",
+                decision_code=f"{TOPUP_PACK_OVERLAY_DECISION_PREFIX}{normalized_pack_id}",
+                ability_family=None,
+                channel=None,
+                execution_kind=None,
+                execution_tier=None,
+                data_classification=None,
+                trace_id=audit_context.trace_id if audit_context else None,
+                idempotency_key=audit_context.idempotency_key if audit_context else None,
+                payload_json={"pack_id": normalized_pack_id, "overlay": overlay},
+            )
+            item = next(
+                (
+                    pack
+                    for pack in self.list_operator_managed_points_packs(repository=repository)
+                    if str(pack.get("pack_id") or "") == normalized_pack_id
+                ),
+                None,
+            )
+            payload = {
+                "pack": item,
+                "catalog_summary": {
+                    "total": 3,
+                    "active": sum(
+                        1
+                        for pack in self.list_operator_managed_points_packs(repository=repository)
+                        if bool(pack.get("active"))
+                    ),
+                },
+            }
+            self._record_service_audit_in_session(
+                repository=repository,
+                audit_context=audit_context,
+                event_kind="topup_pack.update",
+                outcome="succeeded",
+                scope_kind="topup_pack",
+                scope_id=normalized_pack_id,
+                payload_json=payload,
+            )
+            session.commit()
+            return payload
+
+    def apply_operator_managed_subscription_topup(
+        self,
+        *,
+        subscription_id: str,
+        pack_id: str = "",
+        runs_increment: float = 0.0,
+        tokens_increment: float = 0.0,
+        cost_increment: float = 0.0,
+        reason: str = "",
+        note: str = "",
+        target_period_start_at: datetime | None = None,
+        target_period_end_at: datetime | None = None,
+        audit_context: ServiceAuditContext | None = None,
+    ) -> dict[str, object]:
+        normalized_reason = str(reason or "").strip()
+        normalized_note = str(note or "").strip()
+        if not normalized_reason:
+            raise CommercialValidationError(
+                "service.subscription_topup_reason_required",
+                "operator-managed top-up requires an operator reason",
+            )
+
+        with get_session(self.database_url) as session:
+            repository = CommercialRepository(session)
+            payload = self._apply_operator_managed_subscription_topup_in_session(
+                repository=repository,
+                subscription_id=subscription_id,
+                pack_id=pack_id,
+                runs_increment=runs_increment,
+                tokens_increment=tokens_increment,
+                cost_increment=cost_increment,
+                reason=normalized_reason,
+                note=normalized_note,
+                target_period_start_at=target_period_start_at,
+                target_period_end_at=target_period_end_at,
+                audit_context=audit_context,
+            )
+            session.commit()
+            return payload
+
+    def rebuild_subscription_billing_snapshots(
+        self,
+        subscription_id: str,
+        *,
+        audit_context: ServiceAuditContext | None = None,
+    ) -> dict[str, object]:
+        with get_session(self.database_url) as session:
+            repository = CommercialRepository(session)
+            subscription = repository.get_subscription(subscription_id)
+            if subscription is None:
+                raise CommercialNotFoundError(
+                    "service.subscription_not_found",
+                    f"subscription '{subscription_id}' was not found",
+                )
+            covered_sites = repository.list_sites(account_id=subscription.account_id, limit=None)
+            period_start_at, period_end_at = self._resolve_period(subscription, self.now_factory())
+            refresh = self._refresh_subscription_billing_snapshots_in_session(
+                repository=repository,
+                subscription=subscription,
+                covered_sites=covered_sites,
+                period_start_at=period_start_at,
+                period_end_at=period_end_at,
+            )
+            latest_billing_snapshots = repository.get_latest_billing_snapshots_by_site(
+                site_ids=[str(site.site_id or "") for site in covered_sites if str(site.site_id or "").strip()]
+            )
+            payload = {
+                "subscription": self._serialize_subscription(subscription),
+                "billing_snapshot_refresh": refresh,
+                "billing_snapshot_status": self._build_subscription_billing_snapshot_status(
+                    subscription=subscription,
+                    sites=covered_sites,
+                    latest_billing_snapshots=latest_billing_snapshots,
+                    period_start_at=period_start_at,
+                    period_end_at=period_end_at,
+                ),
+            }
+            self._record_service_audit_in_session(
+                repository=repository,
+                audit_context=audit_context,
+                event_kind="subscription.billing_snapshot.rebuild",
+                outcome="succeeded",
+                account_id=subscription.account_id,
+                subscription_id=subscription.subscription_id,
+                plan_id=subscription.plan_id,
+                plan_version_id=subscription.plan_version_id,
+                scope_kind="subscription",
+                scope_id=subscription.subscription_id,
+                payload_json=payload,
+            )
+            session.commit()
+            return payload
+
+    def list_admin_plans(
+        self,
+        *,
+        status: str | None = None,
+        limit: int = 100,
+    ) -> dict[str, object]:
+        with get_session(self.database_url) as session:
+            repository = CommercialRepository(session)
+            plans = repository.list_plans(status=status, limit=limit)
+            plan_ids = [plan.plan_id for plan in plans]
+            versions = repository.list_plan_versions(limit=None)
+            versions_by_plan: dict[str, list[object]] = defaultdict(list)
+            for version in versions:
+                versions_by_plan[str(version.plan_id or "")].append(version)
+            subscriptions = repository.list_subscriptions(limit=None)
+        subscription_counts = Counter(
+            subscription.plan_id for subscription in subscriptions if subscription.plan_id
+        )
+        active_subscription_counts = Counter(
+            subscription.plan_id
+            for subscription in subscriptions
+            if subscription.plan_id
+            and subscription.status in {
+                SUBSCRIPTION_STATUS_TRIALING,
+                SUBSCRIPTION_STATUS_ACTIVE,
+                SUBSCRIPTION_STATUS_PAST_DUE,
+                SUBSCRIPTION_STATUS_SUSPENDED,
+            }
+        )
+        items = []
+        for plan in plans:
+            plan_id = str(plan.plan_id or "")
+            serialized_versions = [
+                self._serialize_plan_version(version)
+                for version in versions_by_plan.get(plan_id, [])
+            ]
+            tier_summary = self._build_plan_tier_summary(plan, serialized_versions)
+            latest_version = self._select_latest_plan_version(serialized_versions)
+            items.append(
+                {
+                    "plan": self._serialize_plan(plan),
+                    "versions": serialized_versions,
+                    "tier_summary": tier_summary,
+                    "latest_version": latest_version,
+                    "published_version_count": sum(
+                        1
+                        for version in serialized_versions
+                        if str(version.get("status") or "") == PLAN_VERSION_STATUS_PUBLISHED
+                    ),
+                    "subscription_counts": {
+                        "total": int(subscription_counts.get(plan_id, 0)),
+                        "active": int(active_subscription_counts.get(plan_id, 0)),
+                    },
+                }
+            )
+        return {
+            "filters": {"status": status or "", "limit": limit},
+            "tier_templates": self._list_plan_tier_templates(),
+            "items": items,
+        }
+
+    def get_admin_plan(self, plan_id: str) -> dict[str, object]:
+        with get_session(self.database_url) as session:
+            repository = CommercialRepository(session)
+            plan = repository.get_plan(plan_id)
+            if plan is None:
+                raise CommercialNotFoundError(
+                    "service.plan_not_found",
+                    f"plan '{plan_id}' was not found",
+                )
+            versions = repository.list_plan_versions(plan_id=plan_id, limit=None)
+            subscriptions = repository.list_subscriptions(plan_id=plan_id, limit=None)
+            account_ids = [
+                subscription.account_id for subscription in subscriptions if subscription.account_id
+            ]
+            sites = repository.list_sites(account_ids=account_ids, limit=None)
+            sites_by_account: dict[str, list[Site]] = defaultdict(list)
+            for site in sites:
+                if site.account_id:
+                    sites_by_account[site.account_id].append(site)
+            accounts = {
+                account.account_id: account
+                for account in repository.list_accounts(account_ids=account_ids, limit=None)
+            }
+        serialized_versions = [self._serialize_plan_version(version) for version in versions]
+        tier_summary = self._build_plan_tier_summary(plan, serialized_versions)
+        latest_version = self._select_latest_plan_version(serialized_versions)
+        return {
+            "plan": self._serialize_plan(plan),
+            "versions": serialized_versions,
+            "tier_summary": tier_summary,
+            "latest_version": latest_version,
+            "package_fit_cues": self._build_plan_package_fit_cues(
+                tier_summary=tier_summary,
+                latest_version=latest_version,
+            ),
+            "subscriptions": [
+                {
+                    "subscription": self._serialize_subscription(subscription),
+                    "account": (
+                        self._serialize_account(accounts[subscription.account_id])
+                        if subscription.account_id in accounts
+                        else None
+                    ),
+                    "sites": [
+                        self._serialize_site(site)
+                        for site in sites_by_account.get(subscription.account_id, [])
+                    ],
+                    "expiry": self._serialize_expiry_state(subscription),
+                }
+                for subscription in subscriptions
+            ],
+        }
+
+    def list_admin_subscriptions(
+        self,
+        *,
+        status: str | None = None,
+        account_id: str | None = None,
+        plan_id: str | None = None,
+        expires_before: datetime | None = None,
+        limit: int = 100,
+    ) -> dict[str, object]:
+        with get_session(self.database_url) as session:
+            repository = CommercialRepository(session)
+            subscriptions = repository.list_subscriptions(
+                status=status,
+                account_id=account_id,
+                plan_id=plan_id,
+                current_period_end_before=expires_before,
+                limit=limit,
+            )
+            account_ids = [subscription.account_id for subscription in subscriptions]
+            accounts = {
+                account.account_id: account
+                for account in repository.list_accounts(account_ids=account_ids, limit=None)
+            }
+            sites = repository.list_sites(account_ids=account_ids, limit=None)
+            sites_by_account: dict[str, list[Site]] = defaultdict(list)
+            for site in sites:
+                if site.account_id:
+                    sites_by_account[site.account_id].append(site)
+            latest_billing_by_site = repository.get_latest_billing_snapshots_by_site(
+                site_ids=[site.site_id for site in sites],
+            )
+
+        items = []
+        now = self.now_factory()
+        for subscription in subscriptions:
+            account_sites = sites_by_account.get(subscription.account_id, [])
+            period_start_at, period_end_at = self._resolve_period(subscription, now)
+            items.append(
+                {
+                    "subscription": self._serialize_subscription(subscription),
+                    "account": self._serialize_account(accounts[subscription.account_id])
+                    if subscription.account_id in accounts
+                    else None,
+                    "covered_sites": [
+                        self._serialize_site(site)
+                        for site in account_sites
+                    ],
+                    "coverage": self._build_subscription_coverage_summary(
+                        subscription,
+                        site_count=len(account_sites),
+                    ),
+                    "expiry": self._serialize_expiry_state(subscription),
+                    "latest_billing_snapshots": [
+                        self._serialize_billing_snapshot(latest_billing_by_site[site.site_id])
+                        for site in account_sites
+                        if site.site_id in latest_billing_by_site
+                    ],
+                    "billing_snapshot_status": self._build_subscription_billing_snapshot_status(
+                        subscription=subscription,
+                        sites=account_sites,
+                        latest_billing_snapshots=latest_billing_by_site,
+                        period_start_at=period_start_at,
+                        period_end_at=period_end_at,
+                    ),
+                }
+            )
+        return {
+            "filters": {
+                "status": status or "",
+                "account_id": account_id or "",
+                "plan_id": plan_id or "",
+                "expires_before": self._serialize_datetime(expires_before),
+                "limit": limit,
+            },
+            "items": items,
+        }
+
+    def get_admin_subscription(self, subscription_id: str) -> dict[str, object]:
+        with get_session(self.database_url) as session:
+            repository = CommercialRepository(session)
+            subscription = repository.get_subscription(subscription_id)
+            if subscription is None:
+                raise CommercialNotFoundError(
+                    "service.subscription_not_found",
+                    f"subscription '{subscription_id}' was not found",
+                )
+            account = (
+                repository.get_account(subscription.account_id)
+                if subscription.account_id
+                else None
+            )
+            plan = repository.get_plan(subscription.plan_id) if subscription.plan_id else None
+            plan_version = (
+                repository.get_plan_version(subscription.plan_version_id)
+                if subscription.plan_version_id
+                else None
+            )
+            sites = repository.list_sites(account_id=subscription.account_id, limit=None)
+            billing_snapshots = repository.get_latest_billing_snapshots_by_site(
+                site_ids=[site.site_id for site in sites]
+            )
+            snapshot = repository.get_active_entitlement_snapshot(
+                subscription.account_id or "",
+                subscription_id=subscription.subscription_id,
+            )
+            policy = self._normalize_commercial_policy(
+                snapshot.policy_json if snapshot is not None else getattr(plan_version, "policy_json", None)
+            )
+            budgets = (
+                self._normalize_budgets(snapshot.budgets_json)
+                if snapshot is not None
+                else self._normalize_budgets(getattr(plan_version, "budgets_json", None))
+            )
+            now = self.now_factory()
+            period_start_at, period_end_at = self._resolve_period(subscription, now)
+            meter_events = [
+                event
+                for event in repository.list_usage_meter_events_for_admin(
+                    account_ids=[subscription.account_id],
+                    since=period_start_at,
+                    limit=None,
+                )
+                if str(getattr(event, "subscription_id", "") or "") == subscription.subscription_id
+                and (
+                    period_end_at is None
+                    or self._normalize_datetime(getattr(event, "created_at", None)) <= period_end_at
+                )
+            ]
+            usage_totals = self._aggregate_meter_events(meter_events)
+            budget_state = self._build_budget_policy_state(
+                repository=repository,
+                subscription=subscription,
+                policy=policy,
+                budgets=budgets,
+                totals=usage_totals,
+                period_start_at=period_start_at,
+            )
+            topup_summary = self._build_subscription_topup_summary(subscription, repository=repository)
+            site_count = repository.count_sites_by_account(
+                account_ids=[subscription.account_id]
+            ).get(subscription.account_id or "", 0)
+        return {
+            "subscription": self._serialize_subscription(subscription),
+            "expiry": self._serialize_expiry_state(subscription),
+            "account": self._serialize_account(account) if account is not None else None,
+            "covered_sites": [self._serialize_site(site) for site in sites],
+            "plan": self._serialize_plan(plan) if plan is not None else None,
+            "plan_version": (
+                self._serialize_plan_version(plan_version)
+                if plan_version is not None
+                else None
+            ),
+            "latest_billing_snapshots": [
+                self._serialize_billing_snapshot(snapshot)
+                for snapshot in billing_snapshots.values()
+            ],
+            "billing_snapshot_status": self._build_subscription_billing_snapshot_status(
+                subscription=subscription,
+                sites=sites,
+                latest_billing_snapshots=billing_snapshots,
+                period_start_at=period_start_at,
+                period_end_at=period_end_at,
+            ),
+            "coverage": self._build_subscription_coverage_summary(
+                subscription,
+                site_count=site_count,
+                site_limit=int(getattr(snapshot, "site_limit", 0) or 0),
+            ),
+            "commercial_policy": policy,
+            "budget_headroom": self._build_subscription_budget_headroom(
+                plan_version=plan_version,
+                effective_budgets=budgets,
+                topup_summary=topup_summary,
+            ),
+            "budget_state": budget_state,
+            "subscription_grace": self._build_subscription_grace_state(
+                subscription=subscription,
+                policy=policy,
+                period_end_at=period_end_at,
+                now=now,
+            ),
+            "usage_totals": usage_totals,
+            "topup_summary": topup_summary,
+            "topup_packs": self.list_operator_managed_points_packs(repository=repository),
+        }
+
+    def inspect_usage_meter(self, site_id: str, *, limit: int = 50) -> dict[str, object]:
+        with get_session(self.database_url) as session:
+            repository = CommercialRepository(session)
+            site = repository.get_site(site_id)
+            if site is None:
+                raise CommercialNotFoundError(
+                    "service.site_not_found",
+                    f"site '{site_id}' was not found",
+                )
+            subscription = repository.get_latest_account_subscription(site.account_id or "")
+            period_start_at, period_end_at = self._resolve_period(subscription, self.now_factory())
+            events = repository.list_usage_meter_events(
+                site_id,
+                subscription_id=subscription.subscription_id if subscription else None,
+                period_start_at=period_start_at,
+                period_end_at=period_end_at,
+                limit=limit,
+            )
+            totals = self._aggregate_meter_events(events)
+            return {
+                "site_id": site_id,
+                "subscription_id": subscription.subscription_id if subscription else "",
+                "period_start_at": self._serialize_datetime(period_start_at),
+                "period_end_at": self._serialize_datetime(period_end_at),
+                "totals": totals,
+                "items": [self._serialize_meter_event(event) for event in events],
+            }
+
+    def _ensure_plan_free_version_in_session(
+        self,
+        *,
+        repository: CommercialRepository,
+    ) -> tuple[str, str]:
+        tier_id = "starter"
+        baseline = PLAN_TIER_REGISTRY[tier_id]
+        plan_id = DEFAULT_FREE_PLAN_ID
+        plan_version_id = DEFAULT_FREE_PLAN_VERSION_ID
+
+        repository.upsert_plan(
+            plan_id=plan_id,
+            name=str(baseline.get("package_alias") or "Free"),
+            status=PLAN_STATUS_ACTIVE,
+            description=str(baseline.get("positioning") or ""),
+            metadata_json={
+                "tier_id": tier_id,
+                "package_alias": str(baseline.get("package_alias") or "Free"),
+                "plan_kind": DEFAULT_FREE_PLAN_KIND,
+                "source": DEFAULT_FREE_PLAN_SOURCE,
+            },
+        )
+
+        policy_baseline = baseline.get("policy_baseline") or {}
+        repository.upsert_plan_version(
+            plan_version_id=plan_version_id,
+            plan_id=plan_id,
+            version_label="v1",
+            status=PLAN_VERSION_STATUS_PUBLISHED,
+            currency="USD",
+            entitlements_json=DEFAULT_RUNTIME_ENTITLEMENTS,
+            budgets_json=dict(baseline.get("budgets_template") or {}),
+            concurrency_json=dict(baseline.get("concurrency_template") or {}),
+            policy_json={
+                "subscription": {
+                    "grace_period_days": int(policy_baseline.get("grace_period_days") or 0),
+                },
+            },
+            metadata_json={
+                "tier_id": tier_id,
+                "package_alias": str(baseline.get("package_alias") or "Free"),
+                "plan_kind": DEFAULT_FREE_PLAN_KIND,
+                "site_limit": int(baseline.get("site_limit") or 1),
+                "monthly_included_points": int(baseline.get("monthly_included_points") or 0),
+                "max_batch_items": int(baseline.get("max_batch_items") or 0),
+                "automation_enabled": bool(baseline.get("automation_enabled")),
+                "api_enabled": bool(baseline.get("api_enabled")),
+                "openclaw_enabled": bool(baseline.get("openclaw_enabled")),
+                "source": DEFAULT_FREE_PLAN_SOURCE,
+            },
+        )
+        return plan_id, plan_version_id
+
+    def _ensure_plan_tier_version_in_session(
+        self,
+        *,
+        repository: CommercialRepository,
+        tier_id: str,
+    ) -> tuple[str, str]:
+        if tier_id == "starter":
+            return self._ensure_plan_free_version_in_session(repository=repository)
+
+        baseline = PLAN_TIER_REGISTRY.get(tier_id)
+        if baseline is None:
+            raise CommercialNotFoundError(
+                "service.plan_tier_not_found",
+                f"plan tier '{tier_id}' was not found",
+            )
+
+        plan_id, plan_version_id = CANONICAL_TIER_PLAN_IDS[tier_id]
+        policy_baseline = baseline.get("policy_baseline") or {}
+        package_alias = str(baseline.get("package_alias") or baseline.get("label") or tier_id.title())
+
+        repository.upsert_plan(
+            plan_id=plan_id,
+            name=package_alias,
+            status=PLAN_STATUS_ACTIVE,
+            description=str(baseline.get("positioning") or ""),
+            metadata_json={
+                "tier_id": tier_id,
+                "package_alias": package_alias,
+                "source": "canonical_package_shell_v1",
+            },
+        )
+        repository.upsert_plan_version(
+            plan_version_id=plan_version_id,
+            plan_id=plan_id,
+            version_label="v1",
+            status=PLAN_VERSION_STATUS_PUBLISHED,
+            currency="USD",
+            entitlements_json=DEFAULT_RUNTIME_ENTITLEMENTS,
+            budgets_json=dict(baseline.get("budgets_template") or {}),
+            concurrency_json=dict(baseline.get("concurrency_template") or {}),
+            policy_json={
+                "subscription": {
+                    "grace_period_days": int(policy_baseline.get("grace_period_days") or 0),
+                },
+            },
+            metadata_json={
+                "tier_id": tier_id,
+                "package_alias": package_alias,
+                "monthly_included_points": int(baseline.get("monthly_included_points") or 0),
+                "site_limit": int(baseline.get("site_limit") or 1),
+                "max_batch_items": int(baseline.get("max_batch_items") or 0),
+                "automation_enabled": bool(baseline.get("automation_enabled")),
+                "api_enabled": bool(baseline.get("api_enabled")),
+                "openclaw_enabled": bool(baseline.get("openclaw_enabled")),
+                "source": "canonical_package_shell_v1",
+            },
+        )
+        return plan_id, plan_version_id
+
+    def _apply_operator_managed_subscription_topup_in_session(
+        self,
+        *,
+        repository: CommercialRepository,
+        subscription_id: str,
+        pack_id: str = "",
+        runs_increment: float = 0.0,
+        tokens_increment: float = 0.0,
+        cost_increment: float = 0.0,
+        reason: str,
+        note: str = "",
+        target_period_start_at: datetime | None = None,
+        target_period_end_at: datetime | None = None,
+        audit_context: ServiceAuditContext | None = None,
+    ) -> dict[str, object]:
+        now = self.now_factory()
+        selected_pack = self._resolve_operator_managed_points_pack(pack_id, repository=repository)
+        if selected_pack and not bool(selected_pack.get("active", True)):
+            raise CommercialValidationError(
+                "service.subscription_topup_pack_inactive",
+                "operator-managed top-up pack is inactive and cannot be applied",
+            )
+        pack_runs_increment = (
+            self._coerce_float(selected_pack.get("runs_increment")) if selected_pack else 0.0
+        )
+        pack_tokens_increment = (
+            self._coerce_float(selected_pack.get("tokens_increment")) if selected_pack else 0.0
+        )
+        pack_cost_increment = (
+            self._coerce_float(selected_pack.get("cost_increment")) if selected_pack else 0.0
+        )
+        normalized_runs = max(0.0, pack_runs_increment + self._coerce_float(runs_increment))
+        normalized_tokens = max(0.0, pack_tokens_increment + self._coerce_float(tokens_increment))
+        normalized_cost = max(0.0, pack_cost_increment + self._coerce_float(cost_increment))
+        if normalized_runs <= 0 and normalized_tokens <= 0 and normalized_cost <= 0:
+            raise CommercialValidationError(
+                "service.subscription_topup_invalid",
+                "operator-managed top-up requires either a standard pack or at least one positive budget increment",
+            )
+        subscription = repository.get_subscription(subscription_id)
+        if subscription is None:
+            raise CommercialNotFoundError(
+                "service.subscription_not_found",
+                f"subscription '{subscription_id}' was not found",
+            )
+        plan_version = repository.get_plan_version(subscription.plan_version_id)
+        if plan_version is None:
+            raise CommercialNotFoundError(
+                "service.plan_version_not_found",
+                f"plan version '{subscription.plan_version_id}' was not found",
+            )
+
+        period_start_at, period_end_at = self._resolve_period(subscription, now)
+        expected_period_start = self._serialize_datetime(period_start_at)
+        expected_period_end = self._serialize_datetime(period_end_at)
+        requested_period_start = self._serialize_datetime(target_period_start_at)
+        requested_period_end = self._serialize_datetime(target_period_end_at)
+        if target_period_start_at is not None and requested_period_start != expected_period_start:
+            raise CommercialValidationError(
+                "service.subscription_topup_period_mismatch",
+                "operator-managed top-up target period does not match the active subscription period",
+            )
+        if target_period_end_at is not None and requested_period_end != expected_period_end:
+            raise CommercialValidationError(
+                "service.subscription_topup_period_mismatch",
+                "operator-managed top-up target period does not match the active subscription period",
+            )
+
+        active_snapshot = repository.get_active_entitlement_snapshot(
+            subscription.account_id,
+            subscription_id=subscription.subscription_id,
+        )
+        base_entitlements = self._normalize_entitlements(
+            active_snapshot.entitlements_json
+            if active_snapshot is not None
+            else plan_version.entitlements_json
+        )
+        base_budgets = self._normalize_budgets(
+            active_snapshot.budgets_json
+            if active_snapshot is not None
+            else plan_version.budgets_json
+        )
+        base_concurrency = self._normalize_concurrency(
+            active_snapshot.concurrency_json
+            if active_snapshot is not None
+            else plan_version.concurrency_json
+        )
+        base_policy = self._normalize_commercial_policy(
+            active_snapshot.policy_json
+            if active_snapshot is not None
+            else plan_version.policy_json
+        )
+
+        topup_id = f"topup_{uuid4().hex[:12]}"
+        increment_payload = {
+            "runs": round(normalized_runs, 6),
+            "tokens": round(normalized_tokens, 6),
+            "cost": round(normalized_cost, 6),
+        }
+        updated_budgets = {
+            "max_runs_per_period": round(
+                float(base_budgets.get("max_runs_per_period") or 0.0) + normalized_runs,
+                6,
+            ),
+            "max_tokens_per_period": round(
+                float(base_budgets.get("max_tokens_per_period") or 0.0) + normalized_tokens,
+                6,
+            ),
+            "max_cost_per_period": round(
+                float(base_budgets.get("max_cost_per_period") or 0.0) + normalized_cost,
+                6,
+            ),
+        }
+
+        subscription_metadata = dict(subscription.metadata_json or {})
+        topup_history = subscription_metadata.get("operator_managed_topups")
+        topup_items = list(topup_history) if isinstance(topup_history, list) else []
+        topup_record = {
+            "topup_id": topup_id,
+            "applied_at": self._serialize_datetime(now),
+            "target_period_start_at": expected_period_start,
+            "target_period_end_at": expected_period_end,
+            "pack_id": str(selected_pack.get("pack_id") or "") if selected_pack else "",
+            "pack_label": str(selected_pack.get("label") or "") if selected_pack else "",
+            "points_label": str(selected_pack.get("points_label") or "") if selected_pack else "",
+            "increments": increment_payload,
+            "reason": reason,
+            "note": note,
+            "actor_kind": audit_context.actor_kind if audit_context else "",
+            "actor_ref": audit_context.actor_ref if audit_context else "",
+        }
+        topup_items.append(topup_record)
+        subscription_metadata["operator_managed_topups"] = topup_items[-20:]
+        subscription_metadata["current_period_topup_totals"] = {
+            "runs": round(
+                sum(
+                    self._coerce_float((item.get("increments") or {}).get("runs"))
+                    for item in topup_items
+                    if isinstance(item, dict)
+                    and str(item.get("target_period_start_at") or "") == expected_period_start
+                    and str(item.get("target_period_end_at") or "") == expected_period_end
+                ),
+                6,
+            ),
+            "tokens": round(
+                sum(
+                    self._coerce_float((item.get("increments") or {}).get("tokens"))
+                    for item in topup_items
+                    if isinstance(item, dict)
+                    and str(item.get("target_period_start_at") or "") == expected_period_start
+                    and str(item.get("target_period_end_at") or "") == expected_period_end
+                ),
+                6,
+            ),
+            "cost": round(
+                sum(
+                    self._coerce_float((item.get("increments") or {}).get("cost"))
+                    for item in topup_items
+                    if isinstance(item, dict)
+                    and str(item.get("target_period_start_at") or "") == expected_period_start
+                    and str(item.get("target_period_end_at") or "") == expected_period_end
+                ),
+                6,
+            ),
+        }
+
+        subscription.metadata_json = subscription_metadata
+        repository.supersede_entitlement_snapshots(subscription.account_id)
+        snapshot = repository.create_entitlement_snapshot(
+            account_id=subscription.account_id,
+            subscription_id=subscription.subscription_id,
+            plan_version_id=plan_version.plan_version_id,
+            entitlements_json=base_entitlements,
+            budgets_json=updated_budgets,
+            concurrency_json=base_concurrency,
+            policy_json=base_policy,
+            site_limit=self._resolve_site_limit(
+                plan_version=plan_version,
+                subscription=subscription,
+                snapshot=active_snapshot,
+            ),
+            metadata_json={
+                "source": "subscription_topup",
+                "topup_id": topup_id,
+                "target_period_start_at": expected_period_start,
+                "target_period_end_at": expected_period_end,
+                "pack_id": str(selected_pack.get("pack_id") or "") if selected_pack else "",
+                "pack_label": str(selected_pack.get("label") or "") if selected_pack else "",
+                "points_label": str(selected_pack.get("points_label") or "") if selected_pack else "",
+                "increments": increment_payload,
+                "reason": reason,
+            },
+        )
+        covered_sites = repository.list_sites(account_id=subscription.account_id, limit=None)
+        billing_snapshot_refresh = self._refresh_subscription_billing_snapshots_in_session(
+            repository=repository,
+            subscription=subscription,
+            covered_sites=covered_sites,
+            period_start_at=period_start_at,
+            period_end_at=period_end_at,
+        )
+        latest_billing_snapshots = repository.get_latest_billing_snapshots_by_site(
+            site_ids=[str(site.site_id or "") for site in covered_sites if str(site.site_id or "").strip()]
+        )
+        payload = {
+            "subscription": self._serialize_subscription(subscription),
+            "entitlement_snapshot": self._serialize_entitlement_snapshot(snapshot),
+            "topup": topup_record,
+            "topup_summary": self._build_subscription_topup_summary(subscription, repository=repository),
+            "billing_snapshot_refresh": billing_snapshot_refresh,
+            "billing_snapshot_status": self._build_subscription_billing_snapshot_status(
+                subscription=subscription,
+                sites=covered_sites,
+                latest_billing_snapshots=latest_billing_snapshots,
+                period_start_at=period_start_at,
+                period_end_at=period_end_at,
+            ),
+        }
+        self._record_service_audit_in_session(
+            repository=repository,
+            audit_context=audit_context,
+            event_kind="subscription.topup",
+            outcome="succeeded",
+            account_id=subscription.account_id,
+            subscription_id=subscription.subscription_id,
+            plan_id=subscription.plan_id,
+            plan_version_id=subscription.plan_version_id,
+            scope_kind="subscription",
+            scope_id=subscription.subscription_id,
+            payload_json=payload,
+        )
+        return payload
+
+    def _bind_subscription_in_session(
+        self,
+        *,
+        repository: CommercialRepository,
+        subscription_id: str,
+        account_id: str,
+        plan_id: str,
+        plan_version_id: str,
+        status: str,
+        current_period_start_at: datetime,
+        current_period_end_at: datetime,
+        metadata_json: dict[str, object] | None,
+    ) -> tuple[AccountSubscription, AccountEntitlementSnapshot]:
+        subscription = repository.upsert_account_subscription(
+            subscription_id=subscription_id,
+            account_id=account_id,
+            plan_id=plan_id,
+            plan_version_id=plan_version_id,
+            status=status,
+            current_period_start_at=current_period_start_at,
+            current_period_end_at=current_period_end_at,
+            started_at=current_period_start_at,
+            canceled_at=None,
+            suspended_at=None,
+            metadata_json=metadata_json,
+        )
+        plan_version = repository.get_plan_version(plan_version_id)
+        if plan_version is None:
+            raise CommercialNotFoundError(
+                "service.plan_version_not_found",
+                f"plan version '{plan_version_id}' was not found",
+            )
+        repository.supersede_entitlement_snapshots(account_id)
+        snapshot_site_limit = self._resolve_site_limit(
+            plan_version=plan_version,
+            subscription=subscription,
+        )
+        snapshot = repository.create_entitlement_snapshot(
+            account_id=account_id,
+            subscription_id=subscription.subscription_id,
+            plan_version_id=plan_version.plan_version_id,
+            entitlements_json=self._normalize_entitlements(plan_version.entitlements_json),
+            budgets_json=self._normalize_budgets(plan_version.budgets_json),
+            concurrency_json=self._normalize_concurrency(plan_version.concurrency_json),
+            policy_json=self._normalize_commercial_policy(plan_version.policy_json),
+            site_limit=snapshot_site_limit,
+            metadata_json={"source": "subscription_bind"},
+        )
+        return subscription, snapshot
+
+    def _normalize_entitlements(
+        self,
+        raw: dict[str, object] | None,
+    ) -> dict[str, object]:
+        raw = raw if isinstance(raw, dict) else {}
+        return {
+            "ability_families": self._normalize_list(raw.get("ability_families"), default=["*"]),
+            "channels": self._normalize_list(raw.get("channels"), default=["*"]),
+            "execution_kinds": self._normalize_list(raw.get("execution_kinds"), default=["*"]),
+            "execution_tiers": self._normalize_list(raw.get("execution_tiers"), default=["cloud"]),
+            "data_classifications": self._normalize_list(
+                raw.get("data_classifications"),
+                default=["*"],
+            ),
+        }
+
+    def _normalize_budgets(self, raw: dict[str, object] | None) -> dict[str, object]:
+        raw = raw if isinstance(raw, dict) else {}
+        return {
+            "max_runs_per_period": self._coerce_float(raw.get("max_runs_per_period")),
+            "max_tokens_per_period": self._coerce_float(raw.get("max_tokens_per_period")),
+            "max_cost_per_period": self._coerce_float(raw.get("max_cost_per_period")),
+        }
+
+    def _normalize_concurrency(self, raw: dict[str, object] | None) -> dict[str, object]:
+        raw = raw if isinstance(raw, dict) else {}
+        return {
+            "max_active_runs": self._coerce_int(raw.get("max_active_runs")),
+        }
+
+    def _normalize_runtime_policy_overrides(
+        self,
+        raw: object,
+    ) -> dict[str, object]:
+        raw = raw if isinstance(raw, dict) else {}
+        overrides: dict[str, object] = {}
+        if "allow_fallback" in raw:
+            overrides["allow_fallback"] = self._coerce_bool(raw.get("allow_fallback"))
+        retry_max = self._coerce_int(raw.get("retry_max"))
+        if retry_max > 0 or raw.get("retry_max") == 0:
+            overrides["retry_max"] = max(0, retry_max)
+            overrides["max_retries"] = max(0, retry_max)
+        task_backend_raw = raw.get("task_backend")
+        if isinstance(task_backend_raw, dict):
+            task_backend: dict[str, object] = {}
+            if "enabled" in task_backend_raw:
+                task_backend["enabled"] = self._coerce_bool(task_backend_raw.get("enabled"))
+            if "mode" in task_backend_raw:
+                task_backend["mode"] = str(task_backend_raw.get("mode") or "")
+            if "callback_mode" in task_backend_raw:
+                task_backend["callback_mode"] = str(task_backend_raw.get("callback_mode") or "")
+            if "polling_interval_sec" in task_backend_raw:
+                task_backend["polling_interval_sec"] = max(
+                    0,
+                    self._coerce_int(task_backend_raw.get("polling_interval_sec")),
+                )
+            if task_backend:
+                overrides["task_backend"] = task_backend
+        return overrides
+
+    def _normalize_budget_policy(self, raw: object) -> dict[str, object]:
+        raw = raw if isinstance(raw, dict) else {}
+        return {
+            "grace_requests": max(0, self._coerce_int(raw.get("grace_requests"))),
+            "downgrade_policy": self._normalize_runtime_policy_overrides(
+                raw.get("downgrade_policy")
+            ),
+        }
+
+    def _normalize_reconciliation_tolerance(self, raw: object) -> dict[str, float]:
+        raw = raw if isinstance(raw, dict) else {}
+        tolerance_raw = raw.get("tolerance") if isinstance(raw.get("tolerance"), dict) else raw
+        return {
+            "runs": max(0.0, self._coerce_float(tolerance_raw.get("runs"))),
+            "provider_calls": max(0.0, self._coerce_float(tolerance_raw.get("provider_calls"))),
+            "tokens_total": max(0.0, self._coerce_float(tolerance_raw.get("tokens_total"))),
+            "cost": max(0.0, self._coerce_float(tolerance_raw.get("cost"))),
+        }
+
+    def _normalize_commercial_policy(self, raw: object) -> dict[str, object]:
+        raw = raw if isinstance(raw, dict) else {}
+        subscription_raw = raw.get("subscription")
+        subscription_raw = subscription_raw if isinstance(subscription_raw, dict) else {}
+        budgets_raw = raw.get("budgets")
+        budgets_raw = budgets_raw if isinstance(budgets_raw, dict) else {}
+        reconciliation_raw = raw.get("reconciliation")
+        reconciliation_raw = reconciliation_raw if isinstance(reconciliation_raw, dict) else {}
+        return {
+            "subscription": {
+                "grace_period_days": max(
+                    0,
+                    self._coerce_int(subscription_raw.get("grace_period_days")),
+                ),
+                "downgrade_policy": self._normalize_runtime_policy_overrides(
+                    subscription_raw.get("downgrade_policy")
+                ),
+            },
+            "budgets": {
+                "runs": self._normalize_budget_policy(budgets_raw.get("runs")),
+                "tokens": self._normalize_budget_policy(budgets_raw.get("tokens")),
+                "cost": self._normalize_budget_policy(budgets_raw.get("cost")),
+            },
+            "reconciliation": {
+                "tolerance": self._normalize_reconciliation_tolerance(reconciliation_raw),
+            },
+        }
+
+    def _normalize_list(self, raw: object, *, default: list[str]) -> list[str]:
+        if not isinstance(raw, list):
+            return list(default)
+        values = [str(item).strip() for item in raw if str(item).strip()]
+        return values or list(default)
+
+    def _resolve_period(
+        self,
+        subscription: AccountSubscription | None,
+        now: datetime,
+    ) -> tuple[datetime, datetime]:
+        if subscription is None:
+            return now - timedelta(days=30), now
+        start_at = self._normalize_datetime(
+            subscription.current_period_start_at
+            or subscription.started_at
+            or now
+        )
+        end_at = self._normalize_datetime(
+            subscription.current_period_end_at
+            or (start_at + timedelta(days=30))
+        )
+        return start_at, end_at
+
+    def _aggregate_meter_events(self, events: list[object]) -> dict[str, float]:
+        totals: dict[str, float] = defaultdict(float)
+        for event in events:
+            meter_key = str(getattr(event, "meter_key", "") or "")
+            if not meter_key:
+                continue
+            totals[meter_key] += float(getattr(event, "quantity", 0.0) or 0.0)
+        return {key: round(value, 6) for key, value in sorted(totals.items())}
+
+    def _aggregate_meter_breakdown(self, events: list[object]) -> dict[str, object]:
+        by_family: dict[str, dict[str, float]] = defaultdict(lambda: defaultdict(float))
+        for event in events:
+            family = str(getattr(event, "ability_family", "") or "unclassified")
+            meter_key = str(getattr(event, "meter_key", "") or "")
+            if not meter_key:
+                continue
+            by_family[family][meter_key] += float(getattr(event, "quantity", 0.0) or 0.0)
+        return {
+            "ability_families": {
+                family: {key: round(value, 6) for key, value in sorted(values.items())}
+                for family, values in sorted(by_family.items())
+            }
+        }
+
+    def _build_billing_snapshot_id(
+        self,
+        site_id: str,
+        subscription_id: str,
+        period_start_at: datetime,
+        period_end_at: datetime,
+    ) -> str:
+        return (
+            f"bill_{site_id}_{subscription_id}_"
+            f"{int(period_start_at.timestamp())}_{int(period_end_at.timestamp())}"
+        )
+
+    def _serialize_subscription(self, subscription: AccountSubscription) -> dict[str, object]:
+        metadata = subscription.metadata_json or {}
+        package_summary = self._build_subscription_package_summary(subscription)
+        package_alias = str(package_summary.get("package_alias") or "").strip()
+        return {
+            "subscription_id": subscription.subscription_id,
+            "account_id": subscription.account_id,
+            "plan_id": subscription.plan_id,
+            "plan_version_id": subscription.plan_version_id,
+            "status": subscription.status,
+            "tier_id": str(metadata.get("tier_id") or "").strip(),
+            "plan_kind": str(metadata.get("plan_kind") or "").strip(),
+            "package_kind": str(package_summary.get("package_kind") or ""),
+            "package_alias": package_alias,
+            "display_package_label": str(package_summary.get("display_package_label") or ""),
+            "coverage_state": str(package_summary.get("coverage_state") or ""),
+            "current_period_start_at": self._serialize_datetime(
+                subscription.current_period_start_at
+            ),
+            "current_period_end_at": self._serialize_datetime(
+                subscription.current_period_end_at
+            ),
+            "started_at": self._serialize_datetime(subscription.started_at),
+            "canceled_at": self._serialize_datetime(subscription.canceled_at),
+            "suspended_at": self._serialize_datetime(subscription.suspended_at),
+            "metadata": metadata,
+            "created_at": self._serialize_datetime(subscription.created_at),
+            "updated_at": self._serialize_datetime(subscription.updated_at),
+        }
+
+    def _serialize_plan(self, plan: object) -> dict[str, object]:
+        return {
+            "plan_id": str(getattr(plan, "plan_id", "") or ""),
+            "name": str(getattr(plan, "name", "") or ""),
+            "status": str(getattr(plan, "status", "") or ""),
+            "description": str(getattr(plan, "description", "") or ""),
+            "metadata": getattr(plan, "metadata_json", None) or {},
+            "created_at": self._serialize_datetime(getattr(plan, "created_at", None)),
+            "updated_at": self._serialize_datetime(getattr(plan, "updated_at", None)),
+        }
+
+    def _serialize_plan_version(self, plan_version: object) -> dict[str, object]:
+        return {
+            "plan_version_id": str(getattr(plan_version, "plan_version_id", "") or ""),
+            "plan_id": str(getattr(plan_version, "plan_id", "") or ""),
+            "version_label": str(getattr(plan_version, "version_label", "") or ""),
+            "status": str(getattr(plan_version, "status", "") or ""),
+            "currency": str(getattr(plan_version, "currency", "USD") or "USD"),
+            "entitlements": self._normalize_entitlements(
+                getattr(plan_version, "entitlements_json", None)
+            ),
+            "budgets": self._normalize_budgets(getattr(plan_version, "budgets_json", None)),
+            "concurrency": self._normalize_concurrency(
+                getattr(plan_version, "concurrency_json", None)
+            ),
+            "policy": self._normalize_commercial_policy(getattr(plan_version, "policy_json", None)),
+            "metadata": getattr(plan_version, "metadata_json", None) or {},
+            "created_at": self._serialize_datetime(getattr(plan_version, "created_at", None)),
+            "updated_at": self._serialize_datetime(getattr(plan_version, "updated_at", None)),
+        }
+
+    def _serialize_entitlement_snapshot(
+        self,
+        snapshot: AccountEntitlementSnapshot,
+    ) -> dict[str, object]:
+        return {
+            "account_id": snapshot.account_id,
+            "subscription_id": snapshot.subscription_id,
+            "plan_version_id": snapshot.plan_version_id,
+            "status": snapshot.status,
+            "entitlements": self._normalize_entitlements(snapshot.entitlements_json),
+            "budgets": self._normalize_budgets(snapshot.budgets_json),
+            "concurrency": self._normalize_concurrency(snapshot.concurrency_json),
+            "policy": self._normalize_commercial_policy(snapshot.policy_json),
+            "site_limit": int(getattr(snapshot, "site_limit", 1) or 1),
+            "metadata": snapshot.metadata_json or {},
+            "generated_at": self._serialize_datetime(snapshot.generated_at),
+        }
+
+    def _serialize_billing_snapshot(self, snapshot: object) -> dict[str, object]:
+        return {
+            "snapshot_id": str(getattr(snapshot, "snapshot_id", "") or ""),
+            "account_id": str(getattr(snapshot, "account_id", "") or ""),
+            "site_id": str(getattr(snapshot, "site_id", "") or ""),
+            "subscription_id": str(getattr(snapshot, "subscription_id", "") or ""),
+            "plan_version_id": str(getattr(snapshot, "plan_version_id", "") or ""),
+            "currency": str(getattr(snapshot, "currency", "USD") or "USD"),
+            "period_start_at": self._serialize_datetime(
+                getattr(snapshot, "period_start_at", None)
+            ),
+            "period_end_at": self._serialize_datetime(
+                getattr(snapshot, "period_end_at", None)
+            ),
+            "totals": getattr(snapshot, "totals_json", None) or {},
+            "breakdown": getattr(snapshot, "breakdown_json", None) or {},
+            "generated_at": self._serialize_datetime(getattr(snapshot, "generated_at", None)),
+        }
+
+    def _serialize_meter_event(self, event: object) -> dict[str, object]:
+        return {
+            "event_id": int(getattr(event, "id", 0) or 0),
+            "site_id": str(getattr(event, "site_id", "") or ""),
+            "subscription_id": str(getattr(event, "subscription_id", "") or ""),
+            "run_id": str(getattr(event, "run_id", "") or ""),
+            "provider_call_id": int(getattr(event, "provider_call_id", 0) or 0),
+            "event_kind": str(getattr(event, "event_kind", "") or ""),
+            "meter_key": str(getattr(event, "meter_key", "") or ""),
+            "quantity": round(float(getattr(event, "quantity", 0.0) or 0.0), 6),
+            "ability_family": str(getattr(event, "ability_family", "") or ""),
+            "channel": str(getattr(event, "channel", "") or ""),
+            "execution_kind": str(getattr(event, "execution_kind", "") or ""),
+            "execution_tier": str(getattr(event, "execution_tier", "") or ""),
+            "data_classification": str(getattr(event, "data_classification", "") or ""),
+            "currency": str(getattr(event, "currency", "") or ""),
+            "dedupe_key": str(getattr(event, "dedupe_key", "") or ""),
+            "payload": getattr(event, "payload_json", None) or {},
+            "created_at": self._serialize_datetime(getattr(event, "created_at", None)),
+        }
+
+    def _serialize_expiry_state(
+        self,
+        subscription: AccountSubscription | None,
+    ) -> dict[str, object] | None:
+        if subscription is None:
+            return None
+        now = self.now_factory()
+        period_end_at = subscription.current_period_end_at
+        days_until_end: int | None = None
+        if period_end_at is not None:
+            normalized_end = self._normalize_datetime(period_end_at)
+            days_until_end = int((normalized_end - now).total_seconds() // 86400)
+        return {
+            "current_period_end_at": self._serialize_datetime(period_end_at),
+            "days_until_end": days_until_end,
+            "is_expired": bool(days_until_end is not None and days_until_end < 0),
+        }
+
+    def _latest_subscription_map(
+        self,
+        subscriptions: list[AccountSubscription],
+    ) -> dict[str, AccountSubscription]:
+        items: dict[str, AccountSubscription] = {}
+        for subscription in subscriptions:
+            current = items.get(subscription.account_id)
+            if current is None:
+                items[subscription.account_id] = subscription
+                continue
+            current_created_at = self._normalize_datetime(current.created_at)
+            next_created_at = self._normalize_datetime(subscription.created_at)
+            if next_created_at >= current_created_at:
+                items[subscription.account_id] = subscription
+        return items
+
+    def _find_nearest_subscription_expiry(
+        self,
+        subscriptions: list[AccountSubscription],
+    ) -> datetime | None:
+        candidates = [
+            self._normalize_datetime(subscription.current_period_end_at)
+            for subscription in subscriptions
+            if subscription.current_period_end_at is not None
+        ]
+        return min(candidates) if candidates else None
+
+    def _resolve_runtime_batch_limits(
+        self,
+        *,
+        snapshot: object | None,
+        plan_version: object | None,
+    ) -> dict[str, object]:
+        metadata: dict[str, object] = {}
+        snapshot_metadata = getattr(snapshot, "metadata_json", None)
+        if isinstance(snapshot_metadata, dict):
+            metadata.update(snapshot_metadata)
+        plan_metadata = getattr(plan_version, "metadata_json", None)
+        if isinstance(plan_metadata, dict):
+            metadata.update(plan_metadata)
+
+        return {
+            "max_batch_items": max(0, int(metadata.get("max_batch_items") or 0)),
+        }
+
+    def _select_latest_plan_version(
+        self, versions: list[dict[str, object]]
+    ) -> dict[str, object] | None:
+        if not versions:
+            return None
+        published = [
+            version
+            for version in versions
+            if str(version.get("status") or "") == PLAN_VERSION_STATUS_PUBLISHED
+        ]
+        return published[0] if published else versions[0]
+
+    def _infer_plan_tier_id(
+        self,
+        plan: object | dict[str, object],
+        versions: list[dict[str, object]],
+    ) -> str:
+        if isinstance(plan, dict):
+            plan_id = str(plan.get("plan_id") or "")
+            name = str(plan.get("name") or "")
+            metadata = plan.get("metadata") or {}
+        else:
+            plan_id = str(getattr(plan, "plan_id", "") or "")
+            name = str(getattr(plan, "name", "") or "")
+            metadata = getattr(plan, "metadata_json", None) or {}
+        metadata_dict = metadata if isinstance(metadata, dict) else {}
+        tier_id = str(metadata_dict.get("tier_id") or "").strip().lower()
+        if tier_id in PLAN_TIER_REGISTRY:
+            return tier_id
+        for version in versions:
+            version_metadata = version.get("metadata") or {}
+            if isinstance(version_metadata, dict):
+                candidate = str(version_metadata.get("tier_id") or "").strip().lower()
+                if candidate in PLAN_TIER_REGISTRY:
+                    return candidate
+        fingerprint = f"{plan_id} {name}".lower()
+        for candidate in PLAN_TIER_REGISTRY:
+            if candidate in fingerprint:
+                return candidate
+        return DEFAULT_PLAN_TIER_ID
+
+    def _build_plan_tier_summary(
+        self,
+        plan: object | dict[str, object],
+        versions: list[dict[str, object]],
+    ) -> dict[str, object]:
+        tier_id = self._infer_plan_tier_id(plan, versions)
+        baseline = PLAN_TIER_REGISTRY.get(tier_id, PLAN_TIER_REGISTRY[DEFAULT_PLAN_TIER_ID])
+        return self._serialize_plan_tier_template(baseline, tier_id=tier_id)
+
+    def _list_plan_tier_templates(self) -> list[dict[str, object]]:
+        return [
+            self._serialize_plan_tier_template(PLAN_TIER_REGISTRY[tier_id], tier_id=tier_id)
+            for tier_id in PLAN_TIER_REGISTRY
+        ]
+
+    def _serialize_plan_tier_template(
+        self,
+        baseline: dict[str, object],
+        *,
+        tier_id: str,
+    ) -> dict[str, object]:
+        budgets_template = dict(baseline.get("budgets_template") or {})
+        concurrency_template = dict(baseline.get("concurrency_template") or {})
+        policy_baseline = dict(baseline.get("policy_baseline") or {})
+        return {
+            "tier_id": tier_id,
+            "label": str(baseline.get("label") or tier_id.title()),
+            "package_alias": str(baseline.get("package_alias") or ""),
+            "usage_band": str(baseline.get("usage_band") or ""),
+            "positioning": str(baseline.get("positioning") or ""),
+            "monthly_included_points": int(
+                baseline.get("monthly_included_points") or 0
+            ),
+            "site_limit": int(baseline.get("site_limit") or 1),
+            "budgets_template": budgets_template,
+            "concurrency_template": concurrency_template,
+            "max_batch_items": int(baseline.get("max_batch_items") or 0),
+            "automation_enabled": bool(baseline.get("automation_enabled")),
+            "api_enabled": bool(baseline.get("api_enabled")),
+            "openclaw_enabled": bool(baseline.get("openclaw_enabled")),
+            "package_operator_note": str(baseline.get("package_operator_note") or ""),
+            "policy_baseline": policy_baseline,
+            "canonical_shell": {
+                "entitlements": self._normalize_entitlements(DEFAULT_RUNTIME_ENTITLEMENTS),
+                "budgets": budgets_template,
+                "concurrency": concurrency_template,
+                "policy": self._normalize_commercial_policy(
+                    {"subscription": policy_baseline}
+                ),
+                "metadata": {
+                    "tier_id": tier_id,
+                    "package_alias": str(baseline.get("package_alias") or ""),
+                    "monthly_included_points": int(baseline.get("monthly_included_points") or 0),
+                    "site_limit": int(baseline.get("site_limit") or 1),
+                    "max_batch_items": int(baseline.get("max_batch_items") or 0),
+                    "automation_enabled": bool(baseline.get("automation_enabled")),
+                    "api_enabled": bool(baseline.get("api_enabled")),
+                    "openclaw_enabled": bool(baseline.get("openclaw_enabled")),
+                },
+            },
+            "feature_groups": list(baseline.get("feature_groups") or []),
+        }
+
+    def _build_plan_package_fit_cues(
+        self,
+        *,
+        tier_summary: dict[str, object],
+        latest_version: dict[str, object] | None,
+    ) -> list[dict[str, object]]:
+        cues: list[dict[str, object]] = []
+        if latest_version is None:
+            return [
+                {
+                    "code": "package_fit.no_published_version",
+                    "severity": "warning",
+                    "title": "No published version yet",
+                    "detail": "Freeze one published plan version before using this tier as an operator package template.",
+                }
+            ]
+
+        tier_budgets = tier_summary.get("budgets_template") or {}
+        latest_budgets = latest_version.get("budgets") or {}
+        tier_concurrency = tier_summary.get("concurrency_template") or {}
+        latest_concurrency = latest_version.get("concurrency") or {}
+
+        max_cost = float((latest_budgets or {}).get("max_cost_per_period") or 0.0)
+        if max_cost <= 0:
+            cues.append(
+                {
+                    "code": "package_fit.cost_ceiling_missing",
+                    "severity": "warning",
+                    "title": "Cost ceiling is not frozen",
+                    "detail": "This plan version still lacks `max_cost_per_period`, so operator package review remains too manual.",
+                }
+            )
+
+        for key, label in (
+            ("max_runs_per_period", "runs"),
+            ("max_tokens_per_period", "tokens"),
+            ("max_cost_per_period", "cost"),
+        ):
+            template_value = float((tier_budgets or {}).get(key) or 0.0)
+            current_value = float((latest_budgets or {}).get(key) or 0.0)
+            if template_value <= 0 or current_value <= 0:
+                continue
+            if current_value < template_value * 0.5:
+                cues.append(
+                    {
+                        "code": f"package_fit.{key}.too_conservative",
+                        "severity": "warning",
+                        "title": f"{label.title()} budget is tighter than the tier baseline",
+                        "detail": f"The latest version freezes {label} well below the {tier_summary.get('label')} template. Confirm that the plan should remain this conservative.",
+                    }
+                )
+            elif current_value > template_value * 2.0:
+                cues.append(
+                    {
+                        "code": f"package_fit.{key}.too_wide",
+                        "severity": "warning",
+                        "title": f"{label.title()} budget is wider than the tier baseline",
+                        "detail": f"The latest version stretches {label} materially beyond the {tier_summary.get('label')} template. Consider whether this belongs in a higher tier.",
+                    }
+                )
+
+        template_parallel = int((tier_concurrency or {}).get("max_active_runs") or 0)
+        current_parallel = int((latest_concurrency or {}).get("max_active_runs") or 0)
+        if template_parallel > 0 and current_parallel > template_parallel * 2:
+            cues.append(
+                {
+                    "code": "package_fit.concurrency_too_wide",
+                    "severity": "warning",
+                    "title": "Concurrency is wider than the tier baseline",
+                    "detail": f"The latest version allows materially more active runs than the {tier_summary.get('label')} template.",
+                }
+            )
+
+        shadow_summary = self.get_commercial_shadow_pricing_summary(window_days=30, limit=3)
+        top_family = (
+            shadow_summary.get("top_families", [])[0]
+            if isinstance(shadow_summary.get("top_families"), list)
+            and shadow_summary.get("top_families")
+            else None
+        )
+        if isinstance(top_family, dict):
+            observed_cost = float(top_family.get("provider_cost") or 0.0)
+            observed_tokens = float(top_family.get("tokens_total") or 0.0)
+            observed_runs = int(top_family.get("runs") or 0)
+            top_family_name = str(top_family.get("ability_family") or "unknown")
+            if max_cost > 0 and observed_cost > max_cost:
+                cues.append(
+                    {
+                        "code": "package_fit.shadow_cost_over_budget",
+                        "severity": "warning",
+                        "title": "Recent high-cost family already exceeds this template",
+                        "detail": f"The top 30-day family `{top_family_name}` consumed more provider cost than this package ceiling. Treat this tier as too narrow for recent usage.",
+                    }
+                )
+            elif max_cost > 0 and observed_cost < max_cost * 0.15:
+                cues.append(
+                    {
+                        "code": "package_fit.shadow_cost_headroom_high",
+                        "severity": "info",
+                        "title": "Recent high-cost family still sits far below the ceiling",
+                        "detail": f"The top 30-day family `{top_family_name}` remains well under this template cost ceiling, so this tier may be wider than current observed usage.",
+                    }
+                )
+            max_tokens = float((latest_budgets or {}).get("max_tokens_per_period") or 0.0)
+            if max_tokens > 0 and observed_tokens > max_tokens:
+                cues.append(
+                    {
+                        "code": "package_fit.shadow_tokens_over_budget",
+                        "severity": "warning",
+                        "title": "Recent token load exceeds the template",
+                        "detail": f"The top 30-day family `{top_family_name}` already exceeds the frozen token ceiling for this package.",
+                    }
+                )
+            max_runs = float((latest_budgets or {}).get("max_runs_per_period") or 0.0)
+            if max_runs > 0 and float(observed_runs) > max_runs:
+                cues.append(
+                    {
+                        "code": "package_fit.shadow_runs_over_budget",
+                        "severity": "warning",
+                        "title": "Recent run volume exceeds the template",
+                        "detail": f"The top 30-day family `{top_family_name}` already runs above the frozen run ceiling for this package.",
+                    }
+                )
+
+        if not cues:
+            cues.append(
+                {
+                    "code": "package_fit.within_band",
+                    "severity": "ok",
+                    "title": "Template still reads as internally consistent",
+                    "detail": "Tier baseline, latest version budgets, and recent shadow pricing do not currently show an obvious mismatch.",
+                }
+            )
+        return cues
+
+    def _resolve_subscription_policy_action(
+        self,
+        *,
+        subscription: AccountSubscription,
+        policy: dict[str, object],
+        period_end_at: datetime,
+        now: datetime,
+        reason: str,
+    ) -> dict[str, object] | None:
+        subscription_policy = policy.get("subscription")
+        subscription_policy = (
+            subscription_policy if isinstance(subscription_policy, dict) else {}
+        )
+        grace_period_days = max(
+            0,
+            self._coerce_int(subscription_policy.get("grace_period_days")),
+        )
+        if grace_period_days <= 0:
+            return None
+        grace_until_at = period_end_at + timedelta(days=grace_period_days)
+        if now > grace_until_at:
+            return None
+        return {
+            "kind": "subscription_grace",
+            "decision_code": "commercial.subscription_grace",
+            "reason": reason,
+            "subscription_status": subscription.status,
+            "grace_period_days": grace_period_days,
+            "grace_until_at": self._serialize_datetime(grace_until_at),
+            "runtime_policy_overrides": self._normalize_runtime_policy_overrides(
+                subscription_policy.get("downgrade_policy")
+            ),
+        }
+
+    def _load_operator_managed_points_pack_overlays(
+        self,
+        repository: CommercialRepository,
+    ) -> dict[str, dict[str, object]]:
+        overlays: dict[str, dict[str, object]] = {}
+        for row in repository.list_operator_managed_topup_pack_overlays():
+            pack_id = str(getattr(row, "pack_id", "") or "").strip()
+            if not pack_id or pack_id not in OPERATOR_MANAGED_POINTS_PACK_REGISTRY:
+                continue
+            overlays[pack_id] = {
+                "label": str(getattr(row, "label", "") or ""),
+                "points_label": str(getattr(row, "points_label", "") or ""),
+                "runs_increment": round(
+                    max(0.0, self._coerce_float(getattr(row, "runs_increment", 0.0))),
+                    6,
+                ),
+                "tokens_increment": round(
+                    max(0.0, self._coerce_float(getattr(row, "tokens_increment", 0.0))),
+                    6,
+                ),
+                "cost_increment": round(
+                    max(0.0, self._coerce_float(getattr(row, "cost_increment", 0.0))),
+                    6,
+                ),
+                "operator_note": str(getattr(row, "operator_note", "") or ""),
+                "recommended_for_tiers": [
+                    str(item or "").strip()
+                    for item in list(getattr(row, "recommended_for_tiers_json", []) or [])
+                    if str(item or "").strip()
+                ],
+                "display_order": max(1, int(getattr(row, "display_order", 1) or 1)),
+                "active": bool(getattr(row, "active", True)),
+                "overlay_updated_at": self._serialize_datetime(
+                    self._normalize_datetime(getattr(row, "updated_at", None))
+                ),
+            }
+        return overlays
+
+    def _resolve_operator_managed_points_pack(
+        self,
+        pack_id: str | None,
+        *,
+        repository: CommercialRepository | None = None,
+    ) -> dict[str, object] | None:
+        normalized_pack_id = str(pack_id or "").strip()
+        if not normalized_pack_id:
+            return None
+        pack = next(
+            (
+                item
+                for item in self.list_operator_managed_points_packs(repository=repository)
+                if str(item.get("pack_id") or "") == normalized_pack_id
+            ),
+            None,
+        )
+        if pack is None:
+            raise CommercialValidationError(
+                "service.subscription_topup_pack_not_found",
+                f"operator-managed points pack '{normalized_pack_id}' was not found",
+            )
+        return dict(pack)
+
+    def _build_subscription_coverage_summary(
+        self,
+        subscription: AccountSubscription | None,
+        *,
+        site_count: int | None = None,
+        site_limit: int | None = None,
+    ) -> dict[str, object]:
+        package_summary = self._build_subscription_package_summary(
+            subscription,
+            site_count=site_count,
+        )
+        if subscription is None:
+            return {
+                "covered_by_subscription_id": "",
+                "subscription_status": "missing",
+                "plan_id": "",
+                "plan_version_id": "",
+                "current_period_end_at": None,
+                "site_count": int(site_count or 0),
+                "site_limit": int(site_limit or 0),
+                **package_summary,
+            }
+        return {
+            "covered_by_subscription_id": subscription.subscription_id,
+            "subscription_status": subscription.status,
+            "plan_id": subscription.plan_id,
+            "plan_version_id": subscription.plan_version_id,
+            "current_period_end_at": self._serialize_datetime(
+                subscription.current_period_end_at
+            ),
+            "site_count": int(site_count or 0),
+            "site_limit": int(site_limit or 0),
+            **package_summary,
+        }
+
+    def _select_primary_subscription(
+        self,
+        subscriptions: list[AccountSubscription],
+    ) -> AccountSubscription | None:
+        if not subscriptions:
+            return None
+        covered = [item for item in subscriptions if _subscription_counts_as_covered(item)]
+        candidates = covered if covered else subscriptions
+        return candidates[0]
+
+    def _resolve_subscription_package_kind(
+        self,
+        subscription: AccountSubscription | None,
+        *,
+        site_count: int | None = None,
+    ) -> str:
+        if subscription is None:
+            return "uncovered" if int(site_count or 0) > 0 else "unknown"
+        plan_id = str(getattr(subscription, "plan_id", "") or "").strip()
+        metadata = getattr(subscription, "metadata_json", None) or {}
+        plan_kind = str(metadata.get("plan_kind") or "").strip()
+        if plan_id == DEFAULT_FREE_PLAN_ID or plan_kind == DEFAULT_FREE_PLAN_KIND:
+            return "formal_free"
+        if plan_id == "plan_dev_unlimited":
+            return "dev_baseline"
+        if plan_id:
+            return "tier_package"
+        return "unknown"
+
+    def _resolve_subscription_display_package_label(
+        self,
+        subscription: AccountSubscription | None,
+        *,
+        site_count: int | None = None,
+    ) -> str:
+        package_kind = self._resolve_subscription_package_kind(subscription, site_count=site_count)
+        if package_kind == "uncovered":
+            return "Uncovered"
+        if package_kind == "unknown":
+            return "Unknown"
+        if subscription is None:
+            return "Unknown"
+        metadata = getattr(subscription, "metadata_json", None) or {}
+        package_alias = str(metadata.get("package_alias") or "").strip()
+        if package_alias:
+            return package_alias
+        plan_id = str(getattr(subscription, "plan_id", "") or "").strip()
+        if package_kind == "dev_baseline":
+            return "Dev Unlimited"
+        if package_kind == "formal_free":
+            return "Free"
+        tier_package_alias = str(
+            self._build_plan_tier_summary(
+                {"plan_id": plan_id, "metadata": metadata},
+                [],
+            ).get("package_alias")
+            or ""
+        ).strip()
+        if tier_package_alias:
+            return tier_package_alias
+        return plan_id or "Unknown"
+
+    def _build_subscription_package_summary(
+        self,
+        subscription: AccountSubscription | None,
+        *,
+        site_count: int | None = None,
+    ) -> dict[str, object]:
+        package_kind = self._resolve_subscription_package_kind(subscription, site_count=site_count)
+        coverage_state = "covered" if _subscription_counts_as_covered(subscription) else "uncovered"
+        package_alias = ""
+        plan_id = ""
+        plan_version_id = ""
+        if subscription is not None:
+            package_alias = str((getattr(subscription, "metadata_json", None) or {}).get("package_alias") or "").strip()
+            plan_id = str(getattr(subscription, "plan_id", "") or "").strip()
+            plan_version_id = str(getattr(subscription, "plan_version_id", "") or "").strip()
+        return {
+            "display_package_label": self._resolve_subscription_display_package_label(
+                subscription,
+                site_count=site_count,
+            ),
+            "package_kind": package_kind,
+            "coverage_state": coverage_state,
+            "package_alias": package_alias,
+            "plan_id": plan_id,
+            "plan_version_id": plan_version_id,
+        }
+
+    def _build_subscription_topup_summary(
+        self,
+        subscription: AccountSubscription | None,
+        *,
+        repository: CommercialRepository | None = None,
+    ) -> dict[str, object] | None:
+        if subscription is None:
+            return None
+        metadata = subscription.metadata_json or {}
+        raw_topups = metadata.get("operator_managed_topups")
+        topups = [item for item in raw_topups if isinstance(item, dict)] if isinstance(raw_topups, list) else []
+        latest = topups[-1] if topups else None
+        current_period_start = self._serialize_datetime(subscription.current_period_start_at)
+        current_period_end = self._serialize_datetime(subscription.current_period_end_at)
+        current_period_topups = [
+            item
+            for item in topups
+            if str(item.get("target_period_start_at") or "") == current_period_start
+            and str(item.get("target_period_end_at") or "") == current_period_end
+        ]
+        current_period_totals = metadata.get("current_period_topup_totals")
+        latest_pack_id = str((latest or {}).get("pack_id") or "").strip()
+        latest_pack_template = self._resolve_operator_managed_points_pack(
+            latest_pack_id,
+            repository=repository,
+        )
+        return {
+            "count": len(topups),
+            "latest": latest,
+            "latest_pack": (
+                {
+                    "pack_id": latest_pack_id,
+                    "label": str(
+                        (latest or {}).get("pack_label")
+                        or (latest_pack_template or {}).get("label")
+                        or ""
+                    ),
+                    "points_label": str(
+                        (latest or {}).get("points_label")
+                        or (latest_pack_template or {}).get("points_label")
+                        or ""
+                    ),
+                }
+                if latest
+                else None
+            ),
+            "current_period_count": len(current_period_topups),
+            "current_period_totals": current_period_totals if isinstance(current_period_totals, dict) else {},
+        }
+
+    def _build_subscription_budget_headroom(
+        self,
+        *,
+        plan_version: object | None,
+        effective_budgets: dict[str, object],
+        topup_summary: dict[str, object] | None,
+    ) -> dict[str, object]:
+        base_budgets = self._normalize_budgets(
+            getattr(plan_version, "budgets_json", None) if plan_version is not None else None
+        )
+        effective = self._normalize_budgets(effective_budgets)
+        topup_totals = (
+            (topup_summary or {}).get("current_period_totals")
+            if isinstance(topup_summary, dict)
+            else {}
+        )
+        current_period_delta = {
+            "runs": round(self._coerce_float((topup_totals or {}).get("runs")), 6),
+            "tokens": round(self._coerce_float((topup_totals or {}).get("tokens")), 6),
+            "cost": round(self._coerce_float((topup_totals or {}).get("cost")), 6),
+        }
+        return {
+            "base_budget": {
+                "runs": round(self._coerce_float(base_budgets.get("max_runs_per_period")), 6),
+                "tokens": round(self._coerce_float(base_budgets.get("max_tokens_per_period")), 6),
+                "cost": round(self._coerce_float(base_budgets.get("max_cost_per_period")), 6),
+            },
+            "current_period_topup_delta": current_period_delta,
+            "effective_budget": {
+                "runs": round(self._coerce_float(effective.get("max_runs_per_period")), 6),
+                "tokens": round(self._coerce_float(effective.get("max_tokens_per_period")), 6),
+                "cost": round(self._coerce_float(effective.get("max_cost_per_period")), 6),
+            },
+        }
+
+    def _build_billing_mismatch(
+        self,
+        *,
+        ledger_totals: dict[str, float],
+        snapshot_totals: dict[str, object],
+        tolerance: dict[str, float],
+        snapshot_present: bool,
+    ) -> dict[str, object]:
+        comparable_keys = ("runs", "provider_calls", "tokens_total", "cost")
+        deltas: dict[str, float] = {}
+        mismatches: dict[str, dict[str, float]] = {}
+        for key in comparable_keys:
+            ledger_value = round(float(ledger_totals.get(key, 0.0) or 0.0), 6)
+            snapshot_value = round(float(self._coerce_float(snapshot_totals.get(key))), 6)
+            delta = round(abs(ledger_value - snapshot_value), 6)
+            deltas[key] = delta
+            allowed_delta = round(float(tolerance.get(key, 0.0) or 0.0), 6)
+            if delta > allowed_delta:
+                mismatches[key] = {
+                    "ledger": ledger_value,
+                    "snapshot": snapshot_value,
+                    "delta": delta,
+                    "tolerance": allowed_delta,
+                }
+        return {
+            "snapshot_present": snapshot_present,
+            "in_sync": snapshot_present and not mismatches,
+            "deltas": deltas,
+            "tolerance": tolerance,
+            "mismatches": mismatches,
+            "recommended_action": "" if snapshot_present and not mismatches else "rebuild_snapshot",
+        }
+
+    def _upsert_current_period_billing_snapshot_in_session(
+        self,
+        *,
+        repository: CommercialRepository,
+        site_id: str,
+        subscription: AccountSubscription,
+        period_start_at: datetime,
+        period_end_at: datetime,
+    ) -> BillingSnapshot:
+        events = repository.list_usage_meter_events(
+            site_id,
+            subscription_id=subscription.subscription_id,
+            period_start_at=period_start_at,
+            period_end_at=period_end_at,
+            limit=None,
+        )
+        totals = self._aggregate_meter_events(events)
+        breakdown = self._aggregate_meter_breakdown(events)
+        return repository.upsert_billing_snapshot(
+            snapshot_id=self._build_billing_snapshot_id(
+                site_id,
+                subscription.subscription_id,
+                period_start_at,
+                period_end_at,
+            ),
+            account_id=subscription.account_id,
+            site_id=site_id,
+            subscription_id=subscription.subscription_id,
+            plan_version_id=subscription.plan_version_id,
+            currency="USD",
+            period_start_at=period_start_at,
+            period_end_at=period_end_at,
+            totals_json=totals,
+            breakdown_json=breakdown,
+        )
+
+    def _build_subscription_billing_snapshot_status(
+        self,
+        *,
+        subscription: AccountSubscription,
+        sites: list[Site],
+        latest_billing_snapshots: dict[str, BillingSnapshot],
+        period_start_at: datetime,
+        period_end_at: datetime,
+    ) -> dict[str, object]:
+        subscription_updated_at = self._normalize_datetime(
+            getattr(subscription, "updated_at", None)
+        )
+        items: list[dict[str, object]] = []
+        fresh_site_count = 0
+        stale_site_count = 0
+        missing_site_count = 0
+
+        for site in sites:
+            site_id = str(site.site_id or "").strip()
+            if not site_id:
+                continue
+            snapshot = latest_billing_snapshots.get(site_id)
+            raw_snapshot_generated_at = getattr(snapshot, "generated_at", None)
+            snapshot_generated_at = (
+                self._normalize_datetime(raw_snapshot_generated_at)
+                if raw_snapshot_generated_at is not None
+                else None
+            )
+            snapshot_matches_period = (
+                snapshot is not None
+                and str(getattr(snapshot, "subscription_id", "") or "") == subscription.subscription_id
+                and self._normalize_datetime(getattr(snapshot, "period_start_at", None)) == period_start_at
+                and self._normalize_datetime(getattr(snapshot, "period_end_at", None)) == period_end_at
+            )
+            is_fresh = bool(
+                snapshot_matches_period
+                and snapshot_generated_at is not None
+                and subscription_updated_at is not None
+                and snapshot_generated_at >= subscription_updated_at
+            )
+            if snapshot is None:
+                status = "missing"
+                missing_site_count += 1
+            elif is_fresh:
+                status = "fresh"
+                fresh_site_count += 1
+            else:
+                status = "stale"
+                stale_site_count += 1
+            items.append(
+                {
+                    "site_id": site_id,
+                    "status": status,
+                    "snapshot": self._serialize_billing_snapshot(snapshot) if snapshot is not None else None,
+                }
+            )
+
+        if stale_site_count > 0:
+            aggregate_status = "stale"
+            summary = "Current-period billing snapshots need rebuild to match the latest subscription posture."
+        elif missing_site_count > 0:
+            aggregate_status = "missing"
+            summary = "Current-period billing snapshots are still missing for at least one covered site."
+        else:
+            aggregate_status = "fresh"
+            summary = "Current-period billing snapshots are fresh for every covered site."
+
+        next_action: dict[str, object] | None = None
+        if aggregate_status in {"stale", "missing"} and items:
+            next_action = {
+                "action": "rebuild_current_period_billing_snapshots",
+                "label": "Rebuild current-period billing snapshots",
+                "detail": "Refresh current-period billing snapshots for every covered site before treating billing posture as reconciled.",
+            }
+
+        return {
+            "status": aggregate_status,
+            "summary": summary,
+            "site_count": len(items),
+            "fresh_site_count": fresh_site_count,
+            "stale_site_count": stale_site_count,
+            "missing_site_count": missing_site_count,
+            "next_action": next_action,
+            "items": items,
+        }
+
+    def _refresh_subscription_billing_snapshots_in_session(
+        self,
+        *,
+        repository: CommercialRepository,
+        subscription: AccountSubscription,
+        covered_sites: list[Site],
+        period_start_at: datetime,
+        period_end_at: datetime,
+    ) -> dict[str, object]:
+        refreshed_billing_snapshots = [
+            self._serialize_billing_snapshot(
+                self._upsert_current_period_billing_snapshot_in_session(
+                    repository=repository,
+                    site_id=str(site.site_id or ""),
+                    subscription=subscription,
+                    period_start_at=period_start_at,
+                    period_end_at=period_end_at,
+                )
+            )
+            for site in covered_sites
+            if str(site.site_id or "").strip()
+        ]
+        if refreshed_billing_snapshots:
+            status = "refreshed"
+            summary = "Current-period billing snapshots were rebuilt for every covered site."
+        else:
+            status = "no_covered_sites"
+            summary = "No covered sites are currently attached to this subscription, so there were no billing snapshots to rebuild."
+        return {
+            "status": status,
+            "summary": summary,
+            "site_count": len(refreshed_billing_snapshots),
+            "snapshots": refreshed_billing_snapshots,
+        }

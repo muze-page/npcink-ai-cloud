@@ -1,0 +1,557 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+from fastapi.testclient import TestClient
+
+from app.adapters.notifications.base import PortalEmailSender
+from app.api.main import create_app
+from app.core.config import Settings
+from app.core.db import dispose_engine, init_schema
+from app.core.services import CloudServices
+from app.domain.catalog.service import CatalogService
+from tests.conftest import (
+    TEST_INTERNAL_AUTH_TOKEN,
+    TEST_ADMIN_SESSION_SECRET,
+    TEST_PORTAL_JWT_SECRET,
+    build_internal_headers,
+)
+
+TEST_ADMIN_BOOTSTRAP_TOKEN = "magick-cloud-admin-bootstrap-test-32"
+
+
+def _sqlite_url(tmp_path: Path) -> str:
+    return f"sqlite+pysqlite:///{tmp_path / 'web-routes.sqlite3'}"
+
+
+def _build_client(
+    tmp_path: Path,
+    *,
+    settings_overrides: dict[str, object] | None = None,
+    portal_email_sender: PortalEmailSender | None = None,
+) -> tuple[str, TestClient]:
+    database_url = _sqlite_url(tmp_path)
+    init_schema(database_url)
+    CatalogService(database_url).refresh_catalog()
+
+    settings_kwargs: dict[str, object] = {
+        "_env_file": None,
+        "project_name": "Magick AI Cloud Test",
+        "environment": "test",
+        "database_url": database_url,
+        "redis_url": "redis://localhost:6379/0",
+        "internal_auth_token": TEST_INTERNAL_AUTH_TOKEN,
+        "admin_bootstrap_token": TEST_ADMIN_BOOTSTRAP_TOKEN,
+        "admin_session_secret": TEST_ADMIN_SESSION_SECRET,
+        "allow_dev_admin_internal_token_fallback": False,
+        "portal_jwt_secret": TEST_PORTAL_JWT_SECRET,
+        "admin_bootstrap_admin_ref": "platform:founder",
+        "admin_bootstrap_admin_role": "platform_admin",
+    }
+    settings_kwargs.update(settings_overrides or {})
+    settings = Settings(**settings_kwargs)
+    client = TestClient(
+        create_app(
+            CloudServices(
+                settings=settings,
+                portal_email_sender=portal_email_sender,
+            )
+        )
+    )
+    client.headers.update(
+        {
+            "origin": "http://testserver",
+            "referer": "http://testserver/",
+        }
+    )
+    return database_url, client
+
+
+class FakePortalEmailSender(PortalEmailSender):
+    def __init__(self) -> None:
+        self.messages: list[dict[str, object]] = []
+
+    def send_test_email(
+        self,
+        *,
+        recipient_email: str,
+        project_name: str,
+        portal_url: str,
+    ) -> None:
+        self.messages.append(
+            {
+                "kind": "test",
+                "recipient_email": recipient_email,
+                "project_name": project_name,
+                "portal_url": portal_url,
+            }
+        )
+
+    def send_login_code(
+        self,
+        *,
+        recipient_email: str,
+        member_ref: str,
+        code: str,
+        expires_in_seconds: int,
+        project_name: str,
+        locale: str = "zh-CN",
+    ) -> None:
+        self.messages.append(
+            {
+                "kind": "login_code",
+                "recipient_email": recipient_email,
+                "member_ref": member_ref,
+                "code": code,
+                "expires_in_seconds": expires_in_seconds,
+                "project_name": project_name,
+                "locale": locale,
+            }
+        )
+
+    def send_invite_notice(
+        self,
+        *,
+        recipient_email: str,
+        member_ref: str,
+        portal_url: str,
+        project_name: str,
+        locale: str = "zh-CN",
+    ) -> None:
+        self.messages.append(
+            {
+                "kind": "invite_notice",
+                "recipient_email": recipient_email,
+                "member_ref": member_ref,
+                "portal_url": portal_url,
+                "project_name": project_name,
+                "locale": locale,
+            }
+        )
+
+
+def _login_platform_admin(client: TestClient, *, admin_ref: str = "platform:founder") -> TestClient:
+    response = client.post(
+        "/admin/auth/bootstrap",
+        data={
+            "token": TEST_ADMIN_BOOTSTRAP_TOKEN,
+            "admin_ref": admin_ref,
+        },
+        follow_redirects=False,
+    )
+    assert response.status_code == 303, response.text
+    assert response.headers["location"].startswith("/admin"), response.headers["location"]
+    assert "magick_admin_session_token" in response.headers.get("set-cookie", "")
+    return client
+
+
+def _seed_account_membership(
+    client: TestClient,
+    *,
+    account_id: str,
+    member_ref: str,
+    role: str = "user_admin",
+    status: str = "active",
+) -> None:
+    safe_member_ref = member_ref.replace(":", "_").replace("@", "_").replace(".", "_")
+    client.post(
+        "/internal/service/accounts",
+        json={"account_id": account_id, "name": f"Account {account_id}"},
+        headers=build_internal_headers(idempotency_key=f"{account_id}-account-seed"),
+    )
+    response = client.post(
+        f"/internal/service/accounts/{account_id}/memberships",
+        json={
+            "member_ref": member_ref,
+            "role": role,
+            "status": status,
+        },
+        headers=build_internal_headers(
+            idempotency_key=f"{account_id}-{safe_member_ref}-membership-seed"
+        ),
+    )
+    assert response.status_code == 200, response.text
+
+
+def test_web_portal_login_page_renders(tmp_path: Path) -> None:
+    database_url, client = _build_client(tmp_path)
+
+    response = client.get("/portal/login", follow_redirects=False)
+
+    assert response.status_code == 307
+    assert response.headers["location"].endswith("/portal/login")
+
+    dispose_engine(database_url)
+
+
+def test_web_removed_obsolete_admin_auth_routes_return_not_found(tmp_path: Path) -> None:
+    database_url, client = _build_client(tmp_path)
+
+    removed_login_response = client.get("/admin/auth/oidc/login", follow_redirects=False)
+    removed_callback_response = client.get(
+        "/admin/auth/oidc/callback?code=oidc-code&state=oidc-state",
+        follow_redirects=False,
+    )
+
+    assert removed_login_response.status_code == 404
+    assert removed_callback_response.status_code == 404
+
+    dispose_engine(database_url)
+
+
+def test_web_removed_ops_routes_and_bad_admin_token(tmp_path: Path) -> None:
+    database_url, client = _build_client(tmp_path)
+
+    removed_login = client.get("/ops/login", follow_redirects=False)
+    removed_bootstrap = client.post("/ops/auth/bootstrap", follow_redirects=False)
+    removed_logout = client.get("/ops/logout", follow_redirects=False)
+    invalid_login = client.post(
+        "/admin/auth/bootstrap",
+        data={"token": "wrong-token", "admin_ref": "platform:founder"},
+        follow_redirects=False,
+    )
+
+    assert removed_login.status_code == 404
+    assert removed_bootstrap.status_code == 404
+    assert removed_logout.status_code == 404
+    assert invalid_login.status_code == 303
+    assert "auth.admin_bootstrap_token_invalid" in invalid_login.headers["location"]
+
+    dispose_engine(database_url)
+
+
+def test_web_admin_bootstrap_issues_cookie_session(tmp_path: Path) -> None:
+    database_url, client = _build_client(tmp_path)
+
+    _login_platform_admin(client, admin_ref="platform:founder")
+
+    session_response = client.get("/admin/session")
+
+    assert session_response.status_code == 200
+    assert session_response.json()["data"]["platform_admin_ref"] == "platform:founder"
+    assert session_response.json()["data"]["identity_type"] == "platform_admin"
+    assert session_response.json()["data"]["role"] == "platform_admin"
+    assert session_response.json()["data"]["auth_mode"] == "admin_bootstrap_token"
+
+    dispose_engine(database_url)
+
+
+def test_web_admin_bootstrap_token_is_separate_from_internal_service_token(tmp_path: Path) -> None:
+    database_url, client = _build_client(tmp_path)
+
+    response = client.post(
+        "/admin/auth/bootstrap",
+        data={
+            "token": TEST_INTERNAL_AUTH_TOKEN,
+            "admin_ref": "platform:founder",
+        },
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert "auth.admin_bootstrap_token_invalid" in response.headers["location"]
+
+    dispose_engine(database_url)
+
+
+def test_web_admin_protected_pages_require_session(tmp_path: Path) -> None:
+    database_url, client = _build_client(tmp_path)
+
+    for path in ("/admin", "/admin/accounts", "/admin/sites", "/admin/subscriptions"):
+        response = client.get(path, follow_redirects=False)
+        assert response.status_code == 303
+        assert response.headers["location"].startswith("/admin/login")
+
+    dispose_engine(database_url)
+
+
+def test_web_rejects_untrusted_forwarded_host_in_production(tmp_path: Path) -> None:
+    database_url, client = _build_client(
+        tmp_path,
+        settings_overrides={
+            "environment": "production",
+            "portal_public_base_url": "https://cloud.example.com",
+            "provider_connection_secret": "p" * 32,
+            "portal_email_smtp_host": "smtp.example.com",
+            "portal_email_from_email": "noreply@example.com",
+        },
+    )
+
+    response = client.get(
+        "/admin/login",
+        headers={
+            "host": "cloud.example.com",
+            "x-forwarded-host": "evil.example.com",
+            "x-forwarded-proto": "https",
+        },
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error_code"] == "request.forwarded_host_invalid"
+
+    dispose_engine(database_url)
+
+
+def test_web_allows_untrusted_forwarded_host_in_development_when_browser_origin_is_trusted(
+    tmp_path: Path,
+) -> None:
+    database_url, client = _build_client(
+        tmp_path,
+        settings_overrides={
+            "environment": "development",
+            "portal_public_base_url": "http://100.102.170.79:8010",
+            "browser_origin_allowlist": "http://100.102.170.79:8010",
+        },
+    )
+
+    response = client.get(
+        "/health/live",
+        headers={
+            "host": "testserver",
+            "x-forwarded-host": "frontend:3000",
+            "x-forwarded-proto": "http",
+            "origin": "http://100.102.170.79:8010",
+            "referer": "http://100.102.170.79:8010/",
+        },
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 200
+
+    dispose_engine(database_url)
+
+
+def test_web_rejects_untrusted_forwarded_origin_in_production(tmp_path: Path) -> None:
+    database_url, client = _build_client(
+        tmp_path,
+        settings_overrides={
+            "environment": "production",
+            "portal_public_base_url": "https://cloud.example.com",
+            "provider_connection_secret": "p" * 32,
+            "portal_email_smtp_host": "smtp.example.com",
+            "portal_email_from_email": "noreply@example.com",
+        },
+    )
+
+    response = client.get(
+        "/admin/login",
+        headers={
+            "host": "cloud.example.com",
+            "x-forwarded-host": "cloud.example.com",
+            "x-forwarded-proto": "http",
+        },
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error_code"] == "request.forwarded_origin_invalid"
+
+    dispose_engine(database_url)
+
+
+def test_web_removed_multi_admin_pages_return_not_found(tmp_path: Path) -> None:
+    database_url, client = _build_client(tmp_path)
+    _login_platform_admin(client, admin_ref="platform:founder")
+
+    platform_admins_page = client.get("/admin/platform-admins", follow_redirects=False)
+    identities_page = client.get("/admin/identities", follow_redirects=False)
+
+    assert platform_admins_page.status_code == 404
+    assert identities_page.status_code == 404
+
+    dispose_engine(database_url)
+
+
+def test_web_admin_invite_member_uses_invite_notice_and_user_admin_role(tmp_path: Path) -> None:
+    fake_sender = FakePortalEmailSender()
+    database_url, client = _build_client(
+        tmp_path,
+        settings_overrides={
+            "portal_jwt_secret": TEST_PORTAL_JWT_SECRET,
+            "portal_public_base_url": "https://cloud.example.com",
+        },
+        portal_email_sender=fake_sender,
+    )
+
+    _login_platform_admin(client, admin_ref="platform:founder")
+    client.post(
+        "/internal/service/accounts",
+        json={"account_id": "acct_role_gate", "name": "Role Gate Account"},
+        headers=build_internal_headers(idempotency_key="role-gate-account-001"),
+    )
+
+    response = client.post(
+        "/admin/accounts/acct_role_gate/invite-member",
+        json={"email": "member@example.com", "role": "user_admin"},
+    )
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["member_ref"] == "user:member@example.com"
+    assert data["role"] == "user_admin"
+    assert data["status"] == "pending_invite"
+    assert len(fake_sender.messages) == 1
+    assert fake_sender.messages[0]["kind"] == "invite_notice"
+    assert str(fake_sender.messages[0]["portal_url"]).endswith("/portal/login")
+
+    dispose_engine(database_url)
+
+
+def test_internal_platform_admin_directory_routes_are_removed(tmp_path: Path) -> None:
+    database_url, client = _build_client(tmp_path)
+
+    list_response = client.get(
+        "/internal/service/admin/platform-admins",
+        headers=build_internal_headers(),
+    )
+    create_response = client.post(
+        "/internal/service/platform-admin-identities",
+        json={
+            "admin_ref": "platform:anything",
+            "role": "platform_admin",
+            "email": "founder@example.com",
+        },
+        headers=build_internal_headers(idempotency_key="platform-admin-create-disabled"),
+    )
+    delete_response = client.delete(
+        "/internal/service/platform-admin-identities/platform:anything",
+        headers=build_internal_headers(idempotency_key="platform-admin-delete-disabled"),
+    )
+
+    assert list_response.status_code == 404
+    assert create_response.status_code == 404
+    assert delete_response.status_code == 404
+
+    dispose_engine(database_url)
+
+
+def test_web_admin_json_write_rejects_form_posts(tmp_path: Path) -> None:
+    database_url, client = _build_client(tmp_path)
+    _login_platform_admin(client, admin_ref="platform:founder")
+    client.post(
+        "/internal/service/accounts",
+        json={"account_id": "acct_form_gate", "name": "Form Gate Account"},
+        headers=build_internal_headers(idempotency_key="form-gate-account-001"),
+    )
+
+    response = client.post(
+        "/admin/accounts/acct_form_gate/invite-member",
+        data={"email": "member@example.com"},
+    )
+
+    assert response.status_code == 415
+    assert response.json()["error_code"] == "request.content_type_invalid"
+
+    dispose_engine(database_url)
+
+
+def test_web_portal_preview_surface_is_removed(tmp_path: Path) -> None:
+    database_url, client = _build_client(tmp_path)
+
+    response = client.post("/portal/preview/email-login/request", json={"email": "outsider@example.com"})
+
+    assert response.status_code == 404
+
+    dispose_engine(database_url)
+
+
+def test_web_portal_email_code_and_key_actions_with_jwt(tmp_path: Path) -> None:
+    fake_sender = FakePortalEmailSender()
+    database_url, client = _build_client(
+        tmp_path,
+        settings_overrides={
+            "portal_jwt_secret": TEST_PORTAL_JWT_SECRET,
+            "portal_jwt_issuer": "magick-cloud-portal",
+            "portal_jwt_audience": "magick-cloud-customers",
+        },
+        portal_email_sender=fake_sender,
+    )
+
+    _seed_account_membership(
+        client,
+        account_id="acct_web",
+        member_ref="user:web@example.com",
+        status="pending_invite",
+    )
+    client.post(
+        "/internal/service/sites",
+        json={
+            "site_id": "site_web",
+            "account_id": "acct_web",
+            "name": "Web Site",
+            "status": "provisioning",
+        },
+        headers=build_internal_headers(idempotency_key="web-site-001"),
+    )
+    client.post(
+        "/internal/service/sites/site_web/activate",
+        headers=build_internal_headers(idempotency_key="web-site-activate-001"),
+    )
+
+    login_request_response = client.post(
+        "/portal/v1/auth/code/request",
+        json={"email": "web@example.com"},
+    )
+    assert login_request_response.status_code == 200
+    assert login_request_response.json()["data"]["delivery"] == "email"
+    assert login_request_response.json()["data"]["code"] == ""
+    assert len(fake_sender.messages) == 1
+
+    login_verify_response = client.post(
+        "/portal/v1/auth/code/verify",
+        json={"email": "web@example.com", "code": str(fake_sender.messages[0]["code"])},
+    )
+    assert login_verify_response.status_code == 200
+    assert login_verify_response.json()["data"]["member_ref"] == "user:web@example.com"
+
+    issue_response = client.post(
+        "/portal/v1/sites/site_web/api-keys",
+        json={"label": "Web Key"},
+        headers={"origin": "http://testserver", "referer": "http://testserver/"},
+    )
+    assert issue_response.status_code == 200
+    assert issue_response.json()["data"]["cloud_api_key"].startswith("mak1_")
+
+    dispose_engine(database_url)
+
+
+def test_web_admin_can_activate_provisioning_site(tmp_path: Path) -> None:
+    database_url, client = _build_client(tmp_path)
+
+    _login_platform_admin(client)
+    client.post(
+        "/internal/service/accounts",
+        json={"account_id": "acct_web_activate", "name": "Web Activate Account"},
+        headers=build_internal_headers(idempotency_key="web-activate-account-001"),
+    )
+    client.post(
+        "/internal/service/sites",
+        json={
+            "site_id": "site_web_activate",
+            "account_id": "acct_web_activate",
+            "name": "Web Activate Site",
+            "status": "provisioning",
+        },
+        headers=build_internal_headers(idempotency_key="web-activate-site-001"),
+    )
+
+    response = client.post(
+        "/admin/sites/site_web_activate/activate",
+        json={},
+        headers={"origin": "http://testserver", "referer": "http://testserver/"},
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["message"] == "site activated"
+    assert response.json()["data"]["status"] == "active"
+
+    site_response = client.get(
+        "/internal/service/admin/sites/site_web_activate",
+        headers=build_internal_headers(),
+    )
+    assert site_response.status_code == 200
+    assert site_response.json()["data"]["site"]["status"] == "active"
+
+    dispose_engine(database_url)

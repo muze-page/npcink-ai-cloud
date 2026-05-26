@@ -1,0 +1,89 @@
+{
+  "version": "recognition_upstream_v1",
+  "sources": {
+    "litellm_revision": "seed-2026-03-29",
+    "hf_snapshot": "seed-2026-03-29"
+  },
+  "records": {
+    "huggingface::black-forest-labs/FLUX.1-dev": {
+      "evidence_source": "huggingface_model_info",
+      "model_type": "image_generation",
+      "preview_type": "image",
+      "input_modalities": ["text", "image"],
+      "output_modalities": ["image"],
+      "capabilities": {
+        "text_input": true,
+        "image_input": false,
+        "image_output": true,
+        "vision": false,
+        "tools": false,
+        "structured_output": false
+      },
+      "confidence": 0.9
+    },
+    "huggingface::llava-hf/llava-1.5-7b-hf": {
+      "evidence_source": "huggingface_model_info",
+      "model_type": "vision",
+      "preview_type": "text",
+      "input_modalities": ["text", "image"],
+      "output_modalities": ["text"],
+      "capabilities": {
+        "text_input": true,
+        "image_input": true,
+        "image_output": false,
+        "vision": true,
+        "tools": false,
+        "structured_output": false
+      },
+      "confidence": 0.88
+    },
+    "huggingface::BAAI/bge-m3": {
+      "evidence_source": "huggingface_model_info",
+      "model_type": "embedding",
+      "preview_type": "embedding",
+      "input_modalities": ["text"],
+      "output_modalities": ["embedding"],
+      "capabilities": {
+        "text_input": true,
+        "image_input": false,
+        "image_output": false,
+        "vision": false,
+        "tools": false,
+        "structured_output": false
+      },
+      "confidence": 0.9
+    },
+    "openai::gpt-4.1": {
+      "evidence_source": "litellm_seed",
+      "model_type": "vision",
+      "preview_type": "text",
+      "input_modalities": ["text", "image"],
+      "output_modalities": ["text"],
+      "capabilities": {
+        "text_input": true,
+        "image_input": true,
+        "image_output": false,
+        "vision": true,
+        "tools": true,
+        "structured_output": true
+      },
+      "confidence": 0.96
+    },
+    "openai::text-embedding-3-small": {
+      "evidence_source": "litellm_seed",
+      "model_type": "embedding",
+      "preview_type": "embedding",
+      "input_modalities": ["text"],
+      "output_modalities": ["embedding"],
+      "capabilities": {
+        "text_input": true,
+        "image_input": false,
+        "image_output": false,
+        "vision": false,
+        "tools": false,
+        "structured_output": false
+      },
+      "confidence": 0.95
+    }
+  }
+}

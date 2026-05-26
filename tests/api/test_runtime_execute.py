@@ -1,0 +1,3295 @@
+from __future__ import annotations
+
+import json
+import logging
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
+
+import httpx
+import pytest
+from fastapi.testclient import TestClient
+from sqlalchemy import select
+
+from app.adapters.callbacks.base import RuntimeCallbackDispatcher
+from app.adapters.callbacks.http import HttpRuntimeCallbackDispatcher
+from app.adapters.providers.anthropic import AnthropicProviderAdapter
+from app.adapters.providers.base import (
+    ProviderAdapter,
+    ProviderExecutionError,
+    ProviderExecutionRequest,
+    ProviderExecutionResult,
+)
+from app.adapters.providers.openai import OpenAIProviderAdapter
+from app.adapters.queue.in_memory import InMemoryRuntimeQueue
+from app.api.main import create_app
+from app.core import security as security_module
+from app.core.config import Settings
+from app.core.db import dispose_engine, get_session, init_schema
+from app.core.models import (
+    SITE_API_KEY_STATUS_REVOKED,
+    AccountSubscription,
+    PlanVersion,
+    RunRecord,
+    RuntimeGuardEvent,
+    Site,
+    SiteApiKey,
+    UsageMeterEvent,
+)
+from app.core.security import (
+    build_body_digest,
+    build_canonical_request,
+    build_hmac_signature,
+)
+from app.core.services import CloudServices
+from app.core.secrets import encrypt_runtime_terminal_callback_secret
+from app.domain.catalog.service import CatalogService
+from app.domain.runtime.service import RuntimeService
+from tests.conftest import (
+    TEST_PROVIDER_CONNECTION_SECRET,
+    build_auth_headers,
+    merge_json_headers,
+    seed_site_auth,
+)
+
+
+def _sqlite_url(tmp_path: Path) -> str:
+    return f"sqlite+pysqlite:///{tmp_path / 'runtime-api.sqlite3'}"
+
+
+def _build_client(
+    tmp_path: Path,
+    *,
+    providers: dict[str, ProviderAdapter] | None = None,
+    runtime_queue: InMemoryRuntimeQueue | None = None,
+    callback_dispatcher: RuntimeCallbackDispatcher | None = None,
+    settings_overrides: dict[str, object] | None = None,
+    bootstrap_catalog: bool = True,
+) -> tuple[str, TestClient]:
+    database_url = _sqlite_url(tmp_path)
+    init_schema(database_url)
+    if bootstrap_catalog:
+        CatalogService(database_url, providers=providers).refresh_catalog()
+    seed_site_auth(
+        database_url,
+        site_id="site_alpha",
+        scopes=["runtime:execute", "runtime:read", "runtime:resolve"],
+    )
+    seed_site_auth(
+        database_url,
+        site_id="site_beta",
+        key_id="key_beta",
+        scopes=["runtime:execute", "runtime:read", "runtime:resolve"],
+    )
+
+    settings = Settings(
+        project_name="Magick AI Cloud Test",
+        environment="test",
+        database_url=database_url,
+        redis_url="redis://localhost:6379/0",
+        provider_connection_secret=TEST_PROVIDER_CONNECTION_SECRET,
+        **(settings_overrides or {}),
+    )
+    return database_url, TestClient(
+        create_app(
+            CloudServices(
+                settings=settings,
+                providers=providers or {},
+                runtime_queue=runtime_queue,
+                callback_dispatcher=callback_dispatcher,
+            )
+        )
+    )
+
+
+def _runtime_service_settings(database_url: str) -> Settings:
+    return Settings(
+        environment="test",
+        database_url=database_url,
+        redis_url="redis://localhost:6379/0",
+        provider_connection_secret=TEST_PROVIDER_CONNECTION_SECRET,
+    )
+
+
+def _runtime_callback_metadata(
+    callback_url: str,
+    *,
+    callback_id: str = "runtime_terminal",
+) -> dict[str, object]:
+    settings = _runtime_service_settings("sqlite+pysqlite:///:memory:")
+    return {
+        "runtime_callbacks": {
+            "terminal": {
+                "enabled": True,
+                "callback_url": callback_url,
+                "key_id": "runtime_callback_key",
+                "secret_ciphertext": encrypt_runtime_terminal_callback_secret(
+                    "runtime-callback-secret-for-tests-32b",
+                    settings=settings,
+                ),
+                "callback_id": callback_id,
+            }
+        }
+    }
+
+
+class SequencedProviderAdapter(OpenAIProviderAdapter):
+    def __init__(self, outcomes_by_instance: dict[str, list[dict[str, object]]]) -> None:
+        super().__init__()
+        self.outcomes_by_instance = outcomes_by_instance
+        self.attempts_by_instance: dict[str, int] = {}
+
+    def execute(self, request: ProviderExecutionRequest) -> ProviderExecutionResult:
+        outcomes = self.outcomes_by_instance.get(request.instance_id, [])
+        attempt_index = self.attempts_by_instance.get(request.instance_id, 0)
+        self.attempts_by_instance[request.instance_id] = attempt_index + 1
+        if not outcomes:
+            return super().execute(request)
+
+        outcome = outcomes[min(attempt_index, len(outcomes) - 1)]
+        if outcome["kind"] == "error":
+            retryable = outcome.get("retryable")
+            raise ProviderExecutionError(
+                str(outcome["error_code"]),
+                str(outcome["message"]),
+                retryable=retryable if isinstance(retryable, bool) else None,
+                tokens_in=int(outcome.get("tokens_in", 0)),
+                tokens_out=int(outcome.get("tokens_out", 0)),
+                cost=float(outcome.get("cost", 0.0)),
+            )
+
+        output_text = str(outcome.get("output_text", "sequenced success"))
+        tokens_in = int(outcome.get("tokens_in", 6))
+        tokens_out = int(outcome.get("tokens_out", 4))
+        latency_ms = int(outcome.get("latency_ms", 90))
+        return ProviderExecutionResult(
+            output={
+                "output_text": output_text,
+                "messages": [{"role": "assistant", "content": output_text}],
+                "model_id": request.model_id,
+            },
+            latency_ms=latency_ms,
+            tokens_in=tokens_in,
+            tokens_out=tokens_out,
+            cost=0.0,
+        )
+
+
+def test_execute_route_runs_and_supports_idempotency(tmp_path: Path) -> None:
+    database_url, client = _build_client(tmp_path)
+    payload = {
+        "site_id": "site_alpha",
+        "ability_name": "magick-ai/workflows/generate-post-draft",
+        "ability_family": "workflow",
+        "skill_id": "content_summary_seo",
+        "workflow_id": "content_summary_seo_completion",
+        "contract_version": "v1",
+        "channel": "openapi",
+        "execution_kind": "text",
+        "execution_tier": "cloud",
+        "execution_pattern": "inline",
+        "data_classification": "internal",
+        "timeout_seconds": 1800,
+        "retry_max": 2,
+        "retention_ttl": 86400,
+        "task_backend": {
+            "enabled": True,
+            "mode": "polling",
+            "callback_mode": "polling_preferred",
+            "polling_interval_sec": 120,
+        },
+        "profile_id": "text.balanced",
+        "idempotency_key": "idem-balanced-001",
+        "trace_id": "trace-balanced-001",
+        "input": {
+            "messages": [{"role": "user", "content": "write a short draft"}]
+        },
+        "policy": {"allow_fallback": True},
+    }
+    body = json.dumps(payload).encode("utf-8")
+    first_headers = merge_json_headers(
+        build_auth_headers(
+            "POST",
+            "/v1/runtime/execute",
+            site_id="site_alpha",
+            idempotency_key="idem-balanced-001",
+            nonce="nonce-balanced-001",
+            trace_id="tracebalanced0010000000000000000",
+            body=body,
+        )
+    )
+    replay_headers = merge_json_headers(
+        build_auth_headers(
+            "POST",
+            "/v1/runtime/execute",
+            site_id="site_alpha",
+            idempotency_key="idem-balanced-001",
+            nonce="nonce-balanced-002",
+            trace_id="tracebalanced0010000000000000001",
+            body=body,
+        )
+    )
+
+    first_response = client.post(
+        "/v1/runtime/execute",
+        content=body,
+        headers=first_headers,
+    )
+    second_response = client.post(
+        "/v1/runtime/execute",
+        content=body,
+        headers=replay_headers,
+    )
+
+    assert first_response.status_code == 200
+    assert second_response.status_code == 200
+    assert "X-Magick-Deprecated-Execution-Pattern" not in first_response.headers
+    assert "X-Magick-Canonical-Execution-Pattern" not in first_response.headers
+    assert "X-Magick-Deprecated-Execution-Pattern" not in second_response.headers
+    assert "X-Magick-Canonical-Execution-Pattern" not in second_response.headers
+
+    first_data = first_response.json()["data"]
+    second_data = second_response.json()["data"]
+    assert first_data["run_id"] == second_data["run_id"]
+    assert first_data["idempotent_replay"] is False
+    assert second_data["idempotent_replay"] is True
+    assert first_data["provider_call_count"] == 1
+    assert first_data["error_code"] == ""
+    assert first_data["execution_context"] == {
+        "skill_id": "content_summary_seo",
+        "workflow_id": "content_summary_seo_completion",
+        "contract_version": "v1",
+        "ability_family": "workflow",
+        "execution_tier": "cloud",
+        "execution_pattern": "inline",
+        "data_classification": "internal",
+        "storage_mode": "result_only",
+    }
+    assert first_data["task_backend"] == {
+        "enabled": True,
+        "mode": "polling",
+        "callback_mode": "polling_preferred",
+        "polling_interval_sec": 120,
+        "callback_url": "",
+        "timeout_seconds": 1800,
+        "retry_max": 2,
+        "retention_ttl": 86400,
+        "status": "completed",
+    }
+    assert first_data["run_lifecycle"]["phase"] == "terminal"
+    assert first_data["run_lifecycle"]["queue_mode"] == "inline"
+    assert first_data["run_lifecycle"]["terminal_status"] == "succeeded"
+    assert first_data["run_lifecycle"]["retention"]["state"] == "retained"
+    assert first_data["run_lifecycle"]["cancel"]["state"] == "not_available"
+
+    run_headers = build_auth_headers(
+        "GET",
+        f"/v1/runs/{first_data['run_id']}",
+        site_id="site_alpha",
+        trace_id="tracebalanced0010000000000000001",
+    )
+    result_headers = build_auth_headers(
+        "GET",
+        f"/v1/runs/{first_data['run_id']}/result",
+        site_id="site_alpha",
+        trace_id="tracebalanced0010000000000000002",
+    )
+    run_response = client.get(f"/v1/runs/{first_data['run_id']}", headers=run_headers)
+    result_response = client.get(
+        f"/v1/runs/{first_data['run_id']}/result",
+        headers=result_headers,
+    )
+
+    assert run_response.status_code == 200
+    assert result_response.status_code == 200
+    assert run_response.json()["data"]["provider_call_count"] == 1
+    assert run_response.json()["data"]["skill_id"] == "content_summary_seo"
+    assert run_response.json()["data"]["task_backend"]["status"] == "completed"
+    assert run_response.json()["data"]["run_lifecycle"]["phase"] == "terminal"
+    assert result_response.json()["data"]["result"]["output_text"].startswith("[hosted:")
+    assert (
+        result_response.json()["data"]["execution_context"]["execution_pattern"]
+        == "inline"
+    )
+    assert (
+        result_response.json()["data"]["execution_context"]["ability_family"]
+        == "workflow"
+    )
+    assert result_response.json()["data"]["task_backend"]["retry_max"] == 2
+    assert result_response.json()["data"]["run_lifecycle"]["retention"]["state"] == "retained"
+
+    with get_session(database_url) as session:
+        meter_events = list(
+            session.scalars(
+                select(UsageMeterEvent)
+                .where(UsageMeterEvent.run_id == first_data["run_id"])
+                .order_by(UsageMeterEvent.id.asc())
+            )
+        )
+    assert [event.meter_key for event in meter_events] == [
+        "runs",
+        "provider_calls",
+        "tokens_in",
+        "tokens_out",
+        "tokens_total",
+        "cost",
+    ]
+    assert all(event.ability_family == "workflow" for event in meter_events)
+
+    dispose_engine(database_url)
+
+
+def test_execute_route_rejects_step_offload_public_ingress(
+    tmp_path: Path,
+) -> None:
+    database_url, client = _build_client(tmp_path)
+    payload = {
+        "site_id": "site_alpha",
+        "ability_name": "magick-ai/workflows/generate-post-draft",
+        "ability_family": "workflow",
+        "skill_id": "content_summary_seo",
+        "workflow_id": "content_summary_seo_completion",
+        "contract_version": "v1",
+        "channel": "openapi",
+        "execution_kind": "text",
+        "execution_tier": "cloud",
+        "execution_pattern": "step_offload",
+        "data_classification": "internal",
+        "profile_id": "text.balanced",
+        "idempotency_key": "idem-step-offload-001",
+        "trace_id": "trace-step-offload-001",
+        "input": {
+            "messages": [{"role": "user", "content": "return one short line"}]
+        },
+        "policy": {"allow_fallback": True},
+    }
+    body = json.dumps(payload).encode("utf-8")
+    headers = merge_json_headers(
+        build_auth_headers(
+            "POST",
+            "/v1/runtime/execute",
+            site_id="site_alpha",
+            idempotency_key="idem-step-offload-001",
+            nonce="nonce-step-offload-001",
+            trace_id="tracestepoffload001000000000",
+            body=body,
+        )
+    )
+
+    response = client.post(
+        "/v1/runtime/execute",
+        content=body,
+        headers=headers,
+    )
+
+    assert response.status_code == 422
+
+    dispose_engine(database_url)
+
+
+def test_execute_route_loads_enabled_provider_connections_from_database(tmp_path: Path) -> None:
+    settings_overrides = {
+        "admin_session_secret": "x" * 32,
+    }
+    database_url, client = _build_client(
+        tmp_path,
+        providers={},
+        settings_overrides=settings_overrides,
+        bootstrap_catalog=False,
+    )
+    settings = Settings(
+        project_name="Magick AI Cloud Test",
+        environment="test",
+        database_url=database_url,
+        redis_url="redis://localhost:6379/0",
+        **settings_overrides,
+    )
+    catalog_service = CatalogService(database_url, settings=settings)
+    catalog_service.upsert_admin_provider_connection(
+        connection_id="openai-main",
+        provider_type="openai",
+        source_role="execution_source",
+        display_name="OpenAI Main",
+        enabled=True,
+        base_url="https://api.openai.com/v1",
+        config={"timeout_seconds": 30},
+        api_key="",
+    )
+    synced = catalog_service.sync_admin_provider_connection_catalog("openai-main")
+    assert synced is not None
+
+    payload = {
+        "site_id": "site_alpha",
+        "ability_name": "magick-ai/abilities/text-complete",
+        "ability_family": "text",
+        "channel": "openapi",
+        "execution_kind": "text",
+        "execution_tier": "cloud",
+        "execution_pattern": "inline",
+        "data_classification": "internal",
+        "profile_id": "text.balanced",
+        "idempotency_key": "idem-connection-route-001",
+        "trace_id": "trace-connection-route-001",
+        "input": {
+            "messages": [{"role": "user", "content": "respond with one short line"}]
+        },
+        "policy": {"allow_fallback": True},
+    }
+    body = json.dumps(payload).encode("utf-8")
+    headers = merge_json_headers(
+        build_auth_headers(
+            "POST",
+            "/v1/runtime/execute",
+            site_id="site_alpha",
+            idempotency_key="idem-connection-route-001",
+            nonce="nonce-connection-route-001",
+            trace_id="traceconnectionroute0010000000000",
+            body=body,
+        )
+    )
+
+    response = client.post(
+        "/v1/runtime/execute",
+        content=body,
+        headers=headers,
+    )
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["status"] == "succeeded"
+    assert data["provider_id"] == "openai-main"
+    assert data["instance_id"].startswith("openai-main/")
+
+    dispose_engine(database_url)
+
+
+def test_execute_route_rejects_unknown_policy_keys(tmp_path: Path) -> None:
+    database_url, client = _build_client(tmp_path)
+    payload = {
+        "site_id": "site_alpha",
+        "ability_name": "magick-ai/workflows/generate-post-draft",
+        "channel": "openapi",
+        "execution_kind": "text",
+        "profile_id": "text.balanced",
+        "idempotency_key": "idem-policy-unknown-001",
+        "input": {"messages": [{"role": "user", "content": "unknown policy key"}]},
+        "policy": {"allow_fallback": True, "router_preset_id": "preset.alpha"},
+    }
+    body = json.dumps(payload).encode("utf-8")
+    response = client.post(
+        "/v1/runtime/execute",
+        content=body,
+        headers=merge_json_headers(
+            build_auth_headers(
+                "POST",
+                "/v1/runtime/execute",
+                site_id="site_alpha",
+                idempotency_key="idem-policy-unknown-001",
+                trace_id="tracepolicyunknown001000000000",
+                body=body,
+            )
+        ),
+    )
+
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert any(item["loc"][-1] == "router_preset_id" for item in detail)
+
+    dispose_engine(database_url)
+
+
+def test_execute_route_rejects_local_governance_policy_keys(tmp_path: Path) -> None:
+    database_url, client = _build_client(tmp_path)
+    payload = {
+        "site_id": "site_alpha",
+        "ability_name": "magick-ai/workflows/generate-post-draft",
+        "channel": "openapi",
+        "execution_kind": "text",
+        "profile_id": "text.balanced",
+        "idempotency_key": "idem-policy-governance-001",
+        "input": {"messages": [{"role": "user", "content": "blocked policy key"}]},
+        "policy": {
+            "allow_fallback": True,
+            "requires_confirm": True,
+            "required_scope": "post.write",
+            "tool_policy": {"allow_write": True},
+            "approval_policy": {"mode": "proposal_only"},
+            "apply_policy": {"post_write": True},
+            "final_write_policy": {"allow": False},
+        },
+    }
+    body = json.dumps(payload).encode("utf-8")
+    response = client.post(
+        "/v1/runtime/execute",
+        content=body,
+        headers=merge_json_headers(
+            build_auth_headers(
+                "POST",
+                "/v1/runtime/execute",
+                site_id="site_alpha",
+                idempotency_key="idem-policy-governance-001",
+                trace_id="tracepolicygovernance00100000",
+                body=body,
+            )
+        ),
+    )
+
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    detail_json = json.dumps(detail)
+    assert "local governance or final-write fields" in detail_json
+    assert "requires_confirm" in detail_json
+    assert "required_scope" in detail_json
+    assert "tool_policy" in detail_json
+    assert "approval_policy" in detail_json
+    assert "apply_policy" in detail_json
+    assert "final_write_policy" in detail_json
+
+    dispose_engine(database_url)
+
+
+def test_execute_route_rejects_reused_nonce(tmp_path: Path) -> None:
+    database_url, client = _build_client(tmp_path)
+    payload = {
+        "site_id": "site_alpha",
+        "ability_name": "magick-ai/workflows/generate-post-draft",
+        "execution_kind": "text",
+        "profile_id": "text.balanced",
+        "idempotency_key": "idem-reused-nonce-001",
+        "input": {"messages": [{"role": "user", "content": "replay should fail"}]},
+    }
+    body = json.dumps(payload).encode("utf-8")
+    headers = merge_json_headers(
+        build_auth_headers(
+            "POST",
+            "/v1/runtime/execute",
+            site_id="site_alpha",
+            idempotency_key="idem-reused-nonce-001",
+            nonce="nonce-reused-001",
+            trace_id="tracereusednonce00100000000000",
+            body=body,
+        )
+    )
+
+    first_response = client.post("/v1/runtime/execute", content=body, headers=headers)
+    second_response = client.post("/v1/runtime/execute", content=body, headers=headers)
+
+    assert first_response.status_code == 200
+    assert second_response.status_code == 409
+    assert second_response.json()["error_code"] == "auth.replay_blocked"
+
+    dispose_engine(database_url)
+
+
+def test_resolve_route_enforces_public_short_window_rate_limit(tmp_path: Path) -> None:
+    database_url, client = _build_client(
+        tmp_path,
+        settings_overrides={
+            "public_post_rate_limit_window_seconds": 60,
+            "public_post_max_requests_per_window": 1,
+        },
+    )
+    payload = {
+        "site_id": "site_alpha",
+        "ability_name": "magick-ai/workflows/generate-post-draft",
+        "ability_family": "workflow",
+        "execution_kind": "text",
+        "profile_id": "text.balanced",
+        "input": {"messages": [{"role": "user", "content": "resolve once"}]},
+    }
+    first_body = json.dumps(payload).encode("utf-8")
+    second_body = json.dumps(
+        {
+            **payload,
+            "input": {"messages": [{"role": "user", "content": "resolve twice"}]},
+        }
+    ).encode("utf-8")
+
+    first_response = client.post(
+        "/v1/runtime/resolve",
+        content=first_body,
+        headers=merge_json_headers(
+            build_auth_headers(
+                "POST",
+                "/v1/runtime/resolve",
+                site_id="site_alpha",
+                nonce="nonce-rate-limit-001",
+                trace_id="traceratelimit0010000000000000",
+                body=first_body,
+            )
+        ),
+    )
+    second_response = client.post(
+        "/v1/runtime/resolve",
+        content=second_body,
+        headers=merge_json_headers(
+            build_auth_headers(
+                "POST",
+                "/v1/runtime/resolve",
+                site_id="site_alpha",
+                nonce="nonce-rate-limit-002",
+                trace_id="traceratelimit0020000000000000",
+                body=second_body,
+            )
+        ),
+    )
+
+    assert first_response.status_code == 200
+    assert second_response.status_code == 429
+    assert second_response.json()["error_code"] == "auth.rate_limit_exceeded"
+
+    dispose_engine(database_url)
+
+
+def test_resolve_route_enforces_public_key_short_window_rate_limit(tmp_path: Path) -> None:
+    database_url, client = _build_client(
+        tmp_path,
+        settings_overrides={
+            "public_post_rate_limit_window_seconds": 60,
+            "public_post_max_requests_per_window": 10,
+            "public_post_max_requests_per_key_window": 1,
+            "public_post_max_requests_per_ip_window": 10,
+        },
+    )
+    payload = {
+        "site_id": "site_alpha",
+        "ability_name": "magick-ai/workflows/generate-post-draft",
+        "ability_family": "workflow",
+        "execution_kind": "text",
+        "profile_id": "text.balanced",
+        "input": {"messages": [{"role": "user", "content": "key limited"}]},
+    }
+    first_body = json.dumps(payload).encode("utf-8")
+    second_body = json.dumps(
+        {
+            **payload,
+            "input": {"messages": [{"role": "user", "content": "key limited again"}]},
+        }
+    ).encode("utf-8")
+
+    first_response = client.post(
+        "/v1/runtime/resolve",
+        content=first_body,
+        headers=merge_json_headers(
+            build_auth_headers(
+                "POST",
+                "/v1/runtime/resolve",
+                site_id="site_alpha",
+                key_id="key_default",
+                nonce="nonce-key-rate-limit-001",
+                trace_id="tracekeyratelimit00100000000",
+                body=first_body,
+            )
+        ),
+    )
+    second_response = client.post(
+        "/v1/runtime/resolve",
+        content=second_body,
+        headers=merge_json_headers(
+            build_auth_headers(
+                "POST",
+                "/v1/runtime/resolve",
+                site_id="site_alpha",
+                key_id="key_default",
+                nonce="nonce-key-rate-limit-002",
+                trace_id="tracekeyratelimit00200000000",
+                body=second_body,
+            )
+        ),
+    )
+
+    assert first_response.status_code == 200
+    assert second_response.status_code == 429
+    assert second_response.json()["error_code"] == "auth.rate_limit_exceeded"
+
+    dispose_engine(database_url)
+
+
+def test_resolve_route_enforces_public_ip_short_window_rate_limit(tmp_path: Path) -> None:
+    database_url, client = _build_client(
+        tmp_path,
+        settings_overrides={
+            "public_post_rate_limit_window_seconds": 60,
+            "public_post_max_requests_per_window": 10,
+            "public_post_max_requests_per_key_window": 10,
+            "public_post_max_requests_per_ip_window": 1,
+        },
+    )
+    first_payload = {
+        "site_id": "site_alpha",
+        "ability_name": "magick-ai/workflows/generate-post-draft",
+        "ability_family": "workflow",
+        "execution_kind": "text",
+        "profile_id": "text.balanced",
+        "input": {"messages": [{"role": "user", "content": "ip limited first"}]},
+    }
+    second_payload = {
+        "site_id": "site_beta",
+        "ability_name": "magick-ai/workflows/generate-post-draft",
+        "ability_family": "workflow",
+        "execution_kind": "text",
+        "profile_id": "text.balanced",
+        "input": {"messages": [{"role": "user", "content": "ip limited second"}]},
+    }
+    first_body = json.dumps(first_payload).encode("utf-8")
+    second_body = json.dumps(second_payload).encode("utf-8")
+
+    first_response = client.post(
+        "/v1/runtime/resolve",
+        content=first_body,
+        headers=merge_json_headers(
+            build_auth_headers(
+                "POST",
+                "/v1/runtime/resolve",
+                site_id="site_alpha",
+                key_id="key_default",
+                nonce="nonce-ip-rate-limit-001",
+                trace_id="traceipratelimit001000000000",
+                body=first_body,
+            )
+        ),
+    )
+    second_response = client.post(
+        "/v1/runtime/resolve",
+        content=second_body,
+        headers=merge_json_headers(
+            build_auth_headers(
+                "POST",
+                "/v1/runtime/resolve",
+                site_id="site_beta",
+                key_id="key_beta",
+                nonce="nonce-ip-rate-limit-002",
+                trace_id="traceipratelimit002000000000",
+                body=second_body,
+            )
+        ),
+    )
+
+    assert first_response.status_code == 200
+    assert second_response.status_code == 429
+    assert second_response.json()["error_code"] == "auth.rate_limit_exceeded"
+
+    dispose_engine(database_url)
+
+
+def test_resolve_route_enforces_public_guard_cooldown_after_rejects(tmp_path: Path) -> None:
+    database_url, client = _build_client(
+        tmp_path,
+        settings_overrides={
+            "public_post_rate_limit_window_seconds": 600,
+            "public_post_max_requests_per_window": 10,
+            "public_post_max_requests_per_key_window": 10,
+            "public_post_max_requests_per_ip_window": 10,
+            "public_guard_cooldown_window_seconds": 3600,
+            "public_guard_max_reject_events_per_site_window": 1,
+            "public_guard_max_reject_events_per_key_window": 1,
+            "public_guard_max_reject_events_per_ip_window": 1,
+        },
+    )
+    payload = {
+        "site_id": "site_alpha",
+        "ability_name": "magick-ai/workflows/generate-post-draft",
+        "ability_family": "workflow",
+        "execution_kind": "text",
+        "profile_id": "text.balanced",
+        "input": {"messages": [{"role": "user", "content": "cooldown me"}]},
+    }
+    body = json.dumps(payload).encode("utf-8")
+    headers = merge_json_headers(
+        build_auth_headers(
+            "POST",
+            "/v1/runtime/resolve",
+            site_id="site_alpha",
+            key_id="key_default",
+            nonce="nonce-cooldown-001",
+            trace_id="tracecooldown0010000000000000",
+            body=body,
+        )
+    )
+    fresh_headers = merge_json_headers(
+        build_auth_headers(
+            "POST",
+            "/v1/runtime/resolve",
+            site_id="site_alpha",
+            key_id="key_default",
+            nonce="nonce-cooldown-002",
+            trace_id="tracecooldown0020000000000000",
+            body=body,
+        )
+    )
+
+    first_response = client.post("/v1/runtime/resolve", content=body, headers=headers)
+    replay_response = client.post("/v1/runtime/resolve", content=body, headers=headers)
+    cooldown_response = client.post(
+        "/v1/runtime/resolve",
+        content=body,
+        headers=fresh_headers,
+    )
+
+    assert first_response.status_code == 200
+    assert replay_response.status_code == 409
+    assert replay_response.json()["error_code"] == "auth.replay_blocked"
+    assert cooldown_response.status_code == 429
+    assert cooldown_response.json()["error_code"] == "auth.rate_limit_exceeded"
+
+    with get_session(database_url) as session:
+        events = list(
+            session.scalars(
+                select(RuntimeGuardEvent)
+                .where(RuntimeGuardEvent.site_id == "site_alpha")
+                .order_by(RuntimeGuardEvent.id.asc())
+            )
+        )
+    assert any(event.event_code == "auth.replay_blocked" for event in events)
+    assert any(event.event_code == "auth.rate_limit_exceeded" for event in events)
+
+    dispose_engine(database_url)
+
+
+def test_resolve_route_logs_guard_persistence_failure_without_relaxing_auth(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    database_url, client = _build_client(tmp_path)
+    payload = {
+        "site_id": "site_alpha",
+        "ability_name": "magick-ai/workflows/generate-post-draft",
+        "ability_family": "workflow",
+        "execution_kind": "text",
+        "profile_id": "text.balanced",
+        "input": {"messages": [{"role": "user", "content": "fail guard persistence"}]},
+    }
+    body = json.dumps(payload).encode("utf-8")
+    headers = merge_json_headers(
+        build_auth_headers(
+            "POST",
+            "/v1/runtime/resolve",
+            site_id="site_alpha",
+            key_id="key_default",
+            nonce="nonce-guard-persist-001",
+            trace_id="traceguardpersist0010000000000",
+            body=body,
+        )
+    )
+
+    def raise_guard_write_failure(*args: object, **kwargs: object) -> None:
+        raise RuntimeError("guard write failed")
+
+    monkeypatch.setattr(
+        security_module,
+        "_record_runtime_guard_events",
+        raise_guard_write_failure,
+    )
+    caplog.set_level(logging.ERROR, logger="app.core.security")
+
+    first_response = client.post("/v1/runtime/resolve", content=body, headers=headers)
+    replay_response = client.post("/v1/runtime/resolve", content=body, headers=headers)
+
+    assert first_response.status_code == 200
+    assert replay_response.status_code == 409
+    assert replay_response.json()["error_code"] == "auth.replay_blocked"
+    assert any(
+        "runtime guard rejection persistence failed" in record.message
+        and record.exc_info is not None
+        and "auth.replay_blocked" in record.message
+        and "site_alpha" in record.message
+        for record in caplog.records
+    )
+
+    with get_session(database_url) as session:
+        events = list(
+            session.scalars(
+                select(RuntimeGuardEvent)
+                .where(RuntimeGuardEvent.site_id == "site_alpha")
+                .order_by(RuntimeGuardEvent.id.asc())
+            )
+        )
+    assert events == []
+
+    dispose_engine(database_url)
+
+
+def test_execute_route_keeps_idempotency_conflict_for_payload_mismatch(tmp_path: Path) -> None:
+    database_url, client = _build_client(tmp_path)
+    first_payload = {
+        "site_id": "site_alpha",
+        "ability_name": "magick-ai/workflows/generate-post-draft",
+        "execution_kind": "text",
+        "profile_id": "text.balanced",
+        "idempotency_key": "idem-conflict-001",
+        "input": {"messages": [{"role": "user", "content": "first body"}]},
+    }
+    second_payload = {
+        **first_payload,
+        "input": {"messages": [{"role": "user", "content": "second body"}]},
+    }
+    first_body = json.dumps(first_payload).encode("utf-8")
+    second_body = json.dumps(second_payload).encode("utf-8")
+    first_headers = merge_json_headers(
+        build_auth_headers(
+            "POST",
+            "/v1/runtime/execute",
+            site_id="site_alpha",
+            idempotency_key="idem-conflict-001",
+            nonce="nonce-conflict-001",
+            trace_id="traceconflict0010000000000000",
+            body=first_body,
+        )
+    )
+    second_headers = merge_json_headers(
+        build_auth_headers(
+            "POST",
+            "/v1/runtime/execute",
+            site_id="site_alpha",
+            idempotency_key="idem-conflict-001",
+            nonce="nonce-conflict-002",
+            trace_id="traceconflict0020000000000000",
+            body=second_body,
+        )
+    )
+
+    first_response = client.post(
+        "/v1/runtime/execute",
+        content=first_body,
+        headers=first_headers,
+    )
+    second_response = client.post(
+        "/v1/runtime/execute",
+        content=second_body,
+        headers=second_headers,
+    )
+
+    assert first_response.status_code == 200
+    assert second_response.status_code == 409
+    assert second_response.json()["error_code"] == "runtime.idempotency_conflict"
+
+    dispose_engine(database_url)
+
+
+def test_execute_route_rejects_unprovisioned_site(tmp_path: Path) -> None:
+    database_url, client = _build_client(tmp_path)
+    payload = {
+        "site_id": "site_gamma",
+        "ability_name": "magick-ai/workflows/generate-post-draft",
+        "execution_kind": "text",
+        "profile_id": "text.balanced",
+        "idempotency_key": "idem-unprovisioned-001",
+        "input": {"messages": [{"role": "user", "content": "should fail"}]},
+    }
+    body = json.dumps(payload).encode("utf-8")
+    headers = merge_json_headers(
+        build_auth_headers(
+            "POST",
+            "/v1/runtime/execute",
+            site_id="site_gamma",
+            idempotency_key="idem-unprovisioned-001",
+            trace_id="traceunprovisioned0010000000000",
+            body=body,
+        )
+    )
+
+    response = client.post("/v1/runtime/execute", content=body, headers=headers)
+
+    assert response.status_code == 401
+    assert response.json()["error_code"] == "auth.invalid_site"
+
+    dispose_engine(database_url)
+
+
+def test_execute_route_rejects_revoked_key(tmp_path: Path) -> None:
+    database_url, client = _build_client(tmp_path)
+    seed_site_auth(
+        database_url,
+        site_id="site_alpha",
+        scopes=["runtime:execute", "runtime:read", "runtime:resolve"],
+        key_status=SITE_API_KEY_STATUS_REVOKED,
+    )
+    payload = {
+        "site_id": "site_alpha",
+        "ability_name": "magick-ai/workflows/generate-post-draft",
+        "execution_kind": "text",
+        "profile_id": "text.balanced",
+        "idempotency_key": "idem-revoked-key-001",
+        "input": {"messages": [{"role": "user", "content": "should fail"}]},
+    }
+    body = json.dumps(payload).encode("utf-8")
+    headers = merge_json_headers(
+        build_auth_headers(
+            "POST",
+            "/v1/runtime/execute",
+            site_id="site_alpha",
+            idempotency_key="idem-revoked-key-001",
+            trace_id="tracerevokedkey0010000000000000",
+            body=body,
+        )
+    )
+
+    response = client.post("/v1/runtime/execute", content=body, headers=headers)
+
+    assert response.status_code == 401
+    assert response.json()["error_code"] == "auth.invalid_key"
+
+    dispose_engine(database_url)
+
+
+def test_execute_route_rejects_expired_key(tmp_path: Path) -> None:
+    database_url, client = _build_client(tmp_path)
+    seed_site_auth(
+        database_url,
+        site_id="site_alpha",
+        scopes=["runtime:execute", "runtime:read", "runtime:resolve"],
+        expires_at=datetime.now(UTC) - timedelta(minutes=1),
+    )
+    payload = {
+        "site_id": "site_alpha",
+        "ability_name": "magick-ai/workflows/generate-post-draft",
+        "execution_kind": "text",
+        "profile_id": "text.balanced",
+        "idempotency_key": "idem-expired-key-001",
+        "input": {"messages": [{"role": "user", "content": "should fail"}]},
+    }
+    body = json.dumps(payload).encode("utf-8")
+    headers = merge_json_headers(
+        build_auth_headers(
+            "POST",
+            "/v1/runtime/execute",
+            site_id="site_alpha",
+            idempotency_key="idem-expired-key-001",
+            trace_id="traceexpiredkey0010000000000000",
+            body=body,
+        )
+    )
+
+    response = client.post("/v1/runtime/execute", content=body, headers=headers)
+
+    assert response.status_code == 401
+    assert response.json()["error_code"] == "auth.invalid_key"
+
+    dispose_engine(database_url)
+
+
+def test_execute_route_rejects_invalid_idempotency_key(tmp_path: Path) -> None:
+    database_url, client = _build_client(tmp_path)
+    payload = {
+        "site_id": "site_alpha",
+        "ability_name": "magick-ai/workflows/generate-post-draft",
+        "execution_kind": "text",
+        "profile_id": "text.balanced",
+        "input": {"messages": [{"role": "user", "content": "should fail"}]},
+    }
+    body = json.dumps(payload).encode("utf-8")
+    invalid_idempotency_key = "bad key with spaces"
+    headers = merge_json_headers(
+        build_auth_headers(
+            "POST",
+            "/v1/runtime/execute",
+            site_id="site_alpha",
+            idempotency_key=invalid_idempotency_key,
+            trace_id="traceinvalididem001000000000000",
+            body=body,
+        )
+    )
+
+    response = client.post("/v1/runtime/execute", content=body, headers=headers)
+
+    assert response.status_code == 400
+    assert response.json()["error_code"] == "auth.invalid_idempotency_key"
+
+    dispose_engine(database_url)
+
+
+def test_runtime_routes_reject_inactive_subscription(tmp_path: Path) -> None:
+    database_url, client = _build_client(tmp_path)
+    seed_site_auth(
+        database_url,
+        site_id="site_alpha",
+        scopes=["runtime:execute", "runtime:read", "runtime:resolve"],
+        subscription_status="past_due",
+    )
+    payload = {
+        "site_id": "site_alpha",
+        "ability_name": "magick-ai/workflows/generate-post-draft",
+        "ability_family": "workflow",
+        "execution_kind": "text",
+        "profile_id": "text.balanced",
+        "input": {"messages": [{"role": "user", "content": "should fail"}]},
+    }
+    body = json.dumps(payload).encode("utf-8")
+
+    resolve_response = client.post(
+        "/v1/runtime/resolve",
+        content=body,
+        headers=merge_json_headers(
+            build_auth_headers(
+                "POST",
+                "/v1/runtime/resolve",
+                site_id="site_alpha",
+                trace_id="tracesubinactive0010000000000",
+                body=body,
+            )
+        ),
+    )
+    execute_response = client.post(
+        "/v1/runtime/execute",
+        content=body,
+        headers=merge_json_headers(
+            build_auth_headers(
+                "POST",
+                "/v1/runtime/execute",
+                site_id="site_alpha",
+                idempotency_key="idem-subinactive-001",
+                trace_id="tracesubinactive0020000000000",
+                body=body,
+            )
+        ),
+    )
+
+    assert resolve_response.status_code == 403
+    assert resolve_response.json()["error_code"] == "commercial.subscription_inactive"
+    assert execute_response.status_code == 403
+    assert execute_response.json()["error_code"] == "commercial.subscription_inactive"
+
+    dispose_engine(database_url)
+
+
+def test_execute_route_rejects_entitlement_miss(tmp_path: Path) -> None:
+    database_url, client = _build_client(tmp_path)
+    seed_site_auth(
+        database_url,
+        site_id="site_alpha",
+        scopes=["runtime:execute", "runtime:read", "runtime:resolve"],
+        entitlements={
+            "ability_families": ["vision"],
+            "channels": ["openapi"],
+            "execution_kinds": ["text"],
+            "execution_tiers": ["cloud"],
+            "data_classifications": ["internal"],
+        },
+    )
+    payload = {
+        "site_id": "site_alpha",
+        "ability_name": "magick-ai/workflows/generate-post-draft",
+        "ability_family": "workflow",
+        "canonical_run_id": "wp_run_callback_dispatch_001",
+        "channel": "openapi",
+        "execution_kind": "text",
+        "profile_id": "text.balanced",
+        "idempotency_key": "idem-entitlement-miss-001",
+        "input": {"messages": [{"role": "user", "content": "should fail"}]},
+    }
+    body = json.dumps(payload).encode("utf-8")
+
+    response = client.post(
+        "/v1/runtime/execute",
+        content=body,
+        headers=merge_json_headers(
+            build_auth_headers(
+                "POST",
+                "/v1/runtime/execute",
+                site_id="site_alpha",
+                idempotency_key="idem-entitlement-miss-001",
+                trace_id="traceentitlementmiss00100000",
+                body=body,
+            )
+        ),
+    )
+
+    assert response.status_code == 403
+    assert response.json()["error_code"] == "commercial.entitlement_denied"
+
+    dispose_engine(database_url)
+
+
+def test_execute_route_rejects_batch_over_plan_limit(tmp_path: Path) -> None:
+    database_url, client = _build_client(tmp_path)
+    seed_site_auth(
+        database_url,
+        site_id="site_alpha",
+        scopes=["runtime:execute", "runtime:read", "runtime:resolve"],
+    )
+    with get_session(database_url) as session:
+        site = session.get(Site, "site_alpha")
+        assert site is not None
+        subscription = session.scalar(
+            select(AccountSubscription).where(AccountSubscription.account_id == site.account_id)
+        )
+        assert subscription is not None
+        plan_version = session.get(PlanVersion, subscription.plan_version_id)
+        assert plan_version is not None
+        plan_metadata = (
+            plan_version.metadata_json if isinstance(plan_version.metadata_json, dict) else {}
+        )
+        plan_version.metadata_json = {
+            **plan_metadata,
+            "max_batch_items": 2,
+        }
+        session.commit()
+
+    payload = {
+        "site_id": "site_alpha",
+        "ability_name": "workflow/media_alt_completion",
+        "ability_family": "workflow",
+        "workflow_id": "media_alt_completion",
+        "contract_version": "v1",
+        "channel": "openapi",
+        "execution_kind": "text",
+        "execution_tier": "cloud",
+        "execution_pattern": "whole_run_offload",
+        "data_classification": "internal",
+        "timeout_seconds": 900,
+        "retry_max": 1,
+        "retention_ttl": 86400,
+        "task_backend": {
+            "enabled": True,
+            "mode": "polling",
+            "callback_mode": "polling_preferred",
+            "polling_interval_sec": 120,
+        },
+        "profile_id": "text.balanced",
+        "idempotency_key": "idem-batch-limit-001",
+        "trace_id": "tracebatchlimit001000000000000",
+        "input": {
+            "items": [
+                {"attachment_id": 101, "title": "One"},
+                {"attachment_id": 102, "title": "Two"},
+                {"attachment_id": 103, "title": "Three"},
+            ]
+        },
+        "policy": {"allow_fallback": True},
+    }
+    body = json.dumps(payload).encode("utf-8")
+
+    response = client.post(
+        "/v1/runtime/execute",
+        content=body,
+        headers=merge_json_headers(
+            build_auth_headers(
+                "POST",
+                "/v1/runtime/execute",
+                site_id="site_alpha",
+                idempotency_key="idem-batch-limit-001",
+                nonce="nonce-batch-limit-001",
+                trace_id="tracebatchlimit001000000000001",
+                body=body,
+            )
+        ),
+    )
+
+    assert response.status_code == 429
+    assert response.json()["error_code"] == "commercial.batch_limit_exceeded"
+
+    dispose_engine(database_url)
+
+
+def test_runtime_routes_allow_subscription_grace_with_runtime_downgrade(
+    tmp_path: Path,
+) -> None:
+    runtime_queue = InMemoryRuntimeQueue()
+    database_url, client = _build_client(tmp_path, runtime_queue=runtime_queue)
+    seed_site_auth(
+        database_url,
+        site_id="site_alpha",
+        scopes=["runtime:execute", "runtime:read", "runtime:resolve"],
+        subscription_status="past_due",
+        policy={
+            "subscription": {
+                "grace_period_days": 3,
+                "downgrade_policy": {
+                    "retry_max": 0,
+                    "allow_fallback": False,
+                    "task_backend": {
+                        "enabled": False,
+                        "mode": "inline",
+                        "callback_mode": "polling_only",
+                        "polling_interval_sec": 0,
+                    },
+                },
+            }
+        },
+    )
+    with get_session(database_url) as session:
+        site = session.get(Site, "site_alpha")
+        assert site is not None
+        subscription = session.scalar(
+            select(AccountSubscription).where(AccountSubscription.account_id == site.account_id)
+        )
+        assert subscription is not None
+        subscription.current_period_end_at = datetime.now(UTC) - timedelta(days=1)
+        session.commit()
+
+    payload = {
+        "site_id": "site_alpha",
+        "ability_name": "workflow/media_nightly_image_optimize",
+        "ability_family": "automation",
+        "channel": "openapi",
+        "execution_kind": "text",
+        "execution_pattern": "whole_run_offload",
+        "task_backend": {
+            "enabled": True,
+            "mode": "polling",
+            "callback_mode": "polling_preferred",
+            "polling_interval_sec": 60,
+        },
+        "profile_id": "text.balanced",
+        "idempotency_key": "idem-sub-grace-001",
+        "input": {"messages": [{"role": "user", "content": "grace path"}]},
+    }
+    body = json.dumps(payload).encode("utf-8")
+
+    resolve_response = client.post(
+        "/v1/runtime/resolve",
+        content=body,
+        headers=merge_json_headers(
+            build_auth_headers(
+                "POST",
+                "/v1/runtime/resolve",
+                site_id="site_alpha",
+                trace_id="tracesubgrace00100000000000000",
+                body=body,
+            )
+        ),
+    )
+    execute_response = client.post(
+        "/v1/runtime/execute",
+        content=body,
+        headers=merge_json_headers(
+            build_auth_headers(
+                "POST",
+                "/v1/runtime/execute",
+                site_id="site_alpha",
+                idempotency_key="idem-sub-grace-001",
+                trace_id="tracesubgrace00200000000000000",
+                body=body,
+            )
+        ),
+    )
+
+    assert resolve_response.status_code == 200
+    assert (
+        resolve_response.json()["data"]["policy"]["commercial_policy"]["decision_code"]
+        == "commercial.subscription_grace"
+    )
+    assert resolve_response.json()["data"]["task_backend"]["enabled"] is False
+    assert resolve_response.json()["data"]["run_lifecycle"]["queue_mode"] == "inline"
+
+    assert execute_response.status_code == 200
+    assert execute_response.json()["data"]["status"] == "succeeded"
+    assert execute_response.json()["data"]["task_backend"]["enabled"] is False
+    assert execute_response.json()["data"]["run_lifecycle"]["queue_mode"] == "inline"
+
+    dispose_engine(database_url)
+
+
+def test_execute_route_rejects_budget_exhaustion(tmp_path: Path) -> None:
+    database_url, client = _build_client(tmp_path)
+    seed_site_auth(
+        database_url,
+        site_id="site_alpha",
+        scopes=["runtime:execute", "runtime:read", "runtime:resolve"],
+        budgets={"max_runs_per_period": 1},
+    )
+    payload = {
+        "site_id": "site_alpha",
+        "ability_name": "magick-ai/workflows/generate-post-draft",
+        "ability_family": "workflow",
+        "canonical_run_id": "wp_run_callback_dispatch_001",
+        "channel": "openapi",
+        "execution_kind": "text",
+        "profile_id": "text.balanced",
+        "idempotency_key": "idem-budget-001",
+        "input": {"messages": [{"role": "user", "content": "first allowed"}]},
+    }
+    first_body = json.dumps(payload).encode("utf-8")
+    second_payload = {**payload, "idempotency_key": "idem-budget-002"}
+    second_body = json.dumps(second_payload).encode("utf-8")
+
+    first_response = client.post(
+        "/v1/runtime/execute",
+        content=first_body,
+        headers=merge_json_headers(
+            build_auth_headers(
+                "POST",
+                "/v1/runtime/execute",
+                site_id="site_alpha",
+                idempotency_key="idem-budget-001",
+                trace_id="tracebudget001000000000000000",
+                body=first_body,
+            )
+        ),
+    )
+    second_response = client.post(
+        "/v1/runtime/execute",
+        content=second_body,
+        headers=merge_json_headers(
+            build_auth_headers(
+                "POST",
+                "/v1/runtime/execute",
+                site_id="site_alpha",
+                idempotency_key="idem-budget-002",
+                trace_id="tracebudget002000000000000000",
+                body=second_body,
+            )
+        ),
+    )
+
+    assert first_response.status_code == 200
+    assert first_response.json()["data"]["status"] == "succeeded"
+    assert second_response.status_code == 429
+    assert second_response.json()["error_code"] == "commercial.quota_exceeded"
+
+    dispose_engine(database_url)
+
+
+def test_execute_route_allows_budget_grace_with_runtime_downgrade(tmp_path: Path) -> None:
+    runtime_queue = InMemoryRuntimeQueue()
+    database_url, client = _build_client(tmp_path, runtime_queue=runtime_queue)
+    seed_site_auth(
+        database_url,
+        site_id="site_alpha",
+        scopes=["runtime:execute", "runtime:read", "runtime:resolve"],
+        budgets={"max_runs_per_period": 1},
+        concurrency={"max_active_runs": 2},
+        policy={
+            "budgets": {
+                "runs": {
+                    "grace_requests": 1,
+                    "downgrade_policy": {
+                        "retry_max": 0,
+                        "allow_fallback": False,
+                        "task_backend": {
+                            "enabled": False,
+                            "mode": "inline",
+                            "callback_mode": "polling_only",
+                            "polling_interval_sec": 0,
+                        },
+                    },
+                }
+            }
+        },
+    )
+    request_payload = {
+        "site_id": "site_alpha",
+        "ability_name": "workflow/media_nightly_image_optimize",
+        "ability_family": "automation",
+        "channel": "openapi",
+        "execution_kind": "text",
+        "execution_pattern": "whole_run_offload",
+        "task_backend": {
+            "enabled": True,
+            "mode": "polling",
+            "callback_mode": "polling_preferred",
+            "polling_interval_sec": 60,
+        },
+        "profile_id": "text.balanced",
+        "input": {"messages": [{"role": "user", "content": "budget grace"}]},
+    }
+    first_body = json.dumps({**request_payload, "idempotency_key": "idem-budget-grace-001"}).encode(
+        "utf-8"
+    )
+    second_body = json.dumps({**request_payload, "idempotency_key": "idem-budget-grace-002"}).encode(
+        "utf-8"
+    )
+    third_body = json.dumps({**request_payload, "idempotency_key": "idem-budget-grace-003"}).encode(
+        "utf-8"
+    )
+
+    first_response = client.post(
+        "/v1/runtime/execute",
+        content=first_body,
+        headers=merge_json_headers(
+            build_auth_headers(
+                "POST",
+                "/v1/runtime/execute",
+                site_id="site_alpha",
+                idempotency_key="idem-budget-grace-001",
+                trace_id="tracebudgetgrace001000000000",
+                body=first_body,
+            )
+        ),
+    )
+    second_response = client.post(
+        "/v1/runtime/execute",
+        content=second_body,
+        headers=merge_json_headers(
+            build_auth_headers(
+                "POST",
+                "/v1/runtime/execute",
+                site_id="site_alpha",
+                idempotency_key="idem-budget-grace-002",
+                trace_id="tracebudgetgrace002000000000",
+                body=second_body,
+            )
+        ),
+    )
+    third_response = client.post(
+        "/v1/runtime/execute",
+        content=third_body,
+        headers=merge_json_headers(
+            build_auth_headers(
+                "POST",
+                "/v1/runtime/execute",
+                site_id="site_alpha",
+                idempotency_key="idem-budget-grace-003",
+                trace_id="tracebudgetgrace003000000000",
+                body=third_body,
+            )
+        ),
+    )
+
+    assert first_response.status_code == 200
+    assert first_response.json()["data"]["status"] == "queued"
+    assert first_response.json()["data"]["task_backend"]["enabled"] is True
+
+    assert second_response.status_code == 200
+    assert second_response.json()["data"]["status"] == "succeeded"
+    assert second_response.json()["data"]["task_backend"]["enabled"] is False
+    assert second_response.json()["data"]["run_lifecycle"]["queue_mode"] == "inline"
+
+    assert third_response.status_code == 429
+    assert third_response.json()["error_code"] == "commercial.quota_exceeded"
+
+    dispose_engine(database_url)
+
+
+def test_execute_route_rejects_concurrency_exhaustion(tmp_path: Path) -> None:
+    runtime_queue = InMemoryRuntimeQueue()
+    database_url, client = _build_client(tmp_path, runtime_queue=runtime_queue)
+    seed_site_auth(
+        database_url,
+        site_id="site_alpha",
+        scopes=["runtime:execute", "runtime:read", "runtime:resolve"],
+        concurrency={"max_active_runs": 2},
+    )
+    seed_site_auth(
+        database_url,
+        site_id="site_alpha",
+        scopes=["runtime:execute", "runtime:read", "runtime:resolve"],
+        concurrency={"max_active_runs": 1},
+    )
+    payload = {
+        "site_id": "site_alpha",
+        "ability_name": "workflow/media_nightly_image_optimize",
+        "ability_family": "automation",
+        "skill_id": "media_nightly_optimize",
+        "workflow_id": "media_nightly_image_optimize",
+        "channel": "openapi",
+        "execution_kind": "text",
+        "execution_tier": "cloud",
+        "execution_pattern": "whole_run_offload",
+        "data_classification": "internal",
+        "profile_id": "text.balanced",
+        "idempotency_key": "idem-concurrency-001",
+        "task_backend": {
+            "enabled": True,
+            "mode": "polling",
+            "callback_mode": "polling_preferred",
+            "polling_interval_sec": 120,
+        },
+        "input": {"messages": [{"role": "user", "content": "queue first"}]},
+    }
+    first_body = json.dumps(payload).encode("utf-8")
+    second_payload = {**payload, "idempotency_key": "idem-concurrency-002"}
+    second_body = json.dumps(second_payload).encode("utf-8")
+
+    first_response = client.post(
+        "/v1/runtime/execute",
+        content=first_body,
+        headers=merge_json_headers(
+            build_auth_headers(
+                "POST",
+                "/v1/runtime/execute",
+                site_id="site_alpha",
+                idempotency_key="idem-concurrency-001",
+                trace_id="traceconcurrency001000000000",
+                body=first_body,
+            )
+        ),
+    )
+    second_response = client.post(
+        "/v1/runtime/execute",
+        content=second_body,
+        headers=merge_json_headers(
+            build_auth_headers(
+                "POST",
+                "/v1/runtime/execute",
+                site_id="site_alpha",
+                idempotency_key="idem-concurrency-002",
+                trace_id="traceconcurrency002000000000",
+                body=second_body,
+            )
+        ),
+    )
+
+    assert first_response.status_code == 200
+    assert first_response.json()["data"]["status"] == "queued"
+    assert second_response.status_code == 429
+    assert second_response.json()["error_code"] == "commercial.concurrency_exceeded"
+
+    dispose_engine(database_url)
+
+
+def test_execute_route_rejects_payloads_over_app_limit(tmp_path: Path) -> None:
+    database_url, client = _build_client(tmp_path)
+    oversized_content = "x" * (1_048_576 + 1)
+    payload = {
+        "site_id": "site_alpha",
+        "ability_name": "magick-ai/workflows/generate-post-draft",
+        "execution_kind": "text",
+        "profile_id": "text.balanced",
+        "idempotency_key": "idem-payload-too-large-001",
+        "input": {"messages": [{"role": "user", "content": oversized_content}]},
+    }
+    body = json.dumps(payload).encode("utf-8")
+    headers = merge_json_headers(
+        build_auth_headers(
+            "POST",
+            "/v1/runtime/execute",
+            site_id="site_alpha",
+            idempotency_key="idem-payload-too-large-001",
+            trace_id="tracepayloadtoolarge001000000",
+            body=body,
+        )
+    )
+
+    response = client.post("/v1/runtime/execute", content=body, headers=headers)
+
+    assert response.status_code == 413
+    assert response.json()["error_code"] == "auth.payload_too_large"
+
+    dispose_engine(database_url)
+
+
+def test_execute_route_enqueues_whole_run_offload_and_worker_completes_it(
+    tmp_path: Path,
+) -> None:
+    runtime_queue = InMemoryRuntimeQueue()
+    database_url, client = _build_client(tmp_path, runtime_queue=runtime_queue)
+    payload = {
+        "site_id": "site_alpha",
+        "ability_name": "workflow/media_nightly_image_optimize",
+        "skill_id": "media_nightly_optimize",
+        "workflow_id": "media_nightly_image_optimize",
+        "contract_version": "v1",
+        "channel": "openapi",
+        "execution_kind": "text",
+        "execution_tier": "cloud",
+        "execution_pattern": "whole_run_offload",
+        "data_classification": "internal",
+        "timeout_seconds": 1800,
+        "retry_max": 2,
+        "retention_ttl": 86400,
+        "task_backend": {
+            "enabled": True,
+            "mode": "polling",
+            "callback_mode": "polling_preferred",
+            "polling_interval_sec": 120,
+        },
+        "profile_id": "text.balanced",
+        "idempotency_key": "idem-nightly-001",
+        "trace_id": "trace-nightly-001",
+        "input": {
+            "messages": [{"role": "user", "content": "scan media and propose alt text"}]
+        },
+        "policy": {"allow_fallback": True},
+    }
+    body = json.dumps(payload).encode("utf-8")
+    headers = merge_json_headers(
+        build_auth_headers(
+            "POST",
+            "/v1/runtime/execute",
+            site_id="site_alpha",
+            idempotency_key="idem-nightly-001",
+            trace_id="tracenightly001000000000000000",
+            body=body,
+        )
+    )
+
+    execute_response = client.post("/v1/runtime/execute", content=body, headers=headers)
+    assert execute_response.status_code == 200
+    execute_payload = execute_response.json()["data"]
+    assert execute_payload["status"] == "queued"
+    assert execute_payload["provider_call_count"] == 0
+    assert execute_payload["task_backend"]["status"] == "queued"
+    assert execute_payload["run_lifecycle"]["phase"] == "queued"
+    assert execute_payload["run_lifecycle"]["queue_mode"] == "queue_backed"
+    assert execute_payload["result"] == {}
+
+    run_id = str(execute_payload["run_id"])
+    result_response = client.get(
+        f"/v1/runs/{run_id}/result",
+        headers=build_auth_headers(
+            "GET",
+            f"/v1/runs/{run_id}/result",
+            site_id="site_alpha",
+            trace_id="tracenightlyresult0010000000000",
+        ),
+    )
+    assert result_response.status_code == 409
+    assert result_response.json()["error_code"] == "runtime.result_not_ready"
+
+    worker = RuntimeService(
+        database_url,
+        settings=_runtime_service_settings(database_url),
+        runtime_queue=runtime_queue,
+    )
+    processed = worker.process_next_queued_run(timeout_seconds=1)
+    assert processed == {
+        "run_id": run_id,
+        "status": "succeeded",
+        "trace_id": "trace-nightly-001",
+    }
+
+    run_response = client.get(
+        f"/v1/runs/{run_id}",
+        headers=build_auth_headers(
+            "GET",
+            f"/v1/runs/{run_id}",
+            site_id="site_alpha",
+            trace_id="tracenightlystatus001000000000",
+        ),
+    )
+    assert run_response.status_code == 200
+    assert run_response.json()["data"]["status"] == "succeeded"
+    assert run_response.json()["data"]["task_backend"]["status"] == "completed"
+    assert run_response.json()["data"]["run_lifecycle"]["phase"] == "terminal"
+
+    final_result_response = client.get(
+        f"/v1/runs/{run_id}/result",
+        headers=build_auth_headers(
+            "GET",
+            f"/v1/runs/{run_id}/result",
+            site_id="site_alpha",
+            trace_id="tracenightlyresult0020000000000",
+        ),
+    )
+    assert final_result_response.status_code == 200
+    assert (
+        final_result_response.json()["data"]["execution_context"]["execution_pattern"]
+        == "whole_run_offload"
+    )
+    assert final_result_response.json()["data"]["task_backend"]["status"] == "completed"
+    assert final_result_response.json()["data"]["run_lifecycle"]["retention"]["state"] == (
+        "retained"
+    )
+    assert final_result_response.json()["data"]["provider_calls"][0]["provider_id"] == (
+        "openai"
+    )
+
+    dispose_engine(database_url)
+
+
+def test_cancel_route_cancels_queued_whole_run_before_worker_claim(tmp_path: Path) -> None:
+    runtime_queue = InMemoryRuntimeQueue()
+    database_url, client = _build_client(tmp_path, runtime_queue=runtime_queue)
+    payload = {
+        "site_id": "site_alpha",
+        "ability_name": "workflow/media_nightly_image_optimize",
+        "ability_family": "automation",
+        "channel": "openapi",
+        "execution_kind": "text",
+        "execution_tier": "cloud",
+        "execution_pattern": "whole_run_offload",
+        "data_classification": "internal",
+        "task_backend": {
+            "enabled": True,
+            "mode": "polling",
+            "callback_mode": "polling_preferred",
+            "polling_interval_sec": 120,
+        },
+        "profile_id": "text.balanced",
+        "idempotency_key": "idem-nightly-cancel-001",
+        "input": {"messages": [{"role": "user", "content": "queue then cancel"}]},
+    }
+    body = json.dumps(payload).encode("utf-8")
+    execute_response = client.post(
+        "/v1/runtime/execute",
+        content=body,
+        headers=merge_json_headers(
+            build_auth_headers(
+                "POST",
+                "/v1/runtime/execute",
+                site_id="site_alpha",
+                idempotency_key="idem-nightly-cancel-001",
+                trace_id="tracequeuecancel0010000000000",
+                body=body,
+            )
+        ),
+    )
+
+    assert execute_response.status_code == 200
+    run_id = str(execute_response.json()["data"]["run_id"])
+    assert execute_response.json()["data"]["run_lifecycle"]["cancel"] == {
+        "supported": True,
+        "state": "available",
+        "requested_at": None,
+        "canceled_at": None,
+    }
+
+    cancel_response = client.post(
+        f"/v1/runs/{run_id}/cancel",
+        content=b"",
+        headers=build_auth_headers(
+            "POST",
+            f"/v1/runs/{run_id}/cancel",
+            site_id="site_alpha",
+            idempotency_key="idem-nightly-cancel-control-001",
+            trace_id="tracequeuecancel0020000000000",
+            body=b"",
+        ),
+    )
+
+    assert cancel_response.status_code == 200
+    cancel_payload = cancel_response.json()["data"]
+    assert cancel_payload["status"] == "canceled"
+    assert cancel_payload["error_code"] == "runtime.canceled"
+    assert cancel_payload["task_backend"]["status"] == "canceled"
+    assert cancel_payload["run_lifecycle"]["cancel"]["state"] == "canceled"
+    assert cancel_payload["run_lifecycle"]["terminal_status"] == "canceled"
+
+    worker = RuntimeService(
+        database_url,
+        settings=_runtime_service_settings(database_url),
+        runtime_queue=runtime_queue,
+    )
+    assert worker.process_next_queued_run(timeout_seconds=1) is None
+
+    run_response = client.get(
+        f"/v1/runs/{run_id}",
+        headers=build_auth_headers(
+            "GET",
+            f"/v1/runs/{run_id}",
+            site_id="site_alpha",
+            trace_id="tracequeuecancel0030000000000",
+        ),
+    )
+    assert run_response.status_code == 200
+    assert run_response.json()["data"]["status"] == "canceled"
+
+    result_response = client.get(
+        f"/v1/runs/{run_id}/result",
+        headers=build_auth_headers(
+            "GET",
+            f"/v1/runs/{run_id}/result",
+            site_id="site_alpha",
+            trace_id="tracequeuecancel0040000000000",
+        ),
+    )
+    assert result_response.status_code == 409
+    assert result_response.json()["error_code"] == "runtime.result_not_ready"
+
+    dispose_engine(database_url)
+
+
+def test_cancel_route_rejects_inline_runs(tmp_path: Path) -> None:
+    database_url, client = _build_client(tmp_path)
+    payload = {
+        "site_id": "site_alpha",
+        "ability_name": "magick-ai/workflows/generate-post-draft",
+        "channel": "openapi",
+        "execution_kind": "text",
+        "profile_id": "text.balanced",
+        "idempotency_key": "idem-inline-cancel-001",
+        "input": {"messages": [{"role": "user", "content": "inline run"}]},
+    }
+    body = json.dumps(payload).encode("utf-8")
+    execute_response = client.post(
+        "/v1/runtime/execute",
+        content=body,
+        headers=merge_json_headers(
+            build_auth_headers(
+                "POST",
+                "/v1/runtime/execute",
+                site_id="site_alpha",
+                idempotency_key="idem-inline-cancel-001",
+                trace_id="traceinlinecancel00100000000",
+                body=body,
+            )
+        ),
+    )
+
+    assert execute_response.status_code == 200
+    run_id = str(execute_response.json()["data"]["run_id"])
+
+    cancel_response = client.post(
+        f"/v1/runs/{run_id}/cancel",
+        content=b"",
+        headers=build_auth_headers(
+            "POST",
+            f"/v1/runs/{run_id}/cancel",
+            site_id="site_alpha",
+            idempotency_key="idem-inline-cancel-control-001",
+            trace_id="traceinlinecancel00200000000",
+            body=b"",
+        ),
+    )
+
+    assert cancel_response.status_code == 409
+    assert cancel_response.json()["error_code"] == "runtime.cancel_not_allowed"
+
+    dispose_engine(database_url)
+
+
+def test_execute_route_worker_can_drain_multiple_queued_runs_in_one_poll_cycle(
+    tmp_path: Path,
+) -> None:
+    runtime_queue = InMemoryRuntimeQueue()
+    database_url, client = _build_client(tmp_path, runtime_queue=runtime_queue)
+    seed_site_auth(
+        database_url,
+        site_id="site_alpha",
+        scopes=["runtime:execute", "runtime:read", "runtime:resolve"],
+        concurrency={"max_active_runs": 2},
+    )
+
+    def queue_request(idempotency_key: str, trace_id: str, prompt: str) -> str:
+        payload = {
+            "site_id": "site_alpha",
+            "ability_name": "workflow/media_nightly_image_optimize",
+            "skill_id": "media_nightly_optimize",
+            "workflow_id": "media_nightly_image_optimize",
+            "contract_version": "v1",
+            "channel": "openapi",
+            "execution_kind": "text",
+            "execution_tier": "cloud",
+            "execution_pattern": "whole_run_offload",
+            "data_classification": "internal",
+            "timeout_seconds": 1800,
+            "retry_max": 2,
+            "retention_ttl": 86400,
+            "task_backend": {
+                "enabled": True,
+                "mode": "polling",
+                "callback_mode": "polling_preferred",
+                "polling_interval_sec": 120,
+            },
+            "profile_id": "text.balanced",
+            "idempotency_key": idempotency_key,
+            "trace_id": trace_id,
+            "input": {"messages": [{"role": "user", "content": prompt}]},
+            "policy": {"allow_fallback": True},
+        }
+        body = json.dumps(payload).encode("utf-8")
+        response = client.post(
+            "/v1/runtime/execute",
+            content=body,
+            headers=merge_json_headers(
+                build_auth_headers(
+                    "POST",
+                    "/v1/runtime/execute",
+                    site_id="site_alpha",
+                    idempotency_key=idempotency_key,
+                    trace_id=f"{trace_id}000000000000000000",
+                    body=body,
+                )
+            ),
+        )
+
+        assert response.status_code == 200
+        assert response.json()["data"]["status"] == "queued"
+        return str(response.json()["data"]["run_id"])
+
+    first_run_id = queue_request(
+        "idem-nightly-batch-001",
+        "trace-nightly-batch-001",
+        "first queued batch run",
+    )
+    second_run_id = queue_request(
+        "idem-nightly-batch-002",
+        "trace-nightly-batch-002",
+        "second queued batch run",
+    )
+
+    worker = RuntimeService(
+        database_url,
+        settings=_runtime_service_settings(database_url),
+        runtime_queue=runtime_queue,
+    )
+    processed = worker.process_queued_runs(max_runs=2, timeout_seconds=1)
+    assert processed == [
+        {
+            "run_id": first_run_id,
+            "status": "succeeded",
+            "trace_id": "trace-nightly-batch-001",
+        },
+        {
+            "run_id": second_run_id,
+            "status": "succeeded",
+            "trace_id": "trace-nightly-batch-002",
+        },
+    ]
+
+    for run_id in (first_run_id, second_run_id):
+        run_response = client.get(
+            f"/v1/runs/{run_id}",
+            headers=build_auth_headers(
+                "GET",
+                f"/v1/runs/{run_id}",
+                site_id="site_alpha",
+                trace_id=f"trace-status-{run_id[-8:]}",
+            ),
+        )
+        result_response = client.get(
+            f"/v1/runs/{run_id}/result",
+            headers=build_auth_headers(
+                "GET",
+                f"/v1/runs/{run_id}/result",
+                site_id="site_alpha",
+                trace_id=f"trace-result-{run_id[-8:]}",
+            ),
+        )
+        assert run_response.status_code == 200
+        assert result_response.status_code == 200
+        assert run_response.json()["data"]["task_backend"]["status"] == "completed"
+        assert result_response.json()["data"]["task_backend"]["status"] == "completed"
+
+    dispose_engine(database_url)
+
+
+def test_callback_delivery_worker_dispatches_terminal_run_payload(tmp_path: Path) -> None:
+    callback_requests: list[dict[str, object]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        callback_requests.append(
+            {
+                "url": str(request.url),
+                "headers": dict(request.headers),
+                "payload": json.loads(request.content.decode("utf-8")),
+            }
+        )
+        return httpx.Response(204)
+
+    callback_dispatcher = HttpRuntimeCallbackDispatcher(
+        transport=httpx.MockTransport(handler),
+    )
+    database_url, client = _build_client(
+        tmp_path,
+        callback_dispatcher=callback_dispatcher,
+    )
+    seed_site_auth(
+        database_url,
+        site_id="site_alpha",
+        scopes=["runtime:execute", "runtime:read", "runtime:resolve"],
+        site_metadata=_runtime_callback_metadata(
+            "https://example.com/runtime",
+            callback_id="runtime-terminal-dispatch",
+        ),
+    )
+    payload = {
+        "site_id": "site_alpha",
+        "ability_name": "magick-ai/workflows/generate-post-draft",
+        "ability_family": "workflow",
+        "canonical_run_id": "wp_run_callback_dispatch_001",
+        "contract_version": "v1",
+        "channel": "openapi",
+        "execution_kind": "text",
+        "profile_id": "text.balanced",
+        "task_backend": {
+            "enabled": True,
+            "mode": "polling",
+            "callback_mode": "polling_preferred",
+        },
+        "idempotency_key": "idem-callback-dispatch-001",
+        "input": {"messages": [{"role": "user", "content": "send callback later"}]},
+    }
+    body = json.dumps(payload).encode("utf-8")
+    execute_response = client.post(
+        "/v1/runtime/execute",
+        content=body,
+        headers=merge_json_headers(
+            build_auth_headers(
+                "POST",
+                "/v1/runtime/execute",
+                site_id="site_alpha",
+                idempotency_key="idem-callback-dispatch-001",
+                trace_id="tracecallbackdispatch0010000",
+                body=body,
+            )
+        ),
+    )
+
+    assert execute_response.status_code == 200
+    run_id = str(execute_response.json()["data"]["run_id"])
+    assert execute_response.json()["data"]["canonical_run_id"] == "wp_run_callback_dispatch_001"
+    assert execute_response.json()["data"]["run_lifecycle"]["callback"]["dispatch_status"] == (
+        "pending"
+    )
+    assert callback_requests == []
+
+    worker = RuntimeService(
+        database_url,
+        settings=_runtime_service_settings(database_url),
+        callback_dispatcher=callback_dispatcher,
+        callback_max_attempts=3,
+        callback_retry_backoff_seconds=0,
+    )
+    dispatched = worker.dispatch_pending_callbacks(max_callbacks=1)
+
+    assert dispatched == [
+        {
+            "run_id": run_id,
+            "callback_status": "delivered",
+            "trace_id": execute_response.json()["data"]["trace_id"],
+            "status_code": 204,
+        }
+    ]
+    assert len(callback_requests) == 1
+    assert callback_requests[0]["url"] == "https://example.com/runtime"
+    assert callback_requests[0]["headers"]["x-magick-cloud-event"] == "runtime.run.terminal"
+    assert callback_requests[0]["headers"]["x-magick-callback-id"] == "runtime-terminal-dispatch"
+    assert callback_requests[0]["headers"]["x-magick-signature"] != ""
+    assert callback_requests[0]["headers"]["x-magick-timestamp"] != ""
+    assert callback_requests[0]["payload"]["run_id"] == run_id
+    assert callback_requests[0]["payload"]["canonical_run_id"] == "wp_run_callback_dispatch_001"
+    assert callback_requests[0]["payload"]["status"] == "succeeded"
+
+    run_response = client.get(
+        f"/v1/runs/{run_id}",
+        headers=build_auth_headers(
+            "GET",
+            f"/v1/runs/{run_id}",
+            site_id="site_alpha",
+            trace_id="tracecallbackdispatch0020000",
+        ),
+    )
+    assert run_response.status_code == 200
+    assert run_response.json()["data"]["canonical_run_id"] == "wp_run_callback_dispatch_001"
+    assert run_response.json()["data"]["run_lifecycle"]["callback"]["dispatch_status"] == (
+        "delivered"
+    )
+    assert run_response.json()["data"]["run_lifecycle"]["callback"]["attempt_count"] == 1
+    assert run_response.json()["data"]["run_lifecycle"]["callback"]["delivered_at"] is not None
+
+    dispose_engine(database_url)
+
+
+def test_callback_delivery_worker_retries_retryable_failures(tmp_path: Path) -> None:
+    attempt_counter = {"count": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        del request
+        attempt_counter["count"] += 1
+        if attempt_counter["count"] == 1:
+            return httpx.Response(500)
+        return httpx.Response(202)
+
+    callback_dispatcher = HttpRuntimeCallbackDispatcher(
+        transport=httpx.MockTransport(handler),
+    )
+    database_url, client = _build_client(
+        tmp_path,
+        callback_dispatcher=callback_dispatcher,
+        settings_overrides={
+            "runtime_callback_max_attempts": 2,
+            "runtime_callback_retry_backoff_seconds": 0,
+        },
+    )
+    seed_site_auth(
+        database_url,
+        site_id="site_alpha",
+        scopes=["runtime:execute", "runtime:read", "runtime:resolve"],
+        site_metadata=_runtime_callback_metadata(
+            "https://example.com/retry",
+            callback_id="runtime-terminal-retry",
+        ),
+    )
+    payload = {
+        "site_id": "site_alpha",
+        "ability_name": "magick-ai/workflows/generate-post-draft",
+        "contract_version": "v1",
+        "channel": "openapi",
+        "execution_kind": "text",
+        "profile_id": "text.balanced",
+        "task_backend": {
+            "enabled": True,
+            "mode": "polling",
+            "callback_mode": "polling_preferred",
+        },
+        "idempotency_key": "idem-callback-retry-001",
+        "input": {"messages": [{"role": "user", "content": "retry callback"}]},
+    }
+    body = json.dumps(payload).encode("utf-8")
+    execute_response = client.post(
+        "/v1/runtime/execute",
+        content=body,
+        headers=merge_json_headers(
+            build_auth_headers(
+                "POST",
+                "/v1/runtime/execute",
+                site_id="site_alpha",
+                idempotency_key="idem-callback-retry-001",
+                trace_id="tracecallbackretry001000000",
+                body=body,
+            )
+        ),
+    )
+    assert execute_response.status_code == 200
+    run_id = str(execute_response.json()["data"]["run_id"])
+
+    worker = RuntimeService(
+        database_url,
+        settings=_runtime_service_settings(database_url),
+        callback_dispatcher=callback_dispatcher,
+        callback_max_attempts=2,
+        callback_retry_backoff_seconds=0,
+    )
+    first_attempt = worker.dispatch_pending_callbacks(max_callbacks=1)
+    second_attempt = worker.dispatch_pending_callbacks(max_callbacks=1)
+
+    assert first_attempt == [
+        {
+            "run_id": run_id,
+            "callback_status": "pending",
+            "trace_id": execute_response.json()["data"]["trace_id"],
+        }
+    ]
+    assert second_attempt == [
+        {
+            "run_id": run_id,
+            "callback_status": "delivered",
+            "trace_id": execute_response.json()["data"]["trace_id"],
+            "status_code": 202,
+        }
+    ]
+    assert attempt_counter["count"] == 2
+
+    run_response = client.get(
+        f"/v1/runs/{run_id}",
+        headers=build_auth_headers(
+            "GET",
+            f"/v1/runs/{run_id}",
+            site_id="site_alpha",
+            trace_id="tracecallbackretry002000000",
+        ),
+    )
+    assert run_response.status_code == 200
+    assert run_response.json()["data"]["run_lifecycle"]["callback"]["dispatch_status"] == (
+        "delivered"
+    )
+    assert run_response.json()["data"]["run_lifecycle"]["callback"]["attempt_count"] == 2
+    assert run_response.json()["data"]["run_lifecycle"]["callback"]["last_error_code"] == ""
+
+    dispose_engine(database_url)
+
+
+def test_execute_route_rejects_public_callback_url_override_without_registration(
+    tmp_path: Path,
+) -> None:
+    database_url, client = _build_client(tmp_path)
+    payload = {
+        "site_id": "site_alpha",
+        "ability_name": "magick-ai/workflows/generate-post-draft",
+        "contract_version": "v1",
+        "channel": "openapi",
+        "execution_kind": "text",
+        "profile_id": "text.balanced",
+        "callback_url": "https://example.com/runtime",
+        "task_backend": {
+            "enabled": True,
+            "mode": "polling",
+            "callback_mode": "terminal_callback_required",
+        },
+        "idempotency_key": "idem-callback-contract-001",
+        "input": {"messages": [{"role": "user", "content": "require registration"}]},
+    }
+    body = json.dumps(payload).encode("utf-8")
+    response = client.post(
+        "/v1/runtime/execute",
+        content=body,
+        headers=merge_json_headers(
+            build_auth_headers(
+                "POST",
+                "/v1/runtime/execute",
+                site_id="site_alpha",
+                idempotency_key="idem-callback-contract-001",
+                trace_id="tracecallbackcontract0010000",
+                body=body,
+            )
+        ),
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error_code"] == "runtime.callback_not_registered"
+
+    dispose_engine(database_url)
+
+
+def test_execute_route_rejects_contract_timeout_above_cloud_ceiling(tmp_path: Path) -> None:
+    database_url, client = _build_client(tmp_path)
+    payload = {
+        "site_id": "site_alpha",
+        "ability_name": "magick-ai/workflows/generate-post-draft",
+        "contract_version": "v1",
+        "channel": "openapi",
+        "execution_kind": "text",
+        "profile_id": "text.balanced",
+        "timeout_seconds": 3601,
+        "idempotency_key": "idem-timeout-contract-001",
+        "input": {"messages": [{"role": "user", "content": "too much time"}]},
+    }
+    body = json.dumps(payload).encode("utf-8")
+    response = client.post(
+        "/v1/runtime/execute",
+        content=body,
+        headers=merge_json_headers(
+            build_auth_headers(
+                "POST",
+                "/v1/runtime/execute",
+                site_id="site_alpha",
+                idempotency_key="idem-timeout-contract-001",
+                trace_id="tracetimeoutcontract001000",
+                body=body,
+            )
+        ),
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error_code"] == "runtime.contract_timeout_exceeded"
+
+    dispose_engine(database_url)
+
+
+def test_execute_route_result_only_storage_omits_persisted_input_payload(tmp_path: Path) -> None:
+    database_url, client = _build_client(tmp_path)
+    payload = {
+        "site_id": "site_alpha",
+        "ability_name": "magick-ai/workflows/generate-post-draft",
+        "contract_version": "v1",
+        "channel": "openapi",
+        "execution_kind": "text",
+        "profile_id": "text.balanced",
+        "storage_mode": "result_only",
+        "idempotency_key": "idem-storage-result-only-001",
+        "input": {"messages": [{"role": "user", "content": "keep only result"}]},
+    }
+    body = json.dumps(payload).encode("utf-8")
+    response = client.post(
+        "/v1/runtime/execute",
+        content=body,
+        headers=merge_json_headers(
+            build_auth_headers(
+                "POST",
+                "/v1/runtime/execute",
+                site_id="site_alpha",
+                idempotency_key="idem-storage-result-only-001",
+                trace_id="tracestorageresultonly001",
+                body=body,
+            )
+        ),
+    )
+
+    assert response.status_code == 200
+    run_id = response.json()["data"]["run_id"]
+    with get_session(database_url) as session:
+        run = session.get(RunRecord, run_id)
+        assert run is not None
+        assert run.input_json == {}
+        assert isinstance(run.result_json, dict)
+
+    dispose_engine(database_url)
+
+
+def test_execute_route_no_store_omits_persisted_input_payload(tmp_path: Path) -> None:
+    database_url, client = _build_client(tmp_path)
+    payload = {
+        "site_id": "site_alpha",
+        "ability_name": "magick-ai/workflows/generate-post-draft",
+        "contract_version": "v1",
+        "channel": "openapi",
+        "execution_kind": "text",
+        "profile_id": "text.balanced",
+        "storage_mode": "no_store",
+        "idempotency_key": "idem-storage-no-store-001",
+        "input": {"messages": [{"role": "user", "content": "store nothing"}]},
+    }
+    body = json.dumps(payload).encode("utf-8")
+    response = client.post(
+        "/v1/runtime/execute",
+        content=body,
+        headers=merge_json_headers(
+            build_auth_headers(
+                "POST",
+                "/v1/runtime/execute",
+                site_id="site_alpha",
+                idempotency_key="idem-storage-no-store-001",
+                trace_id="tracestoragenostore0010000",
+                body=body,
+            )
+        ),
+    )
+
+    assert response.status_code == 200
+    run_id = response.json()["data"]["run_id"]
+    with get_session(database_url) as session:
+        run = session.get(RunRecord, run_id)
+        assert run is not None
+        assert run.input_json == {}
+        assert run.result_json == {"stored": False, "status": "omitted"}
+
+    dispose_engine(database_url)
+
+
+def test_execute_route_rejects_plaintext_registered_callback_secret_without_ciphertext(
+    tmp_path: Path,
+) -> None:
+    database_url, client = _build_client(tmp_path)
+    seed_site_auth(
+        database_url,
+        site_id="site_alpha",
+        scopes=["runtime:execute", "runtime:read", "runtime:resolve"],
+        site_metadata={
+            "runtime_callbacks": {
+                "terminal": {
+                    "enabled": True,
+                    "callback_url": "https://example.com/runtime",
+                    "key_id": "runtime_callback_key",
+                    "secret": "legacy-plaintext-secret",
+                    "callback_id": "runtime_terminal",
+                }
+            }
+        },
+    )
+    payload = {
+        "site_id": "site_alpha",
+        "ability_name": "magick-ai/workflows/generate-post-draft",
+        "contract_version": "v1",
+        "channel": "openapi",
+        "execution_kind": "text",
+        "profile_id": "text.balanced",
+        "task_backend": {
+            "enabled": True,
+            "mode": "polling",
+            "callback_mode": "terminal_callback_required",
+        },
+        "idempotency_key": "idem-callback-plaintext-001",
+        "input": {"messages": [{"role": "user", "content": "require ciphertext"}]},
+    }
+    body = json.dumps(payload).encode("utf-8")
+    response = client.post(
+        "/v1/runtime/execute",
+        content=body,
+        headers=merge_json_headers(
+            build_auth_headers(
+                "POST",
+                "/v1/runtime/execute",
+                site_id="site_alpha",
+                idempotency_key="idem-callback-plaintext-001",
+                trace_id="tracecallbackplaintext001000",
+                body=body,
+            )
+        ),
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error_code"] == "runtime.callback_not_registered"
+    assert "re-saved as ciphertext" in response.json()["message"]
+
+    dispose_engine(database_url)
+
+
+def test_resolve_route_returns_execution_context(tmp_path: Path) -> None:
+    database_url, client = _build_client(tmp_path)
+    payload = {
+        "site_id": "site_alpha",
+        "ability_name": "magick-ai/workflows/generate-post-draft",
+        "ability_family": "workflow",
+        "skill_id": "content_summary_seo",
+        "workflow_id": "content_summary_seo_completion",
+        "contract_version": "v1",
+        "channel": "openapi",
+        "execution_kind": "text",
+        "execution_tier": "cloud",
+        "execution_pattern": "inline",
+        "data_classification": "internal",
+        "task_backend": {
+            "enabled": True,
+            "mode": "polling",
+            "callback_mode": "polling_preferred",
+            "polling_interval_sec": 120,
+        },
+        "profile_id": "text.balanced",
+        "input": {"messages": [{"role": "user", "content": "resolve me"}]},
+    }
+    body = json.dumps(payload).encode("utf-8")
+    response = client.post(
+        "/v1/runtime/resolve",
+        content=body,
+        headers=merge_json_headers(
+            build_auth_headers(
+                "POST",
+                "/v1/runtime/resolve",
+                site_id="site_alpha",
+                trace_id="traceresolve00100000000000000000",
+                body=body,
+            )
+        ),
+    )
+
+    assert response.status_code == 200
+    assert response.json()["data"]["execution_context"] == {
+        "skill_id": "content_summary_seo",
+        "workflow_id": "content_summary_seo_completion",
+        "contract_version": "v1",
+        "ability_family": "workflow",
+        "execution_tier": "cloud",
+        "execution_pattern": "inline",
+        "data_classification": "internal",
+        "storage_mode": "result_only",
+    }
+    assert response.json()["data"]["task_backend"] == {
+        "enabled": True,
+        "mode": "polling",
+        "callback_mode": "polling_preferred",
+        "polling_interval_sec": 120,
+        "callback_url": "",
+        "timeout_seconds": 0,
+        "retry_max": 0,
+        "retention_ttl": 0,
+        "status": "running",
+    }
+    assert response.json()["data"]["run_lifecycle"] == {
+        "phase": "requested",
+        "next_phase": "processing",
+        "queue_mode": "inline",
+        "cancel": {
+            "supported": False,
+            "state": "not_available",
+            "requested_at": None,
+            "canceled_at": None,
+        },
+        "callback": {
+            "requested": False,
+            "mode": "polling_preferred",
+            "url_present": False,
+            "dispatch_status": "not_requested",
+            "attempt_count": 0,
+            "last_attempt_at": None,
+            "delivered_at": None,
+            "next_attempt_at": None,
+            "last_error_code": "",
+        },
+        "retention": {
+            "ttl_seconds": 0,
+            "state": "disabled",
+        },
+    }
+
+    dispose_engine(database_url)
+
+
+def test_execute_route_falls_back_to_next_candidate(tmp_path: Path) -> None:
+    database_url, client = _build_client(tmp_path)
+    payload = {
+        "site_id": "site_alpha",
+        "ability_name": "magick-ai/workflows/generate-post-draft",
+        "channel": "openapi",
+        "execution_kind": "text",
+        "profile_id": "text.balanced",
+        "idempotency_key": "idem-balanced-002",
+        "input": {
+            "messages": [{"role": "user", "content": "fallback request"}],
+            "simulate_error_for_instances": [
+                "openai-us-east-text-balanced"
+            ],
+        },
+        "policy": {"allow_fallback": True},
+    }
+    body = json.dumps(payload).encode("utf-8")
+    headers = merge_json_headers(
+        build_auth_headers(
+            "POST",
+            "/v1/runtime/execute",
+            site_id="site_alpha",
+            idempotency_key="idem-balanced-002",
+            trace_id="tracebalanced0020000000000000000",
+            body=body,
+        )
+    )
+    response = client.post("/v1/runtime/execute", content=body, headers=headers)
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "ok"
+    assert payload["data"]["fallback_used"] is True
+    assert payload["data"]["instance_id"] == "openai-us-east-text-economy"
+    assert payload["data"]["provider_call_count"] == 2
+
+    result_response = client.get(
+        f"/v1/runs/{payload['data']['run_id']}/result",
+        headers=build_auth_headers(
+            "GET",
+            f"/v1/runs/{payload['data']['run_id']}/result",
+            site_id="site_alpha",
+            trace_id="tracebalanced0020000000000000001",
+        ),
+    )
+    provider_calls = result_response.json()["data"]["provider_calls"]
+    assert len(provider_calls) == 2
+    assert provider_calls[0]["error_code"] == "provider.simulated_error"
+    assert provider_calls[1]["fallback_used"] is True
+
+    dispose_engine(database_url)
+
+
+def test_run_result_route_returns_expired_after_retention_window(tmp_path: Path) -> None:
+    database_url, client = _build_client(tmp_path)
+    payload = {
+        "site_id": "site_alpha",
+        "ability_name": "magick-ai/workflows/generate-post-draft",
+        "channel": "openapi",
+        "execution_kind": "text",
+        "profile_id": "text.balanced",
+        "idempotency_key": "idem-retention-expired-001",
+        "retention_ttl": 60,
+        "input": {"messages": [{"role": "user", "content": "expire result"}]},
+    }
+    body = json.dumps(payload).encode("utf-8")
+    execute_response = client.post(
+        "/v1/runtime/execute",
+        content=body,
+        headers=merge_json_headers(
+            build_auth_headers(
+                "POST",
+                "/v1/runtime/execute",
+                site_id="site_alpha",
+                idempotency_key="idem-retention-expired-001",
+                trace_id="traceretentionexpired0010000000",
+                body=body,
+            )
+        ),
+    )
+    run_id = str(execute_response.json()["data"]["run_id"])
+
+    with get_session(database_url) as session:
+        run = session.scalar(select(RunRecord).where(RunRecord.run_id == run_id))
+        assert run is not None
+        run.retention_expires_at = datetime.now(UTC) - timedelta(minutes=1)
+        session.commit()
+
+    run_response = client.get(
+        f"/v1/runs/{run_id}",
+        headers=build_auth_headers(
+            "GET",
+            f"/v1/runs/{run_id}",
+            site_id="site_alpha",
+            trace_id="traceretentionexpired0020000000",
+        ),
+    )
+    result_response = client.get(
+        f"/v1/runs/{run_id}/result",
+        headers=build_auth_headers(
+            "GET",
+            f"/v1/runs/{run_id}/result",
+            site_id="site_alpha",
+            trace_id="traceretentionexpired0030000000",
+        ),
+    )
+
+    assert run_response.status_code == 200
+    assert run_response.json()["data"]["run_lifecycle"]["retention"]["state"] == "expired"
+    assert result_response.status_code == 410
+    assert result_response.json()["error_code"] == "runtime.result_expired"
+
+    dispose_engine(database_url)
+
+
+def test_execute_route_rejects_invalid_signature(tmp_path: Path) -> None:
+    database_url, client = _build_client(tmp_path)
+    payload = {
+        "site_id": "site_alpha",
+        "ability_name": "magick-ai/workflows/generate-post-draft",
+        "channel": "openapi",
+        "execution_kind": "text",
+        "profile_id": "text.balanced",
+        "input": {"messages": [{"role": "user", "content": "bad sig"}]},
+    }
+    body = json.dumps(payload).encode("utf-8")
+    headers = merge_json_headers(
+        build_auth_headers(
+            "POST",
+            "/v1/runtime/execute",
+            site_id="site_alpha",
+            idempotency_key="idem-invalid-signature",
+            trace_id="traceinvalidsig00000000000000000",
+            body=body,
+        ),
+        extra_headers={"X-Magick-Signature": "deadbeef"},
+    )
+
+    response = client.post("/v1/runtime/execute", content=body, headers=headers)
+
+    assert response.status_code == 401
+    assert response.json()["error_code"] == "auth.invalid_signature"
+
+    dispose_engine(database_url)
+
+
+def test_execute_route_rejects_signature_signed_with_stored_secret_hash(tmp_path: Path) -> None:
+    database_url, client = _build_client(tmp_path)
+    payload = {
+        "site_id": "site_alpha",
+        "ability_name": "magick-ai/workflows/generate-post-draft",
+        "channel": "openapi",
+        "execution_kind": "text",
+        "profile_id": "text.balanced",
+        "input": {"messages": [{"role": "user", "content": "hash forgery"}]},
+    }
+    body = json.dumps(payload).encode("utf-8")
+    timestamp = str(int(datetime.now(UTC).timestamp()))
+    nonce = "nonce-stolen-hash-signature"
+    idempotency_key = "idem-stolen-hash-signature"
+    traceparent = build_auth_headers(
+        "POST",
+        "/v1/runtime/execute",
+        site_id="site_alpha",
+        trace_id="tracestolenhash00000000000000000",
+        body=body,
+    )["traceparent"]
+    with get_session(database_url) as session:
+        api_key = session.get(SiteApiKey, "key_default")
+        assert api_key is not None
+        stolen_hash = str(api_key.secret_hash)
+    canonical_request = build_canonical_request(
+        method="POST",
+        path="/v1/runtime/execute",
+        query="",
+        site_id="site_alpha",
+        key_id="key_default",
+        timestamp=timestamp,
+        nonce=nonce,
+        idempotency_key=idempotency_key,
+        traceparent=traceparent,
+        body_digest=build_body_digest(body),
+    )
+
+    response = client.post(
+        "/v1/runtime/execute",
+        content=body,
+        headers=merge_json_headers(
+            {
+                "X-Magick-Site-Id": "site_alpha",
+                "X-Magick-Key-Id": "key_default",
+                "X-Magick-Timestamp": timestamp,
+                "X-Magick-Nonce": nonce,
+                "X-Magick-Signature": build_hmac_signature(stolen_hash, canonical_request),
+                "Idempotency-Key": idempotency_key,
+                "traceparent": traceparent,
+            }
+        ),
+    )
+
+    assert response.status_code == 401
+    assert response.json()["error_code"] == "auth.invalid_signature"
+
+    dispose_engine(database_url)
+
+
+def test_execute_route_rejects_key_without_signing_secret_ciphertext(tmp_path: Path) -> None:
+    database_url, client = _build_client(tmp_path)
+    with get_session(database_url) as session:
+        api_key = session.get(SiteApiKey, "key_default")
+        assert api_key is not None
+        api_key.signing_secret_ciphertext = None
+        session.commit()
+    payload = {
+        "site_id": "site_alpha",
+        "ability_name": "magick-ai/workflows/generate-post-draft",
+        "channel": "openapi",
+        "execution_kind": "text",
+        "profile_id": "text.balanced",
+        "input": {"messages": [{"role": "user", "content": "missing signing secret"}]},
+    }
+    body = json.dumps(payload).encode("utf-8")
+
+    response = client.post(
+        "/v1/runtime/execute",
+        content=body,
+        headers=merge_json_headers(
+            build_auth_headers(
+                "POST",
+                "/v1/runtime/execute",
+                site_id="site_alpha",
+                idempotency_key="idem-missing-signing-secret",
+                trace_id="tracemissingsigningsecret0000000",
+                body=body,
+            )
+        ),
+    )
+
+    assert response.status_code == 401
+    assert response.json()["error_code"] == "auth.invalid_key"
+
+    dispose_engine(database_url)
+
+
+def test_run_route_is_scoped_to_authenticated_site(tmp_path: Path) -> None:
+    database_url, client = _build_client(tmp_path)
+    payload = {
+        "site_id": "site_alpha",
+        "ability_name": "magick-ai/workflows/generate-post-draft",
+        "channel": "openapi",
+        "execution_kind": "text",
+        "profile_id": "text.balanced",
+        "idempotency_key": "idem-site-scope-001",
+        "input": {"messages": [{"role": "user", "content": "scoped read"}]},
+    }
+    body = json.dumps(payload).encode("utf-8")
+    response = client.post(
+        "/v1/runtime/execute",
+        content=body,
+        headers=merge_json_headers(
+            build_auth_headers(
+                "POST",
+                "/v1/runtime/execute",
+                site_id="site_alpha",
+                idempotency_key="idem-site-scope-001",
+                trace_id="tracesitescope001000000000000000",
+                body=body,
+            )
+        ),
+    )
+    run_id = response.json()["data"]["run_id"]
+
+    run_response = client.get(
+        f"/v1/runs/{run_id}",
+        headers=build_auth_headers(
+            "GET",
+            f"/v1/runs/{run_id}",
+            site_id="site_beta",
+            key_id="key_beta",
+            trace_id="tracesitescope002000000000000000",
+        ),
+    )
+
+    assert run_response.status_code == 404
+    assert run_response.json()["error_code"] == "runtime.run_not_found"
+
+    dispose_engine(database_url)
+
+
+def test_execute_route_can_use_http_provider_transport(tmp_path: Path) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/models"):
+            return httpx.Response(
+                200,
+                json={
+                    "data": [
+                        {
+                            "id": "gpt-4.1-mini",
+                            "context_window": 128000,
+                        }
+                    ]
+                },
+            )
+
+        payload = json.loads(request.content.decode("utf-8"))
+        assert request.url.path.endswith("/chat/completions")
+        assert payload["messages"][0]["content"] == "real http path"
+        return httpx.Response(
+            200,
+            json={
+                "model": "gpt-4.1-mini",
+                "choices": [
+                    {
+                        "finish_reason": "stop",
+                        "message": {
+                            "role": "assistant",
+                            "content": "transport-backed response",
+                        },
+                    }
+                ],
+                "usage": {
+                    "prompt_tokens": 7,
+                    "completion_tokens": 4,
+                },
+            },
+        )
+
+    providers: dict[str, ProviderAdapter] = {
+        OpenAIProviderAdapter.provider_id: OpenAIProviderAdapter(
+            api_key="test-api-key",
+            transport=httpx.MockTransport(handler),
+        )
+    }
+    database_url, client = _build_client(tmp_path, providers=providers)
+    payload = {
+        "site_id": "site_alpha",
+        "ability_name": "magick-ai/workflows/generate-post-draft",
+        "channel": "openapi",
+        "execution_kind": "text",
+        "profile_id": "text.balanced",
+        "idempotency_key": "idem-http-provider-001",
+        "input": {
+            "messages": [{"role": "user", "content": "real http path"}]
+        },
+    }
+    body = json.dumps(payload).encode("utf-8")
+    headers = merge_json_headers(
+        build_auth_headers(
+            "POST",
+            "/v1/runtime/execute",
+            site_id="site_alpha",
+            idempotency_key="idem-http-provider-001",
+            trace_id="tracehttpprovider0010000000000000",
+            body=body,
+        )
+    )
+
+    response = client.post("/v1/runtime/execute", content=body, headers=headers)
+
+    assert response.status_code == 200
+    result = response.json()["data"]
+    assert result["status"] == "succeeded"
+    assert result["result"]["output_text"] == "transport-backed response"
+
+    dispose_engine(database_url)
+
+
+def test_execute_route_can_use_anthropic_http_provider_transport(tmp_path: Path) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/v1/models"):
+            assert request.headers["x-api-key"] == "test-api-key"
+            return httpx.Response(
+                200,
+                json={
+                    "data": [
+                        {"id": "claude-3-5-haiku-latest"},
+                        {"id": "claude-3-7-sonnet-latest"},
+                        {"id": "claude-3-opus-latest"},
+                    ]
+                },
+            )
+
+        if request.url.path.endswith("/v1/messages"):
+            payload = json.loads(request.content.decode("utf-8"))
+            assert payload["model"] == "claude-3-7-sonnet-latest"
+            assert payload["messages"][0]["content"] == "anthropic route request"
+            return httpx.Response(
+                200,
+                json={
+                    "model": "claude-3-7-sonnet-latest",
+                    "content": [{"type": "text", "text": "anthropic route response"}],
+                    "usage": {"input_tokens": 14, "output_tokens": 7},
+                    "stop_reason": "end_turn",
+                },
+            )
+
+        raise AssertionError(f"unexpected request path: {request.url.path}")
+
+    providers: dict[str, ProviderAdapter] = {
+        AnthropicProviderAdapter.provider_id: AnthropicProviderAdapter(
+            api_key="test-api-key",
+            transport=httpx.MockTransport(handler),
+        )
+    }
+    database_url, client = _build_client(tmp_path, providers=providers)
+    payload = {
+        "site_id": "site_alpha",
+        "ability_name": "magick-ai/workflows/generate-post-draft",
+        "channel": "openapi",
+        "execution_kind": "text",
+        "profile_id": "text.balanced",
+        "idempotency_key": "idem-anthropic-http-001",
+        "trace_id": "traceanthropichttp001000000000000",
+        "input": {
+            "messages": [
+                {"role": "user", "content": "anthropic route request"},
+            ],
+            "max_tokens": 256,
+        },
+    }
+    body = json.dumps(payload).encode("utf-8")
+    headers = merge_json_headers(
+        build_auth_headers(
+            "POST",
+            "/v1/runtime/execute",
+            site_id="site_alpha",
+            idempotency_key="idem-anthropic-http-001",
+            trace_id="traceanthropichttp001000000000000",
+            body=body,
+        )
+    )
+
+    response = client.post("/v1/runtime/execute", content=body, headers=headers)
+
+    assert response.status_code == 200
+    response_payload = response.json()["data"]
+    assert response_payload["provider_id"] == "anthropic"
+    assert response_payload["model_id"] == "claude-3-7-sonnet-latest"
+    assert response_payload["result"]["output_text"] == "anthropic route response"
+    assert response_payload["provider_call_count"] == 1
+
+    dispose_engine(database_url)
+
+
+def test_execute_route_retries_retryable_provider_errors(tmp_path: Path) -> None:
+    providers: dict[str, ProviderAdapter] = {
+        OpenAIProviderAdapter.provider_id: SequencedProviderAdapter(
+            {
+                "openai-us-east-text-balanced": [
+                    {
+                        "kind": "error",
+                        "error_code": "provider.rate_limited",
+                        "message": "retry me",
+                    },
+                    {
+                        "kind": "success",
+                        "output_text": "recovered after retry",
+                    },
+                ]
+            }
+        )
+    }
+    database_url, client = _build_client(tmp_path, providers=providers)
+    payload = {
+        "site_id": "site_alpha",
+        "ability_name": "magick-ai/workflows/generate-post-draft",
+        "channel": "openapi",
+        "execution_kind": "text",
+        "profile_id": "text.balanced",
+        "idempotency_key": "idem-retry-success-001",
+        "retry_max": 1,
+        "input": {"messages": [{"role": "user", "content": "retry path"}]},
+        "policy": {"allow_fallback": True},
+    }
+    body = json.dumps(payload).encode("utf-8")
+    response = client.post(
+        "/v1/runtime/execute",
+        content=body,
+        headers=merge_json_headers(
+            build_auth_headers(
+                "POST",
+                "/v1/runtime/execute",
+                site_id="site_alpha",
+                idempotency_key="idem-retry-success-001",
+                trace_id="traceretrysuccess001000000000000",
+                body=body,
+            )
+        ),
+    )
+
+    assert response.status_code == 200
+    result = response.json()["data"]
+    assert result["status"] == "succeeded"
+    assert result["provider_call_count"] == 2
+    assert result["retry_exhausted"] is False
+    assert result["result"]["output_text"] == "recovered after retry"
+
+    run_result = client.get(
+        f"/v1/runs/{result['run_id']}/result",
+        headers=build_auth_headers(
+            "GET",
+            f"/v1/runs/{result['run_id']}/result",
+            site_id="site_alpha",
+            trace_id="traceretrysuccess002000000000000",
+        ),
+    ).json()["data"]
+    assert len(run_result["provider_calls"]) == 2
+    assert run_result["provider_calls"][0]["error_code"] == "provider.rate_limited"
+    assert run_result["provider_calls"][0]["retryable"] is True
+    assert run_result["provider_calls"][1]["retry_count"] == 1
+
+    dispose_engine(database_url)
+
+
+def test_execute_route_stops_on_non_fallbackable_provider_error(tmp_path: Path) -> None:
+    providers: dict[str, ProviderAdapter] = {
+        OpenAIProviderAdapter.provider_id: SequencedProviderAdapter(
+            {
+                "openai-us-east-text-balanced": [
+                    {
+                        "kind": "error",
+                        "error_code": "provider.invalid_request",
+                        "message": "bad prompt payload",
+                        "retryable": False,
+                    }
+                ],
+                "openai-us-east-text-economy": [
+                    {
+                        "kind": "success",
+                        "output_text": "should never run",
+                    }
+                ],
+            }
+        )
+    }
+    database_url, client = _build_client(tmp_path, providers=providers)
+    payload = {
+        "site_id": "site_alpha",
+        "ability_name": "magick-ai/workflows/generate-post-draft",
+        "channel": "openapi",
+        "execution_kind": "text",
+        "profile_id": "text.balanced",
+        "idempotency_key": "idem-invalid-request-001",
+        "retry_max": 2,
+        "input": {"messages": [{"role": "user", "content": "invalid payload"}]},
+        "policy": {"allow_fallback": True},
+    }
+    body = json.dumps(payload).encode("utf-8")
+    response = client.post(
+        "/v1/runtime/execute",
+        content=body,
+        headers=merge_json_headers(
+            build_auth_headers(
+                "POST",
+                "/v1/runtime/execute",
+                site_id="site_alpha",
+                idempotency_key="idem-invalid-request-001",
+                trace_id="traceinvalidrequest0010000000000",
+                body=body,
+            )
+        ),
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "error"
+    assert payload["error_code"] == "provider.invalid_request"
+    assert payload["data"]["instance_id"] == "openai-us-east-text-balanced"
+    assert payload["data"]["retryable"] is False
+    assert payload["data"]["retry_exhausted"] is False
+    assert payload["data"]["provider_call_count"] == 1
+
+    dispose_engine(database_url)
+
+
+def test_execute_route_marks_retry_exhausted_after_last_retry(tmp_path: Path) -> None:
+    providers: dict[str, ProviderAdapter] = {
+        OpenAIProviderAdapter.provider_id: SequencedProviderAdapter(
+            {
+                "openai-us-east-text-balanced": [
+                    {
+                        "kind": "error",
+                        "error_code": "provider.rate_limited",
+                        "message": "still rate limited",
+                    }
+                ]
+            }
+        )
+    }
+    database_url, client = _build_client(tmp_path, providers=providers)
+    payload = {
+        "site_id": "site_alpha",
+        "ability_name": "magick-ai/workflows/generate-post-draft",
+        "channel": "openapi",
+        "execution_kind": "text",
+        "profile_id": "text.balanced",
+        "idempotency_key": "idem-retry-exhausted-001",
+        "retry_max": 2,
+        "input": {"messages": [{"role": "user", "content": "retry exhausted"}]},
+        "policy": {"allow_fallback": False},
+    }
+    body = json.dumps(payload).encode("utf-8")
+    response = client.post(
+        "/v1/runtime/execute",
+        content=body,
+        headers=merge_json_headers(
+            build_auth_headers(
+                "POST",
+                "/v1/runtime/execute",
+                site_id="site_alpha",
+                idempotency_key="idem-retry-exhausted-001",
+                trace_id="traceretryexhausted001000000000",
+                body=body,
+            )
+        ),
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "error"
+    assert payload["error_code"] == "provider.rate_limited"
+    assert payload["data"]["retryable"] is True
+    assert payload["data"]["retry_exhausted"] is True
+    assert payload["data"]["provider_call_count"] == 3
+
+    dispose_engine(database_url)
+
+
+def test_failed_run_records_metered_provider_cost_and_purge_keeps_ledger(
+    tmp_path: Path,
+) -> None:
+    providers: dict[str, ProviderAdapter] = {
+        OpenAIProviderAdapter.provider_id: SequencedProviderAdapter(
+            {
+                "openai-us-east-text-balanced": [
+                    {
+                        "kind": "error",
+                        "error_code": "provider.invalid_request",
+                        "message": "bad prompt payload",
+                        "retryable": False,
+                        "tokens_in": 9,
+                        "tokens_out": 4,
+                        "cost": 0.42,
+                    }
+                ]
+            }
+        )
+    }
+    database_url, client = _build_client(tmp_path, providers=providers)
+    payload = {
+        "site_id": "site_alpha",
+        "ability_name": "magick-ai/workflows/generate-post-draft",
+        "ability_family": "workflow",
+        "channel": "openapi",
+        "execution_kind": "text",
+        "profile_id": "text.balanced",
+        "idempotency_key": "idem-metered-error-001",
+        "input": {"messages": [{"role": "user", "content": "meter the failure"}]},
+    }
+    body = json.dumps(payload).encode("utf-8")
+    response = client.post(
+        "/v1/runtime/execute",
+        content=body,
+        headers=merge_json_headers(
+            build_auth_headers(
+                "POST",
+                "/v1/runtime/execute",
+                site_id="site_alpha",
+                idempotency_key="idem-metered-error-001",
+                trace_id="tracemeterederror0010000000",
+                body=body,
+            )
+        ),
+    )
+
+    assert response.status_code == 200
+    result = response.json()["data"]
+    assert response.json()["status"] == "error"
+    assert result["status"] == "failed"
+
+    with get_session(database_url) as session:
+        run = session.scalar(select(RunRecord).where(RunRecord.run_id == result["run_id"]))
+        assert run is not None
+        meter_events = list(
+            session.scalars(
+                select(UsageMeterEvent)
+                .where(UsageMeterEvent.run_id == result["run_id"])
+                .order_by(UsageMeterEvent.id.asc())
+            )
+        )
+        meter_before = [(event.meter_key, event.quantity) for event in meter_events]
+        run.result_json = None
+        run.result_purged_at = datetime.now(UTC)
+        session.commit()
+
+    assert meter_before == [
+        ("runs", 1.0),
+        ("provider_calls", 1.0),
+        ("tokens_in", 9.0),
+        ("tokens_out", 4.0),
+        ("tokens_total", 13.0),
+        ("cost", 0.42),
+    ]
+
+    with get_session(database_url) as session:
+        meter_after = [
+            (event.meter_key, event.quantity)
+            for event in session.scalars(
+                select(UsageMeterEvent)
+                .where(UsageMeterEvent.run_id == result["run_id"])
+                .order_by(UsageMeterEvent.id.asc())
+            )
+        ]
+    assert meter_after == meter_before
+
+    dispose_engine(database_url)

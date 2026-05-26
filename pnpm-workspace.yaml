@@ -1,0 +1,11 @@
+packages:
+  - 'frontend'
+
+overrides:
+  postcss: '>=8.5.10'
+
+ignoredBuiltDependencies:
+  - '@parcel/watcher'
+  - core-js
+  - core-js-pure
+  - unrs-resolver

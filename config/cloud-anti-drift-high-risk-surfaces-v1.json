@@ -1,0 +1,45 @@
+{
+  "version": "cloud-anti-drift-high-risk-surfaces-v1",
+  "updated": "2026-05-21",
+  "task_trigger_patterns": [
+    "app/**",
+    "tests/**",
+    "frontend/**",
+    "deploy/**",
+    "migrations/**"
+  ],
+  "governance_exempt_patterns": [
+    "config/cloud-anti-drift-high-risk-surfaces-v1.json",
+    "scripts/check-cloud-anti-drift.js",
+    ".github/workflows/ci.yml"
+  ],
+  "high_risk_patterns": [
+    "app/api/routes/runtime.py",
+    "app/api/routes/runs.py",
+    "app/domain/runtime/**",
+    "app/workers/**",
+    "frontend/k8s/**"
+  ],
+  "forbidden_active_patterns": [
+    "frontend/k8s/**"
+  ],
+  "high_risk_field_tokens": [
+    "execution_mode",
+    "hosted_profile_id",
+    "final_write_policy",
+    "final_write_target",
+    "wordpress_write_policy",
+    "wordpress_write_target",
+    "write_confirmed",
+    "confirm_token"
+  ],
+  "executable_seam_patterns": [
+    "app/**",
+    "deploy/**",
+    "migrations/**"
+  ],
+  "executable_seam_backstop_patterns": [
+    "tests/**",
+    "scripts/cloud-deploy-bundle-smoke-flow.sh"
+  ]
+}

@@ -1,0 +1,358 @@
+'use client';
+
+import Link from 'next/link';
+import { useEffect, useState } from 'react';
+import { BackofficeStatusBadge } from '@/components/backoffice/BackofficeStatusBadge';
+import type { PortalSiteSummaryRecord, Site } from '@/lib/portal-client';
+import { resolveCustomerPackageDisplay } from '@/lib/customer-package-display';
+import {
+  getPortalSiteDisplayName,
+  getPortalSiteSecondaryLabel,
+} from '@/lib/portal-site-display';
+import { translateAllowedAction, translateExternalCommercialRole } from '@/lib/admin-display';
+import { translateStatusLabel } from '@/lib/status-display';
+import { cn, formatCompactNumber, formatDate, formatNumber } from '@/lib/utils';
+
+type RestrictionItem = {
+  tone: 'warn' | 'info';
+  label: string;
+  detail: string;
+};
+
+interface PortalSiteInspectorDrawerProps {
+  isOpen: boolean;
+  onClose: () => void;
+  site: Site | null;
+  summary: PortalSiteSummaryRecord | null;
+  isLoading: boolean;
+  error: string;
+  restrictions: RestrictionItem[];
+  isCurrentSite: boolean;
+  onSelectCurrentSite: (siteId: string) => void | Promise<void>;
+  previousSiteId?: string;
+  nextSiteId?: string;
+  onNavigateSite: (siteId: string) => void;
+  t: (key: string, params?: Record<string, string>, fallback?: string) => string;
+}
+
+export function PortalSiteInspectorDrawer({
+  isOpen,
+  onClose,
+  site,
+  summary,
+  isLoading,
+  error,
+  restrictions,
+  isCurrentSite,
+  onSelectCurrentSite,
+  previousSiteId = '',
+  nextSiteId = '',
+  onNavigateSite,
+  t,
+}: PortalSiteInspectorDrawerProps) {
+  const [showDetail, setShowDetail] = useState(false);
+
+  useEffect(() => {
+    if (!isOpen) {
+      return;
+    }
+
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        onClose();
+      }
+    };
+
+    document.addEventListener('keydown', handleEscape);
+    document.body.style.overflow = 'hidden';
+
+    return () => {
+      document.removeEventListener('keydown', handleEscape);
+      document.body.style.overflow = 'unset';
+    };
+  }, [isOpen, onClose]);
+
+  if (!isOpen || !site) {
+    return null;
+  }
+
+  const detailSite = summary?.site || site;
+  const packageDisplay = resolveCustomerPackageDisplay(t, {
+    planId: summary?.coverage?.plan_id,
+    planVersionId: summary?.coverage?.plan_version_id,
+    packageAlias: summary?.package_alias || summary?.coverage?.package_alias,
+    formalPlanName: detailSite.plan_name,
+    coverageState: summary?.coverage ? 'covered' : 'uncovered',
+  });
+  const planLabel = packageDisplay.display_package_label || t('common.not_found');
+  const subscriptionStatus = summary?.subscription_status || summary?.coverage?.status || 'unknown';
+  const featureCount = summary?.entitlement_snapshot?.features?.length || 0;
+  const requestLimit = summary?.entitlement_snapshot?.requests_limit || 0;
+  const tokenLimit = summary?.entitlement_snapshot?.tokens_limit || 0;
+  const periodStart =
+    summary?.coverage?.current_period_start_at ||
+    summary?.coverage?.current_period_start ||
+    '';
+  const periodEnd =
+    summary?.coverage?.current_period_end_at ||
+    summary?.coverage?.current_period_end ||
+    '';
+  const footerLinks = [
+    { href: `/portal/usage?site=${site.site_id}`, label: t('usage.title', {}, 'Open Usage') },
+    { href: `/portal/billing?site=${site.site_id}`, label: t('portal.nav_package', {}, 'Open Package') },
+    { href: `/portal/sites/${site.site_id}`, label: t('portal.site_record', {}, 'Open site record') },
+  ];
+  const postureMetrics = [
+    {
+      label: t('common.status'),
+      value: translateStatusLabel(detailSite.status, t),
+      detail: translateStatusLabel(subscriptionStatus, t),
+    },
+    {
+      label: t('common.plan'),
+      value: planLabel,
+      detail: t('portal.home.latest_plan_status', {}, 'Plan status'),
+    },
+    {
+      label: t('common.account'),
+      value: summary?.account_id || detailSite.account_id || t('common.not_found'),
+      detail: summary?.member_ref || t('common.not_found'),
+    },
+    {
+      label: t('portal.home.access_scope', {}, 'Access scope'),
+      value: summary?.identity_type
+        ? translateExternalCommercialRole(summary.identity_type, t)
+        : t('common.not_found'),
+      detail:
+        summary?.allowed_actions?.length
+          ? summary.allowed_actions.map((action) => translateAllowedAction(action, t)).join(' · ')
+          : t('portal.home.read_only_summary', {}, 'Read-only summary only'),
+    },
+    {
+      label: t('common.connected'),
+      value: detailSite.created_at ? formatDate(detailSite.created_at) : t('common.not_found'),
+    },
+    {
+      label: t('portal.period_end', {}, 'Period End'),
+      value: periodEnd ? formatDate(periodEnd) : t('common.not_found'),
+      detail: periodStart ? `${t('portal.period_start', {}, 'Period Start')}: ${formatDate(periodStart)}` : undefined,
+    },
+  ];
+  const limitMetrics = [
+    {
+      label: t('site_details.entitlements', {}, 'Entitlements'),
+      value: String(featureCount),
+      detail: t('common.features', {}, 'Features'),
+    },
+    {
+      label: t('usage.requests_month', {}, 'Requests / Month'),
+      value: requestLimit > 0 ? formatNumber(requestLimit) : t('common.not_found'),
+    },
+    {
+      label: t('usage.tokens_month', {}, 'Tokens / Month'),
+      value: tokenLimit > 0 ? formatCompactNumber(tokenLimit) : t('common.not_found'),
+    },
+  ];
+
+  return (
+    <div className="fixed inset-0 z-50">
+      <div className="absolute inset-0 bg-slate-950/45 backdrop-blur-sm" onClick={onClose} aria-hidden="true" />
+      <aside
+        className={cn(
+          'absolute right-0 top-0 flex h-full w-full max-w-2xl flex-col border-l border-slate-200 bg-white shadow-2xl transition-transform dark:border-slate-800 dark:bg-slate-950 sm:max-w-xl',
+          isOpen ? 'translate-x-0' : 'translate-x-full'
+        )}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="portal-site-inspector-title"
+      >
+        <div className="flex items-start justify-between gap-4 border-b border-slate-200 px-4 py-4 dark:border-slate-800 sm:px-5">
+          <div className="min-w-0">
+            <p className="text-[0.68rem] font-semibold uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
+              {t('portal.site_summary', {}, 'Site summary')}
+            </p>
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              <h2 id="portal-site-inspector-title" className="truncate text-xl font-semibold text-slate-950 dark:text-white">
+                {getPortalSiteDisplayName(detailSite)}
+              </h2>
+              <BackofficeStatusBadge
+                status={detailSite.status}
+                label={translateStatusLabel(detailSite.status, t)}
+                className="text-[0.68rem]"
+              />
+              {isCurrentSite ? (
+                <span className="rounded-full bg-[color:var(--brand-primary-soft)] px-2 py-1 text-[0.68rem] font-semibold uppercase tracking-[0.16em] text-[color:var(--brand-primary)]">
+                  {t('common.current', {}, 'Current')}
+                </span>
+              ) : null}
+            </div>
+            <p className="mt-1 text-sm text-slate-600 dark:text-slate-400">
+              {getPortalSiteSecondaryLabel(detailSite) || t('common.not_found')}
+            </p>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => previousSiteId && onNavigateSite(previousSiteId)}
+                disabled={!previousSiteId}
+                className="btn btn-secondary btn-sm flex-1 sm:flex-none"
+              >
+                {t('common.previous', {}, 'Previous')}
+              </button>
+              <button
+                type="button"
+                onClick={() => nextSiteId && onNavigateSite(nextSiteId)}
+                disabled={!nextSiteId}
+                className="btn btn-secondary btn-sm flex-1 sm:flex-none"
+              >
+                {t('common.next', {}, 'Next')}
+              </button>
+              <button
+                type="button"
+                onClick={() => void onSelectCurrentSite(site.site_id)}
+                disabled={isCurrentSite}
+                className={cn('btn btn-secondary btn-sm w-full sm:w-auto', isCurrentSite && 'opacity-70')}
+              >
+                {isCurrentSite ? t('common.current', {}, 'Current') : t('portal.home.select_site_action', {}, 'Select')}
+              </button>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-lg p-2 text-slate-500 transition hover:bg-slate-100 hover:text-slate-700 dark:hover:bg-slate-900 dark:hover:text-slate-200"
+            aria-label={t('common.close')}
+          >
+            <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
+        </div>
+
+        <div className="flex-1 overflow-y-auto px-4 py-4 sm:px-5 sm:py-5">
+          {isLoading ? (
+            <div className="space-y-3">
+              <div className="h-20 animate-pulse rounded-2xl bg-slate-100 dark:bg-slate-900" />
+              <div className="h-28 animate-pulse rounded-2xl bg-slate-100 dark:bg-slate-900" />
+              <div className="h-24 animate-pulse rounded-2xl bg-slate-100 dark:bg-slate-900" />
+            </div>
+          ) : error ? (
+            <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-4 text-sm text-red-700 dark:border-red-900 dark:bg-red-950/30 dark:text-red-300">
+              {error}
+            </div>
+          ) : (
+            <div className="space-y-5">
+              <section className="rounded-[1.4rem] border border-slate-200/80 bg-slate-50/70 px-4 py-4 dark:border-slate-800 dark:bg-slate-950/45">
+                <div className="flex flex-col gap-2">
+                  <p className="text-[0.68rem] font-semibold uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
+                    {t('portal.home.drawer_posture_label', {}, 'Quick view')}
+                  </p>
+                  <h3 className="text-lg font-semibold text-slate-950 dark:text-white">
+                    {t('portal.home.drawer_posture_title', {}, 'Current site')}
+                  </h3>
+                  <p className="text-sm leading-6 text-slate-600 dark:text-slate-300">
+                    {t(
+                      'portal.home.drawer_posture_desc',
+                      {},
+                      'Use this quick view to confirm the current site, package, and status before opening a dedicated page.'
+                    )}
+                  </p>
+                </div>
+
+                <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                  <Metric
+                    label={t('common.site')}
+                    value={getPortalSiteDisplayName(detailSite)}
+                    detail={getPortalSiteSecondaryLabel(detailSite) || undefined}
+                  />
+                  {postureMetrics.map((item) => (
+                    <Metric key={`${item.label}-${item.value}`} label={item.label} value={item.value} detail={item.detail} />
+                  ))}
+                </div>
+              </section>
+
+              <section className="rounded-[1.4rem] border border-slate-200/80 bg-white/90 px-4 py-4 dark:border-slate-800 dark:bg-slate-950/30">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <p className="text-[0.68rem] font-semibold uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
+                      {t('portal.home.drawer_limits_label', {}, 'Details')}
+                    </p>
+                    <h3 className="mt-2 text-lg font-semibold text-slate-950 dark:text-white">
+                      {t('portal.home.drawer_attention_title', {}, 'Restrictions and access details')}
+                    </h3>
+                  </div>
+                  <button type="button" onClick={() => setShowDetail((current) => !current)} className="btn btn-secondary btn-sm">
+                    {showDetail ? t('common.hide', {}, 'Hide') : t('common.view_details', {}, 'View details')}
+                  </button>
+                </div>
+
+                {showDetail ? (
+                  <div className="mt-4 space-y-4">
+                    <div className="grid gap-3 sm:grid-cols-3">
+                      {limitMetrics.map((item) => (
+                        <Metric key={`${item.label}-${item.value}`} label={item.label} value={item.value} detail={item.detail} />
+                      ))}
+                    </div>
+                    <div className="space-y-3">
+                      {restrictions.length ? (
+                        restrictions.map((item, index) => (
+                          <div
+                            key={`${item.label}-${index}`}
+                            className={cn(
+                              'rounded-2xl border px-4 py-3',
+                              item.tone === 'warn'
+                                ? 'border-amber-200 bg-amber-50 dark:border-amber-900/60 dark:bg-amber-950/20'
+                                : 'border-blue-200 bg-blue-50 dark:border-blue-900/60 dark:bg-blue-950/20'
+                            )}
+                          >
+                            <p className="font-medium text-slate-950 dark:text-white">{item.label}</p>
+                            <p className="mt-1 text-sm leading-6 text-slate-600 dark:text-slate-300">{item.detail}</p>
+                          </div>
+                        ))
+                      ) : (
+                        <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 dark:border-emerald-900/60 dark:bg-emerald-950/20">
+                          <p className="font-medium text-emerald-900 dark:text-emerald-100">
+                            {t('portal.home.recent_issues_empty_title', {}, 'No active restrictions')}
+                          </p>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                ) : (
+                  <p className="mt-3 text-sm leading-6 text-slate-600 dark:text-slate-300">
+                    {restrictions[0]?.detail ||
+                      t('portal.home.recent_issues_empty_desc', {}, 'The current site looks ready for normal usage.')}
+                  </p>
+                )}
+              </section>
+
+              <div className="grid gap-2 sm:grid-cols-2">
+                {footerLinks.map((item, index) => (
+                  <Link
+                    key={item.href}
+                    href={item.href}
+                    className={cn(index === 0 ? 'btn btn-secondary justify-center w-full' : 'btn btn-secondary justify-center w-full')}
+                    onClick={onClose}
+                  >
+                    {item.label}
+                  </Link>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      </aside>
+    </div>
+  );
+}
+
+function Metric({ label, value, detail }: { label: string; value: string; detail?: string }) {
+  return (
+    <div className="rounded-[1rem] border border-slate-200/80 bg-slate-50/80 px-3 py-3 dark:border-slate-800 dark:bg-slate-900/60">
+      <p className="text-[0.68rem] font-semibold uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
+        {label}
+      </p>
+      <p className="mt-2 text-sm font-semibold text-slate-950 dark:text-white">{value}</p>
+      {detail ? <p className="mt-1 text-xs text-slate-600 dark:text-slate-400">{detail}</p> : null}
+    </div>
+  );
+}

@@ -1,0 +1,507 @@
+'use client';
+
+import React, { useEffect, useState, useCallback, useRef } from 'react';
+import Link from 'next/link';
+import { usePathname } from 'next/navigation';
+import { cn, formatDate } from '@/lib/utils';
+import { useLocale } from '@/contexts/LocaleContext';
+import { ThemeToggle } from '@/components/ui/ThemeToggle';
+import { LocaleSwitcher } from '@/components/ui/LocaleSwitcher';
+
+interface AdminLayoutProps {
+  children: React.ReactNode;
+}
+
+interface ActiveImpersonation {
+  impersonation_id: string;
+  member_ref: string;
+  account_id?: string;
+  site_id: string;
+  started_at?: string;
+  expires_at?: string;
+}
+
+export default function AdminLayout({ children }: AdminLayoutProps) {
+  const pathname = usePathname();
+  const { t } = useLocale();
+  const isLoginPage = pathname === '/admin/login';
+  const [activeImpersonation, setActiveImpersonation] = useState<ActiveImpersonation | null>(null);
+  const [isEndingImpersonation, setIsEndingImpersonation] = useState(false);
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const [isMoreMenuOpen, setIsMoreMenuOpen] = useState(false);
+  const moreMenuRef = useRef<HTMLDivElement>(null);
+
+  const redirectToLogin = useCallback(() => {
+    const redirect =
+      typeof window !== 'undefined'
+        ? `${window.location.pathname}${window.location.search}`
+        : pathname;
+    window.location.href = `/admin/login?redirect=${encodeURIComponent(redirect)}`;
+  }, [pathname]);
+
+  useEffect(() => {
+    if (!mobileNavOpen) {
+      document.body.style.overflow = '';
+      return;
+    }
+
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setMobileNavOpen(false);
+      }
+    };
+
+    document.addEventListener('keydown', handleEscape);
+    document.body.style.overflow = 'hidden';
+
+    return () => {
+      document.removeEventListener('keydown', handleEscape);
+      document.body.style.overflow = '';
+    };
+  }, [mobileNavOpen]);
+
+  useEffect(() => {
+    if (isLoginPage) {
+      return;
+    }
+
+    const loadActiveImpersonation = async () => {
+      try {
+        const response = await fetch('/api/admin/impersonations?active_only=true', {
+          credentials: 'include',
+        });
+
+        if (
+          response.status === 401 ||
+          response.status === 403 ||
+          response.redirected ||
+          response.url.includes('/admin/login')
+        ) {
+          redirectToLogin();
+          return;
+        }
+
+        if (!response.ok) {
+          setActiveImpersonation(null);
+          return;
+        }
+
+        const data = await response.json();
+        setActiveImpersonation((data.data?.items || [])[0] || null);
+      } catch {
+        setActiveImpersonation(null);
+      }
+    };
+
+    loadActiveImpersonation();
+  }, [isLoginPage, pathname, redirectToLogin]);
+
+  useEffect(() => {
+    setIsMoreMenuOpen(false);
+  }, [pathname]);
+
+  useEffect(() => {
+    if (!isMoreMenuOpen) {
+      return;
+    }
+
+    const handlePointerDown = (event: MouseEvent) => {
+      if (moreMenuRef.current && !moreMenuRef.current.contains(event.target as Node)) {
+        setIsMoreMenuOpen(false);
+      }
+    };
+
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setIsMoreMenuOpen(false);
+      }
+    };
+
+    document.addEventListener('mousedown', handlePointerDown);
+    document.addEventListener('keydown', handleEscape);
+
+    return () => {
+      document.removeEventListener('mousedown', handlePointerDown);
+      document.removeEventListener('keydown', handleEscape);
+    };
+  }, [isMoreMenuOpen]);
+
+  const handleEndImpersonation = async () => {
+    if (!activeImpersonation) {
+      return;
+    }
+
+    setIsEndingImpersonation(true);
+    try {
+      const response = await fetch(`/api/admin/impersonations/${activeImpersonation.impersonation_id}/end`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          ended_reason: 'ended_from_admin_global_bar',
+        }),
+      });
+
+      if (!response.ok) {
+        return;
+      }
+
+      setActiveImpersonation(null);
+    } catch {
+      return;
+    } finally {
+      setIsEndingImpersonation(false);
+    }
+  };
+
+  const toggleMobileNav = useCallback(() => {
+    setMobileNavOpen((current) => !current);
+  }, []);
+
+  const primaryNavItems = [
+    { href: '/admin', label: t('nav.overview', {}, 'Overview') },
+    { href: '/admin/accounts', label: t('common.accounts', {}, 'Customers') },
+    { href: '/admin/sites', label: t('common.sites', {}, 'Sites') },
+    { href: '/admin/subscriptions', label: t('common.subscriptions', {}, 'Subscriptions') },
+    { href: '/admin/plans', label: t('common.package', {}, 'Package') },
+    { href: '/admin/topup-packs', label: t('admin.topup_packs', {}, 'Top-up packs') },
+    { href: '/admin/requests', label: t('admin.user_requests', {}, 'User requests') },
+  ];
+
+  const secondaryNavItems = [
+    { href: '/admin/members', label: t('common.members', {}, 'Members') },
+    { href: '/admin/model-intelligence', label: t('admin.model_intelligence', {}, 'Model intelligence') },
+    { href: '/admin/impersonations', label: t('nav.impersonations', {}, 'Impersonations') },
+  ];
+
+  const isActive = (href: string) => {
+    if (href === '/admin') {
+      return pathname === '/admin';
+    }
+
+    return pathname === href || pathname.startsWith(`${href}/`);
+  };
+  const activePrimaryItem = primaryNavItems.find((item) => isActive(item.href)) ?? primaryNavItems[0];
+  const activeSecondaryItem = secondaryNavItems.find((item) => isActive(item.href)) ?? null;
+
+  if (isLoginPage) {
+    return (
+      <div className="flex min-h-screen flex-col bg-[radial-gradient(circle_at_top_left,_rgba(96,165,250,0.18),transparent_22rem),radial-gradient(circle_at_top_right,_rgba(56,189,248,0.16),transparent_24rem),linear-gradient(180deg,#f8fbff_0%,#f7f8fc_54%,#eef3fb_100%)] dark:bg-[radial-gradient(circle_at_top_left,_rgba(56,189,248,0.16),transparent_20rem),radial-gradient(circle_at_top_right,_rgba(37,99,235,0.16),transparent_24rem),linear-gradient(180deg,#07111f_0%,#08101d_54%,#030712_100%)]">
+        <header className="border-b border-slate-200/70 bg-white/72 backdrop-blur-xl dark:border-slate-800 dark:bg-slate-950/72">
+          <div className="container mx-auto flex h-14 items-center justify-between px-4">
+            <Link
+              href="/"
+              className="flex items-center gap-3"
+            >
+              <span className="brand-mark" aria-hidden="true">
+                <svg className="h-5 w-5" viewBox="0 0 24 24" fill="none">
+                  <path d="M6 15.25 12.2 4l.6 6.55H18l-6.2 9.45-.5-6.2H6Z" fill="currentColor" />
+                </svg>
+              </span>
+              <span className="flex flex-col leading-none">
+                <span className="text-[0.68rem] font-bold uppercase tracking-[0.3em] text-blue-600 dark:text-blue-300">
+                  Magick AI
+                </span>
+                <span className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+                  {t('admin.console')}
+                </span>
+              </span>
+            </Link>
+            <div className="flex items-center gap-2">
+              <LocaleSwitcher />
+              <ThemeToggle />
+            </div>
+          </div>
+        </header>
+        <main className="flex-1">{children}</main>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex min-h-screen flex-col">
+      <header className="sticky top-0 z-50 w-full border-b border-slate-200/70 bg-white/80 backdrop-blur-xl dark:border-slate-800 dark:bg-slate-950/82">
+        <div className="container mx-auto px-4">
+          <div className="flex min-h-[3.6rem] items-center justify-between gap-4 py-2">
+            <Link 
+              href="/admin" 
+              className="flex items-center gap-3"
+            >
+              <span className="brand-mark" aria-hidden="true">
+                <svg className="h-5 w-5" viewBox="0 0 24 24" fill="none">
+                  <path d="M6 15.25 12.2 4l.6 6.55H18l-6.2 9.45-.5-6.2H6Z" fill="currentColor" />
+                </svg>
+              </span>
+              <span className="flex flex-col leading-none">
+                <span className="text-[0.68rem] font-bold uppercase tracking-[0.3em] text-blue-600 dark:text-blue-300">
+                  Magick AI
+                </span>
+                <span className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+                  {t('admin.console')}
+                </span>
+              </span>
+            </Link>
+
+            <div className="flex items-center gap-2">
+              <span className="hidden rounded-full border border-blue-200/80 bg-blue-50 px-2.5 py-1 text-[0.62rem] font-bold uppercase tracking-[0.2em] text-blue-700 dark:border-blue-900/70 dark:bg-blue-950/40 dark:text-blue-200 md:inline-flex">
+                {t('admin.internal_only')}
+              </span>
+              <div className="hidden items-center gap-2 md:flex">
+                <LocaleSwitcher />
+                <ThemeToggle />
+              </div>
+              <Link
+                href="/admin/logout"
+                prefetch={false}
+                className="hidden rounded-full px-3 py-2 text-sm font-medium text-slate-600 transition hover:bg-slate-100 hover:text-slate-900 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-white md:inline-flex"
+              >
+                {t('portal.logout')}
+              </Link>
+              <Link
+                href="/portal"
+                className="hidden rounded-full px-3 py-2 text-sm font-medium text-slate-600 transition hover:bg-slate-100 hover:text-slate-900 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-white md:inline-flex"
+              >
+                {t('nav.portal')} →
+              </Link>
+              <button
+                type="button"
+                className="inline-flex h-10 w-10 items-center justify-center rounded-full border border-slate-200/80 bg-white/85 text-slate-600 shadow-sm transition hover:border-slate-300 hover:text-slate-900 dark:border-slate-700 dark:bg-slate-900/80 dark:text-slate-300 dark:hover:border-slate-600 dark:hover:text-white md:hidden"
+                aria-controls="admin-mobile-nav"
+                aria-expanded={mobileNavOpen}
+                aria-label={mobileNavOpen ? t('common.close') : t('common.open_menu', undefined, 'Open menu')}
+                onClick={toggleMobileNav}
+              >
+                {mobileNavOpen ? (
+                  <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18 18 6M6 6l12 12" />
+                  </svg>
+                ) : (
+                  <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 7h16M4 12h16M4 17h16" />
+                  </svg>
+                )}
+              </button>
+            </div>
+          </div>
+
+          <div className="hidden items-center justify-between gap-6 border-t border-slate-200/70 py-2 dark:border-slate-800 md:flex">
+            <div className="flex min-w-0 items-center gap-2 overflow-visible">
+              <div className="max-w-full overflow-x-auto pb-1">
+                <nav
+                  data-ui="admin-primary-nav"
+                  className="flex min-w-max items-center gap-2"
+                  aria-label={t('admin.console', {}, 'Admin console')}
+                >
+                  {primaryNavItems.map((item) => (
+                    <Link
+                      key={item.href}
+                      href={item.href}
+                      prefetch={false}
+                      className={cn(
+                        'admin-nav-link whitespace-nowrap',
+                        isActive(item.href) && 'admin-nav-link-active'
+                      )}
+                    >
+                      {item.label}
+                    </Link>
+                  ))}
+                </nav>
+              </div>
+              <div ref={moreMenuRef} className="relative shrink-0">
+                <button
+                  type="button"
+                  aria-haspopup="menu"
+                  aria-expanded={isMoreMenuOpen}
+                  className="rounded-full px-3 py-2 text-sm font-medium text-slate-600 transition-all hover:bg-slate-100 hover:text-slate-900 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-white"
+                  onClick={() => setIsMoreMenuOpen((current) => !current)}
+                >
+                  {t('portal.nav_more', {}, 'More')}
+                </button>
+                {isMoreMenuOpen ? (
+                  <div
+                    className="absolute left-0 top-full z-10 mt-2 min-w-48 rounded-2xl border border-slate-200/80 bg-white p-2 shadow-xl dark:border-slate-800 dark:bg-slate-950"
+                    role="menu"
+                  >
+                    {secondaryNavItems.map((item) => (
+                      <Link
+                        key={item.href}
+                        href={item.href}
+                        prefetch={false}
+                        role="menuitem"
+                        onClick={() => setIsMoreMenuOpen(false)}
+                        className={cn(
+                          'block rounded-xl px-3 py-2 text-sm font-medium transition-colors',
+                          isActive(item.href)
+                            ? 'bg-slate-900 text-white dark:bg-blue-500 dark:text-slate-950'
+                            : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-white'
+                        )}
+                      >
+                        {item.label}
+                      </Link>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+            </div>
+            <div className="min-w-0 max-w-sm text-right">
+              <p className="text-[0.62rem] font-semibold uppercase tracking-[0.2em] text-slate-500 dark:text-slate-400">
+                {t('admin.operator_surface', {}, 'Operator surface')}
+              </p>
+              <p className="truncate text-sm text-slate-600 dark:text-slate-300">
+                {activeSecondaryItem ? `${activePrimaryItem.label} / ${activeSecondaryItem.label}` : activePrimaryItem.label}
+              </p>
+            </div>
+          </div>
+        </div>
+
+        <div
+          id="admin-mobile-nav"
+          className={cn(
+            'border-t border-slate-200/70 bg-white/92 backdrop-blur dark:border-slate-800 dark:bg-slate-950/92 md:hidden',
+            mobileNavOpen ? 'block' : 'hidden'
+          )}
+        >
+          <div className="container mx-auto space-y-4 px-4 py-4">
+            <div className="flex items-center gap-2">
+              <LocaleSwitcher />
+              <ThemeToggle />
+              <span className="rounded-full border border-blue-200 bg-blue-50 px-2.5 py-1 text-[0.64rem] font-bold uppercase tracking-[0.22em] text-blue-700 dark:border-blue-900/80 dark:bg-blue-950/40 dark:text-blue-200">
+              {t('admin.internal_only')}
+              </span>
+            </div>
+            <nav className="space-y-4" aria-label={t('admin.console', {}, 'Admin console')}>
+              <div className="space-y-2">
+                <p className="text-[0.68rem] font-bold uppercase tracking-[0.22em] text-slate-500 dark:text-slate-400">
+                  {t('admin.operator_surface', {}, 'Operator surface')}
+                </p>
+                <div className="space-y-2">
+                  {primaryNavItems.map((item) => (
+                    <Link
+                      key={item.href}
+                      href={item.href}
+                      prefetch={false}
+                      className={cn(
+                        'block rounded-2xl px-4 py-3 text-sm font-medium transition-colors',
+                        isActive(item.href)
+                          ? 'bg-slate-900 text-white dark:bg-blue-500 dark:text-slate-950'
+                          : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-white'
+                      )}
+                      onClick={() => setMobileNavOpen(false)}
+                    >
+                      {item.label}
+                    </Link>
+                  ))}
+                </div>
+              </div>
+              <div className="space-y-2">
+                <p className="text-[0.68rem] font-bold uppercase tracking-[0.22em] text-slate-500 dark:text-slate-400">
+                  {t('portal.nav_more', {}, 'More')}
+                </p>
+                <div className="space-y-2">
+                  {secondaryNavItems.map((item) => (
+                    <Link
+                      key={item.href}
+                      href={item.href}
+                      prefetch={false}
+                      className={cn(
+                        'block rounded-2xl px-4 py-3 text-sm font-medium transition-colors',
+                        isActive(item.href)
+                          ? 'bg-slate-900 text-white dark:bg-blue-500 dark:text-slate-950'
+                          : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-white'
+                      )}
+                      onClick={() => setMobileNavOpen(false)}
+                    >
+                      {item.label}
+                    </Link>
+                  ))}
+                </div>
+              </div>
+            </nav>
+            <div className="grid grid-cols-2 gap-2">
+              <Link
+                href="/portal"
+                className="btn btn-secondary justify-center"
+                onClick={() => setMobileNavOpen(false)}
+              >
+                {t('nav.portal')}
+              </Link>
+              <Link
+                href="/admin/logout"
+                prefetch={false}
+                className="btn btn-outline justify-center"
+                onClick={() => setMobileNavOpen(false)}
+              >
+                {t('portal.logout')}
+              </Link>
+            </div>
+          </div>
+        </div>
+      </header>
+
+      {/* Main Content */}
+      <main className="flex-1 bg-transparent">
+        <div className="container mx-auto px-4 py-5 md:py-6">
+          {activeImpersonation ? (
+            <div className="mb-5 overflow-hidden rounded-[1.6rem] border border-amber-200/80 bg-amber-50/80 shadow-sm backdrop-blur dark:border-amber-900/70 dark:bg-amber-950/25">
+              <div className="flex flex-col gap-3 px-4 py-4 lg:flex-row lg:items-center lg:justify-between">
+                <div className="min-w-0">
+                  <p className="text-[0.68rem] font-bold uppercase tracking-[0.24em] text-amber-700 dark:text-amber-300">
+                    {t('admin.current_impersonation')}
+                  </p>
+                  <div className="mt-2 flex flex-wrap items-center gap-2">
+                    <span className="rounded-full border border-amber-300/70 bg-amber-100/80 px-2.5 py-1 text-[0.7rem] font-semibold text-amber-900 dark:border-amber-800 dark:bg-amber-900/60 dark:text-amber-100">
+                      {t('admin.read_only_support_session')}
+                    </span>
+                    <h2 className="truncate text-base font-semibold text-amber-950 dark:text-amber-100">
+                      {activeImpersonation.member_ref} · {activeImpersonation.site_id}
+                    </h2>
+                  </div>
+                  <p className="mt-1 text-sm text-amber-800/85 dark:text-amber-200/80">
+                    {t('admin.started_expires', {
+                      started: activeImpersonation.started_at ? formatDate(activeImpersonation.started_at) : t('common.unknown'),
+                      expires: activeImpersonation.expires_at ? formatDate(activeImpersonation.expires_at) : t('common.unknown'),
+                    })}
+                  </p>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {activeImpersonation.account_id ? (
+                    <Link href={`/admin/accounts/${encodeURIComponent(activeImpersonation.account_id)}`} className="btn btn-secondary">
+                      {t('admin.open_account')}
+                    </Link>
+                  ) : null}
+                  <Link href={`/admin/sites/${encodeURIComponent(activeImpersonation.site_id)}`} className="btn btn-secondary">
+                    {t('admin.open_site')}
+                  </Link>
+                  <Link href="/portal" className="btn btn-primary">
+                    {t('admin.open_customer_portal')}
+                  </Link>
+                  <Link href="/admin/impersonations?active_only=true" className="btn btn-secondary">
+                    {t('nav.impersonations')}
+                  </Link>
+                  <button
+                    type="button"
+                    onClick={handleEndImpersonation}
+                    className="btn btn-secondary"
+                    disabled={isEndingImpersonation}
+                  >
+                    {isEndingImpersonation ? t('common.saving') : t('admin.end_impersonation')}
+                  </button>
+                </div>
+              </div>
+            </div>
+          ) : null}
+          {children}
+        </div>
+      </main>
+
+      {/* Admin Footer */}
+      <footer className="border-t border-gray-200 dark:border-gray-800 py-4">
+        <div className="container mx-auto px-4 text-center text-sm text-gray-500">
+          <p>{t('admin.footer')}</p>
+        </div>
+      </footer>
+    </div>
+  );
+}

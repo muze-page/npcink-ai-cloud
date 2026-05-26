@@ -1,0 +1,217 @@
+# Cloud Release Checklist
+
+> Status: canonical release gate
+>
+> Updated: 2026-04-15
+>
+> Scope: `cloud/**` formal release execution, production env verification, smoke, rollback readiness
+
+## 1. Purpose
+
+This checklist is the final gate before formally releasing Magick AI Cloud.
+
+It is intentionally split into:
+
+- repo ready: repository code, scripts, and local validation are landed
+- env required: production secrets, URLs, trusted hosts/TLS, SMTP, worker cadence, OTLP, and provider credentials are configured on the release host
+- operator required: backup/rollback, cadence, heartbeat, trace, token rotation, and log inspection procedures are confirmed by the release operator
+- smoke required: `deploy/release-smoke.sh`, real mailbox login, signed addon projection reads, and one real signed runtime request pass on the release host
+
+Cloud may be released only when every `Required` item below is complete.
+
+## 2. Current Repository Status
+
+Current repository status is:
+
+- done: single `platform_admin` token login model is landed
+- done: hardening scope is frozen in `cloud-hardening-minimum-operations-v1.md`
+- done: invite-only `user_admin` email verification-code login is landed
+- done: legacy Portal magic-link and OIDC routes are physically removed from active runtime
+- done: legacy multi-platform-admin directory routes are removed from active runtime
+- done: Portal session is unified on JWT session cookie
+- done: formal release smoke script exists
+- done: local validation currently passes:
+  - `pytest`
+  - `pnpm type-check`
+  - `pnpm eslint`
+  - `python3 -m compileall`
+- done: mini dev sync and browser smoke currently pass at the configured mini-dev frontend origin (for example `http://127.0.0.1:8010/`)
+
+Repository conclusion:
+
+- `repo ready` is the only category currently closed by repository evidence
+- `env required`, `operator required`, and `smoke required` remain open until a real release host is verified
+- Cloud must not be treated as GA-ready while any `Required` item remains unchecked
+
+Current open blockers:
+
+| Blocker | Category | Owner | Verification |
+| --- | --- | --- | --- |
+| production secrets | env required | release operator | production secret store contains distinct runtime, admin, session, provider, and Portal secrets |
+| TLS / trusted hosts | env required | release operator | public release origin has valid TLS and matches trusted host / browser origin allowlists |
+| SMTP real mailbox | env required | release operator | production SMTP sends a login code to a real invited mailbox |
+| worker heartbeat | operator required | release operator | `/internal/service/observability/summary` shows fresh worker heartbeats |
+| OTLP sink | operator required | release operator | trace sink endpoint and query URL are configured and a fresh Cloud trace is queryable |
+| DB backup/rollback | operator required | database owner | backup artifact exists and rollback procedure has been written down |
+| real signed runtime request | smoke required | release operator | plugin/runtime smoke completes without `runtime.provider_not_configured` |
+
+## 3. Required Production Environment Checks
+
+All items in this section are `Required`.
+
+### 3.1 Secrets
+
+- [ ] `MAGICK_CLOUD_INTERNAL_AUTH_TOKEN` is set to a production value
+- [ ] `MAGICK_CLOUD_ADMIN_BOOTSTRAP_TOKEN` is set to a separate production value
+- [ ] `MAGICK_CLOUD_ADMIN_SESSION_SECRET` is set to a production value
+- [ ] `MAGICK_CLOUD_PROVIDER_CONNECTION_SECRET` is set to a production value
+- [ ] `MAGICK_CLOUD_PORTAL_JWT_SECRET` is set to a production value
+- [ ] at least one real hosted-runtime provider credential is configured for the release host
+- [ ] `MAGICK_CLOUD_ADMIN_BOOTSTRAP_TOKEN` is not equal to `MAGICK_CLOUD_INTERNAL_AUTH_TOKEN`
+- [ ] browser origin allowlist and trusted host settings match the public release origin
+
+### 3.2 Public Base URLs
+
+- [ ] `MAGICK_CLOUD_BASE_URL` matches the real public release URL
+- [ ] `MAGICK_CLOUD_PORTAL_PUBLIC_BASE_URL` matches the real public portal URL
+- [ ] public reverse proxy and TLS are already valid for the release host
+
+### 3.3 Portal Email Delivery
+
+- [ ] `MAGICK_CLOUD_PORTAL_EMAIL_SMTP_HOST` is configured
+- [ ] `MAGICK_CLOUD_PORTAL_EMAIL_SMTP_PORT` is configured
+- [ ] `MAGICK_CLOUD_PORTAL_EMAIL_SMTP_USERNAME` is configured if required by provider
+- [ ] `MAGICK_CLOUD_PORTAL_EMAIL_SMTP_PASSWORD` is configured if required by provider
+- [ ] `MAGICK_CLOUD_PORTAL_EMAIL_FROM_EMAIL` is configured
+- [ ] `MAGICK_CLOUD_PORTAL_EMAIL_FROM_NAME` is configured
+- [ ] one real mailbox can receive login codes from production SMTP
+
+### 3.4 Production Guardrails
+
+- [ ] `MAGICK_CLOUD_ALLOW_DEV_ADMIN_INTERNAL_TOKEN_FALLBACK=false`
+- [ ] no development-code seam is relied on for release verification
+- [ ] no stub-only login path is used during production smoke
+- [ ] `ops-worker` is deployed and running with the intended cadence intervals
+- [ ] `callback-worker` is deployed and running for terminal callback delivery
+- [ ] `recognition-worker` is deployed or explicitly disabled for the release host
+- [ ] `MAGICK_CLOUD_WORKER_HEARTBEAT_INTERVAL_SECONDS` is set for the release host
+- [ ] cadence env is explicitly set for the release host:
+  - `MAGICK_CLOUD_OPS_CADENCE_POLL_SECONDS`
+  - `MAGICK_CLOUD_RETENTION_CLEANUP_INTERVAL_SECONDS`
+  - `MAGICK_CLOUD_USAGE_ROLLUP_INTERVAL_SECONDS`
+  - `MAGICK_CLOUD_ROUTER_DIAGNOSTICS_INTERVAL_SECONDS`
+  - `MAGICK_CLOUD_LATENCY_PROBE_INTERVAL_SECONDS`
+  - `MAGICK_CLOUD_ALERT_PROVIDER_DEGRADATION_INTERVAL_SECONDS`
+  - `MAGICK_CLOUD_PROVIDER_HEALTH_SCAN_INTERVAL_SECONDS`
+- [ ] OTLP export target is explicit for the release host:
+  - `MAGICK_CLOUD_OTEL_EXPORTER_OTLP_ENDPOINT`
+  - `MAGICK_CLOUD_OTEL_TRACE_SINK_OTLP_ENDPOINT`
+  - `MAGICK_CLOUD_OTEL_TRACE_QUERY_URL`
+
+## 4. Database Readiness
+
+All items in this section are `Required`.
+
+- [ ] target database backup exists and restore path is known
+- [ ] migration state is confirmed on the release target
+- [ ] schema drift has been checked on the target host
+- [ ] rollback plan for the database has been written down
+
+Operator note:
+
+- if the target database was originally bootstrapped outside Alembic control, verify migration baseline explicitly before release
+
+## 5. Formal Release Smoke
+
+All items in this section are `Required`.
+
+Run:
+
+```bash
+cd cloud
+bash deploy/release-smoke.sh \
+  --base-url https://cloud.example.com \
+  --internal-auth-token "$MAGICK_CLOUD_INTERNAL_AUTH_TOKEN" \
+  --admin-token "$MAGICK_CLOUD_ADMIN_BOOTSTRAP_TOKEN" \
+  --member-email invited-admin@example.com \
+  --login-code 123456 \
+  --addon-site-id site_example \
+  --addon-key-id key_example \
+  --addon-secret "$MAGICK_CLOUD_RELEASE_KEY_SECRET"
+```
+
+Required outcomes:
+
+- [ ] `GET /health/live` returns `200`
+- [ ] `GET /health/ready` with internal auth returns `200`
+- [ ] `GET /health/operational-ready` with internal auth returns `200`
+- [ ] `GET /internal/service/observability/summary` with internal auth returns `200`
+- [ ] `GET /` loads
+- [ ] `GET /portal/login` loads
+- [ ] `POST /portal/v1/auth/code/request` succeeds
+- [ ] `POST /portal/v1/auth/code/verify` succeeds with a real login code
+- [ ] `GET /portal/v1/session` succeeds after login
+- [ ] `GET /admin/login` loads
+- [ ] `POST /admin/auth/bootstrap` succeeds with the production admin token
+- [ ] `GET /admin/session` succeeds after admin login
+- [ ] signed `GET /v1/addon/dashboard` exposes:
+  - `source`
+  - `generated_at`
+  - `fresh_until`
+  - `stale`
+- [ ] signed `GET /v1/addon/providers/release-summary` exposes the same freshness fields
+- [ ] if either addon route returns `source=live_fallback`, `fallback_reason` is present and operator-understandable
+- [ ] release smoke is incomplete unless addon credentials are provided and both signed addon routes pass freshness checks
+
+## 6. Plugin and Runtime Verification
+
+This section is `Required` for first release or runtime/auth changes.
+
+- [ ] create or rotate a real Cloud API key in Portal
+- [ ] save the key into the WordPress Cloud addon
+- [ ] plugin connection test passes
+- [ ] plugin overview shows whether data came from `云端摘要投影` or `实时回退结果`
+- [ ] plugin provider evidence shows the same Cloud freshness semantics
+- [ ] one real signed runtime request succeeds
+- [ ] the runtime request does not fail with `runtime.provider_not_configured`
+- [ ] site usage / key / portal state remain coherent after the runtime call
+
+## 7. Operational Sign-Off
+
+All items in this section are `Required`.
+
+- [ ] `platform_admin` bootstrap token storage location is defined
+- [ ] bootstrap token rotation procedure is defined
+- [ ] internal service token rotation procedure is defined
+- [ ] session invalidation procedure is defined
+- [ ] operator has checked `GET /internal/service/ops/cadence` and all required cadence tasks are fresh
+- [ ] operator has checked `GET /internal/service/observability/summary` and worker heartbeats are fresh
+- [ ] operator has checked provider health freshness and degraded-provider list
+- [ ] operator has confirmed traces are queryable in the configured sink
+- [ ] rollback command path is written down
+- [ ] `deploy/OPS_PLAYBOOK.md` is the procedure source used for release
+- [ ] operator knows where to inspect:
+  - API logs
+  - proxy logs
+  - worker logs
+  - SMTP failure symptoms
+
+## 8. Optional But Recommended
+
+- [ ] run `pnpm run check:e2e:cloud-deploy-bundle:smoke` before deploy
+- [ ] run remote portal smoke for a real invited user admin after deploy
+- [ ] verify one non-empty commercial/admin page:
+  - `/admin/plans`
+  - `/admin/sites/<site_id>`
+  - `/portal/keys?site=<site_id>`
+
+## 9. Release Decision
+
+Release may proceed only if:
+
+- every `Required` checkbox is complete
+- release smoke is green
+- database backup and rollback are confirmed
+- one real Portal mailbox and one real plugin runtime flow have both been verified
+
+If any `Required` item is incomplete, do not cut the release.
