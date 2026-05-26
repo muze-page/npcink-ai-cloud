@@ -184,13 +184,33 @@ function loadManifest() {
 	};
 }
 
+function discoverContractPath() {
+	try {
+		const entries = fs.readdirSync( workspaceRoot );
+		const candidates = entries.filter(
+			( entry ) =>
+				entry.startsWith( 'task-contract-' ) && entry.endsWith( '.json' )
+		);
+		if ( candidates.length === 1 ) {
+			return path.resolve( workspaceRoot, candidates[ 0 ] );
+		}
+	} catch {
+		// ignore
+	}
+	return '';
+}
+
 function checkCloudAntiDrift( { contractPath, files } ) {
 	const manifest = loadManifest();
-	const absoluteContractPath = contractPath
+	let absoluteContractPath = contractPath
 		? path.isAbsolute( contractPath )
 			? contractPath
 			: path.resolve( workspaceRoot, contractPath )
 		: '';
+
+	if ( ! absoluteContractPath ) {
+		absoluteContractPath = discoverContractPath();
+	}
 
 	const hasContract = absoluteContractPath && exists( absoluteContractPath );
 	const contract = hasContract

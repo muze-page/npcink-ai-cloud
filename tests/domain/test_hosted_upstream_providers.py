@@ -231,6 +231,7 @@ def test_provider_registry_omits_default_openai_without_credentials_outside_dev_
         database_url="sqlite+pysqlite:///:memory:",
         redis_url="redis://localhost:6379/0",
         internal_auth_token="magick-cloud-internal-prod-token-32b",
+        admin_bootstrap_token="magick-cloud-admin-bootstrap-token-32b",
         admin_session_secret="magick-cloud-ops-session-secret-prod-32b",
         provider_connection_secret="magick-cloud-provider-connection-secret-32b",
         portal_jwt_secret="magick-cloud-portal-jwt-secret-prod-32b",

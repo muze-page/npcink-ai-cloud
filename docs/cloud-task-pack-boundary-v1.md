@@ -12,6 +12,8 @@ hold canonical truth.
 | Pack | ID | Status |
 |------|-----|--------|
 | WooCommerce Growth Pack | `woocommerce-growth` | v1 implemented |
+| GEO Visibility Pack | `geo-visibility` | v1 implemented |
+| Managed Model Routing Pack | `managed-model-routing` | v1 implemented |
 
 ## Capabilities
 
@@ -23,6 +25,26 @@ hold canonical truth.
 - **Multi-language localization suggestions** — draft localized content
 - **SEO/GEO-ready Product Schema suggestions** — recommend structured-data fields
 - **Batch task plan summary** — summarize growth tasks across a product list
+
+### GEO Visibility Pack v1
+
+- **llms.txt suggestions** — recommend adding or updating llms.txt for AI crawlers
+- **Schema checks** — diagnose FAQ / Article / Product Schema presence and completeness
+- **AI citation structure checks** — evaluate headings, lists, and key-point summaries
+- **GEO visibility report** — diagnostics and recommendations per page
+- **Content rewrite suggestions** — propose section expansions or FAQ additions
+- **Batch reports** — analyze multiple pages at once
+
+### Managed Model Routing Pack v1
+
+- **Hosted routing profile recommendations** — suggest provider/model routes
+  - DeepSeek economy route for low-cost workloads
+  - Tongyi / Kimi route for Chinese-language tasks
+  - OpenAI / Claude route for quality-critical tasks
+- **Provider health summary** — instance health across providers
+- **Fallback options** — fallback candidate mapping
+- **Budget alerts** — cost-awareness notices based on catalog and site context
+- **Quality regression summary** — degraded/unhealthy instance awareness
 
 ## Hard Boundaries
 
@@ -45,13 +67,23 @@ hold canonical truth.
      - "draft generated for review"
      - "suggestion only; not written"
 
-4. **Task packs must not create Cloud workflow truth.**
+4. **GEO Visibility Pack must not promise automatic ranking, compliance, or AI citation.**
+   - All outputs are diagnostics and recommendations only.
+   - No claim of guaranteed search ranking, schema compliance, or AI engine inclusion.
+
+5. **Managed Model Routing Pack must not become a second router control plane.**
+   - Cloud may host a read-only recommendation catalog.
+   - Local plugin retains final ownership of adopted routing profiles, snapshots,
+     prompts, presets, and router configuration.
+   - Cloud must not provide a router editing backend that overrides local truth.
+
+6. **Task packs must not create Cloud workflow truth.**
    - No persistent workflow state, execution graph, or run history owned by
      the task pack.
    - Task packs may use transient compute; they may not become a second
      workflow engine or second control plane.
 
-5. **Local plugin remains the only control plane.**
+7. **Local plugin remains the only control plane.**
    - Final approval and all WordPress writes stay local.
 
 ## API Surface
@@ -60,6 +92,9 @@ hold canonical truth.
 |--------|------|-------|------------|
 | POST | `/v1/task-packs/woocommerce-growth/analyze` | `task_pack:write` | Yes |
 | POST | `/v1/task-packs/woocommerce-growth/batch-plan` | `task_pack:write` | Yes |
+| POST | `/v1/task-packs/geo-visibility/analyze` | `task_pack:write` | Yes |
+| POST | `/v1/task-packs/geo-visibility/batch` | `task_pack:write` | Yes |
+| POST | `/v1/task-packs/managed-model-routing/report` | `task_pack:write` | Yes |
 
 ## Files
 
@@ -82,3 +117,6 @@ pnpm run check:perimeter
 All tests must pass, including assertions for:
 - `requires_local_approval: true`
 - Absence of "已写入 WooCommerce" or "written to WooCommerce"
+- Absence of automatic ranking / compliance / citation promises in GEO pack
+- Absence of router control claims in Managed Model Routing pack
+- `cloud_only_recommendation: true` in Managed Model Routing pack

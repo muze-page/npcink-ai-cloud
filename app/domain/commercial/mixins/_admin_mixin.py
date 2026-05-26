@@ -32,7 +32,9 @@ from app.domain.commercial.mixins._audit_mixin import (
     ServiceAuditContext,
     IDENTITY_TYPE_PLATFORM_ADMIN,
     IDENTITY_TYPE_USER_ADMIN,
+    _aggregate_membership_status,
     _canonicalize_platform_admin_role_for_write,
+    _subscription_counts_as_covered,
     _platform_capability_flags,
 )
 from app.domain.commercial.mixins._billing_mixin import (

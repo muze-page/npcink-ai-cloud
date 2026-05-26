@@ -685,6 +685,31 @@ class CommercialServiceAuditMixin:
             session.commit()
             return self._serialize_service_audit_event(event)
 
+    def summarize_service_audit_events(
+        self,
+        *,
+        site_id: str | None = None,
+        account_id: str | None = None,
+        since: datetime | None = None,
+        window_minutes: int | None = None,
+        limit: int = 20,
+    ) -> dict[str, object]:
+        resolved_since = since
+        if resolved_since is None and window_minutes is not None:
+            resolved_since = self.now_factory() - timedelta(minutes=window_minutes)
+        with get_session(self.database_url) as session:
+            repository = CommercialRepository(session)
+            items = repository.summarize_service_audit_events(
+                site_id=site_id,
+                account_id=account_id,
+                since=resolved_since,
+                limit=limit,
+            )
+            return {
+                "totals": {"events": sum(item["count"] for item in items)},
+                "items": items,
+            }
+
     def list_service_audit_events(
         self,
         *,
@@ -706,4 +731,10 @@ class CommercialServiceAuditMixin:
             return {
                 "items": [self._serialize_service_audit_event(event) for event in events],
                 "total": len(events),
+                "filters": {
+                    "site_id": site_id or "",
+                    "account_id": account_id or "",
+                    "event_kind": event_kind or "",
+                    "outcome": outcome or "",
+                },
             }

@@ -1,9 +1,15 @@
 from __future__ import annotations
 
+import os
 from datetime import UTC, datetime
 
 import jwt
 from sqlalchemy import select
+
+if not os.environ.get("MAGICK_CLOUD_PROVIDER_CONNECTION_SECRET", "").strip():
+    os.environ["MAGICK_CLOUD_PROVIDER_CONNECTION_SECRET"] = (
+        "magick-cloud-provider-connection-secret-32b"
+    )
 
 from app.core.config import Settings
 from app.core.db import get_session

@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+import os
+
 import pytest
 
 from app.core.config import Settings
 from app.core.secrets import resolve_provider_connection_secret
 
 
-def test_provider_connection_secret_requires_explicit_value_by_default() -> None:
+def test_provider_connection_secret_requires_explicit_value_by_default(monkeypatch) -> None:
+    monkeypatch.delenv("MAGICK_CLOUD_PROVIDER_CONNECTION_SECRET", raising=False)
     settings = Settings(
         _env_file=None,
         environment="test",
@@ -19,7 +22,10 @@ def test_provider_connection_secret_requires_explicit_value_by_default() -> None
         resolve_provider_connection_secret(settings)
 
 
-def test_provider_connection_secret_allows_dev_fallback_only_when_explicitly_enabled() -> None:
+def test_provider_connection_secret_allows_dev_fallback_only_when_explicitly_enabled(
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv("MAGICK_CLOUD_PROVIDER_CONNECTION_SECRET", raising=False)
     settings = Settings(
         _env_file=None,
         environment="test",

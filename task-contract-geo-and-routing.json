@@ -1,0 +1,15 @@
+{
+  "change_classification": "cloud detail",
+  "truth_owner": "local plugin",
+  "final_write_owner": "local plugin",
+  "fail_closed_expectation": "cloud fails closed to local defaults; no remote mutation without local approval",
+  "human_review_required": false,
+  "required_docs": [
+    "docs/cloud-task-pack-boundary-v1.md"
+  ],
+  "required_gates": [
+    "pnpm --dir magick-ai run check:e2e:hosted-runtime:smoke",
+    "pnpm run check:risk"
+  ],
+  "description": "Add GEO Visibility Pack and Managed Model Routing Pack as read-only, suggestion-only task packs. Cloud outputs diagnostics, reports, and recommendations only. Local plugin retains final ownership of content, routing profiles, and router configuration."
+}
