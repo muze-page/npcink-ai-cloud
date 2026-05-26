@@ -2071,3 +2071,175 @@ async def get_portal_site_analytics_performance(
             "generated_at": logs_summary.get("generated_at", ""),
         },
     )
+
+
+# ============================================
+# Compliance Premium Layer (read-only posture)
+# ============================================
+
+class PortalComplianceRequestPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    request_type: str = ""
+    reason: str = ""
+
+
+COMPLIANCE_REQUEST_TYPES = (
+    "compliance_export",
+    "compliance_deletion_review",
+    "compliance_report",
+)
+
+COMPLIANCE_REQUEST_TITLES: dict[str, str] = {
+    "compliance_export": "数据导出申请",
+    "compliance_deletion_review": "删除复核申请",
+    "compliance_report": "合规报告申请",
+}
+
+COMPLIANCE_REQUEST_TITLES_EN: dict[str, str] = {
+    "compliance_export": "Data Export Request",
+    "compliance_deletion_review": "Deletion Review Request",
+    "compliance_report": "Compliance Report Request",
+}
+
+
+def _resolve_compliance_request_title(request_type: str, locale: str = "") -> str:
+    if locale.startswith("zh"):
+        return COMPLIANCE_REQUEST_TITLES.get(request_type, "合规申请")
+    return COMPLIANCE_REQUEST_TITLES_EN.get(request_type, "Compliance Request")
+
+
+def _resolve_retention_days(tier_id: str, settings: Any) -> int:
+    tier_retention = {
+        "starter": 30,
+        "free": 30,
+        "pro": 90,
+        "basic": 90,
+        "agency": 365,
+        "bulk": 365,
+        "enterprise": 365,
+    }
+    return tier_retention.get(tier_id.lower(), settings.audit_retention_days_default)
+
+
+@router.get("/sites/{site_id}/compliance/posture")
+async def get_portal_site_compliance_posture(request: Request, site_id: str) -> Any:
+    auth = await resolve_portal_request_context(
+        request,
+        require_idempotency=False,
+        allow_session_cookies=True,
+    )
+    if isinstance(auth, JSONResponse):
+        return auth
+    access = _authorize_portal_site_access(
+        request,
+        site_id=site_id,
+        member_ref=auth.member_ref,
+    )
+    if isinstance(access, JSONResponse):
+        return access
+
+    commercial_service = _get_commercial_service(request)
+    settings = get_cloud_services(request).settings
+
+    try:
+        policy = commercial_service.inspect_commercial_policy(site_id)
+    except CommercialServiceError:
+        policy = {}
+
+    tier_id = ""
+    plan_version = policy.get("plan_version") if isinstance(policy, dict) else None
+    if isinstance(plan_version, dict):
+        tier_id = str(plan_version.get("plan_id") or "").strip()
+
+    retention_days = _resolve_retention_days(tier_id, settings)
+
+    try:
+        audit_summary = commercial_service.summarize_service_audit_events(site_id=site_id)
+    except CommercialServiceError:
+        audit_summary = {}
+
+    events_in_retention = audit_summary.get("totals", {}).get("events", 0) if isinstance(audit_summary, dict) else 0
+
+    return _portal_route_envelope(
+        message="portal compliance posture loaded",
+        data={
+            "site_id": site_id,
+            "account_id": str(access.get("account_id") or ""),
+            "member_ref": auth.member_ref,
+            "identity_type": str(access.get("identity_type") or ""),
+            "role": str(access.get("role") or ""),
+            "data_residency": {
+                "storage_region": settings.deployment_region,
+                "inference_region": settings.deployment_region,
+                "byom_enabled": False,
+            },
+            "audit": {
+                "retention_days": retention_days,
+                "events_in_retention": events_in_retention,
+                "last_export_at": None,
+            },
+            "security_controls": [
+                {"control": "encryption_at_rest", "status": "active", "detail": "Fernet AES-128"},
+                {"control": "request_signing", "status": "active", "detail": "HMAC-SHA256"},
+                {"control": "replay_protection", "status": "active", "detail": "ReplayReceipt + nonce"},
+                {"control": "secret_rotation", "status": "active", "detail": "Operator-managed"},
+            ],
+            "compliance_requests_allowed": list(COMPLIANCE_REQUEST_TYPES),
+            "tier_id": tier_id,
+        },
+    )
+
+
+@router.post("/sites/{site_id}/compliance/requests")
+async def create_portal_compliance_request(
+    request: Request,
+    site_id: str,
+    payload: PortalComplianceRequestPayload,
+) -> Any:
+    same_origin = _portal_same_origin_guard(request)
+    if same_origin is not None:
+        return same_origin
+    write_guard = _portal_write_guard(request)
+    if write_guard is not None:
+        return write_guard
+    auth = await resolve_portal_request_context(
+        request,
+        require_idempotency=True,
+        allow_session_cookies=True,
+    )
+    if isinstance(auth, JSONResponse):
+        return auth
+    access = _authorize_portal_site_access(request, site_id=site_id, member_ref=auth.member_ref)
+    if isinstance(access, JSONResponse):
+        return access
+
+    request_type = str(payload.request_type or "").strip().lower()
+    if request_type not in COMPLIANCE_REQUEST_TYPES:
+        return portal_json_error(
+            request,
+            status_code=400,
+            error_code="service.invalid_compliance_request_type",
+            message=f"Compliance request type must be one of: {', '.join(COMPLIANCE_REQUEST_TYPES)}",
+        )
+
+    locale = str(request.headers.get("x-portal-locale") or "").strip()
+    title = _resolve_compliance_request_title(request_type, locale)
+
+    try:
+        result = _get_commercial_service(request).create_portal_action_request(
+            request_type=request_type,
+            member_ref=auth.member_ref,
+            account_id=str(access.get("account_id") or ""),
+            site_id=site_id,
+            title=title,
+            message=payload.reason,
+            payload_json={
+                "request_type": request_type,
+                "current_role": str(access.get("role") or ""),
+            },
+            audit_context=_build_portal_audit_context(request, auth.member_ref),
+        )
+    except CommercialServiceError as error:
+        return _service_error_response(error, request=request)
+    return _portal_route_envelope(message="portal compliance request created", data=result)

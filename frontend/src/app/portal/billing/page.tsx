@@ -965,7 +965,7 @@ function PortalBillingContent() {
                           {localizeTopUpPackPointsLabel(t, pack.pack_id, pack.points_label)}
                         </p>
                       </div>
-                      {isSelected ? <BackofficeTag tone="accent">{t('admin.topup_pack_recommended_selected', {}, 'Selected')}</BackofficeTag> : null}
+                      {isSelected ? <BackofficeTag tone="accent">{t('portal.billing.selected_target_package', {}, 'Selected')}</BackofficeTag> : null}
                     </div>
                     <dl className="mt-4 grid gap-3 text-sm">
                       <div className="flex items-center justify-between gap-3">

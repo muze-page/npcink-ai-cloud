@@ -597,6 +597,9 @@ class CommercialServicePortalMixin:
             "usage_alert",
             "key_expiry",
             "auth_guard",
+            "compliance_export",
+            "compliance_deletion_review",
+            "compliance_report",
         }
         return normalized if normalized in allowed else ""
 
@@ -679,4 +682,3 @@ class CommercialServicePortalMixin:
             "created_at": self._serialize_datetime(item.created_at),
             "updated_at": self._serialize_datetime(item.updated_at),
         }
-

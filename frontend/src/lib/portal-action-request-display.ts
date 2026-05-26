@@ -30,6 +30,12 @@ export function formatPortalActionRequestTypeLabel(t: TranslateFn, requestType?:
       return t('admin.request_type_key_expiry', {}, 'Key expiry');
     case 'auth_guard':
       return t('admin.request_type_auth_guard', {}, 'Auth guard');
+    case 'compliance_export':
+      return t('compliance.request_export', {}, 'Request Data Export');
+    case 'compliance_deletion_review':
+      return t('compliance.request_deletion', {}, 'Request Deletion Review');
+    case 'compliance_report':
+      return t('compliance.request_report', {}, 'Request Compliance Report');
     default:
       return stringifyValue(requestType) || t('common.not_found', {}, 'Not found');
   }

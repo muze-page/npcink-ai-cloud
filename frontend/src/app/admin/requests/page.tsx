@@ -41,6 +41,9 @@ const REQUEST_TYPES = [
   { value: 'usage_alert', labelKey: 'admin.request_type_usage_alert', fallback: 'Usage alert' },
   { value: 'key_expiry', labelKey: 'admin.request_type_key_expiry', fallback: 'Key expiry' },
   { value: 'auth_guard', labelKey: 'admin.request_type_auth_guard', fallback: 'Auth guard' },
+  { value: 'compliance_export', labelKey: 'compliance.request_export', fallback: 'Request Data Export' },
+  { value: 'compliance_deletion_review', labelKey: 'compliance.request_deletion', fallback: 'Request Deletion Review' },
+  { value: 'compliance_report', labelKey: 'compliance.request_report', fallback: 'Request Compliance Report' },
 ];
 
 const REQUEST_STATUSES = [

@@ -1950,7 +1950,13 @@ def test_portal_summary_usage_entitlements_and_audit_routes(tmp_path: Path) -> N
 
 
 def test_portal_action_requests_notifications_diagnostics_and_usage_alert_settings(tmp_path: Path) -> None:
-    database_url, client = _build_client(tmp_path)
+    database_url, client = _build_client(
+        tmp_path,
+        settings_overrides={
+            "deployment_region": "ap-east-1",
+            "audit_retention_days_default": 77,
+        },
+    )
 
     client.post(
         "/internal/service/accounts",
@@ -2106,6 +2112,53 @@ def test_portal_action_requests_notifications_diagnostics_and_usage_alert_settin
         "recent_failures",
     }
 
+    compliance_posture_response = client.get(
+        "/portal/v1/sites/site_portal_actions/compliance/posture",
+        headers=build_portal_headers(member_ref="user:portal-actions@example.com"),
+    )
+    assert compliance_posture_response.status_code == 200, compliance_posture_response.text
+    compliance_posture = compliance_posture_response.json()["data"]
+    assert compliance_posture["site_id"] == "site_portal_actions"
+    assert compliance_posture["data_residency"] == {
+        "storage_region": "ap-east-1",
+        "inference_region": "ap-east-1",
+        "byom_enabled": False,
+    }
+    assert compliance_posture["audit"]["retention_days"] == 77
+    assert compliance_posture["audit"]["events_in_retention"] >= 1
+    assert "compliance_export" in compliance_posture["compliance_requests_allowed"]
+
+    compliance_request_response = client.post(
+        "/portal/v1/sites/site_portal_actions/compliance/requests",
+        json={
+            "request_type": "compliance_export",
+            "reason": "Need a current audit export for enterprise review",
+        },
+        headers=build_portal_headers(
+            member_ref="user:portal-actions@example.com",
+            idempotency_key="portal-actions-compliance-001",
+        ),
+    )
+    assert compliance_request_response.status_code == 200, compliance_request_response.text
+    compliance_request_data = compliance_request_response.json()["data"]
+    assert compliance_request_data["request_type"] == "compliance_export"
+    assert compliance_request_data["status"] == "open"
+    assert compliance_request_data["payload"]["request_type"] == "compliance_export"
+
+    invalid_compliance_request_response = client.post(
+        "/portal/v1/sites/site_portal_actions/compliance/requests",
+        json={"request_type": "automatic_legal_compliance"},
+        headers=build_portal_headers(
+            member_ref="user:portal-actions@example.com",
+            idempotency_key="portal-actions-compliance-invalid-001",
+        ),
+    )
+    assert invalid_compliance_request_response.status_code == 400
+    assert (
+        invalid_compliance_request_response.json()["error_code"]
+        == "service.invalid_compliance_request_type"
+    )
+
     topup_response = client.post(
         "/portal/v1/sites/site_portal_actions/topup-pack-requests",
         json={
@@ -2165,6 +2218,6 @@ def test_portal_action_requests_notifications_diagnostics_and_usage_alert_settin
         assert topup_totals.get("tokens") == 7000000.0
         assert topup_totals.get("cost") == 349.0
         stored_count = len(session.scalars(select(PortalActionRequest)).all())
-    assert stored_count == 3
+    assert stored_count == 4
 
     dispose_engine(database_url)

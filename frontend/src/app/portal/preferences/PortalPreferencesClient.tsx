@@ -219,7 +219,7 @@ export function PortalPreferencesClient() {
                 {t('common.currency')}
               </span>
               <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700 dark:border-slate-800 dark:bg-slate-900/60 dark:text-slate-200">
-                <span className="font-medium">{t('admin.currency_cny', {}, 'CNY')}</span>
+                <span className="font-medium">CNY</span>
                 <span className="ml-2 text-slate-500 dark:text-slate-400">
                   {t(
                     'portal.preferences.currency_fixed_note',

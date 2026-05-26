@@ -185,7 +185,7 @@ function SiteDetailsContent() {
   return (
     <BackofficePageStack>
       <PortalWorkspaceHeader
-        eyebrow={t('portal.site_record', {}, 'Site Record')}
+        eyebrow={t('portal.read_only_record', {}, 'Read-only Record')}
         title={siteDetails?.site.site_name || siteId}
         eyebrowInfo={t(
           'portal.site_detail.primary_desc',
@@ -365,6 +365,32 @@ function SiteDetailsContent() {
           </div>
         </>
       ) : null}
+
+      <BackofficeSectionPanel className="space-y-4">
+        <div>
+          <h2 className="text-xl font-semibold">
+            {t('portal.site_detail.navigation_title', {}, 'Open a Dedicated Workspace')}
+          </h2>
+          <p className="mt-2 text-sm leading-6 text-slate-600 dark:text-slate-300">
+            {t(
+              'portal.site_detail.navigation_desc',
+              {},
+              'Use the dedicated workspace pages when you need keys, usage, billing, or audit history for this site.'
+            )}
+          </p>
+        </div>
+        <div className="grid gap-3 md:grid-cols-3">
+          <Link href={`/portal/keys?site=${siteId}`} className="btn btn-secondary">
+            {t('keys.title', {}, 'Keys')}
+          </Link>
+          <Link href={`/portal/usage?site=${siteId}`} className="btn btn-secondary">
+            {t('nav.usage', {}, 'Usage')}
+          </Link>
+          <Link href={`/portal/billing?site=${siteId}`} className="btn btn-secondary">
+            {t('nav.billing', {}, 'Billing')}
+          </Link>
+        </div>
+      </BackofficeSectionPanel>
 
       <div className="grid gap-6">
         <BackofficeSectionPanel className="space-y-4">

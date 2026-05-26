@@ -818,6 +818,36 @@ export interface PortalSiteDiagnostics {
   }>;
 }
 
+export interface PortalCompliancePosture {
+  site_id: string;
+  account_id?: string;
+  member_ref?: string;
+  identity_type?: string;
+  role?: string;
+  data_residency: {
+    storage_region: string;
+    inference_region: string;
+    byom_enabled: boolean;
+  };
+  audit: {
+    retention_days: number;
+    events_in_retention: number;
+    last_export_at: string | null;
+  };
+  security_controls: Array<{
+    control: string;
+    status: string;
+    detail: string;
+  }>;
+  compliance_requests_allowed: string[];
+  tier_id?: string;
+}
+
+export interface PortalComplianceRequestPayload {
+  request_type: 'compliance_export' | 'compliance_deletion_review' | 'compliance_report';
+  reason?: string;
+}
+
 export interface PortalEnvelope<T> {
   status: 'ok' | 'error';
   message: string;
@@ -1237,6 +1267,21 @@ export class PortalClient {
 
   async getSiteDiagnostics(siteId: string): Promise<PortalEnvelope<PortalSiteDiagnostics>> {
     return this.request('GET', `/sites/${siteId}/diagnostics`, undefined, { requireAuth: true });
+  }
+
+  // ========================================
+  // Compliance Premium Layer
+  // ========================================
+
+  async getCompliancePosture(siteId: string): Promise<PortalEnvelope<PortalCompliancePosture>> {
+    return this.request('GET', `/sites/${siteId}/compliance/posture`, undefined, { requireAuth: true });
+  }
+
+  async createComplianceRequest(
+    siteId: string,
+    payload: PortalComplianceRequestPayload
+  ): Promise<PortalEnvelope<PortalActionRequest>> {
+    return this.request('POST', `/sites/${siteId}/compliance/requests`, payload, { requireAuth: true });
   }
 
   // ========================================

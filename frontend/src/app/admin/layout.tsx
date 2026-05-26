@@ -174,6 +174,7 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
     { href: '/admin/members', label: t('common.members', {}, 'Members') },
     { href: '/admin/model-intelligence', label: t('admin.model_intelligence', {}, 'Model intelligence') },
     { href: '/admin/impersonations', label: t('nav.impersonations', {}, 'Impersonations') },
+    { href: '/admin/compliance', label: t('nav.compliance', {}, 'Compliance') },
   ];
 
   const isActive = (href: string) => {

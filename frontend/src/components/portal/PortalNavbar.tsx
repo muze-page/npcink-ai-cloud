@@ -41,6 +41,7 @@ export function PortalNavbar() {
     () => [
       { href: '/portal/notifications?status=open', label: t('portal.nav_notifications', {}, 'To-dos') },
       { href: '/portal/audit', label: t('nav.audit') },
+      { href: '/portal/compliance', label: t('nav.compliance') },
       { href: '/portal/preferences', label: t('portal.nav_preferences', {}, 'Preferences') },
     ],
     [t]
