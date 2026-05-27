@@ -19,13 +19,6 @@ PUBLIC_PACKAGE_BY_TIER = {
     "pro": "Pro",
     "agency": "Agency",
 }
-TASK_PACKS_BY_TIER = {
-    "starter": [],
-    "pro": ["woocommerce-growth", "geo-visibility", "managed-model-routing"],
-    "agency": ["woocommerce-growth", "geo-visibility", "managed-model-routing"],
-}
-
-
 def _get_commercial_service(request: Request) -> CommercialService:
     services = get_cloud_services(request)
     return CommercialService(services.settings.database_url, settings=services.settings)
@@ -175,9 +168,6 @@ def _build_entitlement_payload(
             "end_at": _public_datetime(policy.get("period_end_at")),
         },
         "entitlement": {
-            "task_packs": {
-                "allowed": list(TASK_PACKS_BY_TIER.get(tier_id, [])),
-            },
             "usage_limits": _resolve_usage_limits(policy, site_limit=site_limit),
             "analytics_retention": {
                 "days": max(0, int(settings.audit_retention_days_default or 0)),

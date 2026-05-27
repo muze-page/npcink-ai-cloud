@@ -413,25 +413,7 @@ def clear_portal_impersonation_cookies(response: JSONResponse | RedirectResponse
 
 
 def current_portal_impersonation_session(request: Request) -> dict[str, object] | None:
-    impersonation_id = request.cookies.get(COOKIE_IMPERSONATION_ID, "").strip()
-    if not impersonation_id:
-        return None
-    expires_at = request.cookies.get(COOKIE_IMPERSONATION_EXPIRES_AT, "").strip()
-    if expires_at:
-        try:
-            expires_at_dt = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
-        except ValueError:
-            expires_at_dt = None
-        if expires_at_dt is not None and expires_at_dt <= datetime.now(UTC):
-            return None
-    try:
-        record = get_commercial_service(request).get_platform_impersonation(
-            impersonation_id=impersonation_id,
-            active_only=True,
-        )
-    except CommercialServiceError:
-        record = None
-    return record
+    return None
 
 
 def _has_portal_request_headers(request: Request) -> bool:

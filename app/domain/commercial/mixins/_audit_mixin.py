@@ -705,9 +705,16 @@ class CommercialServiceAuditMixin:
                 since=resolved_since,
                 limit=limit,
             )
+            totals: dict[str, int] = {"events": 0}
+            for item in items:
+                outcome = str(item.get("outcome") or "unknown")
+                count = int(item.get("count") or 0)
+                totals["events"] += count
+                totals[outcome] = totals.get(outcome, 0) + count
             return {
-                "totals": {"events": sum(item["count"] for item in items)},
+                "totals": totals,
                 "items": items,
+                "groups": items,
             }
 
     def list_commercial_decision_events(
@@ -741,6 +748,45 @@ class CommercialServiceAuditMixin:
                     "decision": decision or "",
                     "decision_code": decision_code or "",
                     "request_kind": request_kind or "",
+                },
+            }
+
+    def summarize_commercial_decision_events(
+        self,
+        *,
+        site_id: str | None = None,
+        subscription_id: str | None = None,
+        request_kind: str | None = None,
+        since: datetime | None = None,
+        window_minutes: int | None = None,
+        limit: int = 20,
+    ) -> dict[str, object]:
+        resolved_since = since
+        if resolved_since is None and window_minutes is not None:
+            resolved_since = self.now_factory() - timedelta(minutes=window_minutes)
+        with get_session(self.database_url) as session:
+            repository = CommercialRepository(session)
+            groups = repository.summarize_commercial_decision_events(
+                site_id=site_id,
+                subscription_id=subscription_id,
+                request_kind=request_kind,
+                since=resolved_since,
+                limit=limit,
+            )
+            totals: dict[str, int] = {"events": 0}
+            for group in groups:
+                decision = str(group.get("decision") or "unknown")
+                count = int(group.get("count") or 0)
+                totals["events"] += count
+                totals[decision] = totals.get(decision, 0) + count
+            return {
+                "totals": totals,
+                "groups": groups,
+                "filters": {
+                    "site_id": site_id or "",
+                    "subscription_id": subscription_id or "",
+                    "request_kind": request_kind or "",
+                    "since": self._serialize_datetime(resolved_since),
                 },
             }
 

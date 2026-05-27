@@ -156,9 +156,8 @@ Current repository status is:
 - operator-only commercial guidance is also landed for:
   - tiered `/admin/plans`
   - operator-managed subscription top-up
-  - fixed `/admin/topup-packs` catalog
 - bounded frontend surfaces do exist, but they are limited to:
-  - marketing pages
+  - service status root page
   - operator/platform-admin `/admin/*`
   - authenticated member `/portal/*`
 - callback delivery worker, queue-backed public run cancel, runtime/operator
@@ -178,14 +177,11 @@ Current repository status is:
   ledger-vs-snapshot reconciliation inspect
 - bounded platform-admin seam is now landed for:
   - bounded `/admin` session cookie login via `internal token`
-  - site-scoped read-only impersonation with TTL and audit
-  - portal-side read-only guard during impersonation
-  - active `/admin/impersonations` start/end UI
-  - active `/admin/accounts/{account_id}` and `/admin/sites/{site_id}` detail pages now support inline impersonation start/end while keeping `/admin/impersonations` as the bounded advanced flow
+  - accounts, sites, plans, subscriptions, provider/model ops, runtime diagnostics, audit, and commercial decisions
 - bounded portal auth seam is now landed for:
   - invited `user_admin` email verification-code login
   - cookie-backed `/portal/*` member session
-  - account/site-scoped portal workspace plus self-serve site creation for the current account
+  - account/site-scoped read-only portal workspace for sites, keys, usage, billing, and audit
 
 Still deferred in the current phase:
 
@@ -194,16 +190,14 @@ Still deferred in the current phase:
 - richer long-window anomaly / burst heuristics and support-bundle/export grade
   operator explainability beyond the current bounded runtime pressure diagnostics
   and bounded abuse watchlists
-- broader queued/running lease recovery and more durable orchestration beyond
-  the current queue-backed runtime worker plus callback dispatch stale-lease
-  reclaim
+- broader queued/running lease recovery beyond the current queue-backed runtime
+  worker plus callback dispatch stale-lease reclaim
 - customer-facing commercial front-office still remains deferred:
   - seat lifecycle
   - checkout/payment
   - invoice/reconciliation
   - dunning-grade customer billing front-office
-- richer platform admin directory/session inventory and write-enabled
-  impersonation remain deferred
+- richer platform admin directory/session inventory remains deferred
 
 Commercial acceptance freeze:
 
@@ -716,54 +710,32 @@ Platform admin bootstrap auth:
 - current visible admin pages:
   - `GET /admin`
   - `GET /admin/plans`
-  - `GET /admin/impersonations`
   - `GET /admin/accounts/{account_id}`
   - `GET /admin/sites/{site_id}`
 - current `/admin` overview now also includes:
   - one `Identity Layers` block for platform roles vs customer portal roles
   - one `Plan catalog` block derived from live `plan_distribution`
   - quick drill-in links to `/admin/plans`, `/admin/accounts`, and `/admin/subscriptions`
-- current Next admin impersonation entrypoints:
-  - `/admin/accounts` provides account-level `Impersonate` entry links
-  - `/admin/accounts/{account_id}` now supports inline start/end for bounded read-only impersonation
-  - `/admin/sites/{site_id}` now supports inline start/end for bounded read-only impersonation
-  - `/admin/impersonations` remains the advanced fallback picker for prefilled account/site/member flows
-- current inventory APIs:
-  - `GET /internal/service/admin/impersonations`
-- current bounded read-only impersonation path:
-  - `POST /admin/impersonations`
-  - `POST /admin/impersonations/{impersonation_id}/end`
-  - `/admin/impersonations` now provides form-driven start/end controls
-  - the live Next admin UI now links into the same bounded flow from:
-    - `/admin/accounts`
-    - `/admin/accounts/{account_id}`
-    - `/admin/sites/{site_id}`
 - platform-admin bootstrap uses the configured single platform admin reference
   and does not require a separate identity-provisioning surface
 - current operator runbook for lean validation:
   - [cloud-platform-login-and-invite-runbook.md](../../magick-ai/docs/archive/plans/cloud-platform-login-and-invite-runbook.md)
-- impersonation is currently:
-  - site-scoped
-  - read-only only
-  - TTL-bounded
-  - reflected in `/portal/v1/session`
-  - blocked from portal key write routes
-
 Buyer-facing web routes:
 
 - `GET /`
-- `GET /features`
-- `GET /getting-started`
 - `GET /portal/login`
 - `GET /portal`
-- `GET /portal/overview`
+- `GET /portal/sites`
 - `GET /portal/keys`
+- `GET /portal/usage`
+- `GET /portal/billing`
+- `GET /portal/audit`
 - `GET /portal/logout`
 
-These routes are a bounded Cloud web and portal layer, not a completed
-customer-facing commercial front-office. In production-style deploys, the bundled proxy now forwards
-`/`, `/features`, `/getting-started`, `/portal*`, and `/static/*` in addition
-to the existing runtime surface.
+These routes are a bounded Cloud service status and portal layer, not a
+customer-facing commercial front-office. Marketing pages, top-up catalog pages,
+impersonation pages, compliance pages, and request queues are intentionally
+removed.
 
 ## Verification Quickstart
 
@@ -843,7 +815,6 @@ Cloud now also exposes one internal-only admin console:
 - `GET /admin/sites/{site_id}`
 - `GET /admin/subscriptions`
 - `GET /admin/subscriptions/{subscription_id}`
-- `GET /admin/impersonations`
 - `GET /admin/plans`
 - `GET /admin/login`
 - `POST /admin/auth/bootstrap`
@@ -896,7 +867,6 @@ Current internal admin routes:
 - `GET /admin/sites/{site_id}`
 - `GET /admin/subscriptions`
 - `GET /admin/subscriptions/{subscription_id}`
-- `GET /admin/impersonations`
 - `GET /admin/login`
 - `POST /admin/auth/bootstrap`
 - `GET /admin/session`

@@ -355,9 +355,6 @@ function PlansContent() {
           <Link href="/admin/subscriptions" className="btn btn-secondary btn-sm">
             {t('admin.back_to_coverage', {}, 'Back to coverage')}
           </Link>
-          <Link href="/admin/topup-packs" className="btn btn-secondary btn-sm">
-            {t('admin.topup_packs', {}, 'Top-up packs')}
-          </Link>
         </div>
       </BackofficePrimaryPanel>
 

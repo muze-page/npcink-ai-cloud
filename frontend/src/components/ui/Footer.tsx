@@ -23,18 +23,13 @@ export function Footer() {
             <h3 className="font-semibold mb-3">{t('footer.product')}</h3>
             <ul className="space-y-2 text-sm">
               <li>
-                <Link href="/features" className="text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-gray-100">
-                  {t('nav.features')}
-                </Link>
-              </li>
-              <li>
-                <Link href="/getting-started" className="text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-gray-100">
-                  {t('nav.getting_started')}
-                </Link>
-              </li>
-              <li>
                 <Link href="/portal" className="text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-gray-100">
                   {t('nav.portal')}
+                </Link>
+              </li>
+              <li>
+                <Link href="/admin/login" className="text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-gray-100">
+                  {t('nav.admin')}
                 </Link>
               </li>
             </ul>

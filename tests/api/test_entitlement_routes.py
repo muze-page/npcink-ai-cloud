@@ -84,13 +84,7 @@ def test_current_entitlement_returns_site_scoped_public_contract(tmp_path: Path)
         "start_at": "2026-05-01T00:00:00Z",
         "end_at": "2026-06-01T00:00:00Z",
     }
-    assert data["entitlement"]["task_packs"] == {
-        "allowed": [
-            "woocommerce-growth",
-            "geo-visibility",
-            "managed-model-routing",
-        ]
-    }
+    assert "task_packs" not in data["entitlement"]
     assert data["entitlement"]["usage_limits"] == {
         "period": "month",
         "max_runs": 10000.0,

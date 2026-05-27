@@ -1239,7 +1239,6 @@ class CommercialServiceBillingMixin:
             ),
             "usage_totals": usage_totals,
             "topup_summary": topup_summary,
-            "topup_packs": self.list_operator_managed_points_packs(repository=repository),
         }
 
     def inspect_usage_meter(self, site_id: str, *, limit: int = 50) -> dict[str, object]:

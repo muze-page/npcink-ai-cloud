@@ -10,11 +10,6 @@ import { resolveUiErrorMessage } from '@/lib/errors';
 import { normalizeStatusToken, translateStatusLabel } from '@/lib/status-display';
 import { readResponsePayload } from '@/lib/safe-response';
 import {
-  formatPortalActionRequestResultSummary,
-  formatPortalActionRequestStatusLabel,
-  formatPortalActionRequestTypeLabel,
-} from '@/lib/portal-action-request-display';
-import {
   BackofficeLayer,
   BackofficeMetricStrip,
   BackofficePageStack,
@@ -121,19 +116,6 @@ type SubscriptionDetailPayload = {
   };
 };
 
-type PortalActionRequest = {
-  request_id: string;
-  request_type: string;
-  account_id?: string;
-  site_id?: string;
-  title: string;
-  message?: string;
-  status: string;
-  payload?: Record<string, unknown>;
-  created_at: string;
-  updated_at?: string;
-};
-
 function SubscriptionDetailContent() {
   const params = useParams();
   const { t } = useLocale();
@@ -143,7 +125,6 @@ function SubscriptionDetailContent() {
   const [error, setError] = useState<string | null>(null);
   const [mutationNotice, setMutationNotice] = useState<string | null>(null);
   const [isSnapshotRefreshSaving, setIsSnapshotRefreshSaving] = useState(false);
-  const [pendingRequests, setPendingRequests] = useState<PortalActionRequest[]>([]);
 
   useEffect(() => {
     const loadDetail = async () => {
@@ -243,36 +224,6 @@ function SubscriptionDetailContent() {
       })),
     };
   }, [detail, subscriptionId]);
-
-  useEffect(() => {
-    const accountId = normalized.accountId;
-    if (!accountId) {
-      setPendingRequests([]);
-      return;
-    }
-
-    const loadPendingRequests = async () => {
-      try {
-        const params = new URLSearchParams();
-        params.set('account_id', accountId);
-        params.set('status', 'open,acknowledged');
-        params.set('limit', '20');
-        const response = await fetch(`/api/admin/portal-action-requests?${params.toString()}`, {
-          credentials: 'include',
-        });
-        const payload = await readResponsePayload<{ data?: { items?: PortalActionRequest[] }; message?: string }>(response);
-        if (!response.ok) {
-          setPendingRequests([]);
-          return;
-        }
-        setPendingRequests(('data' in payload ? payload.data?.items : []) || []);
-      } catch {
-        setPendingRequests([]);
-      }
-    };
-
-    void loadPendingRequests();
-  }, [normalized.accountId]);
 
   if (isLoading) {
     return <LoadingFallback />;
@@ -466,55 +417,6 @@ function SubscriptionDetailContent() {
           </BackofficeStackCard>
         </div>
       </BackofficePrimaryPanel>
-
-      {pendingRequests.length ? (
-        <BackofficeSectionPanel className="space-y-3">
-          <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-            <div>
-              <p className="text-[0.68rem] font-semibold uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
-                {t('admin.subscription_detail.pending_requests_label', {}, 'User requests')}
-              </p>
-              <h2 className="mt-2 text-xl font-semibold text-slate-950 dark:text-white">
-                {t('admin.subscription_detail.pending_requests_title', {}, 'Pending requests for this customer')}
-              </h2>
-              <p className="mt-2 text-sm leading-6 text-slate-600 dark:text-slate-300">
-                {t(
-                  'admin.subscription_detail.pending_requests_desc',
-                  {},
-                  'Review these before changing coverage, because user-submitted package and top-up requests may explain the next commercial action.'
-                )}
-              </p>
-            </div>
-            <Link href="/admin/requests" className="btn btn-secondary btn-sm">
-              {t('admin.subscription_detail.open_user_requests', {}, 'Open user requests')}
-            </Link>
-          </div>
-          <div className="grid gap-3 lg:grid-cols-3">
-            {pendingRequests.slice(0, 3).map((item) => (
-              <BackofficeStackCard key={item.request_id} className="bg-white/80 dark:bg-slate-950/45">
-                <div className="flex items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">
-                      {formatPortalActionRequestTypeLabel(t, item.request_type)}
-                    </p>
-                    <p className="mt-2 truncate text-sm font-semibold text-slate-950 dark:text-white">
-                      {formatPortalActionRequestResultSummary(t, item) || item.title}
-                    </p>
-                    <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                      {formatDate(item.updated_at || item.created_at)}
-                    </p>
-                  </div>
-                  <BackofficeStatusBadge
-                    status={item.status}
-                    label={formatPortalActionRequestStatusLabel(t, item.status)}
-                    className="shrink-0 text-[0.68rem]"
-                  />
-                </div>
-              </BackofficeStackCard>
-            ))}
-          </div>
-        </BackofficeSectionPanel>
-      ) : null}
 
       <BackofficeLayer
         eyebrow={t('admin.detail', {}, 'Detail')}

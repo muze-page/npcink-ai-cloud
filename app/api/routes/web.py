@@ -26,9 +26,7 @@ from app.api.admin_mutations import (
 )
 from app.api.admin_ops import (
     ResolvedAdminSession,
-    end_platform_impersonation,
     resolve_admin_login_identity,
-    start_platform_impersonation_session,
 )
 from app.api.auth import (
     PortalBearerTokenError,
@@ -38,7 +36,6 @@ from app.api.browser_security import enforce_browser_same_origin, enforce_json_r
 from app.api.envelope import build_envelope
 from app.api.portal_locale import resolve_portal_email_locale
 from app.api.portal_session import (
-    build_new_portal_session_metadata,
     portal_cookie_secure,
 )
 from app.api.portal_session import (
@@ -48,22 +45,7 @@ from app.api.portal_session import (
     clear_portal_session_cookies as _clear_browser_session_cookies,
 )
 from app.api.portal_session import (
-    current_portal_impersonation_session as _current_portal_impersonation,
-)
-from app.api.portal_session import (
     portal_auth_mode as _portal_auth_mode,
-)
-from app.api.portal_session import (
-    portal_json_error as _json_error,
-)
-from app.api.portal_session import (
-    serialize_portal_session as _serialize_portal_session,
-)
-from app.api.portal_session import (
-    set_portal_impersonation_cookies as _set_portal_impersonation_cookies,
-)
-from app.api.portal_session import (
-    set_portal_session_cookies as _set_browser_session_cookies,
 )
 from app.api.routes.service import (
     CatalogModelAnnotationPayload,
@@ -71,14 +53,12 @@ from app.api.routes.service import (
     PlanVersionPayload,
     ProviderConnectionPayload,
     RecognitionModelAnnotationPayload,
-    SubscriptionPayload,
     SubscriptionTopUpPayload,
     _build_audit_context,
     _get_catalog_service,
     _get_commercial_service,
 )
 from app.core.models import ACCOUNT_MEMBERSHIP_ROLE_USER_ADMIN, PLATFORM_ADMIN_ROLE_PLATFORM_ADMIN
-from app.core.security import extract_trace_id
 from app.domain.commercial.errors import CommercialServiceError
 from app.domain.commercial.service import (
     IDENTITY_TYPE_PLATFORM_ADMIN,
@@ -685,9 +665,8 @@ def _base_context(request: Request, *, page_id: str, title: str, lead: str) -> d
         ),
         "nav_items": [
             {"href": "/", "label": _translate(locale, "nav.home")},
-            {"href": "/features", "label": _translate(locale, "nav.features")},
-            {"href": "/getting-started", "label": _translate(locale, "nav.getting_started")},
             {"href": "/portal/login", "label": _translate(locale, "nav.portal")},
+            {"href": "/admin/login", "label": _translate(locale, "nav.admin")},
         ],
     }
 
@@ -1148,17 +1127,19 @@ def _parse_scopes(value: object) -> list[str]:
 
 @router.get("/")
 async def web_home(request: Request) -> Any:
-    return _redirect_frontend_public(request, "/")
-
-
-@router.get("/features")
-async def web_features(request: Request) -> Any:
-    return _redirect_frontend_public(request, "/features")
-
-
-@router.get("/getting-started")
-async def web_getting_started(request: Request) -> Any:
-    return _redirect_frontend_public(request, "/getting-started")
+    return build_envelope(
+        status="ok",
+        message="Magick AI Cloud service is running",
+        data={
+            "service": "magick-ai-cloud",
+            "surfaces": {
+                "portal": "/portal/login",
+                "admin": "/admin/login",
+                "health": "/health",
+            },
+        },
+        revision="m7",
+    )
 
 
 @router.post("/admin/auth/bootstrap")
@@ -1332,14 +1313,6 @@ async def web_admin_subscription_page(request: Request, subscription_id: str) ->
     return _redirect_frontend_public(request, f"/admin/subscriptions/{subscription_id}")
 
 
-@router.get("/admin/impersonations")
-async def web_admin_impersonations_page(request: Request) -> Any:
-    redirect = _require_admin_session(request)
-    if redirect is not None:
-        return redirect
-    return _redirect_frontend_public(request, "/admin/impersonations")
-
-
 @router.get("/admin/plans")
 async def web_admin_plans_page(request: Request) -> Any:
     redirect = _require_admin_session(request)
@@ -1374,209 +1347,9 @@ async def web_admin_session(request: Request) -> Any:
     return build_envelope(
         status="ok",
         message="admin session loaded",
-        data={
-            **session,
-            "impersonation": _current_portal_impersonation(request),
-        },
+        data=session,
         revision="m6",
     )
-
-
-async def web_admin_start_impersonation(request: Request) -> Any:
-    session = _require_admin_session_json(request)
-    if isinstance(session, JSONResponse):
-        return session
-    payload = await _request_payload(request)
-    wants_redirect = _request_wants_html_redirect(request)
-    try:
-        enforce_browser_same_origin(request)
-    except PortalBearerTokenError as error:
-        return_to = _sanitize_admin_return_to(payload.get("return_to"), fallback="/admin/impersonations")
-        if wants_redirect:
-            return RedirectResponse(
-                url=_append_query_params(return_to, admin_error=error.message),
-                status_code=303,
-            )
-        return _admin_session_json_error(
-            request,
-            status_code=error.status_code,
-            error_code=error.error_code,
-            message=error.message,
-        )
-    member_ref = str(payload.get("member_ref") or "").strip()
-    site_id = str(payload.get("site_id") or "").strip()
-    reason_code = str(payload.get("reason_code") or "").strip() or "support_debug"
-    reason_text = str(payload.get("reason_text") or "").strip()
-    return_to = _sanitize_admin_return_to(payload.get("return_to"), fallback="/admin/impersonations")
-    if not member_ref or not site_id:
-        if wants_redirect:
-            return RedirectResponse(
-                url=_append_query_params(
-                    return_to,
-                    admin_error="member_ref and site_id are required",
-                    member_ref=member_ref,
-                    site_id=site_id,
-                    reason_code=reason_code,
-                    reason_text=reason_text,
-                ),
-                status_code=303,
-            )
-        return _admin_session_json_error(
-            request,
-            status_code=400,
-            error_code="auth.admin_impersonation_target_required",
-            message="member_ref and site_id are required",
-        )
-    try:
-        impersonation_session = start_platform_impersonation_session(
-            request,
-            platform_admin_ref=str(session.get("platform_admin_ref") or ""),
-            platform_role=str(session.get("role") or ""),
-            member_ref=member_ref,
-            site_id=site_id,
-            reason_code=reason_code,
-            reason_text=reason_text,
-            audit_context=_build_platform_admin_audit_context(
-                request,
-                str(session.get("platform_admin_ref") or ""),
-            ),
-        )
-    except CommercialServiceError as error:
-        if wants_redirect:
-            return RedirectResponse(
-                url=_append_query_params(
-                    return_to,
-                    admin_error=error.message,
-                    member_ref=member_ref,
-                    site_id=site_id,
-                    reason_code=reason_code,
-                    reason_text=reason_text,
-                ),
-                status_code=303,
-            )
-        return _admin_session_json_error(
-            request,
-            status_code=error.status_code,
-            error_code=error.error_code,
-            message=error.message,
-        )
-    if wants_redirect:
-        response: JSONResponse | RedirectResponse = RedirectResponse(
-            url=_append_query_params(
-                return_to,
-                admin_notice=f"Impersonation started for {member_ref} on {site_id}",
-            ),
-            status_code=303,
-        )
-    else:
-        response = JSONResponse(
-            status_code=200,
-            content=build_envelope(
-                status="ok",
-                message="platform impersonation started",
-                data={
-                    "impersonation": impersonation_session.impersonation,
-                    "portal_session": impersonation_session.portal_session,
-                },
-                revision="m6",
-            ),
-        )
-    _set_browser_session_cookies(
-        request,
-        response,
-        member_ref=impersonation_session.member_ref,
-        site_id=impersonation_session.site_id,
-    )
-    _set_portal_impersonation_cookies(
-        request,
-        response,
-        impersonation_id=str(impersonation_session.impersonation.get("impersonation_id") or ""),
-        platform_admin_ref=str(impersonation_session.impersonation.get("platform_admin_ref") or ""),
-        platform_role=str(impersonation_session.impersonation.get("platform_role") or ""),
-        read_only=bool(impersonation_session.impersonation.get("read_only", True)),
-        expires_at=impersonation_session.expires_at,
-        max_age=impersonation_session.max_age,
-    )
-    return response
-
-
-@router.post("/admin/impersonations")
-async def web_admin_start_impersonation(request: Request) -> Any:
-    return await web_admin_start_impersonation(request)
-
-
-async def web_admin_end_impersonation(request: Request, impersonation_id: str) -> Any:
-    session = _require_admin_session_json(request)
-    if isinstance(session, JSONResponse):
-        return session
-    payload = await _request_payload(request)
-    wants_redirect = _request_wants_html_redirect(request)
-    try:
-        enforce_browser_same_origin(request)
-    except PortalBearerTokenError as error:
-        return_to = _sanitize_admin_return_to(payload.get("return_to"), fallback="/admin")
-        if wants_redirect:
-            return RedirectResponse(
-                url=_append_query_params(return_to, admin_error=error.message),
-                status_code=303,
-            )
-        return _admin_session_json_error(
-            request,
-            status_code=error.status_code,
-            error_code=error.error_code,
-            message=error.message,
-        )
-    ended_reason = str(payload.get("ended_reason") or "").strip()
-    return_to = _sanitize_admin_return_to(payload.get("return_to"), fallback="/admin")
-    try:
-        result = end_platform_impersonation(
-            request,
-            impersonation_id=impersonation_id,
-            platform_admin_ref=str(session.get("platform_admin_ref") or ""),
-            ended_reason=ended_reason,
-            audit_context=_build_platform_admin_audit_context(
-                request,
-                str(session.get("platform_admin_ref") or ""),
-            ),
-        )
-    except CommercialServiceError as error:
-        if wants_redirect:
-            return RedirectResponse(
-                url=_append_query_params(return_to, admin_error=error.message),
-                status_code=303,
-            )
-        return _admin_session_json_error(
-            request,
-            status_code=error.status_code,
-            error_code=error.error_code,
-            message=error.message,
-        )
-    if wants_redirect:
-        response = RedirectResponse(
-            url=_append_query_params(
-                return_to,
-                admin_notice=f"Impersonation ended: {impersonation_id}",
-            ),
-            status_code=303,
-        )
-    else:
-        response = JSONResponse(
-            status_code=200,
-            content=build_envelope(
-                status="ok",
-                message="platform impersonation ended",
-                data=result,
-                revision="m6",
-            ),
-        )
-    _clear_portal_impersonation_cookies(response)
-    _clear_browser_session_cookies(response)
-    return response
-
-
-@router.post("/admin/impersonations/{impersonation_id}/end")
-async def web_admin_end_impersonation(request: Request, impersonation_id: str) -> Any:
-    return await web_admin_end_impersonation(request, impersonation_id)
 
 
 @router.get("/admin/logout")
@@ -1768,54 +1541,6 @@ async def web_admin_publish_plan_version(
     )
 
 
-@router.post("/admin/topup-packs/{pack_id}")
-async def web_admin_update_topup_pack(
-    request: Request,
-    pack_id: str,
-    payload: TopUpPackPayload,
-) -> Any:
-    write_guard = _require_same_origin_json_write(request)
-    if write_guard is not None:
-        return write_guard
-    session = _require_admin_capability_json(
-        request,
-        capability="can_manage_accounts",
-    )
-    if isinstance(session, JSONResponse):
-        return session
-
-    try:
-        result = _get_commercial_service(request).update_operator_managed_points_pack(
-            pack_id=pack_id,
-            label=payload.label,
-            points_label=payload.points_label,
-            runs_increment=payload.runs_increment,
-            tokens_increment=payload.tokens_increment,
-            cost_increment=payload.cost_increment,
-            operator_note=payload.operator_note,
-            recommended_for_tiers=payload.recommended_for_tiers,
-            display_order=payload.display_order,
-            active=payload.active,
-            audit_context=_build_platform_admin_audit_context(
-                request,
-                str(session.get("platform_admin_ref") or ""),
-            ),
-        )
-    except CommercialServiceError as error:
-        return _admin_session_json_error(
-            request,
-            status_code=error.status_code,
-            error_code=error.error_code,
-            message=error.message,
-        )
-    return build_envelope(
-        status="ok",
-        message="top-up pack updated",
-        data=result,
-        revision="m6",
-    )
-
-
 @router.post("/admin/subscriptions/{subscription_id}/topup")
 async def web_admin_subscription_topup(
     request: Request,
@@ -1835,7 +1560,7 @@ async def web_admin_subscription_topup(
     try:
         result = _get_commercial_service(request).apply_operator_managed_subscription_topup(
             subscription_id=subscription_id,
-            pack_id=payload.pack_id,
+            pack_id="",
             runs_increment=payload.runs_increment,
             tokens_increment=payload.tokens_increment,
             cost_increment=payload.cost_increment,

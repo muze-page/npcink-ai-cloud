@@ -1,0 +1,103 @@
+from __future__ import annotations
+
+from fastapi.testclient import TestClient
+
+from app.api.main import create_app
+from app.core.config import Settings
+from app.core.services import CloudServices
+
+
+def _client(tmp_path) -> TestClient:
+    settings = Settings(
+        project_name="Magick AI Cloud Test",
+        environment="test",
+        database_url=f"sqlite+pysqlite:///{tmp_path / 'removed-surfaces.sqlite3'}",
+        redis_url="redis://localhost:6379/0",
+    )
+    return TestClient(create_app(CloudServices(settings=settings)))
+
+
+def test_removed_public_control_plane_surfaces_are_absent_from_openapi(tmp_path) -> None:
+    client = _client(tmp_path)
+    paths = set(client.get("/openapi.json").json()["paths"])
+
+    removed_prefixes = (
+        "/v1/orchestration",
+        "/v1/task-packs",
+        "/v1/prompt/advisor/recommendation",
+        "/v1/prompt/eval/recommendation",
+        "/v1/prompt/canary/recommendation",
+        "/v1/prompt/upgrade/recommendation",
+        "/v1/preset/advisor/recommendation",
+        "/portal/v1/notifications",
+        "/portal/v1/member-preferences",
+        "/portal/v1/topup-packs",
+        "/internal/service/admin/topup-packs",
+        "/internal/service/admin/portal-action-requests",
+        "/internal/service/admin/impersonations",
+        "/internal/service/admin/members",
+        "/internal/service/admin/commercial-shadow-pricing/summary",
+    )
+
+    for path in paths:
+        assert not path.startswith(removed_prefixes), path
+
+
+def test_removed_urls_return_404(tmp_path) -> None:
+    client = _client(tmp_path)
+
+    removed_urls = (
+        "/v1/orchestration/runs",
+        "/v1/task-packs/woocommerce-growth/analyze",
+        "/v1/prompt/advisor/recommendation",
+        "/v1/prompt/eval/recommendation",
+        "/v1/prompt/canary/recommendation",
+        "/v1/prompt/upgrade/recommendation",
+        "/v1/preset/advisor/recommendation",
+        "/portal/v1/member-preferences",
+        "/portal/v1/notifications",
+        "/portal/v1/sites/site_alpha/analytics/overview",
+        "/portal/v1/sites/site_alpha/compliance/posture",
+        "/portal/v1/sites/site_alpha/package-change-requests",
+        "/portal/v1/sites/site_alpha/topup-pack-requests",
+        "/portal/v1/sites/site_alpha/delete-requests",
+        "/portal/v1/sites/site_alpha/usage-alert-settings",
+        "/internal/service/admin/topup-packs",
+        "/internal/service/admin/portal-action-requests",
+        "/internal/service/admin/impersonations",
+        "/internal/service/admin/members",
+        "/internal/service/admin/commercial-shadow-pricing/summary",
+    )
+
+    for url in removed_urls:
+        assert client.get(url).status_code == 404, url
+
+
+def test_minimal_surfaces_remain_in_openapi(tmp_path) -> None:
+    client = _client(tmp_path)
+    paths = set(client.get("/openapi.json").json()["paths"])
+
+    expected = {
+        "/health/live",
+        "/v1/catalog/models",
+        "/v1/runtime/resolve",
+        "/v1/runtime/execute",
+        "/v1/runs/{run_id}",
+        "/v1/router/recommendation",
+        "/portal/v1/session",
+        "/portal/v1/sites",
+        "/portal/v1/sites/{site_id}/summary",
+        "/portal/v1/sites/{site_id}/api-keys",
+        "/portal/v1/sites/{site_id}/usage-summary",
+        "/portal/v1/sites/{site_id}/entitlements",
+        "/portal/v1/sites/{site_id}/billing-snapshots",
+        "/portal/v1/sites/{site_id}/audit-events",
+        "/internal/service/admin/overview",
+        "/internal/service/admin/accounts",
+        "/internal/service/admin/sites",
+        "/internal/service/admin/plans",
+        "/internal/service/runtime/diagnostics/summary",
+    }
+
+    missing = expected.difference(paths)
+    assert missing == set()

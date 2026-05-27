@@ -137,22 +137,8 @@ function SiteDetailContent() {
   const [siteActionError, setSiteActionError] = useState<string | null>(null);
   const [isActivatingSite, setIsActivatingSite] = useState(false);
 
-  const loadActiveImpersonation = async (currentSiteId: string) => {
-    try {
-      const response = await fetch(`/api/admin/impersonations?site_id=${encodeURIComponent(currentSiteId)}&active_only=true`, {
-        credentials: 'include',
-      });
-
-      if (!response.ok) {
-        setActiveImpersonation(null);
-        return;
-      }
-
-      const data = await response.json();
-      setActiveImpersonation((data.data?.items || [])[0] || null);
-    } catch {
-      setActiveImpersonation(null);
-    }
+  const loadActiveImpersonation = async (_currentSiteId: string) => {
+    setActiveImpersonation(null);
   };
 
   const handleStartImpersonation = async () => {
@@ -161,79 +147,14 @@ function SiteDetailContent() {
       return;
     }
 
-    setIsImpersonationSubmitting(true);
-    setImpersonationError(null);
     setImpersonationNotice(null);
-
-    try {
-      const response = await fetch('/api/admin/impersonations', {
-        method: 'POST',
-        credentials: 'include',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          member_ref: selectedMemberRef,
-          site_id: site.site_id,
-          reason_code: 'support_debug',
-          reason_text: reasonText || `Started from /admin/sites/${site.site_id}`,
-        }),
-      });
-
-      const payload = await response.json();
-
-      if (!response.ok) {
-        throw new Error(resolveUiErrorMessage(payload.message, t('error.failed_start_impersonation')));
-      }
-
-      setActiveImpersonation(payload.data?.impersonation || null);
-      setImpersonationNotice(t('admin.impersonation_started_notice'));
-      setReasonText('');
-      await loadActiveImpersonation(site.site_id);
-    } catch (err) {
-      setImpersonationError(
-        resolveUiErrorMessage(err instanceof Error ? err.message : null, t('error.failed_start_impersonation'))
-      );
-    } finally {
-      setIsImpersonationSubmitting(false);
-    }
+    setImpersonationError(t('admin.impersonation_removed', {}, 'Impersonation has been removed from the Cloud service plane.'));
   };
 
-  const handleEndImpersonation = async (impersonationId: string) => {
-    setIsImpersonationSubmitting(true);
-    setImpersonationError(null);
+  const handleEndImpersonation = async (_impersonationId: string) => {
+    setActiveImpersonation(null);
     setImpersonationNotice(null);
-
-    try {
-      const response = await fetch(`/api/admin/impersonations/${impersonationId}/end`, {
-        method: 'POST',
-        credentials: 'include',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          ended_reason: 'ended_from_site_detail',
-        }),
-      });
-
-      const payload = await response.json();
-
-      if (!response.ok) {
-        throw new Error(resolveUiErrorMessage(payload.message, t('error.failed_end_impersonation')));
-      }
-
-      setActiveImpersonation(null);
-      setImpersonationNotice(t('admin.impersonation_ended_notice'));
-      if (site) {
-        await loadActiveImpersonation(site.site_id);
-      }
-    } catch (err) {
-      setImpersonationError(
-        resolveUiErrorMessage(err instanceof Error ? err.message : null, t('error.failed_end_impersonation'))
-      );
-    } finally {
-      setIsImpersonationSubmitting(false);
-    }
+    setImpersonationError(t('admin.impersonation_removed', {}, 'Impersonation has been removed from the Cloud service plane.'));
   };
 
   const handleActivateSite = async () => {
@@ -709,11 +630,6 @@ function SiteDetailContent() {
               <Link href="/admin/subscriptions" className="btn btn-secondary">
                 {t('admin.coverage_title', {}, 'Coverage')}
               </Link>
-              {site.related_surfaces?.impersonation_href ? (
-                <Link href={site.related_surfaces.impersonation_href} className="btn btn-secondary">
-                  {t('admin.open_session_inventory', {}, 'Open session inventory')}
-                </Link>
-              ) : null}
               {site.related_surfaces?.subscription_href ? (
                 <Link href={site.related_surfaces.subscription_href} className="text-sm font-medium text-slate-600 underline decoration-dotted underline-offset-4 transition hover:text-slate-950 dark:text-slate-300 dark:hover:text-white">
                   {t('admin.inspect_subscription_detail', {}, 'Inspect subscription detail')}
@@ -958,9 +874,6 @@ function SiteDetailContent() {
       <div className="grid gap-6 xl:grid-cols-[0.95fr_1.05fr]">
         <BackofficeSectionPanel className="space-y-5">
           <div className="flex flex-wrap gap-3">
-            <Link href={`/admin/impersonations?site_id=${encodeURIComponent(site.site_id)}`} className="btn btn-secondary">
-              {t('admin.open_session_inventory')}
-            </Link>
             <button
               type="button"
               onClick={handleStartImpersonation}

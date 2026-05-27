@@ -3,7 +3,6 @@ from __future__ import annotations
 
 from collections import Counter, defaultdict
 from datetime import UTC, datetime, timedelta
-from urllib.parse import quote
 from uuid import uuid4
 
 from app.adapters.repositories.commercial_repository import CommercialRepository
@@ -1128,16 +1127,7 @@ class CommercialServiceAdminMixin:
 
             primary_account_id = str((primary_account or {}).get("account_id") or "")
             primary_follow_up_site_id = str((primary_account or {}).get("highlight_site_id") or "")
-            impersonation_params = []
-            if primary_account_id:
-                impersonation_params.append(f"account_id={quote(primary_account_id)}")
-            if current_member_ref:
-                impersonation_params.append(f"member_ref={quote(current_member_ref)}")
-            if primary_follow_up_site_id:
-                impersonation_params.append(f"site_id={quote(primary_follow_up_site_id)}")
-            primary_impersonation_href = "/admin/impersonations"
-            if impersonation_params:
-                primary_impersonation_href = f"/admin/impersonations?{'&'.join(impersonation_params)}"
+            primary_impersonation_href = ""
 
             covered_subscription_ids = sorted(
                 {
@@ -1465,4 +1455,3 @@ class CommercialServiceAdminMixin:
             "base_run_price": 0.0,
             "per_1k_tokens_price": 0.0,
         }
-

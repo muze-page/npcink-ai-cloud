@@ -34,10 +34,8 @@ export function Navbar() {
 
   const navItems = [
     { href: '/', label: t('nav.home', undefined, 'Home') },
-    { href: '/features', label: t('nav.features', undefined, 'Features') },
-    { href: '/getting-started', label: t('nav.getting_started', undefined, 'Getting Started') },
-    { href: '/packages', label: t('nav.packages', undefined, 'Packages') },
-    { href: '/top-up-packs', label: t('nav.topup_packs', undefined, 'Top-up Guide') },
+    { href: '/portal/login', label: t('nav.portal', undefined, 'Portal') },
+    { href: '/admin/login', label: t('nav.admin', undefined, 'Admin') },
   ];
 
   const toggleMobileMenu = useCallback(() => {

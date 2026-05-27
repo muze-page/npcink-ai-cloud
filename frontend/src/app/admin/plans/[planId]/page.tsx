@@ -110,20 +110,6 @@ type PackageFitCue = {
   detail: string;
 };
 
-type ShadowPricingItem = {
-  ability_family: string;
-  runs: number;
-  tokens_total: number;
-  provider_cost: number;
-  shadow_revenue: number;
-  margin_delta: number;
-  tariff_class: string;
-};
-
-type ShadowPricingSummary = {
-  top_families: ShadowPricingItem[];
-};
-
 type PlanDetailPayload = {
   plan: PlanRecord;
   versions: PlanVersionRecord[];
@@ -313,7 +299,6 @@ function PlanDetailContent() {
   const { planId } = params as { planId: string };
 
   const [detail, setDetail] = useState<PlanDetailPayload | null>(null);
-  const [shadowPricing, setShadowPricing] = useState<ShadowPricingSummary | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -325,26 +310,19 @@ function PlanDetailContent() {
     setIsLoading(true);
     setError(null);
     try {
-      const [response, shadowPricingResponse] = await Promise.all([
-        fetch(`/api/admin/plans/${encodeURIComponent(planId)}`, {
-          credentials: 'include',
-        }),
-        fetch('/api/admin/commercial-shadow-pricing/summary?window_days=30&limit=3', {
-          credentials: 'include',
-        }),
-      ]);
+      const response = await fetch(`/api/admin/plans/${encodeURIComponent(planId)}`, {
+        credentials: 'include',
+      });
       const payload = await readResponsePayload<{ data?: PlanDetailPayload; message?: string }>(response);
-      const shadowPricingPayload = await readResponsePayload<{ data?: ShadowPricingSummary; message?: string }>(shadowPricingResponse);
-      if (!response.ok || !shadowPricingResponse.ok) {
+      if (!response.ok) {
         throw new Error(
           resolveUiErrorMessage(
-            ('message' in payload ? payload.message : null) || ('message' in shadowPricingPayload ? shadowPricingPayload.message : null),
+            'message' in payload ? payload.message : null,
             t('error.failed_load')
           )
         );
       }
       setDetail(('data' in payload ? payload.data : null) as PlanDetailPayload);
-      setShadowPricing(('data' in shadowPricingPayload ? shadowPricingPayload.data : null) as ShadowPricingSummary);
     } catch (err) {
       setError(resolveUiErrorMessage(err instanceof Error ? err.message : null, t('error.failed_load')));
     } finally {
@@ -690,47 +668,6 @@ function PlanDetailContent() {
           </BackofficeStackCard>
         </BackofficeSectionPanel>
 
-        <BackofficeSectionPanel className="space-y-4">
-          <div>
-            <p className="text-xs font-medium uppercase tracking-[0.18em] text-gray-500 dark:text-gray-400">
-              {t('admin.shadow_pricing_label', {}, 'Shadow pricing')}
-            </p>
-            <h2 className="mt-2 text-xl font-semibold text-gray-950 dark:text-white">
-              {t('admin.plan_shadow_pricing_title', {}, 'Current high-cost family evidence')}
-            </h2>
-            <p className="mt-1 text-sm text-gray-600 dark:text-gray-400">
-              {t(
-                'admin.plan_shadow_pricing_desc',
-                {},
-                'Use this as read-only operator evidence when judging whether the current tier template is too narrow or too wide.'
-              )}
-            </p>
-          </div>
-          {shadowPricing?.top_families?.length ? (
-            shadowPricing.top_families.map((item) => (
-              <BackofficeStackCard key={`family-${item.ability_family}`}>
-                <div className="flex items-start justify-between gap-3">
-                  <div>
-                    <p className="font-medium text-slate-950 dark:text-white">{item.ability_family}</p>
-                    <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
-                      {formatInteger(item.runs)} {t('billing.runs', {}, 'runs')} · {formatInteger(item.tokens_total)} {t('common.tokens')}
-                    </p>
-                  </div>
-                  <p className="text-sm font-medium text-slate-950 dark:text-white">{item.tariff_class}</p>
-                </div>
-                <p className="mt-3 text-sm text-slate-600 dark:text-slate-300">
-                  {t('common.cost')}: {item.provider_cost.toFixed(2)} · {t('admin.home_commercial_revenue', {}, 'Shadow revenue')}: {item.shadow_revenue.toFixed(2)} · Margin: {item.margin_delta.toFixed(2)}
-                </p>
-              </BackofficeStackCard>
-            ))
-          ) : (
-            <BackofficeStackCard>
-              <p className="text-sm text-slate-600 dark:text-slate-300">
-                {t('admin.shadow_pricing_empty', {}, 'No ability cost signal is available yet for this window.')}
-              </p>
-            </BackofficeStackCard>
-          )}
-        </BackofficeSectionPanel>
       </div>
       </details>
 

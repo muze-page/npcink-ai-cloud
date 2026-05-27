@@ -11,12 +11,7 @@ import {
   getPortalSiteWordPressUrl,
 } from '@/lib/portal-site-display';
 import { cn, formatDate } from '@/lib/utils';
-import { portalClient, type PortalActionRequest, type PortalSiteSummaryRecord, type Site } from '@/lib/portal-client';
-import {
-  formatPortalActionRequestResultSummary,
-  formatPortalActionRequestStatusLabel,
-  formatPortalActionRequestTypeLabel,
-} from '@/lib/portal-action-request-display';
+import { portalClient, type PortalSiteSummaryRecord, type Site } from '@/lib/portal-client';
 import {
   BackofficePageStack,
   BackofficeSectionPanel,
@@ -125,7 +120,6 @@ export default function PortalPage() {
   const [inspectorError, setInspectorError] = useState('');
   const [currentSiteActiveKeyCount, setCurrentSiteActiveKeyCount] = useState<number | null>(null);
   const [currentSiteSummary, setCurrentSiteSummary] = useState<PortalSiteSummaryRecord | null>(null);
-  const [recentHandledRequests, setRecentHandledRequests] = useState<PortalActionRequest[]>([]);
   const sessionSiteIdsKey = session?.sites?.map((site) => site.site_id).join('|') || '';
 
   const handleSiteSelect = async (siteId: string) => {
@@ -274,33 +268,6 @@ export default function PortalPage() {
       isCancelled = true;
     };
   }, [isAuthenticated, session?.sites, sessionSiteIdsKey]);
-
-  useEffect(() => {
-    if (!isAuthenticated || !session?.member_ref) {
-      setRecentHandledRequests([]);
-      return;
-    }
-
-    let isCancelled = false;
-
-    void Promise.allSettled([
-      portalClient.listNotifications({ status: 'resolved', limit: 5 }),
-      portalClient.listNotifications({ status: 'canceled', limit: 5 }),
-    ]).then((results) => {
-      if (isCancelled) {
-        return;
-      }
-      const items = results
-        .flatMap((result) => (result.status === 'fulfilled' ? result.value.data.items || [] : []))
-        .sort((left, right) => new Date(right.updated_at || right.created_at).getTime() - new Date(left.updated_at || left.created_at).getTime())
-        .slice(0, 3);
-      setRecentHandledRequests(items);
-    });
-
-    return () => {
-      isCancelled = true;
-    };
-  }, [isAuthenticated, session?.member_ref]);
 
   if (isLoading) {
     return (
@@ -610,48 +577,6 @@ export default function PortalPage() {
       </section>
 
       <div className="space-y-5">
-        {recentHandledRequests.length ? (
-          <BackofficeSectionPanel className="space-y-3">
-            <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
-              <div>
-                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-gray-500 dark:text-gray-400">
-                  {t('portal.home.recent_results_label', {}, 'Recent results')}
-                </p>
-                <h2 className="mt-2 text-xl font-semibold text-gray-950 dark:text-white">
-                  {t('portal.home.recent_results_title', {}, '最近处理结果')}
-                </h2>
-              </div>
-              <Link href="/portal/notifications" className="btn btn-secondary btn-sm">
-                {t('portal.nav_notifications', {}, 'To-dos')}
-              </Link>
-            </div>
-            <div className="grid gap-3 lg:grid-cols-3">
-              {recentHandledRequests.map((item) => (
-                <BackofficeStackCard key={item.request_id} className="bg-white/80 dark:bg-slate-950/45">
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <p className="text-xs font-semibold uppercase tracking-[0.16em] text-gray-500 dark:text-gray-400">
-                        {formatPortalActionRequestTypeLabel(t, item.request_type)}
-                      </p>
-                      <p className="mt-2 truncate text-sm font-semibold text-gray-950 dark:text-white">
-                        {formatPortalActionRequestResultSummary(t, item) || item.title}
-                      </p>
-                      <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                        {formatDate(item.updated_at || item.created_at)}
-                      </p>
-                    </div>
-                    <BackofficeStatusBadge
-                      status={item.status}
-                      label={formatPortalActionRequestStatusLabel(t, item.status)}
-                      className="shrink-0 text-[0.68rem]"
-                    />
-                  </div>
-                </BackofficeStackCard>
-              ))}
-            </div>
-          </BackofficeSectionPanel>
-        ) : null}
-
         <BackofficeSectionPanel className="space-y-4">
           <div className="grid gap-3 lg:grid-cols-4">
             <Link href="/portal/sites?filter=active" className="rounded-[1.25rem] border border-slate-200/80 bg-white/85 px-4 py-4 transition hover:bg-slate-50 dark:border-slate-800 dark:bg-slate-950/40 dark:hover:bg-slate-900/60">

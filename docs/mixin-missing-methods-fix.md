@@ -25,7 +25,7 @@
 |------|---------|
 | `collections` | `Counter`, `defaultdict` |
 | `datetime` | `UTC`, `datetime`, `timedelta` |
-| `urllib.parse` | `quote` |
+| `urllib.parse` | `quote`（已随 Cloud 强收缩移除） |
 | `uuid` | `uuid4` |
 | `app.core.models` | `AccountSubscription`, `PlatformImpersonationSession`, `Site`, `ACCOUNT_MEMBERSHIP_STATUS_ACTIVE`, `PLATFORM_IMPERSONATION_STATUS_*`, `SITE_*_STATUS_*`, `SUBSCRIPTION_STATUS_*` |
 | `app.domain.commercial.errors` | `CommercialNotFoundError`, `CommercialPermissionError` |
@@ -42,9 +42,10 @@
 
 ## 验证
 
-所有端点 200 OK：
+当时所有端点 200 OK。Cloud 强收缩后，impersonation 和 top-up pack
+catalog 已退役，不再作为现行验证入口：
 - `/api/admin/overview`
 - `/api/admin/subscriptions`
-- `/api/admin/impersonations`
-- `/api/admin/topup-packs`
+- admin impersonation API（retired）
+- admin top-up pack catalog API（retired）
 - `/admin` 页面 0 errors

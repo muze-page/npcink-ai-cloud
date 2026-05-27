@@ -9,7 +9,6 @@ import { getPortalSiteDisplayName, getPortalSiteSecondaryLabel } from '@/lib/por
 import { cn } from '@/lib/utils';
 import { LocaleSwitcher } from '@/components/ui/LocaleSwitcher';
 import { ThemeToggle } from '@/components/ui/ThemeToggle';
-import { portalClient } from '@/lib/portal-client';
 
 export function PortalNavbar() {
   const pathname = usePathname();
@@ -22,7 +21,6 @@ export function PortalNavbar() {
   const [isMoreMenuOpen, setIsMoreMenuOpen] = useState(false);
   const [isSiteMenuOpen, setIsSiteMenuOpen] = useState(false);
   const [siteSearchQuery, setSiteSearchQuery] = useState('');
-  const [openNotificationCount, setOpenNotificationCount] = useState(0);
   const moreMenuRef = useRef<HTMLDivElement>(null);
   const siteMenuRef = useRef<HTMLDivElement>(null);
 
@@ -31,7 +29,6 @@ export function PortalNavbar() {
       { href: '/portal', label: t('portal.workspace_label', {}, 'Workspace') },
       { href: '/portal/keys', label: t('common.keys') },
       { href: '/portal/usage', label: t('nav.usage') },
-      { href: '/portal/analytics', label: t('portal.nav_analytics', {}, 'Analytics') },
       { href: '/portal/billing', label: t('portal.nav_package', {}, 'Package') },
       { href: '/portal/sites', label: t('portal.nav_sites', {}, 'Sites') },
     ],
@@ -39,10 +36,7 @@ export function PortalNavbar() {
   );
   const secondaryNavItems = useMemo(
     () => [
-      { href: '/portal/notifications?status=open', label: t('portal.nav_notifications', {}, 'To-dos') },
       { href: '/portal/audit', label: t('nav.audit') },
-      { href: '/portal/compliance', label: t('nav.compliance') },
-      { href: '/portal/preferences', label: t('portal.nav_preferences', {}, 'Preferences') },
     ],
     [t]
   );
@@ -96,31 +90,6 @@ export function PortalNavbar() {
     setIsSiteMenuOpen(false);
     setSiteSearchQuery('');
   }, [pathname]);
-
-  useEffect(() => {
-    if (!isAuthenticated) {
-      setOpenNotificationCount(0);
-      return;
-    }
-
-    let isCancelled = false;
-    portalClient
-      .listNotifications({ status: 'open', limit: 100 })
-      .then((response) => {
-        if (isCancelled) return;
-        const total = response.data.total ?? response.data.items?.length ?? 0;
-        setOpenNotificationCount(Number.isFinite(Number(total)) ? Number(total) : 0);
-      })
-      .catch(() => {
-        if (!isCancelled) {
-          setOpenNotificationCount(0);
-        }
-      });
-
-    return () => {
-      isCancelled = true;
-    };
-  }, [isAuthenticated, pathname, session?.site_id]);
 
   useEffect(() => {
     if (!isMoreMenuOpen && !isSiteMenuOpen) {
@@ -185,9 +154,6 @@ export function PortalNavbar() {
       : null,
   ].filter(Boolean) as string[];
   const selectedSite = visibleSites.find((site) => site.site_id === selectedSiteId) || null;
-  const notificationBadge =
-    openNotificationCount > 99 ? '99+' : openNotificationCount > 0 ? String(openNotificationCount) : '';
-
   return (
     <header className="sticky top-0 z-50 w-full border-b border-slate-200/70 bg-white/78 backdrop-blur-xl dark:border-slate-800 dark:bg-slate-950/78">
       <div className="container mx-auto px-4">
@@ -354,11 +320,6 @@ export function PortalNavbar() {
               >
                 <span className="inline-flex items-center gap-2">
                   {item.label}
-                  {item.href.startsWith('/portal/notifications') && notificationBadge ? (
-                    <span className="inline-flex min-w-5 items-center justify-center rounded-full bg-red-500 px-1.5 py-0.5 text-[0.62rem] font-bold leading-none text-white">
-                      {notificationBadge}
-                    </span>
-                  ) : null}
                 </span>
               </Link>
             ))}
@@ -373,11 +334,6 @@ export function PortalNavbar() {
                 onClick={() => setIsMoreMenuOpen((current) => !current)}
               >
                 {t('portal.nav_more', {}, 'More')}
-                {notificationBadge ? (
-                  <span className="absolute -right-1 -top-1 inline-flex min-w-5 items-center justify-center rounded-full bg-red-500 px-1.5 py-0.5 text-[0.62rem] font-bold leading-none text-white">
-                    {notificationBadge}
-                  </span>
-                ) : null}
               </button>
               {isMoreMenuOpen ? (
                 <div
@@ -399,11 +355,6 @@ export function PortalNavbar() {
                     >
                       <span className="inline-flex items-center gap-2">
                         {item.label}
-                        {item.href.startsWith('/portal/notifications') && notificationBadge ? (
-                          <span className="inline-flex min-w-5 items-center justify-center rounded-full bg-red-500 px-1.5 py-0.5 text-[0.62rem] font-bold leading-none text-white">
-                            {notificationBadge}
-                          </span>
-                        ) : null}
                       </span>
                     </Link>
                   ))}
@@ -497,11 +448,6 @@ export function PortalNavbar() {
               >
                 <span className="inline-flex items-center gap-2">
                   {item.label}
-                  {item.href.startsWith('/portal/notifications') && notificationBadge ? (
-                    <span className="inline-flex min-w-5 items-center justify-center rounded-full bg-red-500 px-1.5 py-0.5 text-[0.62rem] font-bold leading-none text-white">
-                      {notificationBadge}
-                    </span>
-                  ) : null}
                 </span>
               </Link>
             ))}

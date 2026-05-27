@@ -3,7 +3,7 @@
 import React, { useEffect, useState, useCallback, useRef } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { cn, formatDate } from '@/lib/utils';
+import { cn } from '@/lib/utils';
 import { useLocale } from '@/contexts/LocaleContext';
 import { ThemeToggle } from '@/components/ui/ThemeToggle';
 import { LocaleSwitcher } from '@/components/ui/LocaleSwitcher';
@@ -12,32 +12,13 @@ interface AdminLayoutProps {
   children: React.ReactNode;
 }
 
-interface ActiveImpersonation {
-  impersonation_id: string;
-  member_ref: string;
-  account_id?: string;
-  site_id: string;
-  started_at?: string;
-  expires_at?: string;
-}
-
 export default function AdminLayout({ children }: AdminLayoutProps) {
   const pathname = usePathname();
   const { t } = useLocale();
   const isLoginPage = pathname === '/admin/login';
-  const [activeImpersonation, setActiveImpersonation] = useState<ActiveImpersonation | null>(null);
-  const [isEndingImpersonation, setIsEndingImpersonation] = useState(false);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [isMoreMenuOpen, setIsMoreMenuOpen] = useState(false);
   const moreMenuRef = useRef<HTMLDivElement>(null);
-
-  const redirectToLogin = useCallback(() => {
-    const redirect =
-      typeof window !== 'undefined'
-        ? `${window.location.pathname}${window.location.search}`
-        : pathname;
-    window.location.href = `/admin/login?redirect=${encodeURIComponent(redirect)}`;
-  }, [pathname]);
 
   useEffect(() => {
     if (!mobileNavOpen) {
@@ -59,42 +40,6 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
       document.body.style.overflow = '';
     };
   }, [mobileNavOpen]);
-
-  useEffect(() => {
-    if (isLoginPage) {
-      return;
-    }
-
-    const loadActiveImpersonation = async () => {
-      try {
-        const response = await fetch('/api/admin/impersonations?active_only=true', {
-          credentials: 'include',
-        });
-
-        if (
-          response.status === 401 ||
-          response.status === 403 ||
-          response.redirected ||
-          response.url.includes('/admin/login')
-        ) {
-          redirectToLogin();
-          return;
-        }
-
-        if (!response.ok) {
-          setActiveImpersonation(null);
-          return;
-        }
-
-        const data = await response.json();
-        setActiveImpersonation((data.data?.items || [])[0] || null);
-      } catch {
-        setActiveImpersonation(null);
-      }
-    };
-
-    loadActiveImpersonation();
-  }, [isLoginPage, pathname, redirectToLogin]);
 
   useEffect(() => {
     setIsMoreMenuOpen(false);
@@ -126,36 +71,6 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
     };
   }, [isMoreMenuOpen]);
 
-  const handleEndImpersonation = async () => {
-    if (!activeImpersonation) {
-      return;
-    }
-
-    setIsEndingImpersonation(true);
-    try {
-      const response = await fetch(`/api/admin/impersonations/${activeImpersonation.impersonation_id}/end`, {
-        method: 'POST',
-        credentials: 'include',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          ended_reason: 'ended_from_admin_global_bar',
-        }),
-      });
-
-      if (!response.ok) {
-        return;
-      }
-
-      setActiveImpersonation(null);
-    } catch {
-      return;
-    } finally {
-      setIsEndingImpersonation(false);
-    }
-  };
-
   const toggleMobileNav = useCallback(() => {
     setMobileNavOpen((current) => !current);
   }, []);
@@ -166,15 +81,10 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
     { href: '/admin/sites', label: t('common.sites', {}, 'Sites') },
     { href: '/admin/subscriptions', label: t('common.subscriptions', {}, 'Subscriptions') },
     { href: '/admin/plans', label: t('common.package', {}, 'Package') },
-    { href: '/admin/topup-packs', label: t('admin.topup_packs', {}, 'Top-up packs') },
-    { href: '/admin/requests', label: t('admin.user_requests', {}, 'User requests') },
   ];
 
   const secondaryNavItems = [
-    { href: '/admin/members', label: t('common.members', {}, 'Members') },
     { href: '/admin/model-intelligence', label: t('admin.model_intelligence', {}, 'Model intelligence') },
-    { href: '/admin/impersonations', label: t('nav.impersonations', {}, 'Impersonations') },
-    { href: '/admin/compliance', label: t('nav.compliance', {}, 'Compliance') },
   ];
 
   const isActive = (href: string) => {
@@ -444,55 +354,6 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
       {/* Main Content */}
       <main className="flex-1 bg-transparent">
         <div className="container mx-auto px-4 py-5 md:py-6">
-          {activeImpersonation ? (
-            <div className="mb-5 overflow-hidden rounded-[1.6rem] border border-amber-200/80 bg-amber-50/80 shadow-sm backdrop-blur dark:border-amber-900/70 dark:bg-amber-950/25">
-              <div className="flex flex-col gap-3 px-4 py-4 lg:flex-row lg:items-center lg:justify-between">
-                <div className="min-w-0">
-                  <p className="text-[0.68rem] font-bold uppercase tracking-[0.24em] text-amber-700 dark:text-amber-300">
-                    {t('admin.current_impersonation')}
-                  </p>
-                  <div className="mt-2 flex flex-wrap items-center gap-2">
-                    <span className="rounded-full border border-amber-300/70 bg-amber-100/80 px-2.5 py-1 text-[0.7rem] font-semibold text-amber-900 dark:border-amber-800 dark:bg-amber-900/60 dark:text-amber-100">
-                      {t('admin.read_only_support_session')}
-                    </span>
-                    <h2 className="truncate text-base font-semibold text-amber-950 dark:text-amber-100">
-                      {activeImpersonation.member_ref} · {activeImpersonation.site_id}
-                    </h2>
-                  </div>
-                  <p className="mt-1 text-sm text-amber-800/85 dark:text-amber-200/80">
-                    {t('admin.started_expires', {
-                      started: activeImpersonation.started_at ? formatDate(activeImpersonation.started_at) : t('common.unknown'),
-                      expires: activeImpersonation.expires_at ? formatDate(activeImpersonation.expires_at) : t('common.unknown'),
-                    })}
-                  </p>
-                </div>
-                <div className="flex flex-wrap gap-2">
-                  {activeImpersonation.account_id ? (
-                    <Link href={`/admin/accounts/${encodeURIComponent(activeImpersonation.account_id)}`} className="btn btn-secondary">
-                      {t('admin.open_account')}
-                    </Link>
-                  ) : null}
-                  <Link href={`/admin/sites/${encodeURIComponent(activeImpersonation.site_id)}`} className="btn btn-secondary">
-                    {t('admin.open_site')}
-                  </Link>
-                  <Link href="/portal" className="btn btn-primary">
-                    {t('admin.open_customer_portal')}
-                  </Link>
-                  <Link href="/admin/impersonations?active_only=true" className="btn btn-secondary">
-                    {t('nav.impersonations')}
-                  </Link>
-                  <button
-                    type="button"
-                    onClick={handleEndImpersonation}
-                    className="btn btn-secondary"
-                    disabled={isEndingImpersonation}
-                  >
-                    {isEndingImpersonation ? t('common.saving') : t('admin.end_impersonation')}
-                  </button>
-                </div>
-              </div>
-            </div>
-          ) : null}
           {children}
         </div>
       </main>

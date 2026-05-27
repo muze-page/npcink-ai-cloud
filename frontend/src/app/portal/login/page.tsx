@@ -305,10 +305,7 @@ function LoginFormContent() {
         />
         <BackofficeSectionPanel className="mx-auto w-full max-w-2xl text-center">
           <p className="text-sm text-gray-600 dark:text-gray-400">
-            {t('portal.login.footer')}{' '}
-            <a href="/getting-started" className="link">
-              {t('auth.get_started')}
-            </a>
+            {t('portal.login.footer')}
           </p>
         </BackofficeSectionPanel>
       </BackofficePageStack>

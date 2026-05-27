@@ -286,42 +286,6 @@ def test_stats_routes_return_windowed_metrics_and_health(tmp_path: Path) -> None
             query=diagnostics_query,
         ),
     )
-    prompt_advisor_query = (
-        "ability_id=magick-ai/workflows/generate-post-draft"
-        "&prompt_id=text_generate_default"
-        "&current_variant=current"
-        "&current_version=3"
-        "&candidate_variant=candidate"
-        "&candidate_version=4"
-        "&range=24h"
-    )
-    prompt_advisor_response = client.get(
-        f"/v1/prompt/advisor/recommendation?{prompt_advisor_query}",
-        headers=build_auth_headers(
-            "GET",
-            "/v1/prompt/advisor/recommendation",
-            site_id="site_alpha",
-            trace_id="tracestatsapi0039500000000000000",
-            query=prompt_advisor_query,
-        ),
-    )
-    preset_advisor_query = (
-        "preset_id=default"
-        "&default_preset_id=default"
-        "&ability_id=magick-ai/workflows/generate-post-draft"
-        "&range=24h"
-    )
-    preset_advisor_response = client.get(
-        f"/v1/preset/advisor/recommendation?{preset_advisor_query}",
-        headers=build_auth_headers(
-            "GET",
-            "/v1/preset/advisor/recommendation",
-            site_id="site_alpha",
-            trace_id="tracestatsapi0039750000000000000",
-            query=preset_advisor_query,
-        ),
-    )
-
     assert instance_response.status_code == 200
     assert profile_response.status_code == 200
     assert hosted_discovery_response.status_code == 200
@@ -332,8 +296,6 @@ def test_stats_routes_return_windowed_metrics_and_health(tmp_path: Path) -> None
     assert alert_response.status_code == 200
     assert diagnostics_response.status_code == 200
     assert recommendation_response.status_code == 200
-    assert prompt_advisor_response.status_code == 200
-    assert preset_advisor_response.status_code == 200
 
     instance_payload = instance_response.json()["data"]
     profile_payload = profile_response.json()["data"]
@@ -345,8 +307,6 @@ def test_stats_routes_return_windowed_metrics_and_health(tmp_path: Path) -> None
     alert_payload = alert_response.json()["data"]
     diagnostics_payload = diagnostics_response.json()["data"]
     recommendation_payload = recommendation_response.json()["data"]
-    prompt_advisor_payload = prompt_advisor_response.json()["data"]
-    preset_advisor_payload = preset_advisor_response.json()["data"]
 
     assert instance_payload["today_calls"] == 2
     assert instance_payload["source"] == "cloud_latency_probe_buffer"
@@ -429,22 +389,6 @@ def test_stats_routes_return_windowed_metrics_and_health(tmp_path: Path) -> None
     assert "recommended_provider_ids" in recommendation_payload
     assert "recommended_profile_ids" in recommendation_payload
     assert "summary_lines" in recommendation_payload
-    assert prompt_advisor_payload["source"] == "cloud_prompt_advisor_summary"
-    assert prompt_advisor_payload["ability_id"] == "magick-ai/workflows/generate-post-draft"
-    assert prompt_advisor_payload["prompt_id"] == "text_generate_default"
-    assert prompt_advisor_payload["recommended_variant"] in {"current", "candidate"}
-    assert prompt_advisor_payload["recommended_version"] in {3, 4}
-    assert prompt_advisor_payload["reason_summary"] != ""
-    assert prompt_advisor_payload["risk_summary"] != ""
-    assert "boundary_note" in prompt_advisor_payload
-    assert preset_advisor_payload["source"] == "cloud_preset_advisor_summary"
-    assert preset_advisor_payload["ability_id"] == "magick-ai/workflows/generate-post-draft"
-    assert preset_advisor_payload["preset_id"] == "default"
-    assert preset_advisor_payload["recommended_preset"] != ""
-    assert preset_advisor_payload["recommended_changes"]
-    assert preset_advisor_payload["reason_summary"] != ""
-    assert preset_advisor_payload["impact_summary"] != ""
-    assert "boundary_note" in preset_advisor_payload
 
     dispose_engine(database_url)
 
@@ -645,66 +589,6 @@ def test_logs_analytics_routes_return_cloud_projection_payloads(tmp_path: Path) 
     dispose_engine(database_url)
 
 
-def test_prompt_governance_recommendation_routes_return_readonly_summaries(
-    tmp_path: Path,
-) -> None:
-    database_url, client, _ = _build_client(tmp_path)
-    prompt_query = (
-        "ability_id=magick-ai/workflows/generate-post-draft"
-        "&prompt_id=text_generate_default"
-        "&current_variant=current"
-        "&current_version=3"
-        "&candidate_variant=candidate"
-        "&candidate_version=4"
-        "&range=24h"
-    )
-
-    responses = {
-        "eval": client.get(
-            f"/v1/prompt/eval/recommendation?{prompt_query}",
-            headers=build_auth_headers(
-                "GET",
-                "/v1/prompt/eval/recommendation",
-                site_id="site_alpha",
-                trace_id="tracestatsapi0065100000000000000",
-                query=prompt_query,
-            ),
-        ),
-        "canary": client.get(
-            f"/v1/prompt/canary/recommendation?{prompt_query}",
-            headers=build_auth_headers(
-                "GET",
-                "/v1/prompt/canary/recommendation",
-                site_id="site_alpha",
-                trace_id="tracestatsapi0065200000000000000",
-                query=prompt_query,
-            ),
-        ),
-        "upgrade": client.get(
-            f"/v1/prompt/upgrade/recommendation?{prompt_query}",
-            headers=build_auth_headers(
-                "GET",
-                "/v1/prompt/upgrade/recommendation",
-                site_id="site_alpha",
-                trace_id="tracestatsapi0065300000000000000",
-                query=prompt_query,
-            ),
-        ),
-    }
-
-    for recommendation_type, response in responses.items():
-        assert response.status_code == 200
-        payload = response.json()["data"]
-        assert payload["source"] == "cloud_prompt_governance_recommendation_summary"
-        assert payload["recommendation_type"] == recommendation_type
-        assert payload["reason_summary"] != ""
-        assert payload["risk_summary"] != ""
-        assert payload["suggested_action"] != ""
-        assert payload["updated_at"] != ""
-        assert payload["boundary_note"] != ""
-        assert payload["evidence"]["logs_summary"]["total"] >= 1
-
-    dispose_engine(database_url)
 
 
 def test_router_diagnostics_summary_exposes_runtime_case_details(tmp_path: Path) -> None:

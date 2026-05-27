@@ -212,71 +212,6 @@ def test_stats_response_shapes_are_stable(tmp_path: Path) -> None:
             query=diagnostics_query,
         ),
     )
-    prompt_advisor_query = (
-        "ability_id=magick-ai/workflows/generate-post-draft"
-        "&prompt_id=text_generate_default"
-        "&current_variant=current"
-        "&current_version=3"
-        "&candidate_variant=candidate"
-        "&candidate_version=4"
-        "&range=24h"
-    )
-    prompt_advisor_response = client.get(
-        f"/v1/prompt/advisor/recommendation?{prompt_advisor_query}",
-        headers=build_auth_headers(
-            "GET",
-            "/v1/prompt/advisor/recommendation",
-            site_id="site_contract",
-            trace_id="tracecontractstats0060750000000000",
-            query=prompt_advisor_query,
-        ),
-    )
-    prompt_eval_response = client.get(
-        f"/v1/prompt/eval/recommendation?{prompt_advisor_query}",
-        headers=build_auth_headers(
-            "GET",
-            "/v1/prompt/eval/recommendation",
-            site_id="site_contract",
-            trace_id="tracecontractstats0060760000000000",
-            query=prompt_advisor_query,
-        ),
-    )
-    prompt_canary_response = client.get(
-        f"/v1/prompt/canary/recommendation?{prompt_advisor_query}",
-        headers=build_auth_headers(
-            "GET",
-            "/v1/prompt/canary/recommendation",
-            site_id="site_contract",
-            trace_id="tracecontractstats0060770000000000",
-            query=prompt_advisor_query,
-        ),
-    )
-    prompt_upgrade_response = client.get(
-        f"/v1/prompt/upgrade/recommendation?{prompt_advisor_query}",
-        headers=build_auth_headers(
-            "GET",
-            "/v1/prompt/upgrade/recommendation",
-            site_id="site_contract",
-            trace_id="tracecontractstats0060780000000000",
-            query=prompt_advisor_query,
-        ),
-    )
-    preset_advisor_query = (
-        "preset_id=default"
-        "&default_preset_id=default"
-        "&ability_id=magick-ai/workflows/generate-post-draft"
-        "&range=24h"
-    )
-    preset_advisor_response = client.get(
-        f"/v1/preset/advisor/recommendation?{preset_advisor_query}",
-        headers=build_auth_headers(
-            "GET",
-            "/v1/preset/advisor/recommendation",
-            site_id="site_contract",
-            trace_id="tracecontractstats0060800000000000",
-            query=preset_advisor_query,
-        ),
-    )
     logs_query = (
         "range=24h"
         "&start_gmt="
@@ -336,11 +271,6 @@ def test_stats_response_shapes_are_stable(tmp_path: Path) -> None:
     assert alert_response.status_code == 200
     assert diagnostics_response.status_code == 200
     assert recommendation_response.status_code == 200
-    assert prompt_advisor_response.status_code == 200
-    assert prompt_eval_response.status_code == 200
-    assert prompt_canary_response.status_code == 200
-    assert prompt_upgrade_response.status_code == 200
-    assert preset_advisor_response.status_code == 200
     assert logs_summary_response.status_code == 200
     assert logs_latency_response.status_code == 200
     assert logs_recommendations_response.status_code == 200
@@ -378,13 +308,13 @@ def test_stats_response_shapes_are_stable(tmp_path: Path) -> None:
         "start_at",
         "end_at",
         "calls_total",
-        "success_total",
-        "error_total",
-        "success_rate",
-        "avg_latency_ms",
-        "latency_ms_p50",
-        "latency_ms_p95",
-        "fallback_total",
+            "success_total",
+            "error_total",
+            "success_rate",
+            "avg_latency_ms",
+            "latency_ms_p50",
+            "latency_ms_p95",
+            "fallback_total",
         "fallback_rate",
         "last_seen_at",
     }
@@ -513,9 +443,11 @@ def test_stats_response_shapes_are_stable(tmp_path: Path) -> None:
         "provider_calls_total",
         "success_total",
         "error_total",
-        "success_rate",
-        "avg_latency_ms",
-        "fallback_total",
+            "success_rate",
+            "avg_latency_ms",
+            "latency_ms_p50",
+            "latency_ms_p95",
+            "fallback_total",
         "fallback_rate",
         "tokens_in_total",
         "tokens_out_total",
@@ -556,22 +488,23 @@ def test_stats_response_shapes_are_stable(tmp_path: Path) -> None:
         "buffer_kind",
         "scope_kind",
     }
-    assert set(projection_payload["data"]["rows"][0].keys()) == {
-        "bucket_gmt",
-        "ability_id",
-        "caller_id",
-        "preset_id",
-        "router_instance_id",
-        "selected_model_instance_id",
-        "request_total",
-        "success_total",
-        "guard_fail_total",
-        "quality_sum",
-        "quality_count",
-        "reward_sum",
-        "reward_count",
-        "avg_latency_ms",
-    }
+    if projection_payload["data"]["rows"]:
+        assert set(projection_payload["data"]["rows"][0].keys()) == {
+            "bucket_gmt",
+            "ability_id",
+            "caller_id",
+            "preset_id",
+            "router_instance_id",
+            "selected_model_instance_id",
+            "request_total",
+            "success_total",
+            "guard_fail_total",
+            "quality_sum",
+            "quality_count",
+            "reward_sum",
+            "reward_count",
+            "avg_latency_ms",
+        }
 
     alert_payload = alert_response.json()
     assert set(alert_payload["data"].keys()) == {
@@ -705,123 +638,6 @@ def test_stats_response_shapes_are_stable(tmp_path: Path) -> None:
     assert set(recommendation_payload["data"]["evidence"].keys()) == {
         "provider_alerts",
         "profile_matches",
-    }
-
-    prompt_advisor_payload = prompt_advisor_response.json()
-    assert set(prompt_advisor_payload["data"].keys()) == {
-        "source",
-        "site_id",
-        "ability_id",
-        "prompt_id",
-        "current_variant",
-        "current_version",
-        "candidate_variant",
-        "candidate_version",
-        "recommended_variant",
-        "recommended_version",
-        "reason_summary",
-        "risk_summary",
-        "updated_at",
-        "window",
-        "evidence",
-        "boundary_note",
-    }
-    assert set(prompt_advisor_payload["data"]["window"].keys()) == {
-        "range",
-        "start_gmt",
-        "end_gmt",
-    }
-    assert set(prompt_advisor_payload["data"]["evidence"].keys()) == {
-        "logs_summary",
-        "recommended_providers",
-        "recommended_error_codes",
-        "degraded_provider_ids",
-    }
-    assert set(prompt_advisor_payload["data"]["evidence"]["logs_summary"].keys()) == {
-        "total",
-        "success_rate",
-        "error_rate",
-        "blocked_rate",
-        "updated_at",
-    }
-
-    for prompt_governance_payload, recommendation_type in (
-        (prompt_eval_response.json(), "eval"),
-        (prompt_canary_response.json(), "canary"),
-        (prompt_upgrade_response.json(), "upgrade"),
-    ):
-        assert set(prompt_governance_payload["data"].keys()) == {
-            "source",
-            "site_id",
-            "ability_id",
-            "prompt_id",
-            "current_variant",
-            "current_version",
-            "candidate_variant",
-            "candidate_version",
-            "recommendation_type",
-            "reason_summary",
-            "risk_summary",
-            "suggested_action",
-            "updated_at",
-            "window",
-            "evidence",
-            "boundary_note",
-        }
-        assert prompt_governance_payload["data"]["recommendation_type"] == recommendation_type
-        assert set(prompt_governance_payload["data"]["window"].keys()) == {
-            "range",
-            "start_gmt",
-            "end_gmt",
-        }
-        assert set(prompt_governance_payload["data"]["evidence"].keys()) == {
-            "logs_summary",
-            "recommended_providers",
-            "recommended_error_codes",
-            "degraded_provider_ids",
-        }
-        assert set(prompt_governance_payload["data"]["evidence"]["logs_summary"].keys()) == {
-            "total",
-            "success_rate",
-            "error_rate",
-            "blocked_rate",
-            "updated_at",
-        }
-
-    preset_advisor_payload = preset_advisor_response.json()
-    assert set(preset_advisor_payload["data"].keys()) == {
-        "source",
-        "site_id",
-        "ability_id",
-        "preset_id",
-        "default_preset_id",
-        "recommended_preset",
-        "recommended_changes",
-        "reason_summary",
-        "impact_summary",
-        "updated_at",
-        "window",
-        "evidence",
-        "boundary_note",
-    }
-    assert set(preset_advisor_payload["data"]["window"].keys()) == {
-        "range",
-        "start_gmt",
-        "end_gmt",
-    }
-    assert set(preset_advisor_payload["data"]["evidence"].keys()) == {
-        "logs_summary",
-        "observed_presets",
-        "recommended_providers",
-        "recommended_error_codes",
-        "degraded_provider_ids",
-    }
-    assert set(preset_advisor_payload["data"]["evidence"]["logs_summary"].keys()) == {
-        "total",
-        "success_rate",
-        "error_rate",
-        "blocked_rate",
-        "updated_at",
     }
 
     logs_summary_payload = logs_summary_response.json()

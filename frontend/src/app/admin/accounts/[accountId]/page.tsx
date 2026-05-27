@@ -254,39 +254,9 @@ function AccountDetailContent() {
   const [packageActionPending, setPackageActionPending] = useState<'change' | 'suspend' | 'cancel' | null>(null);
   const [packagePlans, setPackagePlans] = useState<PackagePlanListItem[]>([]);
 
-  const buildImpersonationHref = (siteId: string, memberRef: string) => {
-    const params = new URLSearchParams({
-      account_id: accountId,
-      reason_code: 'support_debug',
-    });
-
-    if (siteId) {
-      params.set('site_id', siteId);
-    }
-    if (memberRef) {
-      params.set('member_ref', memberRef);
-    }
-
-    return `/admin/impersonations?${params.toString()}`;
-  };
-
   const loadActiveImpersonation = useCallback(async () => {
-    try {
-      const response = await fetch(`/api/admin/impersonations?account_id=${encodeURIComponent(accountId)}&active_only=true`, {
-        credentials: 'include',
-      });
-
-      if (!response.ok) {
-        setActiveImpersonation(null);
-        return;
-      }
-
-      const data = await response.json();
-      setActiveImpersonation((data.data?.items || [])[0] || null);
-    } catch {
-      setActiveImpersonation(null);
-    }
-  }, [accountId]);
+    setActiveImpersonation(null);
+  }, []);
 
   const loadPackagePlans = useCallback(async () => {
     try {
@@ -782,77 +752,14 @@ function AccountDetailContent() {
       return;
     }
 
-    setIsImpersonationSubmitting(true);
-    setImpersonationError(null);
     setImpersonationNotice(null);
-
-    try {
-      const response = await fetch('/api/admin/impersonations', {
-        method: 'POST',
-        credentials: 'include',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          member_ref: selectedMemberRef,
-          site_id: selectedSiteId,
-          reason_code: 'support_debug',
-          reason_text: reasonText || `Started from /admin/accounts/${accountId}`,
-        }),
-      });
-
-      const payload = await response.json();
-
-      if (!response.ok) {
-        throw new Error(resolveUiErrorMessage(payload.message, t('error.failed_start_impersonation')));
-      }
-
-      setActiveImpersonation(payload.data?.impersonation || null);
-      setImpersonationNotice(t('admin.impersonation_started_notice'));
-      setReasonText('');
-      await loadActiveImpersonation();
-    } catch (err) {
-      setImpersonationError(
-        resolveUiErrorMessage(err instanceof Error ? err.message : null, t('error.failed_start_impersonation'))
-      );
-    } finally {
-      setIsImpersonationSubmitting(false);
-    }
+    setImpersonationError(t('admin.impersonation_removed', {}, 'Impersonation has been removed from the Cloud service plane.'));
   };
 
-  const handleEndImpersonation = async (impersonationId: string) => {
-    setIsImpersonationSubmitting(true);
-    setImpersonationError(null);
+  const handleEndImpersonation = async (_impersonationId: string) => {
+    setActiveImpersonation(null);
     setImpersonationNotice(null);
-
-    try {
-      const response = await fetch(`/api/admin/impersonations/${impersonationId}/end`, {
-        method: 'POST',
-        credentials: 'include',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          ended_reason: 'ended_from_account_detail',
-        }),
-      });
-
-      const payload = await response.json();
-
-      if (!response.ok) {
-        throw new Error(resolveUiErrorMessage(payload.message, t('error.failed_end_impersonation')));
-      }
-
-      setActiveImpersonation(null);
-      setImpersonationNotice(t('admin.impersonation_ended_notice'));
-      await loadActiveImpersonation();
-    } catch (err) {
-      setImpersonationError(
-        resolveUiErrorMessage(err instanceof Error ? err.message : null, t('error.failed_end_impersonation'))
-      );
-    } finally {
-      setIsImpersonationSubmitting(false);
-    }
+    setImpersonationError(t('admin.impersonation_removed', {}, 'Impersonation has been removed from the Cloud service plane.'));
   };
 
   useEffect(() => {
@@ -1080,7 +987,6 @@ function AccountDetailContent() {
       };
     });
   const selectedPackageOption = packagePlanOptions.find((item) => item.plan_id === packageForm.plan_id) || null;
-  const impersonationHref = buildImpersonationHref(selectedSiteId, selectedMemberRef);
   const portalAccessSummaryItems = [
     {
       label: t('common.members'),
@@ -1583,9 +1489,6 @@ function AccountDetailContent() {
             </summary>
             <div className="mt-4 space-y-4">
               <div className="flex flex-wrap gap-3">
-                <Link href={impersonationHref} className={cn('btn btn-secondary', (!selectedSiteId || !selectedMemberRef) && 'pointer-events-none opacity-50')}>
-                  {t('admin.open_session_inventory')}
-                </Link>
                 <button
                   type="button"
                   onClick={handleStartImpersonation}
@@ -1751,11 +1654,6 @@ function AccountDetailContent() {
                 <BackofficeEmptyState
                   title={t('admin.account_detail.members_empty_title', undefined, 'No members on this customer')}
                   description={t('admin.account_detail.members_empty_desc', undefined, 'No user administrator or support member is attached to this customer yet. Use the member directory for invite and access follow-up.')}
-                  action={
-                    <Link href="/admin/members" className="btn btn-secondary">
-                      {t('common.members', undefined, 'Members')}
-                    </Link>
-                  }
                 />
               )}
             </div>

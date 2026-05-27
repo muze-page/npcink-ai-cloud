@@ -11,13 +11,11 @@ from app.api.routes.catalog import router as catalog_router
 from app.api.routes.entitlements import router as entitlements_router
 from app.api.routes.health import router as health_router
 from app.api.routes.internal import router as internal_router
-from app.api.routes.orchestration import router as orchestration_router
 from app.api.routes.portal import router as portal_router
 from app.api.routes.runs import router as runs_router
 from app.api.routes.runtime import router as runtime_router
 from app.api.routes.service import router as service_router
 from app.api.routes.stats import router as stats_router
-from app.api.routes.task_packs import router as task_packs_router
 from app.api.routes.web import router as web_router
 from app.core.config import Settings, get_settings
 from app.core.logging import configure_logging
@@ -153,8 +151,6 @@ def create_app(services: CloudServices | None = None) -> FastAPI:
     app.include_router(runtime_router)
     app.include_router(runs_router)
     app.include_router(stats_router)
-    app.include_router(task_packs_router)
-    app.include_router(orchestration_router)
     app.include_router(web_router)
 
     return app

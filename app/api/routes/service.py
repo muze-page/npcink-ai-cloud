@@ -107,29 +107,11 @@ class SubscriptionPayload(BaseModel):
 class SubscriptionTopUpPayload(BaseModel):
     target_period_start_at: datetime | None = None
     target_period_end_at: datetime | None = None
-    pack_id: str = ""
     runs_increment: float = 0.0
     tokens_increment: float = 0.0
     cost_increment: float = 0.0
     reason: str = ""
     note: str = ""
-
-
-class TopUpPackPayload(BaseModel):
-    label: str = ""
-    points_label: str = ""
-    runs_increment: float = 0.0
-    tokens_increment: float = 0.0
-    cost_increment: float = 0.0
-    operator_note: str = ""
-    recommended_for_tiers: list[str] = Field(default_factory=list)
-    display_order: int = 1
-    active: bool = True
-
-
-class PortalActionRequestDecisionPayload(BaseModel):
-    decision: str
-    decision_note: str = ""
 
 
 class CatalogModelAnnotationPayload(BaseModel):
@@ -931,7 +913,7 @@ async def apply_subscription_topup(
     try:
         result = service.apply_operator_managed_subscription_topup(
             subscription_id=subscription_id,
-            pack_id=payload.pack_id,
+            pack_id="",
             runs_increment=payload.runs_increment,
             tokens_increment=payload.tokens_increment,
             cost_increment=payload.cost_increment,
@@ -1171,34 +1153,6 @@ async def get_admin_overview(
     return build_envelope(
         status="ok",
         message="admin overview loaded",
-        data=result,
-        revision="m6",
-    )
-
-
-@router.get("/admin/commercial-shadow-pricing/summary")
-async def get_admin_commercial_shadow_pricing_summary(
-    request: Request,
-    window_days: int = Query(default=7, ge=1, le=90),
-    site_id: str | None = Query(default=None),
-    ability_family: str | None = Query(default=None),
-    limit: int = Query(default=5, ge=1, le=20),
-) -> Any:
-    auth = await authorize_internal_request(request, require_idempotency=False)
-    if auth is not None:
-        return auth
-    try:
-        result = _get_commercial_service(request).get_commercial_shadow_pricing_summary(
-            window_days=window_days,
-            site_id=site_id,
-            ability_family=ability_family,
-            limit=limit,
-        )
-    except CommercialServiceError as error:
-        return _service_error_response(error, request=request)
-    return build_envelope(
-        status="ok",
-        message="commercial shadow pricing summary loaded",
         data=result,
         revision="m6",
     )
@@ -1780,42 +1734,6 @@ async def list_admin_accounts(
     )
 
 
-@router.get("/admin/members")
-async def list_admin_members(
-    request: Request,
-    member_ref: str | None = Query(default=None),
-    status: str | None = Query(default=None),
-    account_id: str | None = Query(default=None),
-    has_coverage_follow_up: bool | None = Query(default=None),
-    disabled: bool | None = Query(default=None),
-    dev_baseline: bool | None = Query(default=None),
-    never_logged_in: bool = Query(default=False),
-    limit: int = Query(default=100, ge=1, le=500),
-) -> Any:
-    auth = await authorize_internal_request(request, require_idempotency=False)
-    if auth is not None:
-        return auth
-    try:
-        result = _get_commercial_service(request).list_admin_members_queue(
-            member_ref=member_ref,
-            status=status,
-            account_id=account_id,
-            has_coverage_follow_up=has_coverage_follow_up,
-            disabled=disabled,
-            dev_baseline=dev_baseline,
-            never_logged_in=never_logged_in,
-            limit=limit,
-        )
-    except CommercialServiceError as error:
-        return _service_error_response(error, request=request)
-    return build_envelope(
-        status="ok",
-        message="admin members loaded",
-        data=result,
-        revision="m6",
-    )
-
-
 @router.get("/admin/accounts/{account_id}")
 async def get_admin_account(
     request: Request,
@@ -2005,7 +1923,6 @@ async def get_admin_site(
             if related_subscription_id
             else ""
         ),
-        "impersonation_href": f"/admin/impersonations?site_id={site_id}",
         "audit_href": f"/api/admin/audit-events?site_id={site_id}&limit=20",
     }
     result["commercial_follow_up"] = {
@@ -2160,168 +2077,6 @@ async def get_admin_plan(
     return build_envelope(
         status="ok",
         message="admin plan loaded",
-        data=result,
-        revision="m6",
-    )
-
-
-@router.get("/admin/topup-packs")
-async def list_admin_topup_packs(
-    request: Request,
-) -> Any:
-    auth = await authorize_internal_request(request, require_idempotency=False)
-    if auth is not None:
-        return auth
-    try:
-        result = _get_commercial_service(request).list_admin_topup_packs()
-    except CommercialServiceError as error:
-        return _service_error_response(error, request=request)
-    return build_envelope(
-        status="ok",
-        message="admin top-up packs loaded",
-        data=result,
-        revision="m6",
-    )
-
-
-@router.get("/admin/portal-action-requests")
-async def list_admin_portal_action_requests(
-    request: Request,
-    status: str = Query(default="open"),
-    request_type: str = Query(default=""),
-    account_id: str = Query(default=""),
-    site_id: str = Query(default=""),
-    limit: int = Query(default=100, ge=1, le=100),
-) -> Any:
-    auth = await authorize_internal_request(request, require_idempotency=False)
-    if auth is not None:
-        return auth
-    statuses = [item.strip() for item in str(status or "").split(",") if item.strip()]
-    try:
-        result = _get_commercial_service(request).list_portal_action_requests(
-            member_ref="",
-            account_id=account_id,
-            site_id=site_id,
-            request_type=request_type,
-            statuses=statuses,
-            limit=limit,
-        )
-    except CommercialServiceError as error:
-        return _service_error_response(error, request=request)
-    return build_envelope(
-        status="ok",
-        message="admin portal action requests loaded",
-        data=result,
-        revision="m6",
-    )
-
-
-@router.post("/admin/portal-action-requests/{request_id}/decision")
-async def decide_admin_portal_action_request(
-    request: Request,
-    request_id: str,
-    payload: PortalActionRequestDecisionPayload,
-) -> Any:
-    auth = await authorize_internal_request(request, require_idempotency=True)
-    if auth is not None:
-        return auth
-    try:
-        result = _get_commercial_service(request).decide_portal_action_request(
-            request_id=request_id,
-            decision=payload.decision,
-            decision_note=payload.decision_note,
-            audit_context=_build_audit_context(request),
-        )
-    except CommercialServiceError as error:
-        return _service_error_response(error, request=request)
-    return build_envelope(
-        status="ok",
-        message="admin portal action request decision saved",
-        data=result,
-        revision="m6",
-    )
-
-
-@router.post("/admin/topup-packs/{pack_id}")
-async def update_admin_topup_pack(
-    request: Request,
-    pack_id: str,
-    payload: TopUpPackPayload,
-) -> Any:
-    auth = await authorize_internal_request(request, require_idempotency=True)
-    if auth is not None:
-        return auth
-    audit_context = _build_audit_context(request)
-    try:
-        result = _get_commercial_service(request).update_operator_managed_points_pack(
-            pack_id=pack_id,
-            label=payload.label,
-            points_label=payload.points_label,
-            runs_increment=payload.runs_increment,
-            tokens_increment=payload.tokens_increment,
-            cost_increment=payload.cost_increment,
-            operator_note=payload.operator_note,
-            recommended_for_tiers=payload.recommended_for_tiers,
-            display_order=payload.display_order,
-            active=payload.active,
-            audit_context=audit_context,
-        )
-    except CommercialServiceError as error:
-        _record_service_failure(
-            request,
-            event_kind="topup_pack.update",
-            error=error,
-            scope_kind="topup_pack",
-            scope_id=pack_id,
-            payload_json=_build_audit_payload(payload),
-        )
-        return _service_error_response(error)
-    return build_envelope(
-        status="ok",
-        message="top-up pack updated",
-        data=_merge_receipt(
-            result,
-            _build_operator_receipt(
-                event_kind="topup_pack.update",
-                scope_kind="topup_pack",
-                scope_id=pack_id,
-                outcome="succeeded",
-                effective_summary=f"Top-up pack {pack_id} is now updated for operator use.",
-            ),
-        ),
-        revision="m6",
-    )
-
-
-@router.get("/admin/impersonations")
-async def list_admin_impersonations(
-    request: Request,
-    status: str | None = Query(default=None),
-    platform_admin_ref: str | None = Query(default=None),
-    member_ref: str | None = Query(default=None),
-    account_id: str | None = Query(default=None),
-    site_id: str | None = Query(default=None),
-    active_only: bool = Query(default=False),
-    limit: int = Query(default=100, ge=1, le=500),
-) -> Any:
-    auth = await authorize_internal_request(request, require_idempotency=False)
-    if auth is not None:
-        return auth
-    try:
-        result = _get_commercial_service(request).list_admin_platform_impersonations(
-            status=status,
-            platform_admin_ref=platform_admin_ref,
-            member_ref=member_ref,
-            account_id=account_id,
-            site_id=site_id,
-            active_only=active_only,
-            limit=limit,
-        )
-    except CommercialServiceError as error:
-        return _service_error_response(error, request=request)
-    return build_envelope(
-        status="ok",
-        message="admin impersonations loaded",
         data=result,
         revision="m6",
     )

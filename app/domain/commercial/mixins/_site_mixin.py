@@ -262,7 +262,7 @@ class CommercialServiceSiteMixin(CommercialServiceAuditMixin):
                 },
                 "next": {
                     "keys_path": f"/portal/keys?site={site.site_id}",
-                    "settings_path": f"/portal/settings?site={site.site_id}",
+                    "sites_path": f"/portal/sites?site={site.site_id}",
                 },
             }
             self._record_service_audit_in_session(
