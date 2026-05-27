@@ -54,8 +54,6 @@ services:
       MAGICK_CLOUD_DATABASE_URL: postgresql+psycopg://magick:magick@postgres:5432/magick_ai_cloud
       MAGICK_CLOUD_REDIS_URL: redis://redis:6379/0
       MAGICK_CLOUD_PORTAL_JWT_SECRET: ${MAGICK_CLOUD_PORTAL_JWT_SECRET:-dev-portal-preview-token-32-bytes}
-      MAGICK_CLOUD_RECOGNITION_EVIDENCE_SNAPSHOT_PATH: ${MAGICK_CLOUD_RECOGNITION_EVIDENCE_SNAPSHOT_PATH:-/app/.runtime/recognition-evidence-snapshot.json}
-      MAGICK_CLOUD_RECOGNITION_EVIDENCE_SOURCE_PATH: ${MAGICK_CLOUD_RECOGNITION_EVIDENCE_SOURCE_PATH:-}
     expose:
       - "8000"
     depends_on:
@@ -81,30 +79,6 @@ services:
       MAGICK_CLOUD_LOG_LEVEL: DEBUG
       MAGICK_CLOUD_DATABASE_URL: postgresql+psycopg://magick:magick@postgres:5432/magick_ai_cloud
       MAGICK_CLOUD_REDIS_URL: redis://redis:6379/0
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    volumes:
-      - .:/app
-
-  recognition-worker:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    image: magick-ai-cloud-recognition-worker:dev
-    command: python -m app.workers.recognition_evidence_refresh --daemon
-    env_file:
-      - ./.env
-      - ./.env.local
-    environment:
-      MAGICK_CLOUD_ENVIRONMENT: development
-      MAGICK_CLOUD_LOG_LEVEL: DEBUG
-      MAGICK_CLOUD_DATABASE_URL: postgresql+psycopg://magick:magick@postgres:5432/magick_ai_cloud
-      MAGICK_CLOUD_REDIS_URL: redis://redis:6379/0
-      MAGICK_CLOUD_RECOGNITION_EVIDENCE_WORKER_ENABLED: ${MAGICK_CLOUD_RECOGNITION_EVIDENCE_WORKER_ENABLED:-false}
-      MAGICK_CLOUD_RECOGNITION_EVIDENCE_WORKER_POLL_SECONDS: ${MAGICK_CLOUD_RECOGNITION_EVIDENCE_WORKER_POLL_SECONDS:-3600}
     depends_on:
       postgres:
         condition: service_healthy

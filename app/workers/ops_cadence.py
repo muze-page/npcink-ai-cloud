@@ -83,7 +83,6 @@ def _run_alert_provider_degradation_summary(settings: Settings) -> dict[str, obj
 def _run_provider_health_scan(settings: Settings) -> dict[str, object]:
     result = CatalogService(
         settings.database_url,
-        settings=settings,
         providers=resolve_live_provider_adapters(
             settings,
             include_enabled_connections=True,

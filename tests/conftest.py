@@ -6,9 +6,9 @@ from datetime import UTC, datetime
 import jwt
 from sqlalchemy import select
 
-if not os.environ.get("MAGICK_CLOUD_PROVIDER_CONNECTION_SECRET", "").strip():
-    os.environ["MAGICK_CLOUD_PROVIDER_CONNECTION_SECRET"] = (
-        "magick-cloud-provider-connection-secret-32b"
+if not os.environ.get("MAGICK_CLOUD_INTERNAL_AUTH_TOKEN", "").strip():
+    os.environ["MAGICK_CLOUD_INTERNAL_AUTH_TOKEN"] = (
+        "magick-cloud-internal-test-token-32b"
     )
 
 from app.core.config import Settings
@@ -36,7 +36,6 @@ TEST_KEY_ID = "key_default"
 TEST_INTERNAL_AUTH_TOKEN = "magick-cloud-internal-test-token-32b"
 TEST_ADMIN_SESSION_SECRET = "magick-cloud-ops-session-secret-32b"
 TEST_PORTAL_JWT_SECRET = "magick-cloud-portal-jwt-secret-32b"
-TEST_PROVIDER_CONNECTION_SECRET = "magick-cloud-provider-connection-secret-32b"
 
 
 def seed_site_auth(
@@ -63,7 +62,7 @@ def seed_site_auth(
             environment="test",
             database_url=database_url,
             redis_url="redis://localhost:6379/0",
-            provider_connection_secret=TEST_PROVIDER_CONNECTION_SECRET,
+            internal_auth_token=TEST_INTERNAL_AUTH_TOKEN,
         ),
     ).provision_runtime_baseline(
         site_id=site_id,

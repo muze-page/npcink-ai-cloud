@@ -43,7 +43,6 @@ addopts = [
   "--ignore=tests/domain/test_addon_projection_repository.py",
   "--ignore=tests/api/test_addon_routes.py",
   "--ignore=tests/workers/test_addon_projection_worker.py",
-  "--ignore=tests/workers/test_recognition_evidence_daemon.py",
 ]
 
 [tool.ruff]

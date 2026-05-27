@@ -55,20 +55,6 @@ class Settings(BaseSettings):
     alert_worker_min_requests: int = Field(default=20)
     alert_worker_error_rate_threshold: float = Field(default=0.25)
     alert_worker_latency_ms_threshold: int = Field(default=20000)
-    recognition_evidence_snapshot_path: str | None = Field(default=None)
-    recognition_evidence_source_path: str | None = Field(default=None)
-    recognition_evidence_worker_enabled: bool = Field(default=False)
-    recognition_evidence_worker_poll_seconds: int = Field(default=3600)
-    recognition_evidence_min_refresh_seconds: int = Field(default=900)
-    model_intelligence_publisher_enabled: bool = Field(default=False)
-    model_intelligence_bundle_path: str | None = Field(
-        default="/app/.runtime/model-intelligence.bundle.json"
-    )
-    model_intelligence_run_summary_path: str | None = Field(
-        default="/app/.runtime/model-intelligence.run-summary.json"
-    )
-    model_intelligence_publisher_timeout_seconds: int = Field(default=1800)
-    recognition_price_cny_per_usd: float = Field(default=7.2)
     auth_timestamp_tolerance_seconds: int = Field(default=300)
     public_post_rate_limit_window_seconds: int = Field(default=60)
     public_post_max_requests_per_window: int = Field(default=120)
@@ -93,8 +79,6 @@ class Settings(BaseSettings):
             "MAGICK_CLOUD_OPS_SESSION_SECRET",
         ),
     )
-    provider_connection_secret: str | None = Field(default=None)
-    allow_dev_provider_connection_secret_fallback: bool = Field(default=False)
     debug_local_origin_allowlist: str = Field(default="")
     browser_origin_allowlist: str = Field(default="")
     trusted_host_allowlist: str = Field(default="")
@@ -187,13 +171,6 @@ class Settings(BaseSettings):
             "MAGICK_CLOUD_OPENAI_COMPATIBLE_SAMPLE_CATALOG_PROFILE",
         ),
     )
-    openai_recognition_review_sample_catalog_profile: str = Field(
-        default="",
-        validation_alias=AliasChoices(
-            "MAGICK_CLOUD_OPENAI_RECOGNITION_REVIEW_SAMPLE_CATALOG_PROFILE",
-            "MAGICK_CLOUD_OPENAI_COMPATIBLE_RECOGNITION_REVIEW_SAMPLE_CATALOG_PROFILE",
-        ),
-    )
     litellm_provider_enabled: bool = Field(default=False)
     litellm_base_url: str | None = Field(default=None)
     litellm_api_key: str | None = Field(default=None)
@@ -210,12 +187,10 @@ class Settings(BaseSettings):
     tei_region: str = Field(default="self-hosted")
     tei_context_window: int = Field(default=8192)
     openrouter_provider_enabled: bool = Field(default=False)
-    openrouter_recognition_enabled: bool = Field(default=False)
     openrouter_base_url: str = Field(default="https://openrouter.ai/api/v1")
     openrouter_api_key: str | None = Field(default=None)
     openrouter_timeout_seconds: float = Field(default=30.0)
     openrouter_site_url: str | None = Field(default=None)
-    siliconflow_recognition_enabled: bool = Field(default=False)
     siliconflow_pricing_url: str = Field(default="https://www2.siliconflow.cn/pricing")
     siliconflow_timeout_seconds: float = Field(default=30.0)
     huggingface_base_url: str = Field(default="https://huggingface.co")
@@ -322,7 +297,6 @@ class Settings(BaseSettings):
             "internal_auth_token": self.internal_auth_token,
             "admin_bootstrap_token": self.admin_bootstrap_token,
             "admin_session_secret": self.admin_session_secret,
-            "provider_connection_secret": self.provider_connection_secret,
             "portal_jwt_secret": self.portal_jwt_secret,
         }
         for field_name, raw_value in secret_fields.items():
@@ -333,21 +307,9 @@ class Settings(BaseSettings):
             raise ValueError(
                 "allow_dev_admin_internal_token_fallback is only allowed in development/test"
             )
-        if production_like and self.allow_dev_provider_connection_secret_fallback:
-            raise ValueError(
-                "allow_dev_provider_connection_secret_fallback is only allowed in development/test"
-            )
         if production_like and str(self.openai_sample_catalog_profile or "").strip():
             raise ValueError(
                 "openai_sample_catalog_profile is only allowed in development/test"
-            )
-        if (
-            production_like
-            and str(self.openai_recognition_review_sample_catalog_profile or "").strip()
-        ):
-            raise ValueError(
-                "openai_recognition_review_sample_catalog_profile is only allowed in "
-                "development/test"
             )
         if production_like and not str(self.admin_session_secret or "").strip():
             raise ValueError(
@@ -369,10 +331,6 @@ class Settings(BaseSettings):
         ):
             raise ValueError(
                 "admin_bootstrap_token must differ from internal_auth_token outside development/test environments"
-            )
-        if production_like and not str(self.provider_connection_secret or "").strip():
-            raise ValueError(
-                "provider_connection_secret is required outside development/test environments"
             )
         if production_like and not str(self.portal_public_base_url or "").strip():
             raise ValueError(
@@ -440,14 +398,6 @@ class Settings(BaseSettings):
             raise ValueError("alert_worker_error_rate_threshold must be between 0.01 and 1.0")
         if self.alert_worker_latency_ms_threshold < 1:
             raise ValueError("alert_worker_latency_ms_threshold must be at least 1")
-        if self.recognition_evidence_worker_poll_seconds < 60:
-            raise ValueError("recognition_evidence_worker_poll_seconds must be at least 60")
-        if self.recognition_evidence_min_refresh_seconds < 60:
-            raise ValueError("recognition_evidence_min_refresh_seconds must be at least 60")
-        if self.model_intelligence_publisher_timeout_seconds < 30:
-            raise ValueError("model_intelligence_publisher_timeout_seconds must be at least 30")
-        if self.recognition_price_cny_per_usd <= 0:
-            raise ValueError("recognition_price_cny_per_usd must be greater than 0")
         if self.litellm_timeout_seconds <= 0:
             raise ValueError("litellm_timeout_seconds must be greater than 0")
         if self.vllm_timeout_seconds <= 0:
@@ -477,14 +427,6 @@ class Settings(BaseSettings):
         if self.openrouter_provider_enabled and not str(self.openrouter_api_key or "").strip():
             raise ValueError(
                 "openrouter_api_key is required when openrouter_provider_enabled is true"
-            )
-        if (
-            str(self.recognition_evidence_source_path or "").strip()
-            and not str(self.recognition_evidence_snapshot_path or "").strip()
-        ):
-            raise ValueError(
-                "recognition_evidence_snapshot_path is required when "
-                "recognition_evidence_source_path is set"
             )
         return self
 

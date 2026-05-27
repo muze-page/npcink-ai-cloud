@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import sys
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -8,15 +9,18 @@ from alembic import command
 from alembic.config import Config
 from sqlalchemy import create_engine, text
 
+from app.core.config import get_settings
+
 
 def _sqlite_url(tmp_path: Path) -> str:
     return f"sqlite+pysqlite:///{tmp_path / 'identity-role-migration.sqlite3'}"
 
 
 def _alembic_config(database_url: str) -> Config:
-    config = Config("../../../cloud/alembic.ini")
+    root_dir = Path(__file__).resolve().parents[2]
+    config = Config(str(root_dir / "alembic.ini"))
     config.set_main_option("sqlalchemy.url", database_url)
-    config.set_main_option("script_location", "../../../cloud/migrations")
+    config.set_main_option("script_location", str(root_dir / "migrations"))
     return config
 
 
@@ -24,6 +28,11 @@ def test_identity_role_collapse_migration_rewrites_historical_values(tmp_path: P
     database_url = _sqlite_url(tmp_path)
     previous_database_url = os.environ.get("MAGICK_CLOUD_DATABASE_URL")
     os.environ["MAGICK_CLOUD_DATABASE_URL"] = database_url
+
+    # Clear cached settings so migrations/env.py sees the updated env var.
+    get_settings.cache_clear()
+    if "migrations.env" in sys.modules:
+        del sys.modules["migrations.env"]
 
     try:
         config = _alembic_config(database_url)
@@ -124,7 +133,7 @@ def test_identity_role_collapse_migration_rewrites_historical_values(tmp_path: P
                 },
             )
 
-        command.upgrade(config, "head")
+        command.upgrade(config, "20260412_0023")
 
         with engine.connect() as connection:
             membership_role = connection.execute(

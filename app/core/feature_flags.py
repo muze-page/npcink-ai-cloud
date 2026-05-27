@@ -51,21 +51,6 @@ def _default_flag_definitions(settings: Settings) -> tuple[FeatureFlagDefinition
             description="Portal billing stays read-only and operator-mediated.",
         ),
         FeatureFlagDefinition(
-            key="model_ops.publisher.enabled",
-            enabled=bool(settings.model_intelligence_publisher_enabled),
-            description="Model intelligence publisher worker is enabled.",
-        ),
-        FeatureFlagDefinition(
-            key="recognition.legacy_worker.enabled",
-            enabled=bool(settings.recognition_evidence_worker_enabled),
-            description="Legacy recognition evidence worker is enabled.",
-        ),
-        FeatureFlagDefinition(
-            key="recognition.openrouter.enabled",
-            enabled=bool(settings.openrouter_recognition_enabled),
-            description="OpenRouter-backed recognition refresh path is enabled.",
-        ),
-        FeatureFlagDefinition(
             key="admin.dev_internal_token_fallback.enabled",
             enabled=bool(settings.allow_dev_admin_internal_token_fallback),
             description="Development-only internal admin token fallback is enabled.",

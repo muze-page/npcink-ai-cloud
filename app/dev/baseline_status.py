@@ -111,14 +111,6 @@ def get_required_schema() -> dict[str, list[str]]:
             "status_code",
             "created_at",
         ],
-        "provider_connections": [
-            "connection_id",
-            "provider_type",
-            "source_role",
-            "enabled",
-            "base_url",
-            "status",
-        ],
     }
 
 

@@ -32,7 +32,8 @@ COOKIE_SESSION_EXPIRES_AT = "magick_portal_session_expires_at"
 
 
 def get_commercial_service(request: Request) -> CommercialService:
-    return CommercialService(get_cloud_services(request).settings.database_url)
+    services = get_cloud_services(request)
+    return CommercialService(services.settings.database_url, settings=services.settings)
 
 
 def portal_auth_mode(request: Request) -> str:

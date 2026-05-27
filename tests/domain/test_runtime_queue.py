@@ -29,7 +29,6 @@ from app.domain.runtime.models import (
 )
 from app.domain.runtime.service import RuntimeService
 from tests.conftest import seed_site_auth
-from tests.conftest import TEST_PROVIDER_CONNECTION_SECRET
 
 
 def _sqlite_url(tmp_path: Path) -> str:
@@ -49,7 +48,6 @@ def _runtime_service(
             database_url=database_url,
             redis_url="redis://localhost:6379/0",
             internal_auth_token="i" * 32,
-            provider_connection_secret=TEST_PROVIDER_CONNECTION_SECRET,
         )
     return RuntimeService(database_url, settings=settings, **kwargs)
 
@@ -821,7 +819,10 @@ def test_callback_dispatch_recovery_logs_audit_failure_but_keeps_recovery_flow(
         callback_retry_backoff_seconds=0,
     )
 
+    call_count = 0
     def raise_audit_failure(*args: object, **kwargs: object) -> None:
+        nonlocal call_count
+        call_count += 1
         raise RuntimeError("audit write failed")
 
     monkeypatch.setattr(

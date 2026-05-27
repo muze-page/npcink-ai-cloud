@@ -27,8 +27,6 @@ GA-style customer billing front-office narrative.
 ### Marketing
 
 - `/`
-- `/features`
-- `/getting-started`
 
 ### Portal
 
@@ -38,7 +36,6 @@ GA-style customer billing front-office narrative.
 - `/portal/usage`
 - `/portal/billing`
 - `/portal/audit`
-- `/portal/settings`
 
 ### Admin
 
@@ -47,7 +44,6 @@ GA-style customer billing front-office narrative.
 - `/admin/accounts`
 - `/admin/sites`
 - `/admin/subscriptions`
-- `/admin/impersonations`
 - `/admin/plans`
 
 ### BFF / Auth / Health Handlers

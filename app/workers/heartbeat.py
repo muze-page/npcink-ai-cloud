@@ -16,10 +16,7 @@ EXPECTED_WORKER_IDS = (
 
 
 def expected_worker_ids(settings: Settings) -> tuple[str, ...]:
-    worker_ids = list(EXPECTED_WORKER_IDS)
-    if settings.recognition_evidence_worker_enabled or settings.model_intelligence_publisher_enabled:
-        worker_ids.append("recognition_evidence")
-    return tuple(worker_ids)
+    return EXPECTED_WORKER_IDS
 
 
 def _parse_timestamp(value: object) -> datetime | None:

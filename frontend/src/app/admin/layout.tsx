@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useState, useCallback, useRef } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { cn } from '@/lib/utils';
@@ -17,8 +17,6 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
   const { t } = useLocale();
   const isLoginPage = pathname === '/admin/login';
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
-  const [isMoreMenuOpen, setIsMoreMenuOpen] = useState(false);
-  const moreMenuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (!mobileNavOpen) {
@@ -41,35 +39,9 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
     };
   }, [mobileNavOpen]);
 
-  useEffect(() => {
-    setIsMoreMenuOpen(false);
-  }, [pathname]);
 
-  useEffect(() => {
-    if (!isMoreMenuOpen) {
-      return;
-    }
 
-    const handlePointerDown = (event: MouseEvent) => {
-      if (moreMenuRef.current && !moreMenuRef.current.contains(event.target as Node)) {
-        setIsMoreMenuOpen(false);
-      }
-    };
 
-    const handleEscape = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        setIsMoreMenuOpen(false);
-      }
-    };
-
-    document.addEventListener('mousedown', handlePointerDown);
-    document.addEventListener('keydown', handleEscape);
-
-    return () => {
-      document.removeEventListener('mousedown', handlePointerDown);
-      document.removeEventListener('keydown', handleEscape);
-    };
-  }, [isMoreMenuOpen]);
 
   const toggleMobileNav = useCallback(() => {
     setMobileNavOpen((current) => !current);
@@ -83,10 +55,6 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
     { href: '/admin/plans', label: t('common.package', {}, 'Package') },
   ];
 
-  const secondaryNavItems = [
-    { href: '/admin/model-intelligence', label: t('admin.model_intelligence', {}, 'Model intelligence') },
-  ];
-
   const isActive = (href: string) => {
     if (href === '/admin') {
       return pathname === '/admin';
@@ -95,7 +63,6 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
     return pathname === href || pathname.startsWith(`${href}/`);
   };
   const activePrimaryItem = primaryNavItems.find((item) => isActive(item.href)) ?? primaryNavItems[0];
-  const activeSecondaryItem = secondaryNavItems.find((item) => isActive(item.href)) ?? null;
 
   if (isLoginPage) {
     return (
@@ -220,48 +187,14 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
                   ))}
                 </nav>
               </div>
-              <div ref={moreMenuRef} className="relative shrink-0">
-                <button
-                  type="button"
-                  aria-haspopup="menu"
-                  aria-expanded={isMoreMenuOpen}
-                  className="rounded-full px-3 py-2 text-sm font-medium text-slate-600 transition-all hover:bg-slate-100 hover:text-slate-900 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-white"
-                  onClick={() => setIsMoreMenuOpen((current) => !current)}
-                >
-                  {t('portal.nav_more', {}, 'More')}
-                </button>
-                {isMoreMenuOpen ? (
-                  <div
-                    className="absolute left-0 top-full z-10 mt-2 min-w-48 rounded-2xl border border-slate-200/80 bg-white p-2 shadow-xl dark:border-slate-800 dark:bg-slate-950"
-                    role="menu"
-                  >
-                    {secondaryNavItems.map((item) => (
-                      <Link
-                        key={item.href}
-                        href={item.href}
-                        prefetch={false}
-                        role="menuitem"
-                        onClick={() => setIsMoreMenuOpen(false)}
-                        className={cn(
-                          'block rounded-xl px-3 py-2 text-sm font-medium transition-colors',
-                          isActive(item.href)
-                            ? 'bg-slate-900 text-white dark:bg-blue-500 dark:text-slate-950'
-                            : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-white'
-                        )}
-                      >
-                        {item.label}
-                      </Link>
-                    ))}
-                  </div>
-                ) : null}
-              </div>
+
             </div>
             <div className="min-w-0 max-w-sm text-right">
               <p className="text-[0.62rem] font-semibold uppercase tracking-[0.2em] text-slate-500 dark:text-slate-400">
                 {t('admin.operator_surface', {}, 'Operator surface')}
               </p>
               <p className="truncate text-sm text-slate-600 dark:text-slate-300">
-                {activeSecondaryItem ? `${activePrimaryItem.label} / ${activeSecondaryItem.label}` : activePrimaryItem.label}
+                {activePrimaryItem.label}
               </p>
             </div>
           </div>
@@ -289,29 +222,6 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
                 </p>
                 <div className="space-y-2">
                   {primaryNavItems.map((item) => (
-                    <Link
-                      key={item.href}
-                      href={item.href}
-                      prefetch={false}
-                      className={cn(
-                        'block rounded-2xl px-4 py-3 text-sm font-medium transition-colors',
-                        isActive(item.href)
-                          ? 'bg-slate-900 text-white dark:bg-blue-500 dark:text-slate-950'
-                          : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-white'
-                      )}
-                      onClick={() => setMobileNavOpen(false)}
-                    >
-                      {item.label}
-                    </Link>
-                  ))}
-                </div>
-              </div>
-              <div className="space-y-2">
-                <p className="text-[0.68rem] font-bold uppercase tracking-[0.22em] text-slate-500 dark:text-slate-400">
-                  {t('portal.nav_more', {}, 'More')}
-                </p>
-                <div className="space-y-2">
-                  {secondaryNavItems.map((item) => (
                     <Link
                       key={item.href}
                       href={item.href}

@@ -94,12 +94,10 @@ health, and cloud service entitlements, but they must not duplicate plugin
 admin surfaces such as abilities, workflows, MCP, OpenClaw, or other
 feature-control pages.
 
-Model operations admin information architecture is frozen separately in
-[`magick-ai/docs/contracts/cloud-model-ops-information-architecture-v1.md`](../magick-ai/docs/contracts/cloud-model-ops-information-architecture-v1.md).
-That contract makes `/admin/model-ops` the unified workspace entry, while
-keeping `连接源 / Source connections`, `模型情报 / Model intelligence`, and
-`平台模型 / Platform models` as deep working surfaces without turning Cloud into a
-second control plane.
+Model operations admin surfaces (provider connections, model intelligence,
+recognition review, and platform model ops console) have been removed.
+`catalog/platform-models` is retained only as runtime metadata, not as a
+platform model operations console.
 
 ## Identity Contract
 
@@ -301,10 +299,7 @@ and container execution. It is not a git-tracked source of truth.
 
 - Runtime outputs stay under `cloud/.runtime/**`.
 - Test fixtures belong under `cloud/tests/fixtures/runtime/**`.
-- Container defaults such as `/app/.runtime/model-intelligence.bundle.json`
-  remain runtime output paths, not fixture paths.
-
-If you need sample bundle or recognition payloads for a test, add them under
+If you need sample payloads for a test, add them under
 `cloud/tests/fixtures/runtime/**` and load them explicitly from the test. Do not
 commit new files under `cloud/.runtime/**`.
 
@@ -409,15 +404,9 @@ docker compose -f docker-compose.dev.yml up --build
 ```
 
 Keep local-only debug credentials such as `MAGICK_CLOUD_INTERNAL_AUTH_TOKEN`,
-`MAGICK_CLOUD_ADMIN_BOOTSTRAP_TOKEN`, `MAGICK_CLOUD_ADMIN_SESSION_SECRET`, `MAGICK_CLOUD_PROVIDER_CONNECTION_SECRET`,
-and `MAGICK_CLOUD_PORTAL_JWT_SECRET` in `cloud/.env.local` for dev Docker runs.
+`MAGICK_CLOUD_ADMIN_BOOTSTRAP_TOKEN`, `MAGICK_CLOUD_ADMIN_SESSION_SECRET`,and `MAGICK_CLOUD_PORTAL_JWT_SECRET` in `cloud/.env.local` for dev Docker runs.
 `cloud/.env.local` is gitignored, while production-style deploy helpers read
 `cloud/.env.deploy` instead.
-
-`MAGICK_CLOUD_PROVIDER_CONNECTION_SECRET` is recommended whenever `/admin/providers`
-is enabled, because provider connection secrets are stored encrypted in the DB.
-If it is unset, Cloud falls back to the admin/session secret chain, which is
-acceptable for bounded local dev but not ideal as a long-term deployment default.
 
 Recognition intelligence sources can also pull Ollama metadata in two modes:
 
@@ -431,104 +420,13 @@ Recognition intelligence sources can also pull Ollama metadata in two modes:
   - `MAGICK_CLOUD_OLLAMA_CATALOG_LIMIT=250`
 
 The allowlist mode is best for private nodes you actually run. The catalog mode
-is best for `/admin/model-intelligence` when you want to enrich model intelligence from
-the official Ollama library without turning Ollama into a platform execution
-source. `/admin/recognition` remains a compatibility-only alias.
-
-## Model Intelligence Publisher
-
-The preferred intelligence path is the internal Cloud publisher in
-`cloud/app/model_intelligence/publisher/**`.
-
-Current freeze:
-
-- `cloud/app/model_intelligence/publisher/**` is the publisher primary implementation
-- Cloud is the default intelligence inspect/review/distribution surface
-- Cloud is not a second intelligence control plane and must keep bundle truth read-only
-
-Cloud should run the publisher as a bounded job host plus freshness/status
-surface. It must not fold publisher truth back into hosted runtime or provider
-execution truth. Recommended environment variables:
-
-```bash
-MAGICK_CLOUD_MODEL_INTELLIGENCE_PUBLISHER_ENABLED=true
-MAGICK_CLOUD_MODEL_INTELLIGENCE_BUNDLE_PATH=/app/.runtime/model-intelligence.bundle.json
-MAGICK_CLOUD_MODEL_INTELLIGENCE_RUN_SUMMARY_PATH=/app/.runtime/model-intelligence.run-summary.json
-MAGICK_CLOUD_MODEL_INTELLIGENCE_PUBLISHER_TIMEOUT_SECONDS=1800
-MAGICK_CLOUD_RECOGNITION_EVIDENCE_WORKER_ENABLED=false
-```
-
-Canonical host expectation:
-
-- `api` and `recognition-worker` receive the same publisher env so operators can
-  refresh, inspect, and daemon-run the same bundle path without hand-editing
-  container-local paths
-- `scripts/remote-preview-mini.sh --verify-publisher` verifies refresh + inspect
-  against the internal publisher path, not against an external workspace mount
-- publisher remains disabled by default; enabling it should not require any
-  additional path discovery beyond toggling
-  `MAGICK_CLOUD_MODEL_INTELLIGENCE_PUBLISHER_ENABLED=true`
-
-Internal routes:
-
-- `POST /internal/catalog/intelligence/publisher/refresh`
-- `GET /internal/catalog/intelligence/publisher`
-
-The inspect route is expected to expose at least:
-
-- bundle existence
-- latest generated time
-- freshness status
-- source list and failed sources
-- latest persisted publication metadata
-
-Recommended MINI operator replay:
-
-```bash
-cd ../..
-MAGICK_CLOUD_MODEL_INTELLIGENCE_PUBLISHER_ENABLED=true \
-  bash scripts/remote-preview-mini.sh --build-remote --verify-publisher
-```
-
-This is the current real-world acceptance path for the bounded Cloud publisher
-host. It proves:
-
-- database migrations ran before preview declared success
-- `api`, `worker`, and `frontend` stayed running
-- publisher refresh completed successfully
-- publisher inspect reported `configured=true` and `bundle_exists=true`
-
-The legacy recognition evidence worker remains compatibility-only. New model
-intelligence sources should go to `cloud/app/model_intelligence/publisher/sources/**` first.
-
-Recognition intelligence can also pull public SiliconFlow catalog + pricing
-metadata without storing provider secrets:
-
-- `MAGICK_CLOUD_SILICONFLOW_RECOGNITION_ENABLED=true`
-- `MAGICK_CLOUD_SILICONFLOW_PRICING_URL=https://www2.siliconflow.cn/pricing`
-- `MAGICK_CLOUD_SILICONFLOW_TIMEOUT_SECONDS=30`
-
-This source currently treats SiliconFlow's public pricing page as a read-only
-intelligence source for `/admin/model-intelligence` (compatibility alias:
-`/admin/recognition`) and the public `recognition-intelligence` bundle. It is
-intended for model capability + rough price reference, not billing truth.
-
-Current migration direction:
-
-- publisher bundle remains the preferred intelligence publication path
-- cloud `/admin/model-intelligence` is the preferred operator-facing review path
-- plugin/local consumers may move to cloud-first consumption only when freshness
-  and fallback behavior are both verified
-- cloud recognition worker is legacy/compat only and stays disabled by default
-
-See [cloud-model-intelligence-publisher-v1.md](../magick-ai/docs/contracts/cloud-model-intelligence-publisher-v1.md) and [cloud-recognition-migration-freeze-v1.md](../magick-ai/docs/contracts/cloud-recognition-migration-freeze-v1.md).
+is not used for admin model intelligence surfaces; those have been removed.
 
 For production-style remote deploys, start from [cloud/.env.example](../../cloud/.env.example), then copy it to `cloud/.env.deploy` or another deploy env file. Production-style config now fails fast when these are missing:
 
 - `MAGICK_CLOUD_INTERNAL_AUTH_TOKEN`
 - `MAGICK_CLOUD_ADMIN_BOOTSTRAP_TOKEN`
 - `MAGICK_CLOUD_ADMIN_SESSION_SECRET`
-- `MAGICK_CLOUD_PROVIDER_CONNECTION_SECRET`
 - `MAGICK_CLOUD_PORTAL_JWT_SECRET`
 - `MAGICK_CLOUD_PORTAL_PUBLIC_BASE_URL`
 - `MAGICK_CLOUD_PORTAL_EMAIL_SMTP_HOST`
@@ -542,8 +440,6 @@ Additional hardening rules now enforced:
 - trusted host / forwarded host validation no longer assumes ingress is always configured correctly
 - callback registration and dispatch only accept `https://` targets that resolve to public IP space
 - `MAGICK_CLOUD_DEBUG_LOCAL_ORIGIN_ALLOWLIST` defaults to empty and only applies in `development` / `test`
-- provider secret fallback is disabled by default; only explicit non-prod
-  `allow_dev_provider_connection_secret_fallback` can re-enable a fallback chain
 
 ## Release Smoke
 
@@ -631,37 +527,6 @@ Health endpoints:
 If you need `/internal/*` routes in dev or prod, set
 `MAGICK_CLOUD_INTERNAL_AUTH_TOKEN`. Internal routes fail closed when the token is
 not configured.
-
-## Provider Connections
-
-Cloud now exposes a bounded operator-only upstream connection surface:
-
-- `/admin/providers`
-
-This surface is intentionally separate from:
-
-- `/admin/models`
-  - Hosted Catalog metadata curation
-- `/admin/model-intelligence`
-  - Recognition Review (compatibility alias: `/admin/recognition`)
-
-`/admin/providers` only handles:
-
-- provider source connection config
-- encrypted provider secret storage
-- `Test connection`
-- `Sync hosted catalog`
-
-It must not be used as:
-
-- a second runtime control plane
-- a WordPress truth/config console
-- a multi-environment secret platform
-
-See:
-
-- [cloud-provider-connections-console-v1.md](../magick-ai/docs/contracts/cloud-provider-connections-console-v1.md)
-- [cloud-provider-integration-matrix-v1.md](../magick-ai/docs/contracts/cloud-provider-integration-matrix-v1.md)
 
 Portal member auth:
 
@@ -1348,35 +1213,6 @@ Release readiness should now prefer `GET /health/operational-ready` over
 `GET /health/ready`; the former enforces fresh worker heartbeats, fresh cadence
 tasks, and fresh provider health in addition to DB/Redis reachability.
 
-For hosted recognition metadata refresh, `python -m app.workers.recognition_evidence_daemon`
-acts as a bounded polling worker. It reuses the same refresh path as
-`POST /internal/catalog/recognition/evidence/refresh`, writes a local snapshot to
-`MAGICK_CLOUD_RECOGNITION_EVIDENCE_SNAPSHOT_PATH`, and can merge evidence from
-LiteLLM, OpenRouter model metadata, Hugging Face allowlists, and optional Ollama
-private-node allowlists.
-This remains read-only metadata ingest; WordPress still owns final local merge
-truth, review behavior, and user overrides. Enable it explicitly with:
-
-```bash
-export MAGICK_CLOUD_RECOGNITION_EVIDENCE_WORKER_ENABLED=true
-export MAGICK_CLOUD_RECOGNITION_EVIDENCE_WORKER_POLL_SECONDS=3600
-export MAGICK_CLOUD_RECOGNITION_EVIDENCE_SNAPSHOT_PATH=/app/.runtime/recognition-evidence-snapshot.json
-export MAGICK_CLOUD_RECOGNITION_EVIDENCE_MIN_REFRESH_SECONDS=900
-export MAGICK_CLOUD_RECOGNITION_PRICE_CNY_PER_USD=7.2
-export MAGICK_CLOUD_OPENROUTER_RECOGNITION_ENABLED=true
-export MAGICK_CLOUD_OPENROUTER_SITE_URL=https://your-cloud.example
-export MAGICK_CLOUD_LITELLM_BASE_URL=https://your-litellm.example
-export MAGICK_CLOUD_HUGGINGFACE_MODEL_ALLOWLIST=black-forest-labs/FLUX.1-dev,llava-hf/llava-1.5-7b-hf
-export MAGICK_CLOUD_OLLAMA_BASE_URL=http://host.docker.internal:11434
-export MAGICK_CLOUD_OLLAMA_MODEL_ALLOWLIST=llava:13b,bge-m3:latest
-python -m app.workers.recognition_evidence_daemon
-```
-
-`/admin/model-intelligence` now treats price metadata as model intelligence. Prices are
-stored with `USD` as the base currency (`price_input` / `price_output`, per
-1M tokens) and the operator UI can toggle between `USD` and `CNY` using
-`MAGICK_CLOUD_RECOGNITION_PRICE_CNY_PER_USD` as the display conversion rate.
-
 From the repository root you can also use:
 
 ```bash
@@ -1394,7 +1230,6 @@ From `cloud/`, you can also run:
 ```bash
 make router-performance
 make router-diagnostics
-make recognition-refresh
 make latency-probe
 make alert-provider-degradation
 ```

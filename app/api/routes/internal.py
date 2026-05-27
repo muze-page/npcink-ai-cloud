@@ -7,20 +7,11 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from app.adapters.notifications.base import PortalEmailDeliveryError
-from app.adapters.providers.registry import (
-    build_recognition_review_provider_adapters,
-    resolve_live_provider_adapters,
-)
+from app.adapters.providers.registry import resolve_live_provider_adapters
 from app.api.auth import authorize_internal_request
 from app.api.envelope import build_envelope
 from app.core.services import CloudServices
-from app.domain.catalog.recognition import inspect_upstream_evidence_snapshot
 from app.domain.catalog.service import CatalogService
-from app.workers.model_intelligence_publisher import (
-    inspect_publisher_state,
-    run_once as run_model_intelligence_publisher,
-)
-from app.workers.recognition_evidence_refresh import run_once as run_recognition_evidence_refresh
 
 router = APIRouter(prefix="/internal", tags=["internal"])
 
@@ -46,8 +37,6 @@ def _get_catalog_service(request: Request) -> CatalogService:
             base_providers=typed_services.providers,
             include_enabled_connections=True,
         ),
-        recognition_review_providers=build_recognition_review_provider_adapters(typed_services.settings),
-        recognition_evidence_snapshot_path=typed_services.settings.recognition_evidence_snapshot_path,
     )
 
 
@@ -90,84 +79,6 @@ async def refresh_catalog(
         message="catalog refreshed",
         data=result,
         revision=result["revision"],
-    )
-
-
-@router.post("/catalog/recognition/evidence/refresh")
-async def refresh_catalog_recognition_evidence(request: Request) -> Any:
-    auth = await authorize_internal_request(
-        request,
-        require_idempotency=True,
-    )
-    if auth is not None:
-        return auth
-
-    services = _get_cloud_services(request)
-    result = run_recognition_evidence_refresh(services.settings)
-
-    return build_envelope(
-        status="ok",
-        message="catalog recognition evidence refreshed",
-        data=result,
-    )
-
-
-@router.post("/catalog/intelligence/publisher/refresh")
-async def refresh_model_intelligence_publisher(request: Request) -> Any:
-    auth = await authorize_internal_request(
-        request,
-        require_idempotency=True,
-    )
-    if auth is not None:
-        return auth
-
-    services = _get_cloud_services(request)
-    result = run_model_intelligence_publisher(services.settings)
-
-    return build_envelope(
-        status="ok",
-        message="model intelligence publisher refreshed",
-        data=result,
-    )
-
-
-@router.get("/catalog/intelligence/publisher")
-async def get_model_intelligence_publisher_state(request: Request) -> Any:
-    auth = await authorize_internal_request(
-        request,
-        require_idempotency=False,
-    )
-    if auth is not None:
-        return auth
-
-    services = _get_cloud_services(request)
-    result = inspect_publisher_state(services.settings)
-
-    return build_envelope(
-        status="ok",
-        message="model intelligence publisher state loaded",
-        data=result,
-    )
-
-
-@router.get("/catalog/recognition/evidence")
-async def get_catalog_recognition_evidence(request: Request) -> Any:
-    auth = await authorize_internal_request(
-        request,
-        require_idempotency=False,
-    )
-    if auth is not None:
-        return auth
-
-    services = _get_cloud_services(request)
-    result = inspect_upstream_evidence_snapshot(
-        services.settings.recognition_evidence_snapshot_path,
-    )
-
-    return build_envelope(
-        status="ok",
-        message="catalog recognition evidence loaded",
-        data=result,
     )
 
 

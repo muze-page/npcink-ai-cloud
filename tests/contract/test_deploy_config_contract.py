@@ -27,7 +27,6 @@ def test_prod_env_files_use_canonical_admin_and_openai_names() -> None:
         assert "MAGICK_CLOUD_WORKER_HEARTBEAT_INTERVAL_SECONDS" in text or text is checklist_text
         assert "MAGICK_CLOUD_PROVIDER_HEALTH_SCAN_INTERVAL_SECONDS" in text or text is checklist_text
         assert "MAGICK_CLOUD_OTEL_TRACE_SINK_OTLP_ENDPOINT" in text or text is checklist_text
-        assert "MAGICK_CLOUD_PROVIDER_CONNECTION_SECRET" in text
         assert "MAGICK_CLOUD_OPENAI_BASE_URL" in text or text is checklist_text
 
     assert "callback-worker:" in compose_text
@@ -65,8 +64,6 @@ def test_env_example_production_payload_validates_with_canonical_names(
         + ("b" * 32),
         "MAGICK_CLOUD_ADMIN_SESSION_SECRET=": "MAGICK_CLOUD_ADMIN_SESSION_SECRET="
         + ("a" * 32),
-        "MAGICK_CLOUD_PROVIDER_CONNECTION_SECRET=": "MAGICK_CLOUD_PROVIDER_CONNECTION_SECRET="
-        + ("p" * 32),
         "MAGICK_CLOUD_PORTAL_JWT_SECRET=": "MAGICK_CLOUD_PORTAL_JWT_SECRET=" + ("j" * 32),
         "MAGICK_CLOUD_PORTAL_PUBLIC_BASE_URL=": "MAGICK_CLOUD_PORTAL_PUBLIC_BASE_URL=https://cloud.example.com",
         "MAGICK_CLOUD_PORTAL_EMAIL_SMTP_HOST=": "MAGICK_CLOUD_PORTAL_EMAIL_SMTP_HOST=smtp.example.com",
@@ -87,7 +84,6 @@ def test_env_example_production_payload_validates_with_canonical_names(
     assert settings.worker_heartbeat_interval_seconds == 60
     assert settings.provider_health_scan_interval_seconds == 900
     assert settings.otel_trace_sink_otlp_endpoint == "jaeger:4317"
-    assert settings.provider_connection_secret == "p" * 32
     assert settings.openai_base_url == "https://api.openai.com/v1"
 
 
@@ -99,7 +95,6 @@ def test_settings_accept_legacy_admin_and_openai_env_aliases(monkeypatch) -> Non
     monkeypatch.setenv("MAGICK_CLOUD_ADMIN_BOOTSTRAP_TOKEN", "b" * 32)
     monkeypatch.setenv("MAGICK_CLOUD_ADMIN_SESSION_SECRET", "a" * 32)
     monkeypatch.setenv("MAGICK_CLOUD_OPS_SESSION_SECRET", "a" * 32)
-    monkeypatch.setenv("MAGICK_CLOUD_PROVIDER_CONNECTION_SECRET", "p" * 32)
     monkeypatch.setenv("MAGICK_CLOUD_PORTAL_JWT_SECRET", "j" * 32)
     monkeypatch.setenv("MAGICK_CLOUD_PORTAL_PUBLIC_BASE_URL", "https://cloud.example.com")
     monkeypatch.setenv("MAGICK_CLOUD_PORTAL_EMAIL_SMTP_HOST", "smtp.example.com")
@@ -132,7 +127,7 @@ def test_preview_and_baseline_scripts_lock_migration_and_schema_checks() -> None
 
     assert "alembic upgrade head" in preview_script
     assert "python -m app.dev.baseline_status" in preview_script
-    assert 'SERVICES="${SERVICES:-api worker callback-worker ops-worker recognition-worker frontend}"' in preview_script
+    assert 'SERVICES="${SERVICES:-api worker callback-worker ops-worker frontend}"' in preview_script
     assert "for service in ${SERVICES}; do" in preview_script
     assert 'fatal startup log detected' in preview_script
     assert "MAGICK_CLOUD_TRUSTED_HOST_ALLOWLIST" in preview_script

@@ -28,7 +28,6 @@ from app.domain.runtime.service import RuntimeService
 from app.workers.ops_cadence import run_due_tasks
 from tests.conftest import (
     TEST_INTERNAL_AUTH_TOKEN,
-    TEST_PROVIDER_CONNECTION_SECRET,
     build_auth_headers,
     build_internal_headers,
     merge_json_headers,
@@ -55,7 +54,6 @@ def _build_client(
         database_url=database_url,
         redis_url="redis://localhost:6379/0",
         internal_auth_token=TEST_INTERNAL_AUTH_TOKEN,
-        provider_connection_secret=TEST_PROVIDER_CONNECTION_SECRET,
         **(settings_overrides or {}),
     )
     return database_url, TestClient(create_app(CloudServices(settings=settings)))
@@ -67,7 +65,6 @@ def _runtime_service_settings(database_url: str) -> Settings:
         database_url=database_url,
         redis_url="redis://localhost:6379/0",
         internal_auth_token=TEST_INTERNAL_AUTH_TOKEN,
-        provider_connection_secret=TEST_PROVIDER_CONNECTION_SECRET,
     )
 
 
@@ -1628,50 +1625,6 @@ def test_service_routes_expose_observability_summary(tmp_path: Path) -> None:
     assert "summary" in payload["runtime"]
     assert "backlog" in payload["runtime"]
 
-    dispose_engine(database_url)
-
-
-def test_service_routes_observability_summary_includes_recognition_worker_when_enabled(
-    tmp_path: Path,
-) -> None:
-    database_url, client = _build_client(
-        tmp_path,
-        settings_overrides={
-            "worker_heartbeat_interval_seconds": 60,
-            "recognition_evidence_worker_enabled": True,
-        },
-    )
-    settings = Settings(
-        environment="test",
-        database_url=database_url,
-        redis_url="redis://localhost:6379/0",
-        internal_auth_token=TEST_INTERNAL_AUTH_TOKEN,
-        provider_connection_secret=TEST_PROVIDER_CONNECTION_SECRET,
-        recognition_evidence_worker_enabled=True,
-    )
-    CommercialService(database_url, settings=settings).record_service_audit_event(
-        audit_context=ServiceAuditContext(
-            trace_id="",
-            idempotency_key="",
-            method="POST",
-            path="/internal/workers/recognition_evidence/heartbeat",
-            actor_kind="system_worker",
-            actor_ref="recognition_evidence",
-        ),
-        event_kind="worker.heartbeat",
-        outcome="succeeded",
-        scope_kind="worker",
-        scope_id="recognition_evidence",
-        payload_json={"worker_id": "recognition_evidence", "status": "idle"},
-    )
-    response = client.get(
-        "/internal/service/observability/summary",
-        headers=build_internal_headers(),
-    )
-    assert response.status_code == 200
-    payload = response.json()["data"]
-    assert payload["workers"]["totals"]["workers_total"] == 4
-    assert any(item["worker_id"] == "recognition_evidence" for item in payload["workers"]["items"])
     dispose_engine(database_url)
 
 

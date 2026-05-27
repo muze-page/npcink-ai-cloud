@@ -10,29 +10,9 @@ from cryptography.fernet import Fernet, InvalidToken
 from app.core.config import Settings
 
 
-def resolve_provider_connection_secret(settings: Settings) -> str:
-    secret = str(settings.provider_connection_secret or "").strip()
-    if secret:
-        return secret
-
-    environment = str(settings.environment or "").strip().lower()
-    if environment in {"development", "test"} and settings.allow_dev_provider_connection_secret_fallback:
-        return _resolve_encryption_secret(
-            (
-                settings.admin_session_secret,
-                settings.portal_jwt_secret,
-                settings.internal_auth_token,
-            ),
-            error_message="provider connection secret is not configured",
-        )
-
-    raise RuntimeError("provider connection secret is not configured")
-
-
 def resolve_runtime_terminal_callback_secret(settings: Settings) -> str:
     return _resolve_encryption_secret(
         (
-            settings.provider_connection_secret,
             settings.admin_session_secret,
             settings.portal_jwt_secret,
             settings.internal_auth_token,
@@ -69,7 +49,14 @@ def encrypt_site_api_signing_secret(secret: str, *, settings: Settings) -> str:
     if not normalized:
         return ""
     return _build_fernet(
-        resolve_provider_connection_secret(settings),
+        _resolve_encryption_secret(
+            (
+                settings.admin_session_secret,
+                settings.portal_jwt_secret,
+                settings.internal_auth_token,
+            ),
+            error_message="site api signing secret is not configured",
+        ),
         purpose="site_api_key_signing_secret",
     ).encrypt(normalized.encode("utf-8")).decode("utf-8")
 
@@ -80,7 +67,14 @@ def decrypt_site_api_signing_secret(ciphertext: str | None, *, settings: Setting
         return ""
     try:
         return _build_fernet(
-            resolve_provider_connection_secret(settings),
+            _resolve_encryption_secret(
+                (
+                    settings.admin_session_secret,
+                    settings.portal_jwt_secret,
+                    settings.internal_auth_token,
+                ),
+                error_message="site api signing secret is not configured",
+            ),
             purpose="site_api_key_signing_secret",
         ).decrypt(token.encode("utf-8")).decode("utf-8")
     except InvalidToken as error:
@@ -122,13 +116,6 @@ def decrypt_runtime_execution_input(
     return decoded if isinstance(decoded, dict) else {}
 
 
-def resolve_provider_connection_secret_strict(settings: Settings) -> str:
-    secret = str(settings.provider_connection_secret or "").strip()
-    if secret:
-        return secret
-    raise RuntimeError("provider connection secret is not configured")
-
-
 def _resolve_encryption_secret(
     candidates: Iterable[str | None],
     *,
@@ -139,28 +126,6 @@ def _resolve_encryption_secret(
         if secret:
             return secret
     raise RuntimeError(error_message)
-
-
-def encrypt_provider_connection_secret(secret: str, *, settings: Settings) -> str:
-    normalized = str(secret or "")
-    if not normalized:
-        return ""
-    return _build_provider_fernet(settings).encrypt(normalized.encode("utf-8")).decode("utf-8")
-
-
-def decrypt_provider_connection_secret(ciphertext: str | None, *, settings: Settings) -> str:
-    token = str(ciphertext or "").strip()
-    if not token:
-        return ""
-    try:
-        return _build_provider_fernet(settings).decrypt(token.encode("utf-8")).decode("utf-8")
-    except InvalidToken as error:
-        raise RuntimeError("provider connection secret could not be decrypted") from error
-
-
-def _build_provider_fernet(settings: Settings) -> Fernet:
-    signing_secret = resolve_provider_connection_secret(settings)
-    return _build_fernet(signing_secret, purpose="provider_connection_secret")
 
 
 def _build_fernet(signing_secret: str, *, purpose: str) -> Fernet:

@@ -77,7 +77,7 @@ Manual refresh guidance:
 Run on the release host:
 
 ```bash
-  docker compose -f cloud/docker-compose.prod.yml restart worker callback-worker ops-worker recognition-worker
+  docker compose -f cloud/docker-compose.prod.yml restart worker callback-worker ops-worker
 ```
 
 Then verify:

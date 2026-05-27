@@ -14,7 +14,7 @@ REMOTE_CLOUD_DIR_SCRIPT="${REMOTE_PROJECT_DIR_SCRIPT}"
 REMOTE_OVERRIDE_FILE_SCRIPT="${REMOTE_CLOUD_DIR_SCRIPT}/docker-compose.remote-preview.yml"
 REMOTE_DOCKER_CONFIG_SCRIPT="${REMOTE_PROJECT_DIR_SCRIPT}/.docker-codex-preview"
 PREVIEW_PORT="${PREVIEW_PORT:-8010}"
-SERVICES="${SERVICES:-api worker callback-worker ops-worker recognition-worker frontend}"
+SERVICES="${SERVICES:-api worker callback-worker ops-worker frontend}"
 PREVIEW_STACK_SERVICES="${PREVIEW_STACK_SERVICES:-proxy ${SERVICES}}"
 DEPENDENCY_IMAGES=("postgres:16-alpine" "redis:7-alpine" "nginx:1.27-alpine")
 PREVIEW_BASE_URL="http://${REMOTE_IP}:${PREVIEW_PORT}"
@@ -54,9 +54,6 @@ image_for_service() {
 			;;
 		ops-worker)
 			printf '%s\n' 'magick-ai-cloud-ops-worker:dev'
-			;;
-		recognition-worker)
-			printf '%s\n' 'magick-ai-cloud-recognition-worker:dev'
 			;;
 		frontend)
 			printf '%s\n' 'magick-ai-cloud-frontend:dev'
@@ -107,7 +104,7 @@ Environment overrides:
   REMOTE_PROJECT_DIR  Remote workspace path (default: $REMOTE_ROOT)
   PREVIEW_PORT        Portal port (default: 8010)
   IMAGE_BUILD_MODE    Build mode: remote (default) or local
-  SERVICES            Services to build (default: "api worker callback-worker ops-worker recognition-worker frontend")
+  SERVICES            Services to build (default: "api worker callback-worker ops-worker frontend")
   VERIFY_PUBLISHER    Verify publisher refresh/inspect when enabled (default: 0)
   ENABLE_TRACE_SINK   Start host Jaeger and wire OTLP/query endpoints (default: 1)
   DRY_RUN             Print actions without changing anything (default: 0)
@@ -265,15 +262,6 @@ services:
         condition: service_healthy
     volumes:
       - .:/app
-
-  recognition-worker:
-    environment:
-      MAGICK_CLOUD_WORKER_HEARTBEAT_INTERVAL_SECONDS: 60
-      MAGICK_CLOUD_RECOGNITION_EVIDENCE_WORKER_POLL_SECONDS: 60
-      MAGICK_CLOUD_MODEL_INTELLIGENCE_PUBLISHER_ENABLED: ${MAGICK_CLOUD_MODEL_INTELLIGENCE_PUBLISHER_ENABLED}
-      MAGICK_CLOUD_OTEL_EXPORTER_OTLP_ENDPOINT: ${TRACE_EXPORTER_ENDPOINT}
-      MAGICK_CLOUD_OTEL_TRACE_SINK_OTLP_ENDPOINT: ${TRACE_SINK_OTLP_ENDPOINT}
-      MAGICK_CLOUD_OTEL_TRACE_QUERY_URL: ${TRACE_QUERY_URL}
 
   frontend:
     environment:
@@ -644,18 +632,6 @@ with urllib.request.urlopen(inspect_request, timeout=60) as response:
     print(json.dumps(payload, ensure_ascii=False))
 PY
 
-recognition_worker_container=\$(${REMOTE_COMPOSE_CMD} ps -q recognition-worker)
-if [ -z \"\${recognition_worker_container}\" ]; then
-	echo '[remote-preview] publisher smoke failed: recognition-worker container missing' >&2
-	exit 1
-fi
-
-recognition_worker_state=\$(docker inspect -f '{{.State.Status}}' \"\${recognition_worker_container}\")
-if [ \"\${recognition_worker_state}\" != 'running' ]; then
-	echo \"[remote-preview] publisher smoke failed: recognition-worker state=\${recognition_worker_state}\" >&2
-	${REMOTE_COMPOSE_CMD} logs --since 120s --no-color recognition-worker >&2 || true
-	exit 1
-fi
 "
 }
 

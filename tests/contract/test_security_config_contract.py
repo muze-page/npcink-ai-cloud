@@ -41,7 +41,6 @@ def test_settings_accept_hardened_production_auth_settings() -> None:
         internal_auth_token="magick-cloud-internal-prod-token-32b",
         admin_bootstrap_token="magick-cloud-admin-bootstrap-prod-token",
         admin_session_secret="magick-cloud-ops-session-secret-prod-32b",
-        provider_connection_secret="magick-cloud-provider-connection-secret-32b",
         portal_jwt_secret="magick-cloud-portal-jwt-secret-prod-32b",
         portal_public_base_url="https://cloud.example.com",
         portal_email_smtp_host="smtp.example.com",
@@ -77,12 +76,11 @@ def test_settings_reject_openai_sample_catalog_profile_outside_dev_and_test() ->
             redis_url="redis://localhost:6379/0",
             internal_auth_token="magick-cloud-internal-prod-token-32b",
             admin_session_secret="magick-cloud-ops-session-secret-prod-32b",
-            provider_connection_secret="magick-cloud-provider-connection-secret-32b",
-            portal_jwt_secret="magick-cloud-portal-jwt-secret-prod-32b",
+                portal_jwt_secret="magick-cloud-portal-jwt-secret-prod-32b",
             portal_public_base_url="https://cloud.example.com",
             portal_email_smtp_host="smtp.example.com",
             portal_email_from_email="no-reply@example.com",
-            openai_sample_catalog_profile="recognition_sample",
+            openai_sample_catalog_profile="legacy_dev_sample",
         )
 
     assert "openai_sample_catalog_profile is only allowed in development/test" in str(
@@ -100,10 +98,6 @@ def test_settings_reject_openai_sample_catalog_profile_outside_dev_and_test() ->
         (
             {"admin_bootstrap_token": ""},
             "admin_bootstrap_token is required outside development/test environments",
-        ),
-        (
-            {"provider_connection_secret": ""},
-            "provider_connection_secret is required outside development/test environments",
         ),
         (
             {
@@ -140,7 +134,6 @@ def test_settings_require_production_portal_and_secret_fields(
         "internal_auth_token": "magick-cloud-internal-prod-token-32b",
         "admin_bootstrap_token": "magick-cloud-admin-bootstrap-prod-token",
         "admin_session_secret": "magick-cloud-ops-session-secret-prod-32b",
-        "provider_connection_secret": "magick-cloud-provider-connection-secret-32b",
         "portal_jwt_secret": "magick-cloud-portal-jwt-secret-prod-32b",
         "portal_public_base_url": "https://cloud.example.com",
         "portal_email_smtp_host": "smtp.example.com",

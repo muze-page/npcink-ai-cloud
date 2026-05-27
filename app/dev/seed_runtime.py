@@ -49,7 +49,7 @@ def seed_site_auth(
     plan_version_id: str = "plan_free_v1",
     subscription_id: str | None = None,
 ) -> dict[str, object]:
-    result = CommercialService(settings.database_url).provision_runtime_baseline(
+    result = CommercialService(settings.database_url, settings=settings).provision_runtime_baseline(
         site_id=site_id,
         key_id=key_id,
         secret=secret,

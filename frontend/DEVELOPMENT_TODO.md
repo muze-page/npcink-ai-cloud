@@ -71,8 +71,6 @@
   - `/portal/notifications`
   - `/api/portal/sites/[siteId]/webhooks`
   - `/api/portal/sites/[siteId]/integrations`
-- [x] Settings
-  - `/portal/settings`
 
 ### ✅ Operator/admin surfaces
 

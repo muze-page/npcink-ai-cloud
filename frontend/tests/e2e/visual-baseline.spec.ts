@@ -2,7 +2,6 @@
  * Cloud Frontend Visual Baseline Tests
  * 
  * 覆盖范围：
- * - Marketing: /(marketing)/getting-started 页面
  * - Portal: /portal 主页面
  * - Portal Billing: /portal/billing 页面
  * - Admin: /admin 管理后台
@@ -11,68 +10,6 @@
  * 对于需要登录的页面，测试会使用固定测试数据或预置认证状态。
  */
 import { expect, test } from '@playwright/test';
-
-/**
- * Getting Started 页面视觉基线
- * 验证：Hero 区、步骤卡片、FAQ、CTA
- */
-test('cloud frontend visual baseline: getting started page', async ({ page }) => {
-  await page.emulateMedia({ reducedMotion: 'reduce' });
-  await page.goto('/getting-started');
-
-  // 验证关键元素
-  await expect(
-    page.getByText(
-      /Current routes cover hosted runtime onboarding|现有路由覆盖 hosted runtime 接入|現有路由涵蓋 hosted runtime 接入/i
-    )
-  ).toBeVisible();
-
-  await expect(
-    page.getByRole('heading').first()
-  ).toBeVisible();
-
-  // 等待页面完全加载
-  await page.waitForLoadState('networkidle');
-
-  // 截取整个页面
-  await expect(page).toHaveScreenshot('getting-started-baseline.png', {
-    fullPage: true,
-    animations: 'disabled',
-    caret: 'hide',
-    scale: 'css',
-    maxDiffPixelRatio: 0.02,
-  });
-
-  // 截取 Hero 区
-  const heroSection = page.locator('section').first();
-  if (await heroSection.isVisible()) {
-    await expect(heroSection).toHaveScreenshot('getting-started-hero.png', {
-      animations: 'disabled',
-      caret: 'hide',
-      scale: 'css',
-    });
-  }
-
-  // 截取步骤卡片
-  const stepsSection = page.locator('section').nth(1);
-  if (await stepsSection.isVisible()) {
-    await expect(stepsSection).toHaveScreenshot('getting-started-steps.png', {
-      animations: 'disabled',
-      caret: 'hide',
-      scale: 'css',
-    });
-  }
-
-  // 截取 FAQ 区
-  const faqSection = page.locator('section').nth(2);
-  if (await faqSection.isVisible()) {
-    await expect(faqSection).toHaveScreenshot('getting-started-faq.png', {
-      animations: 'disabled',
-      caret: 'hide',
-      scale: 'css',
-    });
-  }
-});
 
 /**
  * Portal 主页面视觉基线

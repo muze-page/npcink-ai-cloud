@@ -14,12 +14,6 @@ from app.adapters.providers.base import (
     ProviderExecutionRequest,
     ProviderExecutionResult,
 )
-from app.adapters.providers.openai_sample_catalog import (
-    build_recognition_sample_catalog,
-    build_scaled_recognition_review_catalog,
-)
-
-
 class OpenAIProviderAdapter:
     provider_id = "openai"
     display_name = "OpenAI Compatible"
@@ -149,29 +143,12 @@ class OpenAIProviderAdapter:
             ),
         ]
 
-        if self.sample_catalog_profile in {"recognition_sample", "recognition_sample_17"}:
-            models.extend(self._build_recognition_sample_catalog())
-        elif self.sample_catalog_profile == "recognition_review_60":
-            models.extend(self._build_scaled_recognition_review_catalog(total_models=60))
-        elif self.sample_catalog_profile == "recognition_review_240":
-            models.extend(self._build_scaled_recognition_review_catalog(total_models=240))
-
         return ProviderCatalogSnapshot(
             provider_id=self.provider_id,
             display_name=self.display_name,
             adapter_type=self.adapter_type,
             models=models,
         )
-
-    def _build_recognition_sample_catalog(self) -> list[CatalogModelSeed]:
-        return build_recognition_sample_catalog()
-
-    def _build_scaled_recognition_review_catalog(
-        self,
-        *,
-        total_models: int,
-    ) -> list[CatalogModelSeed]:
-        return build_scaled_recognition_review_catalog(total_models=total_models)
 
     def _fetch_http_catalog(self) -> ProviderCatalogSnapshot:
         try:

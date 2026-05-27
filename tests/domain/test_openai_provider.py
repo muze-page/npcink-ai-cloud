@@ -54,67 +54,6 @@ def test_openai_adapter_fetches_catalog_over_http() -> None:
     assert snapshot.models[2].instances[0].endpoint_variant == "embeddings"
 
 
-def test_openai_adapter_supports_recognition_sample_profile() -> None:
-    adapter = OpenAIProviderAdapter(sample_catalog_profile="recognition_sample")
-
-    snapshot = adapter.fetch_catalog()
-
-    assert [model.model_id for model in snapshot.models] == [
-        "gpt-4.1-mini",
-        "gpt-4.1",
-        "text-embedding-3-small",
-        "flux-dev",
-        "flux-schnell",
-        "sdxl-turbo",
-        "llava:13b",
-        "qwen2.5-vl-7b-instruct",
-        "minicpm-v-2.6",
-        "bge-m3",
-        "multilingual-e5-large",
-        "gte-large-en-v1.5",
-        "mistral-small-3.1",
-        "gemma-3-27b-it",
-        "deepseek-r1-distill-qwen-32b",
-        "qwen2.5-72b-instruct",
-        "jina-embeddings-v3",
-    ]
-    assert len(snapshot.models) == 17
-    assert snapshot.models[3].instances[0].endpoint_variant == "images"
-    assert snapshot.models[4].raw_json["pipeline_tag"] == "text-to-image"
-    assert snapshot.models[6].feature == "text"
-    assert snapshot.models[7].raw_json["pipeline_tag"] == "image-text-to-text"
-    assert snapshot.models[9].feature == "embedding"
-    assert snapshot.models[16].raw_json["pipeline_tag"] == "feature-extraction"
-
-
-def test_openai_adapter_supports_recognition_review_60_sample_profile() -> None:
-    adapter = OpenAIProviderAdapter(sample_catalog_profile="recognition_review_60")
-
-    snapshot = adapter.fetch_catalog()
-
-    assert len(snapshot.models) == 60
-    assert snapshot.models[0].model_id == "gpt-4.1-mini"
-    assert snapshot.models[16].model_id == "jina-embeddings-v3"
-    assert snapshot.models[17].model_id == "sample-chat-balanced-001"
-    assert snapshot.models[17].instances[0].instance_id == "openai-us-east-sample-chat-balanced-001"
-    assert snapshot.models[17].raw_json["catalog_profile"] == "recognition_review_scaled"
-    assert snapshot.models[17].raw_json["catalog_profile_variant_index"] == 1
-    assert snapshot.models[-1].model_id == "sample-embed-bge-004"
-
-
-def test_openai_adapter_supports_recognition_review_240_sample_profile() -> None:
-    adapter = OpenAIProviderAdapter(sample_catalog_profile="recognition_review_240")
-
-    snapshot = adapter.fetch_catalog()
-
-    assert len(snapshot.models) == 240
-    assert snapshot.models[0].model_id == "gpt-4.1-mini"
-    assert snapshot.models[17].model_id == "sample-chat-balanced-001"
-    assert snapshot.models[28].model_id == "sample-reranker-001"
-    assert snapshot.models[-1].model_id == "sample-embed-bge-019"
-    assert snapshot.models[-1].raw_json["catalog_profile_variant_index"] == 19
-
-
 def test_openai_adapter_rejects_sample_catalog_when_fallback_is_disabled() -> None:
     adapter = OpenAIProviderAdapter(
         allow_sample_catalog=False,

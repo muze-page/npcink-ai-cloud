@@ -9,7 +9,7 @@ from app.core.config import Settings
 from app.core.db import dispose_engine, init_schema
 from app.core.services import CloudServices
 from app.domain.catalog.service import CatalogService
-from tests.conftest import TEST_PROVIDER_CONNECTION_SECRET, build_auth_headers, seed_site_auth
+from tests.conftest import build_auth_headers, seed_site_auth
 
 
 def _sqlite_url(tmp_path: Path) -> str:
@@ -26,7 +26,6 @@ def _build_client(tmp_path: Path) -> tuple[str, TestClient]:
         environment="test",
         database_url=database_url,
         redis_url="redis://localhost:6379/0",
-        provider_connection_secret=TEST_PROVIDER_CONNECTION_SECRET,
     )
     return database_url, TestClient(create_app(CloudServices(settings=settings)))
 

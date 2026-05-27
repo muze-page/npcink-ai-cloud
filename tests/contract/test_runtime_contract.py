@@ -17,7 +17,6 @@ from app.core.services import CloudServices
 from app.domain.catalog.service import CatalogService
 from tests.conftest import (
     TEST_INTERNAL_AUTH_TOKEN,
-    TEST_PROVIDER_CONNECTION_SECRET,
     build_auth_headers,
     build_internal_headers,
     merge_json_headers,
@@ -49,7 +48,6 @@ def _build_client(
         database_url=database_url,
         redis_url="redis://localhost:6379/0",
         internal_auth_token=TEST_INTERNAL_AUTH_TOKEN,
-        provider_connection_secret=TEST_PROVIDER_CONNECTION_SECRET,
         **(settings_overrides or {}),
     )
     return database_url, TestClient(create_app(CloudServices(settings=settings)))
@@ -60,7 +58,6 @@ def _runtime_callback_metadata(callback_url: str) -> dict[str, object]:
         environment="test",
         database_url="sqlite+pysqlite:///:memory:",
         redis_url="redis://localhost:6379/0",
-        provider_connection_secret=TEST_PROVIDER_CONNECTION_SECRET,
     )
     return {
         "runtime_callbacks": {

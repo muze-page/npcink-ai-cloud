@@ -94,7 +94,6 @@ configured = [
         "registered": "litellm" in providers,
         "base_url": settings.litellm_base_url,
         "timeout_seconds": settings.litellm_timeout_seconds,
-        "recognition_importer_available": bool(settings.litellm_base_url),
         "catalog": provider_rows.get("litellm"),
     },
     {

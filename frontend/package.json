@@ -14,7 +14,6 @@
     "playwright:browsers:install:chromium": "PLAYWRIGHT_BROWSERS_PATH=${PLAYWRIGHT_BROWSERS_PATH:-$HOME/.local/share/magick-ai-playwright} pnpm exec playwright install chromium",
     "playwright:browsers:prune:check": "PLAYWRIGHT_BROWSERS_PATH=${PLAYWRIGHT_BROWSERS_PATH:-$HOME/.local/share/magick-ai-playwright} node ../scripts/prune-cloud-frontend-playwright-cache.js",
     "playwright:browsers:prune": "PLAYWRIGHT_BROWSERS_PATH=${PLAYWRIGHT_BROWSERS_PATH:-$HOME/.local/share/magick-ai-playwright} node ../scripts/prune-cloud-frontend-playwright-cache.js --apply",
-    "test:i18n-contract": "node tests/unit/admin-models-i18n-contract.mjs",
     "test:i18n:admin-portal-completeness": "node tests/unit/admin-portal-i18n-completeness-contract.mjs",
     "test:admin-dev-autologin-contract": "node tests/unit/admin-dev-autologin-contract.mjs",
     "test:portal-proxy-contract": "node tests/unit/portal-proxy-contract.mjs",

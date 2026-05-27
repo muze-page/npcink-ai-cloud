@@ -1,5 +1,5 @@
 import { expect, test, type Locator } from '@playwright/test';
-import { FREE_PLAN_ID, LONG_ACCOUNT_ID, LONG_PLAN_ID, LONG_RECOGNITION_MODEL_ID, installAdminMocks } from './helpers/admin-operator-fixture';
+import { FREE_PLAN_ID, LONG_ACCOUNT_ID, LONG_PLAN_ID, installAdminMocks } from './helpers/admin-operator-fixture';
 
 async function setScopedInputValue(scope: Locator, index: number, value: string) {
   await scope.locator('input.input').nth(index).evaluate((element, nextValue) => {
@@ -143,28 +143,6 @@ test('admin queue pages keep one primary header action and shared identifier tre
   await expect(page.getByRole('button', { name: /Apply .* baseline/i })).toBeVisible();
   await expect(page.getByRole('button', { name: /Reset to latest release|恢复为最新发布记录|恢復為最新發佈記錄/i })).toBeVisible();
   await expect(page.getByText(/已发布|published/i).first()).toBeVisible();
-});
-
-test('admin model intelligence stays a bounded internal review page', async ({ page }) => {
-  await page.emulateMedia({ reducedMotion: 'reduce' });
-  await installAdminMocks(page);
-
-  await page.goto(`/admin/model-intelligence?model_id=${LONG_RECOGNITION_MODEL_ID}`);
-  await expect(page.getByRole('heading', { level: 1, name: /Model intelligence|模型情报|模型情報/i })).toBeVisible();
-  await expect(page.getByText(/Source repair bridge|修源桥接|修源橋接/i)).toBeVisible();
-  await expect(page.getByText('model_demo_e...rimary').first()).toBeVisible();
-  await expect(page.locator('[data-ui="backoffice-status-badge"]').first()).toBeVisible();
-  await expect(page.locator('[data-ui="admin-semantic-badge"]').first()).toBeVisible();
-  await expect(page.locator('[data-ui="backoffice-filter-pill"]').first()).toBeVisible();
-});
-
-test('admin recognition path stays compatibility-only and redirects to model intelligence', async ({ page }) => {
-  await page.emulateMedia({ reducedMotion: 'reduce' });
-  await installAdminMocks(page);
-
-  await page.goto(`/admin/recognition?model_id=${LONG_RECOGNITION_MODEL_ID}`);
-  await page.waitForURL(new RegExp(`/admin/model-intelligence\\?(?:.*&)?model_id=${LONG_RECOGNITION_MODEL_ID}$`));
-  await expect(page.getByRole('heading', { level: 1, name: /Model intelligence|模型情报|模型情報/i })).toBeVisible();
 });
 
 test('admin support and detail pages keep bounded operator hierarchy', async ({ page }) => {

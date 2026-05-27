@@ -6,7 +6,7 @@ SCOPES ?= catalog:read,runtime:resolve,runtime:execute,runtime:read,stats:read
 PYTEST_ARGS ?=
 CHANGED_BASE_REF ?= origin/master
 
-.PHONY: baseline bootstrap-dev dev test test-local lint lint-changed perimeter frontend-sync frontend-watch migrate seed-dev rollup recognition-refresh bundle deploy-smoke deploy-ssh provider-status env-ssh secret-rotation-check model-ops-release-check model-ops-ia-check
+.PHONY: baseline bootstrap-dev dev test test-local lint lint-changed perimeter frontend-sync frontend-watch migrate seed-dev rollup bundle deploy-smoke deploy-ssh provider-status env-ssh secret-rotation-check
 
 baseline:
 	.venv/bin/pytest --version
@@ -17,7 +17,7 @@ baseline:
 	docker compose -f docker-compose.dev.yml run --rm api python -m ruff check . || true
 	docker compose -f docker-compose.dev.yml run --rm api python -m mypy app || true
 	$(MAKE) perimeter
-	.venv/bin/pytest tests/api/test_runtime_execute.py tests/api/test_addon_routes.py tests/contract/test_runtime_contract.py tests/domain/test_provider_connections_admin.py tests/domain/test_commercial_runtime_defaults.py -q
+	.venv/bin/pytest tests/api/test_runtime_execute.py tests/api/test_addon_routes.py tests/contract/test_runtime_contract.py tests/domain/test_commercial_runtime_defaults.py -q
 	cd frontend && pnpm run type-check
 
 bootstrap-dev:
@@ -63,9 +63,6 @@ seed-dev:
 rollup:
 	docker compose -f docker-compose.dev.yml run --rm api python -m app.workers.usage_rollup
 
-recognition-refresh:
-	docker compose -f docker-compose.dev.yml run --rm api python -m app.workers.recognition_evidence_refresh
-
 router-performance:
 	docker compose -f docker-compose.dev.yml run --rm api python -m app.workers.router_performance_snapshot
 
@@ -96,10 +93,4 @@ env-ssh:
 secret-rotation-check:
 	bash deploy/validate-secret-rotation.sh
 
-model-ops-release-check:
-	docker compose -f docker-compose.dev.yml run --rm api python -m app.dev.model_ops_release_preflight
 
-model-ops-ia-check:
-	cd frontend && pnpm run type-check
-	cd frontend && pnpm run test:i18n-contract
-	cd frontend && pnpm run test:e2e:admin-operator-path

@@ -64,7 +64,6 @@ All items in this section are `Required`.
 - [ ] `MAGICK_CLOUD_INTERNAL_AUTH_TOKEN` is set to a production value
 - [ ] `MAGICK_CLOUD_ADMIN_BOOTSTRAP_TOKEN` is set to a separate production value
 - [ ] `MAGICK_CLOUD_ADMIN_SESSION_SECRET` is set to a production value
-- [ ] `MAGICK_CLOUD_PROVIDER_CONNECTION_SECRET` is set to a production value
 - [ ] `MAGICK_CLOUD_PORTAL_JWT_SECRET` is set to a production value
 - [ ] at least one real hosted-runtime provider credential is configured for the release host
 - [ ] `MAGICK_CLOUD_ADMIN_BOOTSTRAP_TOKEN` is not equal to `MAGICK_CLOUD_INTERNAL_AUTH_TOKEN`
@@ -93,7 +92,6 @@ All items in this section are `Required`.
 - [ ] no stub-only login path is used during production smoke
 - [ ] `ops-worker` is deployed and running with the intended cadence intervals
 - [ ] `callback-worker` is deployed and running for terminal callback delivery
-- [ ] `recognition-worker` is deployed or explicitly disabled for the release host
 - [ ] `MAGICK_CLOUD_WORKER_HEARTBEAT_INTERVAL_SECONDS` is set for the release host
 - [ ] cadence env is explicitly set for the release host:
   - `MAGICK_CLOUD_OPS_CADENCE_POLL_SECONDS`

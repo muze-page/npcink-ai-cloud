@@ -28,18 +28,13 @@ Commercial copy freeze for frontend surfaces:
 - Current commercial scope is bounded to operator/admin guidance:
   - `/admin/plans`
   - `/admin/subscriptions`
-  - `/admin/topup-packs`
   - no customer storefront, wallet, checkout, invoice, or self-serve buy flow
 - Top-level navigation is intentionally grouped into:
   - `Overview`
   - `Commercial Ops`
   - `Model Ops`
   - `Support / Access`
-- `Model Ops` follows one fixed handoff:
-  - `Providers`
-  - `Model intelligence`
-  - `Platform Models`
-  - `/admin/recognition` is compatibility-only and redirects to `/admin/model-intelligence`.
+
 
 ### Cloud Portal
 
@@ -55,8 +50,7 @@ Commercial copy freeze for frontend surfaces:
   - `Billing`
   - `Audit`
   - `Settings`
-- `/portal/settings` is read-only summary only and must not become a second
-  writable settings plane.
+
 
 ### Cloud Addon Boundary
 
@@ -70,8 +64,6 @@ Commercial copy freeze for frontend surfaces:
 ### Marketing
 
 - `/`
-- `/features`
-- `/getting-started`
 
 ### Portal
 
@@ -81,7 +73,6 @@ Commercial copy freeze for frontend surfaces:
 - `/portal/usage`
 - `/portal/billing`
 - `/portal/audit`
-- `/portal/settings`
 
 ### Admin
 
@@ -91,17 +82,9 @@ Commercial copy freeze for frontend surfaces:
   - `Overview`
   - `Commercial Ops`
     - `/admin/plans`
-    - `/admin/topup-packs`
     - `/admin/subscriptions`
     - `/admin/accounts`
     - `/admin/sites`
-  - `Model Ops`
-    - `/admin/providers`
-    - `/admin/model-intelligence`
-    - `/admin/models`
-    - `/admin/recognition` (compatibility-only alias)
-  - `Support / Access`
-    - `/admin/impersonations`
 
 ### BFF / Route Handlers
 

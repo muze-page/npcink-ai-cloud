@@ -11,7 +11,6 @@ from app.core.db import dispose_engine, init_schema
 from app.core.services import CloudServices
 from app.domain.commercial.service import CommercialService
 from tests.conftest import (
-    TEST_PROVIDER_CONNECTION_SECRET,
     build_auth_headers,
     seed_site_auth,
 )
@@ -29,7 +28,6 @@ def _build_client(tmp_path: Path) -> tuple[str, TestClient]:
         environment="test",
         database_url=database_url,
         redis_url="redis://localhost:6379/0",
-        provider_connection_secret=TEST_PROVIDER_CONNECTION_SECRET,
         audit_retention_days_default=45,
     )
     seed_site_auth(

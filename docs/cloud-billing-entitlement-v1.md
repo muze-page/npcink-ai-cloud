@@ -20,7 +20,7 @@ Billing entitlement attaches to exactly these paid object shapes:
 |--------|---------|----------|
 | `site` | One provisioned Cloud site that maps to one connected WordPress install. | Cloud may enforce hosted runtime entitlement for the site; it must not write WordPress. |
 | `agency` | A customer/operator account that covers multiple sites or stores. | Cloud may aggregate entitlement coverage and usage; it must not become a second product control plane. |
-| `woo_store` | A WooCommerce store attached to a connected site. | Cloud may meter WooCommerce hosted runtime usage and report entitlement; Woo product/catalog truth and writes stay local. |
+| `woo_store` | A WooCommerce store attached to a connected site. | Cloud may meter Woo task pack usage and report entitlement; Woo product/catalog truth and writes stay local. |
 
 Every entitlement response must include the resolved paid object:
 
@@ -63,6 +63,13 @@ An entitlement snapshot must express these fields only for the v1 contract:
 {
   "package": "Pro",
   "package_tier": "pro",
+  "task_packs": {
+    "allowed": [
+      "woocommerce-growth",
+      "geo-visibility",
+      "managed-model-routing"
+    ]
+  },
   "usage_limits": {
     "period": "month",
     "max_runs": 10000,
@@ -83,6 +90,7 @@ An entitlement snapshot must express these fields only for the v1 contract:
 
 Field rules:
 
+- `task_packs.allowed` lists Cloud task pack ids available to the paid object.
 - `usage_limits` is the customer-visible limit shape for the active billing
   period.
 - `analytics_retention.days` controls Cloud analytics/log summary visibility; it
@@ -126,6 +134,9 @@ Response:
       "end_at": "2026-06-01T00:00:00Z"
     },
     "entitlement": {
+      "task_packs": {
+        "allowed": ["woocommerce-growth", "geo-visibility"]
+      },
       "usage_limits": {
         "period": "month",
         "max_runs": 10000,

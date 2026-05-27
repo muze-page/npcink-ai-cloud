@@ -72,7 +72,7 @@ def bootstrap_portal_site(
     key_label: str,
     scopes: list[str],
 ) -> dict[str, object]:
-    commercial_service = CommercialService(settings.database_url)
+    commercial_service = CommercialService(settings.database_url, settings=settings)
     normalized_email = member_email.strip().lower()
     member_ref = f"user:{normalized_email}"
     base_url = _normalized_base_url(public_base_url)

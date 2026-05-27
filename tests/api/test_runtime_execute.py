@@ -45,7 +45,6 @@ from app.core.secrets import encrypt_runtime_terminal_callback_secret
 from app.domain.catalog.service import CatalogService
 from app.domain.runtime.service import RuntimeService
 from tests.conftest import (
-    TEST_PROVIDER_CONNECTION_SECRET,
     build_auth_headers,
     merge_json_headers,
     seed_site_auth,
@@ -86,7 +85,6 @@ def _build_client(
         environment="test",
         database_url=database_url,
         redis_url="redis://localhost:6379/0",
-        provider_connection_secret=TEST_PROVIDER_CONNECTION_SECRET,
         **(settings_overrides or {}),
     )
     return database_url, TestClient(
@@ -106,7 +104,6 @@ def _runtime_service_settings(database_url: str) -> Settings:
         environment="test",
         database_url=database_url,
         redis_url="redis://localhost:6379/0",
-        provider_connection_secret=TEST_PROVIDER_CONNECTION_SECRET,
     )
 
 
@@ -382,82 +379,6 @@ def test_execute_route_rejects_step_offload_public_ingress(
     )
 
     assert response.status_code == 422
-
-    dispose_engine(database_url)
-
-
-def test_execute_route_loads_enabled_provider_connections_from_database(tmp_path: Path) -> None:
-    settings_overrides = {
-        "admin_session_secret": "x" * 32,
-    }
-    database_url, client = _build_client(
-        tmp_path,
-        providers={},
-        settings_overrides=settings_overrides,
-        bootstrap_catalog=False,
-    )
-    settings = Settings(
-        project_name="Magick AI Cloud Test",
-        environment="test",
-        database_url=database_url,
-        redis_url="redis://localhost:6379/0",
-        **settings_overrides,
-    )
-    catalog_service = CatalogService(database_url, settings=settings)
-    catalog_service.upsert_admin_provider_connection(
-        connection_id="openai-main",
-        provider_type="openai",
-        source_role="execution_source",
-        display_name="OpenAI Main",
-        enabled=True,
-        base_url="https://api.openai.com/v1",
-        config={"timeout_seconds": 30},
-        api_key="",
-    )
-    synced = catalog_service.sync_admin_provider_connection_catalog("openai-main")
-    assert synced is not None
-
-    payload = {
-        "site_id": "site_alpha",
-        "ability_name": "magick-ai/abilities/text-complete",
-        "ability_family": "text",
-        "channel": "openapi",
-        "execution_kind": "text",
-        "execution_tier": "cloud",
-        "execution_pattern": "inline",
-        "data_classification": "internal",
-        "profile_id": "text.balanced",
-        "idempotency_key": "idem-connection-route-001",
-        "trace_id": "trace-connection-route-001",
-        "input": {
-            "messages": [{"role": "user", "content": "respond with one short line"}]
-        },
-        "policy": {"allow_fallback": True},
-    }
-    body = json.dumps(payload).encode("utf-8")
-    headers = merge_json_headers(
-        build_auth_headers(
-            "POST",
-            "/v1/runtime/execute",
-            site_id="site_alpha",
-            idempotency_key="idem-connection-route-001",
-            nonce="nonce-connection-route-001",
-            trace_id="traceconnectionroute0010000000000",
-            body=body,
-        )
-    )
-
-    response = client.post(
-        "/v1/runtime/execute",
-        content=body,
-        headers=headers,
-    )
-
-    assert response.status_code == 200
-    data = response.json()["data"]
-    assert data["status"] == "succeeded"
-    assert data["provider_id"] == "openai-main"
-    assert data["instance_id"].startswith("openai-main/")
 
     dispose_engine(database_url)
 

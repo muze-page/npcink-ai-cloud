@@ -16,7 +16,7 @@ from app.api.routes.runs import router as runs_router
 from app.api.routes.runtime import router as runtime_router
 from app.api.routes.service import router as service_router
 from app.api.routes.stats import router as stats_router
-from app.api.routes.web import router as web_router
+from app.api.routes.auth import router as auth_router
 from app.core.config import Settings, get_settings
 from app.core.logging import configure_logging
 from app.core.services import CloudServices, create_default_services
@@ -151,7 +151,7 @@ def create_app(services: CloudServices | None = None) -> FastAPI:
     app.include_router(runtime_router)
     app.include_router(runs_router)
     app.include_router(stats_router)
-    app.include_router(web_router)
+    app.include_router(auth_router)
 
     return app
 

@@ -26,7 +26,6 @@ def test_ops_cadence_worker_records_managed_task_audit_and_respects_intervals(
         database_url=database_url,
         redis_url="redis://localhost:6379/0",
         internal_auth_token="i" * 32,
-        provider_connection_secret="p" * 32,
         retention_cleanup_interval_seconds=60,
         usage_rollup_interval_seconds=60,
         router_diagnostics_interval_seconds=60,
@@ -45,14 +44,12 @@ def test_ops_cadence_worker_records_managed_task_audit_and_respects_intervals(
         "latency_probe_summary",
         "alert_provider_degradation",
         "provider_health_scan",
-        "addon_overview_projection",
-        "provider_release_summary_projection",
     }
     assert all(item["outcome"] == "succeeded" for item in first_results)
 
     service = CommercialService(database_url, settings=settings)
     first_events = service.list_service_audit_events(limit=20)["items"]
-    assert len(first_events) == 8
+    assert len(first_events) == 6
 
     latest_created_at = datetime.fromisoformat(
         str(first_events[0]["created_at"]).replace("Z", "+00:00")
@@ -79,7 +76,6 @@ def test_ops_cadence_worker_records_managed_task_audit_and_respects_intervals(
         "latency_probe_summary",
         "alert_provider_degradation",
         "provider_health_scan",
-        "addon_overview_projection",
     }
 
     fifth_results = run_due_tasks(settings, now=latest_created_at + timedelta(seconds=301))
@@ -90,8 +86,6 @@ def test_ops_cadence_worker_records_managed_task_audit_and_respects_intervals(
         "latency_probe_summary",
         "alert_provider_degradation",
         "provider_health_scan",
-        "addon_overview_projection",
-        "provider_release_summary_projection",
     }
 
     dispose_engine(database_url)
@@ -109,37 +103,36 @@ def test_cadence_summary_hides_stale_error_details_after_newer_success(
         database_url=database_url,
         redis_url="redis://localhost:6379/0",
         internal_auth_token="i" * 32,
-        provider_connection_secret="p" * 32,
     )
     service = CommercialService(database_url, settings=settings)
     audit_context = ServiceAuditContext(
         trace_id="",
         idempotency_key="",
         method="POST",
-        path="/internal/workers/ops-cadence/addon_overview_projection",
+        path="/internal/workers/ops-cadence/retention_cleanup",
         actor_kind="system_worker",
         actor_ref="ops_cadence",
     )
     service.record_service_audit_event(
         audit_context=audit_context,
-        event_kind="addon.overview_projection.cadence",
+        event_kind="runtime.retention_cleanup.cadence",
         outcome="error",
         scope_kind="ops_cadence",
-        scope_id="addon_overview_projection",
+        scope_id="retention_cleanup",
         payload_json={"message": "old error", "error_code": "ops.cadence_task_failed"},
     )
     service.record_service_audit_event(
         audit_context=audit_context,
-        event_kind="addon.overview_projection.cadence",
+        event_kind="runtime.retention_cleanup.cadence",
         outcome="succeeded",
         scope_kind="ops_cadence",
-        scope_id="addon_overview_projection",
-        payload_json={"stored_total": 1},
+        scope_id="retention_cleanup",
+        payload_json={"purged_runs": 1},
     )
 
     summary = build_cadence_summary(settings, now=datetime.now(UTC))
     item = next(
-        candidate for candidate in summary["items"] if candidate["task_id"] == "addon_overview_projection"
+        candidate for candidate in summary["items"] if candidate["task_id"] == "retention_cleanup"
     )
     assert item["last_outcome"] == "succeeded"
     assert item["last_error_at"] == ""

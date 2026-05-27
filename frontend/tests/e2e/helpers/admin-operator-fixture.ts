@@ -833,25 +833,6 @@ export async function installAdminMocks(page: Page) {
           operator_notes: 'Stable hosted row.',
           updated_at: '2026-04-05T01:00:00Z',
         },
-        recognition_bundle: {
-          revision: 'bundle_demo',
-          checksum: 'abcdef1234567890fedcba',
-          published_at: '2026-04-05T01:00:00Z',
-        },
-        recognition: {
-          matched: true,
-          model_type: 'chat',
-          preview_type: 'chat',
-          confidence: 0.98,
-          evidence_sources: ['seed'],
-          evidence: [{ source: 'seed', confidence: 0.98 }],
-        },
-        recognition_review: {
-          review_status: 'approved',
-          manual_tags: ['stable'],
-          operator_notes: 'Approved for hosted serving.',
-          updated_at: '2026-04-05T01:00:00Z',
-        },
       });
       return;
     }
@@ -937,11 +918,6 @@ export async function installAdminMocks(page: Page) {
           visibility: 'default',
           badges: ['hosted'],
           updated_at: '2026-04-05T01:00:00Z',
-        },
-        recognition_bundle: {
-          revision: 'bundle_demo',
-          checksum: 'abcdef1234567890fedcba',
-          published_at: '2026-04-05T01:00:00Z',
         },
         pricing: {
           base_currency: 'USD',
@@ -1033,27 +1009,6 @@ export async function installAdminMocks(page: Page) {
           cny_per_usd: 7.2,
           unit: 'per_1m_tokens',
         },
-        recognition_bundle: {
-          revision: 'bundle_demo',
-          checksum: 'abcdef1234567890fedcba',
-          published_at: '2026-04-05T01:00:00Z',
-          admin_source: {
-            kind: 'recognition_evidence_snapshot',
-            configured: true,
-            snapshot_exists: true,
-            records_total: 1,
-            generated_at: '2026-04-05T01:00:00Z',
-            hours_old: 4,
-            freshness_status: 'fresh',
-            source_keys: ['openrouter_model_info', 'huggingface_model_info'],
-            failed_sources: [],
-            health_status: 'ok',
-            health_issues: [],
-            bundle_exists: true,
-            fallback: {
-              previous_bundle_used: false,
-              cached_sources_used: [],
-            },
             latest_publication: {
               revision: 'bundle_demo',
               checksum: 'abcdef1234567890fedcba',
@@ -1205,11 +1160,6 @@ export async function installAdminMocks(page: Page) {
           recommended_total: items.filter((item) => item.annotation.recommended).length,
           cost_tier_counts: {},
           visibility_counts: {},
-        },
-        recognition_bundle: {
-          revision: 'bundle_demo',
-          checksum: 'abcdef1234567890fedcba',
-          published_at: '2026-04-05T01:00:00Z',
         },
       });
       return;

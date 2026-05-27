@@ -38,6 +38,13 @@ def test_removed_public_control_plane_surfaces_are_absent_from_openapi(tmp_path)
         "/internal/service/admin/impersonations",
         "/internal/service/admin/members",
         "/internal/service/admin/commercial-shadow-pricing/summary",
+        "/v1/catalog/recognition",
+        "/v1/catalog/recognition-intelligence",
+        "/internal/catalog/recognition/evidence",
+        "/internal/catalog/intelligence/publisher",
+        "/internal/service/admin/providers",
+        "/internal/service/admin/models",
+        "/internal/service/admin/recognition",
     )
 
     for path in paths:
@@ -69,6 +76,17 @@ def test_removed_urls_return_404(tmp_path) -> None:
         "/internal/service/admin/impersonations",
         "/internal/service/admin/members",
         "/internal/service/admin/commercial-shadow-pricing/summary",
+        "/v1/catalog/recognition/revision",
+        "/v1/catalog/recognition-intelligence/revision",
+        "/v1/catalog/recognition/bundle",
+        "/v1/catalog/recognition-intelligence/bundle",
+        "/internal/catalog/recognition/evidence",
+        "/internal/catalog/recognition/evidence/refresh",
+        "/internal/catalog/intelligence/publisher",
+        "/internal/catalog/intelligence/publisher/refresh",
+        "/internal/service/admin/providers",
+        "/internal/service/admin/models",
+        "/internal/service/admin/recognition",
     )
 
     for url in removed_urls:

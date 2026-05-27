@@ -1353,7 +1353,6 @@ def test_portal_debug_bypass_is_disabled_in_production_even_with_allowlist(
             "portal_email_smtp_host": "smtp.example.com",
             "portal_email_from_email": "noreply@example.com",
             "admin_bootstrap_token": "b" * 32,
-            "provider_connection_secret": "p" * 32,
             "trusted_host_allowlist": "testserver,cloud.example.com",
             "debug_local_origin_allowlist": "http://127.0.0.1:8010",
         },
