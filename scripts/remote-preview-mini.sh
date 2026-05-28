@@ -21,7 +21,6 @@ PREVIEW_BASE_URL="http://${REMOTE_IP}:${PREVIEW_PORT}"
 LIVE_URL="${PREVIEW_BASE_URL}/health/live"
 DRY_RUN="${DRY_RUN:-0}"
 IMAGE_BUILD_MODE="${IMAGE_BUILD_MODE:-remote}"
-VERIFY_PUBLISHER="${VERIFY_PUBLISHER:-0}"
 ENABLE_TRACE_SINK="${ENABLE_TRACE_SINK:-1}"
 REMOTE_JAEGER_VERSION="${REMOTE_JAEGER_VERSION:-2.17.0}"
 REMOTE_JAEGER_ARCHIVE_URL="${REMOTE_JAEGER_ARCHIVE_URL:-https://github.com/jaegertracing/jaeger/releases/download/v${REMOTE_JAEGER_VERSION}/jaeger-${REMOTE_JAEGER_VERSION}-darwin-arm64.tar.gz}"
@@ -34,10 +33,6 @@ REMOTE_JAEGER_DIR_SCRIPT="${REMOTE_RUNTIME_ROOT_SCRIPT}/jaeger"
 REMOTE_JAEGER_BINARY_SCRIPT="${REMOTE_JAEGER_DIR_SCRIPT}/jaeger-${REMOTE_JAEGER_VERSION}-darwin-arm64/jaeger"
 REMOTE_JAEGER_LOG_SCRIPT="${REMOTE_JAEGER_DIR_SCRIPT}/jaeger.log"
 REMOTE_JAEGER_PID_SCRIPT="${REMOTE_JAEGER_DIR_SCRIPT}/jaeger.pid"
-
-# Keep preview deploys deterministic: unset should behave like disabled rather than
-# passing an empty string through compose and breaking Pydantic bool parsing.
-: "${MAGICK_CLOUD_MODEL_INTELLIGENCE_PUBLISHER_ENABLED:=false}"
 
 read -r -a SERVICE_ARRAY <<< "${SERVICES}"
 
@@ -84,15 +79,11 @@ append_remote_compose_env() {
 	REMOTE_COMPOSE_ENV_PREFIX+="${key}=${quoted} "
 }
 
-append_remote_compose_env MAGICK_CLOUD_MODEL_INTELLIGENCE_PUBLISHER_ENABLED
-append_remote_compose_env MAGICK_CLOUD_MODEL_INTELLIGENCE_PUBLISHER_SCRIPT_PATH
-append_remote_compose_env MAGICK_CLOUD_MODEL_INTELLIGENCE_BUNDLE_PATH
-append_remote_compose_env MAGICK_CLOUD_MODEL_INTELLIGENCE_RUN_SUMMARY_PATH
 REMOTE_COMPOSE_CMD="${REMOTE_COMPOSE_ENV_PREFIX}docker compose -f docker-compose.dev.yml -f docker-compose.remote-preview.yml"
 
 usage() {
 	cat <<'EOF'
-Usage: scripts/remote-preview-mini.sh [--dry-run] [--build-remote|--build-local] [--verify-publisher]
+Usage: scripts/remote-preview-mini.sh [--dry-run] [--build-remote|--build-local]
 
 Sync the local Cloud repo to a remote Mac mini, rebuild the remote dev stack,
 and verify direct portal access.
@@ -105,7 +96,6 @@ Environment overrides:
   PREVIEW_PORT        Portal port (default: 8010)
   IMAGE_BUILD_MODE    Build mode: remote (default) or local
   SERVICES            Services to build (default: "api worker callback-worker ops-worker frontend")
-  VERIFY_PUBLISHER    Verify publisher refresh/inspect when enabled (default: 0)
   ENABLE_TRACE_SINK   Start host Jaeger and wire OTLP/query endpoints (default: 1)
   DRY_RUN             Print actions without changing anything (default: 0)
 EOF
@@ -191,7 +181,6 @@ services:
       MAGICK_CLOUD_PORTAL_PUBLIC_BASE_URL: http://${REMOTE_IP}:${PREVIEW_PORT}
       MAGICK_CLOUD_TRUSTED_HOST_ALLOWLIST: ${REMOTE_IP},${REMOTE_IP}:${PREVIEW_PORT},127.0.0.1,127.0.0.1:${PREVIEW_PORT},127.0.0.1:8080,localhost,localhost:${PREVIEW_PORT},api,api:8000,proxy,proxy:8080
       MAGICK_CLOUD_BROWSER_ORIGIN_ALLOWLIST: http://${REMOTE_IP}:${PREVIEW_PORT},http://127.0.0.1:${PREVIEW_PORT},http://localhost:${PREVIEW_PORT}
-      MAGICK_CLOUD_MODEL_INTELLIGENCE_PUBLISHER_ENABLED: ${MAGICK_CLOUD_MODEL_INTELLIGENCE_PUBLISHER_ENABLED}
       MAGICK_CLOUD_OTEL_EXPORTER_OTLP_ENDPOINT: ${TRACE_EXPORTER_ENDPOINT}
       MAGICK_CLOUD_OTEL_TRACE_SINK_OTLP_ENDPOINT: ${TRACE_SINK_OTLP_ENDPOINT}
       MAGICK_CLOUD_OTEL_TRACE_QUERY_URL: ${TRACE_QUERY_URL}
@@ -569,72 +558,6 @@ done
 "
 }
 
-verify_remote_publisher() {
-	log "checking remote publisher refresh and inspect state"
-	run_remote_cloud "
-publisher_enabled=\"\$(${REMOTE_COMPOSE_CMD} exec -T api sh -lc 'printf %s \"\${MAGICK_CLOUD_MODEL_INTELLIGENCE_PUBLISHER_ENABLED:-false}\"' 2>/dev/null || true)\"
-publisher_enabled=\"\$(printf '%s' \"\${publisher_enabled}\" | tr '[:upper:]' '[:lower:]')\"
-if [ \"\${publisher_enabled}\" != 'true' ]; then
-	echo '[remote-preview] publisher smoke skipped: MAGICK_CLOUD_MODEL_INTELLIGENCE_PUBLISHER_ENABLED is not true'
-	exit 0
-fi
-
-internal_token=\"\$(${REMOTE_COMPOSE_CMD} exec -T api sh -lc 'printf %s \"\${MAGICK_CLOUD_INTERNAL_AUTH_TOKEN:-}\"')\"
-if [ -z \"\${internal_token}\" ]; then
-	echo '[remote-preview] publisher smoke failed: MAGICK_CLOUD_INTERNAL_AUTH_TOKEN missing' >&2
-	exit 1
-fi
-
-${REMOTE_COMPOSE_CMD} exec -T api python - <<'PY'
-import json
-import os
-import sys
-import urllib.request
-import uuid
-
-token = os.environ.get('MAGICK_CLOUD_INTERNAL_AUTH_TOKEN', '')
-headers = {
-    'X-Magick-Internal-Token': token,
-    'traceparent': '00-55555555555555555555555555555555-6666666666666666-01',
-    'Idempotency-Key': f'remote-preview-mini-publisher-refresh-{uuid.uuid4().hex}',
-}
-request = urllib.request.Request(
-    'http://127.0.0.1:8000/internal/catalog/intelligence/publisher/refresh',
-    data=b'',
-    method='POST',
-    headers=headers,
-)
-with urllib.request.urlopen(request, timeout=60) as response:
-    payload = json.loads(response.read().decode('utf-8'))
-    if response.status != 200:
-        raise SystemExit(f'publisher refresh returned status {response.status}')
-    if payload.get('status') != 'ok':
-        raise SystemExit(f'publisher refresh failed: {payload}')
-
-inspect_request = urllib.request.Request(
-    'http://127.0.0.1:8000/internal/catalog/intelligence/publisher',
-    headers={
-        'X-Magick-Internal-Token': token,
-        'traceparent': '00-77777777777777777777777777777777-8888888888888888-01',
-    },
-)
-with urllib.request.urlopen(inspect_request, timeout=60) as response:
-    payload = json.loads(response.read().decode('utf-8'))
-    if response.status != 200:
-        raise SystemExit(f'publisher inspect returned status {response.status}')
-    data = payload.get('data') or {}
-    if not data.get('configured'):
-        raise SystemExit(f'publisher inspect configured=false: {payload}')
-    if not data.get('bundle_exists'):
-        raise SystemExit(f'publisher inspect bundle_exists=false: {payload}')
-    if data.get('freshness_status') != 'fresh':
-        raise SystemExit(f'publisher inspect freshness_status={data.get("freshness_status")}: {payload}')
-    print(json.dumps(payload, ensure_ascii=False))
-PY
-
-"
-}
-
 show_remote_status() {
 	log "remote compose status"
 	run_remote_cloud "${REMOTE_COMPOSE_CMD} ps"
@@ -657,9 +580,6 @@ main() {
 				;;
 			--build-remote)
 				IMAGE_BUILD_MODE="remote"
-				;;
-			--verify-publisher)
-				VERIFY_PUBLISHER=1
 				;;
 			*)
 				printf '[remote-preview] unknown argument: %s\n' "$1" >&2
@@ -692,9 +612,6 @@ main() {
 	verify_remote_database_head
 	verify_remote_operational_readiness
 	verify_remote_trace_sink
-	if [ "${VERIFY_PUBLISHER}" = "1" ]; then
-		verify_remote_publisher
-	fi
 	verify_remote_logs_clean
 	show_remote_status
 

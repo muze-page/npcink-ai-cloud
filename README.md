@@ -152,7 +152,7 @@ Current repository status is:
   ledger-vs-snapshot reconciliation inspect
 - bounded platform-admin seam is now landed for:
   - bounded `/admin` session cookie login via `internal token`
-  - accounts, sites, plans, subscriptions, provider/model ops, runtime diagnostics, audit, and commercial decisions
+  - accounts, sites, plans, subscriptions, runtime diagnostics, audit, and commercial decisions
 - bounded portal auth seam is now landed for:
   - invited `user_admin` email verification-code login
   - cookie-backed `/portal/*` member session
@@ -408,7 +408,7 @@ Keep local-only debug credentials such as `MAGICK_CLOUD_INTERNAL_AUTH_TOKEN`,
 `cloud/.env.local` is gitignored, while production-style deploy helpers read
 `cloud/.env.deploy` instead.
 
-Recognition intelligence sources can also pull Ollama metadata in two modes:
+Runtime catalog metadata can also include Ollama-sourced model records in two modes:
 
 - self-hosted/local node allowlist:
   - `MAGICK_CLOUD_OLLAMA_BASE_URL=http://host.docker.internal:11434`
@@ -419,8 +419,7 @@ Recognition intelligence sources can also pull Ollama metadata in two modes:
   - `MAGICK_CLOUD_OLLAMA_CATALOG_ENABLED=true`
   - `MAGICK_CLOUD_OLLAMA_CATALOG_LIMIT=250`
 
-The allowlist mode is best for private nodes you actually run. The catalog mode
-is not used for admin model intelligence surfaces; those have been removed.
+The allowlist mode is best for private nodes you actually run. Ollama metadata is consumed as runtime catalog input only; it does not create a platform model operations surface.
 
 For production-style remote deploys, start from [cloud/.env.example](../../cloud/.env.example), then copy it to `cloud/.env.deploy` or another deploy env file. Production-style config now fails fast when these are missing:
 
