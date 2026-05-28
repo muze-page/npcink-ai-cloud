@@ -486,7 +486,7 @@ function PlansContent() {
 
       <details className="rounded-2xl border border-dashed border-slate-200 px-4 py-4 dark:border-slate-800">
         <summary className="cursor-pointer list-none text-sm font-medium text-slate-700 dark:text-slate-300">
-          {t('admin.package_shell_maintenance_toggle_label', {}, 'Inspect canonical package shell maintenance')}
+          {t('admin.package_shell_maintenance_toggle_label', {}, 'Default plan maintenance')}
         </summary>
       <BackofficeLayer
         className="mt-4"

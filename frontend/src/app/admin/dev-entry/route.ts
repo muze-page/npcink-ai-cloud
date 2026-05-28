@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { appendForwardHeaders, buildBackendUrl, buildForwardedRequestHeaders } from '@/app/api/admin/_shared';
 import {
+  getAdminBootstrapToken,
   getAdminBootstrapAdminRef,
-  getInternalAuthToken,
   getPublicBaseUrl,
   isMiniDevHost,
   isMiniDevRequestHost,
@@ -165,7 +165,7 @@ export async function GET(request: NextRequest) {
         Referer: `${resolvedOrigin}/`,
       }),
       body: JSON.stringify({
-        token: getInternalAuthToken(),
+        token: getAdminBootstrapToken(),
         admin_ref: getAdminBootstrapAdminRef(),
         redirect: resolveRedirectPath(request),
       }),

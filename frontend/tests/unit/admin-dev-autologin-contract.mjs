@@ -17,8 +17,8 @@ assert.match(
 );
 assert.match(
   adminRouteSource,
-  /token:\s*getInternalAuthToken\(\)/,
-  'admin dev-entry must send the internal auth token'
+  /token:\s*getAdminBootstrapToken\(\)/,
+  'admin dev-entry must send the admin bootstrap token'
 );
 assert.match(
   adminRouteSource,
@@ -57,12 +57,12 @@ assert.match(
 );
 assert.match(
   adminRouteSource,
-  /Origin:\s*resolveExternalOrigin\(request\)/,
+  /Origin:\s*resolvedOrigin/,
   'admin dev-entry must forward the resolved external origin'
 );
 assert.match(
   adminRouteSource,
-  /Referer:\s*`\$\{resolveExternalOrigin\(request\)\}\/`/,
+  /Referer:\s*`\$\{resolvedOrigin\}\/`/,
   'admin dev-entry must forward a referer rooted at the resolved external origin'
 );
 assert.match(

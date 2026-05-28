@@ -8,6 +8,7 @@ const envSchema = z.object({
   CLOUD_API_BASE_URL: z.string().url().default('http://127.0.0.1:8000'),
   CLOUD_PUBLIC_BASE_URL: z.string().url().default('http://127.0.0.1:8010'),
   MAGICK_CLOUD_INTERNAL_AUTH_TOKEN: z.string().optional().default(''),
+  MAGICK_CLOUD_ADMIN_BOOTSTRAP_TOKEN: z.string().optional().default(''),
   MAGICK_CLOUD_ADMIN_BOOTSTRAP_ADMIN_REF: z.string().optional().default('platform:internal_root'),
   MAGICK_CLOUD_DEV_PORTAL_EMAIL: z.string().optional().default('portal-demo@example.com'),
   MAGICK_CLOUD_DEV_PORTAL_SITE_ID: z.string().optional().default('site_magick-ai-local'),
@@ -88,6 +89,7 @@ export function validateEnv(): Env {
     CLOUD_API_BASE_URL: rawApiBaseUrl,
     CLOUD_PUBLIC_BASE_URL: rawPublicBaseUrl,
     MAGICK_CLOUD_INTERNAL_AUTH_TOKEN: process.env.MAGICK_CLOUD_INTERNAL_AUTH_TOKEN,
+    MAGICK_CLOUD_ADMIN_BOOTSTRAP_TOKEN: process.env.MAGICK_CLOUD_ADMIN_BOOTSTRAP_TOKEN,
     MAGICK_CLOUD_ADMIN_BOOTSTRAP_ADMIN_REF: process.env.MAGICK_CLOUD_ADMIN_BOOTSTRAP_ADMIN_REF,
     MAGICK_CLOUD_DEV_PORTAL_EMAIL: process.env.MAGICK_CLOUD_DEV_PORTAL_EMAIL,
     MAGICK_CLOUD_DEV_PORTAL_SITE_ID: process.env.MAGICK_CLOUD_DEV_PORTAL_SITE_ID,
@@ -208,6 +210,16 @@ export function getInternalAuthToken(): string {
 
   if (!token) {
     throw new Error('MAGICK_CLOUD_INTERNAL_AUTH_TOKEN is not configured for frontend admin proxy');
+  }
+
+  return token;
+}
+
+export function getAdminBootstrapToken(): string {
+  const token = getEnv().MAGICK_CLOUD_ADMIN_BOOTSTRAP_TOKEN.trim();
+
+  if (!token) {
+    throw new Error('MAGICK_CLOUD_ADMIN_BOOTSTRAP_TOKEN is not configured for frontend admin bootstrap');
   }
 
   return token;

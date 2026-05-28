@@ -27,7 +27,7 @@ function AdminLoginPageContent() {
           description={t(
             'admin.login_desc',
             {},
-            'Use the current Cloud internal token to open the operator workspace. This path is for platform operations only.'
+            'Use the current Cloud admin bootstrap token to open the operator workspace. This path is for platform operations only.'
           )}
           summary={(
             <div className="grid gap-3 text-sm text-slate-600 dark:text-slate-300 lg:grid-cols-2">
@@ -55,7 +55,7 @@ function AdminLoginPageContent() {
               {t(
                 'admin.login_token_help',
                 {},
-                'Keep public signup closed. Operators enter through the internal token path, then continue account or site work inside the admin workspace.'
+                'Keep public signup closed. Operators enter through the admin bootstrap token path, then continue account or site work inside the admin workspace.'
               )}
             </p>
           </BackofficeStackCard>
