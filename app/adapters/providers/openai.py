@@ -807,8 +807,8 @@ class OpenAIProviderAdapter:
             return "quality"
 
         model_key = model_id.lower()
-        economy_keywords = ("nano", "small", "haiku", "flash-lite")
-        balanced_keywords = ("mini", "medium", "flash", "turbo")
+        economy_keywords = ("nano", "small", "haiku", "flash-lite", "chat")
+        balanced_keywords = ("mini", "medium", "flash", "turbo", "v3")
         quality_keywords = (
             "gpt-5",
             "gpt-4.5",
@@ -820,6 +820,8 @@ class OpenAIProviderAdapter:
             "sonnet",
             "pro",
             "large",
+            "r1",
+            "reasoner",
         )
 
         if any(keyword in model_key for keyword in economy_keywords):
