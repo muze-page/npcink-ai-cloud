@@ -3408,3 +3408,89 @@ def test_adapter_origin_analysis_no_write_phrase_defaults_to_report(tmp_path: Pa
     assert result["analysis_type"] == "report"
 
     dispose_engine(database_url)
+
+
+def test_openclaw_read_only_analysis_returns_report_envelope(tmp_path: Path):
+    providers: dict[str, ProviderAdapter] = {
+        OpenAIProviderAdapter.provider_id: _FixedTextProviderAdapter(
+            "Here is a summary of your site audit findings."
+        )
+    }
+    database_url, client = _build_client(tmp_path, providers=providers)
+    try:
+        payload = {
+            "site_id": "site_alpha",
+            "ability_name": "openclaw.site_audit",
+            "ability_family": "openclaw",
+            "execution_kind": "text",
+            "profile_id": "text.balanced",
+            "execution_pattern": "inline",
+            "idempotency_key": "idem-openclaw-readonly-001",
+            "input": {"text": "Analyze the site for issues"},
+        }
+        body = json.dumps(payload).encode("utf-8")
+        headers = merge_json_headers(
+            build_auth_headers(
+                "POST",
+                "/v1/runtime/execute",
+                site_id="site_alpha",
+                idempotency_key="idem-openclaw-readonly-001",
+                body=body,
+                trace_id="traceopenclawreadonly001000000",
+            )
+        )
+        response = client.post(
+            "/v1/runtime/execute",
+            content=body,
+            headers=headers,
+        )
+        assert response.status_code in {200, 201}
+        envelope = response.json()["data"].get("analysis_envelope")
+        assert envelope is not None
+        assert envelope["analysis_type"] == "report"
+        assert envelope["requires_local_approval"] is False
+    finally:
+        dispose_engine(database_url)
+
+
+def test_openclaw_write_like_analysis_returns_proposal_envelope(tmp_path: Path):
+    providers: dict[str, ProviderAdapter] = {
+        OpenAIProviderAdapter.provider_id: _FixedTextProviderAdapter(
+            "The theme has been updated and changes applied to WooCommerce."
+        )
+    }
+    database_url, client = _build_client(tmp_path, providers=providers)
+    try:
+        payload = {
+            "site_id": "site_alpha",
+            "ability_name": "openclaw.theme_update",
+            "ability_family": "openclaw",
+            "execution_kind": "text",
+            "profile_id": "text.balanced",
+            "execution_pattern": "inline",
+            "idempotency_key": "idem-openclaw-writelike-001",
+            "input": {"text": "Update the WordPress theme to latest version"},
+        }
+        body = json.dumps(payload).encode("utf-8")
+        headers = merge_json_headers(
+            build_auth_headers(
+                "POST",
+                "/v1/runtime/execute",
+                site_id="site_alpha",
+                idempotency_key="idem-openclaw-writelike-001",
+                body=body,
+                trace_id="traceopenclawwritelike001000000",
+            )
+        )
+        response = client.post(
+            "/v1/runtime/execute",
+            content=body,
+            headers=headers,
+        )
+        assert response.status_code in {200, 201}
+        envelope = response.json()["data"].get("analysis_envelope")
+        assert envelope is not None
+        assert envelope["analysis_type"] == "proposal"
+        assert envelope["requires_local_approval"] is True
+    finally:
+        dispose_engine(database_url)
