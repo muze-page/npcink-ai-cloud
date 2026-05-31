@@ -23,6 +23,7 @@ import {
   type PackageKind,
 } from '@/lib/customer-package-display';
 import { localizePackageAlias } from '@/lib/admin-plan-copy';
+import { formatAdminCurrency } from '@/lib/currency';
 import { cn, formatDate, formatNumber as formatInteger } from '@/lib/utils';
 import { translateAllowedAction, translateExternalCommercialRole } from '@/lib/admin-display';
 import { resolveUiErrorMessage } from '@/lib/errors';
@@ -239,6 +240,13 @@ function AccountDetailContent() {
   const [packageActionError, setPackageActionError] = useState<string | null>(null);
   const [packageActionPending, setPackageActionPending] = useState<'change' | 'suspend' | 'cancel' | null>(null);
   const [packagePlans, setPackagePlans] = useState<PackagePlanListItem[]>([]);
+  const [siteRuntimeData, setSiteRuntimeData] = useState<Record<string, {
+    totalRuns: number;
+    failedRuns: number;
+    lastRunAt: string | null;
+    costEstimate: number;
+    tokensTotal: number;
+  }>>({});
 
   const loadPackagePlans = useCallback(async () => {
     try {
@@ -287,6 +295,50 @@ function AccountDetailContent() {
       setSiteMembers([]);
       setSelectedMemberRef('');
     }
+  }, []);
+
+  const loadSiteRuntimeData = useCallback(async (siteIds: string[]) => {
+    if (siteIds.length === 0) {
+      setSiteRuntimeData({});
+      return;
+    }
+    const results: Record<string, {
+      totalRuns: number;
+      failedRuns: number;
+      lastRunAt: string | null;
+      costEstimate: number;
+      tokensTotal: number;
+    }> = {};
+    await Promise.all(
+      siteIds.map(async (siteId) => {
+        try {
+          const response = await fetch(`/api/admin/sites/${encodeURIComponent(siteId)}`, {
+            credentials: 'include',
+          });
+          if (!response.ok) return;
+          const data = await response.json();
+          const siteData = data.data || {};
+          const usageSummary = siteData.usage_summary || {};
+          const runtimeSummary = siteData.runtime_summary || {};
+          results[siteId] = {
+            totalRuns: Number(runtimeSummary.total_runs ?? 0),
+            failedRuns: Number(runtimeSummary.failed_runs ?? 0),
+            lastRunAt: runtimeSummary.last_run_at || null,
+            costEstimate: Number(usageSummary.cost_estimate ?? 0),
+            tokensTotal: Number(usageSummary.tokens_total ?? 0),
+          };
+        } catch {
+          results[siteId] = {
+            totalRuns: 0,
+            failedRuns: 0,
+            lastRunAt: null,
+            costEstimate: 0,
+            tokensTotal: 0,
+          };
+        }
+      })
+    );
+    setSiteRuntimeData(results);
   }, []);
 
   const loadAccount = useCallback(async (preferredSiteId = '', preferredMemberRef = '') => {
@@ -477,12 +529,17 @@ function AccountDetailContent() {
       } else {
         setSiteMembers([]);
       }
+
+      const nextSiteIds = nextAccount?.sites?.map((s) => s.site_id).filter(Boolean) || [];
+      if (nextSiteIds.length > 0) {
+        void loadSiteRuntimeData(nextSiteIds);
+      }
     } catch (err) {
       setError(resolveUiErrorMessage(err instanceof Error ? err.message : null, t('error.failed_load')));
     } finally {
       setIsLoading(false);
     }
-  }, [accountId, loadSiteMembers, t]);
+  }, [accountId, loadSiteMembers, loadSiteRuntimeData, t]);
 
   const handleInviteMember = async () => {
     const normalizedEmail = inviteEmail.trim().toLowerCase();
@@ -1395,6 +1452,81 @@ function AccountDetailContent() {
           )}
         </BackofficeSectionPanel>
       </div>
+
+      {Object.keys(siteRuntimeData).length > 0 ? (
+        <BackofficeSectionPanel className="space-y-4">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-gray-500 dark:text-gray-400">
+              {t('admin.provider_health_label', undefined, 'Provider health')}
+            </p>
+            <h2 className="mt-2 text-xl font-semibold text-gray-950 dark:text-white">
+              {t('admin.provider_health_title', undefined, 'Model health & plan utilization')}
+            </h2>
+            <p className="mt-1 text-sm text-gray-600 dark:text-gray-400">
+              {t('admin.provider_health_desc', undefined, 'Per-site runtime health and cost utilization for this customer.')}
+            </p>
+          </div>
+          <div className="space-y-3">
+            {Object.entries(siteRuntimeData).map(([siteId, runtime]) => {
+              const failureRate = runtime.totalRuns > 0
+                ? Math.round((runtime.failedRuns / runtime.totalRuns) * 100)
+                : 0;
+              const healthStatus = failureRate >= 50 ? 'error' : failureRate >= 20 ? 'warning' : 'ok';
+              const siteName = account?.sites?.find((s) => s.site_id === siteId)?.name || siteId;
+              return (
+                <BackofficeStackCard key={siteId} className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2">
+                      <Link href={`/admin/sites/${siteId}`} className="font-mono text-sm font-semibold text-blue-600 hover:underline dark:text-blue-300">
+                        <BackofficeIdentifier value={siteId} className="text-sm text-blue-600 dark:text-blue-300" />
+                      </Link>
+                      <BackofficeStatusBadge status={healthStatus} label={
+                        healthStatus === 'ok'
+                          ? t('admin.provider_healthy', undefined, 'Healthy')
+                          : healthStatus === 'warning'
+                            ? t('admin.provider_degraded', undefined, 'Degraded')
+                            : t('admin.provider_unhealthy', undefined, 'Unhealthy')
+                      } />
+                    </div>
+                    {siteName && siteName !== siteId ? (
+                      <p className="mt-1 text-sm text-gray-600 dark:text-gray-400">{siteName}</p>
+                    ) : null}
+                  </div>
+                  <div className="grid gap-3 sm:grid-cols-3 sm:text-right">
+                    <div>
+                      <p className="text-[0.68rem] font-semibold uppercase tracking-[0.16em] text-gray-500 dark:text-gray-400">
+                        {t('admin.run_failure_rate', undefined, 'Failure rate')}
+                      </p>
+                      <p className={cn(
+                        'mt-1 text-sm font-semibold',
+                        failureRate >= 50 ? 'text-red-600 dark:text-red-400' : failureRate >= 20 ? 'text-amber-700 dark:text-amber-300' : 'text-gray-950 dark:text-white'
+                      )}>
+                        {failureRate}%
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-[0.68rem] font-semibold uppercase tracking-[0.16em] text-gray-500 dark:text-gray-400">
+                        {t('admin.cost_estimate', undefined, 'Cost estimate')}
+                      </p>
+                      <p className="mt-1 text-sm font-semibold text-gray-950 dark:text-white">
+                        {formatAdminCurrency(runtime.costEstimate)}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-[0.68rem] font-semibold uppercase tracking-[0.16em] text-gray-500 dark:text-gray-400">
+                        {t('admin.tokens_used', undefined, 'Tokens used')}
+                      </p>
+                      <p className="mt-1 text-sm font-semibold text-gray-950 dark:text-white">
+                        {formatInteger(runtime.tokensTotal)}
+                      </p>
+                    </div>
+                  </div>
+                </BackofficeStackCard>
+              );
+            })}
+          </div>
+        </BackofficeSectionPanel>
+      ) : null}
 
       <div id="portal-access" className="grid gap-6 xl:grid-cols-[0.9fr_1.1fr]">
         <BackofficeSectionPanel className="space-y-5">

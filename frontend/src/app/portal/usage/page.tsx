@@ -34,7 +34,7 @@ import {
   formatPortalCurrency,
 } from '@/lib/currency';
 import { formatPortalErrorMessage } from '@/lib/portal-error';
-import { formatCompactNumber, formatDate, formatNumber } from '@/lib/utils';
+import { cn, formatCompactNumber, formatDate, formatNumber } from '@/lib/utils';
 import {
   BackofficePageStack,
   BackofficeSectionPanel,
@@ -233,6 +233,16 @@ function PortalUsageContent() {
       : '',
   ].filter(Boolean);
 
+  const runUtilizationPct = toFinite(runBudgetState.limit || runsLimit) > 0
+    ? Math.min(100, Math.round((toFinite(runBudgetState.current_total) / toFinite(runBudgetState.limit || runsLimit)) * 100))
+    : 0;
+  const tokenUtilizationPct = toFinite(tokenBudgetState.limit || tokensLimit) > 0
+    ? Math.min(100, Math.round((toFinite(tokenBudgetState.current_total) / toFinite(tokenBudgetState.limit || tokensLimit)) * 100))
+    : 0;
+  const costUtilizationPct = toFinite(costBudgetState.limit || costLimit) > 0
+    ? Math.min(100, Math.round((toFinite(costBudgetState.current_total) / toFinite(costBudgetState.limit || costLimit)) * 100))
+    : 0;
+
   const headroomMetrics = [
     {
       label: t('portal.usage.remaining_requests_test_label', {}, 'Requests left'),
@@ -360,6 +370,121 @@ function PortalUsageContent() {
               <div className="mt-3">
                 <UsageBarChart data={chartData} type="cost" height={160} />
               </div>
+            </BackofficeStackCard>
+          </div>
+        </BackofficeSectionPanel>
+      ) : null}
+
+      {entitlements ? (
+        <BackofficeSectionPanel className="space-y-5">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-gray-500 dark:text-gray-400">
+              {t('portal.usage.quota_headroom_label', {}, 'Quota headroom')}
+            </p>
+            <h2 className="mt-2 text-xl font-semibold text-gray-950 dark:text-white">
+              {t('portal.usage.quota_headroom_title', {}, 'Plan utilization')}
+            </h2>
+          </div>
+          <div className="space-y-4">
+            <BackofficeStackCard className="bg-white/80 dark:bg-slate-950/45">
+              <div className="space-y-4">
+                <div>
+                  <div className="flex items-center justify-between text-sm">
+                    <span className="font-medium text-gray-950 dark:text-white">{t('usage.requests', {}, 'Requests')}</span>
+                    <span className="text-gray-600 dark:text-gray-400">{runUtilizationPct}%</span>
+                  </div>
+                  <div className="mt-2 h-2 w-full overflow-hidden rounded-full bg-slate-200 dark:bg-slate-800">
+                    <div
+                      className={cn(
+                        'h-full rounded-full transition-all',
+                        runUtilizationPct >= 100 ? 'bg-red-500' : runUtilizationPct >= 80 ? 'bg-amber-500' : 'bg-emerald-500'
+                      )}
+                      style={{ width: `${runUtilizationPct}%` }}
+                    />
+                  </div>
+                  <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                    {formatNumber(toFinite(runBudgetState.current_total))} / {formatNumber(toFinite(runBudgetState.limit || runsLimit))}
+                  </p>
+                </div>
+                <div>
+                  <div className="flex items-center justify-between text-sm">
+                    <span className="font-medium text-gray-950 dark:text-white">{t('usage.tokens', {}, 'Tokens')}</span>
+                    <span className="text-gray-600 dark:text-gray-400">{tokenUtilizationPct}%</span>
+                  </div>
+                  <div className="mt-2 h-2 w-full overflow-hidden rounded-full bg-slate-200 dark:bg-slate-800">
+                    <div
+                      className={cn(
+                        'h-full rounded-full transition-all',
+                        tokenUtilizationPct >= 100 ? 'bg-red-500' : tokenUtilizationPct >= 80 ? 'bg-amber-500' : 'bg-emerald-500'
+                      )}
+                      style={{ width: `${tokenUtilizationPct}%` }}
+                    />
+                  </div>
+                  <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                    {formatCompactNumber(toFinite(tokenBudgetState.current_total))} / {formatCompactNumber(toFinite(tokenBudgetState.limit || tokensLimit))}
+                  </p>
+                </div>
+                <div>
+                  <div className="flex items-center justify-between text-sm">
+                    <span className="font-medium text-gray-950 dark:text-white">{t('common.cost', {}, 'Cost')}</span>
+                    <span className="text-gray-600 dark:text-gray-400">{costUtilizationPct}%</span>
+                  </div>
+                  <div className="mt-2 h-2 w-full overflow-hidden rounded-full bg-slate-200 dark:bg-slate-800">
+                    <div
+                      className={cn(
+                        'h-full rounded-full transition-all',
+                        costUtilizationPct >= 100 ? 'bg-red-500' : costUtilizationPct >= 80 ? 'bg-amber-500' : 'bg-emerald-500'
+                      )}
+                      style={{ width: `${costUtilizationPct}%` }}
+                    />
+                  </div>
+                  <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                    {formatPreferredCurrency(toFinite(costBudgetState.current_total))} / {formatPreferredCurrency(toFinite(costBudgetState.limit || costLimit))}
+                  </p>
+                </div>
+              </div>
+            </BackofficeStackCard>
+          </div>
+        </BackofficeSectionPanel>
+      ) : null}
+
+      {usageWindow ? (
+        <BackofficeSectionPanel className="space-y-5">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-gray-500 dark:text-gray-400">
+              {t('portal.usage.cost_summary_label', {}, 'Cost summary')}
+            </p>
+            <h2 className="mt-2 text-xl font-semibold text-gray-950 dark:text-white">
+              {t('portal.usage.cost_summary_title', {}, 'Provider cost breakdown')}
+            </h2>
+          </div>
+          <div className="grid gap-4 md:grid-cols-3">
+            <BackofficeStackCard className="bg-white/80 dark:bg-slate-950/45">
+              <p className="text-xs font-semibold uppercase tracking-[0.16em] text-gray-500 dark:text-gray-400">
+                {t('portal.usage.estimated_total_cost', {}, 'Estimated total cost')}
+              </p>
+              <p className="mt-3 text-2xl font-semibold text-gray-950 dark:text-white">
+                {formatPreferredCurrency(toFinite(usageWindow.cost_total))}
+              </p>
+              <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                {usageWindow ? `${formatDate(usageWindow.start_at)} - ${formatDate(usageWindow.end_at)}` : t('common.not_found')}
+              </p>
+            </BackofficeStackCard>
+            <BackofficeStackCard className="bg-white/80 dark:bg-slate-950/45">
+              <p className="text-xs font-semibold uppercase tracking-[0.16em] text-gray-500 dark:text-gray-400">
+                {t('portal.usage.input_tokens', {}, 'Input tokens')}
+              </p>
+              <p className="mt-3 text-2xl font-semibold text-gray-950 dark:text-white">
+                {formatCompactNumber(toFinite(usageWindow.tokens_in_total))}
+              </p>
+            </BackofficeStackCard>
+            <BackofficeStackCard className="bg-white/80 dark:bg-slate-950/45">
+              <p className="text-xs font-semibold uppercase tracking-[0.16em] text-gray-500 dark:text-gray-400">
+                {t('portal.usage.output_tokens', {}, 'Output tokens')}
+              </p>
+              <p className="mt-3 text-2xl font-semibold text-gray-950 dark:text-white">
+                {formatCompactNumber(toFinite(usageWindow.tokens_out_total))}
+              </p>
             </BackofficeStackCard>
           </div>
         </BackofficeSectionPanel>
