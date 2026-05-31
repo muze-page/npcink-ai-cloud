@@ -46,3 +46,23 @@ def test_build_analysis_result_envelope_proposal_input_not_proposal():
     assert result["analysis_type"] == "proposal_input"
     assert result["requires_local_approval"] is True
     assert result["proposal_handoff"]["proposal_id"] == "p1"
+
+
+def test_build_analysis_result_envelope_corrects_invalid_analysis_type():
+    result = build_analysis_result_envelope(
+        {"analysis_type": "proposal", "summary": "test"},
+        ability_family="openclaw",
+        ability_name="openclaw.create_post",
+        input_payload={},
+    )
+    assert result["analysis_type"] in {"report", "recommendation", "proposal_input"}
+
+
+def test_build_analysis_result_envelope_corrects_unknown_analysis_type_to_report():
+    result = build_analysis_result_envelope(
+        {"analysis_type": "action", "summary": "read-only result"},
+        ability_family="openclaw",
+        ability_name="openclaw.site_audit",
+        input_payload={},
+    )
+    assert result["analysis_type"] == "report"

@@ -35,6 +35,8 @@ WRITE_ABILITY_HINTS = frozenset(
     }
 )
 
+VALID_ANALYSIS_TYPES = frozenset({"report", "recommendation", "proposal_input"})
+
 
 def build_analysis_result_envelope(
     result: dict[str, Any],
@@ -130,6 +132,9 @@ def _ensure_analysis_envelope_fields(
         requires_local_approval = _detect_write_completion_language(raw_text)
     if not requires_local_approval:
         requires_local_approval = _ability_name_implies_mutation(ability_name)
+
+    if result.get("analysis_type") not in VALID_ANALYSIS_TYPES:
+        result["analysis_type"] = "proposal_input" if requires_local_approval else "report"
 
     result["requires_local_approval"] = requires_local_approval
 
