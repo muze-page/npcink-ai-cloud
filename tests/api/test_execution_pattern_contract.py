@@ -120,3 +120,16 @@ def test_whole_run_offload_accepted_with_task_backend(tmp_path: Path):
         assert response.status_code in {200, 201, 202}
     finally:
         dispose_engine(database_url)
+
+
+def test_openapi_schema_execution_pattern_excludes_orchestrated(tmp_path: Path):
+    database_url, client = _build_client(tmp_path)
+    try:
+        schema = client.get("/openapi.json").json()
+        runtime_payload = schema.get("components", {}).get("schemas", {}).get("RuntimePayload", {})
+        pattern_prop = runtime_payload.get("properties", {}).get("execution_pattern", {})
+        enum_values = pattern_prop.get("enum", [])
+        assert "orchestrated" not in enum_values
+        assert set(enum_values) == {"inline", "whole_run_offload"}
+    finally:
+        dispose_engine(database_url)
