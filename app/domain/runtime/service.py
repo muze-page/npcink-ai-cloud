@@ -2270,35 +2270,18 @@ class RuntimeService:
             execution_context=self._build_execution_context(run),
             task_backend=self._build_task_backend_payload(run),
             run_lifecycle=self._build_run_lifecycle(run),
-            result=result,
-            analysis_envelope=self._build_analysis_envelope(result, run.ability_family or "text"),
+            result=self._apply_analysis_envelope(result, run),
         )
 
-    def _build_analysis_envelope(self, result: dict[str, Any], ability_family: str) -> dict[str, Any] | None:
-        if ability_family != "openclaw":
-            return None
-
-        output = result.get("output", {})
-        output_text = str(output.get("output_text", ""))
-        summary = str(result.get("summary", "") or output_text)[:500]
-
-        requires_local_approval = bool(
-            result.get("requires_local_approval")
-            or output.get("requires_local_approval")
-            or any(
-                keyword in output_text.lower()
-                for keyword in ("write", "create", "update", "delete", "install", "modify")
-            )
+    def _apply_analysis_envelope(self, result: dict[str, Any], run: Any) -> dict[str, Any]:
+        if (run.ability_family or "text") != "openclaw":
+            return result
+        return build_analysis_result_envelope(
+            result,
+            ability_family=run.ability_family or "text",
+            ability_name=run.ability_name or "",
+            input_payload=run.input_payload if hasattr(run, 'input_payload') else {},
         )
-
-        return {
-            "analysis_type": "report" if not requires_local_approval else "proposal",
-            "summary": summary,
-            "findings": result.get("findings", []) or output.get("findings", []),
-            "recommendations": result.get("recommendations", []) or output.get("recommendations", []),
-            "requires_local_approval": requires_local_approval,
-            "proposal_handoff": (result.get("proposal_handoff") or output.get("proposal_handoff")) if requires_local_approval else None,
-        }
 
     def cleanup_expired_run_results(self, *, now: datetime | None = None) -> int:
         with get_session(self.database_url) as session:

@@ -446,13 +446,13 @@ JSON
 signed_request "POST" "/v1/runtime/execute" "" "${OPENCLAW_BODY}" "idem-local-alpha-openclaw-${IDEMPOTENCY_SUFFIX}" "nonce-local-alpha-openclaw-${IDEMPOTENCY_SUFFIX}"
 assert_status "${HTTP_STATUS}" "200" "openclaw analysis execute"
 OPENCLAW_RESPONSE="${HTTP_BODY}"
-ANALYSIS_TYPE=$(json_read_path "$OPENCLAW_RESPONSE" "data.analysis_envelope.analysis_type" 2>/dev/null || echo "")
+ANALYSIS_TYPE=$(json_read_path "$OPENCLAW_RESPONSE" "data.result.analysis_type" 2>/dev/null || echo "")
 if [ "$ANALYSIS_TYPE" = "report" ]; then
 	ok "openclaw read-only analysis returns report type"
 else
 	echo "  WARN: openclaw analysis_type=$ANALYSIS_TYPE (expected report)"
 fi
-REQUIRES_APPROVAL=$(json_read_path "$OPENCLAW_RESPONSE" "data.analysis_envelope.requires_local_approval" 2>/dev/null || echo "false")
+REQUIRES_APPROVAL=$(json_read_path "$OPENCLAW_RESPONSE" "data.result.requires_local_approval" 2>/dev/null || echo "false")
 if [ "$REQUIRES_APPROVAL" = "false" ]; then
 	ok "openclaw read-only analysis does not require local approval"
 else

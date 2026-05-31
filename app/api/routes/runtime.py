@@ -341,7 +341,6 @@ async def execute_runtime(
                 "task_backend": result.task_backend,
                 "run_lifecycle": result.run_lifecycle,
                 "result": result.result,
-                "analysis_envelope": result.analysis_envelope,
             },
             trace_id=result.trace_id,
             revision="m2",

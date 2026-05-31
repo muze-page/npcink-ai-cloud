@@ -206,4 +206,3 @@ class RuntimeExecutionResponse:
     task_backend: dict[str, Any]
     run_lifecycle: dict[str, Any]
     result: dict[str, Any]
-    analysis_envelope: dict[str, Any] | None = None

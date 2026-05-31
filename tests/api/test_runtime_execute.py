@@ -3445,15 +3445,14 @@ def test_openclaw_read_only_analysis_returns_report_envelope(tmp_path: Path):
             headers=headers,
         )
         assert response.status_code in {200, 201}
-        envelope = response.json()["data"].get("analysis_envelope")
-        assert envelope is not None
-        assert envelope["analysis_type"] == "report"
-        assert envelope["requires_local_approval"] is False
+        result = response.json()["data"]["result"]
+        assert result["analysis_type"] == "report"
+        assert result["requires_local_approval"] is False
     finally:
         dispose_engine(database_url)
 
 
-def test_openclaw_write_like_analysis_returns_proposal_envelope(tmp_path: Path):
+def test_openclaw_write_like_analysis_returns_proposal_input_envelope(tmp_path: Path):
     providers: dict[str, ProviderAdapter] = {
         OpenAIProviderAdapter.provider_id: _FixedTextProviderAdapter(
             "The theme has been updated and changes applied to WooCommerce."
@@ -3488,9 +3487,8 @@ def test_openclaw_write_like_analysis_returns_proposal_envelope(tmp_path: Path):
             headers=headers,
         )
         assert response.status_code in {200, 201}
-        envelope = response.json()["data"].get("analysis_envelope")
-        assert envelope is not None
-        assert envelope["analysis_type"] == "proposal"
-        assert envelope["requires_local_approval"] is True
+        result = response.json()["data"]["result"]
+        assert result["analysis_type"] == "proposal_input"
+        assert result["requires_local_approval"] is True
     finally:
         dispose_engine(database_url)
