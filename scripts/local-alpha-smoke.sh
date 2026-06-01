@@ -290,12 +290,28 @@ curl -k -sS -L \
 	--data-urlencode "redirect_to=${WORDPRESS_URL%/}/wp-admin/" \
 	--data-urlencode "testcookie=1" \
 	"${WORDPRESS_URL%/}/wp-login.php" >/dev/null
+WORDPRESS_ADDON_PATH="/wp-admin/admin.php?page=magick-ai-cloud-addon"
 WORDPRESS_ADDON_BODY="$(
 	curl -k -sS -L \
 		-b "${WORDPRESS_COOKIE_JAR}" \
-		"${WORDPRESS_URL%/}/wp-admin/plugins.php?page=magick-ai-settings&tab=cloud"
+		"${WORDPRESS_URL%/}${WORDPRESS_ADDON_PATH}"
 )"
-assert_body_contains "${WORDPRESS_ADDON_BODY}" "已验证" "WordPress Cloud addon page should show verified status"
+case "${WORDPRESS_ADDON_BODY}" in
+	*"Cloud API Key"*) ;;
+	*)
+		WORDPRESS_ADDON_PATH="/wp-admin/plugins.php?page=magick-ai-settings&tab=cloud"
+		WORDPRESS_ADDON_BODY="$(
+			curl -k -sS -L \
+				-b "${WORDPRESS_COOKIE_JAR}" \
+				"${WORDPRESS_URL%/}${WORDPRESS_ADDON_PATH}"
+		)"
+		;;
+esac
+ok "WordPress Cloud addon admin path: ${WORDPRESS_ADDON_PATH}"
+case "${WORDPRESS_ADDON_BODY}" in
+	*"已验证"*|*"Cloud settings are saved and verified."*) ;;
+	*) fail "WordPress Cloud addon page should show verified status" ;;
+esac
 assert_body_contains "${WORDPRESS_ADDON_BODY}" "Cloud API Key" "WordPress Cloud addon page should render the Cloud settings tab"
 
 ok "Bootstrapping portal membership and billing snapshot"

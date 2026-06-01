@@ -135,7 +135,7 @@ Current local target:
 - Portal public base URL: `http://127.0.0.1:8010`
 - WordPress site: `https://magick-ai.local/`
 - WordPress addon settings path:
-  `https://magick-ai.local/wp-admin/plugins.php?page=magick-ai-settings&tab=cloud`
+  `https://magick-ai.local/wp-admin/admin.php?page=magick-ai-cloud-addon`
 - Portal login path for local alpha: `/portal/dev-entry`
 - Local dev-entry origin allowlist:
   `http://127.0.0.1:8010,http://localhost:8010`
