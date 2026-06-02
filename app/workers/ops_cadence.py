@@ -95,6 +95,13 @@ def _run_provider_health_scan(settings: Settings) -> dict[str, object]:
     }
 
 
+def _run_artifact_cleanup(settings: Settings) -> dict[str, object]:
+    from app.domain.media_derivatives.artifacts import cleanup_expired_artifacts
+
+    purged = cleanup_expired_artifacts(database_url=settings.database_url)
+    return {"purged_artifacts": purged}
+
+
 def cadence_task_specs() -> list[CadenceTaskSpec]:
     return [
         CadenceTaskSpec(
@@ -132,6 +139,12 @@ def cadence_task_specs() -> list[CadenceTaskSpec]:
             event_kind="provider.health_scan_cadence",
             interval_seconds=lambda settings: settings.provider_health_scan_interval_seconds,
             runner=_run_provider_health_scan,
+        ),
+        CadenceTaskSpec(
+            task_id="artifact_cleanup",
+            event_kind="runtime.artifact_cleanup.cadence",
+            interval_seconds=lambda s: s.artifact_cleanup_interval_seconds,
+            runner=_run_artifact_cleanup,
         ),
     ]
 
