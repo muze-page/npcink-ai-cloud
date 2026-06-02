@@ -34,6 +34,8 @@ owner.
   families, error codes, and attention codes.
 - `docs/plugin-observability-emitter-examples.md` gives concrete emitter
   examples for Abilities, Core, Adapter, and Cloud Addon.
+- `docs/plugin-observability-e2e-acceptance.md` gives the real WordPress to
+  Cloud acceptance checklist for Cloud Addon plus Abilities, Core, and Adapter.
 
 Any new emitter event should be added to the event catalog before a plugin
 starts sending it.
@@ -190,6 +192,8 @@ When another AI continues this work, start in this order:
    UI is visible.
 7. Use `docs/plugin-observability-emitter-examples.md` before asking plugin-side
    agents to add or adjust emitters.
+8. Use `docs/plugin-observability-e2e-acceptance.md` before claiming real
+   plugin-side monitoring is complete.
 
 Do not start by adding new charts. First confirm whether the signal is already
 represented as an event kind, error code, health reason, or attention code. If
