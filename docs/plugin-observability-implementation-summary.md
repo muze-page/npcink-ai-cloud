@@ -153,3 +153,21 @@ The next high-value layer is alerting and operator workflow:
 - add a small synthetic-monitoring fixture for seeded demo data
 - document emitter examples for `magick-ai-abilities`, `magick-ai-core`, and
   `magick-ai-adapter`
+
+## AI Handoff Checklist
+
+When another AI continues this work, start in this order:
+
+1. Read `docs/plugin-observability-v1.md`.
+2. Read `docs/plugin-observability-event-catalog.md`.
+3. Read this implementation summary.
+4. Inspect `PluginObservabilityService.get_summary()` and
+   `PluginObservabilityService.get_admin_summary()` before changing response
+   shape.
+5. Run the focused backend and frontend verification commands listed above.
+6. Use the local Portal and Admin smoke-test URLs before claiming the monitoring
+   UI is visible.
+
+Do not start by adding new charts. First confirm whether the signal is already
+represented as an event kind, error code, health reason, or attention code. If
+the signal is new, extend the catalog and tests before changing the UI.
