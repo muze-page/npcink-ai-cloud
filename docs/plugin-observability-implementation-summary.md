@@ -36,6 +36,8 @@ owner.
   examples for Abilities, Core, Adapter, and Cloud Addon.
 - `docs/plugin-observability-e2e-acceptance.md` gives the real WordPress to
   Cloud acceptance checklist for Cloud Addon plus Abilities, Core, and Adapter.
+- `docs/plugin-observability-plugin-side-handoff.md` gives copy-ready prompts
+  for the plugin-side AI sessions that need to finish real trigger coverage.
 
 Any new emitter event should be added to the event catalog before a plugin
 starts sending it.
@@ -194,6 +196,9 @@ When another AI continues this work, start in this order:
    agents to add or adjust emitters.
 8. Use `docs/plugin-observability-e2e-acceptance.md` before claiming real
    plugin-side monitoring is complete.
+9. Use `docs/plugin-observability-plugin-side-handoff.md` when delegating
+   Abilities, Core, Adapter, or Cloud Addon follow-up work to another AI
+   session.
 
 Do not start by adding new charts. First confirm whether the signal is already
 represented as an event kind, error code, health reason, or attention code. If
