@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import hashlib
 import io
+from unittest.mock import patch
 
 import pytest
 from PIL import Image
 
-from app.domain.media_derivatives.contracts import MAX_PIXEL_COUNT
 from app.domain.media_derivatives.errors import (
     MediaDerivativeAnimatedSourceUnavailableError,
     MediaDerivativeFormatUnavailableError,
@@ -114,7 +114,6 @@ def test_animated_source_rejected() -> None:
 
 def test_pixel_bomb_protection() -> None:
     source = _make_png_bytes(2, 2)
-    from unittest.mock import patch
 
     with patch("app.domain.media_derivatives.processor.MAX_PIXEL_COUNT", 1):
         with pytest.raises(MediaDerivativeSourceTooLargeError):
@@ -125,6 +124,25 @@ def test_pixel_bomb_protection() -> None:
                 max_width=100,
                 quality=80,
             )
+
+
+def test_pixel_bomb_rejected_before_full_load() -> None:
+    source = _make_png_bytes(2, 2)
+
+    with (
+        patch("app.domain.media_derivatives.processor.MAX_PIXEL_COUNT", 1),
+        patch("PIL.Image.Image.load") as load_mock,
+    ):
+        with pytest.raises(MediaDerivativeSourceTooLargeError):
+            process_media_derivative(
+                source_bytes=source,
+                source_media_type="image",
+                target_format="webp",
+                max_width=100,
+                quality=80,
+            )
+
+    assert not load_mock.called
 
 
 def test_avif_unavailable_returns_explicit_error() -> None:
@@ -141,7 +159,10 @@ def test_avif_unavailable_returns_explicit_error() -> None:
             max_width=50,
             quality=80,
         )
-    assert "avif" in str(exc_info.value.error_code).lower() or "avif" in str(exc_info.value.message).lower()
+    assert (
+        "avif" in str(exc_info.value.error_code).lower()
+        or "avif" in str(exc_info.value.message).lower()
+    )
 
 
 def test_processor_closes_image_handles() -> None:

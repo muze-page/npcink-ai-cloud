@@ -16,6 +16,7 @@ from app.api.envelope import build_envelope
 from app.core.config import Settings
 from app.core.db import get_session
 from app.core.security import (
+    PUBLIC_RUNTIME_MAX_BODY_BYTES,
     REPLAY_SCOPE_INTERNAL,
     REPLAY_SCOPE_INTERNAL_POST,
     REPLAY_SCOPE_INTERNAL_POST_IP,
@@ -128,7 +129,9 @@ def build_portal_session_token(
     expires_at: datetime | None = None,
 ) -> str:
     now = datetime.now(UTC)
-    resolved_expires_at = expires_at or (now + timedelta(seconds=resolve_portal_session_ttl_seconds(settings)))
+    resolved_expires_at = expires_at or (
+        now + timedelta(seconds=resolve_portal_session_ttl_seconds(settings))
+    )
     payload: dict[str, Any] = {
         "sub": member_ref,
         "purpose": "portal_session",
@@ -318,6 +321,7 @@ async def authorize_public_request(
     *,
     require_idempotency: bool,
     required_scope: str | None = None,
+    max_body_bytes: int | None = None,
 ) -> RequestAuthContext | JSONResponse:
     services = get_cloud_services(request)
 
@@ -353,6 +357,7 @@ async def authorize_public_request(
             ),
             require_idempotency=require_idempotency,
             required_scope=required_scope,
+            max_body_bytes=max_body_bytes or PUBLIC_RUNTIME_MAX_BODY_BYTES,
         )
     except RequestAuthError as error:
         return _build_auth_error_response(

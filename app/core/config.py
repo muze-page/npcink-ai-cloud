@@ -43,6 +43,8 @@ class Settings(BaseSettings):
     latency_probe_interval_seconds: int = Field(default=900)
     alert_provider_degradation_interval_seconds: int = Field(default=900)
     provider_health_scan_interval_seconds: int = Field(default=900)
+    media_derivative_max_body_bytes: int = Field(default=51 * 1024 * 1024)
+    artifact_cleanup_interval_seconds: int = Field(default=3600)
     router_performance_worker_window_hours: int = Field(default=1)
     router_performance_worker_site_limit: int = Field(default=100)
     router_diagnostics_worker_recent_minutes: int = Field(default=60)
@@ -337,7 +339,8 @@ class Settings(BaseSettings):
             == str(self.internal_auth_token or "").strip()
         ):
             raise ValueError(
-                "admin_bootstrap_token must differ from internal_auth_token outside development/test environments"
+                "admin_bootstrap_token must differ from internal_auth_token outside "
+                "development/test environments"
             )
         if production_like and not str(self.portal_public_base_url or "").strip():
             raise ValueError(
@@ -357,11 +360,13 @@ class Settings(BaseSettings):
             )
         if production_like and not self.explicit_browser_origins():
             raise ValueError(
-                "browser_origin_allowlist or portal_public_base_url is required outside development/test environments"
+                "browser_origin_allowlist or portal_public_base_url is required outside "
+                "development/test environments"
             )
         if production_like and not self.trusted_hosts():
             raise ValueError(
-                "trusted_host_allowlist or portal_public_base_url is required outside development/test environments"
+                "trusted_host_allowlist or portal_public_base_url is required outside "
+                "development/test environments"
             )
         if self.ops_cadence_poll_seconds < 5:
             raise ValueError("ops_cadence_poll_seconds must be at least 5")
@@ -371,6 +376,8 @@ class Settings(BaseSettings):
             raise ValueError("worker_heartbeat_interval_seconds must be at least 30")
         if self.retention_cleanup_interval_seconds < 60:
             raise ValueError("retention_cleanup_interval_seconds must be at least 60")
+        if self.artifact_cleanup_interval_seconds < 60:
+            raise ValueError("artifact_cleanup_interval_seconds must be at least 60")
         if self.usage_rollup_interval_seconds < 60:
             raise ValueError("usage_rollup_interval_seconds must be at least 60")
         if self.router_diagnostics_interval_seconds < 60:

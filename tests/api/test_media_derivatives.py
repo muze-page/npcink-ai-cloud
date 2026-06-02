@@ -65,6 +65,13 @@ def _make_png_bytes(width: int = 100, height: int = 80) -> bytes:
     return buf.getvalue()
 
 
+def _make_bmp_bytes(width: int = 1200, height: int = 1200) -> bytes:
+    img = Image.new("RGB", (width, height), color="blue")
+    buf = io.BytesIO()
+    img.save(buf, format="BMP")
+    return buf.getvalue()
+
+
 def _make_animated_gif_bytes() -> bytes:
     frames = [Image.new("RGB", (10, 10), color=c) for c in ("red", "green")]
     buf = io.BytesIO()
@@ -223,6 +230,105 @@ def test_invalid_format_gif_returns_422(tmp_path: Path) -> None:
         dispose_engine(database_url)
 
 
+def test_valid_upload_above_default_runtime_body_limit_is_accepted(tmp_path: Path) -> None:
+    database_url, client = _build_client(tmp_path)
+    try:
+        image_bytes = _make_bmp_bytes()
+        assert len(image_bytes) > 1_048_576
+        assert len(image_bytes) < MAX_UPLOAD_BYTES_IMAGE
+        request_dict = {
+            "request_contract_version": "media_derivative_cloud_request.v1",
+            "cloud_job_payload": {
+                "job_type": "generate_optimized_media_derivative",
+                "target_format": "webp",
+                "max_width": 100,
+                "quality": 80,
+                "source_media_type": "image",
+            },
+        }
+        body, content_type = _build_multipart_body(request_dict, image_bytes)
+        headers = build_auth_headers(
+            "POST",
+            "/v1/runtime/media-derivatives",
+            site_id="site_alpha",
+            body=body,
+            idempotency_key="idem-large-valid-001",
+            nonce="nonce-large-valid-001",
+        )
+        headers["content-type"] = content_type
+        response = client.post("/v1/runtime/media-derivatives", content=body, headers=headers)
+        assert response.status_code == 200, response.json()
+        assert response.json()["data"]["status"] == "queued"
+    finally:
+        dispose_engine(database_url)
+
+
+def test_idempotency_key_conflict_returns_409(tmp_path: Path) -> None:
+    database_url, client = _build_client(tmp_path)
+    try:
+        base_request = {
+            "request_contract_version": "media_derivative_cloud_request.v1",
+            "cloud_job_payload": {
+                "job_type": "generate_optimized_media_derivative",
+                "target_format": "webp",
+                "max_width": 50,
+                "quality": 80,
+                "source_media_type": "image",
+            },
+        }
+        first_body, first_content_type = _build_multipart_body(
+            base_request,
+            _make_png_bytes(50, 50),
+            boundary="boundary-idem-a",
+        )
+        first_headers = build_auth_headers(
+            "POST",
+            "/v1/runtime/media-derivatives",
+            site_id="site_alpha",
+            body=first_body,
+            idempotency_key="idem-conflict-001",
+            nonce="nonce-conflict-001",
+        )
+        first_headers["content-type"] = first_content_type
+        first_response = client.post(
+            "/v1/runtime/media-derivatives",
+            content=first_body,
+            headers=first_headers,
+        )
+        assert first_response.status_code == 200, first_response.json()
+
+        changed_request = {
+            **base_request,
+            "cloud_job_payload": {
+                **base_request["cloud_job_payload"],
+                "quality": 60,
+            },
+        }
+        second_body, second_content_type = _build_multipart_body(
+            changed_request,
+            _make_png_bytes(50, 50),
+            boundary="boundary-idem-b",
+        )
+        second_headers = build_auth_headers(
+            "POST",
+            "/v1/runtime/media-derivatives",
+            site_id="site_alpha",
+            body=second_body,
+            idempotency_key="idem-conflict-001",
+            nonce="nonce-conflict-002",
+        )
+        second_headers["content-type"] = second_content_type
+        second_response = client.post(
+            "/v1/runtime/media-derivatives",
+            content=second_body,
+            headers=second_headers,
+        )
+        assert second_response.status_code == 409
+        assert second_response.json()["error_code"] == "runtime.idempotency_conflict"
+    finally:
+        dispose_engine(database_url)
+
+
 def test_video_source_media_type_returns_422(tmp_path: Path) -> None:
     database_url, client = _build_client(tmp_path)
     try:
@@ -293,7 +399,10 @@ def test_expired_artifact_download_returns_410(tmp_path: Path) -> None:
             f"/v1/runtime/artifacts/{artifact_id}/download",
             site_id="site_alpha",
         )
-        dl_response = client.get(f"/v1/runtime/artifacts/{artifact_id}/download", headers=dl_headers)
+        dl_response = client.get(
+            f"/v1/runtime/artifacts/{artifact_id}/download",
+            headers=dl_headers,
+        )
         assert dl_response.status_code == 410
     finally:
         dispose_engine(database_url)
@@ -354,7 +463,11 @@ def test_artifact_reference_must_be_same_site(tmp_path: Path) -> None:
             nonce="nonce-cross-site-002",
         )
         ref_headers["content-type"] = "application/json"
-        ref_response = client.post("/v1/runtime/media-derivatives", content=ref_body, headers=ref_headers)
+        ref_response = client.post(
+            "/v1/runtime/media-derivatives",
+            content=ref_body,
+            headers=ref_headers,
+        )
         assert ref_response.status_code == 404
     finally:
         dispose_engine(database_url)
@@ -399,7 +512,9 @@ def test_animated_image_rejected(tmp_path: Path) -> None:
         assert result_response.status_code == 200
         result_data = result_response.json()["data"]
         assert result_data["status"] == "failed"
-        assert "animated_source_unavailable" in (result_data.get("error_code") or "")
+        assert "animated_source_unavailable" in (
+            result_data.get("result", {}).get("error_code") or ""
+        )
     finally:
         dispose_engine(database_url)
 
@@ -509,6 +624,7 @@ def test_oversized_upload_returns_413(tmp_path: Path) -> None:
         headers["content-type"] = content_type
         response = client.post("/v1/runtime/media-derivatives", content=body, headers=headers)
         assert response.status_code == 413
+        assert response.json()["error_code"] == "media_derivative.upload_too_large"
     finally:
         dispose_engine(database_url)
 
@@ -569,7 +685,11 @@ def test_purged_artifact_reference_is_rejected(tmp_path: Path) -> None:
             nonce="nonce-purged-002",
         )
         ref_headers["content-type"] = "application/json"
-        ref_response = client.post("/v1/runtime/media-derivatives", content=ref_body, headers=ref_headers)
+        ref_response = client.post(
+            "/v1/runtime/media-derivatives",
+            content=ref_body,
+            headers=ref_headers,
+        )
         assert ref_response.status_code == 404
     finally:
         dispose_engine(database_url)

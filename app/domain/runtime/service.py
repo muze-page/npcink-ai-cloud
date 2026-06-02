@@ -333,6 +333,12 @@ class RuntimeService:
         resolved_trace_id = trace_id or uuid4().hex
         run_id = f"run_{uuid4().hex}"
         resolved_idempotency_key = idempotency_key or f"auto_{uuid4().hex}"
+        source_checksum = hashlib.sha256(source_bytes).hexdigest()
+        request_fingerprint = self._build_request_fingerprint_for_media_derivative(
+            site_id,
+            input_payload,
+            source_checksum=source_checksum,
+        )
 
         with get_session(self.database_url) as session:
             repository = RuntimeRepository(session)
@@ -340,6 +346,11 @@ class RuntimeService:
 
             existing = repository.get_run_by_idempotency(site_id, resolved_idempotency_key)
             if existing is not None:
+                if existing.request_fingerprint != request_fingerprint:
+                    raise RuntimeIdempotencyConflictError(
+                        site_id,
+                        resolved_idempotency_key,
+                    )
                 session.commit()
                 return self._build_execution_response(
                     existing,
@@ -402,9 +413,7 @@ class RuntimeService:
                 canonical_run_id=None,
                 status="queued",
                 idempotency_key=resolved_idempotency_key,
-                request_fingerprint=self._build_request_fingerprint_for_media_derivative(
-                    site_id, input_payload,
-                ),
+                request_fingerprint=request_fingerprint,
                 trace_id=resolved_trace_id,
                 input_json={},
                 execution_input_ciphertext=encrypt_runtime_execution_input(
@@ -429,12 +438,15 @@ class RuntimeService:
         self,
         site_id: str,
         input_payload: dict[str, Any],
+        *,
+        source_checksum: str,
     ) -> str:
         canonical_payload = json.dumps(
             {
                 "site_id": site_id,
                 "execution_kind": "media_derivative",
                 "input": input_payload,
+                "source_checksum": source_checksum,
             },
             sort_keys=True,
             separators=(",", ":"),
@@ -447,18 +459,21 @@ class RuntimeService:
         *,
         repository: RuntimeRepository,
     ) -> None:
-        from app.domain.media_derivatives.artifacts import create_artifact, build_artifact_result_json
+        import base64
+
+        from app.domain.media_derivatives.artifacts import (
+            build_artifact_result_json,
+            create_artifact,
+        )
         from app.domain.media_derivatives.contracts import ARTIFACT_DEFAULT_TTL_MINUTES
         from app.domain.media_derivatives.errors import (
+            MediaDerivativeAnimatedSourceUnavailableError,
             MediaDerivativeFormatUnavailableError,
+            MediaDerivativeProcessingFailedError,
             MediaDerivativeSourceDecodeFailedError,
             MediaDerivativeSourceTooLargeError,
-            MediaDerivativeAnimatedSourceUnavailableError,
-            MediaDerivativeProcessingFailedError,
         )
         from app.domain.media_derivatives.processor import process_media_derivative
-
-        import base64
 
         media_input = self._get_execution_input_payload(run)
         cloud_job_payload = media_input.get("cloud_job_payload", {})
@@ -477,6 +492,11 @@ class RuntimeService:
                 error_code="media_derivative.source_decode_failed",
                 error_message="no source bytes found in media derivative run",
             )
+            run.result_json = {
+                "status": "failed",
+                "error_code": "media_derivative.source_decode_failed",
+                "error_message": "no source bytes found in media derivative run",
+            }
             return
 
         try:
@@ -499,6 +519,11 @@ class RuntimeService:
                 error_code=error.error_code,
                 error_message=error.message,
             )
+            run.result_json = {
+                "status": "failed",
+                "error_code": error.error_code,
+                "error_message": error.message,
+            }
             return
 
         artifact = create_artifact(

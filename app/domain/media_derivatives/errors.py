@@ -11,7 +11,11 @@ class MediaDerivativeErrorBase(Exception):
 
 class MediaDerivativeInvalidSourceError(MediaDerivativeErrorBase):
     def __init__(self) -> None:
-        super().__init__(400, "media_derivative.invalid_source", "exactly one source mode is required")
+        super().__init__(
+            400,
+            "media_derivative.invalid_source",
+            "exactly one source mode is required",
+        )
 
 
 class MediaDerivativeFormatUnavailableError(MediaDerivativeErrorBase):
@@ -43,17 +47,29 @@ class MediaDerivativeSourceMediaTypeUnavailableError(MediaDerivativeErrorBase):
 
 class MediaDerivativeUploadTooLargeError(MediaDerivativeErrorBase):
     def __init__(self) -> None:
-        super().__init__(413, "media_derivative.upload_too_large", "uploaded file exceeds the size limit")
+        super().__init__(
+            413,
+            "media_derivative.upload_too_large",
+            "uploaded file exceeds the size limit",
+        )
 
 
 class MediaDerivativeSourceDecodeFailedError(MediaDerivativeErrorBase):
     def __init__(self) -> None:
-        super().__init__(422, "media_derivative.source_decode_failed", "source image could not be decoded")
+        super().__init__(
+            422,
+            "media_derivative.source_decode_failed",
+            "source image could not be decoded",
+        )
 
 
 class MediaDerivativeSourceTooLargeError(MediaDerivativeErrorBase):
     def __init__(self) -> None:
-        super().__init__(422, "media_derivative.source_too_large", "source image exceeds pixel count safety limit")
+        super().__init__(
+            422,
+            "media_derivative.source_too_large",
+            "source image exceeds pixel count safety limit",
+        )
 
 
 class MediaDerivativeAnimatedSourceUnavailableError(MediaDerivativeErrorBase):
@@ -67,13 +83,21 @@ class MediaDerivativeAnimatedSourceUnavailableError(MediaDerivativeErrorBase):
 
 class MediaDerivativeProcessingFailedError(MediaDerivativeErrorBase):
     def __init__(self, detail: str = "") -> None:
-        message = f"media derivative processing failed: {detail}" if detail else "media derivative processing failed"
+        message = (
+            f"media derivative processing failed: {detail}"
+            if detail
+            else "media derivative processing failed"
+        )
         super().__init__(422, "media_derivative.processing_failed", message)
 
 
 class MediaDerivativeSourceArtifactNotFoundError(MediaDerivativeErrorBase):
     def __init__(self) -> None:
-        super().__init__(404, "media_derivative.source_artifact_not_found", "referenced source artifact not found")
+        super().__init__(
+            404,
+            "media_derivative.source_artifact_not_found",
+            "referenced source artifact not found",
+        )
 
 
 class MediaDerivativeArtifactExpiredError(MediaDerivativeErrorBase):

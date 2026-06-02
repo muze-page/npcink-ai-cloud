@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, model_validator
 
 ALLOWED_TARGET_FORMATS = frozenset({"webp", "avif", "jpeg", "png", "original"})
 ALLOWED_SOURCE_MEDIA_TYPES = frozenset({"image"})
@@ -74,7 +74,10 @@ class MediaDerivativeRequest(BaseModel):
         if not (1 <= payload.max_width <= 10000):
             raise ValueError("max_width must be between 1 and 10000")
         if not (ARTIFACT_MIN_TTL_MINUTES <= self.ttl_minutes <= ARTIFACT_MAX_TTL_MINUTES):
-            raise ValueError(f"ttl_minutes must be between {ARTIFACT_MIN_TTL_MINUTES} and {ARTIFACT_MAX_TTL_MINUTES}")
+            raise ValueError(
+                f"ttl_minutes must be between "
+                f"{ARTIFACT_MIN_TTL_MINUTES} and {ARTIFACT_MAX_TTL_MINUTES}"
+            )
         return self
 
 

@@ -230,8 +230,12 @@ def _validate_nonce(
         )
 
 
-def _validate_payload_size(body: bytes) -> None:
-    if len(body) > PUBLIC_RUNTIME_MAX_BODY_BYTES:
+def _validate_payload_size(
+    body: bytes,
+    *,
+    max_body_bytes: int = PUBLIC_RUNTIME_MAX_BODY_BYTES,
+) -> None:
+    if len(body) > max_body_bytes:
         raise RequestAuthError(
             413,
             "auth.payload_too_large",
@@ -561,7 +565,8 @@ def record_runtime_guard_rejection(
             session.commit()
     except Exception:
         logger.exception(
-            "runtime guard rejection persistence failed: operation=%s auth_surface=%s site_id=%s key_id=%s trace_id=%s error_code=%s",
+            "runtime guard rejection persistence failed: operation=%s auth_surface=%s "
+            "site_id=%s key_id=%s trace_id=%s error_code=%s",
             "record_runtime_guard_rejection",
             auth_surface,
             site_id,
@@ -587,6 +592,7 @@ async def authorize_request(
     public_guard_max_reject_events_per_ip_window: int,
     require_idempotency: bool,
     required_scope: str | None = None,
+    max_body_bytes: int = PUBLIC_RUNTIME_MAX_BODY_BYTES,
 ) -> RequestAuthContext:
     site_id = ""
     key_id = ""
@@ -621,7 +627,7 @@ async def authorize_request(
             _require_header(request, "X-Magick-Signature", "auth.signature_required")
         )
         body = await request.body()
-        _validate_payload_size(body)
+        _validate_payload_size(body, max_body_bytes=max_body_bytes)
         body_digest = build_body_digest(body)
         canonical_request = build_canonical_request(
             method=request.method,

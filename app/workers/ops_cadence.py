@@ -1,9 +1,9 @@
 from __future__ import annotations
 
+import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-import time
-from typing import Callable
 
 from app.adapters.providers.registry import resolve_live_provider_adapters
 from app.core.config import Settings, get_settings
@@ -13,8 +13,8 @@ from app.domain.catalog.service import CatalogService
 from app.domain.commercial.service import CommercialService, ServiceAuditContext
 from app.domain.runtime.service import RuntimeService
 from app.domain.usage.rollup import UsageRollupService
-from app.workers.heartbeat import WorkerHeartbeat
 from app.workers.alert_provider_degradation import run_once as run_alert_provider_degradation
+from app.workers.heartbeat import WorkerHeartbeat
 from app.workers.latency_probe_summary import run_once as run_latency_probe_summary
 from app.workers.router_diagnostics_summary import run_once as run_router_diagnostics_summary
 
@@ -31,7 +31,10 @@ class CadenceTaskSpec:
 
 
 def _run_retention_cleanup(settings: Settings) -> dict[str, object]:
-    purged_runs = RuntimeService(settings.database_url, settings=settings).cleanup_expired_run_results()
+    purged_runs = RuntimeService(
+        settings.database_url,
+        settings=settings,
+    ).cleanup_expired_run_results()
     return {"purged_runs": purged_runs}
 
 
@@ -285,7 +288,9 @@ def run_due_tasks(
         interval_seconds = max(60, int(spec.interval_seconds(settings)))
         last_event = _latest_event(commercial_service, event_kind=spec.event_kind)
         last_run_at = _parse_timestamp((last_event or {}).get("created_at"))
-        due = last_run_at is None or current_time >= (last_run_at + timedelta(seconds=interval_seconds))
+        due = last_run_at is None or current_time >= (
+            last_run_at + timedelta(seconds=interval_seconds)
+        )
         if not due:
             continue
 

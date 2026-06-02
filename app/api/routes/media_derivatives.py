@@ -4,14 +4,14 @@ import json
 from datetime import UTC, datetime
 from typing import Any
 
-from fastapi import APIRouter, File, Form, Request, UploadFile
+from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, StreamingResponse
+from python_multipart import FormParser
 from starlette.concurrency import run_in_threadpool
 
 from app.adapters.providers.registry import resolve_execution_provider_adapters
 from app.api.auth import authorize_public_request, get_cloud_services
 from app.api.envelope import build_envelope
-from app.core.config import Settings
 from app.core.db import get_session
 from app.core.logging import get_logger
 from app.domain.media_derivatives.artifacts import (
@@ -20,10 +20,10 @@ from app.domain.media_derivatives.artifacts import (
 )
 from app.domain.media_derivatives.contracts import (
     MAX_UPLOAD_BYTES_IMAGE,
-    BLOCKED_RESPONSE_FIELDS,
     MediaDerivativeRequest,
 )
 from app.domain.media_derivatives.errors import MediaDerivativeErrorBase
+from app.domain.runtime.errors import RuntimeErrorBase
 from app.domain.runtime.service import RuntimeService
 
 logger = get_logger(__name__)
@@ -73,21 +73,70 @@ def _parse_request_json(request_str: str) -> MediaDerivativeRequest:
 
 
 @router.post("/media-derivatives")
-async def create_media_derivative(
-    request: Request,
-    request_form: str = Form(..., alias="request"),
-    source_file: UploadFile | None = File(None),
-) -> Any:
+async def create_media_derivative(request: Request) -> Any:
+    services = get_cloud_services(request)
     auth = await authorize_public_request(
         request,
         require_idempotency=True,
         required_scope="runtime:execute",
+        max_body_bytes=services.settings.media_derivative_max_body_bytes,
     )
     if isinstance(auth, JSONResponse):
         return auth
 
+    body = await request.body()
+    content_type = request.headers.get("content-type", "")
+
+    request_json_str: str | None = None
+    source_bytes: bytes | None = None
+
+    if "multipart/form-data" in content_type:
+        fields: dict[str, str] = {}
+        files: dict[str, bytes] = {}
+
+        def _on_field(field: Any) -> None:
+            name = (
+                field.field_name.decode()
+                if isinstance(field.field_name, bytes)
+                else field.field_name
+            )
+            fields[name] = field.value
+
+        def _on_file(file: Any) -> None:
+            name = (
+                file.field_name.decode()
+                if isinstance(file.field_name, bytes)
+                else file.field_name
+            )
+            file.file_object.seek(0)
+            files[name] = file.file_object.read()
+
+        boundary = None
+        for part in content_type.split(";"):
+            part = part.strip()
+            if part.startswith("boundary="):
+                boundary = part[9:].strip('"')
+                break
+
+        parser = FormParser("multipart/form-data", _on_field, _on_file, boundary=boundary)
+        parser.write(body)
+        parser.finalize()
+
+        request_json_str = fields.get("request")
+        source_bytes = files.get("source_file")
+    else:
+        request_json_str = body.decode("utf-8")
+
+    if not request_json_str:
+        return _media_error_response(
+            status_code=400,
+            error_code="media_derivative.invalid_request",
+            message="request JSON is missing",
+            trace_id=auth.trace_id,
+        )
+
     try:
-        derivative_request = _parse_request_json(request_form)
+        derivative_request = _parse_request_json(request_json_str)
     except json.JSONDecodeError:
         return _media_error_response(
             status_code=400,
@@ -116,11 +165,9 @@ async def create_media_derivative(
             trace_id=auth.trace_id,
         )
 
-    source_bytes: bytes | None = None
     source_artifact_id: str | None = None
 
-    if source_file is not None:
-        source_bytes = await source_file.read()
+    if source_bytes is not None:
         if len(source_bytes) > MAX_UPLOAD_BYTES_IMAGE:
             return _media_error_response(
                 status_code=413,
@@ -139,7 +186,6 @@ async def create_media_derivative(
         )
 
     if source_artifact_id:
-        services = get_cloud_services(request)
         with get_session(services.settings.database_url) as session:
             artifact = get_artifact(
                 session,
@@ -189,6 +235,13 @@ async def create_media_derivative(
             message=error.message,
             trace_id=auth.trace_id,
         )
+    except RuntimeErrorBase as error:
+        return _media_error_response(
+            status_code=error.status_code,
+            error_code=error.error_code,
+            message=error.message,
+            trace_id=auth.trace_id,
+        )
 
     success_statuses = {"queued", "running", "succeeded"}
     status = "ok" if result.status in success_statuses else "error"
@@ -197,7 +250,11 @@ async def create_media_derivative(
         content=build_envelope(
             status=status,
             error_code=error_code,
-            message="media derivative queued" if result.status == "queued" else "media derivative processed",
+            message=(
+                "media derivative queued"
+                if result.status == "queued"
+                else "media derivative processed"
+            ),
             data={
                 "run_id": result.run_id,
                 "status": result.status,

@@ -44,7 +44,7 @@ def _check_format_available(target_format: str) -> None:
     except MediaDerivativeFormatUnavailableError:
         raise
     except Exception:
-        raise MediaDerivativeFormatUnavailableError(target_format)
+        raise MediaDerivativeFormatUnavailableError(target_format) from None
 
 
 def process_media_derivative(
@@ -64,16 +64,15 @@ def process_media_derivative(
             img = Image.open(BytesIO(source_bytes))
             img.verify()
         except Exception:
-            raise MediaDerivativeSourceDecodeFailedError()
+            raise MediaDerivativeSourceDecodeFailedError() from None
 
         img = Image.open(BytesIO(source_bytes))
+        if img.width * img.height > MAX_PIXEL_COUNT:
+            raise MediaDerivativeSourceTooLargeError()
         img.load()
 
         if hasattr(img, "n_frames") and getattr(img, "n_frames", 1) > 1:
             raise MediaDerivativeAnimatedSourceUnavailableError()
-
-        if img.width * img.height > MAX_PIXEL_COUNT:
-            raise MediaDerivativeSourceTooLargeError()
 
         try:
             from PIL import ExifTags
