@@ -15,6 +15,7 @@ from app.core.security import extract_trace_id
 from app.domain.catalog.service import CatalogService
 from app.domain.commercial.errors import CommercialServiceError
 from app.domain.commercial.service import CommercialService, ServiceAuditContext
+from app.domain.observability.plugin_events import PluginObservabilityService
 from app.domain.observability.service import ObservabilityService
 from app.domain.runtime.models import (
     RUNTIME_BACKLOG_SCOPE_KIND_PATTERN,
@@ -1466,6 +1467,31 @@ async def get_admin_plan(
     return build_envelope(
         status="ok",
         message="admin plan loaded",
+        data=result,
+        revision="m6",
+    )
+
+
+@router.get("/admin/plugin-observability")
+async def get_admin_plugin_observability(
+    request: Request,
+    window_hours: int = Query(default=24, ge=1, le=168),
+    site_id: str = Query(default=""),
+    plugin_slug: str = Query(default=""),
+) -> Any:
+    auth = await authorize_internal_request(request, require_idempotency=False)
+    if auth is not None:
+        return auth
+    services = get_cloud_services(request)
+    service = PluginObservabilityService(services.settings.database_url)
+    result = service.get_admin_summary(
+        window_hours=window_hours,
+        site_id=site_id,
+        plugin_slug=plugin_slug,
+    )
+    return build_envelope(
+        status="ok",
+        message="plugin observability admin summary loaded",
         data=result,
         revision="m6",
     )

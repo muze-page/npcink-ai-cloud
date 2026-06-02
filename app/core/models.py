@@ -173,7 +173,11 @@ class PortalLoginCode(Base):
     email: Mapped[str] = mapped_column(String(191), index=True)
     member_ref: Mapped[str] = mapped_column(String(191), index=True)
     code_hash: Mapped[str] = mapped_column(String(191))
-    status: Mapped[str] = mapped_column(String(32), default=PORTAL_LOGIN_CODE_STATUS_PENDING, index=True)
+    status: Mapped[str] = mapped_column(
+        String(32),
+        default=PORTAL_LOGIN_CODE_STATUS_PENDING,
+        index=True,
+    )
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
     attempt_count: Mapped[int] = mapped_column(Integer, default=0)
@@ -647,6 +651,43 @@ class RuntimeGuardEvent(Base):
     trace_id: Mapped[str | None] = mapped_column(String(64), index=True)
     payload_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
     created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        index=True,
+    )
+
+
+class PluginObservabilityEvent(Base):
+    __tablename__ = "plugin_observability_events"
+    __table_args__ = (
+        UniqueConstraint("dedupe_key", name="uq_plugin_observability_events_dedupe"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    dedupe_key: Mapped[str] = mapped_column(String(255))
+    site_id: Mapped[str] = mapped_column(ForeignKey("sites.site_id"), index=True)
+    key_id: Mapped[str | None] = mapped_column(String(191), index=True)
+    schema_version: Mapped[str] = mapped_column(String(32), default="")
+    plugin_slug: Mapped[str] = mapped_column(String(64), index=True)
+    plugin_version: Mapped[str | None] = mapped_column(String(64))
+    source: Mapped[str] = mapped_column(String(32), default="local", index=True)
+    event_kind: Mapped[str] = mapped_column(String(96), index=True)
+    event_id: Mapped[str | None] = mapped_column(String(96), index=True)
+    status: Mapped[str | None] = mapped_column(String(32), index=True)
+    status_detail: Mapped[str | None] = mapped_column(String(64))
+    error_code: Mapped[str | None] = mapped_column(String(128), index=True)
+    latency_ms: Mapped[int | None] = mapped_column(Integer)
+    ability_id: Mapped[str | None] = mapped_column(String(191), index=True)
+    proposal_id: Mapped[str | None] = mapped_column(String(191), index=True)
+    correlation_id: Mapped[str | None] = mapped_column(String(191), index=True)
+    adapter_request_id: Mapped[str | None] = mapped_column(String(191), index=True)
+    method: Mapped[str | None] = mapped_column(String(16))
+    route: Mapped[str | None] = mapped_column(String(255), index=True)
+    status_code: Mapped[int | None] = mapped_column(Integer)
+    payload_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    emitted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    captured_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    received_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
         index=True,
