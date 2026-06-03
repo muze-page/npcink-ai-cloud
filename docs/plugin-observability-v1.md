@@ -2,7 +2,7 @@
 
 Status: active contract
 
-Date: 2026-06-02
+Date: 2026-06-03
 
 Scope: `magick-ai-abilities`, `magick-ai-core`, `magick-ai-adapter`,
 `magick-ai-cloud-addon`, and the Cloud plugin observability read surfaces.
@@ -86,8 +86,15 @@ per-ability registration event for every ability on every request.
 
 ## Deduplication and Rate Limits
 
-Cloud deduplication uses a hash of site, key, ids, plugin slug, event kind, and
-timestamps. Emitters should provide `event_id` where practical.
+Cloud deduplication prefers stable `event_id` semantics. When `event_id` is
+present, Cloud hashes `site_id`, `key_id`, `plugin_slug`, `event_kind`, and
+`event_id`; timestamp drift must not create a second stored event. When
+`event_id` is absent, Cloud falls back to `site_id`, `key_id`, `plugin_slug`,
+`event_kind`, `emitted_at`, `captured_at`, `correlation_id`, and
+`adapter_request_id`.
+
+Emitters should provide `event_id` where practical. Stable IDs should represent
+the semantic operation being reported, not the collector upload attempt.
 
 Registration-class events should emit only when:
 

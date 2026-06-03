@@ -246,3 +246,64 @@ def test_plugin_observability_event_id_is_deduped_after_replay_window(tmp_path: 
     with get_session(database_url) as session:
         count = session.scalar(select(func.count()).select_from(PluginObservabilityEvent))
         assert count == 1
+
+
+def test_plugin_observability_event_id_dedupes_timestamp_drift(tmp_path: Path) -> None:
+    database_url, client = _build_client(tmp_path)
+    payloads = [
+        {
+            "contract_version": "magick-plugin-observability-v1",
+            "events": [
+                {
+                    "plugin_slug": "magick-ai-core",
+                    "event_kind": "core.proposal.plan_ingest",
+                    "event_id": "core_proposal_plan_ingest_same",
+                    "status": "ok",
+                    "emitted_at": "2026-06-03T02:31:47Z",
+                    "captured_at": "2026-06-03T02:31:47Z",
+                }
+            ],
+        },
+        {
+            "contract_version": "magick-plugin-observability-v1",
+            "events": [
+                {
+                    "plugin_slug": "magick-ai-core",
+                    "event_kind": "core.proposal.plan_ingest",
+                    "event_id": "core_proposal_plan_ingest_same",
+                    "status": "ok",
+                    "emitted_at": "2026-06-03T02:31:48Z",
+                    "captured_at": "2026-06-03T02:31:48Z",
+                }
+            ],
+        },
+    ]
+
+    responses = []
+    for index, payload in enumerate(payloads):
+        body = json.dumps(payload, separators=(",", ":")).encode()
+        response = client.post(
+            "/v1/observability/plugin-events",
+            content=body,
+            headers=merge_json_headers(
+                build_auth_headers(
+                    "POST",
+                    "/v1/observability/plugin-events",
+                    site_id="site_obs",
+                    body=body,
+                    idempotency_key=f"obs-timestamp-drift-{index}",
+                    trace_id=f"traceobsapits{index}0000000000000000",
+                )
+            ),
+        )
+        assert response.status_code == 200
+        responses.append(response.json()["data"])
+
+    assert responses[0]["stored_count"] == 1
+    assert responses[0]["duplicate_count"] == 0
+    assert responses[1]["stored_count"] == 0
+    assert responses[1]["duplicate_count"] == 1
+
+    with get_session(database_url) as session:
+        count = session.scalar(select(func.count()).select_from(PluginObservabilityEvent))
+        assert count == 1

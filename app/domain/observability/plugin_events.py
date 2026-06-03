@@ -629,19 +629,25 @@ class PluginObservabilityService:
             for key, value in event.items()
             if key in ALLOWED_EVENT_FIELDS and self._is_safe_scalar(value)
         }
-        dedupe_source = "|".join(
-            [
-                site_id,
-                key_id,
-                str(normalized.get("event_id") or ""),
-                str(normalized.get("plugin_slug") or ""),
-                str(normalized.get("event_kind") or ""),
-                str(normalized.get("emitted_at") or ""),
-                str(normalized.get("captured_at") or ""),
-                str(normalized.get("correlation_id") or ""),
-                str(normalized.get("adapter_request_id") or ""),
-            ]
-        )
+        event_id = str(normalized.get("event_id") or "")
+        dedupe_fields = [
+            site_id,
+            key_id,
+            str(normalized.get("plugin_slug") or ""),
+            str(normalized.get("event_kind") or ""),
+        ]
+        if event_id:
+            dedupe_fields.append(event_id)
+        else:
+            dedupe_fields.extend(
+                [
+                    str(normalized.get("emitted_at") or ""),
+                    str(normalized.get("captured_at") or ""),
+                    str(normalized.get("correlation_id") or ""),
+                    str(normalized.get("adapter_request_id") or ""),
+                ]
+            )
+        dedupe_source = "|".join(dedupe_fields)
         normalized["dedupe_key"] = hashlib.sha256(dedupe_source.encode("utf-8")).hexdigest()
         return normalized
 

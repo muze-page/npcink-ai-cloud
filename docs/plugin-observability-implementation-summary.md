@@ -38,6 +38,9 @@ owner.
   Cloud acceptance checklist for Cloud Addon plus Abilities, Core, and Adapter.
 - `docs/plugin-observability-plugin-side-handoff.md` gives copy-ready prompts
   for the plugin-side AI sessions that need to finish real trigger coverage.
+- `docs/plugin-observability-dedupe-smoke-2026-06-03.md` records the real Cloud
+  Addon flush evidence and the stable `event_id` dedupe rule that ignores
+  timestamp drift when `event_id` is present.
 
 Any new emitter event should be added to the event catalog before a plugin
 starts sending it.
@@ -189,14 +192,16 @@ When another AI continues this work, start in this order:
 4. Inspect `PluginObservabilityService.get_summary()` and
    `PluginObservabilityService.get_admin_summary()` before changing response
    shape.
-5. Run the focused backend and frontend verification commands listed above.
-6. Use the local Portal and Admin smoke-test URLs before claiming the monitoring
+5. Read `docs/plugin-observability-dedupe-smoke-2026-06-03.md` before changing
+   ingestion dedupe logic or plugin-side `event_id` generation.
+6. Run the focused backend and frontend verification commands listed above.
+7. Use the local Portal and Admin smoke-test URLs before claiming the monitoring
    UI is visible.
-7. Use `docs/plugin-observability-emitter-examples.md` before asking plugin-side
+8. Use `docs/plugin-observability-emitter-examples.md` before asking plugin-side
    agents to add or adjust emitters.
-8. Use `docs/plugin-observability-e2e-acceptance.md` before claiming real
+9. Use `docs/plugin-observability-e2e-acceptance.md` before claiming real
    plugin-side monitoring is complete.
-9. Use `docs/plugin-observability-plugin-side-handoff.md` when delegating
+10. Use `docs/plugin-observability-plugin-side-handoff.md` when delegating
    Abilities, Core, Adapter, or Cloud Addon follow-up work to another AI
    session.
 
