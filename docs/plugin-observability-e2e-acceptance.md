@@ -185,18 +185,21 @@ Registration-class acceptance:
 
 Trigger:
 
-- Run a preflight that completes.
-- Run or simulate a preflight that is blocked.
-- Create, approve, and reject proposals where the local workflow supports it.
+- Create one proposal.
+- Approve one proposal.
+- Reject one proposal where the local workflow supports it.
+- Run one commit preflight that completes.
+- Run or simulate one commit preflight that is blocked.
 - Confirm audit metadata is emitted without raw proposal payloads.
 
 Expected event families:
 
-- `core.preflight.completed`
-- `core.preflight.blocked`
 - `core.proposal.create`
 - `core.proposal.approve`
 - `core.proposal.reject`
+- `core.proposal.plan_ingest` where plan intake is exercised
+- `core.commit.preflight` with `status=ok` for success and `status=warning` or
+  `status=error` for blocked/failed paths
 
 Expected Cloud evidence:
 

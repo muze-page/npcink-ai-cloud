@@ -25,14 +25,16 @@ registration is represented by `abilities.catalog.changed`.
 
 | Event kind | Status | Meaning | Primary fields |
 | --- | --- | --- | --- |
-| `core.preflight.completed` | `ok` | Governance preflight completed and did not block the request. | `proposal_id`, `latency_ms`, `proposal_count` |
-| `core.preflight.blocked` | `warning` | Governance preflight blocked or held a proposed action. | `proposal_id`, `blocked_count`, `error_code` |
-| `core.approval.completed` | `ok` | Approval flow completed. | `proposal_id`, `latency_ms` |
-| `core.audit.recorded` | `ok` | Audit metadata was recorded. | `proposal_id`, `correlation_id` |
-| `core.audit.failed` | `error` | Audit metadata could not be recorded. | `proposal_id`, `error_code` |
+| `core.proposal.create` | `ok` or `error` | Proposal creation completed or failed. | `proposal_id`, `ability_id`, `latency_ms`, `error_code` |
+| `core.proposal.plan_ingest` | `ok` or `error` | Read-only plan intake created proposal records or failed validation. | `ability_id`, `proposal_count`, `blocked_count`, `latency_ms`, `error_code` |
+| `core.proposal.approve` | `ok` or `error` | Proposal approval completed or failed. | `proposal_id`, `ability_id`, `latency_ms`, `error_code` |
+| `core.proposal.reject` | `ok` or `error` | Proposal rejection completed or failed. | `proposal_id`, `ability_id`, `latency_ms`, `error_code` |
+| `core.commit.preflight` | `ok`, `warning`, or `error` | Commit preflight completed, produced a governance block, or failed. | `proposal_id`, `ability_id`, `correlation_id`, `latency_ms`, `error_code` |
 
 Core events must not expose prompt text, generated content, approval notes, or
-raw policy payloads.
+raw proposal or policy payloads. Expected governance preflight blocks use
+`status=warning` with the Core `magick_ai_core_*` error code; failed paths use
+`status=error`.
 
 ### Adapter
 
@@ -63,7 +65,9 @@ that floods the same monitoring surface it is meant to support.
 | --- | --- | --- | --- |
 | `abilities.callback_timeout` | Abilities | Ability callback exceeded the local timeout. | Inspect the ability callback and recent latency trend. |
 | `abilities.callback_error` | Abilities | Ability callback returned an error or threw. | Check the ability id and local plugin logs. |
-| `core.preflight_blocked` | Core | Governance blocked a proposed action. | Review the proposal and local governance settings. |
+| `magick_ai_core_proposal_not_approved` | Core | Commit preflight was requested before local approval. | Review the proposal in local WordPress Core. |
+| `magick_ai_core_proposal_items_blocked` | Core | Commit preflight found missing input or blocked proposal items. | Review the proposal preview and required human input locally. |
+| `magick_ai_core_commit_preflight_already_issued` | Core | Core already issued one execution handoff for the approved input. | Use the adapter's idempotent execution record or create a fresh proposal after review. |
 | `core.audit_failed` | Core | Audit metadata could not be recorded. | Check local audit storage and retry path. |
 | `adapter.dispatch_failed` | Adapter | OpenClaw dispatch failed. | Check adapter route, Core availability, and channel configuration. |
 | `adapter.core_unavailable` | Adapter | Adapter could not reach Core. | Check Core plugin status and local REST/API bridge. |

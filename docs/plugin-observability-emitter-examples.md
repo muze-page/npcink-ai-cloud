@@ -94,7 +94,7 @@ plugin version changes, or a manual refresh requests it.
 
 ## magick-ai-core
 
-### Preflight Completed
+### Proposal Created
 
 ```json
 {
@@ -102,18 +102,17 @@ plugin version changes, or a manual refresh requests it.
   "plugin_slug": "magick-ai-core",
   "plugin_version": "0.1.0",
   "source": "local",
-  "event_kind": "core.preflight.completed",
-  "event_id": "preflight_...",
+  "event_kind": "core.proposal.create",
   "status": "ok",
   "proposal_id": "proposal_...",
-  "proposal_count": 1,
+  "ability_id": "magick-ai/create-draft",
   "latency_ms": 34,
   "captured_at": "2026-06-02T10:00:00Z",
   "emitted_at": "2026-06-02T10:00:00Z"
 }
 ```
 
-### Preflight Blocked
+### Commit Preflight Completed
 
 ```json
 {
@@ -121,17 +120,38 @@ plugin version changes, or a manual refresh requests it.
   "plugin_slug": "magick-ai-core",
   "plugin_version": "0.1.0",
   "source": "local",
-  "event_kind": "core.preflight.blocked",
-  "event_id": "preflight_...",
-  "status": "warning",
+  "event_kind": "core.commit.preflight",
+  "status": "ok",
   "proposal_id": "proposal_...",
-  "blocked_count": 1,
-  "error_code": "core.preflight_blocked",
-  "status_detail": "requires_approval",
+  "ability_id": "magick-ai/create-draft",
+  "correlation_id": "corr_...",
+  "latency_ms": 34,
   "captured_at": "2026-06-02T10:00:00Z",
   "emitted_at": "2026-06-02T10:00:00Z"
 }
 ```
+
+### Commit Preflight Blocked
+
+```json
+{
+  "schema_version": "2026-06-01",
+  "plugin_slug": "magick-ai-core",
+  "plugin_version": "0.1.0",
+  "source": "local",
+  "event_kind": "core.commit.preflight",
+  "status": "warning",
+  "proposal_id": "proposal_...",
+  "error_code": "magick_ai_core_proposal_not_approved",
+  "captured_at": "2026-06-02T10:00:00Z",
+  "emitted_at": "2026-06-02T10:00:00Z"
+}
+```
+
+Core proposal approve/reject and plan ingest use the same metadata-only shape
+with `event_kind` values `core.proposal.approve`, `core.proposal.reject`, and
+`core.proposal.plan_ingest`. Do not include proposal input, preview, caller
+payloads, approval notes, generated content, or policy payloads.
 
 ## magick-ai-adapter
 
