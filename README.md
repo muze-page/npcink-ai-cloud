@@ -32,6 +32,7 @@ Operational references:
 - [docs/cloud-adapter-analysis-contract.md](docs/cloud-adapter-analysis-contract.md)
 - [docs/cloud-local-integration-and-rebuild-guidance.md](docs/cloud-local-integration-and-rebuild-guidance.md)
 - [docs/cloud-content-generation-boundary-v1.md](docs/cloud-content-generation-boundary-v1.md)
+- [docs/cloud-bulk-article-run-v1.md](docs/cloud-bulk-article-run-v1.md)
 
 ## Test Entry For Agents
 

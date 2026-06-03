@@ -71,6 +71,12 @@ These are product-valid but require stronger gates:
 - comment reply automation
 - scheduled content assistance
 
+Bulk article preparation is further constrained by
+[Cloud Bulk Article Run v1](cloud-bulk-article-run-v1.md). Cloud may prepare
+`bulk_article_run_v1` artifacts for local review, but final WordPress writes
+must still return to the local Core proposal, approval, commit-preflight, and
+WordPress Abilities API path.
+
 Minimum gates:
 
 - provisioned and active site
