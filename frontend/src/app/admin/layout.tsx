@@ -53,6 +53,7 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
     { href: '/admin/sites', label: t('common.sites', {}, 'Sites') },
     { href: '/admin/coverage', label: t('admin.nav_coverage', {}, 'Coverage') },
     { href: '/admin/plugin-observability', label: t('admin.nav_plugin_observability', {}, 'Plugin Observability') },
+    { href: '/admin/media-observability', label: t('admin.nav_media_observability', {}, 'Media Observability') },
   ];
 
   const isActive = (href: string) => {

@@ -484,6 +484,7 @@ class RuntimeService:
             MediaDerivativeSourceDecodeFailedError,
             MediaDerivativeSourceTooLargeError,
         )
+        from app.domain.media_derivatives.metrics import record_media_derivative_job_metric
         from app.domain.media_derivatives.processor import process_media_derivative
 
         media_input = self._get_execution_input_payload(run)
@@ -500,6 +501,8 @@ class RuntimeService:
         source_bytes = base64.b64decode(source_b64) if source_b64 else b""
         watermark_b64 = media_input.get("_watermark_bytes_b64", "")
         watermark_bytes = base64.b64decode(watermark_b64) if watermark_b64 else None
+        processing_started_at = datetime.now(UTC)
+        watermark_applied = bool(watermark_bytes)
 
         if not source_bytes:
             repository.mark_run_failed(
@@ -512,6 +515,16 @@ class RuntimeService:
                 "error_code": "media_derivative.source_decode_failed",
                 "error_message": "no source bytes found in media derivative run",
             }
+            record_media_derivative_job_metric(
+                session=repository.session,
+                run=run,
+                target_format=target_format,
+                source_media_type=source_media_type,
+                source_bytes=0,
+                processing_started_at=processing_started_at,
+                error_code="media_derivative.source_decode_failed",
+                watermark_applied=watermark_applied,
+            )
             return
 
         try:
@@ -541,6 +554,16 @@ class RuntimeService:
                 "error_code": error.error_code,
                 "error_message": error.message,
             }
+            record_media_derivative_job_metric(
+                session=repository.session,
+                run=run,
+                target_format=target_format,
+                source_media_type=source_media_type,
+                source_bytes=len(source_bytes),
+                processing_started_at=processing_started_at,
+                error_code=error.error_code,
+                watermark_applied=watermark_applied,
+            )
             return
 
         artifact = create_artifact(
@@ -559,6 +582,17 @@ class RuntimeService:
             model_id="pillow",
             instance_id="cloud-worker",
             fallback_used=False,
+        )
+        record_media_derivative_job_metric(
+            session=repository.session,
+            run=run,
+            target_format=target_format,
+            source_media_type=source_media_type,
+            source_bytes=len(source_bytes),
+            processing_started_at=processing_started_at,
+            result=result,
+            artifact=artifact,
+            watermark_applied=watermark_applied,
         )
 
     def process_next_queued_run(self, *, timeout_seconds: int = 1) -> dict[str, object] | None:

@@ -12,7 +12,12 @@ from app.adapters.queue.in_memory import InMemoryRuntimeQueue
 from app.api.main import create_app
 from app.core.config import Settings
 from app.core.db import dispose_engine, get_session, init_schema
-from app.core.models import MediaDerivativeArtifact, ProviderCallRecord, RunRecord
+from app.core.models import (
+    MediaDerivativeArtifact,
+    MediaDerivativeJobMetric,
+    ProviderCallRecord,
+    RunRecord,
+)
 from app.core.services import CloudServices
 from app.domain.media_derivatives.contracts import BLOCKED_RESPONSE_FIELDS, MAX_UPLOAD_BYTES_IMAGE
 from app.domain.runtime.service import RuntimeService
@@ -178,6 +183,19 @@ def test_worker_success_path(tmp_path: Path) -> None:
         assert artifact["checksum"].startswith("sha256:")
         assert artifact["mime_type"] == "image/webp"
         assert artifact["processing_warnings"] == []
+        with get_session(database_url) as session:
+            metric = session.query(MediaDerivativeJobMetric).filter_by(run_id=run_id).one()
+            assert metric.status == "succeeded"
+            assert metric.target_format == "webp"
+            assert metric.output_format == "webp"
+            assert metric.source_bytes == len(image_bytes)
+            assert metric.output_bytes == artifact["filesize_bytes"]
+            assert metric.source_width == 200
+            assert metric.source_height == 160
+            assert metric.output_width == 100
+            assert metric.output_height == 80
+            assert metric.processing_duration_ms >= 0
+            assert metric.artifact_id == artifact["artifact_id"]
     finally:
         dispose_engine(database_url)
 
@@ -281,6 +299,11 @@ def test_watermark_file_success_path(tmp_path: Path) -> None:
         assert dl_response.status_code == 200
         watermarked = Image.open(io.BytesIO(dl_response.content))
         assert watermarked.getpixel((95, 95))[:3] == (255, 0, 0)
+        with get_session(database_url) as session:
+            metric = session.query(MediaDerivativeJobMetric).filter_by(run_id=run_id).one()
+            assert metric.watermark_applied is True
+            assert metric.artifact_download_count == 1
+            assert metric.artifact_last_downloaded_at is not None
     finally:
         dispose_engine(database_url)
 
@@ -797,6 +820,13 @@ def test_animated_image_rejected(tmp_path: Path) -> None:
         assert "animated_source_unavailable" in (
             result_data.get("result", {}).get("error_code") or ""
         )
+        with get_session(database_url) as session:
+            metric = session.query(MediaDerivativeJobMetric).filter_by(run_id=run_id).one()
+            assert metric.status == "failed"
+            assert metric.error_code == "media_derivative.animated_source_unavailable"
+            assert metric.target_format == "webp"
+            assert metric.source_bytes == len(image_bytes)
+            assert metric.output_bytes == 0
     finally:
         dispose_engine(database_url)
 

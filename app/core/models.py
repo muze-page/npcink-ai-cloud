@@ -879,3 +879,43 @@ class MediaDerivativeArtifact(Base):
         DateTime(timezone=True),
         server_default=func.now(),
     )
+
+
+class MediaDerivativeJobMetric(Base):
+    __tablename__ = "media_derivative_job_metrics"
+    __table_args__ = (
+        UniqueConstraint("run_id", name="uq_media_derivative_job_metrics_run"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    run_id: Mapped[str] = mapped_column(ForeignKey("run_records.run_id"), index=True)
+    site_id: Mapped[str] = mapped_column(String(191), index=True)
+    account_id: Mapped[str | None] = mapped_column(String(191), index=True)
+    subscription_id: Mapped[str | None] = mapped_column(String(191), index=True)
+    status: Mapped[str] = mapped_column(String(32), index=True)
+    error_code: Mapped[str | None] = mapped_column(String(128), index=True)
+    target_format: Mapped[str] = mapped_column(String(16), index=True)
+    output_format: Mapped[str | None] = mapped_column(String(16), index=True)
+    source_media_type: Mapped[str] = mapped_column(String(16), default="image", index=True)
+    source_bytes: Mapped[int] = mapped_column(Integer, default=0)
+    output_bytes: Mapped[int] = mapped_column(Integer, default=0)
+    source_width: Mapped[int] = mapped_column(Integer, default=0)
+    source_height: Mapped[int] = mapped_column(Integer, default=0)
+    output_width: Mapped[int] = mapped_column(Integer, default=0)
+    output_height: Mapped[int] = mapped_column(Integer, default=0)
+    compression_ratio: Mapped[float] = mapped_column(Float, default=0.0)
+    queue_wait_ms: Mapped[int] = mapped_column(Integer, default=0)
+    processing_duration_ms: Mapped[int] = mapped_column(Integer, default=0)
+    total_duration_ms: Mapped[int] = mapped_column(Integer, default=0)
+    watermark_applied: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    warnings_count: Mapped[int] = mapped_column(Integer, default=0)
+    artifact_id: Mapped[str | None] = mapped_column(String(191), index=True)
+    artifact_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    artifact_download_count: Mapped[int] = mapped_column(Integer, default=0)
+    artifact_last_downloaded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        index=True,
+    )
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)

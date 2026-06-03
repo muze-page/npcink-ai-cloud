@@ -39,6 +39,7 @@ from app.domain.commercial.customer_api_keys import (
 )
 from app.domain.commercial.errors import CommercialServiceError
 from app.domain.commercial.service import PORTAL_SITE_KEY_WRITE_ROLES
+from app.domain.media_derivatives.metrics import MediaDerivativeObservabilityService
 from app.domain.observability.plugin_events import PluginObservabilityService
 from app.domain.usage.service import UsageService
 
@@ -548,6 +549,51 @@ async def get_portal_site_plugin_observability(
     result["role"] = str(access.get("role") or "")
     return _portal_route_envelope(
         message="portal plugin observability loaded",
+        data=result,
+    )
+
+
+@router.get("/sites/{site_id}/media-observability")
+async def get_portal_site_media_observability(
+    request: Request,
+    site_id: str,
+    window_hours: int = Query(default=24, ge=1, le=168),
+    target_format: str = Query(default="", max_length=16),
+) -> Any:
+    auth = await resolve_portal_request_context(
+        request,
+        require_idempotency=False,
+        allow_session_cookies=True,
+    )
+    if isinstance(auth, JSONResponse):
+        return auth
+    access = _authorize_portal_site_access(
+        request,
+        site_id=site_id,
+        member_ref=auth.member_ref,
+    )
+    if isinstance(access, JSONResponse):
+        return access
+    result = MediaDerivativeObservabilityService(
+        _get_commercial_service(request).database_url
+    ).get_summary(
+        site_id=site_id,
+        window_hours=window_hours,
+        target_format=target_format.strip(),
+    )
+    result.pop("sites", None)
+    result["site_id"] = site_id
+    result["account_id"] = str(access.get("account_id") or "")
+    result["member_ref"] = auth.member_ref
+    result["identity_type"] = str(access.get("identity_type") or "")
+    result["allowed_actions"] = [
+        str(action)
+        for action in list(access.get("allowed_actions") or [])
+        if str(action).strip()
+    ]
+    result["role"] = str(access.get("role") or "")
+    return _portal_route_envelope(
+        message="portal media observability loaded",
         data=result,
     )
 

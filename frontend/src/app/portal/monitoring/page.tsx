@@ -6,11 +6,13 @@ import { LoadingFallback } from '@/components/ui/LoadingFallback';
 import { BackofficePageStack } from '@/components/backoffice/BackofficeScaffold';
 import { PortalWorkspaceHeader } from '@/components/portal/PortalWorkspaceHeader';
 import { PortalErrorState, PortalLoadingState, PortalSignedOutState } from '@/components/portal/PortalPageState';
+import { PortalMediaProcessingPanel } from '@/components/portal/PortalMediaProcessingPanel';
 import { PortalPluginMonitoringPanel } from '@/components/portal/PortalPluginMonitoringPanel';
 import { useLocale } from '@/contexts/LocaleContext';
 import { useSession } from '@/hooks/useSession';
 import {
   portalClient,
+  type PortalMediaObservabilitySummary,
   type PortalPluginObservabilitySummary,
   type Site,
 } from '@/lib/portal-client';
@@ -36,8 +38,11 @@ function PortalMonitoringContent() {
   const searchParams = useSearchParams();
   const { session, isLoading, isAuthenticated, selectSite } = useSession();
   const [summary, setSummary] = useState<PortalPluginObservabilitySummary | null>(null);
+  const [mediaSummary, setMediaSummary] = useState<PortalMediaObservabilitySummary | null>(null);
   const [isSummaryLoading, setIsSummaryLoading] = useState(false);
+  const [isMediaSummaryLoading, setIsMediaSummaryLoading] = useState(false);
   const [error, setError] = useState('');
+  const [mediaError, setMediaError] = useState('');
   const [refreshNonce, setRefreshNonce] = useState(0);
   const requestedSiteId = searchParams.get('site') || '';
   const sites = session?.sites || [];
@@ -47,13 +52,17 @@ function PortalMonitoringContent() {
   useEffect(() => {
     if (!selectedSiteId) {
       setSummary(null);
+      setMediaSummary(null);
       setError('');
+      setMediaError('');
       return;
     }
 
     let isCancelled = false;
     setIsSummaryLoading(true);
+    setIsMediaSummaryLoading(true);
     setError('');
+    setMediaError('');
 
     void portalClient
       .getPluginObservability(selectedSiteId, { windowHours: 24 })
@@ -71,6 +80,25 @@ function PortalMonitoringContent() {
       .finally(() => {
         if (!isCancelled) {
           setIsSummaryLoading(false);
+        }
+      });
+
+    void portalClient
+      .getMediaObservability(selectedSiteId, { windowHours: 24 })
+      .then((response) => {
+        if (!isCancelled) {
+          setMediaSummary(response.data);
+        }
+      })
+      .catch((err) => {
+        if (!isCancelled) {
+          setMediaSummary(null);
+          setMediaError(formatPortalErrorMessage(err, t, t('error.failed_load')));
+        }
+      })
+      .finally(() => {
+        if (!isCancelled) {
+          setIsMediaSummaryLoading(false);
         }
       });
 
@@ -157,6 +185,13 @@ function PortalMonitoringContent() {
         summary={summary}
         isLoading={isSummaryLoading}
         error={error}
+        onRetry={() => setRefreshNonce((current) => current + 1)}
+      />
+
+      <PortalMediaProcessingPanel
+        summary={mediaSummary}
+        isLoading={isMediaSummaryLoading}
+        error={mediaError}
         onRetry={() => setRefreshNonce((current) => current + 1)}
       />
     </BackofficePageStack>

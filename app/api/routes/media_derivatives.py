@@ -23,6 +23,7 @@ from app.domain.media_derivatives.contracts import (
     MediaDerivativeRequest,
 )
 from app.domain.media_derivatives.errors import MediaDerivativeErrorBase
+from app.domain.media_derivatives.metrics import record_media_derivative_artifact_download
 from app.domain.runtime.errors import RuntimeErrorBase
 from app.domain.runtime.service import RuntimeService
 
@@ -369,6 +370,10 @@ async def download_artifact(
             remaining_seconds = max(0, int(remaining.total_seconds()))
 
         blob_data = artifact.blob_data or b""
+        record_media_derivative_artifact_download(
+            session=session,
+            artifact_id=artifact.artifact_id,
+        )
         session.commit()
 
     format_ext = artifact.format

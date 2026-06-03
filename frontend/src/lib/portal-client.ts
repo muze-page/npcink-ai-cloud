@@ -421,6 +421,90 @@ export interface PortalPluginObservabilitySummary {
   recent_errors: PortalPluginObservabilityRecentError[];
 }
 
+export interface PortalMediaObservabilityTotals {
+  jobs_total: number;
+  succeeded_total: number;
+  failed_total: number;
+  success_rate: number;
+  avg_processing_duration_ms: number;
+  p95_processing_duration_ms: number;
+  avg_queue_wait_ms: number;
+  source_bytes_total: number;
+  output_bytes_total: number;
+  bytes_saved_total: number;
+  compression_ratio: number;
+  artifact_download_count: number;
+  last_finished_at: string;
+  active_site_count: number;
+  active_account_count: number;
+  watermark_job_count: number;
+  active_artifact_count: number;
+  active_artifact_bytes: number;
+}
+
+export interface PortalMediaObservabilityHealth {
+  status: string;
+  score: number;
+  summary: string;
+}
+
+export interface PortalMediaObservabilityTimelinePoint {
+  bucket_start_at: string;
+  jobs_total: number;
+  failed_total: number;
+  bytes_saved_total: number;
+}
+
+export interface PortalMediaObservabilityFormat {
+  target_format: string;
+  jobs_total: number;
+  succeeded_total: number;
+  failed_total: number;
+  success_rate: number;
+  source_bytes_total: number;
+  output_bytes_total: number;
+  bytes_saved_total: number;
+  compression_ratio: number;
+  avg_processing_duration_ms: number;
+}
+
+export interface PortalMediaObservabilityError {
+  error_code: string;
+  count: number;
+  last_seen_at: string;
+}
+
+export interface PortalMediaObservabilityRecentFailure {
+  run_id: string;
+  site_id: string;
+  target_format: string;
+  error_code: string;
+  source_bytes: number;
+  queue_wait_ms: number;
+  processing_duration_ms: number;
+  finished_at: string;
+}
+
+export interface PortalMediaObservabilitySummary {
+  contract_version: string;
+  site_id: string;
+  account_id?: string;
+  member_ref?: string;
+  role?: string;
+  generated_at: string;
+  window: {
+    hours: number;
+    start_at: string;
+    end_at: string;
+  };
+  totals: PortalMediaObservabilityTotals;
+  health: PortalMediaObservabilityHealth;
+  timeline: PortalMediaObservabilityTimelinePoint[];
+  formats: PortalMediaObservabilityFormat[];
+  errors: PortalMediaObservabilityError[];
+  recent_failures: PortalMediaObservabilityRecentFailure[];
+}
+
 export interface PortalAuditEvent {
   event_id: string;
   event_kind: string;
@@ -974,6 +1058,26 @@ export class PortalClient {
     return this.request(
       'GET',
       `/sites/${siteId}/plugin-observability?${params.toString()}`,
+      undefined,
+      { requireAuth: true }
+    );
+  }
+
+  async getMediaObservability(
+    siteId: string,
+    options?: {
+      windowHours?: number;
+      targetFormat?: string;
+    }
+  ): Promise<PortalEnvelope<PortalMediaObservabilitySummary>> {
+    const params = new URLSearchParams();
+    params.set('window_hours', String(options?.windowHours || 24));
+    if (options?.targetFormat) {
+      params.set('target_format', options.targetFormat);
+    }
+    return this.request(
+      'GET',
+      `/sites/${siteId}/media-observability?${params.toString()}`,
       undefined,
       { requireAuth: true }
     );

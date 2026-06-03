@@ -32,6 +32,8 @@ class MediaDerivativeResult:
     checksum: str
     mime_type: str
     format: str
+    source_width: int = 0
+    source_height: int = 0
     processing_warnings: list[str] = field(default_factory=list)
 
 
@@ -196,6 +198,8 @@ def process_media_derivative(
     img: Image.Image | None = None
     try:
         img = _open_static_image(source_bytes)
+        source_width = img.width
+        source_height = img.height
 
         try:
             from PIL import ExifTags
@@ -254,6 +258,8 @@ def process_media_derivative(
             checksum=f"sha256:{checksum}",
             mime_type=mime_type,
             format=fmt,
+            source_width=source_width,
+            source_height=source_height,
             processing_warnings=warnings,
         )
     except (
