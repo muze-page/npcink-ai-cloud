@@ -9,39 +9,36 @@ def _read(path: str) -> str:
     return (ROOT / path).read_text(encoding="utf-8")
 
 
-def test_cloud_bulk_article_contract_keeps_cloud_runtime_only() -> None:
+def test_cloud_bulk_article_contract_prohibits_cloud_writing_generation() -> None:
     contract = _read("docs/cloud-bulk-article-run-v1.md")
     content_boundary = _read("docs/cloud-content-generation-boundary-v1.md")
     readme = _read("README.md")
 
     for required in (
-        "Status: active planning contract",
+        "Status: prohibited and deprecated planning contract",
         "bulk_article_run_v1",
-        "Cloud bulk article work is runtime preparation",
-        "Cloud bulk article work is not publishing",
-        "Final WordPress writes remain local",
-        "Core-governed, preflighted, audited",
-        "approval_policy",
-        "wordpress_write_target",
-        "post_status=publish",
-        "commit=true",
-        "ready_for_local_review",
-        "partially_ready_for_local_review",
+        "Cloud bulk article generation is not a product surface",
+        "article title generation",
+        "article outline generation",
+        "paragraph or body drafting",
+        "SEO title, excerpt, or meta-description writing",
+        "batch article draft production",
+        "Cloud-produced `article_write_plan` candidates",
+        "Cloud article artifact import into Toolbox",
+        "direct Cloud publishing",
+        "local Ability recipe",
         "article_write_plan",
         "magick-ai-toolbox/build-article-write-plan",
-        "POST /wp-json/magick-ai-core/v1/proposals/from-plan",
-        "must not mark it",
-        "published",
-        "bulk spam",
-        "doorway pages",
-        "Cloud Addon reads run/result detail",
+        "Core /proposals/from-plan",
         "WordPress Abilities API",
-        "direct Cloud publishing",
-        "Cloud WordPress credentials",
-        "a second scheduler or workflow truth",
+        "must not become article workflow",
+        "blocked",
+        "contract identifier",
     ):
         assert required in contract
 
+    assert "Cloud article writing generation is not cautiously allowed" in content_boundary
+    assert "article writing generation, batch article drafts" in content_boundary
     assert "direct cloud-side publishing to WordPress" in content_boundary
     assert "docs/cloud-bulk-article-run-v1.md" in readme
 
@@ -55,6 +52,8 @@ def test_cloud_bulk_article_contract_does_not_add_public_publish_route() -> None
     forbidden_fragments = (
         "/v1/articles/bulk-publish",
         "/v1/bulk-publish",
+        "/v1/articles/bulk-runs",
+        "/v1/bulk-article-runs",
         "wp_insert_post",
         "wp_update_post",
     )

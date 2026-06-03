@@ -63,19 +63,18 @@ unless a local approved write flow explicitly applies them.
 
 These are product-valid but require stronger gates:
 
-- batch article drafts
 - batch product-description drafts
-- long-form article generation
 - automated translation batches
 - image generation for article media
 - comment reply automation
 - scheduled content assistance
 
-Bulk article preparation is further constrained by
-[Cloud Bulk Article Run v1](cloud-bulk-article-run-v1.md). Cloud may prepare
-`bulk_article_run_v1` artifacts for local review, but final WordPress writes
-must still return to the local Core proposal, approval, commit-preflight, and
-WordPress Abilities API path.
+Cloud article writing generation is not cautiously allowed. It is prohibited
+by [Cloud Bulk Article Run v1](cloud-bulk-article-run-v1.md): Cloud must not
+generate article drafts, SEO copy, long-form article bodies,
+`bulk_article_run_v1` runs, or Cloud-produced `article_write_plan` candidates.
+Article drafting remains a local Ability recipe under local review and Core
+governance.
 
 Minimum gates:
 
@@ -103,6 +102,8 @@ Cloud must not intentionally provide product surfaces for:
   provenance checks
 - unauthorized rewriting, scraping, laundering, or derivative use of copyrighted
   works
+- article writing generation, batch article drafts, long-form article
+  generation, or Cloud-produced `article_write_plan` candidates
 - regulated high-stakes advice in legal, medical, financial, or safety-critical
   domains without a separate approved product and compliance review
 - direct cloud-side publishing to WordPress or other public channels
