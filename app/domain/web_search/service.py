@@ -385,7 +385,7 @@ class ApifyWebSearchProvider:
         endpoint = f"{base_url}/acts/{quote(actor_id, safe='')}/run-sync-get-dataset-items"
         max_results = coerce_positive_int(options.get("max_results"), default=5, maximum=10)
         request_body = {
-            "queries": [query],
+            "queries": query,
             "maxResults": max_results,
             "resultsPerPage": max_results,
             "maxPagesPerQuery": 1,
@@ -397,7 +397,11 @@ class ApifyWebSearchProvider:
             with httpx.Client(
                 timeout=float(self.settings.web_search_apify_timeout_seconds)
             ) as client:
-                response = client.post(endpoint, params={"token": api_token}, json=request_body)
+                response = client.post(
+                    endpoint,
+                    headers={"Authorization": f"Bearer {api_token}"},
+                    json=request_body,
+                )
                 response.raise_for_status()
         except httpx.TimeoutException as error:
             usage = self._usage(started, error_code="provider.timeout")
@@ -426,6 +430,7 @@ class ApifyWebSearchProvider:
         raw_results = payload if isinstance(payload, list) else payload.get("items", [])
         if not isinstance(raw_results, list):
             raw_results = []
+        raw_results = _flatten_apify_search_results(raw_results, max_results=max_results)
         intent = str(options.get("intent") or "general_research")
         results = _normalize_results(
             raw_results,
@@ -458,6 +463,29 @@ class ApifyWebSearchProvider:
             cost=max(0.0, float(self.settings.web_search_apify_cost_per_query or 0.0)),
             error_code=error_code,
         )
+
+
+def _flatten_apify_search_results(
+    raw_results: list[Any],
+    *,
+    max_results: int,
+) -> list[dict[str, Any]]:
+    flattened: list[dict[str, Any]] = []
+    for item in raw_results:
+        if not isinstance(item, dict):
+            continue
+        organic_results = item.get("organicResults")
+        if isinstance(organic_results, list):
+            for organic_result in organic_results:
+                if isinstance(organic_result, dict):
+                    flattened.append(organic_result)
+                if len(flattened) >= max_results:
+                    return flattened
+            continue
+        flattened.append(item)
+        if len(flattened) >= max_results:
+            return flattened
+    return flattened
 
 
 def _build_options(input_payload: dict[str, Any]) -> dict[str, Any]:

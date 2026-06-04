@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+import httpx
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
@@ -377,6 +378,88 @@ def test_cloud_managed_web_search_uses_apify_provider(
             )
         )
         assert provider_calls[0].provider_id == "apify"
+
+
+def test_apify_provider_uses_actor_query_string_and_bearer_auth(monkeypatch: Any) -> None:
+    captured: dict[str, Any] = {}
+
+    class FakeClient:
+        def __init__(self, *, timeout: float) -> None:
+            captured["timeout"] = timeout
+
+        def __enter__(self) -> "FakeClient":
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            return None
+
+        def post(
+            self,
+            endpoint: str,
+            *,
+            headers: dict[str, str],
+            json: dict[str, Any],
+        ) -> httpx.Response:
+            captured["endpoint"] = endpoint
+            captured["headers"] = headers
+            captured["json"] = json
+            return httpx.Response(
+                200,
+                json=[
+                    {
+                        "searchQuery": {
+                            "term": "latest WordPress AI search trends",
+                            "url": "https://www.google.com/search?q=latest+WordPress+AI+search+trends",
+                        },
+                        "url": "https://www.google.com/search?q=latest+WordPress+AI+search+trends",
+                        "organicResults": [
+                            {
+                                "title": "Apify source",
+                                "url": "https://example.com/apify-source",
+                                "description": "A source returned by Apify.",
+                            }
+                        ],
+                    }
+                ],
+                request=httpx.Request("POST", endpoint),
+            )
+
+    monkeypatch.setattr("app.domain.web_search.service.httpx.Client", FakeClient)
+
+    result = ApifyWebSearchProvider(
+        Settings(
+            _env_file=None,
+            environment="test",
+            web_search_provider="apify",
+            web_search_apify_api_token="redacted-placeholder",
+            web_search_apify_actor_id="apify/google-search-scraper",
+        )
+    ).search(
+        query="latest WordPress AI search trends",
+        options={
+            "intent": "news",
+            "provider": "apify",
+            "max_results": 3,
+            "language": "en",
+            "region": "US",
+            "evidence_policy": {"required_sources": 1, "no_hit_policy": "abstain"},
+        },
+        site_id="site_alpha",
+        run_id="run_apify_shape",
+    )
+
+    assert captured["json"]["queries"] == "latest WordPress AI search trends"
+    assert captured["json"]["maxResults"] == 3
+    assert captured["json"]["resultsPerPage"] == 3
+    assert captured["json"]["maxPagesPerQuery"] == 1
+    assert captured["json"]["language"] == "en"
+    assert captured["json"]["countryCode"] == "US"
+    assert captured["headers"]["Authorization"] == "Bearer redacted-placeholder"
+    assert "token=" not in captured["endpoint"]
+    assert result.result_json["provider"] == "apify"
+    assert len(result.result_json["results"]) == 1
+    assert result.result_json["evidence_gate"]["source_count"] == 1
+    assert result.result_json["results"][0]["url"] == "https://example.com/apify-source"
 
 
 def test_web_search_rejects_provider_keys_in_runtime_input(tmp_path: Path) -> None:
