@@ -319,6 +319,7 @@ def test_pixabay_provider_preserves_api_endpoint_trailing_slash(monkeypatch: Any
         admin_session_secret=TEST_ADMIN_SESSION_SECRET,
         portal_jwt_secret=TEST_PORTAL_JWT_SECRET,
         image_source_provider="pixabay",
+        image_source_auto_strategy="first_available",
         image_source_pixabay_base_url="https://pixabay.com/api",
         image_source_pixabay_api_key="placeholder-pixabay-key",
     )
@@ -366,6 +367,9 @@ def test_pixabay_provider_preserves_api_endpoint_trailing_slash(monkeypatch: Any
 
     assert captured["url"] == "https://pixabay.com/api/"
     assert captured["params"]["orientation"] == "horizontal"
+    assert execution.result_json["requested_provider_mode"] == "pixabay"
+    assert execution.result_json["resolved_provider"] == "pixabay"
+    assert execution.result_json["auto_strategy"] == "first_available"
     candidate = execution.result_json["images"][0]
     assert candidate["provider"] == "pixabay"
     assert candidate["thumbnail_url"] == "https://cdn.pixabay.com/photo-thumb.jpg"

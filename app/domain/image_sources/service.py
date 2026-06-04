@@ -202,6 +202,7 @@ class UnsplashImageSourceProvider(_BaseImageProvider):
         candidates = [_normalize_unsplash(item) for item in _list(payload.get("results"))]
         return _build_result(
             provider_id=self.provider_id,
+            auto_strategy=str(self.settings.image_source_auto_strategy or "first_available"),
             query=query,
             options=options,
             candidates=candidates,
@@ -251,6 +252,7 @@ class PixabayImageSourceProvider(_BaseImageProvider):
         candidates = [_normalize_pixabay(item) for item in _list(payload.get("hits"))]
         return _build_result(
             provider_id=self.provider_id,
+            auto_strategy=str(self.settings.image_source_auto_strategy or "first_available"),
             query=query,
             options=options,
             candidates=candidates,
@@ -293,6 +295,7 @@ class PexelsImageSourceProvider(_BaseImageProvider):
         candidates = [_normalize_pexels(item) for item in _list(payload.get("photos"))]
         return _build_result(
             provider_id=self.provider_id,
+            auto_strategy=str(self.settings.image_source_auto_strategy or "first_available"),
             query=query,
             options=options,
             candidates=candidates,
@@ -516,6 +519,7 @@ def _candidate(
 def _build_result(
     *,
     provider_id: str,
+    auto_strategy: str,
     query: str,
     options: dict[str, Any],
     candidates: list[dict[str, Any]],
@@ -530,6 +534,9 @@ def _build_result(
         "status": "ready",
         "provider": "magick_ai_cloud",
         "provider_mode": provider_id,
+        "requested_provider_mode": str(options.get("provider") or "auto"),
+        "resolved_provider": provider_id,
+        "auto_strategy": auto_strategy,
         "candidate_contract_version": IMAGE_CANDIDATE_CONTRACT,
         "query_hash": _hash_text(query),
         "query_chars": len(query),
