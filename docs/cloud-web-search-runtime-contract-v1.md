@@ -121,6 +121,65 @@ Supported first intents:
 - `source_discovery`
 - `external_links`
 
+## Automatic Search Preflight
+
+Generic hosted runtime requests may ask Cloud to automatically run Web Search
+before the model/provider execution. This is intentionally semi-automatic:
+Cloud does not inspect every prompt and decide to browse. A caller must declare
+that external evidence is needed.
+
+Supported input controls:
+
+```json
+{
+  "requires_external_evidence": true,
+  "topic": "latest WordPress AI search trends",
+  "search_policy": {
+    "mode": "auto",
+    "intent": "news",
+    "provider": "auto",
+    "max_results": 3,
+    "recency_days": 7,
+    "enhance_with_reader": false,
+    "evidence_policy": {
+      "required_sources": 1,
+      "no_hit_policy": "abstain"
+    }
+  }
+}
+```
+
+`search_policy.mode` values:
+
+- `off`: do not run automatic search.
+- `auto`: run search only for external-evidence intents such as `news`,
+  `fact_check`, `writing_context`, `competitor_research`, `source_discovery`,
+  or `external_links`.
+- `required`: run search and fail the runtime request if search fails.
+- `dry_run`: report that search would run, but do not call a provider.
+
+The search query is resolved from `search_policy.query`, `search_query`,
+`query`, `topic`, `title`, or `headline`, in that order.
+
+When automatic search succeeds, Cloud injects the normalized Web Search result
+into provider input under:
+
+```json
+{
+  "cloud_evidence": {
+    "web_search": {
+      "source": "cloud_managed_automatic_web_search",
+      "report": {},
+      "result": {}
+    }
+  }
+}
+```
+
+The terminal runtime result also includes `automatic_web_search` so callers can
+see whether search was skipped, dry-run, failed, or used. This evidence remains
+`suggestion_only`; Cloud still must not write WordPress content.
+
 ## Output Shape
 
 ```json

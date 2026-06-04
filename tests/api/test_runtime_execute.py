@@ -4,6 +4,7 @@ import json
 import logging
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 import httpx
 import pytest
@@ -43,7 +44,13 @@ from app.core.security import (
 )
 from app.core.services import CloudServices
 from app.domain.catalog.service import CatalogService
+from app.domain.runtime.models import RuntimeRequest
 from app.domain.runtime.service import RuntimeService
+from app.domain.web_search.service import (
+    WebSearchExecutionResult,
+    WebSearchProviderUsage,
+    WebSearchService,
+)
 from tests.conftest import (
     build_auth_headers,
     merge_json_headers,
@@ -171,6 +178,194 @@ class SequencedProviderAdapter(OpenAIProviderAdapter):
         )
 
 
+class RecordingProviderAdapter(OpenAIProviderAdapter):
+    def __init__(self) -> None:
+        super().__init__()
+        self.requests: list[ProviderExecutionRequest] = []
+
+    def execute(self, request: ProviderExecutionRequest) -> ProviderExecutionResult:
+        self.requests.append(request)
+        web_search_evidence = (
+            request.input_payload.get("cloud_evidence", {})
+            if isinstance(request.input_payload.get("cloud_evidence"), dict)
+            else {}
+        ).get("web_search")
+        return ProviderExecutionResult(
+            output={
+                "output_text": "recording provider success",
+                "received_automatic_web_search": isinstance(web_search_evidence, dict),
+            },
+            latency_ms=25,
+            tokens_in=5,
+            tokens_out=3,
+            cost=0.0,
+        )
+
+
+def test_runtime_auto_web_search_enriches_provider_input(
+    tmp_path: Path,
+    monkeypatch: Any,
+) -> None:
+    database_url = _sqlite_url(tmp_path)
+    provider = RecordingProviderAdapter()
+    init_schema(database_url)
+    CatalogService(database_url, providers={"openai": provider}).refresh_catalog()
+    seed_site_auth(
+        database_url,
+        site_id="site_alpha",
+        scopes=["runtime:execute", "runtime:read", "runtime:resolve"],
+    )
+    settings = Settings(
+        environment="test",
+        database_url=database_url,
+        redis_url="redis://localhost:6379/0",
+        web_search_provider="tavily",
+        web_search_tavily_api_key="placeholder-tavily-key",
+    )
+
+    def fake_search(
+        self: WebSearchService,
+        *,
+        site_id: str,
+        ability_name: str,
+        contract_version: str,
+        input_payload: dict[str, Any],
+        run_id: str,
+    ) -> WebSearchExecutionResult:
+        assert input_payload["query"] == "latest WordPress AI search trends"
+        assert input_payload["intent"] == "news"
+        return WebSearchExecutionResult(
+            result_json={
+                "artifact_type": "web_search_results",
+                "composition_role": "external_web_evidence",
+                "status": "ready",
+                "provider": "tavily",
+                "intent": "news",
+                "query_hash": "hash-only",
+                "query_chars": len(input_payload["query"]),
+                "evidence_gate": {
+                    "status": "passed",
+                    "source_count": 1,
+                    "allows_web_grounded_assertion": True,
+                },
+                "results": [
+                    {
+                        "title": "Search source",
+                        "url": "https://example.com/source",
+                        "snippet": "External source.",
+                        "score": 1.0,
+                        "source": "tavily",
+                        "write_posture": "suggestion_only",
+                        "direct_wordpress_write": False,
+                    }
+                ],
+                "write_posture": "suggestion_only",
+                "direct_wordpress_write": False,
+            },
+            usage=WebSearchProviderUsage(
+                provider_id="tavily",
+                model_id="web-search",
+                instance_id="cloud-managed",
+                region="unspecified",
+                latency_ms=12,
+                cost=0.002,
+            ),
+        )
+
+    monkeypatch.setattr(WebSearchService, "execute", fake_search)
+
+    response = RuntimeService(
+        database_url,
+        settings=settings,
+        providers={"openai": provider},
+    ).execute(
+        RuntimeRequest(
+            site_id="site_alpha",
+            ability_name="magick-ai/workflows/generate-post-draft",
+            ability_family="workflow",
+            channel="openapi",
+            execution_kind="text",
+            profile_id="text.balanced",
+            contract_version="v1",
+            input_payload={
+                "topic": "latest WordPress AI search trends",
+                "search_policy": {
+                    "mode": "auto",
+                    "intent": "news",
+                    "max_results": 2,
+                    "recency_days": 7,
+                },
+            },
+            policy={"allow_fallback": True},
+        )
+    )
+
+    assert response.status == "succeeded"
+    assert response.provider_call_count == 2
+    assert response.result["received_automatic_web_search"] is True
+    assert response.result["automatic_web_search"]["status"] == "ready"
+    assert provider.requests
+    evidence = provider.requests[0].input_payload["cloud_evidence"]["web_search"]
+    assert evidence["report"]["status"] == "ready"
+    assert evidence["result"]["results"][0]["url"] == "https://example.com/source"
+
+
+def test_runtime_auto_web_search_dry_run_does_not_call_search(
+    tmp_path: Path,
+    monkeypatch: Any,
+) -> None:
+    database_url = _sqlite_url(tmp_path)
+    provider = RecordingProviderAdapter()
+    init_schema(database_url)
+    CatalogService(database_url, providers={"openai": provider}).refresh_catalog()
+    seed_site_auth(
+        database_url,
+        site_id="site_alpha",
+        scopes=["runtime:execute", "runtime:read", "runtime:resolve"],
+    )
+    settings = Settings(
+        environment="test",
+        database_url=database_url,
+        redis_url="redis://localhost:6379/0",
+        web_search_provider="tavily",
+        web_search_tavily_api_key="placeholder-tavily-key",
+    )
+
+    def unexpected_search(self: WebSearchService, **kwargs: Any) -> WebSearchExecutionResult:
+        raise AssertionError("dry_run must not call WebSearchService")
+
+    monkeypatch.setattr(WebSearchService, "execute", unexpected_search)
+
+    response = RuntimeService(
+        database_url,
+        settings=settings,
+        providers={"openai": provider},
+    ).execute(
+        RuntimeRequest(
+            site_id="site_alpha",
+            ability_name="magick-ai/workflows/generate-post-draft",
+            ability_family="workflow",
+            channel="openapi",
+            execution_kind="text",
+            profile_id="text.balanced",
+            contract_version="v1",
+            input_payload={
+                "topic": "latest WordPress AI search trends",
+                "search_policy": {
+                    "mode": "dry_run",
+                    "intent": "news",
+                },
+            },
+            policy={"allow_fallback": True},
+        )
+    )
+
+    assert response.status == "succeeded"
+    assert response.provider_call_count == 1
+    assert response.result["received_automatic_web_search"] is False
+    assert response.result["automatic_web_search"]["status"] == "would_search"
+
+
 def test_execute_route_runs_and_supports_idempotency(tmp_path: Path) -> None:
     database_url, client = _build_client(tmp_path)
     payload = {
@@ -197,9 +392,7 @@ def test_execute_route_runs_and_supports_idempotency(tmp_path: Path) -> None:
         "profile_id": "text.balanced",
         "idempotency_key": "idem-balanced-001",
         "trace_id": "trace-balanced-001",
-        "input": {
-            "messages": [{"role": "user", "content": "write a short draft"}]
-        },
+        "input": {"messages": [{"role": "user", "content": "write a short draft"}]},
         "policy": {"allow_fallback": True},
     }
     body = json.dumps(payload).encode("utf-8")
@@ -303,14 +496,8 @@ def test_execute_route_runs_and_supports_idempotency(tmp_path: Path) -> None:
     assert run_response.json()["data"]["task_backend"]["status"] == "completed"
     assert run_response.json()["data"]["run_lifecycle"]["phase"] == "terminal"
     assert result_response.json()["data"]["result"]["output_text"].startswith("[hosted:")
-    assert (
-        result_response.json()["data"]["execution_context"]["execution_pattern"]
-        == "inline"
-    )
-    assert (
-        result_response.json()["data"]["execution_context"]["ability_family"]
-        == "workflow"
-    )
+    assert result_response.json()["data"]["execution_context"]["execution_pattern"] == "inline"
+    assert result_response.json()["data"]["execution_context"]["ability_family"] == "workflow"
     assert result_response.json()["data"]["task_backend"]["retry_max"] == 2
     assert result_response.json()["data"]["run_lifecycle"]["retention"]["state"] == "retained"
 
@@ -354,9 +541,7 @@ def test_execute_route_rejects_step_offload_public_ingress(
         "profile_id": "text.balanced",
         "idempotency_key": "idem-step-offload-001",
         "trace_id": "trace-step-offload-001",
-        "input": {
-            "messages": [{"role": "user", "content": "return one short line"}]
-        },
+        "input": {"messages": [{"role": "user", "content": "return one short line"}]},
         "policy": {"allow_fallback": True},
     }
     body = json.dumps(payload).encode("utf-8")
@@ -1410,9 +1595,9 @@ def test_execute_route_allows_budget_grace_with_runtime_downgrade(tmp_path: Path
     second_body = json.dumps(
         {**request_payload, "idempotency_key": "idem-budget-grace-002"}
     ).encode("utf-8")
-    third_body = json.dumps(
-        {**request_payload, "idempotency_key": "idem-budget-grace-003"}
-    ).encode("utf-8")
+    third_body = json.dumps({**request_payload, "idempotency_key": "idem-budget-grace-003"}).encode(
+        "utf-8"
+    )
 
     first_response = client.post(
         "/v1/runtime/execute",
@@ -1608,9 +1793,7 @@ def test_execute_route_enqueues_whole_run_offload_and_worker_completes_it(
         "profile_id": "text.balanced",
         "idempotency_key": "idem-nightly-001",
         "trace_id": "trace-nightly-001",
-        "input": {
-            "messages": [{"role": "user", "content": "scan media and propose alt text"}]
-        },
+        "input": {"messages": [{"role": "user", "content": "scan media and propose alt text"}]},
         "policy": {"allow_fallback": True},
     }
     body = json.dumps(payload).encode("utf-8")
@@ -1692,9 +1875,7 @@ def test_execute_route_enqueues_whole_run_offload_and_worker_completes_it(
     assert final_result_response.json()["data"]["run_lifecycle"]["retention"]["state"] == (
         "retained"
     )
-    assert final_result_response.json()["data"]["provider_calls"][0]["provider_id"] == (
-        "openai"
-    )
+    assert final_result_response.json()["data"]["provider_calls"][0]["provider_id"] == ("openai")
 
     dispose_engine(database_url)
 
@@ -2508,9 +2689,7 @@ def test_execute_route_falls_back_to_next_candidate(tmp_path: Path) -> None:
         "idempotency_key": "idem-balanced-002",
         "input": {
             "messages": [{"role": "user", "content": "fallback request"}],
-            "simulate_error_for_instances": [
-                "openai-us-east-text-balanced"
-            ],
+            "simulate_error_for_instances": ["openai-us-east-text-balanced"],
         },
         "policy": {"allow_fallback": True},
     }
@@ -2839,9 +3018,7 @@ def test_execute_route_can_use_http_provider_transport(tmp_path: Path) -> None:
         "execution_kind": "text",
         "profile_id": "text.balanced",
         "idempotency_key": "idem-http-provider-001",
-        "input": {
-            "messages": [{"role": "user", "content": "real http path"}]
-        },
+        "input": {"messages": [{"role": "user", "content": "real http path"}]},
     }
     body = json.dumps(payload).encode("utf-8")
     headers = merge_json_headers(
@@ -3239,9 +3416,7 @@ class _FixedTextProviderAdapter(OpenAIProviderAdapter):
 
 def test_adapter_origin_analysis_payload_succeeds(tmp_path: Path) -> None:
     providers: dict[str, ProviderAdapter] = {
-        OpenAIProviderAdapter.provider_id: _FixedTextProviderAdapter(
-            "Top sellers are A, B, C."
-        )
+        OpenAIProviderAdapter.provider_id: _FixedTextProviderAdapter("Top sellers are A, B, C.")
     }
     database_url, client = _build_client(tmp_path, providers=providers)
     payload = {

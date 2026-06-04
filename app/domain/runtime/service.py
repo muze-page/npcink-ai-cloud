@@ -6,6 +6,8 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 from uuid import uuid4
 
+from sqlalchemy.orm.attributes import flag_modified
+
 from app.adapters.callbacks.base import (
     RuntimeCallbackDispatcher,
     RuntimeCallbackDispatchError,
@@ -108,9 +110,15 @@ from app.domain.site_knowledge.metrics import (
     record_site_knowledge_run_metric,
 )
 from app.domain.site_knowledge.service import SiteKnowledgeService
+from app.domain.web_search.auto_policy import (
+    attach_automatic_web_search_evidence,
+    build_automatic_web_search_plan,
+    build_automatic_web_search_success_report,
+)
 from app.domain.web_search.contracts import (
     WEB_SEARCH_ABILITIES,
     WEB_SEARCH_ABILITY,
+    WEB_SEARCH_CONTRACT,
     WebSearchContractViolation,
     validate_web_search_runtime_contract,
 )
@@ -190,8 +198,7 @@ class RuntimeService:
         should_enqueue = self._should_enqueue(request, merged_policy)
 
         candidates = [
-            self._serialize_routing_candidate(candidate)
-            for candidate in resolution.candidates
+            self._serialize_routing_candidate(candidate) for candidate in resolution.candidates
         ]
         task_backend_status = "queued" if should_enqueue else "running"
 
@@ -486,9 +493,7 @@ class RuntimeService:
         run_id = f"run_{uuid4().hex}"
         resolved_idempotency_key = idempotency_key or f"auto_{uuid4().hex}"
         source_checksum = hashlib.sha256(source_bytes).hexdigest()
-        watermark_checksum = (
-            hashlib.sha256(watermark_bytes).hexdigest() if watermark_bytes else ""
-        )
+        watermark_checksum = hashlib.sha256(watermark_bytes).hexdigest() if watermark_bytes else ""
         request_fingerprint = self._build_request_fingerprint_for_media_derivative(
             site_id,
             input_payload,
@@ -533,9 +538,9 @@ class RuntimeService:
                 "_source_bytes_b64": base64.b64encode(source_bytes).decode("ascii"),
             }
             if watermark_bytes:
-                media_input["_watermark_bytes_b64"] = base64.b64encode(
-                    watermark_bytes
-                ).decode("ascii")
+                media_input["_watermark_bytes_b64"] = base64.b64encode(watermark_bytes).decode(
+                    "ascii"
+                )
 
             policy = {
                 "storage_mode": "result_only",
@@ -1052,9 +1057,7 @@ class RuntimeService:
         active_scope_count = len(items)
         pressured_scope_count = sum(1 for item in items if item["pressure_state"] != "healthy")
         stale_scope_count = sum(
-            1
-            for item in items
-            if int(item["lease_recovery_inputs"]["total_stale_runs"]) > 0
+            1 for item in items if int(item["lease_recovery_inputs"]["total_stale_runs"]) > 0
         )
         total_active_runs = max(
             1,
@@ -1313,11 +1316,15 @@ class RuntimeService:
                 if callback_limit > 0
                 else []
             )
-            running_stale_runs = repository.list_runtime_diagnostic_runs(
-                issue_kind="running_stale",
-                site_id=site_id,
-                limit=max(1, suggestion_limit) if suggestion_limit > 0 else 1,
-            ) if suggestion_limit > 0 else []
+            running_stale_runs = (
+                repository.list_runtime_diagnostic_runs(
+                    issue_kind="running_stale",
+                    site_id=site_id,
+                    limit=max(1, suggestion_limit) if suggestion_limit > 0 else 1,
+                )
+                if suggestion_limit > 0
+                else []
+            )
             session.commit()
 
         audit_context = ServiceAuditContext(
@@ -1536,9 +1543,7 @@ class RuntimeService:
                 "cooldown_pressure": self._summarize_abuse_guard_pressure(cooldown_items),
             }
             watchlist.extend(
-                item
-                for item in (*request_items, *cooldown_items)
-                if item["severity"] != "healthy"
+                item for item in (*request_items, *cooldown_items) if item["severity"] != "healthy"
             )
 
         sorted_watchlist = sorted(
@@ -1872,14 +1877,18 @@ class RuntimeService:
             )
 
         candidates.sort(key=lambda item: int(item["priority"]))
-        primary = candidates[0] if candidates else {
-            "reason": "none",
-            "state": "healthy",
-            "evidence_path": "",
-            "suggested_action": "continue_monitoring",
-            "mode": "none",
-            "priority": 100,
-        }
+        primary = (
+            candidates[0]
+            if candidates
+            else {
+                "reason": "none",
+                "state": "healthy",
+                "evidence_path": "",
+                "suggested_action": "continue_monitoring",
+                "mode": "none",
+                "priority": 100,
+            }
+        )
         return {
             "state": str(primary["state"]),
             "primary_reason": str(primary["reason"]),
@@ -1982,6 +1991,14 @@ class RuntimeService:
         input_payload: dict[str, Any],
     ) -> None:
         policy = run.policy_json if isinstance(run.policy_json, dict) else {}
+        input_payload = self._apply_automatic_web_search(
+            run,
+            repository=repository,
+            input_payload=input_payload,
+            policy=policy,
+        )
+        if run.status == "failed":
+            return
         allow_fallback = bool(policy.get("allow_fallback", True))
         max_retries = max(0, self._coerce_int(policy.get("max_retries"), default=0))
         timeout_ms = max(1, self._coerce_int(policy.get("timeout_ms"), default=30_000))
@@ -2073,9 +2090,7 @@ class RuntimeService:
 
                     error_taxonomy = get_error_taxonomy(error.error_code)
                     should_retry = (
-                        retry_count < max_retries
-                        and error.retryable
-                        and error_taxonomy.retryable
+                        retry_count < max_retries and error.retryable and error_taxonomy.retryable
                     )
                     if should_retry:
                         continue
@@ -2119,6 +2134,10 @@ class RuntimeService:
                         run.policy_json if isinstance(run.policy_json, dict) else {}
                     ),
                 )
+                automatic_web_search = policy.get("automatic_web_search")
+                if isinstance(automatic_web_search, dict):
+                    prepared_result = dict(prepared_result)
+                    prepared_result["automatic_web_search"] = automatic_web_search
                 wrapped_result = build_analysis_result_envelope(
                     prepared_result,
                     ability_family=run.ability_family or "text",
@@ -2147,6 +2166,138 @@ class RuntimeService:
             instance_id=last_instance_id or None,
             fallback_used=last_fallback_used,
         )
+
+    def _apply_automatic_web_search(
+        self,
+        run: RunRecord,
+        *,
+        repository: RuntimeRepository,
+        input_payload: dict[str, Any],
+        policy: dict[str, object],
+    ) -> dict[str, Any]:
+        plan = build_automatic_web_search_plan(
+            input_payload,
+            ability_name=run.ability_name or "",
+            workflow_id=run.workflow_id or "",
+        )
+        if plan is None:
+            return input_payload
+
+        if plan.is_dry_run:
+            self._record_automatic_web_search_report(
+                run,
+                policy=policy,
+                report=plan.to_report(status="would_search"),
+            )
+            return input_payload
+
+        try:
+            search_result = WebSearchService(self.settings).execute(
+                site_id=run.site_id,
+                ability_name=WEB_SEARCH_ABILITY,
+                contract_version=WEB_SEARCH_CONTRACT,
+                input_payload=plan.to_web_search_input(),
+                run_id=f"{run.run_id}:automatic-web-search",
+            )
+        except WebSearchProviderError as error:
+            if error.usage is not None:
+                self._record_automatic_web_search_provider_call(
+                    run,
+                    repository=repository,
+                    usage=error.usage,
+                )
+            report = plan.to_report(
+                status="failed",
+                error_code=error.error_code,
+                message=error.message,
+            )
+            self._record_automatic_web_search_report(run, policy=policy, report=report)
+            if plan.is_required:
+                repository.mark_run_failed(
+                    run,
+                    error_code=error.error_code,
+                    error_message=error.message,
+                    provider_id="web_search",
+                    model_id="web-search-managed",
+                    instance_id="cloud-runtime",
+                    fallback_used=False,
+                )
+            return input_payload
+        except WebSearchContractViolation as error:
+            report = plan.to_report(
+                status="failed",
+                error_code=error.error_code,
+                message=error.message,
+            )
+            self._record_automatic_web_search_report(run, policy=policy, report=report)
+            if plan.is_required:
+                repository.mark_run_failed(
+                    run,
+                    error_code=error.error_code,
+                    error_message=error.message,
+                    provider_id="web_search",
+                    model_id="web-search-managed",
+                    instance_id="cloud-runtime",
+                    fallback_used=False,
+                )
+            return input_payload
+
+        self._record_automatic_web_search_provider_call(
+            run,
+            repository=repository,
+            usage=search_result.usage,
+        )
+        report = build_automatic_web_search_success_report(
+            plan,
+            search_result.result_json,
+        )
+        self._record_automatic_web_search_report(run, policy=policy, report=report)
+        return attach_automatic_web_search_evidence(
+            input_payload,
+            result_json=search_result.result_json,
+            report=report,
+        )
+
+    def _record_automatic_web_search_provider_call(
+        self,
+        run: RunRecord,
+        *,
+        repository: RuntimeRepository,
+        usage: Any,
+    ) -> None:
+        provider_call = repository.record_provider_call(
+            run_id=run.run_id,
+            provider_id=usage.provider_id,
+            model_id=usage.model_id,
+            instance_id=usage.instance_id,
+            region=usage.region,
+            latency_ms=usage.latency_ms,
+            tokens_in=0,
+            tokens_out=0,
+            cost=usage.cost,
+            retry_count=0,
+            fallback_used=False,
+            error_code=usage.error_code,
+        )
+        self.commercial_service.record_provider_call_usage(
+            session=repository.session,
+            run=run,
+            provider_call=provider_call,
+        )
+
+    def _record_automatic_web_search_report(
+        self,
+        run: RunRecord,
+        *,
+        policy: dict[str, object],
+        report: dict[str, Any],
+    ) -> None:
+        updated_policy = dict(policy)
+        updated_policy["automatic_web_search"] = report
+        run.policy_json = updated_policy
+        flag_modified(run, "policy_json")
+        policy.clear()
+        policy.update(updated_policy)
 
     def _execute_site_knowledge_run(
         self,
@@ -2669,9 +2820,7 @@ class RuntimeService:
             "retry_max": max(0, request.retry_max),
             "retention_ttl": max(0, request.retention_ttl),
             "task_backend": (
-                policy.get("task_backend")
-                if isinstance(policy.get("task_backend"), dict)
-                else {}
+                policy.get("task_backend") if isinstance(policy.get("task_backend"), dict) else {}
             ),
         }
         return policy
@@ -2827,9 +2976,7 @@ class RuntimeService:
         normalized_task_backend = normalize_runtime_task_backend(request.task_backend)
         if normalized_task_backend:
             updated["task_backend"] = normalized_task_backend
-        updated["storage_mode"] = str(
-            request.storage_mode or RUNTIME_STORAGE_MODE_RESULT_ONLY
-        )
+        updated["storage_mode"] = str(request.storage_mode or RUNTIME_STORAGE_MODE_RESULT_ONLY)
         if request.callback_url:
             updated["callback_url"] = str(request.callback_url or "").strip()
         return updated
@@ -2942,9 +3089,7 @@ class RuntimeService:
 
     def _resolve_batch_request_size(self, request: RuntimeRequest) -> int:
         feature_id = self._resolve_batch_feature_id(request)
-        input_payload = (
-            request.input_payload if isinstance(request.input_payload, dict) else {}
-        )
+        input_payload = request.input_payload if isinstance(request.input_payload, dict) else {}
         if feature_id == "media_alt_completion":
             items = input_payload.get("items")
             if isinstance(items, list):
@@ -3036,9 +3181,7 @@ class RuntimeService:
 
         secret_ciphertext = str(callback.get("secret_ciphertext") or "").strip()
         legacy_secret = str(
-            callback.get("secret")
-            or metadata.get("runtime_terminal_callback_secret")
-            or ""
+            callback.get("secret") or metadata.get("runtime_terminal_callback_secret") or ""
         ).strip()
         secret = ""
         secret_error = ""
@@ -3065,9 +3208,7 @@ class RuntimeService:
                 or ""
             ).strip(),
             "key_id": str(
-                callback.get("key_id")
-                or metadata.get("runtime_terminal_callback_key_id")
-                or ""
+                callback.get("key_id") or metadata.get("runtime_terminal_callback_key_id") or ""
             ).strip(),
             "secret": secret.strip(),
             "secret_error": secret_error.strip(),
@@ -3356,7 +3497,7 @@ class RuntimeService:
             result,
             ability_family=run.ability_family or "text",
             ability_name=run.ability_name or "",
-            input_payload=run.input_payload if hasattr(run, 'input_payload') else {},
+            input_payload=run.input_payload if hasattr(run, "input_payload") else {},
         )
 
     def cleanup_expired_run_results(self, *, now: datetime | None = None) -> int:
@@ -3601,8 +3742,7 @@ class RuntimeService:
             and run.callback_next_attempt_at is not None
         ):
             return self._normalize_timestamp(run.callback_next_attempt_at) <= (
-                current_time
-                - timedelta(seconds=RUNTIME_DIAGNOSTIC_CALLBACK_OVERDUE_AFTER_SECONDS)
+                current_time - timedelta(seconds=RUNTIME_DIAGNOSTIC_CALLBACK_OVERDUE_AFTER_SECONDS)
             )
         return False
 
@@ -4142,9 +4282,7 @@ class RuntimeService:
                         or RUNTIME_CALLBACK_DISPATCH_LEASE_RECOVERY_ERROR_CODE
                     ),
                     "recovery_action": "requeue_pending_after_stale_dispatch_lease",
-                    "stale_after_seconds": (
-                        RUNTIME_CALLBACK_DISPATCH_LEASE_RECOVERY_AFTER_SECONDS
-                    ),
+                    "stale_after_seconds": (RUNTIME_CALLBACK_DISPATCH_LEASE_RECOVERY_AFTER_SECONDS),
                     "stale_for_seconds": stale_for_seconds,
                 },
             )
@@ -4156,8 +4294,7 @@ class RuntimeService:
                 run.run_id,
                 run.site_id,
                 run.trace_id,
-                run.callback_last_error_code
-                or RUNTIME_CALLBACK_DISPATCH_LEASE_RECOVERY_ERROR_CODE,
+                run.callback_last_error_code or RUNTIME_CALLBACK_DISPATCH_LEASE_RECOVERY_ERROR_CODE,
             )
 
     def _build_callback_payload(self, run: RunRecord) -> dict[str, object]:
