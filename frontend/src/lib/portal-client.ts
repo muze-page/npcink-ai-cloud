@@ -398,6 +398,74 @@ export interface PortalPluginObservabilityDigest {
   top_error_code: string;
 }
 
+export interface PortalMonitoringOverviewQuotaMetric {
+  used: number;
+  limit: number;
+  remaining: number;
+  usage_ratio: number;
+  over_limit: boolean;
+}
+
+export interface PortalMonitoringOverviewAction {
+  code: string;
+  severity: 'warning' | 'error';
+  source: string;
+  title: string;
+  detail: string;
+  suggested_action: string;
+  sort_weight?: number;
+}
+
+export interface PortalMonitoringOverviewComponent {
+  component: string;
+  status: 'ok' | 'warning' | 'error' | 'inactive';
+  score: number;
+  summary: string;
+}
+
+export interface PortalMonitoringOverviewSummary {
+  contract_version: string;
+  site_id: string;
+  account_id?: string;
+  member_ref?: string;
+  role?: string;
+  generated_at: string;
+  window: {
+    hours: number;
+    start_at: string;
+    end_at: string;
+  };
+  health: {
+    status: 'ok' | 'warning' | 'error' | 'inactive';
+    score: number;
+    summary: string;
+    components_count: number;
+  };
+  action_required: PortalMonitoringOverviewAction[];
+  quota: {
+    period_start_at: string;
+    period_end_at: string;
+    runs: PortalMonitoringOverviewQuotaMetric;
+    tokens: PortalMonitoringOverviewQuotaMetric;
+    cost: PortalMonitoringOverviewQuotaMetric;
+    top_pressure: 'runs' | 'tokens' | 'cost' | 'none';
+    summary: string;
+  };
+  activity: {
+    last_seen_at: string;
+    plugin_events_total: number;
+    plugin_errors_total: number;
+    media_jobs_total: number;
+    media_failed_total: number;
+    vector_searches_total: number;
+    vector_no_hit_total: number;
+    runtime_runs_total: number;
+    runtime_success_rate: number;
+    runtime_p95_latency_ms: number;
+  };
+  components: PortalMonitoringOverviewComponent[];
+}
+
 export interface PortalPluginObservabilitySummary {
   contract_version: string;
   site_id: string;
@@ -503,6 +571,100 @@ export interface PortalMediaObservabilitySummary {
   formats: PortalMediaObservabilityFormat[];
   errors: PortalMediaObservabilityError[];
   recent_failures: PortalMediaObservabilityRecentFailure[];
+}
+
+export interface PortalVectorObservabilityTotals {
+  index_jobs_total: number;
+  index_succeeded_total: number;
+  index_failed_total: number;
+  index_success_rate: number;
+  accepted_documents_total: number;
+  indexed_documents_total: number;
+  indexed_chunks_total: number;
+  failed_documents_total: number;
+  deleted_entries_total: number;
+  avg_index_duration_ms: number;
+  p95_index_duration_ms: number;
+  last_index_job_finished_at: string;
+  search_queries_total: number;
+  search_succeeded_total: number;
+  search_failed_total: number;
+  search_success_rate: number;
+  no_hit_total: number;
+  no_hit_rate: number;
+  avg_search_latency_ms: number;
+  p95_search_latency_ms: number;
+  avg_top1_score: number;
+  avg_result_score: number;
+  last_search_finished_at: string;
+  active_site_count: number;
+  indexed_site_count: number;
+  current_document_count: number;
+  current_chunk_count: number;
+}
+
+export interface PortalVectorObservabilityHealth {
+  status: string;
+  score: number;
+  summary: string;
+}
+
+export interface PortalVectorObservabilityTimelinePoint {
+  bucket_start_at: string;
+  index_jobs_total: number;
+  indexed_chunks_total: number;
+  search_queries_total: number;
+  no_hit_total: number;
+  failed_total: number;
+}
+
+export interface PortalVectorObservabilityIntent {
+  intent: string;
+  queries_total: number;
+  no_hit_total: number;
+  no_hit_rate: number;
+  avg_top1_score: number;
+  avg_latency_ms: number;
+}
+
+export interface PortalVectorObservabilitySnapshot {
+  site_id: string;
+  document_count: number;
+  chunk_count: number;
+  post_type_counts: Record<string, number>;
+  source_type_counts: Record<string, number>;
+  last_indexed_at: string;
+  embedding_provider: string;
+  embedding_model: string;
+  embedding_dimensions: number;
+  vector_backend: string;
+  captured_at: string;
+}
+
+export interface PortalVectorObservabilityError {
+  error_code: string;
+  count: number;
+  last_seen_at: string;
+}
+
+export interface PortalVectorObservabilitySummary {
+  contract_version: string;
+  site_id: string;
+  account_id?: string;
+  member_ref?: string;
+  role?: string;
+  generated_at: string;
+  window: {
+    hours: number;
+    start_at: string;
+    end_at: string;
+  };
+  totals: PortalVectorObservabilityTotals;
+  health: PortalVectorObservabilityHealth;
+  timeline: PortalVectorObservabilityTimelinePoint[];
+  intents: PortalVectorObservabilityIntent[];
+  index_snapshots: PortalVectorObservabilitySnapshot[];
+  errors: PortalVectorObservabilityError[];
 }
 
 export interface PortalAuditEvent {
@@ -1043,6 +1205,22 @@ export class PortalClient {
     return this.request('GET', `/sites/${siteId}/usage-summary`, undefined, { requireAuth: true });
   }
 
+  async getMonitoringOverview(
+    siteId: string,
+    options?: {
+      windowHours?: number;
+    }
+  ): Promise<PortalEnvelope<PortalMonitoringOverviewSummary>> {
+    const params = new URLSearchParams();
+    params.set('window_hours', String(options?.windowHours || 24));
+    return this.request(
+      'GET',
+      `/sites/${siteId}/monitoring-overview?${params.toString()}`,
+      undefined,
+      { requireAuth: true }
+    );
+  }
+
   async getPluginObservability(
     siteId: string,
     options?: {
@@ -1078,6 +1256,22 @@ export class PortalClient {
     return this.request(
       'GET',
       `/sites/${siteId}/media-observability?${params.toString()}`,
+      undefined,
+      { requireAuth: true }
+    );
+  }
+
+  async getVectorObservability(
+    siteId: string,
+    options?: {
+      windowHours?: number;
+    }
+  ): Promise<PortalEnvelope<PortalVectorObservabilitySummary>> {
+    const params = new URLSearchParams();
+    params.set('window_hours', String(options?.windowHours || 24));
+    return this.request(
+      'GET',
+      `/sites/${siteId}/vector-observability?${params.toString()}`,
       undefined,
       { requireAuth: true }
     );

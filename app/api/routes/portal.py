@@ -41,6 +41,8 @@ from app.domain.commercial.errors import CommercialServiceError
 from app.domain.commercial.service import PORTAL_SITE_KEY_WRITE_ROLES
 from app.domain.media_derivatives.metrics import MediaDerivativeObservabilityService
 from app.domain.observability.plugin_events import PluginObservabilityService
+from app.domain.observability.site_monitoring_overview import SiteMonitoringOverviewService
+from app.domain.site_knowledge.metrics import SiteKnowledgeObservabilityService
 from app.domain.usage.service import UsageService
 
 router = APIRouter(prefix="/portal/v1", tags=["portal"])
@@ -509,6 +511,51 @@ async def get_portal_site_usage_summary(request: Request, site_id: str) -> Any:
     )
 
 
+@router.get("/sites/{site_id}/monitoring-overview")
+async def get_portal_site_monitoring_overview(
+    request: Request,
+    site_id: str,
+    window_hours: int = Query(default=24, ge=1, le=168),
+) -> Any:
+    auth = await resolve_portal_request_context(
+        request,
+        require_idempotency=False,
+        allow_session_cookies=True,
+    )
+    if isinstance(auth, JSONResponse):
+        return auth
+    access = _authorize_portal_site_access(
+        request,
+        site_id=site_id,
+        member_ref=auth.member_ref,
+    )
+    if isinstance(access, JSONResponse):
+        return access
+    try:
+        service = _get_commercial_service(request)
+        policy = service.inspect_commercial_policy(site_id)
+        result = SiteMonitoringOverviewService(service.database_url).get_summary(
+            site_id=site_id,
+            commercial_policy=policy,
+            window_hours=window_hours,
+        )
+    except CommercialServiceError as error:
+        return _service_error_response(error, request=request)
+    result["account_id"] = str(access.get("account_id") or "")
+    result["member_ref"] = auth.member_ref
+    result["identity_type"] = str(access.get("identity_type") or "")
+    result["allowed_actions"] = [
+        str(action)
+        for action in list(access.get("allowed_actions") or [])
+        if str(action).strip()
+    ]
+    result["role"] = str(access.get("role") or "")
+    return _portal_route_envelope(
+        message="portal monitoring overview loaded",
+        data=result,
+    )
+
+
 @router.get("/sites/{site_id}/plugin-observability")
 async def get_portal_site_plugin_observability(
     request: Request,
@@ -594,6 +641,49 @@ async def get_portal_site_media_observability(
     result["role"] = str(access.get("role") or "")
     return _portal_route_envelope(
         message="portal media observability loaded",
+        data=result,
+    )
+
+
+@router.get("/sites/{site_id}/vector-observability")
+async def get_portal_site_vector_observability(
+    request: Request,
+    site_id: str,
+    window_hours: int = Query(default=24, ge=1, le=168),
+) -> Any:
+    auth = await resolve_portal_request_context(
+        request,
+        require_idempotency=False,
+        allow_session_cookies=True,
+    )
+    if isinstance(auth, JSONResponse):
+        return auth
+    access = _authorize_portal_site_access(
+        request,
+        site_id=site_id,
+        member_ref=auth.member_ref,
+    )
+    if isinstance(access, JSONResponse):
+        return access
+    result = SiteKnowledgeObservabilityService(
+        _get_commercial_service(request).database_url
+    ).get_summary(
+        site_id=site_id,
+        window_hours=window_hours,
+    )
+    result.pop("sites", None)
+    result["site_id"] = site_id
+    result["account_id"] = str(access.get("account_id") or "")
+    result["member_ref"] = auth.member_ref
+    result["identity_type"] = str(access.get("identity_type") or "")
+    result["allowed_actions"] = [
+        str(action)
+        for action in list(access.get("allowed_actions") or [])
+        if str(action).strip()
+    ]
+    result["role"] = str(access.get("role") or "")
+    return _portal_route_envelope(
+        message="portal vector observability loaded",
         data=result,
     )
 

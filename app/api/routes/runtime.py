@@ -20,6 +20,14 @@ from app.domain.runtime.models import (
     normalize_runtime_request_policy,
 )
 from app.domain.runtime.service import RuntimeService
+from app.domain.site_knowledge.contracts import (
+    SITE_KNOWLEDGE_ABILITIES,
+    SITE_KNOWLEDGE_ABILITY_FAMILY,
+    SITE_KNOWLEDGE_DATA_CLASSIFICATION,
+    SITE_KNOWLEDGE_EXECUTION_KIND,
+    SITE_KNOWLEDGE_PROFILE_ID,
+    SITE_KNOWLEDGE_SYNC_ABILITY,
+)
 
 router = APIRouter(prefix="/v1/runtime", tags=["runtime"])
 
@@ -53,23 +61,37 @@ class RuntimePolicyPayload(BaseModel):
 class RuntimePayload(BaseModel):
     site_id: str | None = None
     ability_name: str
-    ability_family: Literal["text", "vision", "workflow", "automation", "mcp", "openclaw"] = "text"
+    ability_family: Literal[
+        "text",
+        "vision",
+        "workflow",
+        "automation",
+        "mcp",
+        "openclaw",
+        "knowledge",
+    ] = "text"
     canonical_run_id: str | None = None
     skill_id: str | None = None
     workflow_id: str | None = None
     contract_version: str = Field(default="v1", min_length=1)
     channel: str = "openapi"
-    execution_kind: str
+    execution_kind: str = ""
     execution_tier: Literal["cloud"] = "cloud"
     execution_pattern: Literal["inline", "whole_run_offload"] = "inline"
-    data_classification: Literal["public", "internal", "pii", "secret"] = "internal"
+    data_classification: Literal[
+        "public",
+        "internal",
+        "pii",
+        "secret",
+        "public_site_content",
+    ] = "internal"
     storage_mode: Literal["no_store", "result_only", "full_store_with_ttl"] = "result_only"
     timeout_seconds: int = 0
     retry_max: int = 0
     retention_ttl: int = 0
     callback_url: str = ""
     task_backend: dict[str, Any] = Field(default_factory=dict)
-    profile_id: str
+    profile_id: str = ""
     idempotency_key: str | None = None
     trace_id: str | None = None
     input: dict[str, Any] = Field(default_factory=dict)
@@ -100,29 +122,73 @@ def _build_runtime_request(
     return RuntimeRequest(
         site_id=auth.site_id,
         ability_name=payload.ability_name,
-        ability_family=payload.ability_family,
+        ability_family=_resolve_ability_family(payload),
         canonical_run_id=payload.canonical_run_id or "",
         skill_id=payload.skill_id or "",
         workflow_id=payload.workflow_id or "",
         contract_version=payload.contract_version or "v1",
         channel=payload.channel,
-        execution_kind=payload.execution_kind,
+        execution_kind=_resolve_execution_kind(payload),
         execution_tier=payload.execution_tier,
         execution_pattern=_normalize_runtime_execution_pattern(payload.execution_pattern),
-        data_classification=payload.data_classification,
+        data_classification=_resolve_data_classification(payload),
         storage_mode=payload.storage_mode,
         timeout_seconds=max(0, payload.timeout_seconds),
         retry_max=max(0, payload.retry_max),
         retention_ttl=max(0, payload.retention_ttl),
         callback_url=payload.callback_url or "",
-        task_backend=payload.task_backend or {},
-        profile_id=payload.profile_id,
+        task_backend=_resolve_task_backend(payload),
+        profile_id=_resolve_profile_id(payload),
         input_payload=payload.input,
         policy=payload.policy.to_runtime_policy(),
         idempotency_key=_resolve_idempotency_key(request, payload),
         trace_id=_resolve_trace_id(payload, auth),
         allow_legacy_callback_url=False,
     )
+
+
+def _is_site_knowledge_payload(payload: RuntimePayload) -> bool:
+    return payload.ability_name in SITE_KNOWLEDGE_ABILITIES
+
+
+def _resolve_ability_family(payload: RuntimePayload) -> str:
+    if _is_site_knowledge_payload(payload):
+        return SITE_KNOWLEDGE_ABILITY_FAMILY
+    return payload.ability_family
+
+
+def _resolve_execution_kind(payload: RuntimePayload) -> str:
+    if _is_site_knowledge_payload(payload) and not payload.execution_kind:
+        return SITE_KNOWLEDGE_EXECUTION_KIND
+    return payload.execution_kind
+
+
+def _resolve_profile_id(payload: RuntimePayload) -> str:
+    if _is_site_knowledge_payload(payload) and not payload.profile_id:
+        return SITE_KNOWLEDGE_PROFILE_ID
+    return payload.profile_id
+
+
+def _resolve_data_classification(payload: RuntimePayload) -> str:
+    if _is_site_knowledge_payload(payload):
+        return SITE_KNOWLEDGE_DATA_CLASSIFICATION
+    return payload.data_classification
+
+
+def _resolve_task_backend(payload: RuntimePayload) -> dict[str, Any]:
+    task_backend = payload.task_backend or {}
+    if (
+        payload.ability_name == SITE_KNOWLEDGE_SYNC_ABILITY
+        and payload.execution_pattern == "whole_run_offload"
+        and not task_backend
+    ):
+        return {
+            "enabled": True,
+            "mode": "queue",
+            "callback_mode": "polling_preferred",
+            "polling_interval_sec": 5,
+        }
+    return task_backend
 
 
 def _resolve_idempotency_key(request: Request, payload: RuntimePayload) -> str:

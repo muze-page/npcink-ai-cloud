@@ -1,0 +1,1044 @@
+from __future__ import annotations
+
+import hashlib
+from datetime import datetime
+from typing import Any
+
+from sqlalchemy.orm import Session
+
+from app.adapters.providers.base import (
+    ProviderAdapter,
+    ProviderExecutionError,
+    ProviderExecutionRequest,
+)
+from app.core.config import Settings, get_settings
+from app.domain.site_knowledge.backends import (
+    SiteKnowledgeBackendError,
+    SiteKnowledgeVectorBackend,
+    VectorSearchHit,
+    build_vector_backend,
+)
+from app.domain.site_knowledge.contracts import (
+    ALLOWED_SEARCH_INTENTS,
+    ALLOWED_SYNC_MODES,
+    PUBLIC_COMMENT_STATUSES,
+    PUBLIC_POST_STATUSES,
+    PUBLIC_POST_TYPES,
+    PUBLIC_SOURCE_TYPES,
+    SITE_KNOWLEDGE_SEARCH_ABILITY,
+    SITE_KNOWLEDGE_STATUS_ABILITY,
+    SITE_KNOWLEDGE_SYNC_ABILITY,
+    SiteKnowledgeContractViolation,
+    coerce_positive_int,
+    validate_site_knowledge_runtime_contract,
+)
+from app.domain.site_knowledge.embedding import (
+    cosine_similarity,
+    embed_text_deterministic,
+)
+from app.domain.site_knowledge.repository import SiteKnowledgeRepository
+
+MAX_CHUNK_CHARS = 900
+CHUNK_OVERLAP_CHARS = 120
+DEFAULT_EVIDENCE_MIN_SCORE = 0.25
+DEFAULT_REQUIRED_EVIDENCE_SOURCES = 1
+ALLOWED_NO_HIT_POLICIES = frozenset({"abstain", "fallback_to_general", "return_empty"})
+
+
+class SiteKnowledgeService:
+    def __init__(
+        self,
+        session: Session,
+        *,
+        settings: Settings | None = None,
+        providers: dict[str, ProviderAdapter] | None = None,
+    ) -> None:
+        self.settings = settings or get_settings()
+        self.providers = providers or {}
+        self.repository = SiteKnowledgeRepository(session)
+        self.vector_backend = build_vector_backend(self.settings)
+        self.embedding_provider_id = str(
+            self.settings.site_knowledge_embedding_provider or "deterministic"
+        )
+        self.embedding_model = str(self.settings.site_knowledge_embedding_model or "BAAI/bge-m3")
+        self.embedding_dimensions = int(self.settings.site_knowledge_embedding_dimensions)
+
+    def execute(
+        self,
+        *,
+        site_id: str,
+        ability_name: str,
+        contract_version: str,
+        input_payload: dict[str, Any],
+        run_id: str,
+    ) -> dict[str, Any]:
+        validate_site_knowledge_runtime_contract(
+            ability_name=ability_name,
+            contract_version=contract_version,
+            input_payload=input_payload,
+        )
+        if ability_name == SITE_KNOWLEDGE_SYNC_ABILITY:
+            return self.sync(site_id=site_id, input_payload=input_payload, run_id=run_id)
+        if ability_name == SITE_KNOWLEDGE_STATUS_ABILITY:
+            return self.status(site_id=site_id, input_payload=input_payload)
+        if ability_name == SITE_KNOWLEDGE_SEARCH_ABILITY:
+            return self.search(site_id=site_id, input_payload=input_payload, run_id=run_id)
+        raise SiteKnowledgeContractViolation(
+            "site_knowledge.unknown_ability",
+            "site knowledge ability_name is not supported",
+        )
+
+    def sync(
+        self,
+        *,
+        site_id: str,
+        input_payload: dict[str, Any],
+        run_id: str,
+    ) -> dict[str, Any]:
+        sync_mode = str(input_payload.get("sync_mode") or "refresh").strip().lower()
+        if sync_mode not in ALLOWED_SYNC_MODES:
+            raise SiteKnowledgeContractViolation(
+                "site_knowledge.invalid_sync_mode",
+                "site knowledge sync_mode must be refresh, rebuild, or delete",
+            )
+        post_ids = _coerce_post_ids(input_payload.get("post_ids"))
+        documents = input_payload.get("documents")
+        documents = documents if isinstance(documents, list) else []
+        comments = input_payload.get("comments")
+        comments = comments if isinstance(comments, list) else []
+
+        deleted_entries = 0
+        if sync_mode == "delete":
+            if self.vector_backend is not None:
+                if post_ids:
+                    self.vector_backend.delete_post_indexes(site_id, post_ids)
+                else:
+                    self.vector_backend.delete_site_index(site_id)
+            deleted_entries = (
+                self.repository.delete_post_indexes(site_id, post_ids)
+                if post_ids
+                else self.repository.delete_site_index(site_id)
+            )
+            return self._sync_response(
+                status="completed",
+                run_id=run_id,
+                sync_mode=sync_mode,
+                accepted_documents=0,
+                indexed_documents=0,
+                indexed_chunks=0,
+                failed_documents=0,
+                deleted_entries=deleted_entries,
+            )
+
+        if sync_mode == "rebuild":
+            if self.vector_backend is not None:
+                if post_ids:
+                    self.vector_backend.delete_post_indexes(site_id, post_ids)
+                else:
+                    self.vector_backend.delete_site_index(site_id)
+            deleted_entries = (
+                self.repository.delete_post_indexes(site_id, post_ids)
+                if post_ids
+                else self.repository.delete_site_index(site_id)
+            )
+
+        accepted_documents = 0
+        indexed_documents = 0
+        indexed_chunks = 0
+        failed_documents = 0
+
+        for raw_document in [*documents, *comments]:
+            document = raw_document if isinstance(raw_document, dict) else {}
+            normalized = (
+                _normalize_public_comment(document)
+                if _looks_like_comment_document(document)
+                else _normalize_public_document(document)
+            )
+            if normalized is None:
+                failed_documents += 1
+                continue
+            if (
+                normalized["source_type"] == "comment"
+                and not self.settings.site_knowledge_comments_enabled
+            ):
+                continue
+            accepted_documents += 1
+            chunks = self._build_chunks(
+                normalized,
+                site_id=site_id,
+                run_id=run_id,
+                ability_name=SITE_KNOWLEDGE_SYNC_ABILITY,
+            )
+            if not chunks:
+                failed_documents += 1
+                continue
+            if self.vector_backend is not None:
+                self.vector_backend.upsert_chunks(
+                    site_id=site_id,
+                    chunks=[
+                        {
+                            **chunk,
+                            "post_id": int(normalized["post_id"]),
+                            "source_type": str(normalized["source_type"]),
+                            "source_id": int(normalized["source_id"]),
+                            "parent_post_id": int(normalized["parent_post_id"] or 0),
+                            "post_type": str(normalized["post_type"]),
+                            "post_status": str(normalized["post_status"]),
+                            "title": str(normalized["title"]),
+                            "url": str(normalized["url"]),
+                            "content_hash": str(normalized["content_hash"]),
+                        }
+                        for chunk in chunks
+                    ],
+                )
+            self.repository.upsert_document_with_chunks(
+                site_id=site_id,
+                post_id=int(normalized["post_id"]),
+                source_type=str(normalized["source_type"]),
+                source_id=int(normalized["source_id"]),
+                parent_post_id=(
+                    int(normalized["parent_post_id"])
+                    if normalized["parent_post_id"] is not None
+                    else None
+                ),
+                post_type=str(normalized["post_type"]),
+                post_status=str(normalized["post_status"]),
+                title=str(normalized["title"]),
+                url=str(normalized["url"]),
+                modified_gmt=str(normalized["modified_gmt"]),
+                content_hash=str(normalized["content_hash"]),
+                run_id=run_id,
+                chunks=chunks,
+            )
+            indexed_documents += 1
+            indexed_chunks += len(chunks)
+
+        return self._sync_response(
+            status="completed",
+            run_id=run_id,
+            sync_mode=sync_mode,
+            accepted_documents=accepted_documents,
+            indexed_documents=indexed_documents,
+            indexed_chunks=indexed_chunks,
+            failed_documents=failed_documents,
+            deleted_entries=deleted_entries,
+        )
+
+    def status(self, *, site_id: str, input_payload: dict[str, Any]) -> dict[str, Any]:
+        include_coverage = bool(input_payload.get("include_coverage"))
+        indexed_posts = self.repository.count_documents(site_id)
+        indexed_chunks = self.repository.count_chunks(site_id)
+        last_sync_at = self.repository.last_sync_at(site_id)
+
+        status = "ready" if indexed_chunks > 0 else "empty"
+        if self.repository.has_running_sync(site_id):
+            status = "syncing"
+        elif indexed_chunks == 0 and self.repository.latest_failed_sync(site_id) is not None:
+            status = "failed"
+
+        coverage = {
+            "indexed_posts": indexed_posts,
+            "indexed_chunks": indexed_chunks,
+            "last_sync_at": _serialize_datetime(last_sync_at),
+            "has_stale_content": False,
+            "post_type_coverage": {},
+            "source_type_coverage": {},
+            "comments_enabled": bool(self.settings.site_knowledge_comments_enabled),
+        }
+        if include_coverage:
+            coverage["post_type_coverage"] = {
+                post_type: 1.0 for post_type in sorted(self.repository.post_type_counts(site_id))
+            }
+            coverage["source_type_coverage"] = {
+                source_type: 1.0
+                for source_type in sorted(self.repository.source_type_counts(site_id))
+            }
+
+        return {
+            "artifact_type": "site_knowledge_status",
+            "composition_role": "site_knowledge_status",
+            "status": status,
+            "coverage": coverage,
+            "write_posture": "suggestion_only",
+            "direct_wordpress_write": False,
+        }
+
+    def search(
+        self,
+        *,
+        site_id: str,
+        input_payload: dict[str, Any],
+        run_id: str,
+    ) -> dict[str, Any]:
+        query = " ".join(str(input_payload.get("query") or "").split())
+        if not query:
+            raise SiteKnowledgeContractViolation(
+                "site_knowledge.query_required",
+                "site knowledge search query is required",
+            )
+        intent = str(input_payload.get("intent") or "site_search").strip()
+        if intent not in ALLOWED_SEARCH_INTENTS:
+            intent = "site_search"
+        max_results = coerce_positive_int(
+            input_payload.get("max_results"),
+            default=8,
+            maximum=20,
+        )
+        evidence_policy = _resolve_evidence_policy(input_payload.get("evidence_policy"))
+        filters = input_payload.get("filters")
+        filters = filters if isinstance(filters, dict) else {}
+        post_types = _filter_string_list(filters.get("post_types"), allowed=PUBLIC_POST_TYPES)
+        statuses = _filter_string_list(filters.get("status"), allowed=PUBLIC_POST_STATUSES)
+        source_types = _filter_string_list(filters.get("source_types"), allowed=PUBLIC_SOURCE_TYPES)
+        if not source_types:
+            source_types = ["post", "page"]
+        if "comment" in source_types and self.settings.site_knowledge_comments_enabled:
+            post_types = [*post_types, "comment"] if "comment" not in post_types else post_types
+        else:
+            source_types = [source_type for source_type in source_types if source_type != "comment"]
+        current_post_id = _coerce_int(input_payload.get("current_post_id"), default=0)
+
+        query_embedding = self._embed_text(
+            query,
+            site_id=site_id,
+            run_id=run_id,
+            ability_name=SITE_KNOWLEDGE_SEARCH_ABILITY,
+        )
+        results = self._search_vector_backend(
+            site_id=site_id,
+            query_embedding=query_embedding,
+            post_types=post_types,
+            statuses=statuses or ["publish"],
+            source_types=source_types,
+            current_post_id=current_post_id,
+            max_results=max_results,
+            intent=intent,
+        )
+        if results is not None:
+            results = _apply_evidence_policy(results, evidence_policy)
+            return {
+                "artifact_type": "site_knowledge_results",
+                "composition_role": "site_knowledge_context",
+                "status": "ready",
+                "intent": intent,
+                "workflow_support": _workflow_support_for_intent(intent),
+                "evidence_gate": _evidence_gate(results, evidence_policy),
+                "results": results,
+                "write_posture": "suggestion_only",
+                "direct_wordpress_write": False,
+            }
+
+        scored = []
+        for chunk in self.repository.list_search_chunks(
+            site_id=site_id,
+            post_types=post_types,
+            statuses=statuses or ["publish"],
+            source_types=source_types,
+            current_post_id=current_post_id,
+        ):
+            embedding = chunk.embedding_json if isinstance(chunk.embedding_json, list) else []
+            score = cosine_similarity(query_embedding, [float(value) for value in embedding])
+            lexical_bonus = _lexical_bonus(query, chunk.chunk_text, chunk.title)
+            scored.append((min(1.0, score + lexical_bonus), chunk))
+
+        scored.sort(key=lambda item: (-item[0], item[1].post_id, item[1].chunk_index))
+        results = [
+            _serialize_search_result(
+                post_id=chunk.post_id,
+                source_type=chunk.source_type,
+                source_id=chunk.source_id,
+                parent_post_id=chunk.parent_post_id or 0,
+                title=chunk.title,
+                url=chunk.url,
+                chunk_text=chunk.chunk_text,
+                score=score,
+                intent=intent,
+            )
+            for score, chunk in scored[:max_results]
+        ]
+        results = _apply_evidence_policy(results, evidence_policy)
+
+        return {
+            "artifact_type": "site_knowledge_results",
+            "composition_role": "site_knowledge_context",
+            "status": "ready",
+            "intent": intent,
+            "workflow_support": _workflow_support_for_intent(intent),
+            "evidence_gate": _evidence_gate(results, evidence_policy),
+            "results": results,
+            "write_posture": "suggestion_only",
+            "direct_wordpress_write": False,
+        }
+
+    def _build_chunks(
+        self,
+        document: dict[str, object],
+        *,
+        site_id: str,
+        run_id: str,
+        ability_name: str,
+    ) -> list[dict[str, object]]:
+        source_text = "\n\n".join(
+            part
+            for part in (
+                str(document.get("title") or ""),
+                str(document.get("excerpt") or ""),
+                str(document.get("content_excerpt") or ""),
+            )
+            if part.strip()
+        )
+        source_text = " ".join(source_text.split())
+        if not source_text:
+            return []
+
+        chunks = []
+        start = 0
+        while start < len(source_text):
+            text = source_text[start : start + MAX_CHUNK_CHARS].strip()
+            if text:
+                chunks.append(
+                    {
+                        "chunk_index": len(chunks),
+                        "chunk_text": text,
+                        "embedding": self._embed_text(
+                            text,
+                            site_id=site_id,
+                            run_id=run_id,
+                            ability_name=ability_name,
+                        ),
+                        "embedding_model": self.embedding_model,
+                        "metadata": {
+                            "source": "wordpress_public_excerpt",
+                            "content_hash": str(document.get("content_hash") or ""),
+                        },
+                    }
+                )
+            if start + MAX_CHUNK_CHARS >= len(source_text):
+                break
+            start += MAX_CHUNK_CHARS - CHUNK_OVERLAP_CHARS
+        return chunks
+
+    def _embed_text(
+        self,
+        text: str,
+        *,
+        site_id: str,
+        run_id: str,
+        ability_name: str,
+    ) -> list[float]:
+        if self.embedding_provider_id == "deterministic":
+            return embed_text_deterministic(text, dimensions=self.embedding_dimensions)
+        return self._embed_text_with_provider(
+            text,
+            site_id=site_id,
+            run_id=run_id,
+            ability_name=ability_name,
+        )
+
+    def _embed_text_with_provider(
+        self,
+        text: str,
+        *,
+        site_id: str,
+        run_id: str,
+        ability_name: str,
+    ) -> list[float]:
+        provider = self.providers.get(self.embedding_provider_id)
+        if provider is None:
+            raise SiteKnowledgeBackendError(
+                "site_knowledge.embedding_provider_missing",
+                "site knowledge embedding provider is not configured",
+            )
+        model_id = self.embedding_model
+        if self.embedding_provider_id == "tei" and not model_id.lower().startswith("tei/"):
+            model_id = f"tei/{model_id}"
+        try:
+            result = provider.execute(
+                ProviderExecutionRequest(
+                    run_id=run_id,
+                    site_id=site_id,
+                    ability_name=ability_name,
+                    profile_id="site-knowledge.managed",
+                    execution_kind="embedding",
+                    model_id=model_id,
+                    instance_id=f"{self.embedding_provider_id}-site-knowledge-embedding",
+                    endpoint_variant="embeddings",
+                    trace_id=run_id,
+                    input_payload={"text": text},
+                    policy={"storage_mode": "result_only"},
+                    timeout_ms=max(1, int(self._embedding_timeout_seconds() * 1000)),
+                )
+            )
+        except ProviderExecutionError as error:
+            raise SiteKnowledgeBackendError(
+                error.error_code,
+                "site knowledge embedding provider request failed",
+            ) from error
+
+        embedding = result.output.get("embedding")
+        if not isinstance(embedding, list):
+            raise SiteKnowledgeBackendError(
+                "site_knowledge.embedding_invalid",
+                "site knowledge embedding provider returned an invalid embedding",
+            )
+        vector = [float(value) for value in embedding]
+        if len(vector) != self.embedding_dimensions:
+            raise SiteKnowledgeBackendError(
+                "site_knowledge.embedding_dimension_mismatch",
+                "site knowledge embedding dimensions do not match configuration",
+            )
+        return vector
+
+    def _embedding_timeout_seconds(self) -> float:
+        if self.embedding_provider_id == "siliconflow":
+            return float(self.settings.siliconflow_timeout_seconds)
+        if self.embedding_provider_id == "openai":
+            return float(self.settings.openai_timeout_seconds)
+        return float(self.settings.tei_timeout_seconds)
+
+    def _search_vector_backend(
+        self,
+        *,
+        site_id: str,
+        query_embedding: list[float],
+        post_types: list[str],
+        statuses: list[str],
+        source_types: list[str],
+        current_post_id: int,
+        max_results: int,
+        intent: str,
+    ) -> list[dict[str, object]] | None:
+        backend: SiteKnowledgeVectorBackend | None = self.vector_backend
+        if backend is None:
+            return None
+        hits = backend.search(
+            site_id=site_id,
+            query_embedding=query_embedding,
+            post_types=post_types,
+            statuses=statuses,
+            source_types=source_types,
+            current_post_id=current_post_id,
+            limit=max_results,
+        )
+        return [_serialize_vector_hit(hit, intent=intent) for hit in hits]
+
+    def _sync_response(
+        self,
+        *,
+        status: str,
+        run_id: str,
+        sync_mode: str,
+        accepted_documents: int,
+        indexed_documents: int,
+        indexed_chunks: int,
+        failed_documents: int,
+        deleted_entries: int,
+    ) -> dict[str, Any]:
+        return {
+            "artifact_type": "site_knowledge_sync_request",
+            "composition_role": "site_knowledge_sync_request",
+            "status": status,
+            "run_id": run_id,
+            "sync": {
+                "sync_mode": sync_mode,
+                "accepted_documents": accepted_documents,
+                "indexed_documents": indexed_documents,
+                "indexed_chunks": indexed_chunks,
+                "failed_documents": failed_documents,
+                "deleted_entries": deleted_entries,
+            },
+            "write_posture": "suggestion_only",
+            "direct_wordpress_write": False,
+        }
+
+
+def _normalize_public_document(document: dict[str, Any]) -> dict[str, object] | None:
+    post_id = _coerce_int(document.get("post_id"), default=0)
+    post_type = str(document.get("post_type") or "").strip().lower()
+    post_status = str(document.get("post_status") or "").strip().lower()
+    if (
+        post_id <= 0
+        or post_type not in PUBLIC_POST_TYPES
+        or post_status not in PUBLIC_POST_STATUSES
+    ):
+        return None
+
+    title = " ".join(str(document.get("title") or "").split())
+    url = str(document.get("url") or "").strip()
+    excerpt = " ".join(str(document.get("excerpt") or "").split())
+    content_excerpt = " ".join(str(document.get("content_excerpt") or "").split())
+    content_hash = str(document.get("content_hash") or "").strip()
+    if not content_hash:
+        content_hash = hashlib.sha256(
+            f"{title}|{excerpt}|{content_excerpt}".encode()
+        ).hexdigest()
+
+    return {
+        "post_id": post_id,
+        "source_type": post_type,
+        "source_id": post_id,
+        "parent_post_id": post_id,
+        "post_type": post_type,
+        "post_status": post_status,
+        "title": title[:500],
+        "url": url[:2000],
+        "modified_gmt": str(document.get("modified_gmt") or "").strip()[:64],
+        "excerpt": excerpt[:2000],
+        "content_excerpt": content_excerpt[:12000],
+        "content_hash": content_hash[:128],
+    }
+
+
+def _normalize_public_comment(document: dict[str, Any]) -> dict[str, object] | None:
+    comment_id = _coerce_int(document.get("comment_id"), default=0)
+    post_id = _coerce_int(document.get("post_id"), default=0)
+    comment_status = str(document.get("comment_status") or "").strip().lower()
+    if comment_id <= 0 or post_id <= 0 or comment_status not in PUBLIC_COMMENT_STATUSES:
+        return None
+
+    content_excerpt = " ".join(str(document.get("content_excerpt") or "").split())
+    content_hash = str(document.get("content_hash") or "").strip()
+    if not content_hash:
+        content_hash = hashlib.sha256(
+            f"{post_id}|{comment_id}|{content_excerpt}".encode()
+        ).hexdigest()
+    url = str(document.get("url") or "").strip()
+
+    return {
+        "post_id": post_id,
+        "source_type": "comment",
+        "source_id": comment_id,
+        "parent_post_id": post_id,
+        "post_type": "comment",
+        "post_status": "publish",
+        "title": f"Comment on post {post_id}",
+        "url": url[:2000],
+        "modified_gmt": str(document.get("created_gmt") or "").strip()[:64],
+        "excerpt": "",
+        "content_excerpt": content_excerpt[:4000],
+        "content_hash": content_hash[:128],
+    }
+
+
+def _looks_like_comment_document(document: dict[str, Any]) -> bool:
+    return "comment_id" in document or "comment_status" in document
+
+
+def _coerce_post_ids(value: Any) -> list[int]:
+    if not isinstance(value, list):
+        return []
+    post_ids = []
+    for item in value:
+        post_id = _coerce_int(item, default=0)
+        if post_id > 0:
+            post_ids.append(post_id)
+    return post_ids
+
+
+def _filter_string_list(value: Any, *, allowed: frozenset[str]) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    results = []
+    for item in value:
+        normalized = str(item or "").strip().lower()
+        if normalized in allowed:
+            results.append(normalized)
+    return results
+
+
+def _resolve_evidence_policy(value: Any) -> dict[str, object]:
+    policy = value if isinstance(value, dict) else {}
+    min_score = _coerce_float(
+        policy.get("min_score"),
+        default=DEFAULT_EVIDENCE_MIN_SCORE,
+    )
+    min_score = max(0.0, min(1.0, min_score))
+    required_sources = coerce_positive_int(
+        policy.get("required_sources"),
+        default=DEFAULT_REQUIRED_EVIDENCE_SOURCES,
+        maximum=5,
+    )
+    no_hit_policy = str(policy.get("no_hit_policy") or "abstain").strip().lower()
+    if no_hit_policy not in ALLOWED_NO_HIT_POLICIES:
+        no_hit_policy = "abstain"
+    return {
+        "min_score": min_score,
+        "required_sources": required_sources,
+        "no_hit_policy": no_hit_policy,
+    }
+
+
+def _apply_evidence_policy(
+    results: list[dict[str, object]],
+    evidence_policy: dict[str, object],
+) -> list[dict[str, object]]:
+    min_score = float(evidence_policy.get("min_score") or 0.0)
+    return [
+        result
+        for result in results
+        if _coerce_float(result.get("score"), default=0.0) >= min_score
+    ]
+
+
+def _evidence_gate(
+    results: list[dict[str, object]],
+    evidence_policy: dict[str, object],
+) -> dict[str, object]:
+    required_sources = int(evidence_policy.get("required_sources") or 1)
+    no_hit_policy = str(evidence_policy.get("no_hit_policy") or "abstain")
+    passed = len(results) >= required_sources
+    return {
+        "status": "passed" if passed else "insufficient_evidence",
+        "min_score": round(float(evidence_policy.get("min_score") or 0.0), 4),
+        "required_sources": required_sources,
+        "source_count": len(results),
+        "no_hit_policy": no_hit_policy,
+        "allows_site_grounded_assertion": passed,
+        "guidance": (
+            "Use returned site sources as grounding evidence."
+            if passed
+            else _insufficient_evidence_guidance(no_hit_policy)
+        ),
+    }
+
+
+def _insufficient_evidence_guidance(no_hit_policy: str) -> str:
+    if no_hit_policy == "fallback_to_general":
+        return (
+            "Do not present an unsupported site-specific claim; use general model "
+            "knowledge only with an explicit uncertainty disclaimer."
+        )
+    if no_hit_policy == "return_empty":
+        return (
+            "Return no grounded answer because the site knowledge index had "
+            "insufficient evidence."
+        )
+    return "Abstain or ask for more source material; do not invent site-specific facts."
+
+
+def _coerce_float(value: Any, *, default: float) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _coerce_int(value: Any, *, default: int) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _serialize_datetime(value: datetime | None) -> str:
+    if value is None:
+        return ""
+    return value.isoformat()
+
+
+def _lexical_bonus(query: str, chunk_text: str, title: str) -> float:
+    query_terms = {term for term in query.lower().split() if len(term) >= 2}
+    if not query_terms:
+        return 0.0
+    haystack = f"{title} {chunk_text}".lower()
+    matches = sum(1 for term in query_terms if term in haystack)
+    return min(0.2, matches / max(1, len(query_terms)) * 0.2)
+
+
+def _reason_for_intent(intent: str) -> str:
+    if intent == "site_search":
+        return "The indexed passage may answer a site-content question with source context."
+    if intent == "faq_candidates":
+        return (
+            "The indexed passage may reveal a repeated question or answerable "
+            "site FAQ candidate."
+        )
+    if intent == "related_content":
+        return "The indexed passage is related and may support topic cluster planning."
+    if intent == "content_gap_analysis":
+        return (
+            "The indexed passage is related evidence for deciding whether coverage "
+            "is missing or shallow."
+        )
+    if intent == "duplicate_check":
+        return (
+            "The indexed passage is similar enough to review before creating or "
+            "publishing new content."
+        )
+    if intent == "internal_links":
+        return "The indexed passage is semantically related and may support an internal link."
+    if intent == "refresh_suggestions":
+        return "The indexed passage is related to the requested refresh context."
+    if intent == "writing_context":
+        return "The indexed passage can provide site-specific writing context."
+    if intent == "image_context":
+        return "The indexed passage can inform image context or media planning."
+    return "Topic and intent are closely related."
+
+
+def _suggested_use_for_intent(intent: str) -> str:
+    return {
+        "site_search": "answer_source",
+        "internal_links": "internal_link",
+        "related_content": "topic_cluster_candidate",
+        "refresh_suggestions": "refresh_candidate",
+        "faq_candidates": "faq_candidate",
+        "content_gap_analysis": "gap_evidence",
+        "duplicate_check": "duplicate_or_conflict_candidate",
+    }.get(intent, "reference_snippet")
+
+
+def _serialize_vector_hit(hit: VectorSearchHit, *, intent: str) -> dict[str, object]:
+    return _serialize_search_result(
+        post_id=hit.post_id,
+        source_type=hit.source_type,
+        source_id=hit.source_id,
+        parent_post_id=hit.parent_post_id,
+        title=hit.title,
+        url=hit.url,
+        chunk_text=hit.chunk_text,
+        score=hit.score,
+        intent=intent,
+    )
+
+
+def _serialize_search_result(
+    *,
+    post_id: int,
+    source_type: str,
+    source_id: int,
+    parent_post_id: int,
+    title: str,
+    url: str,
+    chunk_text: str,
+    score: float,
+    intent: str,
+) -> dict[str, object]:
+    result: dict[str, object] = {
+        "post_id": post_id,
+        "source_type": source_type,
+        "source_id": source_id,
+        "parent_post_id": parent_post_id,
+        "title": title,
+        "url": url,
+        "chunk": chunk_text[:1200],
+        "score": round(score, 4),
+        "reason": _reason_for_intent(intent),
+        "suggested_use": _suggested_use_for_intent(intent),
+    }
+    if intent == "internal_links":
+        result.update(
+            {
+                "anchor_text_candidates": _anchor_text_candidates(title, chunk_text),
+                "link_target": {
+                    "post_id": post_id,
+                    "title": title,
+                    "url": url,
+                },
+                "suggested_action": "insert_internal_link_after_editor_confirmation",
+                "insert_mode": "wordpress_local_only",
+            }
+        )
+    elif intent == "writing_context":
+        result.update(
+            {
+                "context_role": "site_reference",
+                "citation": {
+                    "post_id": post_id,
+                    "title": title,
+                    "url": url,
+                },
+                "usage_guidance": (
+                    "Use as background context for generation; do not copy or publish "
+                    "without WordPress-side editor approval."
+                ),
+            }
+        )
+    elif intent == "refresh_suggestions":
+        result.update(
+            {
+                "refresh_action": "review_for_update_or_merge",
+                "refresh_signals": ["topic_overlap", "semantic_similarity"],
+                "suggested_action": "open_wordpress_editor_review",
+                "update_mode": "wordpress_local_only",
+            }
+        )
+    elif intent == "site_search":
+        result.update(
+            {
+                "answer_source": {
+                    "post_id": post_id,
+                    "title": title,
+                    "url": url,
+                },
+                "copilot_action": "answer_with_site_citation",
+                "response_mode": "source_grounded_suggestion",
+            }
+        )
+    elif intent == "faq_candidates":
+        result.update(
+            {
+                "faq_candidate": {
+                    "question_seed": _faq_question_seed(chunk_text),
+                    "answer_source": {
+                        "post_id": post_id,
+                        "source_type": source_type,
+                        "source_id": source_id,
+                        "title": title,
+                        "url": url,
+                    },
+                    "source_signal": (
+                        "approved_comment_question"
+                        if source_type == "comment"
+                        else "public_content_question"
+                    ),
+                },
+                "suggested_action": "review_or_add_faq_after_editor_confirmation",
+                "faq_mode": "wordpress_local_only",
+            }
+        )
+    elif intent == "related_content":
+        result.update(
+            {
+                "cluster_candidate": {
+                    "post_id": post_id,
+                    "title": title,
+                    "url": url,
+                },
+                "cluster_role": _cluster_role_for_score(score),
+                "planning_action": "review_for_topic_cluster_or_hub_page",
+                "planning_mode": "wordpress_local_only",
+            }
+        )
+    elif intent == "content_gap_analysis":
+        result.update(
+            {
+                "gap_signal": {
+                    "coverage": _coverage_signal_for_score(score),
+                    "evidence_source": {
+                        "post_id": post_id,
+                        "source_type": source_type,
+                        "source_id": source_id,
+                        "title": title,
+                        "url": url,
+                    },
+                    "signals": ["semantic_near_match", "coverage_review_needed"],
+                },
+                "suggested_action": "review_for_new_or_expanded_content",
+                "planning_mode": "wordpress_local_only",
+            }
+        )
+    if intent in {"refresh_suggestions", "duplicate_check"}:
+        result["duplicate_check"] = {
+            "risk": _duplicate_risk_for_score(score),
+            "signals": ["semantic_similarity", "topic_overlap"],
+            "preflight_action": "review_existing_content_before_drafting",
+            "conflict_action": "do_not_publish_until_wordpress_editor_review",
+            "review_mode": "wordpress_local_only",
+        }
+    return result
+
+
+def _workflow_support_for_intent(intent: str) -> dict[str, object]:
+    if intent == "site_search":
+        return {
+            "workflow": "site_content_copilot",
+            "wordpress_write_owner": "wordpress_local",
+            "cloud_output": "answer_sources",
+        }
+    if intent == "faq_candidates":
+        return {
+            "workflow": "faq_candidate_mining",
+            "wordpress_write_owner": "wordpress_local",
+            "cloud_output": "faq_candidates",
+        }
+    if intent == "related_content":
+        return {
+            "workflow": "topic_cluster_planning",
+            "wordpress_write_owner": "wordpress_local",
+            "cloud_output": "cluster_candidates",
+        }
+    if intent == "content_gap_analysis":
+        return {
+            "workflow": "content_gap_analysis",
+            "wordpress_write_owner": "wordpress_local",
+            "cloud_output": "gap_evidence",
+        }
+    if intent == "duplicate_check":
+        return {
+            "workflow": "publish_preflight_duplicate_check",
+            "wordpress_write_owner": "wordpress_local",
+            "cloud_output": "duplicate_or_conflict_candidates",
+        }
+    if intent == "internal_links":
+        return {
+            "workflow": "internal_link_recommendation",
+            "wordpress_write_owner": "wordpress_local",
+            "cloud_output": "candidate_links",
+        }
+    if intent == "writing_context":
+        return {
+            "workflow": "generation_context_enrichment",
+            "wordpress_write_owner": "wordpress_local",
+            "cloud_output": "reference_context",
+        }
+    if intent == "refresh_suggestions":
+        return {
+            "workflow": "content_refresh_review",
+            "wordpress_write_owner": "wordpress_local",
+            "cloud_output": "refresh_candidates",
+        }
+    return {
+        "workflow": "site_knowledge_search",
+        "wordpress_write_owner": "wordpress_local",
+        "cloud_output": "search_results",
+    }
+
+
+def _anchor_text_candidates(title: str, chunk_text: str) -> list[str]:
+    candidates = []
+    normalized_title = " ".join(str(title or "").split())
+    if normalized_title:
+        candidates.append(normalized_title[:80])
+
+    words = [word.strip(".,;:!?()[]{}\"'") for word in str(chunk_text or "").split()]
+    words = [word for word in words if len(word) >= 2]
+    if len(words) >= 4:
+        phrase = " ".join(words[: min(8, len(words))])
+        if phrase and phrase not in candidates:
+            candidates.append(phrase[:80])
+    return candidates[:3]
+
+
+def _duplicate_risk_for_score(score: float) -> str:
+    if score >= 0.85:
+        return "high"
+    if score >= 0.7:
+        return "medium"
+    return "low"
+
+
+def _coverage_signal_for_score(score: float) -> str:
+    if score >= 0.85:
+        return "covered_or_duplicate_risk"
+    if score >= 0.65:
+        return "partially_covered"
+    return "possible_gap"
+
+
+def _faq_question_seed(chunk_text: str) -> str:
+    text = " ".join(str(chunk_text or "").split())
+    if not text:
+        return ""
+    for marker in ("?", "？"):
+        if marker in text:
+            return text.split(marker, 1)[0][:180] + marker
+    return text[:180]
+
+
+def _cluster_role_for_score(score: float) -> str:
+    if score >= 0.85:
+        return "hub_or_core_reference"
+    if score >= 0.7:
+        return "supporting_reference"
+    return "loose_related_reference"

@@ -54,6 +54,8 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
     { href: '/admin/coverage', label: t('admin.nav_coverage', {}, 'Coverage') },
     { href: '/admin/plugin-observability', label: t('admin.nav_plugin_observability', {}, 'Plugin Observability') },
     { href: '/admin/media-observability', label: t('admin.nav_media_observability', {}, 'Media Observability') },
+    { href: '/admin/ai-advisor', label: t('admin.nav_ai_advisor', {}, 'AI Advisor') },
+    { href: '/admin/vector-observability', label: t('admin.nav_vector_observability', {}, 'Vector Observability') },
   ];
 
   const isActive = (href: string) => {

@@ -19,8 +19,8 @@ from app.core.models import (
 from app.core.services import CloudServices
 from app.domain.catalog.service import CatalogService
 from tests.conftest import (
-    TEST_INTERNAL_AUTH_TOKEN,
     TEST_ADMIN_SESSION_SECRET,
+    TEST_INTERNAL_AUTH_TOKEN,
     TEST_PORTAL_JWT_SECRET,
     build_internal_headers,
     build_portal_bearer_headers,
@@ -1579,6 +1579,20 @@ def test_portal_summary_usage_entitlements_and_audit_routes(tmp_path: Path) -> N
     assert usage_response.json()["data"]["site_id"] == "site_portal_reads"
     assert usage_response.json()["data"]["identity_type"] == "user_admin"
     assert usage_response.json()["data"]["role"] == "user_admin"
+
+    monitoring_response = client.get(
+        "/portal/v1/sites/site_portal_reads/monitoring-overview?window_hours=24",
+        headers=build_portal_headers(member_ref="user:portal-reads@example.com"),
+    )
+    assert monitoring_response.status_code == 200
+    monitoring_data = monitoring_response.json()["data"]
+    assert monitoring_data["contract_version"] == "magick-site-monitoring-overview-v1"
+    assert monitoring_data["site_id"] == "site_portal_reads"
+    assert monitoring_data["identity_type"] == "user_admin"
+    assert monitoring_data["role"] == "user_admin"
+    assert "health" in monitoring_data
+    assert "action_required" in monitoring_data
+    assert "quota" in monitoring_data
 
     entitlements_response = client.get(
         "/portal/v1/sites/site_portal_reads/entitlements",

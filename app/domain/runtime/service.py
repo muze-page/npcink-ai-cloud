@@ -16,7 +16,7 @@ from app.adapters.providers.base import (
     ProviderExecutionError,
     ProviderExecutionRequest,
 )
-from app.adapters.providers.openai import OpenAIProviderAdapter
+from app.adapters.providers.registry import build_provider_adapters
 from app.adapters.queue.base import RuntimeQueue, RuntimeQueueError
 from app.adapters.repositories.runtime_repository import RuntimeRepository
 from app.core.config import Settings, get_settings
@@ -89,6 +89,18 @@ from app.domain.runtime.models import (
     normalize_runtime_request_policy,
     normalize_runtime_task_backend,
 )
+from app.domain.site_knowledge.backends import SiteKnowledgeBackendError
+from app.domain.site_knowledge.contracts import (
+    SITE_KNOWLEDGE_ABILITIES,
+    SITE_KNOWLEDGE_SYNC_ABILITY,
+    SiteKnowledgeContractViolation,
+    validate_site_knowledge_runtime_contract,
+)
+from app.domain.site_knowledge.metrics import (
+    record_site_knowledge_failure_metric,
+    record_site_knowledge_run_metric,
+)
+from app.domain.site_knowledge.service import SiteKnowledgeService
 
 logger = get_logger(__name__)
 
@@ -111,9 +123,9 @@ class RuntimeService:
         self.settings = settings or get_settings()
         self.routing_service = RoutingService(database_url)
         self.commercial_service = CommercialService(database_url, settings=self.settings)
-        self.providers = providers or {
-            OpenAIProviderAdapter.provider_id: OpenAIProviderAdapter()
-        }
+        self.providers = (
+            providers if providers is not None else build_provider_adapters(self.settings)
+        )
         self.runtime_queue = runtime_queue
         self.callback_dispatcher = callback_dispatcher
         self.callback_max_attempts = max(1, callback_max_attempts)
@@ -188,6 +200,9 @@ class RuntimeService:
         }
 
     def execute(self, request: RuntimeRequest) -> RuntimeExecutionResponse:
+        if self._is_site_knowledge_request(request):
+            return self._execute_site_knowledge_request(request)
+
         resolution = self.routing_service.resolve(
             profile_id=request.profile_id,
             execution_kind=request.execution_kind,
@@ -309,6 +324,124 @@ class RuntimeService:
                 run,
                 repository=repository,
                 candidates=resolution.candidates,
+                input_payload=request.input_payload,
+            )
+            session.commit()
+            return self._build_execution_response(
+                run,
+                repository=repository,
+                idempotent_replay=False,
+            )
+
+    def _execute_site_knowledge_request(
+        self,
+        request: RuntimeRequest,
+    ) -> RuntimeExecutionResponse:
+        self._validate_site_knowledge_contract(request)
+        trace_id = request.trace_id or uuid4().hex
+        run_id = f"run_{uuid4().hex}"
+        merged_policy = self._build_site_knowledge_policy(request)
+        request_fingerprint = self._build_request_fingerprint(request, merged_policy)
+        should_enqueue = self._should_enqueue(request, merged_policy)
+
+        with get_session(self.database_url) as session:
+            repository = RuntimeRepository(session)
+            self._require_active_site(repository, request.site_id)
+
+            if request.idempotency_key:
+                existing = repository.get_run_by_idempotency(
+                    request.site_id,
+                    request.idempotency_key,
+                )
+                if existing is not None:
+                    if existing.request_fingerprint != request_fingerprint:
+                        raise RuntimeIdempotencyConflictError(
+                            request.site_id,
+                            request.idempotency_key,
+                        )
+                    session.commit()
+                    return self._build_execution_response(
+                        existing,
+                        repository=repository,
+                        idempotent_replay=True,
+                    )
+
+            commercial_decision = self.commercial_service.authorize_runtime_request(
+                session=session,
+                site_id=request.site_id,
+                ability_family=request.ability_family,
+                channel=request.channel,
+                execution_kind=request.execution_kind,
+                execution_tier=request.execution_tier,
+                data_classification=request.data_classification,
+                trace_id=trace_id,
+                idempotency_key=request.idempotency_key,
+                request_kind="execute",
+                run_id=run_id,
+            )
+            self._enforce_batch_limits(
+                request=request,
+                commercial_decision=commercial_decision,
+            )
+            merged_policy = self._apply_commercial_policy_overrides(
+                merged_policy,
+                commercial_decision=commercial_decision,
+            )
+            should_enqueue = self._should_enqueue(request, merged_policy)
+            storage_mode = self._get_storage_mode(merged_policy)
+            execution_input_ciphertext = None
+            if should_enqueue:
+                execution_input_ciphertext = encrypt_runtime_execution_input(
+                    request.input_payload,
+                    settings=self.settings,
+                )
+
+            run = repository.create_run(
+                run_id=run_id,
+                site_id=request.site_id,
+                account_id=str(commercial_decision.get("account_id") or "") or None,
+                subscription_id=str(commercial_decision.get("subscription_id") or "") or None,
+                plan_version_id=str(commercial_decision.get("plan_version_id") or "") or None,
+                ability_name=request.ability_name,
+                ability_family=request.ability_family,
+                skill_id=request.skill_id,
+                workflow_id=request.workflow_id,
+                contract_version=request.contract_version,
+                channel=request.channel,
+                execution_kind=request.execution_kind,
+                execution_tier=request.execution_tier,
+                execution_pattern=request.execution_pattern,
+                data_classification=request.data_classification,
+                profile_id=request.profile_id,
+                canonical_run_id=request.canonical_run_id or None,
+                status="queued" if should_enqueue else "running",
+                idempotency_key=request.idempotency_key,
+                request_fingerprint=request_fingerprint,
+                trace_id=trace_id,
+                input_json=self._prepare_input_for_storage(
+                    request.input_payload,
+                    storage_mode=storage_mode,
+                ),
+                execution_input_ciphertext=execution_input_ciphertext,
+                policy_json=merged_policy,
+                selected_provider_id="site_knowledge",
+                selected_model_id="site-knowledge-managed",
+                selected_instance_id="cloud-runtime",
+            )
+            self.commercial_service.record_run_acceptance(session=session, run=run)
+
+            if should_enqueue:
+                self._publish_queue_signal(run.run_id)
+                session.commit()
+                return self._build_execution_response(
+                    run,
+                    repository=repository,
+                    idempotent_replay=False,
+                )
+
+            self._execute_site_knowledge_run(
+                run,
+                repository=repository,
                 input_payload=request.input_payload,
             )
             session.commit()
@@ -1794,6 +1927,9 @@ class RuntimeService:
         if run.execution_kind == "media_derivative":
             self._execute_media_derivative_run(run, repository=repository)
             return
+        if self._is_site_knowledge_run(run):
+            self._execute_site_knowledge_run(run, repository=repository)
+            return
 
         policy = run.policy_json if isinstance(run.policy_json, dict) else {}
         candidates = self._deserialize_routing_candidates(policy)
@@ -1987,6 +2123,134 @@ class RuntimeService:
             instance_id=last_instance_id or None,
             fallback_used=last_fallback_used,
         )
+
+    def _execute_site_knowledge_run(
+        self,
+        run: RunRecord,
+        *,
+        repository: RuntimeRepository,
+        input_payload: dict[str, Any] | None = None,
+    ) -> None:
+        if self._cancel_requested_before_attempt(run, repository=repository):
+            repository.mark_run_canceled(run)
+            return
+
+        payload = (
+            input_payload
+            if isinstance(input_payload, dict)
+            else self._get_execution_input_payload(run)
+        )
+        execution_started_at = datetime.now(UTC)
+        try:
+            result_json = SiteKnowledgeService(
+                repository.session,
+                settings=self.settings,
+                providers=self.providers,
+            ).execute(
+                site_id=run.site_id,
+                ability_name=run.ability_name,
+                contract_version=run.contract_version or "",
+                input_payload=payload,
+                run_id=run.run_id,
+            )
+        except (SiteKnowledgeContractViolation, SiteKnowledgeBackendError) as error:
+            repository.mark_run_failed(
+                run,
+                error_code=error.error_code,
+                error_message=error.message,
+                provider_id="site_knowledge",
+                model_id="site-knowledge-managed",
+                instance_id="cloud-runtime",
+                fallback_used=False,
+            )
+            record_site_knowledge_failure_metric(
+                session=repository.session,
+                run=run,
+                input_payload=payload,
+                error_code=error.error_code,
+                execution_started_at=execution_started_at,
+                settings=self.settings,
+            )
+            return
+
+        repository.mark_run_succeeded(
+            run,
+            result_json=result_json,
+            provider_id="site_knowledge",
+            model_id="site-knowledge-managed",
+            instance_id="cloud-runtime",
+            fallback_used=False,
+        )
+        record_site_knowledge_run_metric(
+            session=repository.session,
+            run=run,
+            input_payload=payload,
+            result_json=result_json,
+            execution_started_at=execution_started_at,
+            settings=self.settings,
+        )
+
+    def _is_site_knowledge_request(self, request: RuntimeRequest) -> bool:
+        return request.ability_name in SITE_KNOWLEDGE_ABILITIES
+
+    def _is_site_knowledge_run(self, run: RunRecord) -> bool:
+        return str(run.ability_name or "") in SITE_KNOWLEDGE_ABILITIES
+
+    def _validate_site_knowledge_contract(self, request: RuntimeRequest) -> None:
+        try:
+            validate_site_knowledge_runtime_contract(
+                ability_name=request.ability_name,
+                contract_version=request.contract_version,
+                input_payload=request.input_payload,
+            )
+        except SiteKnowledgeContractViolation as error:
+            raise RuntimeExecutionContractError(error.error_code, error.message) from error
+        if request.timeout_seconds > RUNTIME_MAX_TIMEOUT_SECONDS:
+            raise RuntimeExecutionContractError(
+                "runtime.contract_timeout_exceeded",
+                f"timeout_seconds exceeds max allowed value {RUNTIME_MAX_TIMEOUT_SECONDS}",
+            )
+        if request.retry_max > RUNTIME_MAX_RETRY_MAX:
+            raise RuntimeExecutionContractError(
+                "runtime.contract_retry_exceeded",
+                f"retry_max exceeds max allowed value {RUNTIME_MAX_RETRY_MAX}",
+            )
+        if request.retention_ttl > RUNTIME_MAX_RETENTION_TTL:
+            raise RuntimeExecutionContractError(
+                "runtime.contract_retention_exceeded",
+                f"retention_ttl exceeds max allowed value {RUNTIME_MAX_RETENTION_TTL}",
+            )
+
+    def _build_site_knowledge_policy(self, request: RuntimeRequest) -> dict[str, object]:
+        policy = self._apply_runtime_controls(dict(request.policy), request)
+        if request.ability_name == SITE_KNOWLEDGE_SYNC_ABILITY:
+            policy.setdefault("allow_fallback", False)
+        if request.execution_pattern == "whole_run_offload":
+            task_backend = policy.get("task_backend")
+            if not isinstance(task_backend, dict) or not task_backend:
+                policy["task_backend"] = {
+                    "enabled": True,
+                    "mode": "queue",
+                    "callback_mode": "polling_preferred",
+                    "polling_interval_sec": 5,
+                }
+        policy["execution_contract"] = {
+            "ability_name": request.ability_name,
+            "contract_version": request.contract_version,
+            "profile_id": request.profile_id,
+            "execution_pattern": request.execution_pattern,
+            "data_classification": request.data_classification,
+            "storage_mode": request.storage_mode,
+            "timeout_seconds": max(0, request.timeout_seconds),
+            "retry_max": max(0, request.retry_max),
+            "retention_ttl": max(0, request.retention_ttl),
+            "task_backend": (
+                policy.get("task_backend")
+                if isinstance(policy.get("task_backend"), dict)
+                else {}
+            ),
+        }
+        return policy
 
     def _publish_queue_signal(self, run_id: str) -> None:
         if self.runtime_queue is None:

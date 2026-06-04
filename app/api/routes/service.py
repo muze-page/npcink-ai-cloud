@@ -24,6 +24,7 @@ from app.domain.runtime.models import (
     RUNTIME_DIAGNOSTIC_ISSUE_KIND_PATTERN,
 )
 from app.domain.runtime.service import RuntimeService
+from app.domain.site_knowledge.metrics import SiteKnowledgeObservabilityService
 from app.workers.ops_cadence import build_cadence_summary
 
 router = APIRouter(prefix="/internal/service", tags=["service"])
@@ -1786,6 +1787,29 @@ async def get_admin_media_observability(
     return build_envelope(
         status="ok",
         message="media observability admin summary loaded",
+        data=result,
+        revision="m6",
+    )
+
+
+@router.get("/admin/vector-observability")
+async def get_admin_vector_observability(
+    request: Request,
+    window_hours: int = Query(default=24, ge=1, le=168),
+    site_id: str = Query(default=""),
+) -> Any:
+    auth = await authorize_internal_request(request, require_idempotency=False)
+    if auth is not None:
+        return auth
+    services = get_cloud_services(request)
+    service = SiteKnowledgeObservabilityService(services.settings.database_url)
+    result = service.get_summary(
+        window_hours=window_hours,
+        site_id=site_id.strip(),
+    )
+    return build_envelope(
+        status="ok",
+        message="vector observability admin summary loaded",
         data=result,
         revision="m6",
     )

@@ -198,11 +198,25 @@ class Settings(BaseSettings):
     tei_region: str = Field(default="self-hosted")
     tei_context_window: int = Field(default=8192)
     internal_ops_summarizer_provider_allowlist: str = Field(default="")
+    site_knowledge_vector_backend: str = Field(default="postgres_json")
+    site_knowledge_embedding_provider: str = Field(default="deterministic")
+    site_knowledge_embedding_model: str = Field(default="BAAI/bge-m3")
+    site_knowledge_embedding_dimensions: int = Field(default=1024)
+    site_knowledge_vector_metric_type: str = Field(default="COSINE")
+    site_knowledge_comments_enabled: bool = Field(default=False)
+    site_knowledge_zilliz_uri: str | None = Field(default=None)
+    site_knowledge_zilliz_token: str | None = Field(default=None)
+    site_knowledge_zilliz_database: str | None = Field(default=None)
+    site_knowledge_zilliz_collection: str = Field(default="magick_site_knowledge_chunks")
+    site_knowledge_zilliz_timeout_seconds: float = Field(default=10.0)
     openrouter_provider_enabled: bool = Field(default=False)
     openrouter_base_url: str = Field(default="https://openrouter.ai/api/v1")
     openrouter_api_key: str | None = Field(default=None)
     openrouter_timeout_seconds: float = Field(default=30.0)
     openrouter_site_url: str | None = Field(default=None)
+    siliconflow_provider_enabled: bool = Field(default=False)
+    siliconflow_base_url: str = Field(default="https://api.siliconflow.cn/v1")
+    siliconflow_api_key: str | None = Field(default=None)
     siliconflow_pricing_url: str = Field(default="https://www2.siliconflow.cn/pricing")
     siliconflow_timeout_seconds: float = Field(default=30.0)
     huggingface_base_url: str = Field(default="https://huggingface.co")
@@ -427,10 +441,93 @@ class Settings(BaseSettings):
             raise ValueError("tei_timeout_seconds must be greater than 0")
         if self.tei_context_window <= 0:
             raise ValueError("tei_context_window must be greater than 0")
+        if self.site_knowledge_embedding_dimensions <= 0:
+            raise ValueError("site_knowledge_embedding_dimensions must be greater than 0")
+        if self.site_knowledge_zilliz_timeout_seconds <= 0:
+            raise ValueError("site_knowledge_zilliz_timeout_seconds must be greater than 0")
+        site_knowledge_embedding_provider = str(
+            self.site_knowledge_embedding_provider or ""
+        ).strip()
+        allowed_site_knowledge_embedding_providers = {
+            "deterministic",
+            "openai",
+            "siliconflow",
+            "tei",
+        }
+        if site_knowledge_embedding_provider not in allowed_site_knowledge_embedding_providers:
+            raise ValueError(
+                "site_knowledge_embedding_provider must be deterministic, "
+                "openai, siliconflow, or tei"
+            )
+        site_knowledge_backend = str(self.site_knowledge_vector_backend or "").strip()
+        if site_knowledge_backend not in {"postgres_json", "zilliz_cloud"}:
+            raise ValueError(
+                "site_knowledge_vector_backend must be postgres_json or zilliz_cloud"
+            )
+        metric_type = str(self.site_knowledge_vector_metric_type or "").strip().upper()
+        if metric_type not in {"COSINE", "IP", "L2"}:
+            raise ValueError("site_knowledge_vector_metric_type must be COSINE, IP, or L2")
+        self.site_knowledge_vector_metric_type = metric_type
+        if site_knowledge_backend == "zilliz_cloud":
+            if not str(self.site_knowledge_zilliz_uri or "").strip():
+                raise ValueError(
+                    "site_knowledge_zilliz_uri is required when zilliz_cloud is enabled"
+                )
+            if not str(self.site_knowledge_zilliz_token or "").strip():
+                raise ValueError(
+                    "site_knowledge_zilliz_token is required when zilliz_cloud is enabled"
+                )
+            if not str(self.site_knowledge_zilliz_collection or "").strip():
+                raise ValueError(
+                    "site_knowledge_zilliz_collection is required when zilliz_cloud is enabled"
+                )
+        if site_knowledge_embedding_provider == "tei":
+            if not self.tei_provider_enabled:
+                raise ValueError(
+                    "tei_provider_enabled is required when site knowledge uses tei embeddings"
+                )
+            model_id = str(self.site_knowledge_embedding_model or "").strip()
+            configured_model_ids = {
+                item.strip()
+                for item in str(self.tei_model_ids or "").split(",")
+                if item.strip()
+            }
+            configured_model_ids.update(f"tei/{item}" for item in list(configured_model_ids))
+            if model_id not in configured_model_ids:
+                raise ValueError(
+                    "site_knowledge_embedding_model must be included in tei_model_ids"
+                )
+        if site_knowledge_embedding_provider == "openai":
+            if not str(self.openai_api_key or "").strip():
+                raise ValueError(
+                    "openai_api_key is required when site knowledge uses openai embeddings"
+                )
+        if site_knowledge_embedding_provider == "siliconflow":
+            if not self.siliconflow_provider_enabled:
+                raise ValueError(
+                    "siliconflow_provider_enabled is required when site "
+                    "knowledge uses siliconflow embeddings"
+                )
+            if not str(self.siliconflow_api_key or "").strip():
+                raise ValueError(
+                    "siliconflow_api_key is required when siliconflow_provider_enabled is true"
+                )
         if self.openrouter_timeout_seconds <= 0:
             raise ValueError("openrouter_timeout_seconds must be greater than 0")
         if self.siliconflow_timeout_seconds <= 0:
             raise ValueError("siliconflow_timeout_seconds must be greater than 0")
+        if self.siliconflow_provider_enabled and not str(
+            self.siliconflow_base_url or ""
+        ).strip():
+            raise ValueError(
+                "siliconflow_base_url is required when siliconflow_provider_enabled is true"
+            )
+        if self.siliconflow_provider_enabled and not str(
+            self.siliconflow_api_key or ""
+        ).strip():
+            raise ValueError(
+                "siliconflow_api_key is required when siliconflow_provider_enabled is true"
+            )
         if self.huggingface_timeout_seconds <= 0:
             raise ValueError("huggingface_timeout_seconds must be greater than 0")
         if self.ollama_timeout_seconds <= 0:

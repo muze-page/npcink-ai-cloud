@@ -7,8 +7,9 @@ from types import SimpleNamespace
 from typing import Any
 
 from app.adapters.providers.base import ProviderAdapter
-from app.adapters.providers.openai import OpenAIProviderAdapter
+from app.adapters.providers.registry import build_provider_adapters
 from app.adapters.repositories.catalog_repository import CatalogRepository
+from app.core.config import Settings, get_settings
 from app.core.db import get_session
 from app.core.models import ProviderCallRecord
 from app.domain.health.scoring import assess_instance_health
@@ -38,11 +39,13 @@ class CatalogService:
         self,
         database_url: str,
         providers: dict[str, ProviderAdapter] | None = None,
+        settings: Settings | None = None,
     ) -> None:
         self.database_url = database_url
-        self.providers = providers or {
-            OpenAIProviderAdapter.provider_id: OpenAIProviderAdapter()
-        }
+        self.settings = settings or get_settings()
+        self.providers = (
+            providers if providers is not None else build_provider_adapters(self.settings)
+        )
 
     def get_revision(self) -> dict[str, str]:
         with get_session(self.database_url) as session:

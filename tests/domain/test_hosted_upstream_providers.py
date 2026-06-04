@@ -8,6 +8,7 @@ from app.adapters.providers.base import ProviderExecutionRequest
 from app.adapters.providers.litellm_gateway import LiteLLMGatewayProviderAdapter
 from app.adapters.providers.openrouter import OpenRouterProviderAdapter
 from app.adapters.providers.registry import build_provider_adapters
+from app.adapters.providers.siliconflow import SiliconFlowProviderAdapter
 from app.adapters.providers.tei import TEIProviderAdapter
 from app.adapters.providers.vllm import VLLMProviderAdapter
 from app.core.config import Settings
@@ -181,6 +182,38 @@ def test_tei_provider_uses_configured_catalog_and_embeddings_endpoint() -> None:
     assert result.output["dimensions"] == 3
 
 
+def test_siliconflow_provider_executes_openai_compatible_embeddings() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path.endswith("/embeddings")
+        assert request.headers["Authorization"] == "Bearer sf-key"
+        payload = json.loads(request.content.decode("utf-8"))
+        assert payload["model"] == "BAAI/bge-m3"
+        assert payload["input"] == "hello embeddings"
+        return httpx.Response(
+            200,
+            json={
+                "model": "BAAI/bge-m3",
+                "data": [{"embedding": [0.1, 0.2, 0.3]}],
+                "usage": {"prompt_tokens": 3},
+            },
+        )
+
+    adapter = SiliconFlowProviderAdapter(
+        api_key="sf-key",
+        transport=httpx.MockTransport(handler),
+    )
+
+    result = adapter.execute(
+        _build_request(
+            execution_kind="embedding",
+            endpoint_variant="embeddings",
+            model_id="siliconflow/BAAI/bge-m3",
+            input_payload={"text": "hello embeddings"},
+        )
+    )
+    assert result.output["dimensions"] == 3
+
+
 def test_openrouter_provider_sets_router_headers_and_namespaces_model_ids() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.headers["Authorization"] == "Bearer or-key"
@@ -214,6 +247,8 @@ def test_provider_registry_registers_optional_upstreams_only_when_enabled() -> N
         tei_model_ids="BAAI/bge-m3, jinaai/jina-embeddings-v3",
         openrouter_provider_enabled=True,
         openrouter_api_key="or-key",
+        siliconflow_provider_enabled=True,
+        siliconflow_api_key="sf-key",
     )
 
     providers = build_provider_adapters(settings)
@@ -222,6 +257,7 @@ def test_provider_registry_registers_optional_upstreams_only_when_enabled() -> N
     assert "vllm" in providers
     assert "tei" in providers
     assert "openrouter" in providers
+    assert "siliconflow" in providers
 
 
 def test_provider_registry_omits_default_openai_without_credentials_outside_dev_test() -> None:

@@ -339,6 +339,171 @@ class SiteApiKey(Base):
     )
 
 
+class SiteKnowledgeDocument(Base):
+    __tablename__ = "site_knowledge_documents"
+    __table_args__ = (
+        UniqueConstraint(
+            "site_id",
+            "source_type",
+            "source_id",
+            name="uq_site_knowledge_documents_site_source",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    site_id: Mapped[str] = mapped_column(ForeignKey("sites.site_id"), index=True)
+    post_id: Mapped[int] = mapped_column(Integer, index=True)
+    source_type: Mapped[str] = mapped_column(String(32), default="post", index=True)
+    source_id: Mapped[int] = mapped_column(Integer, index=True)
+    parent_post_id: Mapped[int | None] = mapped_column(Integer, index=True)
+    post_type: Mapped[str] = mapped_column(String(64), index=True)
+    post_status: Mapped[str] = mapped_column(String(32), index=True)
+    title: Mapped[str] = mapped_column(Text)
+    url: Mapped[str] = mapped_column(Text)
+    modified_gmt: Mapped[str | None] = mapped_column(String(64))
+    content_hash: Mapped[str] = mapped_column(String(128), index=True)
+    last_sync_run_id: Mapped[str | None] = mapped_column(String(191), index=True)
+    metadata_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    last_indexed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        index=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+
+class SiteKnowledgeChunk(Base):
+    __tablename__ = "site_knowledge_chunks"
+    __table_args__ = (
+        UniqueConstraint(
+            "site_id",
+            "source_type",
+            "source_id",
+            "chunk_index",
+            name="uq_site_knowledge_chunks_site_source_chunk",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    site_id: Mapped[str] = mapped_column(ForeignKey("sites.site_id"), index=True)
+    post_id: Mapped[int] = mapped_column(Integer, index=True)
+    source_type: Mapped[str] = mapped_column(String(32), default="post", index=True)
+    source_id: Mapped[int] = mapped_column(Integer, index=True)
+    parent_post_id: Mapped[int | None] = mapped_column(Integer, index=True)
+    chunk_index: Mapped[int] = mapped_column(Integer)
+    post_type: Mapped[str] = mapped_column(String(64), index=True)
+    post_status: Mapped[str] = mapped_column(String(32), index=True)
+    title: Mapped[str] = mapped_column(Text)
+    url: Mapped[str] = mapped_column(Text)
+    chunk_text: Mapped[str] = mapped_column(Text)
+    embedding_json: Mapped[list[float]] = mapped_column(JSON)
+    embedding_model: Mapped[str] = mapped_column(String(191))
+    content_hash: Mapped[str] = mapped_column(String(128), index=True)
+    metadata_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    indexed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        index=True,
+    )
+
+
+class SiteKnowledgeIndexJobMetric(Base):
+    __tablename__ = "site_knowledge_index_job_metrics"
+    __table_args__ = (
+        UniqueConstraint("run_id", name="uq_site_knowledge_index_job_metrics_run"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    run_id: Mapped[str] = mapped_column(ForeignKey("run_records.run_id"), index=True)
+    site_id: Mapped[str] = mapped_column(ForeignKey("sites.site_id"), index=True)
+    account_id: Mapped[str | None] = mapped_column(String(191), index=True)
+    subscription_id: Mapped[str | None] = mapped_column(String(191), index=True)
+    status: Mapped[str] = mapped_column(String(32), index=True)
+    error_code: Mapped[str | None] = mapped_column(String(128), index=True)
+    sync_mode: Mapped[str] = mapped_column(String(32), index=True)
+    accepted_documents: Mapped[int] = mapped_column(Integer, default=0)
+    indexed_documents: Mapped[int] = mapped_column(Integer, default=0)
+    indexed_chunks: Mapped[int] = mapped_column(Integer, default=0)
+    failed_documents: Mapped[int] = mapped_column(Integer, default=0)
+    deleted_entries: Mapped[int] = mapped_column(Integer, default=0)
+    embedding_provider: Mapped[str] = mapped_column(String(64), index=True)
+    embedding_model: Mapped[str] = mapped_column(String(191), index=True)
+    embedding_dimensions: Mapped[int] = mapped_column(Integer, default=0)
+    vector_backend: Mapped[str] = mapped_column(String(64), index=True)
+    duration_ms: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        index=True,
+    )
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+
+
+class SiteKnowledgeSearchMetric(Base):
+    __tablename__ = "site_knowledge_search_metrics"
+    __table_args__ = (
+        UniqueConstraint("run_id", name="uq_site_knowledge_search_metrics_run"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    run_id: Mapped[str] = mapped_column(ForeignKey("run_records.run_id"), index=True)
+    site_id: Mapped[str] = mapped_column(ForeignKey("sites.site_id"), index=True)
+    account_id: Mapped[str | None] = mapped_column(String(191), index=True)
+    subscription_id: Mapped[str | None] = mapped_column(String(191), index=True)
+    status: Mapped[str] = mapped_column(String(32), index=True)
+    error_code: Mapped[str | None] = mapped_column(String(128), index=True)
+    intent: Mapped[str] = mapped_column(String(64), index=True)
+    result_count: Mapped[int] = mapped_column(Integer, default=0)
+    no_hit: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    top1_score: Mapped[float] = mapped_column(Float, default=0.0)
+    avg_score: Mapped[float] = mapped_column(Float, default=0.0)
+    query_hash: Mapped[str | None] = mapped_column(String(128), index=True)
+    query_chars: Mapped[int] = mapped_column(Integer, default=0)
+    max_results: Mapped[int] = mapped_column(Integer, default=0)
+    filter_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    embedding_provider: Mapped[str] = mapped_column(String(64), index=True)
+    embedding_model: Mapped[str] = mapped_column(String(191), index=True)
+    embedding_dimensions: Mapped[int] = mapped_column(Integer, default=0)
+    vector_backend: Mapped[str] = mapped_column(String(64), index=True)
+    latency_ms: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        index=True,
+    )
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+
+
+class SiteKnowledgeIndexSnapshot(Base):
+    __tablename__ = "site_knowledge_index_snapshots"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    site_id: Mapped[str] = mapped_column(ForeignKey("sites.site_id"), index=True)
+    run_id: Mapped[str | None] = mapped_column(String(191), index=True)
+    document_count: Mapped[int] = mapped_column(Integer, default=0)
+    chunk_count: Mapped[int] = mapped_column(Integer, default=0)
+    post_type_counts_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    source_type_counts_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    last_indexed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    embedding_provider: Mapped[str] = mapped_column(String(64), index=True)
+    embedding_model: Mapped[str] = mapped_column(String(191), index=True)
+    embedding_dimensions: Mapped[int] = mapped_column(Integer, default=0)
+    vector_backend: Mapped[str] = mapped_column(String(64), index=True)
+    captured_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        index=True,
+    )
+
+
 class AccountSubscription(Base):
     __tablename__ = "account_subscriptions"
 

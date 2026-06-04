@@ -10,6 +10,37 @@ if not os.environ.get("MAGICK_CLOUD_INTERNAL_AUTH_TOKEN", "").strip():
     os.environ["MAGICK_CLOUD_INTERNAL_AUTH_TOKEN"] = (
         "magick-cloud-internal-test-token-32b"
     )
+if not os.environ.get("MAGICK_CLOUD_ADMIN_SESSION_SECRET", "").strip():
+    os.environ["MAGICK_CLOUD_ADMIN_SESSION_SECRET"] = (
+        "magick-cloud-ops-session-secret-32b"
+    )
+if not os.environ.get("MAGICK_CLOUD_PORTAL_JWT_SECRET", "").strip():
+    os.environ["MAGICK_CLOUD_PORTAL_JWT_SECRET"] = (
+        "magick-cloud-portal-jwt-secret-32b"
+    )
+for _provider_env_name in (
+    "MAGICK_CLOUD_OPENAI_API_KEY",
+    "MAGICK_CLOUD_OPENAI_COMPATIBLE_API_KEY",
+    "MAGICK_CLOUD_ANTHROPIC_API_KEY",
+    "MAGICK_CLOUD_LITELLM_API_KEY",
+    "MAGICK_CLOUD_VLLM_API_KEY",
+    "MAGICK_CLOUD_TEI_API_KEY",
+    "MAGICK_CLOUD_OPENROUTER_API_KEY",
+    "MAGICK_CLOUD_SILICONFLOW_API_KEY",
+):
+    os.environ[_provider_env_name] = ""
+for _provider_flag_name in (
+    "MAGICK_CLOUD_LITELLM_PROVIDER_ENABLED",
+    "MAGICK_CLOUD_VLLM_PROVIDER_ENABLED",
+    "MAGICK_CLOUD_TEI_PROVIDER_ENABLED",
+    "MAGICK_CLOUD_OPENROUTER_PROVIDER_ENABLED",
+    "MAGICK_CLOUD_SILICONFLOW_PROVIDER_ENABLED",
+):
+    os.environ[_provider_flag_name] = "false"
+os.environ["MAGICK_CLOUD_OPENAI_SAMPLE_CATALOG_PROFILE"] = ""
+os.environ["MAGICK_CLOUD_OPENAI_COMPATIBLE_SAMPLE_CATALOG_PROFILE"] = ""
+os.environ["MAGICK_CLOUD_SITE_KNOWLEDGE_EMBEDDING_PROVIDER"] = "deterministic"
+os.environ["MAGICK_CLOUD_SITE_KNOWLEDGE_VECTOR_BACKEND"] = "postgres_json"
 os.environ["MAGICK_CLOUD_OTEL_EXPORTER_OTLP_ENDPOINT"] = ""
 
 from app.core.config import Settings

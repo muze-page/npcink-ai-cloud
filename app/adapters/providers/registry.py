@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
-from typing import Any
 
 from app.adapters.providers.anthropic import AnthropicProviderAdapter
 from app.adapters.providers.base import ProviderAdapter
 from app.adapters.providers.litellm_gateway import LiteLLMGatewayProviderAdapter
 from app.adapters.providers.openai import OpenAIProviderAdapter
 from app.adapters.providers.openrouter import OpenRouterProviderAdapter
+from app.adapters.providers.siliconflow import SiliconFlowProviderAdapter
 from app.adapters.providers.tei import TEIProviderAdapter
 from app.adapters.providers.vllm import VLLMProviderAdapter
 from app.core.config import Settings
@@ -133,6 +133,14 @@ def build_provider_adapters_with_overrides(
             api_key=str(settings.openrouter_api_key or "").strip(),
             timeout_seconds=settings.openrouter_timeout_seconds,
             site_url=settings.openrouter_site_url,
+            app_name=settings.project_name,
+        )
+
+    if settings.siliconflow_provider_enabled:
+        providers[SiliconFlowProviderAdapter.provider_id] = SiliconFlowProviderAdapter(
+            base_url=settings.siliconflow_base_url,
+            api_key=str(settings.siliconflow_api_key or "").strip(),
+            timeout_seconds=settings.siliconflow_timeout_seconds,
             app_name=settings.project_name,
         )
 
