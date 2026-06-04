@@ -226,6 +226,10 @@ def test_internal_ai_advisor_routes_are_internal_and_evidence_backed(
         "/internal/service/advisor/ops-summary?scope=runtime&site_id=site_advisor",
         headers=build_internal_headers(),
     )
+    ops_summary_preview_response = client.get(
+        "/internal/service/advisor/ops-summary-preview?scope=runtime&site_id=site_advisor",
+        headers=build_internal_headers(),
+    )
 
     assert unauthenticated.status_code == 401
     assert runtime_response.status_code == 200
@@ -269,6 +273,15 @@ def test_internal_ai_advisor_routes_are_internal_and_evidence_backed(
     assert ops_summary_payload["support_draft"]
     assert "article" not in ops_summary_payload["support_draft"].lower()
     assert "write WordPress" in ops_summary_payload["safety_note"]
+
+    assert ops_summary_preview_response.status_code == 200
+    preview_payload = ops_summary_preview_response.json()["data"]
+    assert preview_payload["preview_version"] == "internal-ops-summarizer-preview-v1"
+    assert preview_payload["baseline"]["generation"]["mode"] == "deterministic_fallback"
+    assert preview_payload["ai"]["generation"]["mode"] == "deterministic_fallback"
+    assert preview_payload["comparison"]["ai_called"] is False
+    assert preview_payload["comparison"]["value_check"] == "pass_provider_id_to_test_llm"
+    assert preview_payload["safety"]["wordpress_write_allowed"] is False
 
     dispose_engine(database_url)
 

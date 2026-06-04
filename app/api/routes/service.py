@@ -1286,6 +1286,55 @@ async def get_ops_summary_advisor(
     )
 
 
+@router.get("/advisor/ops-summary-preview")
+async def get_ops_summary_preview_advisor(
+    request: Request,
+    scope: str = Query(default="runtime", max_length=32),
+    site_id: str | None = Query(default=None, max_length=191),
+    draft_kind: str = Query(default="support_reply", max_length=32),
+    recent_minutes: int = Query(default=60, ge=1, le=1440),
+    usage_window_days: int = Query(default=7, ge=1, le=90),
+    audit_window_minutes: int = Query(default=1440, ge=1, le=10080),
+    range_filter: str = Query(default="24h", alias="range", max_length=16),
+    limit: int = Query(default=25, ge=1, le=1000),
+    provider_id: str = Query(default="", max_length=64),
+    model_id: str = Query(default="internal-ops-summarizer", max_length=191),
+) -> Any:
+    auth = await authorize_internal_request(request, require_idempotency=False)
+    if auth is not None:
+        return auth
+    try:
+        result = _get_advisor_service(request).get_ops_summary_preview(
+            scope=scope,
+            site_id=site_id,
+            draft_kind=draft_kind,
+            recent_minutes=recent_minutes,
+            usage_window_days=usage_window_days,
+            audit_window_minutes=audit_window_minutes,
+            range_filter=range_filter,
+            limit=limit,
+            provider_id=provider_id,
+            model_id=model_id,
+        )
+    except ValueError as error:
+        return JSONResponse(
+            status_code=400,
+            content=build_envelope(
+                status="error",
+                error_code="advisor.invalid_ops_summary_preview_request",
+                message=str(error),
+                data={"scope": scope, "site_id": site_id or ""},
+                revision="m1",
+            ),
+        )
+    return build_envelope(
+        status="ok",
+        message="ops summary preview loaded",
+        data=result,
+        revision="m1",
+    )
+
+
 @router.get("/admin/accounts")
 async def list_admin_accounts(
     request: Request,

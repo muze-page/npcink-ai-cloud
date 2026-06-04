@@ -154,6 +154,7 @@ Forbidden:
 Initial API:
 
 - `GET /internal/service/advisor/ops-summary`
+- `GET /internal/service/advisor/ops-summary-preview`
 
 The response must identify whether text came from a provider or deterministic
 fallback using `generation.mode`. This mode is advisory evidence, not
@@ -168,6 +169,11 @@ Otherwise the endpoint must return deterministic fallback text. Each request
 must write an internal `service_audit_events` row with generation mode,
 provider/model ids, token counts, cost, and error code. Audit payloads must not
 store prompts, model output text, customer content, or WordPress content.
+
+The preview endpoint returns both deterministic baseline text and the provider
+attempt result, plus a compact comparison (`ai_called`, `text_changed`,
+`tokens_in`, `tokens_out`, `cost`, `value_check`). It exists only to help
+operators decide whether LLM participation is worth enabling for this workflow.
 
 ## Storage
 
@@ -201,6 +207,7 @@ Initial API surfaces should be internal and bounded:
 - `GET /internal/service/advisor/commercial`
 - `GET /internal/service/advisor/routing`
 - `GET /internal/service/advisor/ops-summary`
+- `GET /internal/service/advisor/ops-summary-preview`
 - optional subject-scoped variants under existing admin site/account detail
   read APIs
 

@@ -341,6 +341,7 @@ class InternalAIAdvisorService:
         limit: int = 25,
         provider_id: str = "",
         model_id: str = "internal-ops-summarizer",
+        record_audit: bool = True,
     ) -> dict[str, Any]:
         advisor = self._resolve_advisor_payload(
             scope=scope,
@@ -366,15 +367,18 @@ class InternalAIAdvisorService:
         if requested_provider_id and not self._is_summarizer_provider_allowed(
             requested_provider_id
         ):
-            self._record_summarizer_audit_event(
-                scope=normalized_scope,
-                site_id=site_id,
-                draft_kind=normalized_draft_kind,
-                provider_id=requested_provider_id,
-                model_id=model_id,
-                generation_mode="deterministic_fallback",
-                outcome="blocked",
-                error_code="provider_not_allowlisted",
+            self._maybe_record_summarizer_audit_event(
+                record_audit=record_audit,
+                event={
+                    "scope": normalized_scope,
+                    "site_id": site_id,
+                    "draft_kind": normalized_draft_kind,
+                    "provider_id": requested_provider_id,
+                    "model_id": model_id,
+                    "generation_mode": "deterministic_fallback",
+                    "outcome": "blocked",
+                    "error_code": "provider_not_allowlisted",
+                },
             )
             return {
                 **deterministic,
@@ -389,15 +393,18 @@ class InternalAIAdvisorService:
         provider = self._select_provider(requested_provider_id)
         if provider is None:
             error_code = "provider_not_configured" if requested_provider_id else ""
-            self._record_summarizer_audit_event(
-                scope=normalized_scope,
-                site_id=site_id,
-                draft_kind=normalized_draft_kind,
-                provider_id=requested_provider_id,
-                model_id=model_id if requested_provider_id else "",
-                generation_mode="deterministic_fallback",
-                outcome="fallback",
-                error_code=error_code,
+            self._maybe_record_summarizer_audit_event(
+                record_audit=record_audit,
+                event={
+                    "scope": normalized_scope,
+                    "site_id": site_id,
+                    "draft_kind": normalized_draft_kind,
+                    "provider_id": requested_provider_id,
+                    "model_id": model_id if requested_provider_id else "",
+                    "generation_mode": "deterministic_fallback",
+                    "outcome": "fallback",
+                    "error_code": error_code,
+                },
             )
             return {
                 **deterministic,
@@ -433,18 +440,21 @@ class InternalAIAdvisorService:
                 )
             )
         except ProviderExecutionError as error:
-            self._record_summarizer_audit_event(
-                scope=normalized_scope,
-                site_id=site_id,
-                draft_kind=normalized_draft_kind,
-                provider_id=provider.provider_id,
-                model_id=model_id,
-                generation_mode="deterministic_fallback",
-                outcome="provider_error",
-                error_code=error.error_code,
-                tokens_in=error.tokens_in,
-                tokens_out=error.tokens_out,
-                cost=error.cost,
+            self._maybe_record_summarizer_audit_event(
+                record_audit=record_audit,
+                event={
+                    "scope": normalized_scope,
+                    "site_id": site_id,
+                    "draft_kind": normalized_draft_kind,
+                    "provider_id": provider.provider_id,
+                    "model_id": model_id,
+                    "generation_mode": "deterministic_fallback",
+                    "outcome": "provider_error",
+                    "error_code": error.error_code,
+                    "tokens_in": error.tokens_in,
+                    "tokens_out": error.tokens_out,
+                    "cost": error.cost,
+                },
             )
             return {
                 **deterministic,
@@ -460,18 +470,21 @@ class InternalAIAdvisorService:
             str(llm_result.output.get("output_text") or ""),
             fallback=deterministic,
         )
-        self._record_summarizer_audit_event(
-            scope=normalized_scope,
-            site_id=site_id,
-            draft_kind=normalized_draft_kind,
-            provider_id=provider.provider_id,
-            model_id=model_id,
-            generation_mode="llm",
-            outcome="success",
-            error_code="",
-            tokens_in=llm_result.tokens_in,
-            tokens_out=llm_result.tokens_out,
-            cost=llm_result.cost,
+        self._maybe_record_summarizer_audit_event(
+            record_audit=record_audit,
+            event={
+                "scope": normalized_scope,
+                "site_id": site_id,
+                "draft_kind": normalized_draft_kind,
+                "provider_id": provider.provider_id,
+                "model_id": model_id,
+                "generation_mode": "llm",
+                "outcome": "success",
+                "error_code": "",
+                "tokens_in": llm_result.tokens_in,
+                "tokens_out": llm_result.tokens_out,
+                "cost": llm_result.cost,
+            },
         )
         return {
             **parsed,
@@ -483,6 +496,66 @@ class InternalAIAdvisorService:
                 "tokens_in": llm_result.tokens_in,
                 "tokens_out": llm_result.tokens_out,
                 "cost": llm_result.cost,
+            },
+        }
+
+    def get_ops_summary_preview(
+        self,
+        *,
+        scope: str,
+        site_id: str | None = None,
+        draft_kind: str = "support_reply",
+        recent_minutes: int = 60,
+        usage_window_days: int = 7,
+        audit_window_minutes: int = 1440,
+        range_filter: str = "24h",
+        limit: int = 25,
+        provider_id: str = "",
+        model_id: str = "internal-ops-summarizer",
+    ) -> dict[str, Any]:
+        baseline = self.get_ops_summary(
+            scope=scope,
+            site_id=site_id,
+            draft_kind=draft_kind,
+            recent_minutes=recent_minutes,
+            usage_window_days=usage_window_days,
+            audit_window_minutes=audit_window_minutes,
+            range_filter=range_filter,
+            limit=limit,
+            provider_id="",
+            model_id=model_id,
+            record_audit=False,
+        )
+        ai = self.get_ops_summary(
+            scope=scope,
+            site_id=site_id,
+            draft_kind=draft_kind,
+            recent_minutes=recent_minutes,
+            usage_window_days=usage_window_days,
+            audit_window_minutes=audit_window_minutes,
+            range_filter=range_filter,
+            limit=limit,
+            provider_id=provider_id,
+            model_id=model_id,
+            record_audit=True,
+        )
+        comparison = _build_ops_summary_comparison(
+            baseline=baseline,
+            ai=ai,
+            requested_provider_id=provider_id,
+            model_id=model_id,
+        )
+        return {
+            "preview_version": "internal-ops-summarizer-preview-v1",
+            "baseline": baseline,
+            "ai": ai,
+            "comparison": comparison,
+            "safety": {
+                "prompt_saved": False,
+                "output_text_saved": False,
+                "wordpress_write_allowed": False,
+                "customer_article_generation_allowed": False,
+                "requires_operator_review": True,
             },
         }
 
@@ -717,6 +790,28 @@ class InternalAIAdvisorService:
             )
             session.commit()
 
+    def _maybe_record_summarizer_audit_event(
+        self,
+        *,
+        record_audit: bool,
+        event: dict[str, Any],
+    ) -> None:
+        if not record_audit:
+            return
+        self._record_summarizer_audit_event(
+            scope=str(event.get("scope") or ""),
+            site_id=str(event.get("site_id") or "") or None,
+            draft_kind=str(event.get("draft_kind") or ""),
+            provider_id=str(event.get("provider_id") or ""),
+            model_id=str(event.get("model_id") or ""),
+            generation_mode=str(event.get("generation_mode") or ""),
+            outcome=str(event.get("outcome") or ""),
+            error_code=str(event.get("error_code") or ""),
+            tokens_in=_int(event.get("tokens_in")),
+            tokens_out=_int(event.get("tokens_out")),
+            cost=_float(event.get("cost")),
+        )
+
     def _parse_llm_summary_output(
         self,
         output_text: str,
@@ -829,6 +924,55 @@ def _normalize_draft_kind(value: str) -> str:
     if normalized in {"operator_summary", "support_reply"}:
         return normalized
     return "support_reply"
+
+
+def _build_ops_summary_comparison(
+    *,
+    baseline: dict[str, Any],
+    ai: dict[str, Any],
+    requested_provider_id: str,
+    model_id: str,
+) -> dict[str, Any]:
+    baseline_generation = _dict(baseline.get("generation"))
+    ai_generation = _dict(ai.get("generation"))
+    tokens_in = _int(ai_generation.get("tokens_in"))
+    tokens_out = _int(ai_generation.get("tokens_out"))
+    cost = _float(ai_generation.get("cost"))
+    text_changed = any(
+        str(baseline.get(field) or "").strip() != str(ai.get(field) or "").strip()
+        for field in (
+            "operator_summary",
+            "support_draft",
+            "operator_next_step",
+            "safety_note",
+        )
+    )
+    ai_called = str(ai_generation.get("mode") or "") == "llm"
+    error_code = str(ai_generation.get("error_code") or "")
+    if ai_called and text_changed:
+        value_check = "review_ai_output"
+    elif requested_provider_id and error_code == "provider_not_allowlisted":
+        value_check = "configure_provider_allowlist"
+    elif requested_provider_id and error_code == "provider_not_configured":
+        value_check = "configure_provider_adapter"
+    elif not requested_provider_id:
+        value_check = "pass_provider_id_to_test_llm"
+    else:
+        value_check = "no_material_difference"
+
+    return {
+        "baseline_mode": str(baseline_generation.get("mode") or ""),
+        "ai_mode": str(ai_generation.get("mode") or ""),
+        "requested_provider_id": str(requested_provider_id or ""),
+        "model_id": str(model_id or ""),
+        "ai_called": ai_called,
+        "text_changed": text_changed,
+        "tokens_in": tokens_in,
+        "tokens_out": tokens_out,
+        "cost": cost,
+        "error_code": error_code,
+        "value_check": value_check,
+    }
 
 
 def _is_json_scalar_or_list(value: Any) -> bool:
