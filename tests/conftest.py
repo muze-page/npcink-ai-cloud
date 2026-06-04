@@ -10,6 +10,7 @@ if not os.environ.get("MAGICK_CLOUD_INTERNAL_AUTH_TOKEN", "").strip():
     os.environ["MAGICK_CLOUD_INTERNAL_AUTH_TOKEN"] = (
         "magick-cloud-internal-test-token-32b"
     )
+os.environ["MAGICK_CLOUD_OTEL_EXPORTER_OTLP_ENDPOINT"] = ""
 
 from app.core.config import Settings
 from app.core.db import get_session
@@ -59,10 +60,13 @@ def seed_site_auth(
     CommercialService(
         database_url,
         settings=Settings(
+            _env_file=None,
             environment="test",
             database_url=database_url,
             redis_url="redis://localhost:6379/0",
             internal_auth_token=TEST_INTERNAL_AUTH_TOKEN,
+            admin_session_secret=TEST_ADMIN_SESSION_SECRET,
+            portal_jwt_secret=TEST_PORTAL_JWT_SECRET,
         ),
     ).provision_runtime_baseline(
         site_id=site_id,

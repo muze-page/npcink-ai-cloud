@@ -25,7 +25,7 @@ def configure_tracing(settings: Settings) -> None:
     )
     provider = TracerProvider(resource=resource)
 
-    if settings.otel_exporter_otlp_endpoint:
+    if settings.otel_exporter_otlp_endpoint and settings.environment != "test":
         exporter = OTLPSpanExporter(
             endpoint=settings.otel_exporter_otlp_endpoint,
         )

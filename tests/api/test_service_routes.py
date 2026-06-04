@@ -8,14 +8,16 @@ import httpx
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
-from app.api.main import create_app
 from app.adapters.callbacks.http import HttpRuntimeCallbackDispatcher
+from app.api.main import create_app
 from app.core.config import Settings
 from app.core.db import dispose_engine, get_session, init_schema
 from app.core.models import (
+    SUBSCRIPTION_STATUS_PAST_DUE,
     AccountEntitlementSnapshot,
     AccountSubscription,
     BillingSnapshot,
+    ProviderCallRecord,
     ReplayReceipt,
     RunRecord,
     RuntimeGuardEvent,
@@ -27,7 +29,9 @@ from app.domain.commercial.service import CommercialService, ServiceAuditContext
 from app.domain.runtime.service import RuntimeService
 from app.workers.ops_cadence import run_due_tasks
 from tests.conftest import (
+    TEST_ADMIN_SESSION_SECRET,
     TEST_INTERNAL_AUTH_TOKEN,
+    TEST_PORTAL_JWT_SECRET,
     build_auth_headers,
     build_internal_headers,
     merge_json_headers,
@@ -49,11 +53,27 @@ def _build_client(
     CatalogService(database_url).refresh_catalog()
 
     settings = Settings(
+        _env_file=None,
         project_name="Magick AI Cloud Test",
         environment="test",
         database_url=database_url,
         redis_url="redis://localhost:6379/0",
         internal_auth_token=TEST_INTERNAL_AUTH_TOKEN,
+        admin_session_secret=TEST_ADMIN_SESSION_SECRET,
+        portal_jwt_secret=TEST_PORTAL_JWT_SECRET,
+        openai_api_key="",
+        anthropic_api_key="",
+        litellm_provider_enabled=False,
+        litellm_api_key="",
+        vllm_provider_enabled=False,
+        vllm_api_key="",
+        tei_provider_enabled=False,
+        tei_api_key="",
+        openrouter_provider_enabled=False,
+        openrouter_api_key="",
+        siliconflow_provider_enabled=False,
+        siliconflow_api_key="",
+        site_knowledge_embedding_provider="deterministic",
         **(settings_overrides or {}),
     )
     return database_url, TestClient(create_app(CloudServices(settings=settings)))
@@ -61,11 +81,184 @@ def _build_client(
 
 def _runtime_service_settings(database_url: str) -> Settings:
     return Settings(
+        _env_file=None,
         environment="test",
         database_url=database_url,
         redis_url="redis://localhost:6379/0",
         internal_auth_token=TEST_INTERNAL_AUTH_TOKEN,
+        admin_session_secret=TEST_ADMIN_SESSION_SECRET,
+        portal_jwt_secret=TEST_PORTAL_JWT_SECRET,
+        openai_api_key="",
+        anthropic_api_key="",
+        litellm_provider_enabled=False,
+        litellm_api_key="",
+        vllm_provider_enabled=False,
+        vllm_api_key="",
+        tei_provider_enabled=False,
+        tei_api_key="",
+        openrouter_provider_enabled=False,
+        openrouter_api_key="",
+        siliconflow_provider_enabled=False,
+        siliconflow_api_key="",
+        site_knowledge_embedding_provider="deterministic",
     )
+
+
+def test_internal_ai_advisor_routes_are_internal_and_evidence_backed(
+    tmp_path: Path,
+) -> None:
+    database_url, client = _build_client(tmp_path)
+    seed_site_auth(
+        database_url,
+        site_id="site_advisor",
+        scopes=["runtime:execute", "runtime:read", "runtime:resolve", "stats:read"],
+    )
+    now = datetime.now(UTC)
+    with get_session(database_url) as session:
+        subscription = session.scalar(
+            select(AccountSubscription).where(
+                AccountSubscription.account_id == "acct_site_advisor"
+            )
+        )
+        assert subscription is not None
+        subscription.status = SUBSCRIPTION_STATUS_PAST_DUE
+        session.add(
+            RuntimeGuardEvent(
+                auth_surface="public",
+                scope_kind="site",
+                scope_id="site_advisor",
+                site_id="site_advisor",
+                key_id="key_default",
+                client_ref="127.0.0.1",
+                event_code="auth.rate_limit_exceeded",
+                status_code=429,
+                method="POST",
+                path="/v1/runtime/execute",
+                trace_id="advisor-runtime-trace",
+                payload_json={"reason": "test"},
+                created_at=now,
+            )
+        )
+        session.add(
+            RunRecord(
+                run_id="run_advisor",
+                site_id="site_advisor",
+                account_id="acct_site_advisor",
+                subscription_id=subscription.subscription_id,
+                plan_version_id=subscription.plan_version_id,
+                ability_name="advisor-test",
+                ability_family="text",
+                skill_id=None,
+                workflow_id=None,
+                contract_version="test",
+                channel="api",
+                execution_kind="text",
+                execution_tier="cloud",
+                execution_pattern="step_offload",
+                data_classification="internal",
+                profile_id="text.balanced",
+                canonical_run_id=None,
+                status="succeeded",
+                idempotency_key="advisor-run",
+                request_fingerprint="advisor-fingerprint",
+                trace_id="advisor-routing-trace",
+                cancel_requested_at=None,
+                canceled_at=None,
+                input_json={},
+                execution_input_ciphertext=None,
+                policy_json={},
+                result_ref="inline",
+                result_json={"ok": True},
+                error_code=None,
+                error_message=None,
+                callback_status="not_requested",
+                callback_attempt_count=0,
+                callback_last_attempt_at=None,
+                callback_delivered_at=None,
+                callback_next_attempt_at=None,
+                callback_last_error_code=None,
+                callback_last_error_message=None,
+                selected_provider_id="openai",
+                selected_model_id="gpt-4o-mini",
+                selected_instance_id="openai-us-east-text-balanced",
+                fallback_used=False,
+                started_at=now,
+                processing_started_at=now,
+                finished_at=now,
+                retention_expires_at=now + timedelta(days=1),
+                result_purged_at=None,
+            )
+        )
+        session.flush()
+        session.add(
+            ProviderCallRecord(
+                run_id="run_advisor",
+                provider_id="openai",
+                model_id="gpt-4o-mini",
+                instance_id="openai-us-east-text-balanced",
+                region="us-east",
+                latency_ms=250,
+                tokens_in=10,
+                tokens_out=20,
+                cost=0.001,
+                retry_count=0,
+                fallback_used=False,
+                error_code=None,
+                created_at=now,
+            )
+        )
+        session.commit()
+
+    unauthenticated = client.get("/internal/service/advisor/runtime")
+    runtime_response = client.get(
+        "/internal/service/advisor/runtime?site_id=site_advisor&recent_minutes=60",
+        headers=build_internal_headers(),
+    )
+    commercial_response = client.get(
+        "/internal/service/advisor/commercial",
+        headers=build_internal_headers(),
+    )
+    routing_response = client.get(
+        "/internal/service/advisor/routing?site_id=site_advisor",
+        headers=build_internal_headers(),
+    )
+
+    assert unauthenticated.status_code == 401
+    assert runtime_response.status_code == 200
+    runtime_payload = runtime_response.json()["data"]
+    assert runtime_payload["advisor_version"] == "internal-ai-advisor-v1"
+    assert runtime_payload["scope"] == "runtime_operations"
+    assert runtime_payload["status"] == "attention"
+    assert runtime_payload["evidence"][0]["ref"] == (
+        "/internal/service/runtime/diagnostics/summary"
+    )
+    assert {
+        item["action"] for item in runtime_payload["recommended_actions"]
+    } >= {"inspect_commercial_entitlement_and_runtime_guard"}
+    assert any(
+        signal["code"] == "runtime.guard_events"
+        and signal["recent_rate_limit_exceeded"] == 1
+        for signal in runtime_payload["signals"]
+    )
+
+    assert commercial_response.status_code == 200
+    commercial_payload = commercial_response.json()["data"]
+    assert commercial_payload["scope"] == "commercial_operations"
+    assert commercial_payload["status"] == "attention"
+    assert any(
+        signal["code"] == "commercial.subscription_attention"
+        for signal in commercial_payload["signals"]
+    )
+    assert commercial_payload["recommended_actions"][0]["requires_operator"] is True
+
+    assert routing_response.status_code == 200
+    routing_payload = routing_response.json()["data"]
+    assert routing_payload["scope"] == "routing_operations"
+    assert routing_payload["status"] == "ready"
+    assert "text.balanced" in routing_payload["signals"][0]["recommended_profile_ids"]
+    assert routing_payload["evidence"][0]["kind"] == "router_recommendation_summary"
+
+    dispose_engine(database_url)
 
 
 def test_service_routes_manage_account_site_and_keys(tmp_path: Path) -> None:

@@ -12,6 +12,7 @@ from app.api.auth import authorize_internal_request, get_cloud_services
 from app.api.envelope import build_envelope
 from app.core.models import ACCOUNT_MEMBERSHIP_ROLE_USER_ADMIN
 from app.core.security import extract_trace_id
+from app.domain.advisor.service import InternalAIAdvisorService
 from app.domain.catalog.service import CatalogService
 from app.domain.commercial.errors import CommercialServiceError
 from app.domain.commercial.service import CommercialService, ServiceAuditContext
@@ -136,6 +137,11 @@ def _get_catalog_service(request: Request) -> CatalogService:
             include_enabled_connections=True,
         ),
     )
+
+
+def _get_advisor_service(request: Request) -> InternalAIAdvisorService:
+    services = get_cloud_services(request)
+    return InternalAIAdvisorService(services.settings.database_url)
 
 
 def _service_error_response(
@@ -1142,6 +1148,82 @@ async def get_admin_overview(
         message="admin overview loaded",
         data=result,
         revision="m6",
+    )
+
+
+@router.get("/advisor/runtime")
+async def get_runtime_advisor(
+    request: Request,
+    site_id: str | None = Query(default=None, max_length=191),
+    recent_minutes: int = Query(default=60, ge=1, le=1440),
+) -> Any:
+    auth = await authorize_internal_request(request, require_idempotency=False)
+    if auth is not None:
+        return auth
+    result = _get_advisor_service(request).get_runtime_advisor(
+        site_id=site_id,
+        recent_minutes=recent_minutes,
+    )
+    return build_envelope(
+        status="ok",
+        message="runtime advisor loaded",
+        data=result,
+        revision="m1",
+    )
+
+
+@router.get("/advisor/commercial")
+async def get_commercial_advisor(
+    request: Request,
+    usage_window_days: int = Query(default=7, ge=1, le=90),
+    audit_window_minutes: int = Query(default=1440, ge=1, le=10080),
+) -> Any:
+    auth = await authorize_internal_request(request, require_idempotency=False)
+    if auth is not None:
+        return auth
+    result = _get_advisor_service(request).get_commercial_advisor(
+        usage_window_days=usage_window_days,
+        audit_window_minutes=audit_window_minutes,
+    )
+    return build_envelope(
+        status="ok",
+        message="commercial advisor loaded",
+        data=result,
+        revision="m1",
+    )
+
+
+@router.get("/advisor/routing")
+async def get_routing_advisor(
+    request: Request,
+    site_id: str = Query(min_length=1, max_length=191),
+    range_filter: str = Query(default="24h", alias="range", max_length=16),
+    limit: int = Query(default=25, ge=1, le=1000),
+) -> Any:
+    auth = await authorize_internal_request(request, require_idempotency=False)
+    if auth is not None:
+        return auth
+    try:
+        result = _get_advisor_service(request).get_routing_advisor(
+            site_id=site_id,
+            filters={"range": range_filter, "limit": limit},
+        )
+    except ValueError as error:
+        return JSONResponse(
+            status_code=400,
+            content=build_envelope(
+                status="error",
+                error_code="advisor.invalid_routing_window",
+                message=str(error),
+                data={"site_id": site_id, "range": range_filter, "limit": limit},
+                revision="m1",
+            ),
+        )
+    return build_envelope(
+        status="ok",
+        message="routing advisor loaded",
+        data=result,
+        revision="m1",
     )
 
 
