@@ -31,6 +31,13 @@ type SummaryBranch = {
   safety_note: string;
   severity: string;
   status: string;
+  source_context: {
+    advisor: {
+      scope: string;
+      evidence: Array<{ kind: string; ref: string; label: string }>;
+      signals: Array<Record<string, string | number | boolean | null>>;
+    };
+  };
 };
 
 type AdvisorPreviewData = {
@@ -60,6 +67,7 @@ type AdvisorPreviewData = {
 };
 
 const SCOPE_OPTIONS = [
+  { label: 'Operations', value: 'operations' },
   { label: 'Runtime', value: 'runtime' },
   { label: 'Commercial', value: 'commercial' },
   { label: 'Routing', value: 'routing' },
@@ -84,6 +92,23 @@ function normalizeBranch(raw: any): SummaryBranch {
     safety_note: String(raw?.safety_note ?? ''),
     severity: String(raw?.severity ?? ''),
     status: String(raw?.status ?? ''),
+    source_context: {
+      advisor: {
+        scope: String(raw?.source_context?.advisor?.scope ?? ''),
+        evidence: Array.isArray(raw?.source_context?.advisor?.evidence)
+          ? raw.source_context.advisor.evidence.map((item: any) => ({
+              kind: String(item?.kind ?? ''),
+              ref: String(item?.ref ?? ''),
+              label: String(item?.label ?? ''),
+            }))
+          : [],
+        signals: Array.isArray(raw?.source_context?.advisor?.signals)
+          ? raw.source_context.advisor.signals
+              .filter((item: any) => item && typeof item === 'object')
+              .map((item: any) => item as Record<string, string | number | boolean | null>)
+          : [],
+      },
+    },
   };
 }
 
@@ -242,13 +267,13 @@ function AdminAiAdvisorContent() {
   const [data, setData] = useState<AdvisorPreviewData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const [scope, setScope] = useState('runtime');
+  const [scope, setScope] = useState('operations');
   const [siteIdInput, setSiteIdInput] = useState('');
   const [siteId, setSiteId] = useState('');
-  const [providerIdInput, setProviderIdInput] = useState('');
-  const [providerId, setProviderId] = useState('');
-  const [modelIdInput, setModelIdInput] = useState('internal-ops-summarizer');
-  const [modelId, setModelId] = useState('internal-ops-summarizer');
+  const [providerIdInput, setProviderIdInput] = useState('openai');
+  const [providerId, setProviderId] = useState('openai');
+  const [modelIdInput, setModelIdInput] = useState('deepseek-v4-flash');
+  const [modelId, setModelId] = useState('deepseek-v4-flash');
   const [reloadKey, setReloadKey] = useState(0);
 
   const loadPreview = useCallback(async () => {
@@ -337,8 +362,8 @@ function AdminAiAdvisorContent() {
     <BackofficePageStack>
       <BackofficePrimaryPanel
         eyebrow="Operator surface"
-        title="AI Advisor Preview"
-        description="Compare rule text against the AI branch for one advisor signal."
+        title="AI Operations Advisor"
+        description="Compare rule analysis against the AI branch using real cloud operations signals."
         aside={
           data ? (
             <div className="w-full xl:w-[42rem]">
@@ -395,7 +420,7 @@ function AdminAiAdvisorContent() {
             onClick={() => {
               setSiteId(siteIdInput.trim());
               setProviderId(providerIdInput.trim());
-              setModelId(modelIdInput.trim() || 'internal-ops-summarizer');
+              setModelId(modelIdInput.trim() || 'deepseek-v4-flash');
               setReloadKey((current) => current + 1);
             }}
             disabled={loading}
@@ -414,6 +439,8 @@ function AdminAiAdvisorContent() {
           </div>
 
           <div className="grid gap-5 xl:grid-cols-[1.2fr_0.8fr]">
+            <SignalPanel branch={data.ai} />
+
             <BackofficeSectionPanel className="space-y-4">
               <div className="flex items-start justify-between gap-3">
                 <div>
@@ -444,7 +471,8 @@ function AdminAiAdvisorContent() {
                 </BackofficeStackCard>
               </div>
             </BackofficeSectionPanel>
-
+          </div>
+          <div className="grid gap-5 xl:grid-cols-[1.2fr_0.8fr]">
             <BackofficeSectionPanel className="space-y-4">
               <div>
                 <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
@@ -467,6 +495,65 @@ function AdminAiAdvisorContent() {
         </>
       ) : null}
     </BackofficePageStack>
+  );
+}
+
+function SignalPanel({ branch }: { branch: SummaryBranch }) {
+  const signals = branch.source_context.advisor.signals;
+  const evidence = branch.source_context.advisor.evidence;
+  return (
+    <BackofficeSectionPanel className="space-y-4">
+      <div>
+        <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
+          Evidence
+        </p>
+        <h2 className="mt-2 text-xl font-semibold text-slate-950 dark:text-white">AI input signals</h2>
+      </div>
+      <div className="space-y-3">
+        {signals.length ? (
+          signals.map((signal, index) => <SignalRow key={`${String(signal.code || 'signal')}-${index}`} signal={signal} />)
+        ) : (
+          <p className="rounded-xl border border-slate-200/80 bg-white/70 px-4 py-3 text-sm text-slate-600 dark:border-slate-800 dark:bg-slate-950/35 dark:text-slate-300">
+            No redacted operations signals were passed to the AI branch.
+          </p>
+        )}
+      </div>
+      <div className="border-t border-slate-200/80 pt-4 dark:border-slate-800">
+        <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">
+          Sources
+        </p>
+        <div className="mt-3 grid gap-2 md:grid-cols-2">
+          {evidence.map((item) => (
+            <div
+              key={`${item.kind}-${item.ref}`}
+              className="rounded-xl border border-slate-200/80 bg-white/70 px-3 py-2 dark:border-slate-800 dark:bg-slate-950/35"
+            >
+              <p className="text-sm font-medium text-slate-800 dark:text-slate-100">{item.label || item.kind}</p>
+              <p className="mt-1 truncate font-mono text-[0.7rem] text-slate-500 dark:text-slate-400">{item.ref}</p>
+            </div>
+          ))}
+        </div>
+      </div>
+    </BackofficeSectionPanel>
+  );
+}
+
+function SignalRow({ signal }: { signal: Record<string, string | number | boolean | null> }) {
+  const entries = Object.entries(signal).filter(([key]) => key !== 'code');
+  return (
+    <div className="rounded-xl border border-slate-200/80 bg-white/70 px-4 py-3 dark:border-slate-800 dark:bg-slate-950/35">
+      <p className="font-mono text-xs font-semibold text-slate-900 dark:text-slate-100">{String(signal.code || 'signal')}</p>
+      <div className="mt-3 grid gap-x-4 gap-y-2 sm:grid-cols-2 lg:grid-cols-3">
+        {entries.map(([key, value]) => (
+          <div key={key} className="min-w-0">
+            <p className="text-[0.68rem] font-semibold uppercase tracking-[0.14em] text-slate-500 dark:text-slate-400">
+              {key}
+            </p>
+            <p className="mt-1 truncate font-mono text-xs text-slate-700 dark:text-slate-200">{String(value ?? '-')}</p>
+          </div>
+        ))}
+      </div>
+    </div>
   );
 }
 

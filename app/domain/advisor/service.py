@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
+
+from sqlalchemy import case, desc, func, select
 
 from app.adapters.providers.base import (
     ProviderAdapter,
@@ -10,9 +12,14 @@ from app.adapters.providers.base import (
     ProviderExecutionRequest,
 )
 from app.core.db import get_session
-from app.core.models import ServiceAuditEvent
+from app.core.models import (
+    ProviderCallRecord,
+    RunRecord,
+    ServiceAuditEvent,
+)
 from app.domain.commercial.service import CommercialService
 from app.domain.runtime.service import RuntimeService
+from app.domain.site_knowledge.metrics import SiteKnowledgeObservabilityService
 from app.domain.usage.service import UsageService
 
 ADVISOR_VERSION = "internal-ai-advisor-v1"
@@ -328,6 +335,212 @@ class InternalAIAdvisorService:
             source={"router_recommendation": recommendation},
         )
 
+    def get_operations_advisor(
+        self,
+        *,
+        site_id: str | None = None,
+        window_hours: int = 24,
+        usage_window_days: int = 7,
+        audit_window_minutes: int = 1440,
+    ) -> dict[str, Any]:
+        bounded_window_hours = min(168, max(1, int(window_hours or 24)))
+        bounded_usage_window_days = min(90, max(1, int(usage_window_days or 7)))
+        bounded_audit_window_minutes = min(10080, max(1, int(audit_window_minutes or 1440)))
+        commercial = CommercialService(self.database_url).get_admin_overview(
+            usage_window_days=bounded_usage_window_days,
+            audit_window_minutes=bounded_audit_window_minutes,
+        )
+        runtime = RuntimeService(self.database_url).get_runtime_diagnostics_summary(
+            site_id=site_id,
+            recent_minutes=bounded_window_hours * 60,
+        )
+        knowledge = SiteKnowledgeObservabilityService(self.database_url).get_summary(
+            window_hours=bounded_window_hours,
+            site_id=str(site_id or "").strip(),
+        )
+        provider = self._get_provider_operations_metrics(
+            site_id=site_id,
+            window_hours=bounded_window_hours,
+        )
+        runs = self._get_run_operations_metrics(
+            site_id=site_id,
+            window_hours=bounded_window_hours,
+        )
+
+        counts = _dict(commercial.get("counts"))
+        recent_usage = _dict(commercial.get("recent_usage"))
+        usage_totals = _dict(recent_usage.get("totals"))
+        attention_subscriptions = _list(commercial.get("attention_subscriptions"))
+        expiring = _dict(commercial.get("expiring_subscriptions"))
+        queue = _dict(runtime.get("queue"))
+        callback = _dict(runtime.get("callback"))
+        guard = _dict(runtime.get("guard"))
+        knowledge_totals = _dict(knowledge.get("totals"))
+
+        signals = [
+            {
+                "code": "ops.platform_coverage",
+                "active_sites": _int(counts.get("sites_active")),
+                "total_sites": _int(counts.get("sites_total")),
+                "attention_subscriptions": len(attention_subscriptions),
+                "subscriptions_expiring_7d": _int(expiring.get("within_7_days")),
+            },
+            {
+                "code": "ops.usage_cost",
+                "usage_events": _int(recent_usage.get("event_count")),
+                "meter_quantity": _float(usage_totals.get("quantity")),
+                "reported_cost": _float(usage_totals.get("cost")),
+                "provider_cost": _float(provider.get("cost")),
+                "tokens_total": _int(provider.get("tokens_total")),
+            },
+            {
+                "code": "ops.runtime_quality",
+                "total_runs": _int(runs.get("total_runs")),
+                "failed_runs": _int(runs.get("failed_runs")),
+                "run_failure_rate": _float(runs.get("failure_rate")),
+                "queued_runs": _int(queue.get("queued_runs")),
+                "callback_failed": _int(callback.get("failed")),
+                "guard_events": _int(guard.get("recent_events")),
+            },
+            {
+                "code": "ops.provider_quality",
+                "provider_calls": _int(provider.get("call_count")),
+                "provider_errors": _int(provider.get("error_count")),
+                "provider_error_rate": _float(provider.get("error_rate")),
+                "fallbacks": _int(provider.get("fallback_count")),
+                "avg_latency_ms": _int(provider.get("avg_latency_ms")),
+                "top_provider": str(provider.get("top_provider_id") or ""),
+            },
+            {
+                "code": "ops.knowledge_quality",
+                "knowledge_searches": _int(knowledge_totals.get("search_queries_total")),
+                "knowledge_no_hits": _int(knowledge_totals.get("no_hit_total")),
+                "knowledge_no_hit_rate": _float(knowledge_totals.get("no_hit_rate")),
+                "knowledge_failed_searches": _int(
+                    knowledge_totals.get("search_failed_total")
+                ),
+                "indexed_documents": _int(knowledge_totals.get("current_document_count")),
+                "indexed_chunks": _int(knowledge_totals.get("current_chunk_count")),
+            },
+        ]
+
+        actions: list[dict[str, Any]] = []
+        status = "ok"
+        severity = "info"
+        headline = "Operations posture is stable"
+        summary = (
+            "Recent usage, runtime, provider, and knowledge signals do not show "
+            "a high-priority operator action."
+        )
+
+        if _int(runs.get("failed_runs")) > 0 or _float(runs.get("failure_rate")) >= 0.1:
+            status = "attention"
+            severity = _max_severity(severity, "warning")
+            headline = "Runtime failures need operations review"
+            summary = "Recent run failures are visible in the selected operations window."
+            actions.append(_action("inspect_failed_runs_by_site_and_ability"))
+
+        if _int(provider.get("error_count")) > 0 or _float(provider.get("error_rate")) >= 0.05:
+            status = "attention"
+            severity = _max_severity(severity, "warning")
+            headline = "Provider reliability needs review"
+            summary = "Provider errors or fallback pressure are present in recent traffic."
+            actions.append(_action("inspect_provider_errors_latency_and_fallbacks"))
+
+        if _float(knowledge_totals.get("no_hit_rate")) >= 0.25 and _int(
+            knowledge_totals.get("search_queries_total")
+        ) >= 4:
+            status = "attention"
+            severity = _max_severity(severity, "warning")
+            headline = "Knowledge search value may be low"
+            summary = "Knowledge searches show elevated no-hit pressure in the selected window."
+            actions.append(_action("review_site_knowledge_no_hit_queries_and_index_coverage"))
+
+        if attention_subscriptions or _int(expiring.get("within_7_days")) > 0:
+            status = "attention"
+            severity = _max_severity(severity, "warning")
+            if headline == "Operations posture is stable":
+                headline = "Commercial follow-up is visible"
+                summary = "Subscription attention or near-term expiry signals are present."
+            actions.append(_action("review_subscription_attention_and_expiry_coverage"))
+
+        if _int(queue.get("queued_runs")) > 0 or _int(callback.get("failed")) > 0:
+            status = "attention"
+            severity = _max_severity(severity, "warning")
+            if headline == "Operations posture is stable":
+                headline = "Runtime delivery needs operator review"
+                summary = "Queue or callback pressure is present in recent runtime diagnostics."
+            actions.append(_action("inspect_queue_worker_and_callback_delivery"))
+
+        if not actions:
+            actions.append(_action("continue_operations_monitoring"))
+
+        return self._advisor_payload(
+            scope="operations_analysis",
+            status=status,
+            severity=severity,
+            headline=headline,
+            summary=summary,
+            evidence=[
+                _evidence(
+                    "admin_overview",
+                    "/internal/service/admin/overview",
+                    "commercial coverage and usage summary",
+                ),
+                _evidence(
+                    "runtime_diagnostics",
+                    "/internal/service/runtime/diagnostics/summary",
+                    "runtime queue, callback, and guard summary",
+                ),
+                _evidence(
+                    "site_knowledge_observability",
+                    "/internal/service/site-knowledge/observability/summary",
+                    "knowledge search and index health summary",
+                ),
+                _evidence(
+                    "provider_call_records",
+                    "provider_call_records",
+                    "provider call metrics aggregated from run telemetry",
+                ),
+            ],
+            recommended_actions=_dedupe_actions(actions),
+            confidence="high" if status == "attention" else "medium",
+            filters={
+                "site_id": site_id or "",
+                "window_hours": bounded_window_hours,
+                "usage_window_days": bounded_usage_window_days,
+                "audit_window_minutes": bounded_audit_window_minutes,
+            },
+            signals=signals,
+            source={
+                "commercial": {
+                    "counts": counts,
+                    "recent_usage": {
+                        "event_count": _int(recent_usage.get("event_count")),
+                        "totals": usage_totals,
+                    },
+                    "attention_subscriptions": {"count": len(attention_subscriptions)},
+                    "expiring_subscriptions": {
+                        "within_7_days": _int(expiring.get("within_7_days")),
+                        "within_30_days": _int(expiring.get("within_30_days")),
+                    },
+                },
+                "runtime": {
+                    "queue": queue,
+                    "callback": callback,
+                    "guard": guard,
+                    "runs": runs,
+                },
+                "provider": provider,
+                "site_knowledge": {
+                    "totals": knowledge_totals,
+                    "health": _dict(knowledge.get("health")),
+                    "top_sites": _list(knowledge.get("sites"))[:5],
+                    "top_intents": _list(knowledge.get("intents"))[:5],
+                },
+            },
+        )
+
     def get_ops_summary(
         self,
         *,
@@ -588,7 +801,14 @@ class InternalAIAdvisorService:
                 site_id=str(site_id or "").strip(),
                 filters={"range": range_filter, "limit": limit},
             )
-        raise ValueError("scope must be runtime, commercial, or routing")
+        if normalized_scope in {"operations", "operations_analysis", "ops"}:
+            return self.get_operations_advisor(
+                site_id=site_id,
+                window_hours=_range_to_hours(range_filter),
+                usage_window_days=usage_window_days,
+                audit_window_minutes=audit_window_minutes,
+            )
+        raise ValueError("scope must be runtime, commercial, routing, or operations")
 
     def _build_redacted_summarizer_context(
         self,
@@ -653,6 +873,32 @@ class InternalAIAdvisorService:
             "recommended_profile_ids",
             "avoid_provider_ids",
             "avoid_profile_ids",
+            "active_sites",
+            "total_sites",
+            "attention_subscriptions",
+            "subscriptions_expiring_7d",
+            "usage_events",
+            "meter_quantity",
+            "reported_cost",
+            "provider_cost",
+            "tokens_total",
+            "total_runs",
+            "failed_runs",
+            "run_failure_rate",
+            "callback_failed",
+            "guard_events",
+            "provider_calls",
+            "provider_errors",
+            "provider_error_rate",
+            "fallbacks",
+            "avg_latency_ms",
+            "top_provider",
+            "knowledge_searches",
+            "knowledge_no_hits",
+            "knowledge_no_hit_rate",
+            "knowledge_failed_searches",
+            "indexed_documents",
+            "indexed_chunks",
         }
         return {
             key: value
@@ -692,7 +938,7 @@ class InternalAIAdvisorService:
             ],
             "params": {
                 "temperature": 0.2,
-                "max_tokens": 320,
+                "max_tokens": 600,
                 "response_format": {"type": "json_object"},
             },
         }
@@ -818,12 +1064,7 @@ class InternalAIAdvisorService:
         *,
         fallback: dict[str, Any],
     ) -> dict[str, Any]:
-        try:
-            parsed = json.loads(output_text)
-        except json.JSONDecodeError:
-            parsed = {}
-        if not isinstance(parsed, dict):
-            parsed = {}
+        parsed = _parse_json_object_text(output_text)
 
         operator_summary = str(parsed.get("operator_summary") or "").strip()
         support_draft = str(parsed.get("support_draft") or "").strip()
@@ -838,6 +1079,189 @@ class InternalAIAdvisorService:
             "support_draft": support_draft or fallback["support_draft"],
             "operator_next_step": operator_next_step or fallback["operator_next_step"],
             "safety_note": safety_note or fallback["safety_note"],
+        }
+
+    def _get_run_operations_metrics(
+        self,
+        *,
+        site_id: str | None,
+        window_hours: int,
+    ) -> dict[str, Any]:
+        now = datetime.now(UTC)
+        since = now - timedelta(hours=min(168, max(1, int(window_hours or 24))))
+        conditions = [RunRecord.started_at >= since, RunRecord.started_at <= now]
+        if site_id:
+            conditions.append(RunRecord.site_id == site_id)
+        with get_session(self.database_url) as session:
+            totals = session.execute(
+                select(
+                    func.count(RunRecord.run_id),
+                    func.sum(case((RunRecord.status == "succeeded", 1), else_=0)),
+                    func.sum(case((RunRecord.status == "failed", 1), else_=0)),
+                    func.sum(case((RunRecord.status == "queued", 1), else_=0)),
+                    func.sum(case((RunRecord.status == "running", 1), else_=0)),
+                    func.count(func.distinct(RunRecord.site_id)),
+                    func.max(RunRecord.started_at),
+                ).where(*conditions)
+            ).one()
+            site_rows = session.execute(
+                select(
+                    RunRecord.site_id,
+                    func.count(RunRecord.run_id),
+                    func.sum(case((RunRecord.status == "failed", 1), else_=0)),
+                    func.max(RunRecord.started_at),
+                )
+                .where(*conditions)
+                .group_by(RunRecord.site_id)
+                .order_by(desc(func.count(RunRecord.run_id)))
+                .limit(5)
+            ).all()
+            ability_rows = session.execute(
+                select(
+                    RunRecord.ability_family,
+                    func.count(RunRecord.run_id),
+                    func.sum(case((RunRecord.status == "failed", 1), else_=0)),
+                )
+                .where(*conditions)
+                .group_by(RunRecord.ability_family)
+                .order_by(desc(func.count(RunRecord.run_id)))
+                .limit(5)
+            ).all()
+
+        total_runs = _int(totals[0])
+        failed_runs = _int(totals[2])
+        return {
+            "window_hours": window_hours,
+            "total_runs": total_runs,
+            "succeeded_runs": _int(totals[1]),
+            "failed_runs": failed_runs,
+            "queued_runs": _int(totals[3]),
+            "running_runs": _int(totals[4]),
+            "active_site_count": _int(totals[5]),
+            "failure_rate": round(failed_runs / total_runs, 4) if total_runs else 0.0,
+            "last_run_at": _format_datetime(totals[6]),
+            "top_sites": [
+                {
+                    "site_id": str(row[0] or ""),
+                    "run_count": _int(row[1]),
+                    "failed_runs": _int(row[2]),
+                    "last_run_at": _format_datetime(row[3]),
+                }
+                for row in site_rows
+            ],
+            "ability_families": [
+                {
+                    "ability_family": str(row[0] or ""),
+                    "run_count": _int(row[1]),
+                    "failed_runs": _int(row[2]),
+                }
+                for row in ability_rows
+            ],
+        }
+
+    def _get_provider_operations_metrics(
+        self,
+        *,
+        site_id: str | None,
+        window_hours: int,
+    ) -> dict[str, Any]:
+        now = datetime.now(UTC)
+        since = now - timedelta(hours=min(168, max(1, int(window_hours or 24))))
+        conditions = [
+            ProviderCallRecord.created_at >= since,
+            ProviderCallRecord.created_at <= now,
+        ]
+        needs_run_join = bool(site_id)
+        if site_id:
+            conditions.append(RunRecord.site_id == site_id)
+        with get_session(self.database_url) as session:
+            statement = select(
+                func.count(ProviderCallRecord.id),
+                func.sum(case((ProviderCallRecord.error_code != "", 1), else_=0)),
+                func.sum(case((ProviderCallRecord.fallback_used.is_(True), 1), else_=0)),
+                func.sum(ProviderCallRecord.tokens_in),
+                func.sum(ProviderCallRecord.tokens_out),
+                func.sum(ProviderCallRecord.cost),
+                func.avg(ProviderCallRecord.latency_ms),
+                func.max(ProviderCallRecord.created_at),
+            )
+            provider_statement = select(
+                ProviderCallRecord.provider_id,
+                func.count(ProviderCallRecord.id),
+                func.sum(case((ProviderCallRecord.error_code != "", 1), else_=0)),
+                func.sum(ProviderCallRecord.cost),
+                func.avg(ProviderCallRecord.latency_ms),
+                func.max(ProviderCallRecord.created_at),
+            )
+            model_statement = select(
+                ProviderCallRecord.model_id,
+                func.count(ProviderCallRecord.id),
+                func.sum(ProviderCallRecord.cost),
+            )
+            if needs_run_join:
+                statement = statement.join(
+                    RunRecord,
+                    RunRecord.run_id == ProviderCallRecord.run_id,
+                )
+                provider_statement = provider_statement.join(
+                    RunRecord,
+                    RunRecord.run_id == ProviderCallRecord.run_id,
+                )
+                model_statement = model_statement.join(
+                    RunRecord,
+                    RunRecord.run_id == ProviderCallRecord.run_id,
+                )
+            totals = session.execute(statement.where(*conditions)).one()
+            provider_rows = session.execute(
+                provider_statement.where(*conditions)
+                .group_by(ProviderCallRecord.provider_id)
+                .order_by(desc(func.count(ProviderCallRecord.id)))
+                .limit(5)
+            ).all()
+            model_rows = session.execute(
+                model_statement.where(*conditions)
+                .group_by(ProviderCallRecord.model_id)
+                .order_by(desc(func.count(ProviderCallRecord.id)))
+                .limit(5)
+            ).all()
+
+        call_count = _int(totals[0])
+        error_count = _int(totals[1])
+        tokens_in = _int(totals[3])
+        tokens_out = _int(totals[4])
+        top_provider_id = str(provider_rows[0][0] or "") if provider_rows else ""
+        return {
+            "window_hours": window_hours,
+            "call_count": call_count,
+            "error_count": error_count,
+            "error_rate": round(error_count / call_count, 4) if call_count else 0.0,
+            "fallback_count": _int(totals[2]),
+            "tokens_in": tokens_in,
+            "tokens_out": tokens_out,
+            "tokens_total": tokens_in + tokens_out,
+            "cost": round(_float(totals[5]), 6),
+            "avg_latency_ms": round(_float(totals[6])),
+            "last_call_at": _format_datetime(totals[7]),
+            "top_provider_id": top_provider_id,
+            "providers": [
+                {
+                    "provider_id": str(row[0] or ""),
+                    "call_count": _int(row[1]),
+                    "error_count": _int(row[2]),
+                    "cost": round(_float(row[3]), 6),
+                    "avg_latency_ms": round(_float(row[4])),
+                    "last_call_at": _format_datetime(row[5]),
+                }
+                for row in provider_rows
+            ],
+            "models": [
+                {
+                    "model_id": str(row[0] or ""),
+                    "call_count": _int(row[1]),
+                    "cost": round(_float(row[2]), 6),
+                }
+                for row in model_rows
+            ],
         }
 
     def _advisor_payload(
@@ -924,6 +1348,48 @@ def _normalize_draft_kind(value: str) -> str:
     if normalized in {"operator_summary", "support_reply"}:
         return normalized
     return "support_reply"
+
+
+def _range_to_hours(value: str) -> int:
+    normalized = str(value or "").strip().lower()
+    if normalized.endswith("h"):
+        return min(168, max(1, _int(normalized[:-1])))
+    if normalized.endswith("d"):
+        return min(168, max(1, _int(normalized[:-1]) * 24))
+    if normalized in {"7d", "week"}:
+        return 168
+    return 24
+
+
+def _format_datetime(value: Any) -> str:
+    if isinstance(value, datetime):
+        return value.astimezone(UTC).isoformat()
+    return ""
+
+
+def _parse_json_object_text(value: str) -> dict[str, Any]:
+    text = str(value or "").strip()
+    if not text:
+        return {}
+    candidates = [text]
+    if text.startswith("```"):
+        unfenced = text.strip("`").strip()
+        if unfenced.lower().startswith("json"):
+            unfenced = unfenced[4:].strip()
+        candidates.append(unfenced)
+    start = text.find("{")
+    end = text.rfind("}")
+    if start >= 0 and end > start:
+        candidates.append(text[start : end + 1])
+
+    for candidate in candidates:
+        try:
+            parsed = json.loads(candidate)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(parsed, dict):
+            return parsed
+    return {}
 
 
 def _build_ops_summary_comparison(

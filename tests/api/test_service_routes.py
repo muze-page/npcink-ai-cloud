@@ -222,6 +222,10 @@ def test_internal_ai_advisor_routes_are_internal_and_evidence_backed(
         "/internal/service/advisor/routing?site_id=site_advisor",
         headers=build_internal_headers(),
     )
+    operations_response = client.get(
+        "/internal/service/advisor/operations?site_id=site_advisor&range=24h",
+        headers=build_internal_headers(),
+    )
     ops_summary_response = client.get(
         "/internal/service/advisor/ops-summary?scope=runtime&site_id=site_advisor",
         headers=build_internal_headers(),
@@ -265,6 +269,14 @@ def test_internal_ai_advisor_routes_are_internal_and_evidence_backed(
     assert routing_payload["status"] == "ready"
     assert "text.balanced" in routing_payload["signals"][0]["recommended_profile_ids"]
     assert routing_payload["evidence"][0]["kind"] == "router_recommendation_summary"
+
+    assert operations_response.status_code == 200
+    operations_payload = operations_response.json()["data"]
+    assert operations_payload["scope"] == "operations_analysis"
+    assert operations_payload["evidence"][0]["kind"] == "admin_overview"
+    assert any(signal["code"] == "ops.runtime_quality" for signal in operations_payload["signals"])
+    assert any(signal["code"] == "ops.provider_quality" for signal in operations_payload["signals"])
+    assert operations_payload["recommended_actions"][0]["requires_operator"] is True
 
     assert ops_summary_response.status_code == 200
     ops_summary_payload = ops_summary_response.json()["data"]

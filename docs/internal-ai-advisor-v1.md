@@ -69,6 +69,20 @@ The first landed implementation is an on-demand read API over existing Cloud
 summaries. It does not persist advisor snapshots. It may call a configured
 provider only through the Internal Ops Summarizer contract below.
 
+The second landed implementation adds an Operations Analysis scope. It aggregates
+existing Cloud data before model use:
+
+- commercial coverage, recent usage totals, attention subscriptions, and expiry
+  counts
+- runtime queue, callback, guard, and run outcome metrics
+- provider call count, error rate, fallback count, tokens, cost, latency, and
+  top provider/model activity
+- site-knowledge search volume, no-hit rate, failed searches, and current index
+  coverage
+
+This scope is still advisory. It does not auto-triage accounts, mutate router
+profiles, modify WordPress, send customer messages, or create commercial state.
+
 ## Data Sources
 
 The advisor may read from existing Cloud-owned evidence surfaces:
@@ -153,6 +167,7 @@ Forbidden:
 
 Initial API:
 
+- `GET /internal/service/advisor/operations`
 - `GET /internal/service/advisor/ops-summary`
 - `GET /internal/service/advisor/ops-summary-preview`
 
@@ -206,6 +221,7 @@ Initial API surfaces should be internal and bounded:
 - `GET /internal/service/advisor/runtime`
 - `GET /internal/service/advisor/commercial`
 - `GET /internal/service/advisor/routing`
+- `GET /internal/service/advisor/operations`
 - `GET /internal/service/advisor/ops-summary`
 - `GET /internal/service/advisor/ops-summary-preview`
 - optional subject-scoped variants under existing admin site/account detail

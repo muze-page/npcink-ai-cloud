@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -13,7 +13,13 @@ from app.adapters.providers.base import (
     ProviderExecutionResult,
 )
 from app.core.db import dispose_engine, get_session, init_schema
-from app.core.models import RuntimeGuardEvent, ServiceAuditEvent
+from app.core.models import (
+    ProviderCallRecord,
+    RunRecord,
+    RuntimeGuardEvent,
+    ServiceAuditEvent,
+    SiteKnowledgeSearchMetric,
+)
 from app.domain.advisor.service import InternalAIAdvisorService
 from app.domain.catalog.service import CatalogService
 from tests.conftest import seed_site_auth
@@ -245,7 +251,175 @@ def test_ops_summary_preview_compares_baseline_and_ai_branch(tmp_path: Path) -> 
     dispose_engine(database_url)
 
 
+def test_operations_summary_uses_real_operating_metrics_for_ai_prompt(tmp_path: Path) -> None:
+    database_url = _sqlite_url(tmp_path)
+    init_schema(database_url)
+    CatalogService(database_url).refresh_catalog()
+    seed_site_auth(
+        database_url,
+        site_id="site_ops_metrics",
+        scopes=["runtime:execute", "runtime:read", "runtime:resolve", "stats:read"],
+    )
+    now = datetime.now(UTC)
+    with get_session(database_url) as session:
+        failed_run = _run_record(
+            run_id="run_ops_metrics_failed",
+            site_id="site_ops_metrics",
+            now=now,
+            status="failed",
+            error_code="provider.timeout",
+        )
+        succeeded_run = _run_record(
+            run_id="run_ops_metrics_succeeded",
+            site_id="site_ops_metrics",
+            now=now,
+            status="succeeded",
+        )
+        session.add_all([failed_run, succeeded_run])
+        session.flush()
+        session.add(
+            ProviderCallRecord(
+                run_id=failed_run.run_id,
+                provider_id="openai",
+                model_id="deepseek-v4-flash",
+                instance_id="openai:deepseek-v4-flash",
+                region="global",
+                latency_ms=1200,
+                tokens_in=400,
+                tokens_out=120,
+                cost=0.002,
+                retry_count=1,
+                fallback_used=True,
+                error_code="provider.timeout",
+                created_at=now,
+            )
+        )
+        for index in range(4):
+            search_run = _run_record(
+                run_id=f"run_ops_metrics_search_{index}",
+                site_id="site_ops_metrics",
+                now=now,
+                status="succeeded",
+            )
+            session.add(search_run)
+            session.flush()
+            session.add(
+                SiteKnowledgeSearchMetric(
+                    run_id=search_run.run_id,
+                    site_id="site_ops_metrics",
+                    account_id="acct_site_ops_metrics",
+                    subscription_id="sub_site_ops_metrics",
+                    status="succeeded",
+                    error_code=None,
+                    intent="site_search",
+                    result_count=0,
+                    no_hit=True,
+                    top1_score=0.0,
+                    avg_score=0.0,
+                    query_hash=f"query-{index}",
+                    query_chars=24,
+                    max_results=5,
+                    filter_json={},
+                    embedding_provider="deterministic",
+                    embedding_model="deterministic",
+                    embedding_dimensions=3,
+                    vector_backend="memory",
+                    latency_ms=35,
+                    created_at=now,
+                    finished_at=now,
+                )
+            )
+        session.commit()
+
+    provider = _DraftProvider()
+    result = InternalAIAdvisorService(
+        database_url,
+        providers={provider.provider_id: provider},
+        allowed_summarizer_provider_ids={provider.provider_id},
+    ).get_ops_summary(
+        scope="operations",
+        site_id="site_ops_metrics",
+        provider_id=provider.provider_id,
+        model_id="ops-model",
+    )
+
+    assert result["generation"]["mode"] == "llm"
+    prompt_context = _extract_prompt_context(provider.requests[0].input_payload)
+    signals = prompt_context["redacted_context"]["advisor"]["signals"]
+    runtime_signal = next(item for item in signals if item["code"] == "ops.runtime_quality")
+    provider_signal = next(item for item in signals if item["code"] == "ops.provider_quality")
+    knowledge_signal = next(item for item in signals if item["code"] == "ops.knowledge_quality")
+    assert runtime_signal["total_runs"] == 6
+    assert runtime_signal["failed_runs"] == 1
+    assert provider_signal["provider_errors"] == 1
+    assert provider_signal["fallbacks"] == 1
+    assert knowledge_signal["knowledge_searches"] == 4
+    assert knowledge_signal["knowledge_no_hit_rate"] == 1.0
+    assert "input_json" not in json.dumps(prompt_context)
+    assert "result_json" not in json.dumps(prompt_context)
+
+    dispose_engine(database_url)
+
+
 def _extract_prompt_context(input_payload: dict[str, Any]) -> dict[str, Any]:
     messages = input_payload["messages"]
     user_message = messages[1]
     return json.loads(user_message["content"])
+
+
+def _run_record(
+    *,
+    run_id: str,
+    site_id: str,
+    now: datetime,
+    status: str,
+    error_code: str | None = None,
+) -> RunRecord:
+    return RunRecord(
+        run_id=run_id,
+        site_id=site_id,
+        account_id=f"acct_{site_id}",
+        subscription_id=f"sub_{site_id}",
+        plan_version_id="free-v1",
+        ability_name="ops-metrics-test",
+        ability_family="text",
+        skill_id=None,
+        workflow_id=None,
+        contract_version="test",
+        channel="api",
+        execution_kind="text",
+        execution_tier="cloud",
+        execution_pattern="step_offload",
+        data_classification="internal",
+        profile_id="text.balanced",
+        canonical_run_id=None,
+        status=status,
+        idempotency_key=run_id,
+        request_fingerprint=f"{run_id}-fingerprint",
+        trace_id=f"{run_id}-trace",
+        cancel_requested_at=None,
+        canceled_at=None,
+        input_json={"raw": "must stay out of prompt"},
+        execution_input_ciphertext=None,
+        policy_json={},
+        result_ref="inline",
+        result_json={"raw": "must stay out of prompt"},
+        error_code=error_code,
+        error_message=None,
+        callback_status="not_requested",
+        callback_attempt_count=0,
+        callback_last_attempt_at=None,
+        callback_delivered_at=None,
+        callback_next_attempt_at=None,
+        callback_last_error_code=None,
+        callback_last_error_message=None,
+        selected_provider_id="openai",
+        selected_model_id="deepseek-v4-flash",
+        selected_instance_id="openai:deepseek-v4-flash",
+        fallback_used=False,
+        started_at=now,
+        processing_started_at=now,
+        finished_at=now,
+        retention_expires_at=now + timedelta(days=1),
+        result_purged_at=None,
+    )

@@ -155,6 +155,21 @@ def _csv_set(value: str) -> set[str]:
     return {item.strip() for item in str(value or "").split(",") if item.strip()}
 
 
+def _advisor_range_to_hours(value: str) -> int:
+    normalized = str(value or "").strip().lower()
+    if normalized.endswith("h"):
+        try:
+            return min(168, max(1, int(normalized[:-1])))
+        except ValueError:
+            return 24
+    if normalized.endswith("d"):
+        try:
+            return min(168, max(1, int(normalized[:-1]) * 24))
+        except ValueError:
+            return 24
+    return 24
+
+
 def _service_error_response(
     error: CommercialServiceError,
     *,
@@ -1233,6 +1248,31 @@ async def get_routing_advisor(
     return build_envelope(
         status="ok",
         message="routing advisor loaded",
+        data=result,
+        revision="m1",
+    )
+
+
+@router.get("/advisor/operations")
+async def get_operations_advisor(
+    request: Request,
+    site_id: str | None = Query(default=None, max_length=191),
+    range_filter: str = Query(default="24h", alias="range", max_length=16),
+    usage_window_days: int = Query(default=7, ge=1, le=90),
+    audit_window_minutes: int = Query(default=1440, ge=1, le=10080),
+) -> Any:
+    auth = await authorize_internal_request(request, require_idempotency=False)
+    if auth is not None:
+        return auth
+    result = _get_advisor_service(request).get_operations_advisor(
+        site_id=site_id,
+        window_hours=_advisor_range_to_hours(range_filter),
+        usage_window_days=usage_window_days,
+        audit_window_minutes=audit_window_minutes,
+    )
+    return build_envelope(
+        status="ok",
+        message="operations advisor loaded",
         data=result,
         revision="m1",
     )
