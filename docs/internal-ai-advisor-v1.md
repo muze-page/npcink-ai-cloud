@@ -170,6 +170,7 @@ Initial API:
 - `GET /internal/service/advisor/operations`
 - `GET /internal/service/advisor/ops-summary`
 - `GET /internal/service/advisor/ops-summary-preview`
+- `POST /internal/service/advisor/ops-summary-review`
 
 The response must identify whether text came from a provider or deterministic
 fallback using `generation.mode`. This mode is advisory evidence, not
@@ -179,6 +180,9 @@ defined by [AI Generated Content Disclosure v1](ai-generated-content-disclosure-
 For `llm` and `llm_cached`, the output must be visibly labeled as Magick AI
 generated and must remain in `needs_review` status until a human confirmation
 event exists.
+Human confirmation is scoped to the cached analysis entry and updates only
+`ai_disclosure.review_status`; it does not approve WordPress writes, send drafts
+to customers, or mutate Cloud commercial/router state.
 Provider execution requires both:
 
 - `MAGICK_CLOUD_INTERNAL_OPS_SUMMARIZER_PROVIDER_ALLOWLIST` includes the

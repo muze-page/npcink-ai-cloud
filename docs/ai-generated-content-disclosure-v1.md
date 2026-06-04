@@ -140,6 +140,11 @@ For images, audio, and video, future implementations must add both visible and
 machine-readable labeling where supported. Text-only outputs currently use
 visible label plus API metadata.
 
+Admin and portal copy buttons for AI content must copy the disclosure text with
+the content, not only the raw generated text. Freeform browser selection cannot
+be fully controlled, so product-provided copy/export actions are the compliance
+path and must be labeled accordingly.
+
 ## 7. Logging And Audit
 
 Audit logs must retain enough evidence to prove origin and review state without
@@ -191,6 +196,17 @@ Internal Ops Summarizer responses include `ai_disclosure`:
 
 The admin UI must display Magick AI disclosure near the AI output card and near
 independently copyable generated content blocks.
+
+Internal Ops Summarizer review state is persisted against the cached analysis
+entry. `POST /internal/service/advisor/ops-summary-review` accepts `cache_key`
+and `review_status` and writes a service audit event. Supported review states
+are:
+
+- `needs_review`
+- `human_confirmed`
+- `edited_after_ai`
+
+Review events must not store prompts or raw model output.
 
 ## 10. Release Checklist
 

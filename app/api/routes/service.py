@@ -123,6 +123,13 @@ class PluginAttentionStatePayload(BaseModel):
     note: str = Field(default="", max_length=512)
 
 
+class OpsSummaryDisclosureReviewPayload(BaseModel):
+    cache_key: str = Field(min_length=16, max_length=128)
+    review_status: str = Field(max_length=32)
+    actor_ref: str = Field(default="internal", max_length=191)
+    note: str = Field(default="", max_length=512)
+
+
 def _get_commercial_service(request: Request) -> CommercialService:
     services = get_cloud_services(request)
     return CommercialService(services.settings.database_url, settings=services.settings)
@@ -1379,6 +1386,40 @@ async def get_ops_summary_preview_advisor(
     return build_envelope(
         status="ok",
         message="ops summary preview loaded",
+        data=result,
+        revision="m1",
+    )
+
+
+@router.post("/advisor/ops-summary-review")
+async def review_ops_summary_disclosure(
+    request: Request,
+    payload: OpsSummaryDisclosureReviewPayload,
+) -> Any:
+    auth = await authorize_internal_request(request, require_idempotency=False)
+    if auth is not None:
+        return auth
+    try:
+        result = _get_advisor_service(request).review_ops_summary_disclosure(
+            cache_key=payload.cache_key,
+            review_status=payload.review_status,
+            actor_ref=payload.actor_ref,
+            note=payload.note,
+        )
+    except ValueError as error:
+        return JSONResponse(
+            status_code=400,
+            content=build_envelope(
+                status="error",
+                error_code="advisor.invalid_ops_summary_review_request",
+                message=str(error),
+                data={"cache_key": payload.cache_key},
+                revision="m1",
+            ),
+        )
+    return build_envelope(
+        status="ok",
+        message="ops summary disclosure review saved",
         data=result,
         revision="m1",
     )

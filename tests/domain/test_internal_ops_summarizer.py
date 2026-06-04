@@ -355,6 +355,40 @@ def test_ops_summary_caches_ai_analysis_until_refresh_or_expiry(tmp_path: Path) 
     assert [event.outcome for event in audit_events] == ["success", "cache_hit"]
     assert (audit_events[1].payload_json or {})["generation_mode"] == "llm_cached"
 
+    reviewed = service.review_ops_summary_disclosure(
+        cache_key=first["generation"]["cache_key"],
+        review_status="human_confirmed",
+        actor_ref="platform:tester",
+    )
+    assert reviewed["review_status"] == "human_confirmed"
+    assert reviewed["ai_disclosure"]["review_status"] == "human_confirmed"
+    assert reviewed["ai_disclosure"]["reviewed_by"] == "platform:tester"
+
+    confirmed = service.get_ops_summary(
+        scope="runtime",
+        site_id="site_ops_summary_cache",
+        provider_id=provider.provider_id,
+        model_id="ops-model",
+        cache_ttl_seconds=1800,
+    )
+    assert confirmed["generation"]["mode"] == "llm_cached"
+    assert confirmed["ai_disclosure"]["review_status"] == "human_confirmed"
+    assert confirmed["ai_disclosure"]["reviewed_by"] == "platform:tester"
+
+    with get_session(database_url) as session:
+        review_event = session.execute(
+            select(ServiceAuditEvent).where(
+                ServiceAuditEvent.event_kind == "internal_advisor.ai_disclosure_review"
+            )
+        ).scalar_one()
+        review_payload = review_event.payload_json or {}
+    assert review_event.outcome == "human_confirmed"
+    assert review_event.actor_ref == "platform:tester"
+    assert review_payload["cache_key"] == first["generation"]["cache_key"]
+    assert review_payload["generated_by_ai"] is True
+    assert review_payload["prompt_saved"] is False
+    assert review_payload["output_text_saved"] is False
+
     refreshed = service.get_ops_summary(
         scope="runtime",
         site_id="site_ops_summary_cache",
