@@ -197,6 +197,12 @@ Internal Ops Summarizer responses include `ai_disclosure`:
 The admin UI must display Magick AI disclosure near the AI output card and near
 independently copyable generated content blocks.
 
+The Portal AI Insights UI must display the Magick AI marker and `AI generated`
+or deterministic-origin label directly on the analysis block and each history
+item. The Portal must not show upstream provider names, provider logos, model
+ids, token counts, costs, or cache keys to customers. Pricing and provider
+mapping remain internal service-plane data.
+
 Internal Ops Summarizer review state is persisted against the cached analysis
 entry. `POST /internal/service/advisor/ops-summary-review` accepts `cache_key`
 and `review_status` and writes a service audit event. Supported review states

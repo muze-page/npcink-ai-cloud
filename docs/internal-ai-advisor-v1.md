@@ -172,6 +172,37 @@ Initial API:
 - `GET /internal/service/advisor/ops-summary-preview`
 - `POST /internal/service/advisor/ops-summary-review`
 - `GET /internal/service/advisor/ops-summary-history`
+- `GET /portal/v1/sites/{site_id}/ai-insights/history`
+- `POST /portal/v1/sites/{site_id}/ai-insights/analyze`
+
+The Portal endpoints are customer-facing read/detail surfaces over the same
+advisor contract. They are not provider configuration endpoints. Portal users
+cannot pass `provider_id`, `model_id`, token budgets, prices, prompt templates,
+or cache keys. The service resolves an allowlisted provider internally and
+falls back to deterministic analysis when no provider is configured.
+
+Portal AI analysis is manual-trigger only:
+
+- page load may read cached history
+- `POST /ai-insights/analyze` is the only action that may call a provider
+- default cache TTL is 30 minutes
+- `force_refresh=true` is explicit and still does not expose provider details
+
+Portal responses may expose:
+
+- headline, operator summary, next step, status, severity, generated time
+- Magick AI disclosure, visible label, and review status
+- cache hit/fresh-until state without the cache key
+- safety flags showing no WordPress write, no raw prompt persistence, and no
+  article generation
+
+Portal responses must not expose:
+
+- upstream provider or model id
+- token counts, cost, internal price mapping, or request cost
+- cache key, raw prompt, raw model payload, source context, secrets, callback
+  bodies, or WordPress content
+- admin review mutation controls
 
 The response must identify whether text came from a provider or deterministic
 fallback using `generation.mode`. This mode is advisory evidence, not

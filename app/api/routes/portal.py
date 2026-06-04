@@ -33,6 +33,7 @@ from app.api.routes.service import (
     _get_commercial_service,
     _service_error_response,
 )
+from app.domain.advisor.service import InternalAIAdvisorService
 from app.domain.commercial.customer_api_keys import (
     build_customer_api_key,
     serialize_portal_site_key,
@@ -67,6 +68,10 @@ class PortalLoginCodeRequestPayload(BaseModel):
 class PortalLoginCodeVerifyPayload(BaseModel):
     email: str = ""
     code: str = ""
+
+
+class PortalAIInsightAnalyzePayload(BaseModel):
+    force_refresh: bool = False
 
 
 def _build_portal_audit_context(request: Request, member_ref: str):
@@ -145,6 +150,120 @@ def _portal_same_origin_guard(
             message=error.message,
         )
     return None
+
+
+def _csv_set(value: str) -> set[str]:
+    return {item.strip() for item in str(value or "").split(",") if item.strip()}
+
+
+def _get_portal_advisor_service(request: Request) -> InternalAIAdvisorService:
+    services = get_cloud_services(request)
+    return InternalAIAdvisorService(
+        services.settings.database_url,
+        providers=services.providers,
+        allowed_summarizer_provider_ids=_csv_set(
+            services.settings.internal_ops_summarizer_provider_allowlist
+        ),
+    )
+
+
+def _resolve_portal_ai_provider_id(request: Request) -> str:
+    services = get_cloud_services(request)
+    allowed_provider_ids = [
+        provider_id
+        for provider_id in _csv_set(services.settings.internal_ops_summarizer_provider_allowlist)
+        if provider_id in services.providers
+    ]
+    return sorted(allowed_provider_ids)[0] if allowed_provider_ids else ""
+
+
+def _portal_ai_disclosure(disclosure: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "version": str(disclosure.get("version") or ""),
+        "content_origin": str(disclosure.get("content_origin") or ""),
+        "generated_by_ai": bool(disclosure.get("generated_by_ai")),
+        "ai_assisted": bool(disclosure.get("ai_assisted")),
+        "visible_label_required": bool(disclosure.get("visible_label_required")),
+        "visible_label": str(disclosure.get("visible_label") or ""),
+        "brand_label": str(disclosure.get("brand_label") or "Magick AI"),
+        "visible_notice": str(disclosure.get("visible_notice") or ""),
+        "review_status": str(disclosure.get("review_status") or ""),
+        "reviewed_at": str(disclosure.get("reviewed_at") or ""),
+        "source_generation_mode": str(disclosure.get("source_generation_mode") or ""),
+    }
+
+
+def _portal_ai_generation(generation: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "mode": str(generation.get("mode") or ""),
+        "error_code": str(generation.get("error_code") or ""),
+        "cache_status": str(generation.get("cache_status") or ""),
+        "cache_hit": bool(generation.get("cache_hit")),
+        "cache_generated_at": str(generation.get("cache_generated_at") or ""),
+        "cache_expires_at": str(generation.get("cache_expires_at") or ""),
+    }
+
+
+def _portal_ai_summary(summary: dict[str, Any]) -> dict[str, Any]:
+    generation = summary.get("generation") if isinstance(summary.get("generation"), dict) else {}
+    disclosure = (
+        summary.get("ai_disclosure")
+        if isinstance(summary.get("ai_disclosure"), dict)
+        else {}
+    )
+    return {
+        "summary_version": str(summary.get("summarizer_version") or "internal-ops-summarizer-v1"),
+        "scope": str(summary.get("scope") or ""),
+        "status": str(summary.get("status") or ""),
+        "severity": str(summary.get("severity") or ""),
+        "headline": str(summary.get("headline") or ""),
+        "operator_summary": str(summary.get("operator_summary") or ""),
+        "operator_next_step": str(summary.get("operator_next_step") or ""),
+        "safety_note": str(summary.get("safety_note") or ""),
+        "generated_at": str(
+            summary.get("generated_at")
+            or (disclosure or {}).get("generated_at")
+            or (generation or {}).get("cache_generated_at")
+            or ""
+        ),
+        "generation": _portal_ai_generation(generation or {}),
+        "ai_disclosure": _portal_ai_disclosure(disclosure or {}),
+    }
+
+
+def _portal_ai_history_item(item: dict[str, Any]) -> dict[str, Any]:
+    generation = item.get("generation") if isinstance(item.get("generation"), dict) else {}
+    disclosure = item.get("ai_disclosure") if isinstance(item.get("ai_disclosure"), dict) else {}
+    return {
+        "site_id": str(item.get("site_id") or ""),
+        "scope": str(item.get("scope") or ""),
+        "status": str(item.get("status") or ""),
+        "severity": str(item.get("severity") or ""),
+        "headline": str(item.get("headline") or ""),
+        "operator_summary": str(item.get("operator_summary") or ""),
+        "operator_next_step": str(item.get("operator_next_step") or ""),
+        "generated_at": str(item.get("generated_at") or ""),
+        "fresh_until": str(item.get("fresh_until") or ""),
+        "is_stale": bool(item.get("is_stale")),
+        "generation": _portal_ai_generation(generation or {}),
+        "ai_disclosure": _portal_ai_disclosure(disclosure or {}),
+    }
+
+
+def _portal_ai_safety_contract() -> dict[str, bool]:
+    return {
+        "manual_trigger_required": True,
+        "prompt_saved": False,
+        "raw_payload_saved": False,
+        "wordpress_write_allowed": False,
+        "provider_visible": False,
+        "model_visible": False,
+        "token_usage_visible": False,
+        "cost_visible": False,
+        "cache_key_visible": False,
+        "customer_article_generation_allowed": False,
+    }
+
 
 def _resolve_portal_site_summary(
     request: Request,
@@ -685,6 +804,110 @@ async def get_portal_site_vector_observability(
     return _portal_route_envelope(
         message="portal vector observability loaded",
         data=result,
+    )
+
+
+@router.get("/sites/{site_id}/ai-insights/history")
+async def list_portal_site_ai_insight_history(
+    request: Request,
+    site_id: str,
+    limit: int = Query(default=10, ge=1, le=50),
+) -> Any:
+    auth = await resolve_portal_request_context(
+        request,
+        require_idempotency=False,
+        allow_session_cookies=True,
+    )
+    if isinstance(auth, JSONResponse):
+        return auth
+    access = _authorize_portal_site_access(
+        request,
+        site_id=site_id,
+        member_ref=auth.member_ref,
+    )
+    if isinstance(access, JSONResponse):
+        return access
+    history = _get_portal_advisor_service(request).list_ops_summary_history(
+        site_id=site_id,
+        scope="operations_analysis",
+        limit=limit,
+    )
+    return _portal_route_envelope(
+        message="portal ai insight history loaded",
+        data={
+            "portal_ai_insight_version": "portal-ai-insight-v1",
+            "site_id": site_id,
+            "account_id": str(access.get("account_id") or ""),
+            "member_ref": auth.member_ref,
+            "identity_type": str(access.get("identity_type") or ""),
+            "role": str(access.get("role") or ""),
+            "items": [
+                _portal_ai_history_item(item)
+                for item in list(history.get("items") or [])
+                if isinstance(item, dict)
+            ],
+            "safety": _portal_ai_safety_contract(),
+        },
+    )
+
+
+@router.post("/sites/{site_id}/ai-insights/analyze")
+async def analyze_portal_site_ai_insight(
+    request: Request,
+    site_id: str,
+    payload: PortalAIInsightAnalyzePayload,
+) -> Any:
+    same_origin = _portal_same_origin_guard(request)
+    if same_origin is not None:
+        return same_origin
+    auth = await resolve_portal_request_context(
+        request,
+        require_idempotency=False,
+        allow_session_cookies=True,
+    )
+    if isinstance(auth, JSONResponse):
+        return auth
+    access = _authorize_portal_site_access(
+        request,
+        site_id=site_id,
+        member_ref=auth.member_ref,
+    )
+    if isinstance(access, JSONResponse):
+        return access
+    try:
+        summary = _get_portal_advisor_service(request).get_ops_summary(
+            scope="operations",
+            site_id=site_id,
+            draft_kind="operator_analysis",
+            recent_minutes=120,
+            usage_window_days=7,
+            audit_window_minutes=1440,
+            range_filter="24h",
+            limit=25,
+            provider_id=_resolve_portal_ai_provider_id(request),
+            model_id="deepseek-v4-flash",
+            force_refresh=payload.force_refresh,
+            cache_ttl_seconds=1800,
+        )
+    except ValueError as error:
+        return portal_json_error(
+            request,
+            status_code=400,
+            error_code="portal.ai_insight_invalid",
+            message=str(error),
+        )
+    return _portal_route_envelope(
+        message="portal ai insight analyzed",
+        data={
+            "portal_ai_insight_version": "portal-ai-insight-v1",
+            "site_id": site_id,
+            "account_id": str(access.get("account_id") or ""),
+            "member_ref": auth.member_ref,
+            "identity_type": str(access.get("identity_type") or ""),
+            "role": str(access.get("role") or ""),
+            "analysis": _portal_ai_summary(summary),
+            "safety": _portal_ai_safety_contract(),
+        },
     )
 
 

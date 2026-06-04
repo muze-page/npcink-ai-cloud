@@ -667,6 +667,93 @@ export interface PortalVectorObservabilitySummary {
   errors: PortalVectorObservabilityError[];
 }
 
+export interface PortalAIInsightDisclosure {
+  version: string;
+  content_origin: string;
+  generated_by_ai: boolean;
+  ai_assisted: boolean;
+  visible_label_required: boolean;
+  visible_label: string;
+  brand_label: string;
+  visible_notice: string;
+  review_status: string;
+  reviewed_at: string;
+  source_generation_mode: string;
+}
+
+export interface PortalAIInsightGeneration {
+  mode: string;
+  error_code: string;
+  cache_status: string;
+  cache_hit: boolean;
+  cache_generated_at: string;
+  cache_expires_at: string;
+}
+
+export interface PortalAIInsightAnalysis {
+  summary_version: string;
+  scope: string;
+  status: string;
+  severity: string;
+  headline: string;
+  operator_summary: string;
+  operator_next_step: string;
+  safety_note: string;
+  generated_at: string;
+  generation: PortalAIInsightGeneration;
+  ai_disclosure: PortalAIInsightDisclosure;
+}
+
+export interface PortalAIInsightHistoryItem {
+  site_id: string;
+  scope: string;
+  status: string;
+  severity: string;
+  headline: string;
+  operator_summary: string;
+  operator_next_step: string;
+  generated_at: string;
+  fresh_until: string;
+  is_stale: boolean;
+  generation: PortalAIInsightGeneration;
+  ai_disclosure: PortalAIInsightDisclosure;
+}
+
+export interface PortalAIInsightSafety {
+  manual_trigger_required: boolean;
+  prompt_saved: boolean;
+  raw_payload_saved: boolean;
+  wordpress_write_allowed: boolean;
+  provider_visible: boolean;
+  model_visible: boolean;
+  token_usage_visible: boolean;
+  cost_visible: boolean;
+  cache_key_visible: boolean;
+  customer_article_generation_allowed: boolean;
+}
+
+export interface PortalAIInsightResponse {
+  portal_ai_insight_version: string;
+  site_id: string;
+  account_id?: string;
+  member_ref?: string;
+  identity_type?: ProductIdentityType;
+  role?: string;
+  analysis: PortalAIInsightAnalysis;
+  safety: PortalAIInsightSafety;
+}
+
+export interface PortalAIInsightHistoryResponse {
+  portal_ai_insight_version: string;
+  site_id: string;
+  account_id?: string;
+  member_ref?: string;
+  identity_type?: ProductIdentityType;
+  role?: string;
+  items: PortalAIInsightHistoryItem[];
+  safety: PortalAIInsightSafety;
+}
+
 export interface PortalAuditEvent {
   event_id: string;
   event_kind: string;
@@ -1273,6 +1360,36 @@ export class PortalClient {
       'GET',
       `/sites/${siteId}/vector-observability?${params.toString()}`,
       undefined,
+      { requireAuth: true }
+    );
+  }
+
+  async listAIInsightHistory(
+    siteId: string,
+    options?: {
+      limit?: number;
+    }
+  ): Promise<PortalEnvelope<PortalAIInsightHistoryResponse>> {
+    const params = new URLSearchParams();
+    params.set('limit', String(options?.limit || 10));
+    return this.request(
+      'GET',
+      `/sites/${siteId}/ai-insights/history?${params.toString()}`,
+      undefined,
+      { requireAuth: true }
+    );
+  }
+
+  async analyzeAIInsight(
+    siteId: string,
+    options?: {
+      forceRefresh?: boolean;
+    }
+  ): Promise<PortalEnvelope<PortalAIInsightResponse>> {
+    return this.request(
+      'POST',
+      `/sites/${siteId}/ai-insights/analyze`,
+      { force_refresh: Boolean(options?.forceRefresh) },
       { requireAuth: true }
     );
   }

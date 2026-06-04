@@ -12,6 +12,7 @@ export type PortalWorkspacePage =
   | 'billing'
   | 'audit'
   | 'monitoring'
+  | 'ai-insights'
   | 'record'
   | 'sites';
 

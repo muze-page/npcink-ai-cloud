@@ -36,6 +36,7 @@ export function PortalNavbar() {
   );
   const secondaryNavItems = useMemo(
     () => [
+      { href: '/portal/ai-insights', label: t('portal.ai_insights.nav_label', {}, 'AI Insights') },
       { href: '/portal/monitoring', label: t('portal.monitoring.nav_label', {}, 'Monitoring') },
       { href: '/portal/audit', label: t('nav.audit') },
     ],

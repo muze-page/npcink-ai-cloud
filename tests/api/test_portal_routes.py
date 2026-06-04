@@ -4,11 +4,17 @@ import base64
 import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
 from app.adapters.notifications.base import PortalEmailSender
+from app.adapters.providers.base import (
+    ProviderCatalogSnapshot,
+    ProviderExecutionRequest,
+    ProviderExecutionResult,
+)
 from app.api.main import create_app
 from app.core.config import Settings
 from app.core.db import dispose_engine, get_session, init_schema
@@ -37,6 +43,7 @@ def _build_client(
     *,
     settings_overrides: dict[str, object] | None = None,
     portal_email_sender: PortalEmailSender | None = None,
+    providers: dict[str, Any] | None = None,
 ) -> tuple[str, TestClient]:
     database_url = _sqlite_url(tmp_path)
     init_schema(database_url)
@@ -60,6 +67,7 @@ def _build_client(
         create_app(
             CloudServices(
                 settings=settings,
+                providers=providers or {},
                 portal_email_sender=portal_email_sender,
             )
         )
@@ -133,6 +141,37 @@ class FakePortalEmailSender(PortalEmailSender):
                 "project_name": project_name,
                 "locale": locale,
             }
+        )
+
+
+class _PortalDraftProvider:
+    provider_id = "fake_llm"
+    display_name = "Fake LLM"
+    adapter_type = "fake"
+
+    def __init__(self) -> None:
+        self.requests: list[ProviderExecutionRequest] = []
+
+    def fetch_catalog(self) -> ProviderCatalogSnapshot:
+        raise NotImplementedError
+
+    def execute(self, request: ProviderExecutionRequest) -> ProviderExecutionResult:
+        self.requests.append(request)
+        return ProviderExecutionResult(
+            output={
+                "output_text": json.dumps(
+                    {
+                        "operator_summary": "LLM summarized operations and usage pressure.",
+                        "support_draft": "Internal support draft is not shown in Portal.",
+                        "operator_next_step": "inspect_usage_and_runtime_health",
+                        "safety_note": "AI analysis only; no WordPress write is allowed.",
+                    }
+                )
+            },
+            latency_ms=15,
+            tokens_in=42,
+            tokens_out=21,
+            cost=0.0025,
         )
 
 
@@ -453,6 +492,141 @@ def test_portal_routes_require_portal_auth_configuration(tmp_path: Path) -> None
 
     assert response.status_code == 503
     assert response.json()["error_code"] == "auth.portal_not_configured"
+
+    dispose_engine(database_url)
+
+
+def test_portal_ai_insights_are_manual_cached_and_redacted(tmp_path: Path) -> None:
+    provider = _PortalDraftProvider()
+    database_url, client = _build_client(
+        tmp_path,
+        settings_overrides={
+            "internal_ops_summarizer_provider_allowlist": provider.provider_id,
+        },
+        providers={provider.provider_id: provider},
+    )
+
+    client.post(
+        "/internal/service/accounts",
+        json={"account_id": "acct_portal_ai", "name": "Portal AI Account"},
+        headers=build_internal_headers(idempotency_key="portal-ai-account-001"),
+    )
+    client.post(
+        "/internal/service/sites",
+        json={
+            "site_id": "site_portal_ai",
+            "account_id": "acct_portal_ai",
+            "name": "Portal AI Site",
+            "status": "active",
+        },
+        headers=build_internal_headers(idempotency_key="portal-ai-site-001"),
+    )
+    client.post(
+        "/internal/service/accounts/acct_portal_ai/memberships",
+        json={"member_ref": "user:portal-admin@example.com", "role": "user_admin"},
+        headers=build_internal_headers(idempotency_key="portal-ai-membership-001"),
+    )
+
+    initial_history = client.get(
+        "/portal/v1/sites/site_portal_ai/ai-insights/history",
+        headers=build_portal_headers(),
+    )
+    assert initial_history.status_code == 200
+    assert initial_history.json()["data"]["items"] == []
+    assert len(provider.requests) == 0
+
+    first = client.post(
+        "/portal/v1/sites/site_portal_ai/ai-insights/analyze",
+        json={"force_refresh": False},
+        headers=build_portal_headers(idempotency_key="portal-ai-analyze-001"),
+    )
+    assert first.status_code == 200, first.text
+    first_data = first.json()["data"]
+    analysis = first_data["analysis"]
+    assert analysis["generation"]["mode"] == "llm"
+    assert analysis["generation"]["cache_status"] == "miss"
+    assert analysis["ai_disclosure"]["generated_by_ai"] is True
+    assert analysis["ai_disclosure"]["brand_label"] == "Magick AI"
+    assert first_data["safety"] == {
+        "manual_trigger_required": True,
+        "prompt_saved": False,
+        "raw_payload_saved": False,
+        "wordpress_write_allowed": False,
+        "provider_visible": False,
+        "model_visible": False,
+        "token_usage_visible": False,
+        "cost_visible": False,
+        "cache_key_visible": False,
+        "customer_article_generation_allowed": False,
+    }
+    serialized = json.dumps(first_data)
+    assert "provider_id" not in serialized
+    assert "model_id" not in serialized
+    assert "tokens_in" not in serialized
+    assert "tokens_out" not in serialized
+    assert '"cost":' not in serialized
+    assert '"cache_key":' not in serialized
+    assert "source_context" not in serialized
+    assert len(provider.requests) == 1
+
+    second = client.post(
+        "/portal/v1/sites/site_portal_ai/ai-insights/analyze",
+        json={"force_refresh": False},
+        headers=build_portal_headers(idempotency_key="portal-ai-analyze-002"),
+    )
+    assert second.status_code == 200, second.text
+    second_data = second.json()["data"]
+    assert second_data["analysis"]["generation"]["mode"] == "llm_cached"
+    assert second_data["analysis"]["generation"]["cache_status"] == "hit"
+    assert second_data["analysis"]["generation"]["cache_hit"] is True
+    assert len(provider.requests) == 1
+
+    history = client.get(
+        "/portal/v1/sites/site_portal_ai/ai-insights/history",
+        headers=build_portal_headers(),
+    )
+    assert history.status_code == 200
+    history_data = history.json()["data"]
+    assert len(history_data["items"]) == 1
+    assert history_data["items"][0]["ai_disclosure"]["generated_by_ai"] is True
+    history_serialized = json.dumps(history_data)
+    assert "provider_id" not in history_serialized
+    assert "model_id" not in history_serialized
+    assert "tokens_in" not in history_serialized
+    assert "tokens_out" not in history_serialized
+    assert '"cost":' not in history_serialized
+    assert '"cache_key":' not in history_serialized
+
+    dispose_engine(database_url)
+
+
+def test_portal_ai_insights_reject_other_site(tmp_path: Path) -> None:
+    database_url, client = _build_client(tmp_path)
+
+    client.post(
+        "/internal/service/accounts",
+        json={"account_id": "acct_portal_ai_private", "name": "Portal AI Private"},
+        headers=build_internal_headers(idempotency_key="portal-ai-private-account-001"),
+    )
+    client.post(
+        "/internal/service/sites",
+        json={
+            "site_id": "site_portal_ai_private",
+            "account_id": "acct_portal_ai_private",
+            "name": "Portal AI Private Site",
+            "status": "active",
+        },
+        headers=build_internal_headers(idempotency_key="portal-ai-private-site-001"),
+    )
+
+    response = client.post(
+        "/portal/v1/sites/site_portal_ai_private/ai-insights/analyze",
+        json={"force_refresh": False},
+        headers=build_portal_headers(member_ref="user:outsider@example.com"),
+    )
+
+    assert response.status_code == 403
+    assert response.json()["error_code"] == "service.portal_membership_required"
 
     dispose_engine(database_url)
 
