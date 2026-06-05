@@ -73,6 +73,16 @@ Cloud-managed settings:
 - `MAGICK_CLOUD_SITE_KNOWLEDGE_VECTOR_METRIC_TYPE`: default `COSINE`
 - `MAGICK_CLOUD_SITE_KNOWLEDGE_COMMENTS_ENABLED`: default `false`; when true,
   Cloud may index approved public comments supplied by WordPress.
+- `MAGICK_CLOUD_SITE_KNOWLEDGE_RERANK_PROVIDER`: `disabled` or `jina`;
+  default `disabled`. Rerank is a Cloud-only enhancement after vector recall.
+- `MAGICK_CLOUD_SITE_KNOWLEDGE_RERANK_TOP_K`: default `30`
+- `MAGICK_CLOUD_SITE_KNOWLEDGE_RERANK_TIMEOUT_SECONDS`: default `8`
+- `MAGICK_CLOUD_SITE_KNOWLEDGE_JINA_BASE_URL`: default `https://api.jina.ai`
+- `MAGICK_CLOUD_SITE_KNOWLEDGE_JINA_API_KEY`: required only when
+  `MAGICK_CLOUD_SITE_KNOWLEDGE_RERANK_PROVIDER=jina`; keep it only in Cloud
+  deploy secrets.
+- `MAGICK_CLOUD_SITE_KNOWLEDGE_JINA_RERANK_MODEL`: default
+  `jina-reranker-v3`
 - `MAGICK_CLOUD_SITE_KNOWLEDGE_ZILLIZ_URI`: required when `zilliz_cloud`
   is enabled
 - `MAGICK_CLOUD_SITE_KNOWLEDGE_ZILLIZ_TOKEN`: required when `zilliz_cloud`

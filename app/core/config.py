@@ -204,6 +204,19 @@ class Settings(BaseSettings):
     site_knowledge_embedding_dimensions: int = Field(default=1024)
     site_knowledge_vector_metric_type: str = Field(default="COSINE")
     site_knowledge_comments_enabled: bool = Field(default=False)
+    site_knowledge_rerank_provider: str = Field(default="disabled")
+    site_knowledge_rerank_top_k: int = Field(default=30)
+    site_knowledge_rerank_timeout_seconds: float = Field(default=8.0)
+    site_knowledge_jina_base_url: str = Field(default="https://api.jina.ai")
+    site_knowledge_jina_api_key: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "MAGICK_CLOUD_SITE_KNOWLEDGE_JINA_API_KEY",
+            "MAGICK_CLOUD_JINA_API_KEY",
+            "JINA_API_KEY",
+        ),
+    )
+    site_knowledge_jina_rerank_model: str = Field(default="jina-reranker-v3")
     site_knowledge_zilliz_uri: str | None = Field(default=None)
     site_knowledge_zilliz_token: str | None = Field(default=None)
     site_knowledge_zilliz_database: str | None = Field(default=None)
@@ -599,6 +612,29 @@ class Settings(BaseSettings):
         if metric_type not in {"COSINE", "IP", "L2"}:
             raise ValueError("site_knowledge_vector_metric_type must be COSINE, IP, or L2")
         self.site_knowledge_vector_metric_type = metric_type
+        site_knowledge_rerank_provider = str(
+            self.site_knowledge_rerank_provider or "disabled"
+        ).strip().lower()
+        if site_knowledge_rerank_provider not in {"disabled", "jina"}:
+            raise ValueError("site_knowledge_rerank_provider must be disabled or jina")
+        self.site_knowledge_rerank_provider = site_knowledge_rerank_provider
+        if self.site_knowledge_rerank_top_k <= 0:
+            raise ValueError("site_knowledge_rerank_top_k must be greater than 0")
+        if self.site_knowledge_rerank_timeout_seconds <= 0:
+            raise ValueError("site_knowledge_rerank_timeout_seconds must be greater than 0")
+        if site_knowledge_rerank_provider == "jina":
+            if not str(self.site_knowledge_jina_base_url or "").strip():
+                raise ValueError(
+                    "site_knowledge_jina_base_url is required when Jina rerank is enabled"
+                )
+            if not str(self.site_knowledge_jina_api_key or "").strip():
+                raise ValueError(
+                    "site_knowledge_jina_api_key is required when Jina rerank is enabled"
+                )
+            if not str(self.site_knowledge_jina_rerank_model or "").strip():
+                raise ValueError(
+                    "site_knowledge_jina_rerank_model is required when Jina rerank is enabled"
+                )
         if site_knowledge_backend == "zilliz_cloud":
             if not str(self.site_knowledge_zilliz_uri or "").strip():
                 raise ValueError(

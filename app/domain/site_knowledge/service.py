@@ -40,6 +40,11 @@ from app.domain.site_knowledge.embedding import (
     embed_text_deterministic,
 )
 from app.domain.site_knowledge.repository import SiteKnowledgeRepository
+from app.domain.site_knowledge.rerankers import (
+    SiteKnowledgeReranker,
+    SiteKnowledgeRerankError,
+    build_site_knowledge_reranker,
+)
 
 MAX_CHUNK_CHARS = 900
 CHUNK_OVERLAP_CHARS = 120
@@ -75,6 +80,7 @@ class SiteKnowledgeService:
         self.progress_callback = progress_callback
         self.repository = SiteKnowledgeRepository(session)
         self.vector_backend = build_vector_backend(self.settings)
+        self.reranker = build_site_knowledge_reranker(self.settings)
         self.embedding_provider_id = str(
             self.settings.site_knowledge_embedding_provider or "deterministic"
         )
@@ -481,8 +487,12 @@ class SiteKnowledgeService:
             query=query,
         )
         if results is not None:
-            results = _apply_evidence_policy(results, evidence_policy)
-            results = _rank_search_results_for_query(query, results)[:max_results]
+            results, rerank = self._prepare_search_results(
+                query=query,
+                results=results,
+                evidence_policy=evidence_policy,
+                max_results=max_results,
+            )
             return {
                 "artifact_type": "site_knowledge_results",
                 "composition_role": "site_knowledge_context",
@@ -490,6 +500,7 @@ class SiteKnowledgeService:
                 "intent": intent,
                 "workflow_support": _workflow_support_for_intent(intent),
                 "evidence_gate": _evidence_gate(results, evidence_policy),
+                "rerank": rerank,
                 "results": results,
                 "write_posture": "suggestion_only",
                 "direct_wordpress_write": False,
@@ -524,8 +535,12 @@ class SiteKnowledgeService:
             )
             for score, chunk in scored
         ]
-        results = _apply_evidence_policy(results, evidence_policy)
-        results = _rank_search_results_for_query(query, results)[:max_results]
+        results, rerank = self._prepare_search_results(
+            query=query,
+            results=results,
+            evidence_policy=evidence_policy,
+            max_results=max_results,
+        )
 
         return {
             "artifact_type": "site_knowledge_results",
@@ -534,6 +549,7 @@ class SiteKnowledgeService:
             "intent": intent,
             "workflow_support": _workflow_support_for_intent(intent),
             "evidence_gate": _evidence_gate(results, evidence_policy),
+            "rerank": rerank,
             "results": results,
             "write_posture": "suggestion_only",
             "direct_wordpress_write": False,
@@ -676,6 +692,59 @@ class SiteKnowledgeService:
         if self.embedding_provider_id == "openai":
             return float(self.settings.openai_timeout_seconds)
         return float(self.settings.tei_timeout_seconds)
+
+    def _prepare_search_results(
+        self,
+        *,
+        query: str,
+        results: list[dict[str, object]],
+        evidence_policy: dict[str, object],
+        max_results: int,
+    ) -> tuple[list[dict[str, object]], dict[str, object]]:
+        filtered = _apply_evidence_policy(results, evidence_policy)
+        ranked = _rank_search_results_for_query(query, filtered)
+        reranked, rerank = self._maybe_rerank_results(query=query, results=ranked)
+        return reranked[:max_results], rerank
+
+    def _maybe_rerank_results(
+        self,
+        *,
+        query: str,
+        results: list[dict[str, object]],
+    ) -> tuple[list[dict[str, object]], dict[str, object]]:
+        reranker: SiteKnowledgeReranker | None = self.reranker
+        if reranker is None:
+            return results, {
+                "status": "disabled",
+                "provider": str(self.settings.site_knowledge_rerank_provider or "disabled"),
+                "candidate_count": len(results),
+            }
+
+        exact_results = [result for result in results if bool(result.get("exact_query_match"))]
+        semantic_results = [
+            result for result in results if not bool(result.get("exact_query_match"))
+        ]
+        try:
+            if exact_results:
+                exact_outcome = reranker.rerank(query=query, results=exact_results)
+                if semantic_results:
+                    semantic_outcome = reranker.rerank(query=query, results=semantic_results)
+                    metadata = dict(exact_outcome.metadata)
+                    metadata["semantic_candidate_count"] = len(semantic_results)
+                    metadata["semantic_status"] = semantic_outcome.metadata.get("status")
+                    return [*exact_outcome.results, *semantic_outcome.results], metadata
+                return exact_outcome.results, exact_outcome.metadata
+
+            outcome = reranker.rerank(query=query, results=results)
+            return outcome.results, outcome.metadata
+        except SiteKnowledgeRerankError as error:
+            return results, {
+                "status": "failed",
+                "provider": str(self.settings.site_knowledge_rerank_provider or ""),
+                "error_code": error.error_code,
+                "candidate_count": len(results),
+                "fallback": "vector_order",
+            }
 
     def _sync_progress(
         self,

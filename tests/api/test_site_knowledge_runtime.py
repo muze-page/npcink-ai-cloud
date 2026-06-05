@@ -25,7 +25,12 @@ from app.core.models import (
 )
 from app.core.services import CloudServices
 from app.domain.runtime.service import RuntimeService
+from app.domain.site_knowledge.rerankers import (
+    JinaSiteKnowledgeReranker,
+    SiteKnowledgeRerankError,
+)
 from app.domain.site_knowledge.service import (
+    SiteKnowledgeService,
     _apply_evidence_policy,
     _rank_search_results_for_query,
     _resolve_evidence_policy,
@@ -287,6 +292,7 @@ def test_sync_then_search_and_status_coverage(tmp_path: Path) -> None:
     assert search_data["artifact_type"] == "site_knowledge_results"
     assert search_data["write_posture"] == "suggestion_only"
     assert search_data["direct_wordpress_write"] is False
+    assert search_data["rerank"]["status"] == "disabled"
     assert search_data["evidence_gate"]["status"] == "passed"
     assert search_data["evidence_gate"]["allows_site_grounded_assertion"] is True
     assert search_data["results"][0]["post_id"] == 123
@@ -602,6 +608,149 @@ def test_search_ranking_prioritizes_exact_query_matches() -> None:
     assert ranked[0]["match_type"] == "exact"
 
 
+def test_site_knowledge_jina_rerank_requires_cloud_managed_key(tmp_path: Path) -> None:
+    with pytest.raises(ValidationError):
+        Settings(
+            _env_file=None,
+            project_name="Magick AI Cloud Site Knowledge Test",
+            environment="test",
+            database_url=_sqlite_url(tmp_path),
+            redis_url="redis://localhost:6379/0",
+            admin_session_secret=TEST_ADMIN_SESSION_SECRET,
+            portal_jwt_secret=TEST_PORTAL_JWT_SECRET,
+            site_knowledge_rerank_provider="jina",
+            site_knowledge_jina_api_key="",
+        )
+
+    settings = Settings(
+        _env_file=None,
+        project_name="Magick AI Cloud Site Knowledge Test",
+        environment="test",
+        database_url=_sqlite_url(tmp_path),
+        redis_url="redis://localhost:6379/0",
+        admin_session_secret=TEST_ADMIN_SESSION_SECRET,
+        portal_jwt_secret=TEST_PORTAL_JWT_SECRET,
+        site_knowledge_rerank_provider="jina",
+        site_knowledge_jina_api_key="unit-test-redacted",
+    )
+
+    assert settings.site_knowledge_rerank_provider == "jina"
+    assert settings.site_knowledge_jina_rerank_model == "jina-reranker-v3"
+    assert settings.site_knowledge_rerank_top_k == 30
+
+
+def test_jina_reranker_reorders_candidates_without_exposing_key(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = Settings(
+        _env_file=None,
+        project_name="Magick AI Cloud Site Knowledge Test",
+        environment="test",
+        database_url=_sqlite_url(tmp_path),
+        redis_url="redis://localhost:6379/0",
+        admin_session_secret=TEST_ADMIN_SESSION_SECRET,
+        portal_jwt_secret=TEST_PORTAL_JWT_SECRET,
+        site_knowledge_rerank_provider="jina",
+        site_knowledge_jina_api_key="unit-test-redacted",
+    )
+    captured: dict[str, object] = {}
+
+    class _Response:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict[str, object]:
+            return {
+                "results": [
+                    {"index": 1, "relevance_score": 0.91},
+                    {"index": 0, "relevance_score": 0.21},
+                ]
+            }
+
+    def _post(*args: object, **kwargs: object) -> _Response:
+        captured["args"] = args
+        captured["kwargs"] = kwargs
+        return _Response()
+
+    monkeypatch.setattr("app.domain.site_knowledge.rerankers.httpx.post", _post)
+
+    outcome = JinaSiteKnowledgeReranker(settings).rerank(
+        query="AI 摘要",
+        results=[
+            {
+                "post_id": 1,
+                "title": "Weak",
+                "chunk": "General AI content.",
+                "score": 0.7,
+            },
+            {
+                "post_id": 2,
+                "title": "Strong",
+                "chunk": "AI 摘要 is discussed here.",
+                "score": 0.6,
+            },
+        ],
+    )
+
+    assert [result["post_id"] for result in outcome.results] == [2, 1]
+    assert outcome.results[0]["rerank_provider"] == "jina"
+    assert outcome.results[0]["rerank_score"] == 0.91
+    assert outcome.metadata == {
+        "status": "succeeded",
+        "provider": "jina",
+        "model": "jina-reranker-v3",
+        "candidate_count": 2,
+        "reranked_count": 2,
+    }
+    assert "unit-test-redacted" not in json.dumps(outcome.metadata)
+    kwargs = captured["kwargs"]
+    assert isinstance(kwargs, dict)
+    assert kwargs["json"]["model"] == "jina-reranker-v3"
+    assert kwargs["json"]["query"] == "AI 摘要"
+    assert kwargs["json"]["return_documents"] is False
+    assert kwargs["headers"]["Authorization"] == "Bearer unit-test-redacted"
+
+
+def test_site_knowledge_rerank_failure_falls_back_to_vector_order(tmp_path: Path) -> None:
+    database_url, settings, _, _ = _build_client(
+        tmp_path,
+        settings_overrides={
+            "site_knowledge_rerank_provider": "jina",
+            "site_knowledge_jina_api_key": "unit-test-redacted",
+        },
+    )
+
+    class _FailingReranker:
+        def rerank(
+            self,
+            *,
+            query: str,
+            results: list[dict[str, object]],
+        ) -> object:
+            raise SiteKnowledgeRerankError("site_knowledge.jina_rerank_failed", "failed")
+
+    with get_session(database_url) as session:
+        service = SiteKnowledgeService(session, settings=settings)
+        service.reranker = _FailingReranker()
+        results, rerank = service._maybe_rerank_results(
+            query="AI 摘要",
+            results=[
+                {"post_id": 1, "score": 0.7, "exact_query_match": False},
+                {"post_id": 2, "score": 0.6, "exact_query_match": False},
+            ],
+        )
+
+    assert [result["post_id"] for result in results] == [1, 2]
+    assert rerank == {
+        "status": "failed",
+        "provider": "jina",
+        "error_code": "site_knowledge.jina_rerank_failed",
+        "candidate_count": 2,
+        "fallback": "vector_order",
+    }
+
+
 def test_forbidden_write_fields_fail_closed(tmp_path: Path) -> None:
     _, _, _, client = _build_client(tmp_path)
     payload = _search_payload("publish this")
@@ -877,7 +1026,7 @@ def test_zilliz_backend_requires_cloud_managed_credentials(tmp_path: Path) -> No
         redis_url="redis://localhost:6379/0",
         site_knowledge_vector_backend="zilliz_cloud",
         site_knowledge_zilliz_uri="https://example.zillizcloud.com",
-        site_knowledge_zilliz_token="placeholder-value",
+        site_knowledge_zilliz_token="unit-test-redacted",
         site_knowledge_zilliz_collection="magick_site_knowledge_chunks",
     )
 
