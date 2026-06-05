@@ -4,6 +4,7 @@ from __future__ import annotations
 import secrets
 from collections import Counter
 from datetime import UTC, datetime, timedelta
+from typing import Any, cast
 from urllib.parse import urlsplit
 from uuid import uuid4
 
@@ -12,6 +13,7 @@ from app.core.callback_security import (
     RuntimeCallbackTargetValidationError,
     validate_runtime_callback_target,
 )
+from app.core.db import get_session
 from app.core.models import (
     ACCOUNT_MEMBERSHIP_STATUS_ACTIVE,
     ACCOUNT_STATUS_ACTIVE,
@@ -22,15 +24,15 @@ from app.core.models import (
     SITE_STATUS_ARCHIVED,
     SITE_STATUS_PROVISIONING,
     SITE_STATUS_SUSPENDED,
+    AccountSubscription,
     Site,
     SiteApiKey,
-    AccountSubscription,
 )
-from app.core.security import build_secret_hash
 from app.core.secrets import (
     encrypt_runtime_terminal_callback_secret,
     encrypt_site_api_signing_secret,
 )
+from app.core.security import build_secret_hash
 from app.domain.commercial.customer_api_keys import expand_api_key_scopes
 from app.domain.commercial.errors import (
     CommercialNotFoundError,
@@ -39,20 +41,19 @@ from app.domain.commercial.errors import (
 )
 from app.domain.commercial.mixins._audit_mixin import CommercialServiceAuditMixin
 from app.domain.commercial.service import (
+    DEFAULT_PLAN_TIER_ID,
     PLAN_TIER_REGISTRY,
     PORTAL_SITE_PROVISION_ROLES,
-    DEFAULT_PLAN_TIER_ID,
     ServiceAuditContext,
-    _normalize_portal_site_url,
-    _slugify_portal_site_segment,
-    _portal_membership_is_active,
-    _portal_membership_has_allowed_role,
+    _extract_site_wordpress_url,
     _normalize_customer_membership_role,
+    _normalize_portal_site_url,
+    _portal_membership_has_allowed_role,
+    _portal_membership_is_active,
     _resolve_identity_type,
     _resolve_portal_allowed_actions,
-    _extract_site_wordpress_url,
+    _slugify_portal_site_segment,
 )
-from app.core.db import get_session
 
 
 class CommercialServiceSiteMixin(CommercialServiceAuditMixin):
@@ -92,7 +93,7 @@ class CommercialServiceSiteMixin(CommercialServiceAuditMixin):
             )
             existing_site = repository.get_site(site_id)
             if existing_site is None and snapshot is not None:
-                self._assert_account_site_capacity(
+                cast(Any, self)._assert_account_site_capacity(
                     repository=repository,
                     account_id=account_id,
                     snapshot=snapshot,
@@ -207,7 +208,8 @@ class CommercialServiceSiteMixin(CommercialServiceAuditMixin):
                     "service.entitlement_snapshot_required",
                     f"account '{normalized_account_id}' does not have an active entitlement snapshot",
                 )
-            self._assert_account_site_capacity(
+            service = cast(Any, self)
+            service._assert_account_site_capacity(
                 repository=repository,
                 account_id=normalized_account_id,
                 snapshot=snapshot,
@@ -233,16 +235,16 @@ class CommercialServiceSiteMixin(CommercialServiceAuditMixin):
                 "role": str(getattr(membership, "role", "") or ""),
                 "wordpress_url": canonical_wordpress_url,
                 "site": self._serialize_site(site),
-                "subscription": self._serialize_subscription(subscription),
+                "subscription": service._serialize_subscription(subscription),
                 "commercial_onboarding": {
                     "auto_bound": False,
-                    "tier_id": self._infer_plan_tier_id(
+                    "tier_id": service._infer_plan_tier_id(
                         {"plan_id": subscription.plan_id, "metadata": subscription.metadata_json or {}},
                         [],
                     ),
                     "package_alias": str(
                         (subscription.metadata_json or {}).get("package_alias")
-                        or self._build_plan_tier_summary(
+                        or service._build_plan_tier_summary(
                             {"plan_id": subscription.plan_id, "metadata": subscription.metadata_json or {}},
                             [],
                         ).get("package_alias")
@@ -446,7 +448,9 @@ class CommercialServiceSiteMixin(CommercialServiceAuditMixin):
             metadata = dict(site.metadata_json or {})
             runtime_callbacks = metadata.get("runtime_callbacks")
             runtime_callbacks = dict(runtime_callbacks) if isinstance(runtime_callbacks, dict) else {}
-            normalized_terminal = self._normalize_runtime_terminal_callback(terminal_callback)
+            normalized_terminal = cast(Any, self)._normalize_runtime_terminal_callback(
+                terminal_callback
+            )
             callback_url = str(normalized_terminal.get("callback_url") or "")
             if callback_url:
                 try:
@@ -484,7 +488,7 @@ class CommercialServiceSiteMixin(CommercialServiceAuditMixin):
             metadata.pop("runtime_terminal_callback_secret", None)
             site.metadata_json = metadata
 
-            payload = {
+            payload: dict[str, object] = {
                 "site_id": site.site_id,
                 "runtime_callback": {
                     "enabled": bool(normalized_terminal.get("enabled")),
@@ -683,7 +687,7 @@ class CommercialServiceSiteMixin(CommercialServiceAuditMixin):
             current.status = SITE_API_KEY_STATUS_REVOKED
             current.revoked_at = now
             current.replaced_by_key_id = rotated_key.key_id
-            payload = {
+            payload: dict[str, object] = {
                 "previous": self._serialize_site_key(current),
                 "current": {
                     **self._serialize_site_key(rotated_key),
@@ -816,7 +820,7 @@ class CommercialServiceSiteMixin(CommercialServiceAuditMixin):
         return {
             "site_id": site.site_id,
             "account_id": site.account_id,
-            "member_ref": membership.member_ref,
+            "member_ref": str(getattr(membership, "member_ref", "") or ""),
             "identity_type": _resolve_identity_type(
                 str(getattr(membership, "role", "") or "")
             ),
@@ -910,7 +914,8 @@ class CommercialServiceSiteMixin(CommercialServiceAuditMixin):
             )
             latest_billing_by_site = repository.get_latest_billing_snapshots_by_site(site_ids=site_ids)
 
-        latest_subscription_by_account = self._latest_subscription_map(subscriptions)
+        service = cast(Any, self)
+        latest_subscription_by_account = service._latest_subscription_map(subscriptions)
         site_counts_by_account = Counter(
             site.account_id for site in sites if str(site.account_id or "").strip()
         )
@@ -924,18 +929,21 @@ class CommercialServiceSiteMixin(CommercialServiceAuditMixin):
                     "site": self._serialize_site(site),
                     "member_count": membership_counts.get(site.account_id or "", 0),
                     "active_key_count": key_counts.get(site.site_id, 0),
-                    "coverage": self._build_subscription_coverage_summary(
+                    "coverage": service._build_subscription_coverage_summary(
                         subscription,
                         site_count=site_counts_by_account.get(site.account_id or "", 0),
                     ),
                     "recent_usage": {
                         "window_days": max(1, usage_window_days),
-                        "event_count": int(usage.get("event_count", 0) or 0),
-                        "quantity_total": round(float(usage.get("quantity_total", 0.0) or 0.0), 6),
+                        "event_count": self._coerce_int(usage.get("event_count")),
+                        "quantity_total": round(
+                            self._coerce_float(usage.get("quantity_total")),
+                            6,
+                        ),
                         "last_seen_at": usage.get("last_seen_at"),
                     },
                     "latest_billing_snapshot": (
-                        self._serialize_billing_snapshot(billing_snapshot)
+                        service._serialize_billing_snapshot(billing_snapshot)
                         if billing_snapshot is not None
                         else None
                     ),
@@ -975,26 +983,28 @@ class CommercialServiceSiteMixin(CommercialServiceAuditMixin):
                 subscription_id=subscription.subscription_id if subscription is not None else None,
             )
             site_count = repository.count_sites_by_account(
-                account_ids=[site.account_id]
+                account_ids=[str(site.account_id or "")]
             ).get(site.account_id or "", 0)
 
-        usage_meter = self.inspect_usage_meter(site_id, limit=20)
-        billing_snapshots = self.list_billing_snapshots(site_id)
+        service = cast(Any, self)
+        usage_meter = service.inspect_usage_meter(site_id, limit=20)
+        billing_snapshots = service.list_billing_snapshots(site_id)
         reconciliation = (
-            self.reconcile_billing_snapshot(site_id) if subscription is not None else None
+            service.reconcile_billing_snapshot(site_id) if subscription is not None else None
         )
-        commercial_policy = self.inspect_commercial_policy(site_id)
+        commercial_policy = service.inspect_commercial_policy(site_id)
         return {
             "site": self._serialize_site(site),
-            "account": self._serialize_account(account) if account is not None else None,
+            "account": service._serialize_account(account) if account is not None else None,
             "memberships": [
-                self._serialize_account_membership(membership) for membership in memberships
+                service._serialize_account_membership(membership)
+                for membership in memberships
             ],
             "site_keys": [self._serialize_site_key(item) for item in keys],
             "subscription": (
-                self._serialize_subscription(subscription) if subscription is not None else None
+                service._serialize_subscription(subscription) if subscription is not None else None
             ),
-            "coverage": self._build_subscription_coverage_summary(
+            "coverage": service._build_subscription_coverage_summary(
                 subscription,
                 site_count=site_count,
                 site_limit=int(getattr(snapshot, "site_limit", 0) or 0),
@@ -1122,7 +1132,7 @@ class CommercialServiceSiteMixin(CommercialServiceAuditMixin):
         subscriptions: list[AccountSubscription],
         sites: list[Site],
     ) -> dict[str, AccountSubscription]:
-        latest_by_account = self._latest_subscription_map(subscriptions)
+        latest_by_account = cast(Any, self)._latest_subscription_map(subscriptions)
         return {
             site.site_id: latest_by_account[site.account_id]
             for site in sites
@@ -1152,7 +1162,7 @@ class CommercialServiceSiteMixin(CommercialServiceAuditMixin):
             resolved = self._coerce_int(source)
             if resolved > 0:
                 return resolved
-        tier_id = self._infer_plan_tier_id(
+        tier_id = cast(Any, self)._infer_plan_tier_id(
             {
                 "plan_id": str(getattr(subscription, "plan_id", "") or ""),
                 "metadata": getattr(subscription, "metadata_json", None) or {},
@@ -1160,4 +1170,4 @@ class CommercialServiceSiteMixin(CommercialServiceAuditMixin):
             [],
         )
         baseline = PLAN_TIER_REGISTRY.get(tier_id, PLAN_TIER_REGISTRY[DEFAULT_PLAN_TIER_ID])
-        return max(1, int(baseline.get("site_limit") or 1))
+        return max(1, self._coerce_int(baseline.get("site_limit")) or 1)

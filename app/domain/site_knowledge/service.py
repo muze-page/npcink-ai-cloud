@@ -265,11 +265,9 @@ class SiteKnowledgeService:
                 failed_documents += 1
                 processed_documents += 1
                 continue
-            document_truncated = bool(normalized.get("content_truncated")) or any(
-                bool((chunk.get("metadata") or {}).get("chunk_limit_truncated"))
-                for chunk in chunks
-                if isinstance(chunk.get("metadata"), dict)
-            )
+            document_truncated = bool(
+                normalized.get("content_truncated")
+            ) or _chunks_include_limit_truncation(chunks)
             if document_truncated:
                 truncated_documents += 1
             self._emit_sync_progress(
@@ -325,14 +323,14 @@ class SiteKnowledgeService:
                 run_id=run_id,
                 metadata={
                     "content_truncated": bool(normalized.get("content_truncated")),
-                    "chunk_limit_truncated": any(
-                        bool((chunk.get("metadata") or {}).get("chunk_limit_truncated"))
-                        for chunk in chunks
-                        if isinstance(chunk.get("metadata"), dict)
-                    ),
+                    "chunk_limit_truncated": _chunks_include_limit_truncation(chunks),
                     "truncated": document_truncated,
-                    "source_content_chars": int(normalized.get("source_content_chars") or 0),
-                    "indexed_content_chars": int(normalized.get("indexed_content_chars") or 0),
+                    "source_content_chars": _coerce_int(
+                        normalized.get("source_content_chars"), default=0
+                    ),
+                    "indexed_content_chars": _coerce_int(
+                        normalized.get("indexed_content_chars"), default=0
+                    ),
                     "max_content_chars": MAX_DOCUMENT_CONTENT_CHARS,
                     "chunk_count": len(chunks),
                     "max_chunks": MAX_CHUNKS_PER_DOCUMENT,
@@ -1218,11 +1216,19 @@ def _rank_search_results_for_query(
         results,
         key=lambda result: (
             0 if bool(result.get("exact_query_match")) else 1,
-            -int(result.get("match_count") or 0),
+            -_coerce_int(result.get("match_count"), default=0),
             -_coerce_float(result.get("score"), default=0.0),
             _coerce_int(result.get("post_id"), default=0),
         ),
     )
+
+
+def _chunks_include_limit_truncation(chunks: list[dict[str, object]]) -> bool:
+    for chunk in chunks:
+        metadata = chunk.get("metadata")
+        if isinstance(metadata, dict) and bool(metadata.get("chunk_limit_truncated")):
+            return True
+    return False
 
 
 def _substring_positions(text: str, needle: str) -> list[int]:

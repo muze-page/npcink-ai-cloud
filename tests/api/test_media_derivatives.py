@@ -21,7 +21,13 @@ from app.core.models import (
 from app.core.services import CloudServices
 from app.domain.media_derivatives.contracts import BLOCKED_RESPONSE_FIELDS, MAX_UPLOAD_BYTES_IMAGE
 from app.domain.runtime.service import RuntimeService
-from tests.conftest import build_auth_headers, seed_site_auth
+from tests.conftest import (
+    TEST_ADMIN_SESSION_SECRET,
+    TEST_INTERNAL_AUTH_TOKEN,
+    TEST_PORTAL_JWT_SECRET,
+    build_auth_headers,
+    seed_site_auth,
+)
 
 
 def _sqlite_url(tmp_path: Path) -> str:
@@ -32,6 +38,7 @@ def _build_client(
     tmp_path: Path,
     *,
     runtime_queue: InMemoryRuntimeQueue | None = None,
+    settings_overrides: dict[str, object] | None = None,
 ) -> tuple[str, TestClient]:
     database_url = _sqlite_url(tmp_path)
     init_schema(database_url)
@@ -51,6 +58,10 @@ def _build_client(
         environment="test",
         database_url=database_url,
         redis_url="redis://localhost:6379/0",
+        internal_auth_token=TEST_INTERNAL_AUTH_TOKEN,
+        admin_session_secret=TEST_ADMIN_SESSION_SECRET,
+        portal_jwt_secret=TEST_PORTAL_JWT_SECRET,
+        **(settings_overrides or {}),
     )
     return database_url, TestClient(
         create_app(
@@ -127,6 +138,9 @@ def _process_queued_runs(database_url: str) -> None:
             environment="test",
             database_url=database_url,
             redis_url="redis://localhost:6379/0",
+            internal_auth_token=TEST_INTERNAL_AUTH_TOKEN,
+            admin_session_secret=TEST_ADMIN_SESSION_SECRET,
+            portal_jwt_secret=TEST_PORTAL_JWT_SECRET,
         ),
     )
     service.process_queued_runs(max_runs=10, timeout_seconds=0)
@@ -236,6 +250,176 @@ def test_response_contains_no_wordpress_write_fields(tmp_path: Path) -> None:
         dispose_engine(database_url)
 
 
+def test_batch_context_response_includes_queue_pressure_and_policy(
+    tmp_path: Path,
+) -> None:
+    database_url, client = _build_client(
+        tmp_path,
+        settings_overrides={
+            "media_derivative_batch_default_chunk_size": 6,
+            "media_derivative_batch_max_chunk_size": 12,
+            "media_derivative_site_queued_limit": 20,
+            "media_derivative_site_running_limit": 2,
+        },
+    )
+    try:
+        request_dict = {
+            "request_contract_version": "media_derivative_cloud_request.v1",
+            "cloud_job_payload": {
+                "job_type": "generate_optimized_media_derivative",
+                "target_format": "webp",
+                "max_width": 100,
+                "quality": 80,
+                "source_media_type": "image",
+            },
+            "batch_context": {
+                "batch_id": "batch-april-media",
+                "item_index": 1,
+                "item_count": 12,
+                "chunk_size": 6,
+            },
+        }
+        body, content_type = _build_multipart_body(
+            request_dict,
+            _make_png_bytes(100, 100),
+            boundary="boundary-batch-context",
+        )
+        headers = build_auth_headers(
+            "POST",
+            "/v1/runtime/media-derivatives",
+            site_id="site_alpha",
+            body=body,
+            idempotency_key="idem-batch-context-001",
+            nonce="nonce-batch-context-001",
+        )
+        headers["content-type"] = content_type
+        response = client.post("/v1/runtime/media-derivatives", content=body, headers=headers)
+        assert response.status_code == 200, response.json()
+        data = response.json()["data"]
+        assert data["batch"]["context"]["batch_id"] == "batch-april-media"
+        assert data["batch"]["chunking"]["recommended_chunk_size"] == 6
+        assert data["batch"]["chunking"]["max_chunk_size"] == 12
+        assert data["batch"]["avif_policy"]["batch_requires_explicit_opt_in"] is True
+        assert data["queue_pressure"]["queued"] == 1
+        assert data["queue_pressure"]["running"] == 0
+        assert data["queue_pressure"]["pressure_state"] == "healthy"
+        with get_session(database_url) as session:
+            run = session.get(RunRecord, data["run_id"])
+            assert run is not None
+            media_policy = run.policy_json["media_derivative"]
+            assert media_policy["batch_context"]["batch_id"] == "batch-april-media"
+            assert media_policy["limits"]["site_queued"] == 20
+            assert media_policy["write_posture"] == "artifact_only"
+            assert media_policy["direct_wordpress_write"] is False
+    finally:
+        dispose_engine(database_url)
+
+
+def test_batch_avif_requires_explicit_opt_in(tmp_path: Path) -> None:
+    database_url, client = _build_client(tmp_path)
+    try:
+        request_dict = {
+            "request_contract_version": "media_derivative_cloud_request.v1",
+            "cloud_job_payload": {
+                "job_type": "generate_optimized_media_derivative",
+                "target_format": "avif",
+                "max_width": 100,
+                "quality": 80,
+                "source_media_type": "image",
+            },
+            "batch_context": {
+                "batch_id": "batch-avif-media",
+                "item_index": 1,
+                "item_count": 2,
+                "chunk_size": 2,
+            },
+        }
+        body, content_type = _build_multipart_body(
+            request_dict,
+            _make_png_bytes(100, 100),
+            boundary="boundary-batch-avif",
+        )
+        headers = build_auth_headers(
+            "POST",
+            "/v1/runtime/media-derivatives",
+            site_id="site_alpha",
+            body=body,
+            idempotency_key="idem-batch-avif-001",
+            nonce="nonce-batch-avif-001",
+        )
+        headers["content-type"] = content_type
+        response = client.post("/v1/runtime/media-derivatives", content=body, headers=headers)
+        assert response.status_code == 422
+        assert response.json()["error_code"] == "media_derivative.invalid_format"
+    finally:
+        dispose_engine(database_url)
+
+
+def test_site_queue_full_rejects_new_media_derivative(tmp_path: Path) -> None:
+    database_url, client = _build_client(
+        tmp_path,
+        settings_overrides={
+            "media_derivative_site_queued_limit": 1,
+            "media_derivative_site_running_limit": 1,
+        },
+    )
+    try:
+        request_dict = {
+            "request_contract_version": "media_derivative_cloud_request.v1",
+            "cloud_job_payload": {
+                "job_type": "generate_optimized_media_derivative",
+                "target_format": "webp",
+                "max_width": 100,
+                "quality": 80,
+                "source_media_type": "image",
+            },
+        }
+        first_body, first_content_type = _build_multipart_body(
+            request_dict,
+            _make_png_bytes(100, 100),
+            boundary="boundary-queue-full-first",
+        )
+        first_headers = build_auth_headers(
+            "POST",
+            "/v1/runtime/media-derivatives",
+            site_id="site_alpha",
+            body=first_body,
+            idempotency_key="idem-queue-full-001",
+            nonce="nonce-queue-full-001",
+        )
+        first_headers["content-type"] = first_content_type
+        first_response = client.post(
+            "/v1/runtime/media-derivatives",
+            content=first_body,
+            headers=first_headers,
+        )
+        assert first_response.status_code == 200, first_response.json()
+
+        second_body, second_content_type = _build_multipart_body(
+            request_dict,
+            _make_png_bytes(100, 100),
+            boundary="boundary-queue-full-second",
+        )
+        second_headers = build_auth_headers(
+            "POST",
+            "/v1/runtime/media-derivatives",
+            site_id="site_alpha",
+            body=second_body,
+            idempotency_key="idem-queue-full-002",
+            nonce="nonce-queue-full-002",
+        )
+        second_headers["content-type"] = second_content_type
+        second_response = client.post(
+            "/v1/runtime/media-derivatives",
+            content=second_body,
+            headers=second_headers,
+        )
+        assert second_response.status_code == 429
+        assert second_response.json()["error_code"] == "media_derivative.site_queue_full"
+    finally:
+        dispose_engine(database_url)
+
+
 def test_watermark_file_success_path(tmp_path: Path) -> None:
     database_url, client = _build_client(tmp_path)
     try:
@@ -307,6 +491,84 @@ def test_watermark_file_success_path(tmp_path: Path) -> None:
             assert metric.watermark_applied is True
             assert metric.artifact_download_count == 1
             assert metric.artifact_last_downloaded_at is not None
+    finally:
+        dispose_engine(database_url)
+
+
+def test_text_watermark_success_path_without_watermark_artifact(tmp_path: Path) -> None:
+    database_url, client = _build_client(tmp_path)
+    try:
+        image_bytes = _make_png_bytes(100, 100, color="white")
+        request_dict = {
+            "request_contract_version": "media_derivative_cloud_request.v1",
+            "cloud_job_payload": {
+                "job_type": "generate_optimized_media_derivative",
+                "target_format": "png",
+                "max_width": 100,
+                "quality": 80,
+                "source_media_type": "image",
+                "watermark": {
+                    "type": "text",
+                    "text": "AI",
+                    "position": "top_right",
+                    "opacity": 1.0,
+                    "font_size": 24,
+                    "color": "#000000",
+                    "background": "transparent",
+                    "margin_px": 0,
+                },
+            },
+        }
+        body, content_type = _build_multipart_body(
+            request_dict,
+            image_bytes,
+            boundary="boundary-text-watermark",
+        )
+        headers = build_auth_headers(
+            "POST",
+            "/v1/runtime/media-derivatives",
+            site_id="site_alpha",
+            body=body,
+            idempotency_key="idem-text-watermark-001",
+            nonce="nonce-text-watermark-001",
+        )
+        headers["content-type"] = content_type
+        response = client.post("/v1/runtime/media-derivatives", content=body, headers=headers)
+        assert response.status_code == 200, response.json()
+        run_id = response.json()["data"]["run_id"]
+
+        _process_queued_runs(database_url)
+
+        result_headers = build_auth_headers(
+            "GET",
+            f"/v1/runs/{run_id}/result",
+            site_id="site_alpha",
+        )
+        result_response = client.get(f"/v1/runs/{run_id}/result", headers=result_headers)
+        assert result_response.status_code == 200, result_response.json()
+        artifact = result_response.json()["data"]["result"]["artifact"]
+        artifact_id = artifact["artifact_id"]
+
+        dl_headers = build_auth_headers(
+            "GET",
+            f"/v1/runtime/artifacts/{artifact_id}/download",
+            site_id="site_alpha",
+        )
+        dl_response = client.get(
+            f"/v1/runtime/artifacts/{artifact_id}/download",
+            headers=dl_headers,
+        )
+        assert dl_response.status_code == 200
+        watermarked = Image.open(io.BytesIO(dl_response.content)).convert("RGB")
+        top_right_pixels = [
+            watermarked.getpixel((x, y))
+            for x in range(50, 100)
+            for y in range(0, 40)
+        ]
+        assert any(pixel != (255, 255, 255) for pixel in top_right_pixels)
+        with get_session(database_url) as session:
+            metric = session.query(MediaDerivativeJobMetric).filter_by(run_id=run_id).one()
+            assert metric.watermark_applied is True
     finally:
         dispose_engine(database_url)
 

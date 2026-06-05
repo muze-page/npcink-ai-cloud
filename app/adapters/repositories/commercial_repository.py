@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from typing import Any, cast
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
+from sqlalchemy.sql.elements import ColumnElement
 
 from app.core.models import (
     ACCOUNT_MEMBERSHIP_STATUS_ACTIVE,
@@ -26,6 +28,8 @@ from app.core.models import (
     SiteApiKey,
     UsageMeterEvent,
 )
+
+type SQLAFilter = ColumnElement[bool]
 
 
 class CommercialRepository:
@@ -482,7 +486,7 @@ class CommercialRepository:
             )
             .order_by(Site.created_at.desc(), Site.site_id.asc())
         )
-        return list(self.session.execute(statement).all())
+        return [(site, membership) for site, membership in self.session.execute(statement).all()]
 
     def upsert_site(
         self,
@@ -1265,16 +1269,19 @@ class CommercialRepository:
     ) -> int:
         return int(
             self.session.scalar(
-                select(func.count())
-                .select_from(ServiceAuditEvent)
-                .where(
-                    *self._service_audit_filters(
-                        site_id=site_id,
-                        account_id=account_id,
-                        event_kind=event_kind,
-                        outcome=outcome,
-                        since=since,
-                    )
+                cast(
+                    Any,
+                    select(func.count())
+                    .select_from(ServiceAuditEvent)
+                    .where(
+                        *self._service_audit_filters(
+                            site_id=site_id,
+                            account_id=account_id,
+                            event_kind=event_kind,
+                            outcome=outcome,
+                            since=since,
+                        )
+                    ),
                 )
             )
             or 0
@@ -1412,17 +1419,20 @@ class CommercialRepository:
     ) -> int:
         return int(
             self.session.scalar(
-                select(func.count())
-                .select_from(CommercialDecisionEvent)
-                .where(
-                    *self._commercial_decision_filters(
-                        site_id=site_id,
-                        subscription_id=subscription_id,
-                        decision=decision,
-                        decision_code=decision_code,
-                        request_kind=request_kind,
-                        since=since,
-                    )
+                cast(
+                    Any,
+                    select(func.count())
+                    .select_from(CommercialDecisionEvent)
+                    .where(
+                        *self._commercial_decision_filters(
+                            site_id=site_id,
+                            subscription_id=subscription_id,
+                            decision=decision,
+                            decision_code=decision_code,
+                            request_kind=request_kind,
+                            since=since,
+                        )
+                    ),
                 )
             )
             or 0
@@ -1536,8 +1546,8 @@ class CommercialRepository:
         event_kind: str | None = None,
         outcome: str | None = None,
         since: datetime | None = None,
-    ) -> list[object]:
-        filters: list[object] = []
+    ) -> list[SQLAFilter]:
+        filters: list[SQLAFilter] = []
         if site_id:
             filters.append(ServiceAuditEvent.site_id == site_id)
         if account_id:
@@ -1559,8 +1569,8 @@ class CommercialRepository:
         decision_code: str | None = None,
         request_kind: str | None = None,
         since: datetime | None = None,
-    ) -> list[object]:
-        filters: list[object] = []
+    ) -> list[SQLAFilter]:
+        filters: list[SQLAFilter] = []
         if site_id:
             filters.append(CommercialDecisionEvent.site_id == site_id)
         if subscription_id:

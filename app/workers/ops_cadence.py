@@ -4,6 +4,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from typing import Any, cast
 
 from app.adapters.providers.registry import resolve_live_provider_adapters
 from app.core.config import Settings, get_settings
@@ -21,6 +22,19 @@ from app.workers.router_diagnostics_summary import run_once as run_router_diagno
 
 CADENCE_SCOPE_KIND = "ops_cadence"
 CADENCE_SCOPE_ID = "managed"
+
+
+def _coerce_int(value: object, default: int = 0) -> int:
+    try:
+        return int(cast(Any, value))
+    except (TypeError, ValueError):
+        return default
+
+
+def _dict_value(value: object) -> dict[str, object]:
+    if not isinstance(value, dict):
+        return {}
+    return {str(key): item for key, item in value.items()}
 
 
 @dataclass(frozen=True)
@@ -48,10 +62,10 @@ def _run_plugin_observability_cleanup(settings: Settings) -> dict[str, object]:
 def _run_usage_rollup(settings: Settings) -> dict[str, object]:
     result = UsageRollupService(settings.database_url).generate_rollups()
     return {
-        "rollups_total": int(result.get("rollups_total") or 0),
-        "sites_total": int(result.get("sites_total") or 0),
-        "profile_rollups_total": int(result.get("profile_rollups_total") or 0),
-        "instance_rollups_total": int(result.get("instance_rollups_total") or 0),
+        "rollups_total": _coerce_int(result.get("rollups_total")),
+        "sites_total": _coerce_int(result.get("sites_total")),
+        "profile_rollups_total": _coerce_int(result.get("profile_rollups_total")),
+        "instance_rollups_total": _coerce_int(result.get("instance_rollups_total")),
     }
 
 
@@ -246,11 +260,7 @@ def build_cadence_summary(
         else:
             freshness = "fresh"
 
-        last_error_payload = (
-            (last_error or {}).get("payload")
-            if isinstance((last_error or {}).get("payload"), dict)
-            else {}
-        )
+        last_error_payload = _dict_value(_dict_value(last_error).get("payload"))
         last_error_at_value = str((last_error or {}).get("created_at") or "")
         last_error_message = str(last_error_payload.get("message") or "")
         last_error_code = str(last_error_payload.get("error_code") or "")
@@ -320,7 +330,7 @@ def run_due_tasks(
                 scope_id=spec.task_id,
                 payload_json=payload,
             )
-            result = {
+            result: dict[str, object] = {
                 "task_id": spec.task_id,
                 "event_kind": spec.event_kind,
                 "outcome": "succeeded",
@@ -342,13 +352,13 @@ def run_due_tasks(
                 scope_id=spec.task_id,
                 payload_json=payload,
             )
-            result = {
+            error_result: dict[str, object] = {
                 "task_id": spec.task_id,
                 "event_kind": spec.event_kind,
                 "outcome": "error",
                 "payload": payload,
             }
-            results.append(result)
+            results.append(error_result)
             logger.exception("ops cadence task failed: task_id=%s", spec.task_id)
 
     return results

@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, cast
 
 from sqlalchemy import case, delete, desc, func, select
+from sqlalchemy.sql.elements import ColumnElement
 
 from app.core.db import get_session
 from app.core.models import (
@@ -59,6 +61,8 @@ ATTENTION_STATE_ACTIONS = {
     "mute": "muted",
     "resolve": "resolved",
 }
+
+type SQLAFilter = ColumnElement[bool]
 
 
 class PluginObservabilityService:
@@ -144,7 +148,7 @@ class PluginObservabilityService:
         start_at = current_time - timedelta(hours=bounded_hours)
 
         with get_session(self.database_url) as session:
-            base_conditions = [
+            base_conditions: list[SQLAFilter] = [
                 PluginObservabilityEvent.site_id == site_id,
                 PluginObservabilityEvent.received_at >= start_at,
                 PluginObservabilityEvent.received_at <= current_time,
@@ -312,7 +316,7 @@ class PluginObservabilityService:
             session.commit()
 
         return {
-            "purged_events": int(result.rowcount or 0),
+            "purged_events": self._rowcount(result),
             "retention_days": bounded_days,
             "cutoff_at": self._format_datetime(cutoff_at),
         }
@@ -330,7 +334,7 @@ class PluginObservabilityService:
         start_at = current_time - timedelta(hours=bounded_hours)
 
         with get_session(self.database_url) as session:
-            base_conditions = [
+            base_conditions: list[SQLAFilter] = [
                 PluginObservabilityEvent.received_at >= start_at,
                 PluginObservabilityEvent.received_at <= current_time,
             ]
@@ -480,27 +484,27 @@ class PluginObservabilityService:
         for row in site_rows:
             site_events_total = int(row[1] or 0)
             site_error_total = int(row[2] or 0)
-            site_summary = {
+            site_summary: dict[str, object] = {
                 "site_id": str(row[0] or ""),
                 "events_total": site_events_total,
                 "error_total": site_error_total,
                 "ok_total": max(0, site_events_total - site_error_total),
                 "success_rate": self._success_rate(site_events_total, site_error_total),
                 "avg_latency_ms": self._optional_avg(row[3]),
-                "plugin_count": int(row[4] or 0),
+                "plugin_count": self._coerce_int(row[4]),
                 "last_seen_at": self._format_datetime(row[5]),
             }
             site_summary["health"] = self._build_health(
                 events_total=site_events_total,
                 error_total=site_error_total,
-                avg_latency_ms=int(site_summary["avg_latency_ms"]),
+                avg_latency_ms=self._coerce_int(site_summary.get("avg_latency_ms")),
                 last_seen_at=str(site_summary["last_seen_at"]),
                 current_time=current_time,
                 window_hours=bounded_hours,
             )
             sites.append(site_summary)
 
-        errors = []
+        errors: list[dict[str, object]] = []
         for row in error_rows:
             errors.append({
                 "site_id": str(row[0] or "") or None,
@@ -518,8 +522,8 @@ class PluginObservabilityService:
             "success_rate": self._success_rate(events_total, error_total),
             "avg_latency_ms": self._optional_avg(totals_row[2]),
             "last_seen_at": self._format_datetime(totals_row[3]),
-            "active_site_count": int(active_site_count),
-            "active_plugin_count": int(active_plugin_count),
+            "active_site_count": self._coerce_int(active_site_count),
+            "active_plugin_count": self._coerce_int(active_plugin_count),
         }
         health, attention = self._build_health_and_attention(
             totals=totals,
@@ -722,9 +726,38 @@ class PluginObservabilityService:
         if value is None or value == "":
             return None
         try:
-            return int(value)
+            return int(cast(Any, value))
         except (TypeError, ValueError):
             return None
+
+    def _coerce_int(self, value: object, default: int = 0) -> int:
+        try:
+            return int(cast(Any, value))
+        except (TypeError, ValueError):
+            return default
+
+    def _coerce_float(self, value: object, default: float = 0.0) -> float:
+        try:
+            return float(cast(Any, value))
+        except (TypeError, ValueError):
+            return default
+
+    def _dict_items(self, value: object) -> list[dict[str, object]]:
+        if not isinstance(value, list):
+            return []
+        return [
+            {str(key): item for key, item in candidate.items()}
+            for candidate in value
+            if isinstance(candidate, dict)
+        ]
+
+    def _string_list(self, value: object) -> list[str]:
+        if not isinstance(value, list):
+            return []
+        return [str(item).strip() for item in value if str(item).strip()]
+
+    def _rowcount(self, result: object) -> int:
+        return self._coerce_int(getattr(result, "rowcount", 0))
 
     def _is_safe_scalar(self, value: object) -> bool:
         return value is None or isinstance(value, str | int | float | bool)
@@ -743,8 +776,8 @@ class PluginObservabilityService:
 
     def _build_plugin_summary(
         self,
-        plugin_rows: list[object],
-        event_kind_rows: list[object],
+        plugin_rows: Sequence[object],
+        event_kind_rows: Sequence[object],
     ) -> list[dict[str, object]]:
         events_by_plugin: dict[str, list[dict[str, object]]] = {}
         for row in event_kind_rows:
@@ -785,7 +818,7 @@ class PluginObservabilityService:
         self,
         session: object,
         *,
-        base_conditions: list[object],
+        base_conditions: Sequence[SQLAFilter],
         start_at: datetime,
         end_at: datetime,
     ) -> list[dict[str, object]]:
@@ -827,8 +860,8 @@ class PluginObservabilityService:
             if bucket not in buckets:
                 continue
             item = buckets[bucket]
-            events_total = int(item["events_total"]) + 1
-            error_total = int(item["error_total"]) + (
+            events_total = self._coerce_int(item.get("events_total")) + 1
+            error_total = self._coerce_int(item.get("error_total")) + (
                 1 if str(status or "") == "error" else 0
             )
             item["events_total"] = events_total
@@ -836,10 +869,15 @@ class PluginObservabilityService:
             item["ok_total"] = max(0, events_total - error_total)
             item["success_rate"] = self._success_rate(events_total, error_total)
             if latency_ms is not None:
-                item["_latency_total"] = int(item["_latency_total"]) + int(latency_ms)
-                item["_latency_count"] = int(item["_latency_count"]) + 1
+                item["_latency_total"] = self._coerce_int(
+                    item.get("_latency_total")
+                ) + self._coerce_int(latency_ms)
+                item["_latency_count"] = self._coerce_int(
+                    item.get("_latency_count")
+                ) + 1
                 item["avg_latency_ms"] = self._optional_avg(
-                    int(item["_latency_total"]) / int(item["_latency_count"])
+                    self._coerce_int(item.get("_latency_total"))
+                    / self._coerce_int(item.get("_latency_count"), default=1)
                 )
 
         timeline = []
@@ -990,19 +1028,19 @@ class PluginObservabilityService:
         attention_workflow: dict[str, object],
         window_hours: int,
     ) -> dict[str, object]:
-        events_total = int(totals.get("events_total") or 0)
-        error_total = int(totals.get("error_total") or 0)
-        success_rate = float(totals.get("success_rate") or 0)
-        needs_attention = int(attention_workflow.get("needs_attention") or 0)
+        events_total = self._coerce_int(totals.get("events_total"))
+        error_total = self._coerce_int(totals.get("error_total"))
+        success_rate = self._coerce_float(totals.get("success_rate"))
+        needs_attention = self._coerce_int(attention_workflow.get("needs_attention"))
         period_label = "weekly" if window_hours >= 168 else "daily"
         top_plugin_candidate = max(
             plugins,
-            key=lambda item: int(item.get("error_total") or 0),
+            key=lambda item: self._coerce_int(item.get("error_total")),
             default={},
         )
         top_plugin = (
             top_plugin_candidate
-            if int(top_plugin_candidate.get("error_total") or 0) > 0
+            if self._coerce_int(top_plugin_candidate.get("error_total")) > 0
             else {}
         )
         top_error = errors[0] if errors else {}
@@ -1061,9 +1099,9 @@ class PluginObservabilityService:
         site_id: str = "",
     ) -> tuple[dict[str, object], list[dict[str, object]]]:
         health = self._build_health(
-            events_total=int(totals.get("events_total") or 0),
-            error_total=int(totals.get("error_total") or 0),
-            avg_latency_ms=int(totals.get("avg_latency_ms") or 0),
+            events_total=self._coerce_int(totals.get("events_total")),
+            error_total=self._coerce_int(totals.get("error_total")),
+            avg_latency_ms=self._coerce_int(totals.get("avg_latency_ms")),
             last_seen_at=str(totals.get("last_seen_at") or ""),
             current_time=current_time,
             window_hours=window_hours,
@@ -1084,8 +1122,8 @@ class PluginObservabilityService:
             )
             return health, attention
 
-        events_total = int(totals.get("events_total") or 0)
-        error_total = int(totals.get("error_total") or 0)
+        events_total = self._coerce_int(totals.get("events_total"))
+        error_total = self._coerce_int(totals.get("error_total"))
         error_rate = error_total / events_total if events_total > 0 else 0.0
         if error_rate >= ERROR_RATE_HIGH_THRESHOLD:
             attention.append(
@@ -1112,7 +1150,7 @@ class PluginObservabilityService:
                 )
             )
 
-        avg_latency_ms = int(totals.get("avg_latency_ms") or 0)
+        avg_latency_ms = self._coerce_int(totals.get("avg_latency_ms"))
         if avg_latency_ms >= LATENCY_WARNING_MS:
             attention.append(
                 self._attention_item(
@@ -1143,8 +1181,8 @@ class PluginObservabilityService:
             )
 
         for plugin in plugins:
-            plugin_events_total = int(plugin.get("events_total") or 0)
-            plugin_error_total = int(plugin.get("error_total") or 0)
+            plugin_events_total = self._coerce_int(plugin.get("events_total"))
+            plugin_error_total = self._coerce_int(plugin.get("error_total"))
             if plugin_events_total <= 0 or plugin_error_total <= 0:
                 continue
             plugin_error_rate = plugin_error_total / plugin_events_total
@@ -1167,13 +1205,11 @@ class PluginObservabilityService:
                 )
             )
 
-            for event_kind in list(plugin.get("event_kinds") or []):
-                if not isinstance(event_kind, dict):
-                    continue
+            for event_kind in self._dict_items(plugin.get("event_kinds")):
                 if (
                     str(event_kind.get("event_kind") or "")
                     == "abilities.catalog.changed"
-                    and int(event_kind.get("events_total") or 0)
+                    and self._coerce_int(event_kind.get("events_total"))
                     >= CATALOG_CHURN_THRESHOLD
                 ):
                     attention.append(
@@ -1297,8 +1333,8 @@ class PluginObservabilityService:
     ) -> dict[str, object]:
         if health.get("status") == "inactive":
             return health
-        reasons = list(health.get("reasons") or [])
-        score = int(health.get("score") or 0)
+        reasons = self._string_list(health.get("reasons"))
+        score = self._coerce_int(health.get("score"))
         has_error = False
         has_warning = False
         for item in attention:
@@ -1371,7 +1407,7 @@ class PluginObservabilityService:
             event_kind=event_kind,
             error_code=error_code,
         )
-        item = {
+        item: dict[str, object] = {
             "attention_key": attention_key,
             "severity": severity,
             "code": code,
@@ -1425,7 +1461,7 @@ class PluginObservabilityService:
     def _optional_avg(self, value: object) -> int:
         if value is None:
             return 0
-        return int(round(float(value)))
+        return int(round(self._coerce_float(value)))
 
     def _format_datetime(self, value: object) -> str:
         if not isinstance(value, datetime):

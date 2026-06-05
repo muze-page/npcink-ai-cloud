@@ -28,7 +28,14 @@ def _build_client(tmp_path: Path) -> tuple[str, TestClient]:
     return database_url, TestClient(create_app(CloudServices(settings=settings)))
 
 
-def _run_record(run_id: str, site_id: str, *, status: str, now: datetime) -> RunRecord:
+def _run_record(
+    run_id: str,
+    site_id: str,
+    *,
+    status: str,
+    now: datetime,
+    policy_json: dict[str, object] | None = None,
+) -> RunRecord:
     return RunRecord(
         run_id=run_id,
         site_id=site_id,
@@ -53,7 +60,7 @@ def _run_record(run_id: str, site_id: str, *, status: str, now: datetime) -> Run
         trace_id=f"trace-{run_id}",
         input_json={},
         execution_input_ciphertext=None,
-        policy_json={},
+        policy_json=policy_json or {},
         selected_provider_id="media_derivative",
         selected_model_id="pillow",
         selected_instance_id="cloud-worker",
@@ -69,7 +76,26 @@ def _seed_media_metrics(database_url: str) -> None:
     with get_session(database_url) as session:
         session.add_all(
             [
-                _run_record("run-media-001", "site-media-001", status="succeeded", now=now),
+                _run_record(
+                    "run-media-001",
+                    "site-media-001",
+                    status="succeeded",
+                    now=now,
+                    policy_json={
+                        "media_derivative": {
+                            "target_format": "webp",
+                            "batch_context": {
+                                "batch_id": "batch-media-001",
+                                "item_index": 1,
+                                "item_count": 3,
+                                "chunk_size": 2,
+                                "explicit_avif": False,
+                            },
+                            "write_posture": "artifact_only",
+                            "direct_wordpress_write": False,
+                        }
+                    },
+                ),
                 _run_record("run-media-002", "site-media-001", status="failed", now=now),
                 _run_record("run-media-003", "site-media-002", status="succeeded", now=now),
             ]
@@ -215,6 +241,12 @@ def test_admin_media_observability_returns_cross_site_summary(tmp_path: Path) ->
         assert data["totals"]["active_site_count"] == 2
         assert data["totals"]["active_artifact_bytes"] == 1200
         assert data["health"]["status"] in {"ok", "warning", "error"}
+        assert data["queue"]["queued_total"] == 0
+        assert data["queue"]["running_total"] == 0
+        assert data["queue"]["limits"]["site_queued"] == 100
+        assert data["batch"]["active_or_recent_batch_count"] == 1
+        assert data["batch"]["items"][0]["batch_id"] == "batch-media-001"
+        assert data["batch"]["items"][0]["succeeded"] == 1
         assert sum(item["jobs_total"] for item in data["timeline"]) == 3
         assert {item["target_format"] for item in data["formats"]} == {"webp", "jpeg"}
         assert len(data["sites"]) == 2

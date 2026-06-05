@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from collections import Counter, defaultdict
 from datetime import UTC, datetime, timedelta
+from typing import Any, cast
 from uuid import uuid4
 
 from app.adapters.repositories.commercial_repository import CommercialRepository
@@ -26,6 +27,7 @@ from app.domain.commercial.errors import (
 from app.domain.commercial.mixins._audit_mixin import (
     IDENTITY_TYPE_PLATFORM_ADMIN,
     IDENTITY_TYPE_USER_ADMIN,
+    CommercialServiceAuditMixin,
     ServiceAuditContext,
     _canonicalize_platform_admin_role_for_write,
     _platform_capability_flags,
@@ -36,7 +38,8 @@ from app.domain.commercial.mixins._billing_mixin import (
     SHADOW_PRICING_TARIFF_VERSION,
 )
 
-class CommercialServiceAdminMixin:
+
+class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
 
     def upsert_platform_admin_identity(
         self,
@@ -73,7 +76,7 @@ class CommercialServiceAdminMixin:
                 status=normalized_status,
                 metadata_json=metadata_json,
             )
-            payload = self._serialize_platform_admin_identity(identity)
+            payload = cast(Any, self)._serialize_platform_admin_identity(identity)
             self._record_service_audit_in_session(
                 repository=repository,
                 audit_context=audit_context,
@@ -129,7 +132,7 @@ class CommercialServiceAdminMixin:
                     "service.platform_admin_disabled",
                     f"platform admin '{normalized_admin_ref}' is disabled",
                 )
-            return self._serialize_platform_admin_identity(identity)
+            return cast(Any, self)._serialize_platform_admin_identity(identity)
 
 
     def delete_platform_admin_identity(
@@ -152,7 +155,7 @@ class CommercialServiceAdminMixin:
                     "service.platform_admin_not_found",
                     f"platform admin '{normalized_admin_ref}' was not found",
                 )
-            payload = self._serialize_platform_admin_identity(identity)
+            payload = cast(Any, self)._serialize_platform_admin_identity(identity)
             repository.delete_platform_admin_identity(admin_ref=normalized_admin_ref)
             self._record_service_audit_in_session(
                 repository=repository,
@@ -225,15 +228,15 @@ class CommercialServiceAdminMixin:
                 None,
             )
             matched_sites = [
-                self._serialize_site(site)
+                cast(Any, self)._serialize_site(site)
                 for site in sites
                 if site.account_id == subscription.account_id
             ]
             return {
-                "subscription": self._serialize_subscription(subscription),
-                "expiry": self._serialize_expiry_state(subscription),
+                "subscription": cast(Any, self)._serialize_subscription(subscription),
+                "expiry": cast(Any, self)._serialize_expiry_state(subscription),
                 "account": (
-                    self._serialize_account(matched_account)
+                    cast(Any, self)._serialize_account(matched_account)
                     if matched_account is not None
                     else None
                 ),
@@ -247,22 +250,26 @@ class CommercialServiceAdminMixin:
                 return value.replace(tzinfo=UTC)
             return value
 
+        def _expires_within_attention_window(subscription: AccountSubscription) -> bool:
+            expires_at = _normalize_overview_datetime(subscription.current_period_end_at)
+            return (
+                subscription.status in active_subscription_statuses
+                and expires_at is not None
+                and expires_at <= now + timedelta(days=30)
+            )
+
         plan_counts = Counter(subscription.plan_id for subscription in subscriptions if subscription.plan_id)
         status_counts = Counter(
             subscription.status for subscription in subscriptions if subscription.status
         )
-        usage_totals = self._aggregate_meter_events(usage_events)
+        usage_totals = cast(Any, self)._aggregate_meter_events(usage_events)
         expiring_subscription_items = [
             _serialize_overview_subscription(subscription)
             for subscription in sorted(
                 [
                     subscription
                     for subscription in subscriptions
-                    if subscription.status in active_subscription_statuses
-                    and _normalize_overview_datetime(subscription.current_period_end_at)
-                    is not None
-                    and _normalize_overview_datetime(subscription.current_period_end_at)
-                    <= now + timedelta(days=30)
+                    if _expires_within_attention_window(subscription)
                 ],
                 key=lambda item: (
                     _normalize_overview_datetime(item.current_period_end_at)
@@ -393,7 +400,8 @@ class CommercialServiceAdminMixin:
             return item
 
         for run in runs:
-            ensure_item(run.ability_name, run.ability_family)["runs"] += 1
+            run_item = ensure_item(run.ability_name, run.ability_family)
+            run_item["runs"] = self._coerce_int(run_item.get("runs")) + 1
 
         for provider_call in provider_calls:
             matched_run = run_lookup.get(str(provider_call.run_id or ""))
@@ -401,9 +409,10 @@ class CommercialServiceAdminMixin:
                 getattr(matched_run, "ability_name", ""),
                 getattr(matched_run, "ability_family", ""),
             )
-            item["provider_calls"] = int(item["provider_calls"]) + 1
+            item["provider_calls"] = self._coerce_int(item.get("provider_calls")) + 1
             item["provider_cost"] = round(
-                float(item["provider_cost"]) + float(provider_call.cost or 0.0),
+                self._coerce_float(item.get("provider_cost"))
+                + self._coerce_float(provider_call.cost),
                 6,
             )
 
@@ -415,19 +424,21 @@ class CommercialServiceAdminMixin:
                 or str(getattr(event, "ability_family", "") or ""),
             )
             item["tokens_total"] = round(
-                float(item["tokens_total"]) + float(getattr(event, "quantity", 0.0) or 0.0),
+                self._coerce_float(item.get("tokens_total"))
+                + self._coerce_float(getattr(event, "quantity", 0.0)),
                 6,
             )
 
         ability_items: list[dict[str, object]] = []
         family_map: dict[str, dict[str, object]] = {}
         for item in items_by_key.values():
-            runs_total = int(item["runs"])
-            tokens_total = float(item["tokens_total"])
-            provider_cost = float(item["provider_cost"])
+            runs_total = self._coerce_int(item.get("runs"))
+            tokens_total = self._coerce_float(item.get("tokens_total"))
+            provider_cost = self._coerce_float(item.get("provider_cost"))
             shadow_revenue = round(
-                runs_total * float(item["base_run_price"])
-                + (tokens_total / 1000.0) * float(item["per_1k_tokens_price"]),
+                runs_total * self._coerce_float(item.get("base_run_price"))
+                + (tokens_total / 1000.0)
+                * self._coerce_float(item.get("per_1k_tokens_price")),
                 6,
             )
             margin_delta = round(shadow_revenue - provider_cost, 6)
@@ -435,7 +446,7 @@ class CommercialServiceAdminMixin:
                 "ability_key": item["ability_key"],
                 "ability_family": item["ability_family"],
                 "runs": runs_total,
-                "provider_calls": int(item["provider_calls"]),
+                    "provider_calls": self._coerce_int(item.get("provider_calls")),
                 "tokens_total": round(tokens_total, 6),
                 "provider_cost": round(provider_cost, 6),
                 "shadow_revenue": shadow_revenue,
@@ -464,41 +475,43 @@ class CommercialServiceAdminMixin:
                     "tariff_source": family_tariff["tariff_source"],
                 }
                 family_map[family_key] = family_item
-            family_item["runs"] = int(family_item["runs"]) + runs_total
-            family_item["provider_calls"] = int(family_item["provider_calls"]) + int(
-                item["provider_calls"]
+            family_item["runs"] = self._coerce_int(family_item.get("runs")) + runs_total
+            family_item["provider_calls"] = self._coerce_int(
+                family_item.get("provider_calls")
+            ) + self._coerce_int(
+                item.get("provider_calls")
             )
             family_item["tokens_total"] = round(
-                float(family_item["tokens_total"]) + tokens_total,
+                self._coerce_float(family_item.get("tokens_total")) + tokens_total,
                 6,
             )
             family_item["provider_cost"] = round(
-                float(family_item["provider_cost"]) + provider_cost,
+                self._coerce_float(family_item.get("provider_cost")) + provider_cost,
                 6,
             )
             family_item["shadow_revenue"] = round(
-                float(family_item["shadow_revenue"]) + shadow_revenue,
+                self._coerce_float(family_item.get("shadow_revenue")) + shadow_revenue,
                 6,
             )
             family_item["margin_delta"] = round(
-                float(family_item["margin_delta"]) + margin_delta,
+                self._coerce_float(family_item.get("margin_delta")) + margin_delta,
                 6,
             )
 
         ability_items.sort(
             key=lambda item: (
-                float(item["provider_cost"]),
-                int(item["runs"]),
-                float(item["tokens_total"]),
+                self._coerce_float(item.get("provider_cost")),
+                self._coerce_int(item.get("runs")),
+                self._coerce_float(item.get("tokens_total")),
             ),
             reverse=True,
         )
         family_items = sorted(
             family_map.values(),
             key=lambda item: (
-                float(item["provider_cost"]),
-                int(item["runs"]),
-                float(item["tokens_total"]),
+                self._coerce_float(item.get("provider_cost")),
+                self._coerce_int(item.get("runs")),
+                self._coerce_float(item.get("tokens_total")),
             ),
             reverse=True,
         )
@@ -521,22 +534,24 @@ class CommercialServiceAdminMixin:
             },
             "tariff_version": SHADOW_PRICING_TARIFF_VERSION,
             "totals": {
-                "runs": sum(int(item["runs"]) for item in ability_items),
-                "provider_calls": sum(int(item["provider_calls"]) for item in ability_items),
+                "runs": sum(self._coerce_int(item.get("runs")) for item in ability_items),
+                "provider_calls": sum(
+                    self._coerce_int(item.get("provider_calls")) for item in ability_items
+                ),
                 "tokens_total": round(
-                    sum(float(item["tokens_total"]) for item in ability_items),
+                    sum(self._coerce_float(item.get("tokens_total")) for item in ability_items),
                     6,
                 ),
                 "provider_cost": round(
-                    sum(float(item["provider_cost"]) for item in ability_items),
+                    sum(self._coerce_float(item.get("provider_cost")) for item in ability_items),
                     6,
                 ),
                 "shadow_revenue": round(
-                    sum(float(item["shadow_revenue"]) for item in ability_items),
+                    sum(self._coerce_float(item.get("shadow_revenue")) for item in ability_items),
                     6,
                 ),
                 "margin_delta": round(
-                    sum(float(item["margin_delta"]) for item in ability_items),
+                    sum(self._coerce_float(item.get("margin_delta")) for item in ability_items),
                     6,
                 ),
             },
@@ -615,8 +630,9 @@ class CommercialServiceAdminMixin:
         items = []
         for account in accounts:
             account_subscriptions = subscriptions_by_account.get(account.account_id, [])
-            primary_subscription = self._select_primary_subscription(account_subscriptions)
-            package_summary = self._build_subscription_package_summary(
+            service = cast(Any, self)
+            primary_subscription = service._select_primary_subscription(account_subscriptions)
+            package_summary = service._build_subscription_package_summary(
                 primary_subscription,
                 site_count=int(site_counts.get(account.account_id, 0) or 0),
             )
@@ -625,9 +641,9 @@ class CommercialServiceAdminMixin:
                 for subscription in account_subscriptions
                 if subscription.plan_id
             ).most_common(1)
-            nearest_expiry = self._find_nearest_subscription_expiry(account_subscriptions)
+            nearest_expiry = service._find_nearest_subscription_expiry(account_subscriptions)
             item = {
-                "account": self._serialize_account(account),
+                "account": service._serialize_account(account),
                 "member_count": membership_counts.get(account.account_id, 0),
                 "site_count": site_counts.get(account.account_id, 0),
                 "active_subscription_count": subscription_counts.get(account.account_id, 0),
@@ -683,19 +699,19 @@ class CommercialServiceAdminMixin:
             subscriptions = repository.list_subscriptions(account_id=account_id, limit=None)
 
         return {
-            "account": self._serialize_account(account),
+            "account": cast(Any, self)._serialize_account(account),
             "memberships": [
-                self._serialize_account_membership(
+                cast(Any, self)._serialize_account_membership(
                     membership,
                     accessible_sites=sites,
                 )
                 for membership in memberships
             ],
-            "sites": [self._serialize_site(site) for site in sites],
+            "sites": [cast(Any, self)._serialize_site(site) for site in sites],
             "subscriptions": [
                 {
-                    "subscription": self._serialize_subscription(subscription),
-                    "expiry": self._serialize_expiry_state(subscription),
+                    "subscription": cast(Any, self)._serialize_subscription(subscription),
+                    "expiry": cast(Any, self)._serialize_expiry_state(subscription),
                 }
                 for subscription in subscriptions
             ],
@@ -720,14 +736,15 @@ class CommercialServiceAdminMixin:
             for site in sites
             if str(site.site_id or "").strip()
         }
-        latest_subscription_by_account = self._latest_subscription_map(subscriptions)
+        service = cast(Any, self)
+        latest_subscription_by_account = service._latest_subscription_map(subscriptions)
 
         members_payload: list[dict[str, object]] = []
         follow_up_site_ids: set[str] = set()
         covered_member_count = 0
 
         for membership in memberships:
-            serialized_membership = self._serialize_account_membership(
+            serialized_membership = service._serialize_account_membership(
                 membership,
                 accessible_sites=sites,
             )
@@ -745,7 +762,10 @@ class CommercialServiceAdminMixin:
                     follow_up_site_ids.add(site_id)
                 plan_id = str(getattr(subscription, "plan_id", "") or "").strip() if subscription is not None else ""
                 plan_version_id = str(getattr(subscription, "plan_version_id", "") or "").strip() if subscription is not None else ""
-                package_summary = self._build_subscription_package_summary(subscription, site_count=1)
+                package_summary = service._build_subscription_package_summary(
+                    subscription,
+                    site_count=1,
+                )
                 accessible_sites_payload.append(
                     {
                         "site_id": site_id,
@@ -794,7 +814,7 @@ class CommercialServiceAdminMixin:
             )
 
         return {
-            "account": self._serialize_account(account),
+            "account": service._serialize_account(account),
             "summary": {
                 "member_count": len(members_payload),
                 "covered_member_count": covered_member_count,
@@ -826,7 +846,7 @@ class CommercialServiceAdminMixin:
 
         items = []
         for membership in memberships:
-            serialized = self._serialize_account_membership(
+            serialized = cast(Any, self)._serialize_account_membership(
                 membership,
                 accessible_sites=sites,
             )
@@ -841,7 +861,7 @@ class CommercialServiceAdminMixin:
             items.append(serialized)
 
         return {
-            "account": self._serialize_account(account),
+            "account": cast(Any, self)._serialize_account(account),
             "filters": {
                 "status": status or "",
                 "invite_state": invite_state or "",
@@ -877,8 +897,8 @@ class CommercialServiceAdminMixin:
                 )
             sites = repository.list_sites(account_id=account_id, limit=None)
         return {
-            "account": self._serialize_account(account),
-            "membership": self._serialize_account_membership(
+            "account": cast(Any, self)._serialize_account(account),
+            "membership": cast(Any, self)._serialize_account_membership(
                 membership,
                 accessible_sites=sites,
             ),
@@ -908,7 +928,10 @@ class CommercialServiceAdminMixin:
                 "provider": provider or "",
                 "limit": limit,
             },
-            "items": [self._serialize_platform_admin_identity(identity) for identity in identities],
+            "items": [
+                cast(Any, self)._serialize_platform_admin_identity(identity)
+                for identity in identities
+            ],
         }
 
 

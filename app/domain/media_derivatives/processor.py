@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import hashlib
+import re
 from dataclasses import dataclass, field
 from io import BytesIO
 from typing import Any
 
-from PIL import Image
+from PIL import Image, ImageColor, ImageDraw, ImageFont
 
 from app.domain.media_derivatives.contracts import (
     MAX_PIXEL_COUNT,
@@ -21,6 +22,7 @@ from app.domain.media_derivatives.errors import (
 )
 
 DEFAULT_ORIGINAL_FORMAT = "png"
+RESAMPLE_LANCZOS = Image.Resampling.LANCZOS
 
 
 @dataclass(slots=True)
@@ -109,7 +111,7 @@ def _apply_image_watermark(
         if mark.width != target_width:
             ratio = target_width / max(1, mark.width)
             target_height = max(1, int(mark.height * ratio))
-            mark = mark.resize((target_width, target_height), Image.LANCZOS)
+            mark = mark.resize((target_width, target_height), RESAMPLE_LANCZOS)
 
         opacity = max(0.0, min(1.0, float(watermark_options.get("opacity", 0.75))))
         if opacity < 1.0:
@@ -131,6 +133,101 @@ def _apply_image_watermark(
         return base
     finally:
         watermark.close()
+
+
+def _parse_watermark_color(value: Any, default: str) -> tuple[int, int, int, int]:
+    color = str(value or default).strip()
+    if color.lower() == "transparent":
+        return (0, 0, 0, 0)
+    rgba_match = re.fullmatch(
+        r"rgba?\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})(?:\s*,\s*(0|1|0?\.\d+))?\s*\)",
+        color,
+    )
+    if rgba_match:
+        red = max(0, min(255, int(rgba_match.group(1))))
+        green = max(0, min(255, int(rgba_match.group(2))))
+        blue = max(0, min(255, int(rgba_match.group(3))))
+        alpha = 1.0 if rgba_match.group(4) is None else float(rgba_match.group(4))
+        return (red, green, blue, int(max(0.0, min(1.0, alpha)) * 255))
+    try:
+        parsed = ImageColor.getcolor(color, "RGBA")
+        if isinstance(parsed, int):
+            return (parsed, parsed, parsed, 255)
+        red, green, blue, alpha = tuple(parsed)[:4]
+        return (int(red), int(green), int(blue), int(alpha))
+    except Exception:
+        return _parse_watermark_color(default, "#000000")
+
+
+def _load_text_watermark_font(font_size: int) -> Any:
+    bounded_size = max(8, min(256, int(font_size or 48)))
+    for font_name in (
+        "DejaVuSans-Bold.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        "/usr/share/fonts/dejavu/DejaVuSans-Bold.ttf",
+    ):
+        try:
+            return ImageFont.truetype(font_name, bounded_size)
+        except Exception:
+            continue
+    return ImageFont.load_default()
+
+
+def _apply_text_watermark(
+    image: Image.Image,
+    *,
+    watermark_options: dict[str, Any],
+) -> Image.Image:
+    base = image.convert("RGBA")
+    text = str(watermark_options.get("text") or "AI").strip()[:64] or "AI"
+    font_size = max(8, min(256, int(watermark_options.get("font_size") or 48)))
+    font = _load_text_watermark_font(font_size)
+    padding = max(4, int(font_size * 0.3))
+
+    measuring_image = Image.new("RGBA", (1, 1), (0, 0, 0, 0))
+    measuring_draw = ImageDraw.Draw(measuring_image)
+    bbox = measuring_draw.textbbox((0, 0), text, font=font)
+    text_width = int(max(1, bbox[2] - bbox[0]))
+    text_height = int(max(1, bbox[3] - bbox[1]))
+
+    mark = Image.new(
+        "RGBA",
+        (text_width + padding * 2, text_height + padding * 2),
+        (0, 0, 0, 0),
+    )
+    draw = ImageDraw.Draw(mark)
+    background = _parse_watermark_color(
+        watermark_options.get("background"),
+        "rgba(0,0,0,0.35)",
+    )
+    if background[3] > 0:
+        draw.rounded_rectangle(
+            (0, 0, mark.width, mark.height),
+            radius=max(2, padding // 2),
+            fill=background,
+        )
+
+    color = _parse_watermark_color(watermark_options.get("color"), "#FFFFFF")
+    draw.text((padding - bbox[0], padding - bbox[1]), text, font=font, fill=color)
+
+    opacity = max(0.0, min(1.0, float(watermark_options.get("opacity", 0.75))))
+    if opacity < 1.0:
+        alpha = mark.getchannel("A")
+        alpha = alpha.point(lambda value: int(value * opacity))
+        mark.putalpha(alpha)
+
+    position = str(watermark_options.get("position") or "bottom_right")
+    margin_px = max(0, int(watermark_options.get("margin_px") or 0))
+    paste_at = _resolve_watermark_position(
+        base_width=base.width,
+        base_height=base.height,
+        watermark_width=mark.width,
+        watermark_height=mark.height,
+        position=position,
+        margin_px=margin_px,
+    )
+    base.alpha_composite(mark, dest=paste_at)
+    return base
 
 
 def _save_image(
@@ -225,7 +322,12 @@ def process_media_derivative(
         warnings: list[str] = []
         watermark_applied = False
 
-        if target_format == "original" and not watermark_bytes:
+        watermark_type = str((watermark_options or {}).get("type") or "image")
+        text_watermark_requested = watermark_type == "text" and bool(
+            str((watermark_options or {}).get("text") or "AI").strip()
+        )
+
+        if target_format == "original" and not watermark_bytes and not text_watermark_requested:
             output_bytes = source_bytes
             result_width = img.width
             result_height = img.height
@@ -235,12 +337,18 @@ def process_media_derivative(
             if img.width > max_width:
                 ratio = max_width / img.width
                 new_height = int(img.height * ratio)
-                img = img.resize((max_width, new_height), Image.LANCZOS)
+                img = img.resize((max_width, new_height), RESAMPLE_LANCZOS)
 
             if watermark_bytes:
                 img = _apply_image_watermark(
                     img,
                     watermark_bytes=watermark_bytes,
+                    watermark_options=watermark_options or {},
+                )
+                watermark_applied = True
+            elif text_watermark_requested:
+                img = _apply_text_watermark(
+                    img,
                     watermark_options=watermark_options or {},
                 )
                 watermark_applied = True

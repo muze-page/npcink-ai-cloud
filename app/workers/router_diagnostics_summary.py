@@ -4,7 +4,7 @@ import hashlib
 import hmac
 import json
 from datetime import UTC, datetime
-from typing import Any, Callable
+from typing import Any, Callable, cast
 
 import httpx
 
@@ -17,6 +17,29 @@ from app.domain.usage.rollup import UsageRollupService
 
 CALLBACK_ROUTE = "/magick-ai/open/v1/router/diagnostics/callback"
 CALLBACK_EVENT = "router.diagnostics.batch"
+
+
+def _coerce_int(value: object, default: int = 0) -> int:
+    try:
+        return int(cast(Any, value))
+    except (TypeError, ValueError):
+        return default
+
+
+def _dict_value(value: object) -> dict[str, object]:
+    if not isinstance(value, dict):
+        return {}
+    return {str(key): item for key, item in value.items()}
+
+
+def _dict_items(value: object) -> list[dict[str, object]]:
+    if not isinstance(value, list):
+        return []
+    return [
+        {str(key): item for key, item in candidate.items()}
+        for candidate in value
+        if isinstance(candidate, dict)
+    ]
 
 
 def _build_trace_id(seed: str) -> str:
@@ -64,17 +87,9 @@ def _build_callback_url(base_url: str) -> str:
 def _resolve_callback_config(site: Any) -> dict[str, str] | None:
     if site is None:
         return None
-    metadata = site.metadata_json if isinstance(site.metadata_json, dict) else {}
-    projection_callbacks = (
-        metadata.get("projection_callbacks")
-        if isinstance(metadata.get("projection_callbacks"), dict)
-        else {}
-    )
-    diagnostics_callback = (
-        projection_callbacks.get("router_diagnostics")
-        if isinstance(projection_callbacks.get("router_diagnostics"), dict)
-        else {}
-    )
+    metadata = _dict_value(getattr(site, "metadata_json", None))
+    projection_callbacks = _dict_value(metadata.get("projection_callbacks"))
+    diagnostics_callback = _dict_value(projection_callbacks.get("router_diagnostics"))
 
     enabled_raw = diagnostics_callback.get(
         "enabled", metadata.get("router_diagnostics_callback_enabled", True)
@@ -190,7 +205,7 @@ def run_once(
         recent_minutes=settings.router_diagnostics_worker_recent_minutes,
         config_revision="cloud_runtime_summary_worker",
     )
-    site_batches = list(sink_result.get("site_batches") or [])
+    site_batches = _dict_items(sink_result.get("site_batches"))
     sites_by_id = {site.site_id: site for site in sites}
     callback_attempted_total = 0
     callback_delivered_total = 0
@@ -240,12 +255,12 @@ def run_once(
         "recent_minutes": settings.router_diagnostics_worker_recent_minutes,
         "site_limit": settings.router_diagnostics_worker_site_limit,
         "sites_total": len(site_batches),
-        "stored_batches_total": int(sink_result.get("stored_batches_total") or 0),
+        "stored_batches_total": _coerce_int(sink_result.get("stored_batches_total")),
         "delivery_owner": str(sink_result.get("delivery_owner") or ""),
         "rollup_scope_kind": str(sink_result.get("scope_kind") or ""),
-        "regressions_total": int(sink_result.get("regressions_total") or 0),
-        "quality_regressions_total": int(
-            sink_result.get("quality_regressions_total") or 0
+        "regressions_total": _coerce_int(sink_result.get("regressions_total")),
+        "quality_regressions_total": _coerce_int(
+            sink_result.get("quality_regressions_total")
         ),
         "callback_attempted_total": callback_attempted_total,
         "callback_delivered_total": callback_delivered_total,

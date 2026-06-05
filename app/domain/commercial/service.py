@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
 from urllib.parse import urlsplit
 
 from app.core.models import (
@@ -14,6 +13,7 @@ from app.core.models import (
     SUBSCRIPTION_STATUS_TRIALING,
     Site,
 )
+from app.domain.commercial.audit_context import ServiceAuditContext
 from app.domain.commercial.errors import (
     CommercialPermissionError,
 )
@@ -261,16 +261,6 @@ OPERATOR_MANAGED_POINTS_PACK_REGISTRY: dict[str, dict[str, object]] = {
         "operator_note": "Use when an operator needs a high-headroom current-period top-up without introducing a wallet or self-serve flow.",
     },
 }
-
-
-@dataclass(slots=True)
-class ServiceAuditContext:
-    trace_id: str
-    idempotency_key: str
-    method: str
-    path: str
-    actor_kind: str = "internal_token"
-    actor_ref: str = "internal"
 
 
 PORTAL_SITE_KEY_WRITE_ROLES = {
@@ -567,3 +557,6 @@ class CommercialService(
 ):
     """Commercial service facade composed from domain-specific mixins."""
     pass
+
+
+__all__ = ["CommercialService", "ServiceAuditContext"]

@@ -8,7 +8,7 @@ CHANGED_BASE_REF ?= origin/master
 TEST_PROVIDER_ENV = MAGICK_CLOUD_OPENAI_API_KEY= MAGICK_CLOUD_OPENAI_COMPATIBLE_API_KEY=
 DOCKER_TEST_PROVIDER_ENV = -e MAGICK_CLOUD_OPENAI_API_KEY= -e MAGICK_CLOUD_OPENAI_COMPATIBLE_API_KEY=
 
-.PHONY: baseline bootstrap-dev dev test test-local lint lint-changed perimeter frontend-sync frontend-watch migrate seed-dev rollup bundle deploy-smoke deploy-ssh provider-status env-ssh secret-rotation-check
+.PHONY: baseline bootstrap-dev dev test test-local lint lint-changed mypy-full mypy-targeted perimeter frontend-sync frontend-watch migrate seed-dev rollup bundle deploy-smoke deploy-ssh provider-status env-ssh secret-rotation-check
 
 baseline:
 	.venv/bin/pytest --version
@@ -42,6 +42,12 @@ lint:
 
 lint-changed:
 	MAGICK_CLOUD_CHANGED_BASE_REF="$(CHANGED_BASE_REF)" bash scripts/check-changed-python-quality.sh
+
+mypy-full:
+	.venv/bin/mypy app
+
+mypy-targeted:
+	bash scripts/mypy-targeted.sh $(MYPY_TARGETS)
 
 perimeter:
 	bash scripts/check-cloud-perimeter.sh
@@ -94,4 +100,3 @@ env-ssh:
 
 secret-rotation-check:
 	bash deploy/validate-secret-rotation.sh
-

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Iterable
+from collections.abc import Iterable
 
 import httpx
 
@@ -10,6 +10,7 @@ from app.adapters.providers.base import (
     ProviderCatalogSnapshot,
     ProviderExecutionError,
     ProviderExecutionRequest,
+    ProviderExecutionResult,
 )
 from app.adapters.providers.openai import OpenAIProviderAdapter
 
@@ -87,7 +88,7 @@ class TEIProviderAdapter(OpenAIProviderAdapter):
             ],
         )
 
-    def execute(self, request: ProviderExecutionRequest):
+    def execute(self, request: ProviderExecutionRequest) -> ProviderExecutionResult:
         if request.execution_kind != "embedding" or request.endpoint_variant != "embeddings":
             raise ProviderExecutionError(
                 "provider.unsupported_operation",

@@ -21,6 +21,12 @@ DEFAULT_PORTAL_SCOPES = [
 ]
 
 
+def _dict_value(value: object) -> dict[str, object]:
+    if not isinstance(value, dict):
+        return {}
+    return {str(key): item for key, item in value.items()}
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
@@ -78,7 +84,7 @@ def bootstrap_portal_site(
     base_url = _normalized_base_url(public_base_url)
 
     policy = commercial_service.inspect_commercial_policy(site_id)
-    site = policy.get("site") or {}
+    site = _dict_value(policy.get("site"))
     account_id = str(site.get("account_id") or "").strip()
     subscription = policy.get("subscription")
     if not account_id:
@@ -86,7 +92,9 @@ def bootstrap_portal_site(
             "service.portal_account_not_found",
             f"site '{site_id}' is not bound to an account",
         )
-    if not isinstance(subscription, dict) or not str(subscription.get("subscription_id") or "").strip():
+    if not isinstance(subscription, dict) or not str(
+        subscription.get("subscription_id") or ""
+    ).strip():
         raise CommercialNotFoundError(
             "service.subscription_not_found",
             f"no subscription was found for site '{site_id}'",
@@ -183,11 +191,13 @@ def bootstrap_portal_site(
     }
 
     if issued_key is not None:
-        result["sample_site"]["cloud_api_key"] = build_customer_api_key(
+        sample_site = _dict_value(result.get("sample_site"))
+        sample_site["cloud_api_key"] = build_customer_api_key(
             site_id=site_id,
             key_id=str(issued_key.get("key_id") or ""),
             secret=str(issued_key.get("secret") or ""),
         )
+        result["sample_site"] = sample_site
 
     return result
 

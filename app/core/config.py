@@ -46,6 +46,10 @@ class Settings(BaseSettings):
     alert_provider_degradation_interval_seconds: int = Field(default=900)
     provider_health_scan_interval_seconds: int = Field(default=900)
     media_derivative_max_body_bytes: int = Field(default=51 * 1024 * 1024)
+    media_derivative_batch_default_chunk_size: int = Field(default=10)
+    media_derivative_batch_max_chunk_size: int = Field(default=20)
+    media_derivative_site_queued_limit: int = Field(default=100)
+    media_derivative_site_running_limit: int = Field(default=2)
     artifact_cleanup_interval_seconds: int = Field(default=3600)
     router_performance_worker_window_hours: int = Field(default=1)
     router_performance_worker_site_limit: int = Field(default=100)
@@ -440,6 +444,19 @@ class Settings(BaseSettings):
             raise ValueError("plugin_observability_cleanup_interval_seconds must be at least 60")
         if self.artifact_cleanup_interval_seconds < 60:
             raise ValueError("artifact_cleanup_interval_seconds must be at least 60")
+        if self.media_derivative_batch_default_chunk_size < 1:
+            raise ValueError("media_derivative_batch_default_chunk_size must be at least 1")
+        if not 1 <= self.media_derivative_batch_max_chunk_size <= 100:
+            raise ValueError("media_derivative_batch_max_chunk_size must be between 1 and 100")
+        if self.media_derivative_batch_default_chunk_size > self.media_derivative_batch_max_chunk_size:
+            raise ValueError(
+                "media_derivative_batch_default_chunk_size must not exceed "
+                "media_derivative_batch_max_chunk_size"
+            )
+        if self.media_derivative_site_queued_limit < 1:
+            raise ValueError("media_derivative_site_queued_limit must be at least 1")
+        if self.media_derivative_site_running_limit < 1:
+            raise ValueError("media_derivative_site_running_limit must be at least 1")
         if self.usage_rollup_interval_seconds < 60:
             raise ValueError("usage_rollup_interval_seconds must be at least 60")
         if self.router_diagnostics_interval_seconds < 60:

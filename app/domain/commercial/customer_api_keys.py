@@ -41,7 +41,7 @@ def serialize_portal_site_key(
         "key_id": str(key_payload.get("key_id") or ""),
         "label": str(key_payload.get("label") or ""),
         "status": str(key_payload.get("status") or ""),
-        "scopes": list(key_payload.get("scopes", [])),
+        "scopes": _string_list(key_payload.get("scopes")),
         "last_four": _last_four(str(key_payload.get("key_id") or "")),
         "issued_at": str(key_payload.get("created_at") or ""),
         "created_at": str(key_payload.get("created_at") or ""),
@@ -54,6 +54,12 @@ def serialize_portal_site_key(
 def _last_four(value: str) -> str:
     normalized = str(value or "")
     return normalized[-4:] if normalized else ""
+
+
+def _string_list(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [str(item).strip() for item in value if str(item).strip()]
 
 
 def expand_api_key_scopes(scopes: list[str] | None) -> list[str]:

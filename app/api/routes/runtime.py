@@ -12,12 +12,20 @@ from app.adapters.providers.registry import resolve_execution_provider_adapters
 from app.api.auth import authorize_public_request, get_cloud_services
 from app.api.envelope import build_envelope
 from app.core.security import RequestAuthContext
+from app.domain.hosted_model_defaults import FREE_GPT55_TEXT_PROFILE_ID
 from app.domain.image_sources.contracts import (
     IMAGE_SOURCE_ABILITIES,
     IMAGE_SOURCE_ABILITY_FAMILY,
     IMAGE_SOURCE_DATA_CLASSIFICATION,
     IMAGE_SOURCE_EXECUTION_KIND,
     IMAGE_SOURCE_PROFILE_ID,
+)
+from app.domain.media_batch_plans.contracts import (
+    MEDIA_BATCH_PLAN_ABILITIES,
+    MEDIA_BATCH_PLAN_ABILITY_FAMILY,
+    MEDIA_BATCH_PLAN_DATA_CLASSIFICATION,
+    MEDIA_BATCH_PLAN_EXECUTION_KIND,
+    MEDIA_BATCH_PLAN_PROFILE_ID,
 )
 from app.domain.routing.errors import RoutingError
 from app.domain.runtime.errors import RuntimeErrorBase, RuntimeUnsupportedExecutionPatternError
@@ -189,7 +197,13 @@ def _is_image_source_payload(payload: RuntimePayload) -> bool:
     return payload.ability_name in IMAGE_SOURCE_ABILITIES
 
 
+def _is_media_batch_plan_payload(payload: RuntimePayload) -> bool:
+    return payload.ability_name in MEDIA_BATCH_PLAN_ABILITIES
+
+
 def _resolve_ability_family(payload: RuntimePayload) -> str:
+    if _is_media_batch_plan_payload(payload):
+        return MEDIA_BATCH_PLAN_ABILITY_FAMILY
     if _is_image_source_payload(payload):
         return IMAGE_SOURCE_ABILITY_FAMILY
     if _is_site_knowledge_payload(payload):
@@ -200,6 +214,8 @@ def _resolve_ability_family(payload: RuntimePayload) -> str:
 
 
 def _resolve_execution_kind(payload: RuntimePayload) -> str:
+    if _is_media_batch_plan_payload(payload) and not payload.execution_kind:
+        return MEDIA_BATCH_PLAN_EXECUTION_KIND
     if _is_image_source_payload(payload) and not payload.execution_kind:
         return IMAGE_SOURCE_EXECUTION_KIND
     if _is_site_knowledge_payload(payload) and not payload.execution_kind:
@@ -210,16 +226,25 @@ def _resolve_execution_kind(payload: RuntimePayload) -> str:
 
 
 def _resolve_profile_id(payload: RuntimePayload) -> str:
+    if _is_media_batch_plan_payload(payload) and not payload.profile_id:
+        return MEDIA_BATCH_PLAN_PROFILE_ID
     if _is_image_source_payload(payload) and not payload.profile_id:
         return IMAGE_SOURCE_PROFILE_ID
     if _is_site_knowledge_payload(payload) and not payload.profile_id:
         return SITE_KNOWLEDGE_PROFILE_ID
     if _is_web_search_payload(payload) and not payload.profile_id:
         return WEB_SEARCH_PROFILE_ID
+    if (
+        not payload.profile_id
+        and payload.ability_family in {"text", "openclaw", "workflow", "automation", "mcp"}
+    ):
+        return FREE_GPT55_TEXT_PROFILE_ID
     return payload.profile_id
 
 
 def _resolve_data_classification(payload: RuntimePayload) -> str:
+    if _is_media_batch_plan_payload(payload):
+        return MEDIA_BATCH_PLAN_DATA_CLASSIFICATION
     if _is_image_source_payload(payload):
         return IMAGE_SOURCE_DATA_CLASSIFICATION
     if _is_site_knowledge_payload(payload):

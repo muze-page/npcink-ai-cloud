@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from datetime import datetime, timedelta
+from typing import Any, cast
 from uuid import uuid4
 
 from app.adapters.repositories.commercial_repository import CommercialRepository
@@ -266,7 +267,7 @@ class CommercialServiceAccountMixin(CommercialServiceAuditMixin):
                     metadata_json=sent_metadata,
                 ),
             )
-            payload = {
+            payload: dict[str, object] = {
                 "account_id": account_id,
                 "email": normalized_email,
                 "member_ref": member_ref,
@@ -435,7 +436,7 @@ class CommercialServiceAccountMixin(CommercialServiceAuditMixin):
                     metadata_json=updated_metadata,
                 ),
             )
-            payload = {
+            payload: dict[str, object] = {
                 "account_id": account_id,
                 "member_ref": normalized_member_ref,
                 "email": normalized_email,
@@ -515,7 +516,7 @@ class CommercialServiceAccountMixin(CommercialServiceAuditMixin):
                     metadata_json=updated_metadata,
                 ),
             )
-            payload = {
+            payload: dict[str, object] = {
                 "account_id": account_id,
                 "member_ref": normalized_member_ref,
                 "status": ACCOUNT_MEMBERSHIP_STATUS_DISABLED,
@@ -595,7 +596,7 @@ class CommercialServiceAccountMixin(CommercialServiceAuditMixin):
                     metadata_json=updated_metadata,
                 ),
             )
-            payload = {
+            payload: dict[str, object] = {
                 "account_id": account_id,
                 "member_ref": normalized_member_ref,
                 "status": ACCOUNT_MEMBERSHIP_STATUS_ACTIVE,
@@ -704,7 +705,7 @@ class CommercialServiceAccountMixin(CommercialServiceAuditMixin):
                     ),
                     "role": _normalize_customer_membership_role(str(getattr(membership, "role", "") or "")),
                     "status": membership.status,
-                    "site": self._serialize_site(site),
+                    "site": cast(Any, self)._serialize_site(site),
                 }
             )
         account_items = [
@@ -750,7 +751,9 @@ class CommercialServiceAccountMixin(CommercialServiceAuditMixin):
             identity = repository.get_portal_member_identity_by_member_ref(
                 member_ref=normalized_member_ref,
             )
-            account_contexts = self.list_portal_accounts(member_ref=normalized_member_ref)
+            account_contexts = cast(Any, self).list_portal_accounts(
+                member_ref=normalized_member_ref
+            )
 
         account_items = [
             item
@@ -862,7 +865,7 @@ class CommercialServiceAccountMixin(CommercialServiceAuditMixin):
                 )
             subscription.status = SUBSCRIPTION_STATUS_SUSPENDED
             subscription.suspended_at = now
-            payload = self._serialize_subscription(subscription)
+            payload = cast(Any, self)._serialize_subscription(subscription)
             self._record_service_audit_in_session(
                 repository=repository,
                 audit_context=audit_context,
@@ -896,7 +899,7 @@ class CommercialServiceAccountMixin(CommercialServiceAuditMixin):
                 )
             subscription.status = SUBSCRIPTION_STATUS_CANCELED
             subscription.canceled_at = now
-            payload = self._serialize_subscription(subscription)
+            payload = cast(Any, self)._serialize_subscription(subscription)
             self._record_service_audit_in_session(
                 repository=repository,
                 audit_context=audit_context,
@@ -924,11 +927,12 @@ class CommercialServiceAccountMixin(CommercialServiceAuditMixin):
         if existing_subscriptions:
             return None
 
-        plan_id, plan_version_id = self._ensure_plan_free_version_in_session(
+        service = cast(Any, self)
+        plan_id, plan_version_id = service._ensure_plan_free_version_in_session(
             repository=repository
         )
         now = self.now_factory()
-        subscription, snapshot = self._bind_subscription_in_session(
+        subscription, snapshot = service._bind_subscription_in_session(
             repository=repository,
             subscription_id=f"sub_{account_id}_free",
             account_id=account_id,
@@ -942,12 +946,15 @@ class CommercialServiceAccountMixin(CommercialServiceAuditMixin):
                 "tier_id": "starter",
                 "package_alias": PLAN_TIER_REGISTRY["starter"].get("package_alias") or "Free",
                 "plan_kind": DEFAULT_FREE_PLAN_KIND,
-                "site_limit": int(PLAN_TIER_REGISTRY["starter"].get("site_limit") or 1),
+                "site_limit": self._coerce_int(
+                    PLAN_TIER_REGISTRY["starter"].get("site_limit")
+                )
+                or 1,
             },
         )
         payload = {
-            "subscription": self._serialize_subscription(subscription),
-            "entitlement_snapshot": self._serialize_entitlement_snapshot(snapshot),
+            "subscription": service._serialize_subscription(subscription),
+            "entitlement_snapshot": service._serialize_entitlement_snapshot(snapshot),
         }
         self._record_service_audit_in_session(
             repository=repository,
@@ -992,7 +999,8 @@ class CommercialServiceAccountMixin(CommercialServiceAuditMixin):
                 or repository.get_plan_version(plan_version_id) is None
             )
         ):
-            ensured_plan_id, ensured_plan_version_id = self._ensure_plan_tier_version_in_session(
+            service = cast(Any, self)
+            ensured_plan_id, ensured_plan_version_id = service._ensure_plan_tier_version_in_session(
                 repository=repository,
                 tier_id=requested_tier_id,
             )
@@ -1010,7 +1018,8 @@ class CommercialServiceAccountMixin(CommercialServiceAuditMixin):
                 "service.plan_version_not_found",
                 f"plan version '{plan_version_id}' was not found for plan '{plan_id}'",
             )
-        subscription, snapshot = self._bind_subscription_in_session(
+        service = cast(Any, self)
+        subscription, snapshot = service._bind_subscription_in_session(
             repository=repository,
             subscription_id=subscription_id,
             account_id=account_id,
@@ -1022,8 +1031,8 @@ class CommercialServiceAccountMixin(CommercialServiceAuditMixin):
             metadata_json=metadata_json,
         )
         covered_sites = repository.list_sites(account_id=subscription.account_id, limit=None)
-        period_start_at, period_end_at = self._resolve_period(subscription, now)
-        self._refresh_subscription_billing_snapshots_in_session(
+        period_start_at, period_end_at = service._resolve_period(subscription, now)
+        service._refresh_subscription_billing_snapshots_in_session(
             repository=repository,
             subscription=subscription,
             covered_sites=covered_sites,
@@ -1031,8 +1040,8 @@ class CommercialServiceAccountMixin(CommercialServiceAuditMixin):
             period_end_at=period_end_at,
         )
         payload = {
-            "subscription": self._serialize_subscription(subscription),
-            "entitlement_snapshot": self._serialize_entitlement_snapshot(snapshot),
+            "subscription": service._serialize_subscription(subscription),
+            "entitlement_snapshot": service._serialize_entitlement_snapshot(snapshot),
         }
         self._record_service_audit_in_session(
             repository=repository,
@@ -1072,7 +1081,7 @@ class CommercialServiceAccountMixin(CommercialServiceAuditMixin):
         )
         invite_count_raw = metadata.get("invite_count", 0)
         try:
-            invite_count = int(invite_count_raw or 0)
+            invite_count = self._coerce_int(invite_count_raw)
         except (TypeError, ValueError):
             invite_count = 0
         return {
@@ -1092,15 +1101,23 @@ class CommercialServiceAccountMixin(CommercialServiceAuditMixin):
             "status": str(getattr(membership, "status", "") or ""),
             "invite_state": str(metadata.get("invite_state") or ""),
             "invite_count": invite_count,
-            "invited_at": self._serialize_datetime(metadata.get("invited_at")),
-            "last_invited_at": self._serialize_datetime(metadata.get("last_invited_at")),
-            "invite_expires_at": self._serialize_datetime(metadata.get("invite_expires_at")),
+            "invited_at": self._serialize_datetime(cast(Any, metadata.get("invited_at"))),
+            "last_invited_at": self._serialize_datetime(
+                cast(Any, metadata.get("last_invited_at"))
+            ),
+            "invite_expires_at": self._serialize_datetime(
+                cast(Any, metadata.get("invite_expires_at"))
+            ),
             "last_delivery_status": str(metadata.get("last_delivery_status") or ""),
             "last_delivery_error_code": str(metadata.get("last_delivery_error_code") or ""),
             "last_delivery_error_message": str(metadata.get("last_delivery_error_message") or ""),
-            "last_login_at": self._serialize_datetime(metadata.get("last_login_at")),
-            "enabled_at": self._serialize_datetime(metadata.get("enabled_at")),
-            "disabled_at": self._serialize_datetime(metadata.get("disabled_at")),
+            "last_login_at": self._serialize_datetime(
+                cast(Any, metadata.get("last_login_at"))
+            ),
+            "enabled_at": self._serialize_datetime(cast(Any, metadata.get("enabled_at"))),
+            "disabled_at": self._serialize_datetime(
+                cast(Any, metadata.get("disabled_at"))
+            ),
             "disabled_reason": str(metadata.get("disabled_reason") or ""),
             "accessible_sites": [
                 {
@@ -1137,7 +1154,7 @@ class CommercialServiceAccountMixin(CommercialServiceAuditMixin):
             "role": _normalize_customer_membership_role(str(getattr(membership, "role", "") or "")),
             "membership_status": str(getattr(membership, "status", "") or ""),
             "site_count": len(sites),
-            "sites": [self._serialize_site(site) for site in sites],
+            "sites": [cast(Any, self)._serialize_site(site) for site in sites],
         }
 
     def _list_resolved_portal_account_memberships(
@@ -1178,11 +1195,11 @@ class CommercialServiceAccountMixin(CommercialServiceAuditMixin):
         account_id: str,
         snapshot: object,
     ) -> None:
-        site_limit = self._resolve_site_limit(snapshot=snapshot)
+        site_limit = cast(Any, self)._resolve_site_limit(snapshot=snapshot)
         site_counts = repository.count_sites_by_account(
             account_ids=[account_id],
         )
-        current_count = int(site_counts.get(account_id, 0) or 0)
+        current_count = self._coerce_int(site_counts.get(account_id, 0))
         if current_count >= site_limit:
             raise CommercialPermissionError(
                 "service.site_limit_exceeded",

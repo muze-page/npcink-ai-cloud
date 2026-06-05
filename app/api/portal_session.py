@@ -30,6 +30,17 @@ COOKIE_SESSION_ISSUED_AT = "magick_portal_session_issued_at"
 COOKIE_SESSION_EXPIRES_AT = "magick_portal_session_expires_at"
 
 
+def _dict_value(value: object) -> dict[str, object]:
+    return value if isinstance(value, dict) else {}
+
+
+def _dict_list(value: object) -> list[dict[str, object]]:
+    return [item for item in value if isinstance(item, dict)] if isinstance(value, list) else []
+
+
+def _object_list(value: object) -> list[object]:
+    return value if isinstance(value, list) else []
+
 
 def get_commercial_service(request: Request) -> CommercialService:
     services = get_cloud_services(request)
@@ -180,11 +191,11 @@ def serialize_portal_session(
     service = get_commercial_service(request)
     sites = service.list_portal_sites(member_ref=member_ref)
     accounts = service.list_portal_accounts(member_ref=member_ref)
-    site_items = list(sites.get("items") or [])
+    site_items = _dict_list(sites.get("items"))
     visible_site_items = [
         item
         for item in site_items
-        if str(((item.get("site") or {}).get("status") or "")).strip() != SITE_STATUS_ARCHIVED
+        if str(_dict_value(item.get("site")).get("status") or "").strip() != SITE_STATUS_ARCHIVED
     ]
     selected_site: dict[str, object] | None = None
     selected_role = ""
@@ -203,12 +214,13 @@ def serialize_portal_session(
                 raise
             resolved_site_id = ""
         else:
-            selected_site = access["site"] if isinstance(access.get("site"), dict) else None
+            selected_site = _dict_value(access.get("site")) or None
             selected_role = str(access.get("role") or "")
             selected_account_id = str(access.get("account_id") or "")
-            if str((selected_site or {}).get("status") or "").strip() == SITE_STATUS_ARCHIVED:
+            if str(_dict_value(selected_site).get("status") or "").strip() == SITE_STATUS_ARCHIVED:
                 if strict_site:
                     raise CommercialServiceError(
+                        403,
                         "service.portal_site_archived",
                         "archived portal sites cannot be selected as the current site",
                     )
@@ -224,7 +236,7 @@ def serialize_portal_session(
             resolved_site_id = str(fallback_site.get("site_id") or "")
             selected_account_id = str(fallback_site.get("account_id") or "")
         selected_role = str(fallback_item.get("role") or selected_role or "")
-    account_items = list(accounts.get("items") or [])
+    account_items = _dict_list(accounts.get("items"))
     if not selected_account_id and account_items:
         selected_account_id = str(account_items[0].get("account_id") or "")
         selected_role = str(account_items[0].get("role") or "")
@@ -233,7 +245,7 @@ def serialize_portal_session(
             account_detail = service.get_admin_account(selected_account_id)
         except CommercialServiceError:
             account_detail = {}
-        subscriptions = list(account_detail.get("subscriptions") or [])
+        subscriptions = _dict_list(account_detail.get("subscriptions"))
         current_subscription = subscriptions[0] if subscriptions else None
     return {
         "site_id": resolved_site_id,
@@ -248,7 +260,7 @@ def serialize_portal_session(
             {
                 str(action).strip()
                 for item in account_items
-                for action in list(item.get("allowed_actions") or [])
+                for action in _object_list(item.get("allowed_actions"))
                 if str(action).strip()
             }
         ),

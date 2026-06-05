@@ -403,12 +403,12 @@ class SiteKnowledgeObservabilityService:
         }
 
     def _build_health(self, totals: dict[str, object]) -> dict[str, object]:
-        queries_total = int(totals.get("search_queries_total") or 0)
-        index_jobs_total = int(totals.get("index_jobs_total") or 0)
-        no_hit_rate = float(totals.get("no_hit_rate") or 0.0)
-        search_failures = int(totals.get("search_failed_total") or 0)
-        index_failures = int(totals.get("index_failed_total") or 0)
-        p95_latency = int(totals.get("p95_search_latency_ms") or 0)
+        queries_total = _coerce_int(totals.get("search_queries_total"), default=0)
+        index_jobs_total = _coerce_int(totals.get("index_jobs_total"), default=0)
+        no_hit_rate = _coerce_float(totals.get("no_hit_rate"), default=0.0)
+        search_failures = _coerce_int(totals.get("search_failed_total"), default=0)
+        index_failures = _coerce_int(totals.get("index_failed_total"), default=0)
+        p95_latency = _coerce_int(totals.get("p95_search_latency_ms"), default=0)
         if queries_total == 0 and index_jobs_total == 0:
             return {
                 "status": "inactive",
@@ -468,14 +468,14 @@ class SiteKnowledgeObservabilityService:
             bucket["indexed_chunks_total"] += int(metric.indexed_chunks or 0)
             if metric.status == "failed":
                 bucket["failed_total"] += 1
-        for metric in search_metrics:
+        for search_metric in search_metrics:
             bucket = buckets[
-                self._bucket_index(metric.created_at, start_at, bucket_count, bucket_seconds)
+                self._bucket_index(search_metric.created_at, start_at, bucket_count, bucket_seconds)
             ]
             bucket["search_queries_total"] += 1
-            if metric.no_hit:
+            if search_metric.no_hit:
                 bucket["no_hit_total"] += 1
-            if metric.status == "failed":
+            if search_metric.status == "failed":
                 bucket["failed_total"] += 1
 
         timeline = []
@@ -551,7 +551,8 @@ def _record_index_job_metric(
     if metric is None:
         metric = SiteKnowledgeIndexJobMetric(run_id=run.run_id)
         session.add(metric)
-    sync = result_json.get("sync") if isinstance(result_json.get("sync"), dict) else {}
+    sync_value = result_json.get("sync")
+    sync = sync_value if isinstance(sync_value, dict) else {}
     sync_mode = str(sync.get("sync_mode") or input_payload.get("sync_mode") or "refresh")
     metric.site_id = run.site_id
     metric.account_id = run.account_id or None
@@ -559,11 +560,11 @@ def _record_index_job_metric(
     metric.status = status or run.status
     metric.error_code = error_code or run.error_code or None
     metric.sync_mode = sync_mode[:32]
-    metric.accepted_documents = int(sync.get("accepted_documents") or 0)
-    metric.indexed_documents = int(sync.get("indexed_documents") or 0)
-    metric.indexed_chunks = int(sync.get("indexed_chunks") or 0)
-    metric.failed_documents = int(sync.get("failed_documents") or 0)
-    metric.deleted_entries = int(sync.get("deleted_entries") or 0)
+    metric.accepted_documents = _coerce_int(sync.get("accepted_documents"), default=0)
+    metric.indexed_documents = _coerce_int(sync.get("indexed_documents"), default=0)
+    metric.indexed_chunks = _coerce_int(sync.get("indexed_chunks"), default=0)
+    metric.failed_documents = _coerce_int(sync.get("failed_documents"), default=0)
+    metric.deleted_entries = _coerce_int(sync.get("deleted_entries"), default=0)
     metric.embedding_provider = _embedding_provider(settings)
     metric.embedding_model = _embedding_model(settings)
     metric.embedding_dimensions = _embedding_dimensions(settings)
@@ -592,9 +593,10 @@ def _record_search_metric(
     if metric is None:
         metric = SiteKnowledgeSearchMetric(run_id=run.run_id)
         session.add(metric)
-    results = result_json.get("results") if isinstance(result_json.get("results"), list) else []
+    results_value = result_json.get("results")
+    results = results_value if isinstance(results_value, list) else []
     scores = [
-        float(item.get("score") or 0.0)
+        _coerce_float(item.get("score"), default=0.0)
         for item in results
         if isinstance(item, dict)
     ]
@@ -700,6 +702,34 @@ def _coerce_positive_int(value: Any, *, default: int, maximum: int) -> int:
     if number <= 0:
         return default
     return min(number, maximum)
+
+
+def _coerce_int(value: object, *, default: int) -> int:
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    if isinstance(value, str):
+        try:
+            return int(value)
+        except ValueError:
+            return default
+    return default
+
+
+def _coerce_float(value: object, *, default: float) -> float:
+    if isinstance(value, bool):
+        return float(value)
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value)
+        except ValueError:
+            return default
+    return default
 
 
 def _duration_ms(start_at: datetime | None, end_at: datetime | None) -> int:

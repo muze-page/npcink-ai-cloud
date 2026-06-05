@@ -21,6 +21,8 @@ from app.api.browser_security import enforce_browser_same_origin
 from app.api.envelope import build_envelope
 from app.api.portal_session import (
     clear_portal_session_cookies as _clear_browser_session_cookies,
+)
+from app.api.portal_session import (
     portal_cookie_secure,
 )
 from app.core.models import PLATFORM_ADMIN_ROLE_PLATFORM_ADMIN
@@ -34,6 +36,10 @@ COOKIE_ADMIN_TOKEN = "magick_admin_session_token"
 ADMIN_SESSION_ALGORITHM = "HS256"
 
 router = APIRouter(include_in_schema=False)
+
+
+def _dict_value(value: object) -> dict[str, object]:
+    return value if isinstance(value, dict) else {}
 
 
 def _resolve_admin_session_secret(request: Request) -> str:
@@ -113,11 +119,12 @@ def _current_admin_session(request: Request) -> dict[str, Any]:
     decode_error: InvalidTokenError | None = None
     for token in tokens:
         try:
-            claims = jwt.decode(
+            payload = jwt.decode(
                 token,
                 _resolve_admin_session_secret(request),
                 algorithms=[ADMIN_SESSION_ALGORITHM],
             )
+            claims = payload if isinstance(payload, dict) else {}
             break
         except InvalidTokenError as error:
             decode_error = error
@@ -176,12 +183,9 @@ def _current_admin_session(request: Request) -> dict[str, Any]:
         "platform_admin_ref": str(identity.get("admin_ref") or platform_admin_ref),
         "identity_type": IDENTITY_TYPE_PLATFORM_ADMIN,
         "role": str(identity.get("role") or claims.get("role") or "").strip(),
-        "capabilities": dict(
-            identity.get("capabilities")
-            if isinstance(identity.get("capabilities"), dict)
-            else _platform_capability_flags(
-                str(identity.get("role") or claims.get("role") or "").strip()
-            )
+        "capabilities": _dict_value(identity.get("capabilities"))
+        or _platform_capability_flags(
+            str(identity.get("role") or claims.get("role") or "").strip()
         ),
         "auth_mode": auth_mode,
         "issued_at": issued_at,

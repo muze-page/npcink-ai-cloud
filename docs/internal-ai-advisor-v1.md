@@ -227,6 +227,10 @@ Provider execution requires both:
   provider id
 - the request explicitly passes that `provider_id`
 
+When provider execution is enabled, the default model id is `gpt-5.5`. Callers
+may pass a narrower `model_id` only for an explicit internal test or migration
+case.
+
 Otherwise the endpoint must return deterministic fallback text. Each request
 must write an internal `service_audit_events` row with generation mode,
 provider/model ids, token counts, cost, and error code. Audit payloads must not

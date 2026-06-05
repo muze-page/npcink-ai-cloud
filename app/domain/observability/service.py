@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import Any
 
 from app.adapters.repositories.stats_repository import StatsRepository
 from app.core.config import Settings
 from app.core.db import get_session
 from app.core.feature_flags import EnvFeatureFlagProvider
+from app.core.models import HealthSnapshot
 from app.core.services import ReadyReport
 from app.domain.runtime.service import RuntimeService
 from app.workers.heartbeat import build_worker_heartbeat_summary, expected_worker_ids
@@ -90,21 +90,21 @@ class ObservabilityService:
             backlog_limit=10,
             now=current_time,
         )
-        workers = summary["workers"] if isinstance(summary.get("workers"), dict) else {}
-        worker_items = workers.get("items") if isinstance(workers.get("items"), list) else []
+        workers = self._dict_value(summary.get("workers"))
+        worker_items = self._dict_list(workers.get("items"))
         worker_freshness = {
             str(item.get("worker_id") or ""): str(item.get("freshness") or "")
             for item in worker_items
             if isinstance(item, dict)
         }
-        cadence = summary["cadence"] if isinstance(summary.get("cadence"), dict) else {}
-        cadence_items = cadence.get("items") if isinstance(cadence.get("items"), list) else []
+        cadence = self._dict_value(summary.get("cadence"))
+        cadence_items = self._dict_list(cadence.get("items"))
         cadence_freshness = {
             str(item.get("task_id") or ""): str(item.get("freshness") or "")
             for item in cadence_items
             if isinstance(item, dict)
         }
-        providers = summary["providers"] if isinstance(summary.get("providers"), dict) else {}
+        providers = self._dict_value(summary.get("providers"))
 
         required_worker_ids = expected_worker_ids(self.settings)
         worker_checks = {
@@ -156,11 +156,14 @@ class ObservabilityService:
             instances = repository.list_instances()
             health_snapshots = repository.list_health_snapshots()
 
-        latest_by_instance: dict[str, Any] = {}
+        latest_by_instance: dict[str, HealthSnapshot] = {}
         for snapshot in health_snapshots:
-            current = latest_by_instance.get(snapshot.instance_id)
+            snapshot_instance_id = str(snapshot.instance_id or "")
+            if not snapshot_instance_id:
+                continue
+            current = latest_by_instance.get(snapshot_instance_id)
             if current is None or snapshot.measured_at > current.measured_at:
-                latest_by_instance[snapshot.instance_id] = snapshot
+                latest_by_instance[snapshot_instance_id] = snapshot
 
         status_counts = {
             "healthy": 0,
@@ -171,14 +174,17 @@ class ObservabilityService:
         degraded_provider_ids: set[str] = set()
         last_measured_at: datetime | None = None
         for instance in instances:
-            snapshot = latest_by_instance.get(instance.instance_id)
-            status = str(getattr(snapshot, "status", "unknown") or "unknown")
+            instance_id = str(instance.instance_id or "")
+            latest_snapshot = latest_by_instance.get(instance_id)
+            status: str = str(getattr(latest_snapshot, "status", "unknown") or "unknown")
             if status not in status_counts:
                 status = "unknown"
             status_counts[status] += 1
             if status in {"degraded", "unhealthy"}:
                 degraded_provider_ids.add(str(instance.provider_id))
-            measured_at = self._normalize_datetime(getattr(snapshot, "measured_at", None))
+            measured_at = self._normalize_datetime(
+                getattr(latest_snapshot, "measured_at", None)
+            )
             if measured_at is not None and (
                 last_measured_at is None or measured_at > last_measured_at
             ):
@@ -220,3 +226,13 @@ class ObservabilityService:
         if value.tzinfo is None:
             return value.replace(tzinfo=UTC)
         return value.astimezone(UTC)
+
+    def _dict_value(self, value: object) -> dict[str, object]:
+        if not isinstance(value, dict):
+            return {}
+        return {str(key): item for key, item in value.items()}
+
+    def _dict_list(self, value: object) -> list[dict[str, object]]:
+        if not isinstance(value, list):
+            return []
+        return [self._dict_value(item) for item in value if isinstance(item, dict)]

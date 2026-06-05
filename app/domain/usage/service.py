@@ -3,11 +3,11 @@ from __future__ import annotations
 from collections import defaultdict
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, cast
 from urllib.parse import unquote_plus
 
-from app.adapters.repositories.stats_repository import StatsRepository
 from app.adapters.repositories.runtime_repository import RuntimeRepository
+from app.adapters.repositories.stats_repository import StatsRepository
 from app.core.db import get_session
 from app.core.models import (
     CatalogInstance,
@@ -16,6 +16,30 @@ from app.core.models import (
     RunRecord,
 )
 from app.domain.health.scoring import assess_instance_health
+
+
+def _coerce_int(value: object, default: int = 0) -> int:
+    try:
+        return int(cast(Any, value))
+    except (TypeError, ValueError):
+        return default
+
+
+def _coerce_float(value: object, default: float = 0.0) -> float:
+    try:
+        return float(cast(Any, value))
+    except (TypeError, ValueError):
+        return default
+
+
+def _dict_value(value: object) -> dict[str, object]:
+    if not isinstance(value, dict):
+        return {}
+    return {str(key): item for key, item in value.items()}
+
+
+def _datetime_value(value: object) -> datetime | None:
+    return value if isinstance(value, datetime) else None
 
 
 class UsageInstanceNotFoundError(ValueError):
@@ -1671,37 +1695,21 @@ class UsageService:
                 recent_since=recent_since,
             )
 
-        queue_summary = (
-            runtime_summary["queue"]
-            if isinstance(runtime_summary.get("queue"), dict)
-            else {}
-        )
-        callback_summary = (
-            runtime_summary["callback"]
-            if isinstance(runtime_summary.get("callback"), dict)
-            else {}
-        )
-        retention_summary = (
-            runtime_summary["retention"]
-            if isinstance(runtime_summary.get("retention"), dict)
-            else {}
-        )
-        cancel_summary = (
-            runtime_summary["cancel"]
-            if isinstance(runtime_summary.get("cancel"), dict)
-            else {}
-        )
+        queue_summary = _dict_value(runtime_summary.get("queue"))
+        callback_summary = _dict_value(runtime_summary.get("callback"))
+        retention_summary = _dict_value(runtime_summary.get("retention"))
+        cancel_summary = _dict_value(runtime_summary.get("cancel"))
 
         regression_failed = (
-            int(callback_summary.get("failed", 0))
-            + int(retention_summary.get("due_purge", 0))
-            + int(cancel_summary.get("active_requests", 0))
+            _coerce_int(callback_summary.get("failed"))
+            + _coerce_int(retention_summary.get("due_purge"))
+            + _coerce_int(cancel_summary.get("active_requests"))
         )
         quality_failed = (
-            int(queue_summary.get("queued_runs", 0))
-            + int(queue_summary.get("running_runs", 0))
-            + int(callback_summary.get("due_now", 0))
-            + int(guard_summary.get("recent_rate_limit_exceeded", 0))
+            _coerce_int(queue_summary.get("queued_runs"))
+            + _coerce_int(queue_summary.get("running_runs"))
+            + _coerce_int(callback_summary.get("due_now"))
+            + _coerce_int(guard_summary.get("recent_rate_limit_exceeded"))
         )
         derived_warnings = bool(has_warnings) or regression_failed > 0 or quality_failed > 0
         stale_after = now + timedelta(minutes=15)
@@ -1870,7 +1878,7 @@ class UsageService:
                     "kind": "guard_event",
                     "label": "runtime guard event",
                     "event_code": event_code,
-                    "count": int(event.get("event_count") or 0),
+                    "count": _coerce_int(event.get("event_count")),
                     "summary": event_code or "runtime guard event",
                     "last_seen_at": str(event.get("last_seen_at") or ""),
                     "details": self._serialize_router_diagnostics_guard_event_details(
@@ -1992,10 +2000,10 @@ class UsageService:
         metrics: dict[str, object],
         latency_values: list[int],
     ) -> dict[str, Any]:
-        calls_total = int(metrics.get("calls_total") or 0)
-        success_total = int(metrics.get("success_total") or 0)
-        fallback_total = int(metrics.get("fallback_total") or 0)
-        last_seen_at = self._normalize_datetime(metrics.get("last_seen_at"))
+        calls_total = _coerce_int(metrics.get("calls_total"))
+        success_total = _coerce_int(metrics.get("success_total"))
+        fallback_total = _coerce_int(metrics.get("fallback_total"))
+        last_seen_at = self._normalize_datetime(_datetime_value(metrics.get("last_seen_at")))
         return {
             "start_at": self._format_datetime(window["start_at"]),
             "end_at": self._format_datetime(window["end_at"]),
@@ -2003,7 +2011,7 @@ class UsageService:
             "success_total": success_total,
             "error_total": calls_total - success_total,
             "success_rate": self._safe_rate(success_total, calls_total),
-            "avg_latency_ms": int(metrics.get("avg_latency_ms") or 0),
+            "avg_latency_ms": _coerce_int(metrics.get("avg_latency_ms")),
             "latency_ms_p50": self._calculate_percentile(latency_values, 50.0),
             "latency_ms_p95": self._calculate_percentile(latency_values, 95.0),
             "fallback_total": fallback_total,
@@ -2018,10 +2026,10 @@ class UsageService:
         metrics: dict[str, object],
         latency_values: list[int],
     ) -> dict[str, Any]:
-        calls_total = int(metrics.get("runs_total") or 0)
-        success_total = int(metrics.get("success_total") or 0)
-        fallback_total = int(metrics.get("fallback_total") or 0)
-        last_seen_at = self._normalize_datetime(metrics.get("last_seen_at"))
+        calls_total = _coerce_int(metrics.get("runs_total"))
+        success_total = _coerce_int(metrics.get("success_total"))
+        fallback_total = _coerce_int(metrics.get("fallback_total"))
+        last_seen_at = self._normalize_datetime(_datetime_value(metrics.get("last_seen_at")))
         return {
             "start_at": self._format_datetime(window["start_at"]),
             "end_at": self._format_datetime(window["end_at"]),
@@ -2029,7 +2037,7 @@ class UsageService:
             "success_total": success_total,
             "error_total": calls_total - success_total,
             "success_rate": self._safe_rate(success_total, calls_total),
-            "avg_latency_ms": int(metrics.get("avg_latency_ms") or 0),
+            "avg_latency_ms": _coerce_int(metrics.get("avg_latency_ms")),
             "fallback_total": fallback_total,
             "fallback_rate": self._safe_rate(fallback_total, calls_total),
             "last_seen_at": self._format_datetime_or_empty(last_seen_at),
@@ -2043,25 +2051,27 @@ class UsageService:
         provider_metrics: dict[str, object],
         latency_values: list[int],
     ) -> dict[str, Any]:
-        runs_total = int(run_metrics.get("runs_total") or 0)
-        success_total = int(run_metrics.get("success_total") or 0)
-        fallback_total = int(run_metrics.get("fallback_total") or 0)
-        last_seen_at = self._normalize_datetime(run_metrics.get("last_seen_at"))
+        runs_total = _coerce_int(run_metrics.get("runs_total"))
+        success_total = _coerce_int(run_metrics.get("success_total"))
+        fallback_total = _coerce_int(run_metrics.get("fallback_total"))
+        last_seen_at = self._normalize_datetime(
+            _datetime_value(run_metrics.get("last_seen_at"))
+        )
         return {
             "start_at": self._format_datetime(window["start_at"]),
             "end_at": self._format_datetime(window["end_at"]),
             "runs_total": runs_total,
-            "provider_calls_total": int(provider_metrics.get("calls_total") or 0),
+            "provider_calls_total": _coerce_int(provider_metrics.get("calls_total")),
             "success_total": success_total,
             "error_total": runs_total - success_total,
             "success_rate": self._safe_rate(success_total, runs_total),
-            "avg_latency_ms": int(run_metrics.get("avg_latency_ms") or 0),
+            "avg_latency_ms": _coerce_int(run_metrics.get("avg_latency_ms")),
             "fallback_total": fallback_total,
             "fallback_rate": self._safe_rate(fallback_total, runs_total),
-            "tokens_in_total": int(provider_metrics.get("tokens_in_total") or 0),
-            "tokens_out_total": int(provider_metrics.get("tokens_out_total") or 0),
-            "cost_total": round(float(provider_metrics.get("cost_total") or 0.0), 6),
-            "active_sites_total": int(run_metrics.get("active_sites_total") or 0),
+            "tokens_in_total": _coerce_int(provider_metrics.get("tokens_in_total")),
+            "tokens_out_total": _coerce_int(provider_metrics.get("tokens_out_total")),
+            "cost_total": round(_coerce_float(provider_metrics.get("cost_total")), 6),
+            "active_sites_total": _coerce_int(run_metrics.get("active_sites_total")),
             "latency_ms_p50": self._calculate_percentile(latency_values, 50.0),
             "latency_ms_p95": self._calculate_percentile(latency_values, 95.0),
             "last_seen_at": self._format_datetime_or_empty(last_seen_at),

@@ -1,18 +1,16 @@
 from __future__ import annotations
 
-import json
 from datetime import UTC, datetime
 from pathlib import Path
 
 import app.domain.catalog.service as catalog_service_module
-from app.adapters.repositories.catalog_repository import CatalogRepository
 from app.adapters.providers.base import (
     CatalogInstanceSeed,
     CatalogModelSeed,
     ProviderCatalogSnapshot,
 )
 from app.adapters.providers.openai import OpenAIProviderAdapter
-from app.core.db import dispose_engine, get_session, init_schema
+from app.core.db import dispose_engine, init_schema
 from app.domain.catalog.service import CatalogService
 from app.domain.runtime.models import RuntimeRequest
 from app.domain.runtime.service import RuntimeService
@@ -93,6 +91,29 @@ def test_list_models_returns_recommended_sets_and_profile_filter(tmp_path: Path)
         "text.quality",
     ]
     assert balanced_models["items"][0]["recommended_rank"] == 1
+
+    dispose_engine(database_url)
+
+
+def test_free_gpt55_profile_filters_to_free_hosted_model(tmp_path: Path) -> None:
+    database_url = _sqlite_url(tmp_path)
+    init_schema(database_url)
+
+    service = CatalogService(
+        database_url,
+        providers={"openai": OpenAIProviderAdapter(sample_catalog_profile="free-gpt55")},
+    )
+    service.refresh_catalog()
+
+    models = service.list_models(recommended_for="text.free-gpt55")
+
+    assert models["recommended_sets"]["text.free-gpt55"]["model_ids"] == ["gpt-5.5"]
+    assert models["recommended_sets"]["text.free-gpt55"]["instance_ids"] == [
+        "openai-global-free-gpt55"
+    ]
+    assert models["total"] == 1
+    assert models["items"][0]["model_id"] == "gpt-5.5"
+    assert "text.free-gpt55" in models["items"][0]["recommended_profiles"]
 
     dispose_engine(database_url)
 

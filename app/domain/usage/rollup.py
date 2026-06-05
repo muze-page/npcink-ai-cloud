@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
+from typing import Any, cast
 
 from app.adapters.repositories.stats_repository import StatsRepository
 from app.core.db import get_session
@@ -12,7 +13,42 @@ ROUTER_PERFORMANCE_BATCH_SCOPE = "router_performance_batch"
 ROUTER_DIAGNOSTICS_BATCH_SCOPE = "router_diagnostics_batch"
 LATENCY_PROBE_BATCH_SCOPE = "latency_probe_batch"
 ALERT_EVALUATE_BATCH_SCOPE = "alert_evaluate_batch"
-ALERT_EVALUATE_BATCH_SCOPE = "alert_evaluate_batch"
+
+
+def _coerce_int(value: object, default: int = 0) -> int:
+    try:
+        return int(cast(Any, value))
+    except (TypeError, ValueError):
+        return default
+
+
+def _coerce_float(value: object, default: float = 0.0) -> float:
+    try:
+        return float(cast(Any, value))
+    except (TypeError, ValueError):
+        return default
+
+
+def _dict_value(value: object) -> dict[str, object]:
+    if not isinstance(value, dict):
+        return {}
+    return {str(key): item for key, item in value.items()}
+
+
+def _dict_items(value: object) -> list[dict[str, object]]:
+    if not isinstance(value, list):
+        return []
+    return [
+        {str(key): item for key, item in candidate.items()}
+        for candidate in value
+        if isinstance(candidate, dict)
+    ]
+
+
+def _string_list(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [str(item).strip() for item in value if str(item).strip()]
 
 
 class UsageRollupService:
@@ -130,7 +166,7 @@ class UsageRollupService:
                     start_at=normalized_start,
                     end_at=normalized_end,
                 )
-                rows = list(payload.get("rows") or [])
+                rows = _dict_items(payload.get("rows"))
                 payload["delivery"] = {
                     "owner": "wordpress_fetch_apply",
                     "buffer_kind": "usage_rollup",
@@ -154,10 +190,14 @@ class UsageRollupService:
                         "rollup_key": rollup_key,
                         "scope_id": scope_id,
                         "rows_total": len(rows),
-                        "request_total": sum(int(row.get("request_total") or 0) for row in rows),
-                        "success_total": sum(int(row.get("success_total") or 0) for row in rows),
+                        "request_total": sum(
+                            _coerce_int(row.get("request_total")) for row in rows
+                        ),
+                        "success_total": sum(
+                            _coerce_int(row.get("success_total")) for row in rows
+                        ),
                         "guard_fail_total": sum(
-                            int(row.get("guard_fail_total") or 0) for row in rows
+                            _coerce_int(row.get("guard_fail_total")) for row in rows
                         ),
                         "source": str(payload.get("source") or ""),
                         "window": payload.get("window") or {},
@@ -176,10 +216,16 @@ class UsageRollupService:
             "delivery_owner": "wordpress_fetch_apply",
             "sites_total": len(site_batches),
             "stored_batches_total": len(site_batches),
-            "rows_total": sum(int(item["rows_total"]) for item in site_batches),
-            "request_total": sum(int(item["request_total"]) for item in site_batches),
-            "success_total": sum(int(item["success_total"]) for item in site_batches),
-            "guard_fail_total": sum(int(item["guard_fail_total"]) for item in site_batches),
+            "rows_total": sum(_coerce_int(item.get("rows_total")) for item in site_batches),
+            "request_total": sum(
+                _coerce_int(item.get("request_total")) for item in site_batches
+            ),
+            "success_total": sum(
+                _coerce_int(item.get("success_total")) for item in site_batches
+            ),
+            "guard_fail_total": sum(
+                _coerce_int(item.get("guard_fail_total")) for item in site_batches
+            ),
             "site_batches": site_batches,
         }
 
@@ -259,15 +305,9 @@ class UsageRollupService:
                     "buffer_kind": "usage_rollup",
                     "scope_kind": ROUTER_DIAGNOSTICS_BATCH_SCOPE,
                 }
-                report = payload.get("report") if isinstance(payload.get("report"), dict) else {}
-                regressions = (
-                    report.get("regressions") if isinstance(report.get("regressions"), dict) else {}
-                )
-                quality = (
-                    report.get("quality_regressions")
-                    if isinstance(report.get("quality_regressions"), dict)
-                    else {}
-                )
+                report = _dict_value(payload.get("report"))
+                regressions = _dict_value(report.get("regressions"))
+                quality = _dict_value(report.get("quality_regressions"))
                 rollup_key = self._build_rollup_key(
                     site_id,
                     ROUTER_DIAGNOSTICS_BATCH_SCOPE,
@@ -285,10 +325,10 @@ class UsageRollupService:
                         "site_id": site_id,
                         "rollup_key": rollup_key,
                         "scope_id": scope_id,
-                        "regressions_count": int(regressions.get("count") or 0),
-                        "quality_regressions_count": int(quality.get("count") or 0),
-                        "regression_items_total": len(list(regressions.get("items") or [])),
-                        "quality_items_total": len(list(quality.get("items") or [])),
+                        "regressions_count": _coerce_int(regressions.get("count")),
+                        "quality_regressions_count": _coerce_int(quality.get("count")),
+                        "regression_items_total": len(_dict_items(regressions.get("items"))),
+                        "quality_items_total": len(_dict_items(quality.get("items"))),
                         "source": str(payload.get("source") or ""),
                         "generated_at": str(payload.get("generated_at") or ""),
                         "stale_after_gmt": str(payload.get("stale_after_gmt") or ""),
@@ -305,9 +345,12 @@ class UsageRollupService:
             "delivery_owner": "wordpress_fetch_apply",
             "sites_total": len(site_batches),
             "stored_batches_total": len(site_batches),
-            "regressions_total": sum(int(item["regressions_count"]) for item in site_batches),
+            "regressions_total": sum(
+                _coerce_int(item.get("regressions_count")) for item in site_batches
+            ),
             "quality_regressions_total": sum(
-                int(item["quality_regressions_count"]) for item in site_batches
+                _coerce_int(item.get("quality_regressions_count"))
+                for item in site_batches
             ),
             "site_batches": site_batches,
         }
@@ -383,12 +426,16 @@ class UsageRollupService:
                             "instance_id": instance_id,
                             "runtime": "hosted_profile",
                             "profile_id": "",
-                            "sample_count": int(summary.get("today_calls") or 0),
-                            "latency_ms_p50": int(summary.get("latency_ms_p50") or 0),
-                            "latency_ms_p95": int(summary.get("latency_ms_p95") or 0),
+                            "sample_count": _coerce_int(summary.get("today_calls")),
+                            "latency_ms_p50": _coerce_int(
+                                summary.get("latency_ms_p50")
+                            ),
+                            "latency_ms_p95": _coerce_int(
+                                summary.get("latency_ms_p95")
+                            ),
                             "health": {
                                 "status": str(summary.get("health_status") or ""),
-                                "score": int(summary.get("health_score") or 0),
+                                "score": _coerce_int(summary.get("health_score")),
                             },
                             "routing": {
                                 "latency_tier": "",
@@ -397,7 +444,7 @@ class UsageRollupService:
                         }
                     )
 
-                payload = {
+                payload: dict[str, object] = {
                     "source": "cloud_latency_probe",
                     "site_id": site_id,
                     "generated_at": normalized_end.strftime("%Y-%m-%d %H:%M:%S"),
@@ -435,12 +482,13 @@ class UsageRollupService:
                         "healthy_total": sum(
                             1
                             for item in instances
-                            if str((item.get("health") or {}).get("status") or "") == "healthy"
+                            if str(_dict_value(item.get("health")).get("status") or "")
+                            == "healthy"
                         ),
                         "avg_latency_ms": int(
                             round(
                                 sum(
-                                    int(item.get("latency_ms_p50") or 0)
+                                    _coerce_int(item.get("latency_ms_p50"))
                                     for item in instances
                                 )
                                 / len(instances)
@@ -464,9 +512,13 @@ class UsageRollupService:
             "delivery_owner": "wordpress_fetch_apply",
             "sites_total": len(site_batches),
             "stored_batches_total": len(site_batches),
-            "instances_total": sum(int(item["instances_total"]) for item in site_batches),
-            "ready_total": sum(int(item["ready_total"]) for item in site_batches),
-            "healthy_total": sum(int(item["healthy_total"]) for item in site_batches),
+            "instances_total": sum(
+                _coerce_int(item.get("instances_total")) for item in site_batches
+            ),
+            "ready_total": sum(_coerce_int(item.get("ready_total")) for item in site_batches),
+            "healthy_total": sum(
+                _coerce_int(item.get("healthy_total")) for item in site_batches
+            ),
             "site_batches": site_batches,
         }
 
@@ -487,18 +539,17 @@ class UsageRollupService:
             payload = rollup.payload_json if isinstance(rollup.payload_json, dict) else {}
             if not payload:
                 continue
-            instances = payload.get("instances") if isinstance(payload.get("instances"), list) else []
+            instances = _dict_items(payload.get("instances"))
             for row in instances:
-                if not isinstance(row, dict):
-                    continue
                 if str(row.get("instance_id") or "") != instance_id:
                     continue
-                health = row.get("health") if isinstance(row.get("health"), dict) else {}
+                health = _dict_value(row.get("health"))
                 generated_at = str(payload.get("generated_at") or "")
-                latency_ms = float(row.get("latency_ms_p50") or 0.0)
-                latency_ms_p95 = float(row.get("latency_ms_p95") or latency_ms)
-                sample_count = int(row.get("sample_count") or 0)
-                delivery = payload.get("delivery") if isinstance(payload.get("delivery"), dict) else {}
+                latency_ms = _coerce_float(row.get("latency_ms_p50"))
+                latency_ms_p95 = _coerce_float(row.get("latency_ms_p95"), latency_ms)
+                sample_count = _coerce_int(row.get("sample_count"))
+                delivery = _dict_value(payload.get("delivery"))
+                window = _dict_value(payload.get("window"))
                 return {
                     "status": "ready" if sample_count > 0 else "empty",
                     "error": "",
@@ -513,7 +564,7 @@ class UsageRollupService:
                     "health_status": str(health.get("status") or ""),
                     "health_reason": "",
                     "health_measured_at": generated_at,
-                    "health_score": int(health.get("score") or 0),
+                    "health_score": _coerce_int(health.get("score")),
                     "health_window_calls": sample_count,
                     "today_calls": sample_count,
                     "success_rate": 0.0,
@@ -523,8 +574,8 @@ class UsageRollupService:
                     "fallback_rate": 0.0,
                     "windows": {
                         "today": {
-                            "start_at": str(((payload.get("window") or {}) if isinstance(payload.get("window"), dict) else {}).get("start_gmt") or ""),
-                            "end_at": str(((payload.get("window") or {}) if isinstance(payload.get("window"), dict) else {}).get("end_gmt") or ""),
+                            "start_at": str(window.get("start_gmt") or ""),
+                            "end_at": str(window.get("end_gmt") or ""),
                             "calls_total": sample_count,
                             "success_total": 0,
                             "error_total": 0,
@@ -537,8 +588,8 @@ class UsageRollupService:
                             "last_seen_at": generated_at,
                         },
                         "rolling_24h": {
-                            "start_at": str(((payload.get("window") or {}) if isinstance(payload.get("window"), dict) else {}).get("start_gmt") or ""),
-                            "end_at": str(((payload.get("window") or {}) if isinstance(payload.get("window"), dict) else {}).get("end_gmt") or ""),
+                            "start_at": str(window.get("start_gmt") or ""),
+                            "end_at": str(window.get("end_gmt") or ""),
                             "calls_total": sample_count,
                             "success_total": 0,
                             "error_total": 0,
@@ -596,7 +647,7 @@ class UsageRollupService:
                     "buffer_kind": "usage_rollup",
                     "scope_kind": ALERT_EVALUATE_BATCH_SCOPE,
                 }
-                events = list(payload.get("events") or [])
+                events = _dict_items(payload.get("events"))
                 rollup_key = self._build_rollup_key(
                     site_id,
                     ALERT_EVALUATE_BATCH_SCOPE,
@@ -615,9 +666,11 @@ class UsageRollupService:
                         "rollup_key": rollup_key,
                         "scope_id": scope_id,
                         "events_total": len(events),
-                        "touched_rule_types": list(payload.get("touched_rule_types") or []),
+                        "touched_rule_types": _string_list(
+                            payload.get("touched_rule_types")
+                        ),
                         "providers": [
-                            str(((event.get("summary") or {}).get("provider") or "")).strip()
+                            str(_dict_value(event.get("summary")).get("provider") or "").strip()
                             for event in events
                         ],
                         "window": payload.get("window") or {},
@@ -637,7 +690,7 @@ class UsageRollupService:
             "delivery_owner": "wordpress_fetch_apply",
             "sites_total": len(site_batches),
             "stored_batches_total": len(site_batches),
-            "events_total": sum(int(item["events_total"]) for item in site_batches),
+            "events_total": sum(_coerce_int(item.get("events_total")) for item in site_batches),
             "site_batches": site_batches,
         }
     def get_alert_provider_degradation_batch(
@@ -660,7 +713,7 @@ class UsageRollupService:
             payload = rollup.payload_json if isinstance(rollup.payload_json, dict) else {}
             if not payload:
                 continue
-            window = payload.get("window") if isinstance(payload.get("window"), dict) else {}
+            window = _dict_value(payload.get("window"))
             start_gmt = str(window.get("start_gmt") or "")
             end_gmt = str(window.get("end_gmt") or "")
             if not start_gmt or not end_gmt:
@@ -724,16 +777,6 @@ class UsageRollupService:
             f"__{end_at.strftime('%Y-%m-%dT%H:%M:%SZ')}"
         )
 
-    def _build_alert_evaluate_scope_id(
-        self,
-        *,
-        start_at: datetime,
-        end_at: datetime,
-    ) -> str:
-        return (
-            f"{start_at.strftime('%Y-%m-%dT%H:%M:%SZ')}"
-            f"__{end_at.strftime('%Y-%m-%dT%H:%M:%SZ')}"
-        )
 
     def _build_alert_evaluate_scope_id(
         self,

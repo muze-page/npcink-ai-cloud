@@ -42,17 +42,18 @@ def parse_args() -> argparse.Namespace:
 
 
 def _settings(database_url: str) -> Settings:
-    return Settings(
-        _env_file=None,
-        environment="test",
-        database_url=database_url,
-        redis_url="redis://localhost:6379/0",
-        internal_auth_token="auth-failure-drill-internal-token-32b",
-        admin_bootstrap_token="auth-failure-drill-bootstrap-token-32b",
-        admin_session_secret="auth-failure-drill-admin-session-secret-32b",
-        portal_jwt_secret="auth-failure-drill-portal-jwt-secret-32b",
-        openai_api_key=None,
-    )
+    settings_kwargs: dict[str, Any] = {
+        "_env_file": None,
+        "environment": "test",
+        "database_url": database_url,
+        "redis_url": "redis://localhost:6379/0",
+        "internal_auth_token": "auth-failure-drill-internal-token-32b",
+        "admin_bootstrap_token": "auth-failure-drill-bootstrap-token-32b",
+        "admin_session_secret": "auth-failure-drill-admin-session-secret-32b",
+        "portal_jwt_secret": "auth-failure-drill-portal-jwt-secret-32b",
+        "openai_api_key": None,
+    }
+    return Settings(**settings_kwargs)
 
 
 def _build_traceparent(trace_id: str) -> str:
@@ -163,7 +164,8 @@ def run_drill(
             site_id=site_id,
             recent_minutes=recent_minutes,
         )
-        guard = diagnostics.get("guard", {})
+        guard_value = diagnostics.get("guard")
+        guard = guard_value if isinstance(guard_value, dict) else {}
 
         evidence = {
             "generated_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),

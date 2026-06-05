@@ -21,6 +21,7 @@ from app.core.models import (
     SiteServiceProjection,
 )
 from app.domain.commercial.service import CommercialService
+from app.domain.hosted_model_defaults import FREE_GPT55_MODEL_ID
 from app.domain.runtime.service import RuntimeService
 from app.domain.site_knowledge.metrics import SiteKnowledgeObservabilityService
 from app.domain.usage.service import UsageService
@@ -557,7 +558,7 @@ class InternalAIAdvisorService:
         range_filter: str = "24h",
         limit: int = 25,
         provider_id: str = "",
-        model_id: str = "internal-ops-summarizer",
+        model_id: str = FREE_GPT55_MODEL_ID,
         record_audit: bool = True,
         force_refresh: bool = False,
         cache_ttl_seconds: int = 1800,
@@ -776,7 +777,7 @@ class InternalAIAdvisorService:
         range_filter: str = "24h",
         limit: int = 25,
         provider_id: str = "",
-        model_id: str = "internal-ops-summarizer",
+        model_id: str = FREE_GPT55_MODEL_ID,
         force_refresh: bool = False,
         cache_ttl_seconds: int = 1800,
     ) -> dict[str, Any]:
@@ -1054,10 +1055,10 @@ class InternalAIAdvisorService:
             "average_live_request_cost": average_live_cost,
         }
         value_signal = _build_ops_summary_value_signal(
-            analysis_requests=totals["analysis_requests"],
-            ai_called=totals["ai_called"],
-            cache_hits=totals["cache_hits"],
-            provider_errors=totals["provider_errors"],
+            analysis_requests=int(totals["analysis_requests"]),
+            ai_called=int(totals["ai_called"]),
+            cache_hits=int(totals["cache_hits"]),
+            provider_errors=int(totals["provider_errors"]),
             review_rate=rates["review_rate"],
             confirmed_rate=rates["confirmed_rate"],
             request_cost=totals["request_cost"],

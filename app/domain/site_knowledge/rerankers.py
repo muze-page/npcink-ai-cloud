@@ -158,14 +158,14 @@ def _parse_jina_results(value: Any, *, candidate_count: int) -> list[tuple[int, 
     return ranked
 
 
-def _coerce_float(value: object, *, default: float) -> float:
+def _coerce_float(value: Any, *, default: float) -> float:
     try:
         return float(value)
     except (TypeError, ValueError):
         return default
 
 
-def _coerce_int(value: object, *, default: int) -> int:
+def _coerce_int(value: Any, *, default: int) -> int:
     try:
         return int(value)
     except (TypeError, ValueError):

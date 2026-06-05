@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import JSONResponse
@@ -36,14 +36,14 @@ def _list(value: object) -> list[str]:
 
 def _coerce_float(value: object, default: float = 0.0) -> float:
     try:
-        return float(value)
+        return float(cast(Any, value))
     except (TypeError, ValueError):
         return default
 
 
 def _coerce_int(value: object, default: int = 0) -> int:
     try:
-        return int(value)
+        return int(cast(Any, value))
     except (TypeError, ValueError):
         return default
 

@@ -44,6 +44,7 @@ from app.core.security import (
 )
 from app.core.services import CloudServices
 from app.domain.catalog.service import CatalogService
+from app.domain.hosted_model_defaults import FREE_GPT55_MODEL_ID, FREE_GPT55_TEXT_PROFILE_ID
 from app.domain.runtime.models import RuntimeRequest
 from app.domain.runtime.service import RuntimeService
 from app.domain.web_search.service import (
@@ -180,7 +181,7 @@ class SequencedProviderAdapter(OpenAIProviderAdapter):
 
 class RecordingProviderAdapter(OpenAIProviderAdapter):
     def __init__(self) -> None:
-        super().__init__()
+        super().__init__(sample_catalog_profile="free-gpt55")
         self.requests: list[ProviderExecutionRequest] = []
 
     def execute(self, request: ProviderExecutionRequest) -> ProviderExecutionResult:
@@ -626,6 +627,48 @@ def test_execute_route_runs_and_supports_idempotency(tmp_path: Path) -> None:
         "cost",
     ]
     assert all(event.ability_family == "workflow" for event in meter_events)
+
+    dispose_engine(database_url)
+
+
+def test_execute_route_defaults_text_requests_to_free_gpt55(tmp_path: Path) -> None:
+    provider = RecordingProviderAdapter()
+    database_url, client = _build_client(tmp_path, providers={"openai": provider})
+    payload = {
+        "site_id": "site_alpha",
+        "ability_name": "magick-ai/workflows/generate-post-draft",
+        "ability_family": "workflow",
+        "contract_version": "v1",
+        "channel": "openapi",
+        "execution_kind": "text",
+        "execution_tier": "cloud",
+        "execution_pattern": "inline",
+        "data_classification": "internal",
+        "input": {"messages": [{"role": "user", "content": "write a short draft"}]},
+        "policy": {"allow_fallback": False},
+    }
+    body = json.dumps(payload).encode("utf-8")
+    headers = merge_json_headers(
+        build_auth_headers(
+            "POST",
+            "/v1/runtime/execute",
+            site_id="site_alpha",
+            idempotency_key="idem-free-gpt55-default-001",
+            nonce="nonce-free-gpt55-default-001",
+            trace_id="tracefreegpt55default0010000",
+            body=body,
+        )
+    )
+
+    response = client.post("/v1/runtime/execute", content=body, headers=headers)
+
+    assert response.status_code == 200, response.text
+    data = response.json()["data"]
+    assert data["profile_id"] == FREE_GPT55_TEXT_PROFILE_ID
+    assert data["model_id"] == FREE_GPT55_MODEL_ID
+    assert provider.requests
+    assert provider.requests[0].profile_id == FREE_GPT55_TEXT_PROFILE_ID
+    assert provider.requests[0].model_id == FREE_GPT55_MODEL_ID
 
     dispose_engine(database_url)
 

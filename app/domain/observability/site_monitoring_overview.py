@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, cast
 
 from sqlalchemy import func, select
 
@@ -83,7 +83,7 @@ class SiteMonitoringOverviewService:
                 actions,
                 key=lambda item: (
                     -self._severity_rank(str(item.get("severity") or "")),
-                    int(item.get("sort_weight") or 0),
+                    self._coerce_int(item.get("sort_weight")),
                     str(item.get("code") or ""),
                 ),
             )[:8],
@@ -145,9 +145,9 @@ class SiteMonitoringOverviewService:
             for meter_key in ("runs", "tokens", "cost")
         }
         pressure_candidates = [
-            (meter_key, float(metric.get("usage_ratio") or 0.0))
+            (meter_key, self._coerce_float(metric.get("usage_ratio")))
             for meter_key, metric in metrics.items()
-            if float(metric.get("limit") or 0.0) > 0
+            if self._coerce_float(metric.get("limit")) > 0
         ]
         top_pressure = "none"
         if pressure_candidates:
@@ -227,7 +227,7 @@ class SiteMonitoringOverviewService:
     ) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
         components: list[dict[str, object]] = []
         actions: list[dict[str, object]] = []
-        active_key_count = int(key_state.get("active_key_count") or 0)
+        active_key_count = self._coerce_int(key_state.get("active_key_count"))
         expires_in_days = key_state.get("expires_in_days")
         if active_key_count <= 0:
             components.append(self._component("api_key", "error", 0, "No active Cloud API key."))
@@ -320,7 +320,7 @@ class SiteMonitoringOverviewService:
                 str(health.get("summary") or "No plugin telemetry."),
             )
         )
-        for item in list(summary.get("attention") or [])[:2]:
+        for item in self._dict_items(summary.get("attention"))[:2]:
             item = self._dict(item)
             state = self._dict(item.get("state"))
             workflow_status = str(state.get("workflow_status") or "active")
@@ -514,7 +514,7 @@ class SiteMonitoringOverviewService:
         key_state: dict[str, object],
         actions: list[dict[str, object]],
     ) -> None:
-        if int(key_state.get("active_key_count") or 0) <= 0:
+        if self._coerce_int(key_state.get("active_key_count")) <= 0:
             return
         last_used_at = self._parse_datetime(key_state.get("last_used_at"))
         if last_used_at is None:
@@ -551,7 +551,7 @@ class SiteMonitoringOverviewService:
                 "summary": "No Cloud monitoring activity has been observed for this site.",
                 "components_count": len(components),
             }
-        score = min(int(item.get("score") or 0) for item in active_components)
+        score = min(self._coerce_int(item.get("score")) for item in active_components)
         status = self._status_from_score(score)
         error_count = sum(1 for item in components if item.get("status") == "error")
         warning_count = sum(1 for item in components if item.get("status") == "warning")
@@ -579,9 +579,9 @@ class SiteMonitoringOverviewService:
         if top_pressure == "none":
             return "No period quota limit is configured."
         metric = metrics[top_pressure]
-        ratio = float(metric.get("usage_ratio") or 0.0)
-        used = float(metric.get("used") or 0.0)
-        limit = float(metric.get("limit") or 0.0)
+        ratio = self._coerce_float(metric.get("usage_ratio"))
+        used = self._coerce_float(metric.get("used"))
+        limit = self._coerce_float(metric.get("limit"))
         return (
             f"{top_pressure.title()} usage is {ratio * 100:.1f}% "
             f"of period quota ({used:g}/{limit:g})."
@@ -634,6 +634,23 @@ class SiteMonitoringOverviewService:
 
     def _dict(self, value: object) -> dict[str, Any]:
         return value if isinstance(value, dict) else {}
+
+    def _dict_items(self, value: object) -> list[dict[str, Any]]:
+        if not isinstance(value, list):
+            return []
+        return [self._dict(item) for item in value if isinstance(item, dict)]
+
+    def _coerce_int(self, value: object, default: int = 0) -> int:
+        try:
+            return int(cast(Any, value))
+        except (TypeError, ValueError):
+            return default
+
+    def _coerce_float(self, value: object, default: float = 0.0) -> float:
+        try:
+            return float(cast(Any, value))
+        except (TypeError, ValueError):
+            return default
 
     def _latest_datetime(self, values: list[object]) -> datetime | None:
         latest: datetime | None = None

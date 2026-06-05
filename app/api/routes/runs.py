@@ -29,6 +29,12 @@ class RuntimeRepairPayload(BaseModel):
 router = APIRouter(prefix="/v1/runs", tags=["runs"])
 
 
+def _dict_value(value: object) -> dict[str, object]:
+    if not isinstance(value, dict):
+        return {}
+    return {str(key): item for key, item in value.items()}
+
+
 def _get_runtime_service(request: Request) -> RuntimeService:
     services = get_cloud_services(request)
     return RuntimeService(
@@ -175,7 +181,9 @@ async def cancel_run(
             run_id=run_id,
         )
 
-    cancel_state = str((run.get("run_lifecycle") or {}).get("cancel", {}).get("state") or "")
+    run_lifecycle = _dict_value(run.get("run_lifecycle"))
+    cancel = _dict_value(run_lifecycle.get("cancel"))
+    cancel_state = str(cancel.get("state") or "")
     message = "run canceled" if cancel_state == "canceled" else "run cancel requested"
     return build_envelope(
         status="ok",

@@ -68,6 +68,48 @@ def test_openai_adapter_rejects_sample_catalog_when_fallback_is_disabled() -> No
         raise AssertionError("expected runtime error")
 
 
+def test_openai_adapter_free_gpt55_sample_catalog_profile() -> None:
+    adapter = OpenAIProviderAdapter(sample_catalog_profile="free-gpt55")
+
+    snapshot = adapter.fetch_catalog()
+
+    assert snapshot.models[0].model_id == "gpt-5.5"
+    assert snapshot.models[0].price_input == 0.0
+    assert snapshot.models[0].price_output == 0.0
+    assert snapshot.models[0].instances[0].instance_id == "openai-global-free-gpt55"
+    assert snapshot.models[0].instances[0].endpoint_variant == "responses"
+    assert "free-gpt55" in snapshot.models[0].instances[0].capability_tags
+    assert "hosted-free" in snapshot.models[0].instances[0].capability_tags
+
+
+def test_openai_adapter_tags_free_gpt55_from_http_catalog() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path.endswith("/models")
+        return httpx.Response(
+            200,
+            json={
+                "data": [
+                    {
+                        "id": "gpt-5.5",
+                        "context_window": 256000,
+                        "metadata": {"commercial_tier": "free"},
+                    }
+                ]
+            },
+        )
+
+    adapter = OpenAIProviderAdapter(
+        api_key="test-api-key",
+        transport=httpx.MockTransport(handler),
+    )
+
+    snapshot = adapter.fetch_catalog()
+
+    assert snapshot.models[0].model_id == "gpt-5.5"
+    assert "free-gpt55" in snapshot.models[0].instances[0].capability_tags
+    assert "hosted-free" in snapshot.models[0].instances[0].capability_tags
+
+
 def test_openai_adapter_executes_chat_with_hosted_params_tools_and_thinking() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         payload = json.loads(request.content.decode("utf-8"))

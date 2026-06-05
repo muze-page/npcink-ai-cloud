@@ -24,6 +24,7 @@ from app.core.models import (
 )
 from app.core.services import CloudServices
 from app.domain.catalog.service import CatalogService
+from app.domain.hosted_model_defaults import FREE_GPT55_MODEL_ID
 from tests.conftest import (
     TEST_ADMIN_SESSION_SECRET,
     TEST_INTERNAL_AUTH_TOKEN,
@@ -568,6 +569,7 @@ def test_portal_ai_insights_are_manual_cached_and_redacted(tmp_path: Path) -> No
     assert '"cache_key":' not in serialized
     assert "source_context" not in serialized
     assert len(provider.requests) == 1
+    assert provider.requests[0].model_id == FREE_GPT55_MODEL_ID
 
     second = client.post(
         "/portal/v1/sites/site_portal_ai/ai-insights/analyze",

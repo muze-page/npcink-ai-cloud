@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta
+from typing import Any, cast
 
 from sqlalchemy.orm import Session
 
@@ -23,6 +24,7 @@ from app.core.models import (
 )
 from app.core.secrets import encrypt_site_api_signing_secret
 from app.core.security import build_secret_hash
+from app.domain.commercial.mixins._audit_mixin import CommercialServiceAuditMixin
 from app.domain.commercial.mixins._billing_mixin import (
     DEFAULT_FREE_PLAN_ID,
     DEFAULT_FREE_PLAN_KIND,
@@ -35,6 +37,7 @@ from app.domain.commercial.mixins._billing_mixin import (
 from app.domain.runtime.errors import (
     RuntimeConcurrencyExceededError,
     RuntimeEntitlementDeniedError,
+    RuntimeErrorBase,
     RuntimeQuotaExceededError,
     RuntimeSiteInactiveError,
     RuntimeSiteNotProvisionedError,
@@ -42,7 +45,7 @@ from app.domain.runtime.errors import (
 )
 
 
-class CommercialServiceRuntimeMixin:
+class CommercialServiceRuntimeMixin(CommercialServiceAuditMixin):
 
     def provision_runtime_baseline(
         self,
@@ -63,6 +66,7 @@ class CommercialServiceRuntimeMixin:
 
         with get_session(self.database_url) as session:
             repository = CommercialRepository(session)
+            service = cast(Any, self)
             repository.upsert_account(
                 account_id=resolved_account_id,
                 name=resolved_account_id,
@@ -73,7 +77,7 @@ class CommercialServiceRuntimeMixin:
                 plan_id == DEFAULT_FREE_PLAN_ID
                 and plan_version_id == DEFAULT_FREE_PLAN_VERSION_ID
             ):
-                self._ensure_plan_free_version_in_session(repository=repository)
+                service._ensure_plan_free_version_in_session(repository=repository)
             else:
                 repository.upsert_plan(
                     plan_id=plan_id,
@@ -88,7 +92,7 @@ class CommercialServiceRuntimeMixin:
                     version_label="v1",
                     status=PLAN_VERSION_STATUS_PUBLISHED,
                     currency="USD",
-                    entitlements_json=DEFAULT_RUNTIME_ENTITLEMENTS,
+                    entitlements_json=cast(dict[str, object], DEFAULT_RUNTIME_ENTITLEMENTS),
                     budgets_json=DEFAULT_RUNTIME_BUDGETS,
                     concurrency_json=DEFAULT_RUNTIME_CONCURRENCY,
                     policy_json=DEFAULT_RUNTIME_COMMERCIAL_POLICY,
@@ -130,7 +134,7 @@ class CommercialServiceRuntimeMixin:
                 expires_at=None,
                 revoked_at=None,
             )
-            self._bind_subscription_in_session(
+            service._bind_subscription_in_session(
                 repository=repository,
                 subscription_id=resolved_subscription_id,
                 account_id=resolved_account_id,
@@ -173,7 +177,7 @@ class CommercialServiceRuntimeMixin:
         repository = CommercialRepository(session)
         site = repository.get_site(site_id)
         if site is None:
-            error = RuntimeSiteNotProvisionedError(site_id)
+            error: RuntimeErrorBase = RuntimeSiteNotProvisionedError(site_id)
             self._record_commercial_decision_in_session(
                 repository=repository,
                 account_id=None,
@@ -244,7 +248,8 @@ class CommercialServiceRuntimeMixin:
             session.commit()
             raise error
 
-        period_start_at, period_end_at = self._resolve_period(subscription, now)
+        service = cast(Any, self)
+        period_start_at, period_end_at = service._resolve_period(subscription, now)
         policy_actions: list[dict[str, object]] = []
         snapshot = repository.get_active_entitlement_snapshot(
             site.account_id or "",
@@ -279,8 +284,8 @@ class CommercialServiceRuntimeMixin:
             session.commit()
             raise error
 
-        policy = self._normalize_commercial_policy(snapshot.policy_json)
-        batch_limits = self._resolve_runtime_batch_limits(
+        policy = service._normalize_commercial_policy(snapshot.policy_json)
+        batch_limits = service._resolve_runtime_batch_limits(
             snapshot=snapshot,
             plan_version=plan_version,
         )
@@ -389,14 +394,16 @@ class CommercialServiceRuntimeMixin:
                 idempotency_key=idempotency_key,
                 payload_json={
                     "reason": "entitlement_miss",
-                    "entitlements": self._normalize_entitlements(snapshot.entitlements_json),
+                    "entitlements": service._normalize_entitlements(
+                        snapshot.entitlements_json
+                    ),
                 },
             )
             session.commit()
             raise error
 
         active_runs = repository.count_active_runs(site_id)
-        concurrency = self._normalize_concurrency(snapshot.concurrency_json)
+        concurrency = service._normalize_concurrency(snapshot.concurrency_json)
         max_active_runs = self._coerce_int(concurrency.get("max_active_runs"))
         if request_kind == "execute" and max_active_runs > 0 and active_runs >= max_active_runs:
             error = RuntimeConcurrencyExceededError(site_id, max_active_runs)
@@ -425,7 +432,7 @@ class CommercialServiceRuntimeMixin:
             session.commit()
             raise error
 
-        totals = self._aggregate_meter_events(
+        totals = service._aggregate_meter_events(
             repository.list_usage_meter_events(
                 site_id,
                 subscription_id=subscription.subscription_id,
@@ -434,7 +441,7 @@ class CommercialServiceRuntimeMixin:
                 limit=None,
             )
         )
-        budgets = self._normalize_budgets(snapshot.budgets_json)
+        budgets = service._normalize_budgets(snapshot.budgets_json)
         budget_checks = (
             ("runs", totals.get("runs", 0.0), budgets.get("max_runs_per_period")),
             ("tokens", totals.get("tokens_total", 0.0), budgets.get("max_tokens_per_period")),
@@ -499,7 +506,7 @@ class CommercialServiceRuntimeMixin:
             "plan_version_id": subscription.plan_version_id,
             "period_start_at": period_start_at,
             "period_end_at": period_end_at,
-            "entitlements": self._normalize_entitlements(snapshot.entitlements_json),
+            "entitlements": service._normalize_entitlements(snapshot.entitlements_json),
             "budgets": budgets,
             "concurrency": concurrency,
             "batch_limits": batch_limits,
@@ -698,7 +705,7 @@ class CommercialServiceRuntimeMixin:
                 and isinstance(merged.get(key), dict)
                 and isinstance(value, dict)
             ):
-                task_backend = dict(merged.get(key) or {})
+                task_backend = self._sanitize_payload_dict(merged.get(key)) or {}
                 task_backend.update(value)
                 merged[key] = task_backend
                 continue
@@ -732,7 +739,7 @@ class CommercialServiceRuntimeMixin:
         execution_tier: str,
         data_classification: str,
     ) -> bool:
-        entitlements = self._normalize_entitlements(snapshot.entitlements_json)
+        entitlements = cast(Any, self)._normalize_entitlements(snapshot.entitlements_json)
         checks = (
             (entitlements.get("ability_families"), ability_family),
             (entitlements.get("channels"), channel),

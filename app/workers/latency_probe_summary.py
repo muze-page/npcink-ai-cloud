@@ -1,14 +1,15 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
-from typing import Any, Callable
+from typing import Any, cast
 
 from app.adapters.repositories.commercial_repository import CommercialRepository
 from app.adapters.repositories.stats_repository import StatsRepository
 from app.core.config import Settings, get_settings
 from app.core.db import get_session, require_database_connection
 from app.core.logging import configure_logging, get_logger
-from app.core.models import ProviderCallRecord, SITE_STATUS_ACTIVE
+from app.core.models import SITE_STATUS_ACTIVE, ProviderCallRecord
 from app.domain.usage.rollup import UsageRollupService
 
 
@@ -18,6 +19,23 @@ def _normalize_datetime(value: datetime | None) -> datetime | None:
     if value.tzinfo is None:
         return value.replace(tzinfo=UTC)
     return value.astimezone(UTC)
+
+
+def _coerce_int(value: object, default: int = 0) -> int:
+    try:
+        return int(cast(Any, value))
+    except (TypeError, ValueError):
+        return default
+
+
+def _dict_items(value: object) -> list[dict[str, object]]:
+    if not isinstance(value, list):
+        return []
+    return [
+        {str(key): item for key, item in candidate.items()}
+        for candidate in value
+        if isinstance(candidate, dict)
+    ]
 
 
 def _collect_recent_instance_ids(
@@ -74,7 +92,7 @@ def run_once(
         start_at=since_at,
         end_at=now.astimezone(UTC),
     )
-    site_batches = list(sink_result.get("site_batches") or [])
+    site_batches = _dict_items(sink_result.get("site_batches"))
 
     return {
         "source": "cloud_latency_probe_worker",
@@ -87,12 +105,12 @@ def run_once(
         "site_limit": settings.latency_probe_worker_site_limit,
         "instance_limit": settings.latency_probe_worker_instance_limit,
         "sites_total": len(site_batches),
-        "stored_batches_total": int(sink_result.get("stored_batches_total") or 0),
+        "stored_batches_total": _coerce_int(sink_result.get("stored_batches_total")),
         "delivery_owner": str(sink_result.get("delivery_owner") or ""),
         "rollup_scope_kind": str(sink_result.get("scope_kind") or ""),
-        "instances_total": int(sink_result.get("instances_total") or 0),
-        "ready_total": int(sink_result.get("ready_total") or 0),
-        "healthy_total": int(sink_result.get("healthy_total") or 0),
+        "instances_total": _coerce_int(sink_result.get("instances_total")),
+        "ready_total": _coerce_int(sink_result.get("ready_total")),
+        "healthy_total": _coerce_int(sink_result.get("healthy_total")),
         "site_batches": site_batches,
     }
 

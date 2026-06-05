@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import Any, Callable
+from typing import Any, Callable, cast
 
 from app.adapters.repositories.commercial_repository import CommercialRepository
 from app.core.config import Settings, get_settings
@@ -9,6 +9,23 @@ from app.core.db import get_session, require_database_connection
 from app.core.logging import configure_logging, get_logger
 from app.core.models import SITE_STATUS_ACTIVE
 from app.domain.usage.rollup import UsageRollupService
+
+
+def _coerce_int(value: object, default: int = 0) -> int:
+    try:
+        return int(cast(Any, value))
+    except (TypeError, ValueError):
+        return default
+
+
+def _dict_items(value: object) -> list[dict[str, object]]:
+    if not isinstance(value, list):
+        return []
+    return [
+        {str(key): item for key, item in candidate.items()}
+        for candidate in value
+        if isinstance(candidate, dict)
+    ]
 
 
 def run_once(
@@ -33,7 +50,7 @@ def run_once(
         error_rate_threshold=settings.alert_worker_error_rate_threshold,
         latency_ms_threshold=settings.alert_worker_latency_ms_threshold,
     )
-    site_batches = list(sink_result.get("site_batches") or [])
+    site_batches = _dict_items(sink_result.get("site_batches"))
 
     return {
         "source": "cloud_alert_provider_degradation_worker",
@@ -44,10 +61,10 @@ def run_once(
         "error_rate_threshold": settings.alert_worker_error_rate_threshold,
         "latency_ms_threshold": settings.alert_worker_latency_ms_threshold,
         "sites_total": len(site_batches),
-        "stored_batches_total": int(sink_result.get("stored_batches_total") or 0),
+        "stored_batches_total": _coerce_int(sink_result.get("stored_batches_total")),
         "delivery_owner": str(sink_result.get("delivery_owner") or ""),
         "rollup_scope_kind": str(sink_result.get("scope_kind") or ""),
-        "events_total": int(sink_result.get("events_total") or 0),
+        "events_total": _coerce_int(sink_result.get("events_total")),
         "site_batches": site_batches,
     }
 

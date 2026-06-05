@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
+from typing import Any, cast
 
 from app.adapters.providers.anthropic import AnthropicProviderAdapter
 from app.adapters.providers.base import ProviderAdapter
@@ -164,7 +165,7 @@ def _coerce_string(value: object) -> str:
 
 def _coerce_timeout(value: object) -> float:
     try:
-        normalized = float(value)
+        normalized = float(cast(Any, value))
     except (TypeError, ValueError):
         return 30.0
     return max(0.001, normalized)
@@ -172,7 +173,7 @@ def _coerce_timeout(value: object) -> float:
 
 def _coerce_int(value: object, default: int) -> int:
     try:
-        normalized = int(value)
+        normalized = int(cast(Any, value))
     except (TypeError, ValueError):
         return default
     return max(1, normalized)

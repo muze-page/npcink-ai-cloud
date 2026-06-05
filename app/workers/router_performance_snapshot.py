@@ -3,9 +3,12 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, cast
+
 import httpx
+
 from app.adapters.repositories.commercial_repository import CommercialRepository
 from app.core.config import Settings, get_settings
 from app.core.db import get_session, require_database_connection
@@ -15,6 +18,23 @@ from app.domain.usage.rollup import UsageRollupService
 
 CALLBACK_ROUTE = "/magick-ai/open/v1/router/performance-snapshot/callback"
 CALLBACK_EVENT = "router.performance_snapshot.batch"
+
+
+def _coerce_int(value: object, default: int = 0) -> int:
+    try:
+        return int(cast(Any, value))
+    except (TypeError, ValueError):
+        return default
+
+
+def _dict_items(value: object) -> list[dict[str, object]]:
+    if not isinstance(value, list):
+        return []
+    return [
+        {str(key): item for key, item in candidate.items()}
+        for candidate in value
+        if isinstance(candidate, dict)
+    ]
 
 
 def _build_projection_window(*, now: datetime, window_hours: int) -> tuple[datetime, datetime]:
@@ -150,7 +170,7 @@ def _dispatch_callback(
 def run_once(
     settings: Settings,
     *,
-    now_factory: callable | None = None,
+    now_factory: Callable[[], datetime] | None = None,
     transport: httpx.BaseTransport | None = None,
 ) -> dict[str, Any]:
     factory = now_factory or (lambda: datetime.now(UTC))
@@ -173,7 +193,7 @@ def run_once(
         start_at=start_at,
         end_at=end_at,
     )
-    site_batches = list(sink_result.get("site_batches") or [])
+    site_batches = _dict_items(sink_result.get("site_batches"))
     callback_attempted_total = 0
     callback_delivered_total = 0
     callback_failed_total = 0
@@ -249,13 +269,13 @@ def run_once(
         "site_limit": settings.router_performance_worker_site_limit,
         "window_hours": settings.router_performance_worker_window_hours,
         "sites_total": len(site_batches),
-        "stored_batches_total": int(sink_result.get("stored_batches_total") or 0),
+        "stored_batches_total": _coerce_int(sink_result.get("stored_batches_total")),
         "delivery_owner": str(sink_result.get("delivery_owner") or ""),
         "rollup_scope_kind": str(sink_result.get("scope_kind") or ""),
-        "rows_total": int(sink_result.get("rows_total") or 0),
-        "request_total": int(sink_result.get("request_total") or 0),
-        "success_total": int(sink_result.get("success_total") or 0),
-        "guard_fail_total": int(sink_result.get("guard_fail_total") or 0),
+        "rows_total": _coerce_int(sink_result.get("rows_total")),
+        "request_total": _coerce_int(sink_result.get("request_total")),
+        "success_total": _coerce_int(sink_result.get("success_total")),
+        "guard_fail_total": _coerce_int(sink_result.get("guard_fail_total")),
         "callback_attempted_total": callback_attempted_total,
         "callback_delivered_total": callback_delivered_total,
         "callback_failed_total": callback_failed_total,

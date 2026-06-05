@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import time
-from typing import Any
+from typing import Any, cast
 
 from app.adapters.callbacks.http import HttpRuntimeCallbackDispatcher
 from app.core.config import get_settings
@@ -15,6 +15,23 @@ def _close_if_supported(resource: Any) -> None:
     close = getattr(resource, "close", None)
     if callable(close):
         close()
+
+
+def _coerce_int(value: object, default: int = 0) -> int:
+    try:
+        return int(cast(Any, value))
+    except (TypeError, ValueError):
+        return default
+
+
+def _dict_items(value: object) -> list[dict[str, object]]:
+    if not isinstance(value, list):
+        return []
+    return [
+        {str(key): item for key, item in candidate.items()}
+        for candidate in value
+        if isinstance(candidate, dict)
+    ]
 
 
 def main() -> None:
@@ -65,27 +82,31 @@ def main() -> None:
                 "processed"
                 if callbacks
                 else "repairing"
-                if int(auto_repair.get("redelivered_callback_overdue_total") or 0) > 0
+                if _coerce_int(auto_repair.get("redelivered_callback_overdue_total")) > 0
                 else "idle"
             )
             heartbeat.maybe_record(
                 status=heartbeat_status,
                 payload={
                     "processed_callbacks": len(callbacks),
-                    "redelivered_callback_overdue_total": int(
-                        auto_repair.get("redelivered_callback_overdue_total") or 0
+                    "redelivered_callback_overdue_total": _coerce_int(
+                        auto_repair.get("redelivered_callback_overdue_total")
                     ),
                 },
             )
             if not callbacks:
-                if int(auto_repair.get("redelivered_callback_overdue_total") or 0) > 0:
+                redelivered_total = _coerce_int(
+                    auto_repair.get("redelivered_callback_overdue_total")
+                )
+                if redelivered_total > 0:
                     logger.info(
                         "callback worker auto-redelivered overdue callbacks: count=%s run_ids=%s",
-                        auto_repair["redelivered_callback_overdue_total"],
+                        redelivered_total,
                         [
-                            item["run_id"]
-                            for item in auto_repair.get("redelivered_callback_overdue", [])
-                            if isinstance(item, dict)
+                            item.get("run_id")
+                            for item in _dict_items(
+                                auto_repair.get("redelivered_callback_overdue")
+                            )
                         ],
                     )
                 time.sleep(settings.runtime_callback_worker_poll_seconds)

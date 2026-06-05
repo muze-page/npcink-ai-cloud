@@ -172,6 +172,41 @@ class OpenAIProviderAdapter:
             ),
         ]
 
+        if self.sample_catalog_profile == "free-gpt55":
+            models.insert(
+                0,
+                CatalogModelSeed(
+                    model_id="gpt-5.5",
+                    family="gpt-5.5",
+                    feature="text",
+                    status="available",
+                    context_window=256000,
+                    price_input=0.0,
+                    price_output=0.0,
+                    fallback_candidate=True,
+                    raw_json={
+                        "tier": "quality",
+                        "commercial_tier": "free",
+                        "surface": "free_gpt55_tools",
+                    },
+                    instances=[
+                        CatalogInstanceSeed(
+                            instance_id="openai-global-free-gpt55",
+                            endpoint_variant="responses",
+                            region="global",
+                            capability_tags=[
+                                "text",
+                                "quality",
+                                "free-gpt55",
+                                "hosted-free",
+                            ],
+                            is_default=True,
+                            weight=140,
+                        )
+                    ],
+                ),
+            )
+
         return ProviderCatalogSnapshot(
             provider_id=self.provider_id,
             display_name=self.display_name,
@@ -761,6 +796,7 @@ class OpenAIProviderAdapter:
                     endpoint_variant=endpoint_variant,
                     region=region,
                     capability_tags=self._build_catalog_capability_tags(
+                        model_id,
                         feature,
                         tier,
                         payload,
@@ -944,6 +980,7 @@ class OpenAIProviderAdapter:
 
     def _build_catalog_capability_tags(
         self,
+        model_id: str,
         feature: str,
         tier: str,
         payload: dict[str, Any],
@@ -964,6 +1001,22 @@ class OpenAIProviderAdapter:
         if isinstance(explicit_tags, list):
             for tag in explicit_tags:
                 if isinstance(tag, str) and tag and tag not in tags:
+                    tags.append(tag)
+
+        model_key = str(model_id or "").strip().lower()
+        commercial_tier = self._lookup_nested(
+            payload,
+            ("commercial_tier",),
+            ("metadata", "commercial_tier"),
+            ("billing", "tier"),
+        )
+        if model_key in {"gpt-5.5", "openai/gpt-5.5"} or (
+            model_key.startswith("gpt-5.5")
+            and isinstance(commercial_tier, str)
+            and commercial_tier.strip().lower() == "free"
+        ):
+            for tag in ("free-gpt55", "hosted-free"):
+                if tag not in tags:
                     tags.append(tag)
 
         return tags

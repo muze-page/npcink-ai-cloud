@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import Integer, Select, case, cast, distinct, func, select, ColumnElement
+from sqlalchemy import ColumnElement, Integer, Select, case, cast, distinct, func, select
 from sqlalchemy.orm import Session
 
 from app.core.models import (
@@ -455,7 +455,7 @@ class StatsRepository:
             )
         return statement
 
-    def _run_latency_ms_expression(self) -> ColumnElement:
+    def _run_latency_ms_expression(self) -> ColumnElement | None:
         bind = self.session.get_bind()
         dialect_name = bind.dialect.name if bind is not None else ""
         if dialect_name == "sqlite":

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from collections import Counter, defaultdict
 from datetime import datetime, timedelta
+from typing import Any, Sequence, cast
 from uuid import uuid4
 
 from app.adapters.repositories.commercial_repository import CommercialRepository
@@ -23,7 +24,10 @@ from app.domain.commercial.errors import (
     CommercialNotFoundError,
     CommercialValidationError,
 )
-from app.domain.commercial.mixins._audit_mixin import ServiceAuditContext
+from app.domain.commercial.mixins._audit_mixin import (
+    CommercialServiceAuditMixin,
+    ServiceAuditContext,
+)
 
 ALLOWED_ABILITY_FAMILIES = {
     "text",
@@ -282,7 +286,7 @@ def _subscription_counts_as_covered(subscription: object | None) -> bool:
     )
 
 
-class CommercialServiceBillingMixin:
+class CommercialServiceBillingMixin(CommercialServiceAuditMixin):
     def upsert_plan(
         self,
         *,
@@ -482,7 +486,7 @@ class CommercialServiceBillingMixin:
             return {
                 "site_id": site_id,
                 "generated_at": self._serialize_datetime(now),
-                "site": self._serialize_site(site),
+                "site": cast(Any, self)._serialize_site(site),
                 "subscription": (
                     self._serialize_subscription(subscription) if subscription else None
                 ),
@@ -598,8 +602,8 @@ class CommercialServiceBillingMixin:
                 "pack_id": str(merged.get("pack_id") or ""),
                 "label": str(merged.get("label") or ""),
                 "points_label": str(merged.get("points_label") or ""),
-                "points_equivalent": int(merged.get("points_equivalent") or 0),
-                "display_order": int(merged.get("display_order") or 0),
+                "points_equivalent": self._coerce_int(merged.get("points_equivalent")),
+                "display_order": self._coerce_int(merged.get("display_order")),
                 "recommended_for_tiers": _normalize_recommended_tiers(
                     merged.get("recommended_for_tiers")
                 ),
@@ -637,7 +641,7 @@ class CommercialServiceBillingMixin:
             return sorted(
                 items,
                 key=lambda item: (
-                    int(item.get("display_order") or 0),
+                    self._coerce_int(item.get("display_order")),
                     str(item.get("pack_id") or ""),
                 ),
             )
@@ -713,7 +717,7 @@ class CommercialServiceBillingMixin:
             latest_billing_snapshots = repository.get_latest_billing_snapshots_by_site(
                 site_ids=[str(site.site_id or "") for site in covered_sites if str(site.site_id or "").strip()]
             )
-            payload = {
+            payload: dict[str, object] = {
                 "subscription": self._serialize_subscription(subscription),
                 "billing_snapshot_refresh": refresh,
                 "billing_snapshot_status": self._build_subscription_billing_snapshot_status(
@@ -839,12 +843,12 @@ class CommercialServiceBillingMixin:
                 {
                     "subscription": self._serialize_subscription(subscription),
                     "account": (
-                        self._serialize_account(accounts[subscription.account_id])
+                        cast(Any, self)._serialize_account(accounts[subscription.account_id])
                         if subscription.account_id in accounts
                         else None
                     ),
                     "sites": [
-                        self._serialize_site(site)
+                        cast(Any, self)._serialize_site(site)
                         for site in sites_by_account.get(subscription.account_id, [])
                     ],
                     "expiry": self._serialize_expiry_state(subscription),
@@ -893,11 +897,11 @@ class CommercialServiceBillingMixin:
             items.append(
                 {
                     "subscription": self._serialize_subscription(subscription),
-                    "account": self._serialize_account(accounts[subscription.account_id])
+                    "account": cast(Any, self)._serialize_account(accounts[subscription.account_id])
                     if subscription.account_id in accounts
                     else None,
                     "covered_sites": [
-                        self._serialize_site(site)
+                        cast(Any, self)._serialize_site(site)
                         for site in account_sites
                     ],
                     "coverage": self._build_subscription_coverage_summary(
@@ -978,7 +982,10 @@ class CommercialServiceBillingMixin:
                 if str(getattr(event, "subscription_id", "") or "") == subscription.subscription_id
                 and (
                     period_end_at is None
-                    or self._normalize_datetime(getattr(event, "created_at", None)) <= period_end_at
+                    or (
+                        (event_created_at := getattr(event, "created_at", None)) is not None
+                        and self._normalize_datetime(event_created_at) <= period_end_at
+                    )
                 )
             ]
             usage_totals = self._aggregate_meter_events(meter_events)
@@ -997,8 +1004,8 @@ class CommercialServiceBillingMixin:
         return {
             "subscription": self._serialize_subscription(subscription),
             "expiry": self._serialize_expiry_state(subscription),
-            "account": self._serialize_account(account) if account is not None else None,
-            "covered_sites": [self._serialize_site(site) for site in sites],
+            "account": cast(Any, self)._serialize_account(account) if account is not None else None,
+            "covered_sites": [cast(Any, self)._serialize_site(site) for site in sites],
             "plan": self._serialize_plan(plan) if plan is not None else None,
             "plan_version": (
                 self._serialize_plan_version(plan_version)
@@ -1019,7 +1026,7 @@ class CommercialServiceBillingMixin:
             "coverage": self._build_subscription_coverage_summary(
                 subscription,
                 site_count=site_count,
-                site_limit=int(getattr(snapshot, "site_limit", 0) or 0),
+                site_limit=self._coerce_int(getattr(snapshot, "site_limit", 0)),
             ),
             "commercial_policy": policy,
             "budget_headroom": self._build_subscription_budget_headroom(
@@ -1089,28 +1096,40 @@ class CommercialServiceBillingMixin:
             },
         )
 
-        policy_baseline = baseline.get("policy_baseline") or {}
+        policy_baseline = self._sanitize_payload_dict(
+            baseline.get("policy_baseline")
+        ) or {}
+        budgets_template = self._sanitize_payload_dict(
+            baseline.get("budgets_template")
+        ) or {}
+        concurrency_template = self._sanitize_payload_dict(
+            baseline.get("concurrency_template")
+        ) or {}
         repository.upsert_plan_version(
             plan_version_id=plan_version_id,
             plan_id=plan_id,
             version_label="v1",
             status=PLAN_VERSION_STATUS_PUBLISHED,
             currency="USD",
-            entitlements_json=DEFAULT_RUNTIME_ENTITLEMENTS,
-            budgets_json=dict(baseline.get("budgets_template") or {}),
-            concurrency_json=dict(baseline.get("concurrency_template") or {}),
+            entitlements_json=cast(dict[str, object], DEFAULT_RUNTIME_ENTITLEMENTS),
+            budgets_json=budgets_template,
+            concurrency_json=concurrency_template,
             policy_json={
                 "subscription": {
-                    "grace_period_days": int(policy_baseline.get("grace_period_days") or 0),
+                    "grace_period_days": self._coerce_int(
+                        policy_baseline.get("grace_period_days")
+                    ),
                 },
             },
             metadata_json={
                 "tier_id": tier_id,
                 "package_alias": str(baseline.get("package_alias") or "Free"),
                 "plan_kind": DEFAULT_FREE_PLAN_KIND,
-                "site_limit": int(baseline.get("site_limit") or 1),
-                "monthly_included_points": int(baseline.get("monthly_included_points") or 0),
-                "max_batch_items": int(baseline.get("max_batch_items") or 0),
+                "site_limit": self._coerce_int(baseline.get("site_limit")) or 1,
+                "monthly_included_points": self._coerce_int(
+                    baseline.get("monthly_included_points")
+                ),
+                "max_batch_items": self._coerce_int(baseline.get("max_batch_items")),
                 "automation_enabled": bool(baseline.get("automation_enabled")),
                 "api_enabled": bool(baseline.get("api_enabled")),
                 "openclaw_enabled": bool(baseline.get("openclaw_enabled")),
@@ -1136,7 +1155,15 @@ class CommercialServiceBillingMixin:
             )
 
         plan_id, plan_version_id = CANONICAL_TIER_PLAN_IDS[tier_id]
-        policy_baseline = baseline.get("policy_baseline") or {}
+        policy_baseline = self._sanitize_payload_dict(
+            baseline.get("policy_baseline")
+        ) or {}
+        budgets_template = self._sanitize_payload_dict(
+            baseline.get("budgets_template")
+        ) or {}
+        concurrency_template = self._sanitize_payload_dict(
+            baseline.get("concurrency_template")
+        ) or {}
         package_alias = str(baseline.get("package_alias") or baseline.get("label") or tier_id.title())
 
         repository.upsert_plan(
@@ -1156,20 +1183,24 @@ class CommercialServiceBillingMixin:
             version_label="v1",
             status=PLAN_VERSION_STATUS_PUBLISHED,
             currency="USD",
-            entitlements_json=DEFAULT_RUNTIME_ENTITLEMENTS,
-            budgets_json=dict(baseline.get("budgets_template") or {}),
-            concurrency_json=dict(baseline.get("concurrency_template") or {}),
+            entitlements_json=cast(dict[str, object], DEFAULT_RUNTIME_ENTITLEMENTS),
+            budgets_json=budgets_template,
+            concurrency_json=concurrency_template,
             policy_json={
                 "subscription": {
-                    "grace_period_days": int(policy_baseline.get("grace_period_days") or 0),
+                    "grace_period_days": self._coerce_int(
+                        policy_baseline.get("grace_period_days")
+                    ),
                 },
             },
             metadata_json={
                 "tier_id": tier_id,
                 "package_alias": package_alias,
-                "monthly_included_points": int(baseline.get("monthly_included_points") or 0),
-                "site_limit": int(baseline.get("site_limit") or 1),
-                "max_batch_items": int(baseline.get("max_batch_items") or 0),
+                "monthly_included_points": self._coerce_int(
+                    baseline.get("monthly_included_points")
+                ),
+                "site_limit": self._coerce_int(baseline.get("site_limit")) or 1,
+                "max_batch_items": self._coerce_int(baseline.get("max_batch_items")),
                 "automation_enabled": bool(baseline.get("automation_enabled")),
                 "api_enabled": bool(baseline.get("api_enabled")),
                 "openclaw_enabled": bool(baseline.get("openclaw_enabled")),
@@ -1274,15 +1305,18 @@ class CommercialServiceBillingMixin:
         }
         updated_budgets = {
             "max_runs_per_period": round(
-                float(base_budgets.get("max_runs_per_period") or 0.0) + normalized_runs,
+                self._coerce_float(base_budgets.get("max_runs_per_period"))
+                + normalized_runs,
                 6,
             ),
             "max_tokens_per_period": round(
-                float(base_budgets.get("max_tokens_per_period") or 0.0) + normalized_tokens,
+                self._coerce_float(base_budgets.get("max_tokens_per_period"))
+                + normalized_tokens,
                 6,
             ),
             "max_cost_per_period": round(
-                float(base_budgets.get("max_cost_per_period") or 0.0) + normalized_cost,
+                self._coerce_float(base_budgets.get("max_cost_per_period"))
+                + normalized_cost,
                 6,
             ),
         }
@@ -1309,7 +1343,9 @@ class CommercialServiceBillingMixin:
         subscription_metadata["current_period_topup_totals"] = {
             "runs": round(
                 sum(
-                    self._coerce_float((item.get("increments") or {}).get("runs"))
+                    self._coerce_float(
+                        (self._sanitize_payload_dict(item.get("increments")) or {}).get("runs")
+                    )
                     for item in topup_items
                     if isinstance(item, dict)
                     and str(item.get("target_period_start_at") or "") == expected_period_start
@@ -1319,7 +1355,9 @@ class CommercialServiceBillingMixin:
             ),
             "tokens": round(
                 sum(
-                    self._coerce_float((item.get("increments") or {}).get("tokens"))
+                    self._coerce_float(
+                        (self._sanitize_payload_dict(item.get("increments")) or {}).get("tokens")
+                    )
                     for item in topup_items
                     if isinstance(item, dict)
                     and str(item.get("target_period_start_at") or "") == expected_period_start
@@ -1329,7 +1367,9 @@ class CommercialServiceBillingMixin:
             ),
             "cost": round(
                 sum(
-                    self._coerce_float((item.get("increments") or {}).get("cost"))
+                    self._coerce_float(
+                        (self._sanitize_payload_dict(item.get("increments")) or {}).get("cost")
+                    )
                     for item in topup_items
                     if isinstance(item, dict)
                     and str(item.get("target_period_start_at") or "") == expected_period_start
@@ -1346,10 +1386,10 @@ class CommercialServiceBillingMixin:
             subscription_id=subscription.subscription_id,
             plan_version_id=plan_version.plan_version_id,
             entitlements_json=base_entitlements,
-            budgets_json=updated_budgets,
+            budgets_json=cast(dict[str, object], updated_budgets),
             concurrency_json=base_concurrency,
             policy_json=base_policy,
-            site_limit=self._resolve_site_limit(
+            site_limit=cast(Any, self)._resolve_site_limit(
                 plan_version=plan_version,
                 subscription=subscription,
                 snapshot=active_snapshot,
@@ -1377,7 +1417,7 @@ class CommercialServiceBillingMixin:
         latest_billing_snapshots = repository.get_latest_billing_snapshots_by_site(
             site_ids=[str(site.site_id or "") for site in covered_sites if str(site.site_id or "").strip()]
         )
-        payload = {
+        payload: dict[str, object] = {
             "subscription": self._serialize_subscription(subscription),
             "entitlement_snapshot": self._serialize_entitlement_snapshot(snapshot),
             "topup": topup_record,
@@ -1439,7 +1479,7 @@ class CommercialServiceBillingMixin:
                 f"plan version '{plan_version_id}' was not found",
             )
         repository.supersede_entitlement_snapshots(account_id)
-        snapshot_site_limit = self._resolve_site_limit(
+        snapshot_site_limit = cast(Any, self)._resolve_site_limit(
             plan_version=plan_version,
             subscription=subscription,
         )
@@ -1527,7 +1567,10 @@ class CommercialServiceBillingMixin:
 
     def _normalize_reconciliation_tolerance(self, raw: object) -> dict[str, float]:
         raw = raw if isinstance(raw, dict) else {}
-        tolerance_raw = raw.get("tolerance") if isinstance(raw.get("tolerance"), dict) else raw
+        tolerance_candidate = raw.get("tolerance")
+        tolerance_raw = (
+            tolerance_candidate if isinstance(tolerance_candidate, dict) else raw
+        )
         return {
             "runs": max(0.0, self._coerce_float(tolerance_raw.get("runs"))),
             "provider_calls": max(0.0, self._coerce_float(tolerance_raw.get("provider_calls"))),
@@ -1587,7 +1630,7 @@ class CommercialServiceBillingMixin:
         )
         return start_at, end_at
 
-    def _aggregate_meter_events(self, events: list[object]) -> dict[str, float]:
+    def _aggregate_meter_events(self, events: Sequence[object]) -> dict[str, float]:
         totals: dict[str, float] = defaultdict(float)
         for event in events:
             meter_key = str(getattr(event, "meter_key", "") or "")
@@ -1596,7 +1639,7 @@ class CommercialServiceBillingMixin:
             totals[meter_key] += float(getattr(event, "quantity", 0.0) or 0.0)
         return {key: round(value, 6) for key, value in sorted(totals.items())}
 
-    def _aggregate_meter_breakdown(self, events: list[object]) -> dict[str, object]:
+    def _aggregate_meter_breakdown(self, events: Sequence[object]) -> dict[str, object]:
         by_family: dict[str, dict[str, float]] = defaultdict(lambda: defaultdict(float))
         for event in events:
             family = str(getattr(event, "ability_family", "") or "unclassified")
@@ -1697,7 +1740,7 @@ class CommercialServiceBillingMixin:
             "budgets": self._normalize_budgets(snapshot.budgets_json),
             "concurrency": self._normalize_concurrency(snapshot.concurrency_json),
             "policy": self._normalize_commercial_policy(snapshot.policy_json),
-            "site_limit": int(getattr(snapshot, "site_limit", 1) or 1),
+            "site_limit": self._coerce_int(getattr(snapshot, "site_limit", 1)) or 1,
             "metadata": snapshot.metadata_json or {},
             "generated_at": self._serialize_datetime(snapshot.generated_at),
         }
@@ -1802,7 +1845,7 @@ class CommercialServiceBillingMixin:
             metadata.update(plan_metadata)
 
         return {
-            "max_batch_items": max(0, int(metadata.get("max_batch_items") or 0)),
+            "max_batch_items": max(0, self._coerce_int(metadata.get("max_batch_items"))),
         }
 
     def _select_latest_plan_version(
@@ -1867,29 +1910,42 @@ class CommercialServiceBillingMixin:
         *,
         tier_id: str,
     ) -> dict[str, object]:
-        budgets_template = dict(baseline.get("budgets_template") or {})
-        concurrency_template = dict(baseline.get("concurrency_template") or {})
-        policy_baseline = dict(baseline.get("policy_baseline") or {})
+        budgets_template = self._sanitize_payload_dict(
+            baseline.get("budgets_template")
+        ) or {}
+        concurrency_template = self._sanitize_payload_dict(
+            baseline.get("concurrency_template")
+        ) or {}
+        policy_baseline = self._sanitize_payload_dict(
+            baseline.get("policy_baseline")
+        ) or {}
+        feature_groups = (
+            baseline.get("feature_groups")
+            if isinstance(baseline.get("feature_groups"), list)
+            else []
+        )
         return {
             "tier_id": tier_id,
             "label": str(baseline.get("label") or tier_id.title()),
             "package_alias": str(baseline.get("package_alias") or ""),
             "usage_band": str(baseline.get("usage_band") or ""),
             "positioning": str(baseline.get("positioning") or ""),
-            "monthly_included_points": int(
-                baseline.get("monthly_included_points") or 0
+            "monthly_included_points": self._coerce_int(
+                baseline.get("monthly_included_points")
             ),
-            "site_limit": int(baseline.get("site_limit") or 1),
+            "site_limit": self._coerce_int(baseline.get("site_limit")) or 1,
             "budgets_template": budgets_template,
             "concurrency_template": concurrency_template,
-            "max_batch_items": int(baseline.get("max_batch_items") or 0),
+            "max_batch_items": self._coerce_int(baseline.get("max_batch_items")),
             "automation_enabled": bool(baseline.get("automation_enabled")),
             "api_enabled": bool(baseline.get("api_enabled")),
             "openclaw_enabled": bool(baseline.get("openclaw_enabled")),
             "package_operator_note": str(baseline.get("package_operator_note") or ""),
             "policy_baseline": policy_baseline,
             "canonical_shell": {
-                "entitlements": self._normalize_entitlements(DEFAULT_RUNTIME_ENTITLEMENTS),
+                "entitlements": self._normalize_entitlements(
+                    cast(dict[str, object], DEFAULT_RUNTIME_ENTITLEMENTS)
+                ),
                 "budgets": budgets_template,
                 "concurrency": concurrency_template,
                 "policy": self._normalize_commercial_policy(
@@ -1898,15 +1954,17 @@ class CommercialServiceBillingMixin:
                 "metadata": {
                     "tier_id": tier_id,
                     "package_alias": str(baseline.get("package_alias") or ""),
-                    "monthly_included_points": int(baseline.get("monthly_included_points") or 0),
-                    "site_limit": int(baseline.get("site_limit") or 1),
-                    "max_batch_items": int(baseline.get("max_batch_items") or 0),
+                    "monthly_included_points": self._coerce_int(
+                        baseline.get("monthly_included_points")
+                    ),
+                    "site_limit": self._coerce_int(baseline.get("site_limit")) or 1,
+                    "max_batch_items": self._coerce_int(baseline.get("max_batch_items")),
                     "automation_enabled": bool(baseline.get("automation_enabled")),
                     "api_enabled": bool(baseline.get("api_enabled")),
                     "openclaw_enabled": bool(baseline.get("openclaw_enabled")),
                 },
             },
-            "feature_groups": list(baseline.get("feature_groups") or []),
+            "feature_groups": feature_groups,
         }
 
     def _build_plan_package_fit_cues(
@@ -1926,12 +1984,18 @@ class CommercialServiceBillingMixin:
                 }
             ]
 
-        tier_budgets = tier_summary.get("budgets_template") or {}
-        latest_budgets = latest_version.get("budgets") or {}
-        tier_concurrency = tier_summary.get("concurrency_template") or {}
-        latest_concurrency = latest_version.get("concurrency") or {}
+        tier_budgets = self._sanitize_payload_dict(
+            tier_summary.get("budgets_template")
+        ) or {}
+        latest_budgets = self._sanitize_payload_dict(latest_version.get("budgets")) or {}
+        tier_concurrency = self._sanitize_payload_dict(
+            tier_summary.get("concurrency_template")
+        ) or {}
+        latest_concurrency = self._sanitize_payload_dict(
+            latest_version.get("concurrency")
+        ) or {}
 
-        max_cost = float((latest_budgets or {}).get("max_cost_per_period") or 0.0)
+        max_cost = self._coerce_float(latest_budgets.get("max_cost_per_period"))
         if max_cost <= 0:
             cues.append(
                 {
@@ -1947,8 +2011,8 @@ class CommercialServiceBillingMixin:
             ("max_tokens_per_period", "tokens"),
             ("max_cost_per_period", "cost"),
         ):
-            template_value = float((tier_budgets or {}).get(key) or 0.0)
-            current_value = float((latest_budgets or {}).get(key) or 0.0)
+            template_value = self._coerce_float(tier_budgets.get(key))
+            current_value = self._coerce_float(latest_budgets.get(key))
             if template_value <= 0 or current_value <= 0:
                 continue
             if current_value < template_value * 0.5:
@@ -1970,8 +2034,8 @@ class CommercialServiceBillingMixin:
                     }
                 )
 
-        template_parallel = int((tier_concurrency or {}).get("max_active_runs") or 0)
-        current_parallel = int((latest_concurrency or {}).get("max_active_runs") or 0)
+        template_parallel = self._coerce_int(tier_concurrency.get("max_active_runs"))
+        current_parallel = self._coerce_int(latest_concurrency.get("max_active_runs"))
         if template_parallel > 0 and current_parallel > template_parallel * 2:
             cues.append(
                 {
@@ -1982,7 +2046,10 @@ class CommercialServiceBillingMixin:
                 }
             )
 
-        shadow_summary = self.get_commercial_shadow_pricing_summary(window_days=30, limit=3)
+        shadow_summary = cast(Any, self).get_commercial_shadow_pricing_summary(
+            window_days=30,
+            limit=3,
+        )
         top_family = (
             shadow_summary.get("top_families", [])[0]
             if isinstance(shadow_summary.get("top_families"), list)
@@ -1990,9 +2057,9 @@ class CommercialServiceBillingMixin:
             else None
         )
         if isinstance(top_family, dict):
-            observed_cost = float(top_family.get("provider_cost") or 0.0)
-            observed_tokens = float(top_family.get("tokens_total") or 0.0)
-            observed_runs = int(top_family.get("runs") or 0)
+            observed_cost = self._coerce_float(top_family.get("provider_cost"))
+            observed_tokens = self._coerce_float(top_family.get("tokens_total"))
+            observed_runs = self._coerce_int(top_family.get("runs"))
             top_family_name = str(top_family.get("ability_family") or "unknown")
             if max_cost > 0 and observed_cost > max_cost:
                 cues.append(
@@ -2012,7 +2079,9 @@ class CommercialServiceBillingMixin:
                         "detail": f"The top 30-day family `{top_family_name}` remains well under this template cost ceiling, so this tier may be wider than current observed usage.",
                     }
                 )
-            max_tokens = float((latest_budgets or {}).get("max_tokens_per_period") or 0.0)
+            max_tokens = self._coerce_float(
+                latest_budgets.get("max_tokens_per_period")
+            )
             if max_tokens > 0 and observed_tokens > max_tokens:
                 cues.append(
                     {
@@ -2022,7 +2091,7 @@ class CommercialServiceBillingMixin:
                         "detail": f"The top 30-day family `{top_family_name}` already exceeds the frozen token ceiling for this package.",
                     }
                 )
-            max_runs = float((latest_budgets or {}).get("max_runs_per_period") or 0.0)
+            max_runs = self._coerce_float(latest_budgets.get("max_runs_per_period"))
             if max_runs > 0 and float(observed_runs) > max_runs:
                 cues.append(
                     {
@@ -2290,15 +2359,15 @@ class CommercialServiceBillingMixin:
             getattr(plan_version, "budgets_json", None) if plan_version is not None else None
         )
         effective = self._normalize_budgets(effective_budgets)
-        topup_totals = (
-            (topup_summary or {}).get("current_period_totals")
+        topup_totals = self._sanitize_payload_dict(
+            topup_summary.get("current_period_totals")
             if isinstance(topup_summary, dict)
-            else {}
-        )
+            else None
+        ) or {}
         current_period_delta = {
-            "runs": round(self._coerce_float((topup_totals or {}).get("runs")), 6),
-            "tokens": round(self._coerce_float((topup_totals or {}).get("tokens")), 6),
-            "cost": round(self._coerce_float((topup_totals or {}).get("cost")), 6),
+            "runs": round(self._coerce_float(topup_totals.get("runs")), 6),
+            "tokens": round(self._coerce_float(topup_totals.get("tokens")), 6),
+            "cost": round(self._coerce_float(topup_totals.get("cost")), 6),
         }
         return {
             "base_budget": {
@@ -2379,7 +2448,7 @@ class CommercialServiceBillingMixin:
             currency="USD",
             period_start_at=period_start_at,
             period_end_at=period_end_at,
-            totals_json=totals,
+            totals_json=cast(dict[str, object], totals),
             breakdown_json=breakdown,
         )
 
@@ -2392,8 +2461,11 @@ class CommercialServiceBillingMixin:
         period_start_at: datetime,
         period_end_at: datetime,
     ) -> dict[str, object]:
-        subscription_updated_at = self._normalize_datetime(
-            getattr(subscription, "updated_at", None)
+        raw_subscription_updated_at = getattr(subscription, "updated_at", None)
+        subscription_updated_at = (
+            self._normalize_datetime(raw_subscription_updated_at)
+            if raw_subscription_updated_at is not None
+            else None
         )
         items: list[dict[str, object]] = []
         fresh_site_count = 0
@@ -2411,11 +2483,15 @@ class CommercialServiceBillingMixin:
                 if raw_snapshot_generated_at is not None
                 else None
             )
+            raw_snapshot_period_start_at = getattr(snapshot, "period_start_at", None)
+            raw_snapshot_period_end_at = getattr(snapshot, "period_end_at", None)
             snapshot_matches_period = (
                 snapshot is not None
                 and str(getattr(snapshot, "subscription_id", "") or "") == subscription.subscription_id
-                and self._normalize_datetime(getattr(snapshot, "period_start_at", None)) == period_start_at
-                and self._normalize_datetime(getattr(snapshot, "period_end_at", None)) == period_end_at
+                and raw_snapshot_period_start_at is not None
+                and raw_snapshot_period_end_at is not None
+                and self._normalize_datetime(raw_snapshot_period_start_at) == period_start_at
+                and self._normalize_datetime(raw_snapshot_period_end_at) == period_end_at
             )
             is_fresh = bool(
                 snapshot_matches_period

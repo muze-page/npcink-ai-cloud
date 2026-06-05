@@ -149,6 +149,38 @@ def test_process_png_applies_image_watermark() -> None:
     assert output.getpixel((95, 95))[:3] == (255, 0, 0)
 
 
+def test_process_png_applies_text_watermark() -> None:
+    source = Image.new("RGB", (100, 100), color="white")
+    source_buf = io.BytesIO()
+    source.save(source_buf, format="PNG")
+
+    result = process_media_derivative(
+        source_bytes=source_buf.getvalue(),
+        source_media_type="image",
+        target_format="png",
+        max_width=100,
+        quality=80,
+        watermark_options={
+            "type": "text",
+            "text": "AI",
+            "position": "top_right",
+            "opacity": 1.0,
+            "font_size": 24,
+            "color": "#000000",
+            "background": "transparent",
+            "margin_px": 0,
+        },
+    )
+
+    output = Image.open(io.BytesIO(result.output_bytes)).convert("RGB")
+    top_right_pixels = [
+        output.getpixel((x, y))
+        for x in range(50, 100)
+        for y in range(0, 40)
+    ]
+    assert any(pixel != (255, 255, 255) for pixel in top_right_pixels)
+
+
 def test_process_jpeg_watermark_records_alpha_flatten_warning() -> None:
     source = _make_png_bytes(50, 50)
     watermark = _make_png_bytes(10, 10, mode="RGBA")

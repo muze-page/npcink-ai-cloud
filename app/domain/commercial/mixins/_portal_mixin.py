@@ -4,6 +4,7 @@ from __future__ import annotations
 import secrets
 from collections import defaultdict
 from datetime import datetime, timedelta
+from typing import Any, cast
 from uuid import uuid4
 
 from app.adapters.repositories.commercial_repository import CommercialRepository
@@ -22,12 +23,13 @@ from app.domain.commercial.errors import (
 )
 from app.domain.commercial.mixins._audit_mixin import (
     PORTAL_MEMBER_ALLOWED_LOGIN_STATUSES,
+    CommercialServiceAuditMixin,
     _normalize_portal_membership_metadata,
     _portal_membership_has_allowed_role,
 )
 
 
-class CommercialServicePortalMixin:
+class CommercialServicePortalMixin(CommercialServiceAuditMixin):
 
     def issue_portal_login_code(
         self,
@@ -35,7 +37,7 @@ class CommercialServicePortalMixin:
         email: str,
         ttl_seconds: int,
     ) -> dict[str, object]:
-        login = self.resolve_portal_member_login(email=email)
+        login = cast(Any, self).resolve_portal_member_login(email=email)
         normalized_email = str(login.get("email") or "").strip().lower()
         member_ref = str(login.get("member_ref") or "").strip()
         now = self.now_factory()
@@ -146,7 +148,9 @@ class CommercialServicePortalMixin:
                     status=membership.status,
                     metadata_json=metadata,
                 )
-                updated_items.append(self._serialize_account_membership(membership))
+                updated_items.append(
+                    cast(Any, self)._serialize_account_membership(membership)
+                )
             session.commit()
         return {
             "email": normalized_email,
@@ -163,7 +167,8 @@ class CommercialServicePortalMixin:
     ) -> dict[str, object]:
         with get_session(self.database_url) as session:
             repository = CommercialRepository(session)
-            account_memberships = self._list_resolved_portal_account_memberships(
+            service = cast(Any, self)
+            account_memberships = service._list_resolved_portal_account_memberships(
                 repository,
                 member_ref=member_ref,
             )
@@ -180,7 +185,7 @@ class CommercialServicePortalMixin:
             return {
                 "member_ref": member_ref,
                 "items": [
-                    self._serialize_portal_account_context(
+                    service._serialize_portal_account_context(
                         account,
                         membership,
                         accessible_sites=sites_by_account.get(
@@ -207,6 +212,4 @@ class CommercialServicePortalMixin:
             "service.invalid_target_package",
             "target package must be Free, Basic, or Bulk",
         )
-
-
 

@@ -18,6 +18,12 @@ from app.domain.usage.service import (
 router = APIRouter(tags=["stats"])
 
 
+def _dict_value(value: object) -> dict[str, object]:
+    if not isinstance(value, dict):
+        return {}
+    return {str(key): item for key, item in value.items()}
+
+
 def _get_usage_service(request: Request) -> UsageService:
     services = get_cloud_services(request)
     return UsageService(services.settings.database_url)
@@ -579,13 +585,13 @@ async def get_router_diagnostics_projection(
         result = dict(result)
         result["site_id"] = auth.site_id
         result["config_revision"] = config_revision
-        report = dict(result.get("report") or {})
-        validation = dict(report.get("validation") or {})
+        report = _dict_value(result.get("report"))
+        validation = _dict_value(report.get("validation"))
         validation["enabled_total"] = enabled_total
         validation["tagless_enabled"] = tagless_enabled
         validation["has_warnings"] = has_warnings
         report["validation"] = validation
-        high_risk = dict(report.get("high_risk") or {})
+        high_risk = _dict_value(report.get("high_risk"))
         high_risk["count"] = high_risk_count
         report["high_risk"] = high_risk
         result["report"] = report

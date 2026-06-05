@@ -3,10 +3,8 @@ from __future__ import annotations
 
 import re
 from collections.abc import Callable
-from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from urllib.parse import urlsplit
-
 
 from app.adapters.repositories.commercial_repository import CommercialRepository
 from app.core.config import Settings, get_settings
@@ -16,16 +14,16 @@ from app.core.models import (
     ACCOUNT_MEMBERSHIP_STATUS_ACTIVE,
     ACCOUNT_MEMBERSHIP_STATUS_DISABLED,
     ACCOUNT_MEMBERSHIP_STATUS_PENDING_INVITE,
-    AccountSubscription,
-    CommercialDecisionEvent,
     PLATFORM_ADMIN_ROLE_PLATFORM_ADMIN,
-    ServiceAuditEvent,
-    Site,
     SUBSCRIPTION_STATUS_ACTIVE,
     SUBSCRIPTION_STATUS_TRIALING,
+    AccountSubscription,
+    CommercialDecisionEvent,
+    ServiceAuditEvent,
+    Site,
 )
+from app.domain.commercial.audit_context import ServiceAuditContext
 from app.domain.commercial.errors import CommercialPermissionError
-
 
 PORTAL_SITE_KEY_WRITE_ROLES = {
     ACCOUNT_MEMBERSHIP_ROLE_USER_ADMIN,
@@ -71,16 +69,6 @@ USER_ALLOWED_ACTION_VIEW_AUDIT = "view_audit"
 USER_ALLOWED_ACTION_PROVISION_SITES = "provision_sites"
 USER_ALLOWED_ACTION_MANAGE_SITE_KEYS = "manage_site_keys"
 USER_ALLOWED_ACTION_ARCHIVE_SITES = "archive_sites"
-
-
-@dataclass(slots=True)
-class ServiceAuditContext:
-    trace_id: str
-    idempotency_key: str
-    method: str
-    path: str
-    actor_kind: str = "internal_token"
-    actor_ref: str = "internal"
 
 
 def _normalize_portal_member_email(member_ref: str, metadata_json: dict[str, object] | None) -> str:
@@ -326,6 +314,23 @@ def assert_platform_admin_capability(
 
 
 class CommercialServiceAuditMixin:
+    def _normalize_runtime_policy_overrides(
+        self,
+        raw: object,
+    ) -> dict[str, object]:
+        raise NotImplementedError
+
+    def _resolve_subscription_policy_action(
+        self,
+        *,
+        subscription: AccountSubscription,
+        policy: dict[str, object],
+        period_end_at: datetime,
+        now: datetime,
+        reason: str,
+    ) -> dict[str, object] | None:
+        raise NotImplementedError
+
     def __init__(
         self,
         database_url: str,
@@ -399,7 +404,7 @@ class CommercialServiceAuditMixin:
         plan_version_id: str | None = None,
         scope_kind: str | None = None,
         scope_id: str | None = None,
-        payload_json: dict[str, object] | None = None,
+        payload_json: object | None = None,
     ) -> ServiceAuditEvent | None:
         if audit_context is None:
             return None
@@ -421,7 +426,7 @@ class CommercialServiceAuditMixin:
             idempotency_key=audit_context.idempotency_key,
             actor_kind=audit_context.actor_kind,
             actor_ref=audit_context.actor_ref,
-            payload_json=self._sanitize_payload(payload_json),
+            payload_json=self._sanitize_payload_dict(payload_json),
         )
 
     def _record_commercial_decision_in_session(
@@ -443,7 +448,7 @@ class CommercialServiceAuditMixin:
         data_classification: str | None,
         trace_id: str | None,
         idempotency_key: str | None,
-        payload_json: dict[str, object] | None = None,
+        payload_json: object | None = None,
     ) -> CommercialDecisionEvent:
         return repository.record_commercial_decision_event(
             account_id=account_id,
@@ -461,7 +466,7 @@ class CommercialServiceAuditMixin:
             data_classification=data_classification,
             trace_id=trace_id,
             idempotency_key=idempotency_key,
-            payload_json=self._sanitize_payload(payload_json),
+            payload_json=self._sanitize_payload_dict(payload_json),
         )
 
     def _sanitize_payload(self, payload: object) -> object:
@@ -477,6 +482,13 @@ class CommercialServiceAuditMixin:
         if isinstance(payload, list):
             return [self._sanitize_payload(item) for item in payload]
         return payload
+
+    def _sanitize_payload_dict(
+        self,
+        payload: object | None,
+    ) -> dict[str, object] | None:
+        sanitized = self._sanitize_payload(payload)
+        return sanitized if isinstance(sanitized, dict) else None
 
     def _build_subscription_grace_state(
         self,
@@ -654,7 +666,7 @@ class CommercialServiceAuditMixin:
         plan_version_id: str | None = None,
         scope_kind: str | None = None,
         scope_id: str | None = None,
-        payload_json: dict[str, object] | None = None,
+        payload_json: object | None = None,
     ) -> dict[str, object] | None:
         with get_session(self.database_url) as session:
             repository = CommercialRepository(session)
@@ -701,7 +713,7 @@ class CommercialServiceAuditMixin:
             totals: dict[str, int] = {"events": 0}
             for item in items:
                 outcome = str(item.get("outcome") or "unknown")
-                count = int(item.get("count") or 0)
+                count = self._coerce_int(item.get("count"))
                 totals["events"] += count
                 totals[outcome] = totals.get(outcome, 0) + count
             return {
@@ -769,7 +781,7 @@ class CommercialServiceAuditMixin:
             totals: dict[str, int] = {"events": 0}
             for group in groups:
                 decision = str(group.get("decision") or "unknown")
-                count = int(group.get("count") or 0)
+                count = self._coerce_int(group.get("count"))
                 totals["events"] += count
                 totals[decision] = totals.get(decision, 0) + count
             return {

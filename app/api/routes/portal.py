@@ -39,7 +39,8 @@ from app.domain.commercial.customer_api_keys import (
     serialize_portal_site_key,
 )
 from app.domain.commercial.errors import CommercialServiceError
-from app.domain.commercial.service import PORTAL_SITE_KEY_WRITE_ROLES
+from app.domain.commercial.service import PORTAL_SITE_KEY_WRITE_ROLES, ServiceAuditContext
+from app.domain.hosted_model_defaults import FREE_GPT55_MODEL_ID
 from app.domain.media_derivatives.metrics import MediaDerivativeObservabilityService
 from app.domain.observability.plugin_events import PluginObservabilityService
 from app.domain.observability.site_monitoring_overview import SiteMonitoringOverviewService
@@ -74,7 +75,15 @@ class PortalAIInsightAnalyzePayload(BaseModel):
     force_refresh: bool = False
 
 
-def _build_portal_audit_context(request: Request, member_ref: str):
+def _object_list(value: object) -> list[object]:
+    return value if isinstance(value, list) else []
+
+
+def _dict_value(value: object) -> dict[str, object]:
+    return value if isinstance(value, dict) else {}
+
+
+def _build_portal_audit_context(request: Request, member_ref: str) -> ServiceAuditContext:
     audit_context = _build_audit_context(request)
     audit_context.actor_kind = "portal_member"
     audit_context.actor_ref = member_ref
@@ -283,8 +292,8 @@ def _resolve_portal_site_summary(
         policy = service.inspect_commercial_policy(site_id)
     except CommercialServiceError as error:
         return _service_error_response(error, request=request)
-    subscription = policy.get("subscription") or {}
-    subscription_metadata = subscription.get("metadata") or {}
+    subscription = _dict_value(policy.get("subscription"))
+    subscription_metadata = _dict_value(subscription.get("metadata"))
     return {
         "site_id": site_id,
         "account_id": str(access.get("account_id") or ""),
@@ -292,7 +301,7 @@ def _resolve_portal_site_summary(
         "identity_type": str(access.get("identity_type") or ""),
         "allowed_actions": [
             str(action)
-            for action in list(access.get("allowed_actions") or [])
+            for action in _object_list(access.get("allowed_actions"))
             if str(action).strip()
         ],
         "role": str(access.get("role") or ""),
@@ -620,7 +629,7 @@ async def get_portal_site_usage_summary(request: Request, site_id: str) -> Any:
     result["identity_type"] = str(access.get("identity_type") or "")
     result["allowed_actions"] = [
         str(action)
-        for action in list(access.get("allowed_actions") or [])
+        for action in _object_list(access.get("allowed_actions"))
         if str(action).strip()
     ]
     result["role"] = str(access.get("role") or "")
@@ -665,7 +674,7 @@ async def get_portal_site_monitoring_overview(
     result["identity_type"] = str(access.get("identity_type") or "")
     result["allowed_actions"] = [
         str(action)
-        for action in list(access.get("allowed_actions") or [])
+        for action in _object_list(access.get("allowed_actions"))
         if str(action).strip()
     ]
     result["role"] = str(access.get("role") or "")
@@ -709,7 +718,7 @@ async def get_portal_site_plugin_observability(
     result["identity_type"] = str(access.get("identity_type") or "")
     result["allowed_actions"] = [
         str(action)
-        for action in list(access.get("allowed_actions") or [])
+        for action in _object_list(access.get("allowed_actions"))
         if str(action).strip()
     ]
     result["role"] = str(access.get("role") or "")
@@ -740,8 +749,12 @@ async def get_portal_site_media_observability(
     )
     if isinstance(access, JSONResponse):
         return access
+    services = get_cloud_services(request)
     result = MediaDerivativeObservabilityService(
-        _get_commercial_service(request).database_url
+        services.settings.database_url,
+        site_queued_limit=services.settings.media_derivative_site_queued_limit,
+        site_running_limit=services.settings.media_derivative_site_running_limit,
+        default_chunk_size=services.settings.media_derivative_batch_default_chunk_size,
     ).get_summary(
         site_id=site_id,
         window_hours=window_hours,
@@ -754,7 +767,7 @@ async def get_portal_site_media_observability(
     result["identity_type"] = str(access.get("identity_type") or "")
     result["allowed_actions"] = [
         str(action)
-        for action in list(access.get("allowed_actions") or [])
+        for action in _object_list(access.get("allowed_actions"))
         if str(action).strip()
     ]
     result["role"] = str(access.get("role") or "")
@@ -797,7 +810,7 @@ async def get_portal_site_vector_observability(
     result["identity_type"] = str(access.get("identity_type") or "")
     result["allowed_actions"] = [
         str(action)
-        for action in list(access.get("allowed_actions") or [])
+        for action in _object_list(access.get("allowed_actions"))
         if str(action).strip()
     ]
     result["role"] = str(access.get("role") or "")
@@ -843,7 +856,7 @@ async def list_portal_site_ai_insight_history(
             "role": str(access.get("role") or ""),
             "items": [
                 _portal_ai_history_item(item)
-                for item in list(history.get("items") or [])
+                for item in _object_list(history.get("items"))
                 if isinstance(item, dict)
             ],
             "safety": _portal_ai_safety_contract(),
@@ -885,7 +898,7 @@ async def analyze_portal_site_ai_insight(
             range_filter="24h",
             limit=25,
             provider_id=_resolve_portal_ai_provider_id(request),
-            model_id="deepseek-v4-flash",
+            model_id=FREE_GPT55_MODEL_ID,
             force_refresh=payload.force_refresh,
             cache_ttl_seconds=1800,
         )
@@ -941,7 +954,7 @@ async def get_portal_site_entitlements(request: Request, site_id: str) -> Any:
             "identity_type": str(access.get("identity_type") or ""),
             "allowed_actions": [
                 str(action)
-                for action in list(access.get("allowed_actions") or [])
+                for action in _object_list(access.get("allowed_actions"))
                 if str(action).strip()
             ],
             "role": str(access.get("role") or ""),
@@ -991,7 +1004,7 @@ async def get_portal_site_audit_summary(request: Request, site_id: str) -> Any:
             "identity_type": str(access.get("identity_type") or ""),
             "allowed_actions": [
                 str(action)
-                for action in list(access.get("allowed_actions") or [])
+                for action in _object_list(access.get("allowed_actions"))
                 if str(action).strip()
             ],
             "role": str(access.get("role") or ""),
@@ -1041,7 +1054,7 @@ async def list_portal_site_audit_events(
             "identity_type": str(access.get("identity_type") or ""),
             "allowed_actions": [
                 str(action)
-                for action in list(access.get("allowed_actions") or [])
+                for action in _object_list(access.get("allowed_actions"))
                 if str(action).strip()
             ],
             "role": str(access.get("role") or ""),
@@ -1079,7 +1092,7 @@ async def list_portal_site_billing_snapshots(request: Request, site_id: str) -> 
             "identity_type": str(access.get("identity_type") or ""),
             "allowed_actions": [
                 str(action)
-                for action in list(access.get("allowed_actions") or [])
+                for action in _object_list(access.get("allowed_actions"))
                 if str(action).strip()
             ],
             "role": str(access.get("role") or ""),
@@ -1155,7 +1168,7 @@ async def list_portal_site_keys(
 
     items = [
         serialize_portal_site_key(item)
-        for item in list(result.get("items") or [])
+        for item in _object_list(result.get("items"))
         if isinstance(item, dict)
     ]
 
@@ -1279,8 +1292,8 @@ async def rotate_portal_site_key(
     except CommercialServiceError as error:
         return _service_error_response(error, request=request)
 
-    previous = result.get("previous") if isinstance(result.get("previous"), dict) else {}
-    current = result.get("current") if isinstance(result.get("current"), dict) else {}
+    previous = _dict_value(result.get("previous"))
+    current = _dict_value(result.get("current"))
     cloud_api_key = build_customer_api_key(
         site_id=str(current.get("site_id") or ""),
         key_id=str(current.get("key_id") or ""),

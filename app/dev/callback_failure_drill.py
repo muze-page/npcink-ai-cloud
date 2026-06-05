@@ -15,6 +15,7 @@ from app.adapters.callbacks.base import (
 from app.adapters.providers.base import (
     CatalogInstanceSeed,
     CatalogModelSeed,
+    ProviderAdapter,
     ProviderCatalogSnapshot,
     ProviderExecutionRequest,
     ProviderExecutionResult,
@@ -102,18 +103,25 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def _dict_value(value: object) -> dict[str, object]:
+    if not isinstance(value, dict):
+        return {}
+    return {str(key): item for key, item in value.items()}
+
+
 def _settings(database_url: str) -> Settings:
-    return Settings(
-        _env_file=None,
-        environment="test",
-        database_url=database_url,
-        redis_url="redis://localhost:6379/0",
-        internal_auth_token="callback-failure-drill-internal-token-32b",
-        admin_bootstrap_token="callback-failure-drill-bootstrap-token-32b",
-        admin_session_secret="callback-failure-drill-admin-session-secret-32b",
-        portal_jwt_secret="callback-failure-drill-portal-jwt-secret-32b",
-        openai_api_key=None,
-    )
+    settings_kwargs: dict[str, Any] = {
+        "_env_file": None,
+        "environment": "test",
+        "database_url": database_url,
+        "redis_url": "redis://localhost:6379/0",
+        "internal_auth_token": "callback-failure-drill-internal-token-32b",
+        "admin_bootstrap_token": "callback-failure-drill-bootstrap-token-32b",
+        "admin_session_secret": "callback-failure-drill-admin-session-secret-32b",
+        "portal_jwt_secret": "callback-failure-drill-portal-jwt-secret-32b",
+        "openai_api_key": None,
+    }
+    return Settings(**settings_kwargs)
 
 
 def _register_runtime_callback(
@@ -157,7 +165,7 @@ def run_drill(
     with tempfile.TemporaryDirectory(prefix="magick-callback-failure-drill-") as tmp_dir:
         database_url = f"sqlite+pysqlite:///{Path(tmp_dir) / 'drill.sqlite3'}"
         settings = _settings(database_url)
-        providers = {"openai": SuccessfulProviderAdapter()}
+        providers: dict[str, ProviderAdapter] = {"openai": SuccessfulProviderAdapter()}
         init_schema(database_url)
         CatalogService(database_url, providers=providers).refresh_catalog()
         CatalogService(database_url, providers=providers).scan_provider_health()
@@ -229,7 +237,7 @@ def run_drill(
                 "model_id": response.model_id,
                 "instance_id": response.instance_id,
                 "provider_call_count": response.provider_call_count,
-                "callback": run.get("run_lifecycle", {}).get("callback"),
+                "callback": _dict_value(_dict_value(run.get("run_lifecycle")).get("callback")),
             },
             "callback_dispatch": dispatch_results,
             "diagnostics": {

@@ -56,6 +56,13 @@ from app.domain.image_sources.contracts import (
     validate_image_source_runtime_contract,
 )
 from app.domain.image_sources.service import ImageSourceProviderError, ImageSourceService
+from app.domain.media_batch_plans.contracts import (
+    MEDIA_BATCH_PLAN_ABILITIES,
+    MEDIA_BATCH_PLAN_PROFILE_ID,
+    MediaBatchPlanContractViolation,
+    validate_media_batch_plan_runtime_contract,
+)
+from app.domain.media_batch_plans.service import MediaBatchPlanService
 from app.domain.routing.models import RoutingCandidate, RoutingResolution
 from app.domain.routing.service import RoutingService
 from app.domain.runtime.analysis_result import build_analysis_result_envelope
@@ -222,6 +229,8 @@ class RuntimeService:
         }
 
     def execute(self, request: RuntimeRequest) -> RuntimeExecutionResponse:
+        if self._is_media_batch_plan_request(request):
+            return self._execute_media_batch_plan_request(request)
         if self._is_image_source_request(request):
             return self._execute_image_source_request(request)
         if self._is_site_knowledge_request(request):
@@ -499,6 +508,7 @@ class RuntimeService:
         resolved_idempotency_key = idempotency_key or f"auto_{uuid4().hex}"
         source_checksum = hashlib.sha256(source_bytes).hexdigest()
         watermark_checksum = hashlib.sha256(watermark_bytes).hexdigest() if watermark_bytes else ""
+        media_derivative_policy = self._build_media_derivative_policy(input_payload)
         request_fingerprint = self._build_request_fingerprint_for_media_derivative(
             site_id,
             input_payload,
@@ -549,6 +559,7 @@ class RuntimeService:
 
             policy = {
                 "storage_mode": "result_only",
+                "media_derivative": media_derivative_policy,
                 "execution_contract": {
                     "ability_name": "generate_optimized_media_derivative",
                     "contract_version": "media_derivative_cloud_request.v1",
@@ -604,6 +615,55 @@ class RuntimeService:
                 idempotent_replay=False,
             )
 
+    def get_media_derivative_queue_pressure(self, *, site_id: str) -> dict[str, object]:
+        queued_limit = max(1, int(self.settings.media_derivative_site_queued_limit))
+        running_limit = max(1, int(self.settings.media_derivative_site_running_limit))
+        default_chunk_size = max(
+            1,
+            min(
+                int(self.settings.media_derivative_batch_default_chunk_size),
+                int(self.settings.media_derivative_batch_max_chunk_size),
+            ),
+        )
+        with get_session(self.database_url) as session:
+            repository = RuntimeRepository(session)
+            counts = repository.summarize_media_derivative_queue_pressure(site_id)
+            session.commit()
+
+        queued = int(counts.get("queued") or 0)
+        running = int(counts.get("running") or 0)
+        queue_remaining = max(0, queued_limit - queued)
+        running_remaining = max(0, running_limit - running)
+        pressure_state = "healthy"
+        pressure_reasons: list[str] = []
+        if queued >= queued_limit:
+            pressure_state = "rejecting"
+            pressure_reasons.append("site_media_derivative_queue_full")
+        elif running >= running_limit or queued >= max(default_chunk_size * 2, queued_limit // 2):
+            pressure_state = "attention"
+            if running >= running_limit:
+                pressure_reasons.append("site_media_derivative_running_saturated")
+            if queued >= max(default_chunk_size * 2, queued_limit // 2):
+                pressure_reasons.append("site_media_derivative_queue_depth_high")
+
+        return {
+            "scope": "site",
+            "site_id": site_id,
+            "queued": queued,
+            "running": running,
+            "limits": {
+                "queued": queued_limit,
+                "running": running_limit,
+            },
+            "remaining": {
+                "queued": queue_remaining,
+                "running": running_remaining,
+            },
+            "pressure_state": pressure_state,
+            "pressure_reasons": pressure_reasons,
+            "recommended_chunk_size": max(1, min(default_chunk_size, queue_remaining or 1)),
+        }
+
     def _build_request_fingerprint_for_media_derivative(
         self,
         site_id: str,
@@ -624,6 +684,41 @@ class RuntimeService:
             separators=(",", ":"),
         )
         return hashlib.sha256(canonical_payload.encode("utf-8")).hexdigest()
+
+    def _build_media_derivative_policy(self, input_payload: dict[str, Any]) -> dict[str, object]:
+        cloud_job_payload = (
+            input_payload.get("cloud_job_payload")
+            if isinstance(input_payload.get("cloud_job_payload"), dict)
+            else {}
+        )
+        batch_context = (
+            input_payload.get("batch_context")
+            if isinstance(input_payload.get("batch_context"), dict)
+            else {}
+        )
+        return {
+            "target_format": str(cloud_job_payload.get("target_format") or "webp"),
+            "source_media_type": str(cloud_job_payload.get("source_media_type") or "image"),
+            "batch_context": {
+                "batch_id": str(batch_context.get("batch_id") or ""),
+                "item_index": self._coerce_int(batch_context.get("item_index"), default=1),
+                "item_count": self._coerce_int(batch_context.get("item_count"), default=1),
+                "chunk_size": self._coerce_int(
+                    batch_context.get("chunk_size"),
+                    default=int(self.settings.media_derivative_batch_default_chunk_size),
+                ),
+                "explicit_avif": bool(batch_context.get("explicit_avif")),
+            }
+            if batch_context
+            else {},
+            "limits": {
+                "site_queued": int(self.settings.media_derivative_site_queued_limit),
+                "site_running": int(self.settings.media_derivative_site_running_limit),
+                "batch_max_chunk_size": int(self.settings.media_derivative_batch_max_chunk_size),
+            },
+            "write_posture": "artifact_only",
+            "direct_wordpress_write": False,
+        }
 
     def _execute_media_derivative_run(
         self,
@@ -663,7 +758,9 @@ class RuntimeService:
         watermark_b64 = media_input.get("_watermark_bytes_b64", "")
         watermark_bytes = base64.b64decode(watermark_b64) if watermark_b64 else None
         processing_started_at = datetime.now(UTC)
-        watermark_applied = bool(watermark_bytes)
+        watermark_applied = bool(watermark_bytes) or bool(
+            watermark_options and watermark_options.get("type") == "text"
+        )
 
         if not source_bytes:
             repository.mark_run_failed(
@@ -792,11 +889,26 @@ class RuntimeService:
         with get_session(self.database_url) as session:
             repository = RuntimeRepository(session)
             run: RunRecord | None = None
+            media_derivative_site_running_limit = max(
+                1,
+                int(self.settings.media_derivative_site_running_limit),
+            )
             if signaled_run_id:
-                run = repository.claim_run_if_queued(signaled_run_id)
+                candidate = repository.get_run(signaled_run_id)
+                if (
+                    candidate is not None
+                    and candidate.execution_kind == "media_derivative"
+                    and repository.count_running_media_derivative_runs(candidate.site_id)
+                    >= media_derivative_site_running_limit
+                ):
+                    run = None
+                else:
+                    run = repository.claim_run_if_queued(signaled_run_id)
 
             if run is None:
-                run = repository.claim_next_queued_run()
+                run = repository.claim_next_queued_run(
+                    media_derivative_site_running_limit=media_derivative_site_running_limit,
+                )
 
             if run is None:
                 session.commit()
@@ -1027,7 +1139,8 @@ class RuntimeService:
                 {
                     "scope_kind": str(item["scope_kind"]),
                     "scope_id": str(item["scope_id"]),
-                    "total_runs": int(item_queued["runs"]) + int(item_running["runs"]),
+                    "total_runs": self._coerce_int(item_queued.get("runs"), default=0)
+                    + self._coerce_int(item_running.get("runs"), default=0),
                     "queued": item_queued,
                     "running": item_running,
                     "bottleneck_state": self._classify_backlog_bottleneck(
@@ -1037,39 +1150,57 @@ class RuntimeService:
                     "pressure_state": pressure_state,
                     "pressure_reasons": pressure_reasons,
                     "lease_recovery_inputs": {
-                        "queued_stale_runs": int(item_queued["stale_runs"]),
-                        "running_stale_runs": int(item_running["stale_runs"]),
+                        "queued_stale_runs": self._coerce_int(
+                            item_queued.get("stale_runs"), default=0
+                        ),
+                        "running_stale_runs": self._coerce_int(
+                            item_running.get("stale_runs"), default=0
+                        ),
                         "total_stale_runs": (
-                            int(item_queued["stale_runs"]) + int(item_running["stale_runs"])
+                            self._coerce_int(item_queued.get("stale_runs"), default=0)
+                            + self._coerce_int(item_running.get("stale_runs"), default=0)
                         ),
                     },
                 }
             )
 
-        items.sort(
-            key=lambda item: (
+        def backlog_sort_key(item: dict[str, object]) -> tuple[int, int, int, str]:
+            lease_recovery_inputs = self._dict_or_empty(item.get("lease_recovery_inputs"))
+            return (
                 0
-                if item["pressure_state"] == "critical"
+                if item.get("pressure_state") == "critical"
                 else 1
-                if item["pressure_state"] == "attention"
+                if item.get("pressure_state") == "attention"
                 else 2,
-                -int(item["lease_recovery_inputs"]["total_stale_runs"]),
-                -int(item["total_runs"]),
-                str(item["scope_id"]),
+                -self._coerce_int(lease_recovery_inputs.get("total_stale_runs"), default=0),
+                -self._coerce_int(item.get("total_runs"), default=0),
+                str(item.get("scope_id") or ""),
             )
+
+        items.sort(
+            key=backlog_sort_key
         )
         limited_items = items[: max(1, limit)]
         active_scope_count = len(items)
         pressured_scope_count = sum(1 for item in items if item["pressure_state"] != "healthy")
         stale_scope_count = sum(
-            1 for item in items if int(item["lease_recovery_inputs"]["total_stale_runs"]) > 0
+            1
+            for item in items
+            if self._coerce_int(
+                self._dict_or_empty(item.get("lease_recovery_inputs")).get("total_stale_runs"),
+                default=0,
+            )
+            > 0
         )
         total_active_runs = max(
             1,
-            int(total_queued["runs"]) + int(total_running["runs"]),
+            self._coerce_int(total_queued.get("runs"), default=0)
+            + self._coerce_int(total_running.get("runs"), default=0),
         )
         dominant_scope_share = (
-            round(int(items[0]["total_runs"]) / total_active_runs, 3) if items else 0.0
+            round(self._coerce_int(items[0].get("total_runs"), default=0) / total_active_runs, 3)
+            if items
+            else 0.0
         )
         total_pressure_state, total_pressure_reasons = self._classify_backlog_pressure(
             queued_state=str(total_queued["state"]),
@@ -1099,8 +1230,12 @@ class RuntimeService:
                 "pressure_state": total_pressure_state,
                 "pressure_reasons": total_pressure_reasons,
                 "lease_recovery_inputs": {
-                    "queued_stale_runs": int(total_queued["stale_runs"]),
-                    "running_stale_runs": int(total_running["stale_runs"]),
+                    "queued_stale_runs": self._coerce_int(
+                        total_queued.get("stale_runs"), default=0
+                    ),
+                    "running_stale_runs": self._coerce_int(
+                        total_running.get("stale_runs"), default=0
+                    ),
                     "stale_scope_count": stale_scope_count,
                 },
             },
@@ -1508,13 +1643,16 @@ class RuntimeService:
         scopes: dict[str, dict[str, object]] = {}
         watchlist: list[dict[str, object]] = []
         for scope_kind in scope_kinds:
-            request_limit = max(0, int(scope_specs[scope_kind]["request_limit"]))
-            cooldown_limit = max(0, int(scope_specs[scope_kind]["cooldown_limit"]))
+            scope_spec = scope_specs[scope_kind]
+            request_limit = max(0, self._coerce_int(scope_spec.get("request_limit"), default=0))
+            cooldown_limit = max(0, self._coerce_int(scope_spec.get("cooldown_limit"), default=0))
             request_items = [
                 self._decorate_abuse_guard_item(
                     scope_kind=scope_kind,
                     item=item,
-                    observed_count=max(0, int(item.get("request_count") or 0)),
+                    observed_count=max(
+                        0, self._coerce_int(item.get("request_count"), default=0)
+                    ),
                     limit=request_limit,
                     signal_kind="request_burst",
                     near_limit_reason="request_burst_near_limit",
@@ -1530,7 +1668,9 @@ class RuntimeService:
                     self._decorate_abuse_guard_item(
                         scope_kind=scope_kind,
                         item=item,
-                        observed_count=max(0, int(item.get("event_count") or 0)),
+                        observed_count=max(
+                            0, self._coerce_int(item.get("event_count"), default=0)
+                        ),
                         limit=cooldown_limit,
                         signal_kind="reject_storm",
                         near_limit_reason="reject_storm_near_limit",
@@ -1554,11 +1694,11 @@ class RuntimeService:
         sorted_watchlist = sorted(
             watchlist,
             key=lambda item: (
-                0 if item["severity"] == "critical" else 1,
-                -float(item["limit_ratio"]),
-                -int(item["observed_count"]),
-                str(item["scope_kind"]),
-                str(item["scope_id"]),
+                0 if item.get("severity") == "critical" else 1,
+                -(self._coerce_float(item.get("limit_ratio")) or 0.0),
+                -self._coerce_int(item.get("observed_count"), default=0),
+                str(item.get("scope_kind") or ""),
+                str(item.get("scope_id") or ""),
             ),
         )
         return {
@@ -1597,7 +1737,7 @@ class RuntimeService:
         summary: dict[str, object],
         current_time: datetime,
     ) -> dict[str, object]:
-        queue = dict(summary.get("queue") or {})
+        queue = self._dict_or_empty(summary.get("queue"))
         queued_oldest_age_seconds = self._calculate_age_seconds(
             current_time,
             queue.get("queued_oldest_requested_at"),
@@ -1634,7 +1774,7 @@ class RuntimeService:
             )
         )
 
-        cancel = dict(summary.get("cancel") or {})
+        cancel = self._dict_or_empty(summary.get("cancel"))
         oldest_request_age_seconds = self._calculate_age_seconds(
             current_time,
             cancel.get("oldest_requested_at"),
@@ -1656,12 +1796,14 @@ class RuntimeService:
             )
         )
 
-        callback = dict(summary.get("callback") or {})
-        pending = max(0, int(callback.get("pending") or 0))
-        due_now = max(0, int(callback.get("due_now") or 0))
-        failed = max(0, int(callback.get("failed") or 0))
-        dispatching = max(0, int(callback.get("dispatching") or 0))
-        recoverable_dispatching = max(0, int(callback.get("recoverable_dispatching") or 0))
+        callback = self._dict_or_empty(summary.get("callback"))
+        pending = max(0, self._coerce_int(callback.get("pending"), default=0))
+        due_now = max(0, self._coerce_int(callback.get("due_now"), default=0))
+        failed = max(0, self._coerce_int(callback.get("failed"), default=0))
+        dispatching = max(0, self._coerce_int(callback.get("dispatching"), default=0))
+        recoverable_dispatching = max(
+            0, self._coerce_int(callback.get("recoverable_dispatching"), default=0)
+        )
         oldest_due_age_seconds = self._calculate_age_seconds(
             current_time,
             callback.get("oldest_due_at"),
@@ -1724,11 +1866,11 @@ class RuntimeService:
             )
         )
 
-        failures = dict(summary.get("failures") or {})
-        failed_recent = max(0, int(failures.get("failed_recent") or 0))
+        failures = self._dict_or_empty(summary.get("failures"))
+        failed_recent = max(0, self._coerce_int(failures.get("failed_recent"), default=0))
         provider_error_calls_recent = max(
             0,
-            int(failures.get("provider_error_calls_recent") or 0),
+            self._coerce_int(failures.get("provider_error_calls_recent"), default=0),
         )
         failures["pressure_state"], failures["pressure_reasons"] = self._classify_runtime_pressure(
             (
@@ -1746,7 +1888,7 @@ class RuntimeService:
             cancel=cancel,
             callback=callback,
             failures=failures,
-            retention=dict(summary.get("retention") or {}),
+            retention=self._dict_or_empty(summary.get("retention")),
         )
 
         return {
@@ -1780,7 +1922,7 @@ class RuntimeService:
 
         def sort_key(item: dict[str, object]) -> tuple[int, str]:
             return (
-                int(item.get("count") or 0),
+                self._coerce_int(item.get("count"), default=0),
                 str(item.get("last_seen_at") or ""),
             )
 
@@ -1790,7 +1932,7 @@ class RuntimeService:
         return {
             "error_code": error_code,
             "error_stage": taxonomy.error_stage,
-            "count": int(dominant.get("count") or 0),
+            "count": self._coerce_int(dominant.get("count"), default=0),
             "provider_id": str(dominant.get("provider_id") or ""),
             "last_seen_at": str(dominant.get("last_seen_at") or ""),
         }
@@ -1871,7 +2013,7 @@ class RuntimeService:
                 mode="operator_review",
                 priority=40,
             )
-        if int(retention.get("due_purge") or 0) > 0:
+        if self._coerce_int(retention.get("due_purge"), default=0) > 0:
             add_candidate(
                 reason="retention_due",
                 state="attention",
@@ -1881,7 +2023,7 @@ class RuntimeService:
                 priority=50,
             )
 
-        candidates.sort(key=lambda item: int(item["priority"]))
+        candidates.sort(key=lambda item: self._coerce_int(item.get("priority"), default=0))
         primary = (
             candidates[0]
             if candidates
@@ -1958,6 +2100,9 @@ class RuntimeService:
     ) -> None:
         if run.execution_kind == "media_derivative":
             self._execute_media_derivative_run(run, repository=repository)
+            return
+        if self._is_media_batch_plan_run(run):
+            self._execute_media_batch_plan_run(run, repository=repository)
             return
         if self._is_image_source_run(run):
             self._execute_image_source_run(run, repository=repository)
@@ -2693,6 +2838,150 @@ class RuntimeService:
                 idempotent_replay=False,
             )
 
+    def _execute_media_batch_plan_request(
+        self,
+        request: RuntimeRequest,
+    ) -> RuntimeExecutionResponse:
+        self._validate_media_batch_plan_contract(request)
+        trace_id = request.trace_id or uuid4().hex
+        run_id = f"run_{uuid4().hex}"
+        merged_policy = self._build_media_batch_plan_policy(request)
+        request_fingerprint = self._build_request_fingerprint(request, merged_policy)
+
+        with get_session(self.database_url) as session:
+            repository = RuntimeRepository(session)
+            self._require_active_site(repository, request.site_id)
+
+            if request.idempotency_key:
+                existing = repository.get_run_by_idempotency(
+                    request.site_id,
+                    request.idempotency_key,
+                )
+                if existing is not None:
+                    if existing.request_fingerprint != request_fingerprint:
+                        raise RuntimeIdempotencyConflictError(
+                            request.site_id,
+                            request.idempotency_key,
+                        )
+                    session.commit()
+                    return self._build_execution_response(
+                        existing,
+                        repository=repository,
+                        idempotent_replay=True,
+                    )
+
+            commercial_decision = self.commercial_service.authorize_runtime_request(
+                session=session,
+                site_id=request.site_id,
+                ability_family=request.ability_family,
+                channel=request.channel,
+                execution_kind=request.execution_kind,
+                execution_tier=request.execution_tier,
+                data_classification=request.data_classification,
+                trace_id=trace_id,
+                idempotency_key=request.idempotency_key,
+                request_kind="execute",
+                run_id=run_id,
+            )
+            self._enforce_batch_limits(
+                request=request,
+                commercial_decision=commercial_decision,
+            )
+            merged_policy = self._apply_commercial_policy_overrides(
+                merged_policy,
+                commercial_decision=commercial_decision,
+            )
+            storage_mode = self._get_storage_mode(merged_policy)
+            run = repository.create_run(
+                run_id=run_id,
+                site_id=request.site_id,
+                account_id=str(commercial_decision.get("account_id") or "") or None,
+                subscription_id=str(commercial_decision.get("subscription_id") or "") or None,
+                plan_version_id=str(commercial_decision.get("plan_version_id") or "") or None,
+                ability_name=request.ability_name,
+                ability_family=request.ability_family,
+                skill_id=request.skill_id,
+                workflow_id=request.workflow_id,
+                contract_version=request.contract_version,
+                channel=request.channel,
+                execution_kind=request.execution_kind,
+                execution_tier=request.execution_tier,
+                execution_pattern=request.execution_pattern,
+                data_classification=request.data_classification,
+                profile_id=request.profile_id or MEDIA_BATCH_PLAN_PROFILE_ID,
+                canonical_run_id=request.canonical_run_id or None,
+                status="running",
+                idempotency_key=request.idempotency_key,
+                request_fingerprint=request_fingerprint,
+                trace_id=trace_id,
+                input_json=self._prepare_input_for_storage(
+                    request.input_payload,
+                    storage_mode=storage_mode,
+                ),
+                execution_input_ciphertext=None,
+                policy_json=merged_policy,
+                selected_provider_id="media_batch_plan",
+                selected_model_id="deterministic-intent-parser",
+                selected_instance_id="cloud-runtime",
+            )
+            self.commercial_service.record_run_acceptance(session=session, run=run)
+            self._execute_media_batch_plan_run(
+                run,
+                repository=repository,
+                input_payload=request.input_payload,
+            )
+            session.commit()
+            return self._build_execution_response(
+                run,
+                repository=repository,
+                idempotent_replay=False,
+            )
+
+    def _execute_media_batch_plan_run(
+        self,
+        run: RunRecord,
+        *,
+        repository: RuntimeRepository,
+        input_payload: dict[str, Any] | None = None,
+    ) -> None:
+        if self._cancel_requested_before_attempt(run, repository=repository):
+            repository.mark_run_canceled(run)
+            return
+
+        payload = (
+            input_payload
+            if isinstance(input_payload, dict)
+            else self._get_execution_input_payload(run)
+        )
+        try:
+            execution = MediaBatchPlanService(self.settings).execute(
+                site_id=run.site_id,
+                ability_name=run.ability_name,
+                contract_version=run.contract_version or "",
+                input_payload=payload,
+                run_id=run.run_id,
+            )
+        except MediaBatchPlanContractViolation as error:
+            repository.mark_run_failed(
+                run,
+                error_code=error.error_code,
+                error_message=error.message,
+                provider_id="media_batch_plan",
+                model_id="deterministic-intent-parser",
+                instance_id="cloud-runtime",
+                fallback_used=False,
+            )
+            return
+
+        repository.mark_run_succeeded(
+            run,
+            result_json=execution.result_json,
+            provider_id="media_batch_plan",
+            model_id="deterministic-intent-parser",
+            instance_id="cloud-runtime",
+            fallback_used=False,
+        )
+
     def _execute_image_source_run(
         self,
         run: RunRecord,
@@ -2791,6 +3080,9 @@ class RuntimeService:
     def _is_image_source_request(self, request: RuntimeRequest) -> bool:
         return request.ability_name in IMAGE_SOURCE_ABILITIES
 
+    def _is_media_batch_plan_request(self, request: RuntimeRequest) -> bool:
+        return request.ability_name in MEDIA_BATCH_PLAN_ABILITIES
+
     def _is_site_knowledge_request(self, request: RuntimeRequest) -> bool:
         return request.ability_name in SITE_KNOWLEDGE_ABILITIES
 
@@ -2799,6 +3091,9 @@ class RuntimeService:
 
     def _is_image_source_run(self, run: RunRecord) -> bool:
         return str(run.ability_name or "") in IMAGE_SOURCE_ABILITIES
+
+    def _is_media_batch_plan_run(self, run: RunRecord) -> bool:
+        return str(run.ability_name or "") in MEDIA_BATCH_PLAN_ABILITIES
 
     def _is_site_knowledge_run(self, run: RunRecord) -> bool:
         return str(run.ability_name or "") in SITE_KNOWLEDGE_ABILITIES
@@ -2894,6 +3189,60 @@ class RuntimeService:
                 "runtime.contract_retention_exceeded",
                 f"retention_ttl exceeds max allowed value {RUNTIME_MAX_RETENTION_TTL}",
             )
+
+    def _validate_media_batch_plan_contract(self, request: RuntimeRequest) -> None:
+        try:
+            validate_media_batch_plan_runtime_contract(
+                ability_name=request.ability_name,
+                contract_version=request.contract_version,
+                input_payload=request.input_payload,
+            )
+        except MediaBatchPlanContractViolation as error:
+            raise RuntimeExecutionContractError(error.error_code, error.message) from error
+        if request.ability_name not in MEDIA_BATCH_PLAN_ABILITIES:
+            raise RuntimeExecutionContractError(
+                "media_batch_plan.unknown_ability",
+                "media batch plan ability_name is not supported",
+            )
+        if request.execution_pattern != "inline":
+            raise RuntimeExecutionContractError(
+                "media_batch_plan.inline_required",
+                "media batch plan currently supports inline execution only",
+            )
+        if request.timeout_seconds > RUNTIME_MAX_TIMEOUT_SECONDS:
+            raise RuntimeExecutionContractError(
+                "runtime.contract_timeout_exceeded",
+                f"timeout_seconds exceeds max allowed value {RUNTIME_MAX_TIMEOUT_SECONDS}",
+            )
+        if request.retry_max > RUNTIME_MAX_RETRY_MAX:
+            raise RuntimeExecutionContractError(
+                "runtime.contract_retry_exceeded",
+                f"retry_max exceeds max allowed value {RUNTIME_MAX_RETRY_MAX}",
+            )
+        if request.retention_ttl > RUNTIME_MAX_RETENTION_TTL:
+            raise RuntimeExecutionContractError(
+                "runtime.contract_retention_exceeded",
+                f"retention_ttl exceeds max allowed value {RUNTIME_MAX_RETENTION_TTL}",
+            )
+
+    def _build_media_batch_plan_policy(self, request: RuntimeRequest) -> dict[str, object]:
+        policy = self._apply_runtime_controls(dict(request.policy), request)
+        policy["allow_fallback"] = False
+        policy["execution_contract"] = {
+            "ability_name": request.ability_name,
+            "contract_version": request.contract_version,
+            "profile_id": request.profile_id or MEDIA_BATCH_PLAN_PROFILE_ID,
+            "execution_pattern": request.execution_pattern,
+            "data_classification": request.data_classification,
+            "storage_mode": request.storage_mode,
+            "timeout_seconds": max(0, request.timeout_seconds),
+            "retry_max": max(0, request.retry_max),
+            "retention_ttl": max(0, request.retention_ttl),
+            "plan_contract": "media_derivative_batch_plan.v1",
+            "final_writes": "core_proposal_required",
+            "direct_wordpress_write": False,
+        }
+        return policy
 
     def _build_image_source_policy(self, request: RuntimeRequest) -> dict[str, object]:
         policy = self._apply_runtime_controls(dict(request.policy), request)
@@ -3338,7 +3687,7 @@ class RuntimeService:
                 and isinstance(policy.get("task_backend"), dict)
                 and isinstance(value, dict)
             ):
-                task_backend = dict(policy.get("task_backend") or {})
+                task_backend = self._dict_or_empty(policy.get("task_backend"))
                 task_backend.update(value)
                 policy["task_backend"] = task_backend
                 continue
@@ -3548,8 +3897,11 @@ class RuntimeService:
             return None
 
         attempted_at = datetime.now(UTC)
+        dispatcher = self.callback_dispatcher
+        if dispatcher is None:
+            return None
         try:
-            result = self.callback_dispatcher.dispatch(callback_request)
+            result = dispatcher.dispatch(callback_request)
         except RuntimeCallbackDispatchError as error:
             retry_at = self._resolve_callback_retry_at(
                 callback_request.run_id,
@@ -4240,11 +4592,7 @@ class RuntimeService:
                         retry_at=None,
                     )
                     session.commit()
-                    return {
-                        "run_id": run.run_id,
-                        "callback_status": run.callback_status,
-                        "trace_id": run.trace_id,
-                    }
+                    return None
                 callback_secret = str(registered.get("secret") or "").strip()
             payload = self._build_callback_payload(run)
             session.commit()
@@ -4501,3 +4849,6 @@ class RuntimeService:
             except ValueError:
                 return None
         return None
+
+    def _dict_or_empty(self, value: object | None) -> dict[str, object]:
+        return value if isinstance(value, dict) else {}

@@ -43,7 +43,7 @@ traceparent: <traceparent>   # optional but recommended
   "execution_pattern": "whole_run_offload",
   "storage_mode": "result_only",
   "data_classification": "internal",
-  "profile_id": "text.balanced",
+  "profile_id": "text.free-gpt55",
   "idempotency_key": "<uuid>",
   "trace_id": "<trace-id>",
   "input": {

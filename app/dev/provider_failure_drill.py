@@ -10,6 +10,7 @@ from typing import Any
 from app.adapters.providers.base import (
     CatalogInstanceSeed,
     CatalogModelSeed,
+    ProviderAdapter,
     ProviderCatalogSnapshot,
     ProviderExecutionError,
     ProviderExecutionRequest,
@@ -76,17 +77,18 @@ def parse_args() -> argparse.Namespace:
 
 
 def _settings(database_url: str) -> Settings:
-    return Settings(
-        _env_file=None,
-        environment="test",
-        database_url=database_url,
-        redis_url="redis://localhost:6379/0",
-        internal_auth_token="provider-failure-drill-internal-token-32b",
-        admin_bootstrap_token="provider-failure-drill-bootstrap-token-32b",
-        admin_session_secret="provider-failure-drill-admin-session-secret-32b",
-        portal_jwt_secret="provider-failure-drill-portal-jwt-secret-32b",
-        openai_api_key=None,
-    )
+    settings_kwargs: dict[str, Any] = {
+        "_env_file": None,
+        "environment": "test",
+        "database_url": database_url,
+        "redis_url": "redis://localhost:6379/0",
+        "internal_auth_token": "provider-failure-drill-internal-token-32b",
+        "admin_bootstrap_token": "provider-failure-drill-bootstrap-token-32b",
+        "admin_session_secret": "provider-failure-drill-admin-session-secret-32b",
+        "portal_jwt_secret": "provider-failure-drill-portal-jwt-secret-32b",
+        "openai_api_key": None,
+    }
+    return Settings(**settings_kwargs)
 
 
 def run_drill(
@@ -99,7 +101,7 @@ def run_drill(
     with tempfile.TemporaryDirectory(prefix="magick-provider-failure-drill-") as tmp_dir:
         database_url = f"sqlite+pysqlite:///{Path(tmp_dir) / 'drill.sqlite3'}"
         settings = _settings(database_url)
-        providers = {"openai": FailingProviderAdapter()}
+        providers: dict[str, ProviderAdapter] = {"openai": FailingProviderAdapter()}
         init_schema(database_url)
         CatalogService(database_url, providers=providers).refresh_catalog()
         CatalogService(database_url, providers=providers).scan_provider_health()

@@ -267,7 +267,8 @@ class ZillizCloudSiteKnowledgeBackend:
 
     def _validate_collection_schema(self) -> None:
         description = self.client.describe_collection(self.collection)
-        fields = description.get("fields") if isinstance(description, dict) else []
+        fields_value = description.get("fields") if isinstance(description, dict) else []
+        fields = fields_value if isinstance(fields_value, list) else []
         fields_by_name = {
             str(field.get("name") or ""): field for field in fields if isinstance(field, dict)
         }

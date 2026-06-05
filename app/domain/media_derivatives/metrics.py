@@ -92,8 +92,18 @@ def record_media_derivative_artifact_download(
 
 
 class MediaDerivativeObservabilityService:
-    def __init__(self, database_url: str) -> None:
+    def __init__(
+        self,
+        database_url: str,
+        *,
+        site_queued_limit: int = 100,
+        site_running_limit: int = 2,
+        default_chunk_size: int = 10,
+    ) -> None:
         self.database_url = database_url
+        self.site_queued_limit = max(1, int(site_queued_limit))
+        self.site_running_limit = max(1, int(site_running_limit))
+        self.default_chunk_size = max(1, int(default_chunk_size))
 
     def get_summary(
         self,
@@ -219,6 +229,34 @@ class MediaDerivativeObservabilityService:
                     .order_by(MediaDerivativeJobMetric.created_at.asc())
                 )
             )
+            active_runs_conditions = [
+                RunRecord.execution_kind == "media_derivative",
+                RunRecord.status.in_(("queued", "running")),
+            ]
+            batch_run_conditions = [
+                RunRecord.execution_kind == "media_derivative",
+                RunRecord.started_at >= start_at,
+                RunRecord.started_at <= current_time,
+            ]
+            if site_id:
+                active_runs_conditions.append(RunRecord.site_id == site_id)
+                batch_run_conditions.append(RunRecord.site_id == site_id)
+            active_runs = list(
+                session.scalars(
+                    select(RunRecord)
+                    .where(*active_runs_conditions)
+                    .order_by(RunRecord.started_at.asc())
+                    .limit(500)
+                )
+            )
+            batch_runs = list(
+                session.scalars(
+                    select(RunRecord)
+                    .where(*batch_run_conditions)
+                    .order_by(RunRecord.started_at.asc())
+                    .limit(1000)
+                )
+            )
 
         totals = self._build_totals(
             totals_row,
@@ -238,6 +276,8 @@ class MediaDerivativeObservabilityService:
             },
             "totals": totals,
             "health": self._build_health(totals),
+            "queue": self._queue_summary(active_runs),
+            "batch": self._batch_summary(batch_runs, target_format=target_format),
             "timeline": self._build_timeline(
                 timeline_metrics,
                 start_at=start_at,
@@ -248,6 +288,116 @@ class MediaDerivativeObservabilityService:
             "sites": sites,
             "errors": errors,
             "recent_failures": [self._recent_failure(metric) for metric in recent_failures],
+        }
+
+    def _queue_summary(self, active_runs: list[RunRecord]) -> dict[str, object]:
+        sites: dict[str, dict[str, int]] = defaultdict(lambda: {"queued": 0, "running": 0})
+        queued_total = 0
+        running_total = 0
+        for run in active_runs:
+            site = str(run.site_id or "")
+            if run.status == "queued":
+                queued_total += 1
+                sites[site]["queued"] += 1
+            elif run.status == "running":
+                running_total += 1
+                sites[site]["running"] += 1
+        site_items = []
+        for site_id, counts in sites.items():
+            queued = int(counts.get("queued") or 0)
+            running = int(counts.get("running") or 0)
+            pressure_state = "healthy"
+            reasons: list[str] = []
+            if queued >= self.site_queued_limit:
+                pressure_state = "rejecting"
+                reasons.append("site_media_derivative_queue_full")
+            elif running >= self.site_running_limit:
+                pressure_state = "attention"
+                reasons.append("site_media_derivative_running_saturated")
+            site_items.append(
+                {
+                    "site_id": site_id,
+                    "queued": queued,
+                    "running": running,
+                    "pressure_state": pressure_state,
+                    "pressure_reasons": reasons,
+                }
+            )
+        site_items.sort(
+            key=lambda item: (
+                0 if item["pressure_state"] == "rejecting" else 1,
+                -_int_or_zero(item.get("queued")) - _int_or_zero(item.get("running")),
+                str(item["site_id"]),
+            )
+        )
+        return {
+            "queued_total": queued_total,
+            "running_total": running_total,
+            "active_site_count": len(site_items),
+            "limits": {
+                "site_queued": self.site_queued_limit,
+                "site_running": self.site_running_limit,
+            },
+            "sites": site_items[:50],
+        }
+
+    def _batch_summary(
+        self,
+        runs: list[RunRecord],
+        *,
+        target_format: str = "",
+    ) -> dict[str, object]:
+        batches: dict[str, dict[str, object]] = {}
+        for run in runs:
+            policy = run.policy_json if isinstance(run.policy_json, dict) else {}
+            media_policy_value = policy.get("media_derivative")
+            media_policy = media_policy_value if isinstance(media_policy_value, dict) else {}
+            batch_context_value = media_policy.get("batch_context")
+            batch_context = (
+                batch_context_value if isinstance(batch_context_value, dict) else {}
+            )
+            batch_id = str(batch_context.get("batch_id") or "")
+            if not batch_id:
+                continue
+            run_target_format = str(media_policy.get("target_format") or "")
+            if target_format and run_target_format != target_format:
+                continue
+            entry = batches.setdefault(
+                batch_id,
+                {
+                    "batch_id": batch_id,
+                    "site_id": str(run.site_id or ""),
+                    "target_format": run_target_format,
+                    "item_count": _int_or_zero(batch_context.get("item_count")),
+                    "chunk_size": _int_or_zero(batch_context.get("chunk_size"))
+                    or self.default_chunk_size,
+                    "queued": 0,
+                    "running": 0,
+                    "succeeded": 0,
+                    "failed": 0,
+                    "seen_runs": 0,
+                },
+            )
+            entry["seen_runs"] = _int_or_zero(entry.get("seen_runs")) + 1
+            if run.status == "queued":
+                entry["queued"] = _int_or_zero(entry.get("queued")) + 1
+            elif run.status == "running":
+                entry["running"] = _int_or_zero(entry.get("running")) + 1
+            elif run.status == "succeeded":
+                entry["succeeded"] = _int_or_zero(entry.get("succeeded")) + 1
+            elif run.status == "failed":
+                entry["failed"] = _int_or_zero(entry.get("failed")) + 1
+        items = list(batches.values())
+        items.sort(
+            key=lambda item: (
+                -_int_or_zero(item.get("queued")) - _int_or_zero(item.get("running")),
+                str(item.get("batch_id") or ""),
+            )
+        )
+        return {
+            "active_or_recent_batch_count": len(items),
+            "default_chunk_size": self.default_chunk_size,
+            "items": items[:50],
         }
 
     def _build_totals(

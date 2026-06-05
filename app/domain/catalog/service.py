@@ -1,9 +1,6 @@
 from __future__ import annotations
 
-import json
 from datetime import UTC, datetime
-from pathlib import Path
-from types import SimpleNamespace
 from typing import Any
 
 from app.adapters.providers.base import ProviderAdapter
@@ -13,8 +10,10 @@ from app.core.config import Settings, get_settings
 from app.core.db import get_session
 from app.core.models import ProviderCallRecord
 from app.domain.health.scoring import assess_instance_health
+from app.domain.hosted_model_defaults import FREE_GPT55_TEXT_PROFILE_ID
 
 DEFAULT_RECOMMENDED_PROFILE_IDS = (
+    FREE_GPT55_TEXT_PROFILE_ID,
     "text.economy",
     "text.balanced",
     "text.quality",
@@ -440,6 +439,7 @@ class CatalogService:
             return [instance_id for _, _, instance_id in scored]
 
         profile_specs: dict[str, tuple[str, list[str]]] = {
+            FREE_GPT55_TEXT_PROFILE_ID: ("text", ["free-gpt55"]),
             "text.economy": ("text", ["economy", "balanced"]),
             "text.balanced": ("text", ["balanced", "economy", "quality"]),
             "text.quality": ("text", ["quality", "balanced"]),

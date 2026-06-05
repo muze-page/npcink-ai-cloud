@@ -4,6 +4,8 @@ import ipaddress
 import socket
 from urllib.parse import urlsplit
 
+IPAddress = ipaddress.IPv4Address | ipaddress.IPv6Address
+
 
 class RuntimeCallbackTargetValidationError(ValueError):
     pass
@@ -64,7 +66,7 @@ def validate_runtime_callback_target(callback_url: str) -> None:
         _ensure_public_callback_ip(resolved_ip)
 
 
-def _resolve_callback_target_ips(host: str, port: int) -> set[ipaddress._BaseAddress]:
+def _resolve_callback_target_ips(host: str, port: int) -> set[IPAddress]:
     try:
         records = socket.getaddrinfo(
             host,
@@ -77,7 +79,7 @@ def _resolve_callback_target_ips(host: str, port: int) -> set[ipaddress._BaseAdd
             f"callback_url host could not be resolved: {error}"
         ) from error
 
-    resolved: set[ipaddress._BaseAddress] = set()
+    resolved: set[IPAddress] = set()
     for family, _, _, _, sockaddr in records:
         if family not in {socket.AF_INET, socket.AF_INET6}:
             continue
@@ -88,7 +90,7 @@ def _resolve_callback_target_ips(host: str, port: int) -> set[ipaddress._BaseAdd
     return resolved
 
 
-def _ensure_public_callback_ip(ip: ipaddress._BaseAddress) -> None:
+def _ensure_public_callback_ip(ip: IPAddress) -> None:
     if any(ip in blocked for blocked in _BLOCKED_NETWORKS):
         raise RuntimeCallbackTargetValidationError("callback_url resolved to a non-public address")
     if (

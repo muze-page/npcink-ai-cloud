@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
 from app.adapters.providers.registry import resolve_execution_provider_adapters
 from app.adapters.queue.redis_runtime_queue import RedisRuntimeQueue
@@ -15,6 +15,23 @@ def _close_if_supported(resource: Any) -> None:
     close = getattr(resource, "close", None)
     if callable(close):
         close()
+
+
+def _coerce_int(value: object, default: int = 0) -> int:
+    try:
+        return int(cast(Any, value))
+    except (TypeError, ValueError):
+        return default
+
+
+def _dict_items(value: object) -> list[dict[str, object]]:
+    if not isinstance(value, list):
+        return []
+    return [
+        {str(key): item for key, item in candidate.items()}
+        for candidate in value
+        if isinstance(candidate, dict)
+    ]
 
 
 def main() -> None:
@@ -72,8 +89,9 @@ def main() -> None:
                 if results
                 else "repairing"
                 if (
-                    int(auto_repair.get("requeued_stale_queued_total") or 0) > 0
-                    or int(auto_repair.get("running_stale_operator_queue_total") or 0) > 0
+                    _coerce_int(auto_repair.get("requeued_stale_queued_total")) > 0
+                    or _coerce_int(auto_repair.get("running_stale_operator_queue_total"))
+                    > 0
                 )
                 else "idle"
             )
@@ -81,33 +99,42 @@ def main() -> None:
                 status=heartbeat_status,
                 payload={
                     "processed_runs": len(results),
-                    "requeued_stale_queued_total": int(
-                        auto_repair.get("requeued_stale_queued_total") or 0
+                    "requeued_stale_queued_total": _coerce_int(
+                        auto_repair.get("requeued_stale_queued_total")
                     ),
-                    "running_stale_operator_queue_total": int(
-                        auto_repair.get("running_stale_operator_queue_total") or 0
+                    "running_stale_operator_queue_total": _coerce_int(
+                        auto_repair.get("running_stale_operator_queue_total")
                     ),
                 },
             )
             if not results:
-                if int(auto_repair.get("requeued_stale_queued_total") or 0) > 0:
+                requeued_total = _coerce_int(
+                    auto_repair.get("requeued_stale_queued_total")
+                )
+                if requeued_total > 0:
                     logger.info(
                         "runtime queue auto-requeued stale queued runs: count=%s run_ids=%s",
-                        auto_repair["requeued_stale_queued_total"],
+                        requeued_total,
                         [
-                            item["run_id"]
-                            for item in auto_repair.get("requeued_stale_queued", [])
-                            if isinstance(item, dict)
+                            item.get("run_id")
+                            for item in _dict_items(
+                                auto_repair.get("requeued_stale_queued")
+                            )
                         ],
                     )
-                if int(auto_repair.get("running_stale_operator_queue_total") or 0) > 0:
+                running_stale_total = _coerce_int(
+                    auto_repair.get("running_stale_operator_queue_total")
+                )
+                if running_stale_total > 0:
                     logger.warning(
-                        "runtime queue observed stale running runs requiring operator action: count=%s run_ids=%s",
-                        auto_repair["running_stale_operator_queue_total"],
+                        "runtime queue observed stale running runs requiring operator action: "
+                        "count=%s run_ids=%s",
+                        running_stale_total,
                         [
-                            item["run_id"]
-                            for item in auto_repair.get("running_stale_operator_queue", [])
-                            if isinstance(item, dict)
+                            item.get("run_id")
+                            for item in _dict_items(
+                                auto_repair.get("running_stale_operator_queue")
+                            )
                         ],
                     )
                 continue

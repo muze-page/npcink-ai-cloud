@@ -164,6 +164,10 @@ def resolve_portal_login_code_ttl_seconds(settings: Settings) -> int:
     return max(60, int(settings.portal_login_code_ttl_seconds or 0))
 
 
+def _jwt_payload_dict(payload: object) -> dict[str, Any]:
+    return payload if isinstance(payload, dict) else {}
+
+
 def decode_portal_bearer_claims(settings: Settings, token: str) -> dict[str, Any]:
     if not settings.portal_jwt_secret:
         raise PortalBearerTokenError(
@@ -171,7 +175,7 @@ def decode_portal_bearer_claims(settings: Settings, token: str) -> dict[str, Any
             "auth.portal_not_configured",
             "portal auth is not configured",
         )
-    decode_kwargs: dict[str, object] = {
+    decode_kwargs: dict[str, Any] = {
         "jwt": token,
         "key": settings.portal_jwt_secret,
         "algorithms": [settings.portal_jwt_algorithm],
@@ -196,11 +200,11 @@ def decode_portal_bearer_claims(settings: Settings, token: str) -> dict[str, Any
             "invalid portal bearer token",
         ) from error
 
-    return payload if isinstance(payload, dict) else {}
+    return _jwt_payload_dict(payload)
 
 
 def decode_portal_session_cookie_claims(settings: Settings, token: str) -> dict[str, Any]:
-    decode_kwargs: dict[str, object] = {
+    decode_kwargs: dict[str, Any] = {
         "jwt": token,
         "key": _resolve_portal_link_signing_secret(settings),
         "algorithms": [settings.portal_jwt_algorithm],
@@ -225,8 +229,7 @@ def decode_portal_session_cookie_claims(settings: Settings, token: str) -> dict[
             "invalid portal session token",
         ) from error
 
-    if not isinstance(payload, dict):
-        return {}
+    payload = _jwt_payload_dict(payload)
     purpose = str(payload.get("purpose") or "").strip()
     if purpose != "portal_session":
         raise PortalBearerTokenError(

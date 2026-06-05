@@ -16,6 +16,7 @@ from app.domain.advisor.service import InternalAIAdvisorService
 from app.domain.catalog.service import CatalogService
 from app.domain.commercial.errors import CommercialServiceError
 from app.domain.commercial.service import CommercialService, ServiceAuditContext
+from app.domain.hosted_model_defaults import FREE_GPT55_MODEL_ID
 from app.domain.image_sources.admin_config import ImageSourceAdminConfigService
 from app.domain.media_derivatives.metrics import MediaDerivativeObservabilityService
 from app.domain.observability.plugin_events import PluginObservabilityService
@@ -30,6 +31,29 @@ from app.domain.web_search.admin_config import WebSearchAdminConfigService
 from app.workers.ops_cadence import build_cadence_summary
 
 router = APIRouter(prefix="/internal/service", tags=["service"])
+
+
+def _dict_value(value: object) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
+
+
+def _dict_list(value: object) -> list[dict[str, Any]]:
+    return [item for item in value if isinstance(item, dict)] if isinstance(value, list) else []
+
+
+def _coerce_int(value: object, *, default: int) -> int:
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    if isinstance(value, str):
+        try:
+            return int(value)
+        except ValueError:
+            return default
+    return default
 
 
 class AccountPayload(BaseModel):
@@ -293,12 +317,12 @@ def _build_runtime_explanations(
     subscription_id: str | None = None,
 ) -> list[dict[str, str]]:
     diagnostics = runtime_diagnostics or {}
-    queue = diagnostics.get("queue") if isinstance(diagnostics.get("queue"), dict) else {}
-    callback = diagnostics.get("callback") if isinstance(diagnostics.get("callback"), dict) else {}
-    guard = diagnostics.get("guard") if isinstance(diagnostics.get("guard"), dict) else {}
+    queue = _dict_value(diagnostics.get("queue"))
+    callback = _dict_value(diagnostics.get("callback"))
+    guard = _dict_value(diagnostics.get("guard"))
     items: list[dict[str, str]] = []
 
-    if int(callback.get("failed") or 0) > 0 or callback.get("pressure_state") in {
+    if _coerce_int(callback.get("failed"), default=0) > 0 or callback.get("pressure_state") in {
         "attention",
         "critical",
     }:
@@ -314,7 +338,7 @@ def _build_runtime_explanations(
                 "next_step_ref": str(site_id or ""),
             }
         )
-    if int(queue.get("queued_runs") or 0) > 0 or queue.get("pressure_state") in {
+    if _coerce_int(queue.get("queued_runs"), default=0) > 0 or queue.get("pressure_state") in {
         "attention",
         "critical",
     }:
@@ -330,7 +354,7 @@ def _build_runtime_explanations(
                 "next_step_ref": str(site_id or ""),
             }
         )
-    if int(guard.get("recent_events") or 0) > 0:
+    if _coerce_int(guard.get("recent_events"), default=0) > 0:
         items.append(
             {
                 "state": "policy_gated",
@@ -976,8 +1000,8 @@ async def apply_subscription_topup(
                     "budget headroom added "
                     f"for the current billing period"
                     + (
-                        f" via pack {result.get('topup', {}).get('pack_id')}."
-                        if str((result.get("topup") or {}).get("pack_id") or "").strip()
+                        f" via pack {_dict_value(result.get('topup')).get('pack_id')}."
+                        if str(_dict_value(result.get("topup")).get("pack_id") or "").strip()
                         else "."
                     )
                 ),
@@ -1149,33 +1173,29 @@ async def get_admin_overview(
     ).get_runtime_diagnostics_summary(
         recent_minutes=runtime_recent_minutes,
     )
-    attention_subscriptions = (
-        result.get("attention_subscriptions")
-        if isinstance(result.get("attention_subscriptions"), list)
-        else []
-    )
+    attention_subscriptions = _dict_list(result.get("attention_subscriptions"))
     first_attention = attention_subscriptions[0] if attention_subscriptions else {}
     first_attention_account_id = ""
     first_attention_site_id = ""
     first_attention_subscription_id = ""
     if isinstance(first_attention, dict):
         first_attention_account_id = str(
-            (first_attention.get("account") or {}).get("account_id")
+            _dict_value(first_attention.get("account")).get("account_id")
             or first_attention.get("account_id")
             or ""
         )
         first_attention_site_id = str(
-            (first_attention.get("site") or {}).get("site_id")
+            _dict_value(first_attention.get("site")).get("site_id")
             or first_attention.get("site_id")
             or ""
         )
         first_attention_subscription_id = str(
-            (first_attention.get("subscription") or {}).get("subscription_id")
+            _dict_value(first_attention.get("subscription")).get("subscription_id")
             or first_attention.get("subscription_id")
             or ""
         )
     result["runtime_operator_explanations"] = _build_runtime_explanations(
-        result["runtime_diagnostics"],
+        _dict_value(result.get("runtime_diagnostics")),
         site_id=first_attention_site_id,
         account_id=first_attention_account_id,
         subscription_id=first_attention_subscription_id,
@@ -1301,7 +1321,7 @@ async def get_ops_summary_advisor(
     range_filter: str = Query(default="24h", alias="range", max_length=16),
     limit: int = Query(default=25, ge=1, le=1000),
     provider_id: str = Query(default="", max_length=64),
-    model_id: str = Query(default="internal-ops-summarizer", max_length=191),
+    model_id: str = Query(default=FREE_GPT55_MODEL_ID, max_length=191),
     force_refresh: bool = Query(default=False),
     cache_ttl_seconds: int = Query(default=1800, ge=0, le=86400),
 ) -> Any:
@@ -1354,7 +1374,7 @@ async def get_ops_summary_preview_advisor(
     range_filter: str = Query(default="24h", alias="range", max_length=16),
     limit: int = Query(default=25, ge=1, le=1000),
     provider_id: str = Query(default="", max_length=64),
-    model_id: str = Query(default="internal-ops-summarizer", max_length=191),
+    model_id: str = Query(default=FREE_GPT55_MODEL_ID, max_length=191),
     force_refresh: bool = Query(default=False),
     cache_ttl_seconds: int = Query(default=1800, ge=0, le=86400),
 ) -> Any:
@@ -1543,7 +1563,7 @@ async def get_admin_account_subscription(
         account = _get_commercial_service(request).get_admin_account(account_id)
     except CommercialServiceError as error:
         return _service_error_response(error, request=request)
-    subscriptions = list(account.get("subscriptions") or [])
+    subscriptions = _dict_list(account.get("subscriptions"))
     current = subscriptions[0] if subscriptions else None
     return build_envelope(
         status="ok",
@@ -1684,13 +1704,15 @@ async def get_admin_site(
         recent_minutes=runtime_recent_minutes,
     )
     result["runtime_operator_explanations"] = _build_runtime_explanations(
-        result["runtime_diagnostics"],
+        _dict_value(result.get("runtime_diagnostics")),
         site_id=site_id,
-        account_id=str((result.get("account") or {}).get("account_id") or ""),
-        subscription_id=str((result.get("subscription") or {}).get("subscription_id") or ""),
+        account_id=str(_dict_value(result.get("account")).get("account_id") or ""),
+        subscription_id=str(_dict_value(result.get("subscription")).get("subscription_id") or ""),
     )
-    related_account_id = str((result.get("account") or {}).get("account_id") or "")
-    related_subscription_id = str((result.get("subscription") or {}).get("subscription_id") or "")
+    related_account_id = str(_dict_value(result.get("account")).get("account_id") or "")
+    related_subscription_id = str(
+        _dict_value(result.get("subscription")).get("subscription_id") or ""
+    )
     result["related_surfaces"] = {
         "account_href": f"/admin/accounts/{related_account_id}" if related_account_id else "",
         "subscription_href": (
@@ -1767,8 +1789,8 @@ async def get_admin_subscription(
         result = _get_commercial_service(request).get_admin_subscription(subscription_id)
     except CommercialServiceError as error:
         return _service_error_response(error, request=request)
-    site_id = str((result.get("site") or {}).get("site_id") or "")
-    account_id = str((result.get("account") or {}).get("account_id") or "")
+    site_id = str(_dict_value(result.get("site")).get("site_id") or "")
+    account_id = str(_dict_value(result.get("account")).get("account_id") or "")
     result["related_surfaces"] = {
         "site_href": f"/admin/sites/{site_id}" if site_id else "",
         "account_href": f"/admin/accounts/{account_id}" if account_id else "",
@@ -1913,7 +1935,12 @@ async def get_admin_media_observability(
     if auth is not None:
         return auth
     services = get_cloud_services(request)
-    service = MediaDerivativeObservabilityService(services.settings.database_url)
+    service = MediaDerivativeObservabilityService(
+        services.settings.database_url,
+        site_queued_limit=services.settings.media_derivative_site_queued_limit,
+        site_running_limit=services.settings.media_derivative_site_running_limit,
+        default_chunk_size=services.settings.media_derivative_batch_default_chunk_size,
+    )
     result = service.get_summary(
         window_hours=window_hours,
         site_id=site_id.strip(),

@@ -6,6 +6,7 @@ from typing import Any, cast
 from sqlalchemy import func, select, update
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.orm import Session
+from sqlalchemy.sql.elements import ColumnElement
 
 from app.core.models import (
     RUN_CALLBACK_STATUS_DELIVERED,
@@ -31,6 +32,8 @@ from app.domain.runtime.models import (
     RUNTIME_STORAGE_MODE_NO_STORE,
     RUNTIME_STORAGE_MODE_RESULT_ONLY,
 )
+
+type SQLAFilter = ColumnElement[bool]
 
 
 class RuntimeRepository:
@@ -158,7 +161,39 @@ class RuntimeRepository:
             )
         )
 
-    def claim_next_queued_run(self) -> RunRecord | None:
+    def claim_next_queued_run(
+        self,
+        *,
+        media_derivative_site_running_limit: int | None = None,
+    ) -> RunRecord | None:
+        if media_derivative_site_running_limit and media_derivative_site_running_limit > 0:
+            candidate_run_ids = list(
+                self.session.scalars(
+                    select(RunRecord.run_id)
+                    .where(RunRecord.status == "queued")
+                    .order_by(RunRecord.started_at.asc(), RunRecord.run_id.asc())
+                    .limit(50)
+                )
+            )
+            for candidate_run_id in candidate_run_ids:
+                candidate = self.get_run(str(candidate_run_id))
+                if candidate is None:
+                    continue
+                if (
+                    candidate.execution_kind == "media_derivative"
+                    and self.count_running_media_derivative_runs(candidate.site_id)
+                    >= media_derivative_site_running_limit
+                ):
+                    continue
+                return self._claim_queued_run(
+                    update(RunRecord).where(
+                        RunRecord.run_id == candidate.run_id,
+                        RunRecord.status == "queued",
+                    )
+                )
+            self.session.flush()
+            return None
+
         oldest_queued_run_id = (
             select(RunRecord.run_id)
             .where(RunRecord.status == "queued")
@@ -191,6 +226,34 @@ class RuntimeRepository:
 
         self.session.flush()
         return self.get_run(claimed_run_id)
+
+    def count_running_media_derivative_runs(self, site_id: str) -> int:
+        return int(
+            self.session.scalar(
+                select(func.count(RunRecord.run_id)).where(
+                    RunRecord.site_id == site_id,
+                    RunRecord.execution_kind == "media_derivative",
+                    RunRecord.status == "running",
+                )
+            )
+            or 0
+        )
+
+    def summarize_media_derivative_queue_pressure(self, site_id: str) -> dict[str, int]:
+        rows = self.session.execute(
+            select(RunRecord.status, func.count(RunRecord.run_id))
+            .where(
+                RunRecord.site_id == site_id,
+                RunRecord.execution_kind == "media_derivative",
+                RunRecord.status.in_(("queued", "running")),
+            )
+            .group_by(RunRecord.status)
+        ).all()
+        counts = {str(status): int(count or 0) for status, count in rows}
+        return {
+            "queued": counts.get("queued", 0),
+            "running": counts.get("running", 0),
+        }
 
     def mark_run_failed(
         self,
@@ -386,40 +449,46 @@ class RuntimeRepository:
         recent_window_start = recent_since or (current_time - timedelta(hours=1))
         callback_url = self._callback_url_expression()
 
-        queued_filters = [RunRecord.status == "queued", *self._site_filters(site_id)]
-        running_filters = [RunRecord.status == "running", *self._site_filters(site_id)]
-        cancel_requested_filters = [
+        queued_filters: list[SQLAFilter] = [
+            RunRecord.status == "queued",
+            *self._site_filters(site_id),
+        ]
+        running_filters: list[SQLAFilter] = [
+            RunRecord.status == "running",
+            *self._site_filters(site_id),
+        ]
+        cancel_requested_filters: list[SQLAFilter] = [
             RunRecord.cancel_requested_at.is_not(None),
             RunRecord.status.in_(("queued", "running")),
             *self._site_filters(site_id),
         ]
-        callback_pending_filters = [
+        callback_pending_filters: list[SQLAFilter] = [
             RunRecord.finished_at.is_not(None),
             RunRecord.callback_status == RUN_CALLBACK_STATUS_PENDING,
             callback_url.is_not(None),
             callback_url != "",
             *self._site_filters(site_id),
         ]
-        callback_due_filters = [
+        callback_due_filters: list[SQLAFilter] = [
             *callback_pending_filters,
             RunRecord.callback_next_attempt_at.is_not(None),
             RunRecord.callback_next_attempt_at <= current_time,
         ]
-        callback_failed_filters = [
+        callback_failed_filters: list[SQLAFilter] = [
             RunRecord.finished_at.is_not(None),
             RunRecord.callback_status == RUN_CALLBACK_STATUS_FAILED,
             callback_url.is_not(None),
             callback_url != "",
             *self._site_filters(site_id),
         ]
-        callback_dispatching_filters = [
+        callback_dispatching_filters: list[SQLAFilter] = [
             RunRecord.finished_at.is_not(None),
             RunRecord.callback_status == RUN_CALLBACK_STATUS_DISPATCHING,
             callback_url.is_not(None),
             callback_url != "",
             *self._site_filters(site_id),
         ]
-        callback_dispatching_recoverable_filters = [
+        callback_dispatching_recoverable_filters: list[SQLAFilter] = [
             *callback_dispatching_filters,
             RunRecord.callback_last_attempt_at.is_not(None),
             RunRecord.callback_last_attempt_at
@@ -428,7 +497,7 @@ class RuntimeRepository:
                 - timedelta(seconds=RUNTIME_DIAGNOSTIC_CALLBACK_DISPATCHING_STALE_AFTER_SECONDS)
             ),
         ]
-        callback_delivered_recent_filters = [
+        callback_delivered_recent_filters: list[SQLAFilter] = [
             RunRecord.callback_status == RUN_CALLBACK_STATUS_DELIVERED,
             RunRecord.callback_delivered_at.is_not(None),
             RunRecord.callback_delivered_at >= recent_window_start,
@@ -436,25 +505,25 @@ class RuntimeRepository:
             callback_url != "",
             *self._site_filters(site_id),
         ]
-        retention_due_filters = [
+        retention_due_filters: list[SQLAFilter] = [
             RunRecord.retention_expires_at.is_not(None),
             RunRecord.retention_expires_at <= current_time,
             RunRecord.result_purged_at.is_(None),
             RunRecord.result_json.is_not(None),
             *self._site_filters(site_id),
         ]
-        retention_purged_recent_filters = [
+        retention_purged_recent_filters: list[SQLAFilter] = [
             RunRecord.result_purged_at.is_not(None),
             RunRecord.result_purged_at >= recent_window_start,
             *self._site_filters(site_id),
         ]
-        failed_recent_filters = [
+        failed_recent_filters: list[SQLAFilter] = [
             RunRecord.status == "failed",
             RunRecord.finished_at.is_not(None),
             RunRecord.finished_at >= recent_window_start,
             *self._site_filters(site_id),
         ]
-        canceled_recent_filters = [
+        canceled_recent_filters: list[SQLAFilter] = [
             RunRecord.status == "canceled",
             RunRecord.canceled_at.is_not(None),
             RunRecord.canceled_at >= recent_window_start,
@@ -551,7 +620,7 @@ class RuntimeRepository:
         )
 
         statement = select(RunRecord)
-        order_by = (RunRecord.started_at.asc(),)
+        order_by: tuple[Any, ...] = (RunRecord.started_at.asc(),)
 
         if issue_kind == "queued":
             statement = statement.where(
@@ -1120,21 +1189,34 @@ class RuntimeRepository:
             return value.replace(tzinfo=UTC)
         return value.astimezone(UTC)
 
-    def _site_filters(self, site_id: str | None) -> list[object]:
+    def _site_filters(self, site_id: str | None) -> list[SQLAFilter]:
         if not site_id:
             return []
         return [RunRecord.site_id == site_id]
 
-    def _count_runs(self, filters: list[object]) -> int:
+    def _count_runs(self, filters: list[SQLAFilter]) -> int:
         return int(
-            self.session.scalar(select(func.count()).select_from(RunRecord).where(*filters)) or 0
+            self.session.scalar(
+                cast(Any, select(func.count()).select_from(RunRecord).where(*filters))
+            )
+            or 0
         )
 
-    def _min_timestamp(self, filters: list[object], column: object) -> datetime | None:
-        return self.session.scalar(select(func.min(column)).select_from(RunRecord).where(*filters))
+    def _min_timestamp(self, filters: list[SQLAFilter], column: object) -> datetime | None:
+        return cast(
+            datetime | None,
+            self.session.scalar(
+                cast(Any, select(func.min(column)).select_from(RunRecord).where(*filters))
+            ),
+        )
 
-    def _max_timestamp(self, filters: list[object], column: object) -> datetime | None:
-        return self.session.scalar(select(func.max(column)).select_from(RunRecord).where(*filters))
+    def _max_timestamp(self, filters: list[SQLAFilter], column: object) -> datetime | None:
+        return cast(
+            datetime | None,
+            self.session.scalar(
+                cast(Any, select(func.max(column)).select_from(RunRecord).where(*filters))
+            ),
+        )
 
     def _count_provider_error_calls(
         self,

@@ -110,14 +110,16 @@ def build_worker_heartbeat_summary(
     current_time = (now or datetime.now(UTC)).astimezone(UTC)
     interval_seconds = max(30, int(settings.worker_heartbeat_interval_seconds))
     stale_after_seconds = interval_seconds * 2
-    heartbeat_events = CommercialService(
-        settings.database_url,
-        settings=settings,
-    ).list_service_audit_events(
-        event_kind=WORKER_HEARTBEAT_EVENT_KIND,
-        outcome="succeeded",
-        limit=max(20, len(effective_worker_ids) * 10),
-    )["items"]
+    heartbeat_events = _dict_items(
+        CommercialService(
+            settings.database_url,
+            settings=settings,
+        ).list_service_audit_events(
+            event_kind=WORKER_HEARTBEAT_EVENT_KIND,
+            outcome="succeeded",
+            limit=max(20, len(effective_worker_ids) * 10),
+        ).get("items")
+    )
 
     latest_by_worker: dict[str, dict[str, object]] = {}
     for event in heartbeat_events:
@@ -133,11 +135,13 @@ def build_worker_heartbeat_summary(
 
     items: list[dict[str, object]] = []
     for worker_id in effective_worker_ids:
-        event = latest_by_worker.get(worker_id)
-        payload = event.get("payload") if isinstance(event, dict) else {}
+        latest_event = latest_by_worker.get(worker_id)
+        payload = latest_event.get("payload") if isinstance(latest_event, dict) else {}
         if not isinstance(payload, dict):
             payload = {}
-        recorded_at = _parse_timestamp(payload.get("recorded_at") or (event or {}).get("created_at"))
+        recorded_at = _parse_timestamp(
+            payload.get("recorded_at") or (latest_event or {}).get("created_at")
+        )
         age_seconds = (
             max(0, int((current_time - recorded_at).total_seconds()))
             if recorded_at is not None
@@ -156,7 +160,11 @@ def build_worker_heartbeat_summary(
                 "worker_id": worker_id,
                 "freshness": freshness,
                 "status": str(payload.get("status") or ""),
-                "last_seen_at": str(payload.get("recorded_at") or (event or {}).get("created_at") or ""),
+                "last_seen_at": str(
+                    payload.get("recorded_at")
+                    or (latest_event or {}).get("created_at")
+                    or ""
+                ),
                 "age_seconds": age_seconds,
             }
         )
@@ -174,3 +182,13 @@ def build_worker_heartbeat_summary(
             "missing_total": sum(1 for item in items if item["freshness"] == "missing"),
         },
     }
+
+
+def _dict_items(value: object) -> list[dict[str, object]]:
+    if not isinstance(value, list):
+        return []
+    return [
+        {str(key): item for key, item in candidate.items()}
+        for candidate in value
+        if isinstance(candidate, dict)
+    ]

@@ -149,5 +149,5 @@ if [ "${#mypy_targets[@]}" -eq 0 ]; then
 	exit 0
 fi
 
-echo "[run] mypy --follow-imports=skip changed app files"
-"${CLOUD_DIR}/.venv/bin/python" -m mypy --follow-imports=skip "${mypy_targets[@]}"
+echo "[run] mypy targeted changed app files"
+bash "${CLOUD_DIR}/scripts/mypy-targeted.sh" "${mypy_targets[@]}"

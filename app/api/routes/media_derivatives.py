@@ -192,14 +192,23 @@ async def create_media_derivative(request: Request) -> Any:
         )
 
     watermark = derivative_request.cloud_job_payload.watermark
-    if watermark_bytes is not None:
-        if watermark is None:
+    if watermark is None:
+        if watermark_bytes is not None:
             return _media_error_response(
                 status_code=400,
                 error_code="media_derivative.invalid_watermark",
                 message="watermark options are required when watermark_file is provided",
                 trace_id=auth.trace_id,
             )
+    elif watermark.type == "text":
+        if watermark_bytes is not None or watermark.artifact_id:
+            return _media_error_response(
+                status_code=400,
+                error_code="media_derivative.invalid_watermark",
+                message="text watermark must not include watermark_file or watermark.artifact_id",
+                trace_id=auth.trace_id,
+            )
+    elif watermark_bytes is not None:
         if watermark.artifact_id:
             return _media_error_response(
                 status_code=400,
@@ -271,8 +280,18 @@ async def create_media_derivative(request: Request) -> Any:
         "source_media_type": derivative_request.cloud_job_payload.source_media_type,
         "ttl_minutes": derivative_request.ttl_minutes,
     }
+    if derivative_request.batch_context is not None:
+        input_payload["batch_context"] = derivative_request.batch_context.model_dump()
 
     service = _get_runtime_service(request)
+    queue_pressure_before = service.get_media_derivative_queue_pressure(site_id=auth.site_id)
+    if str(queue_pressure_before.get("pressure_state") or "") == "rejecting":
+        return _media_error_response(
+            status_code=429,
+            error_code="media_derivative.site_queue_full",
+            message="site media derivative queue is full; retry after current chunks finish",
+            trace_id=auth.trace_id,
+        )
 
     try:
         result = await run_in_threadpool(
@@ -303,6 +322,12 @@ async def create_media_derivative(request: Request) -> Any:
     success_statuses = {"queued", "running", "succeeded"}
     status = "ok" if result.status in success_statuses else "error"
     error_code = "" if result.status in success_statuses else result.error_code
+    queue_pressure_after = service.get_media_derivative_queue_pressure(site_id=auth.site_id)
+    batch_context = (
+        derivative_request.batch_context.model_dump()
+        if derivative_request.batch_context is not None
+        else {}
+    )
     return JSONResponse(
         content=build_envelope(
             status=status,
@@ -322,6 +347,20 @@ async def create_media_derivative(request: Request) -> Any:
                     "execution_pattern": result.execution_context.execution_pattern,
                 },
                 "result": result.result,
+                "batch": {
+                    "context": batch_context,
+                    "chunking": {
+                        "recommended_chunk_size": queue_pressure_after.get(
+                            "recommended_chunk_size",
+                            services.settings.media_derivative_batch_default_chunk_size,
+                        ),
+                        "max_chunk_size": services.settings.media_derivative_batch_max_chunk_size,
+                    },
+                    "avif_policy": {
+                        "batch_requires_explicit_opt_in": True,
+                    },
+                },
+                "queue_pressure": queue_pressure_after,
             },
             trace_id=result.trace_id,
             revision="md1",
