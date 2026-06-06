@@ -807,6 +807,49 @@ class UsageRollupService:
             "meter_events": _coerce_int(daily_digest.get("meter_events")),
         }
 
+    def get_hosted_model_governance_batch(
+        self,
+        *,
+        window_minutes: int = 1440,
+    ) -> dict[str, object] | None:
+        if window_minutes <= 0:
+            raise ValueError("window_minutes must be positive")
+
+        scope_suffix = f"__{int(window_minutes)}m"
+        with get_session(self.database_url) as session:
+            repository = StatsRepository(session)
+            rollups = repository.list_usage_rollups(
+                site_scope=GLOBAL_SITE_SCOPE,
+                scope_kind=HOSTED_MODEL_GOVERNANCE_BATCH_SCOPE,
+            )
+
+        for rollup in reversed(rollups):
+            if not str(getattr(rollup, "scope_id", "")).endswith(scope_suffix):
+                continue
+            payload = rollup.payload_json if isinstance(rollup.payload_json, dict) else {}
+            if not payload:
+                continue
+            payload.setdefault("source", "cloud_hosted_model_governance")
+            payload.setdefault(
+                "delivery",
+                {
+                    "owner": "internal_admin_readonly",
+                    "buffer_kind": "usage_rollup",
+                    "scope_kind": HOSTED_MODEL_GOVERNANCE_BATCH_SCOPE,
+                },
+            )
+            payload.setdefault(
+                "rollup",
+                {
+                    "site_scope": GLOBAL_SITE_SCOPE,
+                    "scope_kind": HOSTED_MODEL_GOVERNANCE_BATCH_SCOPE,
+                    "scope_id": str(getattr(rollup, "scope_id", "")),
+                },
+            )
+            return payload
+
+        return None
+
     def _build_rollup_key(
         self,
         site_scope: str,

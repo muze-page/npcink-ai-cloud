@@ -148,6 +148,8 @@ test('admin queue pages keep one primary header action and shared identifier tre
 
   await page.goto('/admin/hosted-models', { waitUntil: 'domcontentloaded' });
   await expect(page.getByRole('heading', { name: /Hosted Model Governance|托管模型/i })).toBeVisible();
+  await expect(page.getByRole('heading', { name: /Latest cadence record/i })).toBeVisible();
+  await expect(page.getByText(/internal_admin_readonly/i).first()).toBeVisible();
   await expect(page.getByRole('heading', { name: /Daily governance watch/i })).toBeVisible();
   await expect(page.getByText(/Hosted model provider call coverage gap/i).first()).toBeVisible();
   await expect(page.getByText(/Ability families|能力/i).first()).toBeVisible();

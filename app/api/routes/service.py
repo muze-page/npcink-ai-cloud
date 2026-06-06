@@ -27,6 +27,7 @@ from app.domain.runtime.models import (
 )
 from app.domain.runtime.service import RuntimeService
 from app.domain.site_knowledge.metrics import SiteKnowledgeObservabilityService
+from app.domain.usage.rollup import UsageRollupService
 from app.domain.web_search.admin_config import WebSearchAdminConfigService
 from app.workers.ops_cadence import build_cadence_summary
 
@@ -2282,6 +2283,67 @@ async def get_hosted_model_governance_diagnostics(
     return build_envelope(
         status="ok",
         message="hosted model governance diagnostics loaded",
+        data=result,
+        revision="m1",
+    )
+
+
+@router.get("/admin/hosted-model-governance-cadence")
+async def get_hosted_model_governance_cadence(
+    request: Request,
+    recent_minutes: int = Query(default=1440, ge=1, le=10080),
+) -> Any:
+    auth = await authorize_internal_request(request, require_idempotency=False)
+    if auth is not None:
+        return auth
+    services = get_cloud_services(request)
+    result = UsageRollupService(
+        services.settings.database_url
+    ).get_hosted_model_governance_batch(
+        window_minutes=recent_minutes,
+    )
+    if result is None:
+        result = {
+            "available": False,
+            "source": "cloud_hosted_model_governance_empty",
+            "filters": {
+                "site_id": "",
+                "recent_minutes": recent_minutes,
+            },
+            "generated_at": "",
+            "alert_summary": {
+                "status": "inactive",
+                "summary": "No hosted model governance cadence record is available yet.",
+                "alert_count": 0,
+                "alerts": [],
+                "daily_digest": {
+                    "runs": 0,
+                    "provider_calls": 0,
+                    "meter_events": 0,
+                    "metered_run_coverage_rate": 0,
+                    "provider_call_run_coverage_rate": 0,
+                    "unmetered_run_count": 0,
+                    "runs_without_provider_call_count": 0,
+                },
+            },
+            "delivery": {
+                "owner": "internal_admin_readonly",
+                "buffer_kind": "usage_rollup",
+                "scope_kind": "hosted_model_governance_batch",
+            },
+            "boundary": {
+                "surface": "internal_admin_summary",
+                "cloud_role": "hosted_runtime_detail",
+                "local_control_plane": "wordpress_plugin",
+                "direct_wordpress_write": False,
+                "contains_prompt_or_result_payloads": False,
+            },
+        }
+    else:
+        result = {**result, "available": True}
+    return build_envelope(
+        status="ok",
+        message="hosted model governance cadence loaded",
         data=result,
         revision="m1",
     )

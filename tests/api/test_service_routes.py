@@ -28,6 +28,7 @@ from app.core.services import CloudServices
 from app.domain.catalog.service import CatalogService
 from app.domain.commercial.service import CommercialService, ServiceAuditContext
 from app.domain.runtime.service import RuntimeService
+from app.domain.usage.rollup import UsageRollupService
 from app.workers.ops_cadence import run_due_tasks
 from tests.conftest import (
     TEST_ADMIN_SESSION_SECRET,
@@ -457,9 +458,28 @@ def test_hosted_model_governance_diagnostics_summarizes_runtime_families(
         f"?site_id={site_id}&recent_minutes=10080&limit=10",
         headers=build_internal_headers(),
     )
+    empty_cadence_response = client.get(
+        "/internal/service/admin/hosted-model-governance-cadence?recent_minutes=60",
+        headers=build_internal_headers(),
+    )
+    UsageRollupService(database_url).store_hosted_model_governance_batch(
+        window_minutes=60,
+        limit=10,
+    )
+    cadence_response = client.get(
+        "/internal/service/admin/hosted-model-governance-cadence?recent_minutes=60",
+        headers=build_internal_headers(),
+    )
 
     assert response.status_code == 200
     assert admin_alias_response.status_code == 200
+    assert empty_cadence_response.status_code == 200
+    assert empty_cadence_response.json()["data"]["available"] is False
+    assert cadence_response.status_code == 200
+    cadence_payload = cadence_response.json()["data"]
+    assert cadence_payload["available"] is True
+    assert cadence_payload["source"] == "cloud_hosted_model_governance"
+    assert cadence_payload["delivery"]["owner"] == "internal_admin_readonly"
     data = response.json()["data"]
     assert admin_alias_response.json()["data"]["totals"]["runs"] == 3
     assert admin_alias_response.json()["data"]["filters"]["recent_minutes"] == 10080

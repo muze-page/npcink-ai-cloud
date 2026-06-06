@@ -466,10 +466,14 @@ def test_usage_rollup_service_stores_hosted_model_governance_batch(
         window_minutes=1440,
         limit=25,
     )
+    latest = service.get_hosted_model_governance_batch(window_minutes=1440)
 
     assert result["scope_kind"] == HOSTED_MODEL_GOVERNANCE_BATCH_SCOPE
     assert result["stored_batches_total"] == 1
     assert result["delivery_owner"] == "internal_admin_readonly"
+    assert latest is not None
+    assert latest["source"] == "cloud_hosted_model_governance"
+    assert latest["delivery"]["owner"] == "internal_admin_readonly"
 
     with get_session(database_url) as session:
         repository = StatsRepository(session)

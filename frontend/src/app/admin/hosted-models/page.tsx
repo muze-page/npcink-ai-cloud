@@ -91,6 +91,26 @@ type HostedModelGovernanceData = {
   };
 };
 
+type HostedModelGovernanceCadence = {
+  available: boolean;
+  source: string;
+  generatedAt: string;
+  filters: { recentMinutes: number };
+  delivery: { owner: string; bufferKind: string; scopeKind: string };
+  rollup: { siteScope: string; scopeKind: string; scopeId: string; generatedAt: string };
+  alertSummary: HostedModelGovernanceData['alertSummary'] & {
+    dailyDigest: {
+      runs: number;
+      providerCalls: number;
+      meterEvents: number;
+      meteredRunCoverageRate: number;
+      providerCallRunCoverageRate: number;
+      unmeteredRunCount: number;
+      runsWithoutProviderCallCount: number;
+    };
+  };
+};
+
 const WINDOW_OPTIONS = [
   { label: '1h', value: 60 },
   { label: '24h', value: 1440 },
@@ -203,6 +223,59 @@ function normalizeHostedModelGovernance(raw: any): HostedModelGovernanceData {
   };
 }
 
+function normalizeHostedModelGovernanceCadence(raw: any): HostedModelGovernanceCadence {
+  const filters = raw?.filters ?? {};
+  const delivery = raw?.delivery ?? {};
+  const rollup = raw?.rollup ?? {};
+  const alertSummary = raw?.alert_summary ?? {};
+  const dailyDigest = alertSummary?.daily_digest ?? {};
+  return {
+    available: Boolean(raw?.available ?? raw?.source === 'cloud_hosted_model_governance'),
+    source: String(raw?.source ?? ''),
+    generatedAt: String(raw?.generated_at ?? ''),
+    filters: {
+      recentMinutes: asNumber(filters.recent_minutes),
+    },
+    delivery: {
+      owner: String(delivery.owner ?? ''),
+      bufferKind: String(delivery.buffer_kind ?? ''),
+      scopeKind: String(delivery.scope_kind ?? ''),
+    },
+    rollup: {
+      siteScope: String(rollup.site_scope ?? ''),
+      scopeKind: String(rollup.scope_kind ?? ''),
+      scopeId: String(rollup.scope_id ?? ''),
+      generatedAt: String(rollup.generated_at ?? ''),
+    },
+    alertSummary: {
+      status: String(alertSummary.status ?? 'inactive'),
+      summary: String(alertSummary.summary ?? ''),
+      nextAction: String(alertSummary.next_action ?? ''),
+      alertCount: asNumber(alertSummary.alert_count),
+      alerts: Array.isArray(alertSummary.alerts)
+        ? alertSummary.alerts.map((item: any) => ({
+            code: String(item?.code ?? ''),
+            severity: String(item?.severity ?? ''),
+            title: String(item?.title ?? ''),
+            summary: String(item?.summary ?? ''),
+            count: asNumber(item?.count),
+            capabilities: Array.isArray(item?.capabilities) ? item.capabilities.map(String) : [],
+            suggestedAction: String(item?.suggested_action ?? ''),
+          }))
+        : [],
+      dailyDigest: {
+        runs: asNumber(dailyDigest.runs),
+        providerCalls: asNumber(dailyDigest.provider_calls),
+        meterEvents: asNumber(dailyDigest.meter_events),
+        meteredRunCoverageRate: asNumber(dailyDigest.metered_run_coverage_rate),
+        providerCallRunCoverageRate: asNumber(dailyDigest.provider_call_run_coverage_rate),
+        unmeteredRunCount: asNumber(dailyDigest.unmetered_run_count),
+        runsWithoutProviderCallCount: asNumber(dailyDigest.runs_without_provider_call_count),
+      },
+    },
+  };
+}
+
 function formatPercent(value: number): string {
   return `${(Number(value || 0) * 100).toFixed(1)}%`;
 }
@@ -226,6 +299,7 @@ function groupTone(group: GovernanceGroup): string {
 function AdminHostedModelsContent() {
   const { t } = useLocale();
   const [data, setData] = useState<HostedModelGovernanceData | null>(null);
+  const [cadence, setCadence] = useState<HostedModelGovernanceCadence | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [recentMinutes, setRecentMinutes] = useState(1440);
@@ -250,9 +324,24 @@ function AdminHostedModelsContent() {
         throw payload;
       }
       setData(normalizeHostedModelGovernance(payload?.data ?? {}));
+      try {
+        const cadenceResponse = await fetch(
+          `/api/admin/hosted-model-governance-cadence?recent_minutes=${encodeURIComponent(String(recentMinutes))}`,
+          { credentials: 'include' }
+        );
+        const cadencePayload = await cadenceResponse.json();
+        if (cadenceResponse.ok && cadencePayload?.status !== 'error') {
+          setCadence(normalizeHostedModelGovernanceCadence(cadencePayload?.data ?? {}));
+        } else {
+          setCadence(null);
+        }
+      } catch {
+        setCadence(null);
+      }
     } catch (err) {
       setError(resolveUiErrorMessage(err, t('error.failed_load')));
       setData(null);
+      setCadence(null);
     } finally {
       setLoading(false);
     }
@@ -407,6 +496,59 @@ function AdminHostedModelsContent() {
         />
       ) : (
         <>
+          <BackofficeSectionPanel className="space-y-4">
+            <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-gray-500 dark:text-gray-400">
+                  Cadence record
+                </p>
+                <h2 className="mt-2 text-xl font-semibold text-gray-950 dark:text-white">
+                  Latest cadence record
+                </h2>
+                <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">
+                  {cadence?.available
+                    ? cadence.alertSummary.summary
+                    : 'No background governance rollup has been recorded for this window yet.'}
+                </p>
+              </div>
+              <BackofficeStatusBadge
+                status={cadence?.alertSummary.status || 'inactive'}
+                label={cadence?.available ? cadence.alertSummary.status : 'missing'}
+              />
+            </div>
+            <BackofficeMetricStrip
+              columnsClassName="md:grid-cols-2 xl:grid-cols-5"
+              items={[
+                {
+                  label: 'Runs',
+                  value: formatNumber(cadence?.alertSummary.dailyDigest.runs || 0),
+                  detail: cadence?.generatedAt ? formatDate(cadence.generatedAt) : 'No cadence record',
+                  size: 'compact',
+                },
+                {
+                  label: 'Meter coverage',
+                  value: formatPercent(cadence?.alertSummary.dailyDigest.meteredRunCoverageRate || 0),
+                },
+                {
+                  label: 'Provider coverage',
+                  value: formatPercent(cadence?.alertSummary.dailyDigest.providerCallRunCoverageRate || 0),
+                },
+                {
+                  label: 'Alerts',
+                  value: formatNumber(cadence?.alertSummary.alertCount || 0),
+                  detail: cadence?.alertSummary.nextAction || 'continue_monitoring',
+                  size: 'compact',
+                },
+                {
+                  label: 'Owner',
+                  value: cadence?.delivery.owner || 'internal_admin_readonly',
+                  detail: cadence?.rollup.scopeId || cadence?.source || 'usage_rollup',
+                  size: 'compact',
+                },
+              ]}
+            />
+          </BackofficeSectionPanel>
+
           <BackofficeSectionPanel className="space-y-4">
             <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
               <div>
