@@ -130,6 +130,18 @@ create a model-specific bypass around entitlement, request guard, idempotency,
 quota, concurrency, provider-call telemetry, usage meter events, storage mode,
 or WordPress write boundaries.
 
+Internal operators may inspect this posture through:
+
+```http
+GET /internal/service/runtime/diagnostics/hosted-model-governance
+```
+
+This diagnostic endpoint is internal-only and read-only. It may summarize
+ability-family, execution-kind, profile, provider, model, token, cost, latency,
+error, and metering-coverage signals, but it must not return prompts, generated
+content, raw runtime inputs/results, provider secrets, WordPress credentials,
+or any local approval/write controls.
+
 ## 4. Cloud API Query
 
 The local plugin queries entitlement through a read-only Cloud API:

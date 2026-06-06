@@ -2249,6 +2249,32 @@ async def get_runtime_diagnostics_summary(
     )
 
 
+@router.get("/runtime/diagnostics/hosted-model-governance")
+async def get_hosted_model_governance_diagnostics(
+    request: Request,
+    site_id: str | None = Query(default=None),
+    recent_minutes: int = Query(default=60, ge=1, le=1440),
+    limit: int = Query(default=20, ge=1, le=100),
+) -> Any:
+    auth = await authorize_internal_request(request, require_idempotency=False)
+    if auth is not None:
+        return auth
+    services = get_cloud_services(request)
+    result = RuntimeService(
+        services.settings.database_url
+    ).get_hosted_model_governance_diagnostics(
+        site_id=site_id,
+        recent_minutes=recent_minutes,
+        limit=limit,
+    )
+    return build_envelope(
+        status="ok",
+        message="hosted model governance diagnostics loaded",
+        data=result,
+        revision="m1",
+    )
+
+
 @router.get("/runtime/diagnostics/backlog")
 async def get_runtime_backlog_diagnostics(
     request: Request,

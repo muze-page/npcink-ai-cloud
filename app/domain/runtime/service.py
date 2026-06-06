@@ -6,6 +6,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 from uuid import uuid4
 
+from sqlalchemy import select
 from sqlalchemy.orm.attributes import flag_modified
 
 from app.adapters.callbacks.base import (
@@ -36,6 +37,7 @@ from app.core.models import (
     ProviderCallRecord,
     RunRecord,
     RuntimeGuardEvent,
+    UsageMeterEvent,
 )
 from app.core.secrets import (
     decrypt_runtime_execution_input,
@@ -1075,6 +1077,234 @@ class RuntimeService:
             **summary,
         }
 
+    def get_hosted_model_governance_diagnostics(
+        self,
+        *,
+        site_id: str | None = None,
+        recent_minutes: int = 60,
+        limit: int = 20,
+    ) -> dict[str, object]:
+        current_time = datetime.now(UTC)
+        recent_since = current_time - timedelta(minutes=max(1, recent_minutes))
+        max_items = max(1, min(100, limit))
+        with get_session(self.database_url) as session:
+            run_statement = select(RunRecord).where(RunRecord.started_at >= recent_since)
+            if site_id:
+                run_statement = run_statement.where(RunRecord.site_id == site_id)
+            runs = list(
+                session.scalars(
+                    run_statement.order_by(
+                        RunRecord.started_at.desc(),
+                        RunRecord.run_id.desc(),
+                    ).limit(5000)
+                )
+            )
+
+            call_statement = (
+                select(ProviderCallRecord, RunRecord)
+                .join(RunRecord, ProviderCallRecord.run_id == RunRecord.run_id)
+                .where(ProviderCallRecord.created_at >= recent_since)
+            )
+            if site_id:
+                call_statement = call_statement.where(RunRecord.site_id == site_id)
+            provider_call_rows = list(
+                session.execute(
+                    call_statement.order_by(
+                        ProviderCallRecord.created_at.desc(),
+                        ProviderCallRecord.id.desc(),
+                    ).limit(10000)
+                )
+            )
+
+            meter_statement = select(UsageMeterEvent).where(
+                UsageMeterEvent.created_at >= recent_since
+            )
+            if site_id:
+                meter_statement = meter_statement.where(UsageMeterEvent.site_id == site_id)
+            meter_events = list(
+                session.scalars(
+                    meter_statement.order_by(
+                        UsageMeterEvent.created_at.desc(),
+                        UsageMeterEvent.id.desc(),
+                    ).limit(10000)
+                )
+            )
+
+        run_ids = {run.run_id for run in runs}
+        provider_call_run_ids = {
+            call.run_id for call, _run in provider_call_rows if call.run_id in run_ids
+        }
+        meter_run_ids = {
+            str(event.run_id or "")
+            for event in meter_events
+            if str(event.run_id or "") in run_ids
+        }
+        run_groups: dict[str, dict[str, object]] = {}
+        profile_groups: dict[str, dict[str, object]] = {}
+        execution_kind_groups: dict[str, dict[str, object]] = {}
+        provider_model_groups: dict[str, dict[str, object]] = {}
+
+        for run in runs:
+            family = str(run.ability_family or "unknown").strip() or "unknown"
+            profile_id = str(run.profile_id or "unknown").strip() or "unknown"
+            execution_kind = str(run.execution_kind or "unknown").strip() or "unknown"
+            self._update_hosted_governance_run_group(
+                run_groups.setdefault(
+                    family,
+                    self._empty_hosted_governance_group(
+                        group_kind="ability_family",
+                        group_id=family,
+                    ),
+                ),
+                run,
+            )
+            self._update_hosted_governance_run_group(
+                profile_groups.setdefault(
+                    profile_id,
+                    self._empty_hosted_governance_group(
+                        group_kind="profile_id",
+                        group_id=profile_id,
+                    ),
+                ),
+                run,
+            )
+            self._update_hosted_governance_run_group(
+                execution_kind_groups.setdefault(
+                    execution_kind,
+                    self._empty_hosted_governance_group(
+                        group_kind="execution_kind",
+                        group_id=execution_kind,
+                    ),
+                ),
+                run,
+            )
+
+        for call, run in provider_call_rows:
+            family = str(run.ability_family or "unknown").strip() or "unknown"
+            profile_id = str(run.profile_id or "unknown").strip() or "unknown"
+            execution_kind = str(run.execution_kind or "unknown").strip() or "unknown"
+            provider_model_key = (
+                f"{call.provider_id or 'unknown'}::{call.model_id or 'unknown'}"
+            )
+            for group in (
+                run_groups.setdefault(
+                    family,
+                    self._empty_hosted_governance_group(
+                        group_kind="ability_family",
+                        group_id=family,
+                    ),
+                ),
+                profile_groups.setdefault(
+                    profile_id,
+                    self._empty_hosted_governance_group(
+                        group_kind="profile_id",
+                        group_id=profile_id,
+                    ),
+                ),
+                execution_kind_groups.setdefault(
+                    execution_kind,
+                    self._empty_hosted_governance_group(
+                        group_kind="execution_kind",
+                        group_id=execution_kind,
+                    ),
+                ),
+                provider_model_groups.setdefault(
+                    provider_model_key,
+                    self._empty_hosted_governance_group(
+                        group_kind="provider_model",
+                        group_id=provider_model_key,
+                    ),
+                ),
+            ):
+                self._update_hosted_governance_provider_call_group(group, call)
+
+        for event in meter_events:
+            family = str(event.ability_family or "unknown").strip() or "unknown"
+            execution_kind = str(event.execution_kind or "unknown").strip() or "unknown"
+            for group in (
+                run_groups.setdefault(
+                    family,
+                    self._empty_hosted_governance_group(
+                        group_kind="ability_family",
+                        group_id=family,
+                    ),
+                ),
+                execution_kind_groups.setdefault(
+                    execution_kind,
+                    self._empty_hosted_governance_group(
+                        group_kind="execution_kind",
+                        group_id=execution_kind,
+                    ),
+                ),
+            ):
+                self._update_hosted_governance_meter_group(group, event)
+
+        capability_items = self._finalize_hosted_governance_groups(
+            run_groups.values(),
+            limit=max_items,
+            provider_call_run_ids=provider_call_run_ids,
+            meter_run_ids=meter_run_ids,
+        )
+        profile_items = self._finalize_hosted_governance_groups(
+            profile_groups.values(),
+            limit=max_items,
+            provider_call_run_ids=provider_call_run_ids,
+            meter_run_ids=meter_run_ids,
+        )
+        execution_kind_items = self._finalize_hosted_governance_groups(
+            execution_kind_groups.values(),
+            limit=max_items,
+            provider_call_run_ids=provider_call_run_ids,
+            meter_run_ids=meter_run_ids,
+        )
+        provider_model_items = self._finalize_hosted_governance_groups(
+            provider_model_groups.values(),
+            limit=max_items,
+            provider_call_run_ids=provider_call_run_ids,
+            meter_run_ids=meter_run_ids,
+        )
+        governance_gaps = self._build_hosted_governance_gap_summary(
+            capability_items=capability_items,
+            runs_total=len(runs),
+            provider_call_run_ids=provider_call_run_ids,
+            meter_run_ids=meter_run_ids,
+        )
+
+        return {
+            "filters": {
+                "site_id": site_id or "",
+                "recent_minutes": recent_minutes,
+                "limit": max_items,
+            },
+            "generated_at": self._serialize_timestamp(current_time),
+            "window": {
+                "since": self._serialize_timestamp(recent_since),
+                "until": self._serialize_timestamp(current_time),
+            },
+            "totals": {
+                "runs": len(runs),
+                "provider_calls": len(provider_call_rows),
+                "usage_meter_events": len(meter_events),
+                "provider_call_run_coverage_rate": self._safe_ratio(
+                    len(provider_call_run_ids),
+                    len(runs),
+                ),
+                "metered_run_coverage_rate": self._safe_ratio(len(meter_run_ids), len(runs)),
+            },
+            "capability_groups": capability_items,
+            "profile_groups": profile_items,
+            "execution_kind_groups": execution_kind_items,
+            "provider_model_groups": provider_model_items,
+            "governance_gaps": governance_gaps,
+            "boundary": {
+                "surface": "internal_operator_diagnostics",
+                "cloud_role": "hosted_runtime_detail",
+                "local_control_plane": "wordpress_plugin",
+                "direct_wordpress_write": False,
+                "contains_prompt_or_result_payloads": False,
+            },
+        }
+
     def get_runtime_backlog_diagnostics(
         self,
         *,
@@ -1254,6 +1484,215 @@ class RuntimeService:
             },
             "items": limited_items,
         }
+
+    def _empty_hosted_governance_group(
+        self,
+        *,
+        group_kind: str,
+        group_id: str,
+    ) -> dict[str, object]:
+        return {
+            "group_kind": group_kind,
+            "group_id": group_id,
+            "run_ids": set(),
+            "provider_call_run_ids": set(),
+            "meter_run_ids": set(),
+            "runs_total": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "queued": 0,
+            "running": 0,
+            "canceled": 0,
+            "provider_calls": 0,
+            "provider_errors": 0,
+            "latency_ms_total": 0,
+            "tokens_in": 0,
+            "tokens_out": 0,
+            "cost": 0.0,
+            "meter_events": 0,
+            "meter_totals": {},
+            "profile_ids": set(),
+            "execution_kinds": set(),
+            "provider_ids": set(),
+            "model_ids": set(),
+            "instance_ids": set(),
+            "data_classifications": set(),
+        }
+
+    def _update_hosted_governance_run_group(
+        self,
+        group: dict[str, object],
+        run: RunRecord,
+    ) -> None:
+        cast(set[str], group["run_ids"]).add(run.run_id)
+        group["runs_total"] = self._coerce_int(group.get("runs_total"), default=0) + 1
+        status = str(run.status or "unknown")
+        if status == "succeeded":
+            group["succeeded"] = self._coerce_int(group.get("succeeded"), default=0) + 1
+        elif status == "failed":
+            group["failed"] = self._coerce_int(group.get("failed"), default=0) + 1
+        elif status == "queued":
+            group["queued"] = self._coerce_int(group.get("queued"), default=0) + 1
+        elif status == "running":
+            group["running"] = self._coerce_int(group.get("running"), default=0) + 1
+        elif status == "canceled":
+            group["canceled"] = self._coerce_int(group.get("canceled"), default=0) + 1
+
+        self._add_nonempty(cast(set[str], group["profile_ids"]), run.profile_id)
+        self._add_nonempty(cast(set[str], group["execution_kinds"]), run.execution_kind)
+        self._add_nonempty(
+            cast(set[str], group["data_classifications"]),
+            run.data_classification,
+        )
+
+    def _update_hosted_governance_provider_call_group(
+        self,
+        group: dict[str, object],
+        call: ProviderCallRecord,
+    ) -> None:
+        cast(set[str], group["run_ids"]).add(call.run_id)
+        cast(set[str], group["provider_call_run_ids"]).add(call.run_id)
+        group["provider_calls"] = self._coerce_int(group.get("provider_calls"), default=0) + 1
+        if call.error_code:
+            group["provider_errors"] = self._coerce_int(group.get("provider_errors"), default=0) + 1
+        group["latency_ms_total"] = (
+            self._coerce_int(group.get("latency_ms_total"), default=0)
+            + self._coerce_int(call.latency_ms, default=0)
+        )
+        group["tokens_in"] = (
+            self._coerce_int(group.get("tokens_in"), default=0)
+            + self._coerce_int(call.tokens_in, default=0)
+        )
+        group["tokens_out"] = (
+            self._coerce_int(group.get("tokens_out"), default=0)
+            + self._coerce_int(call.tokens_out, default=0)
+        )
+        cost = self._coerce_float(group.get("cost")) or 0.0
+        group["cost"] = round(cost + float(call.cost or 0.0), 8)
+        self._add_nonempty(cast(set[str], group["provider_ids"]), call.provider_id)
+        self._add_nonempty(cast(set[str], group["model_ids"]), call.model_id)
+        self._add_nonempty(cast(set[str], group["instance_ids"]), call.instance_id)
+
+    def _update_hosted_governance_meter_group(
+        self,
+        group: dict[str, object],
+        event: UsageMeterEvent,
+    ) -> None:
+        run_id = str(event.run_id or "").strip()
+        if run_id:
+            cast(set[str], group["run_ids"]).add(run_id)
+            cast(set[str], group["meter_run_ids"]).add(run_id)
+        group["meter_events"] = self._coerce_int(group.get("meter_events"), default=0) + 1
+        meter_key = str(event.meter_key or "unknown").strip() or "unknown"
+        meter_totals = cast(dict[str, float], group["meter_totals"])
+        meter_totals[meter_key] = round(
+            float(meter_totals.get(meter_key, 0.0)) + float(event.quantity or 0.0),
+            8,
+        )
+
+    def _finalize_hosted_governance_groups(
+        self,
+        groups: Any,
+        *,
+        limit: int,
+        provider_call_run_ids: set[str],
+        meter_run_ids: set[str],
+    ) -> list[dict[str, object]]:
+        items: list[dict[str, object]] = []
+        for raw_group in groups:
+            group = dict(raw_group)
+            run_ids = cast(set[str], group.pop("run_ids", set()))
+            group_provider_call_run_ids = cast(
+                set[str],
+                group.pop("provider_call_run_ids", set()),
+            )
+            group_meter_run_ids = cast(set[str], group.pop("meter_run_ids", set()))
+            runs_total = max(
+                self._coerce_int(group.get("runs_total"), default=0),
+                len(run_ids),
+            )
+            provider_calls = self._coerce_int(group.get("provider_calls"), default=0)
+            provider_errors = self._coerce_int(group.get("provider_errors"), default=0)
+            latency_total = self._coerce_int(group.pop("latency_ms_total", 0), default=0)
+            tokens_in = self._coerce_int(group.get("tokens_in"), default=0)
+            tokens_out = self._coerce_int(group.get("tokens_out"), default=0)
+            group["runs_total"] = runs_total
+            group["tokens_total"] = tokens_in + tokens_out
+            group["avg_latency_ms"] = (
+                round(latency_total / provider_calls, 2) if provider_calls else 0.0
+            )
+            group["provider_error_rate"] = self._safe_ratio(provider_errors, provider_calls)
+            group["provider_call_run_coverage_rate"] = self._safe_ratio(
+                len(run_ids & provider_call_run_ids) or len(group_provider_call_run_ids),
+                runs_total,
+            )
+            group["metered_run_coverage_rate"] = self._safe_ratio(
+                len(run_ids & meter_run_ids) or len(group_meter_run_ids),
+                runs_total,
+            )
+            group["profile_ids"] = sorted(cast(set[str], group["profile_ids"]))[:10]
+            group["execution_kinds"] = sorted(cast(set[str], group["execution_kinds"]))[:10]
+            group["provider_ids"] = sorted(cast(set[str], group["provider_ids"]))[:10]
+            group["model_ids"] = sorted(cast(set[str], group["model_ids"]))[:10]
+            group["instance_ids"] = sorted(cast(set[str], group["instance_ids"]))[:10]
+            group["data_classifications"] = sorted(
+                cast(set[str], group["data_classifications"])
+            )[:10]
+            items.append(group)
+
+        items.sort(
+            key=lambda item: (
+                -self._coerce_int(item.get("runs_total"), default=0),
+                -self._coerce_int(item.get("provider_calls"), default=0),
+                -float(item.get("cost") or 0.0),
+                str(item.get("group_id") or ""),
+            )
+        )
+        return items[: max(1, limit)]
+
+    def _build_hosted_governance_gap_summary(
+        self,
+        *,
+        capability_items: list[dict[str, object]],
+        runs_total: int,
+        provider_call_run_ids: set[str],
+        meter_run_ids: set[str],
+    ) -> dict[str, object]:
+        unmetered_capabilities = [
+            str(item.get("group_id") or "")
+            for item in capability_items
+            if self._coerce_int(item.get("runs_total"), default=0) > 0
+            and float(item.get("metered_run_coverage_rate") or 0.0) < 1.0
+        ]
+        missing_provider_call_capabilities = [
+            str(item.get("group_id") or "")
+            for item in capability_items
+            if self._coerce_int(item.get("runs_total"), default=0) > 0
+            and self._coerce_int(item.get("provider_calls"), default=0) <= 0
+            and str(item.get("group_id") or "") not in {"vision"}
+        ]
+        return {
+            "unmetered_capabilities": unmetered_capabilities,
+            "missing_provider_call_capabilities": missing_provider_call_capabilities,
+            "unmetered_run_count": max(0, runs_total - len(meter_run_ids)),
+            "runs_without_provider_call_count": max(0, runs_total - len(provider_call_run_ids)),
+            "review_guidance": (
+                "Inspect capabilities below full metering coverage before enabling "
+                "new hosted model families at higher traffic."
+            )
+            if unmetered_capabilities or missing_provider_call_capabilities
+            else "Recent hosted model families have runtime meter coverage in this window.",
+        }
+
+    def _add_nonempty(self, values: set[str], value: object) -> None:
+        normalized = str(value or "").strip()
+        if normalized:
+            values.add(normalized)
+
+    def _safe_ratio(self, numerator: int, denominator: int) -> float:
+        if denominator <= 0:
+            return 0.0
+        return round(max(0, numerator) / denominator, 4)
 
     def list_runtime_diagnostic_runs(
         self,

@@ -21,6 +21,7 @@ from app.core.models import (
     ReplayReceipt,
     RunRecord,
     RuntimeGuardEvent,
+    UsageMeterEvent,
 )
 from app.core.security import REPLAY_SCOPE_PUBLIC_POST_SITE
 from app.core.services import CloudServices
@@ -262,6 +263,209 @@ def test_admin_image_source_provider_settings_are_masked_and_update_runtime(
     assert services.settings.image_source_auto_strategy == "random"
     assert services.settings.image_source_pixabay_api_key == "pixabay-test-secret"
     assert services.settings.image_source_timeout_seconds == 8
+
+
+def test_hosted_model_governance_diagnostics_summarizes_runtime_families(
+    tmp_path: Path,
+) -> None:
+    database_url, client = _build_client(tmp_path)
+    site_id = "site_model_gov"
+    seed_site_auth(
+        database_url,
+        site_id=site_id,
+        scopes=["runtime:execute", "runtime:read"],
+    )
+    now = datetime.now(UTC)
+    with get_session(database_url) as session:
+        subscription = session.scalar(
+            select(AccountSubscription)
+            .where(AccountSubscription.account_id == f"acct_{site_id}")
+            .order_by(AccountSubscription.created_at.desc())
+        )
+        assert subscription is not None
+
+        def add_run(
+            *,
+            run_id: str,
+            ability_family: str,
+            execution_kind: str,
+            profile_id: str,
+            provider_id: str,
+            model_id: str,
+            instance_id: str,
+        ) -> None:
+            session.add(
+                RunRecord(
+                    run_id=run_id,
+                    site_id=site_id,
+                    account_id=subscription.account_id,
+                    subscription_id=subscription.subscription_id,
+                    plan_version_id=subscription.plan_version_id,
+                    ability_name=f"magick-ai-cloud/{execution_kind}",
+                    ability_family=ability_family,
+                    skill_id="",
+                    workflow_id="",
+                    contract_version="test.v1",
+                    channel="openapi",
+                    execution_kind=execution_kind,
+                    execution_tier="cloud",
+                    execution_pattern="inline",
+                    data_classification=(
+                        "public_site_content" if ability_family == "knowledge" else "internal"
+                    ),
+                    profile_id=profile_id,
+                    canonical_run_id=None,
+                    status="succeeded",
+                    idempotency_key=f"idem-{run_id}",
+                    request_fingerprint=f"fingerprint-{run_id}",
+                    trace_id=f"trace-{run_id}",
+                    cancel_requested_at=None,
+                    canceled_at=None,
+                    input_json={},
+                    execution_input_ciphertext=None,
+                    policy_json={},
+                    result_ref="inline",
+                    result_json={"status": "ready"},
+                    error_code=None,
+                    error_message=None,
+                    callback_status="not_requested",
+                    callback_attempt_count=0,
+                    callback_last_attempt_at=None,
+                    callback_delivered_at=None,
+                    callback_next_attempt_at=None,
+                    callback_last_error_code=None,
+                    callback_last_error_message=None,
+                    selected_provider_id=provider_id,
+                    selected_model_id=model_id,
+                    selected_instance_id=instance_id,
+                    fallback_used=False,
+                    started_at=now - timedelta(minutes=5),
+                    processing_started_at=now - timedelta(minutes=5),
+                    finished_at=now - timedelta(minutes=4),
+                    retention_expires_at=now + timedelta(days=1),
+                    result_purged_at=None,
+                )
+            )
+
+        add_run(
+            run_id="run-model-gov-text",
+            ability_family="text",
+            execution_kind="text",
+            profile_id="text.free-gpt55",
+            provider_id="openai-global-gpt-5-5",
+            model_id="gpt-5.5",
+            instance_id="openai-global-gpt-5-5-text",
+        )
+        add_run(
+            run_id="run-model-gov-knowledge",
+            ability_family="knowledge",
+            execution_kind="embedding",
+            profile_id="site-knowledge.managed",
+            provider_id="tei",
+            model_id="tei/BAAI/bge-m3",
+            instance_id="tei-site-knowledge-embedding",
+        )
+        add_run(
+            run_id="run-model-gov-vision",
+            ability_family="vision",
+            execution_kind="media_derivative",
+            profile_id="media_derivative.worker",
+            provider_id="media_derivative",
+            model_id="pillow",
+            instance_id="cloud-worker",
+        )
+        session.flush()
+        session.add_all(
+            [
+                ProviderCallRecord(
+                    run_id="run-model-gov-text",
+                    provider_id="openai-global-gpt-5-5",
+                    model_id="gpt-5.5",
+                    instance_id="openai-global-gpt-5-5-text",
+                    region="global",
+                    latency_ms=180,
+                    tokens_in=20,
+                    tokens_out=40,
+                    cost=0.0,
+                    retry_count=0,
+                    fallback_used=False,
+                    error_code=None,
+                    created_at=now - timedelta(minutes=4),
+                ),
+                ProviderCallRecord(
+                    run_id="run-model-gov-knowledge",
+                    provider_id="tei",
+                    model_id="tei/BAAI/bge-m3",
+                    instance_id="tei-site-knowledge-embedding",
+                    region="unspecified",
+                    latency_ms=45,
+                    tokens_in=5,
+                    tokens_out=0,
+                    cost=0.0,
+                    retry_count=0,
+                    fallback_used=False,
+                    error_code=None,
+                    created_at=now - timedelta(minutes=4),
+                ),
+            ]
+        )
+        for run_id, ability_family, execution_kind, meter_key, quantity in [
+            ("run-model-gov-text", "text", "text", "runs", 1),
+            ("run-model-gov-text", "text", "text", "tokens_total", 60),
+            ("run-model-gov-knowledge", "knowledge", "embedding", "runs", 1),
+            ("run-model-gov-knowledge", "knowledge", "embedding", "tokens_total", 5),
+            ("run-model-gov-vision", "vision", "media_derivative", "runs", 1),
+        ]:
+            session.add(
+                UsageMeterEvent(
+                    account_id=subscription.account_id,
+                    site_id=site_id,
+                    subscription_id=subscription.subscription_id,
+                    plan_version_id=subscription.plan_version_id,
+                    run_id=run_id,
+                    provider_call_id=None,
+                    event_kind="meter",
+                    meter_key=meter_key,
+                    quantity=quantity,
+                    ability_family=ability_family,
+                    channel="openapi",
+                    execution_kind=execution_kind,
+                    execution_tier="cloud",
+                    data_classification=(
+                        "public_site_content" if ability_family == "knowledge" else "internal"
+                    ),
+                    currency="USD",
+                    dedupe_key=f"model-gov-{run_id}-{meter_key}",
+                    payload_json={},
+                    created_at=now - timedelta(minutes=4),
+                )
+            )
+        session.commit()
+
+    unauthenticated = client.get(
+        "/internal/service/runtime/diagnostics/hosted-model-governance"
+    )
+    assert unauthenticated.status_code == 401
+
+    response = client.get(
+        "/internal/service/runtime/diagnostics/hosted-model-governance"
+        f"?site_id={site_id}&recent_minutes=60&limit=10",
+        headers=build_internal_headers(),
+    )
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["totals"]["runs"] == 3
+    assert data["totals"]["provider_calls"] == 2
+    assert data["boundary"]["direct_wordpress_write"] is False
+    assert data["boundary"]["contains_prompt_or_result_payloads"] is False
+    capability_by_id = {item["group_id"]: item for item in data["capability_groups"]}
+    assert capability_by_id["text"]["tokens_total"] == 60
+    assert capability_by_id["knowledge"]["tokens_total"] == 5
+    assert capability_by_id["knowledge"]["provider_calls"] == 1
+    assert "site-knowledge.managed" in capability_by_id["knowledge"]["profile_ids"]
+    assert capability_by_id["vision"]["provider_calls"] == 0
+    assert data["governance_gaps"]["unmetered_capabilities"] == []
 
 
 def test_internal_ai_advisor_routes_are_internal_and_evidence_backed(
