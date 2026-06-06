@@ -196,6 +196,50 @@ Supported first workflows:
 All workflow metadata is advisory. WordPress still owns insertion, edits,
 publishing, and final user confirmation.
 
+## Agent Handoff
+
+`site-knowledge-search` now returns an additive `agent_handoff` object. This is
+the first bounded Agentic handoff shape for:
+
+```text
+site_knowledge -> suggestion_only -> local proposal
+```
+
+The handoff is not a new Cloud Agent platform, registry, route, workflow truth,
+or WordPress write authority. It is a structured local handoff hint embedded in
+the existing runtime result.
+
+For proposal-capable intents, such as `content_gap_analysis`, `internal_links`,
+`refresh_suggestions`, `faq_candidates`, `related_content`, `duplicate_check`,
+and `writing_support_plan`, the handoff uses:
+
+```json
+{
+  "agent_id": "site_knowledge_suggestion_agent",
+  "agent_version": "site_knowledge_agent.v1",
+  "handoff_type": "proposal_input",
+  "handoff_owner": "wordpress_local",
+  "requires_local_approval": true,
+  "write_posture": "suggestion_only",
+  "direct_wordpress_write": false,
+  "proposal_input": {
+    "source": "site_knowledge",
+    "workflow": "content_gap_analysis",
+    "cloud_output": "gap_evidence",
+    "local_next_action": "review_content_gap_before_local_plan",
+    "evidence_refs": []
+  }
+}
+```
+
+For read/display intents such as `site_search` and `writing_context`, the
+handoff remains `suggestion_only` and `proposal_input` is empty.
+
+`evidence_refs` intentionally carries compact source references, not full chunks
+or raw provider payloads. Local Core may use it to construct or prefill a local
+proposal, but final approval, preflight, audit, and WordPress writes remain
+local.
+
 ## Evidence Gate
 
 Search callers may pass an optional `evidence_policy` object:

@@ -498,13 +498,21 @@ class SiteKnowledgeService:
                 evidence_policy=evidence_policy,
                 max_results=max_results,
             )
+            workflow_support = _workflow_support_for_intent(intent)
+            evidence_gate = _evidence_gate(results, evidence_policy)
             return {
                 "artifact_type": "site_knowledge_results",
                 "composition_role": "site_knowledge_context",
                 "status": "ready",
                 "intent": intent,
-                "workflow_support": _workflow_support_for_intent(intent),
-                "evidence_gate": _evidence_gate(results, evidence_policy),
+                "workflow_support": workflow_support,
+                "agent_handoff": _agent_handoff_for_search(
+                    intent=intent,
+                    workflow_support=workflow_support,
+                    evidence_gate=evidence_gate,
+                    results=results,
+                ),
+                "evidence_gate": evidence_gate,
                 "rerank": rerank,
                 "results": results,
                 "write_posture": "suggestion_only",
@@ -546,14 +554,22 @@ class SiteKnowledgeService:
             evidence_policy=evidence_policy,
             max_results=max_results,
         )
+        workflow_support = _workflow_support_for_intent(intent)
+        evidence_gate = _evidence_gate(results, evidence_policy)
 
         return {
             "artifact_type": "site_knowledge_results",
             "composition_role": "site_knowledge_context",
             "status": "ready",
             "intent": intent,
-            "workflow_support": _workflow_support_for_intent(intent),
-            "evidence_gate": _evidence_gate(results, evidence_policy),
+            "workflow_support": workflow_support,
+            "agent_handoff": _agent_handoff_for_search(
+                intent=intent,
+                workflow_support=workflow_support,
+                evidence_gate=evidence_gate,
+                results=results,
+            ),
+            "evidence_gate": evidence_gate,
             "rerank": rerank,
             "results": results,
             "write_posture": "suggestion_only",
@@ -1578,6 +1594,112 @@ def _workflow_support_for_intent(intent: str) -> dict[str, object]:
         "wordpress_write_owner": "wordpress_local",
         "cloud_output": "search_results",
     }
+
+
+PROPOSAL_HANDOFF_INTENTS = frozenset(
+    {
+        "content_gap_analysis",
+        "duplicate_check",
+        "faq_candidates",
+        "internal_links",
+        "refresh_suggestions",
+        "related_content",
+        "writing_support_plan",
+    }
+)
+
+
+def _agent_handoff_for_search(
+    *,
+    intent: str,
+    workflow_support: dict[str, object],
+    evidence_gate: dict[str, object],
+    results: list[dict[str, object]],
+) -> dict[str, object]:
+    handoff_type = (
+        "proposal_input" if intent in PROPOSAL_HANDOFF_INTENTS else "suggestion_only"
+    )
+    evidence_refs = _agent_evidence_refs(results)
+    proposal_input: dict[str, object] = {}
+    if handoff_type == "proposal_input":
+        proposal_input = {
+            "source": "site_knowledge",
+            "intent": intent,
+            "workflow": str(workflow_support.get("workflow") or "site_knowledge_search"),
+            "cloud_output": str(workflow_support.get("cloud_output") or "search_results"),
+            "local_next_action": _agent_local_next_action_for_intent(intent),
+            "evidence_refs": evidence_refs,
+            "blocked_outputs": [
+                "direct_wordpress_write",
+                "cloud_publish",
+                "article_body",
+                "article_title",
+                "seo_copy",
+                "article_write_plan",
+            ],
+        }
+
+    return {
+        "agent_id": "site_knowledge_suggestion_agent",
+        "agent_version": "site_knowledge_agent.v1",
+        "agent_role": "site_knowledge_suggestion",
+        "handoff_type": handoff_type,
+        "handoff_owner": "wordpress_local",
+        "requires_local_approval": handoff_type == "proposal_input",
+        "write_posture": "suggestion_only",
+        "direct_wordpress_write": False,
+        "workflow": str(workflow_support.get("workflow") or "site_knowledge_search"),
+        "cloud_output": str(workflow_support.get("cloud_output") or "search_results"),
+        "evidence_gate_status": str(evidence_gate.get("status") or "insufficient_evidence"),
+        "evidence_count": len(evidence_refs),
+        "allowed_actions": [
+            "search_site_knowledge_read_model",
+            "rank_grounding_evidence",
+            "return_suggestion_or_proposal_input",
+        ],
+        "forbidden_actions": [
+            "direct_wordpress_write",
+            "cloud_publish",
+            "cloud_workflow_truth",
+            "cloud_prompt_or_preset_truth",
+        ],
+        "proposal_input": proposal_input,
+    }
+
+
+def _agent_evidence_refs(results: list[dict[str, object]]) -> list[dict[str, object]]:
+    evidence_refs: list[dict[str, object]] = []
+    for item in results[:5]:
+        evidence_refs.append(
+            {
+                "post_id": _coerce_int(item.get("post_id"), default=0),
+                "source_type": str(item.get("source_type") or ""),
+                "source_id": _coerce_int(item.get("source_id"), default=0),
+                "title": str(item.get("title") or ""),
+                "url": str(item.get("url") or ""),
+                "score": item.get("score") if isinstance(item.get("score"), float) else 0,
+                "suggested_use": str(item.get("suggested_use") or ""),
+            }
+        )
+    return evidence_refs
+
+
+def _agent_local_next_action_for_intent(intent: str) -> str:
+    if intent == "content_gap_analysis":
+        return "review_content_gap_before_local_plan"
+    if intent == "duplicate_check":
+        return "review_duplicate_risk_before_drafting"
+    if intent == "faq_candidates":
+        return "review_faq_candidate_before_local_proposal"
+    if intent == "internal_links":
+        return "create_internal_link_proposal_after_editor_review"
+    if intent == "refresh_suggestions":
+        return "review_refresh_candidate_before_local_update"
+    if intent == "related_content":
+        return "review_topic_cluster_candidate"
+    if intent == "writing_support_plan":
+        return "use_pre_draft_support_before_local_ability_recipe"
+    return "display_suggestion_with_evidence"
 
 
 def _anchor_text_candidates(title: str, chunk_text: str) -> list[str]:

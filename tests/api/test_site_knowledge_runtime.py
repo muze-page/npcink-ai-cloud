@@ -401,6 +401,10 @@ def test_search_intents_support_copilot_duplicate_and_cluster_workflows(
     )["json"]["data"]["result"]
     assert copilot["workflow_support"]["workflow"] == "site_content_copilot"
     assert copilot["workflow_support"]["cloud_output"] == "answer_sources"
+    assert copilot["agent_handoff"]["handoff_type"] == "suggestion_only"
+    assert copilot["agent_handoff"]["requires_local_approval"] is False
+    assert copilot["agent_handoff"]["proposal_input"] == {}
+    assert copilot["agent_handoff"]["direct_wordpress_write"] is False
     assert copilot["results"][0]["suggested_use"] == "answer_source"
     assert copilot["results"][0]["copilot_action"] == "answer_with_site_citation"
     assert copilot["results"][0]["answer_source"]["post_id"] == 123
@@ -471,6 +475,16 @@ def test_high_value_intents_return_advisory_product_metadata(tmp_path: Path) -> 
     )["json"]["data"]["result"]
     assert gap["workflow_support"]["workflow"] == "content_gap_analysis"
     assert gap["workflow_support"]["cloud_output"] == "gap_evidence"
+    assert gap["agent_handoff"]["agent_id"] == "site_knowledge_suggestion_agent"
+    assert gap["agent_handoff"]["handoff_type"] == "proposal_input"
+    assert gap["agent_handoff"]["handoff_owner"] == "wordpress_local"
+    assert gap["agent_handoff"]["requires_local_approval"] is True
+    assert gap["agent_handoff"]["direct_wordpress_write"] is False
+    assert gap["agent_handoff"]["proposal_input"]["workflow"] == "content_gap_analysis"
+    assert gap["agent_handoff"]["proposal_input"]["local_next_action"] == (
+        "review_content_gap_before_local_plan"
+    )
+    assert gap["agent_handoff"]["proposal_input"]["evidence_refs"][0]["post_id"] == 123
     assert gap["results"][0]["suggested_use"] == "gap_evidence"
     assert gap["results"][0]["gap_signal"]["signals"] == [
         "semantic_near_match",
