@@ -28,6 +28,9 @@ test('admin operator path smoke: queue and inspector routes stay connected', asy
   await expect(page.getByRole('heading', { name: /Platform state comes first|先看平台概况/i })).toBeVisible();
   await expect(page.getByRole('link', { name: /Review coverage|检查覆盖|檢查覆蓋/i })).toBeVisible();
   await expect(page.getByRole('link', { name: /Open customer coverage|打开客户覆盖|打開客戶覆蓋/i }).first()).toBeVisible();
+  await expect(page.getByRole('heading', { name: /Are hosted model capabilities covered today\?|托管模型/i })).toBeVisible();
+  await expect(page.getByText(/Hosted model provider call coverage gap/i).first()).toBeVisible();
+  await expect(page.locator('a[href="/admin/hosted-models"]').first()).toBeVisible();
 
   await page.goto('/admin/coverage');
   await expect(page.getByRole('heading', { name: /Customer coverage|客户覆盖|客戶覆蓋/i })).toBeVisible();
@@ -145,6 +148,8 @@ test('admin queue pages keep one primary header action and shared identifier tre
 
   await page.goto('/admin/hosted-models', { waitUntil: 'domcontentloaded' });
   await expect(page.getByRole('heading', { name: /Hosted Model Governance|托管模型/i })).toBeVisible();
+  await expect(page.getByRole('heading', { name: /Daily governance watch/i })).toBeVisible();
+  await expect(page.getByText(/Hosted model provider call coverage gap/i).first()).toBeVisible();
   await expect(page.getByText(/Ability families|能力/i).first()).toBeVisible();
   await expect(page.getByText(/free-gpt55-general/i).first()).toBeVisible();
   await expect(page.getByText(/provider gap: knowledge/i).first()).toBeVisible();

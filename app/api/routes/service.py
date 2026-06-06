@@ -1155,6 +1155,7 @@ async def get_admin_overview(
     usage_window_days: int = Query(default=7, ge=1, le=90),
     audit_window_minutes: int = Query(default=1440, ge=1, le=10080),
     runtime_recent_minutes: int = Query(default=60, ge=1, le=1440),
+    hosted_model_recent_minutes: int = Query(default=1440, ge=1, le=10080),
 ) -> Any:
     auth = await authorize_internal_request(request, require_idempotency=False)
     if auth is not None:
@@ -1168,11 +1169,21 @@ async def get_admin_overview(
         )
     except CommercialServiceError as error:
         return _service_error_response(error, request=request)
-    result["runtime_diagnostics"] = RuntimeService(
-        services.settings.database_url
-    ).get_runtime_diagnostics_summary(
+    runtime_service = RuntimeService(services.settings.database_url)
+    result["runtime_diagnostics"] = runtime_service.get_runtime_diagnostics_summary(
         recent_minutes=runtime_recent_minutes,
     )
+    hosted_model_governance = runtime_service.get_hosted_model_governance_diagnostics(
+        recent_minutes=hosted_model_recent_minutes,
+        limit=10,
+    )
+    result["hosted_model_governance"] = {
+        "filters": hosted_model_governance.get("filters", {}),
+        "generated_at": hosted_model_governance.get("generated_at", ""),
+        "totals": hosted_model_governance.get("totals", {}),
+        "alert_summary": hosted_model_governance.get("alert_summary", {}),
+        "boundary": hosted_model_governance.get("boundary", {}),
+    }
     attention_subscriptions = _dict_list(result.get("attention_subscriptions"))
     first_attention = attention_subscriptions[0] if attention_subscriptions else {}
     first_attention_account_id = ""

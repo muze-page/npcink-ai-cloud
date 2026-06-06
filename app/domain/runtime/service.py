@@ -1269,8 +1269,7 @@ class RuntimeService:
             provider_call_run_ids=provider_call_run_ids,
             meter_run_ids=meter_run_ids,
         )
-
-        return {
+        result = {
             "filters": {
                 "site_id": site_id or "",
                 "recent_minutes": recent_minutes,
@@ -1304,6 +1303,8 @@ class RuntimeService:
                 "contains_prompt_or_result_payloads": False,
             },
         }
+        result["alert_summary"] = self._build_hosted_governance_alert_summary(result)
+        return result
 
     def get_runtime_backlog_diagnostics(
         self,
@@ -1682,6 +1683,189 @@ class RuntimeService:
             )
             if unmetered_capabilities or missing_provider_call_capabilities
             else "Recent hosted model families have runtime meter coverage in this window.",
+        }
+
+    def _build_hosted_governance_alert_summary(
+        self,
+        diagnostics: dict[str, object],
+    ) -> dict[str, object]:
+        totals = diagnostics.get("totals") if isinstance(diagnostics.get("totals"), dict) else {}
+        gaps = (
+            diagnostics.get("governance_gaps")
+            if isinstance(diagnostics.get("governance_gaps"), dict)
+            else {}
+        )
+        capability_items = (
+            diagnostics.get("capability_groups")
+            if isinstance(diagnostics.get("capability_groups"), list)
+            else []
+        )
+        runs_total = self._coerce_int(totals.get("runs"), default=0)
+        provider_calls = self._coerce_int(totals.get("provider_calls"), default=0)
+        meter_events = self._coerce_int(totals.get("usage_meter_events"), default=0)
+        metered_rate = float(totals.get("metered_run_coverage_rate") or 0.0)
+        provider_rate = float(totals.get("provider_call_run_coverage_rate") or 0.0)
+        unmetered_run_count = self._coerce_int(gaps.get("unmetered_run_count"), default=0)
+        runs_without_provider_call_count = self._coerce_int(
+            gaps.get("runs_without_provider_call_count"),
+            default=0,
+        )
+
+        alerts: list[dict[str, object]] = []
+
+        def add_alert(
+            *,
+            code: str,
+            severity: str,
+            title: str,
+            summary: str,
+            count: int,
+            capabilities: list[str],
+            suggested_action: str,
+        ) -> None:
+            alerts.append(
+                {
+                    "code": code,
+                    "severity": severity,
+                    "title": title,
+                    "summary": summary,
+                    "count": max(0, count),
+                    "capabilities": capabilities[:10],
+                    "suggested_action": suggested_action,
+                    "href": "/admin/hosted-models",
+                }
+            )
+
+        unmetered_capabilities = [
+            str(item)
+            for item in gaps.get("unmetered_capabilities", [])
+            if str(item or "").strip()
+        ]
+        if unmetered_run_count > 0 or unmetered_capabilities:
+            add_alert(
+                code="hosted_model.unmetered_runs",
+                severity="error",
+                title="Hosted model meter coverage gap",
+                summary="Some hosted model runs are not represented in usage metering.",
+                count=unmetered_run_count,
+                capabilities=unmetered_capabilities,
+                suggested_action="inspect_metering_callback_or_usage_event_mapping",
+            )
+
+        provider_gap_capabilities = [
+            str(item.get("group_id") or "")
+            for item in capability_items
+            if isinstance(item, dict)
+            and self._coerce_int(item.get("runs_total"), default=0) > 0
+            and float(item.get("provider_call_run_coverage_rate") or 0.0) < 1.0
+        ]
+        if runs_without_provider_call_count > 0 or provider_gap_capabilities:
+            add_alert(
+                code="hosted_model.provider_call_gap",
+                severity="warning",
+                title="Hosted model provider call coverage gap",
+                summary="Some hosted runs do not have matching provider call telemetry.",
+                count=runs_without_provider_call_count,
+                capabilities=provider_gap_capabilities,
+                suggested_action="inspect_provider_call_recording_for_hosted_profiles",
+            )
+
+        provider_error_groups = [
+            str(item.get("group_id") or "")
+            for item in capability_items
+            if isinstance(item, dict)
+            and self._coerce_int(item.get("provider_errors"), default=0) > 0
+        ]
+        provider_errors = sum(
+            self._coerce_int(item.get("provider_errors"), default=0)
+            for item in capability_items
+            if isinstance(item, dict)
+        )
+        if provider_errors > 0:
+            add_alert(
+                code="hosted_model.provider_errors",
+                severity="error" if provider_errors >= 5 else "warning",
+                title="Hosted model provider errors",
+                summary="Provider calls are returning errors in the current governance window.",
+                count=provider_errors,
+                capabilities=provider_error_groups,
+                suggested_action="inspect_provider_credentials_quota_and_health",
+            )
+
+        failed_groups = [
+            str(item.get("group_id") or "")
+            for item in capability_items
+            if isinstance(item, dict)
+            and self._coerce_int(item.get("failed"), default=0) > 0
+        ]
+        failed_runs = sum(
+            self._coerce_int(item.get("failed"), default=0)
+            for item in capability_items
+            if isinstance(item, dict)
+        )
+        if failed_runs > 0:
+            add_alert(
+                code="hosted_model.failed_runs",
+                severity="warning",
+                title="Hosted model failed runs",
+                summary="Hosted model runs are failing before or during provider execution.",
+                count=failed_runs,
+                capabilities=failed_groups,
+                suggested_action="inspect_runtime_failure_detail_for_hosted_models",
+            )
+
+        alerts.sort(
+            key=lambda item: (
+                0 if item["severity"] == "error" else 1,
+                -self._coerce_int(item.get("count"), default=0),
+                str(item.get("code") or ""),
+            )
+        )
+        status = (
+            "inactive"
+            if runs_total <= 0
+            else "error"
+            if any(item["severity"] == "error" for item in alerts)
+            else "warning"
+            if alerts
+            else "ok"
+        )
+        if status == "inactive":
+            summary = "No hosted model runs were observed in this governance window."
+            next_action = "continue_monitoring"
+        elif status == "error":
+            summary = "Hosted model governance has coverage or provider errors that need review."
+            next_action = str(alerts[0].get("suggested_action") or "inspect_hosted_models")
+        elif status == "warning":
+            summary = "Hosted model governance has telemetry gaps to review before traffic expands."
+            next_action = str(alerts[0].get("suggested_action") or "inspect_hosted_models")
+        else:
+            summary = "Hosted model governance is covered in this window."
+            next_action = "continue_monitoring"
+
+        return {
+            "status": status,
+            "summary": summary,
+            "next_action": next_action,
+            "href": "/admin/hosted-models",
+            "alerts": alerts[:8],
+            "alert_count": len(alerts),
+            "daily_digest": {
+                "runs": runs_total,
+                "provider_calls": provider_calls,
+                "meter_events": meter_events,
+                "metered_run_coverage_rate": metered_rate,
+                "provider_call_run_coverage_rate": provider_rate,
+                "unmetered_run_count": unmetered_run_count,
+                "runs_without_provider_call_count": runs_without_provider_call_count,
+            },
+            "boundary": {
+                "surface": "internal_admin_summary",
+                "cloud_role": "hosted_runtime_detail",
+                "local_control_plane": "wordpress_plugin",
+                "direct_wordpress_write": False,
+                "contains_prompt_or_result_payloads": False,
+            },
         }
 
     def _add_nonempty(self, values: set[str], value: object) -> None:

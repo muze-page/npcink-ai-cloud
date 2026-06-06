@@ -474,6 +474,14 @@ def test_hosted_model_governance_diagnostics_summarizes_runtime_families(
     assert "site-knowledge.managed" in capability_by_id["knowledge"]["profile_ids"]
     assert capability_by_id["vision"]["provider_calls"] == 0
     assert data["governance_gaps"]["unmetered_capabilities"] == []
+    assert data["alert_summary"]["status"] == "warning"
+    assert any(
+        alert["code"] == "hosted_model.provider_call_gap"
+        and alert["count"] == 1
+        and "vision" in alert["capabilities"]
+        for alert in data["alert_summary"]["alerts"]
+    )
+    assert data["alert_summary"]["boundary"]["direct_wordpress_write"] is False
 
 
 def test_internal_ai_advisor_routes_are_internal_and_evidence_backed(
@@ -1552,6 +1560,19 @@ def test_service_routes_admin_read_facade(tmp_path: Path) -> None:
     assert overview["counts"]["site_keys_active"] == 1
     assert overview["recent_usage"]["event_count"] >= 1
     assert "runtime_diagnostics" in overview
+    assert overview["hosted_model_governance"]["filters"]["recent_minutes"] == 1440
+    assert overview["hosted_model_governance"]["alert_summary"]["status"] in {
+        "ok",
+        "warning",
+        "error",
+        "inactive",
+    }
+    assert (
+        overview["hosted_model_governance"]["alert_summary"]["boundary"][
+            "direct_wordpress_write"
+        ]
+        is False
+    )
     assert overview["runtime_operator_explanations"]
     assert len(overview["expiring_subscriptions"]["items"]) >= 1
     assert any(

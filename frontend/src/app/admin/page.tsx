@@ -76,6 +76,29 @@ interface AdminOverview {
     nextStepKind: string;
     nextStepRef: string;
   }>;
+  hostedModelGovernance: {
+    status: string;
+    summary: string;
+    alertCount: number;
+    href: string;
+    dailyDigest: {
+      runs: number;
+      providerCalls: number;
+      meterEvents: number;
+      meteredRunCoverageRate: number;
+      providerCallRunCoverageRate: number;
+      unmeteredRunCount: number;
+      runsWithoutProviderCallCount: number;
+    };
+    alerts: Array<{
+      code: string;
+      severity: string;
+      title: string;
+      summary: string;
+      count: number;
+      capabilities: string[];
+    }>;
+  };
 }
 
 function normalizeOverview(raw: any): AdminOverview {
@@ -87,6 +110,9 @@ function normalizeOverview(raw: any): AdminOverview {
   const guard = runtimeDiagnostics?.guard ?? {};
   const recentUsage = raw?.recent_usage ?? {};
   const totals = recentUsage?.totals ?? {};
+  const hostedGovernance = raw?.hosted_model_governance ?? {};
+  const hostedAlertSummary = hostedGovernance?.alert_summary ?? {};
+  const hostedDailyDigest = hostedAlertSummary?.daily_digest ?? {};
 
   return {
     generatedAt: String(raw?.generated_at ?? ''),
@@ -160,7 +186,36 @@ function normalizeOverview(raw: any): AdminOverview {
           nextStepRef: String(item?.next_step_ref ?? ''),
         }))
       : [],
+    hostedModelGovernance: {
+      status: String(hostedAlertSummary.status ?? 'inactive'),
+      summary: String(hostedAlertSummary.summary ?? ''),
+      alertCount: Number(hostedAlertSummary.alert_count ?? 0),
+      href: String(hostedAlertSummary.href ?? '/admin/hosted-models'),
+      dailyDigest: {
+        runs: Number(hostedDailyDigest.runs ?? 0),
+        providerCalls: Number(hostedDailyDigest.provider_calls ?? 0),
+        meterEvents: Number(hostedDailyDigest.meter_events ?? 0),
+        meteredRunCoverageRate: Number(hostedDailyDigest.metered_run_coverage_rate ?? 0),
+        providerCallRunCoverageRate: Number(hostedDailyDigest.provider_call_run_coverage_rate ?? 0),
+        unmeteredRunCount: Number(hostedDailyDigest.unmetered_run_count ?? 0),
+        runsWithoutProviderCallCount: Number(hostedDailyDigest.runs_without_provider_call_count ?? 0),
+      },
+      alerts: Array.isArray(hostedAlertSummary.alerts)
+        ? hostedAlertSummary.alerts.map((item: any) => ({
+            code: String(item?.code ?? ''),
+            severity: String(item?.severity ?? ''),
+            title: String(item?.title ?? ''),
+            summary: String(item?.summary ?? ''),
+            count: Number(item?.count ?? 0),
+            capabilities: Array.isArray(item?.capabilities) ? item.capabilities.map(String) : [],
+          }))
+        : [],
+    },
   };
+}
+
+function formatPercent(value: number): string {
+  return `${(Number(value || 0) * 100).toFixed(1)}%`;
 }
 
 function AdminOverviewContent() {
@@ -236,7 +291,10 @@ function AdminOverviewContent() {
   const statusTone =
     overview.runtimeSummary.callbackFailed > 0
       ? 'error'
+      : overview.hostedModelGovernance.status === 'error'
+        ? 'error'
       : overview.attentionSubscriptions.length > 0 ||
+          overview.hostedModelGovernance.status === 'warning' ||
           overview.expiringSubscriptions.in7Days > 0 ||
           overview.runtimeSummary.guardEvents > 0 ||
           overview.runtimeSummary.callbackPending > 0
@@ -363,6 +421,23 @@ function AdminOverviewContent() {
     },
   ];
   const recentAuditItems = overview.recentAuditSummary.slice(0, 4);
+  const hostedGovernanceMetrics = [
+    {
+      label: t('admin.home_hosted_runs', {}, 'Hosted runs'),
+      value: formatInteger(overview.hostedModelGovernance.dailyDigest.runs),
+      detail: t('admin.home_hosted_runs_detail', {}, 'Runs observed in the hosted model governance window.'),
+    },
+    {
+      label: t('admin.home_hosted_meter', {}, 'Meter coverage'),
+      value: formatPercent(overview.hostedModelGovernance.dailyDigest.meteredRunCoverageRate),
+      detail: t('admin.home_hosted_meter_detail', {}, 'Share of hosted runs represented in usage metering.'),
+    },
+    {
+      label: t('admin.home_hosted_provider', {}, 'Provider coverage'),
+      value: formatPercent(overview.hostedModelGovernance.dailyDigest.providerCallRunCoverageRate),
+      detail: t('admin.home_hosted_provider_detail', {}, 'Share of hosted runs with provider call telemetry.'),
+    },
+  ];
 
   return (
     <BackofficePageStack>
@@ -547,6 +622,61 @@ function AdminOverviewContent() {
         </BackofficeSectionPanel>
 
       </div>
+
+      <BackofficeSectionPanel className="space-y-4">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-gray-500 dark:text-gray-400">
+              {t('admin.home_hosted_section', {}, 'Hosted model governance')}
+            </p>
+            <h2 className="mt-2 text-xl font-semibold text-gray-950 dark:text-white">
+              {t('admin.home_hosted_title', {}, 'Are hosted model capabilities covered today?')}
+            </h2>
+          </div>
+          <Link href="/admin/hosted-models" className="text-sm font-medium text-blue-600 hover:text-blue-700 dark:text-blue-300 dark:hover:text-blue-200">
+            {t('admin.nav_hosted_models', {}, 'Hosted Models')} →
+          </Link>
+        </div>
+        <BackofficeMetricStrip items={hostedGovernanceMetrics} columnsClassName="md:grid-cols-3" />
+        {overview.hostedModelGovernance.alerts.length > 0 ? (
+          <div className="grid gap-3 xl:grid-cols-2">
+            {overview.hostedModelGovernance.alerts.slice(0, 2).map((alert) => (
+              <BackofficeStackCard key={alert.code}>
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <p className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+                      {alert.title}
+                    </p>
+                    <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">
+                      {alert.summary}
+                    </p>
+                    {alert.capabilities.length > 0 ? (
+                      <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
+                        {alert.capabilities.slice(0, 3).join(', ')}
+                      </p>
+                    ) : null}
+                  </div>
+                  <span
+                    className={cn(
+                      'rounded-full border px-2.5 py-1 text-[0.68rem] font-semibold uppercase tracking-[0.18em]',
+                      alert.severity === 'error'
+                        ? 'border-red-200 bg-red-50 text-red-700 dark:border-red-900/50 dark:bg-red-950/20 dark:text-red-200'
+                        : 'border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-900/50 dark:bg-amber-950/20 dark:text-amber-200'
+                    )}
+                  >
+                    {formatInteger(alert.count)}
+                  </span>
+                </div>
+              </BackofficeStackCard>
+            ))}
+          </div>
+        ) : (
+          <BackofficeStackCard className="text-sm text-slate-600 dark:text-slate-300">
+            {overview.hostedModelGovernance.summary ||
+              t('admin.home_hosted_empty', {}, 'No hosted model governance alerts are active today.')}
+          </BackofficeStackCard>
+        )}
+      </BackofficeSectionPanel>
 
       <BackofficeSectionPanel className="space-y-4">
         <div className="flex items-center justify-between gap-3">

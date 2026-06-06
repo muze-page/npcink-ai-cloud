@@ -74,6 +74,21 @@ type HostedModelGovernanceData = {
     directWordpressWrite: boolean;
     containsPromptOrResultPayloads: boolean;
   };
+  alertSummary: {
+    status: string;
+    summary: string;
+    nextAction: string;
+    alertCount: number;
+    alerts: Array<{
+      code: string;
+      severity: string;
+      title: string;
+      summary: string;
+      count: number;
+      capabilities: string[];
+      suggestedAction: string;
+    }>;
+  };
 };
 
 const WINDOW_OPTIONS = [
@@ -123,6 +138,7 @@ function normalizeHostedModelGovernance(raw: any): HostedModelGovernanceData {
   const filters = raw?.filters ?? {};
   const gaps = raw?.governance_gaps ?? {};
   const boundary = raw?.boundary ?? {};
+  const alertSummary = raw?.alert_summary ?? {};
   return {
     generatedAt: String(raw?.generated_at ?? ''),
     filters: {
@@ -166,6 +182,23 @@ function normalizeHostedModelGovernance(raw: any): HostedModelGovernanceData {
       localControlPlane: String(boundary.local_control_plane ?? ''),
       directWordpressWrite: Boolean(boundary.direct_wordpress_write),
       containsPromptOrResultPayloads: Boolean(boundary.contains_prompt_or_result_payloads),
+    },
+    alertSummary: {
+      status: String(alertSummary.status ?? 'inactive'),
+      summary: String(alertSummary.summary ?? ''),
+      nextAction: String(alertSummary.next_action ?? ''),
+      alertCount: asNumber(alertSummary.alert_count),
+      alerts: Array.isArray(alertSummary.alerts)
+        ? alertSummary.alerts.map((item: any) => ({
+            code: String(item?.code ?? ''),
+            severity: String(item?.severity ?? ''),
+            title: String(item?.title ?? ''),
+            summary: String(item?.summary ?? ''),
+            count: asNumber(item?.count),
+            capabilities: Array.isArray(item?.capabilities) ? item.capabilities.map(String) : [],
+            suggestedAction: String(item?.suggested_action ?? ''),
+          }))
+        : [],
     },
   };
 }
@@ -374,6 +407,65 @@ function AdminHostedModelsContent() {
         />
       ) : (
         <>
+          <BackofficeSectionPanel className="space-y-4">
+            <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-gray-500 dark:text-gray-400">
+                  Alert summary
+                </p>
+                <h2 className="mt-2 text-xl font-semibold text-gray-950 dark:text-white">
+                  Daily governance watch
+                </h2>
+                <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">
+                  {data?.alertSummary.summary}
+                </p>
+              </div>
+              <BackofficeStatusBadge
+                status={data?.alertSummary.status || governanceStatus}
+                label={data?.alertSummary.status || governanceStatus}
+              />
+            </div>
+            {data?.alertSummary.alerts.length ? (
+              <div className="grid gap-3 xl:grid-cols-2">
+                {data.alertSummary.alerts.map((alert) => (
+                  <BackofficeStackCard key={alert.code} className="space-y-3">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <p className="text-sm font-semibold text-slate-950 dark:text-white">
+                          {alert.title}
+                        </p>
+                        <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">
+                          {alert.summary}
+                        </p>
+                      </div>
+                      <BackofficeTag tone={alert.severity === 'error' ? 'warning' : 'info'}>
+                        {formatNumber(alert.count)}
+                      </BackofficeTag>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      {alert.capabilities.length ? (
+                        alert.capabilities.slice(0, 4).map((capability) => (
+                          <BackofficeTag key={`${alert.code}-${capability}`} tone="info">
+                            {capability}
+                          </BackofficeTag>
+                        ))
+                      ) : (
+                        <BackofficeTag tone="info">{alert.code}</BackofficeTag>
+                      )}
+                    </div>
+                    <p className="text-xs text-slate-500 dark:text-slate-400">
+                      {alert.suggestedAction}
+                    </p>
+                  </BackofficeStackCard>
+                ))}
+              </div>
+            ) : (
+              <BackofficeStackCard className="text-sm text-slate-600 dark:text-slate-300">
+                No hosted model governance alerts in this window.
+              </BackofficeStackCard>
+            )}
+          </BackofficeSectionPanel>
+
           <BackofficeSectionPanel className="space-y-4">
             <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
               <div>
