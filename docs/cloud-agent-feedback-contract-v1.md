@@ -46,7 +46,16 @@ Local WordPress/Core remains the owner of:
 
 ## Feedback Event Shape
 
-The first contract is an event shape, not a required public API route.
+The first contract is the event shape. The initial signed API surface is:
+
+```text
+POST /v1/agent-feedback/events
+```
+
+The route requires normal site HMAC authentication, `runtime:execute` scope, and
+an `Idempotency-Key`. It accepts one `cloud_agent_feedback.v1` event and records
+it as eval/quality metadata. It must not mutate production prompts, profiles,
+routers, proposals, approvals, preflight, or WordPress content.
 
 ```json
 {
@@ -66,6 +75,9 @@ The first contract is an event shape, not a required public API route.
   ],
   "operator_note": "Evidence was useful, but the final draft title needed a narrower topic.",
   "local_proposal_id": "proposal_123",
+  "evidence_ref_ids": [
+    "post:123"
+  ],
   "created_at": "2026-06-07T00:00:00Z"
 }
 ```
@@ -92,6 +104,15 @@ Optional fields:
 - `evidence_ref_ids`
 - `redaction_status`
 - `retention_class`
+
+The initial route returns a receipt with local-truth markers:
+
+- `accepted_for_eval=true`
+- `quality_rollup_candidate=true`
+- `production_mutation=false`
+- `approval_truth=wordpress_local`
+- `preflight_truth=wordpress_local`
+- `final_write_truth=wordpress_local`
 
 ## Allowed Outcomes
 
