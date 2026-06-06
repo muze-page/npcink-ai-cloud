@@ -2196,6 +2196,7 @@ def test_service_routes_expose_ops_cadence_summary(tmp_path: Path) -> None:
             "router_diagnostics_interval_seconds": 60,
             "latency_probe_interval_seconds": 60,
             "alert_provider_degradation_interval_seconds": 60,
+            "hosted_model_governance_interval_seconds": 60,
             "provider_health_scan_interval_seconds": 60,
         },
     )
@@ -2226,8 +2227,9 @@ def test_service_routes_expose_ops_cadence_summary(tmp_path: Path) -> None:
 
     assert response.status_code == 200
     payload = response.json()["data"]
-    assert payload["totals"]["tasks_total"] == 8
+    assert payload["totals"]["tasks_total"] == 9
     assert any(item["task_id"] == "retention_cleanup" for item in payload["items"])
+    assert any(item["task_id"] == "hosted_model_governance" for item in payload["items"])
     retention_item = next(
         item for item in payload["items"] if item["task_id"] == "retention_cleanup"
     )
@@ -2285,7 +2287,7 @@ def test_service_routes_expose_observability_summary(tmp_path: Path) -> None:
     )
     assert payload["workers"]["totals"]["workers_total"] == 3
     assert any(item["worker_id"] == "runtime_queue" for item in payload["workers"]["items"])
-    assert payload["cadence"]["totals"]["tasks_total"] == 8
+    assert payload["cadence"]["totals"]["tasks_total"] == 9
     assert "status_counts" in payload["providers"]
     assert "summary" in payload["runtime"]
     assert "backlog" in payload["runtime"]

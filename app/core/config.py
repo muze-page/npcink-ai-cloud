@@ -44,6 +44,7 @@ class Settings(BaseSettings):
     router_diagnostics_interval_seconds: int = Field(default=900)
     latency_probe_interval_seconds: int = Field(default=900)
     alert_provider_degradation_interval_seconds: int = Field(default=900)
+    hosted_model_governance_interval_seconds: int = Field(default=3600)
     provider_health_scan_interval_seconds: int = Field(default=900)
     media_derivative_max_body_bytes: int = Field(default=51 * 1024 * 1024)
     media_derivative_batch_default_chunk_size: int = Field(default=10)
@@ -63,6 +64,8 @@ class Settings(BaseSettings):
     alert_worker_min_requests: int = Field(default=20)
     alert_worker_error_rate_threshold: float = Field(default=0.25)
     alert_worker_latency_ms_threshold: int = Field(default=20000)
+    hosted_model_governance_worker_recent_minutes: int = Field(default=1440)
+    hosted_model_governance_worker_limit: int = Field(default=25)
     auth_timestamp_tolerance_seconds: int = Field(default=300)
     public_post_rate_limit_window_seconds: int = Field(default=60)
     public_post_max_requests_per_window: int = Field(default=120)
@@ -448,7 +451,10 @@ class Settings(BaseSettings):
             raise ValueError("media_derivative_batch_default_chunk_size must be at least 1")
         if not 1 <= self.media_derivative_batch_max_chunk_size <= 100:
             raise ValueError("media_derivative_batch_max_chunk_size must be between 1 and 100")
-        if self.media_derivative_batch_default_chunk_size > self.media_derivative_batch_max_chunk_size:
+        if (
+            self.media_derivative_batch_default_chunk_size
+            > self.media_derivative_batch_max_chunk_size
+        ):
             raise ValueError(
                 "media_derivative_batch_default_chunk_size must not exceed "
                 "media_derivative_batch_max_chunk_size"
@@ -465,6 +471,8 @@ class Settings(BaseSettings):
             raise ValueError("latency_probe_interval_seconds must be at least 60")
         if self.alert_provider_degradation_interval_seconds < 60:
             raise ValueError("alert_provider_degradation_interval_seconds must be at least 60")
+        if self.hosted_model_governance_interval_seconds < 60:
+            raise ValueError("hosted_model_governance_interval_seconds must be at least 60")
         if self.provider_health_scan_interval_seconds < 60:
             raise ValueError("provider_health_scan_interval_seconds must be at least 60")
         if self.router_performance_worker_window_hours < 1:
@@ -481,6 +489,12 @@ class Settings(BaseSettings):
             raise ValueError("latency_probe_worker_site_limit must be at least 1")
         if self.latency_probe_worker_instance_limit < 1:
             raise ValueError("latency_probe_worker_instance_limit must be at least 1")
+        if not 1 <= self.hosted_model_governance_worker_recent_minutes <= 10080:
+            raise ValueError(
+                "hosted_model_governance_worker_recent_minutes must be between 1 and 10080"
+            )
+        if not 1 <= self.hosted_model_governance_worker_limit <= 100:
+            raise ValueError("hosted_model_governance_worker_limit must be between 1 and 100")
         if not 5 <= self.alert_worker_window_minutes <= 1440:
             raise ValueError("alert_worker_window_minutes must be between 5 and 1440")
         if self.alert_worker_site_limit < 1:
