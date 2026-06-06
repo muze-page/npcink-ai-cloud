@@ -28,7 +28,7 @@ The action uses:
 
 - `ability_name`: `magick-ai-cloud/generate-image`
 - `contract_version`: `image_generation_request.v1`
-- `profile_id`: `image.grok-imagine-quality`
+- `profile_id`: `grok-imagine-image-quality`
 - `execution_kind`: `image_generation`
 - `trigger`: `manual_user_action`
 

@@ -307,7 +307,7 @@ def test_image_source_candidate_suggested_filename_is_safe(monkeypatch: Any) -> 
     handoff = execution.result_json["ai_generation_handoff"]
     assert handoff["trigger"] == "manual_user_action"
     assert handoff["runtime"]["ability_name"] == "magick-ai-cloud/generate-image"
-    assert handoff["runtime"]["profile_id"] == "image.grok-imagine-quality"
+    assert handoff["runtime"]["profile_id"] == "grok-imagine-image-quality"
     assert handoff["runtime"]["execution_kind"] == "image_generation"
     assert handoff["input_defaults"]["aspect_ratio"] == "16:9"
     assert handoff["required_local_fields"] == ["prompt"]

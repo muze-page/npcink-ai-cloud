@@ -119,7 +119,7 @@ Current managed capability examples include:
 | Capability | Typical profile | Ability family | Execution kind | Required governance |
 |------------|-----------------|----------------|----------------|---------------------|
 | Hosted text generation | `text.free-gpt55` or later hosted text profiles | `text`, `workflow`, `automation`, `mcp`, or `openclaw` | `text` or caller contract value | run, provider call, token, and cost meters |
-| AI image generation | `image.grok-imagine-quality` or later hosted image profiles | `vision` | `image_generation` | run, provider call, cost meters, result storage mode, and local write boundary |
+| AI image generation | `grok-imagine-image-quality` or later hosted image profiles | `vision` | `image_generation` | run, provider call, cost meters, result storage mode, and local write boundary |
 | Image/reference media search | `image-source.managed` | `knowledge` | `image_source` | run, provider call, and cost meters |
 | Web search/evidence | `web-search.managed` | `knowledge` | `web_search` | run, provider call, and cost meters |
 | Site knowledge/vector search | `site-knowledge.managed` | `knowledge` | `knowledge` or `embedding` | run meters plus provider call/token/cost meters for managed embedding providers |
