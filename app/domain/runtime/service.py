@@ -17,6 +17,7 @@ from app.adapters.providers.base import (
     ProviderAdapter,
     ProviderExecutionError,
     ProviderExecutionRequest,
+    ProviderExecutionResult,
 )
 from app.adapters.providers.registry import build_provider_adapters
 from app.adapters.queue.base import RuntimeQueue, RuntimeQueueError
@@ -2493,6 +2494,21 @@ class RuntimeService:
             repository.session.flush()
             repository.session.commit()
 
+        def record_embedding_usage(
+            provider_id: str,
+            provider_request: ProviderExecutionRequest,
+            provider_result: ProviderExecutionResult | None,
+            provider_error: ProviderExecutionError | None,
+        ) -> None:
+            self._record_site_knowledge_embedding_provider_call(
+                run,
+                repository=repository,
+                provider_id=provider_id,
+                provider_request=provider_request,
+                provider_result=provider_result,
+                provider_error=provider_error,
+            )
+
         try:
             result_json = SiteKnowledgeService(
                 repository.session,
@@ -2501,6 +2517,7 @@ class RuntimeService:
                 progress_callback=record_progress
                 if run.ability_name == SITE_KNOWLEDGE_SYNC_ABILITY
                 else None,
+                embedding_usage_callback=record_embedding_usage,
             ).execute(
                 site_id=run.site_id,
                 ability_name=run.ability_name,
@@ -2543,6 +2560,48 @@ class RuntimeService:
             result_json=result_json,
             execution_started_at=execution_started_at,
             settings=self.settings,
+        )
+
+    def _record_site_knowledge_embedding_provider_call(
+        self,
+        run: RunRecord,
+        *,
+        repository: RuntimeRepository,
+        provider_id: str,
+        provider_request: ProviderExecutionRequest,
+        provider_result: ProviderExecutionResult | None = None,
+        provider_error: ProviderExecutionError | None = None,
+    ) -> None:
+        provider_call = repository.record_provider_call(
+            run_id=run.run_id,
+            provider_id=provider_id,
+            model_id=provider_request.model_id,
+            instance_id=provider_request.instance_id,
+            region="unspecified",
+            latency_ms=provider_result.latency_ms if provider_result is not None else 0,
+            tokens_in=(
+                provider_result.tokens_in
+                if provider_result is not None
+                else max(0, int(getattr(provider_error, "tokens_in", 0) or 0))
+            ),
+            tokens_out=(
+                provider_result.tokens_out
+                if provider_result is not None
+                else max(0, int(getattr(provider_error, "tokens_out", 0) or 0))
+            ),
+            cost=(
+                provider_result.cost
+                if provider_result is not None
+                else max(0.0, float(getattr(provider_error, "cost", 0.0) or 0.0))
+            ),
+            retry_count=provider_request.retry_count,
+            fallback_used=False,
+            error_code=provider_error.error_code if provider_error is not None else None,
+        )
+        self.commercial_service.record_provider_call_usage(
+            session=repository.session,
+            run=run,
+            provider_call=provider_call,
         )
 
     def _execute_web_search_request(

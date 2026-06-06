@@ -48,3 +48,36 @@ def test_authorize_runtime_request_uses_starter_package_budgets_and_concurrency(
     }
 
     dispose_engine(database_url)
+
+
+def test_authorize_runtime_request_allows_cloud_managed_knowledge_family(
+    tmp_path: Path,
+) -> None:
+    database_url = _sqlite_url(tmp_path)
+    init_schema(database_url)
+    seed_site_auth(
+        database_url,
+        site_id="site_alpha",
+        scopes=["runtime:execute", "runtime:read", "runtime:resolve"],
+    )
+
+    service = CommercialService(database_url)
+    with get_session(database_url) as session:
+        decision = service.authorize_runtime_request(
+            session=session,
+            site_id="site_alpha",
+            ability_family="knowledge",
+            channel="openapi",
+            execution_kind="embedding",
+            execution_tier="cloud",
+            data_classification="public_site_content",
+            trace_id="trace-commercial-knowledge-001",
+            idempotency_key="idem-commercial-knowledge-001",
+            request_kind="resolve",
+        )
+        session.commit()
+
+    assert decision["decision_code"] == "commercial.allowed"
+    assert decision["entitlements"]["ability_families"] == ["*"]
+
+    dispose_engine(database_url)

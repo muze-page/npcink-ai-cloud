@@ -36,6 +36,7 @@ ALLOWED_ABILITY_FAMILIES = {
     "automation",
     "mcp",
     "openclaw",
+    "knowledge",
 }
 DEFAULT_RUNTIME_ENTITLEMENTS = {
     "ability_families": ["*"],
@@ -124,6 +125,11 @@ SHADOW_PRICING_TARIFF_REGISTRY: dict[str, dict[str, dict[str, float | str]]] = {
             "tariff_class": "high",
             "base_run_price": 0.12,
             "per_1k_tokens_price": 0.02,
+        },
+        "knowledge": {
+            "tariff_class": "low",
+            "base_run_price": 0.02,
+            "per_1k_tokens_price": 0.0,
         },
     },
 }

@@ -13,6 +13,7 @@ from app.adapters.providers.base import (
     ProviderAdapter,
     ProviderExecutionError,
     ProviderExecutionRequest,
+    ProviderExecutionResult,
 )
 from app.core.config import Settings, get_settings
 from app.domain.site_knowledge.backends import (
@@ -54,6 +55,10 @@ DEFAULT_EVIDENCE_MIN_SCORE = 0.45
 DEFAULT_REQUIRED_EVIDENCE_SOURCES = 1
 ALLOWED_NO_HIT_POLICIES = frozenset({"abstain", "fallback_to_general", "return_empty"})
 ProgressCallback = Callable[[dict[str, Any]], None]
+EmbeddingUsageCallback = Callable[
+    [str, ProviderExecutionRequest, ProviderExecutionResult | None, ProviderExecutionError | None],
+    None,
+]
 
 STYLE_SCRIPT_BLOCK_PATTERN = re.compile(
     r"<(?:style|script)\b[^>]*>.*?</(?:style|script)>",
@@ -74,10 +79,12 @@ class SiteKnowledgeService:
         settings: Settings | None = None,
         providers: dict[str, ProviderAdapter] | None = None,
         progress_callback: ProgressCallback | None = None,
+        embedding_usage_callback: EmbeddingUsageCallback | None = None,
     ) -> None:
         self.settings = settings or get_settings()
         self.providers = providers or {}
         self.progress_callback = progress_callback
+        self.embedding_usage_callback = embedding_usage_callback
         self.repository = SiteKnowledgeRepository(session)
         self.vector_backend = build_vector_backend(self.settings)
         self.reranker = build_site_knowledge_reranker(self.settings)
@@ -647,28 +654,29 @@ class SiteKnowledgeService:
         model_id = self.embedding_model
         if self.embedding_provider_id == "tei" and not model_id.lower().startswith("tei/"):
             model_id = f"tei/{model_id}"
+        provider_request = ProviderExecutionRequest(
+            run_id=run_id,
+            site_id=site_id,
+            ability_name=ability_name,
+            profile_id="site-knowledge.managed",
+            execution_kind="embedding",
+            model_id=model_id,
+            instance_id=f"{self.embedding_provider_id}-site-knowledge-embedding",
+            endpoint_variant="embeddings",
+            trace_id=run_id,
+            input_payload={"text": text},
+            policy={"storage_mode": "result_only"},
+            timeout_ms=max(1, int(self._embedding_timeout_seconds() * 1000)),
+        )
         try:
-            result = provider.execute(
-                ProviderExecutionRequest(
-                    run_id=run_id,
-                    site_id=site_id,
-                    ability_name=ability_name,
-                    profile_id="site-knowledge.managed",
-                    execution_kind="embedding",
-                    model_id=model_id,
-                    instance_id=f"{self.embedding_provider_id}-site-knowledge-embedding",
-                    endpoint_variant="embeddings",
-                    trace_id=run_id,
-                    input_payload={"text": text},
-                    policy={"storage_mode": "result_only"},
-                    timeout_ms=max(1, int(self._embedding_timeout_seconds() * 1000)),
-                )
-            )
+            result = provider.execute(provider_request)
         except ProviderExecutionError as error:
+            self._record_embedding_usage(provider_request, provider_error=error)
             raise SiteKnowledgeBackendError(
                 error.error_code,
                 "site knowledge embedding provider request failed",
             ) from error
+        self._record_embedding_usage(provider_request, provider_result=result)
 
         embedding = result.output.get("embedding")
         if not isinstance(embedding, list):
@@ -683,6 +691,22 @@ class SiteKnowledgeService:
                 "site knowledge embedding dimensions do not match configuration",
             )
         return vector
+
+    def _record_embedding_usage(
+        self,
+        provider_request: ProviderExecutionRequest,
+        *,
+        provider_result: ProviderExecutionResult | None = None,
+        provider_error: ProviderExecutionError | None = None,
+    ) -> None:
+        if self.embedding_usage_callback is None:
+            return
+        self.embedding_usage_callback(
+            self.embedding_provider_id,
+            provider_request,
+            provider_result,
+            provider_error,
+        )
 
     def _embedding_timeout_seconds(self) -> float:
         if self.embedding_provider_id == "siliconflow":

@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
+from sqlalchemy import select
 
 from app.adapters.providers.base import (
     ProviderAdapter,
@@ -18,10 +19,12 @@ from app.api.main import create_app
 from app.core.config import Settings
 from app.core.db import get_session, init_schema
 from app.core.models import (
+    ProviderCallRecord,
     SiteKnowledgeChunk,
     SiteKnowledgeIndexJobMetric,
     SiteKnowledgeIndexSnapshot,
     SiteKnowledgeSearchMetric,
+    UsageMeterEvent,
 )
 from app.core.services import CloudServices
 from app.domain.runtime.service import RuntimeService
@@ -1092,14 +1095,38 @@ def test_sync_uses_cloud_managed_tei_embedding_provider(tmp_path: Path) -> None:
     ).process_next_queued_run(timeout_seconds=0)
 
     assert sync_result["status_code"] == 200
+    run_id = sync_result["json"]["data"]["run_id"]
     assert provider.requests
     assert provider.requests[0].execution_kind == "embedding"
     assert provider.requests[0].model_id == "tei/BAAI/bge-m3"
     assert provider.requests[0].input_payload["text"]
     with get_session(database_url) as session:
         chunk = session.query(SiteKnowledgeChunk).one()
+        provider_calls = list(
+            session.scalars(
+                select(ProviderCallRecord).where(ProviderCallRecord.run_id == run_id)
+            )
+        )
+        meter_events = list(
+            session.scalars(
+                select(UsageMeterEvent)
+                .where(UsageMeterEvent.run_id == run_id)
+                .order_by(UsageMeterEvent.id.asc())
+            )
+        )
     assert chunk.embedding_model == "BAAI/bge-m3"
     assert chunk.embedding_json == [0.25] * 1024
+    assert provider_calls
+    assert provider_calls[0].provider_id == "tei"
+    assert provider_calls[0].model_id == "tei/BAAI/bge-m3"
+    assert provider_calls[0].tokens_in == 1
+    assert [event.meter_key for event in meter_events] == [
+        "runs",
+        "provider_calls",
+        "tokens_in",
+        "tokens_total",
+    ]
+    assert all(event.ability_family == "knowledge" for event in meter_events)
 
 
 def test_sync_uses_cloud_managed_siliconflow_embedding_provider(tmp_path: Path) -> None:

@@ -100,6 +100,36 @@ Field rules:
   plugin contracts, WordPress write permissions, approvals, router truth,
   prompt truth, or profile truth.
 
+## 3.1 Model-Agnostic Hosted Runtime Governance
+
+Hosted runtime quota and metering apply to every Cloud-managed model capability,
+not only the current free GPT-5.5 text profile. Cloud must preserve these
+governance dimensions on accepted runs, provider calls, usage meter events, and
+commercial decision events:
+
+- `ability_family`
+- `execution_kind`
+- `execution_tier`
+- `data_classification`
+- `profile_id`
+- provider/model/instance identifiers when an upstream provider is called
+
+Current managed capability examples include:
+
+| Capability | Typical profile | Ability family | Execution kind | Required governance |
+|------------|-----------------|----------------|----------------|---------------------|
+| Hosted text generation | `text.free-gpt55` or later hosted text profiles | `text`, `workflow`, `automation`, `mcp`, or `openclaw` | `text` or caller contract value | run, provider call, token, and cost meters |
+| Image/reference media search | `image-source.managed` | `knowledge` | `image_source` | run, provider call, and cost meters |
+| Web search/evidence | `web-search.managed` | `knowledge` | `web_search` | run, provider call, and cost meters |
+| Site knowledge/vector search | `site-knowledge.managed` | `knowledge` | `knowledge` or `embedding` | run meters plus provider call/token/cost meters for managed embedding providers |
+| Media derivative processing | `media_derivative.worker` | `vision` | `media_derivative` | run meters and queue/concurrency controls |
+
+New hosted text, image, embedding/vector, search, audio, or multimodal model
+adapters must enter through the same runtime authorization path. They must not
+create a model-specific bypass around entitlement, request guard, idempotency,
+quota, concurrency, provider-call telemetry, usage meter events, storage mode,
+or WordPress write boundaries.
+
 ## 4. Cloud API Query
 
 The local plugin queries entitlement through a read-only Cloud API:

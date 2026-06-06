@@ -114,6 +114,14 @@ fallback only. The managed embedding provider paths use the existing Cloud
 provider adapter boundary, so embedding endpoint credentials remain
 Cloud-managed and are not accepted from or returned to WordPress.
 
+Managed embedding provider calls are runtime-governed provider calls. When
+Site Knowledge uses TEI, OpenAI, SiliconFlow, or another Cloud-managed
+embedding adapter, Cloud records provider-call telemetry and usage meter events
+on the owning runtime run with `ability_family=knowledge` and
+`execution_kind=knowledge` or `embedding` as appropriate. This keeps vector
+capability quota, cost, and audit behavior aligned with text, image, and search
+runtime profiles instead of creating a separate vector billing path.
+
 ## Source Types
 
 Post and page content is supplied through `documents`. Comments are supplied
