@@ -642,6 +642,14 @@ def test_internal_ai_advisor_routes_are_internal_and_evidence_backed(
     runtime_payload = runtime_response.json()["data"]
     assert runtime_payload["advisor_version"] == "internal-ai-advisor-v1"
     assert runtime_payload["scope"] == "runtime_operations"
+    assert runtime_payload["agent_handoff"]["agent_id"] == "internal_ops_advisor_agent"
+    assert runtime_payload["agent_handoff"]["handoff_type"] == "operator_recommendation"
+    assert runtime_payload["agent_handoff"]["requires_operator_review"] is True
+    assert runtime_payload["agent_handoff"]["direct_wordpress_write"] is False
+    assert runtime_payload["agent_handoff"]["execution_pattern"] == "inline"
+    assert "automatic_commercial_state_mutation" in runtime_payload["agent_handoff"][
+        "forbidden_actions"
+    ]
     assert runtime_payload["status"] == "attention"
     assert runtime_payload["evidence"][0]["ref"] == (
         "/internal/service/runtime/diagnostics/summary"
@@ -674,6 +682,11 @@ def test_internal_ai_advisor_routes_are_internal_and_evidence_backed(
     assert operations_response.status_code == 200
     operations_payload = operations_response.json()["data"]
     assert operations_payload["scope"] == "operations_analysis"
+    assert operations_payload["agent_handoff"]["agent_role"] == "operations_analysis"
+    assert operations_payload["agent_handoff"]["handoff_owner"] == "cloud_internal_operator"
+    assert operations_payload["agent_handoff"]["fail_closed_behavior"] == (
+        "return_deterministic_advisory_summary"
+    )
     assert operations_payload["evidence"][0]["kind"] == "admin_overview"
     assert any(signal["code"] == "ops.runtime_quality" for signal in operations_payload["signals"])
     assert any(signal["code"] == "ops.provider_quality" for signal in operations_payload["signals"])

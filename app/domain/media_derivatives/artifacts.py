@@ -111,6 +111,31 @@ def build_artifact_result_json(artifact: MediaDerivativeArtifact) -> dict[str, o
         warnings = artifact.processing_warnings_json
     suggested_filename = _suggested_artifact_filename(artifact)
     return {
+        "workflow_metadata": {
+            "workflow_id": "media_derivative_artifact_generation",
+            "workflow_version": "media_derivative_workflow.v1",
+            "workflow_kind": "fixed_worker_workflow",
+            "triggering_ability": "generate_optimized_media_derivative",
+            "triggering_contract": "media_derivative_cloud_request.v1",
+            "execution_pattern": "whole_run_offload",
+            "cloud_output": "temporary_derivative_artifact",
+            "handoff_owner": "wordpress_local",
+            "write_posture": "artifact_only",
+            "direct_wordpress_write": False,
+            "steps": [
+                "validate_media_derivative_request",
+                "queue_runtime_worker_job",
+                "process_static_image_derivative",
+                "store_short_ttl_artifact",
+                "return_artifact_reference_for_local_review",
+            ],
+            "stop_conditions": [
+                "invalid_source",
+                "unsupported_format",
+                "artifact_ttl_expired",
+                "local_approval_required",
+            ],
+        },
         "artifact": {
             "artifact_id": artifact.artifact_id,
             "artifact_reference": {"artifact_id": artifact.artifact_id},

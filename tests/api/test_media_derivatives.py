@@ -189,6 +189,31 @@ def test_worker_success_path(tmp_path: Path) -> None:
         assert result_response.status_code == 200, result_response.json()
         result_data = result_response.json()["data"]
         assert result_data["status"] == "succeeded"
+        assert result_data["result"]["workflow_metadata"] == {
+            "workflow_id": "media_derivative_artifact_generation",
+            "workflow_version": "media_derivative_workflow.v1",
+            "workflow_kind": "fixed_worker_workflow",
+            "triggering_ability": "generate_optimized_media_derivative",
+            "triggering_contract": "media_derivative_cloud_request.v1",
+            "execution_pattern": "whole_run_offload",
+            "cloud_output": "temporary_derivative_artifact",
+            "handoff_owner": "wordpress_local",
+            "write_posture": "artifact_only",
+            "direct_wordpress_write": False,
+            "steps": [
+                "validate_media_derivative_request",
+                "queue_runtime_worker_job",
+                "process_static_image_derivative",
+                "store_short_ttl_artifact",
+                "return_artifact_reference_for_local_review",
+            ],
+            "stop_conditions": [
+                "invalid_source",
+                "unsupported_format",
+                "artifact_ttl_expired",
+                "local_approval_required",
+            ],
+        }
         artifact = result_data["result"]["artifact"]
         assert artifact["format"] == "webp"
         assert artifact["width"] == 100

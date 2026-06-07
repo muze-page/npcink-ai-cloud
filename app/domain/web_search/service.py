@@ -11,6 +11,8 @@ import httpx
 from app.core.config import Settings
 from app.domain.web_search.contracts import (
     ALLOWED_WEB_SEARCH_INTENTS,
+    WEB_SEARCH_ABILITY,
+    WEB_SEARCH_CONTRACT,
     WebSearchContractViolation,
     coerce_positive_int,
     validate_web_search_runtime_contract,
@@ -126,6 +128,10 @@ class WebSearchService:
                 continue
             if errors:
                 result.result_json["provider_fallback_errors"] = errors
+            result.result_json = _attach_web_search_workflow_metadata(
+                result.result_json,
+                options=options,
+            )
             return _enhance_with_jina_reader(
                 settings=self.settings,
                 result=result,
@@ -556,6 +562,7 @@ def _build_result_json(
         "query_hash": _hash_query(query),
         "query_chars": len(query),
         "evidence_gate": _evidence_gate(results, evidence_policy),
+        "workflow_metadata": _web_search_workflow_metadata(options),
         "results": results,
         "sources": [
             {
@@ -567,6 +574,43 @@ def _build_result_json(
         ],
         "write_posture": "suggestion_only",
         "direct_wordpress_write": False,
+    }
+
+
+def _attach_web_search_workflow_metadata(
+    result_json: dict[str, Any],
+    *,
+    options: dict[str, Any],
+) -> dict[str, Any]:
+    updated = dict(result_json)
+    updated["workflow_metadata"] = _web_search_workflow_metadata(options)
+    return updated
+
+
+def _web_search_workflow_metadata(options: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "workflow_id": "external_web_evidence_preflight",
+        "workflow_version": "web_search_evidence_workflow.v1",
+        "workflow_kind": "fixed_evidence_workflow",
+        "triggering_ability": WEB_SEARCH_ABILITY,
+        "triggering_contract": WEB_SEARCH_CONTRACT,
+        "intent": str(options.get("intent") or "general_research"),
+        "cloud_output": "external_web_evidence",
+        "handoff_owner": "wordpress_local",
+        "write_posture": "suggestion_only",
+        "direct_wordpress_write": False,
+        "steps": [
+            "validate_runtime_contract",
+            "select_cloud_managed_search_provider",
+            "normalize_and_score_sources",
+            "apply_evidence_gate",
+            "return_suggestion_only_evidence",
+        ],
+        "stop_conditions": [
+            "provider_not_configured",
+            "provider_fallback_exhausted",
+            "insufficient_evidence",
+        ],
     }
 
 

@@ -476,10 +476,23 @@ def test_high_value_intents_return_advisory_product_metadata(tmp_path: Path) -> 
     assert gap["workflow_support"]["workflow"] == "content_gap_analysis"
     assert gap["workflow_support"]["cloud_output"] == "gap_evidence"
     assert gap["agent_handoff"]["agent_id"] == "site_knowledge_suggestion_agent"
+    assert gap["agent_handoff"]["triggering_ability"] == (
+        "magick-ai-cloud/site-knowledge-search"
+    )
+    assert gap["agent_handoff"]["triggering_contract"] == "site_knowledge_search.v1"
     assert gap["agent_handoff"]["handoff_type"] == "proposal_input"
     assert gap["agent_handoff"]["handoff_owner"] == "wordpress_local"
+    assert gap["agent_handoff"]["local_handoff_owner"] == "wordpress_local"
     assert gap["agent_handoff"]["requires_local_approval"] is True
     assert gap["agent_handoff"]["direct_wordpress_write"] is False
+    assert gap["agent_handoff"]["execution_pattern"] == "inline"
+    assert gap["agent_handoff"]["storage_mode"] == "result_only"
+    assert gap["agent_handoff"]["evidence_requirements"]["no_hit_policy"] == "abstain"
+    assert "local_approval_required" in gap["agent_handoff"]["stop_conditions"]
+    assert "article_write_plan_generation" in gap["agent_handoff"]["forbidden_actions"]
+    assert gap["agent_handoff"]["fail_closed_behavior"] == (
+        "return_suggestion_only_without_wordpress_write"
+    )
     assert gap["agent_handoff"]["proposal_input"]["workflow"] == "content_gap_analysis"
     assert gap["agent_handoff"]["proposal_input"]["local_next_action"] == (
         "review_content_gap_before_local_plan"
