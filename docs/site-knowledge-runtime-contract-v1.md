@@ -73,6 +73,17 @@ Cloud-managed settings:
 - `MAGICK_CLOUD_SITE_KNOWLEDGE_VECTOR_METRIC_TYPE`: default `COSINE`
 - `MAGICK_CLOUD_SITE_KNOWLEDGE_COMMENTS_ENABLED`: default `false`; when true,
   Cloud may index approved public comments supplied by WordPress.
+- `MAGICK_CLOUD_SITE_KNOWLEDGE_MAX_SYNC_DOCUMENTS_PER_RUN`: default `500`.
+  Limits how many public documents or comments one sync run may index.
+- `MAGICK_CLOUD_SITE_KNOWLEDGE_MAX_SYNC_CHUNKS_PER_RUN`: default `5000`.
+  Limits how many chunks one sync run may embed and write.
+- `MAGICK_CLOUD_SITE_KNOWLEDGE_MAX_INDEXED_DOCUMENTS_PER_SITE`: default
+  `10000`. Protects per-site storage and provider cost for very large sites.
+- `MAGICK_CLOUD_SITE_KNOWLEDGE_MAX_INDEXED_CHUNKS_PER_SITE`: default
+  `200000`. This is the main vector storage guardrail.
+- `MAGICK_CLOUD_SITE_KNOWLEDGE_QUOTA_WARNING_RATIO`: default `0.85`.
+  Status returns `near_limit` once document or chunk utilization reaches this
+  ratio.
 - `MAGICK_CLOUD_SITE_KNOWLEDGE_RERANK_PROVIDER`: `disabled` or `jina`;
   default `disabled`. Rerank is a Cloud-only enhancement after vector recall.
 - `MAGICK_CLOUD_SITE_KNOWLEDGE_RERANK_TOP_K`: default `30`
@@ -121,6 +132,45 @@ on the owning runtime run with `ability_family=knowledge` and
 `execution_kind=knowledge` or `embedding` as appropriate. This keeps vector
 capability quota, cost, and audit behavior aligned with text, image, and search
 runtime profiles instead of creating a separate vector billing path.
+
+## Large Site Quotas
+
+Sites with tens or hundreds of thousands of public posts can be indexed over
+time, but they must not be pushed through one request or one worker run.
+
+Cloud enforces two layers:
+
+- per-run caps: stop one `site-knowledge-sync` run from embedding too much at
+  once;
+- per-site caps: stop one connected site from consuming unbounded vector
+  storage and provider quota.
+
+When a sync hits a limit, Cloud returns `status=completed` with
+`progress.stage=limited`, `sync.skipped_documents`, and
+`sync.skipped_due_to_quota`. The response also includes a `quota` object with
+the active limits and utilization. Skipped content remains WordPress-owned and
+can be indexed by later batches after quota or plan policy changes.
+
+`site-knowledge-status` includes `coverage.quota`:
+
+```json
+{
+  "status": "ok|near_limit|limited|empty",
+  "indexed_documents": 10000,
+  "indexed_chunks": 180000,
+  "max_indexed_documents_per_site": 10000,
+  "max_indexed_chunks_per_site": 200000,
+  "max_sync_documents_per_run": 500,
+  "max_sync_chunks_per_run": 5000,
+  "document_utilization": 1.0,
+  "chunk_utilization": 0.9,
+  "skipped_due_to_quota": 0
+}
+```
+
+Toolbox should continue to expose simple start/refresh/status actions. It may
+display this quota detail, but it must not store vector provider credentials or
+become the quota control plane.
 
 ## Source Types
 

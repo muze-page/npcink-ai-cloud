@@ -970,6 +970,112 @@ def test_sync_caps_long_documents_and_reports_truncation(tmp_path: Path) -> None
     assert metadata["max_chunks"] == 64
 
 
+def test_sync_enforces_per_run_document_quota(tmp_path: Path) -> None:
+    database_url, settings, runtime_queue, client = _build_client(
+        tmp_path,
+        settings_overrides={"site_knowledge_max_sync_documents_per_run": 1},
+    )
+    payload = _sync_payload()
+    input_payload = payload["input"]
+    assert isinstance(input_payload, dict)
+    documents = input_payload["documents"]
+    assert isinstance(documents, list)
+    documents.append(
+        {
+            "post_id": 456,
+            "post_type": "page",
+            "post_status": "publish",
+            "title": "Skipped due to per-run quota",
+            "url": "https://example.test/quota-skipped",
+            "modified_gmt": "2026-06-03 04:00:00",
+            "excerpt": "This public page should wait for a later batch.",
+            "content_excerpt": "Cloud site knowledge quota protection.",
+            "content_hash": "quota-skipped-page",
+        }
+    )
+
+    sync_result = _execute(client, payload, idempotency_key="per-run-document-quota")
+    RuntimeService(
+        database_url,
+        settings=settings,
+        providers={},
+        runtime_queue=runtime_queue,
+    ).process_next_queued_run(timeout_seconds=0)
+    worker_result = RuntimeService(
+        database_url,
+        settings=settings,
+        providers={},
+    ).get_run_result(sync_result["json"]["data"]["run_id"], site_id="site_alpha")
+
+    result = worker_result["result"]
+    assert result["sync"]["accepted_documents"] == 1
+    assert result["sync"]["indexed_documents"] == 1
+    assert result["sync"]["skipped_documents"] == 1
+    assert result["sync"]["skipped_due_to_quota"] == 1
+    assert result["quota"]["status"] == "limited"
+    assert result["quota"]["max_sync_documents_per_run"] == 1
+    assert result["progress"]["stage"] == "limited"
+    with get_session(database_url) as session:
+        assert {chunk.post_id for chunk in session.query(SiteKnowledgeChunk).all()} == {123}
+
+
+def test_status_reports_site_knowledge_quota_limits(tmp_path: Path) -> None:
+    database_url, settings, runtime_queue, client = _build_client(
+        tmp_path,
+        settings_overrides={
+            "site_knowledge_max_indexed_documents_per_site": 1,
+            "site_knowledge_max_indexed_chunks_per_site": 4,
+            "site_knowledge_quota_warning_ratio": 0.5,
+        },
+    )
+    _execute(client, _sync_payload(), idempotency_key="status-quota-sync")
+    RuntimeService(
+        database_url,
+        settings=settings,
+        providers={},
+        runtime_queue=runtime_queue,
+    ).process_next_queued_run(timeout_seconds=0)
+
+    status_result = _execute(
+        client,
+        {
+            "ability_name": "magick-ai-cloud/site-knowledge-status",
+            "contract_version": "site_knowledge_status.v1",
+            "execution_pattern": "inline",
+            "data_classification": "public_site_content",
+            "storage_mode": "result_only",
+            "input": {
+                "contract_version": "site_knowledge_status.v1",
+                "include_coverage": True,
+                "write_posture": "suggestion_only",
+            },
+        },
+        idempotency_key="status-quota-limits",
+    )
+
+    quota = status_result["json"]["data"]["result"]["coverage"]["quota"]
+    assert quota["status"] == "limited"
+    assert quota["indexed_documents"] == 1
+    assert quota["max_indexed_documents_per_site"] == 1
+    assert quota["max_indexed_chunks_per_site"] == 4
+    assert quota["max_sync_documents_per_run"] == 500
+    assert quota["document_utilization"] == 1.0
+
+
+def test_site_knowledge_quota_settings_validate_positive_values(tmp_path: Path) -> None:
+    with pytest.raises(ValidationError):
+        Settings(
+            _env_file=None,
+            project_name="Magick AI Cloud Site Knowledge Test",
+            environment="test",
+            database_url=_sqlite_url(tmp_path),
+            redis_url="redis://localhost:6379/0",
+            admin_session_secret=TEST_ADMIN_SESSION_SECRET,
+            portal_jwt_secret=TEST_PORTAL_JWT_SECRET,
+            site_knowledge_max_sync_documents_per_run=0,
+        )
+
+
 def test_targeted_refresh_prunes_missing_public_document(tmp_path: Path) -> None:
     database_url, settings, runtime_queue, client = _build_client(tmp_path)
 

@@ -211,6 +211,11 @@ class Settings(BaseSettings):
     site_knowledge_embedding_dimensions: int = Field(default=1024)
     site_knowledge_vector_metric_type: str = Field(default="COSINE")
     site_knowledge_comments_enabled: bool = Field(default=False)
+    site_knowledge_max_sync_documents_per_run: int = Field(default=500)
+    site_knowledge_max_sync_chunks_per_run: int = Field(default=5000)
+    site_knowledge_max_indexed_documents_per_site: int = Field(default=10000)
+    site_knowledge_max_indexed_chunks_per_site: int = Field(default=200000)
+    site_knowledge_quota_warning_ratio: float = Field(default=0.85)
     site_knowledge_rerank_provider: str = Field(default="disabled")
     site_knowledge_rerank_top_k: int = Field(default=30)
     site_knowledge_rerank_timeout_seconds: float = Field(default=8.0)
@@ -515,6 +520,18 @@ class Settings(BaseSettings):
             raise ValueError("tei_context_window must be greater than 0")
         if self.site_knowledge_embedding_dimensions <= 0:
             raise ValueError("site_knowledge_embedding_dimensions must be greater than 0")
+        if self.site_knowledge_max_sync_documents_per_run <= 0:
+            raise ValueError("site_knowledge_max_sync_documents_per_run must be greater than 0")
+        if self.site_knowledge_max_sync_chunks_per_run <= 0:
+            raise ValueError("site_knowledge_max_sync_chunks_per_run must be greater than 0")
+        if self.site_knowledge_max_indexed_documents_per_site <= 0:
+            raise ValueError(
+                "site_knowledge_max_indexed_documents_per_site must be greater than 0"
+            )
+        if self.site_knowledge_max_indexed_chunks_per_site <= 0:
+            raise ValueError("site_knowledge_max_indexed_chunks_per_site must be greater than 0")
+        if not 0 < self.site_knowledge_quota_warning_ratio <= 1:
+            raise ValueError("site_knowledge_quota_warning_ratio must be between 0 and 1")
         if self.site_knowledge_zilliz_timeout_seconds <= 0:
             raise ValueError("site_knowledge_zilliz_timeout_seconds must be greater than 0")
         web_search_provider = str(self.web_search_provider or "disabled").strip().lower()

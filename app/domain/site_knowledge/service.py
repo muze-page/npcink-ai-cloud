@@ -229,7 +229,14 @@ class SiteKnowledgeService:
         indexed_chunks = 0
         failed_documents = 0
         truncated_documents = 0
+        skipped_documents = 0
+        skipped_due_to_quota = 0
         processed_documents = 0
+        site_document_count = self.repository.count_documents(site_id)
+        site_chunk_count = self.repository.count_chunks(site_id)
+        remaining_run_documents = int(self.settings.site_knowledge_max_sync_documents_per_run)
+        remaining_run_chunks = int(self.settings.site_knowledge_max_sync_chunks_per_run)
+        quota_limited = False
 
         for raw_document in [*documents, *comments]:
             document = raw_document if isinstance(raw_document, dict) else {}
@@ -244,6 +251,8 @@ class SiteKnowledgeService:
                 indexed_documents=indexed_documents,
                 indexed_chunks=indexed_chunks,
                 failed_documents=failed_documents,
+                skipped_documents=skipped_documents,
+                skipped_due_to_quota=skipped_due_to_quota,
                 deleted_entries=deleted_entries,
             )
             normalized = (
@@ -259,6 +268,50 @@ class SiteKnowledgeService:
                 normalized["source_type"] == "comment"
                 and not self.settings.site_knowledge_comments_enabled
             ):
+                skipped_documents += 1
+                processed_documents += 1
+                continue
+            source_type = str(normalized["source_type"])
+            source_id = _coerce_int(normalized.get("source_id"), default=0)
+            existing_document = self.repository.document_exists(
+                site_id=site_id,
+                source_type=source_type,
+                source_id=source_id,
+            )
+            existing_chunks = self.repository.count_chunks_for_source(
+                site_id=site_id,
+                source_type=source_type,
+                source_id=source_id,
+            )
+            if remaining_run_documents <= 0:
+                skipped_documents += 1
+                skipped_due_to_quota += 1
+                quota_limited = True
+                processed_documents += 1
+                continue
+            if (
+                not existing_document
+                and site_document_count
+                >= int(self.settings.site_knowledge_max_indexed_documents_per_site)
+            ):
+                skipped_documents += 1
+                skipped_due_to_quota += 1
+                quota_limited = True
+                processed_documents += 1
+                continue
+            available_site_chunks = (
+                int(self.settings.site_knowledge_max_indexed_chunks_per_site)
+                - max(0, site_chunk_count - existing_chunks)
+            )
+            allowed_chunks = min(
+                MAX_CHUNKS_PER_DOCUMENT,
+                remaining_run_chunks,
+                max(0, available_site_chunks),
+            )
+            if allowed_chunks <= 0:
+                skipped_documents += 1
+                skipped_due_to_quota += 1
+                quota_limited = True
                 processed_documents += 1
                 continue
             accepted_documents += 1
@@ -267,11 +320,17 @@ class SiteKnowledgeService:
                 site_id=site_id,
                 run_id=run_id,
                 ability_name=SITE_KNOWLEDGE_SYNC_ABILITY,
+                max_chunks=allowed_chunks,
             )
             if not chunks:
                 failed_documents += 1
                 processed_documents += 1
                 continue
+            if (
+                allowed_chunks < MAX_CHUNKS_PER_DOCUMENT
+                and _chunks_include_limit_truncation(chunks)
+            ):
+                quota_limited = True
             document_truncated = bool(
                 normalized.get("content_truncated")
             ) or _chunks_include_limit_truncation(chunks)
@@ -288,6 +347,8 @@ class SiteKnowledgeService:
                 indexed_documents=indexed_documents,
                 indexed_chunks=indexed_chunks,
                 failed_documents=failed_documents,
+                skipped_documents=skipped_documents,
+                skipped_due_to_quota=skipped_due_to_quota,
                 deleted_entries=deleted_entries,
             )
             if self.vector_backend is not None:
@@ -341,11 +402,18 @@ class SiteKnowledgeService:
                     "max_content_chars": MAX_DOCUMENT_CONTENT_CHARS,
                     "chunk_count": len(chunks),
                     "max_chunks": MAX_CHUNKS_PER_DOCUMENT,
+                    "effective_max_chunks": allowed_chunks,
+                    "quota_limited": bool(quota_limited),
                 },
                 chunks=chunks,
             )
             indexed_documents += 1
             indexed_chunks += len(chunks)
+            remaining_run_documents -= 1
+            remaining_run_chunks = max(0, remaining_run_chunks - len(chunks))
+            if not existing_document:
+                site_document_count += 1
+            site_chunk_count = max(0, site_chunk_count - existing_chunks) + len(chunks)
             processed_documents += 1
             self._emit_sync_progress(
                 status="running",
@@ -358,13 +426,19 @@ class SiteKnowledgeService:
                 indexed_documents=indexed_documents,
                 indexed_chunks=indexed_chunks,
                 failed_documents=failed_documents,
+                skipped_documents=skipped_documents,
+                skipped_due_to_quota=skipped_due_to_quota,
                 deleted_entries=deleted_entries,
             )
 
         progress = self._sync_progress(
             status="completed",
-            stage="completed",
-            message="Index is ready for search.",
+            stage="limited" if quota_limited else "completed",
+            message=(
+                "Indexing completed with quota limits; remaining content will need later batches."
+                if quota_limited
+                else "Index is ready for search."
+            ),
             sync_mode=sync_mode,
             processed_documents=processed_documents,
             total_documents=total_documents,
@@ -372,6 +446,8 @@ class SiteKnowledgeService:
             indexed_documents=indexed_documents,
             indexed_chunks=indexed_chunks,
             failed_documents=failed_documents,
+            skipped_documents=skipped_documents,
+            skipped_due_to_quota=skipped_due_to_quota,
             deleted_entries=deleted_entries,
             percent=100,
         )
@@ -386,8 +462,16 @@ class SiteKnowledgeService:
             indexed_chunks=indexed_chunks,
             failed_documents=failed_documents,
             truncated_documents=truncated_documents,
+            skipped_documents=skipped_documents,
+            skipped_due_to_quota=skipped_due_to_quota,
             deleted_entries=deleted_entries,
             progress=progress,
+            quota=self._quota_snapshot(
+                indexed_posts=self.repository.count_documents(site_id),
+                indexed_chunks=self.repository.count_chunks(site_id),
+                skipped_documents=skipped_documents,
+                skipped_due_to_quota=skipped_due_to_quota,
+            ),
         )
 
     def status(self, *, site_id: str, input_payload: dict[str, Any]) -> dict[str, Any]:
@@ -413,6 +497,10 @@ class SiteKnowledgeService:
             "source_type_coverage": {},
             "comments_enabled": bool(self.settings.site_knowledge_comments_enabled),
         }
+        coverage["quota"] = self._quota_snapshot(
+            indexed_posts=indexed_posts,
+            indexed_chunks=indexed_chunks,
+        )
         if include_coverage:
             coverage["post_type_coverage"] = {
                 post_type: 1.0 for post_type in sorted(self.repository.post_type_counts(site_id))
@@ -583,6 +671,7 @@ class SiteKnowledgeService:
         site_id: str,
         run_id: str,
         ability_name: str,
+        max_chunks: int | None = None,
     ) -> list[dict[str, object]]:
         source_text = "\n\n".join(
             part
@@ -598,9 +687,14 @@ class SiteKnowledgeService:
             return []
 
         chunks: list[dict[str, object]] = []
+        chunk_limit = MAX_CHUNKS_PER_DOCUMENT
+        if max_chunks is not None:
+            chunk_limit = max(0, min(MAX_CHUNKS_PER_DOCUMENT, int(max_chunks)))
+        if chunk_limit <= 0:
+            return []
         start = 0
         while start < len(source_text):
-            if len(chunks) >= MAX_CHUNKS_PER_DOCUMENT:
+            if len(chunks) >= chunk_limit:
                 break
             text = source_text[start : start + MAX_CHUNK_CHARS].strip()
             if text:
@@ -621,19 +715,21 @@ class SiteKnowledgeService:
                             "content_truncated": bool(document.get("content_truncated")),
                             "max_content_chars": MAX_DOCUMENT_CONTENT_CHARS,
                             "max_chunks": MAX_CHUNKS_PER_DOCUMENT,
+                            "effective_max_chunks": chunk_limit,
                         },
                     }
                 )
             if start + MAX_CHUNK_CHARS >= len(source_text):
                 break
             start += MAX_CHUNK_CHARS - CHUNK_OVERLAP_CHARS
-        chunk_limit_truncated = start < len(source_text) and len(chunks) >= MAX_CHUNKS_PER_DOCUMENT
+        chunk_limit_truncated = start < len(source_text) and len(chunks) >= chunk_limit
         if chunk_limit_truncated:
             for chunk in chunks:
                 metadata = chunk.get("metadata")
                 if isinstance(metadata, dict):
                     metadata["chunk_limit_truncated"] = True
                     metadata["max_chunks"] = MAX_CHUNKS_PER_DOCUMENT
+                    metadata["effective_max_chunks"] = chunk_limit
         return chunks
 
     def _embed_text(
@@ -797,6 +893,8 @@ class SiteKnowledgeService:
         indexed_documents: int = 0,
         indexed_chunks: int = 0,
         failed_documents: int = 0,
+        skipped_documents: int = 0,
+        skipped_due_to_quota: int = 0,
         deleted_entries: int = 0,
         percent: int | None = None,
     ) -> dict[str, Any]:
@@ -818,9 +916,50 @@ class SiteKnowledgeService:
             "indexed_documents": max(0, int(indexed_documents)),
             "indexed_chunks": max(0, int(indexed_chunks)),
             "failed_documents": max(0, int(failed_documents)),
+            "skipped_documents": max(0, int(skipped_documents)),
+            "skipped_due_to_quota": max(0, int(skipped_due_to_quota)),
             "deleted_entries": max(0, int(deleted_entries)),
             "percent": resolved_percent,
             "updated_at": _serialize_datetime(datetime.now(UTC)),
+        }
+
+    def _quota_snapshot(
+        self,
+        *,
+        indexed_posts: int,
+        indexed_chunks: int,
+        skipped_documents: int = 0,
+        skipped_due_to_quota: int = 0,
+    ) -> dict[str, Any]:
+        max_documents = int(self.settings.site_knowledge_max_indexed_documents_per_site)
+        max_chunks = int(self.settings.site_knowledge_max_indexed_chunks_per_site)
+        warning_ratio = float(self.settings.site_knowledge_quota_warning_ratio)
+        document_utilization = indexed_posts / max_documents if max_documents > 0 else 1.0
+        chunk_utilization = indexed_chunks / max_chunks if max_chunks > 0 else 1.0
+        status = "ok"
+        if skipped_due_to_quota > 0 or document_utilization >= 1.0 or chunk_utilization >= 1.0:
+            status = "limited"
+        elif document_utilization >= warning_ratio or chunk_utilization >= warning_ratio:
+            status = "near_limit"
+        elif indexed_posts == 0 and indexed_chunks == 0:
+            status = "empty"
+
+        return {
+            "status": status,
+            "indexed_documents": max(0, int(indexed_posts)),
+            "indexed_chunks": max(0, int(indexed_chunks)),
+            "max_indexed_documents_per_site": max_documents,
+            "max_indexed_chunks_per_site": max_chunks,
+            "max_sync_documents_per_run": int(
+                self.settings.site_knowledge_max_sync_documents_per_run
+            ),
+            "max_sync_chunks_per_run": int(self.settings.site_knowledge_max_sync_chunks_per_run),
+            "warning_ratio": warning_ratio,
+            "document_utilization": round(max(0.0, document_utilization), 4),
+            "chunk_utilization": round(max(0.0, chunk_utilization), 4),
+            "skipped_documents": max(0, int(skipped_documents)),
+            "skipped_due_to_quota": max(0, int(skipped_due_to_quota)),
+            "comments_enabled": bool(self.settings.site_knowledge_comments_enabled),
         }
 
     def _emit_sync_progress(self, **progress: Any) -> None:
@@ -917,7 +1056,10 @@ class SiteKnowledgeService:
         failed_documents: int,
         deleted_entries: int,
         truncated_documents: int = 0,
+        skipped_documents: int = 0,
+        skipped_due_to_quota: int = 0,
         progress: dict[str, Any] | None = None,
+        quota: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         return {
             "artifact_type": "site_knowledge_sync_request",
@@ -931,8 +1073,11 @@ class SiteKnowledgeService:
                 "indexed_chunks": indexed_chunks,
                 "failed_documents": failed_documents,
                 "truncated_documents": truncated_documents,
+                "skipped_documents": skipped_documents,
+                "skipped_due_to_quota": skipped_due_to_quota,
                 "deleted_entries": deleted_entries,
             },
+            "quota": quota if isinstance(quota, dict) else {},
             "progress": progress
             if isinstance(progress, dict)
             else self._sync_progress(
@@ -946,6 +1091,8 @@ class SiteKnowledgeService:
                 indexed_documents=indexed_documents,
                 indexed_chunks=indexed_chunks,
                 failed_documents=failed_documents,
+                skipped_documents=skipped_documents,
+                skipped_due_to_quota=skipped_due_to_quota,
                 deleted_entries=deleted_entries,
                 percent=100 if status == "completed" else None,
             ),

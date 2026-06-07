@@ -172,6 +172,28 @@ class SiteKnowledgeRepository:
             or 0
         )
 
+    def document_exists(self, *, site_id: str, source_type: str, source_id: int) -> bool:
+        count = self.session.scalar(
+            select(func.count()).select_from(SiteKnowledgeDocument).where(
+                SiteKnowledgeDocument.site_id == site_id,
+                SiteKnowledgeDocument.source_type == source_type,
+                SiteKnowledgeDocument.source_id == source_id,
+            )
+        )
+        return int(count or 0) > 0
+
+    def count_chunks_for_source(self, *, site_id: str, source_type: str, source_id: int) -> int:
+        return int(
+            self.session.scalar(
+                select(func.count()).select_from(SiteKnowledgeChunk).where(
+                    SiteKnowledgeChunk.site_id == site_id,
+                    SiteKnowledgeChunk.source_type == source_type,
+                    SiteKnowledgeChunk.source_id == source_id,
+                )
+            )
+            or 0
+        )
+
     def count_truncated_documents(self, site_id: str) -> int:
         documents = self.session.scalars(
             select(SiteKnowledgeDocument.metadata_json).where(
