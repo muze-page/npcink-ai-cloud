@@ -132,6 +132,42 @@ def test_agent_feedback_event_is_accepted_for_eval(tmp_path: Path) -> None:
     assert event.payload_json["cloud_feedback_policy"]["approval_truth"] == "wordpress_local"
 
 
+def test_agent_feedback_accepts_image_quality_labels(tmp_path: Path) -> None:
+    database_url, client = _build_client(tmp_path)
+
+    response = _post_feedback(
+        client,
+        _feedback_payload(
+            agent_id="image_source_candidate_agent",
+            source_runtime="image_candidates",
+            handoff_type="image_candidate_result",
+            local_surface="toolbox_image_candidates",
+            local_outcome="rejected",
+            feedback_labels=[
+                "visual_quality_low",
+                "source_or_license_risk",
+                "operator_confidence_low",
+            ],
+            evidence_ref_ids=["image:ai_generated:cloud:candidate-1"],
+        ),
+        idempotency_key="agent-feedback-image-labels",
+    )
+
+    assert response.status_code == 200
+    with get_session(database_url) as session:
+        events = list(session.scalars(select(UsageMeterEvent)))
+
+    assert len(events) == 1
+    event = events[0]
+    assert event.payload_json is not None
+    assert event.payload_json["local_surface"] == "toolbox_image_candidates"
+    assert event.payload_json["feedback_labels"] == [
+        "visual_quality_low",
+        "source_or_license_risk",
+        "operator_confidence_low",
+    ]
+
+
 def test_agent_feedback_idempotency_dedupes_meter_event(tmp_path: Path) -> None:
     database_url, client = _build_client(tmp_path)
     payload = _feedback_payload()
