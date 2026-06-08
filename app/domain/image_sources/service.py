@@ -77,6 +77,7 @@ class ImageSourceService:
         input_payload: dict[str, Any],
         run_id: str,
         site_knowledge_context: dict[str, Any] | None = None,
+        llm_prompt_plan: dict[str, Any] | None = None,
     ) -> ImageSourceExecutionResult:
         validate_image_source_runtime_contract(
             ability_name=ability_name,
@@ -92,6 +93,7 @@ class ImageSourceService:
         options = _build_options(
             input_payload,
             site_knowledge_context=site_knowledge_context,
+            llm_prompt_plan=llm_prompt_plan,
         )
         provider_id = _resolve_provider(self.settings, str(options.get("provider") or "auto"))
         provider = _build_provider(provider_id, self.settings)
@@ -319,6 +321,7 @@ def _build_options(
     input_payload: dict[str, Any],
     *,
     site_knowledge_context: dict[str, Any] | None = None,
+    llm_prompt_plan: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     provider = str(input_payload.get("provider") or "auto").strip().lower()
     if provider not in ALLOWED_IMAGE_SOURCE_PROVIDERS:
@@ -346,6 +349,7 @@ def _build_options(
         or "image_reference_candidate",
         "visual_context": _normalize_visual_context(input_payload.get("visual_context")),
         "site_knowledge_context": _normalize_site_knowledge_context(site_knowledge_context),
+        "llm_prompt_plan": _normalize_llm_prompt_plan(llm_prompt_plan),
     }
 
 
@@ -627,6 +631,7 @@ def _build_ai_generation_handoff(
         },
         "required_local_fields": ["prompt"],
         "local_prompt_sources": [
+            "cloud_llm_prompt_planner.prompt_candidates",
             "cloud_visual_brief.prompt_candidates",
             "image_source_runtime_input.query",
             "post_title",
@@ -649,8 +654,10 @@ def _build_ai_generation_handoff(
 def _build_visual_brief(*, query: str, options: dict[str, Any]) -> dict[str, Any]:
     context = _dict(options.get("visual_context"))
     site_context = _dict(options.get("site_knowledge_context"))
+    llm_prompt_plan = _dict(options.get("llm_prompt_plan"))
     evidence_refs = _site_context_evidence_refs(site_context)
     site_context_status = str(site_context.get("status") or "not_requested")
+    llm_status = str(llm_prompt_plan.get("status") or "not_requested")
     selected_context = _normalize_text(
         context.get("selected_text") or context.get("selected_block_text"),
         limit=MAX_VISUAL_CONTEXT_CHARS,
@@ -688,6 +695,7 @@ def _build_visual_brief(*, query: str, options: dict[str, Any]) -> dict[str, Any
             "site_context_status": site_context_status,
             "site_context_owner": "cloud_site_knowledge",
             "site_context_result_count": len(evidence_refs),
+            "llm_prompt_planner_status": llm_status,
         },
         "site_context": {
             "status": site_context_status,
@@ -695,6 +703,14 @@ def _build_visual_brief(*, query: str, options: dict[str, Any]) -> dict[str, Any
             "evidence_gate": _dict(site_context.get("evidence_gate")),
             "rerank": _dict(site_context.get("rerank")),
             "evidence_refs": evidence_refs,
+        },
+        "llm_prompt_planner": {
+            "status": llm_status,
+            "profile_id": str(llm_prompt_plan.get("profile_id") or ""),
+            "provider_id": str(llm_prompt_plan.get("provider_id") or ""),
+            "model_id": str(llm_prompt_plan.get("model_id") or ""),
+            "candidate_count": len(_list(llm_prompt_plan.get("prompt_candidates"))),
+            "fallback": str(llm_prompt_plan.get("fallback") or ""),
         },
         "avoid": [
             "visible text",
@@ -710,6 +726,7 @@ def _build_visual_brief(*, query: str, options: dict[str, Any]) -> dict[str, Any
             "direct_wordpress_write": False,
         },
         "site_context_status": site_context_status,
+        "llm_prompt_planner_status": llm_status,
         "rerank_status": str(_dict(site_context.get("rerank")).get("status") or "not_requested"),
         "write_posture": "suggestion_only",
         "direct_wordpress_write": False,
@@ -722,6 +739,14 @@ def _build_prompt_candidates(
     options: dict[str, Any],
     visual_brief: dict[str, Any],
 ) -> list[dict[str, Any]]:
+    llm_prompt_plan = _dict(options.get("llm_prompt_plan"))
+    llm_candidates = _prompt_candidates_from_llm_plan(
+        llm_prompt_plan,
+        evidence_refs=_site_context_evidence_refs(_dict(options.get("site_knowledge_context"))),
+    )
+    if llm_candidates:
+        return llm_candidates
+
     context = _dict(options.get("visual_context"))
     selected_context = _normalize_text(
         context.get("selected_text") or context.get("selected_block_text"),
@@ -1007,6 +1032,74 @@ def _normalize_site_knowledge_context(value: Any) -> dict[str, Any]:
         "rerank": _dict(source.get("rerank")),
         "results": results,
     }
+
+
+def _normalize_llm_prompt_plan(value: Any) -> dict[str, Any]:
+    source = _dict(value)
+    if not source:
+        return {}
+    candidates = []
+    for index, item in enumerate(_list(source.get("prompt_candidates"))[:3], start=1):
+        candidate = _dict(item)
+        prompt = _normalize_text(candidate.get("prompt"), limit=1200)
+        if not prompt:
+            continue
+        candidates.append(
+            {
+                "id": _normalize_token(candidate.get("id"), limit=80)
+                or f"llm_prompt_{index}",
+                "label": _normalize_text(candidate.get("label"), limit=80)
+                or f"LLM prompt {index}",
+                "prompt": prompt,
+                "visual_strategy": _normalize_text(
+                    candidate.get("visual_strategy"),
+                    limit=160,
+                ),
+            }
+        )
+    return {
+        "status": _normalize_token(source.get("status"), limit=40) or "unavailable",
+        "profile_id": _normalize_text(source.get("profile_id"), limit=120),
+        "provider_id": _normalize_text(source.get("provider_id"), limit=120),
+        "model_id": _normalize_text(source.get("model_id"), limit=160),
+        "fallback": _normalize_text(source.get("fallback"), limit=160),
+        "prompt_candidates": candidates,
+    }
+
+
+def _prompt_candidates_from_llm_plan(
+    llm_prompt_plan: dict[str, Any],
+    *,
+    evidence_refs: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    if str(llm_prompt_plan.get("status") or "") != "ready":
+        return []
+    candidates = []
+    for item in _list(llm_prompt_plan.get("prompt_candidates"))[:3]:
+        candidate = _dict(item)
+        prompt = _normalize_text(candidate.get("prompt"), limit=1200)
+        if not prompt:
+            continue
+        candidates.append(
+            {
+                "id": _normalize_token(candidate.get("id"), limit=80) or _hash_text(prompt)[:12],
+                "label": _normalize_text(candidate.get("label"), limit=80)
+                or "LLM visual prompt",
+                "prompt": prompt,
+                "visual_strategy": _normalize_text(
+                    candidate.get("visual_strategy"),
+                    limit=160,
+                ),
+                "source": "cloud_llm_prompt_planner",
+                "planner_profile_id": str(llm_prompt_plan.get("profile_id") or ""),
+                "planner_model_id": str(llm_prompt_plan.get("model_id") or ""),
+                "evidence_refs": evidence_refs,
+                "requires_operator_review": True,
+                "write_posture": "candidate_only",
+                "direct_wordpress_write": False,
+            }
+        )
+    return candidates
 
 
 def _site_context_evidence_refs(site_context: dict[str, Any]) -> list[dict[str, Any]]:

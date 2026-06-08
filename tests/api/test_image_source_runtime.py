@@ -8,11 +8,14 @@ from fastapi.testclient import TestClient
 from sqlalchemy import select
 
 from app.adapters.queue.in_memory import InMemoryRuntimeQueue
+from app.adapters.providers.base import ProviderExecutionRequest, ProviderExecutionResult
+from app.adapters.providers.openai import OpenAIProviderAdapter
 from app.api.main import create_app
 from app.core.config import Settings
 from app.core.db import get_session, init_schema
 from app.core.models import ProviderCallRecord, RunRecord, UsageMeterEvent
 from app.core.services import CloudServices
+from app.domain.catalog.service import CatalogService
 from app.domain.image_sources import service as image_source_service
 from app.domain.image_sources.service import (
     ImageSourceExecutionResult,
@@ -35,9 +38,15 @@ def _sqlite_url(tmp_path: Path) -> str:
     return f"sqlite+pysqlite:///{tmp_path / 'image-source.sqlite3'}"
 
 
-def _build_client(tmp_path: Path) -> tuple[str, TestClient]:
+def _build_client(
+    tmp_path: Path,
+    *,
+    providers: dict[str, Any] | None = None,
+) -> tuple[str, TestClient]:
     database_url = _sqlite_url(tmp_path)
     init_schema(database_url)
+    if providers:
+        CatalogService(database_url, providers=providers).refresh_catalog()
     seed_site_auth(
         database_url,
         site_id="site_alpha",
@@ -59,7 +68,7 @@ def _build_client(tmp_path: Path) -> tuple[str, TestClient]:
         create_app(
             CloudServices(
                 settings=settings,
-                providers={},
+                providers=providers or {},
                 runtime_queue=InMemoryRuntimeQueue(),
             )
         )
@@ -114,6 +123,41 @@ def _execute(
         )
     )
     return client.post("/v1/runtime/execute", content=body, headers=headers)
+
+
+class PromptPlannerProvider(OpenAIProviderAdapter):
+    def __init__(self) -> None:
+        super().__init__(sample_catalog_profile="free-gpt55")
+        self.requests: list[ProviderExecutionRequest] = []
+
+    def execute(self, request: ProviderExecutionRequest) -> ProviderExecutionResult:
+        self.requests.append(request)
+        return ProviderExecutionResult(
+            output={
+                "output_text": json.dumps(
+                    {
+                        "prompt_candidates": [
+                            {
+                                "id": "llm_editorial_scene",
+                                "label": "LLM editorial scene",
+                                "visual_strategy": "Use related site evidence as context.",
+                                "prompt": (
+                                    "Create an original editorial image about answer "
+                                    "quality planning, using a desk with research notes "
+                                    "and decision paths. No visible text, letters, "
+                                    "numbers, logos, watermarks, screenshots, UI panels, "
+                                    "or copied article wording."
+                                ),
+                            }
+                        ]
+                    }
+                )
+            },
+            latency_ms=31,
+            tokens_in=45,
+            tokens_out=55,
+            cost=0.0,
+        )
 
 
 def test_cloud_managed_image_source_executes_and_records_provider_usage(
@@ -370,6 +414,126 @@ def test_image_source_runtime_enriches_prompt_candidates_with_site_knowledge(
     assert "Answer engine optimization guide" in result["prompt_candidates"][0]["prompt"]
 
 
+def test_image_source_runtime_uses_llm_prompt_planner_when_text_profile_is_available(
+    tmp_path: Path,
+    monkeypatch: Any,
+) -> None:
+    planner_provider = PromptPlannerProvider()
+    database_url, client = _build_client(
+        tmp_path,
+        providers={"openai": planner_provider},
+    )
+
+    def fake_site_knowledge_execute(
+        self: SiteKnowledgeService,
+        *,
+        site_id: str,
+        ability_name: str,
+        contract_version: str,
+        input_payload: dict[str, Any],
+        run_id: str,
+    ) -> dict[str, Any]:
+        return {
+            "artifact_type": "site_knowledge_results",
+            "composition_role": "site_knowledge_context",
+            "status": "ready",
+            "intent": "image_context",
+            "evidence_gate": {"status": "passed", "min_score": 0.2},
+            "rerank": {"status": "disabled"},
+            "results": [
+                {
+                    "post_id": 42,
+                    "source_type": "post",
+                    "title": "Answer quality planning",
+                    "url": "https://example.test/answer-quality",
+                    "score": 0.91,
+                    "match_context": "Answer quality planning uses context, limits, and steps.",
+                }
+            ],
+            "write_posture": "suggestion_only",
+            "direct_wordpress_write": False,
+        }
+
+    def fake_search(
+        self: UnsplashImageSourceProvider,
+        *,
+        query: str,
+        options: dict[str, Any],
+        site_id: str,
+        run_id: str,
+    ) -> ImageSourceExecutionResult:
+        assert options["llm_prompt_plan"]["status"] == "ready"
+        return image_source_service._build_result(
+            provider_id="unsplash",
+            auto_strategy="first_available",
+            query=query,
+            options=options,
+            candidates=[
+                {
+                    "contract_version": "image_candidate.v1",
+                    "id": "unsplash-photo-llm",
+                    "provider": "unsplash",
+                    "provider_origin": "cloud",
+                    "source_type": "stock",
+                    "download_url": "https://images.unsplash.com/photo-llm",
+                    "thumbnail_url": "https://images.unsplash.com/photo-llm-thumb",
+                    "source_url": "https://unsplash.com/photos/photo-llm",
+                    "write_posture": "suggestion_only",
+                    "direct_wordpress_write": False,
+                }
+            ],
+            usage=ImageSourceProviderUsage(
+                provider_id="unsplash",
+                model_id="image-source-search",
+                instance_id="cloud-managed",
+                region="unspecified",
+                latency_ms=5,
+                cost=0.001,
+            ),
+        )
+
+    monkeypatch.setattr(SiteKnowledgeService, "execute", fake_site_knowledge_execute)
+    monkeypatch.setattr(UnsplashImageSourceProvider, "search", fake_search)
+
+    response = _execute(
+        client,
+        _payload(
+            {
+                "visual_context": {
+                    "contract_version": "image_visual_brief_request.v1",
+                    "post_id": 99,
+                    "image_use": "paragraph_image",
+                    "selected_text": "AEO focuses on answer quality planning.",
+                    "title": "SEO, AEO, and GEO for AI search",
+                }
+            }
+        ),
+        idempotency_key="image-source-llm-planner",
+    )
+
+    assert response.status_code == 200, response.text
+    result = response.json()["data"]["result"]
+    assert result["visual_brief"]["llm_prompt_planner"]["status"] == "ready"
+    assert result["prompt_candidates"][0]["source"] == "cloud_llm_prompt_planner"
+    assert result["prompt_candidates"][0]["planner_profile_id"] == "text.free-gpt55"
+    assert "answer quality planning" in result["prompt_candidates"][0]["prompt"]
+    assert planner_provider.requests
+    assert planner_provider.requests[0].profile_id == "text.free-gpt55"
+    assert planner_provider.requests[0].execution_kind == "text"
+
+    with get_session(database_url) as session:
+        run_id = response.json()["data"]["run_id"]
+        provider_calls = list(
+            session.scalars(
+                select(ProviderCallRecord)
+                .where(ProviderCallRecord.run_id == run_id)
+                .order_by(ProviderCallRecord.id.asc())
+            )
+        )
+        assert [call.provider_id for call in provider_calls] == ["openai", "unsplash"]
+        assert provider_calls[0].model_id == "gpt-5.5"
+
+
 def test_image_source_candidate_suggested_filename_is_safe(monkeypatch: Any) -> None:
     settings = Settings(
         _env_file=None,
@@ -435,7 +599,8 @@ def test_image_source_candidate_suggested_filename_is_safe(monkeypatch: Any) -> 
     assert handoff["prompt_prefill_plan"]["mode"] == "local_context_prefill"
     assert handoff["prompt_prefill_plan"]["owner"] == "local_plugin_ui"
     assert handoff["prompt_prefill_plan"]["requires_user_review"] is True
-    assert handoff["local_prompt_sources"][0] == "cloud_visual_brief.prompt_candidates"
+    assert handoff["local_prompt_sources"][0] == "cloud_llm_prompt_planner.prompt_candidates"
+    assert handoff["local_prompt_sources"][1] == "cloud_visual_brief.prompt_candidates"
     assert execution.result_json["visual_brief"]["artifact_type"] == "paragraph_image_visual_brief.v1"
     assert execution.result_json["visual_brief"]["evidence_policy"]["use_site_knowledge_vectors"] is True
     assert execution.result_json["prompt_candidates"][0]["requires_operator_review"] is True

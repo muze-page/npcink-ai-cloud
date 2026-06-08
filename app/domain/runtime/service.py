@@ -52,6 +52,7 @@ from app.core.security import (
     REPLAY_SCOPE_PUBLIC_POST_SITE,
 )
 from app.domain.commercial.service import CommercialService, ServiceAuditContext
+from app.domain.hosted_model_defaults import FREE_GPT55_TEXT_PROFILE_ID
 from app.domain.image_generation.contracts import (
     IMAGE_GENERATION_ABILITIES,
     ImageGenerationContractViolation,
@@ -71,6 +72,7 @@ from app.domain.media_batch_plans.contracts import (
     validate_media_batch_plan_runtime_contract,
 )
 from app.domain.media_batch_plans.service import MediaBatchPlanService
+from app.domain.routing.errors import RoutingError
 from app.domain.routing.models import RoutingCandidate, RoutingResolution
 from app.domain.routing.service import RoutingService
 from app.domain.runtime.analysis_result import build_analysis_result_envelope
@@ -3697,6 +3699,12 @@ class RuntimeService:
             repository=repository,
             input_payload=payload,
         )
+        llm_prompt_plan = self._build_image_source_llm_prompt_plan(
+            run,
+            repository=repository,
+            input_payload=payload,
+            site_knowledge_context=site_knowledge_context,
+        )
         try:
             execution = ImageSourceService(self.settings).execute(
                 site_id=run.site_id,
@@ -3705,6 +3713,7 @@ class RuntimeService:
                 input_payload=payload,
                 run_id=run.run_id,
                 site_knowledge_context=site_knowledge_context,
+                llm_prompt_plan=llm_prompt_plan,
             )
         except ImageSourceContractViolation as error:
             repository.mark_run_failed(
@@ -3892,6 +3901,267 @@ class RuntimeService:
             "direct_wordpress_write": False,
         }
 
+    def _build_image_source_llm_prompt_plan(
+        self,
+        run: RunRecord,
+        *,
+        repository: RuntimeRepository,
+        input_payload: dict[str, Any],
+        site_knowledge_context: dict[str, Any],
+    ) -> dict[str, Any]:
+        query = self._image_source_site_knowledge_query(input_payload)
+        if not query:
+            return {
+                "status": "skipped",
+                "fallback": "rule_prompt_candidates",
+                "prompt_candidates": [],
+            }
+
+        try:
+            candidate, profile_id, default_policy = self._resolve_image_prompt_planner_candidate()
+        except RoutingError as error:
+            return {
+                "status": "unavailable",
+                "error_code": error.error_code,
+                "fallback": "rule_prompt_candidates",
+                "prompt_candidates": [],
+            }
+
+        provider = self.providers.get(candidate.provider_id)
+        if provider is None:
+            return {
+                "status": "unavailable",
+                "error_code": "runtime.provider_not_configured",
+                "profile_id": profile_id,
+                "provider_id": candidate.provider_id,
+                "model_id": candidate.model_id,
+                "fallback": "rule_prompt_candidates",
+                "prompt_candidates": [],
+            }
+
+        timeout_ms = max(1, self._coerce_int(default_policy.get("timeout_ms"), default=12_000))
+        request = ProviderExecutionRequest(
+            run_id=run.run_id,
+            site_id=run.site_id,
+            ability_name="magick-ai-cloud/image-prompt-planner",
+            profile_id=profile_id,
+            execution_kind="text",
+            model_id=candidate.model_id,
+            instance_id=candidate.instance_id,
+            endpoint_variant=candidate.endpoint_variant,
+            trace_id=run.trace_id or run.run_id,
+            input_payload=self._build_image_prompt_planner_input(
+                input_payload=input_payload,
+                site_knowledge_context=site_knowledge_context,
+            ),
+            policy={"storage_mode": "result_only"},
+            timeout_ms=timeout_ms,
+            price_input=candidate.price_input,
+            price_output=candidate.price_output,
+        )
+        try:
+            provider_result = provider.execute(request)
+        except ProviderExecutionError as error:
+            provider_call = repository.record_provider_call(
+                run_id=run.run_id,
+                provider_id=candidate.provider_id,
+                model_id=candidate.model_id,
+                instance_id=candidate.instance_id,
+                region=candidate.region,
+                latency_ms=timeout_ms if error.error_code == "provider.timeout" else 0,
+                tokens_in=max(0, int(getattr(error, "tokens_in", 0) or 0)),
+                tokens_out=max(0, int(getattr(error, "tokens_out", 0) or 0)),
+                cost=max(0.0, float(getattr(error, "cost", 0.0) or 0.0)),
+                retry_count=0,
+                fallback_used=False,
+                error_code=error.error_code,
+            )
+            self.commercial_service.record_provider_call_usage(
+                session=repository.session,
+                run=run,
+                provider_call=provider_call,
+            )
+            return {
+                "status": "failed",
+                "error_code": error.error_code,
+                "profile_id": profile_id,
+                "provider_id": candidate.provider_id,
+                "model_id": candidate.model_id,
+                "fallback": "rule_prompt_candidates",
+                "prompt_candidates": [],
+            }
+
+        provider_call = repository.record_provider_call(
+            run_id=run.run_id,
+            provider_id=candidate.provider_id,
+            model_id=candidate.model_id,
+            instance_id=candidate.instance_id,
+            region=candidate.region,
+            latency_ms=provider_result.latency_ms,
+            tokens_in=provider_result.tokens_in,
+            tokens_out=provider_result.tokens_out,
+            cost=provider_result.cost,
+            retry_count=0,
+            fallback_used=False,
+            error_code=None,
+        )
+        self.commercial_service.record_provider_call_usage(
+            session=repository.session,
+            run=run,
+            provider_call=provider_call,
+        )
+        prompt_candidates = self._parse_image_prompt_planner_output(
+            provider_result.output.get("output_text"),
+        )
+        if not prompt_candidates:
+            return {
+                "status": "failed",
+                "error_code": "image_prompt_planner.invalid_output",
+                "profile_id": profile_id,
+                "provider_id": candidate.provider_id,
+                "model_id": candidate.model_id,
+                "fallback": "rule_prompt_candidates",
+                "prompt_candidates": [],
+            }
+        return {
+            "status": "ready",
+            "profile_id": profile_id,
+            "provider_id": candidate.provider_id,
+            "model_id": candidate.model_id,
+            "prompt_candidates": prompt_candidates,
+        }
+
+    def _resolve_image_prompt_planner_candidate(
+        self,
+    ) -> tuple[RoutingCandidate, str, dict[str, object]]:
+        last_error: RoutingError | None = None
+        for profile_id in (FREE_GPT55_TEXT_PROFILE_ID, "text.balanced"):
+            try:
+                resolution = self.routing_service.resolve(
+                    profile_id=profile_id,
+                    execution_kind="text",
+                )
+                return (
+                    resolution.selected_candidate,
+                    resolution.profile_id,
+                    resolution.default_policy,
+                )
+            except RoutingError as error:
+                last_error = error
+        if last_error is not None:
+            raise last_error
+        raise RoutingError(
+            "routing.profile_not_found",
+            "image prompt planner text routing profile is not configured",
+        )
+
+    def _build_image_prompt_planner_input(
+        self,
+        *,
+        input_payload: dict[str, Any],
+        site_knowledge_context: dict[str, Any],
+    ) -> dict[str, Any]:
+        visual_context = (
+            input_payload.get("visual_context")
+            if isinstance(input_payload.get("visual_context"), dict)
+            else {}
+        )
+        evidence = []
+        for item in site_knowledge_context.get("results", []):
+            if not isinstance(item, dict):
+                continue
+            evidence.append(
+                {
+                    "title": str(item.get("title") or "")[:160],
+                    "match_context": str(
+                        item.get("match_context") or item.get("chunk_text") or ""
+                    )[:320],
+                    "score": item.get("score", 0),
+                }
+            )
+        planner_context = {
+            "query": str(input_payload.get("query") or "")[:300],
+            "image_mode": str(
+                visual_context.get("image_mode") or visual_context.get("image_use") or ""
+            )[:40],
+            "title": str(visual_context.get("title") or "")[:160],
+            "excerpt": str(visual_context.get("excerpt") or "")[:240],
+            "selected_text": str(
+                visual_context.get("selected_text")
+                or visual_context.get("selected_block_text")
+                or ""
+            )[:600],
+            "site_evidence": evidence[:4],
+        }
+        return {
+            "messages": [
+                {
+                    "role": "system",
+                    "content": (
+                        "You are an editorial image prompt planner. Return only JSON. "
+                        "Plan original image-generation prompts from the selected article "
+                        "context and site evidence. Do not copy article wording as visible "
+                        "image text. Do not include logos, watermarks, UI screenshots, "
+                        "credentials, or WordPress write instructions."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": (
+                        "Return JSON with key prompt_candidates, an array of 1 to 3 "
+                        "objects. Each object must include id, label, visual_strategy, "
+                        "and prompt. Prompts must be publication-safe, concrete, and "
+                        "must explicitly forbid visible text, letters, numbers, logos, "
+                        "watermarks, screenshots, and copied article wording.\n\n"
+                        f"Context:\n{json.dumps(planner_context, ensure_ascii=False)}"
+                    ),
+                },
+            ],
+            "params": {
+                "temperature": 0.3,
+                "max_tokens": 900,
+                "max_output_tokens": 900,
+            },
+        }
+
+    def _parse_image_prompt_planner_output(self, output_text: object) -> list[dict[str, object]]:
+        text = str(output_text or "").strip()
+        if not text:
+            return []
+        payload: object
+        try:
+            payload = json.loads(text)
+        except json.JSONDecodeError:
+            start = text.find("{")
+            end = text.rfind("}")
+            if start < 0 or end <= start:
+                return []
+            try:
+                payload = json.loads(text[start : end + 1])
+            except json.JSONDecodeError:
+                return []
+        if not isinstance(payload, dict):
+            return []
+        raw_candidates = payload.get("prompt_candidates")
+        if not isinstance(raw_candidates, list):
+            return []
+        candidates: list[dict[str, object]] = []
+        for index, item in enumerate(raw_candidates[:3], start=1):
+            if not isinstance(item, dict):
+                continue
+            prompt = " ".join(str(item.get("prompt") or "").split())[:1200]
+            if not prompt:
+                continue
+            candidates.append(
+                {
+                    "id": str(item.get("id") or f"llm_prompt_{index}")[:80],
+                    "label": str(item.get("label") or f"LLM prompt {index}")[:80],
+                    "visual_strategy": str(item.get("visual_strategy") or "")[:160],
+                    "prompt": prompt,
+                }
+            )
+        return candidates
+
     def _image_source_site_knowledge_query(self, input_payload: dict[str, Any]) -> str:
         visual_context = (
             input_payload.get("visual_context")
@@ -3909,13 +4179,6 @@ class RuntimeService:
         ]
         text = " ".join(str(part or "").strip() for part in parts if str(part or "").strip())
         return " ".join(text.split())[:500]
-
-    @staticmethod
-    def _coerce_int(value: Any, *, default: int) -> int:
-        try:
-            return int(value)
-        except (TypeError, ValueError):
-            return default
 
     def _is_image_source_request(self, request: RuntimeRequest) -> bool:
         return request.ability_name in IMAGE_SOURCE_ABILITIES
