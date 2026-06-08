@@ -92,6 +92,7 @@ class WorkflowMetadata:
 
 
 INTERNAL_OPS_ADVISOR_AGENT_ID = "internal_ops_advisor_agent"
+SITE_KNOWLEDGE_SUGGESTION_AGENT_ID = "site_knowledge_suggestion_agent"
 WEB_SEARCH_EVIDENCE_WORKFLOW_ID = "external_web_evidence_preflight"
 MEDIA_DERIVATIVE_WORKFLOW_ID = "media_derivative_artifact_generation"
 
@@ -125,7 +126,37 @@ _AGENTS: dict[str, AgentHandoffMetadata] = {
             "cloud_workflow_truth",
         ),
         fail_closed_behavior="return_deterministic_advisory_summary",
-    )
+    ),
+    SITE_KNOWLEDGE_SUGGESTION_AGENT_ID: AgentHandoffMetadata(
+        agent_id=SITE_KNOWLEDGE_SUGGESTION_AGENT_ID,
+        agent_version="site_knowledge_agent.v1",
+        agent_role="site_knowledge_suggestion",
+        handoff_type="suggestion_or_proposal_input",
+        handoff_owner="wordpress_local",
+        requires_operator_review=True,
+        direct_wordpress_write=False,
+        execution_pattern="inline",
+        storage_mode="result_only",
+        allowed_actions=(
+            "search_site_knowledge_read_model",
+            "rank_grounding_evidence",
+            "return_suggestion_or_proposal_input",
+        ),
+        stop_conditions=(
+            "evidence_gate_insufficient",
+            "no_allowed_next_action",
+            "local_approval_required",
+        ),
+        forbidden_actions=(
+            "direct_wordpress_write",
+            "cloud_publish",
+            "cloud_workflow_truth",
+            "cloud_prompt_or_preset_truth",
+            "article_body_generation",
+            "article_write_plan_generation",
+        ),
+        fail_closed_behavior="return_suggestion_only_without_wordpress_write",
+    ),
 }
 
 _WORKFLOWS: dict[str, WorkflowMetadata] = {

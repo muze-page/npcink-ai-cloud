@@ -16,6 +16,10 @@ from app.adapters.providers.base import (
     ProviderExecutionResult,
 )
 from app.core.config import Settings, get_settings
+from app.domain.agent_workflow_metadata import (
+    SITE_KNOWLEDGE_SUGGESTION_AGENT_ID,
+    get_agent_handoff_metadata,
+)
 from app.domain.site_knowledge.backends import (
     SiteKnowledgeBackendError,
     SiteKnowledgeVectorBackend,
@@ -1806,20 +1810,23 @@ def _agent_handoff_for_search(
             ],
         }
 
+    agent_metadata = get_agent_handoff_metadata(SITE_KNOWLEDGE_SUGGESTION_AGENT_ID)
     return {
-        "agent_id": "site_knowledge_suggestion_agent",
-        "agent_version": "site_knowledge_agent.v1",
-        "agent_role": "site_knowledge_suggestion",
+        "agent_id": str(
+            agent_metadata.get("agent_id") or SITE_KNOWLEDGE_SUGGESTION_AGENT_ID
+        ),
+        "agent_version": str(agent_metadata.get("agent_version") or ""),
+        "agent_role": str(agent_metadata.get("agent_role") or ""),
         "triggering_ability": SITE_KNOWLEDGE_SEARCH_ABILITY,
         "triggering_contract": SITE_KNOWLEDGE_CONTRACTS[SITE_KNOWLEDGE_SEARCH_ABILITY],
         "handoff_type": handoff_type,
-        "handoff_owner": "wordpress_local",
+        "handoff_owner": str(agent_metadata.get("handoff_owner") or "wordpress_local"),
         "local_handoff_owner": "wordpress_local",
         "requires_local_approval": handoff_type == "proposal_input",
         "write_posture": "suggestion_only",
-        "direct_wordpress_write": False,
-        "execution_pattern": "inline",
-        "storage_mode": "result_only",
+        "direct_wordpress_write": bool(agent_metadata.get("direct_wordpress_write")),
+        "execution_pattern": str(agent_metadata.get("execution_pattern") or "inline"),
+        "storage_mode": str(agent_metadata.get("storage_mode") or "result_only"),
         "workflow": str(workflow_support.get("workflow") or "site_knowledge_search"),
         "cloud_output": str(workflow_support.get("cloud_output") or "search_results"),
         "evidence_gate_status": str(evidence_gate.get("status") or "insufficient_evidence"),
@@ -1829,27 +1836,18 @@ def _agent_handoff_for_search(
             "required_sources": evidence_gate.get("required_sources", 1),
             "no_hit_policy": str(evidence_gate.get("no_hit_policy") or "abstain"),
         },
-        "allowed_actions": [
-            "search_site_knowledge_read_model",
-            "rank_grounding_evidence",
-            "return_suggestion_or_proposal_input",
-        ],
-        "stop_conditions": [
-            "evidence_gate_insufficient",
-            "no_allowed_next_action",
-            "local_approval_required",
-        ],
-        "forbidden_actions": [
-            "direct_wordpress_write",
-            "cloud_publish",
-            "cloud_workflow_truth",
-            "cloud_prompt_or_preset_truth",
-            "article_body_generation",
-            "article_write_plan_generation",
-        ],
-        "fail_closed_behavior": "return_suggestion_only_without_wordpress_write",
+        "allowed_actions": _string_list(agent_metadata.get("allowed_actions")),
+        "stop_conditions": _string_list(agent_metadata.get("stop_conditions")),
+        "forbidden_actions": _string_list(agent_metadata.get("forbidden_actions")),
+        "fail_closed_behavior": str(agent_metadata.get("fail_closed_behavior") or ""),
         "proposal_input": proposal_input,
     }
+
+
+def _string_list(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [str(item) for item in value if str(item).strip()]
 
 
 def _agent_evidence_refs(results: list[dict[str, object]]) -> list[dict[str, object]]:

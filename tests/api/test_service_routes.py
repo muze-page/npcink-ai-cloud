@@ -214,9 +214,14 @@ def test_admin_agent_workflow_metadata_registry_is_read_only(tmp_path: Path) -> 
     assert response.status_code == 200
     data = response.json()["data"]
     assert data["registry_version"] == "cloud-agent-workflow-metadata.v1"
-    assert {item["agent_id"] for item in data["agents"]} == {
-        "internal_ops_advisor_agent"
-    }
+    agents = {item["agent_id"]: item for item in data["agents"]}
+    assert "internal_ops_advisor_agent" in agents
+    assert agents["site_knowledge_suggestion_agent"]["handoff_owner"] == (
+        "wordpress_local"
+    )
+    assert agents["site_knowledge_suggestion_agent"][
+        "direct_wordpress_write"
+    ] is False
     workflows = {item["workflow_id"]: item for item in data["workflows"]}
     assert workflows["external_web_evidence_preflight"]["handoff_owner"] == (
         "wordpress_local"
