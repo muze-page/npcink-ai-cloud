@@ -6,6 +6,7 @@ const port = Number.parseInt(
 const baseURL =
   process.env.MAGICK_AI_CLOUD_FRONTEND_BASE_URL ||
   `http://127.0.0.1:${Number.isFinite(port) ? port : 3301}`;
+const useExternalServer = Boolean(process.env.MAGICK_AI_CLOUD_FRONTEND_BASE_URL);
 const webServerEnv = {
   ...process.env,
   NEXT_TELEMETRY_DISABLED: '1',
@@ -43,19 +44,21 @@ export default defineConfig({
       height: 1200,
     },
   },
-  webServer: {
-    command: `pnpm run build && rm -rf .next/standalone/frontend/.next/static .next/standalone/frontend/public && mkdir -p .next/standalone/frontend/.next && cp -R .next/static .next/standalone/frontend/.next/static && if [ -d public ]; then cp -R public .next/standalone/frontend/public; fi && HOSTNAME=127.0.0.1 PORT=${Number.isFinite(port) ? port : 3301} node .next/standalone/frontend/server.js`,
-    env: {
-      ...webServerEnv,
-      HOSTNAME: '127.0.0.1',
-      PORT: String(Number.isFinite(port) ? port : 3301),
-    },
-    url: baseURL,
-    reuseExistingServer: false,
-    gracefulShutdown: {
-      signal: 'SIGTERM',
-      timeout: 5_000,
-    },
-    timeout: 180_000,
-  },
+  webServer: useExternalServer
+    ? undefined
+    : {
+        command: `pnpm run build && rm -rf .next/standalone/frontend/.next/static .next/standalone/frontend/public && mkdir -p .next/standalone/frontend/.next && cp -R .next/static .next/standalone/frontend/.next/static && if [ -d public ]; then cp -R public .next/standalone/frontend/public; fi && HOSTNAME=127.0.0.1 PORT=${Number.isFinite(port) ? port : 3301} node .next/standalone/frontend/server.js`,
+        env: {
+          ...webServerEnv,
+          HOSTNAME: '127.0.0.1',
+          PORT: String(Number.isFinite(port) ? port : 3301),
+        },
+        url: baseURL,
+        reuseExistingServer: false,
+        gracefulShutdown: {
+          signal: 'SIGTERM',
+          timeout: 5_000,
+        },
+        timeout: 180_000,
+      },
 });
