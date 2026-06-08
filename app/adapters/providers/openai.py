@@ -15,6 +15,7 @@ from app.adapters.providers.base import (
     ProviderExecutionResult,
 )
 from app.domain.image_generation.contracts import IMAGE_GENERATION_RESULT_CONTRACT
+from app.domain.hosted_model_defaults import GROK_IMAGINE_IMAGE_MODEL_ID
 
 DEEPSEEK_MODEL_PRICING_PER_MILLION: dict[str, dict[str, float]] = {
     "deepseek-v4-flash": {
@@ -172,8 +173,8 @@ class OpenAIProviderAdapter:
                 ],
             ),
             CatalogModelSeed(
-                model_id="grok-imagine-image-quality",
-                family="grok-imagine",
+                model_id=GROK_IMAGINE_IMAGE_MODEL_ID,
+                family="z-image",
                 feature="image_generation",
                 status="available",
                 context_window=None,
@@ -187,14 +188,14 @@ class OpenAIProviderAdapter:
                 },
                 instances=[
                     CatalogInstanceSeed(
-                        instance_id="openai-global-grok-imagine-image-quality",
+                        instance_id=f"openai-global-{self._slugify(GROK_IMAGINE_IMAGE_MODEL_ID)}",
                         endpoint_variant="image_generations",
                         region="global",
                         capability_tags=[
                             "image_generation",
                             "default",
                             "quality",
-                            "grok-imagine",
+                            "z-image",
                         ],
                         is_default=True,
                         weight=120,
@@ -1004,7 +1005,16 @@ class OpenAIProviderAdapter:
         }:
             return "image_generation"
 
-        if any(keyword in model_key for keyword in ("grok-imagine", "image-quality")):
+        image_generation_keywords = (
+            "grok-imagine",
+            "image-quality",
+            "gpt-image",
+            "qwen-image",
+            "z-image",
+            "ernie-image",
+            "image-generation",
+        )
+        if any(keyword in model_key for keyword in image_generation_keywords):
             return "image_generation"
 
         output_modalities = set(self._collect_catalog_output_modalities(payload))

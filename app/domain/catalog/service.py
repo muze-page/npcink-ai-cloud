@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from typing import Any
+from uuid import uuid4
 
 from app.adapters.providers.base import ProviderAdapter
 from app.adapters.providers.registry import build_provider_adapters
@@ -12,6 +13,7 @@ from app.core.models import ProviderCallRecord
 from app.domain.health.scoring import assess_instance_health
 from app.domain.hosted_model_defaults import (
     FREE_GPT55_TEXT_PROFILE_ID,
+    GROK_IMAGINE_IMAGE_MODEL_ID,
     GROK_IMAGINE_IMAGE_PROFILE_ID,
 )
 
@@ -185,7 +187,7 @@ class CatalogService:
     def refresh_catalog(self, provider_ids: list[str] | None = None) -> dict[str, Any]:
         selected_ids = provider_ids or list(self.providers.keys())
         refreshed: list[str] = []
-        revision = datetime.now(UTC).strftime("catalog-%Y%m%d%H%M%S")
+        revision = self._build_catalog_revision()
 
         unknown_providers = sorted(set(selected_ids) - set(self.providers.keys()))
         if unknown_providers:
@@ -198,9 +200,14 @@ class CatalogService:
                 adapter = self.providers[provider_id]
                 snapshot = adapter.fetch_catalog()
                 repository.upsert_provider_snapshot(snapshot, revision)
-                repository.create_revision(revision, provider_id, source="provider_refresh")
                 refreshed.append(provider_id)
 
+            repository.create_revision(
+                revision,
+                None,
+                source="provider_refresh",
+                notes="providers=" + ",".join(refreshed),
+            )
             self._sync_default_routing(repository, revision)
             session.commit()
 
@@ -209,6 +216,10 @@ class CatalogService:
             "providers": refreshed,
             "refreshed_count": len(refreshed),
         }
+
+    def _build_catalog_revision(self) -> str:
+        timestamp = datetime.now(UTC).strftime("%Y%m%d%H%M%S%f")
+        return f"catalog-{timestamp}-{uuid4().hex[:8]}"
 
     def scan_provider_health(self, provider_ids: list[str] | None = None) -> dict[str, Any]:
         requested_ids = set(provider_ids or [])
@@ -463,7 +474,7 @@ class CatalogService:
             "vision.default": ("vision", ["default", "quality"]),
             GROK_IMAGINE_IMAGE_PROFILE_ID: (
                 "image_generation",
-                ["grok-imagine", "quality", "default"],
+                ["z-image", "quality", "default"],
             ),
             "embed.default": ("embedding", ["default", "embedding"]),
         }
@@ -473,7 +484,7 @@ class CatalogService:
                 execution_kind,
                 ordered_tiers,
                 exact_model_id=(
-                    GROK_IMAGINE_IMAGE_PROFILE_ID
+                    GROK_IMAGINE_IMAGE_MODEL_ID
                     if profile_id == GROK_IMAGINE_IMAGE_PROFILE_ID
                     else None
                 ),

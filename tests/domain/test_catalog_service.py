@@ -3,6 +3,8 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from pathlib import Path
 
+from sqlalchemy import select
+
 import app.domain.catalog.service as catalog_service_module
 from app.adapters.providers.base import (
     CatalogInstanceSeed,
@@ -10,7 +12,8 @@ from app.adapters.providers.base import (
     ProviderCatalogSnapshot,
 )
 from app.adapters.providers.openai import OpenAIProviderAdapter
-from app.core.db import dispose_engine, init_schema
+from app.core.db import dispose_engine, get_session, init_schema
+from app.core.models import CatalogRevision
 from app.domain.catalog.service import CatalogService
 from app.domain.hosted_model_defaults import (
     GROK_IMAGINE_IMAGE_MODEL_ID,
@@ -51,6 +54,80 @@ def test_refresh_catalog_creates_revision_and_models(tmp_path: Path) -> None:
     assert refresh_result["refreshed_count"] == 1
     assert refresh_result["revision"].startswith("catalog-")
     assert models["total"] == 4
+
+    dispose_engine(database_url)
+
+
+def test_refresh_catalog_uses_one_unique_revision_for_multi_provider_batch(
+    tmp_path: Path,
+) -> None:
+    database_url = _sqlite_url(tmp_path)
+    init_schema(database_url)
+
+    snapshots = {
+        "openai": ProviderCatalogSnapshot(
+            provider_id="openai",
+            display_name="OpenAI Compatible",
+            adapter_type="openai",
+            models=[
+                CatalogModelSeed(
+                    model_id="gpt-4.1-mini",
+                    family="gpt-4.1",
+                    feature="text",
+                    status="available",
+                    instances=[
+                        CatalogInstanceSeed(
+                            instance_id="openai-us-east-text-balanced",
+                            endpoint_variant="chat_completions",
+                            region="us-east",
+                            capability_tags=["text", "balanced"],
+                            weight=100,
+                        )
+                    ],
+                )
+            ],
+        ),
+        "tei": ProviderCatalogSnapshot(
+            provider_id="tei",
+            display_name="TEI",
+            adapter_type="tei",
+            models=[
+                CatalogModelSeed(
+                    model_id="BAAI/bge-m3",
+                    family="bge",
+                    feature="embedding",
+                    status="available",
+                    instances=[
+                        CatalogInstanceSeed(
+                            instance_id="tei-cn-embedding-default",
+                            endpoint_variant="embeddings",
+                            region="cn",
+                            capability_tags=["embedding", "default"],
+                            weight=100,
+                        )
+                    ],
+                )
+            ],
+        ),
+    }
+    service = CatalogService(
+        database_url,
+        providers={
+            provider_id: SequenceCatalogProvider([snapshot])
+            for provider_id, snapshot in snapshots.items()
+        },
+    )
+
+    refresh_result = service.refresh_catalog(provider_ids=["openai", "tei"])
+
+    assert refresh_result["refreshed_count"] == 2
+    assert refresh_result["revision"].startswith("catalog-")
+    assert len(refresh_result["revision"]) <= 64
+    with get_session(database_url) as session:
+        revisions = list(session.scalars(select(CatalogRevision)))
+    assert [revision.revision for revision in revisions] == [refresh_result["revision"]]
+    assert revisions[0].provider_id is None
+    assert revisions[0].notes == "providers=openai,tei"
 
     dispose_engine(database_url)
 
@@ -96,7 +173,7 @@ def test_list_models_returns_recommended_sets_and_profile_filter(tmp_path: Path)
     ]
     assert balanced_models["items"][0]["recommended_rank"] == 1
     assert all_models["recommended_sets"][GROK_IMAGINE_IMAGE_PROFILE_ID]["model_ids"] == [
-        "grok-imagine-image-quality"
+        GROK_IMAGINE_IMAGE_MODEL_ID
     ]
 
     dispose_engine(database_url)
@@ -137,13 +214,13 @@ def test_grok_image_quality_profile_filters_to_exact_image_model(
         adapter_type="openai",
         models=[
             CatalogModelSeed(
-                model_id="grok-imagine-image",
-                family="grok-imagine",
+                model_id="Qwen/Qwen-Image",
+                family="qwen-image",
                 feature="image_generation",
                 status="available",
                 instances=[
                     CatalogInstanceSeed(
-                        instance_id="openai-global-grok-imagine-image",
+                        instance_id="openai-global-qwen-qwen-image",
                         endpoint_variant="image_generations",
                         region="global",
                         capability_tags=["image_generation", "default", "quality"],
@@ -153,12 +230,12 @@ def test_grok_image_quality_profile_filters_to_exact_image_model(
             ),
             CatalogModelSeed(
                 model_id=GROK_IMAGINE_IMAGE_MODEL_ID,
-                family="grok-imagine",
+                family="z-image",
                 feature="image_generation",
                 status="available",
                 instances=[
                     CatalogInstanceSeed(
-                        instance_id="openai-global-grok-imagine-image-quality",
+                        instance_id="openai-global-tongyi-mai-z-image-turbo",
                         endpoint_variant="image_generations",
                         region="global",
                         capability_tags=["image_generation", "default", "quality"],
@@ -167,13 +244,13 @@ def test_grok_image_quality_profile_filters_to_exact_image_model(
                 ],
             ),
             CatalogModelSeed(
-                model_id="grok-imagine-video",
-                family="grok-imagine",
+                model_id="gpt-image-2",
+                family="gpt-image",
                 feature="image_generation",
                 status="available",
                 instances=[
                     CatalogInstanceSeed(
-                        instance_id="openai-global-grok-imagine-video",
+                        instance_id="openai-global-gpt-image-2",
                         endpoint_variant="image_generations",
                         region="global",
                         capability_tags=["image_generation", "default", "quality"],
@@ -194,7 +271,7 @@ def test_grok_image_quality_profile_filters_to_exact_image_model(
     recommended_set = models["recommended_sets"][GROK_IMAGINE_IMAGE_PROFILE_ID]
     assert recommended_set["model_ids"] == [GROK_IMAGINE_IMAGE_MODEL_ID]
     assert recommended_set["instance_ids"] == [
-        "openai-global-grok-imagine-image-quality"
+        "openai-global-tongyi-mai-z-image-turbo"
     ]
     assert models["total"] == 1
     assert models["items"][0]["model_id"] == GROK_IMAGINE_IMAGE_MODEL_ID

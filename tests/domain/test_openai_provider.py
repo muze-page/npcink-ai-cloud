@@ -6,6 +6,7 @@ import httpx
 
 from app.adapters.providers.base import ProviderExecutionError, ProviderExecutionRequest
 from app.adapters.providers.openai import OpenAIProviderAdapter
+from app.domain.hosted_model_defaults import GROK_IMAGINE_IMAGE_MODEL_ID
 
 
 def test_openai_adapter_fetches_catalog_over_http() -> None:
@@ -30,8 +31,7 @@ def test_openai_adapter_fetches_catalog_over_http() -> None:
                         "context_window": 8192,
                     },
                     {
-                        "id": "grok-imagine-image-quality",
-                        "feature": "image_generation",
+                        "id": GROK_IMAGINE_IMAGE_MODEL_ID,
                     },
                 ]
             },
@@ -48,7 +48,7 @@ def test_openai_adapter_fetches_catalog_over_http() -> None:
     assert [model.model_id for model in snapshot.models] == [
         "gpt-4.1-mini",
         "gpt-4.1",
-        "grok-imagine-image-quality",
+        GROK_IMAGINE_IMAGE_MODEL_ID,
         "text-embedding-3-small",
     ]
     assert snapshot.models[0].instances[0].endpoint_variant == "chat_completions"
@@ -89,17 +89,17 @@ def test_openai_adapter_free_gpt55_sample_catalog_profile() -> None:
     assert "hosted-free" in snapshot.models[0].instances[0].capability_tags
 
 
-def test_openai_adapter_sample_catalog_includes_grok_image_generation() -> None:
+def test_openai_adapter_sample_catalog_includes_hosted_image_generation() -> None:
     adapter = OpenAIProviderAdapter()
 
     snapshot = adapter.fetch_catalog()
     model = next(
-        item for item in snapshot.models if item.model_id == "grok-imagine-image-quality"
+        item for item in snapshot.models if item.model_id == GROK_IMAGINE_IMAGE_MODEL_ID
     )
 
     assert model.feature == "image_generation"
     assert model.instances[0].endpoint_variant == "image_generations"
-    assert "grok-imagine" in model.instances[0].capability_tags
+    assert "z-image" in model.instances[0].capability_tags
 
 
 def test_openai_adapter_tags_free_gpt55_from_http_catalog() -> None:
@@ -412,7 +412,7 @@ def test_openai_adapter_executes_image_generation_over_http() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.path.endswith("/images/generations")
         payload = json.loads(request.content.decode("utf-8"))
-        assert payload["model"] == "grok-imagine-image-quality"
+        assert payload["model"] == GROK_IMAGINE_IMAGE_MODEL_ID
         assert payload["prompt"] == "A clean product photo of a red running shoe"
         assert payload["aspect_ratio"] == "16:9"
         assert payload["resolution"] == "high"
@@ -421,7 +421,7 @@ def test_openai_adapter_executes_image_generation_over_http() -> None:
         return httpx.Response(
             200,
             json={
-                "model": "grok-imagine-image-quality",
+                "model": GROK_IMAGINE_IMAGE_MODEL_ID,
                 "data": [
                     {
                         "url": "https://example.test/generated-one.png",
@@ -445,7 +445,7 @@ def test_openai_adapter_executes_image_generation_over_http() -> None:
         _build_request(
             execution_kind="image_generation",
             endpoint_variant="image_generations",
-            model_id="grok-imagine-image-quality",
+            model_id=GROK_IMAGINE_IMAGE_MODEL_ID,
             input_payload={
                 "prompt": "A clean product photo of a red running shoe",
                 "aspect_ratio": "16:9",
