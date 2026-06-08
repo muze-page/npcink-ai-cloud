@@ -116,6 +116,8 @@ from app.domain.runtime.models import (
 from app.domain.site_knowledge.backends import SiteKnowledgeBackendError
 from app.domain.site_knowledge.contracts import (
     SITE_KNOWLEDGE_ABILITIES,
+    SITE_KNOWLEDGE_CONTRACTS,
+    SITE_KNOWLEDGE_SEARCH_ABILITY,
     SITE_KNOWLEDGE_STATUS_ABILITY,
     SITE_KNOWLEDGE_SYNC_ABILITY,
     SiteKnowledgeContractViolation,
@@ -3690,6 +3692,11 @@ class RuntimeService:
             if isinstance(input_payload, dict)
             else self._get_execution_input_payload(run)
         )
+        site_knowledge_context = self._build_image_source_site_knowledge_context(
+            run,
+            repository=repository,
+            input_payload=payload,
+        )
         try:
             execution = ImageSourceService(self.settings).execute(
                 site_id=run.site_id,
@@ -3697,6 +3704,7 @@ class RuntimeService:
                 contract_version=run.contract_version or "",
                 input_payload=payload,
                 run_id=run.run_id,
+                site_knowledge_context=site_knowledge_context,
             )
         except ImageSourceContractViolation as error:
             repository.mark_run_failed(
@@ -3768,6 +3776,146 @@ class RuntimeService:
             instance_id="cloud-runtime",
             fallback_used=False,
         )
+
+    def _build_image_source_site_knowledge_context(
+        self,
+        run: RunRecord,
+        *,
+        repository: RuntimeRepository,
+        input_payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        query = self._image_source_site_knowledge_query(input_payload)
+        if not query:
+            return {
+                "status": "skipped",
+                "reason": "no_visual_context",
+                "intent": "image_context",
+                "results": [],
+                "write_posture": "suggestion_only",
+                "direct_wordpress_write": False,
+            }
+
+        visual_context = (
+            input_payload.get("visual_context")
+            if isinstance(input_payload.get("visual_context"), dict)
+            else {}
+        )
+        current_post_id = self._coerce_int(
+            visual_context.get("post_id") or input_payload.get("post_id"),
+            default=0,
+        )
+        candidate_limits = (
+            visual_context.get("candidate_limits")
+            if isinstance(visual_context.get("candidate_limits"), dict)
+            else {}
+        )
+        max_results = min(
+            4,
+            max(
+                1,
+                self._coerce_int(
+                    candidate_limits.get("max_site_context_results"),
+                    default=3,
+                ),
+            ),
+        )
+
+        def record_embedding_usage(
+            provider_id: str,
+            provider_request: ProviderExecutionRequest,
+            provider_result: ProviderExecutionResult | None,
+            provider_error: ProviderExecutionError | None,
+        ) -> None:
+            self._record_site_knowledge_embedding_provider_call(
+                run,
+                repository=repository,
+                provider_id=provider_id,
+                provider_request=provider_request,
+                provider_result=provider_result,
+                provider_error=provider_error,
+            )
+
+        try:
+            result = SiteKnowledgeService(
+                repository.session,
+                settings=self.settings,
+                providers=self.providers,
+                embedding_usage_callback=record_embedding_usage,
+            ).execute(
+                site_id=run.site_id,
+                ability_name=SITE_KNOWLEDGE_SEARCH_ABILITY,
+                contract_version=SITE_KNOWLEDGE_CONTRACTS[SITE_KNOWLEDGE_SEARCH_ABILITY],
+                input_payload={
+                    "contract_version": SITE_KNOWLEDGE_CONTRACTS[
+                        SITE_KNOWLEDGE_SEARCH_ABILITY
+                    ],
+                    "query": query,
+                    "intent": "image_context",
+                    "max_results": max_results,
+                    "current_post_id": current_post_id,
+                    "filters": {
+                        "post_types": ["post", "page"],
+                        "status": ["publish"],
+                        "source_types": ["post", "page"],
+                    },
+                    "evidence_policy": {
+                        "min_score": 0.2,
+                        "required_sources": 1,
+                        "no_hit_policy": "fallback_to_general",
+                    },
+                    "write_posture": "suggestion_only",
+                },
+                run_id=run.run_id,
+            )
+        except (SiteKnowledgeContractViolation, SiteKnowledgeBackendError) as error:
+            return {
+                "status": "unavailable",
+                "intent": "image_context",
+                "error_code": error.error_code,
+                "results": [],
+                "write_posture": "suggestion_only",
+                "direct_wordpress_write": False,
+            }
+
+        results = result.get("results") if isinstance(result.get("results"), list) else []
+        return {
+            "status": str(result.get("status") or "ready")
+            if results
+            else str(result.get("evidence_gate", {}).get("status") or "insufficient_evidence"),
+            "intent": str(result.get("intent") or "image_context"),
+            "evidence_gate": result.get("evidence_gate")
+            if isinstance(result.get("evidence_gate"), dict)
+            else {},
+            "rerank": result.get("rerank") if isinstance(result.get("rerank"), dict) else {},
+            "results": results,
+            "write_posture": "suggestion_only",
+            "direct_wordpress_write": False,
+        }
+
+    def _image_source_site_knowledge_query(self, input_payload: dict[str, Any]) -> str:
+        visual_context = (
+            input_payload.get("visual_context")
+            if isinstance(input_payload.get("visual_context"), dict)
+            else {}
+        )
+        parts = [
+            visual_context.get("selected_text"),
+            visual_context.get("selected_block_text"),
+            visual_context.get("manual_query"),
+            visual_context.get("fallback_query"),
+            visual_context.get("title"),
+            visual_context.get("excerpt"),
+            input_payload.get("query"),
+        ]
+        text = " ".join(str(part or "").strip() for part in parts if str(part or "").strip())
+        return " ".join(text.split())[:500]
+
+    @staticmethod
+    def _coerce_int(value: Any, *, default: int) -> int:
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return default
 
     def _is_image_source_request(self, request: RuntimeRequest) -> bool:
         return request.ability_name in IMAGE_SOURCE_ABILITIES

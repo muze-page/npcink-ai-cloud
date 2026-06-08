@@ -21,6 +21,7 @@ from app.domain.image_sources.service import (
     PixabayImageSourceProvider,
     UnsplashImageSourceProvider,
 )
+from app.domain.site_knowledge.service import SiteKnowledgeService
 from tests.conftest import (
     TEST_ADMIN_SESSION_SECRET,
     TEST_PORTAL_JWT_SECRET,
@@ -249,6 +250,126 @@ def test_image_source_rejects_provider_keys_in_runtime_input(tmp_path: Path) -> 
     assert response.json()["error_code"] == "image_source.write_or_secret_field_forbidden"
 
 
+def test_image_source_runtime_enriches_prompt_candidates_with_site_knowledge(
+    tmp_path: Path,
+    monkeypatch: Any,
+) -> None:
+    _, client = _build_client(tmp_path)
+
+    def fake_site_knowledge_execute(
+        self: SiteKnowledgeService,
+        *,
+        site_id: str,
+        ability_name: str,
+        contract_version: str,
+        input_payload: dict[str, Any],
+        run_id: str,
+    ) -> dict[str, Any]:
+        assert site_id == "site_alpha"
+        assert ability_name == "magick-ai-cloud/site-knowledge-search"
+        assert contract_version == "site_knowledge_search.v1"
+        assert input_payload["intent"] == "image_context"
+        assert input_payload["current_post_id"] == 99
+        assert "AEO focuses on answer quality" in input_payload["query"]
+        return {
+            "artifact_type": "site_knowledge_results",
+            "composition_role": "site_knowledge_context",
+            "status": "ready",
+            "intent": "image_context",
+            "evidence_gate": {
+                "status": "passed",
+                "min_score": 0.2,
+                "required_sources": 1,
+            },
+            "rerank": {"status": "disabled", "provider": "disabled"},
+            "results": [
+                {
+                    "post_id": 42,
+                    "source_type": "post",
+                    "title": "Answer engine optimization guide",
+                    "url": "https://example.test/aeo-guide",
+                    "score": 0.88,
+                    "match_context": (
+                        "AEO planning should turn a user question into a direct "
+                        "answer, then clarify conditions and constraints."
+                    ),
+                }
+            ],
+            "write_posture": "suggestion_only",
+            "direct_wordpress_write": False,
+        }
+
+    def fake_search(
+        self: UnsplashImageSourceProvider,
+        *,
+        query: str,
+        options: dict[str, Any],
+        site_id: str,
+        run_id: str,
+    ) -> ImageSourceExecutionResult:
+        assert options["site_knowledge_context"]["status"] == "ready"
+        assert options["site_knowledge_context"]["results"][0]["post_id"] == 42
+        return image_source_service._build_result(
+            provider_id="unsplash",
+            auto_strategy="first_available",
+            query=query,
+            options=options,
+            candidates=[
+                {
+                    "contract_version": "image_candidate.v1",
+                    "id": "unsplash-photo-knowledge",
+                    "provider": "unsplash",
+                    "provider_origin": "cloud",
+                    "source_type": "stock",
+                    "download_url": "https://images.unsplash.com/photo-knowledge",
+                    "thumbnail_url": "https://images.unsplash.com/photo-knowledge-thumb",
+                    "source_url": "https://unsplash.com/photos/photo-knowledge",
+                    "write_posture": "suggestion_only",
+                    "direct_wordpress_write": False,
+                }
+            ],
+            usage=ImageSourceProviderUsage(
+                provider_id="unsplash",
+                model_id="image-source-search",
+                instance_id="cloud-managed",
+                region="unspecified",
+                latency_ms=5,
+                cost=0.001,
+            ),
+        )
+
+    monkeypatch.setattr(SiteKnowledgeService, "execute", fake_site_knowledge_execute)
+    monkeypatch.setattr(UnsplashImageSourceProvider, "search", fake_search)
+
+    response = _execute(
+        client,
+        _payload(
+            {
+                "visual_context": {
+                    "contract_version": "image_visual_brief_request.v1",
+                    "post_id": 99,
+                    "image_use": "paragraph_image",
+                    "selected_text": (
+                        "AEO focuses on answer quality when a reader asks a clear "
+                        "question."
+                    ),
+                    "title": "SEO, AEO, and GEO for AI search",
+                }
+            }
+        ),
+        idempotency_key="image-source-site-knowledge",
+    )
+
+    assert response.status_code == 200
+    result = response.json()["data"]["result"]
+    assert result["visual_brief"]["site_context_status"] == "ready"
+    assert result["visual_brief"]["site_context"]["evidence_refs"][0]["post_id"] == 42
+    assert result["prompt_candidates"][0]["evidence_refs"][0]["title"] == (
+        "Answer engine optimization guide"
+    )
+    assert "Answer engine optimization guide" in result["prompt_candidates"][0]["prompt"]
+
+
 def test_image_source_candidate_suggested_filename_is_safe(monkeypatch: Any) -> None:
     settings = Settings(
         _env_file=None,
@@ -314,6 +435,11 @@ def test_image_source_candidate_suggested_filename_is_safe(monkeypatch: Any) -> 
     assert handoff["prompt_prefill_plan"]["mode"] == "local_context_prefill"
     assert handoff["prompt_prefill_plan"]["owner"] == "local_plugin_ui"
     assert handoff["prompt_prefill_plan"]["requires_user_review"] is True
+    assert handoff["local_prompt_sources"][0] == "cloud_visual_brief.prompt_candidates"
+    assert execution.result_json["visual_brief"]["artifact_type"] == "paragraph_image_visual_brief.v1"
+    assert execution.result_json["visual_brief"]["evidence_policy"]["use_site_knowledge_vectors"] is True
+    assert execution.result_json["prompt_candidates"][0]["requires_operator_review"] is True
+    assert handoff["prompt_candidates"][0]["source"] == "cloud_visual_brief"
     assert handoff["prompt_prefill_plan"]["safety"]["do_not_autorun"] is True
     assert handoff["batch_generation_plan"]["mode"] == "local_reviewed_batch_plan"
     assert handoff["batch_generation_plan"]["owner"] == "local_plugin_control_plane"

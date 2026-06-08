@@ -28,6 +28,7 @@ from app.domain.image_sources.contracts import (
 
 MAX_QUERY_CHARS = 300
 MAX_TEXT_CHARS = 300
+MAX_VISUAL_CONTEXT_CHARS = 600
 MAX_PROVIDER_RESULTS = 30
 AUTO_PROVIDER_ORDER = ("unsplash", "pixabay", "pexels")
 
@@ -75,6 +76,7 @@ class ImageSourceService:
         contract_version: str,
         input_payload: dict[str, Any],
         run_id: str,
+        site_knowledge_context: dict[str, Any] | None = None,
     ) -> ImageSourceExecutionResult:
         validate_image_source_runtime_contract(
             ability_name=ability_name,
@@ -87,7 +89,10 @@ class ImageSourceService:
                 "image_source.query_required",
                 "image source query is required",
             )
-        options = _build_options(input_payload)
+        options = _build_options(
+            input_payload,
+            site_knowledge_context=site_knowledge_context,
+        )
         provider_id = _resolve_provider(self.settings, str(options.get("provider") or "auto"))
         provider = _build_provider(provider_id, self.settings)
         return provider.search(query=query, options=options, site_id=site_id, run_id=run_id)
@@ -310,7 +315,11 @@ class PexelsImageSourceProvider(_BaseImageProvider):
         )
 
 
-def _build_options(input_payload: dict[str, Any]) -> dict[str, Any]:
+def _build_options(
+    input_payload: dict[str, Any],
+    *,
+    site_knowledge_context: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     provider = str(input_payload.get("provider") or "auto").strip().lower()
     if provider not in ALLOWED_IMAGE_SOURCE_PROVIDERS:
         provider = "auto"
@@ -335,6 +344,8 @@ def _build_options(input_payload: dict[str, Any]) -> dict[str, Any]:
             limit=80,
         )
         or "image_reference_candidate",
+        "visual_context": _normalize_visual_context(input_payload.get("visual_context")),
+        "site_knowledge_context": _normalize_site_knowledge_context(site_knowledge_context),
     }
 
 
@@ -536,9 +547,16 @@ def _build_result(
         item for item in candidates if item.get("download_url") or item.get("source_url")
     ][: int(options["per_page"])]
     query_hash = _hash_text(query)
+    visual_brief = _build_visual_brief(query=query, options=options)
+    prompt_candidates = _build_prompt_candidates(
+        query=query,
+        options=options,
+        visual_brief=visual_brief,
+    )
     ai_generation_handoff = _build_ai_generation_handoff(
         query_hash=query_hash,
         options=options,
+        prompt_candidates=prompt_candidates,
     )
     result_json = {
         "artifact_type": "image_source_candidates",
@@ -554,6 +572,11 @@ def _build_result(
         "query_chars": len(query),
         "active_sources": [{"provider": provider_id, "count": len(candidates)}],
         "provider_errors": [],
+        "visual_brief": visual_brief,
+        "optimized_query": visual_brief["primary_query"],
+        "alternate_queries": visual_brief["alternate_queries"],
+        "query_suggestions": visual_brief["query_suggestions"],
+        "prompt_candidates": prompt_candidates,
         "images": candidates,
         "candidates": candidates,
         "ai_generation_handoff": ai_generation_handoff,
@@ -573,6 +596,7 @@ def _build_ai_generation_handoff(
     *,
     query_hash: str,
     options: dict[str, Any],
+    prompt_candidates: list[dict[str, Any]],
 ) -> dict[str, Any]:
     return {
         "action_id": "ai_generate_image",
@@ -603,12 +627,14 @@ def _build_ai_generation_handoff(
         },
         "required_local_fields": ["prompt"],
         "local_prompt_sources": [
+            "cloud_visual_brief.prompt_candidates",
             "image_source_runtime_input.query",
             "post_title",
             "post_excerpt",
             "selected_text_context",
         ],
         "prompt_prefill_plan": _build_prompt_prefill_plan(options),
+        "prompt_candidates": prompt_candidates,
         "batch_generation_plan": _build_batch_generation_plan(options),
         "source_context": {
             "query_hash": query_hash,
@@ -618,6 +644,155 @@ def _build_ai_generation_handoff(
         "write_posture": "suggestion_only",
         "direct_wordpress_write": False,
     }
+
+
+def _build_visual_brief(*, query: str, options: dict[str, Any]) -> dict[str, Any]:
+    context = _dict(options.get("visual_context"))
+    site_context = _dict(options.get("site_knowledge_context"))
+    evidence_refs = _site_context_evidence_refs(site_context)
+    site_context_status = str(site_context.get("status") or "not_requested")
+    selected_context = _normalize_text(
+        context.get("selected_text") or context.get("selected_block_text"),
+        limit=MAX_VISUAL_CONTEXT_CHARS,
+    )
+    article_title = _normalize_text(context.get("title"), limit=160)
+    excerpt = _normalize_text(context.get("excerpt"), limit=240)
+    image_mode = _normalize_token(context.get("image_mode"), limit=40) or "featured_image"
+    subject = selected_context or article_title or excerpt
+    primary_query = _visual_query_from_context(subject or "editorial article illustration")
+    alternate_queries = _dedupe_texts(
+        [
+            primary_query,
+            _visual_query_from_context(article_title),
+            _visual_query_from_context(excerpt),
+        ],
+        limit=4,
+    )
+    visual_intent = (
+        "Use the selected paragraph and public site context as semantic guidance; "
+        "translate the idea into an editorial image instead of rendering the paragraph text."
+        if selected_context
+        else "Translate the article context into a concrete editorial image direction."
+    )
+    return {
+        "status": "ready",
+        "artifact_type": "paragraph_image_visual_brief.v1",
+        "composition_role": "paragraph_image_prompt_planning",
+        "visual_intent": visual_intent,
+        "primary_query": primary_query,
+        "alternate_queries": alternate_queries,
+        "query_suggestions": alternate_queries[:3],
+        "source_context": {
+            "image_mode": image_mode,
+            "selected_paragraph_used": bool(selected_context),
+            "site_context_status": site_context_status,
+            "site_context_owner": "cloud_site_knowledge",
+            "site_context_result_count": len(evidence_refs),
+        },
+        "site_context": {
+            "status": site_context_status,
+            "intent": str(site_context.get("intent") or "image_context"),
+            "evidence_gate": _dict(site_context.get("evidence_gate")),
+            "rerank": _dict(site_context.get("rerank")),
+            "evidence_refs": evidence_refs,
+        },
+        "avoid": [
+            "visible text",
+            "article wording as image copy",
+            "logos",
+            "watermarks",
+            "screenshots or UI panels",
+        ],
+        "evidence_policy": {
+            "owner": "cloud_runtime",
+            "use_site_knowledge_vectors": True,
+            "evidence_count": len(evidence_refs),
+            "direct_wordpress_write": False,
+        },
+        "site_context_status": site_context_status,
+        "rerank_status": str(_dict(site_context.get("rerank")).get("status") or "not_requested"),
+        "write_posture": "suggestion_only",
+        "direct_wordpress_write": False,
+    }
+
+
+def _build_prompt_candidates(
+    *,
+    query: str,
+    options: dict[str, Any],
+    visual_brief: dict[str, Any],
+) -> list[dict[str, Any]]:
+    context = _dict(options.get("visual_context"))
+    selected_context = _normalize_text(
+        context.get("selected_text") or context.get("selected_block_text"),
+        limit=MAX_VISUAL_CONTEXT_CHARS,
+    )
+    article_title = _normalize_text(context.get("title"), limit=160)
+    excerpt = _normalize_text(context.get("excerpt"), limit=240)
+    subject = selected_context or article_title or excerpt or "the article section"
+    site_evidence = _site_context_prompt_evidence(_dict(options.get("site_knowledge_context")))
+    primary_query = str(visual_brief.get("primary_query") or query)
+    aspect_ratio = _default_generation_aspect_ratio(str(options.get("orientation") or ""))
+    evidence_sentence = (
+        f" Related site context: {site_evidence}. "
+        if site_evidence
+        else " Related site context was unavailable or insufficient; avoid unsupported site-specific claims. "
+    )
+    prompts = [
+        (
+            "editorial_scene",
+            "Editorial scene",
+            (
+                "Create an original editorial image for a WordPress article. "
+                f"Semantic context: {subject}. "
+                f"{evidence_sentence}"
+                f"Visual direction: {primary_query}. "
+                "Translate the idea into a concrete scene or metaphor. "
+                f"Composition: {aspect_ratio}. "
+                "Style: realistic editorial photo illustration, natural light, high quality. "
+                "No visible text, letters, numbers, labels, logos, watermarks, screenshots, UI panels, or copied article wording."
+            ),
+        ),
+        (
+            "conceptual_metaphor",
+            "Conceptual metaphor",
+            (
+                "Create an original conceptual editorial image for the selected paragraph. "
+                f"Topic context: {subject}. "
+                f"{evidence_sentence}"
+                "Show the underlying idea through objects, spatial relationships, and human-scale context, not through written words. "
+                f"Composition: {aspect_ratio}. "
+                "Clean professional style, natural light, no text, no logos, no interface mockups, no watermarks."
+            ),
+        ),
+        (
+            "workspace_detail",
+            "Workspace detail",
+            (
+                "Create a grounded editorial workspace image that supports this article section. "
+                f"Context to interpret: {subject}. "
+                f"{evidence_sentence}"
+                "Use subtle objects, planning materials, and visual hierarchy to imply analysis and decision-making. "
+                f"Composition: {aspect_ratio}. "
+                "No readable text, no brand marks, no screenshots, no copied paragraph content."
+            ),
+        ),
+    ]
+    return [
+        {
+            "id": prompt_id,
+            "label": label,
+            "prompt": _normalize_text(prompt, limit=1200),
+            "source": "cloud_visual_brief",
+            "evidence_refs": _site_context_evidence_refs(
+                _dict(options.get("site_knowledge_context"))
+            ),
+            "requires_operator_review": True,
+            "write_posture": "candidate_only",
+            "direct_wordpress_write": False,
+        }
+        for prompt_id, label, prompt in prompts
+    ]
 
 
 def _build_batch_generation_plan(options: dict[str, Any]) -> dict[str, Any]:
@@ -747,6 +922,165 @@ def _normalize_token(value: Any, *, limit: int) -> str:
     return "".join(
         ch for ch in str(value or "").strip().lower()[:limit] if ch.isalnum() or ch in {"_", "-"}
     )
+
+
+def _coerce_int(value: Any, *, default: int) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _coerce_float(value: Any, *, default: float = 0.0) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _normalize_visual_context(value: Any) -> dict[str, Any]:
+    source = _dict(value)
+    if not source:
+        return {}
+    allowed_text_fields = {
+        "title": 160,
+        "excerpt": 240,
+        "content_summary": 420,
+        "selected_text": MAX_VISUAL_CONTEXT_CHARS,
+        "selected_block_text": MAX_VISUAL_CONTEXT_CHARS,
+        "manual_query": 160,
+        "fallback_query": 160,
+    }
+    context: dict[str, Any] = {}
+    for field, limit in allowed_text_fields.items():
+        text = _normalize_text(source.get(field), limit=limit)
+        if text:
+            context[field] = text
+    image_mode = _normalize_token(source.get("image_mode") or source.get("image_use"), limit=40)
+    if image_mode:
+        context["image_mode"] = image_mode
+    post_id = _coerce_int(source.get("post_id"), default=0)
+    if post_id > 0:
+        context["post_id"] = post_id
+    selected_block_name = _normalize_token(source.get("selected_block_name"), limit=80)
+    if selected_block_name:
+        context["selected_block_name"] = selected_block_name
+    context["avoid_brand_logos"] = bool(source.get("avoid_brand_logos"))
+    query_intent = _dict(source.get("query_intent"))
+    if query_intent:
+        context["query_intent"] = {
+            "rewrite_abstract_terms": bool(query_intent.get("rewrite_abstract_terms")),
+            "prefer_concrete_visual_scene": bool(
+                query_intent.get("prefer_concrete_visual_scene")
+            ),
+            "return_alternate_queries": bool(query_intent.get("return_alternate_queries")),
+        }
+    return context
+
+
+def _normalize_site_knowledge_context(value: Any) -> dict[str, Any]:
+    source = _dict(value)
+    if not source:
+        return {}
+    results = []
+    for item in _list(source.get("results"))[:4]:
+        result = _dict(item)
+        if not result:
+            continue
+        results.append(
+            {
+                "post_id": _coerce_int(result.get("post_id"), default=0),
+                "source_type": _normalize_token(result.get("source_type"), limit=32),
+                "title": _normalize_text(result.get("title"), limit=160),
+                "url": _normalize_url(result.get("url")),
+                "score": round(max(0.0, min(1.0, _coerce_float(result.get("score")))), 4),
+                "match_context": _normalize_text(
+                    result.get("match_context") or result.get("chunk_text"),
+                    limit=320,
+                ),
+            }
+        )
+    return {
+        "status": _normalize_token(source.get("status"), limit=40) or "unavailable",
+        "intent": _normalize_token(source.get("intent"), limit=40) or "image_context",
+        "evidence_gate": _dict(source.get("evidence_gate")),
+        "rerank": _dict(source.get("rerank")),
+        "results": results,
+    }
+
+
+def _site_context_evidence_refs(site_context: dict[str, Any]) -> list[dict[str, Any]]:
+    refs = []
+    for item in _list(site_context.get("results"))[:4]:
+        result = _dict(item)
+        title = _normalize_text(result.get("title"), limit=120)
+        if not title and not result.get("url"):
+            continue
+        refs.append(
+            {
+                "post_id": _coerce_int(result.get("post_id"), default=0),
+                "source_type": _normalize_token(result.get("source_type"), limit=32),
+                "title": title,
+                "url": _normalize_url(result.get("url")),
+                "score": round(max(0.0, min(1.0, _coerce_float(result.get("score")))), 4),
+            }
+        )
+    return refs
+
+
+def _site_context_prompt_evidence(site_context: dict[str, Any]) -> str:
+    snippets = []
+    for item in _list(site_context.get("results"))[:2]:
+        result = _dict(item)
+        title = _normalize_text(result.get("title"), limit=100)
+        context = _normalize_text(result.get("match_context"), limit=180)
+        if title and context:
+            snippets.append(f"{title}: {context}")
+        elif title:
+            snippets.append(title)
+        elif context:
+            snippets.append(context)
+    return " | ".join(snippets)[:420]
+
+
+def _visual_query_from_context(value: Any) -> str:
+    text = _normalize_text(value, limit=MAX_VISUAL_CONTEXT_CHARS)
+    if not text:
+        return "editorial article illustration"
+    lower = text.lower()
+    term_map = (
+        ("seo", "search strategy workspace"),
+        ("aeo", "answer engine experience planning"),
+        ("geo", "generative search visibility analysis"),
+        ("ai", "artificial intelligence editorial planning"),
+        ("wordpress", "wordpress publishing workflow"),
+        ("content", "content strategy desk"),
+        ("上下文", "editorial context mapping"),
+        ("文章", "article planning workspace"),
+        ("段落", "section-level editorial concept"),
+        ("读者", "reader journey research"),
+        ("搜索", "search discovery analysis"),
+        ("答案", "answer-focused content planning"),
+    )
+    terms = [visual for needle, visual in term_map if needle in lower]
+    if terms:
+        return _normalize_text(" ".join(_dedupe_texts(terms, limit=5)), limit=180)
+    return _normalize_text(text, limit=180)
+
+
+def _dedupe_texts(values: list[str], *, limit: int) -> list[str]:
+    seen: set[str] = set()
+    out: list[str] = []
+    for value in values:
+        text = _normalize_text(value, limit=220)
+        key = text.lower()
+        if not text or key in seen:
+            continue
+        seen.add(key)
+        out.append(text)
+        if len(out) >= limit:
+            break
+    return out
 
 
 def _normalize_url(value: Any) -> str:
