@@ -198,6 +198,10 @@ def test_portal_media_observability_returns_current_site_summary(tmp_path: Path)
     assert envelope["status"] == "ok"
     data = envelope["data"]
     assert data["contract_version"] == "magick-media-observability-summary-v1"
+    assert data["workflow_metadata"]["workflow_id"] == (
+        "media_derivative_artifact_generation"
+    )
+    assert data["workflow_metadata"]["direct_wordpress_write"] is False
     assert data["site_id"] == "site-media-portal-001"
     assert data["account_id"] == "acct_site-media-portal-001"
     assert data["totals"]["jobs_total"] == 1

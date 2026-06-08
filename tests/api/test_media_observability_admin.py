@@ -231,6 +231,11 @@ def test_admin_media_observability_returns_cross_site_summary(tmp_path: Path) ->
         assert response.status_code == 200
         data = response.json()["data"]
         assert data["contract_version"] == "magick-media-observability-summary-v1"
+        assert data["workflow_metadata"]["workflow_id"] == (
+            "media_derivative_artifact_generation"
+        )
+        assert data["workflow_metadata"]["handoff_owner"] == "wordpress_local"
+        assert data["workflow_metadata"]["direct_wordpress_write"] is False
         assert data["totals"]["jobs_total"] == 3
         assert data["totals"]["succeeded_total"] == 2
         assert data["totals"]["failed_total"] == 1

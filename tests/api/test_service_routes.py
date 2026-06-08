@@ -134,6 +134,12 @@ def test_admin_web_search_provider_settings_are_masked_and_update_runtime(
     )
     assert initial.status_code == 200
     assert initial.json()["data"]["providers"]["tavily"]["configured"] is False
+    assert initial.json()["data"]["workflow_metadata"]["workflow_id"] == (
+        "external_web_evidence_preflight"
+    )
+    assert (
+        initial.json()["data"]["workflow_metadata"]["direct_wordpress_write"] is False
+    )
 
     response = client.post(
         "/internal/service/admin/web-search-providers",
@@ -178,6 +184,9 @@ def test_admin_web_search_provider_settings_are_masked_and_update_runtime(
     assert data["providers"]["tavily"]["configured"] is True
     assert data["providers"]["bocha"]["configured"] is True
     assert data["providers"]["jina_reader"]["enabled"] is True
+    assert data["workflow_metadata"]["workflow_version"] == (
+        "web_search_evidence_workflow.v1"
+    )
     assert "tvly-test-secret" not in json.dumps(data)
     assert "bocha-test-secret" not in json.dumps(data)
     assert "jina-test-secret" not in json.dumps(data)
@@ -192,6 +201,32 @@ def test_admin_web_search_provider_settings_are_masked_and_update_runtime(
     services = client.app.state.services
     assert services.settings.web_search_provider == "auto"
     assert services.settings.web_search_bocha_api_key == "bocha-test-secret"
+
+
+def test_admin_agent_workflow_metadata_registry_is_read_only(tmp_path: Path) -> None:
+    _, client = _build_client(tmp_path)
+
+    response = client.get(
+        "/internal/service/admin/agent-workflow-metadata",
+        headers=build_internal_headers(),
+    )
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["registry_version"] == "cloud-agent-workflow-metadata.v1"
+    assert {item["agent_id"] for item in data["agents"]} == {
+        "internal_ops_advisor_agent"
+    }
+    workflows = {item["workflow_id"]: item for item in data["workflows"]}
+    assert workflows["external_web_evidence_preflight"]["handoff_owner"] == (
+        "wordpress_local"
+    )
+    assert workflows["media_derivative_artifact_generation"][
+        "direct_wordpress_write"
+    ] is False
+
+    unauthorized = client.get("/internal/service/admin/agent-workflow-metadata")
+    assert unauthorized.status_code in (401, 403)
 
 
 def test_admin_image_source_provider_settings_are_masked_and_update_runtime(

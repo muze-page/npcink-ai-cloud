@@ -553,6 +553,25 @@ export interface PortalMediaObservabilityRecentFailure {
   finished_at: string;
 }
 
+export interface PortalWorkflowMetadata {
+  workflow_id: string;
+  workflow_version: string;
+  title: string;
+  summary: string;
+  ability_name: string;
+  contract: string;
+  owner: string;
+  handoff_owner: string;
+  execution_pattern: string;
+  storage_mode: string;
+  badges: Array<{ label: string; status: string }>;
+  steps: string[];
+  stop_conditions: string[];
+  direct_wordpress_write: boolean;
+  requires_operator_review: boolean;
+  fail_closed_behavior: string;
+}
+
 export interface PortalMediaObservabilitySummary {
   contract_version: string;
   site_id: string;
@@ -571,6 +590,7 @@ export interface PortalMediaObservabilitySummary {
   formats: PortalMediaObservabilityFormat[];
   errors: PortalMediaObservabilityError[];
   recent_failures: PortalMediaObservabilityRecentFailure[];
+  workflow_metadata: PortalWorkflowMetadata;
 }
 
 export interface PortalVectorObservabilityTotals {

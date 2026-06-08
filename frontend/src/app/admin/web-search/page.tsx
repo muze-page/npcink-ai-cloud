@@ -9,6 +9,11 @@ import {
   BackofficeStackCard,
 } from '@/components/backoffice/BackofficeScaffold';
 import { BackofficeStatusBadge } from '@/components/backoffice/BackofficeStatusBadge';
+import {
+  CloudWorkflowMetadataPanel,
+  normalizeCloudWorkflowMetadata,
+  type CloudWorkflowMetadata,
+} from '@/components/backoffice/CloudWorkflowMetadataPanel';
 import { LoadingFallback } from '@/components/ui/LoadingFallback';
 import { resolveUiErrorMessage } from '@/lib/errors';
 
@@ -32,6 +37,7 @@ type WebSearchConfig = {
   env_path: string;
   requires_worker_restart_after_save: boolean;
   providers: Record<ProviderId, ProviderState>;
+  workflowMetadata: CloudWorkflowMetadata;
 };
 
 type ProviderForm = {
@@ -82,6 +88,7 @@ function normalizeConfig(raw: any): WebSearchConfig {
       jina_reader: normalizeProvider('jina_reader', 'Jina Reader'),
       apify: normalizeProvider('apify', 'Apify'),
     },
+    workflowMetadata: normalizeCloudWorkflowMetadata(raw?.workflow_metadata ?? {}),
   };
 }
 
@@ -113,103 +120,6 @@ function providerHelp(providerId: ProviderId): string {
     case 'apify':
       return 'Apify actor-backed search. Configure an actor that returns dataset items with title, URL, and snippet-like fields.';
   }
-}
-
-function WebSearchWorkflowPanel() {
-  const steps = [
-    'Validate runtime contract',
-    'Select Cloud-managed search provider',
-    'Normalize and score sources',
-    'Apply evidence gate',
-    'Return suggestion-only evidence',
-  ];
-  const stopConditions = [
-    'Provider not configured',
-    'Provider fallback exhausted',
-    'Insufficient evidence',
-  ];
-
-  return (
-    <BackofficeSectionPanel>
-      <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-        <div>
-          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
-            Workflow metadata
-          </p>
-          <h2 className="mt-2 text-lg font-semibold text-slate-950 dark:text-white">
-            External web evidence preflight
-          </h2>
-          <p className="mt-2 text-sm leading-6 text-slate-600 dark:text-slate-300">
-            Fixed runtime evidence workflow. It produces source grounding only and hands control back to the local WordPress path.
-          </p>
-        </div>
-        <div className="flex flex-wrap gap-2">
-          <BackofficeStatusBadge label="suggestion only" status="read_only" />
-          <BackofficeStatusBadge label="write blocked" status="success" />
-        </div>
-      </div>
-      <div className="mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-        <BackofficeStackCard>
-          <p className="text-[0.68rem] font-semibold uppercase tracking-[0.14em] text-slate-500 dark:text-slate-400">
-            Workflow
-          </p>
-          <p className="mt-1 font-mono text-xs text-slate-700 dark:text-slate-200">
-            external_web_evidence_preflight
-          </p>
-        </BackofficeStackCard>
-        <BackofficeStackCard>
-          <p className="text-[0.68rem] font-semibold uppercase tracking-[0.14em] text-slate-500 dark:text-slate-400">
-            Version
-          </p>
-          <p className="mt-1 font-mono text-xs text-slate-700 dark:text-slate-200">
-            web_search_evidence_workflow.v1
-          </p>
-        </BackofficeStackCard>
-        <BackofficeStackCard>
-          <p className="text-[0.68rem] font-semibold uppercase tracking-[0.14em] text-slate-500 dark:text-slate-400">
-            Ability
-          </p>
-          <p className="mt-1 font-mono text-xs text-slate-700 dark:text-slate-200">
-            magick-ai-cloud/web-search
-          </p>
-        </BackofficeStackCard>
-        <BackofficeStackCard>
-          <p className="text-[0.68rem] font-semibold uppercase tracking-[0.14em] text-slate-500 dark:text-slate-400">
-            Owner
-          </p>
-          <p className="mt-1 font-mono text-xs text-slate-700 dark:text-slate-200">
-            wordpress_local
-          </p>
-        </BackofficeStackCard>
-      </div>
-      <div className="mt-5 grid gap-4 lg:grid-cols-2">
-        <BackofficeStackCard>
-          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">
-            Steps
-          </p>
-          <div className="mt-3 space-y-2">
-            {steps.map((step) => (
-              <p key={step} className="text-sm leading-6 text-slate-700 dark:text-slate-200">
-                {step}
-              </p>
-            ))}
-          </div>
-        </BackofficeStackCard>
-        <BackofficeStackCard>
-          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">
-            Stop conditions
-          </p>
-          <div className="mt-3 space-y-2">
-            {stopConditions.map((condition) => (
-              <p key={condition} className="text-sm leading-6 text-slate-700 dark:text-slate-200">
-                {condition}
-              </p>
-            ))}
-          </div>
-        </BackofficeStackCard>
-      </div>
-    </BackofficeSectionPanel>
-  );
 }
 
 function WebSearchAdminContent() {
@@ -383,7 +293,7 @@ function WebSearchAdminContent() {
         </div>
       </BackofficeSectionPanel>
 
-      <WebSearchWorkflowPanel />
+      <CloudWorkflowMetadataPanel metadata={config.workflowMetadata} />
 
       <div className="grid gap-4 xl:grid-cols-2">
         {PROVIDERS.map((providerId) => {

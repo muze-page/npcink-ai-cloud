@@ -13,6 +13,12 @@ from app.api.envelope import build_envelope
 from app.core.models import ACCOUNT_MEMBERSHIP_ROLE_USER_ADMIN
 from app.core.security import extract_trace_id
 from app.domain.advisor.service import InternalAIAdvisorService
+from app.domain.agent_workflow_metadata import (
+    MEDIA_DERIVATIVE_WORKFLOW_ID,
+    WEB_SEARCH_EVIDENCE_WORKFLOW_ID,
+    get_agent_workflow_registry,
+    get_workflow_metadata,
+)
 from app.domain.catalog.service import CatalogService
 from app.domain.commercial.errors import CommercialServiceError
 from app.domain.commercial.service import CommercialService, ServiceAuditContext
@@ -1958,6 +1964,7 @@ async def get_admin_media_observability(
         site_id=site_id.strip(),
         target_format=target_format.strip(),
     )
+    result["workflow_metadata"] = get_workflow_metadata(MEDIA_DERIVATIVE_WORKFLOW_ID)
     return build_envelope(
         status="ok",
         message="media observability admin summary loaded",
@@ -1995,10 +2002,25 @@ async def get_admin_web_search_providers(request: Request) -> Any:
     if auth is not None:
         return auth
     services = get_cloud_services(request)
+    result = WebSearchAdminConfigService(services.settings).get_config()
+    result["workflow_metadata"] = get_workflow_metadata(WEB_SEARCH_EVIDENCE_WORKFLOW_ID)
     return build_envelope(
         status="ok",
         message="web search provider settings loaded",
-        data=WebSearchAdminConfigService(services.settings).get_config(),
+        data=result,
+        revision="m6",
+    )
+
+
+@router.get("/admin/agent-workflow-metadata")
+async def get_admin_agent_workflow_metadata(request: Request) -> Any:
+    auth = await authorize_internal_request(request, require_idempotency=False)
+    if auth is not None:
+        return auth
+    return build_envelope(
+        status="ok",
+        message="agent workflow metadata loaded",
+        data=get_agent_workflow_registry(),
         revision="m6",
     )
 
@@ -2015,6 +2037,7 @@ async def update_admin_web_search_providers(
     result = WebSearchAdminConfigService(services.settings).save_config(
         payload.model_dump(mode="json")
     )
+    result["workflow_metadata"] = get_workflow_metadata(WEB_SEARCH_EVIDENCE_WORKFLOW_ID)
     return build_envelope(
         status="ok",
         message="web search provider settings saved",

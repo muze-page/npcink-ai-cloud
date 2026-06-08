@@ -20,6 +20,10 @@ from app.core.models import (
     ServiceAuditEvent,
     SiteServiceProjection,
 )
+from app.domain.agent_workflow_metadata import (
+    INTERNAL_OPS_ADVISOR_AGENT_ID,
+    get_agent_handoff_metadata,
+)
 from app.domain.commercial.service import CommercialService
 from app.domain.hosted_model_defaults import FREE_GPT55_MODEL_ID
 from app.domain.runtime.service import RuntimeService
@@ -1966,35 +1970,10 @@ def _redacted_agent_handoff(value: Any) -> dict[str, Any]:
 
 def _advisor_agent_handoff(scope: str) -> dict[str, Any]:
     normalized_scope = str(scope or "").strip() or "runtime_operations"
-    return {
-        "agent_id": "internal_ops_advisor_agent",
-        "agent_version": "internal_ops_advisor_agent.v1",
-        "agent_role": normalized_scope,
-        "handoff_type": "operator_recommendation",
-        "handoff_owner": "cloud_internal_operator",
-        "requires_operator_review": True,
-        "direct_wordpress_write": False,
-        "execution_pattern": "inline",
-        "storage_mode": "result_only",
-        "allowed_actions": [
-            "read_cloud_service_evidence",
-            "rank_operator_attention_items",
-            "return_evidence_backed_recommendation",
-        ],
-        "stop_conditions": [
-            "insufficient_evidence",
-            "operator_action_required",
-            "forbidden_mutation_detected",
-        ],
-        "forbidden_actions": [
-            "direct_wordpress_write",
-            "automatic_routing_profile_adoption",
-            "automatic_commercial_state_mutation",
-            "cloud_prompt_or_preset_truth",
-            "cloud_workflow_truth",
-        ],
-        "fail_closed_behavior": "return_deterministic_advisory_summary",
-    }
+    return get_agent_handoff_metadata(
+        INTERNAL_OPS_ADVISOR_AGENT_ID,
+        agent_role=normalized_scope,
+    )
 
 
 def _evidence(kind: str, ref: str, label: str) -> dict[str, str]:

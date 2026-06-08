@@ -34,6 +34,10 @@ from app.api.routes.service import (
     _service_error_response,
 )
 from app.domain.advisor.service import InternalAIAdvisorService
+from app.domain.agent_workflow_metadata import (
+    MEDIA_DERIVATIVE_WORKFLOW_ID,
+    get_workflow_metadata,
+)
 from app.domain.commercial.customer_api_keys import (
     build_customer_api_key,
     serialize_portal_site_key,
@@ -794,6 +798,7 @@ async def get_portal_site_media_observability(
         target_format=target_format.strip(),
     )
     result.pop("sites", None)
+    result["workflow_metadata"] = get_workflow_metadata(MEDIA_DERIVATIVE_WORKFLOW_ID)
     result["site_id"] = site_id
     result["account_id"] = str(access.get("account_id") or "")
     result["member_ref"] = auth.member_ref
