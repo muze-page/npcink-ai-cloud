@@ -36,11 +36,17 @@ ability registry.
 
 - Results are always `suggestion_only`.
 - Responses always include `direct_wordpress_write: false`.
+- Site Knowledge is a writing-assistance evidence service. It helps writers
+  find context, citations, gaps, duplicates, internal links, FAQ candidates,
+  and refresh candidates; it must not produce ready-to-publish article content.
 - Cloud may chunk, embed, store, search, rerank, and report status for public
   site knowledge.
 - Public `post` and `page` sources may be indexed by default. Public approved
   comments may be indexed only when Cloud explicitly enables comment indexing.
 - Cloud must not publish, update, delete, or otherwise mutate WordPress content.
+- Cloud must not return article bodies, article titles, SEO copy,
+  `article_write_plan` candidates, full article drafts, ready-to-publish
+  content, or automatic publishing instructions from Site Knowledge.
 - Cloud must not return provider keys, Cloud secrets, WordPress credentials,
   request headers, or full sensitive request payloads.
 - Long `site-knowledge-sync` runs use the existing runtime worker path and
@@ -225,15 +231,16 @@ Supported first workflows:
 - `duplicate_check`: publish preflight conflict review. Results include
   `duplicate_check` with risk, signals, and local review guidance before a
   draft is created or published.
-- `writing_context`: generation context enrichment. Results include
-  `context_role`, `citation`, and `usage_guidance` so the generation flow can
-  cite site-owned context before drafting.
+- `writing_context`: writer context enrichment. Results include
+  `context_role`, `citation`, and `usage_guidance` so the local writing surface
+  can show site-owned context before the writer drafts.
 - `writing_support_plan`: writer preparation support. Results include
   `writing_support`, `pre_draft_tasks`, `evidence_source`,
   `planning_mode=wordpress_local_only`, and `blocked_outputs` so editors can
   move faster on source review, coverage decisions, internal links, and media
   follow-up without Cloud producing article titles, article bodies, SEO copy,
-  or `article_write_plan` candidates.
+  `article_write_plan` candidates, full drafts, ready-to-publish content, or
+  automatic publishing instructions.
 - `internal_links`: editor link recommendation. Results include
   `anchor_text_candidates`, `link_target`, `suggested_action`, and
   `insert_mode=wordpress_local_only`.

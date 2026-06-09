@@ -1677,6 +1677,9 @@ def _serialize_search_result(
                         "article_title",
                         "seo_copy",
                         "article_write_plan",
+                        "full_article_draft",
+                        "ready_to_publish_content",
+                        "auto_publish_instruction",
                         "direct_wordpress_write",
                     ],
                 },
@@ -1733,7 +1736,7 @@ def _workflow_support_for_intent(intent: str) -> dict[str, object]:
         }
     if intent == "writing_context":
         return {
-            "workflow": "generation_context_enrichment",
+            "workflow": "writer_context_enrichment",
             "wordpress_write_owner": "wordpress_local",
             "cloud_output": "reference_context",
         }
@@ -1742,7 +1745,7 @@ def _workflow_support_for_intent(intent: str) -> dict[str, object]:
             "workflow": "writer_preparation_support",
             "wordpress_write_owner": "wordpress_local",
             "cloud_output": "pre_draft_support_plan",
-            "body_generation_owner": "local_ability_recipe",
+            "writing_assistance_owner": "wordpress_local_writer",
         }
     if intent == "refresh_suggestions":
         return {
@@ -1795,6 +1798,9 @@ def _agent_handoff_for_search(
                 "article_title",
                 "seo_copy",
                 "article_write_plan",
+                "full_article_draft",
+                "ready_to_publish_content",
+                "auto_publish_instruction",
             ],
         }
 
@@ -1867,7 +1873,7 @@ def _agent_local_next_action_for_intent(intent: str) -> str:
     if intent == "related_content":
         return "review_topic_cluster_candidate"
     if intent == "writing_support_plan":
-        return "use_pre_draft_support_before_local_ability_recipe"
+        return "use_pre_draft_support_in_local_writer_workflow"
     return "display_suggestion_with_evidence"
 
 

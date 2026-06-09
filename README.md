@@ -47,6 +47,7 @@ Operational references:
 - [docs/cloud-agent-positioning-v1.md](docs/cloud-agent-positioning-v1.md)
 - [docs/cloud-agent-feedback-contract-v1.md](docs/cloud-agent-feedback-contract-v1.md)
 - [docs/internal-ai-advisor-v1.md](docs/internal-ai-advisor-v1.md)
+- [docs/writing-assistance-evidence-history-2026-06.md](docs/writing-assistance-evidence-history-2026-06.md)
 
 ## Test Entry For Agents
 

@@ -419,7 +419,7 @@ def test_search_intents_return_product_workflow_metadata(tmp_path: Path) -> None
         idempotency_key="workflow-writing-context",
     )["json"]["data"]["result"]
     assert writing_context["intent"] == "writing_context"
-    assert writing_context["workflow_support"]["workflow"] == "generation_context_enrichment"
+    assert writing_context["workflow_support"]["workflow"] == "writer_context_enrichment"
     assert writing_context["workflow_support"]["wordpress_write_owner"] == "wordpress_local"
     assert writing_context["results"][0]["context_role"] == "site_reference"
     assert writing_context["results"][0]["citation"]["post_id"] == 123
@@ -597,7 +597,7 @@ def test_writing_support_plan_returns_pre_draft_assistance_without_article_gener
         "workflow": "writer_preparation_support",
         "wordpress_write_owner": "wordpress_local",
         "cloud_output": "pre_draft_support_plan",
-        "body_generation_owner": "local_ability_recipe",
+        "writing_assistance_owner": "wordpress_local_writer",
     }
     assert support["direct_wordpress_write"] is False
     assert support["write_posture"] == "suggestion_only"
@@ -616,6 +616,9 @@ def test_writing_support_plan_returns_pre_draft_assistance_without_article_gener
         "article_title",
         "seo_copy",
         "article_write_plan",
+        "full_article_draft",
+        "ready_to_publish_content",
+        "auto_publish_instruction",
         "direct_wordpress_write",
     ]
 

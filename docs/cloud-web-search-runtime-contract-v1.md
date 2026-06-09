@@ -9,9 +9,10 @@ Cloud to write WordPress content.
 
 ## Runtime Ability
 
-Cloud accepts this static managed ability name:
+Cloud accepts these static managed ability names:
 
 - `magick-ai-cloud/web-search`
+- `npcink-cloud/web-search`
 
 The matching contract version is:
 
@@ -119,10 +120,13 @@ default customer path uses Cloud-managed search.
 Supported first intents:
 
 - `general_research`
+- `article_background`
 - `fact_check`
 - `news`
 - `writing_context`
 - `competitor_research`
+- `pricing_snapshot`
+- `product_comparison`
 - `source_discovery`
 - `external_links`
 
@@ -196,6 +200,7 @@ see whether search was skipped, dry-run, failed, or used. This evidence remains
   "intent": "general_research",
   "query_hash": "sha256...",
   "query_chars": 36,
+  "output_contract": "search_evidence_pack.v1",
   "evidence_gate": {
     "status": "passed",
     "min_score": 0,
@@ -217,6 +222,50 @@ see whether search was skipped, dry-run, failed, or used. This evidence remains
       "direct_wordpress_write": false
     }
   ],
+  "evidence_pack": {
+    "artifact_type": "search_evidence_pack",
+    "contract_version": "search_evidence_pack.v1",
+    "pack_type": "external_research",
+    "intent": "general_research",
+    "status": "passed",
+    "query_hash": "sha256...",
+    "result_count": 1,
+    "source_count": 1,
+    "required_sources": 1,
+    "provider": "tavily",
+    "sections": [
+      "external_sources",
+      "citation_candidates",
+      "risk_notes"
+    ],
+    "source_cards": [
+      {
+        "title": "Example result",
+        "url": "https://example.com/result",
+        "snippet": "Short provider-normalized snippet.",
+        "source": "tavily",
+        "suggested_use": "external_research",
+        "citation_candidate": true,
+        "write_posture": "suggestion_only",
+        "direct_wordpress_write": false
+      }
+    ],
+    "citation_candidates": [
+      {
+        "title": "Example result",
+        "url": "https://example.com/result",
+        "snippet": "Short provider-normalized snippet.",
+        "source": "tavily",
+        "suggested_use": "external_research",
+        "citation_candidate": true,
+        "write_posture": "suggestion_only",
+        "direct_wordpress_write": false
+      }
+    ],
+    "guidance": "Use returned web sources as external grounding evidence. Keep conclusions suggestion-only.",
+    "write_posture": "suggestion_only",
+    "direct_wordpress_write": false
+  },
   "sources": [
     {
       "title": "Example result",
@@ -228,6 +277,12 @@ see whether search was skipped, dry-run, failed, or used. This evidence remains
   "direct_wordpress_write": false
 }
 ```
+
+`search_evidence_pack.v1` is an additive structured evidence artifact. It is
+not a new workflow registry, not a publication plan, and not a WordPress write
+instruction. It groups normalized source cards and citation candidates so local
+writing surfaces can review current external evidence before a human writes or
+approves final content.
 
 ## Site Knowledge Composition
 
