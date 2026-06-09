@@ -20,6 +20,8 @@ from app.domain.web_search.service import (
     TavilyWebSearchProvider,
     WebSearchExecutionResult,
     WebSearchProviderUsage,
+    _TAVILY_POOL_CURSOR,
+    _TAVILY_POOL_QUARANTINED_UNTIL,
 )
 from tests.conftest import (
     TEST_ADMIN_SESSION_SECRET,
@@ -248,6 +250,132 @@ def test_cloud_managed_web_search_executes_and_records_provider_usage(
             "cost",
         ]
         assert all(event.ability_family == "knowledge" for event in meter_events)
+
+
+def test_tavily_key_pool_rotates_without_exposing_keys(monkeypatch: Any) -> None:
+    _TAVILY_POOL_CURSOR.clear()
+    _TAVILY_POOL_QUARANTINED_UNTIL.clear()
+    seen_keys: list[str] = []
+
+    class FakeClient:
+        def __init__(self, *, timeout: float) -> None:
+            assert timeout == 15.0
+
+        def __enter__(self) -> FakeClient:
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            return None
+
+        def post(self, endpoint: str, *, json: dict[str, Any]) -> httpx.Response:
+            seen_keys.append(str(json["api_key"]))
+            return httpx.Response(
+                200,
+                json={
+                    "results": [
+                        {
+                            "title": "Rotated Tavily source",
+                            "url": "https://example.com/rotated-tavily-source",
+                            "content": "A source returned through a Tavily key pool.",
+                        }
+                    ]
+                },
+                request=httpx.Request("POST", endpoint),
+            )
+
+    monkeypatch.setattr("app.domain.web_search.service.httpx.Client", FakeClient)
+    provider = TavilyWebSearchProvider(
+        Settings(
+            _env_file=None,
+            environment="test",
+            web_search_provider="tavily",
+            web_search_tavily_api_key="",
+            web_search_tavily_api_keys="tvly-pool-a\ntvly-pool-b",
+        )
+    )
+
+    first = provider.search(
+        query="latest WordPress AI search trends",
+        options={"intent": "news", "max_results": 3},
+        site_id="site_alpha",
+        run_id="run_tavily_pool_first",
+    )
+    second = provider.search(
+        query="latest WordPress AI search trends",
+        options={"intent": "news", "max_results": 3},
+        site_id="site_alpha",
+        run_id="run_tavily_pool_second",
+    )
+
+    assert seen_keys == ["tvly-pool-a", "tvly-pool-b"]
+    assert first.result_json["provider_key_pool"]["key_count"] == 2
+    assert first.result_json["provider_key_pool"]["selected_key_index"] == 1
+    assert second.result_json["provider_key_pool"]["selected_key_index"] == 2
+    assert "tvly-pool-a" not in json.dumps(first.result_json)
+    assert "tvly-pool-b" not in json.dumps(second.result_json)
+
+
+def test_tavily_key_pool_fails_over_after_rate_limit(monkeypatch: Any) -> None:
+    _TAVILY_POOL_CURSOR.clear()
+    _TAVILY_POOL_QUARANTINED_UNTIL.clear()
+    seen_keys: list[str] = []
+
+    class FakeClient:
+        def __init__(self, *, timeout: float) -> None:
+            assert timeout == 15.0
+
+        def __enter__(self) -> FakeClient:
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            return None
+
+        def post(self, endpoint: str, *, json: dict[str, Any]) -> httpx.Response:
+            seen_keys.append(str(json["api_key"]))
+            if json["api_key"] == "tvly-limited":
+                return httpx.Response(
+                    429,
+                    json={"message": "rate limited"},
+                    request=httpx.Request("POST", endpoint),
+                )
+            return httpx.Response(
+                200,
+                json={
+                    "results": [
+                        {
+                            "title": "Failover Tavily source",
+                            "url": "https://example.com/failover-tavily-source",
+                            "content": "A source returned after key failover.",
+                        }
+                    ]
+                },
+                request=httpx.Request("POST", endpoint),
+            )
+
+    monkeypatch.setattr("app.domain.web_search.service.httpx.Client", FakeClient)
+    result = TavilyWebSearchProvider(
+        Settings(
+            _env_file=None,
+            environment="test",
+            web_search_provider="tavily",
+            web_search_tavily_api_keys="tvly-limited,tvly-healthy",
+        )
+    ).search(
+        query="latest WordPress AI search trends",
+        options={"intent": "news", "max_results": 3},
+        site_id="site_alpha",
+        run_id="run_tavily_pool_failover",
+    )
+
+    assert seen_keys == ["tvly-limited", "tvly-healthy"]
+    key_pool = result.result_json["provider_key_pool"]
+    assert key_pool["key_count"] == 2
+    assert key_pool["selected_key_index"] == 2
+    assert key_pool["attempt_count"] == 2
+    assert key_pool["failover_count"] == 1
+    assert key_pool["errors"][0]["error_code"] == "provider.rate_limited"
+    assert "tvly-limited" not in json.dumps(result.result_json)
+    assert result.result_json["results"][0]["url"] == "https://example.com/failover-tavily-source"
 
 
 def test_cloud_managed_web_search_accepts_npcink_ability_alias(

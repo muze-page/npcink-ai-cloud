@@ -55,6 +55,12 @@ MVP provider support is Cloud-owned and configured only by Cloud operators:
   `apify`
 - `MAGICK_CLOUD_WEB_SEARCH_TAVILY_BASE_URL`: default `https://api.tavily.com`
 - `MAGICK_CLOUD_WEB_SEARCH_TAVILY_API_KEY`: required when provider is `tavily`
+  unless `MAGICK_CLOUD_WEB_SEARCH_TAVILY_API_KEYS` is configured
+- `MAGICK_CLOUD_WEB_SEARCH_TAVILY_API_KEYS`: optional Cloud-operator key pool.
+  Values may be comma-, semicolon-, whitespace-, or newline-separated. Cloud
+  rotates keys in memory with round-robin selection and temporarily skips keys
+  that return auth, rate-limit, timeout, network, or provider-unavailable
+  failures. WordPress users never submit these keys through runtime requests.
 - `MAGICK_CLOUD_WEB_SEARCH_TAVILY_TIMEOUT_SECONDS`: default `15`
 - `MAGICK_CLOUD_WEB_SEARCH_TAVILY_COST_PER_QUERY`: optional shadow cost for
   provider-call usage records

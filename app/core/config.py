@@ -237,6 +237,7 @@ class Settings(BaseSettings):
     web_search_provider: str = Field(default="disabled")
     web_search_tavily_base_url: str = Field(default="https://api.tavily.com")
     web_search_tavily_api_key: str | None = Field(default=None)
+    web_search_tavily_api_keys: str | None = Field(default=None)
     web_search_tavily_timeout_seconds: float = Field(default=15.0)
     web_search_tavily_cost_per_query: float = Field(default=0.0)
     web_search_bocha_base_url: str = Field(default="https://api.bochaai.com/v1")
@@ -560,9 +561,11 @@ class Settings(BaseSettings):
                 raise ValueError(
                     "web_search_tavily_base_url is required when web_search_provider=tavily"
                 )
-            if not str(self.web_search_tavily_api_key or "").strip():
+            if not str(self.web_search_tavily_api_key or "").strip() and not str(
+                self.web_search_tavily_api_keys or ""
+            ).strip():
                 raise ValueError(
-                    "web_search_tavily_api_key is required when web_search_provider=tavily"
+                    "web_search_tavily_api_key or web_search_tavily_api_keys is required when web_search_provider=tavily"
                 )
         if web_search_provider == "bocha":
             if not str(self.web_search_bocha_base_url or "").strip():

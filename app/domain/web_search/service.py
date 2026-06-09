@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import hashlib
+import re
+import threading
 import time
 from dataclasses import dataclass
 from typing import Any
@@ -29,6 +31,10 @@ MAX_RESULT_TITLE_CHARS = 220
 MAX_RESULT_SNIPPET_CHARS = 600
 MAX_DOMAIN_FILTERS = 10
 WEB_SEARCH_PROVIDER_ORDER = ("tavily", "bocha", "apify")
+TAVILY_KEY_QUARANTINE_SECONDS = 300.0
+_TAVILY_POOL_LOCK = threading.Lock()
+_TAVILY_POOL_CURSOR: dict[str, int] = {}
+_TAVILY_POOL_QUARANTINED_UNTIL: dict[tuple[str, str], float] = {}
 
 
 @dataclass(slots=True)
@@ -175,8 +181,8 @@ class TavilyWebSearchProvider:
         site_id: str,
         run_id: str,
     ) -> WebSearchExecutionResult:
-        api_key = str(self.settings.web_search_tavily_api_key or "").strip()
-        if not api_key:
+        api_keys = _tavily_api_key_pool(self.settings)
+        if not api_keys:
             raise WebSearchProviderError(
                 "web_search.tavily_api_key_missing",
                 "Cloud-managed Tavily API key is not configured",
@@ -184,52 +190,74 @@ class TavilyWebSearchProvider:
         base_url = str(self.settings.web_search_tavily_base_url or "").strip().rstrip("/")
         endpoint = f"{base_url}/search"
         max_results = coerce_positive_int(options.get("max_results"), default=5, maximum=10)
-        request_body: dict[str, Any] = {
-            "api_key": api_key,
-            "query": query,
-            "search_depth": str(options.get("search_depth") or "basic"),
-            "max_results": max_results,
-            "include_answer": False,
-            "include_raw_content": False,
-        }
-        if int(options.get("recency_days") or 0) > 0:
-            request_body["days"] = int(options.get("recency_days") or 0)
-        if options.get("language"):
-            request_body["language"] = str(options["language"])
-        if options.get("region"):
-            request_body["region"] = str(options["region"])
-        if options.get("allowed_domains"):
-            request_body["include_domains"] = list(options["allowed_domains"])
-        if options.get("blocked_domains"):
-            request_body["exclude_domains"] = list(options["blocked_domains"])
-
         started = time.monotonic()
-        try:
-            timeout_seconds = float(self.settings.web_search_tavily_timeout_seconds)
-            with httpx.Client(timeout=timeout_seconds) as client:
-                response = client.post(endpoint, json=request_body)
-                response.raise_for_status()
-        except httpx.TimeoutException as error:
-            usage = self._usage(started, error_code="provider.timeout")
+        key_errors: list[dict[str, object]] = []
+        selection: dict[str, object] | None = None
+        response: httpx.Response | None = None
+        last_error: Exception | None = None
+        last_error_code: str | None = None
+        last_error_message = "Tavily web search request failed"
+
+        for _attempt in range(len(api_keys)):
+            selection = _select_tavily_api_key(api_keys)
+            request_body: dict[str, Any] = {
+                "api_key": str(selection["api_key"]),
+                "query": query,
+                "search_depth": str(options.get("search_depth") or "basic"),
+                "max_results": max_results,
+                "include_answer": False,
+                "include_raw_content": False,
+            }
+            if int(options.get("recency_days") or 0) > 0:
+                request_body["days"] = int(options.get("recency_days") or 0)
+            if options.get("language"):
+                request_body["language"] = str(options["language"])
+            if options.get("region"):
+                request_body["region"] = str(options["region"])
+            if options.get("allowed_domains"):
+                request_body["include_domains"] = list(options["allowed_domains"])
+            if options.get("blocked_domains"):
+                request_body["exclude_domains"] = list(options["blocked_domains"])
+
+            try:
+                timeout_seconds = float(self.settings.web_search_tavily_timeout_seconds)
+                with httpx.Client(timeout=timeout_seconds) as client:
+                    response = client.post(endpoint, json=request_body)
+                    response.raise_for_status()
+                break
+            except httpx.TimeoutException as error:
+                last_error = error
+                last_error_code = "provider.timeout"
+                last_error_message = "Tavily web search timed out"
+            except httpx.HTTPStatusError as error:
+                last_error = error
+                last_error_code = _map_tavily_error(error.response)
+                last_error_message = _extract_http_error_message(error.response)
+            except httpx.RequestError as error:
+                last_error = error
+                last_error_code = "provider.network_error"
+                last_error_message = "Tavily web search request failed"
+
+            key_errors.append(
+                {
+                    "error_code": last_error_code or "provider.error",
+                    "selected_key_index": int(selection["index"]) + 1,
+                }
+            )
+            if not _should_quarantine_tavily_key(last_error_code):
+                break
+            _quarantine_tavily_api_key(
+                pool_id=str(selection["pool_id"]),
+                fingerprint=str(selection["fingerprint"]),
+            )
+
+        if response is None:
+            usage = self._usage(started, error_code=last_error_code)
             raise WebSearchProviderError(
-                "provider.timeout",
-                "Tavily web search timed out",
+                last_error_code or "web_search.tavily_http_error",
+                last_error_message,
                 usage=usage,
-            ) from error
-        except httpx.HTTPStatusError as error:
-            usage = self._usage(started, error_code=_map_tavily_error(error.response))
-            raise WebSearchProviderError(
-                usage.error_code or "web_search.tavily_http_error",
-                _extract_http_error_message(error.response),
-                usage=usage,
-            ) from error
-        except httpx.RequestError as error:
-            usage = self._usage(started, error_code="provider.network_error")
-            raise WebSearchProviderError(
-                "provider.network_error",
-                "Tavily web search request failed",
-                usage=usage,
-            ) from error
+            ) from last_error
 
         usage = self._usage(started)
         try:
@@ -255,6 +283,16 @@ class TavilyWebSearchProvider:
             results=results,
             evidence_policy=evidence_policy,
         )
+        if selection and int(selection["key_count"]) > 1:
+            result_json["provider_key_pool"] = {
+                "provider": "tavily",
+                "strategy": "round_robin_with_temporary_quarantine",
+                "key_count": int(selection["key_count"]),
+                "selected_key_index": int(selection["index"]) + 1,
+                "attempt_count": len(key_errors) + 1,
+                "failover_count": len(key_errors),
+                "errors": key_errors[:5],
+            }
         return WebSearchExecutionResult(result_json=result_json, usage=usage)
 
     def _usage(self, started: float, *, error_code: str | None = None) -> WebSearchProviderUsage:
@@ -531,6 +569,69 @@ def _build_options(input_payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _tavily_api_key_pool(settings: Settings) -> list[str]:
+    raw_values = [
+        str(settings.web_search_tavily_api_keys or ""),
+        str(settings.web_search_tavily_api_key or ""),
+    ]
+    keys: list[str] = []
+    seen: set[str] = set()
+    for raw in raw_values:
+        for item in re.split(r"[\s,;]+", raw):
+            value = item.strip()
+            if not value or value in seen:
+                continue
+            keys.append(value)
+            seen.add(value)
+    return keys
+
+
+def _select_tavily_api_key(api_keys: list[str]) -> dict[str, object]:
+    fingerprints = [_hash_tavily_key(item) for item in api_keys]
+    pool_id = hashlib.sha256("|".join(fingerprints).encode("utf-8")).hexdigest()[:16]
+    now = time.monotonic()
+    with _TAVILY_POOL_LOCK:
+        start = _TAVILY_POOL_CURSOR.get(pool_id, 0) % len(api_keys)
+        selected = start
+        for offset in range(len(api_keys)):
+            index = (start + offset) % len(api_keys)
+            quarantined_until = _TAVILY_POOL_QUARANTINED_UNTIL.get(
+                (pool_id, fingerprints[index]), 0.0
+            )
+            if quarantined_until <= now:
+                selected = index
+                break
+        _TAVILY_POOL_CURSOR[pool_id] = (selected + 1) % len(api_keys)
+    return {
+        "api_key": api_keys[selected],
+        "index": selected,
+        "key_count": len(api_keys),
+        "fingerprint": fingerprints[selected],
+        "pool_id": pool_id,
+    }
+
+
+def _quarantine_tavily_api_key(*, pool_id: str, fingerprint: str) -> None:
+    with _TAVILY_POOL_LOCK:
+        _TAVILY_POOL_QUARANTINED_UNTIL[(pool_id, fingerprint)] = (
+            time.monotonic() + TAVILY_KEY_QUARANTINE_SECONDS
+        )
+
+
+def _should_quarantine_tavily_key(error_code: str | None) -> bool:
+    return str(error_code or "") in {
+        "provider.auth_invalid",
+        "provider.rate_limited",
+        "provider.timeout",
+        "provider.network_error",
+        "provider.unavailable",
+    }
+
+
+def _hash_tavily_key(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()[:16]
+
+
 def _build_provider(
     settings: Settings,
     provider_id: str,
@@ -549,7 +650,7 @@ def _build_provider(
 
 def _provider_configured(settings: Settings, provider_id: str) -> bool:
     if provider_id == "tavily":
-        return bool(str(settings.web_search_tavily_api_key or "").strip())
+        return bool(_tavily_api_key_pool(settings))
     if provider_id == "bocha":
         return bool(str(settings.web_search_bocha_api_key or "").strip())
     if provider_id == "apify":
