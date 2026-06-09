@@ -3,8 +3,10 @@ from __future__ import annotations
 from typing import Any
 
 WEB_SEARCH_ABILITY = "magick-ai-cloud/web-search"
-WEB_SEARCH_ABILITIES = frozenset({WEB_SEARCH_ABILITY})
+NPCINK_WEB_SEARCH_ABILITY = "npcink-cloud/web-search"
+WEB_SEARCH_ABILITIES = frozenset({WEB_SEARCH_ABILITY, NPCINK_WEB_SEARCH_ABILITY})
 WEB_SEARCH_CONTRACT = "web_search.v1"
+SEARCH_EVIDENCE_PACK_CONTRACT = "search_evidence_pack.v1"
 WEB_SEARCH_PROFILE_ID = "web-search.managed"
 WEB_SEARCH_EXECUTION_KIND = "web_search"
 WEB_SEARCH_ABILITY_FAMILY = "knowledge"
@@ -13,10 +15,13 @@ WEB_SEARCH_DATA_CLASSIFICATION = "public"
 ALLOWED_WEB_SEARCH_INTENTS = frozenset(
     {
         "general_research",
+        "article_background",
         "fact_check",
         "news",
         "writing_context",
         "competitor_research",
+        "pricing_snapshot",
+        "product_comparison",
         "source_discovery",
         "external_links",
     }
@@ -64,7 +69,7 @@ def validate_web_search_runtime_contract(
     contract_version: str,
     input_payload: dict[str, Any],
 ) -> None:
-    if ability_name != WEB_SEARCH_ABILITY:
+    if ability_name not in WEB_SEARCH_ABILITIES:
         raise WebSearchContractViolation(
             "web_search.unknown_ability",
             "web search ability_name is not supported",

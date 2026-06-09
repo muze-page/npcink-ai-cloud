@@ -4389,7 +4389,7 @@ class RuntimeService:
             )
         except WebSearchContractViolation as error:
             raise RuntimeExecutionContractError(error.error_code, error.message) from error
-        if request.ability_name != WEB_SEARCH_ABILITY:
+        if request.ability_name not in WEB_SEARCH_ABILITIES:
             raise RuntimeExecutionContractError(
                 "web_search.unknown_ability",
                 "web search ability_name is not supported",

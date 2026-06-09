@@ -16,6 +16,7 @@ from app.domain.agent_workflow_metadata import (
 )
 from app.domain.web_search.contracts import (
     ALLOWED_WEB_SEARCH_INTENTS,
+    SEARCH_EVIDENCE_PACK_CONTRACT,
     WEB_SEARCH_ABILITY,
     WEB_SEARCH_CONTRACT,
     WebSearchContractViolation,
@@ -86,6 +87,7 @@ class WebSearchService:
                 "web search query is required",
             )
         options = _build_options(input_payload)
+        options["ability_name"] = ability_name
         requested_provider = str(options.get("provider") or "").strip().lower()
         provider_id = (
             requested_provider
@@ -558,6 +560,15 @@ def _build_result_json(
     results: list[dict[str, Any]],
     evidence_policy: dict[str, Any],
 ) -> dict[str, Any]:
+    evidence_gate = _evidence_gate(results, evidence_policy)
+    evidence_pack = _build_search_evidence_pack(
+        provider_id=provider_id,
+        query=query,
+        options=options,
+        results=results,
+        evidence_policy=evidence_policy,
+        evidence_gate=evidence_gate,
+    )
     return {
         "artifact_type": "web_search_results",
         "composition_role": "external_web_evidence",
@@ -566,7 +577,9 @@ def _build_result_json(
         "intent": str(options.get("intent") or "general_research"),
         "query_hash": _hash_query(query),
         "query_chars": len(query),
-        "evidence_gate": _evidence_gate(results, evidence_policy),
+        "output_contract": SEARCH_EVIDENCE_PACK_CONTRACT,
+        "evidence_gate": evidence_gate,
+        "evidence_pack": evidence_pack,
         "workflow_metadata": _web_search_workflow_metadata(options),
         "results": results,
         "sources": [
@@ -597,10 +610,11 @@ def _web_search_workflow_metadata(options: dict[str, Any]) -> dict[str, Any]:
     metadata.update(
         {
             "workflow_kind": "fixed_evidence_workflow",
-            "triggering_ability": WEB_SEARCH_ABILITY,
+            "triggering_ability": str(options.get("ability_name") or WEB_SEARCH_ABILITY),
             "triggering_contract": WEB_SEARCH_CONTRACT,
             "intent": str(options.get("intent") or "general_research"),
             "cloud_output": "external_web_evidence",
+            "output_contract": SEARCH_EVIDENCE_PACK_CONTRACT,
             "write_posture": "suggestion_only",
             "steps": registry_metadata_tokens(metadata.get("steps")),
             "stop_conditions": registry_metadata_tokens(metadata.get("stop_conditions")),
@@ -771,13 +785,116 @@ def _evidence_gate(
 
 def _suggested_use(intent: str) -> str:
     return {
+        "article_background": "article_background_source",
         "fact_check": "verify_external_fact",
         "news": "time_sensitive_context",
         "writing_context": "external_writing_context",
         "competitor_research": "competitor_context",
+        "pricing_snapshot": "pricing_context",
+        "product_comparison": "product_comparison_context",
         "source_discovery": "source_candidate",
         "external_links": "external_link_candidate",
     }.get(intent, "external_research")
+
+
+def _build_search_evidence_pack(
+    *,
+    provider_id: str,
+    query: str,
+    options: dict[str, Any],
+    results: list[dict[str, Any]],
+    evidence_policy: dict[str, Any],
+    evidence_gate: dict[str, Any],
+) -> dict[str, Any]:
+    intent = str(options.get("intent") or "general_research")
+    source_cards = [_source_card(item, provider_id=provider_id) for item in results]
+    source_count = len([item for item in source_cards if str(item.get("url") or "")])
+    return {
+        "artifact_type": "search_evidence_pack",
+        "contract_version": SEARCH_EVIDENCE_PACK_CONTRACT,
+        "pack_type": _evidence_pack_type(intent),
+        "intent": intent,
+        "status": str(evidence_gate.get("status") or "insufficient_evidence"),
+        "query_hash": _hash_query(query),
+        "result_count": len(results),
+        "source_count": source_count,
+        "required_sources": int(evidence_policy.get("required_sources") or 1),
+        "provider": provider_id,
+        "sections": _evidence_pack_sections(intent),
+        "source_cards": source_cards,
+        "citation_candidates": source_cards,
+        "guidance": _evidence_pack_guidance(intent, evidence_gate),
+        "write_posture": "suggestion_only",
+        "direct_wordpress_write": False,
+    }
+
+
+def _source_card(item: dict[str, Any], *, provider_id: str) -> dict[str, Any]:
+    return {
+        "title": _normalize_text(item.get("title"), limit=MAX_RESULT_TITLE_CHARS),
+        "url": _normalize_url(item.get("url")),
+        "snippet": _normalize_text(item.get("snippet"), limit=MAX_RESULT_SNIPPET_CHARS),
+        "source": str(item.get("source") or provider_id),
+        "suggested_use": str(item.get("suggested_use") or ""),
+        "citation_candidate": bool(item.get("url")),
+        "write_posture": "suggestion_only",
+        "direct_wordpress_write": False,
+    }
+
+
+def _evidence_pack_type(intent: str) -> str:
+    return {
+        "article_background": "article_background",
+        "fact_check": "fact_check",
+        "competitor_research": "competitor_snapshot",
+        "pricing_snapshot": "pricing_snapshot",
+        "product_comparison": "product_comparison",
+    }.get(intent, "external_research")
+
+
+def _evidence_pack_sections(intent: str) -> list[str]:
+    return {
+        "article_background": [
+            "current_background",
+            "citation_candidates",
+            "risk_notes",
+        ],
+        "fact_check": [
+            "claims_to_verify",
+            "supporting_sources",
+            "manual_review_notes",
+        ],
+        "competitor_research": [
+            "competitor_sources",
+            "positioning_signals",
+            "comparison_notes",
+        ],
+        "pricing_snapshot": [
+            "pricing_sources",
+            "plan_or_offer_signals",
+            "freshness_notes",
+        ],
+        "product_comparison": [
+            "product_sources",
+            "feature_signals",
+            "comparison_notes",
+        ],
+    }.get(intent, ["external_sources", "citation_candidates", "risk_notes"])
+
+
+def _evidence_pack_guidance(intent: str, evidence_gate: dict[str, Any]) -> str:
+    if str(evidence_gate.get("status") or "") != "passed":
+        return "Treat this pack as insufficient evidence and ask for manual review before making current factual claims."
+    return {
+        "article_background": "Use as a pre-writing background pack. Cite sources for current claims and keep final writes local-governed.",
+        "fact_check": "Use as supporting evidence for claim review. Do not mark unsupported claims as verified.",
+        "competitor_research": "Use as a lightweight competitor snapshot, not a durable competitor database.",
+        "pricing_snapshot": "Use as a point-in-time pricing snapshot. Re-check before publishing pricing claims.",
+        "product_comparison": "Use as a lightweight comparison input. Confirm important claims manually before publishing.",
+    }.get(
+        intent,
+        "Use returned web sources as external grounding evidence. Keep conclusions suggestion-only.",
+    )
 
 
 def _normalize_domain_list(value: Any) -> list[str]:

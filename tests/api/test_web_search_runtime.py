@@ -74,7 +74,11 @@ def _build_client(
     return database_url, client
 
 
-def _payload(input_overrides: dict[str, Any] | None = None) -> dict[str, Any]:
+def _payload(
+    input_overrides: dict[str, Any] | None = None,
+    *,
+    ability_name: str = "magick-ai-cloud/web-search",
+) -> dict[str, Any]:
     input_payload: dict[str, Any] = {
         "contract_version": "web_search.v1",
         "query": "latest WordPress AI search trends",
@@ -92,7 +96,7 @@ def _payload(input_overrides: dict[str, Any] | None = None) -> dict[str, Any]:
     }
     input_payload.update(input_overrides or {})
     return {
-        "ability_name": "magick-ai-cloud/web-search",
+        "ability_name": ability_name,
         "contract_version": "web_search.v1",
         "execution_pattern": "inline",
         "storage_mode": "result_only",
@@ -209,6 +213,7 @@ def test_cloud_managed_web_search_executes_and_records_provider_usage(
     assert result["workflow_metadata"]["triggering_contract"] == "web_search.v1"
     assert result["workflow_metadata"]["intent"] == "news"
     assert result["workflow_metadata"]["cloud_output"] == "external_web_evidence"
+    assert result["workflow_metadata"]["output_contract"] == "search_evidence_pack.v1"
     assert result["workflow_metadata"]["handoff_owner"] == "wordpress_local"
     assert result["workflow_metadata"]["write_posture"] == "suggestion_only"
     assert result["workflow_metadata"]["direct_wordpress_write"] is False
@@ -241,6 +246,75 @@ def test_cloud_managed_web_search_executes_and_records_provider_usage(
             "cost",
         ]
         assert all(event.ability_family == "knowledge" for event in meter_events)
+
+
+def test_cloud_managed_web_search_accepts_npcink_ability_alias(
+    tmp_path: Path,
+    monkeypatch: Any,
+) -> None:
+    _, client = _build_client(tmp_path)
+
+    def fake_search(
+        self: TavilyWebSearchProvider,
+        *,
+        query: str,
+        options: dict[str, Any],
+        site_id: str,
+        run_id: str,
+    ) -> WebSearchExecutionResult:
+        return WebSearchExecutionResult(
+            result_json={
+                "artifact_type": "web_search_results",
+                "composition_role": "external_web_evidence",
+                "status": "ready",
+                "provider": "tavily",
+                "intent": options["intent"],
+                "query_hash": "hash-only",
+                "query_chars": len(query),
+                "evidence_gate": {
+                    "status": "passed",
+                    "allows_web_grounded_assertion": True,
+                    "source_count": 1,
+                },
+                "results": [
+                    {
+                        "title": "Current source",
+                        "url": "https://example.com/source",
+                        "snippet": "A source returned by Cloud web search.",
+                        "score": 1.0,
+                        "source": "tavily",
+                        "write_posture": "suggestion_only",
+                        "direct_wordpress_write": False,
+                    }
+                ],
+                "write_posture": "suggestion_only",
+                "direct_wordpress_write": False,
+            },
+            usage=WebSearchProviderUsage(
+                provider_id="tavily",
+                model_id="web-search",
+                instance_id="cloud-managed",
+                region="unspecified",
+                latency_ms=11,
+                cost=0.002,
+            ),
+        )
+
+    monkeypatch.setattr(TavilyWebSearchProvider, "search", fake_search)
+
+    response = _execute(
+        client,
+        _payload(
+            {"intent": "article_background"},
+            ability_name="npcink-cloud/web-search",
+        ),
+        idempotency_key="web-search-npcink-alias",
+    )
+
+    assert response.status_code == 200
+    result = response.json()["data"]["result"]
+    assert result["workflow_metadata"]["triggering_ability"] == "npcink-cloud/web-search"
+    assert result["workflow_metadata"]["intent"] == "article_background"
 
 
 def test_cloud_managed_web_search_uses_bocha_provider(
@@ -469,6 +543,13 @@ def test_apify_provider_uses_actor_query_string_and_bearer_auth(monkeypatch: Any
     assert captured["headers"]["Authorization"] == "Bearer redacted-placeholder"
     assert "token=" not in captured["endpoint"]
     assert result.result_json["provider"] == "apify"
+    assert result.result_json["output_contract"] == "search_evidence_pack.v1"
+    assert result.result_json["evidence_pack"]["artifact_type"] == "search_evidence_pack"
+    assert result.result_json["evidence_pack"]["contract_version"] == "search_evidence_pack.v1"
+    assert result.result_json["evidence_pack"]["pack_type"] == "external_research"
+    assert result.result_json["evidence_pack"]["citation_candidates"][0]["url"] == (
+        "https://example.com/apify-source"
+    )
     assert len(result.result_json["results"]) == 1
     assert result.result_json["evidence_gate"]["source_count"] == 1
     assert result.result_json["results"][0]["url"] == "https://example.com/apify-source"
