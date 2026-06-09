@@ -93,6 +93,8 @@ class WebSearchService:
             requested_provider
             or str(self.settings.web_search_provider or "disabled").strip().lower()
         )
+        options["provider_mode"] = provider_id
+        options["requested_provider"] = requested_provider
         if provider_id == "disabled":
             raise WebSearchProviderError(
                 "web_search.provider_not_configured",
@@ -133,6 +135,12 @@ class WebSearchService:
                     }
                 )
                 continue
+            result.result_json["provider_mode"] = str(
+                result.result_json.get("provider_mode") or provider_id
+            )
+            result.result_json["requested_provider"] = str(
+                result.result_json.get("requested_provider") or requested_provider
+            )
             if errors:
                 result.result_json["provider_fallback_errors"] = errors
             result.result_json = _attach_web_search_workflow_metadata(
@@ -574,6 +582,10 @@ def _build_result_json(
         "composition_role": "external_web_evidence",
         "status": "ready",
         "provider": provider_id,
+        "provider_mode": str(
+            options.get("provider_mode") or options.get("provider") or "cloud_managed"
+        ),
+        "requested_provider": str(options.get("requested_provider") or ""),
         "intent": str(options.get("intent") or "general_research"),
         "query_hash": _hash_query(query),
         "query_chars": len(query),

@@ -205,6 +205,8 @@ def test_cloud_managed_web_search_executes_and_records_provider_usage(
     assert data["execution_context"]["execution_pattern"] == "inline"
     result = data["result"]
     assert result["artifact_type"] == "web_search_results"
+    assert result["provider"] == "tavily"
+    assert result["provider_mode"] == "tavily"
     assert result["direct_wordpress_write"] is False
     assert result["workflow_metadata"]["workflow_id"] == "external_web_evidence_preflight"
     assert result["workflow_metadata"]["workflow_version"] == "web_search_evidence_workflow.v1"
@@ -543,6 +545,7 @@ def test_apify_provider_uses_actor_query_string_and_bearer_auth(monkeypatch: Any
     assert captured["headers"]["Authorization"] == "Bearer redacted-placeholder"
     assert "token=" not in captured["endpoint"]
     assert result.result_json["provider"] == "apify"
+    assert result.result_json["provider_mode"] == "apify"
     assert result.result_json["output_contract"] == "search_evidence_pack.v1"
     assert result.result_json["evidence_pack"]["artifact_type"] == "search_evidence_pack"
     assert result.result_json["evidence_pack"]["contract_version"] == "search_evidence_pack.v1"
