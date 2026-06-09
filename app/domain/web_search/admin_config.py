@@ -350,7 +350,7 @@ def _label_pool(value: Any) -> list[str]:
         raw_items = [str(item) for item in value]
     else:
         raw_items = re.split(r"[\n,;]+", str(value or ""))
-    return [item.strip() for item in raw_items if item.strip()]
+    return [item.strip() for item in raw_items]
 
 
 def _label_pool_value(payload: dict[str, Any], key: str) -> str:

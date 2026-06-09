@@ -383,6 +383,66 @@ def test_tavily_key_pool_fails_over_after_rate_limit(monkeypatch: Any) -> None:
     assert result.result_json["results"][0]["url"] == "https://example.com/failover-tavily-source"
 
 
+def test_tavily_key_pool_preserves_empty_label_alignment(monkeypatch: Any) -> None:
+    _TAVILY_POOL_CURSOR.clear()
+    _TAVILY_POOL_QUARANTINED_UNTIL.clear()
+    seen_keys: list[str] = []
+
+    class FakeClient:
+        def __init__(self, *, timeout: float) -> None:
+            assert timeout == 15.0
+
+        def __enter__(self) -> FakeClient:
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            return None
+
+        def post(self, endpoint: str, *, json: dict[str, Any]) -> httpx.Response:
+            seen_keys.append(str(json["api_key"]))
+            return httpx.Response(
+                200,
+                json={
+                    "results": [
+                        {
+                            "title": "Aligned Tavily source",
+                            "url": "https://example.com/aligned-tavily-source",
+                            "content": "A source returned through aligned labels.",
+                        }
+                    ]
+                },
+                request=httpx.Request("POST", endpoint),
+            )
+
+    monkeypatch.setattr("app.domain.web_search.service.httpx.Client", FakeClient)
+    provider = TavilyWebSearchProvider(
+        Settings(
+            _env_file=None,
+            environment="test",
+            web_search_provider="tavily",
+            web_search_tavily_api_keys="tvly-unlabeled,tvly-labeled",
+            web_search_tavily_api_key_labels=",npc@example.test",
+        )
+    )
+
+    first = provider.search(
+        query="latest WordPress AI search trends",
+        options={"intent": "news", "max_results": 3},
+        site_id="site_alpha",
+        run_id="run_tavily_label_alignment_first",
+    )
+    second = provider.search(
+        query="latest WordPress AI search trends",
+        options={"intent": "news", "max_results": 3},
+        site_id="site_alpha",
+        run_id="run_tavily_label_alignment_second",
+    )
+
+    assert seen_keys == ["tvly-unlabeled", "tvly-labeled"]
+    assert "selected_key_label" not in first.result_json["provider_key_pool"]
+    assert second.result_json["provider_key_pool"]["selected_key_label"] == "npc@example.test"
+
+
 def test_cloud_managed_web_search_accepts_npcink_ability_alias(
     tmp_path: Path,
     monkeypatch: Any,

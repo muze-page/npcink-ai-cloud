@@ -596,7 +596,6 @@ def _tavily_api_key_labels(settings: Settings, key_count: int) -> list[str]:
         item.strip()
         for item in re.split(r"[\n,;]+", str(settings.web_search_tavily_api_key_labels or ""))
     ]
-    labels = [item for item in labels if item]
     if key_count <= 0:
         return []
     return labels[:key_count] + [""] * max(0, key_count - len(labels))
