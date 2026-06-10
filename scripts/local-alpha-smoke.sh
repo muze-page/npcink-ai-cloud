@@ -272,6 +272,18 @@ signed_request() {
 		"Idempotency-Key: ${idempotency_key}"
 }
 
+ok "Ensuring local Cloud dev services are running"
+docker compose -f "${ROOT_DIR}/docker-compose.dev.yml" \
+	--profile runtime \
+	--profile callback \
+	--profile ops \
+	up -d api worker callback-worker ops-worker frontend proxy >/dev/null
+docker compose -f "${ROOT_DIR}/docker-compose.dev.yml" \
+	--profile runtime \
+	--profile callback \
+	--profile ops \
+	restart worker callback-worker ops-worker >/dev/null
+
 ok "Waiting for local Cloud: ${BASE_URL}"
 if ! magick_ai_cloud_wait_for_ready "${BASE_URL}" 20 2; then
 	fail "Cloud API did not become ready"

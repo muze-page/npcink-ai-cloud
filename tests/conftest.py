@@ -8,12 +8,9 @@ import jwt
 import pytest
 from sqlalchemy import select
 
-if not os.environ.get("MAGICK_CLOUD_INTERNAL_AUTH_TOKEN", "").strip():
-    os.environ["MAGICK_CLOUD_INTERNAL_AUTH_TOKEN"] = "magick-cloud-internal-test-token-32b"
-if not os.environ.get("MAGICK_CLOUD_ADMIN_SESSION_SECRET", "").strip():
-    os.environ["MAGICK_CLOUD_ADMIN_SESSION_SECRET"] = "magick-cloud-ops-session-secret-32b"
-if not os.environ.get("MAGICK_CLOUD_PORTAL_JWT_SECRET", "").strip():
-    os.environ["MAGICK_CLOUD_PORTAL_JWT_SECRET"] = "magick-cloud-portal-jwt-secret-32b"
+os.environ["MAGICK_CLOUD_INTERNAL_AUTH_TOKEN"] = "magick-cloud-internal-test-token-32b"
+os.environ["MAGICK_CLOUD_ADMIN_SESSION_SECRET"] = "magick-cloud-ops-session-secret-32b"
+os.environ["MAGICK_CLOUD_PORTAL_JWT_SECRET"] = "magick-cloud-portal-jwt-secret-32b"
 for _provider_env_name in (
     "MAGICK_CLOUD_OPENAI_API_KEY",
     "MAGICK_CLOUD_OPENAI_COMPATIBLE_API_KEY",

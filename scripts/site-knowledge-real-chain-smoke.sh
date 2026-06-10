@@ -377,6 +377,11 @@ SYNC_RESULT_BODY=""
 for _attempt in $(seq 1 60); do
 	signed_request "GET" "/v1/runs/${SYNC_RUN_ID}/result" "" "" "" ""
 	if [ "${HTTP_STATUS}" = "200" ]; then
+		result_status="$(json_read_path "${HTTP_BODY}" "data.result.status" 2>/dev/null || true)"
+		if [ "${result_status}" = "running" ] || [ "${result_status}" = "queued" ]; then
+			sleep 2
+			continue
+		fi
 		SYNC_RESULT_BODY="${HTTP_BODY}"
 		break
 	fi

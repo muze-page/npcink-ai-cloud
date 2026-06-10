@@ -77,7 +77,7 @@ unavailable even when the Cloud project is correctly configured.
 - scaffold one new Cloud route pack: `pnpm run scaffold:cloud:route -- --route-id <route-id>`
 - scaffold one new Portal route pack: `pnpm run scaffold:cloud:portal-route -- --route-id <route-id>`
 - perimeter seam: `pnpm run check:cloud:perimeter`
-- hosted runtime smoke: `pnpm run check:e2e:hosted-runtime:smoke`
+- hosted runtime smoke: `pnpm run smoke:local-alpha`
 - deploy bundle smoke: `pnpm run check:e2e:cloud-deploy-bundle:smoke`
 - combined cloud smoke closure: `pnpm run check:e2e:cloud:smoke`
 - remote WordPress cron helper: `pnpm run cloud:wp-cron:ssh -- <install|status|remove> [--site-url <wp-base-url>]`
