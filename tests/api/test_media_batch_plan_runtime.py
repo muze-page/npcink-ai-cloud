@@ -63,7 +63,8 @@ def _payload(input_overrides: dict[str, Any] | None = None) -> dict[str, Any]:
     input_payload: dict[str, Any] = {
         "contract_version": "media_derivative_batch_plan_request.v1",
         "user_request": (
-            "把 2026 年 4 月媒体库大图转换成 PNG，最大宽度 1600，质量 82，加右下角 LOGO 水印"
+            "把 2026 年 4 月媒体库大图转换成 PNG，裁剪成 16:9，最大宽度 1600，"
+            "质量 82，加右下角 LOGO 水印"
         ),
         "site_context": {"current_date": "2026-06-05T00:00:00Z"},
     }
@@ -128,6 +129,8 @@ def test_media_batch_plan_runtime_generates_governed_chunk_plan(tmp_path: Path) 
     assert result["operation"]["target_format"] == "png"
     assert result["operation"]["max_width"] == 1600
     assert result["operation"]["quality"] == 82
+    assert result["operation"]["crop"]["aspect_ratio"] == "16:9"
+    assert result["operation"]["crop"]["position"] == "center"
     assert result["operation"]["watermark"]["type"] == "image"
     assert result["operation"]["watermark"]["position"] == "bottom_right"
     assert result["execution_plan"]["recommended_chunk_size"] == 7

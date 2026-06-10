@@ -230,6 +230,61 @@ def _apply_text_watermark(
     return base
 
 
+def _parse_crop_aspect_ratio(value: Any) -> tuple[int, int]:
+    ratio = str(value or "16:9").strip()
+    match = re.fullmatch(r"([1-9][0-9]{0,2}):([1-9][0-9]{0,2})", ratio)
+    if not match:
+        return (16, 9)
+    ratio_width = max(1, min(100, int(match.group(1))))
+    ratio_height = max(1, min(100, int(match.group(2))))
+    return ratio_width, ratio_height
+
+
+def _axis_crop_offset(position: str, *, available: int, crop_size: int, axis: str) -> int:
+    overflow = max(0, available - crop_size)
+    if overflow <= 0:
+        return 0
+    if axis == "x":
+        if position in {"top_left", "left", "bottom_left"}:
+            return 0
+        if position in {"top_right", "right", "bottom_right"}:
+            return overflow
+    if axis == "y":
+        if position in {"top_left", "top", "top_right"}:
+            return 0
+        if position in {"bottom_left", "bottom", "bottom_right"}:
+            return overflow
+    return overflow // 2
+
+
+def _apply_aspect_ratio_crop(
+    image: Image.Image,
+    *,
+    crop_options: dict[str, Any],
+    warnings: list[str],
+) -> Image.Image:
+    ratio_width, ratio_height = _parse_crop_aspect_ratio(crop_options.get("aspect_ratio"))
+    target_ratio = ratio_width / ratio_height
+    current_ratio = image.width / max(1, image.height)
+    if abs(current_ratio - target_ratio) < 0.0001:
+        return image
+
+    crop_width = image.width
+    crop_height = image.height
+    if current_ratio > target_ratio:
+        crop_width = max(1, min(image.width, int(round(image.height * target_ratio))))
+    else:
+        crop_height = max(1, min(image.height, int(round(image.width / target_ratio))))
+
+    position = str(crop_options.get("position") or "center")
+    left = _axis_crop_offset(position, available=image.width, crop_size=crop_width, axis="x")
+    top = _axis_crop_offset(position, available=image.height, crop_size=crop_height, axis="y")
+    cropped = image.crop((left, top, left + crop_width, top + crop_height))
+    cropped.format = image.format
+    warnings.append(f"source_cropped_to_aspect_ratio_{ratio_width}_{ratio_height}")
+    return cropped
+
+
 def _save_image(
     image: Image.Image,
     *,
@@ -292,6 +347,7 @@ def process_media_derivative(
     quality: int,
     watermark_bytes: bytes | None = None,
     watermark_options: dict[str, Any] | None = None,
+    crop_options: dict[str, Any] | None = None,
 ) -> MediaDerivativeResult:
     if target_format != "original":
         _check_format_available(target_format)
@@ -319,19 +375,32 @@ def process_media_derivative(
 
         warnings: list[str] = []
         watermark_applied = False
+        crop_requested = bool(crop_options and crop_options.get("type") == "aspect_ratio")
 
         watermark_type = str((watermark_options or {}).get("type") or "image")
         text_watermark_requested = watermark_type == "text" and bool(
             str((watermark_options or {}).get("text") or "AI").strip()
         )
 
-        if target_format == "original" and not watermark_bytes and not text_watermark_requested:
+        if (
+            target_format == "original"
+            and not crop_requested
+            and not watermark_bytes
+            and not text_watermark_requested
+        ):
             output_bytes = source_bytes
             result_width = img.width
             result_height = img.height
             fmt = img.format or "PNG"
             mime_type = MIME_TYPE_BY_FORMAT.get(fmt.lower(), "image/png")
         else:
+            if crop_requested:
+                img = _apply_aspect_ratio_crop(
+                    img,
+                    crop_options=crop_options or {},
+                    warnings=warnings,
+                )
+
             if img.width > max_width:
                 ratio = max_width / img.width
                 new_height = int(img.height * ratio)

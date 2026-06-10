@@ -16,6 +16,20 @@ ALLOWED_WATERMARK_POSITIONS = frozenset(
         "center",
     }
 )
+ALLOWED_CROP_TYPES = frozenset({"aspect_ratio"})
+ALLOWED_CROP_POSITIONS = frozenset(
+    {
+        "top_left",
+        "top",
+        "top_right",
+        "left",
+        "center",
+        "right",
+        "bottom_left",
+        "bottom",
+        "bottom_right",
+    }
+)
 MAX_UPLOAD_BYTES_IMAGE = 50 * 1024 * 1024
 MAX_PIXEL_COUNT = 178_956_970
 ARTIFACT_DEFAULT_TTL_MINUTES = 30
@@ -67,6 +81,14 @@ class WatermarkPayload(BaseModel):
     margin_px: int = 24
 
 
+class CropPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["aspect_ratio"] = "aspect_ratio"
+    aspect_ratio: str = "16:9"
+    position: str = "center"
+
+
 class CloudJobPayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -75,6 +97,7 @@ class CloudJobPayload(BaseModel):
     max_width: int = 1200
     quality: int = 82
     source_media_type: str = "image"
+    crop: CropPayload | None = None
     watermark: WatermarkPayload | None = None
 
 
@@ -114,6 +137,19 @@ class MediaDerivativeRequest(BaseModel):
             raise ValueError("quality must be between 1 and 100")
         if not (1 <= payload.max_width <= 10000):
             raise ValueError("max_width must be between 1 and 10000")
+        if payload.crop is not None:
+            crop = payload.crop
+            if crop.type not in ALLOWED_CROP_TYPES:
+                raise ValueError(f"crop.type '{crop.type}' is not supported")
+            if crop.position not in ALLOWED_CROP_POSITIONS:
+                raise ValueError(f"crop.position '{crop.position}' is not supported")
+            ratio_parts = crop.aspect_ratio.split(":", 1)
+            if len(ratio_parts) != 2 or not all(part.isdigit() for part in ratio_parts):
+                raise ValueError("crop.aspect_ratio must use a W:H ratio")
+            ratio_width = int(ratio_parts[0])
+            ratio_height = int(ratio_parts[1])
+            if not (1 <= ratio_width <= 100 and 1 <= ratio_height <= 100):
+                raise ValueError("crop.aspect_ratio values must be between 1 and 100")
         if self.batch_context is not None:
             batch = self.batch_context
             if not batch.batch_id.strip():

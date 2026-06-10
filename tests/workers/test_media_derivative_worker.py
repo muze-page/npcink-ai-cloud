@@ -213,6 +213,25 @@ def test_process_no_resize_when_within_max_width() -> None:
     assert result.height == 50
 
 
+def test_process_crops_to_aspect_ratio_before_resize() -> None:
+    source = _make_png_bytes(200, 100)
+    result = process_media_derivative(
+        source_bytes=source,
+        source_media_type="image",
+        target_format="png",
+        max_width=50,
+        quality=80,
+        crop_options={
+            "type": "aspect_ratio",
+            "aspect_ratio": "1:1",
+            "position": "center",
+        },
+    )
+    assert result.width == 50
+    assert result.height == 50
+    assert "source_cropped_to_aspect_ratio_1_1" in result.processing_warnings
+
+
 def test_source_decode_failed() -> None:
     with pytest.raises(MediaDerivativeSourceDecodeFailedError):
         process_media_derivative(

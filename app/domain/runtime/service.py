@@ -760,6 +760,8 @@ class RuntimeService:
         target_format = cloud_job_payload.get("target_format", "webp")
         max_width = int(cloud_job_payload.get("max_width", 1200))
         quality = int(cloud_job_payload.get("quality", 82))
+        crop_options = cloud_job_payload.get("crop")
+        crop_options = crop_options if isinstance(crop_options, dict) else None
         watermark_options = cloud_job_payload.get("watermark")
         watermark_options = watermark_options if isinstance(watermark_options, dict) else None
         ttl_minutes = int(media_input.get("ttl_minutes", ARTIFACT_DEFAULT_TTL_MINUTES))
@@ -803,6 +805,7 @@ class RuntimeService:
                 target_format=target_format,
                 max_width=max_width,
                 quality=quality,
+                crop_options=crop_options,
                 watermark_bytes=watermark_bytes,
                 watermark_options=watermark_options,
             )

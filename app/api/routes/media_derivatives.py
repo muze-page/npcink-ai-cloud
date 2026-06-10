@@ -156,6 +156,8 @@ async def create_media_derivative(request: Request) -> Any:
             error_code = "media_derivative.source_media_type_unavailable"
         elif "watermark" in error_message:
             error_code = "media_derivative.invalid_watermark"
+        elif "crop" in error_message:
+            error_code = "media_derivative.invalid_crop"
         elif "ttl_minutes" in error_message:
             error_code = "media_derivative.validation_error"
         elif "quality" in error_message or "max_width" in error_message:

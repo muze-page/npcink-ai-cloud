@@ -132,12 +132,14 @@ class MediaBatchPlanService:
 def _build_operation(user_request: str, input_payload: dict[str, Any]) -> dict[str, Any]:
     overrides = _dict(input_payload.get("defaults"))
     target_format = _resolve_target_format(user_request, overrides)
+    crop = _resolve_crop(user_request, overrides)
     watermark = _resolve_watermark(user_request, overrides)
     operation: dict[str, Any] = {
         "target_format": target_format,
         "max_width": _resolve_max_width(user_request, overrides),
         "quality": _resolve_quality(user_request, overrides),
         "source_media_type": "image",
+        "crop": crop,
         "watermark": watermark,
     }
     return operation
@@ -259,6 +261,65 @@ def _resolve_watermark(user_request: str, overrides: dict[str, Any]) -> dict[str
     return watermark
 
 
+def _resolve_crop(user_request: str, overrides: dict[str, Any]) -> dict[str, Any]:
+    requested = _dict(overrides.get("crop"))
+    if requested:
+        ratio = _normalize_crop_ratio(str(requested.get("aspect_ratio") or "16:9"))
+        position = str(requested.get("position") or "center")
+        if position not in {
+            "top_left",
+            "top",
+            "top_right",
+            "left",
+            "center",
+            "right",
+            "bottom_left",
+            "bottom",
+            "bottom_right",
+        }:
+            position = "center"
+        return {"type": "aspect_ratio", "aspect_ratio": ratio, "position": position}
+
+    lowered = user_request.lower()
+    ratio = ""
+    match = re.search(r"([1-9][0-9]{0,2})\s*[:：]\s*([1-9][0-9]{0,2})", user_request)
+    if match and _contains_any(user_request, ("裁剪", "比例", "ratio", "crop", "aspect")):
+        ratio = _normalize_crop_ratio(f"{match.group(1)}:{match.group(2)}")
+    elif _contains_any(user_request, ("方图", "正方形", "square")):
+        ratio = "1:1"
+    elif _contains_any(user_request, ("横版", "landscape")) and _contains_any(
+        user_request,
+        ("裁剪", "crop", "ratio", "比例"),
+    ):
+        ratio = "16:9"
+    elif _contains_any(user_request, ("竖版", "portrait")) and _contains_any(
+        user_request,
+        ("裁剪", "crop", "ratio", "比例"),
+    ):
+        ratio = "9:16"
+    elif "16x9" in lowered or "16 by 9" in lowered:
+        ratio = "16:9"
+    elif "1x1" in lowered or "1 by 1" in lowered:
+        ratio = "1:1"
+
+    if not ratio:
+        return {}
+    return {
+        "type": "aspect_ratio",
+        "aspect_ratio": ratio,
+        "position": "center",
+    }
+
+
+def _normalize_crop_ratio(value: str) -> str:
+    match = re.fullmatch(r"\s*([1-9][0-9]{0,2})\s*[:：xX]\s*([1-9][0-9]{0,2})\s*", value)
+    if not match:
+        return "16:9"
+    width = max(1, min(100, int(match.group(1))))
+    height = max(1, min(100, int(match.group(2))))
+    return f"{width}:{height}"
+
+
 def _resolve_position(user_request: str) -> str:
     if _contains_any(user_request, ("右下", "bottom right", "bottom-right")):
         return "bottom_right"
@@ -315,6 +376,10 @@ def _build_warnings(
         )
     if operation.get("watermark"):
         warnings.append("Watermark asset selection and authorization remain local/operator-owned.")
+    if operation.get("crop"):
+        warnings.append(
+            "Crop previews should be visually reviewed before Core proposal submission."
+        )
     if "png" in exclusions.get("skip_formats", []):
         warnings.append(
             "Transparent PNG inputs are excluded unless the local plan owner overrides it."
@@ -331,10 +396,14 @@ def _confirmation_summary(*, scope: dict[str, Any], operation: dict[str, Any]) -
     if scope.get("uploaded_from") and scope.get("uploaded_to"):
         date_part = f" from {scope['uploaded_from']} to {scope['uploaded_to']}"
     watermark_part = " with watermark" if operation.get("watermark") else ""
+    crop_part = ""
+    if operation.get("crop"):
+        crop = operation["crop"]
+        crop_part = f" and crop {crop.get('aspect_ratio', '')}"
     return (
         f"Generate preview derivatives for image media{date_part}: "
         f"{operation['target_format']} at max width {operation['max_width']} "
-        f"and quality {operation['quality']}{watermark_part}."
+        f"and quality {operation['quality']}{crop_part}{watermark_part}."
     )
 
 
@@ -346,6 +415,8 @@ def _plan_confidence(*, scope: dict[str, Any], operation: dict[str, Any]) -> flo
         score += 0.08
     if operation.get("watermark"):
         score += 0.04
+    if operation.get("crop"):
+        score += 0.03
     return min(0.94, round(score, 2))
 
 

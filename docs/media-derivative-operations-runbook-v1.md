@@ -19,7 +19,7 @@ and rollback authority stay in the local WordPress/Core path.
 2. The request provides a source image as `source_file` upload or a same-site
    temporary artifact reference.
 3. Cloud validates format, dimensions, quality, TTL, source size, source media
-   type, and optional watermark source.
+   type, optional aspect-ratio crop intent, and optional watermark source.
 4. Cloud queues a normal runtime worker job using the existing FastAPI,
    Postgres, Redis, and worker stack.
 5. The worker produces a short-lived derivative artifact and a
@@ -53,6 +53,8 @@ Supported options:
 - `max_width`: `1..10000`
 - `quality`: `1..100`
 - `ttl_minutes`: `15..60`
+- `crop`: optional aspect-ratio crop, for example
+  `{"type":"aspect_ratio","aspect_ratio":"16:9","position":"center"}`
 - watermark image: uploaded `watermark_file` or same-site temporary artifact
 
 Unsupported behavior:
@@ -154,6 +156,7 @@ Common request-time errors:
 | `media_derivative.invalid_format` | Unsupported target format | Use `webp`, `avif`, `jpeg`, `png`, or `original` |
 | `media_derivative.source_media_type_unavailable` | Unsupported media type | Send images only |
 | `media_derivative.invalid_source` | No source or conflicting source mode | Send exactly one source mode |
+| `media_derivative.invalid_crop` | Invalid crop type, aspect ratio, or position | Use bounded aspect-ratio crop options |
 | `media_derivative.invalid_watermark` | Missing/conflicting watermark source or invalid watermark options | Send options plus exactly one watermark source |
 | `media_derivative.upload_too_large` | Source or watermark exceeds upload byte limit | Let local flow skip or downscale before upload |
 | `media_derivative.source_artifact_not_found` | Referenced source artifact missing, expired, or cross-site | Regenerate source artifact |
@@ -180,12 +183,15 @@ Download-time errors:
 
 Expected behavior:
 
-- EXIF orientation is applied before resize/output.
+- EXIF orientation is applied before crop, resize, and output.
+- Aspect-ratio crop runs before max-width resize and records a processing
+  warning when pixels are cropped.
 - CMYK or palette-like inputs are converted to web-safe output modes when
   needed.
 - JPEG output flattens alpha and records a warning.
-- `original` without watermark preserves source bytes and dimensions.
-- `original` with watermark re-encodes through a supported still-image format.
+- `original` without crop or watermark preserves source bytes and dimensions.
+- `original` with crop or watermark re-encodes through a supported still-image
+  format.
 - Animated sources are rejected instead of silently flattening the first frame.
 
 ## Production Guardrails

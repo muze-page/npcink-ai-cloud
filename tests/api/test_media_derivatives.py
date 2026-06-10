@@ -228,6 +228,66 @@ def test_worker_success_path(tmp_path: Path) -> None:
         dispose_engine(database_url)
 
 
+def test_worker_success_path_with_crop(tmp_path: Path) -> None:
+    database_url, client = _build_client(tmp_path)
+    try:
+        image_bytes = _make_png_bytes(200, 100)
+        request_dict = {
+            "request_contract_version": "media_derivative_cloud_request.v1",
+            "cloud_job_payload": {
+                "job_type": "generate_optimized_media_derivative",
+                "target_format": "png",
+                "max_width": 50,
+                "quality": 80,
+                "source_media_type": "image",
+                "crop": {
+                    "type": "aspect_ratio",
+                    "aspect_ratio": "1:1",
+                    "position": "center",
+                },
+            },
+            "ttl_minutes": 30,
+        }
+        body, content_type = _build_multipart_body(
+            request_dict,
+            image_bytes,
+            boundary="boundary-worker-crop",
+        )
+        headers = build_auth_headers(
+            "POST",
+            "/v1/runtime/media-derivatives",
+            site_id="site_alpha",
+            body=body,
+            idempotency_key="idem-worker-crop-001",
+            nonce="nonce-worker-crop-001",
+        )
+        headers["content-type"] = content_type
+        response = client.post("/v1/runtime/media-derivatives", content=body, headers=headers)
+        assert response.status_code == 200, response.json()
+        run_id = response.json()["data"]["run_id"]
+
+        _process_queued_runs(database_url)
+
+        result_headers = build_auth_headers(
+            "GET",
+            f"/v1/runs/{run_id}/result",
+            site_id="site_alpha",
+        )
+        result_response = client.get(f"/v1/runs/{run_id}/result", headers=result_headers)
+        assert result_response.status_code == 200, result_response.json()
+        artifact = result_response.json()["data"]["result"]["artifact"]
+        assert artifact["format"] == "png"
+        assert artifact["width"] == 50
+        assert artifact["height"] == 50
+        assert "source_cropped_to_aspect_ratio_1_1" in artifact["processing_warnings"]
+        with get_session(database_url) as session:
+            metric = session.query(MediaDerivativeJobMetric).filter_by(run_id=run_id).one()
+            assert metric.output_width == 50
+            assert metric.output_height == 50
+    finally:
+        dispose_engine(database_url)
+
+
 def test_response_contains_no_wordpress_write_fields(tmp_path: Path) -> None:
     database_url, client = _build_client(tmp_path)
     try:
@@ -847,6 +907,45 @@ def test_invalid_watermark_position_returns_422(tmp_path: Path) -> None:
         response = client.post("/v1/runtime/media-derivatives", content=body, headers=headers)
         assert response.status_code == 422
         assert response.json()["error_code"] == "media_derivative.invalid_watermark"
+    finally:
+        dispose_engine(database_url)
+
+
+def test_invalid_crop_ratio_returns_422(tmp_path: Path) -> None:
+    database_url, client = _build_client(tmp_path)
+    try:
+        request_dict = {
+            "request_contract_version": "media_derivative_cloud_request.v1",
+            "cloud_job_payload": {
+                "job_type": "generate_optimized_media_derivative",
+                "target_format": "png",
+                "max_width": 100,
+                "quality": 80,
+                "source_media_type": "image",
+                "crop": {
+                    "type": "aspect_ratio",
+                    "aspect_ratio": "freeform",
+                    "position": "center",
+                },
+            },
+        }
+        body, content_type = _build_multipart_body(
+            request_dict,
+            _make_png_bytes(100, 100),
+            boundary="boundary-invalid-crop-ratio",
+        )
+        headers = build_auth_headers(
+            "POST",
+            "/v1/runtime/media-derivatives",
+            site_id="site_alpha",
+            body=body,
+            idempotency_key="idem-invalid-crop-ratio-001",
+            nonce="nonce-invalid-crop-ratio-001",
+        )
+        headers["content-type"] = content_type
+        response = client.post("/v1/runtime/media-derivatives", content=body, headers=headers)
+        assert response.status_code == 422
+        assert response.json()["error_code"] == "media_derivative.invalid_crop"
     finally:
         dispose_engine(database_url)
 
