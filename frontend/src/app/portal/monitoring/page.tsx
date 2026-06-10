@@ -22,7 +22,6 @@ import {
   portalClient,
   type PortalMediaObservabilitySummary,
   type PortalMonitoringOverviewAction,
-  type PortalMonitoringOverviewQuotaMetric,
   type PortalMonitoringOverviewSummary,
   type PortalPluginObservabilitySummary,
   type PortalVectorObservabilitySummary,
@@ -76,6 +75,23 @@ function statusTone(status: string): 'ok' | 'warning' | 'error' | 'inactive' {
   if (status === 'warning') return 'warning';
   if (status === 'error') return 'error';
   return 'inactive';
+}
+
+function resolveActionTarget(
+  item: PortalMonitoringOverviewAction,
+  siteId: string
+): { tab?: MonitoringTab; href?: string; label: string } | null {
+  const source = String(item.source || '').toLowerCase();
+  if (source === 'plugins') return { tab: 'plugins', label: 'Open Plugins' };
+  if (source === 'media') return { tab: 'media', label: 'Open Media' };
+  if (source === 'vector') return { tab: 'vector', label: 'Open Vector' };
+  if (source === 'quota' || source === 'runtime') {
+    return { href: `/portal/usage?site=${encodeURIComponent(siteId)}`, label: 'Open Usage' };
+  }
+  if (source === 'keys' || source === 'activity') {
+    return { href: `/portal/keys?site=${encodeURIComponent(siteId)}`, label: 'Open Keys' };
+  }
+  return null;
 }
 
 function PortalMonitoringContent() {
@@ -290,6 +306,18 @@ function PortalMonitoringContent() {
     router.push(query ? `${pathname}?${query}` : pathname);
   };
 
+  const openActionTarget = (item: PortalMonitoringOverviewAction) => {
+    const target = resolveActionTarget(item, selectedSiteId);
+    if (!target) return;
+    if (target.tab) {
+      changeTab(target.tab);
+      return;
+    }
+    if (target.href) {
+      router.push(target.href);
+    }
+  };
+
   return (
     <BackofficePageStack>
       <PortalWorkspaceHeader
@@ -337,13 +365,12 @@ function PortalMonitoringContent() {
       {activeTab === 'overview' ? (
         <MonitoringOverview
           monitoringOverview={monitoringOverview}
-          pluginSummary={summary}
-          mediaSummary={mediaSummary}
-          vectorSummary={vectorSummary}
           isLoading={isOverviewLoading}
           errors={[monitoringOverviewError].filter(Boolean)}
           onRefresh={() => setRefreshNonce((current) => current + 1)}
           onSelectTab={changeTab}
+          onSelectAction={openActionTarget}
+          selectedSiteId={selectedSiteId}
         />
       ) : null}
 
@@ -440,30 +467,23 @@ function MonitoringTabs({
 
 function MonitoringOverview({
   monitoringOverview,
-  pluginSummary,
-  mediaSummary,
-  vectorSummary,
   isLoading,
   errors,
   onRefresh,
   onSelectTab,
+  onSelectAction,
+  selectedSiteId,
 }: {
   monitoringOverview: PortalMonitoringOverviewSummary | null;
-  pluginSummary: PortalPluginObservabilitySummary | null;
-  mediaSummary: PortalMediaObservabilitySummary | null;
-  vectorSummary: PortalVectorObservabilitySummary | null;
   isLoading: boolean;
   errors: string[];
   onRefresh: () => void;
   onSelectTab: (tab: MonitoringTab) => void;
+  onSelectAction: (item: PortalMonitoringOverviewAction) => void;
+  selectedSiteId: string;
 }) {
   const { t } = useLocale();
-  const pluginTotals = pluginSummary?.totals || null;
-  const mediaTotals = mediaSummary?.totals || null;
-  const vectorTotals = vectorSummary?.totals || null;
-  const health = monitoringOverview?.health;
   const actionItems = monitoringOverview?.action_required || [];
-  const quota = monitoringOverview?.quota;
   const activity = monitoringOverview?.activity;
   const componentsByName = new Map((monitoringOverview?.components || []).map((item) => [item.component, item]));
   const pluginComponent = componentsByName.get('plugins');
@@ -480,7 +500,7 @@ function MonitoringOverview({
             {t(
               'portal.monitoring.overview_desc',
               {},
-              'A compact read-only operating summary for site health, quota pressure, and Cloud monitoring signals.'
+              'Only the items that need attention are shown here. Use the tabs for detail.'
             )}
           </p>
         </div>
@@ -501,69 +521,37 @@ function MonitoringOverview({
         </BackofficeStackCard>
       ) : null}
 
-      <BackofficeMetricStrip
-        columnsClassName="md:grid-cols-4"
-        items={[
-          {
-            label: t('portal.monitoring.site_health', {}, 'Site health'),
-            value: health ? String(health.score) : t('common.not_found'),
-            detail: health?.summary || t('common.not_found'),
-            toneClassName:
-              health?.status === 'error'
-                ? 'text-red-700 dark:text-red-200'
-                : health?.status === 'warning'
-                  ? 'text-amber-700 dark:text-amber-200'
-                  : '',
-          },
-          {
-            label: t('portal.monitoring.actions_required', {}, 'Action required'),
-            value: formatNumber(actionItems.length),
-            detail: actionItems.length ? actionItems[0]?.title || '' : t('portal.monitoring.no_actions', {}, 'No immediate action'),
-            toneClassName: actionItems.some((item) => item.severity === 'error') ? 'text-red-700 dark:text-red-200' : '',
-          },
-          {
-            label: t('portal.monitoring.quota_pressure', {}, 'Quota pressure'),
-            value: quota ? quota.top_pressure : t('common.not_found'),
-            detail: quota?.summary || t('common.not_found'),
-          },
-          {
-            label: t('portal.monitoring.last_activity', {}, 'Last activity'),
-            value: activity?.last_seen_at ? formatDate(activity.last_seen_at) : t('common.not_found'),
-            detail: activity ? `${formatNumber(activity.runtime_runs_total)} runtime runs` : t('common.not_found'),
-          },
-        ]}
+      <ActionRequiredPanel
+        items={actionItems}
+        onSelectAction={onSelectAction}
+        selectedSiteId={selectedSiteId}
       />
-
-      <div className="grid gap-4 xl:grid-cols-[1.2fr_0.8fr]">
-        <ActionRequiredPanel items={actionItems} />
-        <QuotaPressurePanel quota={quota || null} />
-      </div>
 
       <div className="grid gap-4 xl:grid-cols-3">
         <MonitoringOverviewCard
           title={t('portal.monitoring.card_plugins', {}, 'Plugins')}
-          status={statusTone(pluginComponent?.status || pluginSummary?.health?.status || 'inactive')}
-          badge={`${pluginComponent?.status || pluginSummary?.health?.status || 'inactive'} · ${pluginComponent?.score ?? pluginSummary?.health?.score ?? 0}`}
-          detail={pluginComponent?.summary || pluginSummary?.health?.summary || t('portal.monitoring.no_plugin_summary', {}, 'No plugin summary yet.')}
-          meta={`${formatNumber(Number(activity?.plugin_errors_total ?? pluginTotals?.error_total ?? 0))} errors`}
+          status={statusTone(pluginComponent?.status || 'inactive')}
+          badge={`${pluginComponent?.status || 'inactive'} · ${pluginComponent?.score ?? 0}`}
+          detail={pluginComponent?.summary || t('portal.monitoring.no_plugin_summary', {}, 'No plugin summary yet.')}
+          meta={`${formatNumber(Number(activity?.plugin_errors_total || 0))} errors`}
           actionLabel={t('common.inspect', {}, 'Inspect')}
           onClick={() => onSelectTab('plugins')}
         />
         <MonitoringOverviewCard
           title={t('portal.monitoring.card_media', {}, 'Media')}
-          status={statusTone(mediaComponent?.status || mediaSummary?.health?.status || 'inactive')}
-          badge={`${mediaComponent?.status || mediaSummary?.health?.status || 'inactive'} · ${mediaComponent?.score ?? mediaSummary?.health?.score ?? 0}`}
-          detail={mediaComponent?.summary || mediaSummary?.health?.summary || t('portal.monitoring.no_media_summary', {}, 'No media summary yet.')}
-          meta={`${formatNumber(Number(activity?.media_failed_total ?? mediaTotals?.failed_total ?? 0))} failed jobs`}
+          status={statusTone(mediaComponent?.status || 'inactive')}
+          badge={`${mediaComponent?.status || 'inactive'} · ${mediaComponent?.score ?? 0}`}
+          detail={mediaComponent?.summary || t('portal.monitoring.no_media_summary', {}, 'No media summary yet.')}
+          meta={`${formatNumber(Number(activity?.media_failed_total || 0))} failed jobs`}
           actionLabel={t('common.inspect', {}, 'Inspect')}
           onClick={() => onSelectTab('media')}
         />
         <MonitoringOverviewCard
           title={t('portal.monitoring.card_vector', {}, 'Vector')}
-          status={statusTone(vectorComponent?.status || vectorSummary?.health?.status || 'inactive')}
-          badge={`${vectorComponent?.status || vectorSummary?.health?.status || 'inactive'} · ${vectorComponent?.score ?? vectorSummary?.health?.score ?? 0}`}
-          detail={vectorComponent?.summary || vectorSummary?.health?.summary || t('portal.monitoring.no_vector_summary', {}, 'No vector summary yet.')}
-          meta={`${formatNumber(Number(vectorTotals?.current_chunk_count || 0))} indexed chunks`}
+          status={statusTone(vectorComponent?.status || 'inactive')}
+          badge={`${vectorComponent?.status || 'inactive'} · ${vectorComponent?.score ?? 0}`}
+          detail={vectorComponent?.summary || t('portal.monitoring.no_vector_summary', {}, 'No vector summary yet.')}
+          meta={`${formatNumber(Number(activity?.vector_searches_total || 0))} searches`}
           actionLabel={t('common.inspect', {}, 'Inspect')}
           onClick={() => onSelectTab('vector')}
         />
@@ -572,8 +560,17 @@ function MonitoringOverview({
   );
 }
 
-function ActionRequiredPanel({ items }: { items: PortalMonitoringOverviewAction[] }) {
+function ActionRequiredPanel({
+  items,
+  onSelectAction,
+  selectedSiteId,
+}: {
+  items: PortalMonitoringOverviewAction[];
+  onSelectAction: (item: PortalMonitoringOverviewAction) => void;
+  selectedSiteId: string;
+}) {
   const { t } = useLocale();
+  const visibleItems = items.slice(0, 3);
   return (
     <BackofficeStackCard className="space-y-4">
       <div className="flex items-start justify-between gap-3">
@@ -582,7 +579,7 @@ function ActionRequiredPanel({ items }: { items: PortalMonitoringOverviewAction[
             {t('portal.monitoring.action_required', {}, 'Action required')}
           </h3>
           <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">
-            {t('portal.monitoring.action_required_desc', {}, 'Prioritized items for the selected site.')}
+            {t('portal.monitoring.action_required_desc', {}, 'Top items for the selected site.')}
           </p>
         </div>
         <BackofficeTag tone={items.some((item) => item.severity === 'error') ? 'danger' : 'info'}>
@@ -591,8 +588,17 @@ function ActionRequiredPanel({ items }: { items: PortalMonitoringOverviewAction[
       </div>
       {items.length ? (
         <div className="space-y-3">
-          {items.slice(0, 5).map((item) => (
-            <div key={`${item.code}-${item.source}`} className="rounded-[0.75rem] border border-slate-200 p-3 dark:border-slate-800">
+          {visibleItems.map((item) => {
+            const target = resolveActionTarget(item, selectedSiteId);
+            return (
+            <button
+              key={`${item.code}-${item.source}`}
+              type="button"
+              onClick={() => {
+                onSelectAction(item);
+              }}
+              className="block w-full cursor-pointer rounded-[0.75rem] border border-slate-200 p-3 text-left transition hover:border-slate-300 hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-slate-300 dark:border-slate-800 dark:hover:border-slate-700 dark:hover:bg-slate-900/50 dark:focus:ring-slate-700"
+            >
               <div className="flex items-start justify-between gap-3">
                 <div>
                   <p className="text-sm font-semibold text-slate-950 dark:text-white">{item.title}</p>
@@ -600,9 +606,26 @@ function ActionRequiredPanel({ items }: { items: PortalMonitoringOverviewAction[
                 </div>
                 <BackofficeStatusBadge status={item.severity} label={item.source} />
               </div>
-              <p className="mt-2 text-xs leading-5 text-slate-500 dark:text-slate-400">{item.suggested_action}</p>
-            </div>
-          ))}
+              <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-xs leading-5 text-slate-500 dark:text-slate-400">
+                <span>{item.suggested_action}</span>
+                {target ? (
+                  <span className="font-semibold text-slate-700 dark:text-slate-200">
+                    {target.label}
+                  </span>
+                ) : null}
+              </div>
+            </button>
+          );
+          })}
+          {items.length > visibleItems.length ? (
+            <p className="text-xs text-slate-500 dark:text-slate-400">
+              {t(
+                'portal.monitoring.more_actions_in_tabs',
+                {},
+                `${items.length - visibleItems.length} more item(s) are available in the detail tabs.`
+              )}
+            </p>
+          ) : null}
         </div>
       ) : (
         <div className="rounded-[0.75rem] border border-dashed border-slate-200 p-4 text-sm text-slate-600 dark:border-slate-800 dark:text-slate-300">
@@ -610,60 +633,6 @@ function ActionRequiredPanel({ items }: { items: PortalMonitoringOverviewAction[
         </div>
       )}
     </BackofficeStackCard>
-  );
-}
-
-function QuotaPressurePanel({ quota }: { quota: PortalMonitoringOverviewSummary['quota'] | null }) {
-  const { t } = useLocale();
-  const rows: Array<{ key: 'runs' | 'tokens' | 'cost'; label: string; metric: PortalMonitoringOverviewQuotaMetric }> = quota
-    ? [
-        { key: 'runs', label: t('portal.monitoring.quota_runs', {}, 'Runs'), metric: quota.runs },
-        { key: 'tokens', label: t('portal.monitoring.quota_tokens', {}, 'Tokens'), metric: quota.tokens },
-        { key: 'cost', label: t('portal.monitoring.quota_cost', {}, 'Cost'), metric: quota.cost },
-      ]
-    : [];
-  return (
-    <BackofficeStackCard className="space-y-4">
-      <div>
-        <h3 className="text-sm font-semibold text-slate-950 dark:text-white">
-          {t('portal.monitoring.quota_cost', {}, 'Quota & cost')}
-        </h3>
-        <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">
-          {quota?.summary || t('portal.monitoring.no_quota_summary', {}, 'No quota summary yet.')}
-        </p>
-      </div>
-      <div className="space-y-3">
-        {rows.map((row) => (
-          <QuotaPressureRow key={row.key} label={row.label} metric={row.metric} />
-        ))}
-      </div>
-      {quota?.period_end_at ? (
-        <p className="text-xs text-slate-500 dark:text-slate-400">
-          {t('portal.monitoring.period_ends', {}, 'Period ends')} {formatDate(quota.period_end_at)}
-        </p>
-      ) : null}
-    </BackofficeStackCard>
-  );
-}
-
-function QuotaPressureRow({ label, metric }: { label: string; metric: PortalMonitoringOverviewQuotaMetric }) {
-  const percent = Math.min(100, Math.max(0, Number(metric.usage_ratio || 0) * 100));
-  const hasLimit = Number(metric.limit || 0) > 0;
-  return (
-    <div>
-      <div className="flex items-center justify-between gap-3 text-sm">
-        <span className="font-medium text-slate-700 dark:text-slate-200">{label}</span>
-        <span className="text-slate-500 dark:text-slate-400">
-          {hasLimit ? `${formatNumber(metric.used)} / ${formatNumber(metric.limit)}` : 'unlimited'}
-        </span>
-      </div>
-      <div className="mt-2 h-2 overflow-hidden rounded-full bg-slate-100 dark:bg-slate-900">
-        <div
-          className={`h-full rounded-full ${metric.over_limit || percent >= 90 ? 'bg-red-500' : percent >= 75 ? 'bg-amber-500' : 'bg-emerald-500'}`}
-          style={{ width: hasLimit ? `${percent}%` : '0%' }}
-        />
-      </div>
-    </div>
   );
 }
 
