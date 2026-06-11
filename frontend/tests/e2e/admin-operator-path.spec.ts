@@ -28,7 +28,7 @@ test('admin operator path smoke: queue and inspector routes stay connected', asy
   await expect(page.getByRole('heading', { name: /Platform state comes first|先看平台概况/i })).toBeVisible();
   await expect(page.getByRole('link', { name: /Review coverage|检查覆盖|檢查覆蓋/i })).toBeVisible();
   await expect(page.getByRole('link', { name: /Open customer coverage|打开客户覆盖|打開客戶覆蓋/i }).first()).toBeVisible();
-  await expect(page.getByRole('heading', { name: /Are hosted model capabilities covered today\?|托管模型/i })).toBeVisible();
+  await expect(page.getByRole('heading', { name: /Which runtime signals need follow-up\?|哪些运行时状态需要继续跟进|哪些執行時狀態需要繼續跟進/i })).toBeVisible();
   await expect(
     page
       .getByText(/Hosted model provider call coverage gap|托管模型提供方调用覆盖缺口|託管模型提供方呼叫覆蓋缺口/i)
@@ -43,8 +43,8 @@ test('admin operator path smoke: queue and inspector routes stay connected', asy
   await expect(page.locator('a[href="/admin/hosted-models"]').first()).toBeVisible();
 
   await page.goto('/admin/coverage');
-  await expect(page.getByRole('heading', { name: /Customer coverage|客户覆盖|客戶覆蓋/i })).toBeVisible();
-  await expect(page.getByText(/Customers needing coverage follow-up|需要覆盖跟进的客户|需要覆蓋跟進的客戶/i).first()).toBeVisible();
+  await expect(page.getByRole('heading', { name: /^Customer coverage$|^客户覆盖$|^客戶覆蓋$/i })).toBeVisible();
+  await expect(page.getByText(/Customer coverage queue|客户覆盖队列|客戶覆蓋隊列/i).first()).toBeVisible();
   await expect(page.getByText(/Subscription risks|订阅风险|訂閱風險/i).first()).toBeVisible();
   await expect(page.getByText(/Sites needing follow-up|需要跟进的站点|需要跟進的站點/i).first()).toBeVisible();
   await expect(page.getByRole('link', { name: /Open customer|打开客户|打開客戶/i }).first()).toBeVisible();
@@ -174,15 +174,16 @@ test('admin queue pages keep one primary header action and shared identifier tre
   await expect(page.getByText(/已发布|published/i).first()).toBeVisible();
 
   await page.goto('/admin/hosted-models', { waitUntil: 'domcontentloaded' });
-  await expect(page.getByRole('heading', { name: /Hosted Model Governance|托管模型|託管模型/i })).toBeVisible();
+  await expect(page.getByRole('heading', { name: /Hosted model runtime|托管模型运行时|託管模型執行時/i })).toBeVisible();
   await expect(page.getByRole('heading', { name: /Latest cadence record|最新节奏记录|最新節奏記錄/i })).toBeVisible();
   await expect(page.getByText(/internal admin read-only|内部管理员只读|內部管理員唯讀/i).first()).toBeVisible();
-  await expect(page.getByRole('heading', { name: /Daily governance watch|每日治理观察|每日治理觀察/i })).toBeVisible();
+  await expect(page.getByRole('heading', { name: /Signals needing model follow-up|需要跟进的模型信号|需要跟進的模型訊號/i })).toBeVisible();
   await expect(
     page
       .getByText(/Hosted model provider call coverage gap|托管模型提供方调用覆盖缺口|託管模型提供方呼叫覆蓋缺口/i)
       .first()
   ).toBeVisible();
+  await page.getByText(/Advanced model evidence|高级模型证据|進階模型證據/i).click();
   await expect(page.getByText(/Ability families|能力/i).first()).toBeVisible();
   await expect(page.getByText(/free-gpt55-general/i).first()).toBeVisible();
   await expect(page.getByText(/provider gap: knowledge|提供方缺口：knowledge/i).first()).toBeVisible();

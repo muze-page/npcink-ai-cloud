@@ -45,6 +45,9 @@ function buildAdminBackendPath(pathSegments: string[], method: string): string {
     return '/internal/service/accounts';
   }
 
+  if (/^accounts\/[^/]+\/(?:suspend|restore)$/.test(normalized)) {
+    return `/internal/service/admin/${normalized}`;
+  }
   if (/^accounts\/[^/]+\/subscription(?:\/(?:suspend|cancel))?$/.test(normalized)) {
     return `/internal/service/admin/${normalized}`;
   }

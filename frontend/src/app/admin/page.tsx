@@ -646,14 +646,14 @@ function AdminOverviewContent() {
         <div className="flex items-center justify-between gap-3">
           <div>
             <p className="text-xs font-semibold uppercase tracking-[0.18em] text-gray-500 dark:text-gray-400">
-              {t('admin.home_hosted_section', {}, 'Hosted model governance')}
+              {t('admin.home_section_runtime', {}, 'Runtime attention')}
             </p>
             <h2 className="mt-2 text-xl font-semibold text-gray-950 dark:text-white">
-              {t('admin.home_hosted_title', {}, 'Are hosted model capabilities covered today?')}
+              {t('admin.home_section_runtime_title', {}, 'Which runtime signals need follow-up?')}
             </h2>
           </div>
           <Link href="/admin/hosted-models" className="text-sm font-medium text-blue-600 hover:text-blue-700 dark:text-blue-300 dark:hover:text-blue-200">
-            {t('admin.nav_hosted_models', {}, 'Hosted Models')} →
+            {t('admin.home_secondary_action_runtime', {}, 'Inspect runtime sources')} →
           </Link>
         </div>
         <BackofficeMetricStrip items={hostedGovernanceMetrics} columnsClassName="md:grid-cols-3" />
@@ -697,18 +697,14 @@ function AdminOverviewContent() {
         )}
       </BackofficeSectionPanel>
 
-      <BackofficeSectionPanel className="space-y-4">
-        <div className="flex items-center justify-between gap-3">
-          <div>
-            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-gray-500 dark:text-gray-400">
-              {t('admin.home_secondary_details', {}, 'Secondary detail')}
-            </p>
-            <h2 className="mt-2 text-xl font-semibold text-gray-950 dark:text-white">
-              {t('admin.home_secondary_title', {}, 'Context that supports the main operator read')}
-            </h2>
-          </div>
-        </div>
-        <div>
+      <details className="rounded-2xl border border-dashed border-slate-200 px-5 py-4 dark:border-slate-800">
+        <summary className="cursor-pointer list-none text-sm font-semibold text-slate-700 hover:text-slate-950 dark:text-slate-300 dark:hover:text-white">
+          {t('admin.home_secondary_title', {}, 'Supporting evidence')}
+          <span className="ml-3 font-normal text-slate-500 dark:text-slate-400">
+            {t('admin.home_secondary_details', {}, 'Audit and low-frequency context')}
+          </span>
+        </summary>
+        <div className="mt-4">
           <BackofficeStackCard className="space-y-3">
             <p className="text-sm font-semibold text-slate-900 dark:text-slate-100">
               {t('admin.home_secondary_audit', {}, 'Recent audit summary')}
@@ -735,7 +731,7 @@ function AdminOverviewContent() {
             )}
           </BackofficeStackCard>
         </div>
-      </BackofficeSectionPanel>
+      </details>
     </BackofficePageStack>
   );
 }

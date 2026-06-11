@@ -15,6 +15,7 @@ from app.core.models import (
     ACCOUNT_MEMBERSHIP_STATUS_DISABLED,
     ACCOUNT_MEMBERSHIP_STATUS_PENDING_INVITE,
     ACCOUNT_STATUS_ACTIVE,
+    ACCOUNT_STATUS_SUSPENDED,
     SUBSCRIPTION_STATUS_ACTIVE,
     SUBSCRIPTION_STATUS_CANCELED,
     SUBSCRIPTION_STATUS_SUSPENDED,
@@ -23,6 +24,7 @@ from app.core.models import (
 from app.domain.commercial.errors import (
     CommercialNotFoundError,
     CommercialPermissionError,
+    CommercialValidationError,
 )
 from app.domain.commercial.mixins._audit_mixin import CommercialServiceAuditMixin
 from app.domain.commercial.service import (
@@ -80,6 +82,46 @@ class CommercialServiceAccountMixin(CommercialServiceAuditMixin):
                 repository=repository,
                 audit_context=audit_context,
                 event_kind="account.upsert",
+                outcome="succeeded",
+                account_id=account.account_id,
+                scope_kind="account",
+                scope_id=account.account_id,
+                payload_json=payload,
+            )
+            session.commit()
+            return payload
+
+    def set_account_status(
+        self,
+        account_id: str,
+        *,
+        status: str,
+        audit_context: ServiceAuditContext | None = None,
+    ) -> dict[str, object]:
+        normalized_status = str(status or "").strip().lower()
+        if normalized_status not in {ACCOUNT_STATUS_ACTIVE, ACCOUNT_STATUS_SUSPENDED}:
+            raise CommercialValidationError(
+                "service.account_status_invalid",
+                "account status must be active or suspended",
+            )
+
+        with get_session(self.database_url) as session:
+            repository = CommercialRepository(session)
+            account = repository.get_account(account_id)
+            if account is None:
+                raise CommercialNotFoundError(
+                    "service.account_not_found",
+                    f"account '{account_id}' was not found",
+                )
+
+            account.status = normalized_status
+            session.flush()
+            payload = self._serialize_account(account)
+            event_kind = "account.restore" if normalized_status == ACCOUNT_STATUS_ACTIVE else "account.suspend"
+            self._record_service_audit_in_session(
+                repository=repository,
+                audit_context=audit_context,
+                event_kind=event_kind,
                 outcome="succeeded",
                 account_id=account.account_id,
                 scope_kind="account",

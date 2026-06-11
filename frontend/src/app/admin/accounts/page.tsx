@@ -6,6 +6,7 @@ import { useSearchParams } from 'next/navigation';
 import { BackofficeIdentifier } from '@/components/backoffice/BackofficeIdentifier';
 import { BackofficeStatusBadge } from '@/components/backoffice/BackofficeStatusBadge';
 import { LoadingFallback } from '@/components/ui/LoadingFallback';
+import { ConfirmModal } from '@/components/ui/Modal';
 import { useLocale } from '@/contexts/LocaleContext';
 import {
   resolveCustomerPackageDisplay,
@@ -59,6 +60,14 @@ interface AccountsApiItem {
   plan_kind?: string;
   nearest_expiry_at?: string | null;
 }
+
+type PendingConfirmation = {
+  title: string;
+  message: string;
+  confirmLabel: string;
+  variant?: 'default' | 'danger';
+  onConfirm: () => void;
+};
 
 const MALFORMED_ACCOUNT_TEXT_RE = /Fatal error|Stack trace|Command line code|Uncaught ValueError|Path must not be empty/i;
 const INTERNAL_TEST_ACCOUNT_RE = /(^|[_-])(smoke)([_-]|$)|codex_image_smoke|site_knowledge_smoke/i;
@@ -242,8 +251,12 @@ function AccountsContent() {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
+  const [accountActionId, setAccountActionId] = useState<string | null>(null);
+  const [pendingConfirmation, setPendingConfirmation] = useState<PendingConfirmation | null>(null);
   const [filters, setFilters] = useState({
+    q: searchParams.get('q') || '',
     status: searchParams.get('status') || '',
     member_ref: searchParams.get('member_ref') || '',
     expires_before: searchParams.get('expires_before') || '',
@@ -306,6 +319,7 @@ function AccountsContent() {
   const clearFilters = () => {
     setFilters({
       status: '',
+      q: '',
       member_ref: '',
       expires_before: '',
       coverage_state: '',
@@ -386,13 +400,95 @@ function AccountsContent() {
     }
   };
 
+  const handleAccountStatusMutation = async (account: Account, action: 'suspend' | 'restore') => {
+    setAccountActionId(account.account_id);
+    setNotice(null);
+    setActionError(null);
+    try {
+      const response = await fetch(`/api/admin/accounts/${encodeURIComponent(account.account_id)}/${action}`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      });
+      const payload = await response.json();
+      if (!response.ok) {
+        throw new Error(payload.message || t('error.failed_save', {}, 'Failed to save.'));
+      }
+      const nextStatus = String(payload.data?.status || (action === 'restore' ? 'active' : 'suspended'));
+      setAccounts((current) =>
+        current.map((item) =>
+          item.account_id === account.account_id
+            ? { ...item, status: nextStatus }
+            : item
+        )
+      );
+      setNotice(
+        action === 'restore'
+          ? t('admin.accounts.account_restored_notice', { account: account.display_name }, `${account.display_name} has been restored.`)
+          : t('admin.accounts.account_suspended_notice', { account: account.display_name }, `${account.display_name} has been suspended.`)
+      );
+    } catch (err) {
+      setActionError(resolveUiErrorMessage(err instanceof Error ? err.message : null, t('error.failed_save')));
+    } finally {
+      setAccountActionId(null);
+    }
+  };
+
+  const requestAccountStatusMutation = (account: Account) => {
+    const action = account.status === 'suspended' ? 'restore' : 'suspend';
+    setPendingConfirmation({
+      title:
+        action === 'restore'
+          ? t('admin.accounts.confirm_restore_title', {}, 'Confirm account restore')
+          : t('admin.accounts.confirm_suspend_title', {}, 'Confirm account suspension'),
+      message:
+        action === 'restore'
+          ? t(
+              'admin.accounts.confirm_restore_desc',
+              { account: account.display_name },
+              `Restore ${account.display_name} to active access?`
+            )
+          : t(
+              'admin.accounts.confirm_suspend_desc',
+              { account: account.display_name },
+              `Suspend ${account.display_name}? Customer portal access and site actions will be blocked by account status.`
+            ),
+      confirmLabel:
+        action === 'restore'
+          ? t('admin.accounts.restore_account_action', {}, 'Restore account')
+          : t('admin.accounts.suspend_account_action', {}, 'Suspend account'),
+      variant: action === 'suspend' ? 'danger' : 'default',
+      onConfirm: () => void handleAccountStatusMutation(account, action),
+    });
+  };
+
   const hiddenAccounts = useMemo(() => accounts.filter(isHiddenByDefaultAccount), [accounts]);
   const visibleAccounts = useMemo(
     () => (showInternalAccounts ? accounts : accounts.filter((account) => !isHiddenByDefaultAccount(account))),
     [accounts, showInternalAccounts]
   );
+  const searchedAccounts = useMemo(() => {
+    const query = filters.q.trim().toLowerCase();
+    if (!query) {
+      return visibleAccounts;
+    }
+    return visibleAccounts.filter((account) =>
+      [
+        account.display_name,
+        account.name,
+        account.account_id,
+        account.operator_note,
+        account.display_package_label,
+        account.top_plan || '',
+      ]
+        .join(' ')
+        .toLowerCase()
+        .includes(query)
+    );
+  }, [filters.q, visibleAccounts]);
   const queuedAccounts = useMemo(() => {
-    const scopedAccounts = needsActionOnly ? visibleAccounts.filter(accountNeedsAction) : visibleAccounts;
+    const scopedAccounts = needsActionOnly ? searchedAccounts.filter(accountNeedsAction) : searchedAccounts;
     return [...scopedAccounts].sort((left, right) => {
       const priorityDiff = getAccountPriority(left) - getAccountPriority(right);
       if (priorityDiff !== 0) {
@@ -402,7 +498,7 @@ function AccountsContent() {
       const rightDays = daysUntil(right.nearest_expiry) ?? Number.POSITIVE_INFINITY;
       return leftDays - rightDays;
     });
-  }, [visibleAccounts, needsActionOnly]);
+  }, [searchedAccounts, needsActionOnly]);
 
   if (isLoading) {
     return <LoadingFallback />;
@@ -577,14 +673,32 @@ function AccountsContent() {
               <span>{t('admin.accounts.bind_default_free_label', {}, 'Bind formal Free package on create')}</span>
             </label>
             {notice ? <p className="text-sm text-emerald-700 dark:text-emerald-300 md:col-span-3">{notice}</p> : null}
+            {actionError ? <p className="text-sm text-red-600 dark:text-red-300 md:col-span-3">{actionError}</p> : null}
           </form>
-        ) : notice ? (
-          <div className="border-b border-slate-200/80 px-6 py-3 text-sm text-emerald-700 dark:border-slate-800 dark:text-emerald-300">
-            {notice}
+        ) : notice || actionError ? (
+          <div className="border-b border-slate-200/80 px-6 py-3 text-sm dark:border-slate-800">
+            {notice ? <p className="text-emerald-700 dark:text-emerald-300">{notice}</p> : null}
+            {actionError ? <p className="text-red-600 dark:text-red-300">{actionError}</p> : null}
           </div>
         ) : null}
         <div className="space-y-3 border-b border-slate-200/80 bg-white px-6 py-4 dark:border-slate-800 dark:bg-slate-950/20">
-          <div className="grid gap-3 md:grid-cols-[minmax(10rem,0.9fr)_minmax(10rem,0.9fr)_minmax(10rem,0.9fr)_auto_auto] md:items-end">
+          <div className="grid gap-3 md:grid-cols-[minmax(12rem,1.2fr)_minmax(10rem,0.8fr)_minmax(10rem,0.8fr)_minmax(10rem,0.8fr)_auto_auto] md:items-end">
+            <label className="text-sm">
+              <span className="mb-2 block font-medium text-gray-700 dark:text-gray-300">
+                {t('admin.accounts.search_label', {}, 'Search')}
+              </span>
+              <input
+                type="search"
+                value={filters.q}
+                onChange={(event) => handleFilterChange('q', event.target.value)}
+                placeholder={t(
+                  'admin.accounts.search_placeholder',
+                  {},
+                  'Name, account ID, package, or note'
+                )}
+                className="input"
+              />
+            </label>
             <label className="text-sm">
               <span className="mb-2 block font-medium text-gray-700 dark:text-gray-300">{t('common.status')}</span>
               <select
@@ -737,7 +851,7 @@ function AccountsContent() {
                       </div>
                       {account.operator_note ? (
                         <p className="mt-2 line-clamp-1 text-xs text-slate-500 dark:text-slate-400">
-                          {account.operator_note}
+                          {t('admin.accounts.internal_note_prefix', {}, 'Internal note')}: {account.operator_note}
                         </p>
                       ) : null}
                     </div>
@@ -795,7 +909,22 @@ function AccountsContent() {
                     )}
                   </td>
                   <td className="px-6 py-4">
-                    <div className="flex justify-end">
+                    <div className="flex flex-wrap justify-end gap-2">
+                      <button
+                        type="button"
+                        onClick={() => requestAccountStatusMutation(account)}
+                        className={cn(
+                          'btn btn-secondary btn-sm whitespace-nowrap',
+                          account.status === 'suspended' ? '' : 'border-amber-200 text-amber-700 hover:border-amber-300 dark:border-amber-900/60 dark:text-amber-200'
+                        )}
+                        disabled={accountActionId === account.account_id}
+                      >
+                        {accountActionId === account.account_id
+                          ? t('common.saving', {}, 'Saving...')
+                          : account.status === 'suspended'
+                            ? t('admin.accounts.restore_account_action', {}, 'Restore account')
+                            : t('admin.accounts.suspend_account_action', {}, 'Suspend account')}
+                      </button>
                       <Link href={`/admin/accounts/${account.account_id}`} className="btn btn-primary btn-sm whitespace-nowrap">
                         {t('common.details', {}, 'Details')}
                       </Link>
@@ -809,6 +938,18 @@ function AccountsContent() {
           </div>
         )}
       </BackofficeSectionPanel>
+      <ConfirmModal
+        isOpen={Boolean(pendingConfirmation)}
+        title={pendingConfirmation?.title}
+        message={pendingConfirmation?.message || ''}
+        confirmLabel={pendingConfirmation?.confirmLabel || t('common.confirm', {}, 'Confirm')}
+        cancelLabel={t('common.cancel', {}, 'Cancel')}
+        variant={pendingConfirmation?.variant || 'default'}
+        onClose={() => setPendingConfirmation(null)}
+        onConfirm={() => {
+          pendingConfirmation?.onConfirm();
+        }}
+      />
     </BackofficePageStack>
   );
 }

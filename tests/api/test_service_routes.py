@@ -1741,6 +1741,29 @@ def test_service_routes_admin_read_facade(tmp_path: Path) -> None:
     assert len(account_detail["sites"]) == 1
     assert len(account_detail["subscriptions"]) >= 1
 
+    suspend_account_response = client.post(
+        "/internal/service/admin/accounts/acct_admin/suspend",
+        headers=build_internal_headers(idempotency_key="svc-admin-account-suspend-001"),
+    )
+    assert suspend_account_response.status_code == 200
+    assert suspend_account_response.json()["data"]["status"] == "suspended"
+    assert suspend_account_response.json()["data"]["receipt"]["event_kind"] == "account.suspend"
+
+    suspended_account_detail_response = client.get(
+        "/internal/service/admin/accounts/acct_admin",
+        headers=build_internal_headers(),
+    )
+    assert suspended_account_detail_response.status_code == 200
+    assert suspended_account_detail_response.json()["data"]["account"]["status"] == "suspended"
+
+    restore_account_response = client.post(
+        "/internal/service/admin/accounts/acct_admin/restore",
+        headers=build_internal_headers(idempotency_key="svc-admin-account-restore-001"),
+    )
+    assert restore_account_response.status_code == 200
+    assert restore_account_response.json()["data"]["status"] == "active"
+    assert restore_account_response.json()["data"]["receipt"]["event_kind"] == "account.restore"
+
     assert sites_response.status_code == 200
     sites = sites_response.json()["data"]["items"]
     assert len(sites) == 1

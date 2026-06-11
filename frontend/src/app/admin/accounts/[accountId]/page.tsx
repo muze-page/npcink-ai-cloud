@@ -359,6 +359,9 @@ function AccountDetailContent() {
   const [accountMetaNotice, setAccountMetaNotice] = useState<string | null>(null);
   const [accountMetaError, setAccountMetaError] = useState<string | null>(null);
   const [isSavingAccountMeta, setIsSavingAccountMeta] = useState(false);
+  const [accountStatusNotice, setAccountStatusNotice] = useState<string | null>(null);
+  const [accountStatusError, setAccountStatusError] = useState<string | null>(null);
+  const [accountStatusPending, setAccountStatusPending] = useState<'suspend' | 'restore' | null>(null);
   const [inviteEmail, setInviteEmail] = useState('');
   const [inviteNotice, setInviteNotice] = useState<string | null>(null);
   const [inviteError, setInviteError] = useState<string | null>(null);
@@ -949,6 +952,39 @@ function AccountDetailContent() {
     }
   };
 
+  const handleAccountStatusMutation = async (action: 'suspend' | 'restore') => {
+    if (!account) {
+      return;
+    }
+    setAccountStatusPending(action);
+    setAccountStatusNotice(null);
+    setAccountStatusError(null);
+    try {
+      const response = await fetch(`/api/admin/accounts/${encodeURIComponent(account.account_id)}/${action}`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      });
+      const payload = await response.json();
+      if (!response.ok) {
+        throw new Error(payload.message || t('error.failed_save', {}, 'Failed to save.'));
+      }
+      const nextStatus = String(payload.data?.status || (action === 'restore' ? 'active' : 'suspended'));
+      setAccount((current) => (current ? { ...current, status: nextStatus } : current));
+      setAccountStatusNotice(
+        action === 'restore'
+          ? t('admin.accounts.account_restored_notice', { account: accountTitle }, `${accountTitle} has been restored.`)
+          : t('admin.accounts.account_suspended_notice', { account: accountTitle }, `${accountTitle} has been suspended.`)
+      );
+      await loadAccount(selectedSiteId, selectedMemberRef);
+    } catch (err) {
+      setAccountStatusError(resolveUiErrorMessage(err instanceof Error ? err.message : null, t('error.failed_save')));
+    } finally {
+      setAccountStatusPending(null);
+    }
+  };
+
   const handleApplyTopUpPack = async (pack: TopUpPackOption) => {
     const subscriptionId = packageForm.subscription_id || selectPrimarySubscription(account)?.subscription_id || '';
     if (!subscriptionId) {
@@ -1427,6 +1463,43 @@ function AccountDetailContent() {
             <a href="#coverage-actions" className="btn btn-primary">
               {t('admin.account_detail.manage_package_action', undefined, 'Manage package')}
             </a>
+            <button
+              type="button"
+              onClick={() =>
+                setPendingConfirmation({
+                  title:
+                    account.status === 'suspended'
+                      ? t('admin.accounts.confirm_restore_title', {}, 'Confirm account restore')
+                      : t('admin.accounts.confirm_suspend_title', {}, 'Confirm account suspension'),
+                  message:
+                    account.status === 'suspended'
+                      ? t(
+                          'admin.accounts.confirm_restore_desc',
+                          { account: accountTitle },
+                          `Restore ${accountTitle} to active access?`
+                        )
+                      : t(
+                          'admin.accounts.confirm_suspend_desc',
+                          { account: accountTitle },
+                          `Suspend ${accountTitle}? Customer portal access and site actions will be blocked by account status.`
+                        ),
+                  confirmLabel:
+                    account.status === 'suspended'
+                      ? t('admin.accounts.restore_account_action', {}, 'Restore account')
+                      : t('admin.accounts.suspend_account_action', {}, 'Suspend account'),
+                  variant: account.status === 'suspended' ? 'default' : 'danger',
+                  onConfirm: () => void handleAccountStatusMutation(account.status === 'suspended' ? 'restore' : 'suspend'),
+                })
+              }
+              className="btn btn-secondary"
+              disabled={accountStatusPending !== null}
+            >
+              {accountStatusPending
+                ? t('common.saving', {}, 'Saving...')
+                : account.status === 'suspended'
+                  ? t('admin.accounts.restore_account_action', {}, 'Restore account')
+                  : t('admin.accounts.suspend_account_action', {}, 'Suspend account')}
+            </button>
             <Link href="/admin/accounts" className="btn btn-secondary">
               {t('admin.back_to_accounts')}
             </Link>
@@ -1471,6 +1544,12 @@ function AccountDetailContent() {
             <BackofficeStatusBadge status={account.status} label={translateStatusLabel(account.status, t)} />
           ) : null}
         </div>
+        {accountStatusNotice ? (
+          <p className="text-sm text-emerald-700 dark:text-emerald-300">{accountStatusNotice}</p>
+        ) : null}
+        {accountStatusError ? (
+          <p className="text-sm text-red-600 dark:text-red-300">{accountStatusError}</p>
+        ) : null}
         <details
           data-ui="operator-profile-editor"
           className="rounded-lg border border-slate-200/80 bg-white/75 px-4 py-3 dark:border-slate-800 dark:bg-slate-950/40"

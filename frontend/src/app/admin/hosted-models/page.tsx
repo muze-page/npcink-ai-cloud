@@ -455,11 +455,11 @@ function AdminHostedModelsContent() {
     <BackofficePageStack>
       <BackofficePrimaryPanel
         eyebrow={t('admin.operator_surface', {}, 'Operator surface')}
-        title={t('admin.hosted_models.title', {}, 'Hosted Model Governance')}
+        title={t('admin.hosted_models.title', {}, 'Hosted model runtime')}
         description={t(
           'admin.hosted_models.desc',
           {},
-          'Read-only runtime posture for hosted text, image, search, vector, and future model families. This view summarizes metering, provider calls, cost, and coverage without exposing prompts or results.'
+          'Read-only runtime posture for hosted model families. Start with alert status; open advanced detail only when you need metering, provider, or boundary evidence.'
         )}
         aside={
           data ? (
@@ -632,10 +632,10 @@ function AdminHostedModelsContent() {
             <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
               <div>
                 <p className="text-xs font-semibold uppercase tracking-[0.18em] text-gray-500 dark:text-gray-400">
-                  {t('admin.hosted_models.alert_eyebrow', {}, 'Alert summary')}
+                  {t('admin.hosted_models.alert_eyebrow', {}, 'Runtime signal')}
                 </p>
                 <h2 className="mt-2 text-xl font-semibold text-gray-950 dark:text-white">
-                  {t('admin.hosted_models.alert_title', {}, 'Daily governance watch')}
+                  {t('admin.hosted_models.alert_title', {}, 'Signals needing model follow-up')}
                 </h2>
                 <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">
                   {translateHostedText(t, data?.alertSummary.summary)}
@@ -687,6 +687,14 @@ function AdminHostedModelsContent() {
             )}
           </BackofficeSectionPanel>
 
+          <details className="rounded-2xl border border-dashed border-slate-200 px-5 py-4 dark:border-slate-800">
+            <summary className="cursor-pointer list-none text-sm font-semibold text-slate-700 hover:text-slate-950 dark:text-slate-300 dark:hover:text-white">
+              {t('admin.hosted_models.advanced_detail_title', {}, 'Advanced model evidence')}
+              <span className="ml-3 font-normal text-slate-500 dark:text-slate-400">
+                {t('admin.hosted_models.advanced_detail_desc', {}, 'Metering, provider, capability, and read-only boundary detail')}
+              </span>
+            </summary>
+            <div className="mt-5 space-y-5">
           <BackofficeSectionPanel className="space-y-4">
             <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
               <div>
@@ -845,6 +853,8 @@ function AdminHostedModelsContent() {
               </BackofficeStackCard>
             </BackofficeSectionPanel>
           </div>
+            </div>
+          </details>
         </>
       )}
     </BackofficePageStack>

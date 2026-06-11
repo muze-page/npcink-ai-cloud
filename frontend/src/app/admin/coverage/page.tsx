@@ -19,7 +19,7 @@ import {
 } from '@/lib/customer-package-display';
 import { resolveUiErrorMessage } from '@/lib/errors';
 import { translateStatusLabel } from '@/lib/status-display';
-import { formatDate, formatNumber as formatInteger } from '@/lib/utils';
+import { cn, formatDate, formatNumber as formatInteger } from '@/lib/utils';
 
 type CoverageAccountItem = {
   account: {
@@ -103,6 +103,22 @@ type CoverageState = {
   sites: CoverageSiteItem[];
 };
 
+type CustomerCoverageQueueItem = {
+  accountId: string;
+  name: string;
+  packageLabel: string;
+  reason: string;
+  tone: string;
+  subscriptionId: string;
+  siteCount: number;
+};
+
+const INTERNAL_TEST_TEXT_RE = /Fatal error|Stack trace|Command line code|Uncaught ValueError|Path must not be empty|(^|[_-])smoke([_-]|$)|codex_image_smoke|site_knowledge_smoke/i;
+
+function isInternalCoverageRecord(...values: Array<string | undefined>): boolean {
+  return INTERNAL_TEST_TEXT_RE.test(values.filter(Boolean).join(' '));
+}
+
 async function readJsonData<T>(url: string): Promise<T> {
   const response = await fetch(url, { credentials: 'include' });
   if (!response.ok) {
@@ -139,6 +155,61 @@ function isSiteFollowUp(item: CoverageSiteItem): boolean {
     coverageState === 'uncovered' ||
     ['missing', 'past_due', 'suspended', 'canceled', 'expired'].includes(subscriptionStatus) ||
     Number(item.active_key_count || 0) === 0
+  );
+}
+
+function translateCoverageReason(
+  t: (key: string, params?: Record<string, string>, fallback?: string) => string,
+  value?: string
+): string {
+  const text = String(value || '').trim();
+  if (!text) {
+    return '';
+  }
+  if (text === 'Current-period billing snapshots are still missing for at least one covered site.') {
+    return t(
+      'admin.coverage_reason_billing_snapshot_missing',
+      {},
+      'At least one covered site is missing the current-period billing snapshot.'
+    );
+  }
+  if (text === 'Current-period billing snapshots need rebuild to match the latest subscription posture.') {
+    return t(
+      'admin.coverage_reason_billing_snapshot_rebuild',
+      {},
+      'Current-period billing snapshots need rebuild to match the latest subscription posture.'
+    );
+  }
+  return text;
+}
+
+function coverageToneClassName(tone: string): string {
+  const normalized = tone.toLowerCase();
+  if (['error', 'failed', 'canceled', 'expired'].includes(normalized)) {
+    return 'border-rose-200 bg-rose-50 text-rose-700 dark:border-rose-900/50 dark:bg-rose-950/30 dark:text-rose-200';
+  }
+  if (['active', 'ok', 'success', 'covered'].includes(normalized)) {
+    return 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900/50 dark:bg-emerald-950/30 dark:text-emerald-200';
+  }
+  return 'border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-900/50 dark:bg-amber-950/30 dark:text-amber-200';
+}
+
+function CoverageInlineStatus({
+  status,
+  label,
+}: {
+  status: string;
+  label: string;
+}) {
+  return (
+    <span
+      className={cn(
+        'inline-flex shrink-0 rounded-full border px-2.5 py-1 text-xs font-semibold leading-none',
+        coverageToneClassName(status)
+      )}
+    >
+      {label}
+    </span>
   );
 }
 
@@ -197,11 +268,54 @@ function AdminCoverageContent() {
     return <LoadingFallback />;
   }
 
-  const accountItems = state.accounts.slice(0, 4);
+  const accountItems = state.accounts
+    .filter((item) => !isInternalCoverageRecord(item.account.account_id, item.account.name))
+    .slice(0, 4);
   const subscriptionRisks = state.subscriptions
     .filter(isSubscriptionRisk)
+    .filter(
+      (item) =>
+        !isInternalCoverageRecord(
+          item.account?.account_id,
+          item.account?.name,
+          item.subscription.account_id,
+          item.subscription.subscription_id
+        )
+    )
     .slice(0, 4);
-  const siteFollowUps = state.sites.filter(isSiteFollowUp).slice(0, 4);
+  const siteFollowUps = state.sites
+    .filter(isSiteFollowUp)
+    .filter((item) => !isInternalCoverageRecord(item.site.site_id, item.site.name, item.site.account_id))
+    .slice(0, 4);
+  const customerQueueEntries: Array<[string, CustomerCoverageQueueItem]> = [
+        ...accountItems.map((item): [string, CustomerCoverageQueueItem] => [
+          item.account.account_id,
+          {
+            accountId: item.account.account_id,
+            name: item.account.name || item.account.account_id,
+            packageLabel: item.display_package_label || t('admin.coverage_state_uncovered', {}, 'Uncovered'),
+            reason: t('admin.coverage_reason_missing_package', {}, 'Customer has site footprint without readable package coverage.'),
+            tone: 'warning',
+            subscriptionId: item.primary_subscription_id || '',
+            siteCount: Number(item.site_count || 0),
+          },
+        ]),
+        ...subscriptionRisks.map((item): [string, CustomerCoverageQueueItem] => [
+          item.account?.account_id || item.subscription.account_id || item.subscription.subscription_id,
+          {
+            accountId: item.account?.account_id || item.subscription.account_id || '',
+            name: item.account?.name || item.account?.account_id || item.subscription.account_id || item.subscription.subscription_id,
+            packageLabel: item.coverage?.display_package_label || t('common.not_available', {}, 'N/A'),
+            reason:
+              translateCoverageReason(t, item.billing_snapshot_status?.summary) ||
+              t('admin.coverage_reason_subscription_risk', {}, 'Subscription status, expiry, or billing snapshot needs review.'),
+            tone: item.subscription.status && !['active', 'trialing'].includes(item.subscription.status) ? 'error' : 'warning',
+            subscriptionId: item.subscription.subscription_id,
+            siteCount: Number(item.covered_sites?.length || 0),
+          },
+        ]),
+      ].filter(([key]) => Boolean(key));
+  const customerQueue = Array.from(new Map(customerQueueEntries).values()).slice(0, 6);
 
   return (
     <BackofficePageStack>
@@ -250,48 +364,77 @@ function AdminCoverageContent() {
         </p>
       </BackofficePrimaryPanel>
 
-      <div className="grid gap-5 xl:grid-cols-3">
-        <BackofficeSectionPanel className="space-y-4">
+      <div className="grid gap-5 xl:grid-cols-[minmax(0,1.6fr)_minmax(22rem,0.8fr)]">
+        <BackofficeSectionPanel className="overflow-hidden p-0">
           <div>
-            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-gray-500 dark:text-gray-400">
-              {t('common.accounts', {}, 'Customers')}
-            </p>
-            <h2 className="mt-2 text-xl font-semibold text-gray-950 dark:text-white">
-              {t('admin.coverage_customers_followup_title', {}, 'Customers needing coverage follow-up')}
-            </h2>
-            <p className="mt-2 text-sm text-slate-600 dark:text-slate-300">
-              {t(
-                'admin.coverage_customers_followup_desc',
-                {},
-                'Only customers with site footprint and missing package coverage appear here.'
-              )}
-            </p>
+            <div className="border-b border-slate-200/80 px-6 py-5 dark:border-slate-800">
+              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-gray-500 dark:text-gray-400">
+                {t('common.accounts', {}, 'Customers')}
+              </p>
+              <h2 className="mt-2 text-xl font-semibold text-gray-950 dark:text-white">
+                {t('admin.coverage_customer_queue_title', {}, 'Customer coverage queue')}
+              </h2>
+              <p className="mt-2 text-sm text-slate-600 dark:text-slate-300">
+                {t(
+                  'admin.coverage_customer_queue_desc',
+                  {},
+                  'Start from the customer. Subscription and site records below are evidence, not separate first-step queues.'
+                )}
+              </p>
+            </div>
           </div>
-          <div className="space-y-3">
-            {accountItems.length ? (
-              accountItems.map((item) => (
-                <BackofficeStackCard key={item.account.account_id}>
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <p className="font-semibold text-slate-950 dark:text-white">{item.account.name || item.account.account_id}</p>
-                      <BackofficeIdentifier value={item.account.account_id} className="mt-1 text-xs text-slate-500 dark:text-slate-400" />
-                      <p className="mt-2 text-sm text-slate-600 dark:text-slate-300">
-                        {item.display_package_label || t('admin.coverage_state_uncovered', {}, 'Uncovered')}
-                      </p>
-                    </div>
-                    <BackofficeStatusBadge
-                      status={item.coverage_state || 'warning'}
-                      label={translateCoverageStateLabel(t, (item.coverage_state as CustomerCoverageState) || 'uncovered')}
-                    />
-                  </div>
-                  <div className="mt-3 flex flex-wrap gap-2">
-                    <Link href={`/admin/accounts/${item.account.account_id}`} className="btn btn-secondary btn-sm">
-                      {t('admin.coverage_open_customer_action', {}, 'Open customer')}
-                    </Link>
-                  </div>
-                </BackofficeStackCard>
-              ))
+          {customerQueue.length ? (
+            <div className="overflow-x-auto">
+              <table className="min-w-[48rem] divide-y divide-slate-200/80 text-left text-sm dark:divide-slate-800 lg:w-full">
+                <thead className="bg-slate-50/80 text-xs uppercase tracking-[0.16em] text-slate-500 dark:bg-slate-950/30 dark:text-slate-400">
+                  <tr>
+                    <th className="w-[32%] px-6 py-3 font-semibold">{t('common.account', {}, 'Customer')}</th>
+                    <th className="w-[18%] px-4 py-3 font-semibold">{t('common.package', {}, 'Package')}</th>
+                    <th className="px-4 py-3 font-semibold">{t('admin.reason', {}, 'Reason')}</th>
+                    <th className="w-[9rem] px-6 py-3 text-right font-semibold">{t('common.actions', {}, 'Actions')}</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-200/80 dark:divide-slate-800">
+                  {customerQueue.map((item) => (
+                    <tr key={`${item.accountId || item.subscriptionId}-${item.reason}`} className="align-top hover:bg-slate-50/70 dark:hover:bg-slate-950/35">
+                      <td className="px-6 py-4">
+                        <p className="font-semibold text-slate-950 dark:text-white">{item.name}</p>
+                        {item.accountId ? (
+                          <BackofficeIdentifier value={item.accountId} className="mt-1 text-xs text-slate-500 dark:text-slate-400" />
+                        ) : item.subscriptionId ? (
+                          <BackofficeIdentifier value={item.subscriptionId} className="mt-1 text-xs text-slate-500 dark:text-slate-400" />
+                        ) : null}
+                      </td>
+                      <td className="px-4 py-4">
+                        <p className="font-medium text-slate-900 dark:text-slate-100">{item.packageLabel}</p>
+                        <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                          {t('admin.coverage_site_count_hint', { count: formatInteger(item.siteCount) }, `${formatInteger(item.siteCount)} sites`)}
+                        </p>
+                      </td>
+                      <td className="px-4 py-4">
+                        <div className="max-w-xl space-y-2">
+                          <CoverageInlineStatus status={item.tone} label={translateStatusLabel(item.tone, t)} />
+                          <p className="text-slate-600 dark:text-slate-300">{item.reason}</p>
+                        </div>
+                      </td>
+                      <td className="px-6 py-4 text-right">
+                        {item.accountId ? (
+                          <Link href={`/admin/accounts/${item.accountId}`} className="btn btn-primary btn-sm whitespace-nowrap">
+                            {t('admin.coverage_open_customer_action', {}, 'Open customer')}
+                          </Link>
+                        ) : item.subscriptionId ? (
+                          <Link href={`/admin/subscriptions/${item.subscriptionId}`} className="btn btn-secondary btn-sm whitespace-nowrap">
+                            {t('admin.coverage_open_subscription_detail_action', {}, 'Inspect detail')}
+                          </Link>
+                        ) : null}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
             ) : (
+              <div className="px-6 py-8">
               <BackofficeStackCard className="space-y-3 text-sm text-slate-600 dark:text-slate-300">
                 <div className="flex items-center justify-between gap-3">
                   <span>{t('admin.coverage_customers_empty', {}, 'No uncovered customers are visible in this operator snapshot.')}</span>
@@ -301,44 +444,37 @@ function AdminCoverageContent() {
                   {t('admin.coverage_open_customer_register_action', {}, 'Open customer register')}
                 </Link>
               </BackofficeStackCard>
+              </div>
             )}
-          </div>
         </BackofficeSectionPanel>
 
-        <BackofficeSectionPanel className="space-y-4">
-          <div>
-            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-gray-500 dark:text-gray-400">
-              {t('common.subscriptions', {}, 'Subscriptions')}
-            </p>
-            <h2 className="mt-2 text-xl font-semibold text-gray-950 dark:text-white">
-              {t('admin.coverage_subscription_risks_title', {}, 'Subscription risks')}
-            </h2>
-            <p className="mt-2 text-sm text-slate-600 dark:text-slate-300">
-              {t(
-                'admin.coverage_subscription_risks_desc',
-                {},
-                'Shows non-active subscriptions, near-term expiry, or billing snapshot gaps.'
-              )}
-            </p>
-          </div>
-          <div className="space-y-3">
-            {subscriptionRisks.length ? (
-              subscriptionRisks.map((item) => (
+        <div className="space-y-5">
+          <BackofficeSectionPanel className="space-y-4">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-gray-500 dark:text-gray-400">
+                {t('admin.coverage_evidence_label', {}, 'Evidence')}
+              </p>
+              <h2 className="mt-2 text-xl font-semibold text-gray-950 dark:text-white">
+                {t('admin.coverage_subscription_risks_title', {}, 'Subscription risks')}
+              </h2>
+            </div>
+            <div className="space-y-3">
+              {subscriptionRisks.length ? subscriptionRisks.map((item) => (
                 <BackofficeStackCard key={item.subscription.subscription_id}>
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0">
+                  <div className="min-w-0 space-y-2">
+                    <div className="flex flex-wrap items-center gap-2">
                       <BackofficeIdentifier value={item.subscription.subscription_id} className="text-sm font-semibold text-slate-950 dark:text-white" />
-                      <p className="mt-2 text-sm text-slate-600 dark:text-slate-300">
-                        {item.billing_snapshot_status?.summary ||
-                          item.account?.name ||
-                          item.subscription.account_id ||
-                          t('common.not_found')}
-                      </p>
-                    </div>
-                    <BackofficeStatusBadge
+                      <CoverageInlineStatus
                       status={item.subscription.status || item.billing_snapshot_status?.status || 'warning'}
                       label={translateStatusLabel(item.subscription.status || item.billing_snapshot_status?.status || 'warning', t)}
                     />
+                    </div>
+                    <p className="text-sm text-slate-600 dark:text-slate-300">
+                      {translateCoverageReason(t, item.billing_snapshot_status?.summary) ||
+                        item.account?.name ||
+                        item.subscription.account_id ||
+                        t('common.not_found')}
+                    </p>
                   </div>
                   <div className="mt-3 flex flex-wrap gap-2">
                     <Link href={`/admin/subscriptions/${item.subscription.subscription_id}`} className="btn btn-secondary btn-sm">
@@ -346,8 +482,7 @@ function AdminCoverageContent() {
                     </Link>
                   </div>
                 </BackofficeStackCard>
-              ))
-            ) : (
+              )) : (
               <BackofficeStackCard className="space-y-3 text-sm text-slate-600 dark:text-slate-300">
                 <div className="flex items-center justify-between gap-3">
                   <span>{t('admin.coverage_subscriptions_empty', {}, 'No subscription risk is visible in this operator snapshot.')}</span>
@@ -358,38 +493,25 @@ function AdminCoverageContent() {
                 </Link>
               </BackofficeStackCard>
             )}
-          </div>
-        </BackofficeSectionPanel>
+            </div>
+          </BackofficeSectionPanel>
 
-        <BackofficeSectionPanel className="space-y-4">
-          <div>
-            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-gray-500 dark:text-gray-400">
-              {t('common.sites', {}, 'Sites')}
-            </p>
-            <h2 className="mt-2 text-xl font-semibold text-gray-950 dark:text-white">
-              {t('admin.coverage_sites_followup_title', {}, 'Sites needing follow-up')}
-            </h2>
-            <p className="mt-2 text-sm text-slate-600 dark:text-slate-300">
-              {t(
-                'admin.coverage_sites_followup_desc',
-                {},
-                'Shows sites with inactive status, missing coverage, blocked subscription state, or no active site key.'
-              )}
-            </p>
-          </div>
-          <div className="space-y-3">
-            {siteFollowUps.length ? (
-              siteFollowUps.map((item) => (
+          <BackofficeSectionPanel className="space-y-4">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-gray-500 dark:text-gray-400">
+                {t('admin.coverage_evidence_label', {}, 'Evidence')}
+              </p>
+              <h2 className="mt-2 text-xl font-semibold text-gray-950 dark:text-white">
+                {t('admin.coverage_sites_followup_title', {}, 'Sites needing follow-up')}
+              </h2>
+            </div>
+            <div className="space-y-3">
+              {siteFollowUps.length ? siteFollowUps.map((item) => (
                 <BackofficeStackCard key={item.site.site_id}>
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0">
+                  <div className="min-w-0 space-y-2">
+                    <div className="flex flex-wrap items-center gap-2">
                       <p className="font-semibold text-slate-950 dark:text-white">{item.site.name || item.site.site_id}</p>
-                      <BackofficeIdentifier value={item.site.site_id} className="mt-1 text-xs text-slate-500 dark:text-slate-400" />
-                      <p className="mt-2 text-sm text-slate-600 dark:text-slate-300">
-                        {item.coverage?.covered_by_subscription_id || item.site.account_id || t('common.not_found')}
-                      </p>
-                    </div>
-                    <BackofficeStatusBadge
+                      <CoverageInlineStatus
                       status={item.coverage?.coverage_state === 'uncovered' ? 'warning' : item.site.status || 'warning'}
                       label={
                         item.coverage?.coverage_state === 'uncovered'
@@ -397,6 +519,11 @@ function AdminCoverageContent() {
                           : translateStatusLabel(item.site.status || 'warning', t)
                       }
                     />
+                    </div>
+                    <BackofficeIdentifier value={item.site.site_id} className="text-xs text-slate-500 dark:text-slate-400" />
+                    <p className="text-sm text-slate-600 dark:text-slate-300">
+                      {item.coverage?.covered_by_subscription_id || item.site.account_id || t('common.not_found')}
+                    </p>
                   </div>
                   <div className="mt-3 flex flex-wrap gap-2">
                     <Link href={`/admin/sites/${item.site.site_id}`} className="btn btn-secondary btn-sm">
@@ -404,8 +531,7 @@ function AdminCoverageContent() {
                     </Link>
                   </div>
                 </BackofficeStackCard>
-              ))
-            ) : (
+              )) : (
               <BackofficeStackCard className="space-y-3 text-sm text-slate-600 dark:text-slate-300">
                 <div className="flex items-center justify-between gap-3">
                   <span>{t('admin.coverage_sites_empty', {}, 'No site-level coverage follow-up is visible in this operator snapshot.')}</span>
@@ -416,8 +542,9 @@ function AdminCoverageContent() {
                 </Link>
               </BackofficeStackCard>
             )}
+            </div>
+          </BackofficeSectionPanel>
           </div>
-        </BackofficeSectionPanel>
       </div>
     </BackofficePageStack>
   );

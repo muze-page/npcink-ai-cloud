@@ -16,6 +16,8 @@ type AdvancedEntry = {
   titleFallback: string;
   descKey: string;
   descFallback: string;
+  actionKey: string;
+  actionFallback: string;
   groupKey: string;
   groupFallback: string;
 };
@@ -27,6 +29,8 @@ const advancedEntries: AdvancedEntry[] = [
     titleFallback: 'Plugin Observability',
     descKey: 'admin.advanced.plugin_observability_desc',
     descFallback: 'Plugin event volume, error pressure, latency, and recent failure evidence.',
+    actionKey: 'admin.advanced.action_view_plugin_observability',
+    actionFallback: 'View plugin evidence',
     groupKey: 'admin.advanced.group_runtime',
     groupFallback: 'Runtime evidence',
   },
@@ -36,6 +40,8 @@ const advancedEntries: AdvancedEntry[] = [
     titleFallback: 'Media Observability',
     descKey: 'admin.advanced.media_observability_desc',
     descFallback: 'Media processing jobs, failures, processing duration, and compression value.',
+    actionKey: 'admin.advanced.action_view_media_jobs',
+    actionFallback: 'View media jobs',
     groupKey: 'admin.advanced.group_runtime',
     groupFallback: 'Runtime evidence',
   },
@@ -45,6 +51,8 @@ const advancedEntries: AdvancedEntry[] = [
     titleFallback: 'Vector Observability',
     descKey: 'admin.advanced.vector_observability_desc',
     descFallback: 'Vector and site-knowledge indexing health for support investigations.',
+    actionKey: 'admin.advanced.action_view_vector_health',
+    actionFallback: 'View vector health',
     groupKey: 'admin.advanced.group_runtime',
     groupFallback: 'Runtime evidence',
   },
@@ -54,6 +62,8 @@ const advancedEntries: AdvancedEntry[] = [
     titleFallback: 'Hosted Models',
     descKey: 'admin.advanced.hosted_models_desc',
     descFallback: 'Hosted model governance, metering coverage, provider calls, and model risk.',
+    actionKey: 'admin.advanced.action_view_model_gaps',
+    actionFallback: 'View model gaps',
     groupKey: 'admin.advanced.group_governance',
     groupFallback: 'Governance',
   },
@@ -63,6 +73,8 @@ const advancedEntries: AdvancedEntry[] = [
     titleFallback: 'AI Advisor',
     descKey: 'admin.advanced.ai_advisor_desc',
     descFallback: 'AI-assisted diagnosis for selected operational signals.',
+    actionKey: 'admin.advanced.action_open_advisor',
+    actionFallback: 'Open advisor',
     groupKey: 'admin.advanced.group_governance',
     groupFallback: 'Governance',
   },
@@ -72,6 +84,8 @@ const advancedEntries: AdvancedEntry[] = [
     titleFallback: 'Web Search',
     descKey: 'admin.advanced.web_search_desc',
     descFallback: 'Web-search capability checks and service-plane configuration evidence.',
+    actionKey: 'admin.advanced.action_view_search_readiness',
+    actionFallback: 'View search readiness',
     groupKey: 'admin.advanced.group_capabilities',
     groupFallback: 'Capabilities',
   },
@@ -81,6 +95,8 @@ const advancedEntries: AdvancedEntry[] = [
     titleFallback: 'Image Sources',
     descKey: 'admin.advanced.image_sources_desc',
     descFallback: 'Image-source capability checks and provider/source readiness.',
+    actionKey: 'admin.advanced.action_view_image_readiness',
+    actionFallback: 'View image readiness',
     groupKey: 'admin.advanced.group_capabilities',
     groupFallback: 'Capabilities',
   },
@@ -140,7 +156,7 @@ export default function AdminTroubleshootingPage() {
                     </p>
                   </div>
                   <Link href={entry.href} className="btn btn-secondary shrink-0">
-                    {t('common.open', {}, 'Open')}
+                    {t(entry.actionKey, {}, entry.actionFallback)}
                   </Link>
                 </BackofficeStackCard>
               ))}

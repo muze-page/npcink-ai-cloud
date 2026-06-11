@@ -463,6 +463,88 @@ async def upsert_account(
     return build_envelope(status="ok", message="account saved", data=result, revision="m6")
 
 
+@router.post("/admin/accounts/{account_id}/suspend")
+async def suspend_admin_account(request: Request, account_id: str) -> Any:
+    auth = await authorize_internal_request(request, require_idempotency=True)
+    if auth is not None:
+        return auth
+    service = _get_commercial_service(request)
+    audit_context = _build_audit_context(request)
+    try:
+        result = service.set_account_status(
+            account_id,
+            status="suspended",
+            audit_context=audit_context,
+        )
+    except CommercialServiceError as error:
+        _record_service_failure(
+            request,
+            event_kind="account.suspend",
+            error=error,
+            account_id=account_id,
+            scope_kind="account",
+            scope_id=account_id,
+        )
+        return _service_error_response(error)
+    return build_envelope(
+        status="ok",
+        message="admin account suspended",
+        data=_merge_receipt(
+            result,
+            _build_operator_receipt(
+                event_kind="account.suspend",
+                scope_kind="account",
+                scope_id=account_id,
+                outcome="succeeded",
+                effective_summary=f"Account {account_id} is now suspended.",
+                account_id=account_id,
+            ),
+        ),
+        revision="m6",
+    )
+
+
+@router.post("/admin/accounts/{account_id}/restore")
+async def restore_admin_account(request: Request, account_id: str) -> Any:
+    auth = await authorize_internal_request(request, require_idempotency=True)
+    if auth is not None:
+        return auth
+    service = _get_commercial_service(request)
+    audit_context = _build_audit_context(request)
+    try:
+        result = service.set_account_status(
+            account_id,
+            status="active",
+            audit_context=audit_context,
+        )
+    except CommercialServiceError as error:
+        _record_service_failure(
+            request,
+            event_kind="account.restore",
+            error=error,
+            account_id=account_id,
+            scope_kind="account",
+            scope_id=account_id,
+        )
+        return _service_error_response(error)
+    return build_envelope(
+        status="ok",
+        message="admin account restored",
+        data=_merge_receipt(
+            result,
+            _build_operator_receipt(
+                event_kind="account.restore",
+                scope_kind="account",
+                scope_id=account_id,
+                outcome="succeeded",
+                effective_summary=f"Account {account_id} is now active.",
+                account_id=account_id,
+            ),
+        ),
+        revision="m6",
+    )
+
+
 @router.post("/accounts/{account_id}/memberships")
 async def upsert_account_membership(
     request: Request,
