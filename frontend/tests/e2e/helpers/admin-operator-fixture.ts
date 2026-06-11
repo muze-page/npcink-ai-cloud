@@ -40,6 +40,10 @@ export async function installAdminMocks(page: Page) {
         account_id: LONG_ACCOUNT_ID,
         name: 'MVP Account',
         status: 'active',
+        metadata: {
+          operator_display_name: 'Magick AI Demo',
+          operator_note: 'Pilot customer. Confirm package before public release.',
+        },
         created_at: '2026-02-01T00:00:00Z',
       },
       member_count: 1,
@@ -171,6 +175,30 @@ export async function installAdminMocks(page: Page) {
         plan_id: primaryAccountSubscription.plan_id,
         plan_version_id: primaryAccountSubscription.plan_version_id,
         status: primaryAccountSubscription.status,
+      });
+      return;
+    }
+
+    if (pathname === '/api/admin/subscriptions/sub_mvp/topup' && route.request().method() === 'POST') {
+      const payload = route.request().postDataJSON() as Record<string, unknown>;
+      await fulfillJson(route, {
+        subscription: primaryAccountSubscription,
+        topup: {
+          topup_id: 'topup_e2e_small',
+          pack_id: 'pack_small',
+          runs_increment: Number(payload.runs_increment || 0),
+          tokens_increment: Number(payload.tokens_increment || 0),
+          cost_increment: Number(payload.cost_increment || 0),
+          reason: String(payload.reason || ''),
+        },
+        topup_summary: {
+          current_period_count: 1,
+          current_period_totals: {
+            runs: Number(payload.runs_increment || 0),
+            tokens: Number(payload.tokens_increment || 0),
+            cost: Number(payload.cost_increment || 0),
+          },
+        },
       });
       return;
     }
@@ -821,13 +849,14 @@ export async function installAdminMocks(page: Page) {
         const payload = route.request().postDataJSON() as Record<string, unknown>;
         const accountId = String(payload.account_id || 'acct_new_customer_free');
         const name = String(payload.name || 'New Customer');
+        const metadata = (payload.metadata || {}) as Record<string, unknown>;
         const bindDefaultFree = Boolean(payload.bind_default_free);
-        accountItems = [
-          {
+        const nextAccountItem = {
             account: {
               account_id: accountId,
               name,
-              status: 'active',
+              status: String(payload.status || 'active'),
+              metadata,
               created_at: '2026-04-10T00:00:00Z',
             },
             member_count: 0,
@@ -842,9 +871,22 @@ export async function installAdminMocks(page: Page) {
             primary_subscription_id: bindDefaultFree ? `sub_${accountId}_free` : '',
             coverage_follow_up_required: false,
             nearest_expiry_at: '',
-          },
-          ...accountItems,
-        ];
+          };
+        accountItems = accountItems.some((item) => item.account.account_id === accountId)
+          ? accountItems.map((item) =>
+              item.account.account_id === accountId
+                ? {
+                    ...item,
+                    account: {
+                      ...item.account,
+                      name,
+                      status: String(payload.status || item.account.status || 'active'),
+                      metadata,
+                    },
+                  }
+                : item
+            )
+          : [nextAccountItem, ...accountItems];
         await fulfillJson(route, {
           account_id: accountId,
           name,
@@ -989,12 +1031,14 @@ export async function installAdminMocks(page: Page) {
     }
 
     if (pathname === `/api/admin/accounts/${LONG_ACCOUNT_ID}`) {
+      const primaryAccount = accountItems.find((item) => item.account.account_id === LONG_ACCOUNT_ID)?.account;
       await fulfillJson(route, {
         account: {
           account_id: LONG_ACCOUNT_ID,
-          name: 'MVP Account',
-          status: 'active',
-          created_at: '2026-02-01T00:00:00Z',
+          name: primaryAccount?.name || 'MVP Account',
+          status: primaryAccount?.status || 'active',
+          metadata: primaryAccount?.metadata || {},
+          created_at: primaryAccount?.created_at || '2026-02-01T00:00:00Z',
         },
         memberships: [{ member_ref: 'user:admin@example.com', identity_type: 'user', role: 'user', status: 'active' }],
         sites: [{ site_id: 'site_mvp', name: 'MVP Site', status: 'active' }],

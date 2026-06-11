@@ -6,6 +6,7 @@ import { LoadingFallback } from '@/components/ui/LoadingFallback';
 import { useParams } from 'next/navigation';
 import { BackofficeIdentifier } from '@/components/backoffice/BackofficeIdentifier';
 import { BackofficeStatusBadge } from '@/components/backoffice/BackofficeStatusBadge';
+import { ConfirmModal } from '@/components/ui/Modal';
 import {
   BackofficeEmptyState,
   BackofficeMetricStrip,
@@ -32,7 +33,10 @@ import { translateStatusLabel } from '@/lib/status-display';
 interface AccountDetail {
   account_id: string;
   name: string;
+  operator_display_name: string;
+  operator_note: string;
   status: string;
+  metadata: Record<string, unknown>;
   created_at: string;
   member_count: number;
   site_count: number;
@@ -186,6 +190,58 @@ const QUICK_PACKAGE_OPTIONS: QuickPackageOption[] = [
   { tier_id: 'agency', plan_id: 'agency', plan_version_id: 'agency_v1' },
 ];
 
+type TopUpPackOption = {
+  pack_id: 'pack_small' | 'pack_medium' | 'pack_large';
+  label_key: string;
+  fallback_label: string;
+  points_label: string;
+  runs_increment: number;
+  tokens_increment: number;
+  cost_increment: number;
+  recommended_for_tiers: Array<'free' | 'pro' | 'agency'>;
+};
+
+const TOPUP_PACK_OPTIONS: TopUpPackOption[] = [
+  {
+    pack_id: 'pack_small',
+    label_key: 'admin.account_detail.topup_pack_small',
+    fallback_label: 'Small top-up',
+    points_label: '10,000 points',
+    runs_increment: 10000,
+    tokens_increment: 2000000,
+    cost_increment: 99,
+    recommended_for_tiers: ['free', 'pro'],
+  },
+  {
+    pack_id: 'pack_medium',
+    label_key: 'admin.account_detail.topup_pack_medium',
+    fallback_label: 'Medium top-up',
+    points_label: '35,000 points',
+    runs_increment: 35000,
+    tokens_increment: 7000000,
+    cost_increment: 349,
+    recommended_for_tiers: ['pro', 'agency'],
+  },
+  {
+    pack_id: 'pack_large',
+    label_key: 'admin.account_detail.topup_pack_large',
+    fallback_label: 'Large top-up',
+    points_label: '150,000 points',
+    runs_increment: 150000,
+    tokens_increment: 30000000,
+    cost_increment: 1499,
+    recommended_for_tiers: ['agency'],
+  },
+];
+
+type PendingConfirmation = {
+  title: string;
+  message: string;
+  confirmLabel: string;
+  variant?: 'default' | 'danger';
+  onConfirm: () => void;
+};
+
 function normalizeEmailFromMember(memberRef: string, metadata?: Record<string, unknown>): string {
   const metadataEmail = String(metadata?.email || '').trim().toLowerCase();
   if (metadataEmail) {
@@ -237,6 +293,53 @@ function selectPrimarySubscription(account: AccountDetail | null): AccountDetail
   );
 }
 
+const MALFORMED_ACCOUNT_TEXT_RE = /Fatal error|Stack trace|Command line code|Uncaught ValueError|Path must not be empty/i;
+
+function prettifyAccountId(accountId: string): string {
+  if (MALFORMED_ACCOUNT_TEXT_RE.test(accountId)) {
+    return '';
+  }
+  const stripped = accountId
+    .replace(/^acct[_-]?/i, '')
+    .replace(/^site[_-]?/i, '')
+    .replace(/[_-]+/g, ' ')
+    .trim();
+  if (!stripped) {
+    return accountId;
+  }
+  return stripped
+    .split(/\s+/)
+    .map((word) => {
+      const lower = word.toLowerCase();
+      if (lower === 'ai') return 'AI';
+      if (lower === 'api') return 'API';
+      return lower.charAt(0).toUpperCase() + lower.slice(1);
+    })
+    .join(' ');
+}
+
+function resolveAccountTitle(
+  account: AccountDetail,
+  t: (key: string, vars?: Record<string, string>, fallback?: string) => string
+): string {
+  if (account.operator_display_name.trim()) {
+    return account.operator_display_name.trim();
+  }
+  const rawName = account.name.trim();
+  const isRawName =
+    !rawName ||
+    rawName === account.account_id ||
+    /^acct[_-]/i.test(rawName) ||
+    MALFORMED_ACCOUNT_TEXT_RE.test(rawName);
+  if (!isRawName) {
+    return rawName;
+  }
+  if (MALFORMED_ACCOUNT_TEXT_RE.test(`${account.account_id} ${rawName}`)) {
+    return t('admin.accounts.malformed_account_label', undefined, 'Malformed account record');
+  }
+  return prettifyAccountId(account.account_id) || account.account_id;
+}
+
 function AccountDetailContent() {
   const params = useParams();
   const { t } = useLocale();
@@ -249,6 +352,13 @@ function AccountDetailContent() {
   const [selectedSiteId, setSelectedSiteId] = useState('');
   const [selectedMemberRef, setSelectedMemberRef] = useState('');
   const [siteMembers, setSiteMembers] = useState<SiteMembership[]>([]);
+  const [accountMetaForm, setAccountMetaForm] = useState({
+    operator_display_name: '',
+    operator_note: '',
+  });
+  const [accountMetaNotice, setAccountMetaNotice] = useState<string | null>(null);
+  const [accountMetaError, setAccountMetaError] = useState<string | null>(null);
+  const [isSavingAccountMeta, setIsSavingAccountMeta] = useState(false);
   const [inviteEmail, setInviteEmail] = useState('');
   const [inviteNotice, setInviteNotice] = useState<string | null>(null);
   const [inviteError, setInviteError] = useState<string | null>(null);
@@ -268,6 +378,8 @@ function AccountDetailContent() {
   const [packageActionNotice, setPackageActionNotice] = useState<string | null>(null);
   const [packageActionError, setPackageActionError] = useState<string | null>(null);
   const [packageActionPending, setPackageActionPending] = useState<'change' | 'suspend' | 'cancel' | null>(null);
+  const [topUpActionPending, setTopUpActionPending] = useState<string | null>(null);
+  const [pendingConfirmation, setPendingConfirmation] = useState<PendingConfirmation | null>(null);
   const [packagePlans, setPackagePlans] = useState<PackagePlanListItem[]>([]);
   const [siteRuntimeData, setSiteRuntimeData] = useState<Record<string, {
     totalRuns: number;
@@ -395,6 +507,12 @@ function AccountDetailContent() {
       const payload = data.data || {};
       const coveragePayload = coverageData.data || {};
       const accountData = payload.account || {};
+      const accountMetadata =
+        accountData.metadata && typeof accountData.metadata === 'object'
+          ? (accountData.metadata as Record<string, unknown>)
+          : {};
+      const operatorDisplayName = String(accountMetadata.operator_display_name || '').trim();
+      const operatorNote = String(accountMetadata.operator_note || '').trim();
       const memberships = Array.isArray(payload.memberships) ? payload.memberships : [];
       const sites = Array.isArray(payload.sites) ? payload.sites : [];
       const subscriptions = Array.isArray(payload.subscriptions) ? payload.subscriptions : [];
@@ -403,7 +521,10 @@ function AccountDetailContent() {
       const nextAccount: AccountDetail = {
         account_id: String(accountData.account_id || accountId),
         name: String(accountData.name || accountData.account_id || accountId),
+        operator_display_name: operatorDisplayName,
+        operator_note: operatorNote,
         status: String(accountData.status || 'unknown'),
+        metadata: accountMetadata,
         created_at: String(accountData.created_at || ''),
         member_count: memberships.length,
         site_count: sites.length,
@@ -503,6 +624,10 @@ function AccountDetailContent() {
           : undefined,
       };
       setAccount(nextAccount);
+      setAccountMetaForm({
+        operator_display_name: operatorDisplayName,
+        operator_note: operatorNote,
+      });
       const defaultSubscription =
         nextAccount.subscriptions.find((subscription) =>
           ['active', 'trialing', 'past_due', 'suspended'].includes(subscription.status)
@@ -653,6 +778,66 @@ function AccountDetailContent() {
     }
   };
 
+  const handleSaveAccountMeta = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!account) {
+      return;
+    }
+
+    const operatorDisplayName = accountMetaForm.operator_display_name.trim();
+    const operatorNote = accountMetaForm.operator_note.trim();
+    const metadata = { ...(account.metadata || {}) };
+    if (operatorDisplayName) {
+      metadata.operator_display_name = operatorDisplayName;
+    } else {
+      delete metadata.operator_display_name;
+    }
+    if (operatorNote) {
+      metadata.operator_note = operatorNote;
+    } else {
+      delete metadata.operator_note;
+    }
+
+    setIsSavingAccountMeta(true);
+    setAccountMetaNotice(null);
+    setAccountMetaError(null);
+    try {
+      const response = await fetch('/api/admin/accounts', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          account_id: account.account_id,
+          name: account.name || account.account_id,
+          status: account.status || 'active',
+          metadata,
+          bind_default_free: false,
+        }),
+      });
+      const payload = await response.json();
+      if (!response.ok) {
+        throw new Error(payload.message || t('error.failed_save', {}, 'Failed to save.'));
+      }
+      setAccount((current) =>
+        current
+          ? {
+              ...current,
+              metadata,
+              operator_display_name: operatorDisplayName,
+              operator_note: operatorNote,
+            }
+          : current
+      );
+      setAccountMetaNotice(
+        t('admin.account_detail.operator_profile_saved_notice', undefined, 'Operator note has been saved.')
+      );
+    } catch (err) {
+      setAccountMetaError(resolveUiErrorMessage(err instanceof Error ? err.message : null, t('error.failed_save')));
+    } finally {
+      setIsSavingAccountMeta(false);
+    }
+  };
+
   const handleChangePackage = async (quickPackage?: QuickPackageOption) => {
     const selectedPlanId = (quickPackage?.plan_id || packageForm.plan_id).trim();
     const selectedPlanVersionId = (quickPackage?.plan_version_id || packageForm.plan_version_id).trim();
@@ -761,6 +946,58 @@ function AccountDetailContent() {
       );
     } finally {
       setPackageActionPending(null);
+    }
+  };
+
+  const handleApplyTopUpPack = async (pack: TopUpPackOption) => {
+    const subscriptionId = packageForm.subscription_id || selectPrimarySubscription(account)?.subscription_id || '';
+    if (!subscriptionId) {
+      setPackageActionError(
+        t(
+          'admin.account_detail.topup_missing_subscription',
+          undefined,
+          'A current subscription is required before applying a top-up pack.'
+        )
+      );
+      return;
+    }
+
+    setTopUpActionPending(pack.pack_id);
+    setPackageActionError(null);
+    setPackageActionNotice(null);
+    try {
+      const response = await fetch(`/api/admin/subscriptions/${encodeURIComponent(subscriptionId)}/topup`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          target_period_start_at: packageForm.current_period_start_at || null,
+          target_period_end_at: packageForm.current_period_end_at || null,
+          runs_increment: pack.runs_increment,
+          tokens_increment: pack.tokens_increment,
+          cost_increment: pack.cost_increment,
+          reason: 'operator_overage_buffer',
+          note: `Applied ${pack.pack_id} from account coverage screen.`,
+        }),
+      });
+      const payload = await response.json();
+      if (!response.ok) {
+        throw new Error(payload.message || t('error.failed_save', {}, 'Failed to save.'));
+      }
+      setPackageActionNotice(
+        t(
+          'admin.account_detail.topup_pack_applied_notice',
+          { pack: t(pack.label_key, undefined, pack.fallback_label) },
+          `${pack.fallback_label} has been applied to the current period.`
+        )
+      );
+      await loadAccount(selectedSiteId, selectedMemberRef);
+    } catch (err) {
+      setPackageActionError(
+        resolveUiErrorMessage(err instanceof Error ? err.message : null, t('error.failed_save'))
+      );
+    } finally {
+      setTopUpActionPending(null);
     }
   };
 
@@ -1140,6 +1377,12 @@ function AccountDetailContent() {
       };
     });
   const selectedPackageOption = packagePlanOptions.find((item) => item.plan_id === packageForm.plan_id) || null;
+  const currentTierId =
+    primarySubscription?.package_alias === 'Free' || primarySubscription?.plan_id === 'free'
+      ? 'free'
+      : primarySubscription?.package_alias === 'Agency' || primarySubscription?.plan_id === 'agency'
+        ? 'agency'
+        : 'pro';
   const portalAccessSummaryItems = [
     {
       label: t('common.members'),
@@ -1170,14 +1413,20 @@ function AccountDetailContent() {
       toneClassName: uncoveredMembers.length > 0 ? 'text-red-600 dark:text-red-400' : undefined,
     },
   ];
+  const accountTitle = resolveAccountTitle(account, t);
+  const showPostureBadge = postureTone !== 'ok';
+  const showAccountStatusBadge = account.status !== 'active' && account.status !== 'unknown';
   return (
     <BackofficePageStack>
       <BackofficePrimaryPanel
         eyebrow={t('admin.account_posture')}
-        title={account.name || account.account_id}
+        title={accountTitle}
         description={postureDescription}
         actions={(
           <>
+            <a href="#coverage-actions" className="btn btn-primary">
+              {t('admin.account_detail.manage_package_action', undefined, 'Manage package')}
+            </a>
             <Link href="/admin/accounts" className="btn btn-secondary">
               {t('admin.back_to_accounts')}
             </Link>
@@ -1215,55 +1464,68 @@ function AccountDetailContent() {
       >
         <div className="flex flex-wrap items-center gap-2">
           <BackofficeIdentifier value={account.account_id} className="text-xs text-gray-500 dark:text-gray-400" />
-          <BackofficeStatusBadge status={postureTone} label={translateStatusLabel(postureTone, t)} />
-          <BackofficeStatusBadge status={account.status} label={translateStatusLabel(account.status, t)} />
+          {showPostureBadge ? (
+            <BackofficeStatusBadge status={postureTone} label={translateStatusLabel(postureTone, t)} />
+          ) : null}
+          {showAccountStatusBadge ? (
+            <BackofficeStatusBadge status={account.status} label={translateStatusLabel(account.status, t)} />
+          ) : null}
         </div>
-        {trialReadiness ? (
-          <BackofficeStackCard data-ui="trial-readiness-summary" className="bg-white/85 dark:bg-slate-950/55">
-            <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-              <div className="min-w-0">
-                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-gray-500 dark:text-gray-400">
-                  {t('admin.account_detail.trial_readiness_eyebrow', undefined, 'Trial readiness')}
-                </p>
-                <h2 className="mt-2 text-lg font-semibold text-gray-950 dark:text-white">{trialReadinessTitle}</h2>
-                <p className="mt-1 max-w-3xl text-sm leading-6 text-gray-600 dark:text-gray-300">
-                  {trialReadinessDescription}
-                </p>
-              </div>
-              <div className="flex shrink-0 flex-wrap items-center gap-2">
-                <BackofficeStatusBadge status={trialReadinessTone} label={translateStatusLabel(trialReadinessTone, t)} />
-                <span className="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-semibold text-slate-700 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-200">
-                  {trialReadiness.next_action_label}
-                </span>
-              </div>
-            </div>
-            <div className="mt-4">
-              <BackofficeMetricStrip items={trialMetricItems} columnsClassName="md:grid-cols-2 xl:grid-cols-4" />
-            </div>
-            <div className="mt-4 grid gap-2 md:grid-cols-2 xl:grid-cols-3">
-              {trialReadiness.checks.map((check) => (
-                <div
-                  key={check.code}
-                  className={cn(
-                    'rounded-[1rem] border px-3 py-3 text-sm',
-                    check.ok
-                      ? 'border-emerald-200 bg-emerald-50/70 text-emerald-800 dark:border-emerald-900/50 dark:bg-emerald-950/20 dark:text-emerald-200'
-                      : 'border-amber-200 bg-amber-50/75 text-amber-900 dark:border-amber-900/50 dark:bg-amber-950/20 dark:text-amber-100'
-                  )}
-                >
-                  <div className="flex items-start justify-between gap-3">
-                    <p className="font-semibold">{check.label}</p>
-                    <BackofficeStatusBadge
-                      status={check.ok ? 'ok' : 'warning'}
-                      label={check.ok ? translateStatusLabel('ok', t) : translateStatusLabel('warning', t)}
-                    />
-                  </div>
-                  <p className="mt-2 text-xs leading-5 opacity-85">{check.detail}</p>
-                </div>
-              ))}
-            </div>
-          </BackofficeStackCard>
-        ) : null}
+        <details
+          data-ui="operator-profile-editor"
+          className="rounded-lg border border-slate-200/80 bg-white/75 px-4 py-3 dark:border-slate-800 dark:bg-slate-950/40"
+        >
+          <summary className="cursor-pointer list-none text-sm font-semibold text-slate-800 dark:text-slate-100">
+            {t('admin.account_detail.edit_operator_profile', undefined, 'Edit customer info')}
+            <span className="ml-3 font-normal text-slate-500 dark:text-slate-400">
+              {t(
+                'admin.account_detail.operator_profile_desc',
+                undefined,
+                'Internal display name and note; user workspace is not affected.'
+              )}
+            </span>
+          </summary>
+          <form
+            onSubmit={handleSaveAccountMeta}
+            className="mt-4 grid gap-3 md:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)_auto] md:items-end"
+          >
+            <label className="text-sm">
+              <span className="mb-2 block font-medium text-gray-700 dark:text-gray-300">
+                {t('admin.accounts.operator_display_name_label', {}, 'Operator name')}
+              </span>
+              <input
+                type="text"
+                value={accountMetaForm.operator_display_name}
+                onChange={(event) =>
+                  setAccountMetaForm((current) => ({ ...current, operator_display_name: event.target.value }))
+                }
+                placeholder={accountTitle}
+                className="input"
+              />
+            </label>
+            <label className="text-sm">
+              <span className="mb-2 block font-medium text-gray-700 dark:text-gray-300">
+                {t('admin.accounts.operator_note_label', {}, 'Operator note')}
+              </span>
+              <input
+                type="text"
+                value={accountMetaForm.operator_note}
+                onChange={(event) => setAccountMetaForm((current) => ({ ...current, operator_note: event.target.value }))}
+                placeholder={t('admin.accounts.operator_note_placeholder', {}, 'Internal follow-up note')}
+                className="input"
+              />
+            </label>
+            <button type="submit" className="btn btn-secondary whitespace-nowrap" disabled={isSavingAccountMeta}>
+              {isSavingAccountMeta ? t('common.saving', {}, 'Saving...') : t('common.save', {}, 'Save')}
+            </button>
+            {accountMetaNotice ? (
+              <p className="text-sm text-emerald-700 dark:text-emerald-300 md:col-span-3">{accountMetaNotice}</p>
+            ) : null}
+            {accountMetaError ? (
+              <p className="text-sm text-red-600 dark:text-red-300 md:col-span-3">{accountMetaError}</p>
+            ) : null}
+          </form>
+        </details>
         <div className="grid gap-4 xl:grid-cols-[0.9fr_1.1fr]">
           <div id="coverage-actions">
           <BackofficeStackCard className="bg-white/80 dark:bg-slate-950/55">
@@ -1327,13 +1589,17 @@ function AccountDetailContent() {
           </div>
           <BackofficeStackCard>
             <p className="text-xs font-semibold uppercase tracking-[0.18em] text-gray-500 dark:text-gray-400">
-              {t('admin.account_detail.operator_actions_eyebrow', undefined, 'Operator actions')}
+              {t('admin.account_detail.package_actions_eyebrow', undefined, 'Package actions')}
             </p>
             <h3 className="mt-3 text-lg font-semibold text-gray-950 dark:text-white">
-              {t('admin.account_detail.operator_actions_title', undefined, 'Use bounded support actions from this customer surface')}
+              {t('admin.account_detail.package_actions_title', undefined, 'Package and top-up')}
             </h3>
             <p className="mt-2 text-sm text-gray-600 dark:text-gray-300">
-              {t('admin.account_detail.operator_actions_desc', undefined, 'Keep first actions simple: open coverage, inspect sites, handle portal access, or start support view. Package internals stay secondary.' )}
+              {t(
+                'admin.account_detail.package_actions_desc',
+                undefined,
+                'Change the customer package or add current-period headroom from this primary operation area.'
+              )}
             </p>
             <div className="mt-5 rounded-2xl border border-slate-200 bg-slate-50/70 p-4 dark:border-slate-800 dark:bg-slate-950/30">
               <div className="flex flex-col gap-2 lg:flex-row lg:items-start lg:justify-between">
@@ -1362,7 +1628,18 @@ function AccountDetailContent() {
                     <button
                       key={option.tier_id}
                       type="button"
-                      onClick={() => void handleChangePackage(option)}
+                      onClick={() =>
+                        setPendingConfirmation({
+                          title: t('admin.account_detail.confirm_package_change_title', undefined, 'Confirm package change'),
+                          message: t(
+                            'admin.account_detail.confirm_package_change_desc',
+                            { package: label, account: account.name || account.account_id },
+                            `Change ${account.name || account.account_id} to ${label}? This updates the customer package immediately.`
+                          ),
+                          confirmLabel: t('admin.account_detail.confirm_package_change_action', undefined, 'Change package'),
+                          onConfirm: () => void handleChangePackage(option),
+                        })
+                      }
                       className={cn(
                         'rounded-2xl border px-4 py-3 text-left text-sm transition',
                         isCurrent
@@ -1382,46 +1659,82 @@ function AccountDetailContent() {
                 })}
               </div>
             </div>
+            <div className="mt-5 rounded-2xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-950/45">
+              <div className="flex flex-col gap-2 lg:flex-row lg:items-start lg:justify-between">
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-700 dark:text-slate-300">
+                    {t('admin.account_detail.topup_packs_label', undefined, 'Top-up packs')}
+                  </p>
+                  <p className="mt-2 text-sm text-slate-600 dark:text-slate-300">
+                    {t(
+                      'admin.account_detail.topup_packs_desc',
+                      undefined,
+                      'Add temporary current-period headroom without changing the customer package.'
+                    )}
+                  </p>
+                </div>
+                <BackofficeStatusBadge status="warning" label={t('admin.current_period_only', {}, 'Current period only')} />
+              </div>
+              <div className="mt-4 grid gap-2 sm:grid-cols-3">
+                {TOPUP_PACK_OPTIONS.map((pack) => {
+                  const label = t(pack.label_key, undefined, pack.fallback_label);
+                  const isRecommended = pack.recommended_for_tiers.includes(currentTierId);
+                  return (
+                    <button
+                      key={pack.pack_id}
+                      type="button"
+                      onClick={() =>
+                        setPendingConfirmation({
+                          title: t('admin.account_detail.confirm_topup_title', undefined, 'Confirm top-up pack'),
+                          message: t(
+                            'admin.account_detail.confirm_topup_desc',
+                            { pack: label, points: pack.points_label, account: account.name || account.account_id },
+                            `Apply ${label} (${pack.points_label}) to ${account.name || account.account_id} for the current period?`
+                          ),
+                          confirmLabel: t('admin.account_detail.confirm_topup_action', undefined, 'Apply top-up'),
+                          onConfirm: () => void handleApplyTopUpPack(pack),
+                        })
+                      }
+                      className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-left text-sm text-slate-800 transition hover:border-slate-400 hover:bg-white disabled:cursor-not-allowed disabled:opacity-60 dark:border-slate-800 dark:bg-slate-950/60 dark:text-slate-100 dark:hover:border-slate-600"
+                      disabled={topUpActionPending !== null || packageActionPending !== null || !primarySubscription}
+                    >
+                      <span className="block font-semibold">{label}</span>
+                      <span className="mt-1 block text-xs text-slate-500 dark:text-slate-400">{pack.points_label}</span>
+                      <span className="mt-2 block text-xs text-slate-500 dark:text-slate-400">
+                        {topUpActionPending === pack.pack_id
+                          ? t('common.saving', {}, 'Saving...')
+                          : isRecommended
+                            ? t('admin.recommended', {}, 'Recommended')
+                            : t('admin.account_detail.apply_topup_pack_action', undefined, 'Apply top-up')}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+            {packageActionNotice ? (
+              <BackofficeStackCard
+                data-ui="account-package-action-notice"
+                className="mt-4 border-green-200 bg-green-50 text-green-700 dark:border-green-900 dark:bg-green-950/30 dark:text-green-300"
+              >
+                {packageActionNotice}
+              </BackofficeStackCard>
+            ) : null}
+            {packageActionError ? (
+              <BackofficeStackCard
+                data-ui="account-package-action-error"
+                className="mt-4 border-red-200 bg-red-50 text-red-700 dark:border-red-900 dark:bg-red-950/30 dark:text-red-300"
+              >
+                {packageActionError}
+              </BackofficeStackCard>
+            ) : null}
             <div className="mt-4 flex flex-wrap gap-3">
-              <Link href="/admin/subscriptions" className="btn btn-primary">
-                {t('admin.open_coverage', undefined, 'Open coverage')}
-              </Link>
               <a href="#site-footprint" className="btn btn-secondary">
                 {t('admin.account_detail.view_sites_action', undefined, 'View sites')}
               </a>
               <a href="#portal-access" className="btn btn-secondary">
                 {t('admin.account_detail.invite_member_action', undefined, 'Invite member')}
               </a>
-              <button
-                type="button"
-                onClick={() => void handleChangePackage()}
-                className="btn btn-secondary"
-                disabled={packageActionPending !== null}
-              >
-                {packageActionPending === 'change'
-                  ? t('common.saving', {}, 'Saving...')
-                  : t('admin.account_detail.change_package_action', undefined, 'Change package')}
-              </button>
-              <button
-                type="button"
-                onClick={() => void handleCoverageMutation('suspend')}
-                className="btn btn-secondary"
-                disabled={packageActionPending !== null || !primarySubscription}
-              >
-                {packageActionPending === 'suspend'
-                  ? t('common.saving', {}, 'Saving...')
-                  : t('admin.account_detail.suspend_coverage_action', undefined, 'Suspend coverage')}
-              </button>
-              <button
-                type="button"
-                onClick={() => void handleCoverageMutation('cancel')}
-                className="btn btn-secondary"
-                disabled={packageActionPending !== null || !primarySubscription}
-              >
-                {packageActionPending === 'cancel'
-                  ? t('common.saving', {}, 'Saving...')
-                  : t('admin.account_detail.cancel_coverage_action', undefined, 'Cancel coverage')}
-              </button>
             </div>
             <details
               data-ui="advanced-coverage-controls"
@@ -1542,22 +1855,73 @@ function AccountDetailContent() {
                 />
               </label>
             </div>
-            {packageActionNotice ? (
-              <BackofficeStackCard
-                data-ui="account-package-action-notice"
-                className="mt-4 border-green-200 bg-green-50 text-green-700 dark:border-green-900 dark:bg-green-950/30 dark:text-green-300"
+            <div className="mt-5 flex flex-wrap gap-3">
+              <button
+                type="button"
+                onClick={() =>
+                  setPendingConfirmation({
+                    title: t('admin.account_detail.confirm_package_repair_title', undefined, 'Confirm subscription repair'),
+                    message: t(
+                      'admin.account_detail.confirm_package_repair_desc',
+                      { account: account.name || account.account_id },
+                      `Apply the subscription repair fields to ${account.name || account.account_id}?`
+                    ),
+                    confirmLabel: t('admin.account_detail.change_package_action', undefined, 'Change package'),
+                    onConfirm: () => void handleChangePackage(),
+                  })
+                }
+                className="btn btn-secondary"
+                disabled={packageActionPending !== null || topUpActionPending !== null}
               >
-                {packageActionNotice}
-              </BackofficeStackCard>
-            ) : null}
-            {packageActionError ? (
-              <BackofficeStackCard
-                data-ui="account-package-action-error"
-                className="mt-4 border-red-200 bg-red-50 text-red-700 dark:border-red-900 dark:bg-red-950/30 dark:text-red-300"
+                {packageActionPending === 'change'
+                  ? t('common.saving', {}, 'Saving...')
+                  : t('admin.account_detail.change_package_action', undefined, 'Change package')}
+              </button>
+              <button
+                type="button"
+                onClick={() =>
+                  setPendingConfirmation({
+                    title: t('admin.account_detail.confirm_suspend_title', undefined, 'Confirm suspension'),
+                    message: t(
+                      'admin.account_detail.confirm_suspend_desc',
+                      { account: account.name || account.account_id },
+                      `Suspend current coverage for ${account.name || account.account_id}?`
+                    ),
+                    confirmLabel: t('admin.account_detail.suspend_coverage_action', undefined, 'Suspend coverage'),
+                    variant: 'danger',
+                    onConfirm: () => void handleCoverageMutation('suspend'),
+                  })
+                }
+                className="btn btn-secondary"
+                disabled={packageActionPending !== null || topUpActionPending !== null || !primarySubscription}
               >
-                {packageActionError}
-              </BackofficeStackCard>
-            ) : null}
+                {packageActionPending === 'suspend'
+                  ? t('common.saving', {}, 'Saving...')
+                  : t('admin.account_detail.suspend_coverage_action', undefined, 'Suspend coverage')}
+              </button>
+              <button
+                type="button"
+                onClick={() =>
+                  setPendingConfirmation({
+                    title: t('admin.account_detail.confirm_cancel_title', undefined, 'Confirm cancellation'),
+                    message: t(
+                      'admin.account_detail.confirm_cancel_desc',
+                      { account: account.name || account.account_id },
+                      `Cancel current coverage for ${account.name || account.account_id}?`
+                    ),
+                    confirmLabel: t('admin.account_detail.cancel_coverage_action', undefined, 'Cancel coverage'),
+                    variant: 'danger',
+                    onConfirm: () => void handleCoverageMutation('cancel'),
+                  })
+                }
+                className="btn btn-secondary"
+                disabled={packageActionPending !== null || topUpActionPending !== null || !primarySubscription}
+              >
+                {packageActionPending === 'cancel'
+                  ? t('common.saving', {}, 'Saving...')
+                  : t('admin.account_detail.cancel_coverage_action', undefined, 'Cancel coverage')}
+              </button>
+            </div>
             <div className="mt-5 space-y-4">
               {watchItems.map((item) => (
                 <div key={item.label} className="flex items-start justify-between gap-4 border-b border-gray-200 pb-4 last:border-b-0 last:pb-0 dark:border-gray-800">
@@ -1575,6 +1939,55 @@ function AccountDetailContent() {
           </BackofficeStackCard>
         </div>
       </BackofficePrimaryPanel>
+
+      {trialReadiness ? (
+        <BackofficeSectionPanel>
+          <details data-ui="trial-readiness-summary" className="group">
+            <summary className="flex cursor-pointer list-none items-center justify-between gap-4">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-gray-500 dark:text-gray-400">
+                  {t('admin.account_detail.advanced_checks_eyebrow', undefined, 'Advanced checks')}
+                </p>
+                <h2 className="mt-2 text-xl font-semibold text-gray-950 dark:text-white">
+                  {t('admin.account_detail.trial_readiness_eyebrow', undefined, 'Trial readiness')}
+                </h2>
+                <p className="mt-1 text-sm text-gray-600 dark:text-gray-400">
+                  {trialReadinessTitle}
+                </p>
+              </div>
+              <BackofficeStatusBadge status={trialReadinessTone} label={translateStatusLabel(trialReadinessTone, t)} />
+            </summary>
+            <div className="mt-5 space-y-4">
+              <p className="max-w-3xl text-sm leading-6 text-gray-600 dark:text-gray-300">
+                {trialReadinessDescription}
+              </p>
+              <BackofficeMetricStrip items={trialMetricItems} columnsClassName="md:grid-cols-2 xl:grid-cols-4" />
+              <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
+                {trialReadiness.checks.map((check) => (
+                  <div
+                    key={check.code}
+                    className={cn(
+                      'rounded-[1rem] border px-3 py-3 text-sm',
+                      check.ok
+                        ? 'border-emerald-200 bg-emerald-50/70 text-emerald-800 dark:border-emerald-900/50 dark:bg-emerald-950/20 dark:text-emerald-200'
+                        : 'border-amber-200 bg-amber-50/75 text-amber-900 dark:border-amber-900/50 dark:bg-amber-950/20 dark:text-amber-100'
+                    )}
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <p className="font-semibold">{check.label}</p>
+                      <BackofficeStatusBadge
+                        status={check.ok ? 'ok' : 'warning'}
+                        label={check.ok ? translateStatusLabel('ok', t) : translateStatusLabel('warning', t)}
+                      />
+                    </div>
+                    <p className="mt-2 text-xs leading-5 opacity-85">{check.detail}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </details>
+        </BackofficeSectionPanel>
+      ) : null}
 
       <div id="site-footprint" className="grid gap-6 xl:grid-cols-[1.1fr_0.9fr]">
         <BackofficeSectionPanel className="space-y-4">
@@ -1632,19 +2045,25 @@ function AccountDetailContent() {
       </div>
 
       {Object.keys(siteRuntimeData).length > 0 ? (
-        <BackofficeSectionPanel className="space-y-4">
-          <div>
-            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-gray-500 dark:text-gray-400">
-              {t('admin.provider_health_label', undefined, 'Provider health')}
-            </p>
-            <h2 className="mt-2 text-xl font-semibold text-gray-950 dark:text-white">
-              {t('admin.provider_health_title', undefined, 'Model health & plan utilization')}
-            </h2>
-            <p className="mt-1 text-sm text-gray-600 dark:text-gray-400">
-              {t('admin.provider_health_desc', undefined, 'Per-site runtime health and cost utilization for this customer.')}
-            </p>
-          </div>
-          <div className="space-y-3">
+        <BackofficeSectionPanel>
+          <details className="group">
+            <summary className="flex cursor-pointer list-none items-center justify-between gap-4">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-gray-500 dark:text-gray-400">
+                  {t('admin.account_detail.advanced_checks_eyebrow', undefined, 'Advanced checks')}
+                </p>
+                <h2 className="mt-2 text-xl font-semibold text-gray-950 dark:text-white">
+                  {t('admin.provider_health_title', undefined, 'Model health & plan utilization')}
+                </h2>
+                <p className="mt-1 text-sm text-gray-600 dark:text-gray-400">
+                  {t('admin.provider_health_desc', undefined, 'Per-site runtime health and cost utilization for this customer.')}
+                </p>
+              </div>
+              <span className="text-sm font-medium text-blue-600 dark:text-blue-300">
+                {t('common.view', {}, 'View')}
+              </span>
+            </summary>
+          <div className="mt-5 space-y-3">
             {Object.entries(siteRuntimeData).map(([siteId, runtime]) => {
               const failureRate = runtime.totalRuns > 0
                 ? Math.round((runtime.failedRuns / runtime.totalRuns) * 100)
@@ -1703,6 +2122,7 @@ function AccountDetailContent() {
               );
             })}
           </div>
+          </details>
         </BackofficeSectionPanel>
       ) : null}
 
@@ -2047,6 +2467,18 @@ function AccountDetailContent() {
           </details>
         </BackofficeSectionPanel>
       </div>
+      <ConfirmModal
+        isOpen={Boolean(pendingConfirmation)}
+        title={pendingConfirmation?.title}
+        message={pendingConfirmation?.message || ''}
+        confirmLabel={pendingConfirmation?.confirmLabel || t('common.confirm', {}, 'Confirm')}
+        cancelLabel={t('common.cancel', {}, 'Cancel')}
+        variant={pendingConfirmation?.variant || 'default'}
+        onClose={() => setPendingConfirmation(null)}
+        onConfirm={() => {
+          pendingConfirmation?.onConfirm();
+        }}
+      />
     </BackofficePageStack>
   );
 }

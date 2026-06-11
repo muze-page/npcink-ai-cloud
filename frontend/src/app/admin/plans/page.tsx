@@ -94,6 +94,29 @@ function formatBudgetCurrency(value: unknown): string {
   return formatAdminCurrency(numericValue(value));
 }
 
+function normalizeTierId(value: string): string {
+  return value === 'starter' ? 'free' : value;
+}
+
+function findCanonicalShellPlan(plans: PlanListItem[], tierId: string): PlanListItem | undefined {
+  const expectedTierId = normalizeTierId(tierId);
+  return plans.find((item) => {
+    const planId = item.plan.plan_id;
+    const metadataTierId = normalizeTierId(String(item.plan.metadata?.tier_id || ''));
+    const summaryTierId = normalizeTierId(String(item.tier_summary?.tier_id || ''));
+    if (planId === tierId || planId === expectedTierId) {
+      return true;
+    }
+    if (expectedTierId === 'free' && (planId === 'plan_free' || item.plan.metadata?.plan_kind === 'default_free')) {
+      return true;
+    }
+    return (
+      item.plan.metadata?.source === 'canonical_package_shell_v1' &&
+      (metadataTierId === expectedTierId || summaryTierId === expectedTierId)
+    );
+  });
+}
+
 function PlansContent() {
   const { t } = useLocale();
   const [plans, setPlans] = useState<PlanListItem[]>([]);
@@ -103,6 +126,7 @@ function PlansContent() {
   const [notice, setNotice] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [isBootstrapping, setIsBootstrapping] = useState(false);
+  const [autoBootstrapAttempted, setAutoBootstrapAttempted] = useState(false);
   const [form, setForm] = useState({
     plan_id: '',
     name: '',
@@ -162,7 +186,7 @@ function PlansContent() {
     }
   };
 
-  const handleBootstrapShell = async (shell: TierSummary) => {
+  const handleBootstrapShell = useCallback(async (shell: TierSummary) => {
     setIsBootstrapping(true);
     setError(null);
     setNotice(null);
@@ -249,11 +273,11 @@ function PlansContent() {
     } finally {
       setIsBootstrapping(false);
     }
-  };
+  }, [loadPlans, t]);
 
-  const handleBootstrapMissingShells = async () => {
+  const handleBootstrapMissingShells = useCallback(async () => {
     const missingShells = tierTemplates.filter((shell) => {
-      const existing = findCanonicalShellPlan(shell.tier_id);
+      const existing = findCanonicalShellPlan(plans, shell.tier_id);
       return !existing || Number(existing.published_version_count || 0) === 0;
     });
     if (missingShells.length === 0) {
@@ -265,7 +289,29 @@ function PlansContent() {
       // eslint-disable-next-line no-await-in-loop
       await handleBootstrapShell(shell);
     }
-  };
+  }, [handleBootstrapShell, plans, t, tierTemplates]);
+
+  useEffect(() => {
+    if (isLoading || isBootstrapping || autoBootstrapAttempted || tierTemplates.length === 0) {
+      return;
+    }
+    const missingShells = tierTemplates.filter((shell) => {
+      const existing = findCanonicalShellPlan(plans, shell.tier_id);
+      return !existing || Number(existing.published_version_count || 0) === 0;
+    });
+    if (missingShells.length === 0) {
+      return;
+    }
+    setAutoBootstrapAttempted(true);
+    void handleBootstrapMissingShells();
+  }, [
+    autoBootstrapAttempted,
+    handleBootstrapMissingShells,
+    isBootstrapping,
+    isLoading,
+    plans,
+    tierTemplates,
+  ]);
 
   if (isLoading) {
     return <LoadingFallback />;
@@ -285,17 +331,11 @@ function PlansContent() {
     );
   }
 
-  const findCanonicalShellPlan = (tierId: string) =>
-    plans.find(
-      (item) =>
-        item.plan.plan_id === tierId ||
-        (item.plan.metadata?.source === 'canonical_package_shell_v1' && item.tier_summary?.tier_id === tierId)
-    );
   const isDefaultProductionPlan = (item: PlanListItem) =>
     item.plan.plan_id === 'plan_free' || item.plan.metadata?.plan_kind === 'default_free';
   const isDevBaselinePlan = (item: PlanListItem) => item.plan.plan_id === 'plan_dev_unlimited';
   const canonicalTierCoverage: CanonicalTierCoverageItem[] = tierTemplates.map((shell) => {
-    const item = findCanonicalShellPlan(shell.tier_id) || null;
+    const item = findCanonicalShellPlan(plans, shell.tier_id) || null;
     return {
       shell,
       item,

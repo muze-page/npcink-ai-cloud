@@ -15,7 +15,9 @@ import { getInternalAuthToken } from '@/lib/env';
  * Admin API catch-all proxy.
  *
  * Replaces 43 individual route.ts files with a single catch-all handler.
- * Maps /api/admin/* → /internal/service/admin/* (GET) or /admin/* (POST/PUT/PATCH/DELETE).
+ * Maps /api/admin/* → /internal/service/admin/* for reads.
+ * Writes stay on the service router and only add the admin namespace for
+ * backend routes that actually declare it.
  */
 
 const COPIED_REQUEST_HEADERS = [
@@ -38,10 +40,19 @@ function buildAdminBackendPath(pathSegments: string[], method: string): string {
     return normalized ? `/internal/service/admin/${normalized}` : '/internal/service/admin';
   }
 
-  // POST/PUT/PATCH/DELETE routes go through /admin/ (write surface)
-  // Exception: POST /api/admin/accounts → /internal/service/accounts
+  // Account creation is a service write, not an admin-prefixed write.
   if (upperMethod === 'POST' && normalized === 'accounts') {
     return '/internal/service/accounts';
+  }
+
+  if (/^accounts\/[^/]+\/subscription(?:\/(?:suspend|cancel))?$/.test(normalized)) {
+    return `/internal/service/admin/${normalized}`;
+  }
+  if (/^subscriptions\/[^/]+\/billing-snapshots\/rebuild$/.test(normalized)) {
+    return `/internal/service/admin/${normalized}`;
+  }
+  if (/^subscriptions\/[^/]+\/topup$/.test(normalized)) {
+    return `/internal/service/${normalized}`;
   }
   if (
     upperMethod === 'POST' &&
@@ -62,7 +73,7 @@ function buildAdminBackendPath(pathSegments: string[], method: string): string {
     return '/internal/service/admin/image-source-providers';
   }
 
-  return normalized ? `/admin/${normalized}` : '/admin';
+  return normalized ? `/internal/service/${normalized}` : '/internal/service';
 }
 
 async function proxyAdminRequest(

@@ -1,0 +1,153 @@
+'use client';
+
+import Link from 'next/link';
+import {
+  BackofficeMetricStrip,
+  BackofficePageStack,
+  BackofficePrimaryPanel,
+  BackofficeSectionPanel,
+  BackofficeStackCard,
+} from '@/components/backoffice/BackofficeScaffold';
+import { useLocale } from '@/contexts/LocaleContext';
+
+type AdvancedEntry = {
+  href: string;
+  titleKey: string;
+  titleFallback: string;
+  descKey: string;
+  descFallback: string;
+  groupKey: string;
+  groupFallback: string;
+};
+
+const advancedEntries: AdvancedEntry[] = [
+  {
+    href: '/admin/plugin-observability',
+    titleKey: 'admin.nav_plugin_observability',
+    titleFallback: 'Plugin Observability',
+    descKey: 'admin.advanced.plugin_observability_desc',
+    descFallback: 'Plugin event volume, error pressure, latency, and recent failure evidence.',
+    groupKey: 'admin.advanced.group_runtime',
+    groupFallback: 'Runtime evidence',
+  },
+  {
+    href: '/admin/media-observability',
+    titleKey: 'admin.nav_media_observability',
+    titleFallback: 'Media Observability',
+    descKey: 'admin.advanced.media_observability_desc',
+    descFallback: 'Media processing jobs, failures, processing duration, and compression value.',
+    groupKey: 'admin.advanced.group_runtime',
+    groupFallback: 'Runtime evidence',
+  },
+  {
+    href: '/admin/vector-observability',
+    titleKey: 'admin.nav_vector_observability',
+    titleFallback: 'Vector Observability',
+    descKey: 'admin.advanced.vector_observability_desc',
+    descFallback: 'Vector and site-knowledge indexing health for support investigations.',
+    groupKey: 'admin.advanced.group_runtime',
+    groupFallback: 'Runtime evidence',
+  },
+  {
+    href: '/admin/hosted-models',
+    titleKey: 'admin.nav_hosted_models',
+    titleFallback: 'Hosted Models',
+    descKey: 'admin.advanced.hosted_models_desc',
+    descFallback: 'Hosted model governance, metering coverage, provider calls, and model risk.',
+    groupKey: 'admin.advanced.group_governance',
+    groupFallback: 'Governance',
+  },
+  {
+    href: '/admin/ai-advisor',
+    titleKey: 'admin.nav_ai_advisor',
+    titleFallback: 'AI Advisor',
+    descKey: 'admin.advanced.ai_advisor_desc',
+    descFallback: 'AI-assisted diagnosis for selected operational signals.',
+    groupKey: 'admin.advanced.group_governance',
+    groupFallback: 'Governance',
+  },
+  {
+    href: '/admin/web-search',
+    titleKey: 'admin.nav_web_search',
+    titleFallback: 'Web Search',
+    descKey: 'admin.advanced.web_search_desc',
+    descFallback: 'Web-search capability checks and service-plane configuration evidence.',
+    groupKey: 'admin.advanced.group_capabilities',
+    groupFallback: 'Capabilities',
+  },
+  {
+    href: '/admin/image-sources',
+    titleKey: 'admin.nav_image_sources',
+    titleFallback: 'Image Sources',
+    descKey: 'admin.advanced.image_sources_desc',
+    descFallback: 'Image-source capability checks and provider/source readiness.',
+    groupKey: 'admin.advanced.group_capabilities',
+    groupFallback: 'Capabilities',
+  },
+];
+
+export default function AdminTroubleshootingPage() {
+  const { t } = useLocale();
+  const groups = Array.from(new Set(advancedEntries.map((entry) => entry.groupKey)));
+
+  return (
+    <BackofficePageStack>
+      <BackofficePrimaryPanel
+        eyebrow={t('admin.operator_surface', {}, 'Operator surface')}
+        title={t('admin.advanced.title', {}, 'Advanced Troubleshooting')}
+        description={t(
+          'admin.advanced.desc',
+          {},
+          'Low-frequency diagnostics live here so the primary admin path stays focused on customers, packages, and support decisions.'
+        )}
+        aside={(
+          <div className="w-full xl:w-[34rem]">
+            <BackofficeMetricStrip
+              items={[
+                { label: t('admin.advanced.groups', {}, 'Groups'), value: groups.length, size: 'compact' },
+                { label: t('admin.advanced.entries', {}, 'Entries'), value: advancedEntries.length, size: 'compact' },
+                { label: t('admin.visibility_advanced', {}, 'Advanced'), value: t('common.enabled', {}, 'Enabled'), size: 'compact' },
+              ]}
+              columnsClassName="md:grid-cols-3 xl:grid-cols-3"
+            />
+          </div>
+        )}
+      />
+
+      {groups.map((groupKey) => {
+        const groupEntries = advancedEntries.filter((entry) => entry.groupKey === groupKey);
+        const groupFallback = groupEntries[0]?.groupFallback || 'Advanced';
+
+        return (
+          <BackofficeSectionPanel key={groupKey} className="space-y-4">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-gray-500 dark:text-gray-400">
+                {t('admin.visibility_advanced', {}, 'Advanced')}
+              </p>
+              <h2 className="mt-2 text-xl font-semibold text-gray-950 dark:text-white">
+                {t(groupKey, {}, groupFallback)}
+              </h2>
+            </div>
+            <div className="grid gap-3 lg:grid-cols-2">
+              {groupEntries.map((entry) => (
+                <BackofficeStackCard key={entry.href} className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                  <div>
+                    <h3 className="text-base font-semibold text-slate-950 dark:text-white">
+                      {t(entry.titleKey, {}, entry.titleFallback)}
+                    </h3>
+                    <p className="mt-2 text-sm leading-6 text-slate-600 dark:text-slate-300">
+                      {t(entry.descKey, {}, entry.descFallback)}
+                    </p>
+                  </div>
+                  <Link href={entry.href} className="btn btn-secondary shrink-0">
+                    {t('common.open', {}, 'Open')}
+                  </Link>
+                </BackofficeStackCard>
+              ))}
+            </div>
+          </BackofficeSectionPanel>
+        );
+      })}
+    </BackofficePageStack>
+  );
+}

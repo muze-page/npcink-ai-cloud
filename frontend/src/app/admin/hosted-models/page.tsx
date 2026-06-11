@@ -111,6 +111,55 @@ type HostedModelGovernanceCadence = {
   };
 };
 
+type Translate = (key: string, params?: Record<string, string>, fallback?: string) => string;
+
+const HOSTED_TEXT_KEYS: Record<string, string> = {
+  'Hosted model governance has telemetry gaps to review before traffic expands.':
+    'admin.hosted_models.text.telemetry_gaps',
+  'Hosted model governance has coverage or provider errors that need review.':
+    'admin.hosted_models.text.coverage_or_provider_errors',
+  'Hosted model governance is covered in this window.':
+    'admin.hosted_models.text.covered_window',
+  'No hosted model runs were observed in this governance window.':
+    'admin.hosted_models.text.no_runs_window',
+  'Hosted model provider call coverage gap':
+    'admin.hosted_models.text.provider_call_gap_title',
+  'Hosted model meter coverage gap':
+    'admin.hosted_models.text.meter_gap_title',
+  'Hosted model provider errors':
+    'admin.hosted_models.text.provider_errors_title',
+  'Hosted model failed runs':
+    'admin.hosted_models.text.failed_runs_title',
+  'Some hosted runs do not have matching provider call telemetry.':
+    'admin.hosted_models.text.provider_call_gap_summary',
+  'Some hosted model runs are not represented in usage metering.':
+    'admin.hosted_models.text.meter_gap_summary',
+  'Provider calls are returning errors in the current governance window.':
+    'admin.hosted_models.text.provider_errors_summary',
+  'Hosted model runs are failing before or during provider execution.':
+    'admin.hosted_models.text.failed_runs_summary',
+  'Review hosted model families before promoting new providers.':
+    'admin.hosted_models.text.review_guidance',
+  continue_monitoring: 'admin.hosted_models.action.continue_monitoring',
+  inspect_provider_call_recording_for_hosted_profiles:
+    'admin.hosted_models.action.inspect_provider_call_recording',
+  inspect_metering_callback_or_usage_event_mapping:
+    'admin.hosted_models.action.inspect_metering_mapping',
+  inspect_provider_credentials_quota_and_health:
+    'admin.hosted_models.action.inspect_provider_health',
+  inspect_runtime_failure_detail_for_hosted_models:
+    'admin.hosted_models.action.inspect_runtime_failure',
+  inspect_hosted_models: 'admin.hosted_models.action.inspect_hosted_models',
+  internal_admin_readonly: 'admin.hosted_models.value.internal_admin_readonly',
+  usage_rollup: 'admin.hosted_models.value.usage_rollup',
+  internal_admin: 'admin.hosted_models.value.internal_admin',
+  internal_admin_summary: 'admin.hosted_models.value.internal_admin_summary',
+  hosted_runtime_detail: 'admin.hosted_models.value.hosted_runtime_detail',
+  wordpress_plugin: 'admin.hosted_models.value.wordpress_plugin',
+  runtime: 'admin.hosted_models.value.runtime',
+  internal: 'admin.hosted_models.value.internal',
+};
+
 const WINDOW_OPTIONS = [
   { label: '1h', value: 60 },
   { label: '24h', value: 1440 },
@@ -296,6 +345,26 @@ function groupTone(group: GovernanceGroup): string {
   return 'ok';
 }
 
+function translateHostedText(t: Translate, value: string | undefined): string {
+  const text = String(value || '').trim();
+  if (!text) {
+    return '';
+  }
+  const key = HOSTED_TEXT_KEYS[text];
+  return key ? t(key, {}, text) : text;
+}
+
+function translateHostedStatus(t: Translate, value: string | undefined): string {
+  const status = String(value || 'inactive');
+  if (status === 'missing') {
+    return t('admin.hosted_models.status_missing', {}, 'Missing');
+  }
+  if (status === 'covered') {
+    return t('admin.hosted_models.status_covered', {}, 'Covered');
+  }
+  return t(`status.${status}`, {}, status);
+}
+
 function AdminHostedModelsContent() {
   const { t } = useLocale();
   const [data, setData] = useState<HostedModelGovernanceData | null>(null);
@@ -399,9 +468,9 @@ function AdminHostedModelsContent() {
                 columnsClassName="md:grid-cols-2 xl:grid-cols-5"
                 items={[
                   {
-                    label: 'Status',
-                    value: governanceStatus,
-                    detail: data.governanceGaps.reviewGuidance,
+                    label: t('common.status', {}, 'Status'),
+                    value: translateHostedStatus(t, governanceStatus),
+                    detail: translateHostedText(t, data.governanceGaps.reviewGuidance),
                     toneClassName:
                       governanceStatus === 'warning'
                         ? 'text-amber-600 dark:text-amber-400'
@@ -411,12 +480,16 @@ function AdminHostedModelsContent() {
                     size: 'compact',
                   },
                   {
-                    label: 'Runs',
+                    label: t('admin.hosted_models.metric_runs', {}, 'Runs'),
                     value: formatNumber(data.totals.runs),
-                    detail: `${formatNumber(data.totals.providerCalls)} provider calls`,
+                    detail: t(
+                      'admin.hosted_models.provider_calls_detail',
+                      { count: formatNumber(data.totals.providerCalls) },
+                      `${formatNumber(data.totals.providerCalls)} provider calls`
+                    ),
                   },
                   {
-                    label: 'Meter coverage',
+                    label: t('admin.hosted_models.metric_meter_coverage', {}, 'Meter coverage'),
                     value: formatPercent(data.totals.meteredRunCoverageRate),
                     toneClassName:
                       data.totals.meteredRunCoverageRate < 1
@@ -424,7 +497,7 @@ function AdminHostedModelsContent() {
                         : undefined,
                   },
                   {
-                    label: 'Provider coverage',
+                    label: t('admin.hosted_models.metric_provider_coverage', {}, 'Provider coverage'),
                     value: formatPercent(data.totals.providerCallRunCoverageRate),
                     toneClassName:
                       data.totals.providerCallRunCoverageRate < 1
@@ -432,7 +505,7 @@ function AdminHostedModelsContent() {
                         : undefined,
                   },
                   {
-                    label: 'Meter events',
+                    label: t('admin.hosted_models.metric_meter_events', {}, 'Meter events'),
                     value: formatNumber(data.totals.usageMeterEvents),
                     detail: data.generatedAt ? formatDate(data.generatedAt) : '',
                     size: 'compact',
@@ -464,7 +537,7 @@ function AdminHostedModelsContent() {
                 setSiteIdFilter(siteIdInput.trim());
               }
             }}
-            placeholder="site_id"
+            placeholder={t('admin.hosted_models.site_filter_placeholder', {}, 'site_id')}
             className="h-8 rounded-full border border-slate-200/80 bg-white/80 px-3 text-xs text-slate-700 placeholder:text-slate-400 dark:border-slate-700 dark:bg-slate-900/60 dark:text-slate-200 dark:placeholder:text-slate-500"
           />
           <button
@@ -472,7 +545,7 @@ function AdminHostedModelsContent() {
             onClick={() => setSiteIdFilter(siteIdInput.trim())}
             className="h-8 rounded-full border border-slate-200/80 bg-white/80 px-3 text-xs font-medium text-slate-700 transition hover:border-slate-300 hover:text-slate-950 dark:border-slate-700 dark:bg-slate-900/60 dark:text-slate-200 dark:hover:border-slate-600 dark:hover:text-white"
           >
-            Filter
+            {t('common.apply_filters', {}, 'Filter')}
           </button>
           <button
             type="button"
@@ -500,49 +573,55 @@ function AdminHostedModelsContent() {
             <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
               <div>
                 <p className="text-xs font-semibold uppercase tracking-[0.18em] text-gray-500 dark:text-gray-400">
-                  Cadence record
+                  {t('admin.hosted_models.cadence_eyebrow', {}, 'Cadence record')}
                 </p>
                 <h2 className="mt-2 text-xl font-semibold text-gray-950 dark:text-white">
-                  Latest cadence record
+                  {t('admin.hosted_models.cadence_title', {}, 'Latest cadence record')}
                 </h2>
                 <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">
                   {cadence?.available
-                    ? cadence.alertSummary.summary
-                    : 'No background governance rollup has been recorded for this window yet.'}
+                    ? translateHostedText(t, cadence.alertSummary.summary)
+                    : t(
+                        'admin.hosted_models.no_cadence_desc',
+                        {},
+                        'No background governance rollup has been recorded for this window yet.'
+                      )}
                 </p>
               </div>
               <BackofficeStatusBadge
                 status={cadence?.alertSummary.status || 'inactive'}
-                label={cadence?.available ? cadence.alertSummary.status : 'missing'}
+                label={cadence?.available ? translateHostedStatus(t, cadence.alertSummary.status) : translateHostedStatus(t, 'missing')}
               />
             </div>
             <BackofficeMetricStrip
               columnsClassName="md:grid-cols-2 xl:grid-cols-5"
               items={[
                 {
-                  label: 'Runs',
+                  label: t('admin.hosted_models.metric_runs', {}, 'Runs'),
                   value: formatNumber(cadence?.alertSummary.dailyDigest.runs || 0),
-                  detail: cadence?.generatedAt ? formatDate(cadence.generatedAt) : 'No cadence record',
+                  detail: cadence?.generatedAt
+                    ? formatDate(cadence.generatedAt)
+                    : t('admin.hosted_models.no_cadence_record', {}, 'No cadence record'),
                   size: 'compact',
                 },
                 {
-                  label: 'Meter coverage',
+                  label: t('admin.hosted_models.metric_meter_coverage', {}, 'Meter coverage'),
                   value: formatPercent(cadence?.alertSummary.dailyDigest.meteredRunCoverageRate || 0),
                 },
                 {
-                  label: 'Provider coverage',
+                  label: t('admin.hosted_models.metric_provider_coverage', {}, 'Provider coverage'),
                   value: formatPercent(cadence?.alertSummary.dailyDigest.providerCallRunCoverageRate || 0),
                 },
                 {
-                  label: 'Alerts',
+                  label: t('admin.hosted_models.metric_alerts', {}, 'Alerts'),
                   value: formatNumber(cadence?.alertSummary.alertCount || 0),
-                  detail: cadence?.alertSummary.nextAction || 'continue_monitoring',
+                  detail: translateHostedText(t, cadence?.alertSummary.nextAction || 'continue_monitoring'),
                   size: 'compact',
                 },
                 {
-                  label: 'Owner',
-                  value: cadence?.delivery.owner || 'internal_admin_readonly',
-                  detail: cadence?.rollup.scopeId || cadence?.source || 'usage_rollup',
+                  label: t('admin.hosted_models.metric_owner', {}, 'Owner'),
+                  value: translateHostedText(t, cadence?.delivery.owner || 'internal_admin_readonly'),
+                  detail: translateHostedText(t, cadence?.rollup.scopeId || cadence?.source || 'usage_rollup'),
                   size: 'compact',
                 },
               ]}
@@ -553,18 +632,18 @@ function AdminHostedModelsContent() {
             <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
               <div>
                 <p className="text-xs font-semibold uppercase tracking-[0.18em] text-gray-500 dark:text-gray-400">
-                  Alert summary
+                  {t('admin.hosted_models.alert_eyebrow', {}, 'Alert summary')}
                 </p>
                 <h2 className="mt-2 text-xl font-semibold text-gray-950 dark:text-white">
-                  Daily governance watch
+                  {t('admin.hosted_models.alert_title', {}, 'Daily governance watch')}
                 </h2>
                 <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">
-                  {data?.alertSummary.summary}
+                  {translateHostedText(t, data?.alertSummary.summary)}
                 </p>
               </div>
               <BackofficeStatusBadge
                 status={data?.alertSummary.status || governanceStatus}
-                label={data?.alertSummary.status || governanceStatus}
+                label={translateHostedStatus(t, data?.alertSummary.status || governanceStatus)}
               />
             </div>
             {data?.alertSummary.alerts.length ? (
@@ -574,10 +653,10 @@ function AdminHostedModelsContent() {
                     <div className="flex items-start justify-between gap-3">
                       <div>
                         <p className="text-sm font-semibold text-slate-950 dark:text-white">
-                          {alert.title}
+                          {translateHostedText(t, alert.title)}
                         </p>
                         <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">
-                          {alert.summary}
+                          {translateHostedText(t, alert.summary)}
                         </p>
                       </div>
                       <BackofficeTag tone={alert.severity === 'error' ? 'warning' : 'info'}>
@@ -596,14 +675,14 @@ function AdminHostedModelsContent() {
                       )}
                     </div>
                     <p className="text-xs text-slate-500 dark:text-slate-400">
-                      {alert.suggestedAction}
+                      {translateHostedText(t, alert.suggestedAction)}
                     </p>
                   </BackofficeStackCard>
                 ))}
               </div>
             ) : (
               <BackofficeStackCard className="text-sm text-slate-600 dark:text-slate-300">
-                No hosted model governance alerts in this window.
+                {t('admin.hosted_models.no_alerts', {}, 'No hosted model governance alerts in this window.')}
               </BackofficeStackCard>
             )}
           </BackofficeSectionPanel>
@@ -612,15 +691,15 @@ function AdminHostedModelsContent() {
             <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
               <div>
                 <p className="text-xs font-semibold uppercase tracking-[0.18em] text-gray-500 dark:text-gray-400">
-                  Capability posture
+                  {t('admin.hosted_models.capability_eyebrow', {}, 'Capability posture')}
                 </p>
                 <h2 className="mt-2 text-xl font-semibold text-gray-950 dark:text-white">
-                  Ability families
+                  {t('admin.hosted_models.capability_title', {}, 'Ability families')}
                 </h2>
               </div>
               <BackofficeStatusBadge
                 status={governanceStatus}
-                label={governanceStatus === 'ok' ? 'covered' : governanceStatus}
+                label={translateHostedStatus(t, governanceStatus === 'ok' ? 'covered' : governanceStatus)}
               />
             </div>
             <div className="grid gap-3 xl:grid-cols-3">
@@ -632,22 +711,22 @@ function AdminHostedModelsContent() {
                         {group.groupId}
                       </p>
                       <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                        {group.executionKinds.join(', ') || 'unknown'}
+                        {group.executionKinds.join(', ') || t('common.unknown', {}, 'unknown')}
                       </p>
                     </div>
                     <BackofficeStatusBadge status={groupTone(group)} label={groupTone(group)} />
                   </div>
                   <div className="grid grid-cols-2 gap-2 text-sm">
-                    <MetricLine label="Runs" value={formatNumber(group.runsTotal)} />
-                    <MetricLine label="Calls" value={formatNumber(group.providerCalls)} />
-                    <MetricLine label="Tokens" value={formatNumber(group.tokensTotal)} />
-                    <MetricLine label="Cost" value={formatCost(group.cost)} />
+                    <MetricLine label={t('admin.hosted_models.metric_runs', {}, 'Runs')} value={formatNumber(group.runsTotal)} />
+                    <MetricLine label={t('admin.hosted_models.metric_calls', {}, 'Calls')} value={formatNumber(group.providerCalls)} />
+                    <MetricLine label={t('common.tokens', {}, 'Tokens')} value={formatNumber(group.tokensTotal)} />
+                    <MetricLine label={t('common.cost', {}, 'Cost')} value={formatCost(group.cost)} />
                     <MetricLine
-                      label="Meter"
+                      label={t('admin.hosted_models.metric_meter', {}, 'Meter')}
                       value={formatPercent(group.meteredRunCoverageRate)}
                     />
                     <MetricLine
-                      label="Provider"
+                      label={t('admin.hosted_models.metric_provider', {}, 'Provider')}
                       value={formatPercent(group.providerCallRunCoverageRate)}
                     />
                   </div>
@@ -665,16 +744,18 @@ function AdminHostedModelsContent() {
 
           <div className="grid gap-5 xl:grid-cols-2">
             <GovernanceTable
-              title="Profiles"
-              eyebrow="Routing profile"
+              title={t('admin.hosted_models.profiles_title', {}, 'Profiles')}
+              eyebrow={t('admin.hosted_models.profiles_eyebrow', {}, 'Routing profile')}
               rows={data?.profileGroups || []}
-              firstColumn="Profile"
+              firstColumn={t('admin.hosted_models.column_profile', {}, 'Profile')}
+              t={t}
             />
             <GovernanceTable
-              title="Provider models"
-              eyebrow="Upstream"
+              title={t('admin.hosted_models.provider_models_title', {}, 'Provider models')}
+              eyebrow={t('admin.hosted_models.provider_models_eyebrow', {}, 'Upstream')}
               rows={data?.providerModelGroups || []}
-              firstColumn="Provider/model"
+              firstColumn={t('admin.hosted_models.column_provider_model', {}, 'Provider/model')}
+              t={t}
             />
           </div>
 
@@ -682,41 +763,43 @@ function AdminHostedModelsContent() {
             <BackofficeSectionPanel className="space-y-4">
               <div>
                 <p className="text-xs font-semibold uppercase tracking-[0.18em] text-gray-500 dark:text-gray-400">
-                  Coverage
+                  {t('admin.hosted_models.coverage_eyebrow', {}, 'Coverage')}
                 </p>
                 <h2 className="mt-2 text-xl font-semibold text-gray-950 dark:text-white">
-                  Governance gaps
+                  {t('admin.hosted_models.gaps_title', {}, 'Governance gaps')}
                 </h2>
               </div>
               <BackofficeStackCard>
                 <div className="grid gap-3 sm:grid-cols-2">
                   <MetricLine
-                    label="Unmetered runs"
+                    label={t('admin.hosted_models.metric_unmetered_runs', {}, 'Unmetered runs')}
                     value={formatNumber(data?.governanceGaps.unmeteredRunCount || 0)}
                   />
                   <MetricLine
-                    label="Runs without provider calls"
+                    label={t('admin.hosted_models.metric_runs_without_provider_calls', {}, 'Runs without provider calls')}
                     value={formatNumber(data?.governanceGaps.runsWithoutProviderCallCount || 0)}
                   />
                 </div>
                 <p className="mt-3 text-sm leading-6 text-slate-600 dark:text-slate-300">
-                  {data?.governanceGaps.reviewGuidance}
+                  {translateHostedText(t, data?.governanceGaps.reviewGuidance)}
                 </p>
               </BackofficeStackCard>
               <div className="flex flex-wrap gap-2">
                 {(data?.governanceGaps.unmeteredCapabilities || []).map((item) => (
                   <BackofficeTag key={`unmetered-${item}`} tone="warning">
-                    unmetered: {item}
+                    {t('admin.hosted_models.tag_unmetered', { item }, `unmetered: ${item}`)}
                   </BackofficeTag>
                 ))}
                 {(data?.governanceGaps.missingProviderCallCapabilities || []).map((item) => (
                   <BackofficeTag key={`missing-provider-${item}`} tone="warning">
-                    provider gap: {item}
+                    {t('admin.hosted_models.tag_provider_gap', { item }, `provider gap: ${item}`)}
                   </BackofficeTag>
                 ))}
                 {!data?.governanceGaps.unmeteredCapabilities.length &&
                 !data?.governanceGaps.missingProviderCallCapabilities.length ? (
-                  <BackofficeTag tone="info">No coverage gaps in window</BackofficeTag>
+                  <BackofficeTag tone="info">
+                    {t('admin.hosted_models.no_coverage_gaps', {}, 'No coverage gaps in window')}
+                  </BackofficeTag>
                 ) : null}
               </div>
             </BackofficeSectionPanel>
@@ -724,26 +807,40 @@ function AdminHostedModelsContent() {
             <BackofficeSectionPanel className="space-y-4">
               <div>
                 <p className="text-xs font-semibold uppercase tracking-[0.18em] text-gray-500 dark:text-gray-400">
-                  Boundary
+                  {t('admin.hosted_models.boundary_eyebrow', {}, 'Boundary')}
                 </p>
                 <h2 className="mt-2 text-xl font-semibold text-gray-950 dark:text-white">
-                  Read-only runtime detail
+                  {t('admin.hosted_models.boundary_title', {}, 'Read-only runtime detail')}
                 </h2>
               </div>
               <BackofficeStackCard className="space-y-3">
-                <MetricLine label="Surface" value={data?.boundary.surface || 'internal'} />
-                <MetricLine label="Cloud role" value={data?.boundary.cloudRole || 'runtime'} />
                 <MetricLine
-                  label="Local control plane"
-                  value={data?.boundary.localControlPlane || 'wordpress_plugin'}
+                  label={t('admin.hosted_models.boundary_surface', {}, 'Surface')}
+                  value={translateHostedText(t, data?.boundary.surface || 'internal')}
                 />
                 <MetricLine
-                  label="WordPress write"
-                  value={data?.boundary.directWordpressWrite ? 'allowed' : 'not allowed'}
+                  label={t('admin.hosted_models.boundary_cloud_role', {}, 'Cloud role')}
+                  value={translateHostedText(t, data?.boundary.cloudRole || 'runtime')}
                 />
                 <MetricLine
-                  label="Prompt/result payloads"
-                  value={data?.boundary.containsPromptOrResultPayloads ? 'included' : 'excluded'}
+                  label={t('admin.hosted_models.boundary_local_control_plane', {}, 'Local control plane')}
+                  value={translateHostedText(t, data?.boundary.localControlPlane || 'wordpress_plugin')}
+                />
+                <MetricLine
+                  label={t('admin.hosted_models.boundary_wordpress_write', {}, 'WordPress write')}
+                  value={
+                    data?.boundary.directWordpressWrite
+                      ? t('admin.hosted_models.value_allowed', {}, 'allowed')
+                      : t('admin.hosted_models.value_not_allowed', {}, 'not allowed')
+                  }
+                />
+                <MetricLine
+                  label={t('admin.hosted_models.boundary_payloads', {}, 'Prompt/result payloads')}
+                  value={
+                    data?.boundary.containsPromptOrResultPayloads
+                      ? t('admin.hosted_models.value_included', {}, 'included')
+                      : t('admin.hosted_models.value_excluded', {}, 'excluded')
+                  }
                 />
               </BackofficeStackCard>
             </BackofficeSectionPanel>
@@ -772,11 +869,13 @@ function GovernanceTable({
   title,
   rows,
   firstColumn,
+  t,
 }: {
   eyebrow: string;
   title: string;
   rows: GovernanceGroup[];
   firstColumn: string;
+  t: Translate;
 }) {
   return (
     <BackofficeSectionPanel className="overflow-hidden p-0">
@@ -791,11 +890,21 @@ function GovernanceTable({
           <thead className="bg-slate-50/80 text-xs uppercase tracking-[0.16em] text-slate-500 dark:bg-slate-950/30 dark:text-slate-400">
             <tr>
               <th className="px-5 py-3 text-left font-semibold">{firstColumn}</th>
-              <th className="px-5 py-3 text-right font-semibold">Runs</th>
-              <th className="px-5 py-3 text-right font-semibold">Calls</th>
-              <th className="px-5 py-3 text-right font-semibold">Error</th>
-              <th className="px-5 py-3 text-right font-semibold">Meter</th>
-              <th className="px-5 py-3 text-right font-semibold">Latency</th>
+              <th className="px-5 py-3 text-right font-semibold">
+                {t('admin.hosted_models.metric_runs', {}, 'Runs')}
+              </th>
+              <th className="px-5 py-3 text-right font-semibold">
+                {t('admin.hosted_models.metric_calls', {}, 'Calls')}
+              </th>
+              <th className="px-5 py-3 text-right font-semibold">
+                {t('admin.hosted_models.metric_error', {}, 'Error')}
+              </th>
+              <th className="px-5 py-3 text-right font-semibold">
+                {t('admin.hosted_models.metric_meter', {}, 'Meter')}
+              </th>
+              <th className="px-5 py-3 text-right font-semibold">
+                {t('admin.hosted_models.metric_latency', {}, 'Latency')}
+              </th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-200/80 dark:divide-slate-800">

@@ -404,22 +404,20 @@ function AdminOverviewContent() {
     firstOperatorWatchScope.startsWith('hosted.')
       ? '/admin/hosted-models'
       : firstOperatorWatchScope.startsWith('runtime.') || firstOperatorWatchScope.startsWith('request.')
-        ? '/admin/sites'
+        ? '/admin/accounts'
         : statusTone === 'error' || commercialItems.length > 0 || overview.expiringSubscriptions.in7Days > 0
           ? '/admin/subscriptions'
-          : '/admin/sites';
+          : '/admin/accounts';
   const primaryActionLabel =
     primaryActionHref === '/admin/hosted-models'
       ? t('admin.home_primary_action_hosted_models', {}, 'Inspect hosted models')
       : primaryActionHref === '/admin/subscriptions'
       ? t('admin.home_primary_action_coverage', {}, 'Review coverage')
-      : t('admin.home_primary_action_sites', {}, 'Review sites');
+      : t('admin.home_primary_action_accounts', {}, 'Review customers');
   const secondaryActionHref =
-    statusTone === 'error' || runtimeRiskItems.length > 0 ? '/admin/sites' : '/admin/accounts';
+    '/admin/accounts';
   const secondaryActionLabel =
-    secondaryActionHref === '/admin/sites'
-      ? t('admin.home_secondary_action_sites', {}, 'Inspect sites')
-      : t('admin.home_secondary_action_accounts', {}, 'Inspect accounts');
+    t('admin.home_secondary_action_accounts', {}, 'Inspect accounts');
   const commercialPanelMetrics = [
     {
       label: t('admin.home_commercial_attention', {}, 'Attention now'),
@@ -537,8 +535,8 @@ function AdminOverviewContent() {
                 {t('admin.home_section_platform_title', {}, 'Is the platform healthy enough to keep operating?')}
               </h2>
             </div>
-            <Link href="/admin/sites" className="text-sm font-medium text-blue-600 hover:text-blue-700 dark:text-blue-300 dark:hover:text-blue-200">
-              {t('common.sites')} →
+            <Link href="/admin/accounts" className="text-sm font-medium text-blue-600 hover:text-blue-700 dark:text-blue-300 dark:hover:text-blue-200">
+              {t('common.accounts')} →
             </Link>
           </div>
           <div className="space-y-3">
@@ -551,18 +549,18 @@ function AdminOverviewContent() {
                   ? t(
                     'admin.home_section_platform_runtime_focus',
                     {},
-                    'Runtime watch items are already active. Keep the next inspection on affected sites and coverage continuity first.'
+                    'Runtime watch items are active. Start from affected customers, then drill into their sites only when evidence requires it.'
                   )
                   : t(
                       'admin.home_section_platform_sites_focus',
                       {},
-                      'Service posture is mainly tied to site and subscription continuity. Keep site inspection as the next detailed read.'
+                      'Service posture is mainly tied to customer package and subscription continuity. Keep user review as the next detailed read.'
                     )}
               </p>
             </BackofficeStackCard>
             <BackofficeStackCard>
               <p className="text-sm font-semibold text-slate-900 dark:text-slate-100">
-                {t('admin.home_secondary_sites', {}, 'Sites needing inspection')}
+                {t('admin.home_secondary_sites', {}, 'Customer site evidence')}
               </p>
               {abnormalSiteItems.length > 0 ? (
                 <div className="mt-3 space-y-2">

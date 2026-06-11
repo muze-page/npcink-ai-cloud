@@ -29,8 +29,17 @@ test('admin operator path smoke: queue and inspector routes stay connected', asy
   await expect(page.getByRole('link', { name: /Review coverage|检查覆盖|檢查覆蓋/i })).toBeVisible();
   await expect(page.getByRole('link', { name: /Open customer coverage|打开客户覆盖|打開客戶覆蓋/i }).first()).toBeVisible();
   await expect(page.getByRole('heading', { name: /Are hosted model capabilities covered today\?|托管模型/i })).toBeVisible();
-  await expect(page.getByText(/Hosted model provider call coverage gap/i).first()).toBeVisible();
-  await expect(page.locator('p', { hasText: /Hosted model provider call coverage gap/i })).toHaveCount(2);
+  await expect(
+    page
+      .getByText(/Hosted model provider call coverage gap|托管模型提供方调用覆盖缺口|託管模型提供方呼叫覆蓋缺口/i)
+      .first()
+  ).toBeVisible();
+  await expect(
+    page.locator('p', {
+      hasText:
+        /Hosted model provider call coverage gap|托管模型提供方调用覆盖缺口|託管模型提供方呼叫覆蓋缺口/i,
+    })
+  ).toHaveCount(2);
   await expect(page.locator('a[href="/admin/hosted-models"]').first()).toBeVisible();
 
   await page.goto('/admin/coverage');
@@ -52,6 +61,7 @@ test('admin operator path smoke: queue and inspector routes stay connected', asy
   await page.goto('/admin/subscriptions/sub_mvp');
   await expect(page.getByRole('heading', { name: /Coverage detail: sub_mvp|覆盖详情：sub_mvp|覆蓋詳情：sub_mvp/i })).toBeVisible();
   await expect(page.getByRole('link', { name: /Open customer subscription|打开客户订阅/i })).toHaveCount(0);
+  await expect(page.locator(`a[href="/admin/accounts/${LONG_ACCOUNT_ID}#coverage-actions"]`)).toBeVisible();
   await expect(page.getByRole('link', { name: /Inspect customer detail|检查客户详情|檢查客戶詳情/i })).toBeVisible();
   await expect(page.locator('a[href="/admin/sites/site_mvp"]').first()).toBeVisible();
   await expect(page.getByText(/Base budget|基础预算/i).first()).toBeVisible();
@@ -61,10 +71,10 @@ test('admin operator path smoke: queue and inspector routes stay connected', asy
   await expect(page.getByText(/checkout|buy points|storefront/i)).toHaveCount(0);
 
   await page.goto(`/admin/accounts/${LONG_ACCOUNT_ID}`);
-  await expect(page.getByRole('heading', { name: /MVP Account|acct_mvp_enterprise_primary/i }).first()).toBeVisible();
+  await expect(page.getByRole('heading', { name: /Magick AI Demo|MVP Account|acct_mvp_enterprise_primary/i }).first()).toBeVisible();
   await expect(page.getByRole('link', { name: /Open customer subscription|打开客户订阅/i })).toHaveCount(0);
-  await expect(page.getByText(/Operator actions|运营动作|營運動作/i).first()).toBeVisible();
-  await expect(page.getByText(/View member coverage details|查看成员覆盖详情|檢視成員覆蓋詳情/i).first()).toBeVisible();
+  await expect(page.getByText(/Package and top-up|套餐和加量|方案和加量/i).first()).toBeVisible();
+  await expect(page.getByText(/View member coverage details|查看成员覆盖详情|查看成員覆蓋詳情/i).first()).toBeVisible();
 
   await page.goto('/admin/members');
   await expect(page.getByRole('heading', { name: /Support access queue|支持访问队列/i })).toBeVisible();
@@ -83,13 +93,16 @@ test('admin operator path smoke: queue and inspector routes stay connected', asy
   await expect(page).toHaveURL(/view=pending_cleanup/);
 
   await page.goto('/admin/sites', { waitUntil: 'domcontentloaded' });
-  await expect(
-    page.getByRole('heading', { name: /Which sites need operator follow-up next\?|哪些站点需要下一步运营跟进？/i })
-  ).toBeVisible();
-  await expect(page.locator('a[href="/admin/sites/site_mvp"]').first()).toBeVisible();
+  await expect(page).toHaveURL(/\/admin\/accounts/);
+  await expect(page.getByRole('heading', { name: /Users and current packages|用户与当前套餐|使用者與目前方案/i })).toBeVisible();
 
   await page.goto('/admin/sites/site_mvp');
   await expect(page.getByRole('heading', { name: /MVP Site|site_mvp/i }).first()).toBeVisible();
+
+  await page.goto('/admin/troubleshooting');
+  await expect(page.getByRole('heading', { name: /Advanced Troubleshooting|高级排障|進階排障/i })).toBeVisible();
+  await expect(page.locator('a[href="/admin/plugin-observability"]')).toBeVisible();
+  await expect(page.locator('a[href="/admin/hosted-models"]')).toBeVisible();
 
   await page.goto('/admin/plans', { waitUntil: 'domcontentloaded' });
   await expect(page.getByRole('heading', { name: /Coverage package catalog|覆盖套餐目录|覆蓋方案目錄/i })).toBeVisible();
@@ -117,14 +130,22 @@ test('admin queue pages keep one primary header action and shared identifier tre
   await expect(page.getByText('acct_mvp_ent...rimary').first()).toBeVisible();
 
   await page.goto('/admin/sites');
+  await expect(page).toHaveURL(/\/admin\/accounts/);
   await expect(page.getByText('acct_mvp_ent...rimary').first()).toBeVisible();
 
   await page.goto('/admin/accounts');
   await expect(page.getByText('acct_mvp_ent...rimary').first()).toBeVisible();
+  await expect(page.getByText(/Magick AI Demo/i)).toBeVisible();
+  await expect(page.getByText(/Pilot customer\. Confirm package before public release\./i)).toBeVisible();
   await expect(page.getByText(/Free Account|免费客户|免費客戶/i)).toBeVisible();
   await expect(page.getByText(/Uncovered Account|未覆盖客户|未覆蓋客戶/i)).toBeVisible();
-  await expect(page.getByRole('link', { name: /Open coverage|打开覆盖|打開覆蓋|检查覆盖|檢查覆蓋/i }).first()).toBeVisible();
-  await expect(page.getByRole('link', { name: /Review coverage|检查覆盖|檢查覆蓋/i }).first()).toBeVisible();
+  await expect(page.getByRole('heading', { name: /Users and current packages|用户与当前套餐|使用者與目前方案/i })).toBeVisible();
+  await expect(page.getByRole('columnheader', { name: /Package|套餐|方案/i })).toBeVisible();
+  await expect(page.getByRole('columnheader', { name: /Next step|下一步/i })).toBeVisible();
+  await expect(page.getByRole('columnheader', { name: /Sites \/ members|站点\/成员|站點\/成員/i })).toBeVisible();
+  await expect(page.locator(`a[href="/admin/subscriptions/sub_mvp"]`)).toHaveCount(0);
+  await expect(page.locator(`a[href="/admin/accounts/${LONG_ACCOUNT_ID}#site-footprint"]`)).toHaveCount(0);
+  await expect(page.getByRole('link', { name: /Details|详情|詳情/i }).first()).toBeVisible();
   await page.getByLabel(/Package kind|套餐类型|方案類型/i).selectOption('formal_free');
   await expect(page.getByText(/Free Account|免费客户|免費客戶/i)).toBeVisible();
   await expect(page.getByText(/Uncovered Account|未覆盖客户|未覆蓋客戶/i)).toHaveCount(0);
@@ -133,10 +154,15 @@ test('admin queue pages keep one primary header action and shared identifier tre
   await expect(page.getByText(/Uncovered Account|未覆盖客户|未覆蓋客戶/i)).toBeVisible();
   await expect(page.getByText(/Free Account|免费客户|免費客戶/i)).toHaveCount(0);
   await page.getByLabel(/Coverage state|覆盖状态|覆蓋狀態/i).selectOption('');
+  await page.getByText(/Add user|添加用户|新增使用者/i).click();
   await page.getByLabel(/Account ID|账户 ID|帳戶 ID/i).fill('acct_new_customer_free');
   await page.getByLabel(/Name|名称|名稱/i).fill('New Customer');
-  await page.getByRole('button', { name: /Create customer account|创建客户账号|建立客戶帳號/i }).click();
-  await expect(page.getByText(/bound to the Free package|绑定 Free 套餐|綁定 Free 方案/i)).toBeVisible();
+  await page.getByLabel(/Operator name|运营显示名|營運顯示名/i).fill('New Customer Display');
+  await page.getByLabel(/Operator note|运营备注|營運備註/i).fill('Internal launch note');
+  await page.getByRole('button', { name: /Create user|创建用户|建立使用者/i }).click();
+  await expect(page.getByText(/User created|用户已创建|使用者已建立/i)).toBeVisible();
+  await expect(page.getByText(/New Customer Display/i)).toBeVisible();
+  await expect(page.getByText(/Internal launch note/i)).toBeVisible();
 
   await page.goto('/admin/plans', { waitUntil: 'domcontentloaded' });
   await expect(page.locator(`a[href="/admin/plans/${LONG_PLAN_ID}"]`).first()).toBeVisible();
@@ -148,17 +174,21 @@ test('admin queue pages keep one primary header action and shared identifier tre
   await expect(page.getByText(/已发布|published/i).first()).toBeVisible();
 
   await page.goto('/admin/hosted-models', { waitUntil: 'domcontentloaded' });
-  await expect(page.getByRole('heading', { name: /Hosted Model Governance|托管模型/i })).toBeVisible();
-  await expect(page.getByRole('heading', { name: /Latest cadence record/i })).toBeVisible();
-  await expect(page.getByText(/internal_admin_readonly/i).first()).toBeVisible();
-  await expect(page.getByRole('heading', { name: /Daily governance watch/i })).toBeVisible();
-  await expect(page.getByText(/Hosted model provider call coverage gap/i).first()).toBeVisible();
+  await expect(page.getByRole('heading', { name: /Hosted Model Governance|托管模型|託管模型/i })).toBeVisible();
+  await expect(page.getByRole('heading', { name: /Latest cadence record|最新节奏记录|最新節奏記錄/i })).toBeVisible();
+  await expect(page.getByText(/internal admin read-only|内部管理员只读|內部管理員唯讀/i).first()).toBeVisible();
+  await expect(page.getByRole('heading', { name: /Daily governance watch|每日治理观察|每日治理觀察/i })).toBeVisible();
+  await expect(
+    page
+      .getByText(/Hosted model provider call coverage gap|托管模型提供方调用覆盖缺口|託管模型提供方呼叫覆蓋缺口/i)
+      .first()
+  ).toBeVisible();
   await expect(page.getByText(/Ability families|能力/i).first()).toBeVisible();
   await expect(page.getByText(/free-gpt55-general/i).first()).toBeVisible();
-  await expect(page.getByText(/provider gap: knowledge/i).first()).toBeVisible();
+  await expect(page.getByText(/provider gap: knowledge|提供方缺口：knowledge/i).first()).toBeVisible();
   await expect(page.getByText(/Read-only runtime detail|只读/i).first()).toBeVisible();
-  await expect(page.getByText(/WordPress write/i).first()).toBeVisible();
-  await expect(page.getByText(/not allowed/i).first()).toBeVisible();
+  await expect(page.getByText(/WordPress write|WordPress 写入|WordPress 寫入/i).first()).toBeVisible();
+  await expect(page.getByText(/not allowed|不允许|不允許/i).first()).toBeVisible();
   await expect(page.getByRole('button', { name: /Save|Configure|Enable/i })).toHaveCount(0);
 });
 
@@ -169,14 +199,35 @@ test('admin support and detail pages keep bounded operator hierarchy', async ({ 
   await page.goto(`/admin/accounts/${LONG_ACCOUNT_ID}`);
   await expect(page.getByText('acct_mvp_ent...rimary').first()).toBeVisible();
   await expect(page.getByRole('link', { name: /Open customer subscription|打开客户订阅/i })).toHaveCount(0);
-  await expect(page.getByText(/Operator actions|运营动作|營運動作/i)).toBeVisible();
-  await expect(page.getByText(/Trial readiness/i).first()).toBeVisible();
-  await expect(page.getByText(/Invite trial site|Apply package coverage/i).first()).toBeVisible();
-  await expect(page.getByText(/Cloud API key/i).first()).toBeVisible();
-  await expect(page.getByRole('link', { name: /Open coverage|打开覆盖|打開覆蓋/i })).toBeVisible();
-  await expect(page.getByRole('link', { name: /View sites|查看站点|檢視站點/i })).toBeVisible();
+  await expect(page.getByText(/Package and top-up|套餐和加量|方案和加量/i)).toBeVisible();
+  await page.getByText(/Edit customer info|编辑客户信息|編輯客戶資訊/i).click();
+  const operatorProfileForm = page.locator('form').filter({ hasText: /Operator note|运营备注|營運備註/i }).first();
+  await operatorProfileForm.getByLabel(/Operator note|运营备注|營運備註/i).fill('Updated detail note');
+  await operatorProfileForm.getByRole('button', { name: /Save|保存|儲存/i }).click();
+  await expect(page.getByText(/Operator note has been saved|运营备注已保存|營運備註已儲存/i)).toBeVisible();
+  await page.goto('/admin/accounts');
+  await expect(page.getByText(/Updated detail note/i)).toBeVisible();
+  await page.goto(`/admin/accounts/${LONG_ACCOUNT_ID}`);
+  const trialReadinessSummary = page.locator('[data-ui="trial-readiness-summary"]');
+  await expect(trialReadinessSummary.getByText(/Trial readiness|试用准备|試用準備/i).first()).toBeVisible();
+  await expect(trialReadinessSummary).toHaveJSProperty('open', false);
+  await expect(trialReadinessSummary.getByText(/Cloud API key/i).first()).toBeHidden();
+  await trialReadinessSummary.getByText(/Trial readiness|试用准备|試用準備/i).first().click();
+  await expect(trialReadinessSummary.getByText(/Cloud API key/i).first()).toBeVisible();
+  await expect(page.getByText(/^(Top-up packs|加量包)$/i)).toBeVisible();
+  await expect(page.getByRole('button', { name: /Small top-up|小加量包/i })).toBeVisible();
+  await page.getByRole('button', { name: /Small top-up|小加量包/i }).click();
+  let confirmDialog = page.getByRole('dialog');
+  await expect(confirmDialog.getByText(/Confirm top-up pack|确认应用加量包|確認套用加量包/i)).toBeVisible();
+  await confirmDialog.getByRole('button', { name: /Cancel|取消/i }).click();
+  await expect(page.getByText(/Small top-up has been applied|小加量包 已应用|小加量包 已套用/i)).toHaveCount(0);
+  await page.getByRole('button', { name: /Small top-up|小加量包/i }).click();
+  confirmDialog = page.getByRole('dialog');
+  await confirmDialog.getByRole('button', { name: /Apply top-up|应用加量包|套用加量包/i }).click();
+  await expect(page.getByText(/Small top-up has been applied|小加量包 已应用|小加量包 已套用/i)).toBeVisible();
+  await expect(page.getByRole('link', { name: /View sites|查看站点|查看站點/i })).toBeVisible();
   await expect(page.getByRole('link', { name: /Invite member|邀请成员|邀請成員/i })).toBeVisible();
-  await expect(page.getByText(/Manage portal access|管理成员接入|管理 Portal 存取/i).first()).toBeVisible();
+  await expect(page.getByText(/Manage portal access|管理 Portal 访问|管理 Portal 存取/i).first()).toBeVisible();
   await expect(page.getByLabel(/Plan Version|套餐版本|方案版本/i)).toBeHidden();
   await expect(page.getByLabel(/Email|邮箱|電子郵件/i)).toBeHidden();
   const advancedCoverageControls = page.locator('[data-ui="advanced-coverage-controls"]');
@@ -185,7 +236,7 @@ test('admin support and detail pages keep bounded operator hierarchy', async ({ 
   await expect(memberCoverageDetails).toHaveJSProperty('open', false);
   await expect(advancedCoverageControls.getByRole('link', { name: /Inspect detail|查看详情|檢查詳情/i })).toBeHidden();
   await expect(advancedCoverageControls.getByRole('combobox', { name: /Coverage package option|覆盖套餐选项|覆蓋方案選項/i })).toBeHidden();
-  const packageActionReveal = page.getByText(/Repair subscription record|修复订阅记录|修復訂閱記錄/i);
+  const packageActionReveal = page.getByText(/Repair subscription record|维修订阅记录|維修訂閱記錄/i);
   await packageActionReveal.click();
   await expect(advancedCoverageControls).toHaveJSProperty('open', true);
   const coverageBoundary = page.locator('#coverage-actions');
@@ -195,19 +246,28 @@ test('admin support and detail pages keep bounded operator hierarchy', async ({ 
   await expect(page.getByRole('textbox', { name: /Coverage package version|覆盖套餐版本|覆蓋方案版本/i })).toHaveCount(0);
   await expect(page.getByText(/applied automatically|自动应用|自動套用/i).first()).toBeVisible();
   await page.getByRole('button', { name: /Suspend coverage|暂停覆盖|暫停覆蓋/i }).click();
+  confirmDialog = page.getByRole('dialog');
+  await expect(confirmDialog.getByText(/Confirm suspension|确认暂停覆盖|確認暫停覆蓋/i)).toBeVisible();
+  await confirmDialog.getByRole('button', { name: /Suspend coverage|暂停覆盖|暫停覆蓋/i }).click();
   await expect(coverageBoundary.getByText(/已暂停|suspended/i).first()).toBeVisible();
   await packageActionReveal.click();
   await page.getByRole('button', { name: /Cancel coverage|取消覆盖|取消覆蓋/i }).click();
+  confirmDialog = page.getByRole('dialog');
+  await expect(confirmDialog.getByText(/Confirm cancellation|确认取消覆盖|確認取消覆蓋/i)).toBeVisible();
+  await confirmDialog.getByRole('button', { name: /Cancel coverage|取消覆盖|取消覆蓋/i }).click();
   await expect(coverageBoundary.getByText(/已取消|canceled/i).first()).toBeVisible();
   await packageActionReveal.click();
   await page.getByRole('combobox', { name: /Coverage package option|覆盖套餐选项|覆蓋方案選項/i }).selectOption(LONG_PLAN_ID);
   await page.getByRole('button', { name: /Change package|调整套餐|調整方案/i }).click();
+  confirmDialog = page.getByRole('dialog');
+  await expect(confirmDialog.getByText(/Confirm subscription repair|确认维修订阅记录|確認維修訂閱記錄/i)).toBeVisible();
+  await confirmDialog.getByRole('button', { name: /Change package|调整套餐|調整方案/i }).click();
   await expect(coverageBoundary.getByText(/Pro/i).first()).toBeVisible();
   await expect(page.getByText(/Covered by paid package|付费套餐已覆盖|付費方案已覆蓋/i).first()).toBeVisible();
   await expect(page.getByText(/admin@example\.com/i).first()).toBeVisible();
-  await expect(page.getByText(/View member coverage details|查看成员覆盖详情|檢視成員覆蓋詳情/i).first()).toBeVisible();
+  await expect(page.getByText(/View member coverage details|查看成员覆盖详情|查看成員覆蓋詳情/i).first()).toBeVisible();
   await expect(memberCoverageDetails).toHaveJSProperty('open', false);
-  await expect(page.getByText(/Portal access|成员接入|Portal 存取/i).first()).toBeVisible();
+  await expect(page.getByText(/Portal access|Portal 访问|Portal 存取/i).first()).toBeVisible();
   await expect(page.locator('a[href="/admin/sites/site_mvp"]').first()).toBeVisible();
 
   await page.goto('/admin/sites/site_mvp');
@@ -240,19 +300,21 @@ test('admin navigation stays customer-first', async ({ page }) => {
   const adminNav = page.getByRole('navigation', { name: /管理后台|admin/i });
   const adminPrimaryNav = page.locator('[data-ui="admin-primary-nav"]');
   const primaryLinks = adminPrimaryNav.locator('> a.admin-nav-link');
-  await expect(primaryLinks).toHaveCount(11);
+  await expect(primaryLinks).toHaveCount(4);
   await expect(primaryLinks.nth(0)).toHaveAttribute('href', '/admin');
   await expect(primaryLinks.nth(1)).toHaveAttribute('href', '/admin/accounts');
-  await expect(primaryLinks.nth(2)).toHaveAttribute('href', '/admin/sites');
-  await expect(primaryLinks.nth(3)).toHaveAttribute('href', '/admin/coverage');
+  await expect(primaryLinks.nth(2)).toHaveAttribute('href', '/admin/coverage');
+  await expect(primaryLinks.nth(3)).toHaveAttribute('href', '/admin/troubleshooting');
   await expect(adminNav.getByRole('link', { name: /^Overview$|^概览$|^概覽$/i })).toBeVisible();
   await expect(adminNav.getByRole('link', { name: /^Customers$|^客户$/i })).toBeVisible();
-  await expect(adminNav.getByRole('link', { name: /^Sites$|^站点$/i })).toBeVisible();
-  await expect(adminNav.getByRole('link', { name: /^Coverage$|^覆盖$|^覆蓋$/i })).toBeVisible();
-  await expect(adminNav.getByRole('link', { name: /^Hosted Models$|^托管模型$|^託管模型$/i })).toBeVisible();
+  await expect(adminNav.getByRole('link', { name: /^Sites$|^站点$|^站點$/i })).toHaveCount(0);
+  await expect(adminNav.getByRole('link', { name: /^Packages \/ Coverage$|^套餐\/覆盖$|^方案\/覆蓋$/i })).toBeVisible();
+  await expect(adminNav.getByRole('link', { name: /^Advanced Troubleshooting$|^高级排障$|^進階排障$/i })).toBeVisible();
+  await expect(adminNav.getByRole('link', { name: /^Hosted Models$|^托管模型$|^託管模型$/i })).toHaveCount(0);
   await expect(adminNav.getByRole('link', { name: /^Subscriptions$|^订阅$|^訂閱$/i })).toHaveCount(0);
   await expect(adminNav.getByRole('link', { name: /^Plans$|^套餐目录$|^方案目錄$/i })).toHaveCount(0);
   await expect(adminNav.getByRole('link', { name: /^Members$|^成员$|^成員$/i })).toHaveCount(0);
+  await expect(adminNav.getByRole('link', { name: /^Plugin Observability$|^插件观测$|^外掛觀測$/i })).toHaveCount(0);
 });
 
 test('admin operator path stays usable on mobile viewport', async ({ page }) => {

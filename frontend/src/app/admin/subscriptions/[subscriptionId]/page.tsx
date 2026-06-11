@@ -331,6 +331,14 @@ function SubscriptionDetailContent() {
             <Link href="/admin/subscriptions" className="btn btn-secondary">
               {t('admin.back_to_subscriptions', {}, 'Back to subscriptions')}
             </Link>
+            {detail?.related_surfaces?.account_href || normalized.accountId ? (
+              <Link
+                href={`${detail?.related_surfaces?.account_href || `/admin/accounts/${encodeURIComponent(normalized.accountId)}`}#coverage-actions`}
+                className="btn btn-primary"
+              >
+                {t('admin.account_detail.change_package_action', {}, 'Change package')}
+              </Link>
+            ) : null}
             {detail?.related_surfaces?.account_href ? (
               <Link
                 href={detail.related_surfaces.account_href}

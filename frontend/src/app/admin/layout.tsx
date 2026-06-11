@@ -12,6 +12,12 @@ interface AdminLayoutProps {
   children: React.ReactNode;
 }
 
+type AdminNavItem = {
+  href: string;
+  label: string;
+  activePrefixes?: string[];
+};
+
 export default function AdminLayout({ children }: AdminLayoutProps) {
   const pathname = usePathname();
   const { t } = useLocale();
@@ -47,28 +53,47 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
     setMobileNavOpen((current) => !current);
   }, []);
 
-  const primaryNavItems = [
+  const primaryNavItems: AdminNavItem[] = [
     { href: '/admin', label: t('nav.overview', {}, 'Overview') },
     { href: '/admin/accounts', label: t('common.accounts', {}, 'Customers') },
-    { href: '/admin/sites', label: t('common.sites', {}, 'Sites') },
-    { href: '/admin/coverage', label: t('admin.nav_coverage', {}, 'Coverage') },
-    { href: '/admin/plugin-observability', label: t('admin.nav_plugin_observability', {}, 'Plugin Observability') },
-    { href: '/admin/media-observability', label: t('admin.nav_media_observability', {}, 'Media Observability') },
-    { href: '/admin/ai-advisor', label: t('admin.nav_ai_advisor', {}, 'AI Advisor') },
-    { href: '/admin/web-search', label: t('admin.nav_web_search', {}, 'Web Search') },
-    { href: '/admin/image-sources', label: t('admin.nav_image_sources', {}, 'Image Sources') },
-    { href: '/admin/vector-observability', label: t('admin.nav_vector_observability', {}, 'Vector Observability') },
-    { href: '/admin/hosted-models', label: t('admin.nav_hosted_models', {}, 'Hosted Models') },
+    {
+      href: '/admin/coverage',
+      label: t('admin.nav_packages_coverage', {}, 'Packages / Coverage'),
+      activePrefixes: ['/admin/coverage', '/admin/subscriptions', '/admin/plans'],
+    },
+    {
+      href: '/admin/troubleshooting',
+      label: t('admin.nav_advanced_troubleshooting', {}, 'Advanced Troubleshooting'),
+      activePrefixes: [
+        '/admin/troubleshooting',
+        '/admin/plugin-observability',
+        '/admin/media-observability',
+        '/admin/ai-advisor',
+        '/admin/web-search',
+        '/admin/image-sources',
+        '/admin/vector-observability',
+        '/admin/hosted-models',
+      ],
+    },
   ];
 
-  const isActive = (href: string) => {
+  const isPathMatch = (targetPath: string) => pathname === targetPath || pathname.startsWith(`${targetPath}/`);
+
+  const isActive = (item: AdminNavItem) => {
+    const href = item.href;
     if (href === '/admin') {
       return pathname === '/admin';
     }
+    if (href === '/admin/accounts' && pathname.startsWith('/admin/sites/')) {
+      return true;
+    }
+    if (href === '/admin/accounts' && pathname.startsWith('/admin/members')) {
+      return true;
+    }
 
-    return pathname === href || pathname.startsWith(`${href}/`);
+    return (item.activePrefixes || [href]).some(isPathMatch);
   };
-  const activePrimaryItem = primaryNavItems.find((item) => isActive(item.href)) ?? primaryNavItems[0];
+  const activePrimaryItem = primaryNavItems.find((item) => isActive(item)) ?? primaryNavItems[0];
 
   if (isLoginPage) {
     return (
@@ -185,7 +210,7 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
                       prefetch={false}
                       className={cn(
                         'admin-nav-link whitespace-nowrap',
-                        isActive(item.href) && 'admin-nav-link-active'
+                        isActive(item) && 'admin-nav-link-active'
                       )}
                     >
                       {item.label}
@@ -234,7 +259,7 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
                       prefetch={false}
                       className={cn(
                         'block rounded-2xl px-4 py-3 text-sm font-medium transition-colors',
-                        isActive(item.href)
+                        isActive(item)
                           ? 'bg-slate-900 text-white dark:bg-blue-500 dark:text-slate-950'
                           : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-white'
                       )}

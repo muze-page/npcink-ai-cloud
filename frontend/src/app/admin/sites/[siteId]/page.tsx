@@ -307,8 +307,8 @@ function SiteDetailContent() {
       <div className="flex min-h-[60vh] items-center justify-center">
         <div className="text-center">
           <h2 className="text-2xl font-bold mb-4">{t('admin.site_not_found')}</h2>
-          <Link href="/admin/sites" className="text-blue-600 hover:underline">
-            ← {t('admin.back_to_sites')}
+          <Link href="/admin/accounts" className="text-blue-600 hover:underline">
+            ← {t('common.accounts', {}, 'Accounts')}
           </Link>
         </div>
       </div>
@@ -454,9 +454,6 @@ function SiteDetailContent() {
         description={postureDescription}
         actions={(
           <>
-            <Link href="/admin/sites" className="btn btn-secondary">
-              {t('admin.back_to_sites')}
-            </Link>
             <Link href={`/admin/accounts/${site.account_id}`} className="btn btn-secondary">
               {t('common.account')}
             </Link>
