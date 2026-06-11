@@ -71,6 +71,10 @@ class AccountPayload(BaseModel):
     bind_default_free: bool = False
 
 
+class AccountStatusPayload(BaseModel):
+    reason: str = ""
+
+
 class MembershipPayload(BaseModel):
     member_ref: str
     role: str = ACCOUNT_MEMBERSHIP_ROLE_USER
@@ -464,7 +468,11 @@ async def upsert_account(
 
 
 @router.post("/admin/accounts/{account_id}/suspend")
-async def suspend_admin_account(request: Request, account_id: str) -> Any:
+async def suspend_admin_account(
+    request: Request,
+    account_id: str,
+    payload: AccountStatusPayload | None = None,
+) -> Any:
     auth = await authorize_internal_request(request, require_idempotency=True)
     if auth is not None:
         return auth
@@ -474,6 +482,7 @@ async def suspend_admin_account(request: Request, account_id: str) -> Any:
         result = service.set_account_status(
             account_id,
             status="suspended",
+            reason=payload.reason if payload is not None else "",
             audit_context=audit_context,
         )
     except CommercialServiceError as error:
@@ -505,7 +514,11 @@ async def suspend_admin_account(request: Request, account_id: str) -> Any:
 
 
 @router.post("/admin/accounts/{account_id}/restore")
-async def restore_admin_account(request: Request, account_id: str) -> Any:
+async def restore_admin_account(
+    request: Request,
+    account_id: str,
+    payload: AccountStatusPayload | None = None,
+) -> Any:
     auth = await authorize_internal_request(request, require_idempotency=True)
     if auth is not None:
         return auth
@@ -515,6 +528,7 @@ async def restore_admin_account(request: Request, account_id: str) -> Any:
         result = service.set_account_status(
             account_id,
             status="active",
+            reason=payload.reason if payload is not None else "",
             audit_context=audit_context,
         )
     except CommercialServiceError as error:

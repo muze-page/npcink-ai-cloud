@@ -1743,10 +1743,15 @@ def test_service_routes_admin_read_facade(tmp_path: Path) -> None:
 
     suspend_account_response = client.post(
         "/internal/service/admin/accounts/acct_admin/suspend",
+        json={"reason": "billing review"},
         headers=build_internal_headers(idempotency_key="svc-admin-account-suspend-001"),
     )
     assert suspend_account_response.status_code == 200
     assert suspend_account_response.json()["data"]["status"] == "suspended"
+    assert (
+        suspend_account_response.json()["data"]["metadata"]["account_status_note"]
+        == "billing review"
+    )
     assert suspend_account_response.json()["data"]["receipt"]["event_kind"] == "account.suspend"
 
     suspended_account_detail_response = client.get(
@@ -1755,6 +1760,12 @@ def test_service_routes_admin_read_facade(tmp_path: Path) -> None:
     )
     assert suspended_account_detail_response.status_code == 200
     assert suspended_account_detail_response.json()["data"]["account"]["status"] == "suspended"
+    assert (
+        suspended_account_detail_response.json()["data"]["account"]["metadata"][
+            "account_status_note"
+        ]
+        == "billing review"
+    )
 
     restore_account_response = client.post(
         "/internal/service/admin/accounts/acct_admin/restore",

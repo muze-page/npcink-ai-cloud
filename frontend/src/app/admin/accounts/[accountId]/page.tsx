@@ -35,6 +35,8 @@ interface AccountDetail {
   name: string;
   operator_display_name: string;
   operator_note: string;
+  account_status_note: string;
+  account_status_updated_at: string;
   status: string;
   metadata: Record<string, unknown>;
   created_at: string;
@@ -238,6 +240,7 @@ type PendingConfirmation = {
   title: string;
   message: string;
   confirmLabel: string;
+  showSuspendReason?: boolean;
   variant?: 'default' | 'danger';
   onConfirm: () => void;
 };
@@ -362,6 +365,7 @@ function AccountDetailContent() {
   const [accountStatusNotice, setAccountStatusNotice] = useState<string | null>(null);
   const [accountStatusError, setAccountStatusError] = useState<string | null>(null);
   const [accountStatusPending, setAccountStatusPending] = useState<'suspend' | 'restore' | null>(null);
+  const [suspendReason, setSuspendReason] = useState('');
   const [inviteEmail, setInviteEmail] = useState('');
   const [inviteNotice, setInviteNotice] = useState<string | null>(null);
   const [inviteError, setInviteError] = useState<string | null>(null);
@@ -516,6 +520,8 @@ function AccountDetailContent() {
           : {};
       const operatorDisplayName = String(accountMetadata.operator_display_name || '').trim();
       const operatorNote = String(accountMetadata.operator_note || '').trim();
+      const accountStatusNote = String(accountMetadata.account_status_note || '').trim();
+      const accountStatusUpdatedAt = String(accountMetadata.account_status_updated_at || '').trim();
       const memberships = Array.isArray(payload.memberships) ? payload.memberships : [];
       const sites = Array.isArray(payload.sites) ? payload.sites : [];
       const subscriptions = Array.isArray(payload.subscriptions) ? payload.subscriptions : [];
@@ -526,6 +532,8 @@ function AccountDetailContent() {
         name: String(accountData.name || accountData.account_id || accountId),
         operator_display_name: operatorDisplayName,
         operator_note: operatorNote,
+        account_status_note: accountStatusNote,
+        account_status_updated_at: accountStatusUpdatedAt,
         status: String(accountData.status || 'unknown'),
         metadata: accountMetadata,
         created_at: String(accountData.created_at || ''),
@@ -964,14 +972,28 @@ function AccountDetailContent() {
         method: 'POST',
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({}),
+        body: JSON.stringify({
+          reason: action === 'suspend' ? suspendReason.trim() : '',
+        }),
       });
       const payload = await response.json();
       if (!response.ok) {
         throw new Error(payload.message || t('error.failed_save', {}, 'Failed to save.'));
       }
       const nextStatus = String(payload.data?.status || (action === 'restore' ? 'active' : 'suspended'));
-      setAccount((current) => (current ? { ...current, status: nextStatus } : current));
+      const metadata = payload.data?.metadata && typeof payload.data.metadata === 'object'
+        ? payload.data.metadata
+        : {};
+      setAccount((current) =>
+        current
+          ? {
+              ...current,
+              status: nextStatus,
+              account_status_note: String(metadata.account_status_note || current.account_status_note || ''),
+              account_status_updated_at: String(metadata.account_status_updated_at || current.account_status_updated_at || ''),
+            }
+          : current
+      );
       setAccountStatusNotice(
         action === 'restore'
           ? t('admin.accounts.account_restored_notice', { account: accountTitle }, `${accountTitle} has been restored.`)
@@ -982,6 +1004,7 @@ function AccountDetailContent() {
       setAccountStatusError(resolveUiErrorMessage(err instanceof Error ? err.message : null, t('error.failed_save')));
     } finally {
       setAccountStatusPending(null);
+      setSuspendReason('');
     }
   };
 
@@ -1465,7 +1488,8 @@ function AccountDetailContent() {
             </a>
             <button
               type="button"
-              onClick={() =>
+              onClick={() => {
+                setSuspendReason('');
                 setPendingConfirmation({
                   title:
                     account.status === 'suspended'
@@ -1487,10 +1511,11 @@ function AccountDetailContent() {
                     account.status === 'suspended'
                       ? t('admin.accounts.restore_account_action', {}, 'Restore account')
                       : t('admin.accounts.suspend_account_action', {}, 'Suspend account'),
+                  showSuspendReason: account.status !== 'suspended',
                   variant: account.status === 'suspended' ? 'default' : 'danger',
                   onConfirm: () => void handleAccountStatusMutation(account.status === 'suspended' ? 'restore' : 'suspend'),
-                })
-              }
+                });
+              }}
               className="btn btn-secondary"
               disabled={accountStatusPending !== null}
             >
@@ -1549,6 +1574,11 @@ function AccountDetailContent() {
         ) : null}
         {accountStatusError ? (
           <p className="text-sm text-red-600 dark:text-red-300">{accountStatusError}</p>
+        ) : null}
+        {account.account_status_note ? (
+          <p className="text-sm text-amber-700 dark:text-amber-300">
+            {t('admin.accounts.suspend_reason_label', {}, 'Suspension reason')}: {account.account_status_note}
+          </p>
         ) : null}
         <details
           data-ui="operator-profile-editor"
@@ -2557,7 +2587,23 @@ function AccountDetailContent() {
         onConfirm={() => {
           pendingConfirmation?.onConfirm();
         }}
-      />
+      >
+        {pendingConfirmation?.showSuspendReason ? (
+          <label className="block text-sm">
+            <span className="mb-2 block font-medium text-gray-700 dark:text-gray-300">
+              {t('admin.accounts.suspend_reason_label', {}, 'Suspension reason')}
+            </span>
+            <input
+              type="text"
+              value={suspendReason}
+              onChange={(event) => setSuspendReason(event.target.value)}
+              maxLength={200}
+              placeholder={t('admin.accounts.suspend_reason_placeholder', {}, 'Optional short note for internal follow-up')}
+              className="input"
+            />
+          </label>
+        ) : null}
+      </ConfirmModal>
     </BackofficePageStack>
   );
 }

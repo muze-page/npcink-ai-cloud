@@ -96,6 +96,7 @@ class CommercialServiceAccountMixin(CommercialServiceAuditMixin):
         account_id: str,
         *,
         status: str,
+        reason: str = "",
         audit_context: ServiceAuditContext | None = None,
     ) -> dict[str, object]:
         normalized_status = str(status or "").strip().lower()
@@ -114,7 +115,16 @@ class CommercialServiceAccountMixin(CommercialServiceAuditMixin):
                     f"account '{account_id}' was not found",
                 )
 
+            now = self.now_factory()
+            normalized_reason = str(reason or "").strip()
+            metadata_json = dict(getattr(account, "metadata_json", None) or {})
+            metadata_json["account_status_action"] = normalized_status
+            metadata_json["account_status_updated_at"] = self._serialize_datetime(now)
+            if normalized_status == ACCOUNT_STATUS_SUSPENDED and normalized_reason:
+                metadata_json["account_status_note"] = normalized_reason[:500]
+
             account.status = normalized_status
+            account.metadata_json = metadata_json
             session.flush()
             payload = self._serialize_account(account)
             event_kind = "account.restore" if normalized_status == ACCOUNT_STATUS_ACTIVE else "account.suspend"

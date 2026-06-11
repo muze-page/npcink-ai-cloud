@@ -162,6 +162,7 @@ export function Modal({
  */
 export interface ConfirmModalProps extends Omit<ModalProps, 'children' | 'footer'> {
   message: string;
+  children?: React.ReactNode;
   confirmLabel?: string;
   cancelLabel?: string;
   variant?: 'default' | 'danger';
@@ -170,6 +171,7 @@ export interface ConfirmModalProps extends Omit<ModalProps, 'children' | 'footer
 
 export function ConfirmModal({
   message,
+  children,
   confirmLabel = 'Confirm',
   cancelLabel = 'Cancel',
   variant = 'default',
@@ -197,7 +199,10 @@ export function ConfirmModal({
         </>
       }
     >
-      <p className="text-sm text-gray-600 dark:text-gray-400">{message}</p>
+      <div className="space-y-4">
+        <p className="text-sm text-gray-600 dark:text-gray-400">{message}</p>
+        {children}
+      </div>
     </Modal>
   );
 }
