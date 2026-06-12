@@ -12,6 +12,7 @@ import {
 const COPIED_REQUEST_HEADERS = [
   'accept-language',
   'authorization',
+  'x-magick-portal-member-ref',
   'x-magick-portal-site-admin-ref',
   'idempotency-key',
   'x-magick-portal-token',
