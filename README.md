@@ -379,15 +379,16 @@ docker build -t magick-cloud-prod-check -f Dockerfile .
 
 ## Approved Feature Base
 
-The next Cloud feature branch must start from the clean hardening base branch:
+The next Cloud feature branch should start from the verified standalone Cloud
+`master` branch:
 
-- approved base branch: `codex/cloud-hardening-base`
-- approved base worktree: `../../magick-ai-root-cloud-hardening-base`
+- approved base branch: `master`
 - required baseline before branching: `make baseline`
+- remote state to confirm before branching: `git ls-remote --heads origin master`
 
-Do not start the next Cloud feature directly from the root repo `master`
-until that branch contains the hardening base commits and matches this
-verified baseline.
+Do not start the next Cloud feature from an older hardening worktree or archived
+branch. Reconfirm `master` is synced with `origin/master` and rerun the baseline
+before branching.
 
 This rule exists to keep the current Cloud boundary intact:
 
@@ -396,9 +397,8 @@ This rule exists to keep the current Cloud boundary intact:
 - Cloud feature work must not reintroduce a second control plane or a second
   source of truth
 
-If a new Cloud feature is needed, create `codex/cloud-feature-<topic>` from
-`codex/cloud-hardening-base` instead of branching from the current root
-workspace.
+If a new Cloud feature is needed, create `codex/cloud-feature-<topic>` from the
+synced standalone Cloud `master` branch after the baseline passes.
 
 ## Lint Debt Boundary
 
