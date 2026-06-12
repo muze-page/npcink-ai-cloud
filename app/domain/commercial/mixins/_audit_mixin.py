@@ -15,6 +15,24 @@ from app.core.models import (
 )
 from app.domain.commercial.audit_context import ServiceAuditContext
 
+MAX_AUDIT_PAYLOAD_DEPTH = 8
+MAX_AUDIT_PAYLOAD_ITEMS = 100
+MAX_AUDIT_STRING_CHARS = 2000
+SENSITIVE_AUDIT_KEY_PARTS = (
+    "secret",
+    "token",
+    "api_key",
+    "apikey",
+    "access_key",
+    "password",
+    "authorization",
+    "signature",
+    "private_key",
+    "client_secret",
+    "refresh_token",
+    "id_token",
+)
+
 
 class CommercialServiceAuditMixin:
     def _normalize_runtime_policy_overrides(
@@ -172,18 +190,31 @@ class CommercialServiceAuditMixin:
             payload_json=self._sanitize_payload_dict(payload_json),
         )
 
-    def _sanitize_payload(self, payload: object) -> object:
+    def _sanitize_payload(self, payload: object, *, depth: int = 0) -> object:
+        if depth >= MAX_AUDIT_PAYLOAD_DEPTH:
+            return "[truncated:max_depth]"
         if isinstance(payload, dict):
             sanitized: dict[str, object] = {}
-            for key, value in payload.items():
+            for index, (key, value) in enumerate(payload.items()):
+                if index >= MAX_AUDIT_PAYLOAD_ITEMS:
+                    sanitized["__truncated__"] = "max_items"
+                    break
                 normalized_key = str(key).lower()
-                if normalized_key == "secret":
+                if any(part in normalized_key for part in SENSITIVE_AUDIT_KEY_PARTS):
                     sanitized[str(key)] = "[redacted]"
                     continue
-                sanitized[str(key)] = self._sanitize_payload(value)
+                sanitized[str(key)] = self._sanitize_payload(value, depth=depth + 1)
             return sanitized
         if isinstance(payload, list):
-            return [self._sanitize_payload(item) for item in payload]
+            sanitized_items = [
+                self._sanitize_payload(item, depth=depth + 1)
+                for item in payload[:MAX_AUDIT_PAYLOAD_ITEMS]
+            ]
+            if len(payload) > MAX_AUDIT_PAYLOAD_ITEMS:
+                sanitized_items.append("[truncated:max_items]")
+            return sanitized_items
+        if isinstance(payload, str) and len(payload) > MAX_AUDIT_STRING_CHARS:
+            return f"{payload[:MAX_AUDIT_STRING_CHARS]}...[truncated]"
         return payload
 
     def _sanitize_payload_dict(

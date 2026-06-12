@@ -4,6 +4,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+import httpx
+import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
@@ -19,6 +21,7 @@ from app.domain.catalog.service import CatalogService
 from app.domain.image_sources import service as image_source_service
 from app.domain.image_sources.service import (
     ImageSourceExecutionResult,
+    ImageSourceProviderError,
     ImageSourceProviderUsage,
     ImageSourceService,
     PixabayImageSourceProvider,
@@ -623,6 +626,52 @@ def test_image_source_candidate_suggested_filename_is_safe(monkeypatch: Any) -> 
     assert "secret" not in candidate["suggested_filename"]
     assert "secret=value" not in candidate["suggested_filename"]
     assert "secret commercial launch prompt" not in json.dumps(execution.result_json)
+
+
+def test_image_source_rejects_oversized_provider_response(monkeypatch: Any) -> None:
+    class FakeClient:
+        def __init__(self, *, timeout: float) -> None:
+            assert timeout > 0
+
+        def __enter__(self) -> FakeClient:
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            return None
+
+        def request(
+            self,
+            method: str,
+            url: str,
+            *,
+            headers: dict[str, str],
+            params: dict[str, Any],
+        ) -> httpx.Response:
+            return httpx.Response(
+                200,
+                headers={"content-length": "2000001"},
+                content=b"{}",
+                request=httpx.Request(method, url),
+            )
+
+    monkeypatch.setattr("app.domain.image_sources.service.httpx.Client", FakeClient)
+    provider = UnsplashImageSourceProvider(
+        Settings(
+            _env_file=None,
+            environment="test",
+            image_source_provider="unsplash",
+            image_source_unsplash_access_key="placeholder-unsplash-key",
+        )
+    )
+
+    with pytest.raises(ImageSourceProviderError) as error:
+        provider._request_json(
+            started=0.0,
+            method="GET",
+            url="https://api.unsplash.test/search/photos",
+        )
+
+    assert error.value.error_code == "provider.invalid_response"
 
 
 def test_pixabay_provider_preserves_api_endpoint_trailing_slash(monkeypatch: Any) -> None:

@@ -30,6 +30,7 @@ MAX_QUERY_CHARS = 300
 MAX_TEXT_CHARS = 300
 MAX_VISUAL_CONTEXT_CHARS = 600
 MAX_PROVIDER_RESULTS = 30
+MAX_PROVIDER_RESPONSE_BYTES = 2_000_000
 AUTO_PROVIDER_ORDER = ("unsplash", "pixabay", "pexels")
 
 
@@ -169,6 +170,8 @@ class _BaseImageProvider:
             ) from error
 
         try:
+            if _response_too_large(response, max_bytes=MAX_PROVIDER_RESPONSE_BYTES):
+                raise ValueError("provider response exceeded the accepted size limit")
             payload = response.json()
         except ValueError as error:
             raise ImageSourceProviderError(
@@ -1263,6 +1266,8 @@ def _map_http_error(response: httpx.Response) -> str:
 
 
 def _extract_http_error_message(response: httpx.Response) -> str:
+    if _response_too_large(response, max_bytes=MAX_PROVIDER_RESPONSE_BYTES):
+        return f"Image source provider request failed with HTTP {response.status_code}"
     try:
         data = response.json()
     except ValueError:
@@ -1274,3 +1279,14 @@ def _extract_http_error_message(response: httpx.Response) -> str:
         if message:
             return _normalize_text(message, limit=200)
     return f"Image source provider request failed with HTTP {response.status_code}"
+
+
+def _response_too_large(response: httpx.Response, *, max_bytes: int) -> bool:
+    content_length = response.headers.get("content-length")
+    if content_length:
+        try:
+            if int(content_length) > max_bytes:
+                return True
+        except ValueError:
+            pass
+    return len(response.content) > max_bytes

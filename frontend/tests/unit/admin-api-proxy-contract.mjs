@@ -11,6 +11,18 @@ assert.match(
   'admin GET proxy must read from /internal/service/admin'
 );
 
+assert.doesNotMatch(
+  source,
+  /if \(method !== 'GET'\)\s*{\s*const sessionResult = await requireAdminSessionData\(request\);/s,
+  'admin proxy must not skip session validation for GET requests'
+);
+
+assert.match(
+  source,
+  /const sessionResult = await requireAdminSessionData\(request\);\s*if \(sessionResult instanceof NextResponse\)/,
+  'admin proxy must validate the backend admin session before forwarding any method'
+);
+
 assert.match(
   source,
   /\^accounts\\\/\[\^\/\]\+\\\/subscription\(\?:\\\/\(\?:suspend\|cancel\)\)\?\$/,

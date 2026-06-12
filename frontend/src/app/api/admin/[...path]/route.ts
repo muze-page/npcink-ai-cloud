@@ -96,12 +96,9 @@ async function proxyAdminRequest(
   const requestHost = getExternalRequestHost(request);
   const requestProto = getExternalRequestProto(request) || request.nextUrl.protocol.replace(/:$/, '');
 
-  // For write requests, require admin session
-  if (method !== 'GET') {
-    const sessionResult = await requireAdminSessionData(request);
-    if (sessionResult instanceof NextResponse) {
-      return sessionResult;
-    }
+  const sessionResult = await requireAdminSessionData(request);
+  if (sessionResult instanceof NextResponse) {
+    return sessionResult;
   }
 
   const headers = buildForwardedRequestHeaders(request, {

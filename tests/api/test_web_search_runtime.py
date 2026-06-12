@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 import httpx
+import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
@@ -21,6 +22,7 @@ from app.domain.web_search.service import (
     BochaWebSearchProvider,
     TavilyWebSearchProvider,
     WebSearchExecutionResult,
+    WebSearchProviderError,
     WebSearchProviderUsage,
 )
 from tests.conftest import (
@@ -318,6 +320,46 @@ def test_tavily_key_pool_rotates_without_exposing_keys(monkeypatch: Any) -> None
     assert second.result_json["provider_key_pool"]["selected_key_label"] == "account-b"
     assert "tvly-pool-a" not in json.dumps(first.result_json)
     assert "tvly-pool-b" not in json.dumps(second.result_json)
+
+
+def test_tavily_rejects_oversized_provider_response(monkeypatch: Any) -> None:
+    class FakeClient:
+        def __init__(self, *, timeout: float) -> None:
+            assert timeout == 15.0
+
+        def __enter__(self) -> FakeClient:
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            return None
+
+        def post(self, endpoint: str, *, json: dict[str, Any]) -> httpx.Response:
+            return httpx.Response(
+                200,
+                headers={"content-length": "2000001"},
+                content=b"{}",
+                request=httpx.Request("POST", endpoint),
+            )
+
+    monkeypatch.setattr("app.domain.web_search.service.httpx.Client", FakeClient)
+    provider = TavilyWebSearchProvider(
+        Settings(
+            _env_file=None,
+            environment="test",
+            web_search_provider="tavily",
+            web_search_tavily_api_key="tvly-test-key",
+        )
+    )
+
+    with pytest.raises(WebSearchProviderError) as error:
+        provider.search(
+            query="latest WordPress AI search trends",
+            options={"intent": "news", "max_results": 3},
+            site_id="site_alpha",
+            run_id="run_tavily_oversized_response",
+        )
+
+    assert error.value.error_code == "provider.response_too_large"
 
 
 def test_tavily_prefers_authoritative_sources_for_review_intents(monkeypatch: Any) -> None:

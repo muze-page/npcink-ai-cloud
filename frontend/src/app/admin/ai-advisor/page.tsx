@@ -1423,13 +1423,13 @@ function AdminAiAdvisorContent() {
   const [reviewingDisclosure, setReviewingDisclosure] = useState(false);
   const [copyMessage, setCopyMessage] = useState('');
   const [reloadKey, setReloadKey] = useState(0);
+  const historyScope = data?.ai.scope || data?.baseline.scope || '';
 
   const loadHistory = useCallback(async () => {
     const params = new URLSearchParams();
     params.set('limit', '10');
-    const resolvedScope = data?.ai.scope || data?.baseline.scope || '';
-    if (resolvedScope) {
-      params.set('scope', resolvedScope);
+    if (historyScope) {
+      params.set('scope', historyScope);
     }
     if (siteId.trim()) {
       params.set('site_id', siteId.trim());
@@ -1445,7 +1445,7 @@ function AdminAiAdvisorContent() {
       ? payload.data.items.map((item: any) => normalizeHistoryItem(item))
       : [];
     setHistoryItems(items);
-  }, [data?.ai.scope, data?.baseline.scope, siteId]);
+  }, [historyScope, siteId]);
 
   const loadValueMetrics = useCallback(
     async (resolvedScope = scope) => {

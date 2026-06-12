@@ -74,19 +74,19 @@ export function PortalAuditClient() {
   const [timeRange, setTimeRange] = useState<'all' | '24h' | '7d' | '30d'>(
     () => (searchParams?.get('range') as 'all' | '24h' | '7d' | '30d') || '7d'
   );
+  const [nowMs] = useState(() => Date.now());
   const filteredAuditEvents = useMemo(() => {
     if (timeRange === 'all') {
       return auditEvents;
     }
-    const now = Date.now();
     const threshold =
       timeRange === '24h'
-        ? now - 24 * 60 * 60 * 1000
+        ? nowMs - 24 * 60 * 60 * 1000
         : timeRange === '7d'
-          ? now - 7 * 24 * 60 * 60 * 1000
-          : now - 30 * 24 * 60 * 60 * 1000;
+          ? nowMs - 7 * 24 * 60 * 60 * 1000
+          : nowMs - 30 * 24 * 60 * 60 * 1000;
     return auditEvents.filter((event) => new Date(event.created_at).getTime() >= threshold);
-  }, [auditEvents, timeRange]);
+  }, [auditEvents, nowMs, timeRange]);
   const eventKinds = useMemo(
     () => Array.from(new Set(filteredAuditEvents.map((event) => event.event_kind))),
     [filteredAuditEvents]

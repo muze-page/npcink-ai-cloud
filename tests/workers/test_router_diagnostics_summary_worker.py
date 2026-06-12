@@ -1,14 +1,17 @@
 from __future__ import annotations
 
 import json
+import socket
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import httpx
+import pytest
 from sqlalchemy import select
 
 from app.adapters.repositories.commercial_repository import CommercialRepository
 from app.adapters.repositories.stats_repository import StatsRepository
+from app.core.callback_security import RuntimeCallbackTargetValidationError
 from app.core.config import Settings
 from app.core.db import dispose_engine, get_session, init_schema
 from app.core.models import SITE_STATUS_SUSPENDED, RunRecord, RuntimeGuardEvent
@@ -16,12 +19,22 @@ from app.domain.catalog.service import CatalogService
 from app.domain.runtime.models import RuntimeRequest
 from app.domain.runtime.service import RuntimeService
 from app.domain.usage.rollup import ROUTER_DIAGNOSTICS_BATCH_SCOPE
-from app.workers.router_diagnostics_summary import run_once
+from app.workers.router_diagnostics_summary import _dispatch_callback, run_once
 from tests.conftest import seed_site_auth
 
 
 def _sqlite_url(tmp_path: Path) -> str:
     return f"sqlite+pysqlite:///{tmp_path / 'router-diagnostics-worker.sqlite3'}"
+
+
+def _resolve_example_test_to_public_ip(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fake_getaddrinfo(*args, **kwargs):  # type: ignore[no-untyped-def]
+        del args, kwargs
+        return [
+            (socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", ("93.184.216.34", 443))
+        ]
+
+    monkeypatch.setattr(socket, "getaddrinfo", fake_getaddrinfo)
 
 
 def test_router_diagnostics_summary_worker_generates_active_site_runtime_summary(
@@ -130,7 +143,9 @@ def test_router_diagnostics_summary_worker_generates_active_site_runtime_summary
 
 def test_router_diagnostics_summary_worker_dispatches_optional_callback_when_configured(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    _resolve_example_test_to_public_ip(monkeypatch)
     database_url = _sqlite_url(tmp_path)
     init_schema(database_url)
     CatalogService(database_url).refresh_catalog()
@@ -231,3 +246,18 @@ def test_router_diagnostics_summary_worker_dispatches_optional_callback_when_con
     assert summary["site_batches"][0]["callback"]["status"] == "delivered"
 
     dispose_engine(database_url)
+
+
+def test_router_diagnostics_callback_rejects_private_target_before_dispatch() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise AssertionError(f"unexpected callback dispatch to {request.url}")
+
+    with pytest.raises(RuntimeCallbackTargetValidationError):
+        _dispatch_callback(
+            callback_url="https://127.0.0.1/wp-json/magick-ai/open/v1/router/diagnostics/callback",
+            site_id="site_alpha",
+            key_id="kd_alpha",
+            secret="callback-secret-alpha",
+            payload={"status": "test"},
+            transport=httpx.MockTransport(handler),
+        )

@@ -4,7 +4,7 @@ from typing import Any
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 
 from app.adapters.providers.registry import resolve_execution_provider_adapters
@@ -22,9 +22,9 @@ from app.domain.runtime.service import RuntimeService
 
 
 class RuntimeRepairPayload(BaseModel):
-    action: str
-    operator_reason: str = ""
-    operator_evidence: str = ""
+    action: str = Field(min_length=1, max_length=64)
+    operator_reason: str = Field(default="", max_length=512)
+    operator_evidence: str = Field(default="", max_length=4000)
 
 
 router = APIRouter(prefix="/v1/runs", tags=["runs"])

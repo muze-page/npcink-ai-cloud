@@ -265,6 +265,7 @@ function AccountDetailContent() {
     costEstimate: number;
     tokensTotal: number;
   }>>({});
+  const [nowMs] = useState(() => Date.now());
 
   const loadPackagePlans = useCallback(async () => {
     try {
@@ -808,7 +809,7 @@ function AccountDetailContent() {
     if (!sub.current_period_end) {
       return false;
     }
-    const diff = new Date(sub.current_period_end).getTime() - Date.now();
+    const diff = new Date(sub.current_period_end).getTime() - nowMs;
     return diff >= 0 && diff <= 1000 * 60 * 60 * 24 * 30;
   });
   const uncoveredSiteCount =

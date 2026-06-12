@@ -789,6 +789,9 @@ def test_jina_reranker_reorders_candidates_without_exposing_key(
     captured: dict[str, object] = {}
 
     class _Response:
+        headers: dict[str, str] = {}
+        content = b'{"results":[]}'
+
         def raise_for_status(self) -> None:
             return None
 
@@ -845,6 +848,49 @@ def test_jina_reranker_reorders_candidates_without_exposing_key(
         max(len(document) for document in kwargs["json"]["documents"]) <= MAX_RERANK_DOCUMENT_CHARS
     )
     assert kwargs["headers"]["Authorization"] == "Bearer unit-test-redacted"
+
+
+def test_jina_reranker_rejects_oversized_provider_response(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = Settings(
+        _env_file=None,
+        project_name="Magick AI Cloud Site Knowledge Test",
+        environment="test",
+        database_url=_sqlite_url(tmp_path),
+        redis_url="redis://localhost:6379/0",
+        admin_session_secret=TEST_ADMIN_SESSION_SECRET,
+        portal_jwt_secret=TEST_PORTAL_JWT_SECRET,
+        site_knowledge_rerank_provider="jina",
+        site_knowledge_jina_api_key="unit-test-redacted",
+    )
+
+    class _Response:
+        headers = {"content-length": "2000001"}
+        content = b"{}"
+
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict[str, object]:
+            raise AssertionError("oversized response must not be parsed")
+
+    def _post(*args: object, **kwargs: object) -> _Response:
+        return _Response()
+
+    monkeypatch.setattr("app.domain.site_knowledge.rerankers.httpx.post", _post)
+
+    with pytest.raises(SiteKnowledgeRerankError) as error:
+        JinaSiteKnowledgeReranker(settings).rerank(
+            query="AI 摘要",
+            results=[
+                {"post_id": 1, "title": "Weak", "chunk": "General AI content.", "score": 0.7},
+                {"post_id": 2, "title": "Strong", "chunk": "Relevant AI summary.", "score": 0.6},
+            ],
+        )
+
+    assert error.value.error_code == "site_knowledge.jina_rerank_failed"
 
 
 def test_site_knowledge_rerank_failure_falls_back_to_vector_order(tmp_path: Path) -> None:

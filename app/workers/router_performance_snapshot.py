@@ -10,6 +10,10 @@ from typing import Any, cast
 import httpx
 
 from app.adapters.repositories.commercial_repository import CommercialRepository
+from app.core.callback_security import (
+    RuntimeCallbackTargetValidationError,
+    validate_runtime_callback_target,
+)
 from app.core.config import Settings, get_settings
 from app.core.db import get_session, require_database_connection
 from app.core.logging import configure_logging, get_logger
@@ -126,6 +130,7 @@ def _dispatch_callback(
     timeout_seconds: float,
     transport: httpx.BaseTransport | None = None,
 ) -> dict[str, Any]:
+    validate_runtime_callback_target(callback_url)
     body = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
     timestamp = str(int(datetime.now(UTC).timestamp()))
     trace_id = _build_trace_id(f"{site_id}|{callback_id}|{timestamp}")
@@ -243,6 +248,14 @@ def run_once(
                 timeout_seconds=settings.runtime_callback_timeout_seconds,
                 transport=transport,
             )
+        except RuntimeCallbackTargetValidationError as error:
+            site_batch["callback"] = {
+                "status": "callback_target_invalid",
+                "callback_url": callback_url,
+                "error": str(error),
+            }
+            callback_failed_total += 1
+            continue
         except httpx.HTTPError as error:
             site_batch["callback"] = {
                 "status": "transport_error",

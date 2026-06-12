@@ -153,7 +153,7 @@ class CommercialServicePaymentMixin:
                 refund_id=None,
                 provider_event_id=provider_event_id,
                 idempotency_key=idempotency_key,
-                payload_json=raw_event or {},
+                payload_json=self._sanitize_payload_dict(raw_event or {}) or {},
                 processed_at=now,
             )
             if order.status == PAYMENT_ORDER_STATUS_PAID and order.subscription_id:
@@ -330,7 +330,7 @@ class CommercialServicePaymentMixin:
                 refund_id=refund.refund_id,
                 provider_event_id=provider_event_id,
                 idempotency_key=idempotency_key,
-                payload_json=raw_event or {},
+                payload_json=self._sanitize_payload_dict(raw_event or {}) or {},
                 processed_at=now,
             )
             if refund.status != PAYMENT_REFUND_STATUS_SUCCEEDED:

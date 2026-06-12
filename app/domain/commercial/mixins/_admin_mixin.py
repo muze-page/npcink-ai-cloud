@@ -183,17 +183,18 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
         ]
         with get_session(self.database_url) as session:
             repository = CommercialRepository(session)
-            accounts = repository.list_accounts(limit=None)
-            sites = repository.list_sites(limit=None)
-            subscriptions = repository.list_subscriptions(limit=None)
-            usage_events = repository.list_usage_meter_events_for_admin(
-                since=usage_since,
-                limit=None,
+            accounts_total = repository.count_accounts()
+            site_admins_active = repository.count_site_admin_identities(
+                status=SITE_ADMIN_STATUS_ACTIVE
             )
-            active_site_key_count = sum(
-                repository.count_site_keys_by_site(
-                    statuses=[SITE_API_KEY_STATUS_ACTIVE],
-                ).values()
+            sites_total = repository.count_sites()
+            sites_active = repository.count_sites(status=SITE_STATUS_ACTIVE)
+            subscriptions_total = repository.count_subscriptions()
+            subscriptions_active = repository.count_subscriptions(
+                statuses=active_subscription_statuses
+            )
+            active_site_key_count = repository.count_site_keys_total(
+                statuses=[SITE_API_KEY_STATUS_ACTIVE]
             )
             expiring_in_7_days = repository.count_subscriptions_expiring_by(
                 before=now + timedelta(days=7),
@@ -210,6 +211,35 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
             recent_decisions = repository.summarize_commercial_decision_events(
                 since=audit_since,
                 limit=5,
+            )
+            status_counts = repository.summarize_subscription_status_counts()
+            plan_counts = repository.summarize_subscription_plan_counts()
+            usage_summary = repository.summarize_usage_meter_events_for_admin(since=usage_since)
+            expiring_subscriptions = repository.list_subscriptions(
+                statuses=active_subscription_statuses,
+                current_period_end_before=now + timedelta(days=30),
+                limit=None,
+            )
+            attention_subscriptions = (
+                repository.list_subscriptions(status=SUBSCRIPTION_STATUS_PAST_DUE, limit=5)
+                + repository.list_subscriptions(status=SUBSCRIPTION_STATUS_SUSPENDED, limit=5)
+            )
+            detail_account_ids = sorted(
+                {
+                    subscription.account_id
+                    for subscription in [*expiring_subscriptions, *attention_subscriptions]
+                    if subscription.account_id
+                }
+            )
+            accounts = (
+                repository.list_accounts(account_ids=detail_account_ids, limit=None)
+                if detail_account_ids
+                else []
+            )
+            sites = (
+                repository.list_sites(account_ids=detail_account_ids, limit=None)
+                if detail_account_ids
+                else []
             )
 
         def _serialize_overview_subscription(
@@ -250,19 +280,12 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
                 and expires_at <= now + timedelta(days=30)
             )
 
-        plan_counts = Counter(
-            subscription.plan_id for subscription in subscriptions if subscription.plan_id
-        )
-        status_counts = Counter(
-            subscription.status for subscription in subscriptions if subscription.status
-        )
-        usage_totals = cast(Any, self)._aggregate_meter_events(usage_events)
         expiring_subscription_items = [
             _serialize_overview_subscription(subscription)
             for subscription in sorted(
                 [
                     subscription
-                    for subscription in subscriptions
+                    for subscription in expiring_subscriptions
                     if _expires_within_attention_window(subscription)
                 ],
                 key=lambda item: (
@@ -271,26 +294,21 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
                 ),
             )[:5]
         ]
+        usage_totals = usage_summary.get("totals")
         attention_subscription_items = [
             _serialize_overview_subscription(subscription)
-            for subscription in subscriptions
+            for subscription in attention_subscriptions
             if subscription.status in (SUBSCRIPTION_STATUS_PAST_DUE, SUBSCRIPTION_STATUS_SUSPENDED)
         ][:5]
         return {
             "generated_at": self._serialize_datetime(now),
             "counts": {
-                "accounts_total": len(accounts),
-                "site_admins_active": repository.count_site_admin_identities(
-                    status=SITE_ADMIN_STATUS_ACTIVE
-                ),
-                "sites_total": len(sites),
-                "sites_active": sum(1 for site in sites if site.status == SITE_STATUS_ACTIVE),
-                "subscriptions_total": len(subscriptions),
-                "subscriptions_active": sum(
-                    1
-                    for subscription in subscriptions
-                    if subscription.status in active_subscription_statuses
-                ),
+                "accounts_total": accounts_total,
+                "site_admins_active": site_admins_active,
+                "sites_total": sites_total,
+                "sites_active": sites_active,
+                "subscriptions_total": subscriptions_total,
+                "subscriptions_active": subscriptions_active,
                 "site_keys_active": active_site_key_count,
             },
             "expiring_subscriptions": {
@@ -306,12 +324,12 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
                 for status, count in sorted(status_counts.items())
             ],
             "plan_distribution": [
-                {"plan_id": plan_id, "count": count} for plan_id, count in plan_counts.most_common()
+                {"plan_id": plan_id, "count": count} for plan_id, count in plan_counts.items()
             ],
             "recent_usage": {
                 "window_days": max(1, usage_window_days),
-                "event_count": len(usage_events),
-                "totals": usage_totals,
+                "event_count": int(usage_summary.get("event_count") or 0),
+                "totals": usage_totals if isinstance(usage_totals, dict) else {},
             },
             "recent_audit_summary": {
                 "window_minutes": max(1, audit_window_minutes),

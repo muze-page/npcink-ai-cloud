@@ -60,6 +60,12 @@ from app.domain.web_search.contracts import (
 
 router = APIRouter(prefix="/v1/runtime", tags=["runtime"])
 
+MAX_RUNTIME_JSON_DEPTH = 8
+MAX_RUNTIME_DICT_KEYS = 100
+MAX_RUNTIME_LIST_ITEMS = 200
+MAX_RUNTIME_STRING_CHARS = 50_000
+MAX_RUNTIME_DICT_KEY_CHARS = 191
+
 
 class RuntimePolicyPayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -88,8 +94,8 @@ class RuntimePolicyPayload(BaseModel):
 
 
 class RuntimePayload(BaseModel):
-    site_id: str | None = None
-    ability_name: str
+    site_id: str | None = Field(default=None, max_length=191)
+    ability_name: str = Field(min_length=1, max_length=191)
     ability_family: Literal[
         "text",
         "vision",
@@ -99,12 +105,12 @@ class RuntimePayload(BaseModel):
         "openclaw",
         "knowledge",
     ] = "text"
-    canonical_run_id: str | None = None
-    skill_id: str | None = None
-    workflow_id: str | None = None
-    contract_version: str = Field(default="v1", min_length=1)
-    channel: str = "openapi"
-    execution_kind: str = ""
+    canonical_run_id: str | None = Field(default=None, max_length=191)
+    skill_id: str | None = Field(default=None, max_length=191)
+    workflow_id: str | None = Field(default=None, max_length=191)
+    contract_version: str = Field(default="v1", min_length=1, max_length=32)
+    channel: str = Field(default="openapi", max_length=64)
+    execution_kind: str = Field(default="", max_length=64)
     execution_tier: Literal["cloud"] = "cloud"
     execution_pattern: Literal["inline", "step_offload", "whole_run_offload"] = "inline"
     data_classification: Literal[
@@ -119,16 +125,16 @@ class RuntimePayload(BaseModel):
     timeout_seconds: int = 0
     retry_max: int = 0
     retention_ttl: int = 0
-    callback_url: str = ""
+    callback_url: str = Field(default="", max_length=2048)
     task_backend: dict[str, Any] = Field(default_factory=dict)
-    profile_id: str = ""
-    idempotency_key: str | None = None
-    trace_id: str | None = None
+    profile_id: str = Field(default="", max_length=191)
+    idempotency_key: str | None = Field(default=None, max_length=128)
+    trace_id: str | None = Field(default=None, max_length=64)
     input: dict[str, Any] = Field(default_factory=dict)
     policy: RuntimePolicyPayload = Field(default_factory=RuntimePolicyPayload)
 
     @model_validator(mode="after")
-    def reject_unscoped_step_offload(self) -> RuntimePayload:
+    def validate_runtime_payload_bounds(self) -> RuntimePayload:
         if (
             self.execution_pattern == "step_offload"
             and self.ability_name not in IMAGE_SOURCE_ABILITIES
@@ -137,7 +143,30 @@ class RuntimePayload(BaseModel):
                 "execution_pattern=step_offload is only supported for managed "
                 "image-source runtime abilities"
             )
+        _validate_runtime_json_shape(self.input, field_name="input")
+        _validate_runtime_json_shape(self.task_backend, field_name="task_backend")
         return self
+
+
+def _validate_runtime_json_shape(value: Any, *, field_name: str, depth: int = 0) -> None:
+    if depth >= MAX_RUNTIME_JSON_DEPTH:
+        raise ValueError(f"{field_name} exceeds the accepted nesting depth")
+    if isinstance(value, dict):
+        if len(value) > MAX_RUNTIME_DICT_KEYS:
+            raise ValueError(f"{field_name} contains too many keys")
+        for key, item in value.items():
+            if len(str(key)) > MAX_RUNTIME_DICT_KEY_CHARS:
+                raise ValueError(f"{field_name} contains an oversized key")
+            _validate_runtime_json_shape(item, field_name=field_name, depth=depth + 1)
+        return
+    if isinstance(value, list):
+        if len(value) > MAX_RUNTIME_LIST_ITEMS:
+            raise ValueError(f"{field_name} contains too many items")
+        for item in value:
+            _validate_runtime_json_shape(item, field_name=field_name, depth=depth + 1)
+        return
+    if isinstance(value, str) and len(value) > MAX_RUNTIME_STRING_CHARS:
+        raise ValueError(f"{field_name} contains an oversized string")
 
 
 def _get_runtime_service(request: Request) -> RuntimeService:

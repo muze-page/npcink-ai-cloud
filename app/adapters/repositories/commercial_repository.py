@@ -62,6 +62,12 @@ class CommercialRepository:
             statement = statement.limit(limit)
         return list(self.session.scalars(statement))
 
+    def count_accounts(self, *, status: str | None = None) -> int:
+        statement = select(func.count(Account.account_id))
+        if status:
+            statement = statement.where(Account.status == status)
+        return int(self.session.scalar(statement) or 0)
+
     def upsert_account(
         self,
         *,
@@ -411,6 +417,12 @@ class CommercialRepository:
             statement = statement.limit(limit)
         return list(self.session.scalars(statement))
 
+    def count_sites(self, *, status: str | None = None) -> int:
+        statement = select(func.count(Site.site_id))
+        if status:
+            statement = statement.where(Site.status == status)
+        return int(self.session.scalar(statement) or 0)
+
     def count_sites_by_account(
         self,
         *,
@@ -506,6 +518,12 @@ class CommercialRepository:
             str(site_id or ""): int(count or 0)
             for site_id, count in self.session.execute(statement)
         }
+
+    def count_site_keys_total(self, *, statuses: list[str] | None = None) -> int:
+        statement = select(func.count(SiteApiKey.key_id))
+        if statuses:
+            statement = statement.where(SiteApiKey.status.in_(statuses))
+        return int(self.session.scalar(statement) or 0)
 
     def upsert_site_key(
         self,
@@ -680,6 +698,7 @@ class CommercialRepository:
         self,
         *,
         status: str | None = None,
+        statuses: list[str] | None = None,
         account_id: str | None = None,
         account_ids: list[str] | None = None,
         site_id: str | None = None,
@@ -691,6 +710,8 @@ class CommercialRepository:
         statement = select(AccountSubscription)
         if status:
             statement = statement.where(AccountSubscription.status == status)
+        if statuses:
+            statement = statement.where(AccountSubscription.status.in_(statuses))
         if account_id:
             statement = statement.where(AccountSubscription.account_id == account_id)
         if account_ids is not None:
@@ -728,6 +749,44 @@ class CommercialRepository:
         if limit is not None and limit > 0:
             statement = statement.limit(limit)
         return list(self.session.scalars(statement))
+
+    def count_subscriptions(
+        self,
+        *,
+        status: str | None = None,
+        statuses: list[str] | None = None,
+    ) -> int:
+        statement = select(func.count(AccountSubscription.subscription_id))
+        if status:
+            statement = statement.where(AccountSubscription.status == status)
+        if statuses:
+            statement = statement.where(AccountSubscription.status.in_(statuses))
+        return int(self.session.scalar(statement) or 0)
+
+    def summarize_subscription_status_counts(self) -> dict[str, int]:
+        statement = (
+            select(AccountSubscription.status, func.count(AccountSubscription.subscription_id))
+            .where(AccountSubscription.status.is_not(None))
+            .group_by(AccountSubscription.status)
+        )
+        return {
+            str(status or ""): int(count or 0)
+            for status, count in self.session.execute(statement)
+            if status
+        }
+
+    def summarize_subscription_plan_counts(self) -> dict[str, int]:
+        statement = (
+            select(AccountSubscription.plan_id, func.count(AccountSubscription.subscription_id))
+            .where(AccountSubscription.plan_id.is_not(None))
+            .group_by(AccountSubscription.plan_id)
+            .order_by(func.count(AccountSubscription.subscription_id).desc())
+        )
+        return {
+            str(plan_id or ""): int(count or 0)
+            for plan_id, count in self.session.execute(statement)
+            if plan_id
+        }
 
     def count_subscriptions_by_account(
         self,
@@ -1183,6 +1242,30 @@ class CommercialRepository:
         if limit is not None and limit > 0:
             statement = statement.limit(limit)
         return list(self.session.scalars(statement))
+
+    def summarize_usage_meter_events_for_admin(
+        self,
+        *,
+        since: datetime | None = None,
+    ) -> dict[str, object]:
+        count_statement = select(func.count(UsageMeterEvent.id))
+        totals_statement = (
+            select(UsageMeterEvent.meter_key, func.sum(UsageMeterEvent.quantity))
+            .where(UsageMeterEvent.meter_key.is_not(None))
+            .group_by(UsageMeterEvent.meter_key)
+        )
+        if since is not None:
+            count_statement = count_statement.where(UsageMeterEvent.created_at >= since)
+            totals_statement = totals_statement.where(UsageMeterEvent.created_at >= since)
+        totals = {
+            str(meter_key or ""): round(float(quantity or 0.0), 6)
+            for meter_key, quantity in self.session.execute(totals_statement)
+            if meter_key
+        }
+        return {
+            "event_count": int(self.session.scalar(count_statement) or 0),
+            "totals": dict(sorted(totals.items())),
+        }
 
     def list_run_records_for_admin(
         self,

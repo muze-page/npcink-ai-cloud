@@ -8,6 +8,7 @@ import httpx
 from app.core.config import Settings
 
 MAX_RERANK_DOCUMENT_CHARS = 1600
+MAX_RERANK_RESPONSE_BYTES = 2_000_000
 
 
 class SiteKnowledgeRerankError(RuntimeError):
@@ -87,6 +88,8 @@ class JinaSiteKnowledgeReranker:
                 timeout=self.timeout_seconds,
             )
             response.raise_for_status()
+            if _response_too_large(response, max_bytes=MAX_RERANK_RESPONSE_BYTES):
+                raise ValueError("rerank response exceeded the accepted size limit")
             payload = response.json()
         except Exception as error:
             raise SiteKnowledgeRerankError(
@@ -171,3 +174,14 @@ def _coerce_int(value: Any, *, default: int) -> int:
         return int(value)
     except (TypeError, ValueError):
         return default
+
+
+def _response_too_large(response: httpx.Response, *, max_bytes: int) -> bool:
+    content_length = response.headers.get("content-length")
+    if content_length:
+        try:
+            if int(content_length) > max_bytes:
+                return True
+        except ValueError:
+            pass
+    return len(response.content) > max_bytes

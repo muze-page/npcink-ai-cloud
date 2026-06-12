@@ -1,6 +1,6 @@
 'use client';
 
-import React, { Suspense, useCallback, useEffect, useMemo, useState } from 'react';
+import React, { Suspense, useEffect, useMemo, useState } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import {
   BackofficeMetricStrip,
@@ -369,64 +369,58 @@ function PortalAIInsightsContent() {
     };
   }, [refreshNonce, selectedSiteId, t]);
 
-  const handleSiteChange = useCallback(
-    async (siteId: string) => {
-      if (!siteId || siteId === selectedSiteId) {
-        return;
-      }
-      await selectSite(siteId);
-      const params = new URLSearchParams(searchParams?.toString() || '');
-      params.set('site', siteId);
-      router.replace(`${pathname}?${params.toString()}`);
-    },
-    [pathname, router, searchParams, selectSite, selectedSiteId]
-  );
+  async function handleSiteChange(siteId: string) {
+    if (!siteId || siteId === selectedSiteId) {
+      return;
+    }
+    await selectSite(siteId);
+    const params = new URLSearchParams(searchParams?.toString() || '');
+    params.set('site', siteId);
+    router.replace(`${pathname}?${params.toString()}`);
+  }
 
-  const handleAnalyze = useCallback(
-    async (forceRefresh = false) => {
-      if (!selectedSiteId) {
-        return;
-      }
-      setIsAnalyzing(true);
-      setError('');
-      try {
-        const response = await portalClient.analyzeAIInsight(selectedSiteId, { forceRefresh });
-        setAnalysis(response.data.analysis);
-        setHistoryPayload((current) =>
-          current
-            ? {
-                ...current,
-                items: [
-                  {
-                    site_id: response.data.site_id,
-                    scope: response.data.analysis.scope,
-                    status: response.data.analysis.status,
-                    severity: response.data.analysis.severity,
-                    headline: response.data.analysis.headline,
-                    operator_summary: response.data.analysis.operator_summary,
-                    operator_next_step: response.data.analysis.operator_next_step,
-                    generated_at: response.data.analysis.generated_at,
-                    fresh_until: response.data.analysis.generation.cache_expires_at,
-                    is_stale: false,
-                    generation: response.data.analysis.generation,
-                    ai_disclosure: response.data.analysis.ai_disclosure,
-                    agent_handoff: response.data.analysis.agent_handoff,
-                    agent_registry_metadata: response.data.analysis.agent_registry_metadata,
-                  },
-                  ...current.items,
-                ].slice(0, 10),
-              }
-            : current
-        );
-        setRefreshNonce((current) => current + 1);
-      } catch (err) {
-        setError(formatPortalErrorMessage(err, t, t('error.failed_load')));
-      } finally {
-        setIsAnalyzing(false);
-      }
-    },
-    [selectedSiteId, t]
-  );
+  async function handleAnalyze(forceRefresh = false) {
+    if (!selectedSiteId) {
+      return;
+    }
+    setIsAnalyzing(true);
+    setError('');
+    try {
+      const response = await portalClient.analyzeAIInsight(selectedSiteId, { forceRefresh });
+      setAnalysis(response.data.analysis);
+      setHistoryPayload((current) =>
+        current
+          ? {
+              ...current,
+              items: [
+                {
+                  site_id: response.data.site_id,
+                  scope: response.data.analysis.scope,
+                  status: response.data.analysis.status,
+                  severity: response.data.analysis.severity,
+                  headline: response.data.analysis.headline,
+                  operator_summary: response.data.analysis.operator_summary,
+                  operator_next_step: response.data.analysis.operator_next_step,
+                  generated_at: response.data.analysis.generated_at,
+                  fresh_until: response.data.analysis.generation.cache_expires_at,
+                  is_stale: false,
+                  generation: response.data.analysis.generation,
+                  ai_disclosure: response.data.analysis.ai_disclosure,
+                  agent_handoff: response.data.analysis.agent_handoff,
+                  agent_registry_metadata: response.data.analysis.agent_registry_metadata,
+                },
+                ...current.items,
+              ].slice(0, 10),
+            }
+          : current
+      );
+      setRefreshNonce((current) => current + 1);
+    } catch (err) {
+      setError(formatPortalErrorMessage(err, t, t('error.failed_load')));
+    } finally {
+      setIsAnalyzing(false);
+    }
+  }
 
   if (isLoading) {
     return <PortalLoadingState message={t('common.loading')} />;

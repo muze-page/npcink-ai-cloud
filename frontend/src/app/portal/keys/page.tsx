@@ -79,6 +79,7 @@ function KeysContent() {
   const [isKeyActionLoading, setIsKeyActionLoading] = useState(false);
   const [siteSummary, setSiteSummary] = useState<PortalSiteSummaryRecord | null>(null);
   const [diagnostics, setDiagnostics] = useState<PortalSiteDiagnostics | null>(null);
+  const [nowMs] = useState(() => Date.now());
 
   const loadKeys = useCallback(async () => {
     if (!selectedSiteId) return;
@@ -376,7 +377,6 @@ function KeysContent() {
   const selectedKeyProtected = isProtectedSystemInitializedKey(selectedKey);
   const canManageSiteKeys = Boolean(siteSummary?.allowed_actions?.includes('manage_site_keys'));
   const canWriteKeys = canManageSiteKeys && !isReadOnlySession;
-  const nowMs = Date.now();
   const hasExpiringKey = keys.some((key) => {
     const expiresAtMs = key.expires_at ? new Date(key.expires_at).getTime() : 0;
     return key.status === 'active' && expiresAtMs > 0 && expiresAtMs - nowMs <= 1000 * 60 * 60 * 24 * 14;
@@ -558,7 +558,6 @@ function KeysContent() {
                   filteredKeys.map((key) => {
                     const isSelected = key.key_id === selectedKeyId;
                     const expiresAtMs = key.expires_at ? new Date(key.expires_at).getTime() : 0;
-                    const nowMs = Date.now();
                     const isExpiringSoon = key.status === 'active' && expiresAtMs > 0 && expiresAtMs - nowMs <= 1000 * 60 * 60 * 24 * 14;
                     const createdAtMs = new Date(key.created_at).getTime();
                     const isLongUnused = key.status === 'active' && !key.last_used_at && Number.isFinite(createdAtMs) && nowMs - createdAtMs > 1000 * 60 * 60 * 24 * 30;

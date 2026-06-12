@@ -10,6 +10,7 @@ from typing import Any, cast
 import httpx
 
 from app.adapters.repositories.commercial_repository import CommercialRepository
+from app.core.callback_security import validate_runtime_callback_target
 from app.core.config import Settings, get_settings
 from app.core.db import get_session, require_database_connection
 from app.core.logging import configure_logging, get_logger
@@ -138,6 +139,7 @@ def _dispatch_callback(
     payload: dict[str, Any],
     transport: httpx.BaseTransport | None = None,
 ) -> dict[str, Any]:
+    validate_runtime_callback_target(callback_url)
     raw_body = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     timestamp = str(int(datetime.now(UTC).timestamp()))
     callback_id = hashlib.sha256(

@@ -121,7 +121,12 @@ def test_payment_success_grants_subscription_and_is_idempotent(tmp_path: Path) -
         provider_trade_no="202606122200000001",
         provider_event_id="alipay-notify-paid-1",
         amount=199.0,
-        raw_event={"trade_status": "TRADE_SUCCESS"},
+        raw_event={
+            "trade_status": "TRADE_SUCCESS",
+            "notify_token": "must-not-persist",
+            "signature": "must-not-persist",
+            "nested": {"api_key": "must-not-persist"},
+        },
         audit_context=_audit("payment-success-event"),
     )
     paid_again = service.mark_payment_order_paid(
@@ -142,7 +147,14 @@ def test_payment_success_grants_subscription_and_is_idempotent(tmp_path: Path) -
         )
         assert len(list(session.scalars(select(AccountSubscription)))) == 1
         assert len(list(session.scalars(select(AccountEntitlementSnapshot)))) == 1
-        assert len(list(session.scalars(select(PaymentEvent)))) == 1
+        events = list(session.scalars(select(PaymentEvent)))
+        assert len(events) == 1
+        assert events[0].payload_json == {
+            "trade_status": "TRADE_SUCCESS",
+            "notify_token": "[redacted]",
+            "signature": "[redacted]",
+            "nested": {"api_key": "[redacted]"},
+        }
 
     dispose_engine(database_url)
 

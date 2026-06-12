@@ -30,6 +30,8 @@ MAX_QUERY_CHARS = 500
 MAX_RESULT_TITLE_CHARS = 220
 MAX_RESULT_SNIPPET_CHARS = 600
 MAX_DOMAIN_FILTERS = 10
+MAX_PROVIDER_RESPONSE_BYTES = 2_000_000
+MAX_READER_RESPONSE_BYTES = 500_000
 WEB_SEARCH_PROVIDER_ORDER = ("tavily", "bocha", "apify")
 TAVILY_KEY_QUARANTINE_SECONDS = 300.0
 _TAVILY_POOL_LOCK = threading.Lock()
@@ -268,14 +270,9 @@ class TavilyWebSearchProvider:
 
         usage = self._usage(started)
         try:
-            payload = response.json()
-        except ValueError as error:
-            usage.error_code = "provider.invalid_response"
-            raise WebSearchProviderError(
-                "provider.invalid_response",
-                "Tavily web search returned invalid JSON",
-                usage=usage,
-            ) from error
+            payload = _json_payload(response, provider_id=self.provider_id, usage=usage)
+        except WebSearchProviderError:
+            raise
         raw_results = payload.get("results") if isinstance(payload, dict) else []
         if not isinstance(raw_results, list):
             raw_results = []
@@ -803,6 +800,10 @@ def _enhance_with_jina_reader(
             try:
                 response = client.get(f"{base_url}/{url}", headers=headers)
                 response.raise_for_status()
+                excerpt = _normalize_text(
+                    _response_text(response, max_bytes=MAX_READER_RESPONSE_BYTES),
+                    limit=1200,
+                )
             except (httpx.TimeoutException, httpx.HTTPError) as error:
                 errors.append(
                     {
@@ -812,7 +813,6 @@ def _enhance_with_jina_reader(
                     }
                 )
                 continue
-            excerpt = _normalize_text(response.text, limit=1200)
             if not excerpt:
                 continue
             item["reader_status"] = "ready"
@@ -840,6 +840,13 @@ def _json_payload(
     provider_id: str,
     usage: WebSearchProviderUsage,
 ) -> Any:
+    if _response_too_large(response, max_bytes=MAX_PROVIDER_RESPONSE_BYTES):
+        usage.error_code = "provider.response_too_large"
+        raise WebSearchProviderError(
+            "provider.response_too_large",
+            f"{provider_id} web search response exceeded the accepted size limit",
+            usage=usage,
+        )
     try:
         return response.json()
     except ValueError as error:
@@ -849,6 +856,23 @@ def _json_payload(
             f"{provider_id} web search returned invalid JSON",
             usage=usage,
         ) from error
+
+
+def _response_text(response: httpx.Response, *, max_bytes: int) -> str:
+    if _response_too_large(response, max_bytes=max_bytes):
+        raise httpx.HTTPError("provider response exceeded the accepted size limit")
+    return response.text
+
+
+def _response_too_large(response: httpx.Response, *, max_bytes: int) -> bool:
+    content_length = response.headers.get("content-length")
+    if content_length:
+        try:
+            if int(content_length) > max_bytes:
+                return True
+        except ValueError:
+            pass
+    return len(response.content) > max_bytes
 
 
 def _normalize_results(
@@ -1212,6 +1236,8 @@ def _map_provider_http_error(response: httpx.Response) -> str:
 
 
 def _extract_http_error_message(response: httpx.Response) -> str:
+    if _response_too_large(response, max_bytes=MAX_PROVIDER_RESPONSE_BYTES):
+        return f"Tavily web search failed with HTTP {response.status_code}"
     try:
         payload = response.json()
     except ValueError:
