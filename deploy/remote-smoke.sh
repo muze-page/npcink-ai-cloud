@@ -299,13 +299,17 @@ http_request "GET" "${BASE_URL%/}/health/live" ""
 assert_status "${HTTP_STATUS}" "200" "health/live should succeed"
 assert_json_equals "${HTTP_BODY}" "status" "ok" "health/live envelope status should be ok"
 
-http_request "GET" "${BASE_URL%/}/" ""
-assert_status "${HTTP_STATUS}" "200" "buyer-facing home page should succeed"
-assert_body_contains "${HTTP_BODY}" "_next/" "buyer-facing home page should be served by Next frontend"
+if [ "${MAGICK_CLOUD_SKIP_FRONTEND_IMAGE:-0}" = "1" ]; then
+	ok "Skipping frontend page checks because MAGICK_CLOUD_SKIP_FRONTEND_IMAGE=1"
+else
+	http_request "GET" "${BASE_URL%/}/" ""
+	assert_status "${HTTP_STATUS}" "200" "buyer-facing home page should succeed"
+	assert_body_contains "${HTTP_BODY}" "_next/" "buyer-facing home page should be served by Next frontend"
 
-http_request "GET" "${BASE_URL%/}/portal/login" ""
-assert_status "${HTTP_STATUS}" "200" "portal login page should succeed"
-assert_body_contains "${HTTP_BODY}" "_next/" "portal login page should be served by Next frontend"
+	http_request "GET" "${BASE_URL%/}/portal/login" ""
+	assert_status "${HTTP_STATUS}" "200" "portal login page should succeed"
+	assert_body_contains "${HTTP_BODY}" "_next/" "portal login page should be served by Next frontend"
+fi
 
 http_request "GET" "${BASE_URL%/}/docs" ""
 assert_status "${HTTP_STATUS}" "404" "docs should stay disabled in production perimeter"

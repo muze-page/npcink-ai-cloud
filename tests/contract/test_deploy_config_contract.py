@@ -188,6 +188,29 @@ def test_preview_and_baseline_scripts_lock_migration_and_schema_checks() -> None
     assert "up -d worker callback-worker ops-worker" in remote_migrate_script
 
 
+def test_deploy_bundle_smoke_uses_sample_provider_and_skip_frontend_contract() -> None:
+    cloud_root = _cloud_root()
+    deploy_bundle_smoke = (cloud_root / "scripts" / "cloud-deploy-bundle-smoke-flow.sh").read_text()
+    remote_smoke_script = (cloud_root / "deploy" / "remote-smoke.sh").read_text()
+    nginx_prod_conf = (cloud_root / "deploy" / "nginx.prod.conf").read_text()
+
+    assert 'export MAGICK_CLOUD_ENVIRONMENT="${MAGICK_CLOUD_ENVIRONMENT:-test}"' in (
+        deploy_bundle_smoke
+    )
+    assert "MAGICK_CLOUD_ENVIRONMENT" in deploy_bundle_smoke
+    assert "MAGICK_CLOUD_SKIP_FRONTEND_IMAGE" in deploy_bundle_smoke
+
+    assert 'if [ "${MAGICK_CLOUD_SKIP_FRONTEND_IMAGE:-0}" = "1" ]; then' in (
+        remote_smoke_script
+    )
+    assert "Skipping frontend page checks" in remote_smoke_script
+    assert "buyer-facing home page should succeed" in remote_smoke_script
+
+    assert "upstream magick_ai_cloud_frontend" not in nginx_prod_conf
+    assert "resolver 127.0.0.11" in nginx_prod_conf
+    assert 'set $magick_ai_cloud_frontend "frontend:3000";' in nginx_prod_conf
+
+
 def test_release_gate_documents_cloud_hardening_blockers() -> None:
     cloud_root = _cloud_root()
     checklist_text = (cloud_root / "deploy" / "RELEASE_CHECKLIST.md").read_text()
