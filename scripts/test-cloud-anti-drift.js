@@ -89,6 +89,10 @@ try {
 		files: [ relativeToCloudRoot( projectedPortalFile ) ],
 	} );
 	assert.strictEqual( hasViolations( projectedResult ), false );
+	assert.deepStrictEqual(
+		projectedResult.violations.registry_boundary_doc_missing,
+		[]
+	);
 
 	writeFile(
 		testFixtureFile,

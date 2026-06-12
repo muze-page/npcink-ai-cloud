@@ -22,6 +22,25 @@ const registryMetadataPath = path.join(
 	'domain',
 	'agent_workflow_metadata.py'
 );
+const registryBoundaryDocPath = path.join(
+	cloudRoot,
+	'docs',
+	'cloud-agent-workflow-metadata-registry-v1.md'
+);
+const registryBoundaryDocRequiredPhrases = [
+	'not become a second ability registry, workflow registry, approval system, or',
+	'WordPress write owner',
+	'The preferred product term is metadata projection',
+	'not allowed to be a Cloud control-plane truth',
+	'no WordPress writes',
+	'no approval or auto-apply state',
+	'no workflow execution engine',
+	'no local ability registry replacement',
+	'no prompt, preset, router, MCP, or OpenClaw truth',
+	'static UI metadata and redacted boundary projection',
+	'metadata projection only supplies static UI metadata',
+	'not as authority for running or approving work',
+];
 
 function readText( filePath ) {
 	return fs.readFileSync( filePath, 'utf8' );
@@ -127,6 +146,22 @@ function loadAgentWorkflowRegistryTokens() {
 	}
 
 	return orderedUniq( tokens );
+}
+
+function checkAgentWorkflowRegistryBoundaryDoc() {
+	const source = readTextIfExists( registryBoundaryDocPath );
+	const missing = registryBoundaryDocRequiredPhrases.filter(
+		( phrase ) => ! source.includes( phrase )
+	);
+
+	if ( missing.length === 0 ) {
+		return [];
+	}
+
+	return missing.map(
+		( phrase ) =>
+			`docs/cloud-agent-workflow-metadata-registry-v1.md missing boundary phrase: ${ phrase }`
+	);
 }
 
 function parseContractFile( filePath ) {
@@ -292,6 +327,7 @@ function checkCloudAntiDrift( { contractPath, files } ) {
 			executable_seam_without_backstop: [],
 			forbidden_active_surfaces: [],
 			registry_metadata_hardcoding: [],
+			registry_boundary_doc_missing: checkAgentWorkflowRegistryBoundaryDoc(),
 		},
 		notes: [],
 	};
@@ -449,7 +485,8 @@ if ( require.main === module ) {
 		result.violations.human_review_required_missing.length > 0 ||
 		result.violations.executable_seam_without_backstop.length > 0 ||
 		result.violations.forbidden_active_surfaces.length > 0 ||
-		result.violations.registry_metadata_hardcoding.length > 0;
+		result.violations.registry_metadata_hardcoding.length > 0 ||
+		result.violations.registry_boundary_doc_missing.length > 0;
 
 	if ( wantsJson ) {
 		console.log( JSON.stringify( result, null, 2 ) );
@@ -460,7 +497,7 @@ if ( require.main === module ) {
 		`[cloud-anti-drift] cloud_task=${ result.is_cloud_task ? 'yes' : 'no' }`
 	);
 
-	if ( ! result.is_cloud_task ) {
+	if ( ! result.is_cloud_task && ! hasViolations ) {
 		console.log( '[ok] cloud anti-drift skipped: no cloud task indicators detected.' );
 		process.exit( 0 );
 	}

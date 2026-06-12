@@ -15,7 +15,7 @@ from app.domain.advisor.service import InternalAIAdvisorService
 from app.domain.agent_workflow_metadata import (
     MEDIA_DERIVATIVE_WORKFLOW_ID,
     WEB_SEARCH_EVIDENCE_WORKFLOW_ID,
-    get_agent_workflow_registry,
+    get_agent_workflow_metadata_projection,
     get_workflow_metadata,
 )
 from app.domain.catalog.service import CatalogService
@@ -2226,8 +2226,8 @@ async def get_admin_agent_workflow_metadata(request: Request) -> Any:
         return auth
     return build_envelope(
         status="ok",
-        message="agent workflow metadata loaded",
-        data=get_agent_workflow_registry(),
+        message="agent workflow metadata projection loaded",
+        data=get_agent_workflow_metadata_projection(),
         revision="m6",
     )
 

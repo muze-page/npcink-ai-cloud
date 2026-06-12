@@ -209,7 +209,7 @@ def test_admin_web_search_provider_settings_are_masked_and_update_runtime(
     assert services.settings.web_search_bocha_api_key == "bocha-test-secret"
 
 
-def test_admin_agent_workflow_metadata_registry_is_read_only(tmp_path: Path) -> None:
+def test_admin_agent_workflow_metadata_projection_is_read_only(tmp_path: Path) -> None:
     _, client = _build_client(tmp_path)
 
     response = client.get(
@@ -219,6 +219,8 @@ def test_admin_agent_workflow_metadata_registry_is_read_only(tmp_path: Path) -> 
 
     assert response.status_code == 200
     data = response.json()["data"]
+    assert data["projection_version"] == "cloud-agent-workflow-metadata.v1"
+    assert data["projection_kind"] == "read_only_runtime_metadata"
     assert data["registry_version"] == "cloud-agent-workflow-metadata.v1"
     agents = {item["agent_id"]: item for item in data["agents"]}
     assert "internal_ops_advisor_agent" in agents
