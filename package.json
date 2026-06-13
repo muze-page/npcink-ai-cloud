@@ -54,6 +54,7 @@
     "mini:deploy": "bash scripts/mini-cloud-deploy.sh",
     "check:frontend-handoff": "node scripts/check-cloud-frontend-handoff.js",
     "check:frontend-scope": "node scripts/check-cloud-frontend-scope.js",
+    "check:agent-feedback-quality": "bash scripts/check-agent-feedback-quality.sh",
     "check:visual:frontend": "pnpm --dir frontend run test:visual",
     "check:e2e:deploy-bundle:smoke": "bash scripts/cloud-deploy-bundle-smoke-flow.sh",
     "scaffold:route": "node scripts/scaffold-cloud-route.js",

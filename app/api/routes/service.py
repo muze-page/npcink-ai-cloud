@@ -12,6 +12,7 @@ from app.api.auth import authorize_internal_request, get_cloud_services
 from app.api.envelope import build_envelope
 from app.core.security import extract_trace_id
 from app.domain.advisor.service import InternalAIAdvisorService
+from app.domain.agent_feedback.service import AgentFeedbackService
 from app.domain.agent_workflow_metadata import (
     MEDIA_DERIVATIVE_WORKFLOW_ID,
     WEB_SEARCH_EVIDENCE_WORKFLOW_ID,
@@ -2198,6 +2199,38 @@ async def get_admin_vector_observability(
     return build_envelope(
         status="ok",
         message="vector observability admin summary loaded",
+        data=result,
+        revision="m6",
+    )
+
+
+@router.get("/admin/agent-feedback")
+async def get_admin_agent_feedback(
+    request: Request,
+    window_hours: int = Query(default=24, ge=1, le=168),
+    site_id: str = Query(default=""),
+) -> Any:
+    auth = await authorize_internal_request(request, require_idempotency=False)
+    if auth is not None:
+        return auth
+    services = get_cloud_services(request)
+    service = AgentFeedbackService(services.settings.database_url)
+    result = service.get_summary(
+        site_id=site_id.strip() or None,
+        window_hours=window_hours,
+    )
+    result["read_only"] = True
+    result["surface"] = "internal_admin_quality_feedback"
+    result["boundary"] = {
+        "production_mutation": False,
+        "approval_truth": "wordpress_local",
+        "preflight_truth": "wordpress_local",
+        "final_write_truth": "wordpress_local",
+        "control_plane": "wordpress_local",
+    }
+    return build_envelope(
+        status="ok",
+        message="agent feedback admin summary loaded",
         data=result,
         revision="m6",
     )

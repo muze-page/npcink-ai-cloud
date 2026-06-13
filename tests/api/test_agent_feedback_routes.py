@@ -14,13 +14,18 @@ from app.core.db import get_session, init_schema
 from app.core.models import UsageMeterEvent
 from app.core.services import CloudServices
 from app.domain.agent_feedback import service as agent_feedback_service_module
+from app.domain.agent_feedback.contracts import find_forbidden_agent_feedback_field
 from tests.conftest import (
     TEST_ADMIN_SESSION_SECRET,
+    TEST_INTERNAL_AUTH_TOKEN,
     TEST_PORTAL_JWT_SECRET,
     build_auth_headers,
+    build_internal_headers,
     merge_json_headers,
     seed_site_auth,
 )
+
+AGENT_FEEDBACK_FIXTURE_DIR = Path(__file__).resolve().parents[1] / "fixtures" / "agent_feedback"
 
 
 def _sqlite_url(tmp_path: Path) -> str:
@@ -41,6 +46,7 @@ def _build_client(tmp_path: Path) -> tuple[str, TestClient]:
         environment="test",
         database_url=database_url,
         redis_url="redis://localhost:6379/0",
+        internal_auth_token=TEST_INTERNAL_AUTH_TOKEN,
         admin_session_secret=TEST_ADMIN_SESSION_SECRET,
         portal_jwt_secret=TEST_PORTAL_JWT_SECRET,
     )
@@ -68,20 +74,44 @@ def _feedback_payload(**overrides: object) -> dict[str, object]:
     return payload
 
 
+def _load_content_support_regression_fixture() -> dict[str, object]:
+    fixture_path = AGENT_FEEDBACK_FIXTURE_DIR / "content_support_regression_samples.json"
+    return json.loads(fixture_path.read_text(encoding="utf-8"))
+
+
+def _assert_regression_sample_is_metadata_only(sample: dict[str, object]) -> None:
+    forbidden_path = find_forbidden_agent_feedback_field(sample)
+    assert forbidden_path == ""
+    assert "operator_note" not in sample or str(sample.get("operator_note") or "") == ""
+    serialized = json.dumps(sample, sort_keys=True)
+    for forbidden_fragment in (
+        "post_content",
+        "prompt_text",
+        "provider_response",
+        "api_key",
+        "secret",
+        "confirm_token",
+        "write_confirmed",
+    ):
+        assert forbidden_fragment not in serialized
+
+
 def _post_feedback(
     client: TestClient,
     payload: dict[str, object],
     *,
     idempotency_key: str = "agent-feedback-001",
     nonce: str | None = None,
+    site_id: str = "site_alpha",
+    key_id: str = "key_default",
 ) -> object:
     body = json.dumps(payload).encode("utf-8")
     headers = merge_json_headers(
         build_auth_headers(
             "POST",
             "/v1/agent-feedback/events",
-            site_id="site_alpha",
-            key_id="key_default",
+            site_id=site_id,
+            key_id=key_id,
             idempotency_key=idempotency_key,
             nonce=nonce or f"nonce-{idempotency_key}",
             trace_id="agentfeedback000000000000000000",
@@ -170,6 +200,176 @@ def test_agent_feedback_accepts_image_quality_labels(tmp_path: Path) -> None:
     ]
 
 
+def test_agent_feedback_accepts_editor_content_support_feedback(tmp_path: Path) -> None:
+    database_url, client = _build_client(tmp_path)
+
+    response = _post_feedback(
+        client,
+        _feedback_payload(
+            agent_id="editor_content_support_agent",
+            agent_version="editor_content_support_flow",
+            source_runtime="content_support",
+            source_run_id="local-browser-acceptance-202606130438",
+            handoff_id="content_support:title_suggestions:editor_content_support_flow",
+            handoff_type="editor_content_support_result",
+            local_surface="editor_content_support_sidebar",
+            local_outcome="accepted",
+            feedback_labels=["evidence_useful", "operator_confidence_high"],
+            operator_note="",
+            local_proposal_id="",
+            evidence_ref_ids=[
+                "content_support_section:title_suggestions",
+                "artifact:editor_content_support_flow",
+            ],
+            redaction_status="metadata_only",
+            retention_class="quality_eval",
+        ),
+        idempotency_key="agent-feedback-editor-content-support",
+    )
+    summary_response = _get_feedback_summary(client, window_hours=24)
+
+    assert response.status_code == 200
+    receipt = response.json()["data"]
+    assert receipt["accepted_for_eval"] is True
+    assert receipt["quality_rollup_candidate"] is True
+    assert receipt["production_mutation"] is False
+    assert receipt["approval_truth"] == "wordpress_local"
+    assert receipt["preflight_truth"] == "wordpress_local"
+    assert receipt["final_write_truth"] == "wordpress_local"
+    assert receipt["source_runtime"] == "content_support"
+
+    with get_session(database_url) as session:
+        events = list(session.scalars(select(UsageMeterEvent)))
+
+    assert len(events) == 1
+    event = events[0]
+    assert event.meter_key == "agent_feedback.content_support"
+    assert event.ability_family == "agent"
+    assert event.channel == "editor_content_support_sidebar"
+    assert event.payload_json is not None
+    assert event.payload_json["local_surface"] == "editor_content_support_sidebar"
+    assert event.payload_json["source_runtime"] == "content_support"
+    assert event.payload_json["operator_note"] == ""
+    assert event.payload_json["redaction_status"] == "metadata_only"
+    assert event.payload_json["evidence_ref_ids"] == [
+        "content_support_section:title_suggestions",
+        "artifact:editor_content_support_flow",
+    ]
+    assert event.payload_json["cloud_feedback_policy"]["production_mutation"] is False
+
+    assert summary_response.status_code == 200
+    summary = summary_response.json()["data"]
+    assert summary["events_total"] == 1
+    assert summary["source_runtimes"] == {"content_support": 1}
+    assert summary["local_surfaces"] == {"editor_content_support_sidebar": 1}
+    assert summary["outcomes"] == {"accepted": 1}
+    assert summary["labels"] == {
+        "evidence_useful": 1,
+        "operator_confidence_high": 1,
+    }
+    assert summary["scenarios"] == [
+        {
+            "local_surface": "editor_content_support_sidebar",
+            "source_runtime": "content_support",
+            "events_total": 1,
+            "outcomes": {"accepted": 1},
+            "labels": {
+                "evidence_useful": 1,
+                "operator_confidence_high": 1,
+            },
+            "accepted_rate": 1.0,
+            "evidence_weak_rate": 0.0,
+            "wrong_next_step_rate": 0.0,
+        }
+    ]
+    assert summary["production_mutation"] is False
+    assert summary["approval_truth"] == "wordpress_local"
+    assert summary["preflight_truth"] == "wordpress_local"
+    assert summary["final_write_truth"] == "wordpress_local"
+
+
+def test_content_support_feedback_regression_samples_roll_up_expected_quality(
+    tmp_path: Path,
+) -> None:
+    _database_url, client = _build_client(tmp_path)
+    fixture = _load_content_support_regression_fixture()
+    samples = fixture["samples"]
+    expected = fixture["expected_summary"]
+
+    assert fixture["contract_version"] == "cloud_agent_feedback_regression_samples.v1"
+    assert isinstance(samples, list)
+    assert isinstance(expected, dict)
+
+    for sample in samples:
+        assert isinstance(sample, dict)
+        _assert_regression_sample_is_metadata_only(sample)
+        sample_id = str(sample["sample_id"])
+        response = _post_feedback(
+            client,
+            _feedback_payload(
+                agent_id="editor_content_support_agent",
+                agent_version="editor_content_support_flow",
+                source_runtime=sample["source_runtime"],
+                source_run_id=sample["source_run_id"],
+                handoff_id=sample["handoff_id"],
+                handoff_type=sample["handoff_type"],
+                local_surface=sample["local_surface"],
+                local_outcome=sample["local_outcome"],
+                feedback_labels=sample["feedback_labels"],
+                operator_note="",
+                local_proposal_id="",
+                evidence_ref_ids=sample["evidence_ref_ids"],
+                redaction_status="metadata_only",
+                retention_class="quality_eval",
+            ),
+            idempotency_key=f"agent-feedback-regression-{sample_id}",
+        )
+        assert response.status_code == 200
+        receipt = response.json()["data"]
+        assert receipt["accepted_for_eval"] is True
+        assert receipt["production_mutation"] is False
+        assert receipt["approval_truth"] == "wordpress_local"
+
+    summary_response = _get_feedback_summary(client, window_hours=24)
+    admin_response = client.get(
+        "/internal/service/admin/agent-feedback?window_hours=24",
+        headers=build_internal_headers(),
+    )
+
+    assert summary_response.status_code == 200
+    assert admin_response.status_code == 200
+    summary = summary_response.json()["data"]
+    admin_summary = admin_response.json()["data"]
+    assert summary["events_total"] == expected["events_total"]
+    assert summary["source_runtimes"] == {"content_support": expected["events_total"]}
+    assert summary["local_surfaces"] == {
+        "editor_content_support_sidebar": expected["events_total"]
+    }
+    assert summary["outcomes"] == expected["outcomes"]
+    assert summary["labels"] == expected["labels"]
+    assert summary["rates"]["accepted_rate"] == expected["accepted_rate"]
+    assert summary["rates"]["evidence_useful_rate"] == expected["evidence_useful_rate"]
+    assert summary["rates"]["evidence_weak_rate"] == expected["evidence_weak_rate"]
+    assert summary["rates"]["wrong_next_step_rate"] == expected["wrong_next_step_rate"]
+    assert summary["scenarios"] == [
+        {
+            "local_surface": "editor_content_support_sidebar",
+            "source_runtime": "content_support",
+            "events_total": expected["events_total"],
+            "outcomes": expected["outcomes"],
+            "labels": expected["labels"],
+            "accepted_rate": expected["accepted_rate"],
+            "evidence_weak_rate": expected["evidence_weak_rate"],
+            "wrong_next_step_rate": expected["wrong_next_step_rate"],
+        }
+    ]
+    assert summary["production_mutation"] is False
+    assert summary["approval_truth"] == "wordpress_local"
+    assert admin_summary["read_only"] is True
+    assert admin_summary["boundary"]["control_plane"] == "wordpress_local"
+    assert admin_summary["events_total"] == expected["events_total"]
+
+
 def test_agent_feedback_idempotency_dedupes_meter_event(tmp_path: Path) -> None:
     database_url, client = _build_client(tmp_path)
     payload = _feedback_payload()
@@ -249,6 +449,93 @@ def test_agent_feedback_summary_rolls_up_outcomes_and_labels(tmp_path: Path) -> 
     assert data["quality_trend"][0]["rejected"] == 1
     assert data["production_mutation"] is False
     assert data["approval_truth"] == "wordpress_local"
+
+
+def test_admin_agent_feedback_summary_is_cross_site_read_only(tmp_path: Path) -> None:
+    database_url, client = _build_client(tmp_path)
+    seed_site_auth(
+        database_url,
+        site_id="site_beta",
+        key_id="key_beta",
+        scopes=["runtime:execute", "runtime:read", "stats:read"],
+    )
+
+    alpha = _post_feedback(
+        client,
+        _feedback_payload(
+            source_runtime="content_support",
+            local_surface="editor_content_support_sidebar",
+            local_outcome="accepted",
+            feedback_labels=["evidence_useful", "operator_confidence_high"],
+            operator_note="",
+            redaction_status="metadata_only",
+        ),
+        idempotency_key="agent-feedback-admin-alpha",
+    )
+    beta = _post_feedback(
+        client,
+        _feedback_payload(
+            source_runtime="site_knowledge",
+            local_surface="toolbox_site_knowledge",
+            local_outcome="rejected",
+            feedback_labels=["evidence_weak", "wrong_intent", "operator_confidence_low"],
+            operator_note="",
+            redaction_status="metadata_only",
+        ),
+        idempotency_key="agent-feedback-admin-beta",
+        site_id="site_beta",
+        key_id="key_beta",
+    )
+
+    response = client.get(
+        "/internal/service/admin/agent-feedback?window_hours=24",
+        headers=build_internal_headers(),
+    )
+    unauthenticated = client.get("/internal/service/admin/agent-feedback?window_hours=24")
+
+    assert alpha.status_code == 200
+    assert beta.status_code == 200
+    assert unauthenticated.status_code == 401
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["artifact_type"] == "cloud_agent_feedback_summary"
+    assert data["scope"] == "all_sites"
+    assert data["read_only"] is True
+    assert data["surface"] == "internal_admin_quality_feedback"
+    assert data["events_total"] == 2
+    assert data["source_runtimes"] == {
+        "site_knowledge": 1,
+        "content_support": 1,
+    }
+    assert data["local_surfaces"] == {
+        "toolbox_site_knowledge": 1,
+        "editor_content_support_sidebar": 1,
+    }
+    assert data["rates"]["accepted_rate"] == 0.5
+    assert data["labels"]["wrong_intent"] == 1
+    assert data["labels"]["evidence_weak"] == 1
+    assert data["production_mutation"] is False
+    assert data["approval_truth"] == "wordpress_local"
+    assert data["preflight_truth"] == "wordpress_local"
+    assert data["final_write_truth"] == "wordpress_local"
+    assert data["boundary"] == {
+        "production_mutation": False,
+        "approval_truth": "wordpress_local",
+        "preflight_truth": "wordpress_local",
+        "final_write_truth": "wordpress_local",
+        "control_plane": "wordpress_local",
+    }
+
+    site_filtered = client.get(
+        "/internal/service/admin/agent-feedback?window_hours=24&site_id=site_alpha",
+        headers=build_internal_headers(),
+    )
+    assert site_filtered.status_code == 200
+    site_data = site_filtered.json()["data"]
+    assert site_data["scope"] == "site"
+    assert site_data["site_id"] == "site_alpha"
+    assert site_data["events_total"] == 1
+    assert site_data["source_runtimes"] == {"content_support": 1}
 
 
 def test_agent_feedback_rejects_write_authority_fields(tmp_path: Path) -> None:

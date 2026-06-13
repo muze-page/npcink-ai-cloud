@@ -1,0 +1,106 @@
+{
+  "scenario": "content_support_editor_sidebar_p1",
+  "contract_version": "cloud_agent_feedback_regression_samples.v1",
+  "description": "Metadata-only Content Support feedback samples used to keep quality rollups comparable across prompt, flow, and UI changes.",
+  "samples": [
+    {
+      "sample_id": "content_support_title_accepted",
+      "source_runtime": "content_support",
+      "source_run_id": "regression-content-support-title-accepted",
+      "handoff_id": "content_support:title_suggestions:regression",
+      "handoff_type": "editor_content_support_result",
+      "local_surface": "editor_content_support_sidebar",
+      "local_outcome": "accepted",
+      "feedback_labels": ["evidence_useful", "operator_confidence_high"],
+      "evidence_ref_ids": [
+        "content_support_section:title_suggestions",
+        "artifact:editor_content_support_flow"
+      ],
+      "expected_bucket": "accepted_quality"
+    },
+    {
+      "sample_id": "content_support_summary_edited",
+      "source_runtime": "content_support",
+      "source_run_id": "regression-content-support-summary-edited",
+      "handoff_id": "content_support:summary:regression",
+      "handoff_type": "editor_content_support_result",
+      "local_surface": "editor_content_support_sidebar",
+      "local_outcome": "edited_before_accept",
+      "feedback_labels": ["evidence_useful", "good_but_needs_human_draft"],
+      "evidence_ref_ids": [
+        "content_support_section:summary",
+        "artifact:editor_content_support_flow"
+      ],
+      "expected_bucket": "accepted_after_edit"
+    },
+    {
+      "sample_id": "content_support_outline_evidence_weak",
+      "source_runtime": "content_support",
+      "source_run_id": "regression-content-support-outline-weak",
+      "handoff_id": "content_support:outline:regression",
+      "handoff_type": "editor_content_support_result",
+      "local_surface": "editor_content_support_sidebar",
+      "local_outcome": "rejected",
+      "feedback_labels": ["evidence_weak", "operator_confidence_low"],
+      "evidence_ref_ids": [
+        "content_support_section:outline",
+        "artifact:editor_content_support_flow"
+      ],
+      "expected_bucket": "evidence_gap"
+    },
+    {
+      "sample_id": "content_support_next_step_wrong",
+      "source_runtime": "content_support",
+      "source_run_id": "regression-content-support-wrong-step",
+      "handoff_id": "content_support:next_step:regression",
+      "handoff_type": "editor_content_support_result",
+      "local_surface": "editor_content_support_sidebar",
+      "local_outcome": "rejected",
+      "feedback_labels": ["wrong_next_step", "wrong_intent"],
+      "evidence_ref_ids": [
+        "content_support_section:next_step",
+        "artifact:editor_content_support_flow"
+      ],
+      "expected_bucket": "intent_gap"
+    },
+    {
+      "sample_id": "content_support_context_missing",
+      "source_runtime": "content_support",
+      "source_run_id": "regression-content-support-context-missing",
+      "handoff_id": "content_support:missing_context:regression",
+      "handoff_type": "editor_content_support_result",
+      "local_surface": "editor_content_support_sidebar",
+      "local_outcome": "blocked_by_missing_input",
+      "feedback_labels": ["missing_context", "too_generic"],
+      "evidence_ref_ids": [
+        "content_support_section:context",
+        "artifact:editor_content_support_flow"
+      ],
+      "expected_bucket": "context_gap"
+    }
+  ],
+  "expected_summary": {
+    "events_total": 5,
+    "accepted_rate": 0.4,
+    "evidence_useful_rate": 0.4,
+    "evidence_weak_rate": 0.2,
+    "wrong_next_step_rate": 0.2,
+    "outcomes": {
+      "accepted": 1,
+      "edited_before_accept": 1,
+      "rejected": 2,
+      "blocked_by_missing_input": 1
+    },
+    "labels": {
+      "evidence_useful": 2,
+      "operator_confidence_high": 1,
+      "good_but_needs_human_draft": 1,
+      "evidence_weak": 1,
+      "operator_confidence_low": 1,
+      "wrong_next_step": 1,
+      "wrong_intent": 1,
+      "missing_context": 1,
+      "too_generic": 1
+    }
+  }
+}
