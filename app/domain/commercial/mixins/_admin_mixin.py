@@ -179,6 +179,7 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
     ) -> dict[str, object]:
         now = self.now_factory()
         usage_since = now - timedelta(days=max(1, usage_window_days))
+        previous_usage_since = usage_since - timedelta(days=max(1, usage_window_days))
         audit_since = now - timedelta(minutes=max(1, audit_window_minutes))
         active_subscription_statuses = [
             SUBSCRIPTION_STATUS_TRIALING,
@@ -224,15 +225,36 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
                 since=usage_since,
                 limit=None,
             )
+            previous_usage_meter_events = [
+                event
+                for event in repository.list_usage_meter_events_for_admin(
+                    since=previous_usage_since,
+                    limit=None,
+                )
+                if (
+                    (event_created_at := getattr(event, "created_at", None)) is not None
+                    and cast(Any, self)._normalize_datetime(event_created_at) < usage_since
+                )
+            ]
             credit_ledger_entries = repository.list_credit_ledger_entries(
                 event_types=[CREDIT_LEDGER_EVENT_CONSUME],
                 since=usage_since,
                 until=now,
                 limit=None,
             )
+            previous_credit_ledger_entries = repository.list_credit_ledger_entries(
+                event_types=[CREDIT_LEDGER_EVENT_CONSUME],
+                since=previous_usage_since,
+                until=usage_since,
+                limit=None,
+            )
             knowledge_index_usage = repository.summarize_site_knowledge_index_usage(
                 since=usage_since,
                 until=now,
+            )
+            previous_knowledge_index_usage = repository.summarize_site_knowledge_index_usage(
+                since=previous_usage_since,
+                until=usage_since,
             )
             expiring_subscriptions = repository.list_subscriptions(
                 statuses=active_subscription_statuses,
@@ -318,10 +340,15 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
         platform_credit_summary = self._build_platform_credit_summary(
             meter_events=usage_meter_events,
             ledger_entries=credit_ledger_entries,
+            previous_meter_events=previous_usage_meter_events,
+            previous_ledger_entries=previous_credit_ledger_entries,
             window_days=max(1, usage_window_days),
             start_at=usage_since,
             end_at=now,
+            previous_start_at=previous_usage_since,
+            previous_end_at=usage_since,
             knowledge_index_usage=knowledge_index_usage,
+            previous_knowledge_index_usage=previous_knowledge_index_usage,
         )
         attention_subscription_items = [
             _serialize_overview_subscription(subscription)
@@ -1045,10 +1072,15 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
         *,
         meter_events: list[object],
         ledger_entries: list[object],
+        previous_meter_events: list[object],
+        previous_ledger_entries: list[object],
         window_days: int,
         start_at: datetime,
         end_at: datetime,
+        previous_start_at: datetime,
+        previous_end_at: datetime,
         knowledge_index_usage: dict[str, int],
+        previous_knowledge_index_usage: dict[str, int],
     ) -> dict[str, object]:
         service = cast(Any, self)
         totals = service._aggregate_meter_events(meter_events)
@@ -1065,6 +1097,24 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
             )
         credit_used = round(
             sum(service._coerce_float(item.get("credits")) for item in breakdown),
+            6,
+        )
+        previous_totals = service._aggregate_meter_events(previous_meter_events)
+        previous_ledger_source = bool(previous_ledger_entries)
+        previous_breakdown = build_credit_breakdown_from_ledger(previous_ledger_entries)
+        if not previous_breakdown:
+            previous_breakdown = self._build_admin_account_credit_breakdown(
+                meter_events=previous_meter_events,
+                totals=previous_totals,
+                indexed_document_count=service._coerce_int(
+                    previous_knowledge_index_usage.get("indexed_documents")
+                ),
+                indexed_chunk_count=service._coerce_int(
+                    previous_knowledge_index_usage.get("indexed_chunks")
+                ),
+            )
+        previous_credit_used = round(
+            sum(service._coerce_float(item.get("credits")) for item in previous_breakdown),
             6,
         )
         account_events: dict[str, list[object]] = defaultdict(list)
@@ -1110,10 +1160,26 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
             key=lambda item: service._coerce_float(item.get("credits")),
             reverse=True,
         )[:5]
+        trend = self._build_platform_credit_trend(
+            current_used=credit_used,
+            previous_used=previous_credit_used,
+            previous_start_at=previous_start_at,
+            previous_end_at=previous_end_at,
+        )
+        watch_items = self._build_platform_credit_watch_items(
+            current_used=credit_used,
+            trend=trend,
+            breakdown=breakdown,
+            top_accounts=top_accounts,
+            ledger_source=ledger_source,
+            previous_ledger_source=previous_ledger_source,
+        )
         return {
             "window_days": max(1, int(window_days or 1)),
             "period_start_at": self._serialize_datetime(start_at),
             "period_end_at": self._serialize_datetime(end_at),
+            "previous_period_start_at": self._serialize_datetime(previous_start_at),
+            "previous_period_end_at": self._serialize_datetime(previous_end_at),
             "credit": self._quota_metric(
                 key="platform_ai_credits",
                 label="Platform AI credits",
@@ -1131,7 +1197,155 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
             ),
             "breakdown": breakdown,
             "top_accounts": top_accounts,
+            "trend": trend,
+            "watch_items": watch_items,
         }
+
+    def _build_platform_credit_trend(
+        self,
+        *,
+        current_used: float,
+        previous_used: float,
+        previous_start_at: datetime,
+        previous_end_at: datetime,
+    ) -> dict[str, object]:
+        service = cast(Any, self)
+        current_value = round(service._coerce_float(current_used), 6)
+        previous_value = round(service._coerce_float(previous_used), 6)
+        delta = round(current_value - previous_value, 6)
+        if previous_value > 0:
+            delta_percent = round((delta / previous_value) * 100, 2)
+        elif current_value > 0:
+            delta_percent = None
+        else:
+            delta_percent = 0.0
+        if current_value > 0 and previous_value <= 0:
+            status = "new_activity"
+        elif abs(delta) < 0.000001:
+            status = "flat"
+        elif delta > 0:
+            status = "up"
+        else:
+            status = "down"
+        return {
+            "current_used": current_value,
+            "previous_used": previous_value,
+            "delta": delta,
+            "delta_percent": delta_percent,
+            "status": status,
+            "previous_period_start_at": self._serialize_datetime(previous_start_at),
+            "previous_period_end_at": self._serialize_datetime(previous_end_at),
+        }
+
+    def _build_platform_credit_watch_items(
+        self,
+        *,
+        current_used: float,
+        trend: dict[str, object],
+        breakdown: list[dict[str, object]],
+        top_accounts: list[dict[str, object]],
+        ledger_source: bool,
+        previous_ledger_source: bool,
+    ) -> list[dict[str, object]]:
+        service = cast(Any, self)
+        current_value = service._coerce_float(current_used)
+        items: list[dict[str, object]] = []
+        delta = service._coerce_float(trend.get("delta"))
+        previous_value = service._coerce_float(trend.get("previous_used"))
+        delta_percent = trend.get("delta_percent")
+        if current_value > 0 and previous_value <= 0:
+            items.append(
+                {
+                    "code": "credit_new_activity",
+                    "severity": "info",
+                    "title": "New platform credit activity",
+                    "detail": "The previous comparison window had no AI credit consumption.",
+                    "metric": "ai_credits",
+                    "value": current_value,
+                    "href": "/admin/accounts",
+                }
+            )
+        elif (
+            current_value >= 10
+            and delta >= 10
+            and isinstance(delta_percent, (int, float))
+            and float(delta_percent) >= 50
+        ):
+            items.append(
+                {
+                    "code": "credit_usage_spike",
+                    "severity": "warning",
+                    "title": "AI credit usage rose sharply",
+                    "detail": "Current usage is at least 50% above the previous comparison window.",
+                    "metric": "ai_credits",
+                    "value": current_value,
+                    "delta": round(delta, 6),
+                    "href": "/admin/accounts",
+                }
+            )
+
+        top_account = top_accounts[0] if top_accounts else None
+        if top_account is not None and current_value >= 10:
+            account_credits = service._coerce_float(top_account.get("credits"))
+            if account_credits / max(current_value, 1.0) >= 0.6:
+                account_id = str(top_account.get("account_id") or "")
+                items.append(
+                    {
+                        "code": "credit_account_concentration",
+                        "severity": "warning",
+                        "title": "Consumption is concentrated in one account",
+                        "detail": (
+                            "The top account accounts for at least 60% of this "
+                            "window's AI credits."
+                        ),
+                        "metric": "ai_credits",
+                        "value": round(account_credits, 6),
+                        "account_id": account_id,
+                        "href": (
+                            f"/admin/accounts/{account_id}" if account_id else "/admin/accounts"
+                        ),
+                    }
+                )
+
+        top_component = max(
+            breakdown,
+            key=lambda item: service._coerce_float(item.get("credits")),
+            default=None,
+        )
+        if top_component is not None and current_value >= 10:
+            component_credits = service._coerce_float(top_component.get("credits"))
+            if component_credits / max(current_value, 1.0) >= 0.65:
+                items.append(
+                    {
+                        "code": "credit_component_concentration",
+                        "severity": "info",
+                        "title": "One meter family dominates usage",
+                        "detail": (
+                            "One credit component accounts for at least 65% of "
+                            "this window's consumption."
+                        ),
+                        "metric": str(top_component.get("key") or "ai_credits"),
+                        "value": round(component_credits, 6),
+                        "href": "/admin/accounts",
+                    }
+                )
+
+        if not ledger_source and previous_ledger_source:
+            items.append(
+                {
+                    "code": "credit_source_changed_to_estimate",
+                    "severity": "warning",
+                    "title": "Current window is using estimated credits",
+                    "detail": (
+                        "The comparison window had ledger entries, but the current "
+                        "window is falling back to meter estimates."
+                    ),
+                    "metric": "ai_credits",
+                    "value": current_value,
+                    "href": "/admin/accounts",
+                }
+            )
+        return items[:4]
 
     def _build_admin_account_credit_breakdown(
         self,

@@ -1453,6 +1453,13 @@ def test_service_routes_admin_read_facade(tmp_path: Path) -> None:
     assert overview["counts"]["sites_active"] == 1
     assert overview["counts"]["site_keys_active"] == 1
     assert overview["recent_usage"]["event_count"] >= 1
+    platform_credit = overview["platform_credit_summary"]
+    assert platform_credit["previous_period_start_at"]
+    assert platform_credit["previous_period_end_at"]
+    assert platform_credit["trend"]["current_used"] >= 0
+    assert platform_credit["trend"]["previous_used"] >= 0
+    assert platform_credit["trend"]["status"] in {"new_activity", "flat", "up", "down"}
+    assert isinstance(platform_credit["watch_items"], list)
     assert "runtime_diagnostics" in overview
     assert overview["hosted_model_governance"]["filters"]["recent_minutes"] == 1440
     assert overview["hosted_model_governance"]["alert_summary"]["status"] in {
