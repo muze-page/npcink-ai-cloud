@@ -1959,15 +1959,15 @@ def test_admin_account_quota_summary_reports_ai_credits_and_resource_limits(
     data = response.json()["data"]
     assert data["account_id"] == "acct_site_quota"
     assert data["credit"]["key"] == "ai_credits"
-    assert data["credit"]["used"] == 8.5
+    assert data["credit"]["used"] == 9.0
     assert data["credit"]["limit"] == 20.0
-    assert data["credit"]["remaining"] == 11.5
+    assert data["credit"]["remaining"] == 11.0
     assert data["credit"]["status"] == "ok"
     assert data["credit"]["estimated"] is True
-    assert data["credit"]["rate_version"] == "ai-credit-estimate-v1"
+    assert data["credit"]["rate_version"] == "ai-credit-estimate-v2"
     assert {item["key"]: item["credits"] for item in data["breakdown"]} == {
         "runs": 2.0,
-        "tokens_total": 1.5,
+        "tokens_total": 2,
         "web_search": 5.0,
     }
     resource_limits = {item["key"]: item for item in data["resource_limits"]}
