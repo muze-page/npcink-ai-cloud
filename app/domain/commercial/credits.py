@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
+from math import ceil
 
-AI_CREDIT_RATE_VERSION = "ai-credit-ledger-v1"
+AI_CREDIT_RATE_VERSION = "ai-credit-ledger-v2"
 
 AI_CREDIT_BREAKDOWN_ORDER = (
     "runs",
@@ -72,8 +73,8 @@ def usage_meter_credit_component(event: object) -> dict[str, object] | None:
             "quantity": quantity,
             "unit": "token",
             "rate": 1.0,
-            "rate_unit": "1000_tokens",
-            "credits": quantity / 1000.0,
+            "rate_unit": "1000_tokens_rounded_up",
+            "credits": rounded_token_credits(quantity),
         }
     if meter_key == "provider_calls":
         component = classify_provider_credit_component(
@@ -110,11 +111,19 @@ def vector_credit_component(
             "source_type": "vector_chunks",
             "quantity": quantity_value,
             "unit": "chunk",
-            "rate": 0.1,
-            "rate_unit": None,
-            "credits": quantity_value * 0.1,
+            "rate": 1.0,
+            "rate_unit": "10_chunks",
+            "credits": rounded_vector_chunk_credits(quantity_value),
         }
     return None
+
+
+def rounded_token_credits(quantity: int | float) -> int:
+    return _ceil_positive(_coerce_float(quantity) / 1000.0)
+
+
+def rounded_vector_chunk_credits(quantity: int | float) -> int:
+    return _ceil_positive(_coerce_float(quantity) / 10.0)
 
 
 def build_credit_breakdown_from_ledger(entries: Iterable[object]) -> list[dict[str, object]]:
@@ -169,3 +178,9 @@ def _coerce_float(value: object) -> float:
         return float(value or 0.0)
     except (TypeError, ValueError):
         return 0.0
+
+
+def _ceil_positive(value: float) -> int:
+    if value <= 0:
+        return 0
+    return int(ceil(value))

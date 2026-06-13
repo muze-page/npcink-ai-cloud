@@ -27,6 +27,8 @@ from app.domain.commercial.audit_context import ServiceAuditContext
 from app.domain.commercial.credits import (
     AI_CREDIT_RATE_VERSION,
     build_credit_breakdown_from_ledger,
+    rounded_token_credits,
+    rounded_vector_chunk_credits,
 )
 from app.domain.commercial.errors import (
     CommercialNotFoundError,
@@ -890,7 +892,7 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
             else service._normalize_concurrency(getattr(plan_version, "concurrency_json", None))
         )
         ledger_source = bool(credit_ledger_entries)
-        credit_rate_version = AI_CREDIT_RATE_VERSION if ledger_source else "ai-credit-estimate-v1"
+        credit_rate_version = AI_CREDIT_RATE_VERSION if ledger_source else "ai-credit-estimate-v2"
         credit_breakdown = build_credit_breakdown_from_ledger(credit_ledger_entries)
         if not credit_breakdown:
             credit_breakdown = self._build_admin_account_credit_breakdown(
@@ -1189,7 +1191,7 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
                 extra={
                     "estimated": not ledger_source,
                     "rate_version": (
-                        AI_CREDIT_RATE_VERSION if ledger_source else "ai-credit-estimate-v1"
+                        AI_CREDIT_RATE_VERSION if ledger_source else "ai-credit-estimate-v2"
                     ),
                     "scope": "platform",
                     "source": "ledger" if ledger_source else "estimate",
@@ -1372,7 +1374,7 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
             else:
                 other_provider_calls += quantity
         run_count = service._coerce_float(totals.get("runs"))
-        token_units = service._coerce_float(totals.get("tokens_total")) / 1000.0
+        token_credits = rounded_token_credits(service._coerce_float(totals.get("tokens_total")))
         items = [
             {
                 "key": "runs",
@@ -1388,8 +1390,8 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
                 "quantity": round(service._coerce_float(totals.get("tokens_total")), 6),
                 "unit": "token",
                 "rate": 1.0,
-                "rate_unit": "1000_tokens",
-                "credits": round(token_units, 6),
+                "rate_unit": "1000_tokens_rounded_up",
+                "credits": token_credits,
             },
             {
                 "key": "web_search",
@@ -1428,8 +1430,9 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
                 "label": "Vector indexed chunks",
                 "quantity": indexed_chunk_count,
                 "unit": "chunk",
-                "rate": 0.1,
-                "credits": round(indexed_chunk_count * 0.1, 6),
+                "rate": 1.0,
+                "rate_unit": "10_chunks",
+                "credits": rounded_vector_chunk_credits(indexed_chunk_count),
             },
         ]
         return [item for item in items if service._coerce_float(item.get("quantity")) > 0]
