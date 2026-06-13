@@ -68,6 +68,7 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
         '/admin/troubleshooting',
         '/admin/plugin-observability',
         '/admin/media-observability',
+        '/admin/agent-feedback',
         '/admin/ai-advisor',
         '/admin/web-search',
         '/admin/image-sources',

@@ -46,6 +46,17 @@ const advancedEntries: AdvancedEntry[] = [
     groupFallback: 'Runtime evidence',
   },
   {
+    href: '/admin/agent-feedback',
+    titleKey: 'admin.nav_agent_feedback',
+    titleFallback: 'Agent Feedback Quality',
+    descKey: 'admin.advanced.agent_feedback_desc',
+    descFallback: 'Read-only quality signals from local operator feedback across Cloud-backed AI assistance.',
+    actionKey: 'admin.advanced.action_view_agent_feedback',
+    actionFallback: 'View quality feedback',
+    groupKey: 'admin.advanced.group_runtime',
+    groupFallback: 'Runtime evidence',
+  },
+  {
     href: '/admin/vector-observability',
     titleKey: 'admin.nav_vector_observability',
     titleFallback: 'Vector Observability',

@@ -94,20 +94,22 @@ class AgentFeedbackService:
             "trace_id": trace_id,
         }
 
-    def get_summary(self, *, site_id: str, window_hours: int) -> dict[str, Any]:
+    def get_summary(self, *, site_id: str | None, window_hours: int) -> dict[str, Any]:
         window_hours = max(1, min(168, int(window_hours or 24)))
         since = datetime.now(UTC) - timedelta(hours=window_hours)
 
         with get_session(self.database_url) as session:
+            query = (
+                select(UsageMeterEvent)
+                .where(UsageMeterEvent.event_kind == AGENT_FEEDBACK_EVENT_KIND)
+                .where(UsageMeterEvent.created_at >= since)
+                .order_by(UsageMeterEvent.created_at.desc(), UsageMeterEvent.id.desc())
+                .limit(AGENT_FEEDBACK_SUMMARY_MAX_EVENTS + 1)
+            )
+            if site_id:
+                query = query.where(UsageMeterEvent.site_id == site_id)
             events = list(
-                session.scalars(
-                    select(UsageMeterEvent)
-                    .where(UsageMeterEvent.site_id == site_id)
-                    .where(UsageMeterEvent.event_kind == AGENT_FEEDBACK_EVENT_KIND)
-                    .where(UsageMeterEvent.created_at >= since)
-                    .order_by(UsageMeterEvent.created_at.desc(), UsageMeterEvent.id.desc())
-                    .limit(AGENT_FEEDBACK_SUMMARY_MAX_EVENTS + 1)
-                )
+                session.scalars(query)
             )
         limited = len(events) > AGENT_FEEDBACK_SUMMARY_MAX_EVENTS
         if limited:
@@ -143,11 +145,16 @@ class AgentFeedbackService:
                     self._increment(rejection_reasons, label)
 
         total = len(events)
+        last_event_at = events[0].created_at if events else None
         return {
             "artifact_type": "cloud_agent_feedback_summary",
             "contract_version": AGENT_FEEDBACK_CONTRACT_VERSION,
-            "site_id": site_id,
+            "site_id": site_id or "",
+            "scope": "site" if site_id else "all_sites",
             "window_hours": window_hours,
+            "generated_at": self._format_datetime(datetime.now(UTC)),
+            "window_start_at": self._format_datetime(since),
+            "last_event_at": self._format_datetime(last_event_at) if last_event_at else "",
             "events_total": total,
             "limited": limited,
             "max_events": AGENT_FEEDBACK_SUMMARY_MAX_EVENTS,
