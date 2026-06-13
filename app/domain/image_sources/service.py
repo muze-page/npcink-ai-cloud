@@ -85,7 +85,7 @@ class ImageSourceService:
             contract_version=contract_version,
             input_payload=input_payload,
         )
-        query = _normalize_text(input_payload.get("query"), limit=MAX_QUERY_CHARS)
+        query = _image_source_provider_query(input_payload)
         if not query:
             raise ImageSourceContractViolation(
                 "image_source.query_required",
@@ -336,6 +336,7 @@ def _build_options(
         orientation = "portrait"
     if orientation not in ALLOWED_IMAGE_SOURCE_ORIENTATIONS:
         orientation = ""
+    latency_mode = _image_source_latency_mode(input_payload)
     return {
         "provider": provider,
         "per_page": coerce_positive_int(
@@ -350,10 +351,45 @@ def _build_options(
             limit=80,
         )
         or "image_reference_candidate",
+        "latency_mode": latency_mode,
+        "enhancement_mode": _normalize_token(input_payload.get("enhancement_mode"), limit=40),
         "visual_context": _normalize_visual_context(input_payload.get("visual_context")),
         "site_knowledge_context": _normalize_site_knowledge_context(site_knowledge_context),
         "llm_prompt_plan": _normalize_llm_prompt_plan(llm_prompt_plan),
     }
+
+
+def _image_source_latency_mode(input_payload: dict[str, Any]) -> str:
+    visual_context = _dict(input_payload.get("visual_context"))
+    latency_mode = str(
+        input_payload.get("latency_mode") or visual_context.get("latency_mode") or ""
+    ).strip().lower()
+    return latency_mode if latency_mode == "fast_first" else "complete"
+
+
+def _image_source_provider_query(input_payload: dict[str, Any]) -> str:
+    query = _normalize_text(input_payload.get("query"), limit=MAX_QUERY_CHARS)
+    if _image_source_latency_mode(input_payload) != "fast_first":
+        return query
+
+    visual_context = _dict(input_payload.get("visual_context"))
+    parts = [
+        visual_context.get("manual_query"),
+        visual_context.get("fallback_query"),
+        input_payload.get("query"),
+        visual_context.get("title"),
+        visual_context.get("selected_text"),
+        visual_context.get("selected_block_text"),
+        visual_context.get("excerpt"),
+    ]
+    for part in parts:
+        candidate = _normalize_text(part, limit=MAX_VISUAL_CONTEXT_CHARS)
+        if candidate:
+            visual_query = _visual_query_from_context(candidate)
+            if visual_query:
+                return _normalize_text(visual_query, limit=180)
+            return _normalize_text(candidate, limit=180)
+    return query
 
 
 def _resolve_provider(settings: Settings, requested_provider: str) -> str:
@@ -659,6 +695,8 @@ def _build_visual_brief(*, query: str, options: dict[str, Any]) -> dict[str, Any
     evidence_refs = _site_context_evidence_refs(site_context)
     site_context_status = str(site_context.get("status") or "not_requested")
     llm_status = str(llm_prompt_plan.get("status") or "not_requested")
+    latency_mode = str(options.get("latency_mode") or "complete").strip().lower()
+    use_site_knowledge_vectors = site_context_status not in {"deferred", "skipped"}
     selected_context = _normalize_text(
         context.get("selected_text") or context.get("selected_block_text"),
         limit=MAX_VISUAL_CONTEXT_CHARS,
@@ -697,6 +735,7 @@ def _build_visual_brief(*, query: str, options: dict[str, Any]) -> dict[str, Any
             "site_context_owner": "cloud_site_knowledge",
             "site_context_result_count": len(evidence_refs),
             "llm_prompt_planner_status": llm_status,
+            "latency_mode": latency_mode or "complete",
         },
         "site_context": {
             "status": site_context_status,
@@ -722,7 +761,7 @@ def _build_visual_brief(*, query: str, options: dict[str, Any]) -> dict[str, Any
         ],
         "evidence_policy": {
             "owner": "cloud_runtime",
-            "use_site_knowledge_vectors": True,
+            "use_site_knowledge_vectors": use_site_knowledge_vectors,
             "evidence_count": len(evidence_refs),
             "direct_wordpress_write": False,
         },
