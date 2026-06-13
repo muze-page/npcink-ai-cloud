@@ -1872,6 +1872,34 @@ async def get_admin_account_quota_summary(
     )
 
 
+@router.get("/admin/accounts/{account_id}/credit-ledger")
+async def get_admin_account_credit_ledger(
+    request: Request,
+    account_id: str,
+    limit: int = Query(default=50, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    source_type: str | None = Query(default=None),
+) -> Any:
+    auth = await authorize_internal_request(request, require_idempotency=False)
+    if auth is not None:
+        return auth
+    try:
+        result = _get_commercial_service(request).get_admin_account_credit_ledger(
+            account_id,
+            limit=limit,
+            offset=offset,
+            source_type=source_type,
+        )
+    except CommercialServiceError as error:
+        return _service_error_response(error, request=request)
+    return build_envelope(
+        status="ok",
+        message="admin account credit ledger loaded",
+        data=result,
+        revision="m6",
+    )
+
+
 @router.get("/admin/accounts/{account_id}/subscription")
 async def get_admin_account_subscription(
     request: Request,

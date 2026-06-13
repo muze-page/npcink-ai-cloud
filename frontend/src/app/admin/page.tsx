@@ -371,7 +371,7 @@ function platformCreditWatchTitle(
     credit_usage_spike: t('admin.platform_credit_watch_spike_title', {}, 'AI credit usage rose sharply'),
     credit_account_concentration: t('admin.platform_credit_watch_account_title', {}, 'Consumption is concentrated in one account'),
     credit_component_concentration: t('admin.platform_credit_watch_component_title', {}, 'One meter family dominates usage'),
-    credit_source_changed_to_estimate: t('admin.platform_credit_watch_source_title', {}, 'Current window is using estimated credits'),
+    credit_source_changed_to_estimate: t('admin.platform_credit_watch_source_title', {}, 'Current window is using fallback metering'),
   };
   return titles[code] || fallback || code;
 }

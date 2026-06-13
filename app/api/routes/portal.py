@@ -1052,6 +1052,54 @@ async def get_portal_site_entitlements(request: Request, site_id: str) -> Any:
     )
 
 
+@router.get("/sites/{site_id}/credit-ledger")
+async def get_portal_site_credit_ledger(
+    request: Request,
+    site_id: str,
+    limit: int = Query(default=25, ge=1, le=50),
+    offset: int = Query(default=0, ge=0),
+) -> Any:
+    auth = await resolve_portal_request_context(
+        request,
+        require_idempotency=False,
+        allow_session_cookies=True,
+    )
+    if isinstance(auth, JSONResponse):
+        return auth
+    access = _authorize_portal_site_access(
+        request,
+        site_id=site_id,
+        site_admin_ref=auth.site_admin_ref,
+        required_roles=SITE_ADMIN_SITE_KEY_WRITE_ROLES,
+    )
+    if isinstance(access, JSONResponse):
+        return access
+    try:
+        ledger = _get_commercial_service(request).get_portal_account_credit_ledger(
+            str(access.get("account_id") or ""),
+            limit=limit,
+            offset=offset,
+        )
+    except CommercialServiceError as error:
+        return _service_error_response(error, request=request)
+    return _portal_route_envelope(
+        message="portal credit ledger loaded",
+        data={
+            "site_id": site_id,
+            "account_id": str(access.get("account_id") or ""),
+            "site_admin_ref": auth.site_admin_ref,
+            "identity_type": str(access.get("identity_type") or ""),
+            "allowed_actions": [
+                str(action)
+                for action in _object_list(access.get("allowed_actions"))
+                if str(action).strip()
+            ],
+            "role": str(access.get("role") or ""),
+            **ledger,
+        },
+    )
+
+
 @router.get("/sites/{site_id}/audit-summary")
 async def get_portal_site_audit_summary(request: Request, site_id: str) -> Any:
     auth = await resolve_portal_request_context(

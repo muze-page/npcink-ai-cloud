@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import select
 
 from app.adapters.callbacks.http import HttpRuntimeCallbackDispatcher
+from app.adapters.repositories.commercial_repository import CommercialRepository
 from app.api.main import create_app
 from app.core.config import Settings
 from app.core.db import dispose_engine, get_session, init_schema
@@ -2124,6 +2125,160 @@ def test_admin_account_quota_summary_reports_ai_credits_and_resource_limits(
     assert resource_limits["active_api_key_sites"]["used"] == 1.0
     assert resource_limits["vector_documents"]["unit"] == "document"
     assert data["coverage"]["active_key_site_count"] == 1
+
+
+def test_admin_account_credit_ledger_lists_current_period_entries(
+    tmp_path: Path,
+) -> None:
+    database_url, client = _build_client(tmp_path)
+    seed_site_auth(
+        database_url,
+        site_id="site_credit_ledger",
+        scopes=["runtime:execute", "runtime:read", "stats:read"],
+        budgets={"max_ai_credits_per_period": 20},
+    )
+    now = datetime.now(UTC)
+    with get_session(database_url) as session:
+        subscription = session.scalar(
+            select(AccountSubscription)
+            .where(AccountSubscription.account_id == "acct_site_credit_ledger")
+            .order_by(AccountSubscription.created_at.desc())
+        )
+        assert subscription is not None
+        repository = CommercialRepository(session)
+        repository.record_credit_ledger_entry(
+            account_id="acct_site_credit_ledger",
+            site_id="site_credit_ledger",
+            subscription_id=subscription.subscription_id,
+            plan_version_id=subscription.plan_version_id,
+            run_id="run-credit-ledger-1",
+            provider_call_id=None,
+            source_type="tokens_total",
+            source_id="run-credit-ledger-1:tokens",
+            credit_delta=-2,
+            quantity=1500,
+            unit="token",
+            rate=1,
+            rate_unit="1000_tokens_rounded_up",
+            rate_version="ai-credit-ledger-v2",
+            idempotency_key="credit-ledger-tokens-001",
+            created_at=now,
+        )
+        repository.record_credit_ledger_entry(
+            account_id="acct_site_credit_ledger",
+            site_id="site_credit_ledger",
+            subscription_id=subscription.subscription_id,
+            plan_version_id=subscription.plan_version_id,
+            run_id="run-credit-ledger-1",
+            provider_call_id=None,
+            source_type="vector_chunks",
+            source_id="run-credit-ledger-1:chunks",
+            credit_delta=-2,
+            quantity=11,
+            unit="chunk",
+            rate=1,
+            rate_unit="10_chunks_rounded_up",
+            rate_version="ai-credit-ledger-v2",
+            idempotency_key="credit-ledger-chunks-001",
+            created_at=now + timedelta(seconds=1),
+        )
+        session.commit()
+
+    unauthenticated = client.get(
+        "/internal/service/admin/accounts/acct_site_credit_ledger/credit-ledger"
+    )
+    response = client.get(
+        "/internal/service/admin/accounts/acct_site_credit_ledger/credit-ledger?limit=1",
+        headers=build_internal_headers(),
+    )
+
+    assert unauthenticated.status_code == 401
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["account_id"] == "acct_site_credit_ledger"
+    assert data["rate_version"] == "ai-credit-ledger-v2"
+    assert data["summary"]["total_credits"] == 4.0
+    assert data["summary"]["entry_count"] == 2
+    assert {item["key"]: item["credits"] for item in data["summary"]["breakdown"]} == {
+        "tokens_total": 2.0,
+        "vector_chunks": 2.0,
+    }
+    assert data["pagination"] == {
+        "limit": 1,
+        "offset": 0,
+        "total": 2,
+        "has_more": True,
+    }
+    assert len(data["items"]) == 1
+    assert data["items"][0]["source_type"] == "vector_chunks"
+    assert data["items"][0]["credit_delta"] == -2.0
+    assert data["items"][0]["consumed_credits"] == 2.0
+
+    dispose_engine(database_url)
+
+
+def test_credit_ledger_consume_credit_delta_must_be_integer(
+    tmp_path: Path,
+) -> None:
+    database_url, _client = _build_client(tmp_path)
+    seed_site_auth(
+        database_url,
+        site_id="site_credit_integer",
+        scopes=["runtime:execute", "runtime:read", "stats:read"],
+    )
+    with get_session(database_url) as session:
+        subscription = session.scalar(
+            select(AccountSubscription)
+            .where(AccountSubscription.account_id == "acct_site_credit_integer")
+            .order_by(AccountSubscription.created_at.desc())
+        )
+        assert subscription is not None
+        repository = CommercialRepository(session)
+        try:
+            repository.record_credit_ledger_entry(
+                account_id="acct_site_credit_integer",
+                site_id="site_credit_integer",
+                subscription_id=subscription.subscription_id,
+                plan_version_id=subscription.plan_version_id,
+                run_id="run-credit-integer-1",
+                provider_call_id=None,
+                source_type="tokens_total",
+                source_id="run-credit-integer-1:tokens",
+                credit_delta=-1.25,
+                quantity=1250,
+                unit="token",
+                rate=1,
+                rate_unit="1000_tokens_rounded_up",
+                rate_version="ai-credit-ledger-v2",
+                idempotency_key="credit-integer-invalid-001",
+            )
+        except ValueError as error:
+            assert "integer credit unit" in str(error)
+        else:
+            raise AssertionError("non-integer consume credit_delta should be rejected")
+        session.rollback()
+
+        entry = repository.record_credit_ledger_entry(
+            account_id="acct_site_credit_integer",
+            site_id="site_credit_integer",
+            subscription_id=subscription.subscription_id,
+            plan_version_id=subscription.plan_version_id,
+            run_id="run-credit-integer-2",
+            provider_call_id=None,
+            source_type="vector_chunks",
+            source_id="run-credit-integer-2:chunks",
+            credit_delta=-2.0,
+            quantity=11,
+            unit="chunk",
+            rate=1,
+            rate_unit="10_chunks_rounded_up",
+            rate_version="ai-credit-ledger-v2",
+            idempotency_key="credit-integer-valid-001",
+        )
+        assert entry.credit_delta == -2.0
+        session.commit()
+
+    dispose_engine(database_url)
 
 
 def test_service_routes_inspect_commercial_policy_and_reconciliation(

@@ -1302,6 +1302,15 @@ class CommercialRepository:
         if existing is not None:
             return existing
 
+        normalized_credit_delta = round(float(credit_delta or 0.0), 6)
+        if (
+            event_type == CREDIT_LEDGER_EVENT_CONSUME
+            and not float(normalized_credit_delta).is_integer()
+        ):
+            raise ValueError("consume credit_delta must be an integer credit unit")
+        if event_type == CREDIT_LEDGER_EVENT_CONSUME:
+            normalized_credit_delta = float(int(normalized_credit_delta))
+
         entry = CreditLedgerEntry(
             ledger_entry_id=f"cle_{uuid4().hex}",
             account_id=account_id,
@@ -1313,7 +1322,7 @@ class CommercialRepository:
             event_type=event_type,
             source_type=source_type,
             source_id=source_id,
-            credit_delta=round(float(credit_delta or 0.0), 6),
+            credit_delta=normalized_credit_delta,
             quantity=round(float(quantity or 0.0), 6),
             unit=unit,
             rate=round(float(rate or 0.0), 6),
@@ -1334,9 +1343,11 @@ class CommercialRepository:
         site_ids: list[str] | None = None,
         subscription_id: str | None = None,
         event_types: list[str] | None = None,
+        source_types: list[str] | None = None,
         since: datetime | None = None,
         until: datetime | None = None,
         limit: int | None = None,
+        offset: int | None = None,
     ) -> list[CreditLedgerEntry]:
         statement = select(CreditLedgerEntry)
         if account_ids is not None:
@@ -1353,6 +1364,10 @@ class CommercialRepository:
             if not event_types:
                 return []
             statement = statement.where(CreditLedgerEntry.event_type.in_(event_types))
+        if source_types is not None:
+            if not source_types:
+                return []
+            statement = statement.where(CreditLedgerEntry.source_type.in_(source_types))
         if since is not None:
             statement = statement.where(CreditLedgerEntry.created_at >= since)
         if until is not None:
@@ -1361,9 +1376,47 @@ class CommercialRepository:
             CreditLedgerEntry.created_at.desc(),
             CreditLedgerEntry.ledger_entry_id.desc(),
         )
+        if offset is not None and offset > 0:
+            statement = statement.offset(offset)
         if limit is not None and limit > 0:
             statement = statement.limit(limit)
         return list(self.session.scalars(statement))
+
+    def count_credit_ledger_entries(
+        self,
+        *,
+        account_ids: list[str] | None = None,
+        site_ids: list[str] | None = None,
+        subscription_id: str | None = None,
+        event_types: list[str] | None = None,
+        source_types: list[str] | None = None,
+        since: datetime | None = None,
+        until: datetime | None = None,
+    ) -> int:
+        statement = select(func.count(CreditLedgerEntry.ledger_entry_id))
+        if account_ids is not None:
+            if not account_ids:
+                return 0
+            statement = statement.where(CreditLedgerEntry.account_id.in_(account_ids))
+        if site_ids is not None:
+            if not site_ids:
+                return 0
+            statement = statement.where(CreditLedgerEntry.site_id.in_(site_ids))
+        if subscription_id is not None:
+            statement = statement.where(CreditLedgerEntry.subscription_id == subscription_id)
+        if event_types is not None:
+            if not event_types:
+                return 0
+            statement = statement.where(CreditLedgerEntry.event_type.in_(event_types))
+        if source_types is not None:
+            if not source_types:
+                return 0
+            statement = statement.where(CreditLedgerEntry.source_type.in_(source_types))
+        if since is not None:
+            statement = statement.where(CreditLedgerEntry.created_at >= since)
+        if until is not None:
+            statement = statement.where(CreditLedgerEntry.created_at <= until)
+        return int(self.session.scalar(statement) or 0)
 
     def list_usage_meter_events(
         self,

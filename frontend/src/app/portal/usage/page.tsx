@@ -25,6 +25,7 @@ import {
 import {
   portalClient,
   type Entitlements,
+  type PortalCreditLedgerPayload,
   type PortalUsageSummaryPayload,
   type PortalUsageWindow,
 } from '@/lib/portal-client';
@@ -111,12 +112,14 @@ function PortalUsageContent() {
   });
   const [usage, setUsage] = useState<PortalUsageSummaryPayload | null>(null);
   const [entitlements, setEntitlements] = useState<Entitlements | null>(null);
+  const [creditLedger, setCreditLedger] = useState<PortalCreditLedgerPayload | null>(null);
 
   const loadBundle = useCallback(async () => {
     if (!selectedSiteId) return;
     const bundle = await portalClient.getUsageBundle(selectedSiteId);
     setUsage(bundle.usage);
     setEntitlements(bundle.entitlements);
+    setCreditLedger(bundle.creditLedger);
   }, [selectedSiteId]);
 
   const { execute, isLoading: retryLoading, error: retryError, retry } = useRetry(loadBundle, {
@@ -241,6 +244,9 @@ function PortalUsageContent() {
   const quotaBreakdown = Array.isArray(quotaSummary?.breakdown)
     ? quotaSummary.breakdown
     : [];
+  const creditLedgerItems = creditLedger?.items || [];
+  const creditLedgerTotal = Number(creditLedger?.summary?.total_credits || 0);
+  const creditLedgerCount = Number(creditLedger?.pagination?.total ?? creditLedger?.summary?.entry_count ?? 0);
   const unlimitedLabel = t('common.unlimited', {}, 'Unlimited');
   const quotaResourceByKey = new Map(
     quotaResources.map((item) => [String(item.key || ''), item])
@@ -307,7 +313,7 @@ function PortalUsageContent() {
       ? {
           label: t('portal.usage.ai_credits_label', {}, 'AI credits'),
           value: `${formatQuotaValue(quotaCredit.used)} / ${formatQuotaValue(quotaCredit.limit, Boolean(quotaCredit.unlimited), unlimitedLabel)}`,
-          detail: t('portal.usage.ai_credits_metric_detail', {}, 'Estimated credits used this package period.'),
+          detail: t('portal.usage.ai_credits_metric_detail', {}, 'Recorded credits used this package period.'),
         }
       : {
           label: t('portal.usage.remaining_requests_test_label', {}, 'Requests left'),
@@ -449,7 +455,7 @@ function PortalUsageContent() {
                   </p>
                   <p className="mt-1 text-sm text-gray-600 dark:text-gray-400">
                     {quotaCredit.estimated
-                      ? t('portal.usage.ai_credits_estimated_desc', {}, 'Estimated until the credit ledger is enforced.')
+                      ? t('portal.usage.ai_credits_estimated_desc', {}, 'No ledger entries yet; showing fallback metering.')
                       : t('portal.usage.ai_credits_actual_desc', {}, 'Credits recorded for this package period.')}
                   </p>
                 </div>
@@ -548,6 +554,78 @@ function PortalUsageContent() {
               </div>
             </BackofficeStackCard>
           </div>
+          <BackofficeStackCard className="bg-white/80 dark:bg-slate-950/45">
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+              <div>
+                <p className="text-sm font-semibold text-gray-950 dark:text-white">
+                  {t('portal.usage.credit_ledger_title', {}, 'Credit ledger detail')}
+                </p>
+                <p className="mt-1 text-sm text-gray-600 dark:text-gray-400">
+                  {t(
+                    'portal.usage.credit_ledger_desc',
+                    {},
+                    'Current-period AI credit consume records for this account.'
+                  )}
+                </p>
+              </div>
+              <div className="text-left sm:text-right">
+                <p className="text-lg font-semibold text-gray-950 dark:text-white">
+                  {formatQuotaValue(creditLedgerTotal)}
+                </p>
+                <p className="text-xs text-gray-500 dark:text-gray-400">
+                  {t(
+                    'portal.usage.credit_ledger_record_count',
+                    { count: formatQuotaValue(creditLedgerCount) },
+                    `${formatQuotaValue(creditLedgerCount)} records`
+                  )}
+                </p>
+              </div>
+            </div>
+            {creditLedgerItems.length > 0 ? (
+              <div className="mt-4 overflow-hidden rounded-[1rem] border border-slate-200 dark:border-slate-800">
+                <div className="hidden grid-cols-[1.1fr_0.8fr_0.6fr_0.9fr] gap-3 bg-slate-50 px-4 py-2 text-xs font-semibold uppercase tracking-[0.12em] text-slate-500 dark:bg-slate-950/45 dark:text-slate-400 sm:grid">
+                  <span>{t('portal.usage.credit_ledger_source', {}, 'Source')}</span>
+                  <span>{t('portal.usage.credit_ledger_quantity', {}, 'Quantity')}</span>
+                  <span className="text-right">{t('portal.usage.credit_ledger_credits', {}, 'Credits')}</span>
+                  <span className="text-right">{t('portal.usage.credit_ledger_time', {}, 'Time')}</span>
+                </div>
+                <div className="divide-y divide-slate-200 text-sm dark:divide-slate-800">
+                  {creditLedgerItems.map((entry) => (
+                    <div
+                      key={entry.ledger_entry_id || `${entry.source_type}-${entry.created_at}`}
+                      className="grid grid-cols-1 gap-2 px-4 py-3 sm:grid-cols-[1.1fr_0.8fr_0.6fr_0.9fr] sm:gap-3"
+                    >
+                      <div>
+                        <p className="font-medium text-slate-950 dark:text-white">
+                          {portalCreditBreakdownLabel(entry.source_type, '', t)}
+                        </p>
+                        <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                          {[entry.site_id, entry.run_id].filter(Boolean).join(' · ') || entry.source_id || '-'}
+                        </p>
+                      </div>
+                      <p className="text-slate-700 dark:text-slate-300">
+                        {formatQuotaValue(entry.quantity)} {entry.unit}
+                      </p>
+                      <p className="font-semibold text-slate-950 dark:text-white sm:text-right">
+                        {formatQuotaValue(entry.consumed_credits)}
+                      </p>
+                      <p className="text-slate-500 dark:text-slate-400 sm:text-right">
+                        {entry.created_at ? formatDate(entry.created_at) : '-'}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : (
+              <div className="mt-4 rounded-[1rem] border border-dashed border-slate-300 px-4 py-5 text-sm text-slate-500 dark:border-slate-700 dark:text-slate-400">
+                {t(
+                  'portal.usage.credit_ledger_empty',
+                  {},
+                  'No AI credit ledger consume records are available for the current period.'
+                )}
+              </div>
+            )}
+          </BackofficeStackCard>
         </BackofficeSectionPanel>
       ) : null}
 

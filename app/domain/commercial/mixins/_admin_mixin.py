@@ -1048,6 +1048,100 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
             },
         }
 
+    def get_admin_account_credit_ledger(
+        self,
+        account_id: str,
+        *,
+        limit: int = 50,
+        offset: int = 0,
+        source_type: str | None = None,
+    ) -> dict[str, object]:
+        now = self.now_factory()
+        normalized_limit = min(100, max(1, int(limit or 50)))
+        normalized_offset = max(0, int(offset or 0))
+        normalized_source_type = str(source_type or "").strip()
+        source_types = [normalized_source_type] if normalized_source_type else None
+        with get_session(self.database_url) as session:
+            repository = CommercialRepository(session)
+            account = repository.get_account(account_id)
+            if account is None:
+                raise CommercialNotFoundError(
+                    "service.account_not_found",
+                    f"account '{account_id}' was not found",
+                )
+            subscriptions = repository.list_subscriptions(account_id=account_id, limit=None)
+            primary_subscription = cast(Any, self)._select_primary_subscription(subscriptions)
+            period_start_at, period_end_at = cast(Any, self)._resolve_period(
+                primary_subscription,
+                now,
+            )
+            subscription_id = (
+                primary_subscription.subscription_id
+                if primary_subscription is not None
+                else None
+            )
+            entries = repository.list_credit_ledger_entries(
+                account_ids=[account_id],
+                subscription_id=subscription_id,
+                event_types=[CREDIT_LEDGER_EVENT_CONSUME],
+                source_types=source_types,
+                since=period_start_at,
+                until=period_end_at,
+                limit=normalized_limit,
+                offset=normalized_offset,
+            )
+            total = repository.count_credit_ledger_entries(
+                account_ids=[account_id],
+                subscription_id=subscription_id,
+                event_types=[CREDIT_LEDGER_EVENT_CONSUME],
+                source_types=source_types,
+                since=period_start_at,
+                until=period_end_at,
+            )
+            summary_entries = repository.list_credit_ledger_entries(
+                account_ids=[account_id],
+                subscription_id=subscription_id,
+                event_types=[CREDIT_LEDGER_EVENT_CONSUME],
+                source_types=source_types,
+                since=period_start_at,
+                until=period_end_at,
+                limit=None,
+            )
+
+        service = cast(Any, self)
+        breakdown = build_credit_breakdown_from_ledger(summary_entries)
+        total_credits = round(
+            sum(service._coerce_float(item.get("credits")) for item in breakdown),
+            6,
+        )
+        return {
+            "account_id": account_id,
+            "generated_at": self._serialize_datetime(now),
+            "period_start_at": self._serialize_datetime(period_start_at),
+            "period_end_at": self._serialize_datetime(period_end_at),
+            "rate_version": AI_CREDIT_RATE_VERSION,
+            "filters": {
+                "source_type": normalized_source_type,
+                "limit": normalized_limit,
+                "offset": normalized_offset,
+            },
+            "pagination": {
+                "limit": normalized_limit,
+                "offset": normalized_offset,
+                "total": total,
+                "has_more": normalized_offset + len(entries) < total,
+            },
+            "summary": {
+                "total_credits": total_credits,
+                "entry_count": total,
+                "breakdown": breakdown,
+            },
+            "items": [
+                self._serialize_credit_ledger_entry(entry, include_internal=True)
+                for entry in entries
+            ],
+        }
+
     def get_portal_account_quota_summary(self, account_id: str) -> dict[str, object]:
         summary = self.get_admin_account_quota_summary(account_id)
         return {
@@ -1068,6 +1162,81 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
                 else []
             ),
         }
+
+    def get_portal_account_credit_ledger(
+        self,
+        account_id: str,
+        *,
+        limit: int = 25,
+        offset: int = 0,
+    ) -> dict[str, object]:
+        ledger = self.get_admin_account_credit_ledger(
+            account_id,
+            limit=min(50, max(1, int(limit or 25))),
+            offset=max(0, int(offset or 0)),
+        )
+        return {
+            "account_id": str(ledger.get("account_id") or account_id),
+            "generated_at": ledger.get("generated_at"),
+            "period_start_at": ledger.get("period_start_at"),
+            "period_end_at": ledger.get("period_end_at"),
+            "rate_version": ledger.get("rate_version"),
+            "pagination": ledger.get("pagination"),
+            "summary": ledger.get("summary"),
+            "items": [
+                self._serialize_credit_ledger_entry(entry, include_internal=False)
+                for entry in self._credit_ledger_entries_from_payload(ledger.get("items"))
+            ],
+        }
+
+    def _credit_ledger_entries_from_payload(self, items: object) -> list[object]:
+        return items if isinstance(items, list) else []
+
+    def _serialize_credit_ledger_entry(
+        self,
+        entry: object,
+        *,
+        include_internal: bool = False,
+    ) -> dict[str, object]:
+        service = cast(Any, self)
+
+        def value(key: str, default: object = None) -> object:
+            if isinstance(entry, dict):
+                return entry.get(key, default)
+            return getattr(entry, key, default)
+
+        credit_delta = service._coerce_float(value("credit_delta", 0.0))
+        payload: dict[str, object] = {
+            "ledger_entry_id": str(value("ledger_entry_id", "") or ""),
+            "site_id": str(value("site_id", "") or ""),
+            "event_type": str(value("event_type", "") or ""),
+            "source_type": str(value("source_type", "") or ""),
+            "source_id": str(value("source_id", "") or ""),
+            "run_id": str(value("run_id", "") or ""),
+            "credit_delta": credit_delta,
+            "consumed_credits": max(0.0, -credit_delta),
+            "quantity": service._coerce_float(value("quantity", 0.0)),
+            "unit": str(value("unit", "") or ""),
+            "rate": service._coerce_float(value("rate", 0.0)),
+            "rate_unit": value("rate_unit"),
+            "rate_version": str(value("rate_version", "") or ""),
+            "created_at": self._serialize_datetime(value("created_at")),
+        }
+        if include_internal:
+            payload.update(
+                {
+                    "account_id": str(value("account_id", "") or ""),
+                    "subscription_id": str(value("subscription_id", "") or ""),
+                    "plan_version_id": str(value("plan_version_id", "") or ""),
+                    "provider_call_id": value("provider_call_id"),
+                    "metadata": (
+                        value("metadata")
+                        if isinstance(entry, dict)
+                        else (getattr(entry, "metadata_json", None) or {})
+                    ),
+                }
+            )
+        return payload
 
     def _build_platform_credit_summary(
         self,

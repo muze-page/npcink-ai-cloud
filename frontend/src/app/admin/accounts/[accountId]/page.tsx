@@ -225,6 +225,43 @@ type AccountQuotaSummary = {
   totals?: Record<string, number>;
 };
 
+type AccountCreditLedgerEntry = {
+  ledger_entry_id: string;
+  site_id?: string;
+  event_type?: string;
+  source_type: string;
+  source_id?: string;
+  run_id?: string;
+  credit_delta: number;
+  consumed_credits: number;
+  quantity: number;
+  unit: string;
+  rate?: number;
+  rate_unit?: string;
+  rate_version?: string;
+  created_at?: string;
+};
+
+type AccountCreditLedger = {
+  account_id: string;
+  generated_at?: string;
+  period_start_at?: string;
+  period_end_at?: string;
+  rate_version?: string;
+  pagination?: {
+    limit?: number;
+    offset?: number;
+    total?: number;
+    has_more?: boolean;
+  };
+  summary?: {
+    total_credits?: number;
+    entry_count?: number;
+    breakdown?: AccountCreditBreakdownItem[];
+  };
+  items: AccountCreditLedgerEntry[];
+};
+
 type PendingConfirmation = {
   title: string;
   message: string;
@@ -447,6 +484,7 @@ function AccountDetailContent() {
   const [packagePlans, setPackagePlans] = useState<PackagePlanListItem[]>([]);
   const [siteRuntimeData, setSiteRuntimeData] = useState<Record<string, SiteRuntimeData>>({});
   const [quotaSummary, setQuotaSummary] = useState<AccountQuotaSummary | null>(null);
+  const [creditLedger, setCreditLedger] = useState<AccountCreditLedger | null>(null);
   const [nowMs] = useState(() => Date.now());
 
   const loadPackagePlans = useCallback(async () => {
@@ -572,6 +610,32 @@ function AccountDetailContent() {
       });
     } catch {
       setQuotaSummary(null);
+    }
+  }, [accountId]);
+
+  const loadCreditLedger = useCallback(async () => {
+    try {
+      const response = await fetch(`/api/admin/accounts/${encodeURIComponent(accountId)}/credit-ledger?limit=12`, {
+        credentials: 'include',
+      });
+      if (!response.ok) {
+        setCreditLedger(null);
+        return;
+      }
+      const data = await response.json();
+      const payload = data.data || {};
+      setCreditLedger({
+        account_id: String(payload.account_id || accountId),
+        generated_at: String(payload.generated_at || ''),
+        period_start_at: String(payload.period_start_at || ''),
+        period_end_at: String(payload.period_end_at || ''),
+        rate_version: String(payload.rate_version || ''),
+        pagination: payload.pagination || {},
+        summary: payload.summary || {},
+        items: Array.isArray(payload.items) ? (payload.items as AccountCreditLedgerEntry[]) : [],
+      });
+    } catch {
+      setCreditLedger(null);
     }
   }, [accountId]);
 
@@ -719,12 +783,13 @@ function AccountDetailContent() {
         void loadSiteRuntimeData(nextSiteIds);
       }
       void loadQuotaSummary();
+      void loadCreditLedger();
     } catch (err) {
       setError(resolveUiErrorMessage(err instanceof Error ? err.message : null, t('error.failed_load')));
     } finally {
       setIsLoading(false);
     }
-  }, [accountId, loadQuotaSummary, loadSiteRuntimeData, t]);
+  }, [accountId, loadCreditLedger, loadQuotaSummary, loadSiteRuntimeData, t]);
 
   const handleSaveAccountMeta = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -1309,6 +1374,9 @@ function AccountDetailContent() {
   ];
   const resourceRows = quotaSummary?.resource_limits || [];
   const internalLimitRows = quotaSummary?.internal_limits || [];
+  const creditLedgerItems = creditLedger?.items || [];
+  const creditLedgerTotal = Number(creditLedger?.summary?.total_credits || 0);
+  const creditLedgerCount = Number(creditLedger?.pagination?.total ?? creditLedger?.summary?.entry_count ?? 0);
   const siteLimitLabel = siteLimitUnlimited ? unlimitedLabel : formatInteger(accountSiteLimit);
   const packagePlanOptions = packagePlans
     .filter((item) => item.plan?.plan_id)
@@ -2108,6 +2176,89 @@ function AccountDetailContent() {
                 </div>
               ) : null}
             </div>
+          </BackofficeStackCard>
+
+          <BackofficeStackCard className="bg-white/80 dark:bg-slate-950/55 xl:col-span-2">
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+              <div>
+                <h3 className="text-sm font-semibold text-gray-950 dark:text-white">
+                  {t('admin.account_detail.credit_ledger_title', undefined, 'Credit ledger detail')}
+                </h3>
+                <p className="mt-1 text-sm text-gray-600 dark:text-gray-400">
+                  {t(
+                    'admin.account_detail.credit_ledger_desc',
+                    undefined,
+                    'Current-period consume records from the AI credit ledger.'
+                  )}
+                </p>
+              </div>
+              <div className="text-left sm:text-right">
+                <p className="text-sm font-semibold text-gray-950 dark:text-white">
+                  {formatInteger(Math.round(creditLedgerTotal))}
+                </p>
+                <p className="text-xs text-gray-500 dark:text-gray-400">
+                  {t(
+                    'admin.account_detail.credit_ledger_record_count',
+                    { count: formatInteger(creditLedgerCount) },
+                    `${formatInteger(creditLedgerCount)} records`
+                  )}
+                </p>
+              </div>
+            </div>
+            {creditLedgerItems.length > 0 ? (
+              <div className="mt-4 overflow-hidden rounded-[1rem] border border-slate-200 dark:border-slate-800">
+                <div className="hidden grid-cols-[1.15fr_0.85fr_0.7fr_0.9fr] gap-3 bg-slate-50 px-4 py-2 text-xs font-semibold uppercase tracking-[0.12em] text-slate-500 dark:bg-slate-950/45 dark:text-slate-400 sm:grid">
+                  <span>{t('admin.account_detail.credit_ledger_source', undefined, 'Source')}</span>
+                  <span>{t('admin.account_detail.credit_ledger_quantity', undefined, 'Quantity')}</span>
+                  <span className="text-right">{t('admin.account_detail.credit_ledger_credits', undefined, 'Credits')}</span>
+                  <span className="text-right">{t('admin.account_detail.credit_ledger_time', undefined, 'Time')}</span>
+                </div>
+                <div className="divide-y divide-slate-200 text-sm dark:divide-slate-800">
+                  {creditLedgerItems.map((entry) => (
+                    <div
+                      key={entry.ledger_entry_id || `${entry.source_type}-${entry.created_at}`}
+                      className="grid grid-cols-1 gap-2 px-4 py-3 sm:grid-cols-[1.15fr_0.85fr_0.7fr_0.9fr] sm:gap-3"
+                    >
+                      <div>
+                        <p className="font-medium text-slate-950 dark:text-white">
+                          {creditBreakdownLabel(
+                            {
+                              key: entry.source_type,
+                              quantity: entry.quantity,
+                              unit: entry.unit,
+                              rate: Number(entry.rate || 0),
+                              credits: entry.consumed_credits,
+                            },
+                            t
+                          )}
+                        </p>
+                        <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                          {[entry.site_id, entry.run_id].filter(Boolean).join(' · ') || entry.source_id || '-'}
+                        </p>
+                      </div>
+                      <p className="text-slate-700 dark:text-slate-300">
+                        {formatInteger(Math.round(Number(entry.quantity || 0)))} {entry.unit}
+                      </p>
+                      <p className="font-semibold text-slate-950 dark:text-white sm:text-right">
+                        {formatInteger(Math.round(Number(entry.consumed_credits || 0)))}
+                      </p>
+                      <p className="text-slate-500 dark:text-slate-400 sm:text-right">
+                        {entry.created_at ? formatDate(entry.created_at) : '-'}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : (
+              <BackofficeEmptyState
+                title={t('admin.account_detail.credit_ledger_empty', undefined, 'No ledger records this period')}
+                description={t(
+                  'admin.account_detail.credit_ledger_empty_desc',
+                  undefined,
+                  'This account has no consume entries in the current AI credit ledger period.'
+                )}
+              />
+            )}
           </BackofficeStackCard>
 
           <BackofficeStackCard className="bg-white/80 dark:bg-slate-950/55">

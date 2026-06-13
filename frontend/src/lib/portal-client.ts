@@ -1097,6 +1097,51 @@ export interface PortalActivatedSite {
 export interface PortalUsageBundle {
   usage: PortalUsageSummaryPayload;
   entitlements: Entitlements;
+  creditLedger: PortalCreditLedgerPayload;
+}
+
+export interface PortalCreditLedgerEntry {
+  ledger_entry_id: string;
+  site_id?: string;
+  event_type?: string;
+  source_type: string;
+  source_id?: string;
+  run_id?: string;
+  credit_delta: number;
+  consumed_credits: number;
+  quantity: number;
+  unit: string;
+  rate?: number;
+  rate_unit?: string;
+  rate_version?: string;
+  created_at?: string;
+}
+
+export interface PortalCreditLedgerPayload {
+  site_id: string;
+  account_id: string;
+  generated_at?: string;
+  period_start_at?: string;
+  period_end_at?: string;
+  rate_version?: string;
+  pagination?: {
+    limit?: number;
+    offset?: number;
+    total?: number;
+    has_more?: boolean;
+  };
+  summary?: {
+    total_credits?: number;
+    entry_count?: number;
+    breakdown?: Array<{
+      key?: string;
+      label?: string;
+      quantity?: number;
+      unit?: string;
+      credits?: number;
+    }>;
+  };
+  items: PortalCreditLedgerEntry[];
 }
 
 export interface PortalAuditBundle {
@@ -1473,6 +1518,22 @@ export class PortalClient {
   }
 
   /**
+   * 获取本期积分账本明细
+   * GET /portal/v1/sites/{siteId}/credit-ledger
+   */
+  async getCreditLedger(
+    siteId: string,
+    options?: { limit?: number; offset?: number }
+  ): Promise<PortalEnvelope<PortalCreditLedgerPayload>> {
+    const params = new URLSearchParams();
+    if (options?.limit) params.set('limit', String(options.limit));
+    if (options?.offset) params.set('offset', String(options.offset));
+
+    const query = params.toString() ? `?${params.toString()}` : '';
+    return this.request('GET', `/sites/${siteId}/credit-ledger${query}`, undefined, { requireAuth: true });
+  }
+
+  /**
    * 获取审计摘要
    * GET /portal/v1/sites/{siteId}/audit-summary
    */
@@ -1535,13 +1596,15 @@ export class PortalClient {
   }
 
   async getUsageBundle(siteId: string): Promise<PortalUsageBundle> {
-    const [usageResponse, entitlementsResponse] = await Promise.all([
+    const [usageResponse, entitlementsResponse, creditLedgerResponse] = await Promise.all([
       this.getUsageSummary(siteId),
       this.getEntitlements(siteId),
+      this.getCreditLedger(siteId, { limit: 12 }),
     ]);
     return {
       usage: usageResponse.data,
       entitlements: entitlementsResponse.data,
+      creditLedger: creditLedgerResponse.data,
     };
   }
 

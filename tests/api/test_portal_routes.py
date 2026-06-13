@@ -15,11 +15,13 @@ from app.adapters.providers.base import (
     ProviderExecutionRequest,
     ProviderExecutionResult,
 )
+from app.adapters.repositories.commercial_repository import CommercialRepository
 from app.api.main import create_app
 from app.core.config import Settings
 from app.core.db import dispose_engine, get_session, init_schema
 from app.core.models import (
     SITE_ADMIN_STATUS_ACTIVE,
+    AccountSubscription,
     SiteAdminIdentity,
 )
 from app.core.services import CloudServices
@@ -1620,6 +1622,32 @@ def test_portal_summary_usage_entitlements_and_audit_routes(tmp_path: Path) -> N
         },
         headers=build_internal_headers(idempotency_key="portal-reads-subscription-001"),
     )
+    with get_session(database_url) as session:
+        subscription = session.scalar(
+            select(AccountSubscription)
+            .where(AccountSubscription.account_id == "acct_portal_reads")
+            .order_by(AccountSubscription.created_at.desc())
+        )
+        assert subscription is not None
+        repository = CommercialRepository(session)
+        repository.record_credit_ledger_entry(
+            account_id="acct_portal_reads",
+            site_id="site_portal_reads",
+            subscription_id=subscription.subscription_id,
+            plan_version_id=subscription.plan_version_id,
+            run_id="run-portal-ledger-1",
+            provider_call_id=None,
+            source_type="tokens_total",
+            source_id="run-portal-ledger-1:tokens",
+            credit_delta=-2,
+            quantity=1500,
+            unit="token",
+            rate=1,
+            rate_unit="1000_tokens_rounded_up",
+            rate_version="ai-credit-ledger-v2",
+            idempotency_key="portal-credit-ledger-001",
+        )
+        session.commit()
     client.post(
         "/portal/v1/sites/site_portal_reads/api-keys",
         json={"label": "Portal Reads Key"},
@@ -1677,13 +1705,26 @@ def test_portal_summary_usage_entitlements_and_audit_routes(tmp_path: Path) -> N
     quota_summary = entitlements_data["quota_summary"]
     assert quota_summary["account_id"] == "acct_portal_reads"
     assert quota_summary["credit"]["key"] == "ai_credits"
-    assert quota_summary["credit"]["estimated"] is True
+    assert quota_summary["credit"]["estimated"] is False
     assert "internal_limits" not in quota_summary
     assert {item["key"] for item in quota_summary["resource_limits"]} >= {
         "bound_sites",
         "active_api_key_sites",
         "vector_documents",
     }
+
+    credit_ledger_response = client.get(
+        "/portal/v1/sites/site_portal_reads/credit-ledger?limit=10",
+        headers=build_portal_headers(site_admin_ref="site_admin:portal-reads@example.com"),
+    )
+    assert credit_ledger_response.status_code == 200
+    credit_ledger_data = credit_ledger_response.json()["data"]
+    assert credit_ledger_data["site_id"] == "site_portal_reads"
+    assert credit_ledger_data["account_id"] == "acct_portal_reads"
+    assert credit_ledger_data["summary"]["total_credits"] == 2.0
+    assert credit_ledger_data["pagination"]["total"] == 1
+    assert credit_ledger_data["items"][0]["source_type"] == "tokens_total"
+    assert credit_ledger_data["items"][0]["consumed_credits"] == 2.0
 
     audit_response = client.get(
         "/portal/v1/sites/site_portal_reads/audit-summary",
