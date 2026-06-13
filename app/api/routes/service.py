@@ -24,6 +24,7 @@ from app.domain.commercial.errors import CommercialServiceError
 from app.domain.commercial.service import CommercialService, ServiceAuditContext
 from app.domain.hosted_model_defaults import FREE_GPT55_MODEL_ID
 from app.domain.image_sources.admin_config import ImageSourceAdminConfigService
+from app.domain.image_sources.metrics import ImageSourceMetricsService
 from app.domain.media_derivatives.metrics import MediaDerivativeObservabilityService
 from app.domain.observability.plugin_events import PluginObservabilityService
 from app.domain.observability.service import ObservabilityService
@@ -2335,6 +2336,28 @@ async def update_admin_image_source_providers(
     return build_envelope(
         status="ok",
         message="image source provider settings saved",
+        data=result,
+        revision="m6",
+    )
+
+
+@router.get("/admin/image-source-metrics")
+async def get_admin_image_source_metrics(
+    request: Request,
+    window_hours: int = Query(default=24, ge=1, le=168),
+    site_id: str = Query(default=""),
+) -> Any:
+    auth = await authorize_internal_request(request, require_idempotency=False)
+    if auth is not None:
+        return auth
+    services = get_cloud_services(request)
+    result = ImageSourceMetricsService(services.settings.database_url).get_summary(
+        site_id=site_id.strip() or None,
+        window_hours=window_hours,
+    )
+    return build_envelope(
+        status="ok",
+        message="image source readonly metrics loaded",
         data=result,
         revision="m6",
     )

@@ -306,6 +306,155 @@ def test_admin_image_source_provider_settings_are_masked_and_update_runtime(
     assert services.settings.image_source_timeout_seconds == 8
 
 
+def test_image_source_readonly_metrics_summarizes_fast_first_runtime(
+    tmp_path: Path,
+) -> None:
+    database_url, client = _build_client(tmp_path)
+    site_id = "site_image_metrics"
+    seed_site_auth(
+        database_url,
+        site_id=site_id,
+        scopes=["runtime:execute", "runtime:read"],
+    )
+    now = datetime.now(UTC)
+    with get_session(database_url) as session:
+        subscription = session.scalar(
+            select(AccountSubscription)
+            .where(AccountSubscription.account_id == f"acct_{site_id}")
+            .order_by(AccountSubscription.created_at.desc())
+        )
+        assert subscription is not None
+
+        def add_image_source_run(
+            *,
+            run_id: str,
+            latency_mode: str,
+            status: str = "succeeded",
+            provider_error: str = "",
+        ) -> None:
+            deferred = latency_mode == "fast_first"
+            session.add(
+                RunRecord(
+                    run_id=run_id,
+                    site_id=site_id,
+                    account_id=subscription.account_id,
+                    subscription_id=subscription.subscription_id,
+                    plan_version_id=subscription.plan_version_id,
+                    ability_name="magick-ai-toolbox/search-image-source",
+                    ability_family="knowledge",
+                    skill_id="",
+                    workflow_id="",
+                    contract_version="image_source_cloud_request.v1",
+                    channel="toolbox",
+                    execution_kind="image_source",
+                    execution_tier="cloud",
+                    execution_pattern="step_offload",
+                    data_classification="public_reference_media",
+                    profile_id="image-source.managed",
+                    canonical_run_id=None,
+                    status=status,
+                    idempotency_key=f"idem-{run_id}",
+                    request_fingerprint=f"fingerprint-{run_id}",
+                    trace_id=f"trace-{run_id}",
+                    cancel_requested_at=None,
+                    canceled_at=None,
+                    input_json={
+                        "latency_mode": latency_mode,
+                        "enhancement_mode": "deferred" if deferred else "complete",
+                        "query": "sensitive operator query should not appear",
+                        "visual_context": {"latency_mode": latency_mode},
+                    },
+                    execution_input_ciphertext=None,
+                    policy_json={},
+                    result_ref="inline",
+                    result_json={
+                        "resolved_provider": "unsplash",
+                        "query_chars": 42,
+                        "active_sources": [{"provider": "unsplash", "count": 2}],
+                        "visual_brief": {
+                            "site_context_status": "deferred" if deferred else "ready",
+                            "llm_prompt_planner_status": "deferred" if deferred else "ready",
+                            "source_context": {"latency_mode": latency_mode},
+                        },
+                    },
+                    error_code=provider_error or None,
+                    error_message=None,
+                    callback_status="not_requested",
+                    callback_attempt_count=0,
+                    callback_last_attempt_at=None,
+                    callback_delivered_at=None,
+                    callback_next_attempt_at=None,
+                    callback_last_error_code=None,
+                    callback_last_error_message=None,
+                    selected_provider_id="unsplash",
+                    selected_model_id="image-source-search",
+                    selected_instance_id="cloud-managed",
+                    fallback_used=False,
+                    started_at=now - timedelta(minutes=5),
+                    processing_started_at=now - timedelta(minutes=5),
+                    finished_at=now - timedelta(minutes=4),
+                    retention_expires_at=now + timedelta(days=1),
+                    result_purged_at=None,
+                )
+            )
+            session.flush()
+            session.add(
+                ProviderCallRecord(
+                    run_id=run_id,
+                    provider_id="unsplash",
+                    model_id="image-source-search",
+                    instance_id="cloud-managed",
+                    region="unspecified",
+                    latency_ms=80 if not provider_error else 120,
+                    tokens_in=0,
+                    tokens_out=0,
+                    cost=0.001,
+                    retry_count=0,
+                    fallback_used=False,
+                    error_code=provider_error or None,
+                    created_at=now - timedelta(minutes=4),
+                )
+            )
+
+        add_image_source_run(run_id="run-image-fast", latency_mode="fast_first")
+        add_image_source_run(run_id="run-image-complete", latency_mode="complete")
+        add_image_source_run(
+            run_id="run-image-error",
+            latency_mode="fast_first",
+            status="failed",
+            provider_error="provider.timeout",
+        )
+        session.commit()
+
+    unauthorized = client.get("/internal/service/admin/image-source-metrics")
+    assert unauthorized.status_code == 401
+
+    response = client.get(
+        f"/internal/service/admin/image-source-metrics?site_id={site_id}&window_hours=24",
+        headers=build_internal_headers(),
+    )
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["contract_version"] == "image-source-readonly-metrics.v1"
+    assert data["filters"]["site_id"] == site_id
+    assert data["totals"]["runs"] == 3
+    assert data["totals"]["fast_first_runs"] == 2
+    assert data["totals"]["complete_runs"] == 1
+    assert data["totals"]["deferred_enrichment_runs"] == 2
+    assert data["totals"]["provider_calls"] == 3
+    assert data["totals"]["provider_errors"] == 1
+    assert data["rates"]["fast_first_rate"] == 0.6667
+    assert data["rates"]["provider_error_rate"] == 0.3333
+    assert data["providers"][0]["provider_id"] == "unsplash"
+    assert data["providers"][0]["calls"] == 3
+    assert data["providers"][0]["errors"] == 1
+    assert data["boundary"]["direct_wordpress_write"] is False
+    assert data["boundary"]["contains_prompt_or_result_payloads"] is False
+    payload_text = json.dumps(data, ensure_ascii=False)
+    assert "sensitive operator query should not appear" not in payload_text
+
+
 def test_hosted_model_governance_diagnostics_summarizes_runtime_families(
     tmp_path: Path,
 ) -> None:

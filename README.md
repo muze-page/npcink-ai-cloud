@@ -560,6 +560,13 @@ If you need `/internal/*` routes in dev or prod, set
 `MAGICK_CLOUD_INTERNAL_AUTH_TOKEN`. Internal routes fail closed when the token is
 not configured.
 
+Internal read-only detail examples:
+
+- `GET /internal/service/admin/image-source-metrics` summarizes image-source
+  runs, fast-first usage, deferred enrichment, provider errors, and latency
+  without returning queries, prompts, result payloads, provider secrets, or any
+  WordPress write authority.
+
 Portal member auth:
 
 - portal members are invite-only `user` identities
