@@ -3679,17 +3679,25 @@ class RuntimeService:
             if isinstance(input_payload, dict)
             else self._get_execution_input_payload(run)
         )
-        site_knowledge_context = self._build_image_source_site_knowledge_context(
-            run,
-            repository=repository,
-            input_payload=payload,
-        )
-        llm_prompt_plan = self._build_image_source_llm_prompt_plan(
-            run,
-            repository=repository,
-            input_payload=payload,
-            site_knowledge_context=site_knowledge_context,
-        )
+        if self._image_source_fast_first(payload):
+            site_knowledge_context = self._skipped_image_source_site_knowledge_context(
+                reason="fast_first_deferred"
+            )
+            llm_prompt_plan = self._skipped_image_source_llm_prompt_plan(
+                reason="fast_first_deferred"
+            )
+        else:
+            site_knowledge_context = self._build_image_source_site_knowledge_context(
+                run,
+                repository=repository,
+                input_payload=payload,
+            )
+            llm_prompt_plan = self._build_image_source_llm_prompt_plan(
+                run,
+                repository=repository,
+                input_payload=payload,
+                site_knowledge_context=site_knowledge_context,
+            )
         try:
             execution = ImageSourceService(self.settings).execute(
                 site_id=run.site_id,
@@ -3770,6 +3778,42 @@ class RuntimeService:
             instance_id="cloud-runtime",
             fallback_used=False,
         )
+
+    def _image_source_fast_first(self, input_payload: dict[str, Any]) -> bool:
+        visual_context = self._dict_or_empty(input_payload.get("visual_context"))
+        latency_mode = str(
+            input_payload.get("latency_mode") or visual_context.get("latency_mode") or ""
+        ).strip().lower()
+        enhancement_mode = str(input_payload.get("enhancement_mode") or "").strip().lower()
+        if latency_mode == "fast_first" or enhancement_mode == "deferred":
+            return True
+
+        cloud_steps = visual_context.get("cloud_ai_steps")
+        if isinstance(cloud_steps, list) and cloud_steps:
+            normalized_steps = {str(step).strip() for step in cloud_steps}
+            return (
+                "site_context_vectors" not in normalized_steps
+                and "candidate_rerank" not in normalized_steps
+            )
+        return False
+
+    def _skipped_image_source_site_knowledge_context(self, *, reason: str) -> dict[str, Any]:
+        return {
+            "status": "deferred",
+            "reason": reason,
+            "intent": "image_context",
+            "results": [],
+            "write_posture": "suggestion_only",
+            "direct_wordpress_write": False,
+        }
+
+    def _skipped_image_source_llm_prompt_plan(self, *, reason: str) -> dict[str, Any]:
+        return {
+            "status": "deferred",
+            "reason": reason,
+            "fallback": "rule_prompt_candidates",
+            "prompt_candidates": [],
+        }
 
     def _build_image_source_site_knowledge_context(
         self,

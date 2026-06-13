@@ -418,6 +418,121 @@ def test_image_source_runtime_enriches_prompt_candidates_with_site_knowledge(
     assert "Answer engine optimization guide" in result["prompt_candidates"][0]["prompt"]
 
 
+def test_image_source_fast_first_skips_heavy_enrichment_and_uses_short_query(
+    tmp_path: Path,
+    monkeypatch: Any,
+) -> None:
+    planner_provider = PromptPlannerProvider()
+    database_url, client = _build_client(
+        tmp_path,
+        providers={"openai": planner_provider},
+    )
+
+    def fail_site_knowledge_execute(
+        self: SiteKnowledgeService,
+        *,
+        site_id: str,
+        ability_name: str,
+        contract_version: str,
+        input_payload: dict[str, Any],
+        run_id: str,
+    ) -> dict[str, Any]:
+        raise AssertionError("fast-first image source requests must defer site knowledge")
+
+    def fake_search(
+        self: UnsplashImageSourceProvider,
+        *,
+        query: str,
+        options: dict[str, Any],
+        site_id: str,
+        run_id: str,
+    ) -> ImageSourceExecutionResult:
+        assert options["latency_mode"] == "fast_first"
+        assert options["site_knowledge_context"]["status"] == "deferred"
+        assert options["llm_prompt_plan"]["status"] == "deferred"
+        assert "Somnia Pro是一款售价598元" not in query
+        assert len(query) <= 180
+        assert "search strategy workspace" in query
+        return image_source_service._build_result(
+            provider_id="unsplash",
+            auto_strategy="first_available",
+            query=query,
+            options=options,
+            candidates=[
+                {
+                    "contract_version": "image_candidate.v1",
+                    "id": "unsplash-photo-fast-first",
+                    "provider": "unsplash",
+                    "provider_origin": "cloud",
+                    "source_type": "stock",
+                    "download_url": "https://images.unsplash.com/photo-fast-first",
+                    "thumbnail_url": "https://images.unsplash.com/photo-fast-first-thumb",
+                    "source_url": "https://unsplash.com/photos/photo-fast-first",
+                    "write_posture": "suggestion_only",
+                    "direct_wordpress_write": False,
+                }
+            ],
+            usage=ImageSourceProviderUsage(
+                provider_id="unsplash",
+                model_id="image-source-search",
+                instance_id="cloud-managed",
+                region="unspecified",
+                latency_ms=4,
+                cost=0.001,
+            ),
+        )
+
+    monkeypatch.setattr(SiteKnowledgeService, "execute", fail_site_knowledge_execute)
+    monkeypatch.setattr(UnsplashImageSourceProvider, "search", fake_search)
+
+    response = _execute(
+        client,
+        _payload(
+            {
+                "query": (
+                    "Somnia Pro是一款售价598元的Linear风格博客主题，"
+                    "提供专栏、会员、积分、搜索和瀑布流体验。"
+                ),
+                "latency_mode": "fast_first",
+                "enhancement_mode": "deferred",
+                "visual_context": {
+                    "contract_version": "image_visual_brief_request.v1",
+                    "latency_mode": "fast_first",
+                    "post_id": 99,
+                    "image_use": "featured_image",
+                    "manual_query": "SEO AI article workflow",
+                    "title": "SEO, AEO, and GEO for AI search",
+                    "selected_text": (
+                        "AEO focuses on answer quality when a reader asks a clear question."
+                    ),
+                    "candidate_limits": {"max_site_context_results": 0},
+                    "cloud_ai_steps": ["visual_brief"],
+                },
+            }
+        ),
+        idempotency_key="image-source-fast-first",
+    )
+
+    assert response.status_code == 200, response.text
+    result = response.json()["data"]["result"]
+    assert result["visual_brief"]["site_context_status"] == "deferred"
+    assert result["visual_brief"]["llm_prompt_planner_status"] == "deferred"
+    assert result["visual_brief"]["source_context"]["latency_mode"] == "fast_first"
+    assert result["visual_brief"]["evidence_policy"]["use_site_knowledge_vectors"] is False
+    assert planner_provider.requests == []
+
+    with get_session(database_url) as session:
+        run_id = response.json()["data"]["run_id"]
+        provider_calls = list(
+            session.scalars(
+                select(ProviderCallRecord)
+                .where(ProviderCallRecord.run_id == run_id)
+                .order_by(ProviderCallRecord.id.asc())
+            )
+        )
+        assert [call.provider_id for call in provider_calls] == ["unsplash"]
+
+
 def test_image_source_runtime_uses_llm_prompt_planner_when_text_profile_is_available(
     tmp_path: Path,
     monkeypatch: Any,
