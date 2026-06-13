@@ -8,6 +8,7 @@ from typing import Any
 from sqlalchemy import case, desc, func, select
 from sqlalchemy.orm import Session
 
+from app.adapters.repositories.commercial_repository import CommercialRepository
 from app.core.config import Settings
 from app.core.db import get_session
 from app.core.models import (
@@ -16,6 +17,7 @@ from app.core.models import (
     SiteKnowledgeIndexSnapshot,
     SiteKnowledgeSearchMetric,
 )
+from app.domain.commercial.credits import AI_CREDIT_RATE_VERSION, vector_credit_component
 from app.domain.site_knowledge.contracts import (
     SITE_KNOWLEDGE_SEARCH_ABILITY,
     SITE_KNOWLEDGE_STATUS_ABILITY,
@@ -561,6 +563,52 @@ def _record_index_job_metric(
     metric.vector_backend = _vector_backend(settings)
     metric.duration_ms = _duration_ms(execution_started_at, finished_at)
     metric.finished_at = finished_at
+    session.flush()
+    _record_index_credit_ledger_entries(session=session, run=run, metric=metric)
+
+
+def _record_index_credit_ledger_entries(
+    *,
+    session: Session,
+    run: RunRecord,
+    metric: SiteKnowledgeIndexJobMetric,
+) -> None:
+    repository = CommercialRepository(session)
+    for source_type, quantity in (
+        ("vector_documents", metric.indexed_documents),
+        ("vector_chunks", metric.indexed_chunks),
+    ):
+        component = vector_credit_component(source_type=source_type, quantity=quantity)
+        if component is None:
+            continue
+        credits = float(component.get("credits") or 0.0)
+        repository.record_credit_ledger_entry(
+            account_id=metric.account_id or run.account_id,
+            site_id=metric.site_id or run.site_id,
+            subscription_id=metric.subscription_id or run.subscription_id,
+            plan_version_id=run.plan_version_id,
+            run_id=metric.run_id,
+            provider_call_id=None,
+            source_type=source_type,
+            source_id=metric.run_id,
+            credit_delta=-credits,
+            quantity=float(component.get("quantity") or 0.0),
+            unit=str(component.get("unit") or "credit"),
+            rate=float(component.get("rate") or 0.0),
+            rate_unit=(
+                str(component.get("rate_unit"))
+                if component.get("rate_unit") is not None
+                else None
+            ),
+            rate_version=AI_CREDIT_RATE_VERSION,
+            idempotency_key=f"site_knowledge_index:{metric.run_id}:{source_type}",
+            metadata_json={
+                "site_knowledge_index_metric_id": int(metric.id or 0),
+                "sync_mode": str(metric.sync_mode or ""),
+                "status": str(metric.status or ""),
+            },
+            created_at=metric.finished_at or metric.created_at,
+        )
 
 
 def _record_search_metric(

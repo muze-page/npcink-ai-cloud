@@ -1851,6 +1851,26 @@ async def get_admin_account(
     )
 
 
+@router.get("/admin/accounts/{account_id}/quota-summary")
+async def get_admin_account_quota_summary(
+    request: Request,
+    account_id: str,
+) -> Any:
+    auth = await authorize_internal_request(request, require_idempotency=False)
+    if auth is not None:
+        return auth
+    try:
+        result = _get_commercial_service(request).get_admin_account_quota_summary(account_id)
+    except CommercialServiceError as error:
+        return _service_error_response(error, request=request)
+    return build_envelope(
+        status="ok",
+        message="admin account quota summary loaded",
+        data=result,
+        revision="m6",
+    )
+
+
 @router.get("/admin/accounts/{account_id}/subscription")
 async def get_admin_account_subscription(
     request: Request,

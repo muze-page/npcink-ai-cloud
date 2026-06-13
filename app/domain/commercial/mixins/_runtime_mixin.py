@@ -25,6 +25,10 @@ from app.core.models import (
 )
 from app.core.secrets import encrypt_site_api_signing_secret
 from app.core.security import build_secret_hash
+from app.domain.commercial.credits import (
+    AI_CREDIT_RATE_VERSION,
+    usage_meter_credit_component,
+)
 from app.domain.commercial.mixins._audit_mixin import CommercialServiceAuditMixin
 from app.domain.commercial.mixins._billing_mixin import (
     DEFAULT_FREE_PLAN_ID,
@@ -545,7 +549,8 @@ class CommercialServiceRuntimeMixin(CommercialServiceAuditMixin):
         session: Session,
         run: RunRecord,
     ) -> None:
-        CommercialRepository(session).record_usage_meter_event(
+        repository = CommercialRepository(session)
+        event = repository.record_usage_meter_event(
             account_id=run.account_id,
             site_id=run.site_id,
             subscription_id=run.subscription_id,
@@ -564,6 +569,7 @@ class CommercialServiceRuntimeMixin(CommercialServiceAuditMixin):
             dedupe_key=f"run:{run.run_id}:runs",
             payload_json={"status": run.status},
         )
+        self._record_credit_for_usage_meter_event(repository=repository, event=event)
 
     def record_provider_call_usage(
         self,
@@ -580,7 +586,7 @@ class CommercialServiceRuntimeMixin(CommercialServiceAuditMixin):
             "retry_count": provider_call.retry_count,
             "error_code": provider_call.error_code,
         }
-        repository.record_usage_meter_event(
+        event = repository.record_usage_meter_event(
             account_id=run.account_id,
             site_id=run.site_id,
             subscription_id=run.subscription_id,
@@ -599,6 +605,7 @@ class CommercialServiceRuntimeMixin(CommercialServiceAuditMixin):
             dedupe_key=f"provider_call:{provider_call.id}:provider_calls",
             payload_json=base_payload,
         )
+        self._record_credit_for_usage_meter_event(repository=repository, event=event)
         metric_rows = (
             ("tokens_in", float(provider_call.tokens_in)),
             ("tokens_out", float(provider_call.tokens_out)),
@@ -608,7 +615,7 @@ class CommercialServiceRuntimeMixin(CommercialServiceAuditMixin):
         for meter_key, quantity in metric_rows:
             if quantity <= 0:
                 continue
-            repository.record_usage_meter_event(
+            event = repository.record_usage_meter_event(
                 account_id=run.account_id,
                 site_id=run.site_id,
                 subscription_id=run.subscription_id,
@@ -627,6 +634,51 @@ class CommercialServiceRuntimeMixin(CommercialServiceAuditMixin):
                 dedupe_key=f"provider_call:{provider_call.id}:{meter_key}",
                 payload_json=base_payload,
             )
+            self._record_credit_for_usage_meter_event(repository=repository, event=event)
+
+    def _record_credit_for_usage_meter_event(
+        self,
+        *,
+        repository: CommercialRepository,
+        event: object,
+    ) -> None:
+        component = usage_meter_credit_component(event)
+        if component is None:
+            return
+        event_id = getattr(event, "id", None)
+        if event_id is None:
+            return
+        source_type = str(component.get("source_type") or "")
+        credits = float(component.get("credits") or 0.0)
+        repository.record_credit_ledger_entry(
+            account_id=getattr(event, "account_id", None),
+            site_id=getattr(event, "site_id", None),
+            subscription_id=getattr(event, "subscription_id", None),
+            plan_version_id=getattr(event, "plan_version_id", None),
+            run_id=getattr(event, "run_id", None),
+            provider_call_id=getattr(event, "provider_call_id", None),
+            source_type=source_type,
+            source_id=str(event_id),
+            credit_delta=-credits,
+            quantity=float(component.get("quantity") or 0.0),
+            unit=str(component.get("unit") or "credit"),
+            rate=float(component.get("rate") or 0.0),
+            rate_unit=(
+                str(component.get("rate_unit"))
+                if component.get("rate_unit") is not None
+                else None
+            ),
+            rate_version=AI_CREDIT_RATE_VERSION,
+            idempotency_key=f"usage_meter_event:{event_id}",
+            metadata_json={
+                "usage_meter_event_id": event_id,
+                "meter_key": str(getattr(event, "meter_key", "") or ""),
+                "event_kind": str(getattr(event, "event_kind", "") or ""),
+                "ability_family": str(getattr(event, "ability_family", "") or ""),
+                "execution_kind": str(getattr(event, "execution_kind", "") or ""),
+            },
+            created_at=getattr(event, "created_at", None),
+        )
 
     def _resolve_budget_policy_action(
         self,

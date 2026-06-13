@@ -60,6 +60,31 @@ interface AdminOverview {
     tokensTotal: number;
     cost: number;
   };
+  platformCreditSummary: {
+    windowDays: number;
+    periodStartAt: string;
+    periodEndAt: string;
+    credit: {
+      used: number;
+      estimated: boolean;
+      rateVersion: string;
+      source: string;
+    };
+    breakdown: Array<{
+      key: string;
+      label: string;
+      quantity: number;
+      unit: string;
+      credits: number;
+    }>;
+    topAccounts: Array<{
+      accountId: string;
+      credits: number;
+      runs: number;
+      providerCalls: number;
+      tokensTotal: number;
+    }>;
+  };
   planDistribution: Array<{
     planId: string;
     count: number;
@@ -113,6 +138,8 @@ function normalizeOverview(raw: any): AdminOverview {
   const hostedGovernance = raw?.hosted_model_governance ?? {};
   const hostedAlertSummary = hostedGovernance?.alert_summary ?? {};
   const hostedDailyDigest = hostedAlertSummary?.daily_digest ?? {};
+  const platformCredit = raw?.platform_credit_summary ?? {};
+  const platformCreditMetric = platformCredit?.credit ?? {};
 
   return {
     generatedAt: String(raw?.generated_at ?? ''),
@@ -163,6 +190,35 @@ function normalizeOverview(raw: any): AdminOverview {
       providerCalls: Number(totals.provider_calls ?? 0),
       tokensTotal: Number(totals.tokens_total ?? 0),
       cost: Number(totals.cost ?? 0),
+    },
+    platformCreditSummary: {
+      windowDays: Number(platformCredit.window_days ?? recentUsage.window_days ?? 7),
+      periodStartAt: String(platformCredit.period_start_at ?? ''),
+      periodEndAt: String(platformCredit.period_end_at ?? ''),
+      credit: {
+        used: Number(platformCreditMetric.used ?? 0),
+        estimated: Boolean(platformCreditMetric.estimated),
+        rateVersion: String(platformCreditMetric.rate_version ?? ''),
+        source: String(platformCreditMetric.source ?? ''),
+      },
+      breakdown: Array.isArray(platformCredit.breakdown)
+        ? platformCredit.breakdown.map((item: any) => ({
+            key: String(item?.key ?? ''),
+            label: String(item?.label ?? item?.key ?? ''),
+            quantity: Number(item?.quantity ?? 0),
+            unit: String(item?.unit ?? ''),
+            credits: Number(item?.credits ?? 0),
+          }))
+        : [],
+      topAccounts: Array.isArray(platformCredit.top_accounts)
+        ? platformCredit.top_accounts.map((item: any) => ({
+            accountId: String(item?.account_id ?? ''),
+            credits: Number(item?.credits ?? 0),
+            runs: Number(item?.runs ?? 0),
+            providerCalls: Number(item?.provider_calls ?? 0),
+            tokensTotal: Number(item?.tokens_total ?? 0),
+          }))
+        : [],
     },
     planDistribution: Array.isArray(raw?.plan_distribution)
       ? raw.plan_distribution.map((item: any) => ({
@@ -216,6 +272,23 @@ function normalizeOverview(raw: any): AdminOverview {
 
 function formatPercent(value: number): string {
   return `${(Number(value || 0) * 100).toFixed(1)}%`;
+}
+
+function platformCreditBreakdownLabel(
+  key: string,
+  fallback: string,
+  t: (key: string, vars?: Record<string, string>, fallback?: string) => string
+): string {
+  const labels: Record<string, string> = {
+    runs: t('admin.platform_credit_breakdown_runs', {}, 'Hosted runs'),
+    tokens_total: t('admin.platform_credit_breakdown_tokens', {}, 'Model tokens'),
+    web_search: t('admin.platform_credit_breakdown_search', {}, 'Search'),
+    image_recommendation: t('admin.platform_credit_breakdown_image', {}, 'Image recommendation'),
+    provider_calls_other: t('admin.platform_credit_breakdown_provider_other', {}, 'Other provider calls'),
+    vector_documents: t('admin.platform_credit_breakdown_vector_documents', {}, 'Vector articles'),
+    vector_chunks: t('admin.platform_credit_breakdown_vector_chunks', {}, 'Vector chunks'),
+  };
+  return labels[key] || fallback || key;
 }
 
 function AdminOverviewContent() {
@@ -457,6 +530,33 @@ function AdminOverviewContent() {
       detail: t('admin.home_hosted_provider_detail', {}, 'Share of hosted runs with provider call telemetry.'),
     },
   ];
+  const platformCredit = overview.platformCreditSummary;
+  const platformCreditMetrics = [
+    {
+      label: t('admin.platform_credit_total_label', {}, 'AI credits used'),
+      value: formatInteger(Math.round(platformCredit.credit.used)),
+      detail: t(
+        'admin.platform_credit_total_detail',
+        { days: String(platformCredit.windowDays) },
+        `Estimated consumption across all accounts in the last ${platformCredit.windowDays} days.`
+      ),
+    },
+    {
+      label: t('admin.platform_credit_runs_label', {}, 'Runs'),
+      value: formatInteger(overview.recentUsage.runs),
+      detail: t('admin.platform_credit_runs_detail', {}, 'Hosted run meter events in the same window.'),
+    },
+    {
+      label: t('admin.platform_credit_provider_calls_label', {}, 'Provider calls'),
+      value: formatInteger(overview.recentUsage.providerCalls),
+      detail: t('admin.platform_credit_provider_calls_detail', {}, 'Provider call meter events in the same window.'),
+    },
+    {
+      label: t('admin.platform_credit_tokens_label', {}, 'Tokens'),
+      value: formatInteger(Math.round(overview.recentUsage.tokensTotal)),
+      detail: t('admin.platform_credit_tokens_detail', {}, 'Token usage remains an internal guardrail.'),
+    },
+  ];
 
   return (
     <BackofficePageStack>
@@ -523,6 +623,96 @@ function AdminOverviewContent() {
           )}
         </div>
       </BackofficePrimaryPanel>
+
+      <BackofficeSectionPanel className="space-y-5">
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-gray-500 dark:text-gray-400">
+              {t('admin.platform_credit_eyebrow', {}, 'Platform consumption')}
+            </p>
+            <h2 className="mt-2 text-xl font-semibold text-gray-950 dark:text-white">
+              {t('admin.platform_credit_title', {}, 'AI credit usage across all accounts')}
+            </h2>
+            <p className="mt-1 max-w-3xl text-sm leading-6 text-gray-600 dark:text-gray-400">
+              {t(
+                'admin.platform_credit_desc',
+                {},
+                'This is the operator-wide consumption view. It uses the same estimated AI credit formula as account detail and keeps token/cost as internal guardrails.'
+              )}
+            </p>
+          </div>
+          <span className="rounded-full border border-slate-200 px-2.5 py-1 text-xs font-semibold uppercase tracking-[0.16em] text-slate-600 dark:border-slate-800 dark:text-slate-300">
+            {platformCredit.credit.estimated
+              ? t('admin.platform_credit_estimated', {}, 'Estimated')
+              : t('admin.current_period_only', {}, 'Current period only')}
+          </span>
+        </div>
+        <BackofficeMetricStrip items={platformCreditMetrics} columnsClassName="md:grid-cols-2 xl:grid-cols-4" />
+        <div className="grid gap-4 xl:grid-cols-[1.2fr_0.8fr]">
+          <BackofficeStackCard className="bg-white/80 dark:bg-slate-950/45">
+            <p className="text-sm font-semibold text-gray-950 dark:text-white">
+              {t('admin.platform_credit_breakdown_title', {}, 'Credit breakdown')}
+            </p>
+            <div className="mt-3 divide-y divide-slate-200 text-sm dark:divide-slate-800">
+              {platformCredit.breakdown.length > 0 ? (
+                platformCredit.breakdown.map((item) => (
+                  <div key={item.key} className="flex items-start justify-between gap-4 py-3">
+                    <div>
+                      <p className="font-medium text-slate-900 dark:text-slate-100">
+                        {platformCreditBreakdownLabel(item.key, item.label, t)}
+                      </p>
+                      <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                        {formatInteger(Math.round(item.quantity))} {item.unit}
+                      </p>
+                    </div>
+                    <p className="text-right text-sm font-semibold text-slate-950 dark:text-white">
+                      {formatInteger(Math.round(item.credits))}
+                    </p>
+                  </div>
+                ))
+              ) : (
+                <p className="py-3 text-slate-600 dark:text-slate-300">
+                  {t('admin.platform_credit_breakdown_empty', {}, 'No metered credit consumption in the current window.')}
+                </p>
+              )}
+            </div>
+          </BackofficeStackCard>
+          <BackofficeStackCard className="bg-white/80 dark:bg-slate-950/45">
+            <p className="text-sm font-semibold text-gray-950 dark:text-white">
+              {t('admin.platform_credit_top_accounts_title', {}, 'Top accounts')}
+            </p>
+            <div className="mt-3 space-y-3">
+              {platformCredit.topAccounts.length > 0 ? (
+                platformCredit.topAccounts.map((item) => (
+                  <Link
+                    key={item.accountId}
+                    href={`/admin/accounts/${encodeURIComponent(item.accountId)}`}
+                    className="block rounded-xl border border-slate-200/80 px-3 py-3 text-sm transition hover:bg-slate-50 dark:border-slate-800 dark:hover:bg-slate-900/70"
+                  >
+                    <div className="flex items-start justify-between gap-4">
+                      <div className="min-w-0">
+                        <p className="truncate font-medium text-slate-900 dark:text-slate-100">
+                          {item.accountId}
+                        </p>
+                        <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                          {formatInteger(item.runs)} runs · {formatInteger(item.providerCalls)} calls
+                        </p>
+                      </div>
+                      <p className="shrink-0 text-right font-semibold text-slate-950 dark:text-white">
+                        {formatInteger(Math.round(item.credits))}
+                      </p>
+                    </div>
+                  </Link>
+                ))
+              ) : (
+                <p className="text-sm text-slate-600 dark:text-slate-300">
+                  {t('admin.platform_credit_top_accounts_empty', {}, 'No account-level credit consumption in the current window.')}
+                </p>
+              )}
+            </div>
+          </BackofficeStackCard>
+        </div>
+      </BackofficeSectionPanel>
 
       <div className="grid gap-5 xl:grid-cols-2">
         <BackofficeSectionPanel className="space-y-4">

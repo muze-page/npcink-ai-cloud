@@ -1016,7 +1016,11 @@ async def get_portal_site_entitlements(request: Request, site_id: str) -> Any:
     if isinstance(access, JSONResponse):
         return access
     try:
-        policy = _get_commercial_service(request).inspect_commercial_policy(site_id)
+        commercial_service = _get_commercial_service(request)
+        policy = commercial_service.inspect_commercial_policy(site_id)
+        quota_summary = commercial_service.get_portal_account_quota_summary(
+            str(access.get("account_id") or "")
+        )
     except CommercialServiceError as error:
         return _service_error_response(error, request=request)
     return _portal_route_envelope(
@@ -1042,6 +1046,7 @@ async def get_portal_site_entitlements(request: Request, site_id: str) -> Any:
             "usage_totals": policy.get("usage_totals"),
             "subscription_grace": policy.get("subscription_grace"),
             "budget_state": policy.get("budget_state"),
+            "quota_summary": quota_summary,
             "generated_at": policy.get("generated_at"),
         },
     )

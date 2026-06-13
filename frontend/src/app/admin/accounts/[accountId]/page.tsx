@@ -157,6 +157,74 @@ const TOPUP_PACK_OPTIONS: TopUpPackOption[] = [
   },
 ];
 
+type BudgetStateMetric = {
+  current_total?: number;
+  limit?: number;
+  over_limit?: boolean;
+};
+
+type SiteRuntimeData = {
+  totalRuns: number;
+  failedRuns: number;
+  lastRunAt: string | null;
+  costEstimate: number;
+  tokensTotal: number;
+  providerCalls: number;
+  budgetState: Record<string, BudgetStateMetric>;
+  siteLimit: number;
+  activeKeyCount: number;
+  subscriptionStatus: string;
+  coverageState: string;
+  packageLabel: string;
+};
+
+type AccountBudgetSummary = {
+  used: number;
+  limit: number;
+  remaining: number;
+  usageRatio: number;
+  overLimit: boolean;
+  unlimited: boolean;
+};
+
+type AccountQuotaMetric = {
+  key: string;
+  label?: string;
+  used: number;
+  limit: number;
+  remaining: number;
+  usage_ratio: number;
+  unlimited: boolean;
+  status: string;
+  unit: string;
+  estimated?: boolean;
+  rate_version?: string;
+  source?: string;
+  limit_source?: string;
+};
+
+type AccountCreditBreakdownItem = {
+  key: string;
+  label?: string;
+  quantity: number;
+  unit: string;
+  rate: number;
+  rate_unit?: string;
+  credits: number;
+};
+
+type AccountQuotaSummary = {
+  status: string;
+  generated_at?: string;
+  period_start_at?: string;
+  period_end_at?: string;
+  credit: AccountQuotaMetric;
+  resource_limits: AccountQuotaMetric[];
+  internal_limits: AccountQuotaMetric[];
+  breakdown: AccountCreditBreakdownItem[];
+  totals?: Record<string, number>;
+};
+
 type PendingConfirmation = {
   title: string;
   message: string;
@@ -224,6 +292,125 @@ function resolveAccountTitle(
   return prettifyAccountId(account.account_id) || account.account_id;
 }
 
+function emptyBudgetSummary(): AccountBudgetSummary {
+  return {
+    used: 0,
+    limit: 0,
+    remaining: 0,
+    usageRatio: 0,
+    overLimit: false,
+    unlimited: true,
+  };
+}
+
+function summarizeBudget(
+  siteRuntimeData: Record<string, SiteRuntimeData>,
+  metric: 'runs' | 'tokens' | 'cost'
+): AccountBudgetSummary {
+  const entries = Object.values(siteRuntimeData);
+  if (entries.length === 0) {
+    return emptyBudgetSummary();
+  }
+  const used = entries.reduce(
+    (sum, item) => sum + Number(item.budgetState?.[metric]?.current_total ?? 0),
+    0
+  );
+  const positiveLimits = entries
+    .map((item) => Number(item.budgetState?.[metric]?.limit ?? 0))
+    .filter((value) => value > 0);
+  const limit = positiveLimits.reduce((sum, value) => sum + value, 0);
+  const unlimited = positiveLimits.length === 0;
+  return {
+    used,
+    limit,
+    remaining: unlimited ? 0 : Math.max(0, limit - used),
+    usageRatio: unlimited || limit <= 0 ? 0 : used / limit,
+    overLimit: entries.some((item) => Boolean(item.budgetState?.[metric]?.over_limit)),
+    unlimited,
+  };
+}
+
+function formatUsageRatio(summary: AccountBudgetSummary, unlimitedLabel = 'Unlimited'): string {
+  if (summary.unlimited) {
+    return unlimitedLabel;
+  }
+  return `${Math.round(Math.min(999, Math.max(0, summary.usageRatio * 100)))}%`;
+}
+
+function quotaToneClass(summary: AccountBudgetSummary): string | undefined {
+  if (summary.overLimit || summary.usageRatio >= 1) {
+    return 'text-red-600 dark:text-red-400';
+  }
+  if (summary.usageRatio >= 0.8) {
+    return 'text-amber-700 dark:text-amber-300';
+  }
+  return undefined;
+}
+
+function quotaMetricToneClass(metric?: AccountQuotaMetric | null): string | undefined {
+  if (!metric) {
+    return undefined;
+  }
+  if (metric.status === 'limited' || (!metric.unlimited && metric.usage_ratio >= 1)) {
+    return 'text-red-600 dark:text-red-400';
+  }
+  if (metric.status === 'near_limit' || (!metric.unlimited && metric.usage_ratio >= 0.8)) {
+    return 'text-amber-700 dark:text-amber-300';
+  }
+  return undefined;
+}
+
+function metricToBudgetSummary(metric?: AccountQuotaMetric | null): AccountBudgetSummary {
+  if (!metric) {
+    return emptyBudgetSummary();
+  }
+  return {
+    used: Number(metric.used || 0),
+    limit: Number(metric.limit || 0),
+    remaining: Number(metric.remaining || 0),
+    usageRatio: Number(metric.usage_ratio || 0),
+    overLimit: metric.status === 'limited' || (!metric.unlimited && Number(metric.used || 0) >= Number(metric.limit || 0)),
+    unlimited: Boolean(metric.unlimited),
+  };
+}
+
+function quotaMetricLabel(
+  metric: AccountQuotaMetric,
+  t: (key: string, vars?: Record<string, string>, fallback?: string) => string
+): string {
+  const labels: Record<string, string> = {
+    ai_credits: t('admin.account_detail.ai_credits_label', undefined, 'AI credits'),
+    bound_sites: t('admin.account_detail.bound_sites_label', undefined, 'Bound sites'),
+    active_api_key_sites: t('admin.account_detail.active_api_keys_label', undefined, 'Active API keys'),
+    concurrent_runs: t('admin.account_detail.concurrent_runs_label', undefined, 'Concurrent runs'),
+    batch_items: t('admin.account_detail.batch_items_label', undefined, 'Batch items'),
+    vector_documents: t('admin.account_detail.vector_documents_label', undefined, 'Vector articles'),
+    vector_chunks: t('admin.account_detail.vector_chunks_label', undefined, 'Vector chunks'),
+    vector_sync_documents_per_run: t('admin.account_detail.vector_sync_documents_label', undefined, 'Sync articles/run'),
+    vector_sync_chunks_per_run: t('admin.account_detail.vector_sync_chunks_label', undefined, 'Sync chunks/run'),
+    tokens: t('admin.tokens_used', undefined, 'Tokens used'),
+    cost: t('admin.cost_estimate', undefined, 'Cost estimate'),
+    provider_calls: t('admin.account_detail.provider_calls_label', undefined, 'Provider calls'),
+  };
+  return labels[metric.key] || metric.label || metric.key;
+}
+
+function creditBreakdownLabel(
+  item: AccountCreditBreakdownItem,
+  t: (key: string, vars?: Record<string, string>, fallback?: string) => string
+): string {
+  const labels: Record<string, string> = {
+    runs: t('admin.account_detail.breakdown_runs_label', undefined, 'Hosted runs'),
+    tokens_total: t('admin.account_detail.breakdown_tokens_label', undefined, 'Model tokens'),
+    web_search: t('admin.account_detail.breakdown_search_label', undefined, 'Search'),
+    image_recommendation: t('admin.account_detail.breakdown_image_label', undefined, 'Image recommendation'),
+    provider_calls_other: t('admin.account_detail.breakdown_provider_other_label', undefined, 'Other provider calls'),
+    vector_documents: t('admin.account_detail.breakdown_vector_documents_label', undefined, 'Vector articles'),
+    vector_chunks: t('admin.account_detail.breakdown_vector_chunks_label', undefined, 'Vector chunks'),
+  };
+  return labels[item.key] || item.label || item.key;
+}
+
 function AccountDetailContent() {
   const params = useParams();
   const { t } = useLocale();
@@ -258,13 +445,8 @@ function AccountDetailContent() {
   const [topUpActionPending, setTopUpActionPending] = useState<string | null>(null);
   const [pendingConfirmation, setPendingConfirmation] = useState<PendingConfirmation | null>(null);
   const [packagePlans, setPackagePlans] = useState<PackagePlanListItem[]>([]);
-  const [siteRuntimeData, setSiteRuntimeData] = useState<Record<string, {
-    totalRuns: number;
-    failedRuns: number;
-    lastRunAt: string | null;
-    costEstimate: number;
-    tokensTotal: number;
-  }>>({});
+  const [siteRuntimeData, setSiteRuntimeData] = useState<Record<string, SiteRuntimeData>>({});
+  const [quotaSummary, setQuotaSummary] = useState<AccountQuotaSummary | null>(null);
   const [nowMs] = useState(() => Date.now());
 
   const loadPackagePlans = useCallback(async () => {
@@ -287,13 +469,7 @@ function AccountDetailContent() {
       setSiteRuntimeData({});
       return;
     }
-    const results: Record<string, {
-      totalRuns: number;
-      failedRuns: number;
-      lastRunAt: string | null;
-      costEstimate: number;
-      tokensTotal: number;
-    }> = {};
+    const results: Record<string, SiteRuntimeData> = {};
     await Promise.all(
       siteIds.map(async (siteId) => {
         try {
@@ -305,12 +481,38 @@ function AccountDetailContent() {
           const siteData = data.data || {};
           const usageSummary = siteData.usage_summary || {};
           const runtimeSummary = siteData.runtime_summary || {};
+          const commercialPolicy = siteData.commercial_policy || {};
+          const policyUsageTotals = commercialPolicy.usage_totals || {};
+          const budgetState =
+            commercialPolicy.budget_state && typeof commercialPolicy.budget_state === 'object'
+              ? (commercialPolicy.budget_state as Record<string, BudgetStateMetric>)
+              : {};
+          const entitlementSnapshot = commercialPolicy.entitlement_snapshot || {};
+          const coverage = siteData.coverage || {};
+          const siteKeys = Array.isArray(siteData.site_keys) ? siteData.site_keys : [];
           results[siteId] = {
             totalRuns: Number(runtimeSummary.total_runs ?? 0),
             failedRuns: Number(runtimeSummary.failed_runs ?? 0),
             lastRunAt: runtimeSummary.last_run_at || null,
-            costEstimate: Number(usageSummary.cost_estimate ?? 0),
-            tokensTotal: Number(usageSummary.tokens_total ?? 0),
+            costEstimate: Number(
+              budgetState.cost?.current_total ??
+                usageSummary.cost_estimate ??
+                policyUsageTotals.cost_usd ??
+                0
+            ),
+            tokensTotal: Number(
+              budgetState.tokens?.current_total ??
+                usageSummary.tokens_total ??
+                policyUsageTotals.tokens_total ??
+                0
+            ),
+            providerCalls: Number(policyUsageTotals.provider_calls ?? 0),
+            budgetState,
+            siteLimit: Number(entitlementSnapshot.site_limit ?? coverage.site_limit ?? 0),
+            activeKeyCount: siteKeys.filter((key: { status?: string }) => key.status === 'active').length,
+            subscriptionStatus: String(siteData.subscription?.status || coverage.subscription_status || 'unknown'),
+            coverageState: String(coverage.coverage_state || 'unknown'),
+            packageLabel: String(coverage.display_package_label || ''),
           };
         } catch {
           results[siteId] = {
@@ -319,12 +521,59 @@ function AccountDetailContent() {
             lastRunAt: null,
             costEstimate: 0,
             tokensTotal: 0,
+            providerCalls: 0,
+            budgetState: {},
+            siteLimit: 0,
+            activeKeyCount: 0,
+            subscriptionStatus: 'unknown',
+            coverageState: 'unknown',
+            packageLabel: '',
           };
         }
       })
     );
     setSiteRuntimeData(results);
   }, []);
+
+  const loadQuotaSummary = useCallback(async () => {
+    try {
+      const response = await fetch(`/api/admin/accounts/${encodeURIComponent(accountId)}/quota-summary`, {
+        credentials: 'include',
+      });
+      if (!response.ok) {
+        setQuotaSummary(null);
+        return;
+      }
+      const data = await response.json();
+      const payload = data.data || {};
+      if (!payload.credit) {
+        setQuotaSummary(null);
+        return;
+      }
+      setQuotaSummary({
+        status: String(payload.status || 'ok'),
+        generated_at: String(payload.generated_at || ''),
+        period_start_at: String(payload.period_start_at || ''),
+        period_end_at: String(payload.period_end_at || ''),
+        credit: payload.credit as AccountQuotaMetric,
+        resource_limits: Array.isArray(payload.resource_limits)
+          ? (payload.resource_limits as AccountQuotaMetric[])
+          : [],
+        internal_limits: Array.isArray(payload.internal_limits)
+          ? (payload.internal_limits as AccountQuotaMetric[])
+          : [],
+        breakdown: Array.isArray(payload.breakdown)
+          ? (payload.breakdown as AccountCreditBreakdownItem[])
+          : [],
+        totals:
+          payload.totals && typeof payload.totals === 'object'
+            ? (payload.totals as Record<string, number>)
+            : {},
+      });
+    } catch {
+      setQuotaSummary(null);
+    }
+  }, [accountId]);
 
   const loadAccount = useCallback(async (preferredSiteId = '') => {
     setIsLoading(true);
@@ -469,12 +718,13 @@ function AccountDetailContent() {
       if (nextSiteIds.length > 0) {
         void loadSiteRuntimeData(nextSiteIds);
       }
+      void loadQuotaSummary();
     } catch (err) {
       setError(resolveUiErrorMessage(err instanceof Error ? err.message : null, t('error.failed_load')));
     } finally {
       setIsLoading(false);
     }
-  }, [accountId, loadSiteRuntimeData, t]);
+  }, [accountId, loadQuotaSummary, loadSiteRuntimeData, t]);
 
   const handleSaveAccountMeta = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -795,6 +1045,37 @@ function AccountDetailContent() {
         name: site.name || '',
       }))
     : [];
+  const siteRuntimeItems = Object.values(siteRuntimeData);
+  const resourceMetricByKey = new Map((quotaSummary?.resource_limits || []).map((item) => [item.key, item]));
+  const creditMetric = quotaSummary?.credit || null;
+  const runBudgetSummary = creditMetric ? metricToBudgetSummary(creditMetric) : summarizeBudget(siteRuntimeData, 'runs');
+  const activeKeySiteCount =
+    account.trial_readiness?.summary?.active_key_site_count ??
+    siteRuntimeItems.filter((item) => item.activeKeyCount > 0).length;
+  const boundSitesMetric = resourceMetricByKey.get('bound_sites') || null;
+  const vectorDocumentsMetric = resourceMetricByKey.get('vector_documents') || null;
+  const concurrentRunsMetric = resourceMetricByKey.get('concurrent_runs') || null;
+  const siteLimitValues = siteRuntimeItems.map((item) => Number(item.siteLimit || 0)).filter((value) => value > 0);
+  const accountSiteLimit = boundSitesMetric && !boundSitesMetric.unlimited
+    ? Number(boundSitesMetric.limit || 0)
+    : siteLimitValues.length > 0
+      ? Math.max(...siteLimitValues)
+      : 0;
+  const siteLimitUnlimited = accountSiteLimit <= 0;
+  const siteUsageRatio = boundSitesMetric
+    ? Number(boundSitesMetric.usage_ratio || 0)
+    : siteLimitUnlimited
+      ? 0
+      : account.site_count / accountSiteLimit;
+  const hasSiteLimitPressure = !siteLimitUnlimited && siteUsageRatio >= 0.8;
+  const hasApiKeyGap = account.site_count > 0 && activeKeySiteCount < account.site_count;
+  const quotaNeedsAttention =
+    quotaSummary?.status === 'limited' ||
+    quotaSummary?.status === 'near_limit' ||
+    runBudgetSummary.overLimit ||
+    runBudgetSummary.usageRatio >= 0.8 ||
+    hasSiteLimitPressure ||
+    hasApiKeyGap;
 
   const riskySubscriptions = account.subscriptions.filter((sub) => sub.status !== 'active');
   const primarySubscription = selectPrimarySubscription(account);
@@ -962,6 +1243,73 @@ function AccountDetailContent() {
       toneClassName: hasCoverageGap ? 'text-red-600 dark:text-red-400' : undefined,
     },
   ];
+  const quotaRecommendationItems = [
+    runBudgetSummary.overLimit || runBudgetSummary.usageRatio >= 0.8
+      ? t(
+          'admin.account_detail.recommend_topup_runs',
+          undefined,
+          'Apply a top-up pack or move this account to a higher package before more AI credits are consumed.'
+        )
+      : '',
+    hasSiteLimitPressure
+      ? t(
+          'admin.account_detail.recommend_site_limit',
+          undefined,
+          'Confirm the package site limit before binding another WordPress site to this customer.'
+        )
+      : '',
+    hasApiKeyGap
+      ? t(
+          'admin.account_detail.recommend_key_gap',
+          undefined,
+          'Issue or restore active Cloud API key coverage for every bound site before trial traffic.'
+        )
+      : '',
+    !quotaNeedsAttention
+      ? t(
+          'admin.account_detail.recommend_quota_stable',
+          undefined,
+          'Current quota posture is healthy. Keep this page as the account-level checkpoint before opening site detail.'
+        )
+      : '',
+  ].filter(Boolean);
+  const unlimitedLabel = t('common.unlimited', {}, 'Unlimited');
+  const formatQuotaMetricValue = (metric: AccountQuotaMetric): string => {
+    if (metric.unit === 'usd') {
+      return formatAdminCurrency(metric.used);
+    }
+    return formatInteger(Math.round(Number(metric.used || 0)));
+  };
+  const formatQuotaMetricLimit = (metric: AccountQuotaMetric): string => {
+    if (metric.unlimited) {
+      return unlimitedLabel;
+    }
+    if (metric.unit === 'usd') {
+      return formatAdminCurrency(metric.limit);
+    }
+    return formatInteger(Math.round(Number(metric.limit || 0)));
+  };
+  const quotaRows = [
+    {
+      key: 'ai-credits',
+      label: t('admin.account_detail.ai_credits_label', undefined, 'AI credits'),
+      used: formatInteger(Math.round(runBudgetSummary.used)),
+      limit: runBudgetSummary.unlimited ? unlimitedLabel : formatInteger(Math.round(runBudgetSummary.limit)),
+      remaining: runBudgetSummary.unlimited
+        ? unlimitedLabel
+        : formatInteger(Math.round(runBudgetSummary.remaining)),
+      ratio: formatUsageRatio(runBudgetSummary, unlimitedLabel),
+      detail: t(
+        'admin.account_detail.ai_credits_desc',
+        undefined,
+        'Run budget for the current subscription period.'
+      ),
+      summary: runBudgetSummary,
+    },
+  ];
+  const resourceRows = quotaSummary?.resource_limits || [];
+  const internalLimitRows = quotaSummary?.internal_limits || [];
+  const siteLimitLabel = siteLimitUnlimited ? unlimitedLabel : formatInteger(accountSiteLimit);
   const packagePlanOptions = packagePlans
     .filter((item) => item.plan?.plan_id)
     .map((item) => {
@@ -1610,6 +1958,233 @@ function AccountDetailContent() {
           </details>
         </BackofficeSectionPanel>
       ) : null}
+
+      <BackofficeSectionPanel className="space-y-5">
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-gray-500 dark:text-gray-400">
+              {t('admin.account_detail.quota_eyebrow', undefined, 'Quota posture')}
+            </p>
+            <h2 className="mt-2 text-xl font-semibold text-gray-950 dark:text-white">
+              {t('admin.account_detail.quota_title', undefined, 'Current usage and limits')}
+            </h2>
+            <p className="mt-1 max-w-3xl text-sm leading-6 text-gray-600 dark:text-gray-400">
+              {t(
+                'admin.account_detail.quota_desc',
+                undefined,
+                'Account-level view of current-period AI credits, token usage, cost headroom, bound sites, and active key coverage.'
+              )}
+            </p>
+          </div>
+          <BackofficeStatusBadge
+            status={quotaNeedsAttention ? 'warning' : 'ok'}
+            label={quotaNeedsAttention ? translateStatusLabel('warning', t) : translateStatusLabel('ok', t)}
+          />
+        </div>
+
+        <BackofficeMetricStrip
+          columnsClassName="md:grid-cols-2 xl:grid-cols-4"
+          items={[
+            {
+              label: t('admin.account_detail.ai_credits_label', undefined, 'AI credits'),
+              value: `${formatInteger(Math.round(runBudgetSummary.used))} / ${
+                runBudgetSummary.unlimited ? unlimitedLabel : formatInteger(Math.round(runBudgetSummary.limit))
+              }`,
+              detail: t('admin.account_detail.ai_credits_metric_desc', undefined, 'Used and available run credits.'),
+              toneClassName: quotaToneClass(runBudgetSummary),
+              size: 'compact',
+            },
+            {
+              label: t('admin.account_detail.bound_sites_label', undefined, 'Bound sites'),
+              value: `${formatInteger(account.site_count)} / ${siteLimitLabel}`,
+              detail: t('admin.account_detail.bound_sites_metric_desc', undefined, 'Sites attached to this customer account.'),
+              toneClassName: hasSiteLimitPressure ? 'text-amber-700 dark:text-amber-300' : undefined,
+              size: 'compact',
+            },
+            {
+              label: t('admin.account_detail.vector_documents_label', undefined, 'Vector articles'),
+              value: vectorDocumentsMetric
+                ? `${formatQuotaMetricValue(vectorDocumentsMetric)} / ${formatQuotaMetricLimit(vectorDocumentsMetric)}`
+                : `0 / ${unlimitedLabel}`,
+              detail: t('admin.account_detail.vector_documents_metric_desc', undefined, 'Indexed article capacity stays as a separate resource limit.'),
+              toneClassName: quotaMetricToneClass(vectorDocumentsMetric),
+              size: 'compact',
+            },
+            {
+              label: t('admin.account_detail.concurrent_runs_label', undefined, 'Concurrent runs'),
+              value: concurrentRunsMetric
+                ? `${formatQuotaMetricValue(concurrentRunsMetric)} / ${formatQuotaMetricLimit(concurrentRunsMetric)}`
+                : `0 / ${unlimitedLabel}`,
+              detail: t('admin.account_detail.concurrent_runs_metric_desc', undefined, 'Current queued or running workload against concurrency guardrails.'),
+              toneClassName: quotaMetricToneClass(concurrentRunsMetric),
+              size: 'compact',
+            },
+          ]}
+        />
+
+        <div className="grid gap-4 xl:grid-cols-[1.2fr_0.8fr]">
+          <BackofficeStackCard className="bg-white/80 dark:bg-slate-950/55">
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+              <div>
+                <h3 className="text-sm font-semibold text-gray-950 dark:text-white">
+                  {t('admin.account_detail.credit_breakdown_title', undefined, 'AI credit usage')}
+                </h3>
+                <p className="mt-1 text-sm text-gray-600 dark:text-gray-400">
+                  {t(
+                    'admin.account_detail.credit_breakdown_desc',
+                    undefined,
+                    'AI credits are estimated from runs, tokens, search, image recommendation, and vector processing until the ledger is enforced.'
+                  )}
+                </p>
+              </div>
+              <span className="text-xs font-semibold uppercase tracking-[0.16em] text-gray-500 dark:text-gray-400">
+                {creditMetric?.estimated
+                  ? t('admin.account_detail.estimated_credit_label', undefined, 'Estimated')
+                  : t('admin.current_period_only', undefined, 'Current period only')}
+              </span>
+            </div>
+            <div className="mt-5 space-y-4">
+              {quotaRows.map((item) => {
+                const progress = item.summary.unlimited
+                  ? 0
+                  : Math.min(100, Math.max(0, item.summary.usageRatio * 100));
+                return (
+                  <div key={item.key} className="space-y-2">
+                    <div className="flex flex-col gap-1 sm:flex-row sm:items-start sm:justify-between">
+                      <div>
+                        <p className="text-sm font-semibold text-gray-950 dark:text-white">{item.label}</p>
+                        <p className="text-xs text-gray-500 dark:text-gray-400">{item.detail}</p>
+                      </div>
+                      <div className="text-left sm:text-right">
+                        <p className={cn('text-sm font-semibold text-gray-950 dark:text-white', quotaToneClass(item.summary))}>
+                          {item.used} / {item.limit}
+                        </p>
+                        <p className="text-xs text-gray-500 dark:text-gray-400">
+                          {t('admin.account_detail.quota_remaining_label', undefined, 'Remaining')}: {item.remaining}
+                        </p>
+                      </div>
+                    </div>
+                    <div className="h-2 overflow-hidden rounded-full bg-slate-200 dark:bg-slate-800">
+                      <div
+                        className={cn(
+                          'h-full rounded-full',
+                          item.summary.overLimit || item.summary.usageRatio >= 1
+                            ? 'bg-red-500'
+                            : item.summary.usageRatio >= 0.8
+                              ? 'bg-amber-500'
+                              : 'bg-emerald-500'
+                        )}
+                        style={{ width: `${progress}%` }}
+                      />
+                    </div>
+                    <p className="text-xs text-gray-500 dark:text-gray-400">
+                      {t('admin.account_detail.quota_usage_ratio_label', undefined, 'Usage')}: {item.ratio}
+                    </p>
+                  </div>
+                );
+              })}
+              {(quotaSummary?.breakdown || []).length > 0 ? (
+                <div className="rounded-[1rem] border border-slate-200 bg-slate-50/70 p-3 dark:border-slate-800 dark:bg-slate-950/35">
+                  <p className="text-xs font-semibold uppercase tracking-[0.16em] text-gray-500 dark:text-gray-400">
+                    {t('admin.account_detail.credit_components_label', undefined, 'Credit components')}
+                  </p>
+                  <div className="mt-3 divide-y divide-slate-200 text-sm dark:divide-slate-800">
+                    {(quotaSummary?.breakdown || []).map((item) => (
+                      <div key={item.key} className="flex items-start justify-between gap-4 py-2">
+                        <div>
+                          <p className="font-medium text-gray-900 dark:text-white">
+                            {creditBreakdownLabel(item, t)}
+                          </p>
+                          <p className="text-xs text-gray-500 dark:text-gray-400">
+                            {formatInteger(Math.round(Number(item.quantity || 0)))} {item.unit}
+                          </p>
+                        </div>
+                        <p className="text-right text-sm font-semibold text-gray-950 dark:text-white">
+                          {formatInteger(Math.round(Number(item.credits || 0)))}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+            </div>
+          </BackofficeStackCard>
+
+          <BackofficeStackCard className="bg-white/80 dark:bg-slate-950/55">
+            <h3 className="text-sm font-semibold text-gray-950 dark:text-white">
+              {t('admin.account_detail.resource_limits_title', undefined, 'Resource limits')}
+            </h3>
+            <div className="mt-4 space-y-4">
+              {resourceRows.map((metric) => {
+                const progress = metric.unlimited
+                  ? 0
+                  : Math.min(100, Math.max(0, Number(metric.usage_ratio || 0) * 100));
+                return (
+                  <div key={metric.key} className="border-b border-gray-200 pb-4 last:border-b-0 dark:border-gray-800">
+                    <div className="flex items-start justify-between gap-4">
+                      <div>
+                        <p className="text-xs uppercase tracking-[0.14em] text-gray-500 dark:text-gray-400">
+                          {quotaMetricLabel(metric, t)}
+                        </p>
+                        <p className={cn('mt-1 text-sm font-semibold text-gray-950 dark:text-white', quotaMetricToneClass(metric))}>
+                          {formatQuotaMetricValue(metric)} / {formatQuotaMetricLimit(metric)}
+                        </p>
+                      </div>
+                      <p className="max-w-[12rem] text-right text-xs leading-5 text-gray-500 dark:text-gray-400">
+                        {metric.unlimited
+                          ? unlimitedLabel
+                          : `${Math.round(Math.min(999, Math.max(0, Number(metric.usage_ratio || 0) * 100)))}%`}
+                      </p>
+                    </div>
+                    {!metric.unlimited ? (
+                      <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-slate-200 dark:bg-slate-800">
+                        <div
+                          className={cn(
+                            'h-full rounded-full',
+                            metric.status === 'limited'
+                              ? 'bg-red-500'
+                              : metric.status === 'near_limit'
+                                ? 'bg-amber-500'
+                                : 'bg-emerald-500'
+                          )}
+                          style={{ width: `${progress}%` }}
+                        />
+                      </div>
+                    ) : null}
+                  </div>
+                );
+              })}
+            </div>
+            {internalLimitRows.length > 0 ? (
+              <div className="mt-5 rounded-[1rem] border border-slate-200 bg-slate-50/70 px-3 py-3 dark:border-slate-800 dark:bg-slate-950/35">
+                <p className="text-xs font-semibold uppercase tracking-[0.16em] text-gray-500 dark:text-gray-400">
+                  {t('admin.account_detail.internal_guardrails_title', undefined, 'Internal guardrails')}
+                </p>
+                <div className="mt-3 space-y-2 text-sm text-gray-700 dark:text-gray-300">
+                  {internalLimitRows.map((metric) => (
+                    <div key={metric.key} className="flex items-center justify-between gap-4">
+                      <span>{quotaMetricLabel(metric, t)}</span>
+                      <span className={cn('font-semibold text-gray-950 dark:text-white', quotaMetricToneClass(metric))}>
+                        {formatQuotaMetricValue(metric)} / {formatQuotaMetricLimit(metric)}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+            <div className="mt-5 rounded-[1rem] border border-slate-200 bg-slate-50/70 px-3 py-3 dark:border-slate-800 dark:bg-slate-950/35">
+              <p className="text-xs font-semibold uppercase tracking-[0.16em] text-gray-500 dark:text-gray-400">
+                {t('admin.account_detail.operator_recommendations_title', undefined, 'Recommendations')}
+              </p>
+              <ul className="mt-3 space-y-2 text-sm leading-6 text-gray-700 dark:text-gray-300">
+                {quotaRecommendationItems.map((item) => (
+                  <li key={item}>{item}</li>
+                ))}
+              </ul>
+            </div>
+          </BackofficeStackCard>
+        </div>
+      </BackofficeSectionPanel>
 
       <div id="site-footprint" className="grid gap-6 xl:grid-cols-[1.1fr_0.9fr]">
         <BackofficeSectionPanel className="space-y-4">

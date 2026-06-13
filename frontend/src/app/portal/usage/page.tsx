@@ -54,6 +54,51 @@ function toChartPoint(
   };
 }
 
+function formatQuotaValue(value: unknown, unlimited = false, unlimitedLabel = 'Unlimited'): string {
+  if (unlimited) return unlimitedLabel;
+  return formatNumber(Math.round(Number(value || 0)));
+}
+
+function quotaStatusTone(status: string | undefined): 'ok' | 'warning' | 'error' {
+  if (status === 'limited') return 'error';
+  if (status === 'near_limit') return 'warning';
+  return 'ok';
+}
+
+function portalQuotaResourceLabel(
+  key: string,
+  t: (key: string, vars?: Record<string, string>, fallback?: string) => string
+): string {
+  const labels: Record<string, string> = {
+    bound_sites: t('portal.usage.resource_bound_sites', {}, 'Bound sites'),
+    active_api_key_sites: t('portal.usage.resource_active_keys', {}, 'Active API keys'),
+    concurrent_runs: t('portal.usage.resource_concurrent_runs', {}, 'Concurrent runs'),
+    batch_items: t('portal.usage.resource_batch_items', {}, 'Batch items'),
+    vector_documents: t('portal.usage.resource_vector_documents', {}, 'Vector articles'),
+    vector_chunks: t('portal.usage.resource_vector_chunks', {}, 'Vector chunks'),
+    vector_sync_documents_per_run: t('portal.usage.resource_sync_documents', {}, 'Sync articles/run'),
+    vector_sync_chunks_per_run: t('portal.usage.resource_sync_chunks', {}, 'Sync chunks/run'),
+  };
+  return labels[key] || key;
+}
+
+function portalCreditBreakdownLabel(
+  key: string,
+  fallback: string,
+  t: (key: string, vars?: Record<string, string>, fallback?: string) => string
+): string {
+  const labels: Record<string, string> = {
+    runs: t('portal.usage.breakdown_runs', {}, 'Hosted runs'),
+    tokens_total: t('portal.usage.breakdown_tokens', {}, 'Model tokens'),
+    web_search: t('portal.usage.breakdown_search', {}, 'Search'),
+    image_recommendation: t('portal.usage.breakdown_image', {}, 'Image recommendation'),
+    provider_calls_other: t('portal.usage.breakdown_provider_other', {}, 'Other provider calls'),
+    vector_documents: t('portal.usage.breakdown_vector_documents', {}, 'Vector articles'),
+    vector_chunks: t('portal.usage.breakdown_vector_chunks', {}, 'Vector chunks'),
+  };
+  return labels[key] || fallback || key;
+}
+
 function PortalUsageContent() {
   const searchParams = useSearchParams();
   const { t } = useLocale();
@@ -188,6 +233,20 @@ function PortalUsageContent() {
   });
   const planLabel = planDisplay.display_package_label || t('common.plan');
   const graceState = entitlements?.subscription_grace || {};
+  const quotaSummary = entitlements?.quota_summary || null;
+  const quotaCredit = quotaSummary?.credit || null;
+  const quotaResources = Array.isArray(quotaSummary?.resource_limits)
+    ? quotaSummary.resource_limits
+    : [];
+  const quotaBreakdown = Array.isArray(quotaSummary?.breakdown)
+    ? quotaSummary.breakdown
+    : [];
+  const unlimitedLabel = t('common.unlimited', {}, 'Unlimited');
+  const quotaResourceByKey = new Map(
+    quotaResources.map((item) => [String(item.key || ''), item])
+  );
+  const boundSitesResource = quotaResourceByKey.get('bound_sites');
+  const vectorDocumentsResource = quotaResourceByKey.get('vector_documents');
   const remainingRequests = Math.max(0, toFinite(runBudgetState.limit || runsLimit) - toFinite(runBudgetState.current_total));
   const remainingTokens = Math.max(0, toFinite(tokenBudgetState.limit || tokensLimit) - toFinite(tokenBudgetState.current_total));
   const remainingCost = Math.max(0, toFinite(costBudgetState.limit || costLimit) - toFinite(costBudgetState.current_total));
@@ -244,25 +303,47 @@ function PortalUsageContent() {
     : 0;
 
   const headroomMetrics = [
-    {
-      label: t('portal.usage.remaining_requests_test_label', {}, 'Requests left'),
-      value: formatNumber(remainingRequests),
-      detail: `${formatNumber(toFinite(runBudgetState.current_total))} / ${formatNumber(toFinite(runBudgetState.limit || runsLimit))}`,
-    },
-    {
-      label: t('portal.usage.remaining_tokens_test_label', {}, 'Tokens left'),
-      value: formatCompactNumber(remainingTokens),
-      detail: `${formatCompactNumber(toFinite(tokenBudgetState.current_total))} / ${formatCompactNumber(toFinite(tokenBudgetState.limit || tokensLimit))}`,
-    },
-    {
-      label: t('portal.usage.remaining_cost_test_label', {}, 'Cost headroom'),
-      value: formatPreferredCurrency(remainingCost),
-      detail: `${formatPreferredCurrency(toFinite(costBudgetState.current_total))} / ${formatPreferredCurrency(toFinite(costBudgetState.limit || costLimit))}`,
-    },
+    quotaCredit
+      ? {
+          label: t('portal.usage.ai_credits_label', {}, 'AI credits'),
+          value: `${formatQuotaValue(quotaCredit.used)} / ${formatQuotaValue(quotaCredit.limit, Boolean(quotaCredit.unlimited), unlimitedLabel)}`,
+          detail: t('portal.usage.ai_credits_metric_detail', {}, 'Estimated credits used this package period.'),
+        }
+      : {
+          label: t('portal.usage.remaining_requests_test_label', {}, 'Requests left'),
+          value: formatNumber(remainingRequests),
+          detail: `${formatNumber(toFinite(runBudgetState.current_total))} / ${formatNumber(toFinite(runBudgetState.limit || runsLimit))}`,
+        },
+    boundSitesResource
+      ? {
+          label: t('portal.usage.resource_bound_sites', {}, 'Bound sites'),
+          value: `${formatQuotaValue(boundSitesResource.used)} / ${formatQuotaValue(boundSitesResource.limit, Boolean(boundSitesResource.unlimited), unlimitedLabel)}`,
+          detail: t('portal.usage.resource_bound_sites_detail', {}, 'Sites attached to this account.'),
+        }
+      : {
+          label: t('portal.usage.remaining_tokens_test_label', {}, 'Tokens left'),
+          value: formatCompactNumber(remainingTokens),
+          detail: `${formatCompactNumber(toFinite(tokenBudgetState.current_total))} / ${formatCompactNumber(toFinite(tokenBudgetState.limit || tokensLimit))}`,
+        },
+    vectorDocumentsResource
+      ? {
+          label: t('portal.usage.resource_vector_documents', {}, 'Vector articles'),
+          value: `${formatQuotaValue(vectorDocumentsResource.used)} / ${formatQuotaValue(vectorDocumentsResource.limit, Boolean(vectorDocumentsResource.unlimited), unlimitedLabel)}`,
+          detail: t('portal.usage.resource_vector_documents_detail', {}, 'Indexed article capacity remains a separate resource limit.'),
+        }
+      : {
+          label: t('portal.usage.remaining_cost_test_label', {}, 'Cost headroom'),
+          value: formatPreferredCurrency(remainingCost),
+          detail: `${formatPreferredCurrency(toFinite(costBudgetState.current_total))} / ${formatPreferredCurrency(toFinite(costBudgetState.limit || costLimit))}`,
+        },
     {
       label: t('common.status'),
-      value: headroomTone,
-      detail: usageWindow ? `${t('common.period')}: ${formatDate(usageWindow.start_at)} - ${formatDate(usageWindow.end_at)}` : undefined,
+      value: quotaSummary
+        ? t(`status.${quotaStatusTone(quotaSummary.status)}`, {}, quotaSummary.status || 'ok')
+        : headroomTone,
+      detail: quotaSummary?.period_start_at && quotaSummary?.period_end_at
+        ? `${t('common.period')}: ${formatDate(quotaSummary.period_start_at)} - ${formatDate(quotaSummary.period_end_at)}`
+        : usageWindow ? `${t('common.period')}: ${formatDate(usageWindow.start_at)} - ${formatDate(usageWindow.end_at)}` : undefined,
     },
   ];
 
@@ -334,6 +415,140 @@ function PortalUsageContent() {
             `正在切换到 ${switchingSiteName || selectedSite?.site_name || selectedSiteId}，页面数据会自动更新。`
           )}
         />
+      ) : null}
+
+      {quotaSummary && quotaCredit ? (
+        <BackofficeSectionPanel className="space-y-5">
+          <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-gray-500 dark:text-gray-400">
+                {t('portal.usage.ai_credit_eyebrow', {}, 'Package usage')}
+              </p>
+              <h2 className="mt-2 text-xl font-semibold text-gray-950 dark:text-white">
+                {t('portal.usage.ai_credit_title', {}, 'AI credits and resource limits')}
+              </h2>
+              <p className="mt-1 max-w-3xl text-sm leading-6 text-gray-600 dark:text-gray-400">
+                {t(
+                  'portal.usage.ai_credit_desc',
+                  {},
+                  'AI credits measure consumption. Site binding, concurrency, batch size, and vector capacity remain separate package limits.'
+                )}
+              </p>
+            </div>
+            <BackofficeStatusBadge
+              status={quotaStatusTone(quotaSummary.status)}
+              label={t(`status.${quotaStatusTone(quotaSummary.status)}`, {}, quotaSummary.status || 'ok')}
+            />
+          </div>
+          <div className="grid gap-4 xl:grid-cols-[1.05fr_0.95fr]">
+            <BackofficeStackCard className="bg-white/80 dark:bg-slate-950/45">
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <p className="text-sm font-semibold text-gray-950 dark:text-white">
+                    {t('portal.usage.ai_credits_label', {}, 'AI credits')}
+                  </p>
+                  <p className="mt-1 text-sm text-gray-600 dark:text-gray-400">
+                    {quotaCredit.estimated
+                      ? t('portal.usage.ai_credits_estimated_desc', {}, 'Estimated until the credit ledger is enforced.')
+                      : t('portal.usage.ai_credits_actual_desc', {}, 'Credits recorded for this package period.')}
+                  </p>
+                </div>
+                <p className="text-right text-lg font-semibold text-gray-950 dark:text-white">
+                  {formatQuotaValue(quotaCredit.used)} / {formatQuotaValue(quotaCredit.limit, Boolean(quotaCredit.unlimited), unlimitedLabel)}
+                </p>
+              </div>
+              {!quotaCredit.unlimited ? (
+                <div className="mt-4">
+                  <div className="h-2 overflow-hidden rounded-full bg-slate-200 dark:bg-slate-800">
+                    <div
+                      className={cn(
+                        'h-full rounded-full',
+                        quotaCredit.status === 'limited'
+                          ? 'bg-red-500'
+                          : quotaCredit.status === 'near_limit'
+                            ? 'bg-amber-500'
+                            : 'bg-emerald-500'
+                      )}
+                      style={{ width: `${Math.min(100, Math.max(0, Number(quotaCredit.usage_ratio || 0) * 100))}%` }}
+                    />
+                  </div>
+                  <p className="mt-2 text-xs text-gray-500 dark:text-gray-400">
+                    {t('portal.usage.remaining_credits', {}, 'Remaining')}: {formatQuotaValue(quotaCredit.remaining)}
+                  </p>
+                </div>
+              ) : null}
+              {quotaBreakdown.length > 0 ? (
+                <div className="mt-5 rounded-[1rem] border border-slate-200 bg-slate-50/70 p-3 dark:border-slate-800 dark:bg-slate-950/35">
+                  <p className="text-xs font-semibold uppercase tracking-[0.16em] text-gray-500 dark:text-gray-400">
+                    {t('portal.usage.credit_breakdown_title', {}, 'Credit breakdown')}
+                  </p>
+                  <div className="mt-3 divide-y divide-slate-200 text-sm dark:divide-slate-800">
+                    {quotaBreakdown.map((item) => (
+                      <div key={item.key || item.label} className="flex items-start justify-between gap-4 py-2">
+                        <div>
+                          <p className="font-medium text-slate-900 dark:text-slate-100">
+                            {portalCreditBreakdownLabel(String(item.key || ''), String(item.label || ''), t)}
+                          </p>
+                          <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                            {formatQuotaValue(item.quantity)} {item.unit}
+                          </p>
+                        </div>
+                        <p className="text-right font-semibold text-slate-950 dark:text-white">
+                          {formatQuotaValue(item.credits)}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+            </BackofficeStackCard>
+            <BackofficeStackCard className="bg-white/80 dark:bg-slate-950/45">
+              <p className="text-sm font-semibold text-gray-950 dark:text-white">
+                {t('portal.usage.resource_limits_title', {}, 'Resource limits')}
+              </p>
+              <div className="mt-4 space-y-4">
+                {quotaResources.map((resource) => {
+                  const status = String(resource.status || 'ok');
+                  const progress = resource.unlimited
+                    ? 0
+                    : Math.min(100, Math.max(0, Number(resource.usage_ratio || 0) * 100));
+                  return (
+                    <div key={resource.key} className="border-b border-slate-200 pb-4 last:border-b-0 dark:border-slate-800">
+                      <div className="flex items-start justify-between gap-4">
+                        <div>
+                          <p className="text-xs uppercase tracking-[0.14em] text-slate-500 dark:text-slate-400">
+                            {portalQuotaResourceLabel(String(resource.key || ''), t)}
+                          </p>
+                          <p className="mt-1 text-sm font-semibold text-slate-950 dark:text-white">
+                            {formatQuotaValue(resource.used)} / {formatQuotaValue(resource.limit, Boolean(resource.unlimited), unlimitedLabel)}
+                          </p>
+                        </div>
+                        <p className="text-right text-xs text-slate-500 dark:text-slate-400">
+                          {resource.unlimited ? unlimitedLabel : `${Math.round(progress)}%`}
+                        </p>
+                      </div>
+                      {!resource.unlimited ? (
+                        <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-slate-200 dark:bg-slate-800">
+                          <div
+                            className={cn(
+                              'h-full rounded-full',
+                              status === 'limited'
+                                ? 'bg-red-500'
+                                : status === 'near_limit'
+                                  ? 'bg-amber-500'
+                                  : 'bg-emerald-500'
+                            )}
+                            style={{ width: `${progress}%` }}
+                          />
+                        </div>
+                      ) : null}
+                    </div>
+                  );
+                })}
+              </div>
+            </BackofficeStackCard>
+          </div>
+        </BackofficeSectionPanel>
       ) : null}
 
       {chartData.length > 0 ? (

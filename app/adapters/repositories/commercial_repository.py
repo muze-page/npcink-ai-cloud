@@ -2,12 +2,14 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from typing import Any, cast
+from uuid import uuid4
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 from sqlalchemy.sql.elements import ColumnElement
 
 from app.core.models import (
+    CREDIT_LEDGER_EVENT_CONSUME,
     PORTAL_LOGIN_CODE_STATUS_PENDING,
     SITE_ADMIN_SITE_GRANT_STATUS_ACTIVE,
     SITE_ADMIN_STATUS_ACTIVE,
@@ -16,6 +18,7 @@ from app.core.models import (
     AccountSubscription,
     BillingSnapshot,
     CommercialDecisionEvent,
+    CreditLedgerEntry,
     PaymentEvent,
     PaymentOrder,
     PaymentRefund,
@@ -30,6 +33,9 @@ from app.core.models import (
     SiteAdminIdentity,
     SiteAdminSiteGrant,
     SiteApiKey,
+    SiteKnowledgeChunk,
+    SiteKnowledgeDocument,
+    SiteKnowledgeIndexJobMetric,
     UsageMeterEvent,
 )
 
@@ -1133,6 +1139,88 @@ class CommercialRepository:
         )
         return int(self.session.scalar(statement) or 0)
 
+    def count_active_runs_by_site(self, *, site_ids: list[str]) -> dict[str, int]:
+        if not site_ids:
+            return {}
+        statement = (
+            select(RunRecord.site_id, func.count())
+            .select_from(RunRecord)
+            .where(
+                RunRecord.site_id.in_(site_ids),
+                RunRecord.status.in_(("queued", "running")),
+            )
+            .group_by(RunRecord.site_id)
+        )
+        return {
+            str(site_id or ""): int(count or 0)
+            for site_id, count in self.session.execute(statement)
+            if site_id
+        }
+
+    def summarize_site_knowledge_current_counts(
+        self,
+        *,
+        site_ids: list[str],
+    ) -> dict[str, dict[str, int]]:
+        if not site_ids:
+            return {}
+        items: dict[str, dict[str, int]] = {
+            site_id: {"documents": 0, "chunks": 0} for site_id in site_ids
+        }
+        document_statement = (
+            select(SiteKnowledgeDocument.site_id, func.count())
+            .select_from(SiteKnowledgeDocument)
+            .where(SiteKnowledgeDocument.site_id.in_(site_ids))
+            .group_by(SiteKnowledgeDocument.site_id)
+        )
+        for site_id, count in self.session.execute(document_statement):
+            items.setdefault(str(site_id or ""), {"documents": 0, "chunks": 0})[
+                "documents"
+            ] = int(count or 0)
+        chunk_statement = (
+            select(SiteKnowledgeChunk.site_id, func.count())
+            .select_from(SiteKnowledgeChunk)
+            .where(SiteKnowledgeChunk.site_id.in_(site_ids))
+            .group_by(SiteKnowledgeChunk.site_id)
+        )
+        for site_id, count in self.session.execute(chunk_statement):
+            items.setdefault(str(site_id or ""), {"documents": 0, "chunks": 0})["chunks"] = int(
+                count or 0
+            )
+        return items
+
+    def summarize_site_knowledge_index_usage(
+        self,
+        *,
+        account_id: str | None = None,
+        subscription_id: str | None = None,
+        since: datetime | None = None,
+        until: datetime | None = None,
+    ) -> dict[str, int]:
+        statement = select(
+            func.sum(SiteKnowledgeIndexJobMetric.accepted_documents),
+            func.sum(SiteKnowledgeIndexJobMetric.indexed_documents),
+            func.sum(SiteKnowledgeIndexJobMetric.indexed_chunks),
+        )
+        if account_id:
+            statement = statement.where(SiteKnowledgeIndexJobMetric.account_id == account_id)
+        if subscription_id:
+            statement = statement.where(
+                SiteKnowledgeIndexJobMetric.subscription_id == subscription_id
+            )
+        if since is not None:
+            statement = statement.where(SiteKnowledgeIndexJobMetric.created_at >= since)
+        if until is not None:
+            statement = statement.where(SiteKnowledgeIndexJobMetric.created_at <= until)
+        accepted_documents, indexed_documents, indexed_chunks = self.session.execute(
+            statement
+        ).one()
+        return {
+            "accepted_documents": int(accepted_documents or 0),
+            "indexed_documents": int(indexed_documents or 0),
+            "indexed_chunks": int(indexed_chunks or 0),
+        }
+
     def record_usage_meter_event(
         self,
         *,
@@ -1183,6 +1271,99 @@ class CommercialRepository:
         self.session.add(event)
         self.session.flush()
         return event
+
+    def record_credit_ledger_entry(
+        self,
+        *,
+        account_id: str | None,
+        site_id: str | None,
+        subscription_id: str | None,
+        plan_version_id: str | None,
+        run_id: str | None,
+        provider_call_id: int | None,
+        event_type: str = CREDIT_LEDGER_EVENT_CONSUME,
+        source_type: str,
+        source_id: str,
+        credit_delta: float,
+        quantity: float,
+        unit: str,
+        rate: float,
+        rate_unit: str | None,
+        rate_version: str,
+        idempotency_key: str,
+        metadata_json: dict[str, object] | None = None,
+        created_at: datetime | None = None,
+    ) -> CreditLedgerEntry:
+        existing = self.session.scalar(
+            select(CreditLedgerEntry).where(
+                CreditLedgerEntry.idempotency_key == idempotency_key
+            )
+        )
+        if existing is not None:
+            return existing
+
+        entry = CreditLedgerEntry(
+            ledger_entry_id=f"cle_{uuid4().hex}",
+            account_id=account_id,
+            site_id=site_id,
+            subscription_id=subscription_id,
+            plan_version_id=plan_version_id,
+            run_id=run_id,
+            provider_call_id=provider_call_id,
+            event_type=event_type,
+            source_type=source_type,
+            source_id=source_id,
+            credit_delta=round(float(credit_delta or 0.0), 6),
+            quantity=round(float(quantity or 0.0), 6),
+            unit=unit,
+            rate=round(float(rate or 0.0), 6),
+            rate_unit=rate_unit,
+            rate_version=rate_version,
+            idempotency_key=idempotency_key,
+            metadata_json=metadata_json,
+            created_at=created_at or datetime.now(UTC),
+        )
+        self.session.add(entry)
+        self.session.flush()
+        return entry
+
+    def list_credit_ledger_entries(
+        self,
+        *,
+        account_ids: list[str] | None = None,
+        site_ids: list[str] | None = None,
+        subscription_id: str | None = None,
+        event_types: list[str] | None = None,
+        since: datetime | None = None,
+        until: datetime | None = None,
+        limit: int | None = None,
+    ) -> list[CreditLedgerEntry]:
+        statement = select(CreditLedgerEntry)
+        if account_ids is not None:
+            if not account_ids:
+                return []
+            statement = statement.where(CreditLedgerEntry.account_id.in_(account_ids))
+        if site_ids is not None:
+            if not site_ids:
+                return []
+            statement = statement.where(CreditLedgerEntry.site_id.in_(site_ids))
+        if subscription_id is not None:
+            statement = statement.where(CreditLedgerEntry.subscription_id == subscription_id)
+        if event_types is not None:
+            if not event_types:
+                return []
+            statement = statement.where(CreditLedgerEntry.event_type.in_(event_types))
+        if since is not None:
+            statement = statement.where(CreditLedgerEntry.created_at >= since)
+        if until is not None:
+            statement = statement.where(CreditLedgerEntry.created_at <= until)
+        statement = statement.order_by(
+            CreditLedgerEntry.created_at.desc(),
+            CreditLedgerEntry.ledger_entry_id.desc(),
+        )
+        if limit is not None and limit > 0:
+            statement = statement.limit(limit)
+        return list(self.session.scalars(statement))
 
     def list_usage_meter_events(
         self,

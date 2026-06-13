@@ -1671,8 +1671,19 @@ def test_portal_summary_usage_entitlements_and_audit_routes(tmp_path: Path) -> N
         headers=build_portal_headers(site_admin_ref="site_admin:portal-reads@example.com"),
     )
     assert entitlements_response.status_code == 200
-    assert entitlements_response.json()["data"]["site"]["site_id"] == "site_portal_reads"
-    assert entitlements_response.json()["data"]["policy"]["subscription"]["grace_period_days"] == 0
+    entitlements_data = entitlements_response.json()["data"]
+    assert entitlements_data["site"]["site_id"] == "site_portal_reads"
+    assert entitlements_data["policy"]["subscription"]["grace_period_days"] == 0
+    quota_summary = entitlements_data["quota_summary"]
+    assert quota_summary["account_id"] == "acct_portal_reads"
+    assert quota_summary["credit"]["key"] == "ai_credits"
+    assert quota_summary["credit"]["estimated"] is True
+    assert "internal_limits" not in quota_summary
+    assert {item["key"] for item in quota_summary["resource_limits"]} >= {
+        "bound_sites",
+        "active_api_key_sites",
+        "vector_documents",
+    }
 
     audit_response = client.get(
         "/portal/v1/sites/site_portal_reads/audit-summary",

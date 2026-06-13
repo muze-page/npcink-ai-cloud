@@ -1518,6 +1518,9 @@ class CommercialServiceBillingMixin(CommercialServiceAuditMixin):
     def _normalize_budgets(self, raw: dict[str, object] | None) -> dict[str, object]:
         raw = raw if isinstance(raw, dict) else {}
         return {
+            "max_ai_credits_per_period": self._coerce_float(
+                raw.get("max_ai_credits_per_period")
+            ),
             "max_runs_per_period": self._coerce_float(raw.get("max_runs_per_period")),
             "max_tokens_per_period": self._coerce_float(raw.get("max_tokens_per_period")),
             "max_cost_per_period": self._coerce_float(raw.get("max_cost_per_period")),

@@ -229,6 +229,42 @@ export interface Entitlements {
       over_limit?: boolean;
     }
   >;
+  quota_summary?: {
+    status?: string;
+    generated_at?: string;
+    period_start_at?: string;
+    period_end_at?: string;
+    credit?: {
+      key?: string;
+      used?: number;
+      limit?: number;
+      remaining?: number;
+      unlimited?: boolean;
+      usage_ratio?: number;
+      status?: string;
+      unit?: string;
+      estimated?: boolean;
+      rate_version?: string;
+      source?: string;
+    };
+    resource_limits?: Array<{
+      key?: string;
+      used?: number;
+      limit?: number;
+      remaining?: number;
+      unlimited?: boolean;
+      usage_ratio?: number;
+      status?: string;
+      unit?: string;
+    }>;
+    breakdown?: Array<{
+      key?: string;
+      label?: string;
+      quantity?: number;
+      unit?: string;
+      credits?: number;
+    }>;
+  };
   generated_at: string;
 }
 

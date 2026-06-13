@@ -79,6 +79,11 @@ PAYMENT_REFUND_STATUS_FAILED = "failed"
 PAYMENT_EVENT_STATUS_RECEIVED = "received"
 PAYMENT_EVENT_STATUS_PROCESSED = "processed"
 
+CREDIT_LEDGER_EVENT_CONSUME = "consume"
+CREDIT_LEDGER_EVENT_GRANT = "grant"
+CREDIT_LEDGER_EVENT_ADJUSTMENT = "adjustment"
+CREDIT_LEDGER_EVENT_REFUND = "refund"
+
 RUN_CALLBACK_STATUS_NOT_REQUESTED = "not_requested"
 RUN_CALLBACK_STATUS_PENDING = "pending"
 RUN_CALLBACK_STATUS_DISPATCHING = "dispatching"
@@ -877,6 +882,41 @@ class UsageMeterEvent(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
+    )
+
+
+class CreditLedgerEntry(Base):
+    __tablename__ = "credit_ledger_entries"
+    __table_args__ = (
+        UniqueConstraint("idempotency_key", name="uq_credit_ledger_entries_idempotency"),
+    )
+
+    ledger_entry_id: Mapped[str] = mapped_column(String(191), primary_key=True)
+    account_id: Mapped[str | None] = mapped_column(String(191), index=True)
+    site_id: Mapped[str | None] = mapped_column(String(191), index=True)
+    subscription_id: Mapped[str | None] = mapped_column(String(191), index=True)
+    plan_version_id: Mapped[str | None] = mapped_column(String(191), index=True)
+    run_id: Mapped[str | None] = mapped_column(String(191), index=True)
+    provider_call_id: Mapped[int | None] = mapped_column(Integer, index=True)
+    event_type: Mapped[str] = mapped_column(
+        String(32),
+        default=CREDIT_LEDGER_EVENT_CONSUME,
+        index=True,
+    )
+    source_type: Mapped[str] = mapped_column(String(64), index=True)
+    source_id: Mapped[str] = mapped_column(String(191), index=True)
+    credit_delta: Mapped[float] = mapped_column(Float, default=0.0)
+    quantity: Mapped[float] = mapped_column(Float, default=0.0)
+    unit: Mapped[str] = mapped_column(String(32), default="credit")
+    rate: Mapped[float] = mapped_column(Float, default=0.0)
+    rate_unit: Mapped[str | None] = mapped_column(String(64))
+    rate_version: Mapped[str] = mapped_column(String(64), index=True)
+    idempotency_key: Mapped[str] = mapped_column(String(255))
+    metadata_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        index=True,
     )
 
 

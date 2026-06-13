@@ -1852,6 +1852,124 @@ def test_service_routes_removed_platform_admin_identity_routes(tmp_path: Path) -
     dispose_engine(database_url)
 
 
+def test_admin_account_quota_summary_reports_ai_credits_and_resource_limits(
+    tmp_path: Path,
+) -> None:
+    database_url, client = _build_client(tmp_path)
+    seed_site_auth(
+        database_url,
+        site_id="site_quota",
+        scopes=["runtime:execute", "runtime:read", "stats:read"],
+        budgets={
+            "max_ai_credits_per_period": 20,
+            "max_runs_per_period": 10,
+            "max_tokens_per_period": 5000,
+        },
+    )
+    now = datetime.now(UTC)
+    with get_session(database_url) as session:
+        subscription = session.scalar(
+            select(AccountSubscription)
+            .where(AccountSubscription.account_id == "acct_site_quota")
+            .order_by(AccountSubscription.created_at.desc())
+        )
+        assert subscription is not None
+        events = [
+            UsageMeterEvent(
+                account_id="acct_site_quota",
+                site_id="site_quota",
+                subscription_id=subscription.subscription_id,
+                plan_version_id=subscription.plan_version_id,
+                run_id="run-quota-1",
+                provider_call_id=None,
+                event_kind="runtime.run",
+                meter_key="runs",
+                quantity=2,
+                ability_family="text",
+                channel="api",
+                execution_kind="text",
+                execution_tier="cloud",
+                data_classification="internal",
+                currency=None,
+                dedupe_key="quota-summary-runs",
+                payload_json={},
+                created_at=now,
+            ),
+            UsageMeterEvent(
+                account_id="acct_site_quota",
+                site_id="site_quota",
+                subscription_id=subscription.subscription_id,
+                plan_version_id=subscription.plan_version_id,
+                run_id="run-quota-1",
+                provider_call_id=None,
+                event_kind="runtime.tokens",
+                meter_key="tokens_total",
+                quantity=1500,
+                ability_family="text",
+                channel="api",
+                execution_kind="text",
+                execution_tier="cloud",
+                data_classification="internal",
+                currency=None,
+                dedupe_key="quota-summary-tokens",
+                payload_json={},
+                created_at=now,
+            ),
+            UsageMeterEvent(
+                account_id="acct_site_quota",
+                site_id="site_quota",
+                subscription_id=subscription.subscription_id,
+                plan_version_id=subscription.plan_version_id,
+                run_id="run-quota-1",
+                provider_call_id=None,
+                event_kind="provider.call",
+                meter_key="provider_calls",
+                quantity=1,
+                ability_family="tool",
+                channel="api",
+                execution_kind="web_search",
+                execution_tier="cloud",
+                data_classification="internal",
+                currency=None,
+                dedupe_key="quota-summary-search",
+                payload_json={},
+                created_at=now,
+            ),
+        ]
+        session.add_all(events)
+        session.commit()
+
+    response = client.get(
+        "/internal/service/admin/accounts/acct_site_quota/quota-summary",
+        headers=build_internal_headers(),
+    )
+    unauthenticated = client.get(
+        "/internal/service/admin/accounts/acct_site_quota/quota-summary",
+    )
+
+    assert unauthenticated.status_code == 401
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["account_id"] == "acct_site_quota"
+    assert data["credit"]["key"] == "ai_credits"
+    assert data["credit"]["used"] == 8.5
+    assert data["credit"]["limit"] == 20.0
+    assert data["credit"]["remaining"] == 11.5
+    assert data["credit"]["status"] == "ok"
+    assert data["credit"]["estimated"] is True
+    assert data["credit"]["rate_version"] == "ai-credit-estimate-v1"
+    assert {item["key"]: item["credits"] for item in data["breakdown"]} == {
+        "runs": 2.0,
+        "tokens_total": 1.5,
+        "web_search": 5.0,
+    }
+    resource_limits = {item["key"]: item for item in data["resource_limits"]}
+    assert resource_limits["bound_sites"]["used"] == 1.0
+    assert resource_limits["active_api_key_sites"]["used"] == 1.0
+    assert resource_limits["vector_documents"]["unit"] == "document"
+    assert data["coverage"]["active_key_site_count"] == 1
+
+
 def test_service_routes_inspect_commercial_policy_and_reconciliation(
     tmp_path: Path,
 ) -> None:

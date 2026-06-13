@@ -11,6 +11,7 @@ from app.adapters.repositories.commercial_repository import CommercialRepository
 from app.core.db import get_session
 from app.core.models import (
     ACCOUNT_STATUS_ACTIVE,
+    CREDIT_LEDGER_EVENT_CONSUME,
     PLATFORM_ADMIN_ROLE_PLATFORM_ADMIN,
     PLATFORM_ADMIN_STATUS_ACTIVE,
     SITE_ADMIN_STATUS_ACTIVE,
@@ -23,6 +24,10 @@ from app.core.models import (
     AccountSubscription,
 )
 from app.domain.commercial.audit_context import ServiceAuditContext
+from app.domain.commercial.credits import (
+    AI_CREDIT_RATE_VERSION,
+    build_credit_breakdown_from_ledger,
+)
 from app.domain.commercial.errors import (
     CommercialNotFoundError,
     CommercialPermissionError,
@@ -215,6 +220,20 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
             status_counts = repository.summarize_subscription_status_counts()
             plan_counts = repository.summarize_subscription_plan_counts()
             usage_summary = repository.summarize_usage_meter_events_for_admin(since=usage_since)
+            usage_meter_events = repository.list_usage_meter_events_for_admin(
+                since=usage_since,
+                limit=None,
+            )
+            credit_ledger_entries = repository.list_credit_ledger_entries(
+                event_types=[CREDIT_LEDGER_EVENT_CONSUME],
+                since=usage_since,
+                until=now,
+                limit=None,
+            )
+            knowledge_index_usage = repository.summarize_site_knowledge_index_usage(
+                since=usage_since,
+                until=now,
+            )
             expiring_subscriptions = repository.list_subscriptions(
                 statuses=active_subscription_statuses,
                 current_period_end_before=now + timedelta(days=30),
@@ -296,6 +315,14 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
         ]
         usage_totals = usage_summary.get("totals")
         usage_event_count = int(cast(Any, usage_summary.get("event_count") or 0))
+        platform_credit_summary = self._build_platform_credit_summary(
+            meter_events=usage_meter_events,
+            ledger_entries=credit_ledger_entries,
+            window_days=max(1, usage_window_days),
+            start_at=usage_since,
+            end_at=now,
+            knowledge_index_usage=knowledge_index_usage,
+        )
         attention_subscription_items = [
             _serialize_overview_subscription(subscription)
             for subscription in attention_subscriptions
@@ -332,6 +359,7 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
                 "event_count": usage_event_count,
                 "totals": usage_totals if isinstance(usage_totals, dict) else {},
             },
+            "platform_credit_summary": platform_credit_summary,
             "recent_audit_summary": {
                 "window_minutes": max(1, audit_window_minutes),
                 "items": recent_audit,
@@ -705,6 +733,533 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
                 active_key_counts=active_key_counts,
             ),
         }
+
+    def get_admin_account_quota_summary(self, account_id: str) -> dict[str, object]:
+        now = self.now_factory()
+        with get_session(self.database_url) as session:
+            repository = CommercialRepository(session)
+            account = repository.get_account(account_id)
+            if account is None:
+                raise CommercialNotFoundError(
+                    "service.account_not_found",
+                    f"account '{account_id}' was not found",
+                )
+            sites = repository.list_sites(account_id=account_id, limit=None)
+            site_ids = [str(site.site_id or "") for site in sites if str(site.site_id or "")]
+            subscriptions = repository.list_subscriptions(account_id=account_id, limit=None)
+            primary_subscription = cast(Any, self)._select_primary_subscription(subscriptions)
+            plan_version = (
+                repository.get_plan_version(primary_subscription.plan_version_id)
+                if primary_subscription is not None and primary_subscription.plan_version_id
+                else None
+            )
+            snapshot = repository.get_active_entitlement_snapshot(
+                account_id,
+                subscription_id=(
+                    primary_subscription.subscription_id
+                    if primary_subscription is not None
+                    else None
+                ),
+            )
+            period_start_at, period_end_at = cast(Any, self)._resolve_period(
+                primary_subscription,
+                now,
+            )
+            meter_events = [
+                event
+                for event in repository.list_usage_meter_events_for_admin(
+                    account_ids=[account_id],
+                    since=period_start_at,
+                    limit=None,
+                )
+                if (
+                    primary_subscription is None
+                    or str(getattr(event, "subscription_id", "") or "")
+                    == primary_subscription.subscription_id
+                )
+                and (
+                    period_end_at is None
+                    or (
+                        (event_created_at := getattr(event, "created_at", None)) is not None
+                        and cast(Any, self)._normalize_datetime(event_created_at) <= period_end_at
+                    )
+                )
+            ]
+            credit_ledger_entries = repository.list_credit_ledger_entries(
+                account_ids=[account_id],
+                subscription_id=(
+                    primary_subscription.subscription_id
+                    if primary_subscription is not None
+                    else None
+                ),
+                event_types=[CREDIT_LEDGER_EVENT_CONSUME],
+                since=period_start_at,
+                until=period_end_at,
+                limit=None,
+            )
+            totals = cast(Any, self)._aggregate_meter_events(meter_events)
+            budgets = (
+                cast(Any, self)._normalize_budgets(snapshot.budgets_json)
+                if snapshot is not None
+                else cast(Any, self)._normalize_budgets(
+                    getattr(plan_version, "budgets_json", None)
+                )
+            )
+            policy = cast(Any, self)._normalize_commercial_policy(
+                snapshot.policy_json
+                if snapshot is not None
+                else getattr(plan_version, "policy_json", None)
+            )
+            budget_state = cast(Any, self)._build_budget_policy_state(
+                repository=repository,
+                subscription=primary_subscription,
+                policy=policy,
+                budgets=budgets,
+                totals=totals,
+                period_start_at=period_start_at,
+            )
+            active_key_counts = repository.count_site_keys_by_site(
+                site_ids=site_ids,
+                statuses=[SITE_API_KEY_STATUS_ACTIVE],
+            )
+            active_runs_by_site = repository.count_active_runs_by_site(site_ids=site_ids)
+            knowledge_counts = repository.summarize_site_knowledge_current_counts(
+                site_ids=site_ids
+            )
+            knowledge_index_usage = repository.summarize_site_knowledge_index_usage(
+                account_id=account_id,
+                subscription_id=(
+                    primary_subscription.subscription_id
+                    if primary_subscription is not None
+                    else None
+                ),
+                since=period_start_at,
+                until=period_end_at,
+            )
+            batch_limits = cast(Any, self)._resolve_runtime_batch_limits(
+                snapshot=snapshot,
+                plan_version=plan_version,
+            )
+
+        service = cast(Any, self)
+        site_count = len(sites)
+        active_site_count = sum(
+            1 for site in sites if str(getattr(site, "status", "") or "") == SITE_STATUS_ACTIVE
+        )
+        active_key_site_count = sum(
+            1 for site_id in site_ids if int(active_key_counts.get(site_id, 0) or 0) > 0
+        )
+        active_run_count = sum(int(value or 0) for value in active_runs_by_site.values())
+        indexed_document_count = sum(
+            int(item.get("documents") or 0) for item in knowledge_counts.values()
+        )
+        indexed_chunk_count = sum(
+            int(item.get("chunks") or 0) for item in knowledge_counts.values()
+        )
+        site_limit = service._coerce_int(getattr(snapshot, "site_limit", 0))
+        concurrency = (
+            service._normalize_concurrency(snapshot.concurrency_json)
+            if snapshot is not None
+            else service._normalize_concurrency(getattr(plan_version, "concurrency_json", None))
+        )
+        ledger_source = bool(credit_ledger_entries)
+        credit_rate_version = AI_CREDIT_RATE_VERSION if ledger_source else "ai-credit-estimate-v1"
+        credit_breakdown = build_credit_breakdown_from_ledger(credit_ledger_entries)
+        if not credit_breakdown:
+            credit_breakdown = self._build_admin_account_credit_breakdown(
+                meter_events=meter_events,
+                totals=totals,
+                indexed_document_count=service._coerce_int(
+                    knowledge_index_usage.get("indexed_documents")
+                ),
+                indexed_chunk_count=service._coerce_int(knowledge_index_usage.get("indexed_chunks")),
+            )
+        credit_used = round(
+            sum(service._coerce_float(item.get("credits")) for item in credit_breakdown),
+            6,
+        )
+        credit_limit = service._coerce_float(budgets.get("max_ai_credits_per_period"))
+        if credit_limit <= 0:
+            credit_limit = service._coerce_float(budgets.get("max_runs_per_period"))
+        credit_status = self._quota_status(used=credit_used, limit=credit_limit)
+
+        resource_limits = [
+            self._quota_metric(
+                key="bound_sites",
+                label="Bound sites",
+                used=site_count,
+                limit=site_limit,
+                unit="site",
+            ),
+            self._quota_metric(
+                key="active_api_key_sites",
+                label="Sites with active API keys",
+                used=active_key_site_count,
+                limit=site_count,
+                unit="site",
+                status="ok" if active_key_site_count >= site_count else "limited",
+            ),
+            self._quota_metric(
+                key="concurrent_runs",
+                label="Concurrent runs",
+                used=active_run_count,
+                limit=service._coerce_int(concurrency.get("max_active_runs")),
+                unit="run",
+            ),
+            self._quota_metric(
+                key="batch_items",
+                label="Batch items per request",
+                used=0,
+                limit=service._coerce_int(batch_limits.get("max_batch_items")),
+                unit="item",
+            ),
+            self._quota_metric(
+                key="vector_documents",
+                label="Vector indexed articles",
+                used=indexed_document_count,
+                limit=site_count
+                * max(
+                    0,
+                    int(self.settings.site_knowledge_max_indexed_documents_per_site),
+                ),
+                unit="document",
+            ),
+            self._quota_metric(
+                key="vector_chunks",
+                label="Vector indexed chunks",
+                used=indexed_chunk_count,
+                limit=site_count
+                * max(
+                    0,
+                    int(self.settings.site_knowledge_max_indexed_chunks_per_site),
+                ),
+                unit="chunk",
+            ),
+            self._quota_metric(
+                key="vector_sync_documents_per_run",
+                label="Vector sync documents per run",
+                used=0,
+                limit=max(0, int(self.settings.site_knowledge_max_sync_documents_per_run)),
+                unit="document",
+            ),
+            self._quota_metric(
+                key="vector_sync_chunks_per_run",
+                label="Vector sync chunks per run",
+                used=0,
+                limit=max(0, int(self.settings.site_knowledge_max_sync_chunks_per_run)),
+                unit="chunk",
+            ),
+        ]
+        internal_limits = [
+            self._quota_metric(
+                key="tokens",
+                label="Tokens",
+                used=service._coerce_float(totals.get("tokens_total")),
+                limit=service._coerce_float(budgets.get("max_tokens_per_period")),
+                unit="token",
+            ),
+            self._quota_metric(
+                key="cost",
+                label="Provider cost",
+                used=service._coerce_float(totals.get("cost")),
+                limit=service._coerce_float(budgets.get("max_cost_per_period")),
+                unit="usd",
+            ),
+            self._quota_metric(
+                key="provider_calls",
+                label="Provider calls",
+                used=service._coerce_float(totals.get("provider_calls")),
+                limit=0,
+                unit="call",
+            ),
+        ]
+        resource_statuses = [
+            str(item.get("status") or "ok") for item in [*resource_limits, *internal_limits]
+        ]
+        status = "limited" if "limited" in [credit_status, *resource_statuses] else (
+            "near_limit" if "near_limit" in [credit_status, *resource_statuses] else "ok"
+        )
+        return {
+            "account_id": account_id,
+            "generated_at": self._serialize_datetime(now),
+            "period_start_at": self._serialize_datetime(period_start_at),
+            "period_end_at": self._serialize_datetime(period_end_at),
+            "status": status,
+            "credit": self._quota_metric(
+                key="ai_credits",
+                label="AI credits",
+                used=credit_used,
+                limit=credit_limit,
+                unit="credit",
+                status=credit_status,
+                extra={
+                    "estimated": not ledger_source,
+                    "rate_version": credit_rate_version,
+                    "source": "ledger" if ledger_source else "estimate",
+                    "limit_source": (
+                        "max_ai_credits_per_period"
+                        if service._coerce_float(budgets.get("max_ai_credits_per_period")) > 0
+                        else "max_runs_per_period"
+                    ),
+                },
+            ),
+            "resource_limits": resource_limits,
+            "internal_limits": internal_limits,
+            "breakdown": credit_breakdown,
+            "totals": totals,
+            "budget_state": budget_state,
+            "coverage": {
+                "site_count": site_count,
+                "active_site_count": active_site_count,
+                "active_key_site_count": active_key_site_count,
+                **service._build_subscription_package_summary(
+                    primary_subscription,
+                    site_count=site_count,
+                ),
+            },
+        }
+
+    def get_portal_account_quota_summary(self, account_id: str) -> dict[str, object]:
+        summary = self.get_admin_account_quota_summary(account_id)
+        return {
+            "account_id": str(summary.get("account_id") or account_id),
+            "generated_at": summary.get("generated_at"),
+            "period_start_at": summary.get("period_start_at"),
+            "period_end_at": summary.get("period_end_at"),
+            "status": summary.get("status"),
+            "credit": summary.get("credit"),
+            "resource_limits": (
+                summary.get("resource_limits")
+                if isinstance(summary.get("resource_limits"), list)
+                else []
+            ),
+            "breakdown": (
+                summary.get("breakdown")
+                if isinstance(summary.get("breakdown"), list)
+                else []
+            ),
+        }
+
+    def _build_platform_credit_summary(
+        self,
+        *,
+        meter_events: list[object],
+        ledger_entries: list[object],
+        window_days: int,
+        start_at: datetime,
+        end_at: datetime,
+        knowledge_index_usage: dict[str, int],
+    ) -> dict[str, object]:
+        service = cast(Any, self)
+        totals = service._aggregate_meter_events(meter_events)
+        ledger_source = bool(ledger_entries)
+        breakdown = build_credit_breakdown_from_ledger(ledger_entries)
+        if not breakdown:
+            breakdown = self._build_admin_account_credit_breakdown(
+                meter_events=meter_events,
+                totals=totals,
+                indexed_document_count=service._coerce_int(
+                    knowledge_index_usage.get("indexed_documents")
+                ),
+                indexed_chunk_count=service._coerce_int(knowledge_index_usage.get("indexed_chunks")),
+            )
+        credit_used = round(
+            sum(service._coerce_float(item.get("credits")) for item in breakdown),
+            6,
+        )
+        account_events: dict[str, list[object]] = defaultdict(list)
+        for event in meter_events:
+            account_id = str(getattr(event, "account_id", "") or "")
+            if account_id:
+                account_events[account_id].append(event)
+        account_ledger_entries: dict[str, list[object]] = defaultdict(list)
+        for entry in ledger_entries:
+            account_id = str(getattr(entry, "account_id", "") or "")
+            if account_id:
+                account_ledger_entries[account_id].append(entry)
+        top_accounts = []
+        account_ids = set(account_events.keys()) | set(account_ledger_entries.keys())
+        for account_id in account_ids:
+            events = account_events.get(account_id, [])
+            account_totals = service._aggregate_meter_events(events)
+            account_breakdown = build_credit_breakdown_from_ledger(
+                account_ledger_entries.get(account_id, [])
+            )
+            if not account_breakdown:
+                account_breakdown = self._build_admin_account_credit_breakdown(
+                    meter_events=events,
+                    totals=account_totals,
+                    indexed_document_count=0,
+                    indexed_chunk_count=0,
+                )
+            account_credit_used = round(
+                sum(service._coerce_float(item.get("credits")) for item in account_breakdown),
+                6,
+            )
+            top_accounts.append(
+                {
+                    "account_id": account_id,
+                    "credits": account_credit_used,
+                    "runs": service._coerce_float(account_totals.get("runs")),
+                    "provider_calls": service._coerce_float(account_totals.get("provider_calls")),
+                    "tokens_total": service._coerce_float(account_totals.get("tokens_total")),
+                }
+            )
+        top_accounts = sorted(
+            top_accounts,
+            key=lambda item: service._coerce_float(item.get("credits")),
+            reverse=True,
+        )[:5]
+        return {
+            "window_days": max(1, int(window_days or 1)),
+            "period_start_at": self._serialize_datetime(start_at),
+            "period_end_at": self._serialize_datetime(end_at),
+            "credit": self._quota_metric(
+                key="platform_ai_credits",
+                label="Platform AI credits",
+                used=credit_used,
+                limit=0,
+                unit="credit",
+                extra={
+                    "estimated": not ledger_source,
+                    "rate_version": (
+                        AI_CREDIT_RATE_VERSION if ledger_source else "ai-credit-estimate-v1"
+                    ),
+                    "scope": "platform",
+                    "source": "ledger" if ledger_source else "estimate",
+                },
+            ),
+            "breakdown": breakdown,
+            "top_accounts": top_accounts,
+        }
+
+    def _build_admin_account_credit_breakdown(
+        self,
+        *,
+        meter_events: list[object],
+        totals: dict[str, float],
+        indexed_document_count: int,
+        indexed_chunk_count: int,
+    ) -> list[dict[str, object]]:
+        service = cast(Any, self)
+        web_search_calls = 0.0
+        image_calls = 0.0
+        other_provider_calls = 0.0
+        for event in meter_events:
+            if str(getattr(event, "meter_key", "") or "") != "provider_calls":
+                continue
+            execution_kind = str(getattr(event, "execution_kind", "") or "").lower()
+            ability_family = str(getattr(event, "ability_family", "") or "").lower()
+            quantity = service._coerce_float(getattr(event, "quantity", 0.0))
+            if "web_search" in execution_kind or "search" in execution_kind:
+                web_search_calls += quantity
+            elif "image" in execution_kind or ability_family in {"vision"}:
+                image_calls += quantity
+            else:
+                other_provider_calls += quantity
+        run_count = service._coerce_float(totals.get("runs"))
+        token_units = service._coerce_float(totals.get("tokens_total")) / 1000.0
+        items = [
+            {
+                "key": "runs",
+                "label": "Hosted runs",
+                "quantity": round(run_count, 6),
+                "unit": "run",
+                "rate": 1.0,
+                "credits": round(run_count, 6),
+            },
+            {
+                "key": "tokens_total",
+                "label": "Model tokens",
+                "quantity": round(service._coerce_float(totals.get("tokens_total")), 6),
+                "unit": "token",
+                "rate": 1.0,
+                "rate_unit": "1000_tokens",
+                "credits": round(token_units, 6),
+            },
+            {
+                "key": "web_search",
+                "label": "Search calls",
+                "quantity": round(web_search_calls, 6),
+                "unit": "call",
+                "rate": 5.0,
+                "credits": round(web_search_calls * 5.0, 6),
+            },
+            {
+                "key": "image_recommendation",
+                "label": "Image recommendation calls",
+                "quantity": round(image_calls, 6),
+                "unit": "call",
+                "rate": 3.0,
+                "credits": round(image_calls * 3.0, 6),
+            },
+            {
+                "key": "provider_calls_other",
+                "label": "Other provider calls",
+                "quantity": round(other_provider_calls, 6),
+                "unit": "call",
+                "rate": 0.0,
+                "credits": 0.0,
+            },
+            {
+                "key": "vector_documents",
+                "label": "Vector indexed articles",
+                "quantity": indexed_document_count,
+                "unit": "document",
+                "rate": 2.0,
+                "credits": round(indexed_document_count * 2.0, 6),
+            },
+            {
+                "key": "vector_chunks",
+                "label": "Vector indexed chunks",
+                "quantity": indexed_chunk_count,
+                "unit": "chunk",
+                "rate": 0.1,
+                "credits": round(indexed_chunk_count * 0.1, 6),
+            },
+        ]
+        return [item for item in items if service._coerce_float(item.get("quantity")) > 0]
+
+    def _quota_metric(
+        self,
+        *,
+        key: str,
+        label: str,
+        used: float,
+        limit: float,
+        unit: str,
+        status: str | None = None,
+        extra: dict[str, object] | None = None,
+    ) -> dict[str, object]:
+        used_value = round(float(used or 0.0), 6)
+        limit_value = round(float(limit or 0.0), 6)
+        unlimited = limit_value <= 0
+        remaining = 0.0 if unlimited else max(0.0, limit_value - used_value)
+        usage_ratio = 0.0 if unlimited else used_value / max(limit_value, 1e-9)
+        payload = {
+            "key": key,
+            "label": label,
+            "used": used_value,
+            "limit": limit_value,
+            "remaining": round(remaining, 6),
+            "unlimited": unlimited,
+            "usage_ratio": round(usage_ratio, 6),
+            "status": status or self._quota_status(used=used_value, limit=limit_value),
+            "unit": unit,
+        }
+        if extra:
+            payload.update(extra)
+        return payload
+
+    def _quota_status(self, *, used: float, limit: float) -> str:
+        if float(limit or 0.0) <= 0:
+            return "ok"
+        ratio = float(used or 0.0) / max(float(limit), 1e-9)
+        if ratio >= 1.0:
+            return "limited"
+        if ratio >= 0.8:
+            return "near_limit"
+        return "ok"
 
     def _build_account_trial_readiness_summary(
         self,
