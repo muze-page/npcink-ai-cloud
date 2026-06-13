@@ -13,6 +13,7 @@ SSH_HOST="${MAGICK_CLOUD_DEPLOY_SSH_HOST:-}"
 SSH_USER="${MAGICK_CLOUD_DEPLOY_SSH_USER:-}"
 SSH_PORT="${MAGICK_CLOUD_DEPLOY_SSH_PORT:-22}"
 SSH_IDENTITY_FILE="${MAGICK_CLOUD_DEPLOY_IDENTITY_FILE:-}"
+SSH_CONNECT_TIMEOUT_SECONDS="${MAGICK_CLOUD_DEPLOY_SSH_CONNECT_TIMEOUT_SECONDS:-10}"
 REMOTE_DIR="${MAGICK_CLOUD_DEPLOY_REMOTE_DIR:-/opt/magick-ai-cloud}"
 BUNDLE_PATH="${MAGICK_CLOUD_DEPLOY_BUNDLE_PATH:-${ROOT_DIR}/dist/deploy-bundle.tgz}"
 ENV_FILE="${MAGICK_CLOUD_ENV_FILE:-}"
@@ -162,6 +163,11 @@ if [ -z "${SSH_HOST}" ]; then
 	exit 1
 fi
 
+if [ -n "${SSH_IDENTITY_FILE}" ] && [ ! -f "${SSH_IDENTITY_FILE}" ]; then
+	echo "[fail] SSH identity file not found: ${SSH_IDENTITY_FILE}" >&2
+	exit 1
+fi
+
 if [ -n "${ENV_FILE}" ] && [ ! -f "${ENV_FILE}" ]; then
 	echo "[fail] Env file not found: ${ENV_FILE}" >&2
 	exit 1
@@ -175,10 +181,14 @@ fi
 SSH_ARGS=(
 	-p "${SSH_PORT}"
 	-o StrictHostKeyChecking=accept-new
+	-o BatchMode=yes
+	-o ConnectTimeout="${SSH_CONNECT_TIMEOUT_SECONDS}"
 )
 SCP_ARGS=(
 	-P "${SSH_PORT}"
 	-o StrictHostKeyChecking=accept-new
+	-o BatchMode=yes
+	-o ConnectTimeout="${SSH_CONNECT_TIMEOUT_SECONDS}"
 )
 
 if [ -n "${SSH_IDENTITY_FILE}" ]; then
@@ -202,6 +212,11 @@ resolve_remote_platform() {
 }
 
 if [ -z "${IMAGE_PLATFORM}" ]; then
+	if ! ssh "${SSH_ARGS[@]}" "${SSH_TARGET}" "true" >/dev/null 2>&1; then
+		echo "[fail] SSH target is not reachable: ${SSH_TARGET}:${SSH_PORT}" >&2
+		echo "[fail] Check MAGICK_CLOUD_DEPLOY_IDENTITY_FILE, firewall/security group, and sshd." >&2
+		exit 1
+	fi
 	REMOTE_ARCH="$(ssh "${SSH_ARGS[@]}" "${SSH_TARGET}" "uname -m")"
 	IMAGE_PLATFORM="$(resolve_remote_platform "${REMOTE_ARCH}")"
 	if [ -z "${IMAGE_PLATFORM}" ]; then

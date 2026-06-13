@@ -129,6 +129,7 @@ def test_preview_and_baseline_scripts_lock_migration_and_schema_checks() -> None
     env_push_script = (_cloud_root() / "deploy" / "env-to-ssh-host.sh").read_text()
     remote_env_script = (_cloud_root() / "deploy" / "remote-env-upsert.sh").read_text()
     remote_migrate_script = (_cloud_root() / "deploy" / "remote-migrate.sh").read_text()
+    deploy_to_ssh_script = (_cloud_root() / "deploy" / "deploy-to-ssh-host.sh").read_text()
 
     assert "alembic upgrade head" in preview_script
     assert "python -m app.dev.baseline_status" in preview_script
@@ -186,13 +187,28 @@ def test_preview_and_baseline_scripts_lock_migration_and_schema_checks() -> None
     assert 'RESTART_SERVICES="proxy,api,worker,callback-worker,ops-worker"' in env_push_script
     assert 'RESTART_SERVICES="proxy,api,worker,callback-worker,ops-worker"' in remote_env_script
     assert "up -d worker callback-worker ops-worker" in remote_migrate_script
+    assert "SSH identity file not found" in deploy_to_ssh_script
+    assert "BatchMode=yes" in deploy_to_ssh_script
+    assert "ConnectTimeout" in deploy_to_ssh_script
+    assert "SSH target is not reachable" in deploy_to_ssh_script
 
 
 def test_deploy_bundle_smoke_uses_sample_provider_and_skip_frontend_contract() -> None:
     cloud_root = _cloud_root()
+    compose_text = (cloud_root / "docker-compose.prod.yml").read_text()
+    package_json = (cloud_root / "package.json").read_text()
+    frontend_dockerfile = (cloud_root / "frontend" / "Dockerfile").read_text()
     deploy_bundle_smoke = (cloud_root / "scripts" / "cloud-deploy-bundle-smoke-flow.sh").read_text()
     remote_smoke_script = (cloud_root / "deploy" / "remote-smoke.sh").read_text()
     nginx_prod_conf = (cloud_root / "deploy" / "nginx.prod.conf").read_text()
+
+    assert "packageManager" in package_json
+    assert "pnpm@10.33.0" in package_json
+    assert "context: ." in compose_text
+    assert "dockerfile: frontend/Dockerfile" in compose_text
+    assert "COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./" in frontend_dockerfile
+    assert "corepack prepare pnpm@10.33.0 --activate" in frontend_dockerfile
+    assert "pnpm install --frozen-lockfile --filter frontend..." in frontend_dockerfile
 
     assert 'export MAGICK_CLOUD_ENVIRONMENT="${MAGICK_CLOUD_ENVIRONMENT:-test}"' in (
         deploy_bundle_smoke

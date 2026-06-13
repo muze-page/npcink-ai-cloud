@@ -160,8 +160,8 @@ services:
 
   frontend:
     build:
-      context: ./frontend
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: frontend/Dockerfile
     image: magick-ai-cloud-frontend:prod
     environment:
       CLOUD_API_BASE_URL: http://api:8000

@@ -1,6 +1,7 @@
 {
   "name": "magick-ai-cloud",
   "private": true,
+  "packageManager": "pnpm@10.33.0",
   "scripts": {
     "dev": "docker compose -f docker-compose.dev.yml up --build",
     "dev:runtime": "docker compose -f docker-compose.dev.yml --profile runtime up --build",
