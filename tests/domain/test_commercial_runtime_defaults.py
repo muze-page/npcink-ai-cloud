@@ -39,6 +39,7 @@ def test_authorize_runtime_request_uses_development_unlimited_package_defaults(
         session.commit()
 
     assert decision["budgets"] == {
+        "max_ai_credits_per_period": 0.0,
         "max_runs_per_period": 0.0,
         "max_tokens_per_period": 0.0,
         "max_cost_per_period": 0.0,

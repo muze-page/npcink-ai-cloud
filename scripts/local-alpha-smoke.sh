@@ -345,7 +345,7 @@ ok "Bootstrapping portal membership and billing snapshot"
 docker compose -f "${ROOT_DIR}/docker-compose.dev.yml" run --rm api \
 	python -m app.dev.bootstrap_portal_site \
 		--site-id "${SITE_ID}" \
-		--member-email "${MEMBER_EMAIL}" \
+		--site-admin-email "${MEMBER_EMAIL}" \
 		--public-base-url "${BASE_URL}" >/dev/null
 
 http_request "GET" "${BASE_URL%/}/health/live" "${PORTAL_COOKIE_JAR}" ""
@@ -405,8 +405,8 @@ PY
 http_request "POST" "${BASE_URL%/}/portal/v1/auth/code/verify" "${PORTAL_COOKIE_JAR}" "${VERIFY_BODY}" \
 	"Origin: ${BASE_URL%/}"
 assert_status "${HTTP_STATUS}" "200" "portal login code verify should succeed"
-assert_json_non_empty "${HTTP_BODY}" "data.member_ref" "portal session should include member_ref"
-PORTAL_MEMBER_REF="$(json_read_path "${HTTP_BODY}" "data.member_ref")"
+assert_json_non_empty "${HTTP_BODY}" "data.site_admin_ref" "portal session should include site_admin_ref"
+PORTAL_SITE_ADMIN_REF="$(json_read_path "${HTTP_BODY}" "data.site_admin_ref")"
 
 SELECT_SITE_BODY="$(SITE_ID_VALUE="${SITE_ID}" python3 - <<'PY'
 import json
@@ -523,7 +523,7 @@ EVIDENCE_FILE="${EVIDENCE_DIR}/evidence-${IDEMPOTENCY_SUFFIX}.json"
 BASE_URL_VALUE="${BASE_URL}" \
 WORDPRESS_URL_VALUE="${WORDPRESS_URL}" \
 SITE_ID_VALUE="${SITE_ID}" \
-MEMBER_REF_VALUE="${PORTAL_MEMBER_REF}" \
+SITE_ADMIN_REF_VALUE="${PORTAL_SITE_ADMIN_REF}" \
 OPERATIONAL_READY_VALUE="${OPERATIONAL_READY_BODY}" \
 OBSERVABILITY_VALUE="${OBSERVABILITY_BODY}" \
 WORDPRESS_ADDON_VERIFIED_VALUE="true" \
@@ -553,7 +553,7 @@ evidence = {
     "wordpress_url": os.environ["WORDPRESS_URL_VALUE"],
     "site_id": os.environ["SITE_ID_VALUE"],
     "portal": {
-        "member_ref": os.environ["MEMBER_REF_VALUE"],
+        "site_admin_ref": os.environ["SITE_ADMIN_REF_VALUE"],
     },
     "operational_ready": {
         "ok": operational_ready.get("ok"),
