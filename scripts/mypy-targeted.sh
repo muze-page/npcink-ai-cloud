@@ -9,13 +9,42 @@ if [ ! -x "${CLOUD_DIR}/.venv/bin/python" ]; then
 	exit 1
 fi
 
+profile=""
+if [ "${1:-}" = "--profile" ]; then
+	profile="${2:-}"
+	if [ -z "${profile}" ]; then
+		echo "[fail] --profile requires a value." >&2
+		exit 1
+	fi
+	shift 2
+fi
+
 targets=("$@")
 if [ "${#targets[@]}" -eq 0 ]; then
-	targets=(
-		"app/domain/media_derivatives/contracts.py"
-		"app/domain/media_derivatives/processor.py"
-		"app/api/routes/media_derivatives.py"
-	)
+	case "${profile:-media-derivatives}" in
+		media-derivatives)
+			targets=(
+				"app/domain/media_derivatives/contracts.py"
+				"app/domain/media_derivatives/processor.py"
+				"app/api/routes/media_derivatives.py"
+			)
+			;;
+		commercial-runtime)
+			targets=(
+				"app/domain/commercial/credits.py"
+				"app/domain/commercial/mixins/_admin_mixin.py"
+				"app/domain/commercial/mixins/_runtime_mixin.py"
+				"app/domain/commercial/mixins/_billing_mixin.py"
+				"app/domain/site_knowledge/metrics.py"
+				"app/domain/runtime/service.py"
+				"app/api/routes/entitlements.py"
+			)
+			;;
+		*)
+			echo "[fail] Unknown mypy target profile: ${profile}" >&2
+			exit 1
+			;;
+	esac
 fi
 
 tmp_config="$(mktemp)"

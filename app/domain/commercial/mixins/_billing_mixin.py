@@ -151,6 +151,9 @@ PLAN_TIER_REGISTRY: dict[str, dict[str, object]] = {
         "concurrency_template": {"max_active_runs": 0},
         "site_limit": 0,
         "max_batch_items": 0,
+        "nightly_inspection_runs_per_period": 0,
+        "nightly_inspection_retention_days": 14,
+        "nightly_inspection_payload_modes": ["metadata_only"],
         "automation_enabled": True,
         "api_enabled": True,
         "openclaw_enabled": True,
@@ -169,8 +172,8 @@ PLAN_TIER_REGISTRY: dict[str, dict[str, object]] = {
         "tier_id": "pro",
         "label": "Pro",
         "package_alias": "Pro",
-        "usage_band": "Unlimited internal development usage.",
-        "positioning": "Development-stage package with no runtime, token, cost, concurrency, site, or batch limits while the product is unreleased.",
+        "usage_band": "30 Pro Nightly Inspection runs per month.",
+        "positioning": "Commercial Pro package for bounded Cloud runtime detail with explicit Nightly Inspection batch and period limits.",
         "monthly_included_points": 0,
         "budgets_template": {
             "max_runs_per_period": 0,
@@ -179,7 +182,10 @@ PLAN_TIER_REGISTRY: dict[str, dict[str, object]] = {
         },
         "concurrency_template": {"max_active_runs": 0},
         "site_limit": 0,
-        "max_batch_items": 0,
+        "max_batch_items": 25,
+        "nightly_inspection_runs_per_period": 30,
+        "nightly_inspection_retention_days": 14,
+        "nightly_inspection_payload_modes": ["metadata_only", "excerpt"],
         "automation_enabled": True,
         "api_enabled": True,
         "openclaw_enabled": True,
@@ -198,8 +204,8 @@ PLAN_TIER_REGISTRY: dict[str, dict[str, object]] = {
         "tier_id": "agency",
         "label": "Agency",
         "package_alias": "Agency",
-        "usage_band": "Unlimited internal development usage.",
-        "positioning": "Development-stage package with no runtime, token, cost, concurrency, site, or batch limits while the product is unreleased.",
+        "usage_band": "150 Pro Nightly Inspection runs per month.",
+        "positioning": "Commercial Agency package for multi-site Cloud runtime detail with higher Nightly Inspection batch and period limits.",
         "monthly_included_points": 0,
         "budgets_template": {
             "max_runs_per_period": 0,
@@ -208,7 +214,10 @@ PLAN_TIER_REGISTRY: dict[str, dict[str, object]] = {
         },
         "concurrency_template": {"max_active_runs": 0},
         "site_limit": 0,
-        "max_batch_items": 0,
+        "max_batch_items": 100,
+        "nightly_inspection_runs_per_period": 150,
+        "nightly_inspection_retention_days": 30,
+        "nightly_inspection_payload_modes": ["metadata_only", "excerpt"],
         "automation_enabled": True,
         "api_enabled": True,
         "openclaw_enabled": True,
@@ -486,6 +495,10 @@ class CommercialServiceBillingMixin(CommercialServiceAuditMixin):
                 snapshot=snapshot,
                 plan_version=plan_version,
             )
+            pro_cloud_runtime = self._build_pro_cloud_runtime_state(
+                meter_events,
+                batch_limits=batch_limits,
+            )
 
             return {
                 "site_id": site_id,
@@ -505,6 +518,7 @@ class CommercialServiceBillingMixin(CommercialServiceAuditMixin):
                 "period_end_at": self._serialize_datetime(period_end_at),
                 "usage_totals": totals,
                 "batch_limits": batch_limits,
+                "pro_cloud_runtime": pro_cloud_runtime,
                 "subscription_grace": self._build_subscription_grace_state(
                     subscription=subscription,
                     policy=policy,
@@ -1130,6 +1144,17 @@ class CommercialServiceBillingMixin(CommercialServiceAuditMixin):
                     baseline.get("monthly_included_points")
                 ),
                 "max_batch_items": self._coerce_int(baseline.get("max_batch_items")),
+                "nightly_inspection_runs_per_period": self._coerce_int(
+                    baseline.get("nightly_inspection_runs_per_period")
+                ),
+                "nightly_inspection_retention_days": max(
+                    1,
+                    self._coerce_int(baseline.get("nightly_inspection_retention_days") or 14),
+                ),
+                "nightly_inspection_payload_modes": self._normalize_list(
+                    baseline.get("nightly_inspection_payload_modes"),
+                    default=["metadata_only"],
+                ),
                 "automation_enabled": bool(baseline.get("automation_enabled")),
                 "api_enabled": bool(baseline.get("api_enabled")),
                 "openclaw_enabled": bool(baseline.get("openclaw_enabled")),
@@ -1197,6 +1222,17 @@ class CommercialServiceBillingMixin(CommercialServiceAuditMixin):
                 ),
                 "site_limit": self._coerce_int(baseline.get("site_limit")),
                 "max_batch_items": self._coerce_int(baseline.get("max_batch_items")),
+                "nightly_inspection_runs_per_period": self._coerce_int(
+                    baseline.get("nightly_inspection_runs_per_period")
+                ),
+                "nightly_inspection_retention_days": max(
+                    1,
+                    self._coerce_int(baseline.get("nightly_inspection_retention_days") or 14),
+                ),
+                "nightly_inspection_payload_modes": self._normalize_list(
+                    baseline.get("nightly_inspection_payload_modes"),
+                    default=["metadata_only"],
+                ),
                 "automation_enabled": bool(baseline.get("automation_enabled")),
                 "api_enabled": bool(baseline.get("api_enabled")),
                 "openclaw_enabled": bool(baseline.get("openclaw_enabled")),
@@ -1655,6 +1691,49 @@ class CommercialServiceBillingMixin(CommercialServiceAuditMixin):
             }
         }
 
+    def _build_pro_cloud_runtime_state(
+        self,
+        events: Sequence[object],
+        *,
+        batch_limits: dict[str, object],
+    ) -> dict[str, object]:
+        max_runs = max(
+            0,
+            self._coerce_int(batch_limits.get("nightly_inspection_runs_per_period")),
+        )
+        used_runs = 0
+        for event in events:
+            if str(getattr(event, "meter_key", "") or "") != "runs":
+                continue
+            if str(getattr(event, "ability_family", "") or "") != "automation":
+                continue
+            if str(getattr(event, "execution_kind", "") or "") != "nightly_site_inspection":
+                continue
+            used_runs += int(float(getattr(event, "quantity", 0.0) or 0.0))
+
+        return {
+            "contract_version": "pro-cloud-runtime-entitlement-v1",
+            "feature_id": "nightly_site_inspection",
+            "execution_pattern": "whole_run_offload",
+            "meter_key": "nightly_site_inspection_runs",
+            "limit_enforced": max_runs > 0,
+            "max_nightly_inspection_runs_per_period": max_runs,
+            "used_nightly_inspection_runs": used_runs,
+            "remaining_nightly_inspection_runs": (
+                max(0, max_runs - used_runs) if max_runs > 0 else 0
+            ),
+            "max_batch_items": max(0, self._coerce_int(batch_limits.get("max_batch_items"))),
+            "result_retention_days": max(
+                0,
+                self._coerce_int(batch_limits.get("nightly_inspection_retention_days")),
+            ),
+            "payload_modes": self._normalize_list(
+                batch_limits.get("nightly_inspection_payload_modes"),
+                default=["metadata_only", "excerpt"],
+            ),
+            "quota_exhausted": max_runs > 0 and used_runs >= max_runs,
+        }
+
     def _build_billing_snapshot_id(
         self,
         site_id: str,
@@ -1841,6 +1920,21 @@ class CommercialServiceBillingMixin(CommercialServiceAuditMixin):
 
         return {
             "max_batch_items": max(0, self._coerce_int(metadata.get("max_batch_items"))),
+            "nightly_inspection_runs_per_period": max(
+                0,
+                self._coerce_int(
+                    metadata.get("nightly_inspection_runs_per_period")
+                    or metadata.get("max_nightly_inspection_runs_per_period")
+                ),
+            ),
+            "nightly_inspection_retention_days": max(
+                1,
+                self._coerce_int(metadata.get("nightly_inspection_retention_days") or 14),
+            ),
+            "nightly_inspection_payload_modes": self._normalize_list(
+                metadata.get("nightly_inspection_payload_modes"),
+                default=["metadata_only", "excerpt"],
+            ),
         }
 
     def _select_latest_plan_version(
@@ -1926,6 +2020,17 @@ class CommercialServiceBillingMixin(CommercialServiceAuditMixin):
             "budgets_template": budgets_template,
             "concurrency_template": concurrency_template,
             "max_batch_items": self._coerce_int(baseline.get("max_batch_items")),
+            "nightly_inspection_runs_per_period": self._coerce_int(
+                baseline.get("nightly_inspection_runs_per_period")
+            ),
+            "nightly_inspection_retention_days": max(
+                1,
+                self._coerce_int(baseline.get("nightly_inspection_retention_days") or 14),
+            ),
+            "nightly_inspection_payload_modes": self._normalize_list(
+                baseline.get("nightly_inspection_payload_modes"),
+                default=["metadata_only"],
+            ),
             "automation_enabled": bool(baseline.get("automation_enabled")),
             "api_enabled": bool(baseline.get("api_enabled")),
             "openclaw_enabled": bool(baseline.get("openclaw_enabled")),
@@ -1946,6 +2051,19 @@ class CommercialServiceBillingMixin(CommercialServiceAuditMixin):
                     ),
                     "site_limit": self._coerce_int(baseline.get("site_limit")),
                     "max_batch_items": self._coerce_int(baseline.get("max_batch_items")),
+                    "nightly_inspection_runs_per_period": self._coerce_int(
+                        baseline.get("nightly_inspection_runs_per_period")
+                    ),
+                    "nightly_inspection_retention_days": max(
+                        1,
+                        self._coerce_int(
+                            baseline.get("nightly_inspection_retention_days") or 14
+                        ),
+                    ),
+                    "nightly_inspection_payload_modes": self._normalize_list(
+                        baseline.get("nightly_inspection_payload_modes"),
+                        default=["metadata_only"],
+                    ),
                     "automation_enabled": bool(baseline.get("automation_enabled")),
                     "api_enabled": bool(baseline.get("api_enabled")),
                     "openclaw_enabled": bool(baseline.get("openclaw_enabled")),

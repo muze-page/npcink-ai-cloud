@@ -229,6 +229,57 @@ The Morning Brief result should be structured and reviewable:
 Cloud-hosted results must not include direct apply instructions, final write
 payloads, WordPress credentials, nonces, cookies, or approval tokens.
 
+### Core Review Plan Handoff
+
+When Cloud finds reviewable issues, it may attach a Core review-plan candidate
+beside the Morning Brief result:
+
+```json
+{
+  "artifact_type": "nightly_site_inspection_review_plan",
+  "contract_version": "nightly_site_inspection_core_review_plan.v1",
+  "requires_approval": true,
+  "dry_run": true,
+  "commit_execution": false,
+  "direct_wordpress_write": false,
+  "runtime_owner": "npcink-local-automation-runtime",
+  "evidence_refs": [
+    {
+      "action_id": "action_001",
+      "post_id": "123",
+      "source_type": "post",
+      "score": 67,
+      "severity": "warning",
+      "reason_codes": ["missing_meta_description"]
+    }
+  ],
+  "write_actions": [
+    {
+      "action_id": "review_nightly_site_inspection",
+      "target_ability_id": "npcink-abilities-toolkit/create-draft",
+      "proposal_ready": false,
+      "requires_input": ["title", "content"],
+      "requires_approval": true,
+      "commit_execution": false,
+      "input": {
+        "title": "",
+        "content": "",
+        "status": "draft",
+        "dry_run": true,
+        "commit": false
+      }
+    }
+  ]
+}
+```
+
+The local handoff target is
+`npcink-toolbox/build-nightly-inspection-review-plan`, submitted through Core's
+existing `/proposals/from-plan` intake. This plan deliberately creates a
+blocked review proposal first with `proposal_ready=false`: Cloud supplies
+evidence and prioritization, while the operator supplies draft fields locally
+before any final write path exists.
+
 ## Writing Boundary
 
 Cloud must not perform nightly article writing generation.

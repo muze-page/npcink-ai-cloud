@@ -146,6 +146,43 @@ def _resolve_runtime_quota(policy: dict[str, object]) -> dict[str, object]:
     }
 
 
+def _resolve_pro_cloud_runtime(policy: dict[str, object]) -> dict[str, object]:
+    pro_runtime = _dict(policy.get("pro_cloud_runtime"))
+    batch_limits = _dict(policy.get("batch_limits"))
+    payload_modes = _list(pro_runtime.get("payload_modes")) or _list(
+        batch_limits.get("nightly_inspection_payload_modes")
+    )
+    max_runs = _coerce_int(pro_runtime.get("max_nightly_inspection_runs_per_period"))
+    used_runs = _coerce_int(pro_runtime.get("used_nightly_inspection_runs"))
+    remaining_runs = _coerce_int(pro_runtime.get("remaining_nightly_inspection_runs"))
+    return {
+        "contract_version": "pro-cloud-runtime-entitlement-v1",
+        "feature_id": "nightly_site_inspection",
+        "execution_pattern": "whole_run_offload",
+        "meter_key": "nightly_site_inspection_runs",
+        "limit_enforced": max_runs > 0,
+        "max_nightly_inspection_runs_per_period": max_runs,
+        "used_nightly_inspection_runs": used_runs,
+        "remaining_nightly_inspection_runs": remaining_runs if max_runs > 0 else 0,
+        "quota_exhausted": max_runs > 0 and used_runs >= max_runs,
+        "max_batch_items": _coerce_int(
+            pro_runtime.get("max_batch_items") or batch_limits.get("max_batch_items")
+        ),
+        "result_retention_days": _coerce_int(
+            pro_runtime.get("result_retention_days")
+            or batch_limits.get("nightly_inspection_retention_days")
+        ),
+        "payload_modes": payload_modes or ["metadata_only", "excerpt"],
+        "cloud_role": "runtime_detail",
+        "local_truth": {
+            "schedule_owner": "wordpress_wp_cron_or_local_runtime",
+            "runtime_owner": "npcink-local-automation-runtime",
+            "final_write_path": "core_proposal_required",
+            "direct_wordpress_write": False,
+        },
+    }
+
+
 def _build_entitlement_payload(
     request: Request,
     *,
@@ -177,6 +214,7 @@ def _build_entitlement_payload(
                 "days": max(0, int(settings.audit_retention_days_default or 0)),
             },
             "hosted_runtime_quota": _resolve_runtime_quota(policy),
+            "pro_cloud_runtime": _resolve_pro_cloud_runtime(policy),
         },
     }
 

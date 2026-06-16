@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import Counter, defaultdict
+from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 from uuid import uuid4
@@ -1206,6 +1207,7 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
             return getattr(entry, key, default)
 
         credit_delta = service._coerce_float(value("credit_delta", 0.0))
+        created_at = value("created_at")
         payload: dict[str, object] = {
             "ledger_entry_id": str(value("ledger_entry_id", "") or ""),
             "site_id": str(value("site_id", "") or ""),
@@ -1220,7 +1222,9 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
             "rate": service._coerce_float(value("rate", 0.0)),
             "rate_unit": value("rate_unit"),
             "rate_version": str(value("rate_version", "") or ""),
-            "created_at": self._serialize_datetime(value("created_at")),
+            "created_at": self._serialize_datetime(
+                created_at if isinstance(created_at, datetime | str) else None
+            ),
         }
         if include_internal:
             payload.update(
@@ -1241,10 +1245,10 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
     def _build_platform_credit_summary(
         self,
         *,
-        meter_events: list[object],
-        ledger_entries: list[object],
-        previous_meter_events: list[object],
-        previous_ledger_entries: list[object],
+        meter_events: Sequence[object],
+        ledger_entries: Sequence[object],
+        previous_meter_events: Sequence[object],
+        previous_ledger_entries: Sequence[object],
         window_days: int,
         start_at: datetime,
         end_at: datetime,
@@ -1521,7 +1525,7 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
     def _build_admin_account_credit_breakdown(
         self,
         *,
-        meter_events: list[object],
+        meter_events: Sequence[object],
         totals: dict[str, float],
         indexed_document_count: int,
         indexed_chunk_count: int,

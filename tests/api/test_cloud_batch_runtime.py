@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import timedelta
 from pathlib import Path
 from typing import Any
 
@@ -11,7 +12,13 @@ from app.adapters.queue.in_memory import InMemoryRuntimeQueue
 from app.api.main import create_app
 from app.core.config import Settings
 from app.core.db import get_session, init_schema
-from app.core.models import ProviderCallRecord, RunRecord
+from app.core.models import (
+    AccountSubscription,
+    PlanVersion,
+    ProviderCallRecord,
+    RunRecord,
+    UsageMeterEvent,
+)
 from app.core.services import CloudServices
 from app.domain.runtime.service import RuntimeService
 from tests.conftest import (
@@ -124,6 +131,17 @@ def _post_execute(
     return client.post("/v1/runtime/execute", content=body, headers=headers)
 
 
+def _set_plan_metadata(database_url: str, metadata: dict[str, Any]) -> None:
+    with get_session(database_url) as session:
+        plan_version = session.get(PlanVersion, "plan_free_v1")
+        assert plan_version is not None
+        existing = (
+            plan_version.metadata_json if isinstance(plan_version.metadata_json, dict) else {}
+        )
+        plan_version.metadata_json = {**existing, **metadata}
+        session.commit()
+
+
 def _get_result(client: TestClient, run_id: str) -> Any:
     headers = build_auth_headers(
         "GET",
@@ -172,6 +190,28 @@ def test_cloud_batch_runtime_queues_and_worker_returns_review_only_result(tmp_pa
     assert result["safety"]["article_body_generated"] is False
     assert result["actions"][0]["status"] == "succeeded"
     assert "missing_meta_description" in result["actions"][0]["reason_codes"]
+    assert result["nightly_result"]["contract_version"] == "nightly_site_inspection_result.v1"
+    assert result["nightly_result"]["safety"]["cloud_scheduler_truth"] is False
+    assert result["core_review_plan"]["contract_version"] == (
+        "nightly_site_inspection_core_review_plan.v1"
+    )
+    assert result["core_review_plan"]["artifact_type"] == "nightly_site_inspection_review_plan"
+    assert result["core_review_plan"]["requires_approval"] is True
+    assert result["core_review_plan"]["commit_execution"] is False
+    assert result["core_review_plan"]["dry_run"] is True
+    assert result["core_review_plan"]["direct_wordpress_write"] is False
+    assert result["core_review_plan"]["write_actions"][0]["target_ability_id"] == (
+        "npcink-abilities-toolkit/create-draft"
+    )
+    assert result["core_review_plan"]["write_actions"][0]["proposal_ready"] is False
+    assert result["core_review_plan"]["write_actions"][0]["requires_input"] == [
+        "title",
+        "content",
+    ]
+    assert result["handoff"]["target_plan_ability_id"] == (
+        "npcink-toolbox/build-nightly-inspection-review-plan"
+    )
+    assert result["handoff"]["proposal_candidate_available"] is True
 
     with get_session(database_url) as session:
         run = session.get(RunRecord, run_id)
@@ -183,6 +223,71 @@ def test_cloud_batch_runtime_queues_and_worker_returns_review_only_result(tmp_pa
         )
         assert provider_call is not None
         assert provider_call.provider_id == "cloud_batch_runtime"
+
+
+def test_cloud_batch_runtime_rejects_over_plan_batch_item_limit(tmp_path: Path) -> None:
+    database_url, _, _, client = _build_client(tmp_path)
+    _set_plan_metadata(database_url, {"max_batch_items": 1})
+
+    response = _post_execute(
+        client,
+        _payload(),
+        idempotency_key="cloud-batch-item-limit",
+    )
+
+    assert response.status_code == 429
+    body = response.json()
+    assert body["error_code"] == "commercial.batch_limit_exceeded"
+    assert "nightly_site_inspection" in body["message"]
+
+
+def test_cloud_batch_runtime_rejects_over_period_inspection_quota(tmp_path: Path) -> None:
+    database_url, _, _, client = _build_client(tmp_path)
+    _set_plan_metadata(
+        database_url,
+        {
+            "max_batch_items": 10,
+            "nightly_inspection_runs_per_period": 1,
+        },
+    )
+    with get_session(database_url) as session:
+        subscription = session.get(AccountSubscription, "sub_site_alpha")
+        assert subscription is not None
+        created_at = subscription.current_period_start_at + timedelta(seconds=1)
+        session.add(
+            UsageMeterEvent(
+                account_id="acct_site_alpha",
+                site_id="site_alpha",
+                subscription_id=subscription.subscription_id,
+                plan_version_id=subscription.plan_version_id,
+                run_id="run_prior_nightly_inspection",
+                provider_call_id=None,
+                event_kind="run",
+                meter_key="runs",
+                quantity=1.0,
+                ability_family="automation",
+                channel="openapi",
+                execution_kind="nightly_site_inspection",
+                execution_tier="cloud",
+                data_classification="internal",
+                currency="USD",
+                dedupe_key="run:prior-nightly-inspection:runs",
+                payload_json={"source": "test_prior_usage"},
+                created_at=created_at,
+            )
+        )
+        session.commit()
+
+    response = _post_execute(
+        client,
+        _payload(),
+        idempotency_key="cloud-batch-period-limit",
+    )
+
+    assert response.status_code == 429
+    body = response.json()
+    assert body["error_code"] == "commercial.quota_exceeded"
+    assert "nightly_site_inspection_runs" in body["message"]
 
 
 def test_cloud_batch_runtime_rejects_write_control_fields(tmp_path: Path) -> None:

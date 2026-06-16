@@ -4894,7 +4894,9 @@ class RuntimeService:
         requested_items = self._resolve_batch_request_size(request)
         if requested_items <= 0:
             return
-        if max_batch_items <= 0 or requested_items > max_batch_items:
+        if max_batch_items <= 0:
+            return
+        if requested_items > max_batch_items:
             raise RuntimeBatchLimitExceededError(
                 feature_id=self._resolve_batch_feature_id(request),
                 requested_items=requested_items,
@@ -4914,6 +4916,14 @@ class RuntimeService:
             if isinstance(items, list):
                 return len([item for item in items if isinstance(item, dict)])
             return max(0, self._coerce_int(input_payload.get("per_page"), default=0))
+        if feature_id == "nightly_site_inspection":
+            items = input_payload.get("items")
+            if isinstance(items, list):
+                return len([item for item in items if isinstance(item, dict)])
+            snapshot = input_payload.get("snapshot")
+            if isinstance(snapshot, dict) and isinstance(snapshot.get("items"), list):
+                return len([item for item in snapshot["items"] if isinstance(item, dict)])
+            return 0
         return 0
 
     def _resolve_batch_feature_id(self, request: RuntimeRequest) -> str:
@@ -4921,6 +4931,8 @@ class RuntimeService:
         if workflow_id in {"media_alt_completion", "media_nightly_image_optimize"}:
             return workflow_id
         ability_name = str(request.ability_name or "").strip()
+        if ability_name in CLOUD_BATCH_RUNTIME_ABILITIES:
+            return "nightly_site_inspection"
         if ability_name.endswith("/media_alt_completion"):
             return "media_alt_completion"
         if ability_name.endswith("/media_nightly_image_optimize"):

@@ -8,7 +8,7 @@ CHANGED_BASE_REF ?= origin/master
 TEST_PROVIDER_ENV = MAGICK_CLOUD_OPENAI_API_KEY= MAGICK_CLOUD_OPENAI_COMPATIBLE_API_KEY=
 DOCKER_TEST_PROVIDER_ENV = -e MAGICK_CLOUD_OPENAI_API_KEY= -e MAGICK_CLOUD_OPENAI_COMPATIBLE_API_KEY=
 
-.PHONY: baseline bootstrap-dev dev test test-local lint lint-changed mypy-full mypy-targeted perimeter frontend-sync frontend-watch migrate seed-dev rollup bundle deploy-smoke deploy-ssh provider-status env-ssh secret-rotation-check
+.PHONY: baseline bootstrap-dev dev test test-local lint lint-changed mypy-full mypy-targeted mypy-commercial-runtime perimeter frontend-sync frontend-watch migrate seed-dev rollup bundle deploy-smoke deploy-ssh provider-status env-ssh secret-rotation-check
 
 baseline:
 	.venv/bin/pytest --version
@@ -49,6 +49,9 @@ mypy-full:
 
 mypy-targeted:
 	bash scripts/mypy-targeted.sh $(MYPY_TARGETS)
+
+mypy-commercial-runtime:
+	bash scripts/mypy-targeted.sh --profile commercial-runtime
 
 perimeter:
 	bash scripts/check-cloud-perimeter.sh

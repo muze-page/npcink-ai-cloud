@@ -1749,14 +1749,29 @@ def test_service_routes_admin_read_facade(tmp_path: Path) -> None:
     assert tier_templates[2]["concurrency_template"]["max_active_runs"] == 0
     assert tier_templates[0]["canonical_shell"]["entitlements"]["execution_tiers"] == ["cloud"]
     assert tier_templates[1]["canonical_shell"]["budgets"]["max_runs_per_period"] == 0
-    assert tier_templates[2]["canonical_shell"]["metadata"]["max_batch_items"] == 0
+    assert tier_templates[1]["canonical_shell"]["metadata"]["max_batch_items"] == 25
+    assert (
+        tier_templates[1]["canonical_shell"]["metadata"][
+            "nightly_inspection_runs_per_period"
+        ]
+        == 30
+    )
+    assert tier_templates[2]["canonical_shell"]["metadata"]["max_batch_items"] == 100
+    assert (
+        tier_templates[2]["canonical_shell"]["metadata"][
+            "nightly_inspection_runs_per_period"
+        ]
+        == 150
+    )
     admin_plan_summary = next(item for item in plans if item["plan"]["plan_id"] == "plan_admin")
     assert admin_plan_summary["tier_summary"]["tier_id"] == "pro"
     assert admin_plan_summary["tier_summary"]["label"] == "Pro"
     assert admin_plan_summary["tier_summary"]["package_alias"] == "Pro"
     assert admin_plan_summary["tier_summary"]["monthly_included_points"] == 0
     assert admin_plan_summary["tier_summary"]["site_limit"] == 0
-    assert admin_plan_summary["tier_summary"]["max_batch_items"] == 0
+    assert admin_plan_summary["tier_summary"]["max_batch_items"] == 25
+    assert admin_plan_summary["tier_summary"]["nightly_inspection_runs_per_period"] == 30
+    assert admin_plan_summary["tier_summary"]["nightly_inspection_retention_days"] == 14
     assert admin_plan_summary["tier_summary"]["automation_enabled"] is True
     assert admin_plan_summary["tier_summary"]["api_enabled"] is True
     assert admin_plan_summary["tier_summary"]["openclaw_enabled"] is True
@@ -1773,7 +1788,9 @@ def test_service_routes_admin_read_facade(tmp_path: Path) -> None:
     assert plan_detail["tier_summary"]["package_alias"] == "Pro"
     assert plan_detail["tier_summary"]["monthly_included_points"] == 0
     assert plan_detail["tier_summary"]["site_limit"] == 0
-    assert plan_detail["tier_summary"]["max_batch_items"] == 0
+    assert plan_detail["tier_summary"]["max_batch_items"] == 25
+    assert plan_detail["tier_summary"]["nightly_inspection_runs_per_period"] == 30
+    assert plan_detail["tier_summary"]["nightly_inspection_retention_days"] == 14
     assert plan_detail["tier_summary"]["automation_enabled"] is True
     assert plan_detail["tier_summary"]["api_enabled"] is True
     assert plan_detail["tier_summary"]["openclaw_enabled"] is True
@@ -1941,10 +1958,18 @@ def test_service_routes_plan_tier_fallback_and_package_fit_cues(tmp_path: Path) 
     assert plans["plan_version_tier"]["tier_summary"]["tier_id"] == "agency"
     assert plans["plan_version_tier"]["tier_summary"]["package_alias"] == "Agency"
     assert plans["plan_version_tier"]["tier_summary"]["monthly_included_points"] == 0
-    assert plans["plan_version_tier"]["tier_summary"]["max_batch_items"] == 0
+    assert plans["plan_version_tier"]["tier_summary"]["max_batch_items"] == 100
+    assert (
+        plans["plan_version_tier"]["tier_summary"][
+            "nightly_inspection_runs_per_period"
+        ]
+        == 150
+    )
     assert plans["plan_version_tier"]["tier_summary"]["openclaw_enabled"] is True
     assert plans["agency_ops"]["tier_summary"]["tier_id"] == "agency"
     assert plans["general_ops"]["tier_summary"]["tier_id"] == "pro"
+    assert plans["general_ops"]["tier_summary"]["max_batch_items"] == 25
+    assert plans["general_ops"]["tier_summary"]["nightly_inspection_runs_per_period"] == 30
 
     assert free_detail_response.status_code == 200
     free_detail = free_detail_response.json()["data"]

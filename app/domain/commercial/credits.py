@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from math import ceil
+from typing import Any, cast
 
 AI_CREDIT_RATE_VERSION = "ai-credit-ledger-v2"
 
@@ -175,7 +176,7 @@ def build_credit_breakdown_from_ledger(entries: Iterable[object]) -> list[dict[s
 
 def _coerce_float(value: object) -> float:
     try:
-        return float(value or 0.0)
+        return float(cast(Any, value) or 0.0)
     except (TypeError, ValueError):
         return 0.0
 

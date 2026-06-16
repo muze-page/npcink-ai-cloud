@@ -429,15 +429,14 @@ class CommercialServiceRuntimeMixin(CommercialServiceAuditMixin):
             session.commit()
             raise error
 
-        totals = service._aggregate_meter_events(
-            repository.list_usage_meter_events(
-                site_id,
-                subscription_id=subscription.subscription_id,
-                period_start_at=period_start_at,
-                period_end_at=period_end_at,
-                limit=None,
-            )
+        meter_events = repository.list_usage_meter_events(
+            site_id,
+            subscription_id=subscription.subscription_id,
+            period_start_at=period_start_at,
+            period_end_at=period_end_at,
+            limit=None,
         )
+        totals = service._aggregate_meter_events(meter_events)
         budgets = service._normalize_budgets(snapshot.budgets_json)
         budget_checks = (
             ("runs", totals.get("runs", 0.0), budgets.get("max_runs_per_period")),
@@ -488,6 +487,50 @@ class CommercialServiceRuntimeMixin(CommercialServiceAuditMixin):
             policy_actions.append(budget_action)
             break
 
+        pro_cloud_runtime = service._build_pro_cloud_runtime_state(
+            meter_events,
+            batch_limits=batch_limits,
+        )
+        if (
+            request_kind == "execute"
+            and ability_family == "automation"
+            and execution_kind == "nightly_site_inspection"
+        ):
+            max_runs = self._coerce_int(
+                pro_cloud_runtime.get("max_nightly_inspection_runs_per_period")
+            )
+            used_runs = self._coerce_int(
+                pro_cloud_runtime.get("used_nightly_inspection_runs")
+            )
+            if max_runs > 0 and used_runs >= max_runs:
+                error = RuntimeQuotaExceededError("nightly_site_inspection_runs", max_runs)
+                self._record_commercial_decision_in_session(
+                    repository=repository,
+                    account_id=subscription.account_id,
+                    site_id=site_id,
+                    subscription_id=subscription.subscription_id,
+                    plan_version_id=subscription.plan_version_id,
+                    run_id=run_id,
+                    request_kind=request_kind,
+                    decision="deny",
+                    decision_code=error.error_code,
+                    ability_family=ability_family,
+                    channel=channel,
+                    execution_kind=execution_kind,
+                    execution_tier=execution_tier,
+                    data_classification=data_classification,
+                    trace_id=trace_id,
+                    idempotency_key=idempotency_key,
+                    payload_json={
+                        "meter_key": "nightly_site_inspection_runs",
+                        "current_total": used_runs,
+                        "limit": max_runs,
+                        "pro_cloud_runtime": pro_cloud_runtime,
+                    },
+                )
+                session.commit()
+                raise error
+
         effective_runtime_policy_overrides: dict[str, object] = {}
         for action in policy_actions:
             effective_runtime_policy_overrides = self._merge_runtime_policy_overrides(
@@ -507,6 +550,7 @@ class CommercialServiceRuntimeMixin(CommercialServiceAuditMixin):
             "budgets": budgets,
             "concurrency": concurrency,
             "batch_limits": batch_limits,
+            "pro_cloud_runtime": pro_cloud_runtime,
             "policy": policy,
             "policy_actions": policy_actions,
             "runtime_policy_overrides": effective_runtime_policy_overrides,
@@ -535,6 +579,7 @@ class CommercialServiceRuntimeMixin(CommercialServiceAuditMixin):
                 "budgets": budgets,
                 "concurrency": concurrency,
                 "batch_limits": batch_limits,
+                "pro_cloud_runtime": pro_cloud_runtime,
                 "active_runs": active_runs,
                 "policy": policy,
                 "policy_actions": policy_actions,
@@ -648,8 +693,9 @@ class CommercialServiceRuntimeMixin(CommercialServiceAuditMixin):
         event_id = getattr(event, "id", None)
         if event_id is None:
             return
+        service = cast(Any, self)
         source_type = str(component.get("source_type") or "")
-        credits = float(component.get("credits") or 0.0)
+        credits = service._coerce_float(component.get("credits"))
         repository.record_credit_ledger_entry(
             account_id=getattr(event, "account_id", None),
             site_id=getattr(event, "site_id", None),
@@ -660,9 +706,9 @@ class CommercialServiceRuntimeMixin(CommercialServiceAuditMixin):
             source_type=source_type,
             source_id=str(event_id),
             credit_delta=-credits,
-            quantity=float(component.get("quantity") or 0.0),
+            quantity=service._coerce_float(component.get("quantity")),
             unit=str(component.get("unit") or "credit"),
-            rate=float(component.get("rate") or 0.0),
+            rate=service._coerce_float(component.get("rate")),
             rate_unit=(
                 str(component.get("rate_unit"))
                 if component.get("rate_unit") is not None

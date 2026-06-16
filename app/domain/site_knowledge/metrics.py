@@ -581,7 +581,7 @@ def _record_index_credit_ledger_entries(
         component = vector_credit_component(source_type=source_type, quantity=quantity)
         if component is None:
             continue
-        credits = float(component.get("credits") or 0.0)
+        credits = _coerce_float(component.get("credits"), default=0.0)
         repository.record_credit_ledger_entry(
             account_id=metric.account_id or run.account_id,
             site_id=metric.site_id or run.site_id,
@@ -592,9 +592,9 @@ def _record_index_credit_ledger_entries(
             source_type=source_type,
             source_id=metric.run_id,
             credit_delta=-credits,
-            quantity=float(component.get("quantity") or 0.0),
+            quantity=_coerce_float(component.get("quantity"), default=0.0),
             unit=str(component.get("unit") or "credit"),
-            rate=float(component.get("rate") or 0.0),
+            rate=_coerce_float(component.get("rate"), default=0.0),
             rate_unit=(
                 str(component.get("rate_unit"))
                 if component.get("rate_unit") is not None

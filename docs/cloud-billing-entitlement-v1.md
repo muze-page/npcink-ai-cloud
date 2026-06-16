@@ -86,6 +86,27 @@ An entitlement snapshot must express these fields only for the v1 contract:
     "max_active_runs": 0,
     "max_batch_items": 0,
     "execution_tiers": ["cloud"]
+  },
+  "pro_cloud_runtime": {
+    "contract_version": "pro-cloud-runtime-entitlement-v1",
+    "feature_id": "nightly_site_inspection",
+    "execution_pattern": "whole_run_offload",
+    "meter_key": "nightly_site_inspection_runs",
+    "limit_enforced": true,
+    "max_nightly_inspection_runs_per_period": 30,
+    "used_nightly_inspection_runs": 7,
+    "remaining_nightly_inspection_runs": 23,
+    "quota_exhausted": false,
+    "max_batch_items": 25,
+    "result_retention_days": 21,
+    "payload_modes": ["metadata_only", "excerpt"],
+    "cloud_role": "runtime_detail",
+    "local_truth": {
+      "schedule_owner": "wordpress_wp_cron_or_local_runtime",
+      "runtime_owner": "npcink-local-automation-runtime",
+      "final_write_path": "core_proposal_required",
+      "direct_wordpress_write": false
+    }
   }
 }
 ```
@@ -99,6 +120,10 @@ Field rules:
 - `analytics_retention.days` controls Cloud analytics/log summary visibility; it
   does not create indefinite retention.
 - `hosted_runtime_quota` controls Cloud runtime headroom only.
+- `pro_cloud_runtime` is a read-only detail surface for Toolbox Pro controls. It
+  reports Nightly Site Inspection quota, usage, remaining count, batch item cap,
+  result-retention guidance, and payload modes. It does not create a Cloud
+  scheduler, local write permission, or second approval truth.
 - Entitlement may restrict hosted execution, but it must not expand local
   plugin contracts, WordPress write permissions, approvals, router truth,
   prompt truth, or profile truth.
@@ -195,8 +220,29 @@ Response:
       },
       "hosted_runtime_quota": {
         "max_active_runs": 0,
-        "max_batch_items": 0,
+        "max_batch_items": 25,
         "execution_tiers": ["cloud"]
+      },
+      "pro_cloud_runtime": {
+        "contract_version": "pro-cloud-runtime-entitlement-v1",
+        "feature_id": "nightly_site_inspection",
+        "execution_pattern": "whole_run_offload",
+        "meter_key": "nightly_site_inspection_runs",
+        "limit_enforced": true,
+        "max_nightly_inspection_runs_per_period": 30,
+        "used_nightly_inspection_runs": 0,
+        "remaining_nightly_inspection_runs": 30,
+        "quota_exhausted": false,
+        "max_batch_items": 25,
+        "result_retention_days": 14,
+        "payload_modes": ["metadata_only", "excerpt"],
+        "cloud_role": "runtime_detail",
+        "local_truth": {
+          "schedule_owner": "wordpress_wp_cron_or_local_runtime",
+          "runtime_owner": "npcink-local-automation-runtime",
+          "final_write_path": "core_proposal_required",
+          "direct_wordpress_write": false
+        }
       }
     }
   }

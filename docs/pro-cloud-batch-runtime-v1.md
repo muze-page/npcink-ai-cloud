@@ -101,6 +101,37 @@ including `update_post`, `final_write_policy`, `wordpress_write`,
 `approval_token`, `nonce`, `cookie`, `password`, and secret-bearing keys.
 
 The first implementation caps each runtime request at 50 content items.
+Commercial package metadata may set a lower `max_batch_items` value. When that
+value is positive, Cloud rejects oversized Pro batch requests before queueing
+the run. During internal development, an omitted or `0` value means the package
+does not block on this limit while usage evidence is still recorded.
+
+## Pro Entitlement And Quota
+
+Pro Cloud Batch Runtime is entitlement-backed runtime detail, not a local
+scheduler. The Cloud commercial layer may enforce these package metadata fields:
+
+```json
+{
+  "max_batch_items": 25,
+  "nightly_inspection_runs_per_period": 30,
+  "nightly_inspection_retention_days": 14,
+  "nightly_inspection_payload_modes": ["metadata_only", "excerpt"]
+}
+```
+
+Rules:
+
+- `nightly_inspection_runs_per_period` counts accepted `automation` runs with
+  `execution_kind: nightly_site_inspection` in the active billing period.
+- Positive values are enforced fail-closed before a new run is created.
+- `0` or omitted values keep the current internal-development posture: no
+  package-limit block, but usage metering and audit remain active.
+- `nightly_inspection_retention_days` is customer-visible retention guidance for
+  result detail; request-level `retention_ttl` still remains bounded by runtime
+  contract validation.
+- These fields do not grant WordPress write authority and do not move local
+  schedule, proposal, approval, or final write truth to Cloud.
 
 ## Result Shape
 
@@ -131,6 +162,45 @@ Cloud returns a reviewable result:
       "status": "succeeded"
     }
   ],
+  "nightly_result": {
+    "contract_version": "nightly_site_inspection_result.v1",
+    "safety": {
+      "direct_wordpress_write": false,
+      "requires_local_review": true,
+      "cloud_scheduler_truth": false
+    }
+  },
+  "core_review_plan": {
+    "artifact_type": "nightly_site_inspection_review_plan",
+    "contract_version": "nightly_site_inspection_core_review_plan.v1",
+    "requires_approval": true,
+    "dry_run": true,
+    "commit_execution": false,
+    "direct_wordpress_write": false,
+    "evidence_refs": [
+      {
+        "action_id": "action_001",
+        "post_id": "123",
+        "source_type": "post",
+        "reason_codes": ["missing_meta_description"]
+      }
+    ],
+    "write_actions": [
+      {
+        "action_id": "review_nightly_site_inspection",
+        "target_ability_id": "npcink-abilities-toolkit/create-draft",
+        "proposal_ready": false,
+        "requires_input": ["title", "content"],
+        "input": {
+          "title": "",
+          "content": "",
+          "status": "draft",
+          "dry_run": true,
+          "commit": false
+        }
+      }
+    ]
+  },
   "safety": {
     "direct_wordpress_write": false,
     "final_write_path": "core_proposal_required",
@@ -140,15 +210,22 @@ Cloud returns a reviewable result:
   },
   "handoff": {
     "target_owner": "magick-ai-core",
+    "target_plan_ability_id": "npcink-toolbox/build-nightly-inspection-review-plan",
+    "target_plan_contract": "nightly_site_inspection_core_review_plan.v1",
     "proposal_created": false,
+    "proposal_candidate_available": true,
     "operator_next_action": "review_cloud_batch_result"
   }
 }
 ```
 
-The result may contain quality signals, explanation, and writing preparation
-evidence. It must not contain long-form article bodies, cloud-produced article
-write plans, or final WordPress writes.
+The result may contain quality signals, explanation, writing preparation
+evidence, and a Core review-plan candidate. The review plan is not a final
+article plan. It targets Core proposal intake through
+`npcink-toolbox/build-nightly-inspection-review-plan`, remains
+`proposal_ready=false`, and requires a human to supply `title` and `content`
+before commit preflight can pass. It must not contain long-form article bodies,
+cloud-produced article write plans, final SEO copy, or final WordPress writes.
 
 ## MVP Implementation
 
@@ -163,6 +240,17 @@ The v1 MVP intentionally reuses the hosted runtime system:
 
 No Action Scheduler dependency is required in the plugin for the Pro path.
 No new Cloud scheduler or orchestration framework is introduced.
+
+Toolbox can read current Pro Cloud Runtime status through:
+
+```http
+GET /v1/entitlements/current?object_type=site&object_id={site_id}
+```
+
+The response includes `entitlement.pro_cloud_runtime` with the feature id,
+period limit, used and remaining run counts, batch item cap, result retention
+days, payload modes, and a `local_truth` block that keeps schedule ownership,
+runtime ownership, Core proposal handoff, and direct-write denial explicit.
 
 ## Future Extensions
 

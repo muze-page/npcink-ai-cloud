@@ -80,6 +80,18 @@ The targeted script uses an isolated temporary config without `packages =
 requested files without accidentally expanding the result into a full package
 scan.
 
+For commercial/runtime, entitlement, usage, Cloud Batch Runtime, or
+Site Knowledge credit-ledger work, use the dedicated ratchet profile:
+
+```bash
+make mypy-commercial-runtime
+```
+
+This profile covers the commercial credit helpers, admin/runtime/billing mixins,
+Site Knowledge credit metrics, runtime service, and entitlement route. It is the
+minimum type gate before claiming that commercial/runtime type debt stayed
+closed.
+
 ### Feature Runtime Gate
 
 Run the tests that exercise the changed behavior. For media derivatives:
@@ -116,13 +128,15 @@ not describe that as a full ruff pass.
    infrastructure.
 2. For feature-local work, run targeted pytest plus targeted mypy on the changed
    surface.
-3. For shared service, repository, auth, worker, or mixin changes, also run full
+3. For commercial/runtime, entitlement, usage, or Cloud Batch Runtime changes,
+   run `make mypy-commercial-runtime` plus targeted pytest.
+4. For shared service, repository, auth, worker, or mixin changes, also run full
    mypy.
-4. Before claiming "mypy passes", run `.venv/bin/mypy app`.
-5. If full mypy fails, classify whether the failure is caused by the current
+5. Before claiming "mypy passes", run `.venv/bin/mypy app`.
+6. If full mypy fails, classify whether the failure is caused by the current
    change or by documented existing debt. Since the 2026-06 cleanup, new full
    mypy failures should be treated as regressions unless proven otherwise.
-6. Record any intentionally deferred debt in `docs/mypy-debt-baseline.md` or a
+7. Record any intentionally deferred debt in `docs/mypy-debt-baseline.md` or a
    follow-up document. Do not hide it in config.
 
 ## Prohibited Shortcuts
@@ -160,4 +174,3 @@ Use precise wording:
 - Correct: "full mypy passed: no issues in 139 source files."
 - Incorrect: "mypy passed" when only targeted mypy was run.
 - Incorrect: "ruff passed" when only `--select I,F,E9` was run.
-

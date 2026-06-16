@@ -13,6 +13,14 @@ CLOUD_BATCH_RUNTIME_EXECUTION_KIND = "nightly_site_inspection"
 CLOUD_BATCH_RUNTIME_PROFILE_ID = "cloud-batch-runtime.managed"
 CLOUD_BATCH_RUNTIME_ABILITY_FAMILY = "automation"
 CLOUD_BATCH_RUNTIME_DATA_CLASSIFICATION = "internal"
+NIGHTLY_SITE_INSPECTION_RESULT_CONTRACT = "nightly_site_inspection_result.v1"
+NIGHTLY_SITE_INSPECTION_CORE_REVIEW_PLAN_CONTRACT = (
+    "nightly_site_inspection_core_review_plan.v1"
+)
+NIGHTLY_SITE_INSPECTION_CORE_REVIEW_PLAN_ARTIFACT = "nightly_site_inspection_review_plan"
+NIGHTLY_SITE_INSPECTION_CORE_REVIEW_PLAN_ABILITY = (
+    "npcink-toolbox/build-nightly-inspection-review-plan"
+)
 
 MAX_CLOUD_BATCH_ITEMS = 50
 
