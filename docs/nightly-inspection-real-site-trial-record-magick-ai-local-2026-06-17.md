@@ -1,6 +1,6 @@
 # Nightly Inspection Real-Site Trial Record: magick-ai.local - 2026-06-17
 
-Status: completed first controlled local Cloud inspection run.
+Status: completed controlled local Cloud inspection runs.
 
 Purpose: record the first local controlled-trial attempt for Nightly Site
 Inspection / Morning Brief on `magick-ai.local`. This record follows
@@ -27,42 +27,49 @@ cycle for the current development stage.
 
 ## Nightly Inspection Runs
 
-One real Cloud inspection run was submitted in this attempt through the local
-WordPress / Toolbox Cloud Batch E2E path. The run used a bounded metadata-only
-snapshot and returned a mergeable Morning Brief result.
+Three real Cloud inspection runs were submitted in this development trial. The
+first used the local WordPress / Toolbox Cloud Batch E2E path. Two follow-up
+runs used the authenticated Toolbox REST route that the admin UI button calls:
+`/wp-json/npcink-toolbox/v1/nightly-inspection/cloud-batch`.
 
-| Run date | Cloud run ID | Status | Items scanned | Reviewable | Critical | Warnings | Avg score | Operator reviewed |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| 2026-06-17 | `run_a14776eeb51043b7a1e016c5300b7aa6` | succeeded | 5 | 5 | 3 | 2 | 62.2 | yes |
+| Run date | Cloud run ID | Payload | Status | Items scanned | Reviewable | Critical | Warnings | Avg score | Operator reviewed |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 2026-06-17 | `run_a14776eeb51043b7a1e016c5300b7aa6` | metadata-only | succeeded | 5 | 5 | 3 | 2 | 62.2 | yes |
+| 2026-06-17 | `run_f2a1d9b3f3f0496ca17585b77b87fa6b` | metadata-only | succeeded | 20 | 20 | 11 | 9 | 61.65 | yes |
+| 2026-06-17 | `run_2475959597604fd48582c3973aa2dfac` | excerpt | succeeded | 7 | 7 | 5 | 2 | 57.29 | yes |
 
 ## Morning Brief Review
 
-- Did the priority queue identify the right first items: yes for smoke; first
-  priority was a critical page review item with score `45`
-- Useful issue groups: 4 groups returned; useful enough for the first trial
+- Did the priority queue identify the right first items: yes for smoke; all
+  runs consistently put critical page review items with score `45` at the top
+- Useful issue groups: 4-5 groups returned; useful enough for the first trial
 - Noisy issue groups: none flagged in this pass
-- Missing context: none blocking the smoke; output remained metadata-only
+- Missing context: none blocking the smoke; metadata-only and excerpt paths both
+  returned mergeable Morning Brief results
 - Confusing labels or copy: none flagged in this pass
 - Did the brief save editorial time: likely yes, because the priority queue
-  reduced 5 scanned items to 3 merged local priorities for review
+  reduced scanned items into merged local priorities for review
 - Did the operator need Core handoff: yes, the result preserved review-in-Core
   posture without creating a Core proposal automatically
 - Any attempted Cloud write or direct mutation: no
 
 ## Feedback Loop
 
-- Feedback events submitted: 1
-- Accepted items: first priority item `action_002`
-- Rejected items: none
-- Wrong priority labels: none
+- Feedback events submitted: 3
+- Accepted items: first priority item `action_002` on the initial E2E run and
+  the larger metadata-only REST run
+- Rejected items: excerpt-mode second priority item `action_004`
+- Wrong priority labels: 1
 - Already handled labels: none
-- Evidence weak labels: none
+- Evidence weak labels: 1
 - Wrong next step labels: none
-- Top rejected reason codes: none
+- Top rejected reason codes: `short_title`, `missing_meta_description`,
+  `thin_content`, `missing_internal_links`, `stale_content`
 - Feedback summary checked in Cloud: individual receipt accepted for eval
-- Feedback receipt: `status=ok`, `accepted_for_eval=true`,
-  `feedback_event_id=5616`, `production_mutation=false`
-- Feedback labels: `evidence_useful`, `operator_confidence_high`
+- Feedback receipts: `5616`, `5623`, `5624`; all returned `status=ok`,
+  `accepted_for_eval=true`, and `production_mutation=false`
+- Feedback labels covered: `evidence_useful`, `operator_confidence_high`,
+  `wrong_priority`, `evidence_weak`, `operator_confidence_low`
 
 ## Boundary Review
 
@@ -71,8 +78,9 @@ snapshot and returned a mergeable Morning Brief result.
 - Bulk article generation absent: yes
 - Local/Core final approval owner preserved: yes
 - Secrets, cookies, nonces, or passwords absent from feedback: yes
-- Runtime submission remained bounded: yes, metadata-only batch with no direct
-  WordPress write, no Cloud scheduler truth, no automatic Core proposal
+- Runtime submission remained bounded: yes, metadata-only and excerpt batches
+  returned no direct WordPress write, no Cloud scheduler truth, and no automatic
+  Core proposal
 - Any support or abuse concern: none observed in this local development pass
 
 ## Evidence
@@ -118,6 +126,9 @@ Browser and WordPress site checks:
 - The Toolbox admin HTML exposed the Advanced / Cloud Runtime operator surface,
   including `Run Cloud inspection`, `Refresh Cloud quota`, quota, and Core
   handoff signals.
+- Browser automation against the local HTTPS admin page timed out in this pass,
+  so the follow-up runs used the authenticated REST route invoked by the admin
+  UI rather than a literal browser click.
 - `wp eval-file tests/smoke-nightly-inspection-cloud-e2e.php`: passed against
   `magick-ai.local`; run id
   `run_a14776eeb51043b7a1e016c5300b7aa6`.
@@ -133,13 +144,28 @@ Browser and WordPress site checks:
   45, severity `critical`, next action `review_update_brief`.
 - Feedback receipt accepted for eval with event id `5616`; production mutation
   remained false and final write truth remained `wordpress_local`.
+- Authenticated Toolbox REST route run, metadata-only: run id
+  `run_f2a1d9b3f3f0496ca17585b77b87fa6b`, 20 items scanned, 20 reviewable,
+  11 critical, 9 warnings, average score 61.65, 10 priority items, 5 issue
+  groups, 20 patch actions, 15 merged local priorities.
+- Metadata-only REST feedback receipt: event id `5623`, outcome `accepted`,
+  labels `evidence_useful` and `operator_confidence_high`, production mutation
+  false.
+- Authenticated Toolbox REST route run, excerpt: run id
+  `run_2475959597604fd48582c3973aa2dfac`, 7 items scanned, 7 reviewable,
+  5 critical, 2 warnings, average score 57.29, 7 priority items, 4 issue
+  groups, 7 patch actions, 5 merged local priorities.
+- Excerpt REST feedback receipt: event id `5624`, outcome `rejected`, labels
+  `wrong_priority`, `evidence_weak`, and `operator_confidence_low`, production
+  mutation false.
 
 ## Decision
 
 - Go/no-go: go for continuing development trials
 - Continue unchanged / adjust scoring / adjust Morning Brief copy / pause site:
-  continue unchanged for now; do not tune scoring from one successful smoke run,
-  but begin collecting more varied cases
+  continue unchanged for now; the three successful development runs validate
+  the runtime path, but scoring should not be tuned until browser-click and more
+  varied real-content samples are collected
 - Follow-up implementation task: none for Cloud/Toolbox feature code from this
   pass; the main environment issue was local WP-CLI DB socket configuration
 - Weekly review notes: collect at least a few more real-site runs before tuning
@@ -151,11 +177,9 @@ Before the next local trial batch:
 
 1. Use the Local MySQL port/socket-aware WP-CLI bootstrap when checking
    `magick-ai.local` from the terminal.
-2. Run one larger metadata-only batch from the admin UI path, not only WP-CLI,
-   to validate the browser operator loop.
-3. Run one excerpt-mode batch to verify privacy toggle behavior and quality
-   lift.
-4. Submit both accepted and rejected feedback labels across different priority
-   items.
-5. Record run ids, Morning Brief summaries, feedback receipts, and boundary
-   checks.
+2. Retry the literal browser-click admin UI flow when the local browser
+   automation connection is stable.
+3. Run additional varied-content samples before changing score weights.
+4. Add more rejected feedback reasons beyond wrong priority/evidence weak.
+5. Compare metadata-only versus excerpt quality lift across repeated runs,
+   because one excerpt run is not enough to tune defaults.
