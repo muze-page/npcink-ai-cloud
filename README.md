@@ -49,6 +49,7 @@ Operational references:
 - [docs/external-trial-user-briefing-copy-zh-2026-06-10.md](docs/external-trial-user-briefing-copy-zh-2026-06-10.md)
 - [docs/external-trial-handoff-summary-2026-06-15.md](docs/external-trial-handoff-summary-2026-06-15.md)
 - [docs/nightly-inspection-real-site-operator-trial-2026-06-17.md](docs/nightly-inspection-real-site-operator-trial-2026-06-17.md)
+- [docs/nightly-inspection-real-site-trial-record-magick-ai-local-2026-06-17.md](docs/nightly-inspection-real-site-trial-record-magick-ai-local-2026-06-17.md)
 - [docs/cloud-adapter-analysis-contract.md](docs/cloud-adapter-analysis-contract.md)
 - [docs/cloud-local-integration-and-rebuild-guidance.md](docs/cloud-local-integration-and-rebuild-guidance.md)
 - [docs/cloud-content-generation-boundary-v1.md](docs/cloud-content-generation-boundary-v1.md)
