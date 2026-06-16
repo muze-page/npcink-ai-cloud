@@ -567,7 +567,8 @@ def _build_issue_groups(actions: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "label": definition["label"],
                 "count": len(matched),
                 "top_action_ids": [
-                    str(action.get("action_id") or "") for action in _reviewable_actions(matched)[:5]
+                    str(action.get("action_id") or "")
+                    for action in _reviewable_actions(matched)[:5]
                 ],
                 "reason_codes": sorted(
                     {
