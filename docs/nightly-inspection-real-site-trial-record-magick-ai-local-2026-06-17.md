@@ -1,13 +1,14 @@
 # Nightly Inspection Real-Site Trial Record: magick-ai.local - 2026-06-17
 
-Status: blocked before first real inspection run.
+Status: ready for one controlled inspection run; no real run submitted yet.
 
 Purpose: record the first local controlled-trial attempt for Nightly Site
 Inspection / Morning Brief on `magick-ai.local`. This record follows
 `docs/nightly-inspection-real-site-operator-trial-2026-06-17.md`.
 
 This is a local development trial record. It is not external production
-evidence and does not count as a successful real-site cycle.
+evidence and does not count as a successful real-site cycle until one controlled
+Cloud inspection run is submitted and reviewed.
 
 ## Trial Site
 
@@ -15,18 +16,21 @@ evidence and does not count as a successful real-site cycle.
 - Operator: Codex local operator
 - WordPress site URL: `https://magick-ai.local`
 - Cloud base URL: local Cloud development worktree evidence only
-- Site ID: not confirmed in WordPress due local database connection failure
-- Account ID: not confirmed in WordPress due local database connection failure
+- Site ID: not confirmed from the WordPress admin HTML in this pass
+- Account ID: not confirmed from the WordPress admin HTML in this pass
 - Declared use case: local Nightly Inspection / Morning Brief operator trial
 - Site category decision: local development site, approved for smoke only
-- Cloud API key verified: no, blocked before WordPress addon verification
-- Toolbox Pro Cloud Runtime visible: not confirmed in live UI; static Toolbox
-  contract and smoke tests passed
+- Cloud API key verified: not confirmed by submitting a runtime request
+- Toolbox Pro Cloud Runtime visible: yes, authenticated admin HTML exposed Run
+  Cloud inspection, Refresh Cloud quota, quota, and Core handoff UI signals
 - Operator briefed on review-only boundary: yes
 
 ## Nightly Inspection Runs
 
-No real Cloud inspection run was submitted in this attempt.
+No real Cloud inspection run was submitted in this attempt. The site is ready
+for a single controlled run after operator confirmation, but runtime submission
+was intentionally not triggered during environment repair because it may consume
+Cloud quota and create remote-side state.
 
 | Run date | Cloud run ID | Status | Items scanned | Reviewable | Critical | Warnings | Avg score | Operator reviewed |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -37,8 +41,8 @@ No real Cloud inspection run was submitted in this attempt.
 - Did the priority queue identify the right first items: not evaluated
 - Useful issue groups: not evaluated
 - Noisy issue groups: not evaluated
-- Missing context: live WordPress content snapshot was unavailable because the
-  local database connection failed
+- Missing context: no Cloud run output yet; local WordPress content was readable
+  through WP-CLI after correcting the local DB host/socket mismatch
 - Confusing labels or copy: not evaluated
 - Did the brief save editorial time: not evaluated
 - Did the operator need Core handoff: not evaluated
@@ -65,8 +69,8 @@ No real Cloud inspection run was submitted in this attempt.
 - Local/Core final approval owner preserved: yes
 - Secrets, cookies, nonces, or passwords absent from feedback: yes; no feedback
   event was submitted
-- Any support or abuse concern: none observed; execution was blocked before
-  runtime submission
+- Any support or abuse concern: none observed; runtime submission was deferred
+  pending an explicit one-run operator trigger
 
 ## Evidence
 
@@ -91,24 +95,36 @@ Toolbox local workspace:
 
 Browser and WordPress site checks:
 
-- Browser navigation to
-  `https://magick-ai.local/wp-admin/admin.php?page=npcink-toolbox` redirected
-  to WordPress login with `reauth=1`.
-- The local memory note intentionally does not store the password, so login was
-  not attempted.
-- WP-CLI from `/Users/muze/Local Sites/magick-ai/app/public` failed with
-  `Error establishing a database connection`.
-- Because of the failed database connection, site URL, post/page count, active
-  plugin state, Cloud key state, and live Toolbox Pro Cloud Runtime visibility
-  could not be verified from WordPress.
+- Local.app and Local MySQL were running.
+- `mysqladmin --defaults-file="/Users/muze/Library/Application Support/Local/run/NPb24Zg9g/conf/mysql/my.cnf" ping`:
+  `mysqld is alive`.
+- The default WP-CLI connection still failed because the CLI PHP process used
+  the wrong local MySQL socket.
+- WP-CLI succeeded with a temporary local-only `DB_HOST=127.0.0.1:10004`
+  bootstrap file.
+- WordPress `siteurl`: `https://magick-ai.local`.
+- WordPress `home`: `https://magick-ai.local`.
+- Published post/page count: `608`.
+- Active runtime-related plugins included `npcink-governance-core`,
+  `npcink-abilities-toolkit`, `npcink-ai-client-adapter`,
+  `npcink-cloud-addon`, and `npcink-toolbox`.
+- Authenticated admin HTML was fetched using a short-lived local operator auth
+  cookie generated through WP-CLI for this smoke pass. The captured page did
+  not contain the login form and did contain the WordPress admin bar for
+  `codexadmin`.
+- The Toolbox admin HTML exposed the Advanced / Cloud Runtime operator surface,
+  including `Run Cloud inspection`, `Refresh Cloud quota`, quota, and Core
+  handoff signals.
 
 ## Decision
 
-- Go/no-go: no-go for counting this as a completed real-site trial cycle
+- Go/no-go: go for one controlled local Cloud inspection run after operator
+  confirmation
 - Continue unchanged / adjust scoring / adjust Morning Brief copy / pause site:
-  pause site until local WordPress database and admin session are restored
-- Follow-up implementation task: none for Cloud/Toolbox feature code; this is a
-  local environment readiness issue
+  continue unchanged into one controlled runtime submission; do not tune scoring
+  or Morning Brief grouping until a real run exists
+- Follow-up implementation task: none for Cloud/Toolbox feature code from this
+  readiness pass; the main issue was local WP-CLI DB socket configuration
 - Weekly review notes: do not tune scoring, Morning Brief grouping, or feedback
   labels from this attempt because no real inspection run occurred
 
@@ -116,11 +132,9 @@ Browser and WordPress site checks:
 
 Before the next local trial attempt:
 
-1. Start or repair the Local WordPress database for `magick-ai.local`.
-2. Confirm WP-CLI can read `siteurl`, `home`, active plugins, and published
-   post/page count.
-3. Log in to WordPress admin in the browser.
-4. Confirm the Toolbox Pro Cloud Runtime controls are visible.
-5. Confirm the Cloud addon API key is active.
-6. Submit only one controlled Nightly Inspection run.
-7. Record run id, Morning Brief summary, feedback events, and boundary checks.
+1. Use the Local MySQL port/socket-aware WP-CLI bootstrap when checking
+   `magick-ai.local` from the terminal.
+2. Confirm the Cloud addon API key is active from the authenticated admin
+   surface or from a single runtime request.
+3. Submit only one controlled Nightly Inspection run.
+4. Record run id, Morning Brief summary, feedback events, and boundary checks.
