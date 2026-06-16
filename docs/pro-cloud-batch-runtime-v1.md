@@ -147,7 +147,12 @@ Cloud returns a reviewable result:
     "actions_total": 1,
     "warning_total": 1,
     "critical_total": 0,
-    "average_score": 82.5
+    "average_score": 82.5,
+    "score_version": "nightly_content_quality_score.v2"
+  },
+  "scoring_profile": {
+    "score_version": "nightly_content_quality_score.v2",
+    "editorial_truth": "wordpress_local"
   },
   "actions": [
     {
@@ -155,8 +160,21 @@ Cloud returns a reviewable result:
       "object_type": "post",
       "object_id": "123",
       "score": 67,
+      "score_version": "nightly_content_quality_score.v2",
+      "score_breakdown": {
+        "overall_score": 67,
+        "dimensions": [
+          {
+            "id": "metadata_completeness",
+            "score": 86,
+            "impact": 14,
+            "reason_codes": ["missing_meta_description"]
+          }
+        ]
+      },
       "severity": "warning",
       "reason_codes": ["missing_meta_description"],
+      "priority_reason": "warning_score",
       "recommended_next_action": "review_update_brief",
       "direct_wordpress_write": false,
       "status": "succeeded"
@@ -164,10 +182,44 @@ Cloud returns a reviewable result:
   ],
   "nightly_result": {
     "contract_version": "nightly_site_inspection_result.v1",
+    "issue_groups": [
+      {
+        "id": "metadata",
+        "label": "Metadata",
+        "count": 1,
+        "reason_codes": ["missing_meta_description"]
+      }
+    ],
     "safety": {
       "direct_wordpress_write": false,
       "requires_local_review": true,
       "cloud_scheduler_truth": false
+    }
+  },
+  "morning_brief": {
+    "contract_version": "nightly_site_inspection_morning_brief.v2",
+    "organization_version": "morning_brief_review_queue.v1",
+    "top_summary": {
+      "items_scanned": 2,
+      "reviewable_items": 1,
+      "warnings": 1,
+      "critical": 0,
+      "average_score": 82.5
+    },
+    "priority_queue": [
+      {
+        "action_id": "action_001",
+        "object_type": "post",
+        "object_id": "123",
+        "priority_reason": "warning_score",
+        "group_ids": ["metadata"],
+        "direct_wordpress_write": false
+      }
+    ],
+    "core_handoff": {
+      "available": true,
+      "proposal_created": false,
+      "requires_input": ["title", "content"]
     }
   },
   "core_review_plan": {
@@ -219,13 +271,33 @@ Cloud returns a reviewable result:
 }
 ```
 
-The result may contain quality signals, explanation, writing preparation
-evidence, and a Core review-plan candidate. The review plan is not a final
-article plan. It targets Core proposal intake through
+The result may contain quality signals, score breakdowns, issue grouping,
+review-queue organization, writing preparation evidence, and a Core review-plan
+candidate. The review plan is not a final article plan. It targets Core proposal intake through
 `npcink-toolbox/build-nightly-inspection-review-plan`, remains
 `proposal_ready=false`, and requires a human to supply `title` and `content`
 before commit preflight can pass. It must not contain long-form article bodies,
 cloud-produced article write plans, final SEO copy, or final WordPress writes.
+
+Scoring v2 keeps the score explainable by exposing deterministic dimensions:
+
+- metadata completeness;
+- content depth;
+- freshness;
+- internal navigation;
+- media accessibility;
+- editorial opportunity.
+
+Each action-level `score_breakdown` must stay tied to supplied evidence and
+reason codes. Cloud may compute this runtime detail, but editorial acceptance,
+proposal creation, approval, and final writes remain local.
+
+Real-site operator feedback should use the existing Cloud Agent Feedback
+contract with `source_runtime: nightly_site_inspection`. Feedback may include
+the source action id, object id, reason codes, source score, and source
+severity. Cloud may summarize accepted/rejected rates, wrong-priority labels,
+already-handled labels, and rejected reason codes as read-only quality evidence.
+It must not use feedback to mutate WordPress content or bypass local review.
 
 ## MVP Implementation
 

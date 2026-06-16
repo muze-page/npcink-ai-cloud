@@ -85,7 +85,8 @@ def _payload(input_overrides: dict[str, Any] | None = None) -> dict[str, Any]:
                 "object_id": 456,
                 "title": "Complete evergreen service page with useful context",
                 "meta_description": (
-                    "A complete service page summary with enough detail for review."
+                    "A complete service page summary with enough detail for local "
+                    "operator review and clear search-snippet context."
                 ),
                 "word_count": 900,
                 "internal_link_count": 3,
@@ -185,13 +186,44 @@ def test_cloud_batch_runtime_queues_and_worker_returns_review_only_result(tmp_pa
     assert result["runtime_owner"] == "npcink-local-automation-runtime"
     assert result["cloud_role"] == "runtime_detail"
     assert result["summary"]["items_scanned"] == 2
+    assert result["summary"]["score_version"] == "nightly_content_quality_score.v2"
+    assert result["scoring_profile"]["editorial_truth"] == "wordpress_local"
     assert result["safety"]["direct_wordpress_write"] is False
     assert result["safety"]["final_write_path"] == "core_proposal_required"
     assert result["safety"]["article_body_generated"] is False
     assert result["actions"][0]["status"] == "succeeded"
     assert "missing_meta_description" in result["actions"][0]["reason_codes"]
+    assert result["actions"][0]["score_breakdown"]["score_version"] == (
+        "nightly_content_quality_score.v2"
+    )
+    score_dimensions = {
+        item["id"]: item for item in result["actions"][0]["score_breakdown"]["dimensions"]
+    }
+    assert "missing_meta_description" in score_dimensions[
+        "metadata_completeness"
+    ]["reason_codes"]
+    assert score_dimensions["media_accessibility"]["impact"] == 10
+    assert result["actions"][0]["priority_reason"] == "critical_score"
     assert result["nightly_result"]["contract_version"] == "nightly_site_inspection_result.v1"
     assert result["nightly_result"]["safety"]["cloud_scheduler_truth"] is False
+    assert result["nightly_result"]["issue_groups"][0]["id"] == "metadata"
+    assert result["morning_brief"]["contract_version"] == (
+        "nightly_site_inspection_morning_brief.v2"
+    )
+    assert result["morning_brief"]["top_summary"]["reviewable_items"] == 1
+    assert result["morning_brief"]["priority_queue"][0]["action_id"] == "action_001"
+    assert result["morning_brief"]["priority_queue"][0]["group_ids"] == [
+        "metadata",
+        "content_depth",
+        "internal_links",
+        "media_accessibility",
+        "freshness",
+    ]
+    assert result["morning_brief"]["core_handoff"]["available"] is True
+    assert result["writing_preparation"][0]["suggested_review_angle"] == (
+        "refresh_existing_content"
+    )
+    assert "candidate_internal_targets" in result["writing_preparation"][0]["missing_context"]
     assert result["core_review_plan"]["contract_version"] == (
         "nightly_site_inspection_core_review_plan.v1"
     )

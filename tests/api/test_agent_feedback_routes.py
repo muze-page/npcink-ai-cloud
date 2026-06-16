@@ -288,6 +288,91 @@ def test_agent_feedback_accepts_editor_content_support_feedback(tmp_path: Path) 
     assert summary["final_write_truth"] == "wordpress_local"
 
 
+def test_agent_feedback_accepts_nightly_inspection_feedback_summary(
+    tmp_path: Path,
+) -> None:
+    database_url, client = _build_client(tmp_path)
+
+    accepted = _post_feedback(
+        client,
+        _feedback_payload(
+            agent_id="nightly_site_inspection_cloud_runtime",
+            agent_version="nightly_inspection_cloud_runtime.v1",
+            source_runtime="nightly_site_inspection",
+            source_run_id="run_nightly_123",
+            handoff_id="action_001",
+            handoff_type="morning_brief_priority",
+            local_surface="toolbox_nightly_inspection_morning_brief",
+            local_outcome="accepted",
+            feedback_labels=["evidence_useful", "operator_confidence_high"],
+            operator_note="",
+            local_proposal_id="",
+            evidence_ref_ids=["action_001", "post:123"],
+            source_action_id="action_001",
+            source_object_type="post",
+            source_object_id="123",
+            source_reason_codes=["missing_meta_description", "stale_content"],
+            source_score=67,
+            source_severity="warning",
+            retention_class="quality_eval",
+        ),
+        idempotency_key="agent-feedback-nightly-accepted",
+    )
+    rejected = _post_feedback(
+        client,
+        _feedback_payload(
+            agent_id="nightly_site_inspection_cloud_runtime",
+            agent_version="nightly_inspection_cloud_runtime.v1",
+            source_runtime="nightly_site_inspection",
+            source_run_id="run_nightly_123",
+            handoff_id="action_002",
+            handoff_type="morning_brief_priority",
+            local_surface="toolbox_nightly_inspection_morning_brief",
+            local_outcome="rejected",
+            feedback_labels=["wrong_priority", "already_handled", "operator_confidence_low"],
+            operator_note="",
+            local_proposal_id="",
+            evidence_ref_ids=["action_002", "post:456"],
+            source_action_id="action_002",
+            source_object_type="post",
+            source_object_id="456",
+            source_reason_codes=["missing_internal_links"],
+            source_score=78,
+            source_severity="warning",
+            retention_class="quality_eval",
+        ),
+        idempotency_key="agent-feedback-nightly-rejected",
+    )
+
+    assert accepted.status_code == 200
+    assert rejected.status_code == 200
+
+    summary_response = _get_feedback_summary(client, window_hours=24)
+
+    assert summary_response.status_code == 200
+    nightly = summary_response.json()["data"]["nightly_inspection"]
+    assert nightly["events_total"] == 2
+    assert nightly["action_feedback_total"] == 2
+    assert nightly["outcomes"]["accepted"] == 1
+    assert nightly["outcomes"]["rejected"] == 1
+    assert nightly["labels"]["wrong_priority"] == 1
+    assert nightly["labels"]["already_handled"] == 1
+    assert nightly["reason_codes"]["missing_meta_description"] == 1
+    assert nightly["reason_codes"]["missing_internal_links"] == 1
+    assert nightly["rejected_reason_codes"] == [
+        {"label": "missing_internal_links", "count": 1}
+    ]
+    assert nightly["average_source_score"] == 72.5
+    assert nightly["rates"]["wrong_priority_rate"] == 0.5
+    assert nightly["production_mutation"] is False
+
+    with get_session(database_url) as session:
+        events = list(session.scalars(select(UsageMeterEvent)))
+
+    assert len(events) == 2
+    assert events[0].payload_json["source_action_id"] in {"action_001", "action_002"}
+
+
 def test_content_support_feedback_regression_samples_roll_up_expected_quality(
     tmp_path: Path,
 ) -> None:

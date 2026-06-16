@@ -41,6 +41,12 @@ class AgentFeedbackPayload(BaseModel):
     operator_note: str = Field(default="", max_length=500)
     local_proposal_id: str = Field(default="", max_length=191)
     evidence_ref_ids: list[str] = Field(default_factory=list, max_length=24)
+    source_action_id: str = Field(default="", max_length=191)
+    source_object_type: str = Field(default="", max_length=64)
+    source_object_id: str = Field(default="", max_length=191)
+    source_reason_codes: list[str] = Field(default_factory=list, max_length=12)
+    source_score: int | None = Field(default=None, ge=0, le=100)
+    source_severity: str = Field(default="", max_length=64)
     redaction_status: str = Field(default="", max_length=64)
     retention_class: str = Field(default="", max_length=64)
     created_at: datetime
@@ -86,6 +92,17 @@ class AgentFeedbackPayload(BaseModel):
             ref_id = str(item or "").strip()
             if ref_id and ref_id not in normalized:
                 normalized.append(ref_id[:191])
+        return normalized
+
+    @field_validator("source_reason_codes")
+    @classmethod
+    def normalize_source_reason_codes(cls, value: list[str]) -> list[str]:
+        normalized: list[str] = []
+        for item in value:
+            reason = str(item or "").strip().lower().replace("-", "_")
+            reason = "".join(ch for ch in reason if ch.isalnum() or ch == "_")
+            if reason and reason not in normalized:
+                normalized.append(reason[:96])
         return normalized
 
 

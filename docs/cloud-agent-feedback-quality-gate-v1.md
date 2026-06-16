@@ -12,6 +12,8 @@ The gate covers:
 - Cloud Agent feedback event acceptance and summary rollups.
 - Content Support regression samples for
   `content_support / editor_content_support_sidebar`.
+- Nightly Inspection operator feedback from
+  `nightly_site_inspection / toolbox_nightly_inspection_morning_brief`.
 - The read-only Cloud admin quality dashboard boundary.
 - The local WordPress truth boundary for approval, preflight, and final writes.
 
@@ -57,6 +59,26 @@ Current expected summary:
 
 These samples are metadata-only. They must not include prompt text, post
 content, provider responses, secrets, confirmation tokens, or write authority.
+
+## Nightly Inspection Feedback
+
+Real-site Morning Brief feedback should reuse the same feedback event contract.
+The recommended fields are:
+
+- `source_runtime`: `nightly_site_inspection`;
+- `local_surface`: `toolbox_nightly_inspection_morning_brief`;
+- `source_run_id`: Cloud run id;
+- `source_action_id`: Morning Brief action id;
+- `source_object_type` and `source_object_id`: referenced WordPress object;
+- `source_reason_codes`: bounded reason codes from the inspection result;
+- `source_score` and `source_severity`: source action quality evidence;
+- `feedback_labels`: labels such as `wrong_priority`, `already_handled`,
+  `evidence_weak`, `wrong_next_step`, or `operator_confidence_low`.
+
+The summary response exposes a `nightly_inspection` read-only rollup with
+outcomes, labels, source reason-code counts, rejected reason-code counts,
+severity counts, average source score, and quality rates. This rollup is for
+scoring and Morning Brief tuning only.
 
 ## Boundary
 

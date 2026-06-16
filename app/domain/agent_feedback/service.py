@@ -171,6 +171,8 @@ class AgentFeedbackService:
                     "wrong_intent",
                     "wrong_next_step",
                     "missing_context",
+                    "wrong_priority",
+                    "already_handled",
                     "unsafe_or_overreaching",
                     "too_generic",
                     "duplicate_suggestion",
@@ -179,6 +181,7 @@ class AgentFeedbackService:
                 },
             ),
             "rejection_reasons": self._top_counts(rejection_reasons),
+            "nightly_inspection": self._nightly_inspection_summary(events),
             "rates": {
                 "accepted_rate": self._rate(
                     outcomes.get("accepted", 0) + outcomes.get("edited_before_accept", 0),
@@ -191,6 +194,70 @@ class AgentFeedbackService:
             "production_mutation": False,
             "approval_truth": "wordpress_local",
             "preflight_truth": "wordpress_local",
+            "final_write_truth": "wordpress_local",
+        }
+
+    def _nightly_inspection_summary(self, events: list[UsageMeterEvent]) -> dict[str, Any]:
+        outcomes: dict[str, int] = {}
+        labels: dict[str, int] = {}
+        reason_codes: dict[str, int] = {}
+        rejected_reason_codes: dict[str, int] = {}
+        severities: dict[str, int] = {}
+        action_ids: set[str] = set()
+        score_sum = 0
+        score_count = 0
+
+        for event in events:
+            payload = event.payload_json if isinstance(event.payload_json, dict) else {}
+            source_runtime = str(payload.get("source_runtime") or "").strip()
+            local_surface = str(payload.get("local_surface") or "").strip()
+            if source_runtime != "nightly_site_inspection" and "nightly" not in local_surface:
+                continue
+
+            outcome = str(payload.get("local_outcome") or "unknown").strip() or "unknown"
+            source_action_id = str(payload.get("source_action_id") or "").strip()
+            source_severity = str(payload.get("source_severity") or "").strip()
+            source_score = payload.get("source_score")
+            feedback_labels = self._string_list(payload.get("feedback_labels"))
+            source_reasons = self._string_list(payload.get("source_reason_codes"))
+
+            self._increment(outcomes, outcome)
+            for label in feedback_labels:
+                self._increment(labels, label)
+            for reason in source_reasons:
+                self._increment(reason_codes, reason)
+                if self._is_rejected_outcome(outcome):
+                    self._increment(rejected_reason_codes, reason)
+            if source_severity:
+                self._increment(severities, source_severity)
+            if source_action_id:
+                action_ids.add(source_action_id)
+            if isinstance(source_score, int):
+                score_sum += source_score
+                score_count += 1
+
+        total = sum(outcomes.values())
+        return {
+            "source_runtime": "nightly_site_inspection",
+            "events_total": total,
+            "action_feedback_total": len(action_ids),
+            "outcomes": outcomes,
+            "labels": labels,
+            "reason_codes": reason_codes,
+            "rejected_reason_codes": self._top_counts(rejected_reason_codes),
+            "severities": severities,
+            "average_source_score": round(score_sum / score_count, 2) if score_count else 0.0,
+            "rates": {
+                "accepted_rate": self._rate(
+                    outcomes.get("accepted", 0) + outcomes.get("edited_before_accept", 0),
+                    total,
+                ),
+                "wrong_priority_rate": self._rate(labels.get("wrong_priority", 0), total),
+                "evidence_weak_rate": self._rate(labels.get("evidence_weak", 0), total),
+                "already_handled_rate": self._rate(labels.get("already_handled", 0), total),
+            },
+            "production_mutation": False,
+            "approval_truth": "wordpress_local",
             "final_write_truth": "wordpress_local",
         }
 
