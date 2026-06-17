@@ -362,6 +362,45 @@ blocked review proposal first with `proposal_ready=false`: Cloud supplies
 evidence and prioritization, while the operator supplies draft fields locally
 before any final write path exists.
 
+### Morning Brief Core Intake Package
+
+When a user selects one or more Morning Brief review items, Cloud may expose a
+bounded intake package beside the result:
+
+```json
+{
+  "artifact_type": "nightly_site_inspection_core_intake_package",
+  "contract_version": "nightly_site_inspection_core_intake_package.v1",
+  "available": true,
+  "user_action": "select_review_item_in_morning_brief",
+  "selected_review_item_ids": ["action_001"],
+  "handoff_owner": "wordpress_toolbox_local",
+  "handoff_surface": "morning_brief_review_queue",
+  "target_owner": "magick-ai-core",
+  "target_route": "core:/proposals/from-plan",
+  "target_plan_ability_id": "npcink-toolbox/build-nightly-inspection-review-plan",
+  "target_plan_contract": "nightly_site_inspection_core_review_plan.v1",
+  "proposal_created": false,
+  "proposal_state_owner": "magick-ai-core",
+  "approval_truth": "wordpress_local",
+  "final_write_truth": "wordpress_local",
+  "cloud_role": "runtime_detail",
+  "cloud_scheduler_truth": false,
+  "direct_wordpress_write": false,
+  "receipt_expectation": {
+    "expected_local_receipt": "core_proposal_id",
+    "receipt_owner": "wordpress_toolbox_local",
+    "cloud_receipt_storage": "not_canonical"
+  }
+}
+```
+
+This package is not a Core proposal and does not create one. It is the
+review-item selection envelope that the local Toolbox surface can submit to
+Core. The canonical receipt is the local Core proposal id stored by WordPress;
+Cloud may display or correlate that receipt later, but Cloud receipt storage is
+not canonical proposal truth.
+
 ## Writing Boundary
 
 Cloud must not perform nightly article writing generation.

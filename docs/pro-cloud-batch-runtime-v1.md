@@ -292,9 +292,35 @@ Cloud returns a reviewable result:
     "target_owner": "magick-ai-core",
     "target_plan_ability_id": "npcink-toolbox/build-nightly-inspection-review-plan",
     "target_plan_contract": "nightly_site_inspection_core_review_plan.v1",
+    "core_intake_package_available": true,
     "proposal_created": false,
     "proposal_candidate_available": true,
     "operator_next_action": "review_cloud_batch_result"
+  },
+  "core_intake_package": {
+    "artifact_type": "nightly_site_inspection_core_intake_package",
+    "contract_version": "nightly_site_inspection_core_intake_package.v1",
+    "available": true,
+    "user_action": "select_review_item_in_morning_brief",
+    "selected_review_item_ids": ["action_001"],
+    "handoff_owner": "wordpress_toolbox_local",
+    "handoff_surface": "morning_brief_review_queue",
+    "target_owner": "magick-ai-core",
+    "target_route": "core:/proposals/from-plan",
+    "target_plan_ability_id": "npcink-toolbox/build-nightly-inspection-review-plan",
+    "target_plan_contract": "nightly_site_inspection_core_review_plan.v1",
+    "proposal_created": false,
+    "proposal_state_owner": "magick-ai-core",
+    "approval_truth": "wordpress_local",
+    "final_write_truth": "wordpress_local",
+    "cloud_role": "runtime_detail",
+    "cloud_scheduler_truth": false,
+    "direct_wordpress_write": false,
+    "receipt_expectation": {
+      "expected_local_receipt": "core_proposal_id",
+      "receipt_owner": "wordpress_toolbox_local",
+      "cloud_receipt_storage": "not_canonical"
+    }
   }
 }
 ```
@@ -310,6 +336,10 @@ plan is not a final article plan. It targets Core proposal intake through
 `proposal_ready=false`, and requires a human to supply `title` and `content`
 before commit preflight can pass. It must not contain long-form article bodies,
 cloud-produced article write plans, final SEO copy, or final WordPress writes.
+The `core_intake_package` is the Morning Brief selection envelope for local
+Toolbox/Core submission. It is not a Cloud-owned proposal receipt; the
+canonical receipt remains the local Core `core_proposal_id` after Toolbox
+submits the selected review item through `/proposals/from-plan`.
 
 Scoring v2 keeps the score explainable by exposing deterministic dimensions:
 

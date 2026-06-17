@@ -146,6 +146,13 @@ class CloudBatchRuntimeService:
             core_review_plan=core_review_plan,
             actions=actions,
         )
+        core_intake_package = _build_core_intake_package(
+            run_id=run_id,
+            generated_at=generated_at,
+            review_items=operational_summary["review_items"],
+            core_review_plan=core_review_plan,
+            core_handoff_suggestion=core_handoff_suggestion,
+        )
         nightly_intelligence_detail = _build_nightly_intelligence_detail(
             run_id=run_id,
             site_id=site_id,
@@ -187,6 +194,7 @@ class CloudBatchRuntimeService:
             "morning_brief": morning_brief,
             "writing_preparation": writing_preparation,
             "core_handoff_suggestion": core_handoff_suggestion,
+            "core_intake_package": core_intake_package,
             "nightly_intelligence_detail": nightly_intelligence_detail,
             "core_review_plan": core_review_plan,
             "safety": {
@@ -200,6 +208,7 @@ class CloudBatchRuntimeService:
                 "target_owner": "magick-ai-core",
                 "target_plan_ability_id": NIGHTLY_SITE_INSPECTION_CORE_REVIEW_PLAN_ABILITY,
                 "target_plan_contract": NIGHTLY_SITE_INSPECTION_CORE_REVIEW_PLAN_CONTRACT,
+                "core_intake_package_available": bool(core_intake_package["available"]),
                 "proposal_created": False,
                 "proposal_candidate_available": bool(core_review_plan["write_actions"]),
                 "operator_next_action": "review_cloud_batch_result",
@@ -682,6 +691,75 @@ def _build_nightly_intelligence_detail(
     }
 
 
+def _build_core_intake_package(
+    *,
+    run_id: str,
+    generated_at: str,
+    review_items: list[dict[str, Any]],
+    core_review_plan: dict[str, Any],
+    core_handoff_suggestion: dict[str, Any],
+) -> dict[str, Any]:
+    selected_review_items = [
+        {
+            "action_id": item.get("action_id"),
+            "object_type": item.get("object_type"),
+            "object_id": item.get("object_id"),
+            "score": item.get("score"),
+            "severity": item.get("severity"),
+            "reason_codes": item.get("reason_codes") or [],
+            "recommended_next_action": item.get("recommended_next_action"),
+            "direct_wordpress_write": False,
+        }
+        for item in review_items
+    ]
+    write_actions = core_review_plan.get("write_actions")
+    write_action = write_actions[0] if isinstance(write_actions, list) and write_actions else {}
+
+    return {
+        "artifact_type": "nightly_site_inspection_core_intake_package",
+        "contract_version": "nightly_site_inspection_core_intake_package.v1",
+        "available": bool(core_handoff_suggestion.get("available")),
+        "source_run_id": run_id,
+        "generated_at": generated_at,
+        "user_action": "select_review_item_in_morning_brief",
+        "selected_review_item_ids": [
+            str(item.get("action_id") or "")
+            for item in selected_review_items
+            if str(item.get("action_id") or "").strip()
+        ],
+        "selected_review_items": selected_review_items,
+        "target_owner": "magick-ai-core",
+        "handoff_owner": "wordpress_toolbox_local",
+        "handoff_surface": "morning_brief_review_queue",
+        "target_plan_ability_id": NIGHTLY_SITE_INSPECTION_CORE_REVIEW_PLAN_ABILITY,
+        "target_plan_contract": NIGHTLY_SITE_INSPECTION_CORE_REVIEW_PLAN_CONTRACT,
+        "target_route": "core:/proposals/from-plan",
+        "core_review_plan": core_review_plan,
+        "core_review_plan_idempotency_key": _string_path(
+            write_action,
+            ("input", "idempotency_key"),
+        ),
+        "proposal_created": False,
+        "proposal_state_owner": "magick-ai-core",
+        "approval_truth": "wordpress_local",
+        "final_write_truth": "wordpress_local",
+        "cloud_role": "runtime_detail",
+        "cloud_scheduler_truth": False,
+        "direct_wordpress_write": False,
+        "requires_local_review": True,
+        "operator_next_action": (
+            "submit_selected_review_items_to_core"
+            if selected_review_items
+            else "no_core_handoff_needed"
+        ),
+        "receipt_expectation": {
+            "expected_local_receipt": "core_proposal_id",
+            "receipt_owner": "wordpress_toolbox_local",
+            "cloud_receipt_storage": "not_canonical",
+        },
+    }
+
+
 def _reviewable_actions(actions: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return sorted(
         [action for action in actions if action.get("reason_codes")],
@@ -850,6 +928,15 @@ def _group_next_local_action(group_id: str) -> str:
         "media_accessibility": "review_media_accessibility",
         "freshness": "review_refresh_need",
     }.get(group_id, "review_update_brief")
+
+
+def _string_path(value: dict[str, Any], path: tuple[str, ...]) -> str:
+    current: Any = value
+    for key in path:
+        if not isinstance(current, dict):
+            return ""
+        current = current.get(key)
+    return str(current or "")
 
 
 def _build_core_review_plan(

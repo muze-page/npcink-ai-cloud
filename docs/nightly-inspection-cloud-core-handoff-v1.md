@@ -76,6 +76,30 @@ The additive Core handoff plan uses:
 - `core_review_plan.write_actions[0].proposal_ready`: `false`
 - `core_review_plan.write_actions[0].requires_input`: `["title", "content"]`
 
+The additive Core intake package uses:
+
+- `core_intake_package.artifact_type`:
+  `nightly_site_inspection_core_intake_package`
+- `core_intake_package.contract_version`:
+  `nightly_site_inspection_core_intake_package.v1`
+- `core_intake_package.user_action`:
+  `select_review_item_in_morning_brief`
+- `core_intake_package.handoff_owner`: `wordpress_toolbox_local`
+- `core_intake_package.handoff_surface`: `morning_brief_review_queue`
+- `core_intake_package.target_route`: `core:/proposals/from-plan`
+- `core_intake_package.proposal_created`: `false`
+- `core_intake_package.proposal_state_owner`: `magick-ai-core`
+- `core_intake_package.receipt_expectation.expected_local_receipt`:
+  `core_proposal_id`
+- `core_intake_package.receipt_expectation.receipt_owner`:
+  `wordpress_toolbox_local`
+- `core_intake_package.receipt_expectation.cloud_receipt_storage`:
+  `not_canonical`
+
+This package is the user-selected Morning Brief review item envelope for local
+Toolbox/Core submission. It is not a Cloud proposal record, and it does not
+make Cloud proposal truth.
+
 ## Core Intake Requirements
 
 Core accepts only the read-only plan ability:

@@ -42,8 +42,16 @@ def test_nightly_site_inspection_contract_keeps_cloud_runtime_only() -> None:
         "`blocked_items`",
         "`retry_guidance`",
         "`core_handoff_suggestion`",
+        "nightly_site_inspection_core_intake_package.v1",
+        "select_review_item_in_morning_brief",
+        "morning_brief_review_queue",
+        "core:/proposals/from-plan",
+        "core_proposal_id",
+        "cloud_receipt_storage",
+        "not_canonical",
         "nightly_intelligence_detail.v1",
         "This detail object is not a Cloud control plane.",
+        "This package is not a Core proposal and does not create one.",
         "Do not build a Cloud orchestration platform",
         "Cloud may execute\nbounded runtime tasks",
         "Cloud must use the existing stack and seams",
@@ -92,3 +100,34 @@ def test_nightly_site_inspection_contract_blocks_cloud_article_factory() -> None
         "must run through local Ability/Core review flows",
     ):
         assert required in contract
+
+
+def test_nightly_cloud_core_handoff_contract_defines_core_intake_package() -> None:
+    handoff = _read("docs/nightly-inspection-cloud-core-handoff-v1.md")
+    batch_runtime = _read("docs/pro-cloud-batch-runtime-v1.md")
+
+    for required in (
+        "nightly_site_inspection_core_intake_package",
+        "nightly_site_inspection_core_intake_package.v1",
+        "select_review_item_in_morning_brief",
+        "wordpress_toolbox_local",
+        "morning_brief_review_queue",
+        "core:/proposals/from-plan",
+        "proposal_created",
+        "proposal_state_owner",
+        "core_proposal_id",
+        "cloud_receipt_storage",
+        "not_canonical",
+        "not a Cloud proposal record",
+        "Cloud proposal truth",
+    ):
+        assert required in handoff
+
+    for required in (
+        "core_intake_package_available",
+        "core_intake_package",
+        "nightly_site_inspection_core_intake_package.v1",
+        "The `core_intake_package` is the Morning Brief selection envelope",
+        "canonical receipt remains the local Core `core_proposal_id`",
+    ):
+        assert required in batch_runtime

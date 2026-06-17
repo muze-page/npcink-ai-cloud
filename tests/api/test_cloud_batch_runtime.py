@@ -291,6 +291,66 @@ def test_cloud_batch_runtime_queues_and_worker_returns_review_only_result(tmp_pa
         "operator_next_action": "review_priority_queue",
         "direct_wordpress_write": False,
     }
+    assert result["core_intake_package"]["contract_version"] == (
+        "nightly_site_inspection_core_intake_package.v1"
+    )
+    assert result["core_intake_package"]["artifact_type"] == (
+        "nightly_site_inspection_core_intake_package"
+    )
+    assert result["core_intake_package"]["available"] is True
+    assert result["core_intake_package"]["user_action"] == (
+        "select_review_item_in_morning_brief"
+    )
+    assert result["core_intake_package"]["selected_review_item_ids"] == ["action_001"]
+    assert result["core_intake_package"]["selected_review_items"][0] == {
+        "action_id": "action_001",
+        "object_type": "post",
+        "object_id": "123",
+        "score": 35,
+        "severity": "critical",
+        "reason_codes": [
+            "short_title",
+            "missing_meta_description",
+            "thin_content",
+            "missing_internal_links",
+            "missing_image_alt_text",
+            "stale_content",
+        ],
+        "recommended_next_action": "review_update_brief",
+        "direct_wordpress_write": False,
+    }
+    assert result["core_intake_package"]["target_owner"] == "magick-ai-core"
+    assert result["core_intake_package"]["handoff_owner"] == "wordpress_toolbox_local"
+    assert result["core_intake_package"]["handoff_surface"] == (
+        "morning_brief_review_queue"
+    )
+    assert result["core_intake_package"]["target_route"] == "core:/proposals/from-plan"
+    assert result["core_intake_package"]["target_plan_ability_id"] == (
+        "npcink-toolbox/build-nightly-inspection-review-plan"
+    )
+    assert result["core_intake_package"]["target_plan_contract"] == (
+        "nightly_site_inspection_core_review_plan.v1"
+    )
+    assert result["core_intake_package"]["core_review_plan_idempotency_key"] == (
+        f"nightly-inspection-review-{run_id}"
+    )
+    assert result["core_intake_package"]["proposal_created"] is False
+    assert result["core_intake_package"]["proposal_state_owner"] == "magick-ai-core"
+    assert result["core_intake_package"]["approval_truth"] == "wordpress_local"
+    assert result["core_intake_package"]["final_write_truth"] == "wordpress_local"
+    assert result["core_intake_package"]["cloud_role"] == "runtime_detail"
+    assert result["core_intake_package"]["cloud_scheduler_truth"] is False
+    assert result["core_intake_package"]["direct_wordpress_write"] is False
+    assert result["core_intake_package"]["requires_local_review"] is True
+    assert result["core_intake_package"]["operator_next_action"] == (
+        "submit_selected_review_items_to_core"
+    )
+    assert result["core_intake_package"]["receipt_expectation"] == {
+        "expected_local_receipt": "core_proposal_id",
+        "receipt_owner": "wordpress_toolbox_local",
+        "cloud_receipt_storage": "not_canonical",
+    }
+    assert result["core_intake_package"]["core_review_plan"] == result["core_review_plan"]
     assert result["nightly_intelligence_detail"]["contract_version"] == (
         "nightly_intelligence_detail.v1"
     )
@@ -317,6 +377,7 @@ def test_cloud_batch_runtime_queues_and_worker_returns_review_only_result(tmp_pa
         "npcink-toolbox/build-nightly-inspection-review-plan"
     )
     assert result["handoff"]["proposal_candidate_available"] is True
+    assert result["handoff"]["core_intake_package_available"] is True
 
     with get_session(database_url) as session:
         run = session.get(RunRecord, run_id)
