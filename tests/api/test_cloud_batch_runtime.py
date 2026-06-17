@@ -186,26 +186,33 @@ def test_cloud_batch_runtime_queues_and_worker_returns_review_only_result(tmp_pa
     assert result["status"] == "succeeded"
     assert result["worker_phase"] == "result_ready"
     assert result["execution_kind"] == "nightly_site_inspection"
+    assert result["product_surface"] == "nightly_intelligence"
+    assert result["product_label"] == "Nightly Intelligence"
     assert result["runtime_owner"] == "npcink-local-automation-runtime"
     assert result["cloud_role"] == "runtime_detail"
     assert result["summary"]["items_scanned"] == 2
     assert result["summary"]["score_version"] == "nightly_content_quality_score.v2"
     assert result["eligibility_summary"] == {
         "items_total": 2,
-        "eligible_count": 2,
-        "blocked_count": 0,
+        "eligible_count": 1,
+        "blocked_count": 1,
         "reviewable_count": 1,
         "selected_count": 1,
     }
-    assert result["blocked_items"] == []
+    assert result["blocked_items"][0]["blocked_reason"] == "local_review_required"
+    assert result["blocked_items"][0]["retryable"] is False
     assert result["review_items"][0]["action_id"] == "action_001"
     assert result["review_items"][0]["direct_wordpress_write"] is False
     assert result["operator_next_action"] == "review_cloud_batch_result"
     assert result["retryable"] is False
     assert result["retry_guidance"] == {
+        "available": False,
+        "retry_owner": "not_needed",
+        "operator_next_action": "review_morning_brief",
+        "failed_action_ids": [],
         "retryable": False,
-        "reason": "terminal_result_available",
-        "operator_next_action": "review_cloud_batch_result",
+        "cloud_scheduler_truth": False,
+        "direct_wordpress_write": False,
     }
     assert result["scoring_profile"]["editorial_truth"] == "wordpress_local"
     assert result["safety"]["direct_wordpress_write"] is False
@@ -224,6 +231,18 @@ def test_cloud_batch_runtime_queues_and_worker_returns_review_only_result(tmp_pa
     ]["reason_codes"]
     assert score_dimensions["media_accessibility"]["impact"] == 10
     assert result["actions"][0]["priority_reason"] == "critical_score"
+    assert result["review_items"][0]["action_id"] == "action_001"
+    assert result["blocked_items"][0]["blocked_reason"] == "local_review_required"
+    assert result["blocked_items"][0]["retryable"] is False
+    assert result["retry_guidance"] == {
+        "available": False,
+        "retry_owner": "not_needed",
+        "operator_next_action": "review_morning_brief",
+        "failed_action_ids": [],
+        "retryable": False,
+        "cloud_scheduler_truth": False,
+        "direct_wordpress_write": False,
+    }
     assert result["nightly_result"]["contract_version"] == "nightly_site_inspection_result.v1"
     assert result["nightly_result"]["safety"]["cloud_scheduler_truth"] is False
     assert result["nightly_result"]["issue_groups"][0]["id"] == "metadata"
@@ -259,6 +278,40 @@ def test_cloud_batch_runtime_queues_and_worker_returns_review_only_result(tmp_pa
     assert result["core_review_plan"]["write_actions"][0]["requires_input"] == [
         "title",
         "content",
+    ]
+    assert result["core_handoff_suggestion"] == {
+        "available": True,
+        "suggestion_type": "core_review_plan_candidate",
+        "target_owner": "magick-ai-core",
+        "target_plan_ability_id": "npcink-toolbox/build-nightly-inspection-review-plan",
+        "target_plan_contract": "nightly_site_inspection_core_review_plan.v1",
+        "source_action_ids": ["action_001"],
+        "proposal_created": False,
+        "requires_local_review": True,
+        "operator_next_action": "review_priority_queue",
+        "direct_wordpress_write": False,
+    }
+    assert result["nightly_intelligence_detail"]["contract_version"] == (
+        "nightly_intelligence_detail.v1"
+    )
+    assert result["nightly_intelligence_detail"]["output_contract"] == {
+        "review_items": 1,
+        "blocked_items": 1,
+        "retry_guidance": False,
+        "morning_brief": True,
+        "score_breakdown": True,
+        "core_handoff_suggestion": True,
+    }
+    assert result["nightly_intelligence_detail"]["truth_boundary"] == {
+        "schedule_truth": "wordpress_local",
+        "approval_truth": "wordpress_local",
+        "proposal_truth": "magick_ai_core",
+        "final_write_truth": "wordpress_local",
+        "cloud_scheduler_truth": False,
+        "direct_wordpress_write": False,
+    }
+    assert "automatic_seo_meta_write" in result["nightly_intelligence_detail"][
+        "forbidden_outputs_absent"
     ]
     assert result["handoff"]["target_plan_ability_id"] == (
         "npcink-toolbox/build-nightly-inspection-review-plan"

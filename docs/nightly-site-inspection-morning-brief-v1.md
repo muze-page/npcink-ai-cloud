@@ -1,4 +1,4 @@
-# Nightly Site Inspection / Morning Brief v1
+# Nightly Intelligence / Morning Brief v1
 
 Status: active planning contract
 
@@ -6,12 +6,18 @@ Date: 2026-06-15
 
 ## Purpose
 
-Nightly Site Inspection gives WordPress operators a morning operating surface
-for content maintenance, site quality, and reviewable writing preparation.
+Nightly Intelligence gives WordPress operators a morning operating surface for
+content maintenance, site quality, and reviewable writing preparation. The
+feature name may appear as Nightly Site Inspection in lower-level contracts,
+but the product positioning should be Nightly Intelligence.
 
 The product should be positioned as:
 
 `nightly site inspection + morning writing preparation + content quality scoring`
+
+In customer-facing language:
+
+`Nightly Intelligence = off-hours site inspection and morning editorial readiness`
 
 It must not be positioned as "nightly auto-writing" or "hands-free publishing".
 The primary promise is that slow, repetitive analysis happens off-hours, while
@@ -33,6 +39,38 @@ Do not build a Cloud orchestration platform for this feature. Cloud may execute
 bounded runtime tasks, store run evidence, meter usage, return analysis
 results, and expose read-only diagnostics. Cloud must not become the scheduler
 truth, workflow truth, proposal truth, or WordPress write authority.
+
+## Product Boundary
+
+Nightly Intelligence is for checking, analysis, scoring, and issue discovery.
+
+Allowed analysis:
+
+- content quality analysis;
+- data completeness checks;
+- SEO/AEO/GEO gap discovery;
+- missing image ALT scanning;
+- stale content reminders;
+- site health and content opportunity Morning Briefs.
+
+Required output shape:
+
+- `review_items`;
+- `blocked_items`;
+- `retry_guidance`;
+- `morning_brief`;
+- `score_breakdown`;
+- `core_handoff_suggestion`.
+
+Forbidden output and behavior:
+
+- bulk image mutation;
+- bulk tag mutation;
+- bulk post updates;
+- automatic publishing;
+- automatic SEO/meta writing;
+- direct WordPress writes;
+- automatic Core proposal creation, approval, or execution.
 
 ## Local Ownership
 
@@ -228,6 +266,50 @@ The Morning Brief result should be structured and reviewable:
 
 Cloud-hosted results must not include direct apply instructions, final write
 payloads, WordPress credentials, nonces, cookies, or approval tokens.
+
+The Cloud Batch result also exposes a read-only Nightly Intelligence detail
+surface for the operator, support, and addon display:
+
+```json
+{
+  "product_surface": "nightly_intelligence",
+  "product_label": "Nightly Intelligence",
+  "review_items": [],
+  "blocked_items": [],
+  "retry_guidance": {
+    "available": false,
+    "retry_owner": "not_needed",
+    "operator_next_action": "review_morning_brief",
+    "cloud_scheduler_truth": false,
+    "direct_wordpress_write": false
+  },
+  "core_handoff_suggestion": {
+    "available": true,
+    "suggestion_type": "core_review_plan_candidate",
+    "proposal_created": false,
+    "requires_local_review": true,
+    "direct_wordpress_write": false
+  },
+  "nightly_intelligence_detail": {
+    "artifact_type": "nightly_intelligence_detail",
+    "contract_version": "nightly_intelligence_detail.v1",
+    "read_surface": "run_result_detail",
+    "runtime_owner": "npcink-local-automation-runtime",
+    "cloud_role": "runtime_detail",
+    "truth_boundary": {
+      "schedule_truth": "wordpress_local",
+      "approval_truth": "wordpress_local",
+      "proposal_truth": "magick_ai_core",
+      "final_write_truth": "wordpress_local",
+      "cloud_scheduler_truth": false,
+      "direct_wordpress_write": false
+    }
+  }
+}
+```
+
+This detail object is not a Cloud control plane. It is a bounded read/detail
+surface over the current run result.
 
 ### Core Review Plan Handoff
 

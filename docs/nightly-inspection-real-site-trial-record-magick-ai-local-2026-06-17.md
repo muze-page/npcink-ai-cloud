@@ -27,16 +27,18 @@ cycle for the current development stage.
 
 ## Nightly Inspection Runs
 
-Three real Cloud inspection runs were submitted in this development trial. The
+Four real Cloud inspection runs were submitted in this development trial. The
 first used the local WordPress / Toolbox Cloud Batch E2E path. Two follow-up
 runs used the authenticated Toolbox REST route that the admin UI button calls:
-`/wp-json/npcink-toolbox/v1/nightly-inspection/cloud-batch`.
+`/wp-json/npcink-toolbox/v1/nightly-inspection/cloud-batch`. The final run used
+a literal browser click on the Toolbox `Run Cloud inspection` button.
 
 | Run date | Cloud run ID | Payload | Status | Items scanned | Reviewable | Critical | Warnings | Avg score | Operator reviewed |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | 2026-06-17 | `run_a14776eeb51043b7a1e016c5300b7aa6` | metadata-only | succeeded | 5 | 5 | 3 | 2 | 62.2 | yes |
 | 2026-06-17 | `run_f2a1d9b3f3f0496ca17585b77b87fa6b` | metadata-only | succeeded | 20 | 20 | 11 | 9 | 61.65 | yes |
 | 2026-06-17 | `run_2475959597604fd48582c3973aa2dfac` | excerpt | succeeded | 7 | 7 | 5 | 2 | 57.29 | yes |
+| 2026-06-17 | `run_15d9bdf4cae84c4687d00a4dc600d344` | metadata-only | succeeded | 20 | 20 | 11 | 9 | 61.65 | yes |
 
 ## Morning Brief Review
 
@@ -126,9 +128,11 @@ Browser and WordPress site checks:
 - The Toolbox admin HTML exposed the Advanced / Cloud Runtime operator surface,
   including `Run Cloud inspection`, `Refresh Cloud quota`, quota, and Core
   handoff signals.
-- Browser automation against the local HTTPS admin page timed out in this pass,
-  so the follow-up runs used the authenticated REST route invoked by the admin
-  UI rather than a literal browser click.
+- Browser automation against the local HTTPS admin page succeeded on the final
+  pass. A literal click on `Run Cloud inspection` created run
+  `run_15d9bdf4cae84c4687d00a4dc600d344`, rendered `Succeeded`, showed Cloud
+  run detail, rendered the Morning Brief review queue, merged 15 local
+  priorities, and displayed `Writes None` for Cloud review items.
 - `wp eval-file tests/smoke-nightly-inspection-cloud-e2e.php`: passed against
   `magick-ai.local`; run id
   `run_a14776eeb51043b7a1e016c5300b7aa6`.
@@ -158,14 +162,18 @@ Browser and WordPress site checks:
 - Excerpt REST feedback receipt: event id `5624`, outcome `rejected`, labels
   `wrong_priority`, `evidence_weak`, and `operator_confidence_low`, production
   mutation false.
+- Literal browser-click Toolbox run: run id
+  `run_15d9bdf4cae84c4687d00a4dc600d344`, 20 items scanned, 20 reviewable,
+  11 critical, 9 warnings, average score 61.65, 15 merged local priorities,
+  no Cloud write path visible in the operator UI.
 
 ## Decision
 
 - Go/no-go: go for continuing development trials
 - Continue unchanged / adjust scoring / adjust Morning Brief copy / pause site:
-  continue unchanged for now; the three successful development runs validate
-  the runtime path, but scoring should not be tuned until browser-click and more
-  varied real-content samples are collected
+  continue unchanged for now; the successful E2E, REST-route, and browser-click
+  development runs validate the runtime path, but scoring should not be tuned
+  until more varied real-content samples are collected
 - Follow-up implementation task: none for Cloud/Toolbox feature code from this
   pass; the main environment issue was local WP-CLI DB socket configuration
 - Weekly review notes: collect at least a few more real-site runs before tuning
@@ -177,9 +185,7 @@ Before the next local trial batch:
 
 1. Use the Local MySQL port/socket-aware WP-CLI bootstrap when checking
    `magick-ai.local` from the terminal.
-2. Retry the literal browser-click admin UI flow when the local browser
-   automation connection is stable.
-3. Run additional varied-content samples before changing score weights.
-4. Add more rejected feedback reasons beyond wrong priority/evidence weak.
-5. Compare metadata-only versus excerpt quality lift across repeated runs,
+2. Run additional varied-content samples before changing score weights.
+3. Add more rejected feedback reasons beyond wrong priority/evidence weak.
+4. Compare metadata-only versus excerpt quality lift across repeated runs,
    because one excerpt run is not enough to tune defaults.

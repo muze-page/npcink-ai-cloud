@@ -17,6 +17,8 @@ from app.domain.cloud_batch_runtime.contracts import (
 )
 
 SCORE_VERSION = "nightly_content_quality_score.v2"
+NIGHTLY_INTELLIGENCE_SURFACE = "nightly_intelligence"
+NIGHTLY_INTELLIGENCE_CONTRACT = "nightly_intelligence_detail.v1"
 
 SCORE_DIMENSIONS = (
     "metadata_completeness",
@@ -133,11 +135,34 @@ class CloudBatchRuntimeService:
             writing_preparation=writing_preparation,
             core_review_plan=core_review_plan,
         )
-        operational_summary = _build_operational_summary(actions)
+        blocked_items = _build_blocked_items(actions)
+        retry_guidance = _build_retry_guidance(actions)
+        operational_summary = _build_operational_summary(
+            actions,
+            blocked_items=blocked_items,
+            retry_guidance=retry_guidance,
+        )
+        core_handoff_suggestion = _build_core_handoff_suggestion(
+            core_review_plan=core_review_plan,
+            actions=actions,
+        )
+        nightly_intelligence_detail = _build_nightly_intelligence_detail(
+            run_id=run_id,
+            site_id=site_id,
+            generated_at=generated_at,
+            summary=summary,
+            actions=actions,
+            morning_brief=morning_brief,
+            blocked_items=blocked_items,
+            retry_guidance=retry_guidance,
+            core_handoff_suggestion=core_handoff_suggestion,
+        )
 
         result = {
             "contract_version": CLOUD_BATCH_RUNTIME_RESULT_CONTRACT,
             "request_contract_version": CLOUD_BATCH_RUNTIME_REQUEST_CONTRACT,
+            "product_surface": NIGHTLY_INTELLIGENCE_SURFACE,
+            "product_label": "Nightly Intelligence",
             "run_id": run_id,
             "site_id": site_id,
             "status": "succeeded",
@@ -161,6 +186,8 @@ class CloudBatchRuntimeService:
             "nightly_result": nightly_result,
             "morning_brief": morning_brief,
             "writing_preparation": writing_preparation,
+            "core_handoff_suggestion": core_handoff_suggestion,
+            "nightly_intelligence_detail": nightly_intelligence_detail,
             "core_review_plan": core_review_plan,
             "safety": {
                 "direct_wordpress_write": False,
@@ -525,6 +552,136 @@ def _build_morning_brief(
     }
 
 
+def _build_blocked_items(actions: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    blocked: list[dict[str, Any]] = []
+    for action in actions:
+        reason_codes = [
+            str(reason)
+            for reason in action.get("reason_codes", [])
+            if str(reason or "").strip()
+        ]
+        missing_context = _missing_context(reason_codes)
+        if not missing_context:
+            continue
+        blocked.append(
+            {
+                "action_id": action.get("action_id"),
+                "object_type": action.get("object_type"),
+                "object_id": action.get("object_id"),
+                "title": action.get("title"),
+                "blocked_reason": "local_review_required",
+                "missing_context": missing_context,
+                "retryable": False,
+                "operator_next_action": _next_local_action(reason_codes),
+                "direct_wordpress_write": False,
+            }
+        )
+    return blocked[:10]
+
+
+def _build_retry_guidance(actions: list[dict[str, Any]]) -> dict[str, Any]:
+    failed_actions = [
+        action for action in actions if str(action.get("status") or "") not in {"", "succeeded"}
+    ]
+    return {
+        "available": bool(failed_actions),
+        "retry_owner": "cloud_runtime" if failed_actions else "not_needed",
+        "operator_next_action": (
+            "retry_failed_cloud_analysis" if failed_actions else "review_morning_brief"
+        ),
+        "failed_action_ids": [
+            str(action.get("action_id") or "") for action in failed_actions[:10]
+        ],
+        "retryable": bool(failed_actions),
+        "cloud_scheduler_truth": False,
+        "direct_wordpress_write": False,
+    }
+
+
+def _build_core_handoff_suggestion(
+    *,
+    core_review_plan: dict[str, Any],
+    actions: list[dict[str, Any]],
+) -> dict[str, Any]:
+    reviewable_actions = _reviewable_actions(actions)
+    return {
+        "available": bool(core_review_plan.get("write_actions")),
+        "suggestion_type": "core_review_plan_candidate",
+        "target_owner": "magick-ai-core",
+        "target_plan_ability_id": NIGHTLY_SITE_INSPECTION_CORE_REVIEW_PLAN_ABILITY,
+        "target_plan_contract": NIGHTLY_SITE_INSPECTION_CORE_REVIEW_PLAN_CONTRACT,
+        "source_action_ids": [
+            str(action.get("action_id") or "") for action in reviewable_actions[:10]
+        ],
+        "proposal_created": False,
+        "requires_local_review": True,
+        "operator_next_action": (
+            "review_priority_queue" if reviewable_actions else "no_core_handoff_needed"
+        ),
+        "direct_wordpress_write": False,
+    }
+
+
+def _build_nightly_intelligence_detail(
+    *,
+    run_id: str,
+    site_id: str,
+    generated_at: str,
+    summary: dict[str, Any],
+    actions: list[dict[str, Any]],
+    morning_brief: dict[str, Any],
+    blocked_items: list[dict[str, Any]],
+    retry_guidance: dict[str, Any],
+    core_handoff_suggestion: dict[str, Any],
+) -> dict[str, Any]:
+    review_items = _reviewable_actions(actions)
+    return {
+        "artifact_type": "nightly_intelligence_detail",
+        "contract_version": NIGHTLY_INTELLIGENCE_CONTRACT,
+        "run_id": run_id,
+        "site_id": site_id,
+        "generated_at": generated_at,
+        "positioning": "nightly_site_inspection_and_morning_editorial_preparation",
+        "output_contract": {
+            "review_items": len(review_items),
+            "blocked_items": len(blocked_items),
+            "retry_guidance": bool(retry_guidance.get("available")),
+            "morning_brief": bool(morning_brief),
+            "score_breakdown": True,
+            "core_handoff_suggestion": bool(core_handoff_suggestion.get("available")),
+        },
+        "summary": {
+            "items_scanned": summary.get("items_scanned", 0),
+            "reviewable_items": len(review_items),
+            "blocked_items": len(blocked_items),
+            "warnings": summary.get("warning_total", 0),
+            "critical": summary.get("critical_total", 0),
+            "average_score": summary.get("average_score", 0),
+            "score_version": summary.get("score_version", SCORE_VERSION),
+        },
+        "read_surface": "run_result_detail",
+        "runtime_owner": "npcink-local-automation-runtime",
+        "cloud_role": "runtime_detail",
+        "truth_boundary": {
+            "schedule_truth": "wordpress_local",
+            "approval_truth": "wordpress_local",
+            "proposal_truth": "magick_ai_core",
+            "final_write_truth": "wordpress_local",
+            "cloud_scheduler_truth": False,
+            "direct_wordpress_write": False,
+        },
+        "forbidden_outputs_absent": [
+            "bulk_image_mutation",
+            "bulk_tag_mutation",
+            "bulk_post_update",
+            "automatic_publish",
+            "automatic_seo_meta_write",
+            "article_body",
+            "article_write_plan",
+        ],
+    }
+
+
 def _reviewable_actions(actions: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return sorted(
         [action for action in actions if action.get("reason_codes")],
@@ -536,35 +693,33 @@ def _reviewable_actions(actions: list[dict[str, Any]]) -> list[dict[str, Any]]:
     )
 
 
-def _build_operational_summary(actions: list[dict[str, Any]]) -> dict[str, Any]:
+def _build_operational_summary(
+    actions: list[dict[str, Any]],
+    *,
+    blocked_items: list[dict[str, Any]],
+    retry_guidance: dict[str, Any],
+) -> dict[str, Any]:
     reviewable_actions = _reviewable_actions(actions)
+    operator_next_action = (
+        "review_cloud_batch_result"
+        if reviewable_actions
+        else "no_review_needed"
+    )
     return {
         "eligibility_summary": {
             "items_total": len(actions),
-            "eligible_count": len(actions),
-            "blocked_count": 0,
+            "eligible_count": max(0, len(actions) - len(blocked_items)),
+            "blocked_count": len(blocked_items),
             "reviewable_count": len(reviewable_actions),
             "selected_count": len(reviewable_actions[:10]),
         },
-        "blocked_items": [],
+        "blocked_items": blocked_items,
         "review_items": [
             _priority_queue_item(action) for action in reviewable_actions[:10]
         ],
-        "operator_next_action": (
-            "review_cloud_batch_result"
-            if reviewable_actions
-            else "no_review_needed"
-        ),
-        "retryable": False,
-        "retry_guidance": {
-            "retryable": False,
-            "reason": "terminal_result_available",
-            "operator_next_action": (
-                "review_cloud_batch_result"
-                if reviewable_actions
-                else "no_review_needed"
-            ),
-        },
+        "operator_next_action": operator_next_action,
+        "retryable": bool(retry_guidance.get("retryable")),
+        "retry_guidance": retry_guidance,
     }
 
 

@@ -14,7 +14,8 @@ def test_nightly_site_inspection_contract_freezes_local_schedule_boundary() -> N
     readme = _read("README.md")
 
     for required in (
-        "Nightly Site Inspection / Morning Brief v1",
+        "Nightly Intelligence / Morning Brief v1",
+        "Nightly Intelligence = off-hours site inspection and morning editorial readiness",
         "nightly site inspection + morning writing preparation + content quality scoring",
         "`WP-Cron` as the default trigger",
         "Do not introduce Action Scheduler",
@@ -36,6 +37,13 @@ def test_nightly_site_inspection_contract_keeps_cloud_runtime_only() -> None:
     contract = _read("docs/nightly-site-inspection-morning-brief-v1.md")
 
     for required in (
+        "Nightly Intelligence is for checking, analysis, scoring, and issue discovery.",
+        "`review_items`",
+        "`blocked_items`",
+        "`retry_guidance`",
+        "`core_handoff_suggestion`",
+        "nightly_intelligence_detail.v1",
+        "This detail object is not a Cloud control plane.",
         "Do not build a Cloud orchestration platform",
         "Cloud may execute\nbounded runtime tasks",
         "Cloud must use the existing stack and seams",
