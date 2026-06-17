@@ -73,6 +73,44 @@ a literal browser click on the Toolbox `Run Cloud inspection` button.
 - Feedback labels covered: `evidence_useful`, `operator_confidence_high`,
   `wrong_priority`, `evidence_weak`, `operator_confidence_low`
 
+## Sample Expansion Trial
+
+Six additional authenticated Toolbox REST route runs were completed after the
+initial real-site trial. These runs used the same local `magick-ai.local`
+development site and compared three sample sizes across `metadata_only` and
+`excerpt` payload modes. No WordPress write, Core proposal, automatic publish,
+or Cloud scheduler-truth path was used.
+
+| Sample | Cloud run ID | Payload | Limits | Items | Critical | Warnings | Avg score | Priorities | Merged priorities | Feedback receipt | Feedback outcome |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `meta-small` | `run_7295b64dc1284a1489cd10eff4aec87f` | metadata-only | 3 posts / 2 media | 5 | 3 | 2 | 62.2 | 5 | 3 | `5662` | accepted: `evidence_useful`, `operator_confidence_high` |
+| `excerpt-small` | `run_f5e7cc6be2d54dd9b3c0d5536ab9b9ee` | excerpt | 3 posts / 2 media | 5 | 3 | 2 | 62.2 | 5 | 3 | `5663` | rejected: `already_handled` |
+| `meta-medium` | `run_5ec4ae88c9424bd1b371de5dd7d3c06a` | metadata-only | 6 posts / 4 media | 10 | 6 | 4 | 60.0 | 10 | 6 | `5664` | rejected: `wrong_next_step` |
+| `excerpt-medium` | `run_2a1dffdb694349adb16122fc0ee7635f` | excerpt | 6 posts / 4 media | 10 | 6 | 4 | 60.0 | 10 | 6 | `5665` | accepted: `evidence_useful`, `operator_confidence_high` |
+| `meta-large-repeat` | `run_967f057675e44cc3be0221e146d6933e` | metadata-only | 12 posts / 8 media | 20 | 11 | 9 | 61.65 | 10 | 15 | `5666` | rejected: `not_relevant_to_site` |
+| `excerpt-large` | `run_26f7c950e95549c0a44e3078fdea841a` | excerpt | 12 posts / 8 media | 20 | 11 | 9 | 61.65 | 10 | 15 | `5667` | rejected: `duplicate_suggestion` |
+
+Observed sample expansion findings:
+
+- Sample size changed the result shape as expected: 5, 10, and 20 scanned items
+  produced 3, 6, and 15 merged local priorities.
+- `metadata_only` and `excerpt` produced identical aggregate scores and first
+  priorities on this local dataset. Current evidence does not justify making
+  excerpt the default payload mode.
+- The first priority remained stable across all expanded samples:
+  `action_002`, page `155`, `Page with comments`, score `45`, severity
+  `critical`.
+- Top reason codes remained stable: `short_title`,
+  `missing_meta_description`, `thin_content`, `missing_internal_links`, and
+  `stale_content`.
+- Feedback coverage now includes useful, already handled, wrong next step, not
+  relevant to site, and duplicate suggestion labels. This is enough to observe
+  Cloud eval rollups, but not enough to tune scoring weights.
+- The trial uncovered one integration-detail issue in the local operator
+  script: the current feedback contract uses `local_outcome` and
+  `feedback_labels`, not the shorter UI-facing names `outcome` and `labels`.
+  The final six feedback receipts above used the current contract successfully.
+
 ## Boundary Review
 
 - WordPress direct write absent: yes
@@ -166,18 +204,40 @@ Browser and WordPress site checks:
   `run_15d9bdf4cae84c4687d00a4dc600d344`, 20 items scanned, 20 reviewable,
   11 critical, 9 warnings, average score 61.65, 15 merged local priorities,
   no Cloud write path visible in the operator UI.
+- Sample expansion REST route runs: six additional runs completed successfully
+  with run ids `run_7295b64dc1284a1489cd10eff4aec87f`,
+  `run_f5e7cc6be2d54dd9b3c0d5536ab9b9ee`,
+  `run_5ec4ae88c9424bd1b371de5dd7d3c06a`,
+  `run_2a1dffdb694349adb16122fc0ee7635f`,
+  `run_967f057675e44cc3be0221e146d6933e`, and
+  `run_26f7c950e95549c0a44e3078fdea841a`.
+- Sample expansion feedback receipts: `5662`, `5663`, `5664`, `5665`, `5666`,
+  and `5667`; all returned `status=ok` and `accepted_for_eval=true`.
+- Temporary local sample-expansion evidence file:
+  `/tmp/nightly-sample-expansion-trial-final-20260617100125.json`.
+- Cloud targeted verification after the sample expansion doc update:
+  `.venv/bin/pytest tests/api/test_cloud_batch_runtime.py tests/contract/test_nightly_site_inspection_contract.py tests/api/test_agent_feedback_routes.py`:
+  19 passed.
+- `magick-ai-eval-lab` cross-check:
+  `composer eval:task -- task=project_quality_gate project=/Users/muze/gitee/magick-ai-cloud mode=working_diff`
+  wrote local generated reports under
+  `/Users/muze/gitee/magick-ai-eval-lab/project-review/generated/`.
+  The only review item was an existing `sk-` shaped test marker in tracked
+  test/script fixtures, not this trial document or a newly introduced secret.
 
 ## Decision
 
 - Go/no-go: go for continuing development trials
 - Continue unchanged / adjust scoring / adjust Morning Brief copy / pause site:
-  continue unchanged for now; the successful E2E, REST-route, and browser-click
-  development runs validate the runtime path, but scoring should not be tuned
-  until more varied real-content samples are collected
+  continue unchanged for now; the successful E2E, REST-route, browser-click, and
+  sample-expansion development runs validate the runtime path, but scoring
+  should not be tuned until more varied real-content samples are collected
 - Follow-up implementation task: none for Cloud/Toolbox feature code from this
   pass; the main environment issue was local WP-CLI DB socket configuration
-- Weekly review notes: collect at least a few more real-site runs before tuning
-  scoring weights, Morning Brief grouping, or feedback labels
+- Weekly review notes: keep `metadata_only` as the conservative default for
+  Pro Nightly Intelligence, keep `excerpt` as an explicit trial mode, and use
+  feedback rollups before changing score weights, Morning Brief grouping, or
+  feedback labels
 
 ## Next Attempt Checklist
 
@@ -185,7 +245,9 @@ Before the next local trial batch:
 
 1. Use the Local MySQL port/socket-aware WP-CLI bootstrap when checking
    `magick-ai.local` from the terminal.
-2. Run additional varied-content samples before changing score weights.
-3. Add more rejected feedback reasons beyond wrong priority/evidence weak.
-4. Compare metadata-only versus excerpt quality lift across repeated runs,
-   because one excerpt run is not enough to tune defaults.
+2. Run additional varied-content samples on a second real site before changing
+   score weights.
+3. Review Cloud feedback quality rollups for `already_handled`,
+   `wrong_next_step`, `not_relevant_to_site`, and `duplicate_suggestion`.
+4. Keep comparing metadata-only versus excerpt quality lift across repeated
+   runs, because this local sample expansion did not show an excerpt lift.
