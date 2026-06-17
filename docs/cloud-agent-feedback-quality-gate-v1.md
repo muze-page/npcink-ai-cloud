@@ -77,8 +77,27 @@ The recommended fields are:
 
 The summary response exposes a `nightly_inspection` read-only rollup with
 outcomes, labels, source reason-code counts, rejected reason-code counts,
-severity counts, average source score, and quality rates. This rollup is for
-scoring and Morning Brief tuning only.
+rejected labels, severity counts, average source score, and quality rates. This
+rollup is for scoring and Morning Brief tuning only.
+
+After the `magick-ai.local` sample-expansion trial, the first watchlist for
+Nightly Intelligence quality review is:
+
+- `already_handled`: review whether the Morning Brief is repeating work the
+  operator already resolved.
+- `wrong_next_step`: review whether the recommended local action should be
+  rewritten or split.
+- `not_relevant_to_site`: review whether scoring is overfitting generic content
+  advice to a site where that item is not useful.
+- `duplicate_suggestion`: review grouping and dedupe before changing score
+  weights.
+- `wrong_priority`: review ranking only after there are enough cross-site
+  samples.
+
+The `nightly_inspection.rates` object should expose the corresponding rates so
+operators can decide whether to tune scoring, grouping, or Morning Brief copy
+after multiple trials. One local site is not enough evidence to change scoring
+weights.
 
 ## Boundary
 

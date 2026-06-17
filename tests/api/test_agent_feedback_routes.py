@@ -343,34 +343,111 @@ def test_agent_feedback_accepts_nightly_inspection_feedback_summary(
         ),
         idempotency_key="agent-feedback-nightly-rejected",
     )
+    wrong_next_step = _post_feedback(
+        client,
+        _feedback_payload(
+            agent_id="nightly_site_inspection_cloud_runtime",
+            agent_version="nightly_inspection_cloud_runtime.v1",
+            source_runtime="nightly_site_inspection",
+            source_run_id="run_nightly_456",
+            handoff_id="action_003",
+            handoff_type="morning_brief_priority",
+            local_surface="toolbox_nightly_inspection_morning_brief",
+            local_outcome="rejected",
+            feedback_labels=["wrong_next_step", "not_relevant_to_site"],
+            operator_note="",
+            local_proposal_id="",
+            evidence_ref_ids=["action_003", "post:789"],
+            source_action_id="action_003",
+            source_object_type="post",
+            source_object_id="789",
+            source_reason_codes=["thin_content", "stale_content"],
+            source_score=45,
+            source_severity="critical",
+            retention_class="quality_eval",
+        ),
+        idempotency_key="agent-feedback-nightly-wrong-next-step",
+    )
+    duplicate = _post_feedback(
+        client,
+        _feedback_payload(
+            agent_id="nightly_site_inspection_cloud_runtime",
+            agent_version="nightly_inspection_cloud_runtime.v1",
+            source_runtime="nightly_site_inspection",
+            source_run_id="run_nightly_789",
+            handoff_id="action_004",
+            handoff_type="morning_brief_priority",
+            local_surface="toolbox_nightly_inspection_morning_brief",
+            local_outcome="rejected",
+            feedback_labels=["duplicate_suggestion"],
+            operator_note="",
+            local_proposal_id="",
+            evidence_ref_ids=["action_004", "post:790"],
+            source_action_id="action_004",
+            source_object_type="post",
+            source_object_id="790",
+            source_reason_codes=["stale_content"],
+            source_score=45,
+            source_severity="critical",
+            retention_class="quality_eval",
+        ),
+        idempotency_key="agent-feedback-nightly-duplicate",
+    )
 
     assert accepted.status_code == 200
     assert rejected.status_code == 200
+    assert wrong_next_step.status_code == 200
+    assert duplicate.status_code == 200
 
     summary_response = _get_feedback_summary(client, window_hours=24)
 
     assert summary_response.status_code == 200
     nightly = summary_response.json()["data"]["nightly_inspection"]
-    assert nightly["events_total"] == 2
-    assert nightly["action_feedback_total"] == 2
+    assert nightly["events_total"] == 4
+    assert nightly["action_feedback_total"] == 4
     assert nightly["outcomes"]["accepted"] == 1
-    assert nightly["outcomes"]["rejected"] == 1
+    assert nightly["outcomes"]["rejected"] == 3
     assert nightly["labels"]["wrong_priority"] == 1
     assert nightly["labels"]["already_handled"] == 1
+    assert nightly["labels"]["wrong_next_step"] == 1
+    assert nightly["labels"]["not_relevant_to_site"] == 1
+    assert nightly["labels"]["duplicate_suggestion"] == 1
+    assert nightly["rejected_labels"] == [
+        {"label": "already_handled", "count": 1},
+        {"label": "duplicate_suggestion", "count": 1},
+        {"label": "not_relevant_to_site", "count": 1},
+        {"label": "operator_confidence_low", "count": 1},
+        {"label": "wrong_next_step", "count": 1},
+        {"label": "wrong_priority", "count": 1},
+    ]
     assert nightly["reason_codes"]["missing_meta_description"] == 1
     assert nightly["reason_codes"]["missing_internal_links"] == 1
+    assert nightly["reason_codes"]["stale_content"] == 3
     assert nightly["rejected_reason_codes"] == [
-        {"label": "missing_internal_links", "count": 1}
+        {"label": "stale_content", "count": 2},
+        {"label": "missing_internal_links", "count": 1},
+        {"label": "thin_content", "count": 1},
     ]
-    assert nightly["average_source_score"] == 72.5
-    assert nightly["rates"]["wrong_priority_rate"] == 0.5
+    assert nightly["average_source_score"] == 58.75
+    assert nightly["rates"]["accepted_rate"] == 0.25
+    assert nightly["rates"]["rejected_rate"] == 0.75
+    assert nightly["rates"]["wrong_priority_rate"] == 0.25
+    assert nightly["rates"]["wrong_next_step_rate"] == 0.25
+    assert nightly["rates"]["already_handled_rate"] == 0.25
+    assert nightly["rates"]["not_relevant_to_site_rate"] == 0.25
+    assert nightly["rates"]["duplicate_suggestion_rate"] == 0.25
     assert nightly["production_mutation"] is False
 
     with get_session(database_url) as session:
         events = list(session.scalars(select(UsageMeterEvent)))
 
-    assert len(events) == 2
-    assert events[0].payload_json["source_action_id"] in {"action_001", "action_002"}
+    assert len(events) == 4
+    assert events[0].payload_json["source_action_id"] in {
+        "action_001",
+        "action_002",
+        "action_003",
+        "action_004",
+    }
 
 
 def test_content_support_feedback_regression_samples_roll_up_expected_quality(

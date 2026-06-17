@@ -200,6 +200,7 @@ class AgentFeedbackService:
     def _nightly_inspection_summary(self, events: list[UsageMeterEvent]) -> dict[str, Any]:
         outcomes: dict[str, int] = {}
         labels: dict[str, int] = {}
+        rejected_labels: dict[str, int] = {}
         reason_codes: dict[str, int] = {}
         rejected_reason_codes: dict[str, int] = {}
         severities: dict[str, int] = {}
@@ -224,6 +225,8 @@ class AgentFeedbackService:
             self._increment(outcomes, outcome)
             for label in feedback_labels:
                 self._increment(labels, label)
+                if self._is_rejected_outcome(outcome):
+                    self._increment(rejected_labels, label)
             for reason in source_reasons:
                 self._increment(reason_codes, reason)
                 if self._is_rejected_outcome(outcome):
@@ -243,6 +246,7 @@ class AgentFeedbackService:
             "action_feedback_total": len(action_ids),
             "outcomes": outcomes,
             "labels": labels,
+            "rejected_labels": self._top_counts(rejected_labels),
             "reason_codes": reason_codes,
             "rejected_reason_codes": self._top_counts(rejected_reason_codes),
             "severities": severities,
@@ -252,9 +256,26 @@ class AgentFeedbackService:
                     outcomes.get("accepted", 0) + outcomes.get("edited_before_accept", 0),
                     total,
                 ),
+                "rejected_rate": self._rate(
+                    sum(
+                        count
+                        for outcome, count in outcomes.items()
+                        if self._is_rejected_outcome(outcome)
+                    ),
+                    total,
+                ),
                 "wrong_priority_rate": self._rate(labels.get("wrong_priority", 0), total),
+                "wrong_next_step_rate": self._rate(labels.get("wrong_next_step", 0), total),
                 "evidence_weak_rate": self._rate(labels.get("evidence_weak", 0), total),
                 "already_handled_rate": self._rate(labels.get("already_handled", 0), total),
+                "not_relevant_to_site_rate": self._rate(
+                    labels.get("not_relevant_to_site", 0),
+                    total,
+                ),
+                "duplicate_suggestion_rate": self._rate(
+                    labels.get("duplicate_suggestion", 0),
+                    total,
+                ),
             },
             "production_mutation": False,
             "approval_truth": "wordpress_local",

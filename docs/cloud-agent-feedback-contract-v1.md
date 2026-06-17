@@ -138,6 +138,8 @@ execute, approve, publish, or mutate the customer site.
 - `wrong_intent`
 - `wrong_next_step`
 - `missing_context`
+- `wrong_priority`
+- `already_handled`
 - `unsafe_or_overreaching`
 - `too_generic`
 - `duplicate_suggestion`
