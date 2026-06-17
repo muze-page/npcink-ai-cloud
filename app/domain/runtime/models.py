@@ -72,6 +72,8 @@ RUNTIME_STORAGE_MODES = frozenset(
         RUNTIME_STORAGE_MODE_FULL_STORE_WITH_TTL,
     }
 )
+SENSITIVE_RUNTIME_DATA_CLASSIFICATIONS = frozenset({"pii", "secret"})
+FORBIDDEN_HOSTED_RUNTIME_DATA_CLASSIFICATIONS = frozenset({"secret"})
 RUNTIME_CALLBACK_MODES = frozenset(
     {
         "",

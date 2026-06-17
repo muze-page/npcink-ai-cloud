@@ -2807,6 +2807,241 @@ def test_execute_route_rejects_contract_timeout_above_cloud_ceiling(tmp_path: Pa
     dispose_engine(database_url)
 
 
+def test_execute_route_rejects_sensitive_data_without_no_store(tmp_path: Path) -> None:
+    database_url, client = _build_client(tmp_path)
+    payload = {
+        "site_id": "site_alpha",
+        "ability_name": "magick-ai/workflows/generate-post-draft",
+        "contract_version": "v1",
+        "channel": "openapi",
+        "execution_kind": "text",
+        "profile_id": "text.balanced",
+        "data_classification": "pii",
+        "storage_mode": "result_only",
+        "idempotency_key": "idem-sensitive-result-only-001",
+        "input": {"messages": [{"role": "user", "content": "private customer note"}]},
+    }
+    body = json.dumps(payload).encode("utf-8")
+    response = client.post(
+        "/v1/runtime/execute",
+        content=body,
+        headers=merge_json_headers(
+            build_auth_headers(
+                "POST",
+                "/v1/runtime/execute",
+                site_id="site_alpha",
+                idempotency_key="idem-sensitive-result-only-001",
+                trace_id="tracesensitive0010000000000000",
+                body=body,
+            )
+        ),
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error_code"] == "runtime.sensitive_data_requires_no_store"
+
+    dispose_engine(database_url)
+
+
+def test_execute_route_rejects_secret_like_runtime_input(tmp_path: Path) -> None:
+    database_url, client = _build_client(tmp_path)
+    payload = {
+        "site_id": "site_alpha",
+        "ability_name": "magick-ai/workflows/generate-post-draft",
+        "contract_version": "v1",
+        "channel": "openapi",
+        "execution_kind": "text",
+        "profile_id": "text.balanced",
+        "idempotency_key": "idem-secret-detected-001",
+        "input": {
+            "messages": [{"role": "user", "content": "summarize this draft"}],
+            "provider_key": "sk-testtesttesttesttesttesttest",
+        },
+    }
+    body = json.dumps(payload).encode("utf-8")
+    response = client.post(
+        "/v1/runtime/execute",
+        content=body,
+        headers=merge_json_headers(
+            build_auth_headers(
+                "POST",
+                "/v1/runtime/execute",
+                site_id="site_alpha",
+                idempotency_key="idem-secret-detected-001",
+                trace_id="tracesecretdetected00100000",
+                body=body,
+            )
+        ),
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error_code"] == "runtime.secret_input_detected"
+
+    dispose_engine(database_url)
+
+
+def test_execute_route_rejects_unclassified_personal_data(tmp_path: Path) -> None:
+    database_url, client = _build_client(tmp_path)
+    payload = {
+        "site_id": "site_alpha",
+        "ability_name": "magick-ai/workflows/generate-post-draft",
+        "contract_version": "v1",
+        "channel": "openapi",
+        "execution_kind": "text",
+        "profile_id": "text.balanced",
+        "idempotency_key": "idem-pii-detected-001",
+        "input": {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": "Draft a reply for customer alice@example.com",
+                }
+            ]
+        },
+    }
+    body = json.dumps(payload).encode("utf-8")
+    response = client.post(
+        "/v1/runtime/execute",
+        content=body,
+        headers=merge_json_headers(
+            build_auth_headers(
+                "POST",
+                "/v1/runtime/execute",
+                site_id="site_alpha",
+                idempotency_key="idem-pii-detected-001",
+                trace_id="tracepiidetected0010000000",
+                body=body,
+            )
+        ),
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error_code"] == "runtime.pii_classification_required"
+
+    dispose_engine(database_url)
+
+
+def test_resolve_route_rejects_sensitive_data_without_no_store(tmp_path: Path) -> None:
+    database_url, client = _build_client(tmp_path)
+    payload = {
+        "site_id": "site_alpha",
+        "ability_name": "magick-ai/workflows/generate-post-draft",
+        "contract_version": "v1",
+        "channel": "openapi",
+        "execution_kind": "text",
+        "profile_id": "text.balanced",
+        "data_classification": "pii",
+        "storage_mode": "result_only",
+        "input": {"messages": [{"role": "user", "content": "private customer note"}]},
+    }
+    body = json.dumps(payload).encode("utf-8")
+    response = client.post(
+        "/v1/runtime/resolve",
+        content=body,
+        headers=merge_json_headers(
+            build_auth_headers(
+                "POST",
+                "/v1/runtime/resolve",
+                site_id="site_alpha",
+                trace_id="tracesensitiveresolve00100000",
+                body=body,
+            )
+        ),
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error_code"] == "runtime.sensitive_data_requires_no_store"
+
+    dispose_engine(database_url)
+
+
+def test_execute_route_pii_no_store_omits_persisted_payloads(tmp_path: Path) -> None:
+    database_url, client = _build_client(tmp_path)
+    payload = {
+        "site_id": "site_alpha",
+        "ability_name": "magick-ai/workflows/generate-post-draft",
+        "contract_version": "v1",
+        "channel": "openapi",
+        "execution_kind": "text",
+        "profile_id": "text.balanced",
+        "data_classification": "pii",
+        "storage_mode": "no_store",
+        "idempotency_key": "idem-sensitive-no-store-001",
+        "input": {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": "private customer note from alice@example.com",
+                }
+            ]
+        },
+    }
+    body = json.dumps(payload).encode("utf-8")
+    response = client.post(
+        "/v1/runtime/execute",
+        content=body,
+        headers=merge_json_headers(
+            build_auth_headers(
+                "POST",
+                "/v1/runtime/execute",
+                site_id="site_alpha",
+                idempotency_key="idem-sensitive-no-store-001",
+                trace_id="tracesensitive0020000000000000",
+                body=body,
+            )
+        ),
+    )
+
+    assert response.status_code == 200
+    run_id = response.json()["data"]["run_id"]
+    with get_session(database_url) as session:
+        run = session.get(RunRecord, run_id)
+        assert run is not None
+        assert run.data_classification == "pii"
+        assert run.input_json == {}
+        assert run.result_json == {"stored": False, "status": "omitted"}
+
+    dispose_engine(database_url)
+
+
+def test_execute_route_secret_data_is_excluded_from_hosted_runtime(
+    tmp_path: Path,
+) -> None:
+    database_url, client = _build_client(tmp_path)
+    payload = {
+        "site_id": "site_alpha",
+        "ability_name": "magick-ai/workflows/generate-post-draft",
+        "contract_version": "v1",
+        "channel": "openapi",
+        "execution_kind": "text",
+        "profile_id": "text.balanced",
+        "data_classification": "secret",
+        "storage_mode": "no_store",
+        "idempotency_key": "idem-secret-no-store-001",
+        "input": {"messages": [{"role": "user", "content": "rotate api secret"}]},
+    }
+    body = json.dumps(payload).encode("utf-8")
+    response = client.post(
+        "/v1/runtime/execute",
+        content=body,
+        headers=merge_json_headers(
+            build_auth_headers(
+                "POST",
+                "/v1/runtime/execute",
+                site_id="site_alpha",
+                idempotency_key="idem-secret-no-store-001",
+                trace_id="tracesecret001000000000000000",
+                body=body,
+            )
+        ),
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error_code"] == "runtime.secret_data_forbidden"
+
+    dispose_engine(database_url)
+
+
 def test_execute_route_result_only_storage_omits_persisted_input_payload(tmp_path: Path) -> None:
     database_url, client = _build_client(tmp_path)
     payload = {

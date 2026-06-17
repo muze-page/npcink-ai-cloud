@@ -52,6 +52,7 @@ Operational references:
 - [docs/nightly-inspection-real-site-trial-record-magick-ai-local-2026-06-17.md](docs/nightly-inspection-real-site-trial-record-magick-ai-local-2026-06-17.md)
 - [docs/cloud-adapter-analysis-contract.md](docs/cloud-adapter-analysis-contract.md)
 - [docs/cloud-local-integration-and-rebuild-guidance.md](docs/cloud-local-integration-and-rebuild-guidance.md)
+- [docs/cloud-ai-data-handling-standard-v1.md](docs/cloud-ai-data-handling-standard-v1.md)
 - [docs/cloud-content-generation-boundary-v1.md](docs/cloud-content-generation-boundary-v1.md)
 - [docs/cloud-bulk-article-run-v1.md](docs/cloud-bulk-article-run-v1.md)
 - [docs/nightly-site-inspection-morning-brief-v1.md](docs/nightly-site-inspection-morning-brief-v1.md)
@@ -435,6 +436,41 @@ pnpm run dev:runtime   # adds the queued runtime worker
 pnpm run dev:callback  # adds runtime and callback workers
 pnpm run dev:ops       # adds runtime, callback, and ops cadence workers
 ```
+
+### Docker Restart Recovery
+
+Both `docker-compose.dev.yml` and `docker-compose.prod.yml` set
+`restart: unless-stopped` on long-running services. This lets Docker restore the
+Cloud stack after Docker Desktop or the Docker daemon starts again, as long as
+the containers were not intentionally stopped with `docker compose stop` or
+removed with `docker compose down`.
+
+The dev stack services covered by this policy are `postgres`, `redis`, `api`,
+`frontend`, `proxy`, `worker`, `callback-worker`, and `ops-worker`. The
+production compose file applies the same policy to those services plus
+`otel-collector` and `jaeger`.
+
+After changing restart policy or after finding stale exited containers, recreate
+the stack once so existing containers pick up the compose policy:
+
+```bash
+docker compose -f docker-compose.dev.yml up -d --build
+docker compose -f docker-compose.dev.yml up -d worker callback-worker ops-worker
+```
+
+Verify the local stack with:
+
+```bash
+docker compose -f docker-compose.dev.yml ps
+docker inspect magick-ai-cloud-api-1 --format '{{.HostConfig.RestartPolicy.Name}}'
+curl -fsS http://127.0.0.1:8010/health/live
+curl -fsS http://127.0.0.1:8010/ -o /dev/null -w '%{http_code}\n'
+```
+
+Expected results: the required containers are `Up`, the restart policy prints
+`unless-stopped`, `/health/live` returns JSON with `status: ok`, and the frontend
+entrypoint returns HTTP `200`. A running `proxy` with `502 Bad Gateway` usually
+means `api` or `frontend` is not running yet.
 
 Keep local-only debug credentials such as `MAGICK_CLOUD_INTERNAL_AUTH_TOKEN`,
 `MAGICK_CLOUD_ADMIN_BOOTSTRAP_TOKEN`, `MAGICK_CLOUD_ADMIN_SESSION_SECRET`, and

@@ -183,10 +183,30 @@ def test_cloud_batch_runtime_queues_and_worker_returns_review_only_result(tmp_pa
     assert result_response.status_code == 200
     result = result_response.json()["data"]["result"]
     assert result["contract_version"] == "cloud_batch_runtime_result.v1"
+    assert result["status"] == "succeeded"
+    assert result["worker_phase"] == "result_ready"
+    assert result["execution_kind"] == "nightly_site_inspection"
     assert result["runtime_owner"] == "npcink-local-automation-runtime"
     assert result["cloud_role"] == "runtime_detail"
     assert result["summary"]["items_scanned"] == 2
     assert result["summary"]["score_version"] == "nightly_content_quality_score.v2"
+    assert result["eligibility_summary"] == {
+        "items_total": 2,
+        "eligible_count": 2,
+        "blocked_count": 0,
+        "reviewable_count": 1,
+        "selected_count": 1,
+    }
+    assert result["blocked_items"] == []
+    assert result["review_items"][0]["action_id"] == "action_001"
+    assert result["review_items"][0]["direct_wordpress_write"] is False
+    assert result["operator_next_action"] == "review_cloud_batch_result"
+    assert result["retryable"] is False
+    assert result["retry_guidance"] == {
+        "retryable": False,
+        "reason": "terminal_result_available",
+        "operator_next_action": "review_cloud_batch_result",
+    }
     assert result["scoring_profile"]["editorial_truth"] == "wordpress_local"
     assert result["safety"]["direct_wordpress_write"] is False
     assert result["safety"]["final_write_path"] == "core_proposal_required"

@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from app.domain.cloud_batch_runtime.contracts import (
+    CLOUD_BATCH_RUNTIME_EXECUTION_KIND,
     CLOUD_BATCH_RUNTIME_REQUEST_CONTRACT,
     CLOUD_BATCH_RUNTIME_RESULT_CONTRACT,
     NIGHTLY_SITE_INSPECTION_CORE_REVIEW_PLAN_ABILITY,
@@ -132,12 +133,16 @@ class CloudBatchRuntimeService:
             writing_preparation=writing_preparation,
             core_review_plan=core_review_plan,
         )
+        operational_summary = _build_operational_summary(actions)
 
         result = {
             "contract_version": CLOUD_BATCH_RUNTIME_RESULT_CONTRACT,
             "request_contract_version": CLOUD_BATCH_RUNTIME_REQUEST_CONTRACT,
             "run_id": run_id,
             "site_id": site_id,
+            "status": "succeeded",
+            "worker_phase": "result_ready",
+            "execution_kind": CLOUD_BATCH_RUNTIME_EXECUTION_KIND,
             "generated_at": generated_at,
             "runtime_owner": "npcink-local-automation-runtime",
             "cloud_role": "runtime_detail",
@@ -145,6 +150,12 @@ class CloudBatchRuntimeService:
                 input_payload.get("task_profile") or "nightly_site_inspection_morning_brief"
             ),
             "summary": summary,
+            "eligibility_summary": operational_summary["eligibility_summary"],
+            "blocked_items": operational_summary["blocked_items"],
+            "review_items": operational_summary["review_items"],
+            "operator_next_action": operational_summary["operator_next_action"],
+            "retryable": operational_summary["retryable"],
+            "retry_guidance": operational_summary["retry_guidance"],
             "scoring_profile": _build_scoring_profile(),
             "actions": actions,
             "nightly_result": nightly_result,
@@ -523,6 +534,38 @@ def _reviewable_actions(actions: list[dict[str, Any]]) -> list[dict[str, Any]]:
             str(action.get("action_id") or ""),
         ),
     )
+
+
+def _build_operational_summary(actions: list[dict[str, Any]]) -> dict[str, Any]:
+    reviewable_actions = _reviewable_actions(actions)
+    return {
+        "eligibility_summary": {
+            "items_total": len(actions),
+            "eligible_count": len(actions),
+            "blocked_count": 0,
+            "reviewable_count": len(reviewable_actions),
+            "selected_count": len(reviewable_actions[:10]),
+        },
+        "blocked_items": [],
+        "review_items": [
+            _priority_queue_item(action) for action in reviewable_actions[:10]
+        ],
+        "operator_next_action": (
+            "review_cloud_batch_result"
+            if reviewable_actions
+            else "no_review_needed"
+        ),
+        "retryable": False,
+        "retry_guidance": {
+            "retryable": False,
+            "reason": "terminal_result_available",
+            "operator_next_action": (
+                "review_cloud_batch_result"
+                if reviewable_actions
+                else "no_review_needed"
+            ),
+        },
+    }
 
 
 def _priority_queue_item(action: dict[str, Any]) -> dict[str, Any]:

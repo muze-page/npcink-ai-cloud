@@ -83,6 +83,7 @@ from app.domain.routing.errors import RoutingError
 from app.domain.routing.models import RoutingCandidate, RoutingResolution
 from app.domain.routing.service import RoutingService
 from app.domain.runtime.analysis_result import build_analysis_result_envelope
+from app.domain.runtime.data_guard import find_runtime_data_guard_finding
 from app.domain.runtime.errors import (
     RuntimeBatchLimitExceededError,
     RuntimeCallbackConfigurationError,
@@ -99,6 +100,7 @@ from app.domain.runtime.errors import (
 from app.domain.runtime.models import (
     ABUSE_GUARD_ATTENTION_RATIO,
     ABUSE_GUARD_CRITICAL_RATIO,
+    FORBIDDEN_HOSTED_RUNTIME_DATA_CLASSIFICATIONS,
     RUNTIME_BACKLOG_QUEUED_AGING_AFTER_SECONDS,
     RUNTIME_BACKLOG_RUNNING_AGING_AFTER_SECONDS,
     RUNTIME_CALLBACK_DISPATCH_LEASE_RECOVERY_AFTER_SECONDS,
@@ -115,6 +117,7 @@ from app.domain.runtime.models import (
     RUNTIME_STORAGE_MODE_FULL_STORE_WITH_TTL,
     RUNTIME_STORAGE_MODE_NO_STORE,
     RUNTIME_STORAGE_MODE_RESULT_ONLY,
+    SENSITIVE_RUNTIME_DATA_CLASSIFICATIONS,
     RuntimeExecutionContext,
     RuntimeExecutionResponse,
     RuntimeFailureDetails,
@@ -181,6 +184,7 @@ class RuntimeService:
         self.callback_retry_backoff_seconds = max(0, callback_retry_backoff_seconds)
 
     def resolve(self, request: RuntimeRequest) -> dict[str, object]:
+        self._validate_runtime_data_handling_contract(request)
         if self._is_image_generation_request(request):
             self._validate_image_generation_contract(request)
 
@@ -251,6 +255,7 @@ class RuntimeService:
         }
 
     def execute(self, request: RuntimeRequest) -> RuntimeExecutionResponse:
+        self._validate_runtime_data_handling_contract(request)
         if self._is_cloud_batch_runtime_request(request):
             return self._execute_cloud_batch_runtime_request(request)
         if self._is_media_batch_plan_request(request):
@@ -2174,6 +2179,35 @@ class RuntimeService:
                 "runtime.repair_evidence_too_short",
                 "mark_stale_running_failed requires evidence that records the observed "
                 "stale-running signals",
+            )
+
+    def _validate_runtime_data_handling_contract(self, request: RuntimeRequest) -> None:
+        data_classification = str(request.data_classification or "").strip().lower()
+        storage_mode = str(request.storage_mode or RUNTIME_STORAGE_MODE_RESULT_ONLY).strip()
+        finding = find_runtime_data_guard_finding(request.input_payload)
+        if finding is not None and finding.kind == "secret":
+            raise RuntimeExecutionContractError(
+                "runtime.secret_input_detected",
+                f"runtime input contains secret-like data at '{finding.path}'",
+            )
+        if finding is not None and finding.kind == "pii" and data_classification != "pii":
+            raise RuntimeExecutionContractError(
+                "runtime.pii_classification_required",
+                "runtime input appears to contain personal data and must use "
+                "data_classification=pii",
+            )
+        if (
+            data_classification in SENSITIVE_RUNTIME_DATA_CLASSIFICATIONS
+            and storage_mode != RUNTIME_STORAGE_MODE_NO_STORE
+        ):
+            raise RuntimeExecutionContractError(
+                "runtime.sensitive_data_requires_no_store",
+                "pii and secret runtime requests must use storage_mode=no_store",
+            )
+        if data_classification in FORBIDDEN_HOSTED_RUNTIME_DATA_CLASSIFICATIONS:
+            raise RuntimeExecutionContractError(
+                "runtime.secret_data_forbidden",
+                "secret-classified data is excluded from hosted runtime execution",
             )
 
     def run_bounded_auto_repairs(

@@ -140,6 +140,9 @@ Cloud returns a reviewable result:
 ```json
 {
   "contract_version": "cloud_batch_runtime_result.v1",
+  "status": "succeeded",
+  "worker_phase": "result_ready",
+  "execution_kind": "nightly_site_inspection",
   "runtime_owner": "npcink-local-automation-runtime",
   "cloud_role": "runtime_detail",
   "summary": {
@@ -149,6 +152,31 @@ Cloud returns a reviewable result:
     "critical_total": 0,
     "average_score": 82.5,
     "score_version": "nightly_content_quality_score.v2"
+  },
+  "eligibility_summary": {
+    "items_total": 2,
+    "eligible_count": 2,
+    "blocked_count": 0,
+    "reviewable_count": 1,
+    "selected_count": 1
+  },
+  "blocked_items": [],
+  "review_items": [
+    {
+      "action_id": "action_001",
+      "object_type": "post",
+      "object_id": "123",
+      "priority_reason": "warning_score",
+      "group_ids": ["metadata"],
+      "direct_wordpress_write": false
+    }
+  ],
+  "operator_next_action": "review_cloud_batch_result",
+  "retryable": false,
+  "retry_guidance": {
+    "retryable": false,
+    "reason": "terminal_result_available",
+    "operator_next_action": "review_cloud_batch_result"
   },
   "scoring_profile": {
     "score_version": "nightly_content_quality_score.v2",
@@ -273,7 +301,11 @@ Cloud returns a reviewable result:
 
 The result may contain quality signals, score breakdowns, issue grouping,
 review-queue organization, writing preparation evidence, and a Core review-plan
-candidate. The review plan is not a final article plan. It targets Core proposal intake through
+candidate. The top-level operational fields are for Toolbox and operators to
+show status, eligibility, blocked items, review items, and retry guidance
+without reading raw payloads. They do not grant retry execution, scheduler
+truth, proposal creation, approval, or WordPress write authority. The review
+plan is not a final article plan. It targets Core proposal intake through
 `npcink-toolbox/build-nightly-inspection-review-plan`, remains
 `proposal_ready=false`, and requires a human to supply `title` and `content`
 before commit preflight can pass. It must not contain long-form article bodies,

@@ -42,8 +42,18 @@ handoff to the adapter after approval.
 Cloud must keep the outer hosted runtime result compatible:
 
 - `contract_version`: `cloud_batch_runtime_result.v1`
+- `status`: terminal or current hosted runtime status, such as `succeeded`
+- `worker_phase`: operator-readable runtime phase, such as `result_ready`
+- `execution_kind`: `nightly_site_inspection`
 - `runtime_owner`: `npcink-local-automation-runtime`
 - `cloud_role`: `runtime_detail`
+- `eligibility_summary`: bounded item and reviewability counts for Toolbox
+- `blocked_items`: blocked items with reasons, or an empty list
+- `review_items`: prioritized operator review items, not raw payload dump
+- `operator_next_action`: next operator action, such as
+  `review_cloud_batch_result`
+- `retryable`: boolean retry guidance for this result state
+- `retry_guidance`: bounded retry reason and next action guidance
 - `safety.direct_wordpress_write`: `false`
 - `safety.final_write_path`: `core_proposal_required`
 

@@ -1,6 +1,7 @@
 services:
   postgres:
     image: postgres:16-alpine
+    restart: unless-stopped
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-magick_ai_cloud}
       POSTGRES_USER: ${POSTGRES_USER:-magick}
@@ -15,6 +16,7 @@ services:
 
   redis:
     image: redis:7-alpine
+    restart: unless-stopped
     command: redis-server --appendonly yes
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
@@ -26,6 +28,7 @@ services:
 
   otel-collector:
     image: otel/opentelemetry-collector-contrib:0.104.0
+    restart: unless-stopped
     command: ["--config=/etc/otelcol-contrib/config.yaml"]
     environment:
       MAGICK_CLOUD_OTEL_TRACE_SINK_OTLP_ENDPOINT: ${MAGICK_CLOUD_OTEL_TRACE_SINK_OTLP_ENDPOINT:-jaeger:4317}
@@ -34,6 +37,7 @@ services:
 
   jaeger:
     image: jaegertracing/all-in-one:1.59
+    restart: unless-stopped
     environment:
       COLLECTOR_OTLP_ENABLED: "true"
     ports:
@@ -41,6 +45,7 @@ services:
 
   proxy:
     image: nginx:1.27-alpine
+    restart: unless-stopped
     depends_on:
       api:
         condition: service_started
@@ -56,6 +61,7 @@ services:
       context: .
       dockerfile: Dockerfile
     image: magick-ai-cloud-api:prod
+    restart: unless-stopped
     command: gunicorn -k uvicorn.workers.UvicornWorker -w ${MAGICK_CLOUD_API_WORKERS:-2} -b 0.0.0.0:8000 app.api.main:app
     extra_hosts:
       - "host.docker.internal:host-gateway"
@@ -163,6 +169,7 @@ services:
       context: .
       dockerfile: frontend/Dockerfile
     image: magick-ai-cloud-frontend:prod
+    restart: unless-stopped
     environment:
       CLOUD_API_BASE_URL: http://api:8000
       CLOUD_PUBLIC_BASE_URL: ${MAGICK_CLOUD_PORTAL_PUBLIC_BASE_URL:-${MAGICK_CLOUD_BASE_URL:-http://127.0.0.1:${MAGICK_CLOUD_PORT:-8010}}}
@@ -176,6 +183,7 @@ services:
       context: .
       dockerfile: Dockerfile
     image: magick-ai-cloud-worker:prod
+    restart: unless-stopped
     command: python -m app.workers.runtime_queue
     extra_hosts:
       - "host.docker.internal:host-gateway"
@@ -262,6 +270,7 @@ services:
       context: .
       dockerfile: Dockerfile
     image: magick-ai-cloud-callback-worker:prod
+    restart: unless-stopped
     command: python -m app.workers.callback_dispatch
     extra_hosts:
       - "host.docker.internal:host-gateway"
@@ -298,6 +307,7 @@ services:
       context: .
       dockerfile: Dockerfile
     image: magick-ai-cloud-ops-worker:prod
+    restart: unless-stopped
     command: python -m app.workers.ops_cadence
     extra_hosts:
       - "host.docker.internal:host-gateway"

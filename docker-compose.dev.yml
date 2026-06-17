@@ -1,6 +1,7 @@
 services:
   postgres:
     image: postgres:16-alpine
+    restart: unless-stopped
     environment:
       POSTGRES_DB: magick_ai_cloud
       POSTGRES_USER: magick
@@ -17,6 +18,7 @@ services:
 
   redis:
     image: redis:7-alpine
+    restart: unless-stopped
     ports:
       - "6380:6379"
     healthcheck:
@@ -29,6 +31,7 @@ services:
 
   proxy:
     image: nginx:1.27-alpine
+    restart: unless-stopped
     depends_on:
       api:
         condition: service_started
@@ -44,6 +47,7 @@ services:
       context: .
       dockerfile: Dockerfile
     image: magick-ai-cloud-api:dev
+    restart: unless-stopped
     command: uvicorn app.api.main:app --host 0.0.0.0 --port 8000 --reload
     env_file:
       - ./.env
@@ -72,6 +76,7 @@ services:
       context: .
       dockerfile: Dockerfile
     image: magick-ai-cloud-worker:dev
+    restart: unless-stopped
     command: python -m app.workers.runtime_queue
     env_file:
       - ./.env
@@ -96,6 +101,7 @@ services:
       context: .
       dockerfile: Dockerfile
     image: magick-ai-cloud-callback-worker:dev
+    restart: unless-stopped
     command: python -m app.workers.callback_dispatch
     env_file:
       - ./.env
@@ -120,6 +126,7 @@ services:
       context: .
       dockerfile: Dockerfile
     image: magick-ai-cloud-ops-worker:dev
+    restart: unless-stopped
     command: python -m app.workers.ops_cadence
     env_file:
       - ./.env
@@ -143,6 +150,7 @@ services:
       context: ./frontend
       dockerfile: Dockerfile.dev
     image: magick-ai-cloud-frontend:dev
+    restart: unless-stopped
     command: sh -lc "node node_modules/next/dist/bin/next dev --webpack -H 0.0.0.0"
     env_file:
       - ./.env
