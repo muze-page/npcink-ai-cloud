@@ -337,6 +337,7 @@ def _build_options(
     if orientation not in ALLOWED_IMAGE_SOURCE_ORIENTATIONS:
         orientation = ""
     latency_mode = _image_source_latency_mode(input_payload)
+    raw_visual_context = _dict(input_payload.get("visual_context"))
     return {
         "provider": provider,
         "per_page": coerce_positive_int(
@@ -351,9 +352,12 @@ def _build_options(
             limit=80,
         )
         or "image_reference_candidate",
+        "locale": _normalize_locale(
+            input_payload.get("locale") or raw_visual_context.get("locale")
+        ),
         "latency_mode": latency_mode,
         "enhancement_mode": _normalize_token(input_payload.get("enhancement_mode"), limit=40),
-        "visual_context": _normalize_visual_context(input_payload.get("visual_context")),
+        "visual_context": _normalize_visual_context(raw_visual_context),
         "site_knowledge_context": _normalize_site_knowledge_context(site_knowledge_context),
         "llm_prompt_plan": _normalize_llm_prompt_plan(llm_prompt_plan),
     }
@@ -361,9 +365,11 @@ def _build_options(
 
 def _image_source_latency_mode(input_payload: dict[str, Any]) -> str:
     visual_context = _dict(input_payload.get("visual_context"))
-    latency_mode = str(
-        input_payload.get("latency_mode") or visual_context.get("latency_mode") or ""
-    ).strip().lower()
+    latency_mode = (
+        str(input_payload.get("latency_mode") or visual_context.get("latency_mode") or "")
+        .strip()
+        .lower()
+    )
     return latency_mode if latency_mode == "fast_first" else "complete"
 
 
@@ -720,7 +726,7 @@ def _build_visual_brief(*, query: str, options: dict[str, Any]) -> dict[str, Any
         if selected_context
         else "Translate the article context into a concrete editorial image direction."
     )
-    return {
+    brief = {
         "status": "ready",
         "artifact_type": "paragraph_image_visual_brief.v1",
         "composition_role": "paragraph_image_prompt_planning",
@@ -771,6 +777,23 @@ def _build_visual_brief(*, query: str, options: dict[str, Any]) -> dict[str, Any
         "write_posture": "suggestion_only",
         "direct_wordpress_write": False,
     }
+    if _is_zh_cn_locale(options.get("locale")):
+        brief.update(
+            {
+                "localized_title": "可选配图方向",
+                "localized_summary": (
+                    "已根据选中段落和文章上下文生成可审核的配图方向。"
+                    if selected_context
+                    else "已根据文章上下文生成可审核的配图方向。"
+                ),
+                "localized_intent": (
+                    "把选中段落转译成编辑配图方向，不在图片中呈现原文。"
+                    if selected_context
+                    else "把文章主题转译成具体的编辑配图方向。"
+                ),
+            }
+        )
+    return brief
 
 
 def _build_prompt_candidates(
@@ -783,6 +806,7 @@ def _build_prompt_candidates(
     llm_candidates = _prompt_candidates_from_llm_plan(
         llm_prompt_plan,
         evidence_refs=_site_context_evidence_refs(_dict(options.get("site_knowledge_context"))),
+        locale=str(options.get("locale") or ""),
     )
     if llm_candidates:
         return llm_candidates
@@ -853,21 +877,24 @@ def _build_prompt_candidates(
         ),
     ]
     return [
-        {
-            "id": prompt_id,
-            "label": label,
-            "direction_type": direction_type,
-            "visual_strategy": visual_strategy,
-            "reason": reason,
-            "prompt": _normalize_text(prompt, limit=1200),
-            "source": "cloud_visual_brief",
-            "evidence_refs": _site_context_evidence_refs(
-                _dict(options.get("site_knowledge_context"))
-            ),
-            "requires_operator_review": True,
-            "write_posture": "candidate_only",
-            "direct_wordpress_write": False,
-        }
+        _localize_prompt_candidate(
+            {
+                "id": prompt_id,
+                "label": label,
+                "direction_type": direction_type,
+                "visual_strategy": visual_strategy,
+                "reason": reason,
+                "prompt": _normalize_text(prompt, limit=1200),
+                "source": "cloud_visual_brief",
+                "evidence_refs": _site_context_evidence_refs(
+                    _dict(options.get("site_knowledge_context"))
+                ),
+                "requires_operator_review": True,
+                "write_posture": "candidate_only",
+                "direct_wordpress_write": False,
+            },
+            locale=str(options.get("locale") or ""),
+        )
         for prompt_id, label, direction_type, visual_strategy, reason, prompt in prompts
     ]
 
@@ -1015,6 +1042,17 @@ def _coerce_float(value: Any, *, default: float = 0.0) -> float:
         return default
 
 
+def _normalize_locale(value: Any) -> str:
+    normalized = str(value or "").strip().replace("-", "_")
+    if normalized.lower() == "zh_cn":
+        return "zh_CN"
+    return _normalize_token(normalized, limit=20)
+
+
+def _is_zh_cn_locale(value: Any) -> bool:
+    return str(value or "").strip().replace("-", "_").lower() == "zh_cn"
+
+
 def _normalize_visual_context(value: Any) -> dict[str, Any]:
     source = _dict(value)
     if not source:
@@ -1121,10 +1159,70 @@ def _normalize_llm_prompt_plan(value: Any) -> dict[str, Any]:
     }
 
 
+_ZH_DIRECTION_DISPLAY: dict[str, tuple[str, str, str]] = {
+    "workspace_detail": (
+        "工作区细节",
+        "用工作区中的具体物件承载文章主题。",
+        "适合用安静、真实的细节辅助段落理解。",
+    ),
+    "workflow_detail": (
+        "流程细节",
+        "呈现分析、规划或执行流程中的关键细节。",
+        "适合把段落内容转成可理解的操作过程。",
+    ),
+    "hero_editorial": (
+        "特色图方向",
+        "用自然的编辑场景概括文章重点。",
+        "适合需要一张可作为特色图的文章配图。",
+    ),
+    "editorial_scene": (
+        "特色图方向",
+        "用自然的编辑场景概括文章重点。",
+        "适合需要一张可作为特色图的文章配图。",
+    ),
+    "article_cover": (
+        "特色图方向",
+        "用自然的编辑场景概括文章重点。",
+        "适合需要一张可作为特色图的文章配图。",
+    ),
+    "concept_metaphor": (
+        "概念隐喻",
+        "用物件、空间关系和人物状态表达抽象概念。",
+        "适合把抽象策略或方法论转成可视化画面。",
+    ),
+    "conceptual_metaphor": (
+        "概念隐喻",
+        "用物件、空间关系和人物状态表达抽象概念。",
+        "适合把抽象策略或方法论转成可视化画面。",
+    ),
+    "product_context": (
+        "产品场景",
+        "把产品或服务放进真实使用场景中呈现。",
+        "适合展示产品价值、使用环境或服务触点。",
+    ),
+}
+
+
+def _localize_prompt_candidate(candidate: dict[str, Any], *, locale: str) -> dict[str, Any]:
+    if not _is_zh_cn_locale(locale):
+        return candidate
+    direction_type = _normalize_token(candidate.get("direction_type"), limit=80)
+    display = _ZH_DIRECTION_DISPLAY.get(direction_type) or (
+        "配图方向",
+        "围绕文章上下文生成可审核的配图方案。",
+        "适合作为人工审核前的备选配图方向。",
+    )
+    candidate["localized_label"] = display[0]
+    candidate["localized_strategy"] = display[1]
+    candidate["localized_reason"] = display[2]
+    return candidate
+
+
 def _prompt_candidates_from_llm_plan(
     llm_prompt_plan: dict[str, Any],
     *,
     evidence_refs: list[dict[str, Any]],
+    locale: str,
 ) -> list[dict[str, Any]]:
     if str(llm_prompt_plan.get("status") or "") != "ready":
         return []
@@ -1135,28 +1233,33 @@ def _prompt_candidates_from_llm_plan(
         if not prompt:
             continue
         candidates.append(
-            {
-                "id": _normalize_token(candidate.get("id"), limit=80) or _hash_text(prompt)[:12],
-                "label": _normalize_text(candidate.get("label"), limit=80) or "LLM visual prompt",
-                "prompt": prompt,
-                "direction_type": _normalize_token(
-                    candidate.get("direction_type"),
-                    limit=80,
-                ),
-                "visual_strategy": _normalize_text(
-                    candidate.get("visual_strategy"),
-                    limit=160,
-                ),
-                "reason": _normalize_text(candidate.get("reason"), limit=220),
-                "image_use": _normalize_token(candidate.get("image_use"), limit=80),
-                "source": "cloud_llm_prompt_planner",
-                "planner_profile_id": str(llm_prompt_plan.get("profile_id") or ""),
-                "planner_model_id": str(llm_prompt_plan.get("model_id") or ""),
-                "evidence_refs": evidence_refs,
-                "requires_operator_review": True,
-                "write_posture": "candidate_only",
-                "direct_wordpress_write": False,
-            }
+            _localize_prompt_candidate(
+                {
+                    "id": _normalize_token(candidate.get("id"), limit=80)
+                    or _hash_text(prompt)[:12],
+                    "label": _normalize_text(candidate.get("label"), limit=80)
+                    or "LLM visual prompt",
+                    "prompt": prompt,
+                    "direction_type": _normalize_token(
+                        candidate.get("direction_type"),
+                        limit=80,
+                    ),
+                    "visual_strategy": _normalize_text(
+                        candidate.get("visual_strategy"),
+                        limit=160,
+                    ),
+                    "reason": _normalize_text(candidate.get("reason"), limit=220),
+                    "image_use": _normalize_token(candidate.get("image_use"), limit=80),
+                    "source": "cloud_llm_prompt_planner",
+                    "planner_profile_id": str(llm_prompt_plan.get("profile_id") or ""),
+                    "planner_model_id": str(llm_prompt_plan.get("model_id") or ""),
+                    "evidence_refs": evidence_refs,
+                    "requires_operator_review": True,
+                    "write_posture": "candidate_only",
+                    "direct_wordpress_write": False,
+                },
+                locale=locale,
+            )
         )
     return candidates
 

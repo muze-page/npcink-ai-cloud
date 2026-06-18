@@ -242,6 +242,30 @@ def _is_image_source_payload(payload: RuntimePayload) -> bool:
     return payload.ability_name in IMAGE_SOURCE_ABILITIES
 
 
+def _is_zh_cn_runtime_payload(payload: RuntimePayload) -> bool:
+    input_payload = payload.input if isinstance(payload.input, dict) else {}
+    visual_context = input_payload.get("visual_context")
+    if not isinstance(visual_context, dict):
+        visual_context = {}
+    locale = str(input_payload.get("locale") or visual_context.get("locale") or "")
+    return locale.strip().replace("-", "_").lower() == "zh_cn"
+
+
+def _runtime_execute_success_message(payload: RuntimePayload, result_status: str) -> str:
+    if _is_image_source_payload(payload) and _is_zh_cn_runtime_payload(payload):
+        if result_status == "queued":
+            return "运行已排队"
+        if result_status == "running":
+            return "运行中"
+        if result_status == "succeeded":
+            return "运行完成"
+    return (
+        "runtime queued"
+        if result_status == "queued"
+        else ("runtime executing" if result_status == "running" else "runtime executed")
+    )
+
+
 def _is_image_generation_payload(payload: RuntimePayload) -> bool:
     return payload.ability_name in IMAGE_GENERATION_ABILITIES
 
@@ -525,17 +549,9 @@ async def execute_runtime(
             status=status,
             error_code=error_code,
             message=(
-                "runtime queued"
-                if result.status == "queued"
-                else (
-                    "runtime executing"
-                    if result.status == "running"
-                    else (
-                        "runtime executed"
-                        if result.status == "succeeded"
-                        else result.error_message or "runtime execution failed"
-                    )
-                )
+                _runtime_execute_success_message(payload, result.status)
+                if result.status in success_statuses
+                else result.error_message or "runtime execution failed"
             ),
             data={
                 "run_id": result.run_id,

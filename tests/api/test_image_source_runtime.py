@@ -418,6 +418,113 @@ def test_image_source_runtime_enriches_prompt_candidates_with_site_knowledge(
     assert "Answer engine optimization guide" in result["prompt_candidates"][0]["prompt"]
 
 
+def test_image_source_zh_cn_returns_localized_display_fields(
+    tmp_path: Path,
+    monkeypatch: Any,
+) -> None:
+    _, client = _build_client(tmp_path)
+
+    def fake_search(
+        self: UnsplashImageSourceProvider,
+        *,
+        query: str,
+        options: dict[str, Any],
+        site_id: str,
+        run_id: str,
+    ) -> ImageSourceExecutionResult:
+        assert options["locale"] == "zh_CN"
+        return image_source_service._build_result(
+            provider_id="unsplash",
+            auto_strategy="first_available",
+            query=query,
+            options=options,
+            candidates=[
+                {
+                    "contract_version": "image_candidate.v1",
+                    "id": "unsplash-photo-zh-cn",
+                    "provider": "unsplash",
+                    "provider_origin": "cloud",
+                    "source_type": "stock",
+                    "download_url": "https://images.unsplash.com/photo-zh-cn",
+                    "thumbnail_url": "https://images.unsplash.com/photo-zh-cn-thumb",
+                    "source_url": "https://unsplash.com/photos/photo-zh-cn",
+                    "write_posture": "suggestion_only",
+                    "direct_wordpress_write": False,
+                }
+            ],
+            usage=ImageSourceProviderUsage(
+                provider_id="unsplash",
+                model_id="image-source-search",
+                instance_id="cloud-managed",
+                region="unspecified",
+                latency_ms=5,
+                cost=0.001,
+            ),
+        )
+
+    monkeypatch.setattr(UnsplashImageSourceProvider, "search", fake_search)
+
+    response = _execute(
+        client,
+        _payload(
+            {
+                "locale": "zh_CN",
+                "visual_context": {
+                    "contract_version": "image_visual_brief_request.v1",
+                    "post_id": 99,
+                    "image_use": "paragraph_image",
+                    "selected_text": "AEO focuses on answer quality planning.",
+                    "title": "SEO, AEO, and GEO for AI search",
+                },
+            }
+        ),
+        idempotency_key="image-source-zh-cn-display",
+    )
+
+    assert response.status_code == 200, response.text
+    envelope = response.json()
+    assert envelope["message"] == "运行完成"
+
+    result = envelope["data"]["result"]
+    visual_brief = result["visual_brief"]
+    assert visual_brief["localized_title"] == "可选配图方向"
+    assert visual_brief["localized_summary"] == "已根据选中段落和文章上下文生成可审核的配图方向。"
+    assert visual_brief["localized_intent"] == "把选中段落转译成编辑配图方向，不在图片中呈现原文。"
+    assert visual_brief["site_context_status"] == "insufficient_evidence"
+    assert visual_brief["rerank_status"] == "disabled"
+
+    first_candidate = result["prompt_candidates"][0]
+    assert first_candidate["label"] == "Editorial scene"
+    assert first_candidate["reason"].startswith("Best when")
+    assert first_candidate["prompt"].startswith("Create an original editorial image")
+    assert first_candidate["localized_label"] == "特色图方向"
+    assert first_candidate["localized_strategy"] == "用自然的编辑场景概括文章重点。"
+    assert first_candidate["localized_reason"] == "适合需要一张可作为特色图的文章配图。"
+
+    display_payload = {
+        "visual_brief": {
+            "title": visual_brief["localized_title"],
+            "summary": visual_brief["localized_summary"],
+            "intent": visual_brief["localized_intent"],
+        },
+        "prompt_candidates": [
+            {
+                "label": item["localized_label"],
+                "strategy": item["localized_strategy"],
+                "reason": item["localized_reason"],
+            }
+            for item in result["prompt_candidates"]
+        ],
+    }
+    display_json = json.dumps(display_payload, ensure_ascii=False)
+    assert "runtime executed" not in display_json
+    assert "Workspace detail" not in display_json
+    assert "Grounded workflow detail" not in display_json
+    assert "Best when" not in display_json
+    assert "insufficient_evidence" not in display_json
+    assert "disabled" not in display_json
+
+
 def test_image_source_fast_first_skips_heavy_enrichment_and_uses_short_query(
     tmp_path: Path,
     monkeypatch: Any,
@@ -618,26 +725,34 @@ def test_image_source_runtime_uses_llm_prompt_planner_when_text_profile_is_avail
         client,
         _payload(
             {
+                "locale": "zh_CN",
                 "visual_context": {
                     "contract_version": "image_visual_brief_request.v1",
                     "post_id": 99,
                     "image_use": "paragraph_image",
                     "selected_text": "AEO focuses on answer quality planning.",
                     "title": "SEO, AEO, and GEO for AI search",
-                }
+                },
             }
         ),
         idempotency_key="image-source-llm-planner",
     )
 
     assert response.status_code == 200, response.text
-    result = response.json()["data"]["result"]
+    envelope = response.json()
+    assert envelope["message"] == "运行完成"
+    result = envelope["data"]["result"]
     assert result["visual_brief"]["llm_prompt_planner"]["status"] == "ready"
+    assert result["visual_brief"]["localized_title"] == "可选配图方向"
     assert result["prompt_candidates"][0]["source"] == "cloud_llm_prompt_planner"
     assert result["prompt_candidates"][0]["planner_profile_id"] == "text.free-gpt55"
     assert result["prompt_candidates"][0]["direction_type"] == "editorial_scene"
     assert "selected paragraph" in result["prompt_candidates"][0]["reason"]
     assert "answer quality planning" in result["prompt_candidates"][0]["prompt"]
+    assert result["prompt_candidates"][0]["localized_label"] == "特色图方向"
+    assert result["prompt_candidates"][0]["localized_reason"] == (
+        "适合需要一张可作为特色图的文章配图。"
+    )
     assert planner_provider.requests
     assert planner_provider.requests[0].profile_id == "text.free-gpt55"
     assert planner_provider.requests[0].execution_kind == "text"
