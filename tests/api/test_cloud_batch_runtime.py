@@ -23,8 +23,10 @@ from app.core.services import CloudServices
 from app.domain.runtime.service import RuntimeService
 from tests.conftest import (
     TEST_ADMIN_SESSION_SECRET,
+    TEST_INTERNAL_AUTH_TOKEN,
     TEST_PORTAL_JWT_SECRET,
     build_auth_headers,
+    build_internal_headers,
     merge_json_headers,
     seed_site_auth,
 )
@@ -185,6 +187,9 @@ def test_cloud_batch_runtime_queues_and_worker_returns_review_only_result(tmp_pa
     assert result["contract_version"] == "cloud_batch_runtime_result.v1"
     assert result["status"] == "succeeded"
     assert result["worker_phase"] == "result_ready"
+    assert result["execution_state"]["contract_version"] == "cloud_run_execution_state.v1"
+    assert result["execution_state"]["partial_success"] is False
+    assert result["execution_state"]["retry"]["retryable"] is False
     assert result["execution_kind"] == "nightly_site_inspection"
     assert result["product_surface"] == "nightly_intelligence"
     assert result["product_label"] == "Nightly Intelligence"
@@ -427,6 +432,168 @@ def test_cloud_batch_runtime_queues_and_worker_returns_review_only_result(tmp_pa
         )
         assert provider_call is not None
         assert provider_call.provider_id == "cloud_batch_runtime"
+
+    run_response = client.get(
+        f"/v1/runs/{run_id}",
+        headers=build_auth_headers(
+            "GET",
+            f"/v1/runs/{run_id}",
+            site_id="site_alpha",
+            key_id="key_default",
+            trace_id="cloudbatchrunstate000000000000",
+        ),
+    )
+    assert run_response.status_code == 200
+    assert run_response.json()["data"]["run_lifecycle"]["terminal_status"] == "succeeded"
+
+    recent_response = client.get(
+        "/v1/runs/nightly-inspection/recent?limit=5",
+        headers=build_auth_headers(
+            "GET",
+            "/v1/runs/nightly-inspection/recent",
+            query="limit=5",
+            site_id="site_alpha",
+            key_id="key_default",
+            trace_id="cloudbatchrecent0000000000000",
+        ),
+    )
+    assert recent_response.status_code == 200
+    recent = recent_response.json()["data"]
+    assert recent["contract_version"] == "nightly_site_inspection_recent_runs.v1"
+    assert recent["latest"]["run_id"] == run_id
+    assert recent["latest"]["run_state"]["contract_version"] == "cloud_run_state.v1"
+    assert recent["latest"]["run_state"]["idempotency"]["replay_safe"] is True
+    assert recent["latest"]["summary"]["reviewable_count"] == 1
+    assert recent["toolbox_guidance"]["cloud_scheduler_truth"] is False
+
+    observability_response = client.get(
+        "/internal/service/runtime/diagnostics/nightly-inspection?site_id=site_alpha",
+        headers=build_internal_headers(
+            internal_token=TEST_INTERNAL_AUTH_TOKEN,
+            trace_id="cloudbatchobservability00000000",
+        ),
+    )
+    assert observability_response.status_code == 200
+    observability = observability_response.json()["data"]
+    assert observability["contract_version"] == "nightly_site_inspection_observability.v1"
+    assert observability["totals"]["runs"] == 1
+    assert observability["totals"]["status_counts"]["succeeded"] == 1
+    assert observability["boundary"]["direct_wordpress_write"] is False
+
+
+def test_cloud_batch_runtime_exposes_partial_success_retry_guidance(tmp_path: Path) -> None:
+    database_url, settings, runtime_queue, client = _build_client(tmp_path)
+
+    execute_response = _post_execute(
+        client,
+        _payload(
+            {
+                "items": [
+                    {
+                        "object_type": "post",
+                        "object_id": 123,
+                        "title": "Short title",
+                        "meta_description": "",
+                        "word_count": 420,
+                        "internal_link_count": 0,
+                        "image_alt_missing": 0,
+                        "days_since_modified": 20,
+                    },
+                    "not-a-valid-item",
+                ],
+            }
+        ),
+        idempotency_key="cloud-batch-partial",
+    )
+
+    assert execute_response.status_code == 200
+    run_id = execute_response.json()["data"]["run_id"]
+    RuntimeService(
+        database_url,
+        settings=settings,
+        runtime_queue=runtime_queue,
+    ).process_next_queued_run(timeout_seconds=0)
+
+    result_response = _get_result(client, run_id)
+    assert result_response.status_code == 200
+    result = result_response.json()["data"]["result"]
+    assert result["status"] == "partially_succeeded"
+    assert result["worker_phase"] == "partial_result_ready"
+    assert result["summary"]["items_scanned"] == 2
+    assert result["summary"]["items_succeeded"] == 1
+    assert result["summary"]["items_failed"] == 1
+    assert result["actions"][1]["status"] == "failed"
+    assert result["actions"][1]["error_code"] == "cloud_batch_runtime.item_invalid"
+    assert result["retry_guidance"] == {
+        "available": True,
+        "retry_owner": "cloud_runtime",
+        "operator_next_action": "retry_failed_cloud_analysis",
+        "failed_action_ids": ["action_002"],
+        "retryable": True,
+        "cloud_scheduler_truth": False,
+        "direct_wordpress_write": False,
+    }
+    assert result["execution_state"]["partial_success"] is True
+    assert result["execution_state"]["retry"]["resubmit_requires_new_idempotency_key"] is True
+
+    recent_response = client.get(
+        "/v1/runs/nightly-inspection/recent?limit=5",
+        headers=build_auth_headers(
+            "GET",
+            "/v1/runs/nightly-inspection/recent",
+            query="limit=5",
+            site_id="site_alpha",
+            key_id="key_default",
+            trace_id="cloudbatchpartialrecent000000",
+        ),
+    )
+    assert recent_response.status_code == 200
+    recent = recent_response.json()["data"]
+    assert recent["latest"]["result_status"] == "partially_succeeded"
+    assert recent["latest_failure"]["run_id"] == run_id
+    assert recent["latest_failure"]["retry_guidance"]["failed_action_ids"] == ["action_002"]
+
+    observability_response = client.get(
+        "/internal/service/runtime/diagnostics/nightly-inspection?site_id=site_alpha",
+        headers=build_internal_headers(
+            internal_token=TEST_INTERNAL_AUTH_TOKEN,
+            trace_id="cloudbatchpartialobs000000000",
+        ),
+    )
+    assert observability_response.status_code == 200
+    observability = observability_response.json()["data"]
+    assert observability["totals"]["partial_success_runs"] == 1
+    assert observability["totals"]["retryable_partial_runs"] == 1
+    assert observability["alert_summary"]["suggested_action"] == (
+        "review_partial_success_retry_guidance"
+    )
+
+    retry_payload = {"input": _payload()["input"]}
+    retry_body = json.dumps(retry_payload).encode("utf-8")
+    retry_response = client.post(
+        f"/v1/runs/{run_id}/retry",
+        content=retry_body,
+        headers=merge_json_headers(
+            build_auth_headers(
+                "POST",
+                f"/v1/runs/{run_id}/retry",
+                site_id="site_alpha",
+                key_id="key_default",
+                idempotency_key="cloud-batch-partial-retry",
+                nonce="nonce-cloud-batch-partial-retry",
+                trace_id="cloudbatchpartialretry000000",
+                body=retry_body,
+            )
+        ),
+    )
+    assert retry_response.status_code == 200
+    retry_data = retry_response.json()["data"]
+    assert retry_data["source_run_id"] == run_id
+    assert retry_data["retry_run"]["status"] == "queued"
+    assert retry_data["retry_run"]["run_state"]["idempotency"]["idempotency_key"] == (
+        "cloud-batch-partial-retry"
+    )
+    assert retry_data["boundary"]["direct_wordpress_write"] is False
 
 
 def test_cloud_batch_runtime_rejects_over_plan_batch_item_limit(tmp_path: Path) -> None:

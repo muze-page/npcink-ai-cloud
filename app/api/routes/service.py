@@ -2595,6 +2595,33 @@ async def get_runtime_diagnostics_summary(
     )
 
 
+@router.get("/runtime/diagnostics/nightly-inspection")
+async def get_nightly_inspection_observability(
+    request: Request,
+    site_id: str | None = Query(default=None),
+    recent_minutes: int = Query(default=1440, ge=1, le=10080),
+    limit: int = Query(default=20, ge=1, le=100),
+) -> Any:
+    auth = await authorize_internal_request(request, require_idempotency=False)
+    if auth is not None:
+        return auth
+    services = get_cloud_services(request)
+    result = RuntimeService(
+        services.settings.database_url,
+        settings=services.settings,
+    ).get_nightly_inspection_observability(
+        site_id=site_id,
+        recent_minutes=recent_minutes,
+        limit=limit,
+    )
+    return build_envelope(
+        status="ok",
+        message="nightly inspection observability loaded",
+        data=result,
+        revision="m1",
+    )
+
+
 @router.get("/admin/hosted-model-governance")
 @router.get("/runtime/diagnostics/hosted-model-governance")
 async def get_hosted_model_governance_diagnostics(

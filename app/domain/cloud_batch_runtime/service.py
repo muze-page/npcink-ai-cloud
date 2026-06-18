@@ -95,22 +95,38 @@ class CloudBatchRuntimeService:
             input_payload=input_payload,
         )
 
-        items = _extract_items(input_payload)
+        raw_items = _extract_raw_items(input_payload)
         actions = [
             _score_item(item, sequence=index + 1)
-            for index, item in enumerate(items)
             if isinstance(item, dict)
+            else _failed_item_action(item, sequence=index + 1)
+            for index, item in enumerate(raw_items)
+        ]
+        successful_actions = [
+            action
+            for action in actions
+            if str(action.get("status") or "") == "succeeded"
+        ]
+        failed_actions = [
+            action
+            for action in actions
+            if str(action.get("status") or "") not in {"", "succeeded"}
         ]
         warning_count = sum(1 for action in actions if action["severity"] == "warning")
         critical_count = sum(1 for action in actions if action["severity"] == "critical")
         average_score = round(
-            sum(float(action["score"]) for action in actions) / len(actions),
+            sum(float(action["score"]) for action in successful_actions)
+            / max(1, len(successful_actions)),
             2,
         )
+        result_status = "partially_succeeded" if failed_actions else "succeeded"
+        worker_phase = "partial_result_ready" if failed_actions else "result_ready"
 
         generated_at = datetime.now(UTC).isoformat()
         summary = {
-            "items_scanned": len(actions),
+            "items_scanned": len(raw_items),
+            "items_succeeded": len(successful_actions),
+            "items_failed": len(failed_actions),
             "actions_total": len([action for action in actions if action["reason_codes"]]),
             "warning_total": warning_count,
             "critical_total": critical_count,
@@ -169,11 +185,19 @@ class CloudBatchRuntimeService:
             run_id=run_id,
             site_id=site_id,
             generated_at=generated_at,
+            status=result_status,
+            worker_phase=worker_phase,
             summary=summary,
             operational_summary=operational_summary,
             morning_brief=morning_brief,
             retry_guidance=retry_guidance,
             core_intake_package=core_intake_package,
+        )
+        execution_state = _build_execution_state(
+            status=result_status,
+            worker_phase=worker_phase,
+            actions=actions,
+            retry_guidance=retry_guidance,
         )
 
         result = {
@@ -183,10 +207,11 @@ class CloudBatchRuntimeService:
             "product_label": "Nightly Intelligence",
             "run_id": run_id,
             "site_id": site_id,
-            "status": "succeeded",
-            "worker_phase": "result_ready",
+            "status": result_status,
+            "worker_phase": worker_phase,
             "execution_kind": CLOUD_BATCH_RUNTIME_EXECUTION_KIND,
             "generated_at": generated_at,
+            "execution_state": execution_state,
             "runtime_owner": "npcink-local-automation-runtime",
             "cloud_role": "runtime_detail",
             "task_profile": str(
@@ -230,16 +255,56 @@ class CloudBatchRuntimeService:
 
 
 def _extract_items(input_payload: dict[str, Any]) -> list[dict[str, Any]]:
+    raw_items = _extract_raw_items(input_payload)
+    return [item for item in raw_items if isinstance(item, dict)]
+
+
+def _extract_raw_items(input_payload: dict[str, Any]) -> list[Any]:
     items = input_payload.get("items")
     if isinstance(items, list):
-        return [item for item in items if isinstance(item, dict)]
+        return list(items)
     snapshot = input_payload.get("snapshot")
     if isinstance(snapshot, dict) and isinstance(snapshot.get("items"), list):
-        return [item for item in snapshot["items"] if isinstance(item, dict)]
+        return list(snapshot["items"])
     raise CloudBatchRuntimeContractViolation(
         "cloud_batch_runtime.items_required",
         "cloud batch runtime input requires at least one content item",
     )
+
+
+def _failed_item_action(item: Any, *, sequence: int) -> dict[str, Any]:
+    return {
+        "action_id": f"action_{sequence:03d}",
+        "action_type": "content_quality_signal",
+        "object_type": "unknown",
+        "object_id": "",
+        "title": "(invalid item)",
+        "score": 0,
+        "score_version": SCORE_VERSION,
+        "score_breakdown": _build_score_breakdown(
+            normalized_score=0,
+            severity="warning",
+            reason_codes=[],
+            dimension_impacts={dimension: 0 for dimension in SCORE_DIMENSIONS},
+            dimension_reasons={dimension: [] for dimension in SCORE_DIMENSIONS},
+            dimension_evidence={
+                dimension: ["item_validation:failed"]
+                if dimension == "editorial_opportunity"
+                else []
+                for dimension in SCORE_DIMENSIONS
+            },
+        ),
+        "severity": "warning",
+        "reason_codes": [],
+        "evidence_summary": "Item could not be analyzed because its payload was invalid.",
+        "priority_reason": "item_analysis_failed",
+        "recommended_next_action": "retry_failed_cloud_analysis",
+        "direct_wordpress_write": False,
+        "status": "failed",
+        "error_code": "cloud_batch_runtime.item_invalid",
+        "error_message": "nightly inspection item must be an object",
+        "retryable": True,
+    }
 
 
 def _score_item(item: dict[str, Any], *, sequence: int) -> dict[str, Any]:
@@ -619,6 +684,60 @@ def _build_retry_guidance(actions: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def _build_execution_state(
+    *,
+    status: str,
+    worker_phase: str,
+    actions: list[dict[str, Any]],
+    retry_guidance: dict[str, Any],
+) -> dict[str, Any]:
+    failed_actions = [
+        action for action in actions if str(action.get("status") or "") not in {"", "succeeded"}
+    ]
+    succeeded_actions = [
+        action for action in actions if str(action.get("status") or "") == "succeeded"
+    ]
+    return {
+        "contract_version": "cloud_run_execution_state.v1",
+        "state_machine": "queued->running->terminal",
+        "status": status,
+        "phase": "terminal",
+        "worker_phase": worker_phase,
+        "partial_success": bool(failed_actions and succeeded_actions),
+        "action_counts": {
+            "total": len(actions),
+            "succeeded": len(succeeded_actions),
+            "failed": len(failed_actions),
+        },
+        "retry": {
+            "retryable": bool(retry_guidance.get("retryable")),
+            "retry_owner": retry_guidance.get("retry_owner", "not_needed"),
+            "failed_action_ids": retry_guidance.get("failed_action_ids", []),
+            "operator_next_action": retry_guidance.get(
+                "operator_next_action",
+                "review_morning_brief",
+            ),
+            "resubmit_requires_new_idempotency_key": bool(retry_guidance.get("retryable")),
+        },
+        "idempotency": {
+            "canonical_truth": "run_records.site_id_idempotency_key",
+            "replay_safe": True,
+        },
+        "events": [
+            {
+                "event": "runtime.run.terminal",
+                "status": status,
+                "worker_phase": worker_phase,
+            }
+        ],
+        "boundary": {
+            "cloud_role": "runtime_detail",
+            "cloud_scheduler_truth": False,
+            "direct_wordpress_write": False,
+        },
+    }
+
+
 def _build_core_handoff_suggestion(
     *,
     core_review_plan: dict[str, Any],
@@ -708,6 +827,8 @@ def _build_nightly_run_detail(
     run_id: str,
     site_id: str,
     generated_at: str,
+    status: str,
+    worker_phase: str,
     summary: dict[str, Any],
     operational_summary: dict[str, Any],
     morning_brief: dict[str, Any],
@@ -737,8 +858,8 @@ def _build_nightly_run_detail(
         "run_id": run_id,
         "site_id": site_id,
         "generated_at": generated_at,
-        "status": "succeeded",
-        "worker_phase": "result_ready",
+        "status": status,
+        "worker_phase": worker_phase,
         "operator_summary": {
             "items_scanned": summary.get("items_scanned", 0),
             "reviewable_count": eligibility.get("reviewable_count", len(review_items)),

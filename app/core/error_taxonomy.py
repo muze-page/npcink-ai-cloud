@@ -102,6 +102,48 @@ _ERROR_TAXONOMY: dict[str, ErrorTaxonomyEntry] = {
         retryable=False,
         fallback_eligible=False,
     ),
+    "cloud_batch_runtime.item_invalid": ErrorTaxonomyEntry(
+        error_code="cloud_batch_runtime.item_invalid",
+        error_stage="runtime",
+        retryable=True,
+        fallback_eligible=False,
+    ),
+    "cloud_batch_runtime.invalid_input": ErrorTaxonomyEntry(
+        error_code="cloud_batch_runtime.invalid_input",
+        error_stage="contract",
+        retryable=False,
+        fallback_eligible=False,
+    ),
+    "cloud_batch_runtime.items_required": ErrorTaxonomyEntry(
+        error_code="cloud_batch_runtime.items_required",
+        error_stage="contract",
+        retryable=False,
+        fallback_eligible=False,
+    ),
+    "cloud_batch_runtime.items_limit_exceeded": ErrorTaxonomyEntry(
+        error_code="cloud_batch_runtime.items_limit_exceeded",
+        error_stage="contract",
+        retryable=False,
+        fallback_eligible=False,
+    ),
+    "cloud_batch_runtime.write_or_secret_field_forbidden": ErrorTaxonomyEntry(
+        error_code="cloud_batch_runtime.write_or_secret_field_forbidden",
+        error_stage="contract",
+        retryable=False,
+        fallback_eligible=False,
+    ),
+    "commercial.batch_limit_exceeded": ErrorTaxonomyEntry(
+        error_code="commercial.batch_limit_exceeded",
+        error_stage="entitlement",
+        retryable=False,
+        fallback_eligible=False,
+    ),
+    "commercial.quota_exceeded": ErrorTaxonomyEntry(
+        error_code="commercial.quota_exceeded",
+        error_stage="entitlement",
+        retryable=False,
+        fallback_eligible=False,
+    ),
     "routing.profile_not_found": ErrorTaxonomyEntry(
         error_code="routing.profile_not_found",
         error_stage="routing",
@@ -149,6 +191,22 @@ def get_error_taxonomy(error_code: str | None) -> ErrorTaxonomyEntry:
         return ErrorTaxonomyEntry(
             error_code=error_code,
             error_stage="auth",
+            retryable=False,
+            fallback_eligible=False,
+        )
+
+    if error_code.startswith("commercial."):
+        return ErrorTaxonomyEntry(
+            error_code=error_code,
+            error_stage="entitlement",
+            retryable=False,
+            fallback_eligible=False,
+        )
+
+    if error_code.startswith("cloud_batch_runtime."):
+        return ErrorTaxonomyEntry(
+            error_code=error_code,
+            error_stage="runtime",
             retryable=False,
             fallback_eligible=False,
         )

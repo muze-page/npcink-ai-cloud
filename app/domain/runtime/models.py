@@ -199,4 +199,5 @@ class RuntimeExecutionResponse:
     execution_context: RuntimeExecutionContext
     task_backend: dict[str, Any]
     run_lifecycle: dict[str, Any]
+    run_state: dict[str, Any]
     result: dict[str, Any]

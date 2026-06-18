@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 from datetime import UTC, datetime, timedelta
+from time import perf_counter
 from typing import Any, cast
 from uuid import uuid4
 
@@ -53,6 +54,7 @@ from app.core.security import (
 )
 from app.domain.cloud_batch_runtime.contracts import (
     CLOUD_BATCH_RUNTIME_ABILITIES,
+    CLOUD_BATCH_RUNTIME_EXECUTION_KIND,
     CLOUD_BATCH_RUNTIME_PROFILE_ID,
     CloudBatchRuntimeContractViolation,
     validate_cloud_batch_runtime_contract,
@@ -1156,6 +1158,310 @@ class RuntimeService:
                 }
                 for call in provider_calls
             ],
+        }
+
+    def list_recent_nightly_inspection_runs(
+        self,
+        *,
+        site_id: str,
+        limit: int = 10,
+    ) -> dict[str, object]:
+        max_items = max(1, min(50, limit))
+        with get_session(self.database_url) as session:
+            runs = list(
+                session.scalars(
+                    select(RunRecord)
+                    .where(
+                        RunRecord.site_id == site_id,
+                        RunRecord.execution_kind == CLOUD_BATCH_RUNTIME_EXECUTION_KIND,
+                    )
+                    .order_by(RunRecord.started_at.desc(), RunRecord.run_id.desc())
+                    .limit(max_items)
+                )
+            )
+            provider_calls_by_run = {
+                run.run_id: RuntimeRepository(session).list_provider_calls(run.run_id)
+                for run in runs
+            }
+            session.commit()
+
+        items = [
+            self._serialize_nightly_inspection_run_card(
+                run,
+                provider_calls=provider_calls_by_run.get(run.run_id, []),
+            )
+            for run in runs
+        ]
+        latest = items[0] if items else {}
+
+        def item_retryable(item: dict[str, object]) -> bool:
+            run_state = self._dict_or_empty(item.get("run_state"))
+            retry = self._dict_or_empty(run_state.get("retry"))
+            return bool(retry.get("retryable"))
+
+        latest_failure = next(
+            (
+                item
+                for item in items
+                if item.get("status") == "failed" or item_retryable(item)
+            ),
+            {},
+        )
+        return {
+            "contract_version": "nightly_site_inspection_recent_runs.v1",
+            "site_id": site_id,
+            "limit": max_items,
+            "items": items,
+            "latest": latest,
+            "latest_failure": latest_failure,
+            "toolbox_guidance": {
+                "display_surface": "morning_brief_recent_runs",
+                "primary_next_action": (
+                    "inspect_latest_failure"
+                    if latest_failure
+                    else "review_latest_morning_brief"
+                    if latest
+                    else "run_nightly_inspection"
+                ),
+                "polling_supported": True,
+                "cloud_scheduler_truth": False,
+                "direct_wordpress_write": False,
+            },
+            "boundary": {
+                "cloud_role": "runtime_detail",
+                "schedule_truth": "wordpress_local",
+                "proposal_truth": "magick_ai_core",
+                "final_write_truth": "wordpress_local",
+                "direct_wordpress_write": False,
+            },
+        }
+
+    def retry_nightly_inspection_run(
+        self,
+        *,
+        run_id: str,
+        site_id: str,
+        idempotency_key: str,
+        trace_id: str,
+        input_payload: dict[str, Any] | None = None,
+    ) -> RuntimeExecutionResponse:
+        with get_session(self.database_url) as session:
+            repository = RuntimeRepository(session)
+            run = repository.get_run(run_id)
+            if run is None or run.site_id != site_id:
+                raise RuntimeRunNotFoundError(run_id)
+            if not self._is_cloud_batch_runtime_run(run):
+                raise RuntimeExecutionContractError(
+                    "runtime.retry_not_supported",
+                    "retry is only supported for nightly inspection cloud batch runs",
+                )
+            if run.status not in {"failed", "canceled", "succeeded"}:
+                raise RuntimeExecutionContractError(
+                    "runtime.retry_not_allowed",
+                    "retry requires a terminal nightly inspection run",
+                )
+            stored_input = self._get_execution_input_payload(run)
+            policy = run.policy_json if isinstance(run.policy_json, dict) else {}
+            retry_run_context = {
+                "ability_name": run.ability_name,
+                "ability_family": run.ability_family,
+                "canonical_run_id": run.canonical_run_id or run.run_id,
+                "skill_id": run.skill_id or "",
+                "workflow_id": run.workflow_id or "",
+                "contract_version": run.contract_version or "",
+                "channel": run.channel,
+                "execution_kind": run.execution_kind,
+                "execution_tier": run.execution_tier,
+                "execution_pattern": self._public_execution_pattern(run.execution_pattern),
+                "data_classification": run.data_classification,
+                "profile_id": run.profile_id,
+            }
+            session.commit()
+
+        retry_input = input_payload if isinstance(input_payload, dict) else stored_input
+        if not retry_input:
+            raise RuntimeExecutionContractError(
+                "runtime.retry_input_required",
+                "nightly inspection retry requires the original batch input payload",
+            )
+
+        request = RuntimeRequest(
+            site_id=site_id,
+            ability_name=str(retry_run_context["ability_name"]),
+            ability_family=str(retry_run_context["ability_family"]),
+            canonical_run_id=str(retry_run_context["canonical_run_id"]),
+            skill_id=str(retry_run_context["skill_id"]),
+            workflow_id=str(retry_run_context["workflow_id"]),
+            contract_version=str(retry_run_context["contract_version"]),
+            channel=str(retry_run_context["channel"]),
+            execution_kind=str(retry_run_context["execution_kind"]),
+            execution_tier=str(retry_run_context["execution_tier"]),
+            execution_pattern=str(retry_run_context["execution_pattern"]),
+            data_classification=str(retry_run_context["data_classification"]),
+            storage_mode=str(policy.get("storage_mode") or RUNTIME_STORAGE_MODE_RESULT_ONLY),
+            timeout_seconds=self._coerce_int(policy.get("timeout_seconds"), default=0),
+            retry_max=self._coerce_int(policy.get("retry_max"), default=0),
+            retention_ttl=self._coerce_int(policy.get("retention_ttl"), default=0),
+            task_backend=self._dict_or_empty(policy.get("task_backend")),
+            profile_id=str(retry_run_context["profile_id"]),
+            input_payload=retry_input,
+            policy={},
+            idempotency_key=idempotency_key,
+            trace_id=trace_id,
+            allow_legacy_callback_url=False,
+        )
+        return self.execute(request)
+
+    def get_nightly_inspection_observability(
+        self,
+        *,
+        site_id: str | None = None,
+        recent_minutes: int = 1440,
+        limit: int = 20,
+    ) -> dict[str, object]:
+        current_time = datetime.now(UTC)
+        recent_since = current_time - timedelta(minutes=max(1, recent_minutes))
+        max_items = max(1, min(100, limit))
+        with get_session(self.database_url) as session:
+            run_statement = select(RunRecord).where(
+                RunRecord.execution_kind == CLOUD_BATCH_RUNTIME_EXECUTION_KIND,
+                RunRecord.started_at >= recent_since,
+            )
+            if site_id:
+                run_statement = run_statement.where(RunRecord.site_id == site_id)
+            runs = list(
+                session.scalars(
+                    run_statement.order_by(
+                        RunRecord.started_at.desc(),
+                        RunRecord.run_id.desc(),
+                    ).limit(5000)
+                )
+            )
+            run_ids = [run.run_id for run in runs]
+            provider_calls = (
+                list(
+                    session.scalars(
+                        select(ProviderCallRecord)
+                        .where(ProviderCallRecord.run_id.in_(run_ids))
+                        .order_by(ProviderCallRecord.created_at.desc())
+                    )
+                )
+                if run_ids
+                else []
+            )
+            usage_events = (
+                list(
+                    session.scalars(
+                        select(UsageMeterEvent).where(
+                            UsageMeterEvent.run_id.in_(run_ids),
+                            UsageMeterEvent.created_at >= recent_since,
+                        )
+                    )
+                )
+                if run_ids
+                else []
+            )
+            session.commit()
+
+        status_counts: dict[str, int] = {}
+        for run in runs:
+            status_counts[run.status] = status_counts.get(run.status, 0) + 1
+        failed_runs = [run for run in runs if run.status == "failed"]
+        partial_runs = [
+            run
+            for run in runs
+            if isinstance(run.result_json, dict)
+            and str(run.result_json.get("status") or "") == "partially_succeeded"
+        ]
+        retryable_partial_runs = [
+            run
+            for run in partial_runs
+            if bool(
+                self._dict_or_empty(
+                    self._dict_or_empty(run.result_json).get("retry_guidance")
+                ).get("retryable")
+            )
+        ]
+        provider_error_calls = [call for call in provider_calls if call.error_code]
+        metered_run_ids = {
+            str(event.run_id or "")
+            for event in usage_events
+            if str(event.run_id or "").strip() and event.meter_key == "runs"
+        }
+        run_cards = [
+            self._serialize_nightly_inspection_run_card(
+                run,
+                provider_calls=[
+                    call for call in provider_calls if call.run_id == run.run_id
+                ],
+            )
+            for run in runs[:max_items]
+        ]
+        alert_state = (
+            "error"
+            if failed_runs or provider_error_calls
+            else "warning"
+            if partial_runs
+            else "ok"
+            if runs
+            else "inactive"
+        )
+        return {
+            "contract_version": "nightly_site_inspection_observability.v1",
+            "filters": {
+                "site_id": site_id or "",
+                "recent_minutes": recent_minutes,
+                "limit": max_items,
+            },
+            "generated_at": self._serialize_timestamp(current_time),
+            "window": {
+                "since": self._serialize_timestamp(recent_since),
+                "until": self._serialize_timestamp(current_time),
+            },
+            "totals": {
+                "runs": len(runs),
+                "status_counts": status_counts,
+                "partial_success_runs": len(partial_runs),
+                "retryable_partial_runs": len(retryable_partial_runs),
+                "provider_calls": len(provider_calls),
+                "provider_error_calls": len(provider_error_calls),
+                "usage_meter_events": len(usage_events),
+                "metered_run_coverage_rate": self._safe_ratio(
+                    len(metered_run_ids),
+                    len(runs),
+                ),
+            },
+            "alert_summary": {
+                "status": alert_state,
+                "primary_reason": (
+                    "failed_runs"
+                    if failed_runs
+                    else "provider_error_calls"
+                    if provider_error_calls
+                    else "partial_success_runs"
+                    if partial_runs
+                    else "healthy"
+                    if runs
+                    else "no_recent_runs"
+                ),
+                "suggested_action": (
+                    "inspect_failed_nightly_inspection_runs"
+                    if failed_runs or provider_error_calls
+                    else "review_partial_success_retry_guidance"
+                    if partial_runs
+                    else "continue_monitoring"
+                ),
+            },
+            "recent_runs": run_cards,
+            "boundary": {
+                "surface": "internal_operator_diagnostics",
+                "cloud_role": "runtime_detail",
+                "schedule_truth": "wordpress_local",
+                "proposal_truth": "magick_ai_core",
+                "final_write_truth": "wordpress_local",
+                "direct_wordpress_write": False,
+                "contains_prompt_or_result_payloads": False,
+            },
         }
 
     def get_runtime_diagnostics_summary(
@@ -3838,6 +4144,16 @@ class RuntimeService:
             repository.mark_run_canceled(run)
             return
 
+        started = perf_counter()
+        logger.info(
+            "cloud batch runtime started: run_id=%s site_id=%s trace_id=%s "
+            "ability_name=%s execution_kind=%s",
+            run.run_id,
+            run.site_id,
+            run.trace_id,
+            run.ability_name,
+            run.execution_kind,
+        )
         payload = (
             input_payload
             if isinstance(input_payload, dict)
@@ -3852,6 +4168,26 @@ class RuntimeService:
                 run_id=run.run_id,
             )
         except CloudBatchRuntimeContractViolation as error:
+            latency_ms = max(0, int((perf_counter() - started) * 1000))
+            provider_call = repository.record_provider_call(
+                run_id=run.run_id,
+                provider_id="cloud_batch_runtime",
+                model_id="deterministic-content-quality-v1",
+                instance_id="cloud-runtime",
+                region=self.settings.deployment_region,
+                latency_ms=latency_ms,
+                tokens_in=0,
+                tokens_out=0,
+                cost=0.0,
+                retry_count=0,
+                fallback_used=False,
+                error_code=error.error_code,
+            )
+            self.commercial_service.record_provider_call_usage(
+                session=repository.session,
+                run=run,
+                provider_call=provider_call,
+            )
             repository.mark_run_failed(
                 run,
                 error_code=error.error_code,
@@ -3861,7 +4197,17 @@ class RuntimeService:
                 instance_id="cloud-runtime",
                 fallback_used=False,
             )
+            logger.warning(
+                "cloud batch runtime failed: run_id=%s site_id=%s trace_id=%s "
+                "error_code=%s latency_ms=%s",
+                run.run_id,
+                run.site_id,
+                run.trace_id,
+                error.error_code,
+                latency_ms,
+            )
             return
+        latency_ms = max(0, int((perf_counter() - started) * 1000))
 
         provider_call = repository.record_provider_call(
             run_id=run.run_id,
@@ -3869,7 +4215,7 @@ class RuntimeService:
             model_id="deterministic-content-quality-v1",
             instance_id="cloud-runtime",
             region=self.settings.deployment_region,
-            latency_ms=0,
+            latency_ms=latency_ms,
             tokens_in=0,
             tokens_out=0,
             cost=0.0,
@@ -3888,6 +4234,16 @@ class RuntimeService:
             model_id="deterministic-content-quality-v1",
             instance_id="cloud-runtime",
             fallback_used=False,
+        )
+        logger.info(
+            "cloud batch runtime finished: run_id=%s site_id=%s trace_id=%s "
+            "result_status=%s worker_phase=%s latency_ms=%s",
+            run.run_id,
+            run.site_id,
+            run.trace_id,
+            execution.result_json.get("status"),
+            execution.result_json.get("worker_phase"),
+            latency_ms,
         )
 
     def _execute_image_source_run(
@@ -5347,6 +5703,7 @@ class RuntimeService:
             execution_context=self._build_execution_context(run),
             task_backend=self._build_task_backend_payload(run),
             run_lifecycle=self._build_run_lifecycle(run),
+            run_state=self._build_run_state_payload(run, provider_calls),
             result=self._apply_analysis_envelope(result, run),
         )
 
@@ -5552,6 +5909,112 @@ class RuntimeService:
             },
         }
 
+    def _build_run_state_payload(
+        self,
+        run: RunRecord,
+        provider_calls: list[ProviderCallRecord],
+    ) -> dict[str, object]:
+        result = run.result_json if isinstance(run.result_json, dict) else {}
+        result_state = result.get("execution_state")
+        result_state = result_state if isinstance(result_state, dict) else {}
+        lifecycle = self._build_run_lifecycle(run)
+        failure_details = self._build_failure_details(run, provider_calls)
+        failed_provider_call = next(
+            (call for call in reversed(provider_calls) if call.error_code),
+            None,
+        )
+        retryable = bool(
+            result_state.get("retry", {}).get("retryable")
+            if isinstance(result_state.get("retry"), dict)
+            else failure_details.retryable
+        )
+        failed_action_ids: list[object] = []
+        if isinstance(result_state.get("retry"), dict):
+            raw_failed_action_ids = result_state["retry"].get("failed_action_ids")
+            if isinstance(raw_failed_action_ids, list):
+                failed_action_ids = raw_failed_action_ids[:10]
+
+        return {
+            "contract_version": "cloud_run_state.v1",
+            "state_machine": "requested->queued->running->terminal",
+            "phase": lifecycle.get("phase", "requested"),
+            "status": run.status,
+            "terminal_status": lifecycle.get("terminal_status", ""),
+            "worker_phase": str(result.get("worker_phase") or ""),
+            "partial_success": bool(result_state.get("partial_success")),
+            "retry": {
+                "retryable": retryable,
+                "retry_owner": (
+                    "cloud_runtime"
+                    if retryable
+                    else "not_needed"
+                    if run.status == "succeeded"
+                    else "operator_review"
+                ),
+                "retry_exhausted": failure_details.retry_exhausted,
+                "failed_action_ids": failed_action_ids,
+                "operator_next_action": self._resolve_run_state_next_action(
+                    run,
+                    retryable=retryable,
+                    failed_action_ids=failed_action_ids,
+                ),
+                "resubmit_requires_new_idempotency_key": retryable,
+                "retry_source": (
+                    "resubmit_runtime_execute_payload"
+                    if self._is_cloud_batch_runtime_run(run)
+                    else "runtime_specific"
+                ),
+            },
+            "idempotency": {
+                "idempotency_key": run.idempotency_key or "",
+                "request_fingerprint": run.request_fingerprint or "",
+                "replay_safe": bool(run.idempotency_key),
+                "canonical_truth": "run_records",
+            },
+            "error": {
+                "error_code": run.error_code or "",
+                "error_message": run.error_message or "",
+                "error_stage": failure_details.error_stage,
+                "provider_error_code": failed_provider_call.error_code
+                if failed_provider_call is not None
+                else "",
+            },
+            "observability": {
+                "trace_id": run.trace_id,
+                "provider_call_count": len(provider_calls),
+                "usage_meter_truth": "usage_meter_events",
+                "run_record_truth": "run_records",
+            },
+            "boundary": {
+                "cloud_role": "runtime_detail",
+                "cloud_scheduler_truth": False,
+                "direct_wordpress_write": False,
+            },
+        }
+
+    def _resolve_run_state_next_action(
+        self,
+        run: RunRecord,
+        *,
+        retryable: bool,
+        failed_action_ids: list[object],
+    ) -> str:
+        if run.status == "queued":
+            return "poll_run_status"
+        if run.status == "running":
+            return "wait_for_terminal_result"
+        if retryable:
+            return (
+                "retry_failed_cloud_analysis"
+                if failed_action_ids
+                else "resubmit_runtime_request_with_new_idempotency_key"
+            )
+        if run.status == "failed":
+            return "inspect_runtime_failure_detail"
+        if run.status == "canceled":
+            return "resubmit_if_operator_still_needs_result"
+        return "review_result"
+
     def _serialize_runtime_diagnostic_run(self, run: RunRecord) -> dict[str, object]:
         policy = run.policy_json if isinstance(run.policy_json, dict) else {}
         return {
@@ -5577,6 +6040,73 @@ class RuntimeService:
             "processing_started_at": self._serialize_timestamp(run.processing_started_at),
             "finished_at": self._serialize_timestamp(run.finished_at),
             "suggested_actions": self._build_runtime_suggested_actions(run),
+        }
+
+    def _serialize_nightly_inspection_run_card(
+        self,
+        run: RunRecord,
+        *,
+        provider_calls: list[ProviderCallRecord],
+    ) -> dict[str, object]:
+        result = run.result_json if isinstance(run.result_json, dict) else {}
+        summary = self._dict_or_empty(result.get("summary"))
+        nightly_run_detail = self._dict_or_empty(result.get("nightly_run_detail"))
+        operator_summary = self._dict_or_empty(nightly_run_detail.get("operator_summary"))
+        retry_guidance = self._dict_or_empty(result.get("retry_guidance"))
+        run_state = self._build_run_state_payload(run, provider_calls)
+        return {
+            "run_id": run.run_id,
+            "canonical_run_id": run.canonical_run_id or "",
+            "site_id": run.site_id,
+            "status": run.status,
+            "result_status": str(result.get("status") or run.status),
+            "worker_phase": str(result.get("worker_phase") or ""),
+            "trace_id": run.trace_id,
+            "idempotency_key": run.idempotency_key or "",
+            "started_at": self._serialize_timestamp(run.started_at),
+            "processing_started_at": self._serialize_timestamp(run.processing_started_at),
+            "finished_at": self._serialize_timestamp(run.finished_at),
+            "error_code": run.error_code or "",
+            "error_message": run.error_message or "",
+            "summary": {
+                "items_scanned": self._coerce_int(summary.get("items_scanned"), default=0),
+                "items_succeeded": self._coerce_int(
+                    summary.get("items_succeeded"),
+                    default=self._coerce_int(summary.get("items_scanned"), default=0),
+                ),
+                "items_failed": self._coerce_int(summary.get("items_failed"), default=0),
+                "reviewable_count": self._coerce_int(
+                    operator_summary.get("reviewable_count"),
+                    default=0,
+                ),
+                "blocked_count": self._coerce_int(
+                    operator_summary.get("blocked_count"),
+                    default=0,
+                ),
+                "average_score": self._coerce_float(summary.get("average_score")) or 0.0,
+                "score_version": str(summary.get("score_version") or ""),
+            },
+            "retry_guidance": {
+                "available": bool(retry_guidance.get("available")),
+                "retryable": bool(retry_guidance.get("retryable")),
+                "retry_owner": str(retry_guidance.get("retry_owner") or "not_needed"),
+                "operator_next_action": str(
+                    retry_guidance.get("operator_next_action") or "review_morning_brief"
+                ),
+                "failed_action_ids": self._list_or_empty(
+                    retry_guidance.get("failed_action_ids")
+                )[:10],
+                "resubmit_requires_new_idempotency_key": bool(retry_guidance.get("retryable")),
+            },
+            "run_state": run_state,
+            "core_handoff_summary": self._dict_or_empty(
+                nightly_run_detail.get("core_handoff_summary")
+            ),
+            "read_only_boundary": {
+                "cloud_role": "runtime_detail",
+                "cloud_scheduler_truth": False,
+                "direct_wordpress_write": False,
+            },
         }
 
     def _is_queued_run_stale(self, run: RunRecord, current_time: datetime) -> bool:
