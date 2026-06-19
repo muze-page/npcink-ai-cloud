@@ -280,6 +280,8 @@ def resolve_local_site_metadata(target: SiteTarget) -> dict[str, object]:
             "name": _text(site.get("name")),
             "domain": site_domain,
             "path": str(site_path),
+            "mysql_version": _text(mysql.get("version")),
+            "mysql_service_name": _text(mysql.get("name")),
             "mysql_port": mysql_port,
             "nginx_port": nginx_port,
             "mysql_socket": str(mysql_socket),

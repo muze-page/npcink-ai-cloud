@@ -86,7 +86,11 @@ def test_resolve_local_site_metadata_matches_path_and_socket(
                     "domain": "example.local",
                     "path": str(site_root),
                     "services": {
-                        "mysql": {"ports": {"MYSQL": [10001]}},
+                        "mysql": {
+                            "name": "mysql",
+                            "version": "8.4.0",
+                            "ports": {"MYSQL": [10001]},
+                        },
                         "nginx": {"ports": {"HTTP": [10002]}},
                     },
                 }
@@ -101,6 +105,8 @@ def test_resolve_local_site_metadata_matches_path_and_socket(
 
     assert metadata["matched"] is True
     assert metadata["site_id"] == "site123"
+    assert metadata["mysql_version"] == "8.4.0"
+    assert metadata["mysql_service_name"] == "mysql"
     assert metadata["mysql_port"] == 10001
     assert metadata["nginx_port"] == 10002
     assert metadata["mysql_socket"] == str(socket_path)

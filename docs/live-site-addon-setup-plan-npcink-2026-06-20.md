@@ -53,6 +53,8 @@ GO:
 - Treat `npcink.local` as the first live proof candidate.
 - Prepare exact installation, backup, identity, and rollback steps.
 - Re-run `scripts/live-site-preflight.py` after addon state changes.
+- Generate the pre-write backup/snapshot package before requesting install
+  approval.
 
 NO-GO without second explicit approval:
 
@@ -97,8 +99,30 @@ Before any write action, prepare and confirm:
    - confirm only expected blockers remain or decision becomes `go`
    - only then consider a separate runtime smoke package
 
+## Pre-Write Package Command
+
+The repeatable package command is:
+
+```bash
+scripts/live-site-addon-package.py \
+  --output-dir .tmp/live-site-addon-package/npcink-20260620-prewrite
+```
+
+This command:
+
+- resolves the matching Local MySQL socket for `npcink.local`;
+- snapshots active plugins;
+- snapshots `npcink_cloud_addon_settings` with secret fields redacted;
+- validates the addon build zip exists and contains the main plugin file;
+- exports a pre-addon database backup into `.tmp/`;
+- writes `snapshot.json` and `summary.md` into the output directory.
+
+The package command was run successfully. The database export completed and the
+backup file is local-only under `.tmp/live-site-addon-package/`. The output is
+not committed because it may contain site content.
+
 ## Next Safe Action
 
-Create a write-action checklist for `npcink.local` addon installation and Cloud
-identity provisioning, then ask for explicit approval naming that exact site and
-action before executing it.
+Create the exact write-action checklist for `npcink.local` addon installation
+and Cloud identity provisioning, then ask for explicit approval naming that
+exact site and action before executing it.
