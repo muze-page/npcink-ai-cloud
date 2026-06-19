@@ -38,6 +38,18 @@ HTTP checks used `curl` GET requests only. WordPress checks used read-only
 WP-CLI commands and a read-only `wp eval` summary for options, plugin state,
 content counts, and Cloud addon settings.
 
+The repeatable preflight command is now:
+
+```bash
+scripts/live-site-preflight.py \
+  --markdown-out .tmp/live-site-preflight/wp-npcink-dbd-2026-06-20.md \
+  --json-out .tmp/live-site-preflight/wp-npcink-dbd-2026-06-20.json
+```
+
+The command exits `0` only when every candidate is ready. It exits `2` for a
+valid read-only no-go result. It prints candidate progress to stderr and writes
+non-secret Markdown/JSON evidence to `.tmp/`.
+
 Checked site roots:
 
 - `/Users/muze/Local Sites/wp/app/public`
@@ -68,6 +80,7 @@ Shared WordPress state observed through WP-CLI:
 - active plugins:
   - `magick-device-manage/magick-device-manage.php`
   - `npcink-abilities-toolkit/npcink-abilities-toolkit.php`
+  - `npcink-ai-client-adapter/npcink-ai-client-adapter.php`
   - `plugin-check/plugin.php`
 - sample public titles:
   - `Hello world!`
@@ -108,6 +121,22 @@ This is unsuitable for the next live proof stage because:
 
 The most likely issue is Local site/domain/database mapping, or an intended
 database dump that has not been loaded into the active Local instance.
+
+## Automated Recheck
+
+The repeatable preflight tool was run after this package was created. It
+confirmed the same no-go decision for all three candidates:
+
+- `wp`: `wordpress_identity_mismatch`, `content_set_too_small`,
+  `cloud_addon_unverified`
+- `npcink`: `wordpress_identity_mismatch`, `content_set_too_small`,
+  `cloud_addon_unverified`
+- `dbd`: `wordpress_identity_mismatch`, `content_set_too_small`,
+  `cloud_addon_unverified`
+
+The generated evidence remains local under `.tmp/live-site-preflight/` and is
+not treated as a committed source of truth. Re-run the tool after a candidate's
+Local mapping or active database is corrected.
 
 ## Go / No-Go
 
