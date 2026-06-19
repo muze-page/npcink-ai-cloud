@@ -148,7 +148,7 @@ class ImageSourceAdminConfigService:
             .strip()
             .lower()
         )
-        if auto_strategy not in {"first_available", "random"}:
+        if auto_strategy not in {"first_available", "random", "parallel", "fast_first"}:
             auto_strategy = "first_available"
         return {
             "provider": provider,

@@ -3371,12 +3371,15 @@ class RuntimeService:
                     run=run,
                     provider_call=provider_call,
                 )
+                storage_mode = self._get_storage_mode(
+                    run.policy_json if isinstance(run.policy_json, dict) else {}
+                )
                 prepared_result = self._prepare_result_for_storage(
                     provider_result.output,
-                    storage_mode=self._get_storage_mode(
-                        run.policy_json if isinstance(run.policy_json, dict) else {}
-                    ),
+                    storage_mode=storage_mode,
                 )
+                if storage_mode == RUNTIME_STORAGE_MODE_NO_STORE:
+                    run._transient_result_json = provider_result.output
                 automatic_web_search = policy.get("automatic_web_search")
                 if isinstance(automatic_web_search, dict):
                     prepared_result = dict(prepared_result)
@@ -5677,8 +5680,11 @@ class RuntimeService:
     ) -> RuntimeExecutionResponse:
         provider_calls = repository.list_provider_calls(run.run_id)
         failure_details = self._build_failure_details(run, provider_calls)
+        response_result = getattr(run, "_transient_result_json", None)
+        if not isinstance(response_result, dict):
+            response_result = run.result_json or {}
         result = build_analysis_result_envelope(
-            run.result_json or {},
+            response_result,
             ability_family=run.ability_family or "text",
             ability_name=run.ability_name or "",
             input_payload=run.input_json if isinstance(run.input_json, dict) else {},

@@ -562,9 +562,10 @@ class Settings(BaseSettings):
                 raise ValueError(
                     "web_search_tavily_base_url is required when web_search_provider=tavily"
                 )
-            if not str(self.web_search_tavily_api_key or "").strip() and not str(
-                self.web_search_tavily_api_keys or ""
-            ).strip():
+            if (
+                not str(self.web_search_tavily_api_key or "").strip()
+                and not str(self.web_search_tavily_api_keys or "").strip()
+            ):
                 raise ValueError(
                     "web_search_tavily_api_key or web_search_tavily_api_keys is required "
                     "when web_search_provider=tavily"
@@ -600,8 +601,16 @@ class Settings(BaseSettings):
         image_source_auto_strategy = (
             str(self.image_source_auto_strategy or "first_available").strip().lower()
         )
-        if image_source_auto_strategy not in {"first_available", "random"}:
-            raise ValueError("image_source_auto_strategy must be first_available or random")
+        if image_source_auto_strategy not in {
+            "first_available",
+            "random",
+            "parallel",
+            "fast_first",
+        }:
+            raise ValueError(
+                "image_source_auto_strategy must be first_available, random, "
+                "parallel, or fast_first"
+            )
         self.image_source_auto_strategy = image_source_auto_strategy
         if self.image_source_timeout_seconds <= 0:
             raise ValueError("image_source_timeout_seconds must be greater than 0")

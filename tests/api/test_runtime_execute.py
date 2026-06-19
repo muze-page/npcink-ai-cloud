@@ -2993,6 +2993,8 @@ def test_execute_route_pii_no_store_omits_persisted_payloads(tmp_path: Path) -> 
     )
 
     assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["result"]["output_text"].startswith("[hosted:")
     run_id = response.json()["data"]["run_id"]
     with get_session(database_url) as session:
         run = session.get(RunRecord, run_id)
@@ -3112,6 +3114,8 @@ def test_execute_route_no_store_omits_persisted_input_payload(tmp_path: Path) ->
     )
 
     assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["result"]["output_text"].startswith("[hosted:")
     run_id = response.json()["data"]["run_id"]
     with get_session(database_url) as session:
         run = session.get(RunRecord, run_id)

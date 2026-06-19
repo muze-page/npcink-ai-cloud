@@ -340,14 +340,23 @@ def _resolve_data_classification(payload: RuntimePayload) -> str:
     if _is_media_batch_plan_payload(payload):
         return MEDIA_BATCH_PLAN_DATA_CLASSIFICATION
     if _is_image_generation_payload(payload):
-        return IMAGE_GENERATION_DATA_CLASSIFICATION
+        return _resolve_feature_data_classification(payload, IMAGE_GENERATION_DATA_CLASSIFICATION)
     if _is_image_source_payload(payload):
-        return IMAGE_SOURCE_DATA_CLASSIFICATION
+        return _resolve_feature_data_classification(payload, IMAGE_SOURCE_DATA_CLASSIFICATION)
     if _is_site_knowledge_payload(payload):
         return SITE_KNOWLEDGE_DATA_CLASSIFICATION
     if _is_web_search_payload(payload):
         return WEB_SEARCH_DATA_CLASSIFICATION
     return payload.data_classification
+
+
+def _resolve_feature_data_classification(
+    payload: RuntimePayload, default_classification: str
+) -> str:
+    requested = str(payload.data_classification or "").strip().lower()
+    if requested in {"pii", "secret"}:
+        return requested
+    return default_classification
 
 
 def _resolve_task_backend(payload: RuntimePayload) -> dict[str, Any]:

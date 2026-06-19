@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import random
 import time
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass
 from typing import Any, cast
 from urllib.parse import unquote, urlsplit
@@ -32,6 +33,9 @@ MAX_VISUAL_CONTEXT_CHARS = 600
 MAX_PROVIDER_RESULTS = 30
 MAX_PROVIDER_RESPONSE_BYTES = 2_000_000
 AUTO_PROVIDER_ORDER = ("unsplash", "pixabay", "pexels")
+PARALLEL_AUTO_STRATEGIES = {"parallel", "fast_first"}
+PARALLEL_RESPONSE_BUDGET_SECONDS = 5.0
+PARALLEL_PROVIDER_TIMEOUT_SECONDS = 4.0
 
 
 @dataclass(slots=True)
@@ -96,7 +100,19 @@ class ImageSourceService:
             site_knowledge_context=site_knowledge_context,
             llm_prompt_plan=llm_prompt_plan,
         )
-        provider_id = _resolve_provider(self.settings, str(options.get("provider") or "auto"))
+        requested_provider = str(options.get("provider") or "auto")
+        provider_ids = _resolve_parallel_providers(self.settings, requested_provider)
+        if _should_parallel_search(self.settings, requested_provider, provider_ids):
+            return _search_parallel_providers(
+                settings=self.settings,
+                provider_ids=provider_ids,
+                query=query,
+                options=options,
+                site_id=site_id,
+                run_id=run_id,
+            )
+
+        provider_id = _resolve_provider(self.settings, requested_provider)
         provider = _build_provider(provider_id, self.settings)
         return provider.search(query=query, options=options, site_id=site_id, run_id=run_id)
 
@@ -138,10 +154,15 @@ class _BaseImageProvider:
         url: str,
         headers: dict[str, str] | None = None,
         params: dict[str, Any] | None = None,
+        timeout_seconds: float | None = None,
     ) -> dict[str, Any]:
         try:
-            timeout_seconds = float(self.settings.image_source_timeout_seconds)
-            with httpx.Client(timeout=timeout_seconds) as client:
+            request_timeout = (
+                float(timeout_seconds)
+                if timeout_seconds is not None
+                else float(self.settings.image_source_timeout_seconds)
+            )
+            with httpx.Client(timeout=request_timeout) as client:
                 response = client.request(
                     method,
                     url,
@@ -209,13 +230,17 @@ class UnsplashImageSourceProvider(_BaseImageProvider):
         if options.get("color"):
             params["color"] = options["color"]
         started = time.monotonic()
-        payload = self._request_json(
-            started=started,
-            method="GET",
-            url=f"{base_url}/search/photos",
-            headers={"Authorization": f"Client-ID {api_key}"},
-            params=params,
-        )
+        request_kwargs: dict[str, Any] = {
+            "started": started,
+            "method": "GET",
+            "url": f"{base_url}/search/photos",
+            "headers": {"Authorization": f"Client-ID {api_key}"},
+            "params": params,
+        }
+        timeout_seconds = _provider_timeout_seconds(options)
+        if timeout_seconds is not None:
+            request_kwargs["timeout_seconds"] = timeout_seconds
+        payload = self._request_json(**request_kwargs)
         candidates = [_normalize_unsplash(item) for item in _list(payload.get("results"))]
         return _build_result(
             provider_id=self.provider_id,
@@ -260,12 +285,16 @@ class PixabayImageSourceProvider(_BaseImageProvider):
         if orientation == "portrait":
             params["orientation"] = "vertical"
         started = time.monotonic()
-        payload = self._request_json(
-            started=started,
-            method="GET",
-            url=base_url,
-            params=params,
-        )
+        request_kwargs: dict[str, Any] = {
+            "started": started,
+            "method": "GET",
+            "url": base_url,
+            "params": params,
+        }
+        timeout_seconds = _provider_timeout_seconds(options)
+        if timeout_seconds is not None:
+            request_kwargs["timeout_seconds"] = timeout_seconds
+        payload = self._request_json(**request_kwargs)
         candidates = [_normalize_pixabay(item) for item in _list(payload.get("hits"))]
         return _build_result(
             provider_id=self.provider_id,
@@ -302,13 +331,17 @@ class PexelsImageSourceProvider(_BaseImageProvider):
         if options.get("orientation") in {"landscape", "portrait", "square"}:
             params["orientation"] = options["orientation"]
         started = time.monotonic()
-        payload = self._request_json(
-            started=started,
-            method="GET",
-            url=f"{base_url}/search",
-            headers={"Authorization": api_key},
-            params=params,
-        )
+        request_kwargs: dict[str, Any] = {
+            "started": started,
+            "method": "GET",
+            "url": f"{base_url}/search",
+            "headers": {"Authorization": api_key},
+            "params": params,
+        }
+        timeout_seconds = _provider_timeout_seconds(options)
+        if timeout_seconds is not None:
+            request_kwargs["timeout_seconds"] = timeout_seconds
+        payload = self._request_json(**request_kwargs)
         candidates = [_normalize_pexels(item) for item in _list(payload.get("photos"))]
         return _build_result(
             provider_id=self.provider_id,
@@ -429,6 +462,243 @@ def _resolve_auto_provider(settings: Settings) -> str:
     return available_provider_ids[0] if available_provider_ids else "auto"
 
 
+def _resolve_parallel_providers(settings: Settings, requested_provider: str) -> list[str]:
+    requested = str(requested_provider or "auto").strip().lower()
+    configured_provider = str(settings.image_source_provider or "disabled").strip().lower()
+    if configured_provider == "disabled":
+        raise ImageSourceProviderError(
+            "image_source.provider_not_configured",
+            "Cloud-managed image source provider is not configured",
+        )
+    if requested in {"unsplash", "pixabay", "pexels"}:
+        return [requested]
+
+    available_provider_ids = [
+        provider_id
+        for provider_id in AUTO_PROVIDER_ORDER
+        if _provider_has_key(settings, provider_id)
+    ]
+    if available_provider_ids:
+        return available_provider_ids[:3]
+    if configured_provider in {"unsplash", "pixabay", "pexels"}:
+        return [configured_provider]
+    return []
+
+
+def _should_parallel_search(
+    settings: Settings,
+    requested_provider: str,
+    provider_ids: list[str],
+) -> bool:
+    if len(provider_ids) < 2:
+        return False
+    requested = str(requested_provider or "auto").strip().lower()
+    strategy = str(settings.image_source_auto_strategy or "first_available").strip().lower()
+    return requested in {"auto", "cloud"} or strategy in PARALLEL_AUTO_STRATEGIES
+
+
+def _provider_timeout_seconds(options: dict[str, Any]) -> float | None:
+    timeout = options.get("provider_timeout_seconds")
+    if timeout is None:
+        return None
+    return max(0.1, _coerce_float(timeout, default=PARALLEL_PROVIDER_TIMEOUT_SECONDS))
+
+
+def _search_parallel_providers(
+    *,
+    settings: Settings,
+    provider_ids: list[str],
+    query: str,
+    options: dict[str, Any],
+    site_id: str,
+    run_id: str,
+) -> ImageSourceExecutionResult:
+    started = time.monotonic()
+    per_page = int(options["per_page"])
+    strategy = str(settings.image_source_auto_strategy or "first_available").strip().lower()
+    if strategy not in PARALLEL_AUTO_STRATEGIES:
+        strategy = "parallel"
+    provider_timeout = min(
+        max(0.1, float(settings.image_source_timeout_seconds)),
+        PARALLEL_PROVIDER_TIMEOUT_SECONDS,
+    )
+    parallel_options = dict(options)
+    parallel_options["provider_timeout_seconds"] = provider_timeout
+    response_budget = min(
+        max(provider_timeout + 0.5, 0.5),
+        PARALLEL_RESPONSE_BUDGET_SECONDS,
+    )
+    executor = ThreadPoolExecutor(
+        max_workers=len(provider_ids),
+        thread_name_prefix="image-source",
+    )
+    futures: dict[Future[ImageSourceExecutionResult], str] = {}
+    attempt_started: dict[str, float] = {}
+    for provider_id in provider_ids:
+        attempt_started[provider_id] = time.monotonic()
+        provider = _build_provider(provider_id, settings)
+        futures[
+            executor.submit(
+                provider.search,
+                query=query,
+                options=parallel_options,
+                site_id=site_id,
+                run_id=run_id,
+            )
+        ] = provider_id
+
+    pending = set(futures)
+    provider_results: list[tuple[str, ImageSourceExecutionResult]] = []
+    provider_errors: list[dict[str, Any]] = []
+    provider_attempts: list[dict[str, Any]] = []
+    deadline = started + response_budget
+
+    stop_collecting = False
+    try:
+        while pending:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            done, pending = wait(pending, timeout=remaining, return_when=FIRST_COMPLETED)
+            if not done:
+                break
+            for future in done:
+                provider_id = futures[future]
+                try:
+                    execution = future.result()
+                except ImageSourceProviderError as error:
+                    usage = error.usage
+                    latency_ms = (
+                        usage.latency_ms
+                        if usage is not None
+                        else _elapsed_ms(attempt_started.get(provider_id, started))
+                    )
+                    provider_errors.append(
+                        _provider_error(
+                            provider_id=provider_id,
+                            error_code=error.error_code,
+                            message=error.message,
+                            latency_ms=latency_ms,
+                        )
+                    )
+                    provider_attempts.append(
+                        _provider_attempt(
+                            provider_id=provider_id,
+                            status="failed",
+                            latency_ms=latency_ms,
+                            error_code=error.error_code,
+                        )
+                    )
+                    continue
+                except Exception:  # pragma: no cover - defensive provider isolation
+                    latency_ms = _elapsed_ms(attempt_started.get(provider_id, started))
+                    provider_errors.append(
+                        _provider_error(
+                            provider_id=provider_id,
+                            error_code="provider.unexpected_error",
+                            message=f"{provider_id} image source request failed",
+                            latency_ms=latency_ms,
+                        )
+                    )
+                    provider_attempts.append(
+                        _provider_attempt(
+                            provider_id=provider_id,
+                            status="failed",
+                            latency_ms=latency_ms,
+                            error_code="provider.unexpected_error",
+                        )
+                    )
+                    continue
+
+                candidates = _list(execution.result_json.get("images"))
+                provider_results.append((provider_id, execution))
+                provider_attempts.append(
+                    _provider_attempt(
+                        provider_id=provider_id,
+                        status="ready",
+                        latency_ms=execution.usage.latency_ms,
+                        candidate_count=len(candidates),
+                    )
+                )
+                if _merged_candidate_count(provider_results, per_page=per_page) >= per_page:
+                    stop_collecting = True
+                    break
+            if stop_collecting:
+                break
+    finally:
+        for future in pending:
+            provider_id = futures[future]
+            if not future.done():
+                future.cancel()
+                latency_ms = _elapsed_ms(attempt_started.get(provider_id, started))
+                status = "abandoned" if stop_collecting else "timeout"
+                error_code = "" if stop_collecting else "provider.timeout"
+                if error_code:
+                    provider_errors.append(
+                        _provider_error(
+                            provider_id=provider_id,
+                            error_code=error_code,
+                            message=(
+                                f"{provider_id} image source search exceeded fast-first budget"
+                            ),
+                            latency_ms=latency_ms,
+                        )
+                    )
+                provider_attempts.append(
+                    _provider_attempt(
+                        provider_id=provider_id,
+                        status=status,
+                        latency_ms=latency_ms,
+                        error_code=error_code,
+                    )
+                )
+        executor.shutdown(wait=False, cancel_futures=True)
+
+    if not provider_results:
+        first_error = provider_errors[0] if provider_errors else {}
+        raise ImageSourceProviderError(
+            str(first_error.get("error_code") or "image_source.provider_not_configured"),
+            str(first_error.get("message") or "Cloud-managed image source provider failed"),
+            usage=ImageSourceProviderUsage(
+                provider_id=str(first_error.get("provider") or "image_source"),
+                model_id="image-source-search",
+                instance_id="cloud-managed",
+                region=str(settings.deployment_region or "unspecified"),
+                latency_ms=_elapsed_ms(started),
+                cost=0.0,
+                error_code=str(first_error.get("error_code") or "provider.failed"),
+            ),
+        )
+
+    merged_candidates, active_sources = _merge_provider_candidates(
+        provider_results,
+        per_page=per_page,
+    )
+    successful_provider_ids = [provider_id for provider_id, _ in provider_results]
+    resolved_provider = successful_provider_ids[0]
+    return _build_result(
+        provider_id=resolved_provider,
+        auto_strategy=strategy,
+        query=query,
+        options=options,
+        candidates=merged_candidates,
+        usage=ImageSourceProviderUsage(
+            provider_id=resolved_provider,
+            model_id="image-source-search",
+            instance_id="cloud-managed",
+            region=str(settings.deployment_region or "unspecified"),
+            latency_ms=_elapsed_ms(started),
+            cost=sum(max(0.0, item.usage.cost) for _, item in provider_results),
+        ),
+        provider_mode="parallel",
+        resolved_provider=resolved_provider,
+        resolved_providers=successful_provider_ids,
+        active_sources=active_sources,
+        provider_errors=provider_errors,
+        provider_attempts=provider_attempts,
+    )
+
+
 def _build_provider(provider_id: str, settings: Settings) -> _BaseImageProvider:
     if provider_id == "pixabay":
         return PixabayImageSourceProvider(settings)
@@ -445,6 +715,117 @@ def _provider_has_key(settings: Settings, provider_id: str) -> bool:
     if provider_id == "pexels":
         return bool(str(settings.image_source_pexels_api_key or "").strip())
     return False
+
+
+def _elapsed_ms(started: float) -> int:
+    return max(0, int((time.monotonic() - started) * 1000))
+
+
+def _provider_error(
+    *,
+    provider_id: str,
+    error_code: str,
+    message: str,
+    latency_ms: int,
+) -> dict[str, Any]:
+    return {
+        "provider": provider_id,
+        "error_code": error_code,
+        "message": message,
+        "latency_ms": max(0, int(latency_ms)),
+    }
+
+
+def _provider_attempt(
+    *,
+    provider_id: str,
+    status: str,
+    latency_ms: int,
+    candidate_count: int = 0,
+    error_code: str = "",
+) -> dict[str, Any]:
+    attempt = {
+        "provider": provider_id,
+        "status": status,
+        "latency_ms": max(0, int(latency_ms)),
+        "candidate_count": max(0, int(candidate_count)),
+    }
+    if error_code:
+        attempt["error_code"] = error_code
+    return attempt
+
+
+def _merged_candidate_count(
+    provider_results: list[tuple[str, ImageSourceExecutionResult]],
+    *,
+    per_page: int,
+) -> int:
+    candidates, _ = _merge_provider_candidates(provider_results, per_page=per_page)
+    return len(candidates)
+
+
+def _merge_provider_candidates(
+    provider_results: list[tuple[str, ImageSourceExecutionResult]],
+    *,
+    per_page: int,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    merged: list[dict[str, Any]] = []
+    active_sources: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for provider_id, execution in provider_results:
+        provider_candidates: list[dict[str, Any]] = []
+        for item in _rank_provider_candidates(_list(execution.result_json.get("images"))):
+            candidate = _dict(item)
+            if not candidate.get("download_url") and not candidate.get("source_url"):
+                continue
+            duplicate_keys = _candidate_duplicate_keys(candidate)
+            if duplicate_keys & seen:
+                continue
+            seen.update(duplicate_keys)
+            provider_candidates.append(candidate)
+            merged.append(candidate)
+            if len(merged) >= per_page:
+                break
+        active_sources.append({"provider": provider_id, "count": len(provider_candidates)})
+        if len(merged) >= per_page:
+            break
+    return merged[:per_page], active_sources
+
+
+def _rank_provider_candidates(candidates: list[Any]) -> list[dict[str, Any]]:
+    normalized = [_dict(item) for item in candidates]
+    return sorted(
+        normalized,
+        key=lambda item: (
+            -_candidate_quality_score(item),
+            str(item.get("provider") or ""),
+            str(item.get("id") or ""),
+        ),
+    )
+
+
+def _candidate_quality_score(candidate: dict[str, Any]) -> int:
+    width = _coerce_int(candidate.get("width") or candidate.get("image_width"), default=0)
+    height = _coerce_int(candidate.get("height") or candidate.get("image_height"), default=0)
+    score = 0
+    if width and height and width >= height:
+        score += 3
+    if width >= 1200 and height >= 600:
+        score += 2
+    if candidate.get("source_url") and candidate.get("download_url"):
+        score += 2
+    if candidate.get("thumbnail_url") or candidate.get("thumb_url"):
+        score += 1
+    return score
+
+
+def _candidate_duplicate_keys(candidate: dict[str, Any]) -> set[str]:
+    keys: set[str] = set()
+    for field in ("id", "source_url", "download_url", "thumbnail_url", "thumb_url"):
+        value = str(candidate.get(field) or "").strip()
+        if value:
+            keys.add(f"{field}:{value.lower()}")
+    return keys
 
 
 def _normalize_unsplash(raw: Any) -> dict[str, Any]:
@@ -473,6 +854,8 @@ def _normalize_unsplash(raw: Any) -> dict[str, Any]:
             source_url=source_url,
         ),
         download_location=_normalize_url(links.get("download_location")),
+        width=_coerce_int(item.get("width"), default=0),
+        height=_coerce_int(item.get("height"), default=0),
     )
 
 
@@ -495,6 +878,8 @@ def _normalize_pixabay(raw: Any) -> dict[str, Any]:
             source_url=source_url,
         ),
         download_location="",
+        width=_coerce_int(item.get("imageWidth"), default=0),
+        height=_coerce_int(item.get("imageHeight"), default=0),
     )
 
 
@@ -518,6 +903,8 @@ def _normalize_pexels(raw: Any) -> dict[str, Any]:
             source_url=source_url,
         ),
         download_location="",
+        width=_coerce_int(item.get("width"), default=0),
+        height=_coerce_int(item.get("height"), default=0),
     )
 
 
@@ -533,6 +920,8 @@ def _candidate(
     photographer_url: str,
     attribution: str,
     download_location: str,
+    width: int = 0,
+    height: int = 0,
 ) -> dict[str, Any]:
     stable_id = candidate_id or _hash_text(download_url or source_url)
     suggested_filename = _suggested_candidate_filename(
@@ -556,6 +945,8 @@ def _candidate(
         "source_url": source_url,
         "html_url": source_url,
         "download_location": download_location,
+        "width": max(0, int(width)),
+        "height": max(0, int(height)),
         "suggested_filename": suggested_filename,
         "filename_basis": {
             "owner": "wordpress_write_ability_final",
@@ -591,6 +982,12 @@ def _build_result(
     options: dict[str, Any],
     candidates: list[dict[str, Any]],
     usage: ImageSourceProviderUsage,
+    provider_mode: str | None = None,
+    resolved_provider: str | None = None,
+    resolved_providers: list[str] | None = None,
+    active_sources: list[dict[str, Any]] | None = None,
+    provider_errors: list[dict[str, Any]] | None = None,
+    provider_attempts: list[dict[str, Any]] | None = None,
 ) -> ImageSourceExecutionResult:
     candidates = [
         item for item in candidates if item.get("download_url") or item.get("source_url")
@@ -612,15 +1009,25 @@ def _build_result(
         "composition_role": "image_source_candidates",
         "status": "ready",
         "provider": "magick_ai_cloud",
-        "provider_mode": provider_id,
+        "provider_mode": provider_mode or provider_id,
         "requested_provider_mode": str(options.get("provider") or "auto"),
-        "resolved_provider": provider_id,
+        "resolved_provider": resolved_provider or provider_id,
+        "resolved_providers": resolved_providers or [resolved_provider or provider_id],
         "auto_strategy": auto_strategy,
         "candidate_contract_version": IMAGE_CANDIDATE_CONTRACT,
         "query_hash": query_hash,
         "query_chars": len(query),
-        "active_sources": [{"provider": provider_id, "count": len(candidates)}],
-        "provider_errors": [],
+        "active_sources": active_sources or [{"provider": provider_id, "count": len(candidates)}],
+        "provider_errors": provider_errors or [],
+        "provider_attempts": provider_attempts
+        or [
+            {
+                "provider": provider_id,
+                "status": "ready",
+                "latency_ms": usage.latency_ms,
+                "candidate_count": len(candidates),
+            }
+        ],
         "visual_brief": visual_brief,
         "optimized_query": visual_brief["primary_query"],
         "alternate_queries": visual_brief["alternate_queries"],

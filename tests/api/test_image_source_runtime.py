@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -45,6 +46,7 @@ def _build_client(
     tmp_path: Path,
     *,
     providers: dict[str, Any] | None = None,
+    settings_overrides: dict[str, Any] | None = None,
 ) -> tuple[str, TestClient]:
     database_url = _sqlite_url(tmp_path)
     init_schema(database_url)
@@ -55,18 +57,19 @@ def _build_client(
         site_id="site_alpha",
         scopes=["runtime:execute", "runtime:read"],
     )
-    settings = Settings(
-        _env_file=None,
-        project_name="Magick AI Cloud Image Source Test",
-        environment="test",
-        database_url=database_url,
-        redis_url="redis://localhost:6379/0",
-        admin_session_secret=TEST_ADMIN_SESSION_SECRET,
-        portal_jwt_secret=TEST_PORTAL_JWT_SECRET,
-        image_source_provider="unsplash",
-        image_source_unsplash_access_key="placeholder-unsplash-key",
-        image_source_cost_per_query=0.001,
-    )
+    settings_kwargs = {
+        "project_name": "Magick AI Cloud Image Source Test",
+        "environment": "test",
+        "database_url": database_url,
+        "redis_url": "redis://localhost:6379/0",
+        "admin_session_secret": TEST_ADMIN_SESSION_SECRET,
+        "portal_jwt_secret": TEST_PORTAL_JWT_SECRET,
+        "image_source_provider": "unsplash",
+        "image_source_unsplash_access_key": "placeholder-unsplash-key",
+        "image_source_cost_per_query": 0.001,
+    }
+    settings_kwargs.update(settings_overrides or {})
+    settings = Settings(_env_file=None, **settings_kwargs)
     client = TestClient(
         create_app(
             CloudServices(
@@ -163,6 +166,38 @@ class PromptPlannerProvider(OpenAIProviderAdapter):
             tokens_out=55,
             cost=0.0,
         )
+
+
+def _stock_candidate(
+    provider: str,
+    index: int,
+    *,
+    source_url: str | None = None,
+    width: int = 1600,
+    height: int = 900,
+) -> dict[str, Any]:
+    return {
+        "contract_version": "image_candidate.v1",
+        "id": f"{provider}-photo-{index}",
+        "provider": provider,
+        "provider_origin": "cloud",
+        "source_type": "stock",
+        "download_url": f"https://images.example.test/{provider}/{index}.jpg",
+        "thumbnail_url": f"https://images.example.test/{provider}/{index}-thumb.jpg",
+        "source_url": source_url or f"https://{provider}.example.test/photos/{index}",
+        "width": width,
+        "height": height,
+        "license_review_status": "required",
+        "requires_human_license_review": True,
+        "warnings": ["Review provider license before adoption."],
+        "provenance": {
+            "provider": provider,
+            "provider_origin": "cloud",
+            "source_type": "stock",
+        },
+        "write_posture": "suggestion_only",
+        "direct_wordpress_write": False,
+    }
 
 
 def test_cloud_managed_image_source_executes_and_records_provider_usage(
@@ -284,6 +319,273 @@ def test_cloud_managed_image_source_executes_and_records_provider_usage(
             "cost",
         ]
         assert all(event.ability_family == "knowledge" for event in meter_events)
+
+
+def test_image_source_auto_parallel_merges_configured_providers_to_per_page(
+    tmp_path: Path,
+    monkeypatch: Any,
+) -> None:
+    database_url, client = _build_client(
+        tmp_path,
+        settings_overrides={
+            "image_source_provider": "auto",
+            "image_source_auto_strategy": "parallel",
+            "image_source_unsplash_access_key": "placeholder-unsplash-key",
+            "image_source_pixabay_api_key": "placeholder-pixabay-key",
+            "image_source_pexels_api_key": "",
+        },
+    )
+    pixabay_finished = threading.Event()
+
+    def fake_pixabay_search(
+        self: PixabayImageSourceProvider,
+        *,
+        query: str,
+        options: dict[str, Any],
+        site_id: str,
+        run_id: str,
+    ) -> ImageSourceExecutionResult:
+        pixabay_finished.set()
+        return image_source_service._build_result(
+            provider_id="pixabay",
+            auto_strategy="parallel",
+            query=query,
+            options=options,
+            candidates=[_stock_candidate("pixabay", index) for index in range(1, 5)],
+            usage=ImageSourceProviderUsage(
+                provider_id="pixabay",
+                model_id="image-source-search",
+                instance_id="cloud-managed",
+                region="unspecified",
+                latency_ms=8,
+                cost=0.001,
+            ),
+        )
+
+    def fake_unsplash_search(
+        self: UnsplashImageSourceProvider,
+        *,
+        query: str,
+        options: dict[str, Any],
+        site_id: str,
+        run_id: str,
+    ) -> ImageSourceExecutionResult:
+        assert pixabay_finished.wait(1), "parallel search did not start pixabay"
+        duplicate_source_url = "https://pixabay.example.test/photos/2"
+        return image_source_service._build_result(
+            provider_id="unsplash",
+            auto_strategy="parallel",
+            query=query,
+            options=options,
+            candidates=[
+                _stock_candidate("unsplash", 1, source_url=duplicate_source_url),
+                *[_stock_candidate("unsplash", index) for index in range(2, 7)],
+            ],
+            usage=ImageSourceProviderUsage(
+                provider_id="unsplash",
+                model_id="image-source-search",
+                instance_id="cloud-managed",
+                region="unspecified",
+                latency_ms=14,
+                cost=0.001,
+            ),
+        )
+
+    monkeypatch.setattr(PixabayImageSourceProvider, "search", fake_pixabay_search)
+    monkeypatch.setattr(UnsplashImageSourceProvider, "search", fake_unsplash_search)
+
+    response = _execute(
+        client,
+        _payload({"provider": "auto", "per_page": 9}),
+        idempotency_key="image-source-parallel-merge",
+    )
+
+    assert response.status_code == 200, response.text
+    data = response.json()["data"]
+    result = data["result"]
+    assert result["provider_mode"] == "parallel"
+    assert result["auto_strategy"] == "parallel"
+    assert result["direct_wordpress_write"] is False
+    assert len(result["images"]) == 9
+    assert result["images"][0]["provider"] == "pixabay"
+    assert len({item["source_url"] for item in result["images"]}) == 9
+    assert result["active_sources"] == [
+        {"provider": "pixabay", "count": 4},
+        {"provider": "unsplash", "count": 5},
+    ]
+    assert {item["provider"] for item in result["provider_attempts"]} == {
+        "pixabay",
+        "unsplash",
+    }
+    assert result["provider_errors"] == []
+
+    with get_session(database_url) as session:
+        run = session.get(RunRecord, data["run_id"])
+        assert run is not None
+        assert run.data_classification == "public_reference_media"
+
+
+def test_image_source_parallel_provider_failure_keeps_successful_candidates(
+    tmp_path: Path,
+    monkeypatch: Any,
+) -> None:
+    _, client = _build_client(
+        tmp_path,
+        settings_overrides={
+            "image_source_provider": "auto",
+            "image_source_auto_strategy": "parallel",
+            "image_source_unsplash_access_key": "placeholder-unsplash-key",
+            "image_source_pixabay_api_key": "placeholder-pixabay-key",
+            "image_source_pexels_api_key": "",
+        },
+    )
+
+    def fail_unsplash_search(
+        self: UnsplashImageSourceProvider,
+        *,
+        query: str,
+        options: dict[str, Any],
+        site_id: str,
+        run_id: str,
+    ) -> ImageSourceExecutionResult:
+        raise ImageSourceProviderError(
+            "provider.timeout",
+            "unsplash image source search timed out",
+            usage=ImageSourceProviderUsage(
+                provider_id="unsplash",
+                model_id="image-source-search",
+                instance_id="cloud-managed",
+                region="unspecified",
+                latency_ms=4000,
+                cost=0.0,
+                error_code="provider.timeout",
+            ),
+        )
+
+    def fake_pixabay_search(
+        self: PixabayImageSourceProvider,
+        *,
+        query: str,
+        options: dict[str, Any],
+        site_id: str,
+        run_id: str,
+    ) -> ImageSourceExecutionResult:
+        return image_source_service._build_result(
+            provider_id="pixabay",
+            auto_strategy="parallel",
+            query=query,
+            options=options,
+            candidates=[_stock_candidate("pixabay", 1)],
+            usage=ImageSourceProviderUsage(
+                provider_id="pixabay",
+                model_id="image-source-search",
+                instance_id="cloud-managed",
+                region="unspecified",
+                latency_ms=12,
+                cost=0.001,
+            ),
+        )
+
+    monkeypatch.setattr(UnsplashImageSourceProvider, "search", fail_unsplash_search)
+    monkeypatch.setattr(PixabayImageSourceProvider, "search", fake_pixabay_search)
+
+    response = _execute(
+        client,
+        _payload({"provider": "auto", "per_page": 9}),
+        idempotency_key="image-source-parallel-provider-error",
+    )
+
+    assert response.status_code == 200, response.text
+    result = response.json()["data"]["result"]
+    assert [item["provider"] for item in result["images"]] == ["pixabay"]
+    assert result["direct_wordpress_write"] is False
+    assert result["provider_errors"] == [
+        {
+            "provider": "unsplash",
+            "error_code": "provider.timeout",
+            "message": "unsplash image source search timed out",
+            "latency_ms": 4000,
+        }
+    ]
+    attempts = {item["provider"]: item for item in result["provider_attempts"]}
+    assert attempts["unsplash"]["status"] == "failed"
+    assert attempts["pixabay"]["status"] == "ready"
+
+
+def test_image_source_preserves_sensitive_request_classification(
+    tmp_path: Path,
+    monkeypatch: Any,
+) -> None:
+    database_url, client = _build_client(tmp_path)
+
+    def fake_search(
+        self: UnsplashImageSourceProvider,
+        *,
+        query: str,
+        options: dict[str, Any],
+        site_id: str,
+        run_id: str,
+    ) -> ImageSourceExecutionResult:
+        assert options["visual_context"]["selected_text"] == "Contact editor@example.com"
+        return image_source_service._build_result(
+            provider_id="unsplash",
+            auto_strategy="first_available",
+            query=query,
+            options=options,
+            candidates=[
+                {
+                    "contract_version": "image_candidate.v1",
+                    "id": "unsplash-photo-sensitive-context",
+                    "provider": "unsplash",
+                    "provider_origin": "cloud",
+                    "source_type": "stock",
+                    "download_url": "https://images.unsplash.com/photo-sensitive",
+                    "thumbnail_url": "https://images.unsplash.com/photo-sensitive-thumb",
+                    "source_url": "https://unsplash.com/photos/photo-sensitive",
+                    "write_posture": "suggestion_only",
+                    "direct_wordpress_write": False,
+                }
+            ],
+            usage=ImageSourceProviderUsage(
+                provider_id="unsplash",
+                model_id="image-source-search",
+                instance_id="cloud-managed",
+                region="unspecified",
+                latency_ms=6,
+                cost=0.001,
+            ),
+        )
+
+    monkeypatch.setattr(UnsplashImageSourceProvider, "search", fake_search)
+
+    payload = _payload(
+        {
+            "visual_context": {
+                "contract_version": "image_visual_brief_request.v1",
+                "image_use": "featured_image",
+                "selected_text": "Contact editor@example.com",
+            }
+        }
+    )
+    payload["data_classification"] = "pii"
+    payload["storage_mode"] = "no_store"
+
+    response = _execute(
+        client,
+        payload,
+        idempotency_key="image-source-sensitive-context",
+    )
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["execution_context"]["data_classification"] == "pii"
+    assert data["execution_context"]["storage_mode"] == "no_store"
+
+    with get_session(database_url) as session:
+        run = session.get(RunRecord, data["run_id"])
+        assert run is not None
+        assert run.data_classification == "pii"
+        assert run.input_json == {}
 
 
 def test_image_source_rejects_provider_keys_in_runtime_input(tmp_path: Path) -> None:
