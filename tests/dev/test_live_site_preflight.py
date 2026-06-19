@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
+from typing import Any
 
 from app.dev.live_site_preflight import (
     SiteTarget,
@@ -9,6 +11,7 @@ from app.dev.live_site_preflight import (
     evaluate_candidate,
     internal_identity_matches,
     render_markdown,
+    resolve_local_site_metadata,
 )
 
 
@@ -63,6 +66,45 @@ def test_parse_curl_write_out_returns_status_and_final_url() -> None:
         0,
         "http://fallback.local/",
     )
+
+
+def test_resolve_local_site_metadata_matches_path_and_socket(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    support_dir = tmp_path / "Local"
+    site_root = tmp_path / "Local Sites" / "example"
+    public_root = site_root / "app" / "public"
+    socket_path = support_dir / "run" / "site123" / "mysql" / "mysqld.sock"
+    socket_path.parent.mkdir(parents=True)
+    socket_path.write_text("")
+    sites_path = support_dir / "sites.json"
+    sites_path.write_text(
+        json.dumps(
+            {
+                "site123": {
+                    "name": "example",
+                    "domain": "example.local",
+                    "path": str(site_root),
+                    "services": {
+                        "mysql": {"ports": {"MYSQL": [10001]}},
+                        "nginx": {"ports": {"HTTP": [10002]}},
+                    },
+                }
+            }
+        )
+    )
+    monkeypatch.setattr("app.dev.live_site_preflight.LOCAL_APP_SUPPORT", support_dir)
+
+    metadata = resolve_local_site_metadata(
+        SiteTarget("example", "http://example.local/", public_root)
+    )
+
+    assert metadata["matched"] is True
+    assert metadata["site_id"] == "site123"
+    assert metadata["mysql_port"] == 10001
+    assert metadata["nginx_port"] == 10002
+    assert metadata["mysql_socket"] == str(socket_path)
+    assert metadata["mysql_socket_exists"] is True
 
 
 def test_cloud_addon_ready_requires_verified_identity_and_key_presence() -> None:

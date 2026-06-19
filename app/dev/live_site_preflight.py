@@ -19,6 +19,8 @@ DEFAULT_SITES = (
     ("dbd", "http://dbd.local/", "/Users/muze/Local Sites/dbd/app/public"),
 )
 
+LOCAL_APP_SUPPORT = Path.home() / "Library/Application Support/Local"
+
 WP_EVAL_SUMMARY = r"""
 global $wpdb;
 $settings = get_option("npcink_cloud_addon_settings", []);
@@ -175,15 +177,21 @@ def run_wp_summary(
     php_bin: str,
     wp_bin: str,
     timeout_seconds: int,
+    mysql_socket: str = "",
 ) -> dict[str, object]:
-    command = [
-        php_bin,
-        wp_bin,
-        f"--path={target.path}",
-        f"--url={target.url}",
-        "eval",
-        WP_EVAL_SUMMARY,
-    ]
+    command = [php_bin]
+    if mysql_socket:
+        command.extend(
+            [
+                "-d",
+                f"mysqli.default_socket={mysql_socket}",
+                "-d",
+                f"pdo_mysql.default_socket={mysql_socket}",
+            ]
+        )
+    command.extend(
+        [wp_bin, f"--path={target.path}", f"--url={target.url}", "eval", WP_EVAL_SUMMARY]
+    )
     try:
         result = subprocess.run(
             command,
@@ -237,6 +245,64 @@ def collect_sql_dump_summary(site_root: Path) -> dict[str, object]:
         "bytes": sql_path.stat().st_size,
         "pattern_count": count,
     }
+
+
+def resolve_local_site_metadata(target: SiteTarget) -> dict[str, object]:
+    sites_path = LOCAL_APP_SUPPORT / "sites.json"
+    if not sites_path.exists():
+        return {"matched": False, "reason": "local_sites_json_missing"}
+    try:
+        sites = json.loads(sites_path.read_text())
+    except (OSError, json.JSONDecodeError) as exc:
+        return {"matched": False, "reason": f"local_sites_json_unreadable: {exc}"}
+
+    if not isinstance(sites, dict):
+        return {"matched": False, "reason": "local_sites_json_invalid"}
+
+    target_site_root = target.path.parent.parent.resolve()
+    target_host = _host(target.url)
+    for site_id, site in sites.items():
+        if not isinstance(site, dict):
+            continue
+        site_path = _expand_local_path(_text(site.get("path")))
+        site_domain = _text(site.get("domain"))
+        if site_path != target_site_root and site_domain != target_host:
+            continue
+        services = _dict(site.get("services"))
+        mysql = _dict(services.get("mysql"))
+        nginx = _dict(services.get("nginx"))
+        mysql_port = _first_port(mysql)
+        nginx_port = _first_port(nginx)
+        mysql_socket = LOCAL_APP_SUPPORT / "run" / str(site_id) / "mysql" / "mysqld.sock"
+        return {
+            "matched": True,
+            "site_id": str(site_id),
+            "name": _text(site.get("name")),
+            "domain": site_domain,
+            "path": str(site_path),
+            "mysql_port": mysql_port,
+            "nginx_port": nginx_port,
+            "mysql_socket": str(mysql_socket),
+            "mysql_socket_exists": mysql_socket.exists(),
+        }
+    return {"matched": False, "reason": "local_site_not_matched"}
+
+
+def _expand_local_path(value: str) -> Path:
+    if value.startswith("~/"):
+        value = str(Path.home() / value[2:])
+    return Path(value).expanduser().resolve()
+
+
+def _first_port(service: dict[str, Any]) -> int | None:
+    ports = _dict(service.get("ports"))
+    for value in ports.values():
+        if isinstance(value, list) and value:
+            try:
+                return int(value[0])
+            except (TypeError, ValueError):
+                return None
+    return None
 
 
 def cloud_addon_ready(wp_summary: dict[str, object]) -> bool:
@@ -311,13 +377,19 @@ def collect_site(
     wp_bin: str,
     timeout_seconds: int,
     min_public_items: int,
+    use_local_socket: bool,
 ) -> dict[str, object]:
+    local_site = resolve_local_site_metadata(target) if use_local_socket else {"matched": False}
+    mysql_socket = ""
+    if local_site.get("matched") is True and local_site.get("mysql_socket_exists") is True:
+        mysql_socket = _text(local_site.get("mysql_socket"))
     http_summary = fetch_http_summary(target.url, timeout_seconds=timeout_seconds)
     wp_summary = run_wp_summary(
         target=target,
         php_bin=php_bin,
         wp_bin=wp_bin,
         timeout_seconds=timeout_seconds,
+        mysql_socket=mysql_socket,
     )
     sql_dump = collect_sql_dump_summary(target.path)
     evaluation = evaluate_candidate(
@@ -332,6 +404,7 @@ def collect_site(
         "path": str(target.path),
         "http": http_summary,
         "wordpress": wp_summary,
+        "local_site": local_site,
         "sql_dump": sql_dump,
         "evaluation": evaluation,
     }
@@ -344,6 +417,7 @@ def build_report(
     wp_bin: str,
     timeout_seconds: int,
     min_public_items: int,
+    use_local_socket: bool,
     quiet: bool = True,
 ) -> dict[str, object]:
     sites = []
@@ -356,6 +430,7 @@ def build_report(
             wp_bin=wp_bin,
             timeout_seconds=timeout_seconds,
             min_public_items=min_public_items,
+            use_local_socket=use_local_socket,
         )
         sites.append(site)
         if not quiet:
@@ -375,6 +450,7 @@ def build_report(
             "wp_bin": wp_bin,
             "timeout_seconds": timeout_seconds,
             "min_public_items": min_public_items,
+            "use_local_socket": use_local_socket,
         },
         "sites": sites,
         "overall_decision": "go"
@@ -447,11 +523,15 @@ def _render_site_detail(site: dict[str, object]) -> list[str]:
     wordpress = _dict(site.get("wordpress"))
     evaluation = _dict(site.get("evaluation"))
     sql_dump = _dict(site.get("sql_dump"))
+    local_site = _dict(site.get("local_site"))
     plugins = _list(wordpress.get("active_plugins"))
     titles = _list(wordpress.get("sample_public_titles"))
     blockers = ", ".join(str(item) for item in _list(evaluation.get("blockers"))) or "none"
     warnings = ", ".join(str(item) for item in _list(evaluation.get("warnings"))) or "none"
     db_table = f"{_text(wordpress.get('db_name'))}` / `{_text(wordpress.get('table_prefix'))}"
+    local_socket = "matched"
+    if local_site.get("matched") is not True:
+        local_socket = f"not matched ({_text(local_site.get('reason'))})"
     lines = [
         f"### `{_text(site.get('label'))}`",
         "",
@@ -464,6 +544,7 @@ def _render_site_detail(site: dict[str, object]) -> list[str]:
         f"- DB/table: `{db_table}`",
         f"- WordPress version: `{_text(wordpress.get('wp_version'))}`",
         f"- Active theme: `{_text(wordpress.get('active_theme'))}`",
+        f"- Local mapping: `{local_socket}`",
         f"- SQL dump: `exists={sql_dump.get('exists')}, bytes={sql_dump.get('bytes')}, "
         f"pattern_count={sql_dump.get('pattern_count')}`",
         "- Active plugins:",
@@ -498,6 +579,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--wp-bin", default="/opt/homebrew/bin/wp")
     parser.add_argument("--timeout-seconds", type=int, default=20)
     parser.add_argument("--min-public-items", type=int, default=10)
+    parser.add_argument(
+        "--no-local-socket",
+        action="store_true",
+        help="Do not auto-apply the matching Local app MySQL socket for WP-CLI.",
+    )
     parser.add_argument("--markdown-out", type=Path)
     parser.add_argument("--json-out", type=Path)
     parser.add_argument(
@@ -521,6 +607,7 @@ def main(argv: list[str] | None = None) -> int:
         wp_bin=args.wp_bin,
         timeout_seconds=args.timeout_seconds,
         min_public_items=args.min_public_items,
+        use_local_socket=not args.no_local_socket,
         quiet=args.quiet,
     )
     markdown = render_markdown(report)

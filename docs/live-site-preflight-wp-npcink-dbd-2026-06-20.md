@@ -50,6 +50,12 @@ The command exits `0` only when every candidate is ready. It exits `2` for a
 valid read-only no-go result. It prints candidate progress to stderr and writes
 non-secret Markdown/JSON evidence to `.tmp/`.
 
+By default, the command reads Local's `sites.json` and applies the matching
+Local MySQL socket to WP-CLI. This is required for Local sites whose
+`wp-config.php` uses `DB_HOST=localhost`; otherwise WP-CLI can connect to the
+wrong default socket even though the browser routes to the correct Local site.
+Use `--no-local-socket` only when intentionally testing the generic WP-CLI path.
+
 Checked site roots:
 
 - `/Users/muze/Local Sites/wp/app/public`
@@ -62,7 +68,7 @@ Checked HTTP entrypoints:
 - `http://npcink.local/`
 - `http://dbd.local/`
 
-## Findings
+## Initial Findings
 
 | Candidate | HTTP status | Page title | WordPress internal siteurl/home | Blog name | Public posts/pages | Attachments | Cloud addon settings | Current decision |
 | --- | ---: | --- | --- | --- | ---: | ---: | --- | --- |
@@ -105,10 +111,11 @@ was not imported or modified.
 
 ## Interpretation
 
-The three provided HTTP entrypoints are reachable, but the active WordPress
-state exposed through WP-CLI is not a content-rich live candidate. All three
-site roots currently resolve to the same small/default WordPress identity:
-`magick-device-manage.local`.
+The first WP-CLI pass used the generic PHP/WP-CLI path and showed all three site
+roots resolving to the same small/default WordPress identity:
+`magick-device-manage.local`. That result was not the true browser-routed Local
+site state; it was a WP-CLI targeting problem caused by `DB_HOST=localhost`
+without the matching Local MySQL socket.
 
 This is unsuitable for the next live proof stage because:
 
@@ -119,24 +126,40 @@ This is unsuitable for the next live proof stage because:
 - running sync/runtime now would prove little and could blur environment
   ownership.
 
-The most likely issue is Local site/domain/database mapping, or an intended
-database dump that has not been loaded into the active Local instance.
+The underlying Local site/domain/database mapping is valid. The repeatable
+preflight tool now resolves the matching Local MySQL socket before reading
+WordPress state.
 
 ## Automated Recheck
 
-The repeatable preflight tool was run after this package was created. It
-confirmed the same no-go decision for all three candidates:
+The repeatable preflight tool was updated to apply Local's per-site MySQL socket
+and was run again. It confirmed that the three candidates now expose their
+browser-routed WordPress identities through WP-CLI:
 
-- `wp`: `wordpress_identity_mismatch`, `content_set_too_small`,
-  `cloud_addon_unverified`
-- `npcink`: `wordpress_identity_mismatch`, `content_set_too_small`,
-  `cloud_addon_unverified`
-- `dbd`: `wordpress_identity_mismatch`, `content_set_too_small`,
-  `cloud_addon_unverified`
+| Candidate | HTTP status | WordPress internal siteurl/home | Blog name | Public posts/pages | Remaining blocker |
+| --- | ---: | --- | --- | ---: | --- |
+| `wp.local` | 200 | `http://wp.local` | `wp` | 59 | `cloud_addon_unverified` |
+| `npcink.local` | 200 | `http://npcink.local` | `npcink` | 1968 | `cloud_addon_unverified` |
+| `dbd.local` | 200 | `http://dbd.local` | `dbd` | 134 | `cloud_addon_unverified` |
+
+Current candidate priority:
+
+- `npcink.local` is the best first live proof candidate because it has the
+  largest content set and a clean site identity match.
+- `dbd.local` and `wp.local` are viable secondary candidates after content
+  category review.
+
+The current no-go reason is no longer content or identity mismatch. The current
+blocker is Cloud addon readiness:
+
+- the Cloud addon is not installed in the three candidate plugin directories;
+- the Cloud addon is not active;
+- Cloud addon settings are empty and unverified;
+- no dedicated live Cloud identity has been provisioned for any candidate.
 
 The generated evidence remains local under `.tmp/live-site-preflight/` and is
 not treated as a committed source of truth. Re-run the tool after a candidate's
-Local mapping or active database is corrected.
+Cloud addon installation/configuration state changes.
 
 ## Go / No-Go
 
@@ -144,14 +167,17 @@ GO:
 
 - Keep this as a read-only preflight record.
 - Use it to decide the next candidate preparation step.
-- Re-run read-only preflight after one candidate site is corrected or cloned.
+- Use `npcink.local` as the preferred first live proof candidate.
+- Prepare a separate addon installation and verification plan for one selected
+  candidate.
+- Re-run read-only preflight after addon install/configuration state changes.
 
 NO-GO:
 
 - Do not run live runtime smoke on `wp.local`, `npcink.local`, or `dbd.local`
-  in their current state.
-- Do not run live Site Knowledge sync/search on these sites in their current
-  state.
+  until the Cloud addon is installed, active, configured, and verified.
+- Do not run live Site Knowledge sync/search on these sites until addon
+  readiness and a dedicated Cloud identity are confirmed.
 - Do not reuse `site_npcink_trial` for any live candidate.
 - Do not provision a live Cloud identity until the exact candidate is selected.
 - Do not write addon options, import databases, run search-replace, activate
@@ -174,11 +200,9 @@ Before any live execution, the selected site needs:
 
 ## Next Safe Action
 
-Choose one candidate site and fix or confirm its active Local mapping so that
-browser, WP-CLI, `siteurl/home`, and the active database all point to the same
-intended WordPress instance.
+Choose one candidate site, preferably `npcink.local`, and prepare a narrow
+Cloud addon installation/configuration package.
 
-After that, rerun this same read-only preflight. If the candidate then exposes a
-real content set and a clear Cloud addon path, proceed to a separate live-site
-setup package with backup, dedicated Cloud identity, and a narrow runtime smoke
-plan.
+That package must include backup/rollback, the exact plugin source/package,
+dedicated Cloud identity creation, addon option snapshot, and a second explicit
+approval before any WordPress write or Cloud identity provisioning happens.
