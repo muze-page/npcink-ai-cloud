@@ -160,6 +160,18 @@ logger = get_logger(__name__)
 
 OPERATOR_REPAIR_REASON_MIN_LENGTH = 12
 OPERATOR_REPAIR_EVIDENCE_MIN_LENGTH = 24
+_TRANSIENT_RESULT_JSON_ATTR = "_transient_result_json"
+
+
+def _set_transient_result_json(run: RunRecord, result_json: dict[str, Any]) -> None:
+    setattr(run, _TRANSIENT_RESULT_JSON_ATTR, result_json)
+
+
+def _get_transient_result_json(run: RunRecord) -> dict[str, Any] | None:
+    result_json = getattr(run, _TRANSIENT_RESULT_JSON_ATTR, None)
+    if isinstance(result_json, dict):
+        return result_json
+    return None
 
 
 class RuntimeService:
@@ -3379,7 +3391,7 @@ class RuntimeService:
                     storage_mode=storage_mode,
                 )
                 if storage_mode == RUNTIME_STORAGE_MODE_NO_STORE:
-                    run._transient_result_json = provider_result.output
+                    _set_transient_result_json(run, provider_result.output)
                 automatic_web_search = policy.get("automatic_web_search")
                 if isinstance(automatic_web_search, dict):
                     prepared_result = dict(prepared_result)
@@ -5680,7 +5692,7 @@ class RuntimeService:
     ) -> RuntimeExecutionResponse:
         provider_calls = repository.list_provider_calls(run.run_id)
         failure_details = self._build_failure_details(run, provider_calls)
-        response_result = getattr(run, "_transient_result_json", None)
+        response_result = _get_transient_result_json(run)
         if not isinstance(response_result, dict):
             response_result = run.result_json or {}
         result = build_analysis_result_envelope(
