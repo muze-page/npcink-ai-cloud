@@ -101,6 +101,31 @@ provisioning, or the no-go exclusions, stop and ask again.
 
 ## Execution Sequence
 
+The guarded helper for the install/activation portion is:
+
+```bash
+scripts/live-site-addon-install.py \
+  --output-dir .tmp/live-site-addon-package/npcink-guarded-install
+```
+
+Default mode is prepare-only. It re-runs the pre-write package and writes an
+install plan under `.tmp/`; it does not install or activate the plugin.
+
+After the exact approval text above is provided, the install/activation step can
+be executed with:
+
+```bash
+scripts/live-site-addon-install.py \
+  --execute \
+  --approval-text '<paste the exact approval text>' \
+  --output-dir .tmp/live-site-addon-package/npcink-guarded-install
+```
+
+The helper only covers addon install/activation and read-only plugin-list
+verification. It does not provision Cloud identity, does not write addon
+settings, does not run runtime smoke, and does not run Site Knowledge
+sync/search.
+
 ### 1. Re-run read-only preflight
 
 ```bash
