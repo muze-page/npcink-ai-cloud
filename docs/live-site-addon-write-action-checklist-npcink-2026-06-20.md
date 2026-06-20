@@ -469,32 +469,44 @@ The next approval should name one of:
 Rollback also requires explicit approval because it writes the WordPress site
 state.
 
-Preferred rollback path:
+Use the guarded rollback helper first:
 
 ```bash
-/opt/homebrew/bin/php \
-  -d "mysqli.default_socket=${NPCINK_MYSQL_SOCKET}" \
-  -d "pdo_mysql.default_socket=${NPCINK_MYSQL_SOCKET}" \
-  /opt/homebrew/bin/wp \
-  --path="${NPCINK_WP_PATH}" \
-  --url="${NPCINK_WP_URL}" \
-  plugin deactivate magick-ai-cloud-addon
+scripts/live-site-addon-rollback.py \
+  --snapshot .tmp/live-site-stage1/npcink-stage1/addon-install/prewrite-package/snapshot.json \
+  --output-dir .tmp/live-site-addon-rollback/npcink-stage1
 ```
 
-If the pre-write snapshot showed empty addon settings, delete the addon option:
+Default mode is prepare-only. It reads the pre-write snapshot, checks the target
+URL/path and Local MySQL socket, writes a rollback plan, and does not mutate
+WordPress.
+
+Required approval text for execute mode:
+
+```text
+我明确批准在 npcink.local 回滚 Cloud addon 本地接入：停用 Cloud addon，
+在预写快照显示原设置为空时删除 npcink_cloud_addon_settings；本次不导入数据库，
+不运行 search-replace，不撤销 Cloud identity，不运行 runtime smoke，不运行 Site Knowledge，
+不写内容，不启用 monitoring。
+```
+
+After the exact approval text is provided, execute with:
 
 ```bash
-/opt/homebrew/bin/php \
-  -d "mysqli.default_socket=${NPCINK_MYSQL_SOCKET}" \
-  -d "pdo_mysql.default_socket=${NPCINK_MYSQL_SOCKET}" \
-  /opt/homebrew/bin/wp \
-  --path="${NPCINK_WP_PATH}" \
-  --url="${NPCINK_WP_URL}" \
-  option delete npcink_cloud_addon_settings
+scripts/live-site-addon-rollback.py \
+  --execute \
+  --approval-text '<paste the exact rollback approval text>' \
+  --snapshot .tmp/live-site-stage1/npcink-stage1/addon-install/prewrite-package/snapshot.json \
+  --output-dir .tmp/live-site-addon-rollback/npcink-stage1
 ```
 
-Then revoke the dedicated Cloud API key through Cloud service-plane/internal
-operations.
+The helper only deactivates `magick-ai-cloud-addon`. It deletes
+`npcink_cloud_addon_settings` only when the pre-write snapshot showed empty
+addon settings. If the snapshot contained existing base URL, site ID, key, or
+secret presence, it will not attempt to restore or delete that redacted state.
+
+Cloud API key revocation is a separate Cloud service-plane/internal operation.
+Do not run it through the public runtime surface.
 
 Database import from
 `.tmp/live-site-addon-package/npcink-before-addon-write/npcink-pre-addon.sql`
