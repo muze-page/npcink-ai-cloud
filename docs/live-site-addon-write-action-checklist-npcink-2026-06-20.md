@@ -120,6 +120,25 @@ blocked phase and the exact approval text needed for that phase.
 The first-stage guarded helper combines the addon install/activation guard and
 the Cloud identity guard into one audit trail:
 
+Before requesting the exact execute approval, run the read-only Stage 1
+readiness gate:
+
+```bash
+scripts/live-site-stage1-readiness.py \
+  --base-url http://127.0.0.1:8010 \
+  --output-dir .tmp/live-site-stage1-readiness/npcink-stage1
+```
+
+This readiness gate checks the target site, Local MySQL socket, addon zip,
+identity request plan, Cloud `/health/live`, and internal-token guarded
+`/health/ready`. It does not install plugins, write options, provision Cloud
+identity, call runtime, run Site Knowledge, enable monitoring, or write
+content.
+
+If it reports `ok=false`, fix those prerequisites before asking for Stage 1
+execute approval. If it reports `ok=true`, the next remaining gate is still the
+exact approval text below; readiness is not authorization.
+
 ```bash
 scripts/live-site-stage1.py \
   --output-dir .tmp/live-site-stage1/npcink-stage1
