@@ -126,6 +126,34 @@ verification. It does not provision Cloud identity, does not write addon
 settings, does not run runtime smoke, and does not run Site Knowledge
 sync/search.
 
+The guarded helper for the Cloud identity portion is:
+
+```bash
+scripts/live-site-identity-provision.py \
+  --output-dir .tmp/live-site-identity/npcink-live-identity
+```
+
+Default mode is prepare-only. It writes the internal service request plan for
+account upsert, site provision, site activation, and site key issue. It does not
+call the Cloud service.
+
+After the exact approval text above is provided and
+`MAGICK_CLOUD_INTERNAL_AUTH_TOKEN` is available, the identity step can be
+executed with:
+
+```bash
+scripts/live-site-identity-provision.py \
+  --execute \
+  --approval-text '<paste the exact approval text>' \
+  --base-url http://127.0.0.1:8010 \
+  --output-dir .tmp/live-site-identity/npcink-live-identity
+```
+
+The execute report is redacted. If key issue succeeds, the customer-facing
+Cloud API Key is written only to
+`.tmp/live-site-identity/npcink-live-identity/cloud-api-key.secret.json`; do not
+commit or paste that value into shared docs or terminal summaries.
+
 ### 1. Re-run read-only preflight
 
 ```bash
