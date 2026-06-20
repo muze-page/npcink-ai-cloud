@@ -102,7 +102,11 @@ class ImageSourceService:
         )
         requested_provider = str(options.get("provider") or "auto")
         provider_ids = _resolve_parallel_providers(self.settings, requested_provider)
-        if _should_parallel_search(self.settings, requested_provider, provider_ids):
+        if _should_parallel_search(
+            self.settings,
+            provider_ids,
+            options=options,
+        ):
             return _search_parallel_providers(
                 settings=self.settings,
                 provider_ids=provider_ids,
@@ -244,7 +248,7 @@ class UnsplashImageSourceProvider(_BaseImageProvider):
         candidates = [_normalize_unsplash(item) for item in _list(payload.get("results"))]
         return _build_result(
             provider_id=self.provider_id,
-            auto_strategy=str(self.settings.image_source_auto_strategy or "first_available"),
+            auto_strategy=str(self.settings.image_source_auto_strategy or "fast_first"),
             query=query,
             options=options,
             candidates=candidates,
@@ -298,7 +302,7 @@ class PixabayImageSourceProvider(_BaseImageProvider):
         candidates = [_normalize_pixabay(item) for item in _list(payload.get("hits"))]
         return _build_result(
             provider_id=self.provider_id,
-            auto_strategy=str(self.settings.image_source_auto_strategy or "first_available"),
+            auto_strategy=str(self.settings.image_source_auto_strategy or "fast_first"),
             query=query,
             options=options,
             candidates=candidates,
@@ -345,7 +349,7 @@ class PexelsImageSourceProvider(_BaseImageProvider):
         candidates = [_normalize_pexels(item) for item in _list(payload.get("photos"))]
         return _build_result(
             provider_id=self.provider_id,
-            auto_strategy=str(self.settings.image_source_auto_strategy or "first_available"),
+            auto_strategy=str(self.settings.image_source_auto_strategy or "fast_first"),
             query=query,
             options=options,
             candidates=candidates,
@@ -456,7 +460,7 @@ def _resolve_auto_provider(settings: Settings) -> str:
         for provider_id in AUTO_PROVIDER_ORDER
         if _provider_has_key(settings, provider_id)
     ]
-    strategy = str(settings.image_source_auto_strategy or "first_available").strip().lower()
+    strategy = str(settings.image_source_auto_strategy or "fast_first").strip().lower()
     if strategy == "random" and available_provider_ids:
         return random.choice(available_provider_ids)
     return available_provider_ids[0] if available_provider_ids else "auto"
@@ -487,14 +491,15 @@ def _resolve_parallel_providers(settings: Settings, requested_provider: str) -> 
 
 def _should_parallel_search(
     settings: Settings,
-    requested_provider: str,
     provider_ids: list[str],
+    *,
+    options: dict[str, Any],
 ) -> bool:
     if len(provider_ids) < 2:
         return False
-    requested = str(requested_provider or "auto").strip().lower()
-    strategy = str(settings.image_source_auto_strategy or "first_available").strip().lower()
-    return requested in {"auto", "cloud"} or strategy in PARALLEL_AUTO_STRATEGIES
+    strategy = str(settings.image_source_auto_strategy or "fast_first").strip().lower()
+    latency_mode = str(options.get("latency_mode") or "").strip().lower()
+    return strategy in PARALLEL_AUTO_STRATEGIES or latency_mode == "fast_first"
 
 
 def _provider_timeout_seconds(options: dict[str, Any]) -> float | None:
@@ -515,8 +520,10 @@ def _search_parallel_providers(
 ) -> ImageSourceExecutionResult:
     started = time.monotonic()
     per_page = int(options["per_page"])
-    strategy = str(settings.image_source_auto_strategy or "first_available").strip().lower()
-    if strategy not in PARALLEL_AUTO_STRATEGIES:
+    strategy = str(settings.image_source_auto_strategy or "fast_first").strip().lower()
+    if str(options.get("latency_mode") or "").strip().lower() == "fast_first":
+        strategy = "fast_first"
+    elif strategy not in PARALLEL_AUTO_STRATEGIES:
         strategy = "parallel"
     provider_timeout = min(
         max(0.1, float(settings.image_source_timeout_seconds)),
@@ -620,6 +627,9 @@ def _search_parallel_providers(
                         candidate_count=len(candidates),
                     )
                 )
+                if strategy == "fast_first" and candidates:
+                    stop_collecting = True
+                    break
                 if _merged_candidate_count(provider_results, per_page=per_page) >= per_page:
                     stop_collecting = True
                     break

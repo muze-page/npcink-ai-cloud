@@ -35,7 +35,7 @@ class ImageSourceAdminConfigService:
 
     def get_config(self) -> dict[str, Any]:
         provider_mode = str(self.settings.image_source_provider or "disabled")
-        auto_strategy = str(self.settings.image_source_auto_strategy or "first_available")
+        auto_strategy = str(self.settings.image_source_auto_strategy or "fast_first")
         return {
             "provider_mode": provider_mode,
             "auto_strategy": auto_strategy,
@@ -143,13 +143,13 @@ class ImageSourceAdminConfigService:
                 payload.get("auto_strategy")
                 or runtime.get("auto_strategy")
                 or self.settings.image_source_auto_strategy
-                or "first_available"
+                or "fast_first"
             )
             .strip()
             .lower()
         )
         if auto_strategy not in {"first_available", "random", "parallel", "fast_first"}:
-            auto_strategy = "first_available"
+            auto_strategy = "fast_first"
         return {
             "provider": provider,
             "auto_strategy": auto_strategy,
@@ -188,7 +188,7 @@ class ImageSourceAdminConfigService:
         self.settings.image_source_provider = env.get(ENV_KEYS["provider"], "disabled")
         self.settings.image_source_auto_strategy = env.get(
             ENV_KEYS["auto_strategy"],
-            "first_available",
+            "fast_first",
         )
         self.settings.image_source_unsplash_base_url = env.get(
             ENV_KEYS["unsplash_base_url"],

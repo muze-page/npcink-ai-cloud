@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import threading
+import time
 from pathlib import Path
 from typing import Any
 
@@ -25,6 +26,7 @@ from app.domain.image_sources.service import (
     ImageSourceProviderError,
     ImageSourceProviderUsage,
     ImageSourceService,
+    PexelsImageSourceProvider,
     PixabayImageSourceProvider,
     UnsplashImageSourceProvider,
 )
@@ -510,6 +512,104 @@ def test_image_source_parallel_provider_failure_keeps_successful_candidates(
     attempts = {item["provider"]: item for item in result["provider_attempts"]}
     assert attempts["unsplash"]["status"] == "failed"
     assert attempts["pixabay"]["status"] == "ready"
+
+
+def test_image_source_fast_first_parallel_returns_after_first_success(
+    tmp_path: Path,
+    monkeypatch: Any,
+) -> None:
+    _, client = _build_client(
+        tmp_path,
+        settings_overrides={
+            "image_source_provider": "auto",
+            "image_source_auto_strategy": "fast_first",
+            "image_source_unsplash_access_key": "placeholder-unsplash-key",
+            "image_source_pixabay_api_key": "placeholder-pixabay-key",
+            "image_source_pexels_api_key": "",
+        },
+    )
+    slow_started = threading.Event()
+    release_slow = threading.Event()
+
+    def slow_unsplash_search(
+        self: UnsplashImageSourceProvider,
+        *,
+        query: str,
+        options: dict[str, Any],
+        site_id: str,
+        run_id: str,
+    ) -> ImageSourceExecutionResult:
+        slow_started.set()
+        release_slow.wait(5)
+        return image_source_service._build_result(
+            provider_id="unsplash",
+            auto_strategy="fast_first",
+            query=query,
+            options=options,
+            candidates=[_stock_candidate("unsplash", 1)],
+            usage=ImageSourceProviderUsage(
+                provider_id="unsplash",
+                model_id="image-source-search",
+                instance_id="cloud-managed",
+                region="unspecified",
+                latency_ms=5000,
+                cost=0.001,
+            ),
+        )
+
+    def fast_pixabay_search(
+        self: PixabayImageSourceProvider,
+        *,
+        query: str,
+        options: dict[str, Any],
+        site_id: str,
+        run_id: str,
+    ) -> ImageSourceExecutionResult:
+        assert slow_started.wait(1), "parallel search did not start unsplash"
+        return image_source_service._build_result(
+            provider_id="pixabay",
+            auto_strategy="fast_first",
+            query=query,
+            options=options,
+            candidates=[_stock_candidate("pixabay", index) for index in range(1, 4)],
+            usage=ImageSourceProviderUsage(
+                provider_id="pixabay",
+                model_id="image-source-search",
+                instance_id="cloud-managed",
+                region="unspecified",
+                latency_ms=15,
+                cost=0.001,
+            ),
+        )
+
+    monkeypatch.setattr(UnsplashImageSourceProvider, "search", slow_unsplash_search)
+    monkeypatch.setattr(PixabayImageSourceProvider, "search", fast_pixabay_search)
+
+    started = time.monotonic()
+    try:
+        response = _execute(
+            client,
+            _payload({"provider": "auto", "per_page": 9}),
+            idempotency_key="image-source-fast-first-parallel",
+        )
+    finally:
+        release_slow.set()
+    elapsed = time.monotonic() - started
+
+    assert response.status_code == 200, response.text
+    assert elapsed < 1.0
+    result = response.json()["data"]["result"]
+    assert result["provider_mode"] == "parallel"
+    assert result["auto_strategy"] == "fast_first"
+    assert [item["provider"] for item in result["images"]] == [
+        "pixabay",
+        "pixabay",
+        "pixabay",
+    ]
+    assert result["active_sources"] == [{"provider": "pixabay", "count": 3}]
+    attempts = {item["provider"]: item for item in result["provider_attempts"]}
+    assert attempts["pixabay"]["status"] == "ready"
+    assert attempts["unsplash"]["status"] == "abandoned"
 
 
 def test_image_source_preserves_sensitive_request_classification(
@@ -1403,3 +1503,85 @@ def test_image_source_auto_random_selects_configured_provider(monkeypatch: Any) 
     assert choices == [("pixabay", "pexels")]
     assert image_source_service._resolve_provider(settings, "pixabay") == "pixabay"
     assert choices == [("pixabay", "pexels")]
+
+
+def test_image_source_execute_auto_random_uses_single_resolved_provider(
+    monkeypatch: Any,
+) -> None:
+    settings = Settings(
+        _env_file=None,
+        environment="test",
+        database_url="sqlite+pysqlite:///:memory:",
+        redis_url="redis://localhost:6379/0",
+        admin_session_secret=TEST_ADMIN_SESSION_SECRET,
+        portal_jwt_secret=TEST_PORTAL_JWT_SECRET,
+        image_source_provider="auto",
+        image_source_auto_strategy="random",
+        image_source_unsplash_access_key="",
+        image_source_pixabay_api_key="placeholder-pixabay-key",
+        image_source_pexels_api_key="placeholder-pexels-key",
+    )
+    choices: list[tuple[str, ...]] = []
+
+    def fake_choice(provider_ids: list[str]) -> str:
+        choices.append(tuple(provider_ids))
+        return "pexels"
+
+    def fail_pixabay_search(
+        self: PixabayImageSourceProvider,
+        *,
+        query: str,
+        options: dict[str, Any],
+        site_id: str,
+        run_id: str,
+    ) -> ImageSourceExecutionResult:
+        raise AssertionError("random strategy should execute only the resolved provider")
+
+    def fake_pexels_search(
+        self: PexelsImageSourceProvider,
+        *,
+        query: str,
+        options: dict[str, Any],
+        site_id: str,
+        run_id: str,
+    ) -> ImageSourceExecutionResult:
+        return image_source_service._build_result(
+            provider_id="pexels",
+            auto_strategy="random",
+            query=query,
+            options=options,
+            candidates=[_stock_candidate("pexels", 1)],
+            usage=ImageSourceProviderUsage(
+                provider_id="pexels",
+                model_id="image-source-search",
+                instance_id="cloud-managed",
+                region="unspecified",
+                latency_ms=10,
+                cost=0.001,
+            ),
+        )
+
+    monkeypatch.setattr(image_source_service.random, "choice", fake_choice)
+    monkeypatch.setattr(PixabayImageSourceProvider, "search", fail_pixabay_search)
+    monkeypatch.setattr(PexelsImageSourceProvider, "search", fake_pexels_search)
+
+    execution = ImageSourceService(settings).execute(
+        site_id="site_alpha",
+        ability_name="magick-ai-toolbox/search-image-source",
+        contract_version="image_source_cloud_request.v1",
+        input_payload={
+            "contract_version": "image_source_cloud_request.v1",
+            "query": "editorial article image",
+            "provider": "auto",
+            "per_page": 9,
+            "orientation": "landscape",
+            "candidate_contract": "image_candidate.v1",
+        },
+        run_id="run_image_source_random_single",
+    )
+
+    assert choices == [("pixabay", "pexels")]
+    assert execution.result_json["provider_mode"] == "pexels"
+    assert execution.result_json["resolved_provider"] == "pexels"
+    assert execution.result_json["resolved_providers"] == ["pexels"]
+    assert execution.result_json["auto_strategy"] == "random"
