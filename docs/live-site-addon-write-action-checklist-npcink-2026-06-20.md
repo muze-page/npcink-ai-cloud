@@ -101,6 +101,48 @@ provisioning, or the no-go exclusions, stop and ask again.
 
 ## Execution Sequence
 
+The first-stage guarded helper combines the addon install/activation guard and
+the Cloud identity guard into one audit trail:
+
+```bash
+scripts/live-site-stage1.py \
+  --output-dir .tmp/live-site-stage1/npcink-stage1
+```
+
+Default mode is prepare-only. It re-runs the addon pre-write package, writes the
+addon install plan, writes the Cloud internal service request plan, and emits:
+
+- `.tmp/live-site-stage1/npcink-stage1/stage1-report.json`
+- `.tmp/live-site-stage1/npcink-stage1/summary.md`
+- `.tmp/live-site-stage1/npcink-stage1/addon-install/`
+- `.tmp/live-site-stage1/npcink-stage1/identity/`
+
+It does not install or activate the plugin, call the Cloud service, write addon
+settings, run runtime smoke, run Site Knowledge sync/search, write content, or
+enable monitoring.
+
+After the exact approval text above is provided and
+`MAGICK_CLOUD_INTERNAL_AUTH_TOKEN` is available, stage 1 can be executed with:
+
+```bash
+scripts/live-site-stage1.py \
+  --execute \
+  --approval-text '<paste the exact approval text>' \
+  --base-url http://127.0.0.1:8010 \
+  --output-dir .tmp/live-site-stage1/npcink-stage1
+```
+
+Execute mode first installs/activates the addon through the existing WP-CLI
+guard. It provisions the dedicated Cloud identity only if the addon verifies as
+active. It still stops before wp-admin Save and Verify, runtime smoke, Site
+Knowledge sync/search, content writes, and monitoring.
+
+If key issue succeeds, the customer-facing Cloud API Key is written only to
+`.tmp/live-site-stage1/npcink-stage1/identity/cloud-api-key.secret.json`; do not
+commit or paste that value into shared docs or terminal summaries.
+
+The lower-level helpers remain available for focused debugging.
+
 The guarded helper for the install/activation portion is:
 
 ```bash
