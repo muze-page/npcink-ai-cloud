@@ -195,6 +195,26 @@ If key issue succeeds, the customer-facing Cloud API Key is written only to
 `.tmp/live-site-stage1/npcink-stage1/identity/cloud-api-key.secret.json`; do not
 commit or paste that value into shared docs or terminal summaries.
 
+Before opening wp-admin, generate the read-only Save and Verify handoff:
+
+```bash
+scripts/live-site-save-verify-handoff.py \
+  --stage-report .tmp/live-site-stage1/npcink-stage1/stage1-report.json \
+  --output-dir .tmp/live-site-save-verify-handoff/npcink-stage1
+```
+
+This handoff confirms Stage 1 was executed successfully, confirms the local
+secret file exists and contains the required fields, and prints the exact addon
+admin URL:
+
+```text
+http://npcink.local/wp-admin/admin.php?page=npcink-cloud-addon
+```
+
+It reports only secret presence and length. It does not print the Cloud API Key,
+write WordPress options, provision Cloud identity, call runtime, run Site
+Knowledge sync/search, enable monitoring, or write content.
+
 After the addon admin page reports Save and Verify success, run the read-only
 Stage 1 acceptance check:
 
