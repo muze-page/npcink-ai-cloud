@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
 from collections.abc import Sequence
 from datetime import UTC, datetime
@@ -20,6 +19,11 @@ from app.dev.live_site_addon_install import (
     build_plan_report as build_addon_install_report,
 )
 from app.dev.live_site_addon_package import DEFAULT_ADDON_ZIP, DEFAULT_NPCINK_SITE
+from app.dev.live_site_env import (
+    INTERNAL_TOKEN_ENV_KEY,
+    default_env_files,
+    resolve_env_secret,
+)
 from app.dev.live_site_identity_provision import (
     DEFAULT_ACCOUNT_ID,
     DEFAULT_BASE_URL,
@@ -324,9 +328,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--addon-zip", type=Path, default=DEFAULT_ADDON_ZIP)
     parser.add_argument("--output-dir", type=Path)
     parser.add_argument("--base-url", default=DEFAULT_BASE_URL)
+    parser.add_argument("--internal-token", default="")
     parser.add_argument(
-        "--internal-token",
-        default=os.environ.get("MAGICK_CLOUD_INTERNAL_AUTH_TOKEN", ""),
+        "--env-file",
+        action="append",
+        type=Path,
+        help=(
+            "Env file to read for MAGICK_CLOUD_INTERNAL_AUTH_TOKEN. "
+            "Defaults to .env and .env.local."
+        ),
     )
     parser.add_argument("--account-id", default=DEFAULT_ACCOUNT_ID)
     parser.add_argument("--site-id", default=DEFAULT_SITE_ID)
@@ -345,6 +355,11 @@ def main(argv: list[str] | None = None) -> int:
     target = parse_site_spec(args.site) if args.site else DEFAULT_NPCINK_SITE
     suffix = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     output_dir = args.output_dir or DEFAULT_OUTPUT_ROOT / f"{target.label}-stage1-{suffix}"
+    internal_token = resolve_env_secret(
+        cli_value=args.internal_token,
+        env_key=INTERNAL_TOKEN_ENV_KEY,
+        env_files=default_env_files(args.env_file),
+    )
     try:
         report = build_stage_report(
             target=target,
@@ -353,7 +368,7 @@ def main(argv: list[str] | None = None) -> int:
             addon_zip=args.addon_zip,
             output_dir=output_dir,
             base_url=args.base_url,
-            internal_token=args.internal_token,
+            internal_token=internal_token.value,
             account_id=args.account_id,
             site_id=args.site_id,
             site_name=args.site_name,
@@ -363,6 +378,10 @@ def main(argv: list[str] | None = None) -> int:
             timeout_seconds=args.timeout_seconds,
             execute=args.execute,
             approval_text=args.approval_text,
+        )
+        report["internal_token"] = internal_token.redacted()
+        (output_dir / "stage1-report.json").write_text(
+            json.dumps(report, indent=2, sort_keys=True) + "\n"
         )
     except GuardError as exc:
         print(json.dumps({"ok": False, "guard_error": str(exc)}), file=sys.stderr)

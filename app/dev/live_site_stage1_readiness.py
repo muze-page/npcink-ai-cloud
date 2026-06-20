@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
 from collections.abc import Callable
 from datetime import UTC, datetime
@@ -16,6 +15,11 @@ from app.dev.live_site_addon_package import (
     DEFAULT_ADDON_ZIP,
     DEFAULT_NPCINK_SITE,
     inspect_addon_zip,
+)
+from app.dev.live_site_env import (
+    INTERNAL_TOKEN_ENV_KEY,
+    default_env_files,
+    resolve_env_secret,
 )
 from app.dev.live_site_identity_provision import (
     DEFAULT_ACCOUNT_ID,
@@ -261,6 +265,11 @@ def build_readiness_report(
             "scopes": scopes,
             "request_paths": [item.path for item in request_plan],
             "internal_token_present": bool(internal_token.strip()),
+            "internal_token": {
+                "present": bool(internal_token.strip()),
+                "source": "caller",
+                "length": len(internal_token.strip()),
+            },
         },
         "failures": failures,
         "all_failures": all_failures,
@@ -297,6 +306,7 @@ def render_markdown(report: dict[str, object]) -> str:
     target = _dict(report.get("target"))
     boundary = _dict(report.get("boundary"))
     identity_plan = _dict(report.get("identity_plan"))
+    internal_token = _dict(identity_plan.get("internal_token"))
     failures = _dict(report.get("failures"))
     next_step = _dict(report.get("next_action"))
     request_paths = ", ".join(str(item) for item in _list(identity_plan.get("request_paths")))
@@ -330,6 +340,8 @@ def render_markdown(report: dict[str, object]) -> str:
         f"- Account ID: `{_text(identity_plan.get('account_id'))}`",
         f"- Site ID: `{_text(identity_plan.get('site_id'))}`",
         f"- Internal token present: `{identity_plan.get('internal_token_present')}`",
+        f"- Internal token source: `{_text(internal_token.get('source')) or 'caller'}`",
+        f"- Internal token length: `{internal_token.get('length', 0)}`",
         f"- Request paths: `{request_paths}`",
         "",
         "## Failures",
@@ -372,9 +384,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--addon-zip", type=Path, default=DEFAULT_ADDON_ZIP)
     parser.add_argument("--output-dir", type=Path)
     parser.add_argument("--base-url", default=DEFAULT_BASE_URL)
+    parser.add_argument("--internal-token", default="")
     parser.add_argument(
-        "--internal-token",
-        default=os.environ.get("MAGICK_CLOUD_INTERNAL_AUTH_TOKEN", ""),
+        "--env-file",
+        action="append",
+        type=Path,
+        help=(
+            "Env file to read for MAGICK_CLOUD_INTERNAL_AUTH_TOKEN. "
+            "Defaults to .env and .env.local."
+        ),
     )
     parser.add_argument("--account-id", default=DEFAULT_ACCOUNT_ID)
     parser.add_argument("--site-id", default=DEFAULT_SITE_ID)
@@ -392,6 +410,11 @@ def main(argv: list[str] | None = None) -> int:
     target = parse_site_spec(args.site) if args.site else DEFAULT_NPCINK_SITE
     suffix = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     output_dir = args.output_dir or DEFAULT_OUTPUT_ROOT / f"{target.label}-readiness-{suffix}"
+    internal_token = resolve_env_secret(
+        cli_value=args.internal_token,
+        env_key=INTERNAL_TOKEN_ENV_KEY,
+        env_files=default_env_files(args.env_file),
+    )
     report = build_readiness_report(
         target=target,
         php_bin=args.php_bin,
@@ -399,7 +422,7 @@ def main(argv: list[str] | None = None) -> int:
         addon_zip=args.addon_zip,
         output_dir=output_dir,
         base_url=args.base_url,
-        internal_token=args.internal_token,
+        internal_token=internal_token.value,
         account_id=args.account_id,
         site_id=args.site_id,
         site_name=args.site_name,
@@ -409,6 +432,12 @@ def main(argv: list[str] | None = None) -> int:
         timeout_seconds=args.timeout_seconds,
         approval_text=args.approval_text,
     )
+    identity_plan = _dict(report.get("identity_plan"))
+    identity_plan["internal_token"] = internal_token.redacted()
+    (output_dir / "stage1-readiness-report.json").write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n"
+    )
+    (output_dir / "summary.md").write_text(render_markdown(report))
     print(
         json.dumps(
             {

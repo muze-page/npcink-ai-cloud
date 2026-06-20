@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -14,6 +13,11 @@ from urllib.parse import urljoin
 from urllib.request import Request, urlopen
 
 from app.dev.live_site_addon_install import APPROVAL_TEXT, approval_matches
+from app.dev.live_site_env import (
+    INTERNAL_TOKEN_ENV_KEY,
+    default_env_files,
+    resolve_env_secret,
+)
 from app.domain.commercial.customer_api_keys import build_customer_api_key
 
 DEFAULT_OUTPUT_ROOT = Path(".tmp/live-site-identity")
@@ -383,9 +387,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         description="Prepare or execute guarded Cloud identity provisioning for npcink.local."
     )
     parser.add_argument("--base-url", default=DEFAULT_BASE_URL)
+    parser.add_argument("--internal-token", default="")
     parser.add_argument(
-        "--internal-token",
-        default=os.environ.get("MAGICK_CLOUD_INTERNAL_AUTH_TOKEN", ""),
+        "--env-file",
+        action="append",
+        type=Path,
+        help=(
+            "Env file to read for MAGICK_CLOUD_INTERNAL_AUTH_TOKEN. "
+            "Defaults to .env and .env.local."
+        ),
     )
     parser.add_argument("--account-id", default=DEFAULT_ACCOUNT_ID)
     parser.add_argument("--site-id", default=DEFAULT_SITE_ID)
@@ -405,10 +415,15 @@ def main(argv: list[str] | None = None) -> int:
     scopes = [scope.strip() for scope in args.scopes.split(",") if scope.strip()]
     suffix = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     output_dir = args.output_dir or DEFAULT_OUTPUT_ROOT / f"npcink-live-identity-{suffix}"
+    internal_token = resolve_env_secret(
+        cli_value=args.internal_token,
+        env_key=INTERNAL_TOKEN_ENV_KEY,
+        env_files=default_env_files(args.env_file),
+    )
     try:
         report = build_report(
             base_url=args.base_url,
-            internal_token=args.internal_token,
+            internal_token=internal_token.value,
             account_id=args.account_id,
             site_id=args.site_id,
             site_name=args.site_name,
@@ -419,6 +434,10 @@ def main(argv: list[str] | None = None) -> int:
             execute=args.execute,
             approval_text=args.approval_text,
             timeout_seconds=args.timeout_seconds,
+        )
+        report["internal_token"] = internal_token.redacted()
+        (output_dir / "identity-report.json").write_text(
+            json.dumps(report, indent=2, sort_keys=True) + "\n"
         )
     except GuardError as exc:
         print(json.dumps({"ok": False, "guard_error": str(exc)}), file=sys.stderr)

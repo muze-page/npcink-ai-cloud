@@ -135,6 +135,16 @@ identity request plan, Cloud `/health/live`, and internal-token guarded
 identity, call runtime, run Site Knowledge, enable monitoring, or write
 content.
 
+The readiness, identity, and Stage 1 helpers resolve
+`MAGICK_CLOUD_INTERNAL_AUTH_TOKEN` in this order:
+
+1. explicit `--internal-token`;
+2. current process environment;
+3. `.env`, then `.env.local`.
+
+Reports only record token presence, source, and length; they do not print the
+token value. Use `--env-file <path>` to override the default env-file list.
+
 If it reports `ok=false`, fix those prerequisites before asking for Stage 1
 execute approval. If it reports `ok=true`, the next remaining gate is still the
 exact approval text below; readiness is not authorization.
