@@ -154,6 +154,10 @@ If it reports `ok=false`, fix those prerequisites before asking for Stage 1
 execute approval. If it reports `ok=true`, the next remaining gate is still the
 exact approval text below; readiness is not authorization.
 
+Stage 1 execute also enforces this readiness gate internally before plugin
+installation. If the readiness report fails, the helper stops before addon
+install/activation and before Cloud identity provisioning.
+
 ```bash
 scripts/live-site-stage1.py \
   --output-dir .tmp/live-site-stage1/npcink-stage1

@@ -42,6 +42,9 @@ from app.dev.live_site_identity_provision import (
     build_report as build_identity_report,
 )
 from app.dev.live_site_preflight import SiteTarget, _dict, _text, parse_site_spec
+from app.dev.live_site_stage1_readiness import (
+    build_readiness_report as build_stage1_readiness_report,
+)
 
 DEFAULT_OUTPUT_ROOT = Path(".tmp/live-site-stage1")
 
@@ -84,6 +87,28 @@ class IdentityBuilder(Protocol):
     ) -> dict[str, object]: ...
 
 
+class ReadinessBuilder(Protocol):
+    def __call__(
+        self,
+        *,
+        target: SiteTarget,
+        php_bin: str,
+        wp_bin: str,
+        addon_zip: Path,
+        output_dir: Path,
+        base_url: str,
+        internal_token: str,
+        account_id: str,
+        site_id: str,
+        site_name: str,
+        wordpress_url: str,
+        key_label: str,
+        scopes: list[str],
+        timeout_seconds: int,
+        approval_text: str,
+    ) -> dict[str, object]: ...
+
+
 def _as_list(value: object) -> list[Any]:
     return value if isinstance(value, list) else []
 
@@ -108,6 +133,34 @@ def _identity_skipped(reason: str) -> dict[str, object]:
     return {"skipped": True, "reason": reason}
 
 
+def validate_execute_readiness(report: dict[str, object]) -> list[str]:
+    failures: list[str] = []
+    if report.get("mode") != "read_only_readiness":
+        failures.append("readiness report mode is not read_only_readiness")
+    if report.get("ok") is not True:
+        failures.append("readiness report is not ok")
+    if report.get("ready_for_stage1_execute_after_exact_approval") is not True:
+        failures.append("readiness did not mark stage 1 execute as ready")
+    for failure in _as_list(report.get("all_failures")):
+        failures.append(str(failure))
+    boundary = _dict(report.get("boundary"))
+    expected_false = [
+        "wordpress_writes",
+        "wordpress_option_writes",
+        "cloud_identity_provisioning",
+        "public_runtime_provisioning",
+        "cloud_runtime_execution",
+        "site_knowledge_sync",
+        "site_knowledge_search",
+        "content_writes",
+        "monitoring_enabled",
+    ]
+    for key in expected_false:
+        if boundary.get(key) is not False:
+            failures.append(f"readiness boundary.{key} expected false")
+    return failures
+
+
 def build_stage_report(
     *,
     target: SiteTarget,
@@ -128,10 +181,37 @@ def build_stage_report(
     approval_text: str,
     addon_builder: AddonInstallBuilder = build_addon_install_report,
     identity_builder: IdentityBuilder = build_identity_report,
+    readiness_builder: ReadinessBuilder = build_stage1_readiness_report,
 ) -> dict[str, object]:
     output_dir.mkdir(parents=True, exist_ok=True)
     if execute and not approval_matches(approval_text):
         raise GuardError("exact approval text did not match; stage 1 writes were not run")
+
+    readiness_report: dict[str, object] = {
+        "skipped": True,
+        "reason": "prepare_only",
+    }
+    if execute:
+        readiness_report = readiness_builder(
+            target=target,
+            php_bin=php_bin,
+            wp_bin=wp_bin,
+            addon_zip=addon_zip,
+            output_dir=output_dir / "readiness",
+            base_url=base_url,
+            internal_token=internal_token,
+            account_id=account_id,
+            site_id=site_id,
+            site_name=site_name,
+            wordpress_url=wordpress_url,
+            key_label=key_label,
+            scopes=scopes,
+            timeout_seconds=timeout_seconds,
+            approval_text=approval_text,
+        )
+        readiness_failures = validate_execute_readiness(readiness_report)
+        if readiness_failures:
+            raise GuardError("stage 1 readiness failed: " + "; ".join(readiness_failures))
 
     try:
         addon_report = addon_builder(
@@ -194,6 +274,7 @@ def build_stage_report(
             "site_knowledge_search": False,
             "content_writes": False,
             "monitoring_enabled": False,
+            "readiness_checked": execute,
         },
         "approval": {
             "required_for_execute": APPROVAL_TEXT,
@@ -206,8 +287,12 @@ def build_stage_report(
             "identity_dir": str(output_dir / "identity"),
             "stage_report": str(output_dir / "stage1-report.json"),
             "summary": str(output_dir / "summary.md"),
+            "readiness_report": str(output_dir / "readiness" / "stage1-readiness-report.json")
+            if execute
+            else "",
             "secret_file": secret_file,
         },
+        "readiness": redact_payload(readiness_report),
         "addon_install": redact_payload(addon_report),
         "identity_provision": redact_payload(identity_status),
         "addon_ready_for_manual_verify": addon_active,
@@ -285,12 +370,14 @@ def render_markdown(report: dict[str, object]) -> str:
         f"- Site Knowledge search: `{boundary.get('site_knowledge_search')}`",
         f"- Content writes: `{boundary.get('content_writes')}`",
         f"- Monitoring enabled: `{boundary.get('monitoring_enabled')}`",
+        f"- Readiness checked: `{boundary.get('readiness_checked')}`",
         "",
         "## Outputs",
         "",
         f"- Stage report: `{outputs.get('stage_report')}`",
         f"- Addon install dir: `{outputs.get('addon_install_dir')}`",
         f"- Identity dir: `{outputs.get('identity_dir')}`",
+        f"- Readiness report: `{outputs.get('readiness_report') or 'not generated'}`",
         f"- Secret file: `{outputs.get('secret_file') or 'not generated'}`",
         "",
         "## Readiness",

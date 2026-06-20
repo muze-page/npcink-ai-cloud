@@ -102,6 +102,26 @@ def test_prepare_mode_runs_both_prepare_reports_without_writes(tmp_path) -> None
 def test_execute_skips_identity_when_addon_is_not_active(tmp_path) -> None:
     calls: list[str] = []
 
+    def readiness_builder(**_kwargs: object) -> dict[str, object]:
+        calls.append("readiness")
+        return {
+            "mode": "read_only_readiness",
+            "ok": True,
+            "ready_for_stage1_execute_after_exact_approval": True,
+            "all_failures": [],
+            "boundary": {
+                "wordpress_writes": False,
+                "wordpress_option_writes": False,
+                "cloud_identity_provisioning": False,
+                "public_runtime_provisioning": False,
+                "cloud_runtime_execution": False,
+                "site_knowledge_sync": False,
+                "site_knowledge_search": False,
+                "content_writes": False,
+                "monitoring_enabled": False,
+            },
+        }
+
     def addon_builder(**kwargs: object) -> dict[str, object]:
         calls.append(f"addon:{kwargs['execute']}")
         return {"mode": "execute", "addon_active": False}
@@ -116,9 +136,10 @@ def test_execute_skips_identity_when_addon_is_not_active(tmp_path) -> None:
         approval_text=APPROVAL_TEXT,
         addon_builder=addon_builder,
         identity_builder=identity_builder,
+        readiness_builder=readiness_builder,
     )
 
-    assert calls == ["addon:True"]
+    assert calls == ["readiness", "addon:True"]
     assert report["ok"] is False
     assert report["boundary"]["cloud_identity_provisioning"] is False  # type: ignore[index]
     assert report["identity_provision"] == {
@@ -128,6 +149,25 @@ def test_execute_skips_identity_when_addon_is_not_active(tmp_path) -> None:
 
 
 def test_execute_report_redacts_identity_secret_material(tmp_path) -> None:
+    def readiness_builder(**_kwargs: object) -> dict[str, object]:
+        return {
+            "mode": "read_only_readiness",
+            "ok": True,
+            "ready_for_stage1_execute_after_exact_approval": True,
+            "all_failures": [],
+            "boundary": {
+                "wordpress_writes": False,
+                "wordpress_option_writes": False,
+                "cloud_identity_provisioning": False,
+                "public_runtime_provisioning": False,
+                "cloud_runtime_execution": False,
+                "site_knowledge_sync": False,
+                "site_knowledge_search": False,
+                "content_writes": False,
+                "monitoring_enabled": False,
+            },
+        }
+
     def addon_builder(**_kwargs: object) -> dict[str, object]:
         return {"mode": "execute", "addon_active": True}
 
@@ -149,6 +189,7 @@ def test_execute_report_redacts_identity_secret_material(tmp_path) -> None:
         approval_text=APPROVAL_TEXT,
         addon_builder=addon_builder,
         identity_builder=identity_builder,
+        readiness_builder=readiness_builder,
     )
     encoded = json.dumps(report)
 
@@ -157,3 +198,47 @@ def test_execute_report_redacts_identity_secret_material(tmp_path) -> None:
     assert "mak1_sensitive" not in encoded
     assert report["outputs"]["secret_file"].endswith("cloud-api-key.secret.json")  # type: ignore[index]
     assert "secret_live" not in (tmp_path / "stage1-report.json").read_text()
+
+
+def test_execute_requires_readiness_before_addon_install(tmp_path) -> None:
+    calls: list[str] = []
+
+    def readiness_builder(**_kwargs: object) -> dict[str, object]:
+        calls.append("readiness")
+        return {
+            "mode": "read_only_readiness",
+            "ok": False,
+            "ready_for_stage1_execute_after_exact_approval": False,
+            "all_failures": ["cloud: Cloud /health/ready is not ready"],
+            "boundary": {
+                "wordpress_writes": False,
+                "wordpress_option_writes": False,
+                "cloud_identity_provisioning": False,
+                "public_runtime_provisioning": False,
+                "cloud_runtime_execution": False,
+                "site_knowledge_sync": False,
+                "site_knowledge_search": False,
+                "content_writes": False,
+                "monitoring_enabled": False,
+            },
+        }
+
+    def addon_builder(**_kwargs: object) -> dict[str, object]:
+        calls.append("addon")
+        return {"addon_active": True}
+
+    def identity_builder(**_kwargs: object) -> dict[str, object]:
+        calls.append("identity")
+        return {"secret_file": "/secret.json"}
+
+    with pytest.raises(GuardError, match="stage 1 readiness failed"):
+        build_stage_report(
+            **_stage_kwargs(tmp_path),
+            execute=True,
+            approval_text=APPROVAL_TEXT,
+            addon_builder=addon_builder,
+            identity_builder=identity_builder,
+            readiness_builder=readiness_builder,
+        )
+
+    assert calls == ["readiness"]
