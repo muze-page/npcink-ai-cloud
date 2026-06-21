@@ -16,6 +16,7 @@ from app.core.db import get_session, init_schema
 from app.core.models import ProviderCallRecord, RunRecord, UsageMeterEvent
 from app.core.services import CloudServices
 from app.domain.web_search.service import (
+    _ZHIHU_HOT_LIST_CACHE,
     _TAVILY_POOL_CURSOR,
     _TAVILY_POOL_QUARANTINED_UNTIL,
     ApifyWebSearchProvider,
@@ -24,6 +25,7 @@ from app.domain.web_search.service import (
     WebSearchExecutionResult,
     WebSearchProviderError,
     WebSearchProviderUsage,
+    ZhihuWebSearchProvider,
 )
 from tests.conftest import (
     TEST_ADMIN_SESSION_SECRET,
@@ -775,6 +777,353 @@ def test_cloud_managed_web_search_uses_apify_provider(
             )
         )
         assert provider_calls[0].provider_id == "apify"
+
+
+def test_cloud_managed_web_search_uses_zhihu_provider(
+    tmp_path: Path,
+    monkeypatch: Any,
+) -> None:
+    database_url, client = _build_client(
+        tmp_path,
+        settings_overrides={
+            "web_search_provider": "zhihu",
+            "web_search_zhihu_access_secret": "placeholder-zhihu-secret",
+        },
+    )
+
+    def fake_search(
+        self: ZhihuWebSearchProvider,
+        *,
+        query: str,
+        options: dict[str, Any],
+        site_id: str,
+        run_id: str,
+    ) -> WebSearchExecutionResult:
+        assert options["intent"] == "zhihu_research"
+        assert options["source_type"] == "zhihu_research"
+        return WebSearchExecutionResult(
+            result_json={
+                "artifact_type": "web_search_results",
+                "composition_role": "external_web_evidence",
+                "status": "ready",
+                "provider": "zhihu",
+                "intent": options["intent"],
+                "query_hash": "hash-only",
+                "query_chars": len(query),
+                "output_contract": "search_evidence_pack.v1",
+                "evidence_gate": {
+                    "status": "passed",
+                    "allows_web_grounded_assertion": True,
+                    "source_count": 1,
+                },
+                "evidence_pack": {
+                    "artifact_type": "search_evidence_pack",
+                    "contract_version": "search_evidence_pack.v1",
+                    "pack_type": "zhihu_writing_research",
+                    "source_cards": [],
+                    "write_posture": "suggestion_only",
+                    "direct_wordpress_write": False,
+                },
+                "results": [
+                    {
+                        "title": "Zhihu source",
+                        "url": "https://www.zhihu.com/question/123",
+                        "snippet": "A source returned by Zhihu.",
+                        "score": 0.98,
+                        "source": "zhihu",
+                        "content_type": "Question",
+                        "vote_up_count": 32,
+                        "comment_count": 8,
+                        "write_posture": "suggestion_only",
+                        "direct_wordpress_write": False,
+                    }
+                ],
+                "write_posture": "suggestion_only",
+                "direct_wordpress_write": False,
+            },
+            usage=WebSearchProviderUsage(
+                provider_id="zhihu",
+                model_id="zhihu-openapi-content",
+                instance_id="cloud-managed",
+                region="unspecified",
+                latency_ms=16,
+                cost=0.0,
+            ),
+        )
+
+    monkeypatch.setattr(ZhihuWebSearchProvider, "search", fake_search)
+
+    response = _execute(
+        client,
+        _payload(
+            {
+                "intent": "zhihu_research",
+                "source_type": "zhihu_research",
+                "include_hot_list": True,
+            }
+        ),
+        idempotency_key="web-search-zhihu",
+    )
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["result"]["provider"] == "zhihu"
+    assert data["result"]["intent"] == "zhihu_research"
+    assert data["result"]["results"][0]["source"] == "zhihu"
+    assert data["result"]["direct_wordpress_write"] is False
+    with get_session(database_url) as session:
+        provider_calls = list(
+            session.scalars(
+                select(ProviderCallRecord).where(ProviderCallRecord.run_id == data["run_id"])
+            )
+        )
+        assert provider_calls[0].provider_id == "zhihu"
+
+
+def test_zhihu_provider_uses_bearer_secret_and_merges_hot_list(monkeypatch: Any) -> None:
+    captured: list[dict[str, Any]] = []
+
+    class FakeClient:
+        def __init__(self, *, timeout: float) -> None:
+            captured.append({"timeout": timeout})
+
+        def __enter__(self) -> FakeClient:
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            return None
+
+        def get(
+            self,
+            endpoint: str,
+            *,
+            params: dict[str, str],
+            headers: dict[str, str],
+        ) -> httpx.Response:
+            captured.append({"endpoint": endpoint, "params": params, "headers": headers})
+            if endpoint.endswith("/zhihu_search"):
+                payload = {
+                    "Code": 0,
+                    "Message": "success",
+                    "Data": {
+                        "Items": [
+                            {
+                                "Title": "AI 写作应该如何准备资料？",
+                                "ContentType": "Answer",
+                                "ContentID": "answer-1",
+                                "ContentText": "先收集真实问题和反方观点。",
+                                "Url": "https://www.zhihu.com/answer/answer-1",
+                                "CommentCount": 2,
+                                "VoteUpCount": 9,
+                                "AuthorName": "知乎用户",
+                                "EditTime": 1750000000,
+                                "AuthorityLevel": "2",
+                                "RankingScore": 0.98,
+                            }
+                        ]
+                    },
+                }
+            else:
+                payload = {
+                    "Code": 0,
+                    "Message": "success",
+                    "Data": {
+                        "Items": [
+                            {
+                                "Title": "热榜上的 AI 写作讨论",
+                                "Url": "https://www.zhihu.com/question/456",
+                                "Summary": "关于写作准备的热点问题。",
+                                "ThumbnailUrl": "",
+                            }
+                        ]
+                    },
+                }
+            return httpx.Response(200, json=payload, request=httpx.Request("GET", endpoint))
+
+    monkeypatch.setattr("app.domain.web_search.service.httpx.Client", FakeClient)
+
+    result = ZhihuWebSearchProvider(
+        Settings(
+            _env_file=None,
+            environment="test",
+            web_search_provider="zhihu",
+            web_search_zhihu_access_secret="zhihu-secret",
+        )
+    ).search(
+        query="AI 写作准备",
+        options={
+            "intent": "zhihu_research",
+            "provider": "zhihu",
+            "max_results": 5,
+            "source_type": "zhihu_research",
+            "include_hot_list": True,
+            "evidence_policy": {"required_sources": 1, "no_hit_policy": "abstain"},
+        },
+        site_id="site_alpha",
+        run_id="run_zhihu_shape",
+    )
+
+    requests = [item for item in captured if "endpoint" in item]
+    assert len(requests) == 2
+    assert requests[0]["endpoint"].endswith("/api/v1/content/zhihu_search")
+    assert requests[0]["params"] == {"Query": "AI 写作准备", "Count": "5"}
+    assert requests[0]["headers"]["Authorization"] == "Bearer zhihu-secret"
+    assert "X-Request-Timestamp" in requests[0]["headers"]
+    assert requests[1]["endpoint"].endswith("/api/v1/content/hot_list")
+    assert result.result_json["provider"] == "zhihu"
+    assert result.result_json["evidence_pack"]["pack_type"] == "zhihu_writing_research"
+    assert result.result_json["result_count"] == 2
+    assert result.result_json["results"][0]["content_type"] == "Answer"
+    assert result.result_json["results"][0]["vote_up_count"] == 9
+    assert result.result_json["results"][1]["source"] == "zhihu_hot_list"
+    assert result.result_json["direct_wordpress_write"] is False
+
+
+def test_zhihu_research_does_not_mix_hot_list_by_default(monkeypatch: Any) -> None:
+    captured: list[dict[str, Any]] = []
+
+    class FakeClient:
+        def __init__(self, *, timeout: float) -> None:
+            captured.append({"timeout": timeout})
+
+        def __enter__(self) -> FakeClient:
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            return None
+
+        def get(
+            self,
+            endpoint: str,
+            *,
+            params: dict[str, str],
+            headers: dict[str, str],
+        ) -> httpx.Response:
+            captured.append({"endpoint": endpoint, "params": params, "headers": headers})
+            payload = {
+                "Code": 0,
+                "Message": "success",
+                "Data": {
+                    "Items": [
+                        {
+                            "Title": "AI 写作应该如何准备资料？",
+                            "ContentType": "Answer",
+                            "ContentText": "先收集真实问题和反方观点。",
+                            "Url": "https://www.zhihu.com/answer/answer-1",
+                            "RankingScore": 0.98,
+                        }
+                    ]
+                },
+            }
+            return httpx.Response(200, json=payload, request=httpx.Request("GET", endpoint))
+
+    monkeypatch.setattr("app.domain.web_search.service.httpx.Client", FakeClient)
+
+    result = ZhihuWebSearchProvider(
+        Settings(
+            _env_file=None,
+            environment="test",
+            web_search_provider="zhihu",
+            web_search_zhihu_access_secret="zhihu-secret",
+        )
+    ).search(
+        query="AI 写作准备",
+        options={
+            "intent": "zhihu_research",
+            "provider": "zhihu",
+            "max_results": 5,
+            "source_type": "zhihu_research",
+            "evidence_policy": {"required_sources": 1, "no_hit_policy": "abstain"},
+        },
+        site_id="site_alpha",
+        run_id="run_zhihu_no_hot_list",
+    )
+
+    requests = [item for item in captured if "endpoint" in item]
+    assert len(requests) == 1
+    assert requests[0]["endpoint"].endswith("/api/v1/content/zhihu_search")
+    assert result.result_json["result_count"] == 1
+    assert result.result_json["results"][0]["source"] == "zhihu"
+
+
+def test_zhihu_hot_topics_uses_cached_hot_list_without_search(monkeypatch: Any) -> None:
+    captured: list[dict[str, Any]] = []
+    _ZHIHU_HOT_LIST_CACHE.clear()
+
+    class FakeClient:
+        def __init__(self, *, timeout: float) -> None:
+            captured.append({"timeout": timeout})
+
+        def __enter__(self) -> FakeClient:
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            return None
+
+        def get(
+            self,
+            endpoint: str,
+            *,
+            params: dict[str, str],
+            headers: dict[str, str],
+        ) -> httpx.Response:
+            captured.append({"endpoint": endpoint, "params": params, "headers": headers})
+            payload = {
+                "Code": 0,
+                "Message": "success",
+                "Data": {
+                    "Items": [
+                        {
+                            "Title": "今天的 AI 写作热议",
+                            "Url": "https://www.zhihu.com/question/hot-1",
+                            "Summary": "热榜上的写作选题信号。",
+                            "ThumbnailUrl": "",
+                        }
+                    ]
+                },
+            }
+            return httpx.Response(200, json=payload, request=httpx.Request("GET", endpoint))
+
+    monkeypatch.setattr("app.domain.web_search.service.httpx.Client", FakeClient)
+
+    settings = Settings(
+        _env_file=None,
+        environment="test",
+        web_search_provider="zhihu",
+        web_search_zhihu_access_secret="zhihu-secret",
+        web_search_zhihu_hot_list_cache_ttl_seconds=3600,
+    )
+    provider = ZhihuWebSearchProvider(settings)
+    options = {
+        "intent": "zhihu_hot_topics",
+        "provider": "zhihu",
+        "max_results": 5,
+        "source_type": "zhihu_hot_list",
+        "evidence_policy": {"required_sources": 1, "no_hit_policy": "abstain"},
+    }
+
+    first = provider.search(
+        query="知乎热榜",
+        options=options,
+        site_id="site_alpha",
+        run_id="run_zhihu_hot_topics_first",
+    )
+    second = provider.search(
+        query="知乎热榜",
+        options=options,
+        site_id="site_alpha",
+        run_id="run_zhihu_hot_topics_second",
+    )
+
+    requests = [item for item in captured if "endpoint" in item]
+    assert len(requests) == 1
+    assert requests[0]["endpoint"].endswith("/api/v1/content/hot_list")
+    assert "zhihu_search" not in requests[0]["endpoint"]
+    assert first.result_json["intent"] == "zhihu_hot_topics"
+    assert first.result_json["evidence_pack"]["pack_type"] == "zhihu_hot_topic_pool"
+    assert first.result_json["results"][0]["source"] == "zhihu_hot_list"
+    assert second.result_json["results"][0]["title"] == "今天的 AI 写作热议"
+    _ZHIHU_HOT_LIST_CACHE.clear()
 
 
 def test_apify_provider_uses_actor_query_string_and_bearer_auth(monkeypatch: Any) -> None:

@@ -32,11 +32,13 @@ MAX_RESULT_SNIPPET_CHARS = 600
 MAX_DOMAIN_FILTERS = 10
 MAX_PROVIDER_RESPONSE_BYTES = 2_000_000
 MAX_READER_RESPONSE_BYTES = 500_000
-WEB_SEARCH_PROVIDER_ORDER = ("tavily", "bocha", "apify")
+WEB_SEARCH_PROVIDER_ORDER = ("tavily", "bocha", "apify", "zhihu")
 TAVILY_KEY_QUARANTINE_SECONDS = 300.0
 _TAVILY_POOL_LOCK = threading.Lock()
 _TAVILY_POOL_CURSOR: dict[str, int] = {}
 _TAVILY_POOL_QUARANTINED_UNTIL: dict[tuple[str, str], float] = {}
+_ZHIHU_HOT_LIST_LOCK = threading.Lock()
+_ZHIHU_HOT_LIST_CACHE: dict[str, tuple[float, list[dict[str, Any]]]] = {}
 
 
 class _TavilyApiKeySelection(TypedDict):
@@ -547,6 +549,171 @@ class ApifyWebSearchProvider:
         )
 
 
+class ZhihuWebSearchProvider:
+    provider_id = "zhihu"
+    model_id = "zhihu-openapi-content"
+    instance_id = "cloud-managed"
+
+    def __init__(self, settings: Settings) -> None:
+        self.settings = settings
+
+    def search(
+        self,
+        *,
+        query: str,
+        options: dict[str, Any],
+        site_id: str,
+        run_id: str,
+    ) -> WebSearchExecutionResult:
+        access_secret = str(self.settings.web_search_zhihu_access_secret or "").strip()
+        if not access_secret:
+            raise WebSearchProviderError(
+                "web_search.zhihu_access_secret_missing",
+                "Cloud-managed Zhihu access secret is not configured",
+            )
+        base_url = str(self.settings.web_search_zhihu_base_url or "").strip().rstrip("/")
+        max_results = coerce_positive_int(options.get("max_results"), default=5, maximum=10)
+        source_type = str(options.get("source_type") or "zhihu_search")
+        include_hot_list = bool(options.get("include_hot_list"))
+        started = time.monotonic()
+        try:
+            with httpx.Client(
+                timeout=float(self.settings.web_search_zhihu_timeout_seconds)
+            ) as client:
+                raw_results: list[dict[str, Any]] = []
+                if source_type == "zhihu_hot_list":
+                    raw_results.extend(
+                        self._hot_list_items(
+                            client,
+                            base_url=base_url,
+                            access_secret=access_secret,
+                            limit=min(30, max(5, max_results)),
+                        )
+                    )
+                else:
+                    search_payload = self._get_json(
+                        client,
+                        f"{base_url}/api/v1/content/zhihu_search",
+                        access_secret=access_secret,
+                        params={"Query": query, "Count": str(max_results)},
+                    )
+                    raw_results = _zhihu_items(search_payload)
+                    if include_hot_list:
+                        raw_results.extend(
+                            self._hot_list_items(
+                                client,
+                                base_url=base_url,
+                                access_secret=access_secret,
+                                limit=min(30, max(5, max_results)),
+                            )
+                        )
+        except httpx.TimeoutException as error:
+            usage = self._usage(started, error_code="provider.timeout")
+            raise WebSearchProviderError(
+                "provider.timeout",
+                "Zhihu OpenAPI request timed out",
+                usage=usage,
+            ) from error
+        except httpx.HTTPStatusError as error:
+            usage = self._usage(started, error_code=_map_provider_http_error(error.response))
+            raise WebSearchProviderError(
+                usage.error_code or "web_search.zhihu_http_error",
+                _extract_http_error_message(error.response),
+                usage=usage,
+            ) from error
+        except httpx.RequestError as error:
+            usage = self._usage(started, error_code="provider.network_error")
+            raise WebSearchProviderError(
+                "provider.network_error",
+                "Zhihu OpenAPI request failed",
+                usage=usage,
+            ) from error
+
+        usage = self._usage(started)
+        intent = str(options.get("intent") or "zhihu_research")
+        results = _normalize_zhihu_results(raw_results, intent=intent)
+        evidence_policy = _resolve_evidence_policy(options.get("evidence_policy"))
+        results = _apply_evidence_policy(results, evidence_policy)
+        return WebSearchExecutionResult(
+            result_json=_build_result_json(
+                provider_id=self.provider_id,
+                query=query,
+                options=options,
+                results=results,
+                evidence_policy=evidence_policy,
+            ),
+            usage=usage,
+        )
+
+    def _hot_list_items(
+        self,
+        client: httpx.Client,
+        *,
+        base_url: str,
+        access_secret: str,
+        limit: int,
+    ) -> list[dict[str, Any]]:
+        cache_key = f"{base_url}:limit:{limit}"
+        now = time.time()
+        ttl = max(60, int(self.settings.web_search_zhihu_hot_list_cache_ttl_seconds or 3600))
+        with _ZHIHU_HOT_LIST_LOCK:
+            cached = _ZHIHU_HOT_LIST_CACHE.get(cache_key)
+            if cached and cached[0] > now:
+                return [dict(item) for item in cached[1]]
+
+        hot_payload = self._get_json(
+            client,
+            f"{base_url}/api/v1/content/hot_list",
+            access_secret=access_secret,
+            params={"Limit": str(limit)},
+        )
+        hot_items = _zhihu_hot_items(hot_payload)
+        with _ZHIHU_HOT_LIST_LOCK:
+            _ZHIHU_HOT_LIST_CACHE[cache_key] = (now + ttl, [dict(item) for item in hot_items])
+        return hot_items
+
+    def _get_json(
+        self,
+        client: httpx.Client,
+        endpoint: str,
+        *,
+        access_secret: str,
+        params: dict[str, str],
+    ) -> Any:
+        response = client.get(
+            endpoint,
+            params=params,
+            headers={
+                "Authorization": f"Bearer {access_secret}",
+                "X-Request-Timestamp": str(int(time.time())),
+                "Content-Type": "application/json",
+            },
+        )
+        response.raise_for_status()
+        return _json_payload(
+            response,
+            provider_id=self.provider_id,
+            usage=WebSearchProviderUsage(
+                provider_id=self.provider_id,
+                model_id=self.model_id,
+                instance_id=self.instance_id,
+                region=str(self.settings.deployment_region or "unspecified"),
+                latency_ms=0,
+            ),
+        )
+
+    def _usage(self, started: float, *, error_code: str | None = None) -> WebSearchProviderUsage:
+        return WebSearchProviderUsage(
+            provider_id=self.provider_id,
+            model_id=self.model_id,
+            instance_id=self.instance_id,
+            region=str(self.settings.deployment_region or "unspecified"),
+            latency_ms=max(0, int((time.monotonic() - started) * 1000)),
+            cost=max(0.0, float(self.settings.web_search_zhihu_cost_per_query or 0.0)),
+            error_code=error_code,
+        )
+
+
 def _flatten_apify_search_results(
     raw_results: list[Any],
     *,
@@ -589,6 +756,8 @@ def _build_options(input_payload: dict[str, Any]) -> dict[str, Any]:
         "blocked_domains": _normalize_domain_list(input_payload.get("blocked_domains")),
         "enhance_with_reader": bool(input_payload.get("enhance_with_reader")),
         "evidence_policy": input_payload.get("evidence_policy"),
+        "source_type": _normalize_source_type(input_payload.get("source_type")),
+        "include_hot_list": bool(input_payload.get("include_hot_list")),
     }
 
 
@@ -673,13 +842,15 @@ def _hash_tavily_key(value: str) -> str:
 def _build_provider(
     settings: Settings,
     provider_id: str,
-) -> TavilyWebSearchProvider | BochaWebSearchProvider | ApifyWebSearchProvider:
+) -> TavilyWebSearchProvider | BochaWebSearchProvider | ApifyWebSearchProvider | ZhihuWebSearchProvider:
     if provider_id == "tavily":
         return TavilyWebSearchProvider(settings)
     if provider_id == "bocha":
         return BochaWebSearchProvider(settings)
     if provider_id == "apify":
         return ApifyWebSearchProvider(settings)
+    if provider_id == "zhihu":
+        return ZhihuWebSearchProvider(settings)
     raise WebSearchProviderError(
         "web_search.provider_not_supported",
         "Cloud-managed web search provider is not supported",
@@ -696,6 +867,8 @@ def _provider_configured(settings: Settings, provider_id: str) -> bool:
             str(settings.web_search_apify_api_token or "").strip()
             and str(settings.web_search_apify_actor_id or "").strip()
         )
+    if provider_id == "zhihu":
+        return bool(str(settings.web_search_zhihu_access_secret or "").strip())
     return False
 
 
@@ -920,6 +1093,87 @@ def _normalize_results(
     return normalized
 
 
+def _zhihu_items(payload: Any) -> list[dict[str, Any]]:
+    if not isinstance(payload, dict):
+        return []
+    data = payload.get("Data")
+    if not isinstance(data, dict):
+        data = payload.get("data")
+    if not isinstance(data, dict):
+        return []
+    items = data.get("Items")
+    if not isinstance(items, list):
+        return []
+    return [item for item in items if isinstance(item, dict)]
+
+
+def _zhihu_hot_items(payload: Any) -> list[dict[str, Any]]:
+    if not isinstance(payload, dict):
+        return []
+    data = payload.get("Data")
+    if not isinstance(data, dict):
+        data = payload.get("data")
+    if not isinstance(data, dict):
+        return []
+    items = data.get("Items")
+    if not isinstance(items, list):
+        return []
+    normalized: list[dict[str, Any]] = []
+    for index, item in enumerate(items):
+        if not isinstance(item, dict):
+            continue
+        updated = dict(item)
+        updated["ContentType"] = str(updated.get("ContentType") or "HotList")
+        updated["ContentText"] = str(updated.get("Summary") or "")
+        updated["RankingScore"] = max(0.0, 1.0 - (index * 0.02))
+        updated["source"] = "zhihu_hot_list"
+        normalized.append(updated)
+    return normalized
+
+
+def _normalize_zhihu_results(raw_results: list[dict[str, Any]], *, intent: str) -> list[dict[str, Any]]:
+    normalized: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for raw in raw_results:
+        title = _normalize_text(raw.get("Title") or raw.get("title"), limit=MAX_RESULT_TITLE_CHARS)
+        url = _normalize_url(raw.get("Url") or raw.get("url"))
+        snippet = _normalize_text(
+            raw.get("ContentText") or raw.get("Summary") or raw.get("summary"),
+            limit=MAX_RESULT_SNIPPET_CHARS,
+        )
+        if not url and not title and not snippet:
+            continue
+        dedupe_key = url or f"title:{title}"
+        if dedupe_key in seen:
+            continue
+        seen.add(dedupe_key)
+        source = "zhihu_hot_list" if str(raw.get("source") or "") == "zhihu_hot_list" else "zhihu"
+        normalized.append(
+            {
+                "title": title or "Untitled Zhihu result",
+                "url": url,
+                "snippet": snippet,
+                "score": _coerce_score(raw.get("RankingScore")),
+                "source": source,
+                "content_type": _normalize_token(
+                    raw.get("ContentType") or raw.get("content_type") or "",
+                    limit=48,
+                ),
+                "content_id": _normalize_token(raw.get("ContentID") or "", limit=96),
+                "author_name": _normalize_text(raw.get("AuthorName") or "", limit=120),
+                "comment_count": max(0, _coerce_int(raw.get("CommentCount"))),
+                "vote_up_count": max(0, _coerce_int(raw.get("VoteUpCount"))),
+                "authority_level": _normalize_token(raw.get("AuthorityLevel") or "", limit=16),
+                "edit_time": max(0, _coerce_int(raw.get("EditTime"))),
+                "thumbnail_url": _normalize_url(raw.get("ThumbnailUrl") or ""),
+                "suggested_use": _suggested_use(intent),
+                "write_posture": "suggestion_only",
+                "direct_wordpress_write": False,
+            }
+        )
+    return normalized
+
+
 def _resolve_evidence_policy(value: Any) -> dict[str, Any]:
     raw = value if isinstance(value, dict) else {}
     min_score = _coerce_float(raw.get("min_score"), default=0.0)
@@ -975,6 +1229,8 @@ def _suggested_use(intent: str) -> str:
         "product_comparison": "product_comparison_context",
         "source_discovery": "source_candidate",
         "external_links": "external_link_candidate",
+        "zhihu_research": "zhihu_audience_question_or_topic_signal",
+        "zhihu_hot_topics": "zhihu_hot_topic_candidate",
     }.get(intent, "external_research")
 
 
@@ -1014,7 +1270,7 @@ def _build_search_evidence_pack(
 
 
 def _source_card(item: dict[str, Any], *, provider_id: str) -> dict[str, Any]:
-    return {
+    card = {
         "title": _normalize_text(item.get("title"), limit=MAX_RESULT_TITLE_CHARS),
         "url": _normalize_url(item.get("url")),
         "snippet": _normalize_text(item.get("snippet"), limit=MAX_RESULT_SNIPPET_CHARS),
@@ -1024,6 +1280,19 @@ def _source_card(item: dict[str, Any], *, provider_id: str) -> dict[str, Any]:
         "write_posture": "suggestion_only",
         "direct_wordpress_write": False,
     }
+    for key in (
+        "content_type",
+        "content_id",
+        "author_name",
+        "comment_count",
+        "vote_up_count",
+        "authority_level",
+        "edit_time",
+        "thumbnail_url",
+    ):
+        if key in item and item[key] not in {"", None}:
+            card[key] = item[key]
+    return card
 
 
 def _evidence_pack_type(intent: str) -> str:
@@ -1033,6 +1302,8 @@ def _evidence_pack_type(intent: str) -> str:
         "competitor_research": "competitor_snapshot",
         "pricing_snapshot": "pricing_snapshot",
         "product_comparison": "product_comparison",
+        "zhihu_research": "zhihu_writing_research",
+        "zhihu_hot_topics": "zhihu_hot_topic_pool",
     }.get(intent, "external_research")
 
 
@@ -1063,6 +1334,17 @@ def _evidence_pack_sections(intent: str) -> list[str]:
             "feature_signals",
             "comparison_notes",
         ],
+        "zhihu_research": [
+            "zhihu_topic_candidates",
+            "audience_questions",
+            "citation_candidates",
+            "risk_notes",
+        ],
+        "zhihu_hot_topics": [
+            "hot_topic_candidates",
+            "topic_selection_signals",
+            "manual_review_notes",
+        ],
     }.get(intent, ["external_sources", "citation_candidates", "risk_notes"])
 
 
@@ -1091,6 +1373,14 @@ def _evidence_pack_guidance(intent: str, evidence_gate: dict[str, Any]) -> str:
         "product_comparison": (
             "Use as a lightweight comparison input. Confirm important claims manually "
             "before publishing."
+        ),
+        "zhihu_research": (
+            "Use Zhihu results as pre-writing research, audience-question signals, "
+            "and citation candidates. Do not copy or rewrite source content as final article text."
+        ),
+        "zhihu_hot_topics": (
+            "Use Zhihu hot-list items as topic-selection signals only. Choose topics manually, "
+            "then run focused research before drafting."
         ),
     }.get(
         intent,
@@ -1153,7 +1443,22 @@ def _source_requirements(intent: str) -> list[str]:
                 "official pages before publishing."
             ),
         ],
+        "zhihu_research": [
+            "Use Zhihu links as source candidates and audience-demand signals.",
+            "Do not copy source wording into the final article without review and attribution.",
+        ],
+        "zhihu_hot_topics": [
+            "Use hot-list items as trend and topic-selection signals.",
+            "Run focused research and source verification before drafting or publishing.",
+        ],
     }.get(intent, [])
+
+
+def _normalize_source_type(value: Any) -> str:
+    source_type = _normalize_token(value, limit=48)
+    if source_type in {"zhihu_search", "zhihu_hot_list", "zhihu_research"}:
+        return source_type
+    return ""
 
 
 def _normalize_domain_list(value: Any) -> list[str]:

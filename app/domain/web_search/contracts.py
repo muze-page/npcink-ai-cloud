@@ -24,6 +24,8 @@ ALLOWED_WEB_SEARCH_INTENTS = frozenset(
         "product_comparison",
         "source_discovery",
         "external_links",
+        "zhihu_research",
+        "zhihu_hot_topics",
     }
 )
 

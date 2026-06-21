@@ -51,8 +51,8 @@ does not change runtime routing or create a Cloud workflow truth.
 
 MVP provider support is Cloud-owned and configured only by Cloud operators:
 
-- `MAGICK_CLOUD_WEB_SEARCH_PROVIDER`: `disabled`, `auto`, `tavily`, `bocha`, or
-  `apify`
+- `MAGICK_CLOUD_WEB_SEARCH_PROVIDER`: `disabled`, `auto`, `tavily`, `bocha`,
+  `apify`, or `zhihu`
 - `MAGICK_CLOUD_WEB_SEARCH_TAVILY_BASE_URL`: default `https://api.tavily.com`
 - `MAGICK_CLOUD_WEB_SEARCH_TAVILY_API_KEY`: required when provider is `tavily`
   unless `MAGICK_CLOUD_WEB_SEARCH_TAVILY_API_KEYS` is configured
@@ -79,6 +79,16 @@ MVP provider support is Cloud-owned and configured only by Cloud operators:
   `apify/google-search-scraper`
 - `MAGICK_CLOUD_WEB_SEARCH_APIFY_TIMEOUT_SECONDS`: default `30`
 - `MAGICK_CLOUD_WEB_SEARCH_APIFY_COST_PER_QUERY`: optional shadow cost
+- `MAGICK_CLOUD_WEB_SEARCH_ZHIHU_BASE_URL`: default
+  `https://developer.zhihu.com`
+- `MAGICK_CLOUD_WEB_SEARCH_ZHIHU_ACCESS_SECRET`: required when provider is
+  `zhihu`; this is Cloud-operator configuration only and must not be supplied by
+  WordPress runtime requests
+- `MAGICK_CLOUD_WEB_SEARCH_ZHIHU_TIMEOUT_SECONDS`: default `15`
+- `MAGICK_CLOUD_WEB_SEARCH_ZHIHU_COST_PER_QUERY`: optional shadow cost
+- `MAGICK_CLOUD_WEB_SEARCH_ZHIHU_HOT_LIST_CACHE_TTL_SECONDS`: default `3600`.
+  Cloud may cache Zhihu hot-list responses server-side so WordPress clients read
+  a bounded topic pool without spending provider quota on every panel open.
 - `MAGICK_CLOUD_WEB_SEARCH_JINA_READER_ENABLED`: enables selected URL reader
   enhancement after Tavily, Bocha, or Apify returns result URLs
 - `MAGICK_CLOUD_WEB_SEARCH_JINA_READER_BASE_URL`: default `https://r.jina.ai`
@@ -139,6 +149,45 @@ Supported first intents:
 - `product_comparison`
 - `source_discovery`
 - `external_links`
+- `zhihu_research`
+- `zhihu_hot_topics`
+
+`zhihu_research` is a first-version pre-writing research lane. Toolbox may use a
+fixed managed source request:
+
+```json
+{
+  "intent": "zhihu_research",
+  "provider": "zhihu",
+  "source_type": "zhihu_research",
+  "write_posture": "suggestion_only"
+}
+```
+
+This is not a generic provider router exposed to WordPress. It asks Cloud to call
+the configured Zhihu Open Platform source and normalize topic, question, author,
+and engagement signals as source candidates for the current query. Hot-list
+lookup is opt-in and should be displayed as a separate product section when used,
+not mixed into current-topic results by default. The caller must treat the result
+as pre-writing evidence only: no copying source text, no automatic rewriting into
+an article, no publishing, and no WordPress write authority.
+
+`zhihu_hot_topics` is a separate topic-pool lane. Toolbox may use a fixed managed
+source request:
+
+```json
+{
+  "intent": "zhihu_hot_topics",
+  "provider": "zhihu",
+  "source_type": "zhihu_hot_list",
+  "write_posture": "suggestion_only"
+}
+```
+
+Cloud may serve this lane from a server-side TTL cache. Hot topics are trend
+signals only; callers must not treat them as verified facts, generated article
+plans, or WordPress write instructions. A user should pick a topic manually, then
+run focused Zhihu research or broader web verification before drafting.
 
 ## Automatic Search Preflight
 
@@ -221,16 +270,16 @@ see whether search was skipped, dry-run, failed, or used. This evidence remains
     "guidance": "Use returned web sources as external grounding evidence."
   },
   "results": [
-    {
-      "title": "Example result",
-      "url": "https://example.com/result",
-      "snippet": "Short provider-normalized snippet.",
-      "score": 0.91,
-      "source": "tavily",
-      "suggested_use": "external_research",
-      "write_posture": "suggestion_only",
-      "direct_wordpress_write": false
-    }
+	    {
+	      "title": "Example result",
+	      "url": "https://example.com/result",
+	      "snippet": "Short provider-normalized snippet.",
+	      "score": 0.91,
+	      "source": "tavily",
+	      "suggested_use": "external_research",
+	      "write_posture": "suggestion_only",
+	      "direct_wordpress_write": false
+	    }
   ],
   "evidence_pack": {
     "artifact_type": "search_evidence_pack",
@@ -293,6 +342,13 @@ not a new workflow registry, not a publication plan, and not a WordPress write
 instruction. It groups normalized source cards and citation candidates so local
 writing surfaces can review current external evidence before a human writes or
 approves final content.
+
+For `zhihu_research` and `zhihu_hot_topics`, source cards may additionally
+include `content_type`, `content_id`, `author_name`, `comment_count`,
+`vote_up_count`, `authority_level`, `edit_time`, and `thumbnail_url` when the
+upstream source returns them. These fields support review and prioritization
+only; they must not be interpreted as permission to republish or as verified
+factual truth.
 
 ## Site Knowledge Composition
 

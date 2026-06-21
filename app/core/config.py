@@ -256,6 +256,11 @@ class Settings(BaseSettings):
     web_search_apify_actor_id: str = Field(default="apify/google-search-scraper")
     web_search_apify_timeout_seconds: float = Field(default=30.0)
     web_search_apify_cost_per_query: float = Field(default=0.0)
+    web_search_zhihu_base_url: str = Field(default="https://developer.zhihu.com")
+    web_search_zhihu_access_secret: str | None = Field(default=None)
+    web_search_zhihu_timeout_seconds: float = Field(default=15.0)
+    web_search_zhihu_cost_per_query: float = Field(default=0.0)
+    web_search_zhihu_hot_list_cache_ttl_seconds: int = Field(default=3600)
     web_search_admin_env_path: str = Field(default=".env.local")
     image_source_provider: str = Field(default="disabled")
     image_source_auto_strategy: str = Field(default="fast_first")
@@ -535,9 +540,18 @@ class Settings(BaseSettings):
         if self.site_knowledge_zilliz_timeout_seconds <= 0:
             raise ValueError("site_knowledge_zilliz_timeout_seconds must be greater than 0")
         web_search_provider = str(self.web_search_provider or "disabled").strip().lower()
-        allowed_web_search_providers = {"disabled", "auto", "tavily", "bocha", "apify"}
+        allowed_web_search_providers = {
+            "disabled",
+            "auto",
+            "tavily",
+            "bocha",
+            "apify",
+            "zhihu",
+        }
         if web_search_provider not in allowed_web_search_providers:
-            raise ValueError("web_search_provider must be disabled, auto, tavily, bocha, or apify")
+            raise ValueError(
+                "web_search_provider must be disabled, auto, tavily, bocha, apify, or zhihu"
+            )
         self.web_search_provider = web_search_provider
         if self.web_search_tavily_timeout_seconds <= 0:
             raise ValueError("web_search_tavily_timeout_seconds must be greater than 0")
@@ -557,6 +571,12 @@ class Settings(BaseSettings):
             raise ValueError("web_search_apify_timeout_seconds must be greater than 0")
         if self.web_search_apify_cost_per_query < 0:
             raise ValueError("web_search_apify_cost_per_query must be zero or greater")
+        if self.web_search_zhihu_timeout_seconds <= 0:
+            raise ValueError("web_search_zhihu_timeout_seconds must be greater than 0")
+        if self.web_search_zhihu_cost_per_query < 0:
+            raise ValueError("web_search_zhihu_cost_per_query must be zero or greater")
+        if self.web_search_zhihu_hot_list_cache_ttl_seconds <= 0:
+            raise ValueError("web_search_zhihu_hot_list_cache_ttl_seconds must be greater than 0")
         if web_search_provider == "tavily":
             if not str(self.web_search_tavily_base_url or "").strip():
                 raise ValueError(
@@ -591,6 +611,15 @@ class Settings(BaseSettings):
             if not str(self.web_search_apify_actor_id or "").strip():
                 raise ValueError(
                     "web_search_apify_actor_id is required when web_search_provider=apify"
+                )
+        if web_search_provider == "zhihu":
+            if not str(self.web_search_zhihu_base_url or "").strip():
+                raise ValueError(
+                    "web_search_zhihu_base_url is required when web_search_provider=zhihu"
+                )
+            if not str(self.web_search_zhihu_access_secret or "").strip():
+                raise ValueError(
+                    "web_search_zhihu_access_secret is required when web_search_provider=zhihu"
                 )
         image_source_provider = str(self.image_source_provider or "disabled").strip().lower()
         if image_source_provider not in {"disabled", "auto", "unsplash", "pixabay", "pexels"}:
