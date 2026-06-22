@@ -1548,6 +1548,67 @@ def test_zhihu_direct_answer_uses_chat_completions_contract(monkeypatch: Any) ->
     assert grounded_answer["direct_wordpress_write"] is False
 
 
+def test_zhihu_direct_answer_provider_unavailable_returns_degraded_atom(
+    monkeypatch: Any,
+) -> None:
+    class FakeClient:
+        def __init__(self, *, timeout: float) -> None:
+            pass
+
+        def __enter__(self) -> FakeClient:
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            return None
+
+        def post(
+            self,
+            endpoint: str,
+            *,
+            json: dict[str, Any],
+            headers: dict[str, str],
+        ) -> httpx.Response:
+            return httpx.Response(
+                554,
+                request=httpx.Request("POST", endpoint),
+            )
+
+    monkeypatch.setattr("app.domain.web_search.service.httpx.Client", FakeClient)
+
+    result = ZhihuWebSearchProvider(
+        Settings(
+            _env_file=None,
+            environment="test",
+            web_search_provider="zhihu",
+            web_search_zhihu_access_secret="zhihu-secret",
+        )
+    ).search(
+        query="AI 写作前应该准备什么？",
+        options={
+            "intent": "zhida_deep",
+            "provider": "zhihu",
+            "max_results": 5,
+            "source_type": "zhida_deep",
+        },
+        site_id="site_alpha",
+        run_id="run_zhihu_direct_answer_degraded",
+    )
+
+    assert result.usage.error_code == "provider.unavailable"
+    assert result.result_json["output_contract"] == "grounded_answer.v1"
+    assert result.result_json["status"] == "provider_unavailable"
+    assert result.result_json["provider_error"]["provider"] == "zhihu"
+    assert (
+        "Zhihu web search failed with HTTP 554"
+        in result.result_json["provider_error"]["message"]
+    )
+    grounded_answer = result.result_json["atomic_outputs"]["grounded_answer"]
+    assert grounded_answer["contract_version"] == "grounded_answer.v1"
+    assert grounded_answer["status"] == "provider_unavailable"
+    assert grounded_answer["direct_wordpress_write"] is False
+    assert grounded_answer["answer_text"] == ""
+
+
 def test_zhihu_direct_answer_requires_configured_endpoint() -> None:
     provider = ZhihuWebSearchProvider(
         Settings(

@@ -275,7 +275,10 @@ class TavilyWebSearchProvider:
             except httpx.HTTPStatusError as error:
                 last_error = error
                 last_error_code = _map_tavily_error(error.response)
-                last_error_message = _extract_http_error_message(error.response)
+                last_error_message = _extract_http_error_message(
+                    error.response,
+                    provider_id=self.provider_id,
+                )
             except httpx.RequestError as error:
                 last_error = error
                 last_error_code = "provider.network_error"
@@ -406,7 +409,7 @@ class BochaWebSearchProvider:
             usage = self._usage(started, error_code=_map_provider_http_error(error.response))
             raise WebSearchProviderError(
                 usage.error_code or "web_search.bocha_http_error",
-                _extract_http_error_message(error.response),
+                _extract_http_error_message(error.response, provider_id=self.provider_id),
                 usage=usage,
             ) from error
         except httpx.RequestError as error:
@@ -521,7 +524,7 @@ class ApifyWebSearchProvider:
             usage = self._usage(started, error_code=_map_provider_http_error(error.response))
             raise WebSearchProviderError(
                 usage.error_code or "web_search.apify_http_error",
-                _extract_http_error_message(error.response),
+                _extract_http_error_message(error.response, provider_id=self.provider_id),
                 usage=usage,
             ) from error
         except httpx.RequestError as error:
@@ -648,36 +651,74 @@ class ZhihuWebSearchProvider:
                         str(self.settings.web_search_zhihu_direct_answer_path or ""),
                         setting_name="web_search_zhihu_direct_answer_path",
                     )
-                    if _is_zhihu_playground_endpoint(endpoint):
-                        answer = self._post_playground_direct_answer(
-                            client,
-                            endpoint,
-                            access_secret=access_secret,
-                            query=query,
-                            source_type=source_type,
-                        )
-                    elif _is_zhihu_chat_completions_endpoint(endpoint):
-                        answer = self._post_zhida_chat_completion(
-                            client,
-                            endpoint,
-                            access_secret=access_secret,
-                            query=query,
-                            source_type=source_type,
-                        )
-                    else:
-                        answer_payload = self._get_json(
-                            client,
-                            endpoint,
-                            access_secret=access_secret,
-                            params={
-                                "Query": query,
-                                "Mode": ZHIHU_DIRECT_ANSWER_MODES[source_type],
-                                "Count": str(max_results),
-                            },
-                        )
-                        answer = _zhihu_direct_answer(answer_payload)
                     usage = self._usage(started)
                     intent = str(options.get("intent") or source_type)
+                    try:
+                        if _is_zhihu_playground_endpoint(endpoint):
+                            answer = self._post_playground_direct_answer(
+                                client,
+                                endpoint,
+                                access_secret=access_secret,
+                                query=query,
+                                source_type=source_type,
+                            )
+                        elif _is_zhihu_chat_completions_endpoint(endpoint):
+                            answer = self._post_zhida_chat_completion(
+                                client,
+                                endpoint,
+                                access_secret=access_secret,
+                                query=query,
+                                source_type=source_type,
+                            )
+                        else:
+                            answer_payload = self._get_json(
+                                client,
+                                endpoint,
+                                access_secret=access_secret,
+                                params={
+                                    "Query": query,
+                                    "Mode": ZHIHU_DIRECT_ANSWER_MODES[source_type],
+                                    "Count": str(max_results),
+                                },
+                            )
+                            answer = _zhihu_direct_answer(answer_payload)
+                    except httpx.TimeoutException:
+                        usage = self._usage(started, error_code="provider.timeout")
+                        return WebSearchExecutionResult(
+                            result_json=_build_direct_answer_degraded_result_json(
+                                provider_id=self.provider_id,
+                                query=query,
+                                options=options,
+                                intent=intent,
+                                mode=ZHIHU_DIRECT_ANSWER_MODES[source_type],
+                                error_code="provider.timeout",
+                                error_message="Zhihu OpenAPI request timed out",
+                            ),
+                            usage=usage,
+                        )
+                    except httpx.HTTPStatusError as error:
+                        error_code = _map_provider_http_error(error.response)
+                        if error_code not in {
+                            "provider.rate_limited",
+                            "provider.unavailable",
+                        }:
+                            raise
+                        usage = self._usage(started, error_code=error_code)
+                        return WebSearchExecutionResult(
+                            result_json=_build_direct_answer_degraded_result_json(
+                                provider_id=self.provider_id,
+                                query=query,
+                                options=options,
+                                intent=intent,
+                                mode=ZHIHU_DIRECT_ANSWER_MODES[source_type],
+                                error_code=error_code,
+                                error_message=_extract_http_error_message(
+                                    error.response,
+                                    provider_id=self.provider_id,
+                                ),
+                            ),
+                            usage=usage,
+                        )
                     return WebSearchExecutionResult(
                         result_json=_build_direct_answer_result_json(
                             provider_id=self.provider_id,
@@ -731,7 +772,7 @@ class ZhihuWebSearchProvider:
             usage = self._usage(started, error_code=_map_provider_http_error(error.response))
             raise WebSearchProviderError(
                 usage.error_code or "web_search.zhihu_http_error",
-                _extract_http_error_message(error.response),
+                _extract_http_error_message(error.response, provider_id=self.provider_id),
                 usage=usage,
             ) from error
         except httpx.RequestError as error:
@@ -1276,6 +1317,53 @@ def _build_direct_answer_result_json(
         "write_posture": "suggestion_only",
         "direct_wordpress_write": False,
     }
+
+
+def _build_direct_answer_degraded_result_json(
+    *,
+    provider_id: str,
+    query: str,
+    options: dict[str, Any],
+    intent: str,
+    mode: str,
+    error_code: str,
+    error_message: str,
+) -> dict[str, Any]:
+    result = _build_direct_answer_result_json(
+        provider_id=provider_id,
+        query=query,
+        options=options,
+        answer={"answer_text": "", "source_refs": []},
+        intent=intent,
+        mode=mode,
+    )
+    status = (
+        "provider_rate_limited"
+        if error_code == "provider.rate_limited"
+        else "provider_unavailable"
+    )
+    provider_error = {
+        "code": error_code,
+        "message": _normalize_text(error_message, limit=200),
+        "provider": provider_id,
+        "retryable": error_code
+        in {"provider.rate_limited", "provider.timeout", "provider.unavailable"},
+    }
+    result["status"] = status
+    result["provider_error"] = provider_error
+    result["evidence_gate"]["status"] = status
+    result["evidence_gate"]["allows_web_grounded_assertion"] = False
+    result["evidence_gate"]["guidance"] = (
+        "Zhihu direct-answer source is temporarily unavailable; keep this as "
+        "a degraded atomic result and retry before using any answer preview."
+    )
+    result["atomic_outputs"]["grounded_answer"]["status"] = status
+    result["atomic_outputs"]["grounded_answer"]["provider_error"] = provider_error
+    result["atomic_outputs"]["grounded_answer"]["generation_policy"] = (
+        "No answer text was generated because the direct-answer provider was "
+        "temporarily unavailable. Do not publish; retry or use source evidence."
+    )
+    return result
 
 
 def _attach_web_search_workflow_metadata(
@@ -2245,9 +2333,14 @@ def _map_provider_http_error(response: httpx.Response) -> str:
     return "web_search.tavily_http_error"
 
 
-def _extract_http_error_message(response: httpx.Response) -> str:
+def _extract_http_error_message(
+    response: httpx.Response,
+    *,
+    provider_id: str = "web search provider",
+) -> str:
+    provider_label = provider_id.replace("_", " ").title()
     if _response_too_large(response, max_bytes=MAX_PROVIDER_RESPONSE_BYTES):
-        return f"Tavily web search failed with HTTP {response.status_code}"
+        return f"{provider_label} web search failed with HTTP {response.status_code}"
     try:
         payload = response.json()
     except ValueError:
@@ -2256,4 +2349,4 @@ def _extract_http_error_message(response: httpx.Response) -> str:
         message = str(payload.get("message") or payload.get("error") or "").strip()
         if message:
             return message[:200]
-    return f"Tavily web search failed with HTTP {response.status_code}"
+    return f"{provider_label} web search failed with HTTP {response.status_code}"
