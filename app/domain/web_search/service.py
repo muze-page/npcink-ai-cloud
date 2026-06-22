@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 import threading
 import time
@@ -43,6 +44,11 @@ _TAVILY_POOL_CURSOR: dict[str, int] = {}
 _TAVILY_POOL_QUARANTINED_UNTIL: dict[tuple[str, str], float] = {}
 _ZHIHU_HOT_LIST_LOCK = threading.Lock()
 _ZHIHU_HOT_LIST_CACHE: dict[str, tuple[float, list[dict[str, Any]]]] = {}
+ZHIHU_PLAYGROUND_INVOKE_PATH = "/api/v1/playground/invoke"
+ZHIHU_SEARCH_API_ID = "zhihu_search"
+ZHIHU_GLOBAL_SEARCH_API_ID = "global_search"
+ZHIHU_HOT_LIST_API_ID = "hot_list"
+ZHIHU_DIRECT_ANSWER_API_ID = "zhida_openai"
 ZHIHU_DIRECT_ANSWER_SOURCE_TYPES = frozenset(
     {"zhida_simple", "zhida_deep", "zhida_deepsearch"}
 )
@@ -50,6 +56,11 @@ ZHIHU_DIRECT_ANSWER_MODES = {
     "zhida_simple": "simple",
     "zhida_deep": "deep",
     "zhida_deepsearch": "deepsearch",
+}
+ZHIHU_DIRECT_ANSWER_MODELS = {
+    "zhida_simple": "zhida-fast-1p5",
+    "zhida_deep": "zhida-thinking-1p5",
+    "zhida_deepsearch": "zhida-agent",
 }
 
 
@@ -603,35 +614,68 @@ class ZhihuWebSearchProvider:
                         )
                     )
                 elif source_type == "zhihu_global_search":
-                    global_payload = self._get_json(
-                        client,
-                        self._endpoint(
-                            base_url,
-                            str(self.settings.web_search_zhihu_global_search_path or ""),
-                            setting_name="web_search_zhihu_global_search_path",
-                        ),
-                        access_secret=access_secret,
-                        params={"Query": query, "Count": str(max_results)},
+                    endpoint = self._endpoint(
+                        base_url,
+                        str(self.settings.web_search_zhihu_global_search_path or ""),
+                        setting_name="web_search_zhihu_global_search_path",
                     )
+                    if _is_zhihu_playground_endpoint(endpoint):
+                        payload: dict[str, Any] = {"Query": query, "Count": max_results}
+                        date_filter = _zhihu_global_filter(options.get("recency_days"))
+                        if date_filter:
+                            payload["Filter"] = date_filter
+                        global_payload = self._post_playground_json(
+                            client,
+                            endpoint,
+                            access_secret=access_secret,
+                            api_id=ZHIHU_GLOBAL_SEARCH_API_ID,
+                            payload=payload,
+                        )
+                    else:
+                        global_payload = self._get_json(
+                            client,
+                            endpoint,
+                            access_secret=access_secret,
+                            params={"Query": query, "Count": str(max_results)},
+                        )
                     raw_results = [
                         {**item, "source": "zhihu_global_search"}
                         for item in _zhihu_items(global_payload)
                     ]
                 elif source_type in ZHIHU_DIRECT_ANSWER_SOURCE_TYPES:
-                    answer_payload = self._get_json(
-                        client,
-                        self._endpoint(
-                            base_url,
-                            str(self.settings.web_search_zhihu_direct_answer_path or ""),
-                            setting_name="web_search_zhihu_direct_answer_path",
-                        ),
-                        access_secret=access_secret,
-                        params={
-                            "Query": query,
-                            "Mode": ZHIHU_DIRECT_ANSWER_MODES[source_type],
-                            "Count": str(max_results),
-                        },
+                    endpoint = self._endpoint(
+                        base_url,
+                        str(self.settings.web_search_zhihu_direct_answer_path or ""),
+                        setting_name="web_search_zhihu_direct_answer_path",
                     )
+                    if _is_zhihu_playground_endpoint(endpoint):
+                        answer = self._post_playground_direct_answer(
+                            client,
+                            endpoint,
+                            access_secret=access_secret,
+                            query=query,
+                            source_type=source_type,
+                        )
+                    elif _is_zhihu_chat_completions_endpoint(endpoint):
+                        answer = self._post_zhida_chat_completion(
+                            client,
+                            endpoint,
+                            access_secret=access_secret,
+                            query=query,
+                            source_type=source_type,
+                        )
+                    else:
+                        answer_payload = self._get_json(
+                            client,
+                            endpoint,
+                            access_secret=access_secret,
+                            params={
+                                "Query": query,
+                                "Mode": ZHIHU_DIRECT_ANSWER_MODES[source_type],
+                                "Count": str(max_results),
+                            },
+                        )
+                        answer = _zhihu_direct_answer(answer_payload)
                     usage = self._usage(started)
                     intent = str(options.get("intent") or source_type)
                     return WebSearchExecutionResult(
@@ -639,23 +683,33 @@ class ZhihuWebSearchProvider:
                             provider_id=self.provider_id,
                             query=query,
                             options=options,
-                            answer=_zhihu_direct_answer(answer_payload),
+                            answer=answer,
                             intent=intent,
                             mode=ZHIHU_DIRECT_ANSWER_MODES[source_type],
                         ),
                         usage=usage,
                     )
                 else:
-                    search_payload = self._get_json(
-                        client,
-                        self._endpoint(
-                            base_url,
-                            str(self.settings.web_search_zhihu_search_path or ""),
-                            setting_name="web_search_zhihu_search_path",
-                        ),
-                        access_secret=access_secret,
-                        params={"Query": query, "Count": str(max_results)},
+                    endpoint = self._endpoint(
+                        base_url,
+                        str(self.settings.web_search_zhihu_search_path or ""),
+                        setting_name="web_search_zhihu_search_path",
                     )
+                    if _is_zhihu_playground_endpoint(endpoint):
+                        search_payload = self._post_playground_json(
+                            client,
+                            endpoint,
+                            access_secret=access_secret,
+                            api_id=ZHIHU_SEARCH_API_ID,
+                            payload={"Query": query, "Count": max_results},
+                        )
+                    else:
+                        search_payload = self._get_json(
+                            client,
+                            endpoint,
+                            access_secret=access_secret,
+                            params={"Query": query, "Count": str(max_results)},
+                        )
                     raw_results = _zhihu_items(search_payload)
                     if include_hot_list:
                         raw_results.extend(
@@ -720,16 +774,27 @@ class ZhihuWebSearchProvider:
             if cached and cached[0] > now:
                 return [dict(item) for item in cached[1]]
 
-        hot_payload = self._get_json(
-            client,
-            self._endpoint(
-                base_url,
-                str(self.settings.web_search_zhihu_hot_list_path or ""),
-                setting_name="web_search_zhihu_hot_list_path",
-            ),
-            access_secret=access_secret,
-            params={"Limit": str(limit)},
+        endpoint = self._endpoint(
+            base_url,
+            str(self.settings.web_search_zhihu_hot_list_path or ""),
+            setting_name="web_search_zhihu_hot_list_path",
         )
+        if _is_zhihu_playground_endpoint(endpoint):
+            hot_payload = self._post_playground_json(
+                client,
+                endpoint,
+                access_secret=access_secret,
+                api_id=ZHIHU_HOT_LIST_API_ID,
+                payload={"Limit": limit},
+                stream=True,
+            )
+        else:
+            hot_payload = self._get_json(
+                client,
+                endpoint,
+                access_secret=access_secret,
+                params={"Limit": str(limit)},
+            )
         hot_items = _zhihu_hot_items(hot_payload)
         with _ZHIHU_HOT_LIST_LOCK:
             _ZHIHU_HOT_LIST_CACHE[cache_key] = (now + ttl, [dict(item) for item in hot_items])
@@ -746,11 +811,7 @@ class ZhihuWebSearchProvider:
         response = client.get(
             endpoint,
             params=params,
-            headers={
-                "Authorization": f"Bearer {access_secret}",
-                "X-Request-Timestamp": str(int(time.time())),
-                "Content-Type": "application/json",
-            },
+            headers=self._headers(access_secret=access_secret),
         )
         response.raise_for_status()
         return _json_payload(
@@ -764,6 +825,90 @@ class ZhihuWebSearchProvider:
                 latency_ms=0,
             ),
         )
+
+    def _post_playground_json(
+        self,
+        client: httpx.Client,
+        endpoint: str,
+        *,
+        access_secret: str,
+        api_id: str,
+        payload: dict[str, Any],
+        stream: bool = False,
+    ) -> Any:
+        request_body: dict[str, Any] = {"api_id": api_id, "payload": payload}
+        if stream:
+            request_body["stream"] = True
+        response = client.post(
+            endpoint,
+            headers=self._headers(access_secret=access_secret),
+            json=request_body,
+        )
+        response.raise_for_status()
+        return _json_payload(
+            response,
+            provider_id=self.provider_id,
+            usage=WebSearchProviderUsage(
+                provider_id=self.provider_id,
+                model_id=self.model_id,
+                instance_id=self.instance_id,
+                region=str(self.settings.deployment_region or "unspecified"),
+                latency_ms=0,
+            ),
+        )
+
+    def _post_playground_direct_answer(
+        self,
+        client: httpx.Client,
+        endpoint: str,
+        *,
+        access_secret: str,
+        query: str,
+        source_type: str,
+    ) -> dict[str, Any]:
+        response = client.post(
+            endpoint,
+            headers=self._headers(access_secret=access_secret),
+            json={
+                "api_id": ZHIHU_DIRECT_ANSWER_API_ID,
+                "stream": True,
+                "payload": {
+                    "model": ZHIHU_DIRECT_ANSWER_MODELS[source_type],
+                    "messages": [{"role": "user", "content": query}],
+                },
+            },
+        )
+        response.raise_for_status()
+        return _zhihu_direct_answer_from_response(response)
+
+    def _post_zhida_chat_completion(
+        self,
+        client: httpx.Client,
+        endpoint: str,
+        *,
+        access_secret: str,
+        query: str,
+        source_type: str,
+    ) -> dict[str, Any]:
+        response = client.post(
+            endpoint,
+            headers=self._headers(access_secret=access_secret),
+            json={
+                "model": ZHIHU_DIRECT_ANSWER_MODELS[source_type],
+                "messages": [{"role": "user", "content": query}],
+                "stream": False,
+            },
+        )
+        response.raise_for_status()
+        return _zhihu_direct_answer_from_response(response)
+
+    def _headers(self, *, access_secret: str) -> dict[str, str]:
+        return {
+            "Authorization": f"Bearer {access_secret}",
+            "X-Request-Timestamp": str(int(time.time())),
+            "Content-Type": "application/json",
+            "App": "web",
+        }
 
     def _endpoint(self, base_url: str, path: str, *, setting_name: str) -> str:
         normalized_path = str(path or "").strip()
@@ -932,6 +1077,24 @@ def _build_provider(
         "web_search.provider_not_supported",
         "Cloud-managed web search provider is not supported",
     )
+
+
+def _is_zhihu_playground_endpoint(endpoint: str) -> bool:
+    return urlsplit(endpoint).path.rstrip("/") == ZHIHU_PLAYGROUND_INVOKE_PATH
+
+
+def _is_zhihu_chat_completions_endpoint(endpoint: str) -> bool:
+    return urlsplit(endpoint).path.rstrip("/") == "/v1/chat/completions"
+
+
+def _zhihu_global_filter(recency_days: Any) -> str:
+    days = max(0, min(30, _coerce_int(recency_days)))
+    if days <= 0:
+        return ""
+    now = time.time()
+    start_date = time.strftime("%Y-%m-%d", time.localtime(now - (days * 86400)))
+    end_date = time.strftime("%Y-%m-%d", time.localtime(now))
+    return f"publish_time>={start_date} AND publish_time<={end_date}"
 
 
 def _provider_configured(settings: Settings, provider_id: str) -> bool:
@@ -1288,15 +1451,70 @@ def _zhihu_items(payload: Any) -> list[dict[str, Any]]:
     data = payload.get("Data")
     if not isinstance(data, dict):
         data = payload.get("data")
+    if isinstance(data, list):
+        return [item for item in data if isinstance(item, dict)]
     if not isinstance(data, dict):
         return []
-    items = data.get("Items")
+    items = data.get("Items") or data.get("items")
     if not isinstance(items, list):
         return []
     return [item for item in items if isinstance(item, dict)]
 
 
+def _zhihu_direct_answer_from_response(response: httpx.Response) -> dict[str, Any]:
+    content_type = str(response.headers.get("content-type") or "")
+    if "json" in content_type:
+        try:
+            return _zhihu_direct_answer(response.json())
+        except ValueError:
+            pass
+    text = _response_text(response, max_bytes=MAX_PROVIDER_RESPONSE_BYTES)
+    answer_text = _zhihu_answer_text_from_sse(text)
+    if answer_text:
+        return {"answer_text": answer_text, "source_refs": []}
+    try:
+        return _zhihu_direct_answer(json.loads(text))
+    except ValueError:
+        return {"answer_text": _normalize_text(text, limit=4000), "source_refs": []}
+
+
+def _zhihu_answer_text_from_sse(text: str) -> str:
+    answer_parts: list[str] = []
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line.startswith("data:"):
+            continue
+        payload = line[5:].strip()
+        if not payload or payload == "[DONE]":
+            continue
+        try:
+            event = json.loads(payload)
+        except ValueError:
+            continue
+        if not isinstance(event, dict):
+            continue
+        if event.get("error") is not None:
+            continue
+        choices = event.get("choices")
+        if not isinstance(choices, list) or not choices:
+            continue
+        first_choice = choices[0]
+        if not isinstance(first_choice, dict):
+            continue
+        delta = first_choice.get("delta")
+        if not isinstance(delta, dict):
+            continue
+        content = delta.get("content")
+        if isinstance(content, str) and content:
+            answer_parts.append(content)
+    return _normalize_text("".join(answer_parts), limit=4000)
+
+
 def _zhihu_direct_answer(payload: Any) -> dict[str, Any]:
+    openai_answer = _zhihu_openai_answer_text(payload)
+    if openai_answer:
+        return {"answer_text": openai_answer, "source_refs": []}
+
     data = payload.get("Data") if isinstance(payload, dict) else {}
     if not isinstance(data, dict):
         data = payload.get("data") if isinstance(payload, dict) else {}
@@ -1339,6 +1557,30 @@ def _zhihu_direct_answer(payload: Any) -> dict[str, Any]:
         "answer_text": answer_text,
         "source_refs": sources,
     }
+
+
+def _zhihu_openai_answer_text(payload: Any) -> str:
+    if not isinstance(payload, dict):
+        return ""
+    choices = payload.get("choices")
+    if not isinstance(choices, list):
+        return ""
+    parts: list[str] = []
+    for choice in choices:
+        if not isinstance(choice, dict):
+            continue
+        message = choice.get("message")
+        if isinstance(message, dict):
+            content = message.get("content")
+            if isinstance(content, str) and content:
+                parts.append(content)
+                continue
+        delta = choice.get("delta")
+        if isinstance(delta, dict):
+            content = delta.get("content")
+            if isinstance(content, str) and content:
+                parts.append(content)
+    return _normalize_text("".join(parts), limit=4000)
 
 
 def _zhihu_direct_answer_sources(value: Any) -> list[dict[str, Any]]:
@@ -1390,9 +1632,12 @@ def _zhihu_hot_items(payload: Any) -> list[dict[str, Any]]:
     data = payload.get("Data")
     if not isinstance(data, dict):
         data = payload.get("data")
-    if not isinstance(data, dict):
+    if isinstance(data, list):
+        items = data
+    elif isinstance(data, dict):
+        items = data.get("Items") or data.get("items")
+    else:
         return []
-    items = data.get("Items")
     if not isinstance(items, list):
         return []
     normalized: list[dict[str, Any]] = []

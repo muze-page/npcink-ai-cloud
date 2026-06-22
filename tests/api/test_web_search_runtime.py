@@ -968,6 +968,8 @@ def test_zhihu_provider_uses_bearer_secret_and_merges_hot_list(monkeypatch: Any)
             environment="test",
             web_search_provider="zhihu",
             web_search_zhihu_access_secret="zhihu-secret",
+            web_search_zhihu_search_path="/api/v1/content/zhihu_search",
+            web_search_zhihu_hot_list_path="/api/v1/content/hot_list",
         )
     ).search(
         query="AI 写作准备",
@@ -1045,6 +1047,7 @@ def test_zhihu_research_does_not_mix_hot_list_by_default(monkeypatch: Any) -> No
             environment="test",
             web_search_provider="zhihu",
             web_search_zhihu_access_secret="zhihu-secret",
+            web_search_zhihu_search_path="/api/v1/content/zhihu_search",
         )
     ).search(
         query="AI 写作准备",
@@ -1111,6 +1114,7 @@ def test_zhihu_hot_topics_uses_cached_hot_list_without_search(monkeypatch: Any) 
         environment="test",
         web_search_provider="zhihu",
         web_search_zhihu_access_secret="zhihu-secret",
+        web_search_zhihu_hot_list_path="/api/v1/content/hot_list",
         web_search_zhihu_hot_list_cache_ttl_seconds=3600,
     )
     provider = ZhihuWebSearchProvider(settings)
@@ -1156,7 +1160,7 @@ def test_zhihu_hot_topics_uses_cached_hot_list_without_search(monkeypatch: Any) 
     _ZHIHU_HOT_LIST_CACHE.clear()
 
 
-def test_zhihu_global_search_uses_configured_global_endpoint(monkeypatch: Any) -> None:
+def test_zhihu_global_search_uses_official_content_endpoint(monkeypatch: Any) -> None:
     captured: list[dict[str, Any]] = []
 
     class FakeClient:
@@ -1204,7 +1208,6 @@ def test_zhihu_global_search_uses_configured_global_endpoint(monkeypatch: Any) -
             environment="test",
             web_search_provider="zhihu",
             web_search_zhihu_access_secret="zhihu-secret",
-            web_search_zhihu_global_search_path="/api/v1/content/web_search",
         )
     ).search(
         query="AI 写作事实核查",
@@ -1220,8 +1223,10 @@ def test_zhihu_global_search_uses_configured_global_endpoint(monkeypatch: Any) -
     )
 
     requests = [item for item in captured if "endpoint" in item]
-    assert requests[0]["endpoint"].endswith("/api/v1/content/web_search")
+    assert requests[0]["endpoint"].endswith("/api/v1/content/global_search")
     assert requests[0]["params"] == {"Query": "AI 写作事实核查", "Count": "5"}
+    assert requests[0]["headers"]["Authorization"] == "Bearer zhihu-secret"
+    assert "X-Request-Timestamp" in requests[0]["headers"]
     assert result.result_json["intent"] == "zhihu_global_search"
     assert result.result_json["results"][0]["source"] == "zhihu_global_search"
     assert (
@@ -1230,7 +1235,7 @@ def test_zhihu_global_search_uses_configured_global_endpoint(monkeypatch: Any) -
     )
 
 
-def test_zhihu_direct_answer_returns_grounded_answer_atom(monkeypatch: Any) -> None:
+def test_zhihu_direct_answer_uses_chat_completions_contract(monkeypatch: Any) -> None:
     captured: list[dict[str, Any]] = []
 
     class FakeClient:
@@ -1243,31 +1248,32 @@ def test_zhihu_direct_answer_returns_grounded_answer_atom(monkeypatch: Any) -> N
         def __exit__(self, *args: object) -> None:
             return None
 
-        def get(
+        def post(
             self,
             endpoint: str,
             *,
-            params: dict[str, str],
+            json: dict[str, Any],
             headers: dict[str, str],
         ) -> httpx.Response:
-            captured.append({"endpoint": endpoint, "params": params, "headers": headers})
+            captured.append({"endpoint": endpoint, "json": json, "headers": headers})
             return httpx.Response(
                 200,
                 json={
-                    "Code": 0,
-                    "Message": "success",
-                    "Data": {
-                        "Answer": "先明确读者问题，再收集证据和反方观点。",
-                        "Sources": [
-                            {
-                                "Title": "写作准备的资料框架",
-                                "Url": "https://www.zhihu.com/question/direct-1",
-                                "Summary": "资料、问题和观点需要分开整理。",
-                            }
-                        ],
-                    },
+                    "id": "chatcmpl-test",
+                    "object": "chat.completion",
+                    "model": "zhida-thinking-1p5",
+                    "choices": [
+                        {
+                            "index": 0,
+                            "message": {
+                                "role": "assistant",
+                                "content": "先明确读者问题，再收集证据和反方观点。",
+                            },
+                            "finish_reason": "stop",
+                        }
+                    ],
                 },
-                request=httpx.Request("GET", endpoint),
+                request=httpx.Request("POST", endpoint),
             )
 
     monkeypatch.setattr("app.domain.web_search.service.httpx.Client", FakeClient)
@@ -1278,7 +1284,6 @@ def test_zhihu_direct_answer_returns_grounded_answer_atom(monkeypatch: Any) -> N
             environment="test",
             web_search_provider="zhihu",
             web_search_zhihu_access_secret="zhihu-secret",
-            web_search_zhihu_direct_answer_path="/api/v1/content/direct_answer",
         )
     ).search(
         query="AI 写作前应该准备什么？",
@@ -1294,11 +1299,11 @@ def test_zhihu_direct_answer_returns_grounded_answer_atom(monkeypatch: Any) -> N
     )
 
     requests = [item for item in captured if "endpoint" in item]
-    assert requests[0]["endpoint"].endswith("/api/v1/content/direct_answer")
-    assert requests[0]["params"] == {
-        "Query": "AI 写作前应该准备什么？",
-        "Mode": "deep",
-        "Count": "5",
+    assert requests[0]["endpoint"].endswith("/v1/chat/completions")
+    assert requests[0]["json"] == {
+        "model": "zhida-thinking-1p5",
+        "messages": [{"role": "user", "content": "AI 写作前应该准备什么？"}],
+        "stream": False,
     }
     assert result.result_json["output_contract"] == "grounded_answer.v1"
     assert result.result_json["composition_role"] == "grounded_answer_preview"
@@ -1307,6 +1312,7 @@ def test_zhihu_direct_answer_returns_grounded_answer_atom(monkeypatch: Any) -> N
     assert grounded_answer["status"] == "ready"
     assert grounded_answer["mode"] == "deep"
     assert "先明确读者问题" in grounded_answer["answer_text"]
+    assert "反方观点" in grounded_answer["answer_text"]
     assert grounded_answer["direct_wordpress_write"] is False
 
 
@@ -1317,6 +1323,7 @@ def test_zhihu_direct_answer_requires_configured_endpoint() -> None:
             environment="test",
             web_search_provider="zhihu",
             web_search_zhihu_access_secret="zhihu-secret",
+            web_search_zhihu_direct_answer_path="",
         )
     )
 

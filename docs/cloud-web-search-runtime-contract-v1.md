@@ -171,9 +171,21 @@ use a fixed managed source request:
 
 Cloud normalizes this lane into `source_evidence.v1`. It is useful for
 high-trust external evidence, citation candidates, current facts, and comparison
-material. The exact upstream endpoint path is Cloud configuration
-(`web_search_zhihu_global_search_path`) because the public product page does not
-freeze request parameters as this repository's contract.
+material. The default upstream path is the official Zhihu content endpoint:
+
+```json
+{
+  "method": "GET",
+  "path": "/api/v1/content/global_search",
+  "query": {
+    "Query": "AI 写作事实核查",
+    "Count": 5
+  }
+}
+```
+
+When `recency_days` is supplied, Cloud may add the same date filter shape used
+by the Zhihu playground: `publish_time>=YYYY-MM-DD AND publish_time<=YYYY-MM-DD`.
 
 `zhihu_research` is a first-version pre-writing research lane. Toolbox may use a
 fixed managed source request:
@@ -195,6 +207,19 @@ not mixed into current-topic results by default. The caller must treat the resul
 as pre-writing evidence only: no copying source text, no automatic rewriting into
 an article, no publishing, and no WordPress write authority.
 
+The default upstream request shape is:
+
+```json
+{
+  "method": "GET",
+  "path": "/api/v1/content/zhihu_search",
+  "query": {
+    "Query": "AI 写作准备",
+    "Count": 5
+  }
+}
+```
+
 `zhihu_hot_topics` is a separate topic-pool lane. Toolbox may use a fixed managed
 source request:
 
@@ -212,6 +237,18 @@ signals only; callers must not treat them as verified facts, generated article
 plans, or WordPress write instructions. A user should pick a topic manually, then
 run focused Zhihu research or broader web verification before drafting.
 
+The default upstream request shape is:
+
+```json
+{
+  "method": "GET",
+  "path": "/api/v1/content/hot_list",
+  "query": {
+    "Limit": 20
+  }
+}
+```
+
 `zhida_simple`, `zhida_deep`, and `zhida_deepsearch` are Zhihu direct-answer
 lanes. Toolbox or other local callers may use fixed managed source requests:
 
@@ -227,9 +264,39 @@ lanes. Toolbox or other local callers may use fixed managed source requests:
 Cloud normalizes these lanes into `grounded_answer.v1`. The answer text is a
 reviewable preview only. It may support FAQ/AEO answers, short answer previews,
 or research conclusion previews, but it must not be inserted as final article
-text or published without the local/Core review path. The upstream endpoint path
-is Cloud configuration (`web_search_zhihu_direct_answer_path`) and fails closed
-when not configured.
+text or published without the local/Core review path.
+
+The default upstream request shape is:
+
+```json
+{
+  "method": "POST",
+  "path": "/v1/chat/completions",
+  "body": {
+    "model": "zhida-thinking-1p5",
+    "messages": [
+      {
+        "role": "user",
+        "content": "AI 写作前应该准备什么？"
+      }
+    ],
+    "stream": false
+  }
+}
+```
+
+Mode-to-model mapping follows the public playground bundle:
+
+| Cloud source type | Zhihu mode | Playground model |
+| --- | --- | --- |
+| `zhida_simple` | `simple` | `zhida-fast-1p5` |
+| `zhida_deep` | `deep` | `zhida-thinking-1p5` |
+| `zhida_deepsearch` | `deepsearch` | `zhida-agent` |
+
+Cloud keeps compatibility with explicitly configured legacy or playground proxy
+paths, but the default configuration uses the official Bearer-auth endpoints:
+`/api/v1/content/zhihu_search`, `/api/v1/content/global_search`,
+`/api/v1/content/hot_list`, and `/v1/chat/completions`.
 
 ## Atomic Output Contracts
 
