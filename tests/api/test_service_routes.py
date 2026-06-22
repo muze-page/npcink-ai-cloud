@@ -1243,6 +1243,7 @@ def test_service_routes_bind_subscription_and_rebuild_billing_snapshot(
             "target_period_end_at": subscription_response.json()["data"]["subscription"][
                 "current_period_end_at"
             ],
+            "ai_credits_increment": 10000,
             "runs_increment": 10000,
             "tokens_increment": 2000000,
             "cost_increment": 99,
@@ -1274,10 +1275,12 @@ def test_service_routes_bind_subscription_and_rebuild_billing_snapshot(
     assert topup_payload["receipt"]["event_kind"] == "subscription.topup"
     assert topup_payload["topup"]["pack_id"] == ""
     assert topup_payload["topup"]["reason"] == "operator_overage_buffer"
+    assert topup_payload["entitlement_snapshot"]["budgets"]["max_ai_credits_per_period"] == 10000.0
     assert topup_payload["entitlement_snapshot"]["budgets"]["max_runs_per_period"] == 10010.0
     assert topup_payload["entitlement_snapshot"]["budgets"]["max_tokens_per_period"] == 2005000.0
     assert topup_payload["entitlement_snapshot"]["budgets"]["max_cost_per_period"] == 99.0
     assert topup_payload["topup_summary"]["current_period_count"] == 1
+    assert topup_payload["topup_summary"]["current_period_totals"]["ai_credits"] == 10000.0
     assert topup_payload["topup_summary"]["current_period_totals"]["runs"] == 10000.0
     assert topup_payload["topup_summary"]["current_period_totals"]["tokens"] == 2000000.0
     assert topup_payload["topup_summary"]["current_period_totals"]["cost"] == 99.0
@@ -1296,9 +1299,16 @@ def test_service_routes_bind_subscription_and_rebuild_billing_snapshot(
     assert admin_subscription["topup_summary"]["count"] == 1
     assert admin_subscription["topup_summary"]["latest"]["pack_id"] == ""
     assert admin_subscription["topup_summary"]["latest"]["reason"] == "operator_overage_buffer"
+    assert admin_subscription["topup_summary"]["current_period_totals"]["ai_credits"] == 10000.0
     assert admin_subscription["topup_summary"]["current_period_totals"]["cost"] == 99.0
+    assert admin_subscription["budget_headroom"]["base_budget"]["ai_credits"] == 0.0
     assert admin_subscription["budget_headroom"]["base_budget"]["runs"] == 10.0
+    assert (
+        admin_subscription["budget_headroom"]["current_period_topup_delta"]["ai_credits"]
+        == 10000.0
+    )
     assert admin_subscription["budget_headroom"]["current_period_topup_delta"]["runs"] == 10000.0
+    assert admin_subscription["budget_headroom"]["effective_budget"]["ai_credits"] == 10000.0
     assert admin_subscription["budget_headroom"]["effective_budget"]["runs"] == 10010.0
     assert admin_subscription["billing_snapshot_status"]["status"] == "fresh"
     assert admin_subscription["billing_snapshot_status"]["fresh_site_count"] == 1
@@ -1745,9 +1755,15 @@ def test_service_routes_admin_read_facade(tmp_path: Path) -> None:
     assert len(plans) >= 1
     assert [item["tier_id"] for item in tier_templates] == ["free", "pro", "agency"]
     assert tier_templates[0]["package_alias"] == "Free"
-    assert tier_templates[1]["monthly_included_points"] == 0
-    assert tier_templates[2]["concurrency_template"]["max_active_runs"] == 0
+    assert tier_templates[0]["monthly_included_points"] == 300
+    assert tier_templates[1]["monthly_included_points"] == 10000
+    assert tier_templates[2]["monthly_included_points"] == 150000
+    assert tier_templates[0]["site_limit"] == 1
+    assert tier_templates[1]["site_limit"] == 5
+    assert tier_templates[2]["site_limit"] == 25
+    assert tier_templates[2]["concurrency_template"]["max_active_runs"] == 10
     assert tier_templates[0]["canonical_shell"]["entitlements"]["execution_tiers"] == ["cloud"]
+    assert tier_templates[1]["canonical_shell"]["budgets"]["max_ai_credits_per_period"] == 10000
     assert tier_templates[1]["canonical_shell"]["budgets"]["max_runs_per_period"] == 0
     assert tier_templates[1]["canonical_shell"]["metadata"]["max_batch_items"] == 25
     assert (
@@ -1767,18 +1783,15 @@ def test_service_routes_admin_read_facade(tmp_path: Path) -> None:
     assert admin_plan_summary["tier_summary"]["tier_id"] == "pro"
     assert admin_plan_summary["tier_summary"]["label"] == "Pro"
     assert admin_plan_summary["tier_summary"]["package_alias"] == "Pro"
-    assert admin_plan_summary["tier_summary"]["monthly_included_points"] == 0
-    assert admin_plan_summary["tier_summary"]["site_limit"] == 0
+    assert admin_plan_summary["tier_summary"]["monthly_included_points"] == 10000
+    assert admin_plan_summary["tier_summary"]["site_limit"] == 5
     assert admin_plan_summary["tier_summary"]["max_batch_items"] == 25
     assert admin_plan_summary["tier_summary"]["nightly_inspection_runs_per_period"] == 30
     assert admin_plan_summary["tier_summary"]["nightly_inspection_retention_days"] == 14
     assert admin_plan_summary["tier_summary"]["automation_enabled"] is True
     assert admin_plan_summary["tier_summary"]["api_enabled"] is True
     assert admin_plan_summary["tier_summary"]["openclaw_enabled"] is True
-    assert (
-        "internal development is temporarily unlimited"
-        in admin_plan_summary["tier_summary"]["package_operator_note"].lower()
-    )
+    assert "ai credits" in admin_plan_summary["tier_summary"]["package_operator_note"].lower()
     assert admin_plan_summary["latest_version"]["plan_version_id"] == "plan_admin_v1"
     assert admin_plan_summary["published_version_count"] == 1
     assert plan_detail_response.status_code == 200
@@ -1786,15 +1799,15 @@ def test_service_routes_admin_read_facade(tmp_path: Path) -> None:
     assert plan_detail["plan"]["plan_id"] == "plan_admin"
     assert plan_detail["tier_summary"]["tier_id"] == "pro"
     assert plan_detail["tier_summary"]["package_alias"] == "Pro"
-    assert plan_detail["tier_summary"]["monthly_included_points"] == 0
-    assert plan_detail["tier_summary"]["site_limit"] == 0
+    assert plan_detail["tier_summary"]["monthly_included_points"] == 10000
+    assert plan_detail["tier_summary"]["site_limit"] == 5
     assert plan_detail["tier_summary"]["max_batch_items"] == 25
     assert plan_detail["tier_summary"]["nightly_inspection_runs_per_period"] == 30
     assert plan_detail["tier_summary"]["nightly_inspection_retention_days"] == 14
     assert plan_detail["tier_summary"]["automation_enabled"] is True
     assert plan_detail["tier_summary"]["api_enabled"] is True
     assert plan_detail["tier_summary"]["openclaw_enabled"] is True
-    assert plan_detail["tier_summary"]["concurrency_template"]["max_active_runs"] == 0
+    assert plan_detail["tier_summary"]["concurrency_template"]["max_active_runs"] == 3
     assert plan_detail["latest_version"]["plan_version_id"] == "plan_admin_v1"
     assert plan_detail["package_fit_cues"]
     cue_codes = {item["code"] for item in plan_detail["package_fit_cues"]}
@@ -1950,14 +1963,15 @@ def test_service_routes_plan_tier_fallback_and_package_fit_cues(tmp_path: Path) 
     plans = {item["plan"]["plan_id"]: item for item in plans_response.json()["data"]["items"]}
     assert plans["free_ops"]["tier_summary"]["tier_id"] == "free"
     assert plans["free_ops"]["tier_summary"]["package_alias"] == "Free"
-    assert plans["free_ops"]["tier_summary"]["monthly_included_points"] == 0
-    assert plans["free_ops"]["tier_summary"]["max_batch_items"] == 0
+    assert plans["free_ops"]["tier_summary"]["monthly_included_points"] == 300
+    assert plans["free_ops"]["tier_summary"]["site_limit"] == 1
+    assert plans["free_ops"]["tier_summary"]["max_batch_items"] == 5
     assert plans["free_ops"]["tier_summary"]["automation_enabled"] is True
     assert plans["free_ops"]["tier_summary"]["api_enabled"] is True
     assert plans["free_ops"]["tier_summary"]["openclaw_enabled"] is True
     assert plans["plan_version_tier"]["tier_summary"]["tier_id"] == "agency"
     assert plans["plan_version_tier"]["tier_summary"]["package_alias"] == "Agency"
-    assert plans["plan_version_tier"]["tier_summary"]["monthly_included_points"] == 0
+    assert plans["plan_version_tier"]["tier_summary"]["monthly_included_points"] == 150000
     assert plans["plan_version_tier"]["tier_summary"]["max_batch_items"] == 100
     assert (
         plans["plan_version_tier"]["tier_summary"][
@@ -1975,7 +1989,8 @@ def test_service_routes_plan_tier_fallback_and_package_fit_cues(tmp_path: Path) 
     free_detail = free_detail_response.json()["data"]
     assert free_detail["tier_summary"]["tier_id"] == "free"
     assert free_detail["tier_summary"]["package_alias"] == "Free"
-    assert free_detail["tier_summary"]["monthly_included_points"] == 0
+    assert free_detail["tier_summary"]["monthly_included_points"] == 300
+    assert free_detail["tier_summary"]["budgets_template"]["max_ai_credits_per_period"] == 300
     free_cue_codes = {item["code"] for item in free_detail["package_fit_cues"]}
     assert "package_fit.cost_ceiling_missing" in free_cue_codes
 
@@ -2140,6 +2155,8 @@ def test_admin_account_quota_summary_reports_ai_credits_and_resource_limits(
     assert data["credit"]["status"] == "ok"
     assert data["credit"]["estimated"] is True
     assert data["credit"]["rate_version"] == "ai-credit-estimate-v2"
+    assert data["credit_policy"]["rate_version"] == "ai-credit-ledger-v2"
+    assert data["credit_policy"]["renewal_policy"] == "monthly_plan_grant_resets_each_period"
     assert {item["key"]: item["credits"] for item in data["breakdown"]} == {
         "runs": 2.0,
         "tokens_total": 2,

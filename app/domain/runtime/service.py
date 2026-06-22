@@ -60,6 +60,11 @@ from app.domain.cloud_batch_runtime.contracts import (
     validate_cloud_batch_runtime_contract,
 )
 from app.domain.cloud_batch_runtime.service import CloudBatchRuntimeService
+from app.domain.commercial.credits import (
+    AI_CREDIT_RATE_VERSION,
+    classify_provider_credit_component,
+    estimate_runtime_request_ai_credits,
+)
 from app.domain.commercial.service import CommercialService, ServiceAuditContext
 from app.domain.hosted_model_defaults import FREE_GPT55_TEXT_PROFILE_ID
 from app.domain.image_context_evidence.contracts import (
@@ -350,6 +355,7 @@ class RuntimeService:
                 idempotency_key=request.idempotency_key,
                 request_kind="execute",
                 run_id=run_id,
+                estimated_ai_credits=self._estimate_runtime_request_ai_credits(request),
             )
             self._enforce_batch_limits(
                 request=request,
@@ -472,6 +478,7 @@ class RuntimeService:
                     "status" if request.ability_name == SITE_KNOWLEDGE_STATUS_ABILITY else "execute"
                 ),
                 run_id=run_id,
+                estimated_ai_credits=self._estimate_runtime_request_ai_credits(request),
             )
             self._enforce_batch_limits(
                 request=request,
@@ -590,6 +597,7 @@ class RuntimeService:
                 idempotency_key=request.idempotency_key,
                 request_kind="execute",
                 run_id=run_id,
+                estimated_ai_credits=self._estimate_runtime_request_ai_credits(request),
             )
             self._enforce_batch_limits(
                 request=request,
@@ -719,6 +727,11 @@ class RuntimeService:
                 idempotency_key=resolved_idempotency_key,
                 request_kind="execute",
                 run_id=run_id,
+                estimated_ai_credits=estimate_runtime_request_ai_credits(
+                    ability_family="vision",
+                    execution_kind="media_derivative",
+                    payload_json=input_payload,
+                ),
             )
 
             media_input = {
@@ -3770,6 +3783,7 @@ class RuntimeService:
                 idempotency_key=request.idempotency_key,
                 request_kind="execute",
                 run_id=run_id,
+                estimated_ai_credits=self._estimate_web_search_ai_credits(request),
             )
             self._enforce_batch_limits(
                 request=request,
@@ -3892,6 +3906,12 @@ class RuntimeService:
             )
             return
 
+        result_json = dict(execution.result_json)
+        usage_context = self._build_web_search_usage_context(payload, result_json=result_json)
+        result_json["usage_summary"] = self._build_web_search_usage_summary(
+            run,
+            usage_context=usage_context,
+        )
         provider_call = repository.record_provider_call(
             run_id=run.run_id,
             provider_id=execution.usage.provider_id,
@@ -3910,15 +3930,100 @@ class RuntimeService:
             session=repository.session,
             run=run,
             provider_call=provider_call,
+            usage_context=usage_context,
         )
         repository.mark_run_succeeded(
             run,
-            result_json=execution.result_json,
+            result_json=result_json,
             provider_id="web_search",
             model_id="web-search-managed",
             instance_id="cloud-runtime",
             fallback_used=False,
         )
+
+    def _estimate_web_search_ai_credits(self, request: RuntimeRequest) -> float:
+        return self._estimate_runtime_request_ai_credits(
+            request,
+            payload_json=self._build_web_search_usage_context(request.input_payload),
+        )
+
+    def _estimate_runtime_request_ai_credits(
+        self,
+        request: RuntimeRequest,
+        *,
+        payload_json: dict[str, object] | None = None,
+    ) -> float:
+        return estimate_runtime_request_ai_credits(
+            ability_family=request.ability_family,
+            execution_kind=request.execution_kind,
+            payload_json=payload_json if payload_json is not None else request.input_payload,
+        )
+
+    def _build_web_search_usage_context(
+        self,
+        input_payload: dict[str, Any],
+        *,
+        result_json: dict[str, Any] | None = None,
+    ) -> dict[str, object]:
+        result = result_json if isinstance(result_json, dict) else {}
+        source_type = str(
+            input_payload.get("source_type")
+            or result.get("source_type")
+            or result.get("intent")
+            or ""
+        ).strip()
+        managed_source = str(input_payload.get("managed_source") or "").strip()
+        intent = str(input_payload.get("intent") or result.get("intent") or "").strip()
+        provider = str(result.get("provider") or input_payload.get("provider") or "").strip()
+        if not provider and (
+            source_type.startswith("zhihu")
+            or source_type.startswith("zhida")
+            or managed_source.startswith("zhihu")
+            or intent.startswith("zhihu")
+            or intent.startswith("zhida")
+        ):
+            provider = "zhihu"
+        context: dict[str, object] = {
+            "provider": provider,
+            "provider_mode": str(result.get("provider_mode") or provider or "").strip(),
+            "requested_provider": str(
+                result.get("requested_provider") or input_payload.get("provider") or ""
+            ).strip(),
+            "source_type": source_type,
+            "managed_source": managed_source or source_type or intent,
+            "intent": intent or source_type,
+        }
+        for key in ("cache_status", "result_count"):
+            value = result.get(key)
+            if value is not None and value != "":
+                context[key] = value
+        return context
+
+    def _build_web_search_usage_summary(
+        self,
+        run: RunRecord,
+        *,
+        usage_context: dict[str, object],
+    ) -> dict[str, object]:
+        component = classify_provider_credit_component(
+            execution_kind=run.execution_kind,
+            ability_family=run.ability_family,
+            payload_json=usage_context,
+        )
+        provider_credits = float(self._coerce_float(component.get("rate")) or 0.0)
+        return {
+            "rate_version": AI_CREDIT_RATE_VERSION,
+            "quota_owner": "cloud_runtime_entitlement",
+            "meter_key": "provider_calls",
+            "source_type": str(component.get("source_type") or ""),
+            "unit": str(component.get("unit") or "call"),
+            "provider_call_credits": provider_credits,
+            "run_acceptance_credits": 1.0,
+            "estimated_total_ai_credits": round(1.0 + max(0.0, provider_credits), 6),
+            "provider": str(usage_context.get("provider") or ""),
+            "managed_source": str(usage_context.get("managed_source") or ""),
+            "intent": str(usage_context.get("intent") or ""),
+        }
 
     def _execute_image_source_request(
         self,
@@ -3964,6 +4069,7 @@ class RuntimeService:
                 idempotency_key=request.idempotency_key,
                 request_kind="execute",
                 run_id=run_id,
+                estimated_ai_credits=self._estimate_runtime_request_ai_credits(request),
             )
             self._enforce_batch_limits(
                 request=request,
@@ -4063,6 +4169,7 @@ class RuntimeService:
                 idempotency_key=request.idempotency_key,
                 request_kind="execute",
                 run_id=run_id,
+                estimated_ai_credits=self._estimate_runtime_request_ai_credits(request),
             )
             self._enforce_batch_limits(
                 request=request,
@@ -4167,6 +4274,7 @@ class RuntimeService:
                 idempotency_key=request.idempotency_key,
                 request_kind="execute",
                 run_id=run_id,
+                estimated_ai_credits=self._estimate_runtime_request_ai_credits(request),
             )
             self._enforce_batch_limits(
                 request=request,

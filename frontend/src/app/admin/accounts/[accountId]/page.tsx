@@ -118,6 +118,7 @@ type TopUpPackOption = {
   label_key: string;
   fallback_label: string;
   points_label: string;
+  ai_credits_increment: number;
   runs_increment: number;
   tokens_increment: number;
   cost_increment: number;
@@ -130,6 +131,7 @@ const TOPUP_PACK_OPTIONS: TopUpPackOption[] = [
     label_key: 'admin.account_detail.topup_pack_small',
     fallback_label: 'Small top-up',
     points_label: '10,000 points',
+    ai_credits_increment: 10000,
     runs_increment: 10000,
     tokens_increment: 2000000,
     cost_increment: 99,
@@ -140,6 +142,7 @@ const TOPUP_PACK_OPTIONS: TopUpPackOption[] = [
     label_key: 'admin.account_detail.topup_pack_medium',
     fallback_label: 'Medium top-up',
     points_label: '35,000 points',
+    ai_credits_increment: 35000,
     runs_increment: 35000,
     tokens_increment: 7000000,
     cost_increment: 349,
@@ -150,6 +153,7 @@ const TOPUP_PACK_OPTIONS: TopUpPackOption[] = [
     label_key: 'admin.account_detail.topup_pack_large',
     fallback_label: 'Large top-up',
     points_label: '150,000 points',
+    ai_credits_increment: 150000,
     runs_increment: 150000,
     tokens_increment: 30000000,
     cost_increment: 1499,
@@ -1034,6 +1038,7 @@ function AccountDetailContent() {
         body: JSON.stringify({
           target_period_start_at: packageForm.current_period_start_at || null,
           target_period_end_at: packageForm.current_period_end_at || null,
+          ai_credits_increment: pack.ai_credits_increment,
           runs_increment: pack.runs_increment,
           tokens_increment: pack.tokens_increment,
           cost_increment: pack.cost_increment,

@@ -26,6 +26,7 @@ from app.core.models import (
 )
 from app.domain.commercial.audit_context import ServiceAuditContext
 from app.domain.commercial.credits import (
+    AI_CREDIT_COMPONENT_LABELS,
     AI_CREDIT_RATE_VERSION,
     build_credit_breakdown_from_ledger,
     rounded_token_credits,
@@ -1033,6 +1034,12 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
                     ),
                 },
             ),
+            "credit_policy": {
+                "rate_version": AI_CREDIT_RATE_VERSION,
+                "period_policy": "subscription_period",
+                "renewal_policy": "monthly_plan_grant_resets_each_period",
+                "topup_policy": "operator_topups_apply_to_target_period_only",
+            },
             "resource_limits": resource_limits,
             "internal_limits": internal_limits,
             "breakdown": credit_breakdown,
@@ -1145,22 +1152,37 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
 
     def get_portal_account_quota_summary(self, account_id: str) -> dict[str, object]:
         summary = self.get_admin_account_quota_summary(account_id)
+        breakdown = (
+            summary.get("breakdown")
+            if isinstance(summary.get("breakdown"), list)
+            else []
+        )
+        credit = summary.get("credit") if isinstance(summary.get("credit"), dict) else {}
         return {
             "account_id": str(summary.get("account_id") or account_id),
             "generated_at": summary.get("generated_at"),
             "period_start_at": summary.get("period_start_at"),
             "period_end_at": summary.get("period_end_at"),
             "status": summary.get("status"),
-            "credit": summary.get("credit"),
+            "credit": credit,
+            "credit_policy": (
+                summary.get("credit_policy")
+                if isinstance(summary.get("credit_policy"), dict)
+                else {}
+            ),
             "resource_limits": (
                 summary.get("resource_limits")
                 if isinstance(summary.get("resource_limits"), list)
                 else []
             ),
-            "breakdown": (
-                summary.get("breakdown")
-                if isinstance(summary.get("breakdown"), list)
-                else []
+            "breakdown": breakdown,
+            "credit_usage_detail": self._build_portal_credit_usage_detail(
+                credit=credit,
+                breakdown=breakdown,
+                recent_items=[],
+                generated_at=summary.get("generated_at"),
+                period_start_at=summary.get("period_start_at"),
+                period_end_at=summary.get("period_end_at"),
             ),
         }
 
@@ -1176,6 +1198,16 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
             limit=min(50, max(1, int(limit or 25))),
             offset=max(0, int(offset or 0)),
         )
+        summary = ledger.get("summary") if isinstance(ledger.get("summary"), dict) else {}
+        breakdown = (
+            summary.get("breakdown")
+            if isinstance(summary.get("breakdown"), list)
+            else []
+        )
+        items = [
+            self._serialize_credit_ledger_entry(entry, include_internal=False)
+            for entry in self._credit_ledger_entries_from_payload(ledger.get("items"))
+        ]
         return {
             "account_id": str(ledger.get("account_id") or account_id),
             "generated_at": ledger.get("generated_at"),
@@ -1183,15 +1215,99 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
             "period_end_at": ledger.get("period_end_at"),
             "rate_version": ledger.get("rate_version"),
             "pagination": ledger.get("pagination"),
-            "summary": ledger.get("summary"),
-            "items": [
-                self._serialize_credit_ledger_entry(entry, include_internal=False)
-                for entry in self._credit_ledger_entries_from_payload(ledger.get("items"))
-            ],
+            "summary": summary,
+            "usage_detail": self._build_portal_credit_usage_detail(
+                credit={},
+                breakdown=breakdown,
+                recent_items=items,
+                generated_at=ledger.get("generated_at"),
+                period_start_at=ledger.get("period_start_at"),
+                period_end_at=ledger.get("period_end_at"),
+            ),
+            "items": items,
         }
 
     def _credit_ledger_entries_from_payload(self, items: object) -> list[object]:
         return items if isinstance(items, list) else []
+
+    def _build_portal_credit_usage_detail(
+        self,
+        *,
+        credit: dict[str, object],
+        breakdown: list[object],
+        recent_items: list[dict[str, object]],
+        generated_at: object,
+        period_start_at: object,
+        period_end_at: object,
+    ) -> dict[str, object]:
+        service = cast(Any, self)
+        limit = service._coerce_float(credit.get("limit")) if credit else 0.0
+        used = service._coerce_float(credit.get("used")) if credit else 0.0
+        remaining = max(0.0, limit - used) if limit > 0 else None
+        return {
+            "surface": "portal_personal_credit_usage",
+            "default_visibility": "cloud_portal_only",
+            "local_addon_policy": "summary_and_link_only",
+            "generated_at": generated_at,
+            "period": {
+                "start_at": period_start_at,
+                "end_at": period_end_at,
+            },
+            "summary": {
+                "used": round(used, 6),
+                "limit": round(limit, 6),
+                "remaining": round(remaining, 6) if remaining is not None else None,
+                "status": str(credit.get("status") or ""),
+                "unit": str(credit.get("unit") or "credit"),
+                "rate_version": str(credit.get("rate_version") or AI_CREDIT_RATE_VERSION),
+            },
+            "breakdown": [
+                self._portal_credit_breakdown_item(item)
+                for item in breakdown
+                if isinstance(item, dict)
+            ],
+            "recent_items": recent_items[:10],
+            "copy": {
+                "title": "AI credit usage",
+                "summary": "Current-period Cloud usage is grouped by capability.",
+                "addon_summary": "View credit details in the Cloud portal.",
+            },
+            "portal_paths": {
+                "credit_usage": "/portal/usage",
+                "credit_ledger": "/portal/usage/credits",
+            },
+        }
+
+    def _portal_credit_breakdown_item(self, item: dict[str, object]) -> dict[str, object]:
+        service = cast(Any, self)
+        key = str(item.get("key") or "")
+        return {
+            "key": key,
+            "label": str(item.get("label") or AI_CREDIT_COMPONENT_LABELS.get(key, key)),
+            "quantity": service._coerce_float(item.get("quantity")),
+            "unit": str(item.get("unit") or "credit"),
+            "rate": service._coerce_float(item.get("rate")),
+            "rate_unit": item.get("rate_unit"),
+            "credits": service._coerce_float(item.get("credits")),
+            "capability_group": self._portal_credit_capability_group(key),
+        }
+
+    def _portal_credit_capability_group(self, source_type: str) -> str:
+        if source_type.startswith("zhihu_"):
+            return "zhihu_open_platform"
+        if source_type == "web_search":
+            return "search"
+        if source_type.startswith("zhihu_direct_answer"):
+            return "zhihu_open_platform"
+        if source_type == "tokens_total":
+            return "model_tokens"
+        if source_type == "image_recommendation":
+            return "image"
+        if source_type.startswith("vector_"):
+            return "site_knowledge"
+        if source_type == "runs":
+            return "hosted_runtime"
+        return "other"
 
     def _serialize_credit_ledger_entry(
         self,

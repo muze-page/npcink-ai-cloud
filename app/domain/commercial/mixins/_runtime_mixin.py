@@ -11,6 +11,7 @@ from app.adapters.repositories.commercial_repository import CommercialRepository
 from app.core.db import get_session
 from app.core.models import (
     ACCOUNT_STATUS_ACTIVE,
+    CREDIT_LEDGER_EVENT_CONSUME,
     ENTITLEMENT_SNAPSHOT_STATUS_ACTIVE,
     PLAN_STATUS_ACTIVE,
     PLAN_VERSION_STATUS_PUBLISHED,
@@ -26,7 +27,7 @@ from app.core.models import (
 from app.core.secrets import encrypt_site_api_signing_secret
 from app.core.security import build_secret_hash
 from app.domain.commercial.credits import (
-    AI_CREDIT_RATE_VERSION,
+    record_credit_ledger_component,
     usage_meter_credit_component,
 )
 from app.domain.commercial.mixins._audit_mixin import CommercialServiceAuditMixin
@@ -172,6 +173,7 @@ class CommercialServiceRuntimeMixin(CommercialServiceAuditMixin):
         idempotency_key: str | None = None,
         request_kind: str = "execute",
         run_id: str | None = None,
+        estimated_ai_credits: float = 0.0,
     ) -> dict[str, object]:
         now = self.now_factory()
         repository = CommercialRepository(session)
@@ -249,9 +251,22 @@ class CommercialServiceRuntimeMixin(CommercialServiceAuditMixin):
             raise error
 
         service = cast(Any, self)
+        period_renewed = False
+        renewed_snapshot = None
+        if subscription.status in {
+            SUBSCRIPTION_STATUS_TRIALING,
+            SUBSCRIPTION_STATUS_ACTIVE,
+        }:
+            subscription, renewed_snapshot, period_renewed = (
+                service._ensure_current_subscription_period_in_session(
+                    repository=repository,
+                    subscription=subscription,
+                    now=now,
+                )
+            )
         period_start_at, period_end_at = service._resolve_period(subscription, now)
         policy_actions: list[dict[str, object]] = []
-        snapshot = repository.get_active_entitlement_snapshot(
+        snapshot = renewed_snapshot or repository.get_active_entitlement_snapshot(
             site.account_id or "",
             subscription_id=subscription.subscription_id,
         )
@@ -438,21 +453,59 @@ class CommercialServiceRuntimeMixin(CommercialServiceAuditMixin):
         )
         totals = service._aggregate_meter_events(meter_events)
         budgets = service._normalize_budgets(snapshot.budgets_json)
-        budget_checks = (
-            ("runs", totals.get("runs", 0.0), budgets.get("max_runs_per_period")),
-            ("tokens", totals.get("tokens_total", 0.0), budgets.get("max_tokens_per_period")),
-            ("cost", totals.get("cost", 0.0), budgets.get("max_cost_per_period")),
+        credit_entries = repository.list_credit_ledger_entries(
+            account_ids=[subscription.account_id],
+            subscription_id=subscription.subscription_id,
+            event_types=[CREDIT_LEDGER_EVENT_CONSUME],
+            since=period_start_at,
+            until=period_end_at,
+            limit=None,
         )
-        for meter_key, current_total, budget_value in budget_checks:
+        used_ai_credits = round(
+            sum(
+                max(
+                    0.0,
+                    -service._coerce_float(getattr(entry, "credit_delta", 0.0)),
+                )
+                for entry in credit_entries
+            ),
+            6,
+        )
+        projected_ai_credits = (
+            max(0.0, service._coerce_float(estimated_ai_credits))
+            if request_kind == "execute"
+            else 0.0
+        )
+        budget_checks = (
+            (
+                "ai_credits",
+                used_ai_credits,
+                budgets.get("max_ai_credits_per_period"),
+                projected_ai_credits,
+            ),
+            ("runs", totals.get("runs", 0.0), budgets.get("max_runs_per_period"), 1.0),
+            ("tokens", totals.get("tokens_total", 0.0), budgets.get("max_tokens_per_period"), 0.0),
+            ("cost", totals.get("cost", 0.0), budgets.get("max_cost_per_period"), 0.0),
+        )
+        for meter_key, current_total, budget_value, projected_quantity in budget_checks:
             limit = self._coerce_float(budget_value)
-            if limit <= 0 or current_total < limit:
+            request_projection = (
+                max(0.0, self._coerce_float(projected_quantity))
+                if request_kind == "execute"
+                else 0.0
+            )
+            projected_total = self._coerce_float(current_total) + max(
+                0.0,
+                request_projection,
+            )
+            if limit <= 0 or projected_total <= limit:
                 continue
             budget_action = self._resolve_budget_policy_action(
                 repository=repository,
                 subscription=subscription,
                 policy=policy,
                 meter_key=meter_key,
-                current_total=current_total,
+                current_total=projected_total,
                 limit=limit,
                 period_start_at=period_start_at,
                 request_kind=request_kind,
@@ -479,6 +532,8 @@ class CommercialServiceRuntimeMixin(CommercialServiceAuditMixin):
                     payload_json={
                         "meter_key": meter_key,
                         "current_total": round(float(current_total), 6),
+                        "projected_quantity": round(float(request_projection), 6),
+                        "projected_total": round(float(projected_total), 6),
                         "limit": round(float(limit), 6),
                     },
                 )
@@ -546,8 +601,23 @@ class CommercialServiceRuntimeMixin(CommercialServiceAuditMixin):
             "plan_version_id": subscription.plan_version_id,
             "period_start_at": period_start_at,
             "period_end_at": period_end_at,
+            "period_renewed": period_renewed,
             "entitlements": service._normalize_entitlements(snapshot.entitlements_json),
             "budgets": budgets,
+            "ai_credit_budget": {
+                "used": used_ai_credits,
+                "estimated_request": projected_ai_credits,
+                "limit": self._coerce_float(budgets.get("max_ai_credits_per_period")),
+                "remaining_before_request": (
+                    max(
+                        0.0,
+                        self._coerce_float(budgets.get("max_ai_credits_per_period"))
+                        - used_ai_credits,
+                    )
+                    if self._coerce_float(budgets.get("max_ai_credits_per_period")) > 0
+                    else None
+                ),
+            },
             "concurrency": concurrency,
             "batch_limits": batch_limits,
             "pro_cloud_runtime": pro_cloud_runtime,
@@ -576,7 +646,13 @@ class CommercialServiceRuntimeMixin(CommercialServiceAuditMixin):
             payload_json={
                 "period_start_at": self._serialize_datetime(period_start_at),
                 "period_end_at": self._serialize_datetime(period_end_at),
+                "period_renewed": period_renewed,
                 "budgets": budgets,
+                "ai_credit_budget": {
+                    "used": used_ai_credits,
+                    "estimated_request": projected_ai_credits,
+                    "limit": self._coerce_float(budgets.get("max_ai_credits_per_period")),
+                },
                 "concurrency": concurrency,
                 "batch_limits": batch_limits,
                 "pro_cloud_runtime": pro_cloud_runtime,
@@ -622,6 +698,7 @@ class CommercialServiceRuntimeMixin(CommercialServiceAuditMixin):
         session: Session,
         run: RunRecord,
         provider_call: ProviderCallRecord,
+        usage_context: dict[str, object] | None = None,
     ) -> None:
         repository = CommercialRepository(session)
         base_payload = {
@@ -631,6 +708,12 @@ class CommercialServiceRuntimeMixin(CommercialServiceAuditMixin):
             "retry_count": provider_call.retry_count,
             "error_code": provider_call.error_code,
         }
+        if isinstance(usage_context, dict):
+            for key, value in usage_context.items():
+                if value is None or value == "" or value == [] or value == {}:
+                    continue
+                if isinstance(value, str | int | float | bool):
+                    base_payload[str(key)] = value
         event = repository.record_usage_meter_event(
             account_id=run.account_id,
             site_id=run.site_id,
@@ -693,36 +776,45 @@ class CommercialServiceRuntimeMixin(CommercialServiceAuditMixin):
         event_id = getattr(event, "id", None)
         if event_id is None:
             return
-        service = cast(Any, self)
         source_type = str(component.get("source_type") or "")
-        credits = service._coerce_float(component.get("credits"))
-        repository.record_credit_ledger_entry(
+        payload_json = getattr(event, "payload_json", None)
+        payload_json = payload_json if isinstance(payload_json, dict) else {}
+        metadata_json: dict[str, object] = {
+            "usage_meter_event_id": event_id,
+            "meter_key": str(getattr(event, "meter_key", "") or ""),
+            "event_kind": str(getattr(event, "event_kind", "") or ""),
+            "ability_family": str(getattr(event, "ability_family", "") or ""),
+            "execution_kind": str(getattr(event, "execution_kind", "") or ""),
+            "credit_component": source_type,
+        }
+        for key in (
+            "provider",
+            "provider_id",
+            "provider_mode",
+            "requested_provider",
+            "source_type",
+            "managed_source",
+            "intent",
+            "cache_status",
+            "result_count",
+        ):
+            value = payload_json.get(key)
+            if value is None or value == "" or value == [] or value == {}:
+                continue
+            if isinstance(value, str | int | float | bool):
+                metadata_json[key] = value
+        record_credit_ledger_component(
+            repository=repository,
             account_id=getattr(event, "account_id", None),
             site_id=getattr(event, "site_id", None),
             subscription_id=getattr(event, "subscription_id", None),
             plan_version_id=getattr(event, "plan_version_id", None),
             run_id=getattr(event, "run_id", None),
             provider_call_id=getattr(event, "provider_call_id", None),
-            source_type=source_type,
+            component=component,
             source_id=str(event_id),
-            credit_delta=-credits,
-            quantity=service._coerce_float(component.get("quantity")),
-            unit=str(component.get("unit") or "credit"),
-            rate=service._coerce_float(component.get("rate")),
-            rate_unit=(
-                str(component.get("rate_unit"))
-                if component.get("rate_unit") is not None
-                else None
-            ),
-            rate_version=AI_CREDIT_RATE_VERSION,
             idempotency_key=f"usage_meter_event:{event_id}",
-            metadata_json={
-                "usage_meter_event_id": event_id,
-                "meter_key": str(getattr(event, "meter_key", "") or ""),
-                "event_kind": str(getattr(event, "event_kind", "") or ""),
-                "ability_family": str(getattr(event, "ability_family", "") or ""),
-                "execution_kind": str(getattr(event, "execution_kind", "") or ""),
-            },
+            metadata_json=metadata_json,
             created_at=getattr(event, "created_at", None),
         )
 

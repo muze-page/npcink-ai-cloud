@@ -1,0 +1,112 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+from app.adapters.repositories.commercial_repository import CommercialRepository
+from app.core.db import dispose_engine, get_session, init_schema
+from app.domain.commercial.credits import (
+    AI_CREDIT_BREAKDOWN_ORDER,
+    AI_CREDIT_CAPABILITY_POLICY_REGISTRY,
+    AI_CREDIT_COMPONENT_POLICY_REGISTRY,
+    AI_CREDIT_RATE_VERSION,
+    estimate_runtime_request_ai_credits,
+    record_credit_ledger_component,
+    vector_credit_component,
+)
+
+
+def _sqlite_url(tmp_path: Path) -> str:
+    return f"sqlite+pysqlite:///{tmp_path / 'ai-credit-policy.sqlite3'}"
+
+
+def test_ai_credit_component_registry_covers_every_breakdown_key() -> None:
+    assert set(AI_CREDIT_BREAKDOWN_ORDER) == set(AI_CREDIT_COMPONENT_POLICY_REGISTRY)
+    for source_type, policy in AI_CREDIT_COMPONENT_POLICY_REGISTRY.items():
+        assert policy["source_type"] == source_type
+        assert policy["charge_mode"] in {"consume", "meter_only"}
+        assert policy["unit"]
+        assert float(policy["rate"]) >= 0
+
+
+def test_ai_credit_capability_registry_defines_required_runtime_families() -> None:
+    required_keys = {
+        "runtime:text",
+        "runtime:web_search",
+        "runtime:image",
+        "runtime:site_knowledge",
+        "runtime:batch",
+    }
+    assert required_keys <= set(AI_CREDIT_CAPABILITY_POLICY_REGISTRY)
+    for capability_key, policy in AI_CREDIT_CAPABILITY_POLICY_REGISTRY.items():
+        assert policy["capability_key"] == capability_key
+        assert policy["charge_mode"]
+        assert float(policy["request_base_credits"]) >= 0
+        assert policy["ledger_components"]
+
+
+def test_runtime_execute_authorization_calls_include_ai_credit_estimates() -> None:
+    source = Path("app/domain/runtime/service.py").read_text(encoding="utf-8")
+    for block in source.split("authorize_runtime_request(")[1:]:
+        call = block.split(")\n", 1)[0]
+        if 'request_kind="execute"' not in call and "SITE_KNOWLEDGE_STATUS_ABILITY" not in call:
+            continue
+        assert "estimated_ai_credits=" in call
+
+
+def test_ai_credit_estimates_match_declared_provider_components() -> None:
+    assert estimate_runtime_request_ai_credits(
+        ability_family="workflow",
+        execution_kind="text",
+    ) == 1.0
+    assert estimate_runtime_request_ai_credits(
+        ability_family="tool",
+        execution_kind="web_search",
+        payload_json={"provider": "zhihu", "source_type": "zhida_deepsearch"},
+    ) == 11.0
+    assert estimate_runtime_request_ai_credits(
+        ability_family="vision",
+        execution_kind="image_source",
+    ) == 4.0
+
+
+def test_record_credit_ledger_component_is_idempotent(tmp_path: Path) -> None:
+    database_url = _sqlite_url(tmp_path)
+    init_schema(database_url)
+    component = vector_credit_component(source_type="vector_chunks", quantity=11)
+    assert component is not None
+    with get_session(database_url) as session:
+        repository = CommercialRepository(session)
+        first = record_credit_ledger_component(
+            repository=repository,
+            account_id="acct_credit_policy",
+            site_id="site_credit_policy",
+            subscription_id="sub_credit_policy",
+            plan_version_id="plan_credit_policy_v1",
+            run_id="run-credit-policy-1",
+            provider_call_id=None,
+            component=component,
+            source_id="run-credit-policy-1",
+            idempotency_key="credit-policy-ledger-001",
+            metadata_json={"source": "test"},
+        )
+        second = record_credit_ledger_component(
+            repository=repository,
+            account_id="acct_credit_policy",
+            site_id="site_credit_policy",
+            subscription_id="sub_credit_policy",
+            plan_version_id="plan_credit_policy_v1",
+            run_id="run-credit-policy-1",
+            provider_call_id=None,
+            component=component,
+            source_id="run-credit-policy-1",
+            idempotency_key="credit-policy-ledger-001",
+            metadata_json={"source": "test"},
+        )
+        session.commit()
+
+    assert first is not None
+    assert second is not None
+    assert first.ledger_entry_id == second.ledger_entry_id
+    assert first.credit_delta == -2.0
+    assert first.rate_version == AI_CREDIT_RATE_VERSION
+    dispose_engine(database_url)

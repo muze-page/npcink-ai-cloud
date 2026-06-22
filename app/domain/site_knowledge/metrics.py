@@ -17,7 +17,10 @@ from app.core.models import (
     SiteKnowledgeIndexSnapshot,
     SiteKnowledgeSearchMetric,
 )
-from app.domain.commercial.credits import AI_CREDIT_RATE_VERSION, vector_credit_component
+from app.domain.commercial.credits import (
+    record_credit_ledger_component,
+    vector_credit_component,
+)
 from app.domain.site_knowledge.contracts import (
     SITE_KNOWLEDGE_SEARCH_ABILITY,
     SITE_KNOWLEDGE_STATUS_ABILITY,
@@ -581,26 +584,16 @@ def _record_index_credit_ledger_entries(
         component = vector_credit_component(source_type=source_type, quantity=quantity)
         if component is None:
             continue
-        credits = _coerce_float(component.get("credits"), default=0.0)
-        repository.record_credit_ledger_entry(
+        record_credit_ledger_component(
+            repository=repository,
             account_id=metric.account_id or run.account_id,
             site_id=metric.site_id or run.site_id,
             subscription_id=metric.subscription_id or run.subscription_id,
             plan_version_id=run.plan_version_id,
             run_id=metric.run_id,
             provider_call_id=None,
-            source_type=source_type,
+            component=component,
             source_id=metric.run_id,
-            credit_delta=-credits,
-            quantity=_coerce_float(component.get("quantity"), default=0.0),
-            unit=str(component.get("unit") or "credit"),
-            rate=_coerce_float(component.get("rate"), default=0.0),
-            rate_unit=(
-                str(component.get("rate_unit"))
-                if component.get("rate_unit") is not None
-                else None
-            ),
-            rate_version=AI_CREDIT_RATE_VERSION,
             idempotency_key=f"site_knowledge_index:{metric.run_id}:{source_type}",
             metadata_json={
                 "site_knowledge_index_metric_id": int(metric.id or 0),

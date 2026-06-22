@@ -238,6 +238,7 @@ function PortalUsageContent() {
   const graceState = entitlements?.subscription_grace || {};
   const quotaSummary = entitlements?.quota_summary || null;
   const quotaCredit = quotaSummary?.credit || null;
+  const creditPolicy = quotaSummary?.credit_policy || {};
   const quotaResources = Array.isArray(quotaSummary?.resource_limits)
     ? quotaSummary.resource_limits
     : [];
@@ -483,6 +484,26 @@ function PortalUsageContent() {
                   </p>
                 </div>
               ) : null}
+              <div className="mt-4 grid gap-2 rounded-[1rem] border border-slate-200 bg-slate-50/70 p-3 text-xs text-slate-600 dark:border-slate-800 dark:bg-slate-950/35 dark:text-slate-400">
+                <div className="flex items-center justify-between gap-3">
+                  <span>{t('portal.usage.credit_policy_rate_version', {}, 'Rate version')}</span>
+                  <span className="font-medium text-slate-900 dark:text-slate-100">
+                    {String(creditPolicy.rate_version || quotaCredit.rate_version || 'ai-credit-ledger-v2')}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between gap-3">
+                  <span>{t('portal.usage.credit_policy_renewal', {}, 'Renewal')}</span>
+                  <span className="text-right font-medium text-slate-900 dark:text-slate-100">
+                    {t('portal.usage.credit_policy_renewal_monthly', {}, 'Plan credits reset each package period')}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between gap-3">
+                  <span>{t('portal.usage.credit_policy_topup', {}, 'Top-ups')}</span>
+                  <span className="text-right font-medium text-slate-900 dark:text-slate-100">
+                    {t('portal.usage.credit_policy_topup_current_period', {}, 'Credit packs apply to the selected period only')}
+                  </span>
+                </div>
+              </div>
               {quotaBreakdown.length > 0 ? (
                 <div className="mt-5 rounded-[1rem] border border-slate-200 bg-slate-50/70 p-3 dark:border-slate-800 dark:bg-slate-950/35">
                   <p className="text-xs font-semibold uppercase tracking-[0.16em] text-gray-500 dark:text-gray-400">

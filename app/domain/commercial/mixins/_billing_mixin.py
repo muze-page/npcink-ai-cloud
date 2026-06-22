@@ -48,6 +48,7 @@ DEFAULT_RUNTIME_ENTITLEMENTS = {
     "data_classifications": ["*"],
 }
 DEFAULT_RUNTIME_BUDGETS: dict[str, object] = {
+    "max_ai_credits_per_period": 0.0,
     "max_runs_per_period": 0,
     "max_tokens_per_period": 0,
     "max_cost_per_period": 0.0,
@@ -140,24 +141,25 @@ PLAN_TIER_REGISTRY: dict[str, dict[str, object]] = {
         "tier_id": "free",
         "label": "Free",
         "package_alias": "Free",
-        "usage_band": "Unlimited internal development usage.",
-        "positioning": "Development-stage package with no runtime, token, cost, concurrency, site, or batch limits while the product is unreleased.",
-        "monthly_included_points": 0,
+        "usage_band": "300 AI credits per month.",
+        "positioning": "Conservative single-site package with a small monthly AI credit grant and separate resource boundaries.",
+        "monthly_included_points": 300,
         "budgets_template": {
+            "max_ai_credits_per_period": 300,
             "max_runs_per_period": 0,
             "max_tokens_per_period": 0,
             "max_cost_per_period": 0.0,
         },
-        "concurrency_template": {"max_active_runs": 0},
-        "site_limit": 0,
-        "max_batch_items": 0,
+        "concurrency_template": {"max_active_runs": 1},
+        "site_limit": 1,
+        "max_batch_items": 5,
         "nightly_inspection_runs_per_period": 0,
         "nightly_inspection_retention_days": 14,
         "nightly_inspection_payload_modes": ["metadata_only"],
         "automation_enabled": True,
         "api_enabled": True,
         "openclaw_enabled": True,
-        "package_operator_note": "Internal development is temporarily unlimited. Keep subscriptions, keys, usage, and audit active, but do not block on package limits before release.",
+        "package_operator_note": "Free limits high-cost AI consumption through monthly AI credits while keeping ordinary Cloud service usage reviewable.",
         "policy_baseline": {
             "grace_period_days": 0,
             "downgrade_policy": "No package-limit downgrade while the unreleased product is in internal development.",
@@ -172,16 +174,17 @@ PLAN_TIER_REGISTRY: dict[str, dict[str, object]] = {
         "tier_id": "pro",
         "label": "Pro",
         "package_alias": "Pro",
-        "usage_band": "30 Pro Nightly Inspection runs per month.",
-        "positioning": "Commercial Pro package for bounded Cloud runtime detail with explicit Nightly Inspection batch and period limits.",
-        "monthly_included_points": 0,
+        "usage_band": "10,000 AI credits and 30 Pro Nightly Inspection runs per month.",
+        "positioning": "Commercial Pro package with normal hosted AI consumption controlled by monthly AI credits and separate resource boundaries.",
+        "monthly_included_points": 10_000,
         "budgets_template": {
+            "max_ai_credits_per_period": 10_000,
             "max_runs_per_period": 0,
             "max_tokens_per_period": 0,
             "max_cost_per_period": 0.0,
         },
-        "concurrency_template": {"max_active_runs": 0},
-        "site_limit": 0,
+        "concurrency_template": {"max_active_runs": 3},
+        "site_limit": 5,
         "max_batch_items": 25,
         "nightly_inspection_runs_per_period": 30,
         "nightly_inspection_retention_days": 14,
@@ -189,7 +192,7 @@ PLAN_TIER_REGISTRY: dict[str, dict[str, object]] = {
         "automation_enabled": True,
         "api_enabled": True,
         "openclaw_enabled": True,
-        "package_operator_note": "Internal development is temporarily unlimited. Keep subscriptions, keys, usage, and audit active, but do not block on package limits before release.",
+        "package_operator_note": "Pro keeps ordinary usage broadly available while high-cost AI search, query, and generation paths spend AI credits.",
         "policy_baseline": {
             "grace_period_days": 3,
             "downgrade_policy": "No package-limit downgrade while the unreleased product is in internal development.",
@@ -204,16 +207,17 @@ PLAN_TIER_REGISTRY: dict[str, dict[str, object]] = {
         "tier_id": "agency",
         "label": "Agency",
         "package_alias": "Agency",
-        "usage_band": "150 Pro Nightly Inspection runs per month.",
-        "positioning": "Commercial Agency package for multi-site Cloud runtime detail with higher Nightly Inspection batch and period limits.",
-        "monthly_included_points": 0,
+        "usage_band": "150,000 AI credits and 150 Pro Nightly Inspection runs per month.",
+        "positioning": "Commercial Agency package for custom or multi-site Cloud runtime detail with higher AI credit, batch, and resource headroom.",
+        "monthly_included_points": 150_000,
         "budgets_template": {
+            "max_ai_credits_per_period": 150_000,
             "max_runs_per_period": 0,
             "max_tokens_per_period": 0,
             "max_cost_per_period": 0.0,
         },
-        "concurrency_template": {"max_active_runs": 0},
-        "site_limit": 0,
+        "concurrency_template": {"max_active_runs": 10},
+        "site_limit": 25,
         "max_batch_items": 100,
         "nightly_inspection_runs_per_period": 150,
         "nightly_inspection_retention_days": 30,
@@ -221,7 +225,7 @@ PLAN_TIER_REGISTRY: dict[str, dict[str, object]] = {
         "automation_enabled": True,
         "api_enabled": True,
         "openclaw_enabled": True,
-        "package_operator_note": "Internal development is temporarily unlimited. Keep subscriptions, keys, usage, and audit active, but do not block on package limits before release.",
+        "package_operator_note": "Agency represents custom/high-volume coverage; AI credits remain the primary high-cost consumption control.",
         "policy_baseline": {
             "grace_period_days": 7,
             "downgrade_policy": "No package-limit downgrade while the unreleased product is in internal development.",
@@ -246,6 +250,7 @@ OPERATOR_MANAGED_POINTS_PACK_REGISTRY: dict[str, dict[str, object]] = {
         "label": "Small pack",
         "points_label": "10,000 points equivalent",
         "points_equivalent": 10_000,
+        "ai_credits_increment": 10_000,
         "display_order": 1,
         "recommended_for_tiers": ["free", "pro"],
         "active": True,
@@ -259,6 +264,7 @@ OPERATOR_MANAGED_POINTS_PACK_REGISTRY: dict[str, dict[str, object]] = {
         "label": "Medium pack",
         "points_label": "35,000 points equivalent",
         "points_equivalent": 35_000,
+        "ai_credits_increment": 35_000,
         "display_order": 2,
         "recommended_for_tiers": ["pro", "agency"],
         "active": True,
@@ -272,6 +278,7 @@ OPERATOR_MANAGED_POINTS_PACK_REGISTRY: dict[str, dict[str, object]] = {
         "label": "Large pack",
         "points_label": "150,000 points equivalent",
         "points_equivalent": 150_000,
+        "ai_credits_increment": 150_000,
         "display_order": 3,
         "recommended_for_tiers": ["agency"],
         "active": True,
@@ -619,6 +626,10 @@ class CommercialServiceBillingMixin(CommercialServiceAuditMixin):
                 "label": str(merged.get("label") or ""),
                 "points_label": str(merged.get("points_label") or ""),
                 "points_equivalent": self._coerce_int(merged.get("points_equivalent")),
+                "ai_credits_increment": round(
+                    float(self._coerce_float(merged.get("ai_credits_increment"))),
+                    6,
+                ),
                 "display_order": self._coerce_int(merged.get("display_order")),
                 "recommended_for_tiers": _normalize_recommended_tiers(
                     merged.get("recommended_for_tiers")
@@ -672,6 +683,7 @@ class CommercialServiceBillingMixin(CommercialServiceAuditMixin):
         *,
         subscription_id: str,
         pack_id: str = "",
+        ai_credits_increment: float = 0.0,
         runs_increment: float = 0.0,
         tokens_increment: float = 0.0,
         cost_increment: float = 0.0,
@@ -695,6 +707,7 @@ class CommercialServiceBillingMixin(CommercialServiceAuditMixin):
                 repository=repository,
                 subscription_id=subscription_id,
                 pack_id=pack_id,
+                ai_credits_increment=ai_credits_increment,
                 runs_increment=runs_increment,
                 tokens_increment=tokens_increment,
                 cost_increment=cost_increment,
@@ -1247,6 +1260,7 @@ class CommercialServiceBillingMixin(CommercialServiceAuditMixin):
         repository: CommercialRepository,
         subscription_id: str,
         pack_id: str = "",
+        ai_credits_increment: float = 0.0,
         runs_increment: float = 0.0,
         tokens_increment: float = 0.0,
         cost_increment: float = 0.0,
@@ -1258,6 +1272,9 @@ class CommercialServiceBillingMixin(CommercialServiceAuditMixin):
     ) -> dict[str, object]:
         now = self.now_factory()
         selected_pack = self._resolve_operator_managed_points_pack(pack_id, repository=repository)
+        pack_ai_credits_increment = (
+            self._coerce_float(selected_pack.get("ai_credits_increment")) if selected_pack else 0.0
+        )
         pack_runs_increment = (
             self._coerce_float(selected_pack.get("runs_increment")) if selected_pack else 0.0
         )
@@ -1267,10 +1284,19 @@ class CommercialServiceBillingMixin(CommercialServiceAuditMixin):
         pack_cost_increment = (
             self._coerce_float(selected_pack.get("cost_increment")) if selected_pack else 0.0
         )
+        normalized_ai_credits = max(
+            0.0,
+            pack_ai_credits_increment + self._coerce_float(ai_credits_increment),
+        )
         normalized_runs = max(0.0, pack_runs_increment + self._coerce_float(runs_increment))
         normalized_tokens = max(0.0, pack_tokens_increment + self._coerce_float(tokens_increment))
         normalized_cost = max(0.0, pack_cost_increment + self._coerce_float(cost_increment))
-        if normalized_runs <= 0 and normalized_tokens <= 0 and normalized_cost <= 0:
+        if (
+            normalized_ai_credits <= 0
+            and normalized_runs <= 0
+            and normalized_tokens <= 0
+            and normalized_cost <= 0
+        ):
             raise CommercialValidationError(
                 "service.subscription_topup_invalid",
                 "operator-managed top-up requires either a standard pack or at least one positive budget increment",
@@ -1329,11 +1355,17 @@ class CommercialServiceBillingMixin(CommercialServiceAuditMixin):
 
         topup_id = f"topup_{uuid4().hex[:12]}"
         increment_payload = {
+            "ai_credits": round(normalized_ai_credits, 6),
             "runs": round(normalized_runs, 6),
             "tokens": round(normalized_tokens, 6),
             "cost": round(normalized_cost, 6),
         }
         updated_budgets = {
+            "max_ai_credits_per_period": round(
+                self._coerce_float(base_budgets.get("max_ai_credits_per_period"))
+                + normalized_ai_credits,
+                6,
+            ),
             "max_runs_per_period": round(
                 self._coerce_float(base_budgets.get("max_runs_per_period")) + normalized_runs,
                 6,
@@ -1368,6 +1400,20 @@ class CommercialServiceBillingMixin(CommercialServiceAuditMixin):
         topup_items.append(topup_record)
         subscription_metadata["operator_managed_topups"] = topup_items[-20:]
         subscription_metadata["current_period_topup_totals"] = {
+            "ai_credits": round(
+                sum(
+                    self._coerce_float(
+                        item.get("increments", {}).get("ai_credits")
+                        if isinstance(item.get("increments"), dict)
+                        else 0.0
+                    )
+                    for item in topup_items
+                    if isinstance(item, dict)
+                    and str(item.get("target_period_start_at") or "") == expected_period_start
+                    and str(item.get("target_period_end_at") or "") == expected_period_end
+                ),
+                6,
+            ),
             "runs": round(
                 sum(
                     self._coerce_float(
@@ -1666,6 +1712,61 @@ class CommercialServiceBillingMixin(CommercialServiceAuditMixin):
             subscription.current_period_end_at or (start_at + timedelta(days=30))
         )
         return start_at, end_at
+
+    def _ensure_current_subscription_period_in_session(
+        self,
+        *,
+        repository: CommercialRepository,
+        subscription: AccountSubscription,
+        now: datetime,
+    ) -> tuple[AccountSubscription, AccountEntitlementSnapshot | None, bool]:
+        start_at, end_at = self._resolve_period(subscription, now)
+        if end_at >= now:
+            snapshot = repository.get_active_entitlement_snapshot(
+                subscription.account_id,
+                subscription_id=subscription.subscription_id,
+            )
+            return subscription, snapshot, False
+
+        plan_version = repository.get_plan_version(subscription.plan_version_id)
+        if plan_version is None:
+            return subscription, None, False
+
+        next_start = end_at if end_at > start_at else now
+        next_end = next_start + timedelta(days=30)
+        while next_end <= now:
+            next_start = next_end
+            next_end = next_start + timedelta(days=30)
+
+        metadata_json = dict(subscription.metadata_json or {})
+        metadata_json["last_period_renewed_at"] = self._serialize_datetime(now)
+        metadata_json["previous_period_start_at"] = self._serialize_datetime(start_at)
+        metadata_json["previous_period_end_at"] = self._serialize_datetime(end_at)
+        metadata_json["current_period_topup_totals"] = {
+            "ai_credits": 0.0,
+            "runs": 0.0,
+            "tokens": 0.0,
+            "cost": 0.0,
+        }
+
+        renewed, snapshot = self._bind_subscription_in_session(
+            repository=repository,
+            subscription_id=subscription.subscription_id,
+            account_id=subscription.account_id,
+            plan_id=subscription.plan_id,
+            plan_version_id=subscription.plan_version_id,
+            status=subscription.status,
+            current_period_start_at=next_start,
+            current_period_end_at=next_end,
+            metadata_json=metadata_json,
+        )
+        snapshot.metadata_json = {
+            **(snapshot.metadata_json or {}),
+            "source": "subscription_period_renewal",
+            "previous_period_start_at": self._serialize_datetime(start_at),
+            "previous_period_end_at": self._serialize_datetime(end_at),
+        }
+        return renewed, snapshot, True
 
     def _aggregate_meter_events(self, events: Sequence[object]) -> dict[str, float]:
         totals: dict[str, float] = defaultdict(float)
@@ -2471,18 +2572,27 @@ class CommercialServiceBillingMixin(CommercialServiceAuditMixin):
             or {}
         )
         current_period_delta = {
+            "ai_credits": round(self._coerce_float(topup_totals.get("ai_credits")), 6),
             "runs": round(self._coerce_float(topup_totals.get("runs")), 6),
             "tokens": round(self._coerce_float(topup_totals.get("tokens")), 6),
             "cost": round(self._coerce_float(topup_totals.get("cost")), 6),
         }
         return {
             "base_budget": {
+                "ai_credits": round(
+                    self._coerce_float(base_budgets.get("max_ai_credits_per_period")),
+                    6,
+                ),
                 "runs": round(self._coerce_float(base_budgets.get("max_runs_per_period")), 6),
                 "tokens": round(self._coerce_float(base_budgets.get("max_tokens_per_period")), 6),
                 "cost": round(self._coerce_float(base_budgets.get("max_cost_per_period")), 6),
             },
             "current_period_topup_delta": current_period_delta,
             "effective_budget": {
+                "ai_credits": round(
+                    self._coerce_float(effective.get("max_ai_credits_per_period")),
+                    6,
+                ),
                 "runs": round(self._coerce_float(effective.get("max_runs_per_period")), 6),
                 "tokens": round(self._coerce_float(effective.get("max_tokens_per_period")), 6),
                 "cost": round(self._coerce_float(effective.get("max_cost_per_period")), 6),

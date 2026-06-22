@@ -13,7 +13,13 @@ from app.adapters.queue.in_memory import InMemoryRuntimeQueue
 from app.api.main import create_app
 from app.core.config import Settings
 from app.core.db import get_session, init_schema
-from app.core.models import ProviderCallRecord, RunRecord, UsageMeterEvent
+from app.core.models import (
+    AccountEntitlementSnapshot,
+    CreditLedgerEntry,
+    ProviderCallRecord,
+    RunRecord,
+    UsageMeterEvent,
+)
 from app.core.services import CloudServices
 from app.domain.web_search.service import (
     _TAVILY_POOL_CURSOR,
@@ -276,6 +282,172 @@ def test_cloud_managed_web_search_executes_and_records_provider_usage(
             "cost",
         ]
         assert all(event.ability_family == "knowledge" for event in meter_events)
+
+
+def test_zhihu_direct_answer_records_lane_credit_component(
+    tmp_path: Path,
+    monkeypatch: Any,
+) -> None:
+    database_url, client = _build_client(
+        tmp_path,
+        settings_overrides={
+            "web_search_provider": "zhihu",
+            "web_search_zhihu_access_secret": "test-zhihu-secret",
+        },
+    )
+
+    def fake_search(
+        self: ZhihuWebSearchProvider,
+        *,
+        query: str,
+        options: dict[str, Any],
+        site_id: str,
+        run_id: str,
+    ) -> WebSearchExecutionResult:
+        assert options["source_type"] == "zhida_deep"
+        return WebSearchExecutionResult(
+            result_json={
+                "artifact_type": "web_search_results",
+                "composition_role": "grounded_answer_preview",
+                "status": "ready",
+                "provider": "zhihu",
+                "provider_mode": "zhihu",
+                "intent": "zhida_deep",
+                "query_hash": "hash-only",
+                "query_chars": len(query),
+                "result_count": 1,
+                "evidence_gate": {
+                    "status": "passed",
+                    "allows_web_grounded_assertion": True,
+                    "source_count": 1,
+                },
+                "atomic_outputs": {
+                    "source_evidence": {"contract_version": "source_evidence.v1"},
+                    "topic_candidates": {"contract_version": "topic_candidate.v1"},
+                    "grounded_answer": {
+                        "contract_version": "grounded_answer.v1",
+                        "status": "ready",
+                    },
+                },
+                "results": [
+                    {
+                        "title": "Zhihu answer source",
+                        "url": "https://www.zhihu.com/question/1/answer/2",
+                        "snippet": "A reviewed Zhihu direct answer source.",
+                        "source": "zhihu",
+                        "write_posture": "suggestion_only",
+                        "direct_wordpress_write": False,
+                    }
+                ],
+                "sources": [
+                    {
+                        "title": "Zhihu answer source",
+                        "url": "https://www.zhihu.com/question/1/answer/2",
+                        "source": "zhihu",
+                    }
+                ],
+                "write_posture": "suggestion_only",
+                "direct_wordpress_write": False,
+            },
+            usage=WebSearchProviderUsage(
+                provider_id="zhihu",
+                model_id="zhihu-openapi-content",
+                instance_id="cloud-managed",
+                region="unspecified",
+                latency_ms=16,
+                cost=0.0,
+            ),
+        )
+
+    monkeypatch.setattr(ZhihuWebSearchProvider, "search", fake_search)
+
+    response = _execute(
+        client,
+        _payload(
+            {
+                "provider": "zhihu",
+                "intent": "zhida_deep",
+                "source_type": "zhida_deep",
+                "query": "AI 写作如何做热点选题？",
+                "max_results": 3,
+            }
+        ),
+        idempotency_key="zhihu-direct-answer-credit",
+    )
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    result = data["result"]
+    assert result["usage_summary"]["quota_owner"] == "cloud_runtime_entitlement"
+    assert result["usage_summary"]["source_type"] == "zhihu_direct_answer_deep"
+    assert result["usage_summary"]["provider_call_credits"] == 5.0
+    assert result["usage_summary"]["estimated_total_ai_credits"] == 6.0
+
+    with get_session(database_url) as session:
+        run = session.get(RunRecord, data["run_id"])
+        assert run is not None
+        provider_event = session.scalar(
+            select(UsageMeterEvent).where(
+                UsageMeterEvent.run_id == run.run_id,
+                UsageMeterEvent.meter_key == "provider_calls",
+            )
+        )
+        assert provider_event is not None
+        assert provider_event.payload_json["provider"] == "zhihu"
+        assert provider_event.payload_json["source_type"] == "zhida_deep"
+        assert provider_event.payload_json["intent"] == "zhida_deep"
+
+        credit_entry = session.scalar(
+            select(CreditLedgerEntry).where(
+                CreditLedgerEntry.run_id == run.run_id,
+                CreditLedgerEntry.source_type == "zhihu_direct_answer_deep",
+            )
+        )
+        assert credit_entry is not None
+        assert credit_entry.credit_delta == -5.0
+        assert credit_entry.metadata_json["credit_component"] == "zhihu_direct_answer_deep"
+        assert credit_entry.metadata_json["source_type"] == "zhida_deep"
+
+
+def test_zhihu_direct_answer_rejects_when_ai_credit_budget_would_be_exceeded(
+    tmp_path: Path,
+    monkeypatch: Any,
+) -> None:
+    database_url, client = _build_client(
+        tmp_path,
+        settings_overrides={
+            "web_search_provider": "zhihu",
+            "web_search_zhihu_access_secret": "test-zhihu-secret",
+        },
+    )
+    with get_session(database_url) as session:
+        snapshot = session.scalar(select(AccountEntitlementSnapshot))
+        assert snapshot is not None
+        snapshot.budgets_json = {"max_ai_credits_per_period": 5}
+        session.commit()
+
+    def fake_search(*args: Any, **kwargs: Any) -> WebSearchExecutionResult:
+        raise AssertionError("provider must not be called after Cloud quota rejection")
+
+    monkeypatch.setattr(ZhihuWebSearchProvider, "search", fake_search)
+
+    response = _execute(
+        client,
+        _payload(
+            {
+                "provider": "zhihu",
+                "intent": "zhida_deep",
+                "source_type": "zhida_deep",
+                "query": "AI 写作如何做热点选题？",
+            }
+        ),
+        idempotency_key="zhihu-direct-answer-credit-limit",
+    )
+
+    assert response.status_code == 429
+    body = response.json()
+    assert body["error_code"] == "commercial.quota_exceeded"
+    assert "ai_credits" in body["message"]
 
 
 def test_tavily_key_pool_rotates_without_exposing_keys(monkeypatch: Any) -> None:

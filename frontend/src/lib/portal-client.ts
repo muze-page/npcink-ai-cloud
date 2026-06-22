@@ -247,6 +247,12 @@ export interface Entitlements {
       rate_version?: string;
       source?: string;
     };
+    credit_policy?: {
+      rate_version?: string;
+      period_policy?: string;
+      renewal_policy?: string;
+      topup_policy?: string;
+    };
     resource_limits?: Array<{
       key?: string;
       used?: number;

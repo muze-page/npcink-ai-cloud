@@ -30,11 +30,11 @@ export function localizePackageAlias(t: TranslateFn, tierId: string, fallback?: 
 export function localizeUsageBand(t: TranslateFn, tierId: string, fallback?: string): string {
   switch (tierId) {
     case 'free':
-      return t('admin.plan_usage_band_free', {}, fallback || 'Unlimited internal development usage.');
+      return t('admin.plan_usage_band_free', {}, fallback || '300 AI credits per month.');
     case 'pro':
-      return t('admin.plan_usage_band_pro', {}, fallback || 'Unlimited internal development usage.');
+      return t('admin.plan_usage_band_pro', {}, fallback || '10,000 AI credits and 30 Pro Nightly Inspection runs per month.');
     case 'agency':
-      return t('admin.plan_usage_band_agency', {}, fallback || 'Unlimited internal development usage.');
+      return t('admin.plan_usage_band_agency', {}, fallback || '150,000 AI credits and 150 Pro Nightly Inspection runs per month.');
     default:
       return fallback || '';
   }
@@ -43,11 +43,11 @@ export function localizeUsageBand(t: TranslateFn, tierId: string, fallback?: str
 export function localizePositioning(t: TranslateFn, tierId: string, fallback?: string): string {
   switch (tierId) {
     case 'free':
-      return t('admin.plan_positioning_free', {}, fallback || 'Development-stage package with no runtime, token, cost, concurrency, site, or batch limits while the product is unreleased.');
+      return t('admin.plan_positioning_free', {}, fallback || 'Conservative single-site package with a small monthly AI credit grant and separate resource boundaries.');
     case 'pro':
-      return t('admin.plan_positioning_pro', {}, fallback || 'Development-stage package with no runtime, token, cost, concurrency, site, or batch limits while the product is unreleased.');
+      return t('admin.plan_positioning_pro', {}, fallback || 'Commercial Pro package with normal hosted AI consumption controlled by monthly AI credits and separate resource boundaries.');
     case 'agency':
-      return t('admin.plan_positioning_agency', {}, fallback || 'Development-stage package with no runtime, token, cost, concurrency, site, or batch limits while the product is unreleased.');
+      return t('admin.plan_positioning_agency', {}, fallback || 'Commercial Agency package for custom or multi-site Cloud runtime detail with higher AI credit, batch, and resource headroom.');
     default:
       return fallback || '';
   }
@@ -56,11 +56,11 @@ export function localizePositioning(t: TranslateFn, tierId: string, fallback?: s
 export function localizeOperatorNote(t: TranslateFn, tierId: string, fallback?: string): string {
   switch (tierId) {
     case 'free':
-      return t('admin.plan_operator_note_free', {}, fallback || 'Internal development is temporarily unlimited. Keep subscriptions, keys, usage, and audit active, but do not block on package limits before release.');
+      return t('admin.plan_operator_note_free', {}, fallback || 'Free limits high-cost AI consumption through monthly AI credits while keeping ordinary Cloud service usage reviewable.');
     case 'pro':
-      return t('admin.plan_operator_note_pro', {}, fallback || 'Internal development is temporarily unlimited. Keep subscriptions, keys, usage, and audit active, but do not block on package limits before release.');
+      return t('admin.plan_operator_note_pro', {}, fallback || 'Pro keeps ordinary usage broadly available while high-cost AI search, query, and generation paths spend AI credits.');
     case 'agency':
-      return t('admin.plan_operator_note_agency', {}, fallback || 'Internal development is temporarily unlimited. Keep subscriptions, keys, usage, and audit active, but do not block on package limits before release.');
+      return t('admin.plan_operator_note_agency', {}, fallback || 'Agency represents custom/high-volume coverage; AI credits remain the primary high-cost consumption control.');
     default:
       return fallback || '';
   }

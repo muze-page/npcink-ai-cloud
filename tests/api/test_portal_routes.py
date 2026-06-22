@@ -1647,6 +1647,28 @@ def test_portal_summary_usage_entitlements_and_audit_routes(tmp_path: Path) -> N
             rate_version="ai-credit-ledger-v2",
             idempotency_key="portal-credit-ledger-001",
         )
+        repository.record_credit_ledger_entry(
+            account_id="acct_portal_reads",
+            site_id="site_portal_reads",
+            subscription_id=subscription.subscription_id,
+            plan_version_id=subscription.plan_version_id,
+            run_id="run-portal-ledger-zhihu-hot",
+            provider_call_id=None,
+            source_type="zhihu_hot_topics",
+            source_id="run-portal-ledger-zhihu-hot:provider-call",
+            credit_delta=-1,
+            quantity=1,
+            unit="call",
+            rate=1,
+            rate_unit=None,
+            rate_version="ai-credit-ledger-v2",
+            idempotency_key="portal-credit-ledger-zhihu-hot-001",
+            metadata_json={
+                "provider": "zhihu",
+                "intent": "zhihu_hot_topics",
+                "managed_source": "zhihu_hot_topics",
+            },
+        )
         session.commit()
     client.post(
         "/portal/v1/sites/site_portal_reads/api-keys",
@@ -1706,6 +1728,23 @@ def test_portal_summary_usage_entitlements_and_audit_routes(tmp_path: Path) -> N
     assert quota_summary["account_id"] == "acct_portal_reads"
     assert quota_summary["credit"]["key"] == "ai_credits"
     assert quota_summary["credit"]["estimated"] is False
+    assert quota_summary["credit_policy"]["rate_version"] == "ai-credit-ledger-v2"
+    assert quota_summary["credit_policy"]["topup_policy"] == (
+        "operator_topups_apply_to_target_period_only"
+    )
+    credit_usage_detail = quota_summary["credit_usage_detail"]
+    assert credit_usage_detail["default_visibility"] == "cloud_portal_only"
+    assert credit_usage_detail["local_addon_policy"] == "summary_and_link_only"
+    assert credit_usage_detail["portal_paths"]["credit_ledger"] == "/portal/usage/credits"
+    assert {item["key"] for item in credit_usage_detail["breakdown"]} >= {
+        "tokens_total",
+        "zhihu_hot_topics",
+    }
+    assert next(
+        item
+        for item in credit_usage_detail["breakdown"]
+        if item["key"] == "zhihu_hot_topics"
+    )["capability_group"] == "zhihu_open_platform"
     assert "internal_limits" not in quota_summary
     assert {item["key"] for item in quota_summary["resource_limits"]} >= {
         "bound_sites",
@@ -1721,10 +1760,18 @@ def test_portal_summary_usage_entitlements_and_audit_routes(tmp_path: Path) -> N
     credit_ledger_data = credit_ledger_response.json()["data"]
     assert credit_ledger_data["site_id"] == "site_portal_reads"
     assert credit_ledger_data["account_id"] == "acct_portal_reads"
-    assert credit_ledger_data["summary"]["total_credits"] == 2.0
-    assert credit_ledger_data["pagination"]["total"] == 1
-    assert credit_ledger_data["items"][0]["source_type"] == "tokens_total"
-    assert credit_ledger_data["items"][0]["consumed_credits"] == 2.0
+    assert credit_ledger_data["summary"]["total_credits"] == 3.0
+    assert credit_ledger_data["pagination"]["total"] == 2
+    assert {item["source_type"] for item in credit_ledger_data["items"]} == {
+        "tokens_total",
+        "zhihu_hot_topics",
+    }
+    assert credit_ledger_data["usage_detail"]["surface"] == "portal_personal_credit_usage"
+    assert {item["key"] for item in credit_ledger_data["usage_detail"]["breakdown"]} >= {
+        "tokens_total",
+        "zhihu_hot_topics",
+    }
+    assert len(credit_ledger_data["usage_detail"]["recent_items"]) == 2
 
     audit_response = client.get(
         "/portal/v1/sites/site_portal_reads/audit-summary",

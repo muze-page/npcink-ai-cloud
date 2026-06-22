@@ -141,6 +141,7 @@ class SubscriptionPayload(BaseModel):
 class SubscriptionTopUpPayload(BaseModel):
     target_period_start_at: datetime | None = None
     target_period_end_at: datetime | None = None
+    ai_credits_increment: float = 0.0
     runs_increment: float = 0.0
     tokens_increment: float = 0.0
     cost_increment: float = 0.0
@@ -1101,6 +1102,7 @@ async def apply_subscription_topup(
         result = service.apply_operator_managed_subscription_topup(
             subscription_id=subscription_id,
             pack_id="",
+            ai_credits_increment=payload.ai_credits_increment,
             runs_increment=payload.runs_increment,
             tokens_increment=payload.tokens_increment,
             cost_increment=payload.cost_increment,
