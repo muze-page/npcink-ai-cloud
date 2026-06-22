@@ -18,7 +18,11 @@ from app.domain.agent_workflow_metadata import (
 )
 from app.domain.web_search.contracts import (
     ALLOWED_WEB_SEARCH_INTENTS,
+    ATOMIC_OUTPUT_CONTRACTS,
+    GROUNDED_ANSWER_CONTRACT,
     SEARCH_EVIDENCE_PACK_CONTRACT,
+    SOURCE_EVIDENCE_CONTRACT,
+    TOPIC_CANDIDATE_CONTRACT,
     WEB_SEARCH_ABILITY,
     WEB_SEARCH_CONTRACT,
     WebSearchContractViolation,
@@ -39,6 +43,14 @@ _TAVILY_POOL_CURSOR: dict[str, int] = {}
 _TAVILY_POOL_QUARANTINED_UNTIL: dict[tuple[str, str], float] = {}
 _ZHIHU_HOT_LIST_LOCK = threading.Lock()
 _ZHIHU_HOT_LIST_CACHE: dict[str, tuple[float, list[dict[str, Any]]]] = {}
+ZHIHU_DIRECT_ANSWER_SOURCE_TYPES = frozenset(
+    {"zhida_simple", "zhida_deep", "zhida_deepsearch"}
+)
+ZHIHU_DIRECT_ANSWER_MODES = {
+    "zhida_simple": "simple",
+    "zhida_deep": "deep",
+    "zhida_deepsearch": "deepsearch",
+}
 
 
 class _TavilyApiKeySelection(TypedDict):
@@ -590,10 +602,57 @@ class ZhihuWebSearchProvider:
                             limit=min(30, max(5, max_results)),
                         )
                     )
+                elif source_type == "zhihu_global_search":
+                    global_payload = self._get_json(
+                        client,
+                        self._endpoint(
+                            base_url,
+                            str(self.settings.web_search_zhihu_global_search_path or ""),
+                            setting_name="web_search_zhihu_global_search_path",
+                        ),
+                        access_secret=access_secret,
+                        params={"Query": query, "Count": str(max_results)},
+                    )
+                    raw_results = [
+                        {**item, "source": "zhihu_global_search"}
+                        for item in _zhihu_items(global_payload)
+                    ]
+                elif source_type in ZHIHU_DIRECT_ANSWER_SOURCE_TYPES:
+                    answer_payload = self._get_json(
+                        client,
+                        self._endpoint(
+                            base_url,
+                            str(self.settings.web_search_zhihu_direct_answer_path or ""),
+                            setting_name="web_search_zhihu_direct_answer_path",
+                        ),
+                        access_secret=access_secret,
+                        params={
+                            "Query": query,
+                            "Mode": ZHIHU_DIRECT_ANSWER_MODES[source_type],
+                            "Count": str(max_results),
+                        },
+                    )
+                    usage = self._usage(started)
+                    intent = str(options.get("intent") or source_type)
+                    return WebSearchExecutionResult(
+                        result_json=_build_direct_answer_result_json(
+                            provider_id=self.provider_id,
+                            query=query,
+                            options=options,
+                            answer=_zhihu_direct_answer(answer_payload),
+                            intent=intent,
+                            mode=ZHIHU_DIRECT_ANSWER_MODES[source_type],
+                        ),
+                        usage=usage,
+                    )
                 else:
                     search_payload = self._get_json(
                         client,
-                        f"{base_url}/api/v1/content/zhihu_search",
+                        self._endpoint(
+                            base_url,
+                            str(self.settings.web_search_zhihu_search_path or ""),
+                            setting_name="web_search_zhihu_search_path",
+                        ),
                         access_secret=access_secret,
                         params={"Query": query, "Count": str(max_results)},
                     )
@@ -663,7 +722,11 @@ class ZhihuWebSearchProvider:
 
         hot_payload = self._get_json(
             client,
-            f"{base_url}/api/v1/content/hot_list",
+            self._endpoint(
+                base_url,
+                str(self.settings.web_search_zhihu_hot_list_path or ""),
+                setting_name="web_search_zhihu_hot_list_path",
+            ),
             access_secret=access_secret,
             params={"Limit": str(limit)},
         )
@@ -701,6 +764,15 @@ class ZhihuWebSearchProvider:
                 latency_ms=0,
             ),
         )
+
+    def _endpoint(self, base_url: str, path: str, *, setting_name: str) -> str:
+        normalized_path = str(path or "").strip()
+        if not normalized_path:
+            raise WebSearchProviderError(
+                "web_search.zhihu_endpoint_missing",
+                f"{setting_name} is required for this Zhihu Open Platform source",
+            )
+        return f"{base_url}{normalized_path}"
 
     def _usage(self, started: float, *, error_code: str | None = None) -> WebSearchProviderUsage:
         return WebSearchProviderUsage(
@@ -842,7 +914,12 @@ def _hash_tavily_key(value: str) -> str:
 def _build_provider(
     settings: Settings,
     provider_id: str,
-) -> TavilyWebSearchProvider | BochaWebSearchProvider | ApifyWebSearchProvider | ZhihuWebSearchProvider:
+) -> (
+    TavilyWebSearchProvider
+    | BochaWebSearchProvider
+    | ApifyWebSearchProvider
+    | ZhihuWebSearchProvider
+):
     if provider_id == "tavily":
         return TavilyWebSearchProvider(settings)
     if provider_id == "bocha":
@@ -890,6 +967,13 @@ def _build_result_json(
         evidence_policy=evidence_policy,
         evidence_gate=evidence_gate,
     )
+    atomic_outputs = _build_atomic_outputs(
+        provider_id=provider_id,
+        query=query,
+        options=options,
+        results=results,
+        evidence_gate=evidence_gate,
+    )
     return {
         "artifact_type": "web_search_results",
         "composition_role": "external_web_evidence",
@@ -907,6 +991,7 @@ def _build_result_json(
         "output_contract": SEARCH_EVIDENCE_PACK_CONTRACT,
         "evidence_gate": evidence_gate,
         "evidence_pack": evidence_pack,
+        "atomic_outputs": atomic_outputs,
         "workflow_metadata": _web_search_workflow_metadata(options),
         "results": results,
         "sources": [
@@ -916,6 +1001,110 @@ def _build_result_json(
                 "source": provider_id,
             }
             for item in results
+        ],
+        "write_posture": "suggestion_only",
+        "direct_wordpress_write": False,
+    }
+
+
+def _build_direct_answer_result_json(
+    *,
+    provider_id: str,
+    query: str,
+    options: dict[str, Any],
+    answer: dict[str, Any],
+    intent: str,
+    mode: str,
+) -> dict[str, Any]:
+    answer_text = _normalize_text(answer.get("answer_text"), limit=4000)
+    source_refs = [
+        _source_card(ref, provider_id=provider_id)
+        for ref in answer.get("source_refs", [])
+        if isinstance(ref, dict)
+    ]
+    status = "ready" if answer_text else "empty"
+    source_count = len([item for item in source_refs if str(item.get("url") or "")])
+    evidence_gate = {
+        "status": "passed" if source_count >= 1 else "insufficient_evidence",
+        "min_score": 0.0,
+        "required_sources": 1,
+        "source_count": source_count,
+        "no_hit_policy": "abstain",
+        "allows_web_grounded_assertion": source_count >= 1,
+        "guidance": (
+            "Use direct-answer text only as a grounded preview with source review."
+            if source_refs
+            else "Treat this direct answer as ungrounded until sources are reviewed."
+        ),
+    }
+    return {
+        "artifact_type": "web_search_results",
+        "composition_role": "grounded_answer_preview",
+        "status": status,
+        "provider": provider_id,
+        "provider_mode": str(
+            options.get("provider_mode") or options.get("provider") or "cloud_managed"
+        ),
+        "requested_provider": str(options.get("requested_provider") or ""),
+        "intent": intent,
+        "query_hash": _hash_query(query),
+        "query_chars": len(query),
+        "result_count": len(source_refs),
+        "source_priority": _source_priority(intent),
+        "output_contract": GROUNDED_ANSWER_CONTRACT,
+        "evidence_gate": evidence_gate,
+        "atomic_outputs": {
+            "artifact_type": "atomic_knowledge_outputs",
+            "contract_versions": sorted(ATOMIC_OUTPUT_CONTRACTS),
+            "source_evidence": {
+                "artifact_type": "source_evidence_set",
+                "contract_version": SOURCE_EVIDENCE_CONTRACT,
+                "status": str(evidence_gate.get("status") or "insufficient_evidence"),
+                "query_hash": _hash_query(query),
+                "provider": provider_id,
+                "intent": intent,
+                "result_count": len(source_refs),
+                "items": source_refs,
+                "write_posture": "suggestion_only",
+                "direct_wordpress_write": False,
+            },
+            "topic_candidates": {
+                "artifact_type": "topic_candidate_set",
+                "contract_version": TOPIC_CANDIDATE_CONTRACT,
+                "status": "empty",
+                "query_hash": _hash_query(query),
+                "provider": provider_id,
+                "intent": intent,
+                "result_count": 0,
+                "items": [],
+                "write_posture": "suggestion_only",
+                "direct_wordpress_write": False,
+            },
+            "grounded_answer": {
+                "artifact_type": "grounded_answer_preview",
+                "contract_version": GROUNDED_ANSWER_CONTRACT,
+                "status": status,
+                "mode": mode,
+                "query_hash": _hash_query(query),
+                "answer_text": answer_text,
+                "source_refs": source_refs,
+                "generation_policy": (
+                    "Use as a reviewable direct-answer preview only. Do not insert as "
+                    "final article text or publish without local/Core review."
+                ),
+                "write_posture": "suggestion_only",
+                "direct_wordpress_write": False,
+            },
+        },
+        "workflow_metadata": _web_search_workflow_metadata(options),
+        "results": source_refs,
+        "sources": [
+            {
+                "title": str(item.get("title") or ""),
+                "url": str(item.get("url") or ""),
+                "source": str(item.get("source") or provider_id),
+            }
+            for item in source_refs
         ],
         "write_posture": "suggestion_only",
         "direct_wordpress_write": False,
@@ -1107,6 +1296,94 @@ def _zhihu_items(payload: Any) -> list[dict[str, Any]]:
     return [item for item in items if isinstance(item, dict)]
 
 
+def _zhihu_direct_answer(payload: Any) -> dict[str, Any]:
+    data = payload.get("Data") if isinstance(payload, dict) else {}
+    if not isinstance(data, dict):
+        data = payload.get("data") if isinstance(payload, dict) else {}
+    if not isinstance(data, dict):
+        data = {}
+
+    answer_text = _normalize_text(
+        data.get("Answer")
+        or data.get("answer")
+        or data.get("AnswerText")
+        or data.get("answer_text")
+        or data.get("Content")
+        or data.get("content")
+        or data.get("Text")
+        or data.get("text")
+        or data.get("Summary")
+        or data.get("summary"),
+        limit=4000,
+    )
+    if not answer_text and isinstance(payload, dict):
+        answer_text = _normalize_text(
+            payload.get("Answer")
+            or payload.get("answer")
+            or payload.get("AnswerText")
+            or payload.get("answer_text"),
+            limit=4000,
+        )
+
+    source_items = (
+        data.get("Sources")
+        or data.get("sources")
+        or data.get("References")
+        or data.get("references")
+        or data.get("Items")
+        or data.get("items")
+        or []
+    )
+    sources = _zhihu_direct_answer_sources(source_items)
+    return {
+        "answer_text": answer_text,
+        "source_refs": sources,
+    }
+
+
+def _zhihu_direct_answer_sources(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    sources: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        title = _normalize_text(
+            item.get("Title") or item.get("title") or item.get("Name") or item.get("name"),
+            limit=MAX_RESULT_TITLE_CHARS,
+        )
+        url = _normalize_url(item.get("Url") or item.get("url") or item.get("Link") or "")
+        snippet = _normalize_text(
+            item.get("ContentText")
+            or item.get("Summary")
+            or item.get("summary")
+            or item.get("Snippet")
+            or item.get("snippet"),
+            limit=MAX_RESULT_SNIPPET_CHARS,
+        )
+        if not title and not url and not snippet:
+            continue
+        dedupe_key = url or f"title:{title}"
+        if dedupe_key in seen:
+            continue
+        seen.add(dedupe_key)
+        sources.append(
+            {
+                "title": title or "Zhihu direct-answer source",
+                "url": url,
+                "snippet": snippet,
+                "source": _normalize_text(
+                    item.get("Source") or item.get("source") or "zhihu",
+                    limit=64,
+                ),
+                "write_posture": "suggestion_only",
+                "direct_wordpress_write": False,
+            }
+        )
+    return sources
+
+
 def _zhihu_hot_items(payload: Any) -> list[dict[str, Any]]:
     if not isinstance(payload, dict):
         return []
@@ -1131,7 +1408,11 @@ def _zhihu_hot_items(payload: Any) -> list[dict[str, Any]]:
     return normalized
 
 
-def _normalize_zhihu_results(raw_results: list[dict[str, Any]], *, intent: str) -> list[dict[str, Any]]:
+def _normalize_zhihu_results(
+    raw_results: list[dict[str, Any]],
+    *,
+    intent: str,
+) -> list[dict[str, Any]]:
     normalized: list[dict[str, Any]] = []
     seen: set[str] = set()
     for raw in raw_results:
@@ -1147,7 +1428,11 @@ def _normalize_zhihu_results(raw_results: list[dict[str, Any]], *, intent: str) 
         if dedupe_key in seen:
             continue
         seen.add(dedupe_key)
-        source = "zhihu_hot_list" if str(raw.get("source") or "") == "zhihu_hot_list" else "zhihu"
+        raw_source = str(raw.get("source") or "")
+        if raw_source in {"zhihu_hot_list", "zhihu_global_search"}:
+            source = raw_source
+        else:
+            source = "zhihu"
         normalized.append(
             {
                 "title": title or "Untitled Zhihu result",
@@ -1229,8 +1514,12 @@ def _suggested_use(intent: str) -> str:
         "product_comparison": "product_comparison_context",
         "source_discovery": "source_candidate",
         "external_links": "external_link_candidate",
+        "zhihu_global_search": "zhihu_global_source_evidence",
         "zhihu_research": "zhihu_audience_question_or_topic_signal",
         "zhihu_hot_topics": "zhihu_hot_topic_candidate",
+        "zhida_simple": "fast_direct_answer_preview",
+        "zhida_deep": "deep_direct_answer_preview",
+        "zhida_deepsearch": "realtime_direct_answer_preview",
     }.get(intent, "external_research")
 
 
@@ -1269,6 +1558,115 @@ def _build_search_evidence_pack(
     }
 
 
+def _build_atomic_outputs(
+    *,
+    provider_id: str,
+    query: str,
+    options: dict[str, Any],
+    results: list[dict[str, Any]],
+    evidence_gate: dict[str, Any],
+) -> dict[str, Any]:
+    intent = str(options.get("intent") or "general_research")
+    source_cards = [_source_card(item, provider_id=provider_id) for item in results]
+    topic_candidates = _topic_candidates_from_results(
+        results,
+        provider_id=provider_id,
+        intent=intent,
+    )
+    source_refs = [
+        {
+            "title": str(card.get("title") or ""),
+            "url": str(card.get("url") or ""),
+            "source": str(card.get("source") or provider_id),
+        }
+        for card in source_cards
+        if str(card.get("url") or "")
+    ]
+    return {
+        "artifact_type": "atomic_knowledge_outputs",
+        "contract_versions": sorted(ATOMIC_OUTPUT_CONTRACTS),
+        "source_evidence": {
+            "artifact_type": "source_evidence_set",
+            "contract_version": SOURCE_EVIDENCE_CONTRACT,
+            "status": str(evidence_gate.get("status") or "insufficient_evidence"),
+            "query_hash": _hash_query(query),
+            "provider": provider_id,
+            "intent": intent,
+            "result_count": len(source_cards),
+            "items": source_cards,
+            "write_posture": "suggestion_only",
+            "direct_wordpress_write": False,
+        },
+        "topic_candidates": {
+            "artifact_type": "topic_candidate_set",
+            "contract_version": TOPIC_CANDIDATE_CONTRACT,
+            "status": "ready" if topic_candidates else "empty",
+            "query_hash": _hash_query(query),
+            "provider": provider_id,
+            "intent": intent,
+            "result_count": len(topic_candidates),
+            "items": topic_candidates,
+            "write_posture": "suggestion_only",
+            "direct_wordpress_write": False,
+        },
+        "grounded_answer": {
+            "artifact_type": "grounded_answer_preview",
+            "contract_version": GROUNDED_ANSWER_CONTRACT,
+            "status": "not_generated",
+            "query_hash": _hash_query(query),
+            "answer_text": "",
+            "source_refs": source_refs,
+            "generation_policy": (
+                "A downstream answer composer may use source_evidence only when "
+                "evidence_gate.status=passed; this Web Search runtime does not "
+                "generate final answer text."
+            ),
+            "write_posture": "suggestion_only",
+            "direct_wordpress_write": False,
+        },
+    }
+
+
+def _topic_candidates_from_results(
+    results: list[dict[str, Any]],
+    *,
+    provider_id: str,
+    intent: str,
+) -> list[dict[str, Any]]:
+    if intent not in {"zhihu_hot_topics", "zhihu_research"}:
+        return []
+    candidates: list[dict[str, Any]] = []
+    for index, item in enumerate(results):
+        title = _normalize_text(item.get("title"), limit=MAX_RESULT_TITLE_CHARS)
+        if not title:
+            continue
+        url = _normalize_url(item.get("url"))
+        source = str(item.get("source") or provider_id)
+        candidates.append(
+            {
+                "title": title,
+                "url": url,
+                "signal": _normalize_text(
+                    item.get("snippet"),
+                    limit=MAX_RESULT_SNIPPET_CHARS,
+                ),
+                "source": source,
+                "rank": index + 1,
+                "score": float(item.get("score") or 0.0),
+                "suggested_use": str(item.get("suggested_use") or _suggested_use(intent)),
+                "evidence_refs": [url] if url else [],
+                "next_action": (
+                    "manual_topic_selection_then_focused_research"
+                    if intent == "zhihu_hot_topics"
+                    else "manual_angle_selection_and_source_review"
+                ),
+                "write_posture": "suggestion_only",
+                "direct_wordpress_write": False,
+            }
+        )
+    return candidates
+
+
 def _source_card(item: dict[str, Any], *, provider_id: str) -> dict[str, Any]:
     card = {
         "title": _normalize_text(item.get("title"), limit=MAX_RESULT_TITLE_CHARS),
@@ -1302,8 +1700,12 @@ def _evidence_pack_type(intent: str) -> str:
         "competitor_research": "competitor_snapshot",
         "pricing_snapshot": "pricing_snapshot",
         "product_comparison": "product_comparison",
+        "zhihu_global_search": "zhihu_global_evidence",
         "zhihu_research": "zhihu_writing_research",
         "zhihu_hot_topics": "zhihu_hot_topic_pool",
+        "zhida_simple": "zhihu_direct_answer_preview",
+        "zhida_deep": "zhihu_direct_answer_preview",
+        "zhida_deepsearch": "zhihu_direct_answer_preview",
     }.get(intent, "external_research")
 
 
@@ -1333,6 +1735,11 @@ def _evidence_pack_sections(intent: str) -> list[str]:
             "product_sources",
             "feature_signals",
             "comparison_notes",
+        ],
+        "zhihu_global_search": [
+            "global_source_evidence",
+            "citation_candidates",
+            "authority_notes",
         ],
         "zhihu_research": [
             "zhihu_topic_candidates",
@@ -1382,6 +1789,22 @@ def _evidence_pack_guidance(intent: str, evidence_gate: dict[str, Any]) -> str:
             "Use Zhihu hot-list items as topic-selection signals only. Choose topics manually, "
             "then run focused research before drafting."
         ),
+        "zhihu_global_search": (
+            "Use Zhihu global-search results as source evidence and citation candidates. "
+            "Prefer primary or authoritative sources for publishable factual claims."
+        ),
+        "zhida_simple": (
+            "Use direct-answer output only as a fast preview. Review sources before using it "
+            "in FAQ, AEO, or article-planning surfaces."
+        ),
+        "zhida_deep": (
+            "Use direct-answer output only as a deep preview. Preserve source review and local "
+            "approval before any write-like result."
+        ),
+        "zhida_deepsearch": (
+            "Use direct-answer output only as a real-time research preview. Re-check sources "
+            "before publishing time-sensitive claims."
+        ),
     }.get(
         intent,
         (
@@ -1427,6 +1850,8 @@ def _source_priority(intent: str) -> str:
     return {
         "fact_check": "official_or_primary_sources",
         "pricing_snapshot": "official_pricing_or_docs",
+        "zhihu_global_search": "zhihu_web_and_authoritative_sources",
+        "zhida_deepsearch": "realtime_multi_source_evidence",
     }.get(intent, "external_sources")
 
 
@@ -1451,12 +1876,34 @@ def _source_requirements(intent: str) -> list[str]:
             "Use hot-list items as trend and topic-selection signals.",
             "Run focused research and source verification before drafting or publishing.",
         ],
+        "zhihu_global_search": [
+            "Use Zhihu global-search output as source evidence for broad web research.",
+            "Prefer authoritative or primary sources for publishable factual claims.",
+        ],
+        "zhida_simple": [
+            "Use the direct answer as a fast answer preview, not final article text.",
+            "Review source references before using factual claims.",
+        ],
+        "zhida_deep": [
+            "Use the direct answer as a professional analysis preview, not final article text.",
+            "Preserve evidence references for local review.",
+        ],
+        "zhida_deepsearch": [
+            "Use the direct answer as a real-time research preview, not final article text.",
+            "Re-check time-sensitive source references before publishing.",
+        ],
     }.get(intent, [])
 
 
 def _normalize_source_type(value: Any) -> str:
     source_type = _normalize_token(value, limit=48)
-    if source_type in {"zhihu_search", "zhihu_hot_list", "zhihu_research"}:
+    if source_type in {
+        "zhihu_search",
+        "zhihu_hot_list",
+        "zhihu_research",
+        "zhihu_global_search",
+        *ZHIHU_DIRECT_ANSWER_SOURCE_TYPES,
+    }:
         return source_type
     return ""
 

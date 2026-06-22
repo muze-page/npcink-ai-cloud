@@ -7,6 +7,16 @@ NPCINK_WEB_SEARCH_ABILITY = "npcink-cloud/web-search"
 WEB_SEARCH_ABILITIES = frozenset({WEB_SEARCH_ABILITY, NPCINK_WEB_SEARCH_ABILITY})
 WEB_SEARCH_CONTRACT = "web_search.v1"
 SEARCH_EVIDENCE_PACK_CONTRACT = "search_evidence_pack.v1"
+SOURCE_EVIDENCE_CONTRACT = "source_evidence.v1"
+TOPIC_CANDIDATE_CONTRACT = "topic_candidate.v1"
+GROUNDED_ANSWER_CONTRACT = "grounded_answer.v1"
+ATOMIC_OUTPUT_CONTRACTS = frozenset(
+    {
+        SOURCE_EVIDENCE_CONTRACT,
+        TOPIC_CANDIDATE_CONTRACT,
+        GROUNDED_ANSWER_CONTRACT,
+    }
+)
 WEB_SEARCH_PROFILE_ID = "web-search.managed"
 WEB_SEARCH_EXECUTION_KIND = "web_search"
 WEB_SEARCH_ABILITY_FAMILY = "knowledge"
@@ -24,8 +34,12 @@ ALLOWED_WEB_SEARCH_INTENTS = frozenset(
         "product_comparison",
         "source_discovery",
         "external_links",
+        "zhihu_global_search",
         "zhihu_research",
         "zhihu_hot_topics",
+        "zhida_simple",
+        "zhida_deep",
+        "zhida_deepsearch",
     }
 )
 

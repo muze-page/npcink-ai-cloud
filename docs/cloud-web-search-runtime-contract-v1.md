@@ -149,8 +149,31 @@ Supported first intents:
 - `product_comparison`
 - `source_discovery`
 - `external_links`
+- `zhihu_global_search`
 - `zhihu_research`
 - `zhihu_hot_topics`
+- `zhida_simple`
+- `zhida_deep`
+- `zhida_deepsearch`
+
+`zhihu_global_search` is the Zhihu Open Platform full-web search lane, not the
+generic Tavily/Bocha/Apify provider pool. Toolbox or other local callers may
+use a fixed managed source request:
+
+```json
+{
+  "intent": "zhihu_global_search",
+  "provider": "zhihu",
+  "source_type": "zhihu_global_search",
+  "write_posture": "suggestion_only"
+}
+```
+
+Cloud normalizes this lane into `source_evidence.v1`. It is useful for
+high-trust external evidence, citation candidates, current facts, and comparison
+material. The exact upstream endpoint path is Cloud configuration
+(`web_search_zhihu_global_search_path`) because the public product page does not
+freeze request parameters as this repository's contract.
 
 `zhihu_research` is a first-version pre-writing research lane. Toolbox may use a
 fixed managed source request:
@@ -188,6 +211,51 @@ Cloud may serve this lane from a server-side TTL cache. Hot topics are trend
 signals only; callers must not treat them as verified facts, generated article
 plans, or WordPress write instructions. A user should pick a topic manually, then
 run focused Zhihu research or broader web verification before drafting.
+
+`zhida_simple`, `zhida_deep`, and `zhida_deepsearch` are Zhihu direct-answer
+lanes. Toolbox or other local callers may use fixed managed source requests:
+
+```json
+{
+  "intent": "zhida_deep",
+  "provider": "zhihu",
+  "source_type": "zhida_deep",
+  "write_posture": "suggestion_only"
+}
+```
+
+Cloud normalizes these lanes into `grounded_answer.v1`. The answer text is a
+reviewable preview only. It may support FAQ/AEO answers, short answer previews,
+or research conclusion previews, but it must not be inserted as final article
+text or published without the local/Core review path. The upstream endpoint path
+is Cloud configuration (`web_search_zhihu_direct_answer_path`) and fails closed
+when not configured.
+
+## Atomic Output Contracts
+
+The search runtime is the shared execution lane for four product-level atomic
+capabilities:
+
+| Atomic capability | Runtime source | Output contract | Product use |
+| --- | --- | --- | --- |
+| Global web search | Cloud-managed search providers or Zhihu full-web search | `source_evidence.v1` | External facts, citation candidates, competitor or product context |
+| Zhihu search | Cloud-managed Zhihu search | `source_evidence.v1` plus optional `topic_candidate.v1` | Audience questions, viewpoints, objections, and citation candidates |
+| Hot list | Cloud-managed Zhihu hot-list cache | `topic_candidate.v1` plus supporting `source_evidence.v1` | Daily topic pool and trend signals |
+| Direct answer | Cloud-managed Zhihu direct-answer lanes or downstream answer composer over accepted evidence | `grounded_answer.v1` | Short answer preview, FAQ/AEO draft, or research conclusion preview |
+
+This runtime returns `atomic_outputs` as an additive projection:
+
+- `source_evidence`: normalized source cards under `source_evidence.v1`;
+- `topic_candidates`: topic-selection candidates under `topic_candidate.v1`;
+- `grounded_answer`: a `grounded_answer.v1` placeholder with
+  `status=not_generated`, or a reviewable direct-answer preview when a
+  configured direct-answer lane is called.
+
+The direct-answer atom must stay suggestion-only. Even when Cloud receives
+answer text from Zhihu direct answer, Web Search must not turn provider text into
+a final article, draft insertion, or publishable WordPress write. This keeps
+provider execution in Cloud while product composition, approval, and WordPress
+writes remain local.
 
 ## Automatic Search Preflight
 
@@ -324,6 +392,33 @@ see whether search was skipped, dry-run, failed, or used. This evidence remains
     "guidance": "Use returned web sources as external grounding evidence. Keep conclusions suggestion-only.",
     "write_posture": "suggestion_only",
     "direct_wordpress_write": false
+  },
+  "atomic_outputs": {
+    "artifact_type": "atomic_knowledge_outputs",
+    "contract_versions": [
+      "grounded_answer.v1",
+      "source_evidence.v1",
+      "topic_candidate.v1"
+    ],
+    "source_evidence": {
+      "artifact_type": "source_evidence_set",
+      "contract_version": "source_evidence.v1",
+      "status": "passed",
+      "items": []
+    },
+    "topic_candidates": {
+      "artifact_type": "topic_candidate_set",
+      "contract_version": "topic_candidate.v1",
+      "status": "empty",
+      "items": []
+    },
+    "grounded_answer": {
+      "artifact_type": "grounded_answer_preview",
+      "contract_version": "grounded_answer.v1",
+      "status": "not_generated",
+      "answer_text": "",
+      "source_refs": []
+    }
   },
   "sources": [
     {

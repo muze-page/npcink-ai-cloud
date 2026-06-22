@@ -258,6 +258,10 @@ class Settings(BaseSettings):
     web_search_apify_cost_per_query: float = Field(default=0.0)
     web_search_zhihu_base_url: str = Field(default="https://developer.zhihu.com")
     web_search_zhihu_access_secret: str | None = Field(default=None)
+    web_search_zhihu_search_path: str = Field(default="/api/v1/content/zhihu_search")
+    web_search_zhihu_global_search_path: str = Field(default="")
+    web_search_zhihu_hot_list_path: str = Field(default="/api/v1/content/hot_list")
+    web_search_zhihu_direct_answer_path: str = Field(default="")
     web_search_zhihu_timeout_seconds: float = Field(default=15.0)
     web_search_zhihu_cost_per_query: float = Field(default=0.0)
     web_search_zhihu_hot_list_cache_ttl_seconds: int = Field(default=3600)
@@ -577,6 +581,15 @@ class Settings(BaseSettings):
             raise ValueError("web_search_zhihu_cost_per_query must be zero or greater")
         if self.web_search_zhihu_hot_list_cache_ttl_seconds <= 0:
             raise ValueError("web_search_zhihu_hot_list_cache_ttl_seconds must be greater than 0")
+        for zhihu_path_name in (
+            "web_search_zhihu_search_path",
+            "web_search_zhihu_global_search_path",
+            "web_search_zhihu_hot_list_path",
+            "web_search_zhihu_direct_answer_path",
+        ):
+            zhihu_path_value = str(getattr(self, zhihu_path_name) or "").strip()
+            if zhihu_path_value and not zhihu_path_value.startswith("/"):
+                raise ValueError(f"{zhihu_path_name} must be empty or start with /")
         if web_search_provider == "tavily":
             if not str(self.web_search_tavily_base_url or "").strip():
                 raise ValueError(

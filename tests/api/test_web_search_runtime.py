@@ -16,9 +16,9 @@ from app.core.db import get_session, init_schema
 from app.core.models import ProviderCallRecord, RunRecord, UsageMeterEvent
 from app.core.services import CloudServices
 from app.domain.web_search.service import (
-    _ZHIHU_HOT_LIST_CACHE,
     _TAVILY_POOL_CURSOR,
     _TAVILY_POOL_QUARANTINED_UNTIL,
+    _ZHIHU_HOT_LIST_CACHE,
     ApifyWebSearchProvider,
     BochaWebSearchProvider,
     TavilyWebSearchProvider,
@@ -166,6 +166,20 @@ def test_cloud_managed_web_search_executes_and_records_provider_usage(
                     "allows_web_grounded_assertion": True,
                     "source_count": 1,
                 },
+                "atomic_outputs": {
+                    "source_evidence": {
+                        "contract_version": "source_evidence.v1",
+                        "result_count": 1,
+                    },
+                    "topic_candidates": {
+                        "contract_version": "topic_candidate.v1",
+                        "status": "empty",
+                    },
+                    "grounded_answer": {
+                        "contract_version": "grounded_answer.v1",
+                        "status": "not_generated",
+                    },
+                },
                 "results": [
                     {
                         "title": "WordPress AI search roundup",
@@ -230,6 +244,12 @@ def test_cloud_managed_web_search_executes_and_records_provider_usage(
     assert "apply_evidence_gate" in result["workflow_metadata"]["steps"]
     assert "insufficient_evidence" in result["workflow_metadata"]["stop_conditions"]
     assert result["evidence_gate"]["allows_web_grounded_assertion"] is True
+    assert result["atomic_outputs"]["source_evidence"]["contract_version"] == "source_evidence.v1"
+    assert result["atomic_outputs"]["source_evidence"]["result_count"] == 1
+    assert result["atomic_outputs"]["topic_candidates"]["contract_version"] == "topic_candidate.v1"
+    assert result["atomic_outputs"]["topic_candidates"]["status"] == "empty"
+    assert result["atomic_outputs"]["grounded_answer"]["contract_version"] == "grounded_answer.v1"
+    assert result["atomic_outputs"]["grounded_answer"]["status"] == "not_generated"
     assert result["results"][0]["url"] == "https://example.com/wp-ai-search"
     assert "latest WordPress AI search trends" not in json.dumps(result)
 
@@ -1122,8 +1142,198 @@ def test_zhihu_hot_topics_uses_cached_hot_list_without_search(monkeypatch: Any) 
     assert first.result_json["intent"] == "zhihu_hot_topics"
     assert first.result_json["evidence_pack"]["pack_type"] == "zhihu_hot_topic_pool"
     assert first.result_json["results"][0]["source"] == "zhihu_hot_list"
+    assert (
+        first.result_json["atomic_outputs"]["topic_candidates"]["contract_version"]
+        == "topic_candidate.v1"
+    )
+    assert first.result_json["atomic_outputs"]["topic_candidates"]["result_count"] == 1
+    assert (
+        first.result_json["atomic_outputs"]["topic_candidates"]["items"][0]["next_action"]
+        == "manual_topic_selection_then_focused_research"
+    )
+    assert first.result_json["atomic_outputs"]["grounded_answer"]["status"] == "not_generated"
     assert second.result_json["results"][0]["title"] == "今天的 AI 写作热议"
     _ZHIHU_HOT_LIST_CACHE.clear()
+
+
+def test_zhihu_global_search_uses_configured_global_endpoint(monkeypatch: Any) -> None:
+    captured: list[dict[str, Any]] = []
+
+    class FakeClient:
+        def __init__(self, *, timeout: float) -> None:
+            captured.append({"timeout": timeout})
+
+        def __enter__(self) -> FakeClient:
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            return None
+
+        def get(
+            self,
+            endpoint: str,
+            *,
+            params: dict[str, str],
+            headers: dict[str, str],
+        ) -> httpx.Response:
+            captured.append({"endpoint": endpoint, "params": params, "headers": headers})
+            return httpx.Response(
+                200,
+                json={
+                    "Code": 0,
+                    "Message": "success",
+                    "Data": {
+                        "Items": [
+                            {
+                                "Title": "权威来源中的 AI 写作事实",
+                                "Url": "https://example.com/ai-writing-source",
+                                "Summary": "全网可信来源摘要。",
+                                "RankingScore": 0.96,
+                            }
+                        ]
+                    },
+                },
+                request=httpx.Request("GET", endpoint),
+            )
+
+    monkeypatch.setattr("app.domain.web_search.service.httpx.Client", FakeClient)
+
+    result = ZhihuWebSearchProvider(
+        Settings(
+            _env_file=None,
+            environment="test",
+            web_search_provider="zhihu",
+            web_search_zhihu_access_secret="zhihu-secret",
+            web_search_zhihu_global_search_path="/api/v1/content/web_search",
+        )
+    ).search(
+        query="AI 写作事实核查",
+        options={
+            "intent": "zhihu_global_search",
+            "provider": "zhihu",
+            "max_results": 5,
+            "source_type": "zhihu_global_search",
+            "evidence_policy": {"required_sources": 1, "no_hit_policy": "abstain"},
+        },
+        site_id="site_alpha",
+        run_id="run_zhihu_global_search",
+    )
+
+    requests = [item for item in captured if "endpoint" in item]
+    assert requests[0]["endpoint"].endswith("/api/v1/content/web_search")
+    assert requests[0]["params"] == {"Query": "AI 写作事实核查", "Count": "5"}
+    assert result.result_json["intent"] == "zhihu_global_search"
+    assert result.result_json["results"][0]["source"] == "zhihu_global_search"
+    assert (
+        result.result_json["atomic_outputs"]["source_evidence"]["contract_version"]
+        == "source_evidence.v1"
+    )
+
+
+def test_zhihu_direct_answer_returns_grounded_answer_atom(monkeypatch: Any) -> None:
+    captured: list[dict[str, Any]] = []
+
+    class FakeClient:
+        def __init__(self, *, timeout: float) -> None:
+            captured.append({"timeout": timeout})
+
+        def __enter__(self) -> FakeClient:
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            return None
+
+        def get(
+            self,
+            endpoint: str,
+            *,
+            params: dict[str, str],
+            headers: dict[str, str],
+        ) -> httpx.Response:
+            captured.append({"endpoint": endpoint, "params": params, "headers": headers})
+            return httpx.Response(
+                200,
+                json={
+                    "Code": 0,
+                    "Message": "success",
+                    "Data": {
+                        "Answer": "先明确读者问题，再收集证据和反方观点。",
+                        "Sources": [
+                            {
+                                "Title": "写作准备的资料框架",
+                                "Url": "https://www.zhihu.com/question/direct-1",
+                                "Summary": "资料、问题和观点需要分开整理。",
+                            }
+                        ],
+                    },
+                },
+                request=httpx.Request("GET", endpoint),
+            )
+
+    monkeypatch.setattr("app.domain.web_search.service.httpx.Client", FakeClient)
+
+    result = ZhihuWebSearchProvider(
+        Settings(
+            _env_file=None,
+            environment="test",
+            web_search_provider="zhihu",
+            web_search_zhihu_access_secret="zhihu-secret",
+            web_search_zhihu_direct_answer_path="/api/v1/content/direct_answer",
+        )
+    ).search(
+        query="AI 写作前应该准备什么？",
+        options={
+            "intent": "zhida_deep",
+            "provider": "zhihu",
+            "max_results": 5,
+            "source_type": "zhida_deep",
+            "evidence_policy": {"required_sources": 1, "no_hit_policy": "abstain"},
+        },
+        site_id="site_alpha",
+        run_id="run_zhihu_direct_answer",
+    )
+
+    requests = [item for item in captured if "endpoint" in item]
+    assert requests[0]["endpoint"].endswith("/api/v1/content/direct_answer")
+    assert requests[0]["params"] == {
+        "Query": "AI 写作前应该准备什么？",
+        "Mode": "deep",
+        "Count": "5",
+    }
+    assert result.result_json["output_contract"] == "grounded_answer.v1"
+    assert result.result_json["composition_role"] == "grounded_answer_preview"
+    grounded_answer = result.result_json["atomic_outputs"]["grounded_answer"]
+    assert grounded_answer["contract_version"] == "grounded_answer.v1"
+    assert grounded_answer["status"] == "ready"
+    assert grounded_answer["mode"] == "deep"
+    assert "先明确读者问题" in grounded_answer["answer_text"]
+    assert grounded_answer["direct_wordpress_write"] is False
+
+
+def test_zhihu_direct_answer_requires_configured_endpoint() -> None:
+    provider = ZhihuWebSearchProvider(
+        Settings(
+            _env_file=None,
+            environment="test",
+            web_search_provider="zhihu",
+            web_search_zhihu_access_secret="zhihu-secret",
+        )
+    )
+
+    with pytest.raises(WebSearchProviderError) as error:
+        provider.search(
+            query="AI 写作前应该准备什么？",
+            options={
+                "intent": "zhida_simple",
+                "provider": "zhihu",
+                "max_results": 5,
+                "source_type": "zhida_simple",
+            },
+            site_id="site_alpha",
+            run_id="run_zhihu_direct_answer_missing_endpoint",
+        )
+
+    assert error.value.error_code == "web_search.zhihu_endpoint_missing"
 
 
 def test_apify_provider_uses_actor_query_string_and_bearer_auth(monkeypatch: Any) -> None:
