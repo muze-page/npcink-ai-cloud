@@ -20,6 +20,13 @@ from app.domain.cloud_batch_runtime.contracts import (
     CLOUD_BATCH_RUNTIME_PROFILE_ID,
 )
 from app.domain.hosted_model_defaults import FREE_GPT55_TEXT_PROFILE_ID
+from app.domain.image_context_evidence.contracts import (
+    IMAGE_CONTEXT_EVIDENCE_ABILITIES,
+    IMAGE_CONTEXT_EVIDENCE_ABILITY_FAMILY,
+    IMAGE_CONTEXT_EVIDENCE_DATA_CLASSIFICATION,
+    IMAGE_CONTEXT_EVIDENCE_EXECUTION_KIND,
+    IMAGE_CONTEXT_EVIDENCE_PROFILE_ID,
+)
 from app.domain.image_generation.contracts import (
     IMAGE_GENERATION_ABILITIES,
     IMAGE_GENERATION_ABILITY_FAMILY,
@@ -129,6 +136,7 @@ class RuntimePayload(BaseModel):
         "secret",
         "public_site_content",
         "public_reference_media",
+        "public_site_media_metadata",
     ] = "internal"
     storage_mode: Literal["no_store", "result_only", "full_store_with_ttl"] = "result_only"
     timeout_seconds: int = 0
@@ -270,6 +278,10 @@ def _is_image_generation_payload(payload: RuntimePayload) -> bool:
     return payload.ability_name in IMAGE_GENERATION_ABILITIES
 
 
+def _is_image_context_evidence_payload(payload: RuntimePayload) -> bool:
+    return payload.ability_name in IMAGE_CONTEXT_EVIDENCE_ABILITIES
+
+
 def _is_media_batch_plan_payload(payload: RuntimePayload) -> bool:
     return payload.ability_name in MEDIA_BATCH_PLAN_ABILITIES
 
@@ -283,6 +295,8 @@ def _resolve_ability_family(payload: RuntimePayload) -> str:
         return CLOUD_BATCH_RUNTIME_ABILITY_FAMILY
     if _is_media_batch_plan_payload(payload):
         return MEDIA_BATCH_PLAN_ABILITY_FAMILY
+    if _is_image_context_evidence_payload(payload):
+        return IMAGE_CONTEXT_EVIDENCE_ABILITY_FAMILY
     if _is_image_generation_payload(payload):
         return IMAGE_GENERATION_ABILITY_FAMILY
     if _is_image_source_payload(payload):
@@ -299,6 +313,8 @@ def _resolve_execution_kind(payload: RuntimePayload) -> str:
         return CLOUD_BATCH_RUNTIME_EXECUTION_KIND
     if _is_media_batch_plan_payload(payload) and not payload.execution_kind:
         return MEDIA_BATCH_PLAN_EXECUTION_KIND
+    if _is_image_context_evidence_payload(payload) and not payload.execution_kind:
+        return IMAGE_CONTEXT_EVIDENCE_EXECUTION_KIND
     if _is_image_generation_payload(payload) and not payload.execution_kind:
         return IMAGE_GENERATION_EXECUTION_KIND
     if _is_image_source_payload(payload) and not payload.execution_kind:
@@ -315,6 +331,8 @@ def _resolve_profile_id(payload: RuntimePayload) -> str:
         return CLOUD_BATCH_RUNTIME_PROFILE_ID
     if _is_media_batch_plan_payload(payload) and not payload.profile_id:
         return MEDIA_BATCH_PLAN_PROFILE_ID
+    if _is_image_context_evidence_payload(payload) and not payload.profile_id:
+        return IMAGE_CONTEXT_EVIDENCE_PROFILE_ID
     if _is_image_generation_payload(payload) and not payload.profile_id:
         return IMAGE_GENERATION_PROFILE_ID
     if _is_image_source_payload(payload) and not payload.profile_id:
@@ -339,6 +357,8 @@ def _resolve_data_classification(payload: RuntimePayload) -> str:
         return CLOUD_BATCH_RUNTIME_DATA_CLASSIFICATION
     if _is_media_batch_plan_payload(payload):
         return MEDIA_BATCH_PLAN_DATA_CLASSIFICATION
+    if _is_image_context_evidence_payload(payload):
+        return IMAGE_CONTEXT_EVIDENCE_DATA_CLASSIFICATION
     if _is_image_generation_payload(payload):
         return _resolve_feature_data_classification(payload, IMAGE_GENERATION_DATA_CLASSIFICATION)
     if _is_image_source_payload(payload):

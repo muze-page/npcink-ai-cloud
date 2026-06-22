@@ -16,6 +16,7 @@ from app.domain.hosted_model_defaults import (
     GROK_IMAGINE_IMAGE_MODEL_ID,
     GROK_IMAGINE_IMAGE_PROFILE_ID,
     TEXT_AI_PROFILE_ID,
+    VISION_AI_PROFILE_ID,
 )
 
 DEFAULT_RECOMMENDED_PROFILE_IDS = (
@@ -24,6 +25,7 @@ DEFAULT_RECOMMENDED_PROFILE_IDS = (
     "text.economy",
     "text.balanced",
     "text.quality",
+    VISION_AI_PROFILE_ID,
     "vision.default",
     GROK_IMAGINE_IMAGE_PROFILE_ID,
     "embed.default",
@@ -468,6 +470,7 @@ class CatalogService:
             "text.economy": ("text", ["economy", "balanced"]),
             "text.balanced": ("text", ["balanced", "economy", "quality"]),
             "text.quality": ("text", ["quality", "balanced"]),
+            VISION_AI_PROFILE_ID: ("vision", ["default", "quality"]),
             "vision.default": ("vision", ["default", "quality"]),
             GROK_IMAGINE_IMAGE_PROFILE_ID: (
                 "image_generation",

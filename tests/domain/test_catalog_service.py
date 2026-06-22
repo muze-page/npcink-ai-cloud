@@ -19,6 +19,7 @@ from app.domain.hosted_model_defaults import (
     GROK_IMAGINE_IMAGE_MODEL_ID,
     GROK_IMAGINE_IMAGE_PROFILE_ID,
     TEXT_AI_PROFILE_ID,
+    VISION_AI_PROFILE_ID,
 )
 from app.domain.runtime.models import RuntimeRequest
 from app.domain.runtime.service import RuntimeService
@@ -174,6 +175,7 @@ def test_list_models_returns_recommended_sets_and_profile_filter(tmp_path: Path)
     assert all_models["recommended_sets"][GROK_IMAGINE_IMAGE_PROFILE_ID]["model_ids"] == [
         GROK_IMAGINE_IMAGE_MODEL_ID
     ]
+    assert all_models["recommended_sets"][VISION_AI_PROFILE_ID]["model_ids"] == ["gpt-4.1"]
 
     dispose_engine(database_url)
 
@@ -327,6 +329,25 @@ def test_grok_image_quality_profile_filters_to_exact_image_model(
     assert recommended_set["instance_ids"] == ["openai-global-tongyi-mai-z-image-turbo"]
     assert models["total"] == 1
     assert models["items"][0]["model_id"] == GROK_IMAGINE_IMAGE_MODEL_ID
+
+    dispose_engine(database_url)
+
+
+def test_vision_ai_profile_filters_to_vision_model(tmp_path: Path) -> None:
+    database_url = _sqlite_url(tmp_path)
+    init_schema(database_url)
+
+    service = CatalogService(database_url)
+    service.refresh_catalog()
+
+    models = service.list_models(recommended_for=VISION_AI_PROFILE_ID)
+
+    recommended_set = models["recommended_sets"][VISION_AI_PROFILE_ID]
+    assert recommended_set["model_ids"] == ["gpt-4.1"]
+    assert recommended_set["instance_ids"] == ["openai-us-east-vision-default"]
+    assert models["total"] == 1
+    assert models["items"][0]["model_id"] == "gpt-4.1"
+    assert VISION_AI_PROFILE_ID in models["items"][0]["recommended_profiles"]
 
     dispose_engine(database_url)
 
