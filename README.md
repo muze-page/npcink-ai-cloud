@@ -2,13 +2,13 @@
 
 Hosted Model Runtime for Npcink AI.
 
-Npcink AI Cloud is the runtime enhancement layer for the local Magick AI plugin.
+Npcink AI Cloud is the runtime enhancement layer for the local Npcink plugin.
 It is not a second control plane, a second source of truth, or a SaaS
 replacement for the plugin.
 
 ## Scope Reminder
 
-Npcink AI Cloud is the runtime enhancement layer for the local Magick AI plugin.
+Npcink AI Cloud is the runtime enhancement layer for the local Npcink plugin.
 It is not a second control plane, a second source of truth, or a SaaS
 replacement for the plugin.
 
