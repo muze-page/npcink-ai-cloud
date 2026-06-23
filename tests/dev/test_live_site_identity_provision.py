@@ -134,5 +134,5 @@ def test_execute_writes_secret_file_but_report_is_redacted(tmp_path) -> None:
     assert "secret_live" in secret_file.read_text()
     assert "secret_live" not in json.dumps(report)
     assert len(calls) == 4
-    assert calls[0][2]["X-Magick-Internal-Token"] == "internal-token"
+    assert calls[0][2]["X-Npcink-Internal-Token"] == "internal-token"
     assert calls[0][2]["Idempotency-Key"].endswith("-account")

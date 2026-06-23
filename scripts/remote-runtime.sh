@@ -73,7 +73,7 @@ target_builtin_host() {
 
 target_builtin_root() {
 	case "$1" in
-mini) printf '%s\n' '/Users/muze/gitee/magick-ai-cloud' ;;
+mini) printf '%s\n' '/Users/muze/gitee/npcink-ai-cloud' ;;
 	dorm) printf '%s\n' '' ;;
 	*) fail "Unknown target: $1" ;;
 	esac

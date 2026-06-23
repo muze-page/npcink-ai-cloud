@@ -37,7 +37,7 @@ def _build_client(tmp_path: Path) -> tuple[str, TestClient]:
     )
     settings = Settings(
         _env_file=None,
-        project_name="Magick AI Cloud Media Batch Plan Test",
+        project_name="Npcink AI Cloud Media Batch Plan Test",
         environment="test",
         database_url=database_url,
         redis_url="redis://localhost:6379/0",
@@ -70,7 +70,7 @@ def _payload(input_overrides: dict[str, Any] | None = None) -> dict[str, Any]:
     }
     input_payload.update(input_overrides or {})
     return {
-        "ability_name": "magick-ai-toolbox/plan-media-derivative-batch",
+        "ability_name": "npcink-toolbox/plan-media-derivative-batch",
         "contract_version": "media_derivative_batch_plan_request.v1",
         "execution_pattern": "inline",
         "data_classification": "internal",

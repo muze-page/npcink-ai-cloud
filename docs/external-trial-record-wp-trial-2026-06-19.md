@@ -5,7 +5,7 @@ Status: local trial-clone rehearsal complete; not an external customer invite.
 Purpose: verify one isolated local WordPress trial clone against a dedicated
 Cloud site identity, so Cloud runtime, addon verification, usage, credit ledger,
 entitlement, and billing/detail evidence do not mix with the previous
-`magick-ai.local` rehearsal.
+`npcink.local` rehearsal.
 
 ## Scope And Boundary
 
@@ -49,7 +49,7 @@ changed.
 Before changing the addon option, a local option snapshot was saved at:
 
 ```text
-/Users/muze/gitee/magick-ai-cloud/.tmp/wp-trial-rehearsal/npcink_cloud_addon_settings-before-20260619153319.json
+/Users/muze/gitee/npcink-cloud/.tmp/wp-trial-rehearsal/npcink_cloud_addon_settings-before-20260619153319.json
 ```
 
 The full DB export command could not run from the default shell initially
@@ -167,7 +167,7 @@ external customer trial.
 
 Blockers cleared:
 
-- `wp-trial` no longer shares Cloud evidence with `site_magick_ai_local`.
+- `wp-trial` no longer shares Cloud evidence with `site_npcink_local`.
 - Addon credentials verify with a dedicated Cloud site and key.
 - Runtime, usage meter, AI credit ledger, entitlement, and billing/detail
   evidence all point to `site_wp_trial`.

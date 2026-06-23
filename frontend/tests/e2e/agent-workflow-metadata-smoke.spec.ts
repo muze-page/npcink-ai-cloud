@@ -1,11 +1,11 @@
 import { expect, test, type Page, type Route } from '@playwright/test';
 
 const BASE_URL =
-  process.env.MAGICK_AI_CLOUD_FRONTEND_BASE_URL ||
-  `http://127.0.0.1:${process.env.MAGICK_AI_CLOUD_FRONTEND_PORT || '3301'}`;
+  process.env.NPCINK_CLOUD_FRONTEND_BASE_URL ||
+  `http://127.0.0.1:${process.env.NPCINK_CLOUD_FRONTEND_PORT || '3301'}`;
 
 test.skip(
-  !process.env.MAGICK_AI_CLOUD_FRONTEND_BASE_URL,
+  !process.env.NPCINK_CLOUD_FRONTEND_BASE_URL,
   'agent/workflow metadata smoke expects a running Cloud dev surface'
 );
 

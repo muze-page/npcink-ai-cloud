@@ -1,12 +1,12 @@
 # Workspace Target
 
 This file records the current workspace-specific remote deploy target for
-Magick AI Cloud so future AI sessions do not need to recover it from chat
+Npcink AI Cloud so future AI sessions do not need to recover it from chat
 history.
 
 ## Confirmed values
 
-- Remote host IP: read from `MAGICK_CLOUD_DEPLOY_SSH_HOST`
+- Remote host IP: read from `NPCINK_CLOUD_DEPLOY_SSH_HOST`
 - Remote domain: `magick.sofile.cn`
 - SSH user: `root`
 - SSH identity file:
@@ -14,9 +14,9 @@ history.
 - Local SSL cert source:
   `../../config/magick.sofile.cn_nginx-ssl/`
 - Confirmed public base URL target: `https://magick.sofile.cn`
-- Remote deploy root exists: `/opt/magick-ai-cloud`
+- Remote deploy root exists: `/opt/npcink-ai-cloud`
 - Current host-nginx bind status:
-  - `magick.sofile.cn` DNS A -> current `MAGICK_CLOUD_DEPLOY_SSH_HOST`
+  - `magick.sofile.cn` DNS A -> current `NPCINK_CLOUD_DEPLOY_SSH_HOST`
   - system `nginx` now listens on `80/443` and proxies to `127.0.0.1:8010`
   - local-on-server `curl -k https://127.0.0.1/health/live` reaches Cloud successfully
   - public `http://magick.sofile.cn/*` works and redirects to `https://...`
@@ -73,9 +73,9 @@ pnpm run cloud:env:ssh
 
 - `pnpm run check:e2e:cloud-deploy-bundle:smoke` -> passed
 - `pnpm run cloud:deploy:ssh` -> passed
-- `GET ${MAGICK_CLOUD_BASE_URL}/health/live` -> `200 OK`
-- `GET ${MAGICK_CLOUD_BASE_URL}/` -> buyer-facing home page present
-- `GET ${MAGICK_CLOUD_BASE_URL}/portal/login` -> portal login present
+- `GET ${NPCINK_CLOUD_BASE_URL}/health/live` -> `200 OK`
+- `GET ${NPCINK_CLOUD_BASE_URL}/` -> buyer-facing home page present
+- `GET ${NPCINK_CLOUD_BASE_URL}/portal/login` -> portal login present
 
 Formal release gating now follows:
 

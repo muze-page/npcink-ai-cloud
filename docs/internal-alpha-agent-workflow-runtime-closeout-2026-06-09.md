@@ -50,9 +50,9 @@ The real local target environment was validated across:
 Evidence files:
 
 ```text
-/Users/muze/gitee/magick-ai-cloud/.tmp/local-alpha-smoke/evidence-codex-provider-runtime-20260609103557.json
-/Users/muze/gitee/magick-ai-cloud/.tmp/local-alpha-provider-failure-drill/evidence-codex-provider-runtime-20260609103507.json
-/Users/muze/gitee/magick-ai-cloud/.tmp/local-alpha-callback-failure-drill/evidence-codex-provider-runtime-20260609103514.json
+/Users/muze/gitee/npcink-cloud/.tmp/local-alpha-smoke/evidence-codex-provider-runtime-20260609103557.json
+/Users/muze/gitee/npcink-cloud/.tmp/local-alpha-provider-failure-drill/evidence-codex-provider-runtime-20260609103507.json
+/Users/muze/gitee/npcink-cloud/.tmp/local-alpha-callback-failure-drill/evidence-codex-provider-runtime-20260609103514.json
 ```
 
 Important fixes discovered during validation:
@@ -84,7 +84,7 @@ that model id as the durable product contract.
 The remote repository is Gitee:
 
 ```text
-git@gitee.com:gitgreat/magick-ai-cloud.git
+git@gitee.com:gitgreat/npcink-ai-cloud.git
 ```
 
 At closeout, Gitee CI status was not directly observable from the local machine:

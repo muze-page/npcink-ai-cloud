@@ -177,13 +177,13 @@ No stale matches remained after the change.
 Final verification after commit `ffbb239`:
 
 ```bash
-docker exec magick-ai-cloud-api-1 python -m py_compile \
+docker exec npcink-ai-cloud-api-1 python -m py_compile \
   app/adapters/repositories/commercial_repository.py \
   app/domain/commercial/mixins/_admin_mixin.py \
   app/api/routes/service.py \
   app/api/routes/portal.py
 
-docker exec magick-ai-cloud-api-1 ruff check \
+docker exec npcink-ai-cloud-api-1 ruff check \
   app/adapters/repositories/commercial_repository.py \
   app/domain/commercial/mixins/_admin_mixin.py \
   app/api/routes/service.py \
@@ -191,7 +191,7 @@ docker exec magick-ai-cloud-api-1 ruff check \
   tests/api/test_service_routes.py \
   tests/api/test_portal_routes.py
 
-docker exec magick-ai-cloud-api-1 pytest \
+docker exec npcink-ai-cloud-api-1 pytest \
   tests/api/test_service_routes.py::test_admin_account_quota_summary_reports_ai_credits_and_resource_limits \
   tests/api/test_service_routes.py::test_admin_account_credit_ledger_lists_current_period_entries \
   tests/api/test_service_routes.py::test_credit_ledger_consume_credit_delta_must_be_integer \
@@ -212,11 +212,11 @@ Results:
 - frontend lint passed
 - admin/portal i18n completeness passed
 
-Local service-layer check for `acct_site_magick_ai_local` returned:
+Local service-layer check for `acct_site_npcink_local` returned:
 
 ```json
 {
-  "account_id": "acct_site_magick_ai_local",
+  "account_id": "acct_site_npcink_local",
   "total": 1252,
   "items": 3,
   "summary_total_credits": 1912.0,

@@ -52,7 +52,7 @@ class SmtpPortalEmailSender(PortalEmailSender):
                 [
                     f"{project_name} SMTP test",
                     "",
-                    "This is a test email from the Magick AI Cloud portal mailer.",
+                    "This is a test email from the Npcink AI Cloud portal mailer.",
                     f"Portal URL: {portal_url}",
                     "",
                     "If you received this email, the current SMTP configuration is working.",
@@ -207,7 +207,7 @@ def build_portal_email_sender(settings: Settings) -> PortalEmailSender | None:
     if not host:
         return None
     if not from_email:
-        raise ValueError("MAGICK_CLOUD_PORTAL_EMAIL_FROM_EMAIL is required when SMTP is set.")
+        raise ValueError("NPCINK_CLOUD_PORTAL_EMAIL_FROM_EMAIL is required when SMTP is set.")
     if settings.portal_email_smtp_use_ssl and settings.portal_email_smtp_use_starttls:
         raise ValueError("Portal SMTP cannot enable both SSL and STARTTLS.")
     username = (settings.portal_email_smtp_username or "").strip()

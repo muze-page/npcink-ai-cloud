@@ -4,39 +4,39 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 . "${ROOT_DIR}/deploy/common.sh"
 
-magick_ai_cloud_require_cmd bash
-magick_ai_cloud_require_cmd ssh
-magick_ai_cloud_require_cmd scp
-magick_ai_cloud_require_cmd tar
+npcink_ai_cloud_require_cmd bash
+npcink_ai_cloud_require_cmd ssh
+npcink_ai_cloud_require_cmd scp
+npcink_ai_cloud_require_cmd tar
 
-SSH_HOST="${MAGICK_CLOUD_DEPLOY_SSH_HOST:-}"
-SSH_USER="${MAGICK_CLOUD_DEPLOY_SSH_USER:-}"
-SSH_PORT="${MAGICK_CLOUD_DEPLOY_SSH_PORT:-22}"
-SSH_IDENTITY_FILE="${MAGICK_CLOUD_DEPLOY_IDENTITY_FILE:-}"
-SSH_CONNECT_TIMEOUT_SECONDS="${MAGICK_CLOUD_DEPLOY_SSH_CONNECT_TIMEOUT_SECONDS:-10}"
-REMOTE_DIR="${MAGICK_CLOUD_DEPLOY_REMOTE_DIR:-/opt/magick-ai-cloud}"
-BUNDLE_PATH="${MAGICK_CLOUD_DEPLOY_BUNDLE_PATH:-${ROOT_DIR}/dist/deploy-bundle.tgz}"
-ENV_FILE="${MAGICK_CLOUD_ENV_FILE:-}"
-IMAGE_PLATFORM="${MAGICK_CLOUD_IMAGE_PLATFORM:-}"
-BASE_URL="${MAGICK_CLOUD_BASE_URL:-http://127.0.0.1:${MAGICK_CLOUD_PORT:-8010}}"
-SITE_ID="${MAGICK_CLOUD_SITE_ID:-site_smoke}"
-KEY_ID="${MAGICK_CLOUD_KEY_ID:-key_default}"
-SECRET="${MAGICK_CLOUD_SECRET:-magick-cloud-test-secret}"
-SCOPES="${MAGICK_CLOUD_SCOPES:-catalog:read,runtime:resolve,runtime:execute,runtime:read,stats:read}"
-PROFILE_ID="${MAGICK_CLOUD_PROFILE_ID:-text.balanced}"
-ABILITY_NAME="${MAGICK_CLOUD_ABILITY_NAME:-magick-ai/workflows/generate-post-draft}"
-EXECUTION_KIND="${MAGICK_CLOUD_EXECUTION_KIND:-text}"
-IDEMPOTENCY_SUFFIX="${MAGICK_CLOUD_IDEMPOTENCY_SUFFIX:-}"
-PROMPT_TEXT="${MAGICK_CLOUD_PROMPT_TEXT:-remote deploy smoke request}"
-EXPECTED_PROVIDER_ID="${MAGICK_CLOUD_EXPECTED_PROVIDER_ID:-}"
-EXPECTED_MODEL_ID="${MAGICK_CLOUD_EXPECTED_MODEL_ID:-}"
-EXPECTED_INSTANCE_ID="${MAGICK_CLOUD_EXPECTED_INSTANCE_ID:-}"
-MEMBER_EMAIL="${MAGICK_CLOUD_MEMBER_EMAIL:-}"
+SSH_HOST="${NPCINK_CLOUD_DEPLOY_SSH_HOST:-}"
+SSH_USER="${NPCINK_CLOUD_DEPLOY_SSH_USER:-}"
+SSH_PORT="${NPCINK_CLOUD_DEPLOY_SSH_PORT:-22}"
+SSH_IDENTITY_FILE="${NPCINK_CLOUD_DEPLOY_IDENTITY_FILE:-}"
+SSH_CONNECT_TIMEOUT_SECONDS="${NPCINK_CLOUD_DEPLOY_SSH_CONNECT_TIMEOUT_SECONDS:-10}"
+REMOTE_DIR="${NPCINK_CLOUD_DEPLOY_REMOTE_DIR:-/opt/npcink-ai-cloud}"
+BUNDLE_PATH="${NPCINK_CLOUD_DEPLOY_BUNDLE_PATH:-${ROOT_DIR}/dist/deploy-bundle.tgz}"
+ENV_FILE="${NPCINK_CLOUD_ENV_FILE:-}"
+IMAGE_PLATFORM="${NPCINK_CLOUD_IMAGE_PLATFORM:-}"
+BASE_URL="${NPCINK_CLOUD_BASE_URL:-http://127.0.0.1:${NPCINK_CLOUD_PORT:-8010}}"
+SITE_ID="${NPCINK_CLOUD_SITE_ID:-site_smoke}"
+KEY_ID="${NPCINK_CLOUD_KEY_ID:-key_default}"
+SECRET="${NPCINK_CLOUD_SECRET:-npcink-cloud-test-secret}"
+SCOPES="${NPCINK_CLOUD_SCOPES:-catalog:read,runtime:resolve,runtime:execute,runtime:read,stats:read}"
+PROFILE_ID="${NPCINK_CLOUD_PROFILE_ID:-text.balanced}"
+ABILITY_NAME="${NPCINK_CLOUD_ABILITY_NAME:-magick-ai/workflows/generate-post-draft}"
+EXECUTION_KIND="${NPCINK_CLOUD_EXECUTION_KIND:-text}"
+IDEMPOTENCY_SUFFIX="${NPCINK_CLOUD_IDEMPOTENCY_SUFFIX:-}"
+PROMPT_TEXT="${NPCINK_CLOUD_PROMPT_TEXT:-remote deploy smoke request}"
+EXPECTED_PROVIDER_ID="${NPCINK_CLOUD_EXPECTED_PROVIDER_ID:-}"
+EXPECTED_MODEL_ID="${NPCINK_CLOUD_EXPECTED_MODEL_ID:-}"
+EXPECTED_INSTANCE_ID="${NPCINK_CLOUD_EXPECTED_INSTANCE_ID:-}"
+MEMBER_EMAIL="${NPCINK_CLOUD_MEMBER_EMAIL:-}"
 SKIP_BUNDLE_BUILD=0
 SKIP_SEED=0
 SKIP_SMOKE=0
 WITH_PORTAL_SMOKE=0
-SKIP_FRONTEND_IMAGE="${MAGICK_CLOUD_SKIP_FRONTEND_IMAGE:-0}"
+SKIP_FRONTEND_IMAGE="${NPCINK_CLOUD_SKIP_FRONTEND_IMAGE:-0}"
 
 while [ "$#" -gt 0 ]; do
 	case "$1" in
@@ -159,7 +159,7 @@ while [ "$#" -gt 0 ]; do
 done
 
 if [ -z "${SSH_HOST}" ]; then
-	echo "[fail] Missing --ssh-host or MAGICK_CLOUD_DEPLOY_SSH_HOST" >&2
+	echo "[fail] Missing --ssh-host or NPCINK_CLOUD_DEPLOY_SSH_HOST" >&2
 	exit 1
 fi
 
@@ -214,7 +214,7 @@ resolve_remote_platform() {
 if [ -z "${IMAGE_PLATFORM}" ]; then
 	if ! ssh "${SSH_ARGS[@]}" "${SSH_TARGET}" "true" >/dev/null 2>&1; then
 		echo "[fail] SSH target is not reachable: ${SSH_TARGET}:${SSH_PORT}" >&2
-		echo "[fail] Check MAGICK_CLOUD_DEPLOY_IDENTITY_FILE, firewall/security group, and sshd." >&2
+		echo "[fail] Check NPCINK_CLOUD_DEPLOY_IDENTITY_FILE, firewall/security group, and sshd." >&2
 		exit 1
 	fi
 	REMOTE_ARCH="$(ssh "${SSH_ARGS[@]}" "${SSH_TARGET}" "uname -m")"
@@ -228,8 +228,8 @@ fi
 
 if [ "${SKIP_BUNDLE_BUILD}" -eq 0 ]; then
 	echo "[info] Building deploy bundle"
-	MAGICK_CLOUD_IMAGE_PLATFORM="${IMAGE_PLATFORM}" \
-	MAGICK_CLOUD_SKIP_FRONTEND_IMAGE="${SKIP_FRONTEND_IMAGE}" \
+	NPCINK_CLOUD_IMAGE_PLATFORM="${IMAGE_PLATFORM}" \
+	NPCINK_CLOUD_SKIP_FRONTEND_IMAGE="${SKIP_FRONTEND_IMAGE}" \
 		bash "${ROOT_DIR}/deploy/bundle-images.sh"
 fi
 
@@ -312,13 +312,13 @@ tar xzf "${REMOTE_DIR}/deploy-bundle.tgz" -C "${RELEASE_DIR}"
 
 if [ -n "${REMOTE_ENV_PATH}" ] && [ -f "${REMOTE_ENV_PATH}" ]; then
 	cp "${REMOTE_ENV_PATH}" "${RELEASE_DIR}/${REMOTE_ENV_BASENAME}"
-	export MAGICK_CLOUD_ENV_FILE="${RELEASE_DIR}/${REMOTE_ENV_BASENAME}"
+	export NPCINK_CLOUD_ENV_FILE="${RELEASE_DIR}/${REMOTE_ENV_BASENAME}"
 elif [ -f "${CURRENT_LINK}/${REMOTE_ENV_BASENAME}" ]; then
 	cp "${CURRENT_LINK}/${REMOTE_ENV_BASENAME}" "${RELEASE_DIR}/${REMOTE_ENV_BASENAME}"
-	export MAGICK_CLOUD_ENV_FILE="${RELEASE_DIR}/${REMOTE_ENV_BASENAME}"
+	export NPCINK_CLOUD_ENV_FILE="${RELEASE_DIR}/${REMOTE_ENV_BASENAME}"
 fi
 
-export MAGICK_CLOUD_SKIP_FRONTEND_IMAGE="${SKIP_FRONTEND_IMAGE}"
+export NPCINK_CLOUD_SKIP_FRONTEND_IMAGE="${SKIP_FRONTEND_IMAGE}"
 
 ln -sfn "${RELEASE_DIR}" "${CURRENT_LINK}"
 
@@ -363,7 +363,7 @@ fi
 
 if [ "${WITH_PORTAL_SMOKE}" = "1" ]; then
 	if [ -z "${MEMBER_EMAIL}" ]; then
-		echo "[fail] --with-portal-smoke requires --member-email or MAGICK_CLOUD_MEMBER_EMAIL" >&2
+		echo "[fail] --with-portal-smoke requires --member-email or NPCINK_CLOUD_MEMBER_EMAIL" >&2
 		exit 1
 	fi
 	bash deploy/remote-bootstrap-portal-site.sh \

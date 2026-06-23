@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 DEFAULT_ENV_FILES = (Path(".env"), Path(".env.local"))
-INTERNAL_TOKEN_ENV_KEY = "MAGICK_CLOUD_INTERNAL_AUTH_TOKEN"
+INTERNAL_TOKEN_ENV_KEY = "NPCINK_CLOUD_INTERNAL_AUTH_TOKEN"
 
 
 @dataclass(frozen=True)

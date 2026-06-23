@@ -73,7 +73,7 @@ before execution.
 The Cloud addon is installed, active, and currently reports a verified state.
 
 Current blocker: the existing addon settings point at the shared local Cloud
-site identity `site_magick_ai_local`.
+site identity `site_npcink_local`.
 
 Do not reuse that identity for this trial. Reusing it would mix usage, credit
 ledger, billing/detail, Site Knowledge, and run evidence across multiple
@@ -131,7 +131,7 @@ Still not allowed:
 - changing content on `npcink-trial`;
 - changing any WordPress option except the Cloud addon setting, and only after
   snapshot and explicit approval;
-- starting a Site Knowledge sync under the shared `site_magick_ai_local`
+- starting a Site Knowledge sync under the shared `site_npcink_local`
   identity.
 
 ## Next Safe Action

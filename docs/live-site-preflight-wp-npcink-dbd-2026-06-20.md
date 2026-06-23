@@ -8,7 +8,7 @@ Assess whether the user-provided local WordPress sites are ready to become the
 first live-site proof target after the `npcink-trial` staging validation.
 
 The target outcome is not to expand Cloud product scope. The target is to prove
-that Magick AI Cloud can safely operate beside a real WordPress site as a hosted
+that Npcink AI Cloud can safely operate beside a real WordPress site as a hosted
 runtime/detail layer while WordPress remains the control plane and write owner.
 
 ## Boundary

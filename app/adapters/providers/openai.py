@@ -61,7 +61,7 @@ class OpenAIProviderAdapter:
         organization: str | None = None,
         timeout_seconds: float = 30.0,
         sample_catalog_profile: str = "",
-        app_name: str = "magick-ai-cloud",
+        app_name: str = "npcink-ai-cloud",
         allow_http_without_api_key: bool = False,
         allow_sample_catalog: bool = True,
         allow_sample_execution: bool = True,

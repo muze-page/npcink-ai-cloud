@@ -60,7 +60,7 @@ def _build_client(
         scopes=["runtime:execute", "runtime:read"],
     )
     settings_kwargs = {
-        "project_name": "Magick AI Cloud Image Source Test",
+        "project_name": "Npcink AI Cloud Image Source Test",
         "environment": "test",
         "database_url": database_url,
         "redis_url": "redis://localhost:6379/0",
@@ -98,7 +98,7 @@ def _payload(input_overrides: dict[str, Any] | None = None) -> dict[str, Any]:
     }
     input_payload.update(input_overrides or {})
     return {
-        "ability_name": "magick-ai-toolbox/search-image-source",
+        "ability_name": "npcink-toolbox/search-image-source",
         "contract_version": "image_source_cloud_request.v1",
         "execution_pattern": "step_offload",
         "data_classification": "public_reference_media",
@@ -223,7 +223,7 @@ def test_cloud_managed_image_source_executes_and_records_provider_usage(
                 "artifact_type": "image_source_candidates",
                 "composition_role": "image_source_candidates",
                 "status": "ready",
-                "provider": "magick_ai_cloud",
+                "provider": "npcink_ai_cloud",
                 "provider_mode": "unsplash",
                 "candidate_contract_version": "image_candidate.v1",
                 "query_hash": "hash-only",
@@ -717,7 +717,7 @@ def test_image_source_runtime_enriches_prompt_candidates_with_site_knowledge(
         run_id: str,
     ) -> dict[str, Any]:
         assert site_id == "site_alpha"
-        assert ability_name == "magick-ai-cloud/site-knowledge-search"
+        assert ability_name == "npcink-cloud/site-knowledge-search"
         assert contract_version == "site_knowledge_search.v1"
         assert input_payload["intent"] == "image_context"
         assert input_payload["current_post_id"] == 99
@@ -1212,7 +1212,7 @@ def test_image_source_candidate_suggested_filename_is_safe(monkeypatch: Any) -> 
 
     execution = ImageSourceService(settings).execute(
         site_id="site_alpha",
-        ability_name="magick-ai-toolbox/search-image-source",
+        ability_name="npcink-toolbox/search-image-source",
         contract_version="image_source_cloud_request.v1",
         input_payload={
             "contract_version": "image_source_cloud_request.v1",
@@ -1229,7 +1229,7 @@ def test_image_source_candidate_suggested_filename_is_safe(monkeypatch: Any) -> 
     assert candidate["filename_basis"]["owner"] == "wordpress_write_ability_final"
     handoff = execution.result_json["ai_generation_handoff"]
     assert handoff["trigger"] == "manual_user_action"
-    assert handoff["runtime"]["ability_name"] == "magick-ai-cloud/generate-image"
+    assert handoff["runtime"]["ability_name"] == "npcink-cloud/generate-image"
     assert handoff["runtime"]["profile_id"] == "grok-imagine-image-quality"
     assert handoff["runtime"]["execution_kind"] == "image_generation"
     assert handoff["input_defaults"]["aspect_ratio"] == "16:9"
@@ -1349,7 +1349,7 @@ def test_pixabay_provider_preserves_api_endpoint_trailing_slash(monkeypatch: Any
 
     execution = ImageSourceService(settings).execute(
         site_id="site_alpha",
-        ability_name="magick-ai-toolbox/search-image-source",
+        ability_name="npcink-toolbox/search-image-source",
         contract_version="image_source_cloud_request.v1",
         input_payload={
             "contract_version": "image_source_cloud_request.v1",
@@ -1567,7 +1567,7 @@ def test_image_source_execute_auto_random_uses_single_resolved_provider(
 
     execution = ImageSourceService(settings).execute(
         site_id="site_alpha",
-        ability_name="magick-ai-toolbox/search-image-source",
+        ability_name="npcink-toolbox/search-image-source",
         contract_version="image_source_cloud_request.v1",
         input_payload={
             "contract_version": "image_source_cloud_request.v1",

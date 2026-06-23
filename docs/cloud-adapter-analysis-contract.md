@@ -21,12 +21,12 @@ Use the same HMAC site-key signing as all other public runtime calls.
 Required headers:
 
 ```http
-X-Magick-Site-Id: <site_id>
-X-Magick-Key-Id: <key_id>
-X-Magick-Timestamp: <unix-seconds>
-X-Magick-Nonce: <nonce>
-X-Magick-Trace-Id: <trace-id>
-X-Magick-Signature: <hmac-sha256-signature>
+X-Npcink-Site-Id: <site_id>
+X-Npcink-Key-Id: <key_id>
+X-Npcink-Timestamp: <unix-seconds>
+X-Npcink-Nonce: <nonce>
+X-Npcink-Trace-Id: <trace-id>
+X-Npcink-Signature: <hmac-sha256-signature>
 Idempotency-Key: <idempotency-key>
 traceparent: <traceparent>   # optional but recommended
 ```

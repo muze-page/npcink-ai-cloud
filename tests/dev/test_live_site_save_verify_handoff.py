@@ -81,7 +81,7 @@ def test_handoff_ready_and_redacts_key_material(tmp_path: Path) -> None:
 
     assert report["ready_for_manual_save_verify"] is True
     assert report["admin"]["addon_admin_url"] == (  # type: ignore[index]
-        "http://npcink.local/wp-admin/admin.php?page=magick-ai-cloud-addon"
+        "http://npcink.local/wp-admin/admin.php?page=npcink-cloud-addon"
     )
     assert report["admin"]["base_url_to_paste"] == "http://127.0.0.1:8010"  # type: ignore[index]
     assert report["secret_file"]["cloud_api_key_present"] is True  # type: ignore[index]

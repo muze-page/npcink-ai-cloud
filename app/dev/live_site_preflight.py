@@ -24,7 +24,7 @@ LOCAL_APP_SUPPORT = Path.home() / "Library/Application Support/Local"
 WP_EVAL_SUMMARY = r"""
 global $wpdb;
 $cloud_option_names = [
-    "magick_ai_cloud_addon_settings",
+    "npcink_cloud_addon_settings",
     "npcink_cloud_addon_settings",
 ];
 $settings = [];
@@ -146,7 +146,7 @@ def fetch_http_summary(url: str, timeout_seconds: int) -> dict[str, object]:
                 "-w",
                 "%{http_code}\n%{url_effective}",
                 "-H",
-                "User-Agent: magick-ai-cloud-live-preflight/1.0",
+                "User-Agent: npcink-ai-cloud-live-preflight/1.0",
                 url,
             ]
         )
@@ -583,7 +583,7 @@ def _list(value: object) -> list[Any]:
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Generate read-only Magick AI Cloud live-site preflight evidence."
+        description="Generate read-only Npcink AI Cloud live-site preflight evidence."
     )
     parser.add_argument(
         "--site",

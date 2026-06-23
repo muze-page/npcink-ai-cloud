@@ -28,7 +28,7 @@ class AnthropicProviderAdapter(OpenAIProviderAdapter):
         api_key: str | None = None,
         api_version: str = "2023-06-01",
         timeout_seconds: float = 30.0,
-        app_name: str = "magick-ai-cloud",
+        app_name: str = "npcink-ai-cloud",
         allow_sample_catalog: bool = True,
         allow_sample_execution: bool = True,
         transport: httpx.BaseTransport | None = None,

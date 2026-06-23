@@ -5,20 +5,20 @@ Date: 2026-05-30
 
 ## Purpose
 
-This document records the current Magick AI Cloud responsibility boundary after
+This document records the current Npcink AI Cloud responsibility boundary after
 the project split into:
 
 - `magick-ai-abilities`
 - `magick-ai-core`
 - `magick-ai-adapter`
-- `magick-ai-cloud`
+- `npcink-ai-cloud`
 
 It also records the current recommendation on whether Cloud should be rebuilt
 from scratch or evolved from the existing repository.
 
 ## Cloud Role
 
-`magick-ai-cloud` owns the hosted service side. It is responsible for:
+`npcink-ai-cloud` owns the hosted service side. It is responsible for:
 
 - Cloud API contracts;
 - hosted runtime execution;
@@ -45,7 +45,7 @@ Cloud is not the local WordPress control plane. It must not own:
 | `magick-ai-abilities` | Supplies local WordPress ability definitions, schemas, callbacks, read-only context, and dry-run previews. It does not call Cloud. |
 | `magick-ai-core` | Governs proposals, approvals, preflight, scoped app identity, rate limits, and audit. It does not execute Cloud runs. |
 | `magick-ai-adapter` | Connects OpenClaw and local WordPress to Cloud. It shapes requests, signs or authenticates transport, proxies status, and preserves correlation ids. It does not own durable run truth. |
-| `magick-ai-cloud` | Executes hosted work, stores hosted run truth, produces Cloud analysis, and exposes stats/diagnostics/entitlement detail. |
+| `npcink-ai-cloud` | Executes hosted work, stores hosted run truth, produces Cloud analysis, and exposes stats/diagnostics/entitlement detail. |
 
 Recommended integration:
 
@@ -54,7 +54,7 @@ OpenClaw
   -> magick-ai-adapter
       -> magick-ai-abilities   // local WordPress context and callbacks
       -> magick-ai-core        // governance, approval, audit, preflight
-      -> magick-ai-cloud       // hosted execution, stats, analysis, workers
+      -> npcink-ai-cloud       // hosted execution, stats, analysis, workers
 ```
 
 ## Cloud API Shape For Adapter
@@ -171,7 +171,7 @@ throwing away working runtime, billing, stats, and diagnostics infrastructure.
 Use this prompt when assigning sibling-repo work:
 
 ```text
-You are not responsible for magick-ai-cloud. Do not implement hosted runtime,
+You are not responsible for npcink-ai-cloud. Do not implement hosted runtime,
 Cloud workers, usage/stats truth, diagnostics truth, entitlement truth, or
 Cloud-side analysis storage.
 

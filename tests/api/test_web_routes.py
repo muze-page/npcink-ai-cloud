@@ -17,7 +17,7 @@ from tests.conftest import (
     build_internal_headers,
 )
 
-TEST_ADMIN_BOOTSTRAP_TOKEN = "magick-cloud-admin-bootstrap-test-32"
+TEST_ADMIN_BOOTSTRAP_TOKEN = "npcink-cloud-admin-bootstrap-test-32"
 
 
 def _sqlite_url(tmp_path: Path) -> str:
@@ -36,7 +36,7 @@ def _build_client(
 
     settings_kwargs: dict[str, object] = {
         "_env_file": None,
-        "project_name": "Magick AI Cloud Test",
+        "project_name": "Npcink AI Cloud Test",
         "environment": "test",
         "database_url": database_url,
         "redis_url": "redis://localhost:6379/0",
@@ -382,8 +382,8 @@ def test_web_portal_email_code_and_key_actions_with_jwt(tmp_path: Path) -> None:
         tmp_path,
         settings_overrides={
             "portal_jwt_secret": TEST_PORTAL_JWT_SECRET,
-            "portal_jwt_issuer": "magick-cloud-portal",
-            "portal_jwt_audience": "magick-cloud-customers",
+            "portal_jwt_issuer": "npcink-cloud-portal",
+            "portal_jwt_audience": "npcink-cloud-customers",
         },
         portal_email_sender=fake_sender,
     )

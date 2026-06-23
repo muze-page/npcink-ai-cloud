@@ -236,7 +236,7 @@ class CommercialServicePaymentMixin(CommercialServiceAuditMixin):
         normalized_provider = self._normalize_payment_provider(provider)
         normalized_currency = self._normalize_payment_currency(currency)
         normalized_amount = self._normalize_payment_amount(amount)
-        normalized_subject = str(subject or "").strip()[:191] or "Magick AI Cloud package"
+        normalized_subject = str(subject or "").strip()[:191] or "Npcink AI Cloud package"
         now = service.now_factory()
         idempotency_key = audit_context.idempotency_key if audit_context is not None else ""
         with get_session(service.database_url) as session:
@@ -660,6 +660,7 @@ class CommercialServicePaymentMixin(CommercialServiceAuditMixin):
                 "service.credit_pack_metadata_invalid",
                 "credit pack payment order metadata is invalid",
             )
+        ai_credits = float(cast(int, pack["ai_credits"]))
         subscription_id = str(
             order.subscription_id or metadata.get("target_subscription_id") or ""
         ).strip()
@@ -692,10 +693,10 @@ class CommercialServicePaymentMixin(CommercialServiceAuditMixin):
             event_type=CREDIT_LEDGER_EVENT_GRANT,
             source_type="credit_pack_purchase",
             source_id=order.order_id,
-            credit_delta=float(pack["ai_credits"]),
-            quantity=float(pack["ai_credits"]),
+            credit_delta=ai_credits,
+            quantity=ai_credits,
             unit="credit",
-            rate=round(float(order.amount or 0.0) / max(1.0, float(pack["ai_credits"])), 8),
+            rate=round(float(order.amount or 0.0) / max(1.0, ai_credits), 8),
             rate_unit="payment_amount_per_credit",
             rate_version=AI_CREDIT_RATE_VERSION,
             idempotency_key=f"credit_pack_grant:{order.order_id}",
@@ -755,6 +756,7 @@ class CommercialServicePaymentMixin(CommercialServiceAuditMixin):
                 "service.credit_pack_metadata_invalid",
                 "credit pack payment order metadata is invalid",
             )
+        ai_credits = float(cast(int, pack["ai_credits"]))
         if refund.status != PAYMENT_REFUND_STATUS_SUCCEEDED:
             refund.status = PAYMENT_REFUND_STATUS_SUCCEEDED
             refund.provider_refund_no = (
@@ -773,7 +775,7 @@ class CommercialServicePaymentMixin(CommercialServiceAuditMixin):
             1.0,
             max(0.0, round(float(refund.amount or 0.0), 6) / round(float(order.amount), 6)),
         )
-        refunded_credits = round(float(pack["ai_credits"]) * refunded_ratio, 6)
+        refunded_credits = round(ai_credits * refunded_ratio, 6)
         ledger_entry = repository.record_credit_ledger_entry(
             account_id=order.account_id,
             site_id=order.site_id,
@@ -953,12 +955,13 @@ class CommercialServicePaymentMixin(CommercialServiceAuditMixin):
 
     def _serialize_credit_pack_payment_order(self, order: PaymentOrder) -> dict[str, object]:
         payload = self._serialize_payment_order(order)
-        metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
-        credit_pack = metadata.get("credit_pack") if isinstance(metadata, dict) else {}
+        raw_metadata = payload.get("metadata")
+        metadata = cast(dict[str, object], raw_metadata) if isinstance(raw_metadata, dict) else {}
+        credit_pack = metadata.get("credit_pack")
         payload["purchase_kind"] = "credit_pack"
         payload["credit_pack"] = credit_pack if isinstance(credit_pack, dict) else {}
         payload["target_subscription_id"] = str(
-            (metadata or {}).get("target_subscription_id") or payload.get("subscription_id") or ""
+            metadata.get("target_subscription_id") or payload.get("subscription_id") or ""
         )
         return payload
 

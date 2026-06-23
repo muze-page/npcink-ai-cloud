@@ -44,7 +44,7 @@ def create_app(services: CloudServices | None = None) -> FastAPI:
 
     @app.middleware("http")
     async def trace_requests(request: Request, call_next):  # type: ignore[no-untyped-def]
-        tracer = trace.get_tracer("magick_ai_cloud.http")
+        tracer = trace.get_tracer("npcink_ai_cloud.http")
         span_name = f"{request.method} {request.url.path}"
         carrier = {key: value for key, value in request.headers.items()}
         context = propagate.extract(carrier)

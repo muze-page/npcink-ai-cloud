@@ -1,1 +1,1 @@
-"""Magick AI Cloud package."""
+"""Npcink AI Cloud package."""

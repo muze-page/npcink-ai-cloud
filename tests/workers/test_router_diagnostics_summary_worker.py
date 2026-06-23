@@ -98,7 +98,7 @@ def test_router_diagnostics_summary_worker_generates_active_site_runtime_summary
 
     summary = run_once(
         Settings(
-            project_name="Magick AI Cloud Test",
+            project_name="Npcink AI Cloud Test",
             environment="test",
             database_url=database_url,
             redis_url="redis://localhost:6379/0",
@@ -219,7 +219,7 @@ def test_router_diagnostics_summary_worker_dispatches_optional_callback_when_con
 
     summary = run_once(
         Settings(
-            project_name="Magick AI Cloud Test",
+            project_name="Npcink AI Cloud Test",
             environment="test",
             database_url=database_url,
             redis_url="redis://localhost:6379/0",
@@ -239,8 +239,8 @@ def test_router_diagnostics_summary_worker_dispatches_optional_callback_when_con
         delivered["url"]
         == "https://wp.example.test/wp-json/magick-ai/open/v1/router/diagnostics/callback"
     )
-    assert delivered["headers"]["x-magick-cloud-event"] == "router.diagnostics.batch"
-    assert delivered["headers"]["x-magick-key-id"] == "kd_alpha"
+    assert delivered["headers"]["x-npcink-cloud-event"] == "router.diagnostics.batch"
+    assert delivered["headers"]["x-npcink-key-id"] == "kd_alpha"
     assert delivered["body"]["config_revision"] == "cloud_runtime_summary_worker"
     assert delivered["body"]["delivery"]["buffer_kind"] == "usage_rollup"
     assert summary["site_batches"][0]["callback"]["status"] == "delivered"

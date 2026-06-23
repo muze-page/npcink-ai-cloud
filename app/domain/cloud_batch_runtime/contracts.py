@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
-CLOUD_BATCH_RUNTIME_TOOLBOX_ABILITY = "magick-ai-toolbox/analyze-nightly-content-batch"
-CLOUD_BATCH_RUNTIME_CLOUD_ABILITY = "magick-ai-cloud/analyze-nightly-content-batch"
+CLOUD_BATCH_RUNTIME_TOOLBOX_ABILITY = "npcink-toolbox/analyze-nightly-content-batch"
+CLOUD_BATCH_RUNTIME_CLOUD_ABILITY = "npcink-cloud/analyze-nightly-content-batch"
 CLOUD_BATCH_RUNTIME_ABILITIES = frozenset(
     {CLOUD_BATCH_RUNTIME_TOOLBOX_ABILITY, CLOUD_BATCH_RUNTIME_CLOUD_ABILITY}
 )

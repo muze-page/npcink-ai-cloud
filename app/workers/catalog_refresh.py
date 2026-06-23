@@ -19,7 +19,7 @@ def main() -> None:
             include_enabled_connections=True,
         ),
     ).refresh_catalog()
-    get_logger("magick_ai_cloud.catalog_refresh").info("catalog refreshed: %s", result)
+    get_logger("npcink_ai_cloud.catalog_refresh").info("catalog refreshed: %s", result)
 
 
 if __name__ == "__main__":

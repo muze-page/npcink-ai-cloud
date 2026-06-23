@@ -42,7 +42,7 @@ The source sites were checked before cloning.
   - `npcink-cloud-addon`
   - `npcink-toolbox`
   - `wordpress-importer`
-- Copied local development Cloud Addon and Toolbox settings from `magick-ai.local`.
+- Copied local development Cloud Addon and Toolbox settings from `npcink.local`.
 - Forced Nightly settings on both clones:
   - Basic local WP-Cron: disabled
   - Pro Cloud runtime: enabled

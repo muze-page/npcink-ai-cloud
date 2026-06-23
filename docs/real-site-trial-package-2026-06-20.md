@@ -239,9 +239,9 @@ Extract a bounded public content subset:
 
 Required runtime calls:
 
-- `magick-ai-cloud/site-knowledge-sync`
-- `magick-ai-cloud/site-knowledge-search`
-- `magick-ai-cloud/site-knowledge-status`
+- `npcink-cloud/site-knowledge-sync`
+- `npcink-cloud/site-knowledge-search`
+- `npcink-cloud/site-knowledge-status`
 
 Required search posture:
 

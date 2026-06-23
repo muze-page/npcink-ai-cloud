@@ -7,7 +7,7 @@ export default function ServiceStatusPage() {
         <div className="space-y-6">
           <div>
             <p className="text-xs font-semibold uppercase tracking-[0.24em] text-blue-600 dark:text-blue-300">
-              Magick AI Cloud
+              Npcink AI Cloud
             </p>
             <h1 className="mt-3 text-3xl font-semibold tracking-normal">
               Hosted runtime service

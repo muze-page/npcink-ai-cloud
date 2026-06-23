@@ -39,7 +39,7 @@ def main() -> None:
     configure_logging(settings.log_level)
     require_database_connection(settings.database_url)
 
-    logger = get_logger("magick_ai_cloud.runtime_queue")
+    logger = get_logger("npcink_ai_cloud.runtime_queue")
     providers = resolve_execution_provider_adapters(settings)
     runtime_queue = RedisRuntimeQueue(
         settings.redis_url,

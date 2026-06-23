@@ -24,11 +24,11 @@ IMAGE_BUILD_MODE="${IMAGE_BUILD_MODE:-remote}"
 ENABLE_TRACE_SINK="${ENABLE_TRACE_SINK:-1}"
 REMOTE_JAEGER_VERSION="${REMOTE_JAEGER_VERSION:-2.17.0}"
 REMOTE_JAEGER_ARCHIVE_URL="${REMOTE_JAEGER_ARCHIVE_URL:-https://github.com/jaegertracing/jaeger/releases/download/v${REMOTE_JAEGER_VERSION}/jaeger-${REMOTE_JAEGER_VERSION}-darwin-arm64.tar.gz}"
-TRACE_EXPORTER_ENDPOINT="${MAGICK_CLOUD_OTEL_EXPORTER_OTLP_ENDPOINT:-http://host.docker.internal:4318/v1/traces}"
-TRACE_SINK_OTLP_ENDPOINT="${MAGICK_CLOUD_OTEL_TRACE_SINK_OTLP_ENDPOINT:-host.docker.internal:4318}"
-TRACE_QUERY_URL="${MAGICK_CLOUD_OTEL_TRACE_QUERY_URL:-http://${REMOTE_IP}:16686}"
+TRACE_EXPORTER_ENDPOINT="${NPCINK_CLOUD_OTEL_EXPORTER_OTLP_ENDPOINT:-http://host.docker.internal:4318/v1/traces}"
+TRACE_SINK_OTLP_ENDPOINT="${NPCINK_CLOUD_OTEL_TRACE_SINK_OTLP_ENDPOINT:-host.docker.internal:4318}"
+TRACE_QUERY_URL="${NPCINK_CLOUD_OTEL_TRACE_QUERY_URL:-http://${REMOTE_IP}:16686}"
 REMOTE_COMPOSE_ENV_PREFIX=""
-REMOTE_RUNTIME_ROOT_SCRIPT="\$HOME/.cache/magick-ai-cloud-mini"
+REMOTE_RUNTIME_ROOT_SCRIPT="\$HOME/.cache/npcink-ai-cloud-mini"
 REMOTE_JAEGER_DIR_SCRIPT="${REMOTE_RUNTIME_ROOT_SCRIPT}/jaeger"
 REMOTE_JAEGER_BINARY_SCRIPT="${REMOTE_JAEGER_DIR_SCRIPT}/jaeger-${REMOTE_JAEGER_VERSION}-darwin-arm64/jaeger"
 REMOTE_JAEGER_LOG_SCRIPT="${REMOTE_JAEGER_DIR_SCRIPT}/jaeger.log"
@@ -39,19 +39,19 @@ read -r -a SERVICE_ARRAY <<< "${SERVICES}"
 image_for_service() {
 	case "$1" in
 		api)
-			printf '%s\n' 'magick-ai-cloud-api:dev'
+			printf '%s\n' 'npcink-ai-cloud-api:dev'
 			;;
 		worker)
-			printf '%s\n' 'magick-ai-cloud-worker:dev'
+			printf '%s\n' 'npcink-ai-cloud-worker:dev'
 			;;
 		callback-worker)
-			printf '%s\n' 'magick-ai-cloud-callback-worker:dev'
+			printf '%s\n' 'npcink-ai-cloud-callback-worker:dev'
 			;;
 		ops-worker)
-			printf '%s\n' 'magick-ai-cloud-ops-worker:dev'
+			printf '%s\n' 'npcink-ai-cloud-ops-worker:dev'
 			;;
 		frontend)
-			printf '%s\n' 'magick-ai-cloud-frontend:dev'
+			printf '%s\n' 'npcink-ai-cloud-frontend:dev'
 			;;
 		proxy)
 			printf '%s\n' 'nginx:1.27-alpine'
@@ -91,7 +91,7 @@ and verify direct portal access.
 Environment overrides:
   REMOTE_HOST         SSH target (default from scripts/mini-cloud.env)
   REMOTE_IP           Direct portal IP (default from scripts/mini-cloud.env)
-  REMOTE_ROOT         Remote Cloud repo root (default: ~/gitee/magick-ai-cloud)
+  REMOTE_ROOT         Remote Cloud repo root (default: ~/gitee/npcink-ai-cloud)
   REMOTE_PROJECT_DIR  Remote workspace path (default: $REMOTE_ROOT)
   PREVIEW_PORT        Portal port (default: 8010)
   IMAGE_BUILD_MODE    Build mode: remote (default) or local
@@ -178,39 +178,39 @@ cat > ${REMOTE_OVERRIDE_FILE_SCRIPT} <<'YAML'
 services:
   api:
     environment:
-      MAGICK_CLOUD_PORTAL_PUBLIC_BASE_URL: http://${REMOTE_IP}:${PREVIEW_PORT}
-      MAGICK_CLOUD_TRUSTED_HOST_ALLOWLIST: ${REMOTE_IP},${REMOTE_IP}:${PREVIEW_PORT},127.0.0.1,127.0.0.1:${PREVIEW_PORT},127.0.0.1:8080,localhost,localhost:${PREVIEW_PORT},api,api:8000,proxy,proxy:8080
-      MAGICK_CLOUD_BROWSER_ORIGIN_ALLOWLIST: http://${REMOTE_IP}:${PREVIEW_PORT},http://127.0.0.1:${PREVIEW_PORT},http://localhost:${PREVIEW_PORT}
-      MAGICK_CLOUD_OTEL_EXPORTER_OTLP_ENDPOINT: ${TRACE_EXPORTER_ENDPOINT}
-      MAGICK_CLOUD_OTEL_TRACE_SINK_OTLP_ENDPOINT: ${TRACE_SINK_OTLP_ENDPOINT}
-      MAGICK_CLOUD_OTEL_TRACE_QUERY_URL: ${TRACE_QUERY_URL}
+      NPCINK_CLOUD_PORTAL_PUBLIC_BASE_URL: http://${REMOTE_IP}:${PREVIEW_PORT}
+      NPCINK_CLOUD_TRUSTED_HOST_ALLOWLIST: ${REMOTE_IP},${REMOTE_IP}:${PREVIEW_PORT},127.0.0.1,127.0.0.1:${PREVIEW_PORT},127.0.0.1:8080,localhost,localhost:${PREVIEW_PORT},api,api:8000,proxy,proxy:8080
+      NPCINK_CLOUD_BROWSER_ORIGIN_ALLOWLIST: http://${REMOTE_IP}:${PREVIEW_PORT},http://127.0.0.1:${PREVIEW_PORT},http://localhost:${PREVIEW_PORT}
+      NPCINK_CLOUD_OTEL_EXPORTER_OTLP_ENDPOINT: ${TRACE_EXPORTER_ENDPOINT}
+      NPCINK_CLOUD_OTEL_TRACE_SINK_OTLP_ENDPOINT: ${TRACE_SINK_OTLP_ENDPOINT}
+      NPCINK_CLOUD_OTEL_TRACE_QUERY_URL: ${TRACE_QUERY_URL}
 
   worker:
     environment:
-      MAGICK_CLOUD_WORKER_HEARTBEAT_INTERVAL_SECONDS: 60
-      MAGICK_CLOUD_OTEL_EXPORTER_OTLP_ENDPOINT: ${TRACE_EXPORTER_ENDPOINT}
-      MAGICK_CLOUD_OTEL_TRACE_SINK_OTLP_ENDPOINT: ${TRACE_SINK_OTLP_ENDPOINT}
-      MAGICK_CLOUD_OTEL_TRACE_QUERY_URL: ${TRACE_QUERY_URL}
+      NPCINK_CLOUD_WORKER_HEARTBEAT_INTERVAL_SECONDS: 60
+      NPCINK_CLOUD_OTEL_EXPORTER_OTLP_ENDPOINT: ${TRACE_EXPORTER_ENDPOINT}
+      NPCINK_CLOUD_OTEL_TRACE_SINK_OTLP_ENDPOINT: ${TRACE_SINK_OTLP_ENDPOINT}
+      NPCINK_CLOUD_OTEL_TRACE_QUERY_URL: ${TRACE_QUERY_URL}
 
   callback-worker:
     build:
       context: .
       dockerfile: Dockerfile
-    image: magick-ai-cloud-callback-worker:dev
+    image: npcink-ai-cloud-callback-worker:dev
     command: python -m app.workers.callback_dispatch
     env_file:
       - ./.env
       - ./.env.local
     environment:
-      MAGICK_CLOUD_ENVIRONMENT: development
-      MAGICK_CLOUD_LOG_LEVEL: DEBUG
-      MAGICK_CLOUD_DATABASE_URL: postgresql+psycopg://magick:magick@postgres:5432/magick_ai_cloud
-      MAGICK_CLOUD_REDIS_URL: redis://redis:6379/0
-      MAGICK_CLOUD_RUNTIME_CALLBACK_WORKER_POLL_SECONDS: 5
-      MAGICK_CLOUD_WORKER_HEARTBEAT_INTERVAL_SECONDS: 60
-      MAGICK_CLOUD_OTEL_EXPORTER_OTLP_ENDPOINT: ${TRACE_EXPORTER_ENDPOINT}
-      MAGICK_CLOUD_OTEL_TRACE_SINK_OTLP_ENDPOINT: ${TRACE_SINK_OTLP_ENDPOINT}
-      MAGICK_CLOUD_OTEL_TRACE_QUERY_URL: ${TRACE_QUERY_URL}
+      NPCINK_CLOUD_ENVIRONMENT: development
+      NPCINK_CLOUD_LOG_LEVEL: DEBUG
+      NPCINK_CLOUD_DATABASE_URL: postgresql+psycopg://npcink:npcink@postgres:5432/npcink_ai_cloud
+      NPCINK_CLOUD_REDIS_URL: redis://redis:6379/0
+      NPCINK_CLOUD_RUNTIME_CALLBACK_WORKER_POLL_SECONDS: 5
+      NPCINK_CLOUD_WORKER_HEARTBEAT_INTERVAL_SECONDS: 60
+      NPCINK_CLOUD_OTEL_EXPORTER_OTLP_ENDPOINT: ${TRACE_EXPORTER_ENDPOINT}
+      NPCINK_CLOUD_OTEL_TRACE_SINK_OTLP_ENDPOINT: ${TRACE_SINK_OTLP_ENDPOINT}
+      NPCINK_CLOUD_OTEL_TRACE_QUERY_URL: ${TRACE_QUERY_URL}
     depends_on:
       postgres:
         condition: service_healthy
@@ -223,30 +223,30 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: magick-ai-cloud-ops-worker:dev
+    image: npcink-ai-cloud-ops-worker:dev
     command: python -m app.workers.ops_cadence
     env_file:
       - ./.env
       - ./.env.local
     environment:
-      MAGICK_CLOUD_ENVIRONMENT: development
-      MAGICK_CLOUD_LOG_LEVEL: DEBUG
-      MAGICK_CLOUD_DATABASE_URL: postgresql+psycopg://magick:magick@postgres:5432/magick_ai_cloud
-      MAGICK_CLOUD_REDIS_URL: redis://redis:6379/0
-      MAGICK_CLOUD_WORKER_HEARTBEAT_INTERVAL_SECONDS: 60
-      MAGICK_CLOUD_OPS_CADENCE_POLL_SECONDS: 15
-      MAGICK_CLOUD_RETENTION_CLEANUP_INTERVAL_SECONDS: 60
-      MAGICK_CLOUD_USAGE_ROLLUP_INTERVAL_SECONDS: 60
-      MAGICK_CLOUD_ROUTER_DIAGNOSTICS_INTERVAL_SECONDS: 60
-      MAGICK_CLOUD_LATENCY_PROBE_INTERVAL_SECONDS: 60
-      MAGICK_CLOUD_ALERT_PROVIDER_DEGRADATION_INTERVAL_SECONDS: 60
-      MAGICK_CLOUD_HOSTED_MODEL_GOVERNANCE_INTERVAL_SECONDS: 60
-      MAGICK_CLOUD_PROVIDER_HEALTH_SCAN_INTERVAL_SECONDS: 60
-      MAGICK_CLOUD_HOSTED_MODEL_GOVERNANCE_WORKER_RECENT_MINUTES: 1440
-      MAGICK_CLOUD_HOSTED_MODEL_GOVERNANCE_WORKER_LIMIT: 25
-      MAGICK_CLOUD_OTEL_EXPORTER_OTLP_ENDPOINT: ${TRACE_EXPORTER_ENDPOINT}
-      MAGICK_CLOUD_OTEL_TRACE_SINK_OTLP_ENDPOINT: ${TRACE_SINK_OTLP_ENDPOINT}
-      MAGICK_CLOUD_OTEL_TRACE_QUERY_URL: ${TRACE_QUERY_URL}
+      NPCINK_CLOUD_ENVIRONMENT: development
+      NPCINK_CLOUD_LOG_LEVEL: DEBUG
+      NPCINK_CLOUD_DATABASE_URL: postgresql+psycopg://npcink:npcink@postgres:5432/npcink_ai_cloud
+      NPCINK_CLOUD_REDIS_URL: redis://redis:6379/0
+      NPCINK_CLOUD_WORKER_HEARTBEAT_INTERVAL_SECONDS: 60
+      NPCINK_CLOUD_OPS_CADENCE_POLL_SECONDS: 15
+      NPCINK_CLOUD_RETENTION_CLEANUP_INTERVAL_SECONDS: 60
+      NPCINK_CLOUD_USAGE_ROLLUP_INTERVAL_SECONDS: 60
+      NPCINK_CLOUD_ROUTER_DIAGNOSTICS_INTERVAL_SECONDS: 60
+      NPCINK_CLOUD_LATENCY_PROBE_INTERVAL_SECONDS: 60
+      NPCINK_CLOUD_ALERT_PROVIDER_DEGRADATION_INTERVAL_SECONDS: 60
+      NPCINK_CLOUD_HOSTED_MODEL_GOVERNANCE_INTERVAL_SECONDS: 60
+      NPCINK_CLOUD_PROVIDER_HEALTH_SCAN_INTERVAL_SECONDS: 60
+      NPCINK_CLOUD_HOSTED_MODEL_GOVERNANCE_WORKER_RECENT_MINUTES: 1440
+      NPCINK_CLOUD_HOSTED_MODEL_GOVERNANCE_WORKER_LIMIT: 25
+      NPCINK_CLOUD_OTEL_EXPORTER_OTLP_ENDPOINT: ${TRACE_EXPORTER_ENDPOINT}
+      NPCINK_CLOUD_OTEL_TRACE_SINK_OTLP_ENDPOINT: ${TRACE_SINK_OTLP_ENDPOINT}
+      NPCINK_CLOUD_OTEL_TRACE_QUERY_URL: ${TRACE_QUERY_URL}
     depends_on:
       postgres:
         condition: service_healthy
@@ -258,8 +258,8 @@ services:
   frontend:
     environment:
       CLOUD_PUBLIC_BASE_URL: http://${REMOTE_IP}:${PREVIEW_PORT}
-      MAGICK_CLOUD_LOCAL_DEBUG_DOCK_ALLOWED_HOSTS: ${REMOTE_IP}
-      MAGICK_CLOUD_FRONTEND_DEV_HOST_ALLOWLIST: ${REMOTE_IP},127.0.0.1,localhost,0.0.0.0
+      NPCINK_CLOUD_LOCAL_DEBUG_DOCK_ALLOWED_HOSTS: ${REMOTE_IP}
+      NPCINK_CLOUD_FRONTEND_DEV_HOST_ALLOWLIST: ${REMOTE_IP},127.0.0.1,localhost,0.0.0.0
 YAML
 "
 }
@@ -469,9 +469,9 @@ verify_remote_database_head() {
 verify_remote_operational_readiness() {
 	log "verifying direct operational readiness inside api container"
 	run_remote_cloud "
-internal_token=\"\$(${REMOTE_COMPOSE_CMD} exec -T api sh -lc 'printf %s \"\${MAGICK_CLOUD_INTERNAL_AUTH_TOKEN:-}\"')\"
+internal_token=\"\$(${REMOTE_COMPOSE_CMD} exec -T api sh -lc 'printf %s \"\${NPCINK_CLOUD_INTERNAL_AUTH_TOKEN:-}\"')\"
 if [ -z \"\${internal_token}\" ]; then
-	echo '[remote-preview] operational readiness failed: MAGICK_CLOUD_INTERNAL_AUTH_TOKEN missing' >&2
+	echo '[remote-preview] operational readiness failed: NPCINK_CLOUD_INTERNAL_AUTH_TOKEN missing' >&2
 	exit 1
 fi
 
@@ -481,9 +481,9 @@ import time
 import urllib.error
 import urllib.request
 
-token = os.environ.get('MAGICK_CLOUD_INTERNAL_AUTH_TOKEN', '')
+token = os.environ.get('NPCINK_CLOUD_INTERNAL_AUTH_TOKEN', '')
 headers = {
-    'X-Magick-Internal-Token': token,
+    'X-Npcink-Internal-Token': token,
     'traceparent': '00-99999999999999999999999999999999-aaaaaaaaaaaaaaaa-01',
 }
 
@@ -519,11 +519,11 @@ verify_remote_trace_sink() {
 		log "trace sink verification skipped"
 		return 0
 	fi
-	log "verifying trace sink receives magick-ai-cloud spans"
+	log "verifying trace sink receives npcink-ai-cloud spans"
 	run_remote_cloud "
-service_name=\"\$(${REMOTE_COMPOSE_CMD} exec -T api sh -lc 'printf %s \"\${MAGICK_CLOUD_OTEL_SERVICE_NAME:-magick-ai-cloud}\"')\"
-trace_query_url=\"\$(${REMOTE_COMPOSE_CMD} exec -T api sh -lc 'printf %s \"\${MAGICK_CLOUD_OTEL_TRACE_QUERY_URL:-}\"')\"
-trace_sink=\"\$(${REMOTE_COMPOSE_CMD} exec -T api sh -lc 'printf %s \"\${MAGICK_CLOUD_OTEL_TRACE_SINK_OTLP_ENDPOINT:-}\"')\"
+service_name=\"\$(${REMOTE_COMPOSE_CMD} exec -T api sh -lc 'printf %s \"\${NPCINK_CLOUD_OTEL_SERVICE_NAME:-npcink-ai-cloud}\"')\"
+trace_query_url=\"\$(${REMOTE_COMPOSE_CMD} exec -T api sh -lc 'printf %s \"\${NPCINK_CLOUD_OTEL_TRACE_QUERY_URL:-}\"')\"
+trace_sink=\"\$(${REMOTE_COMPOSE_CMD} exec -T api sh -lc 'printf %s \"\${NPCINK_CLOUD_OTEL_TRACE_SINK_OTLP_ENDPOINT:-}\"')\"
 if [ -z \"\${trace_query_url}\" ] || [ -z \"\${trace_sink}\" ]; then
 	echo '[remote-preview] trace sink verification failed: trace env missing from api container' >&2
 	exit 1

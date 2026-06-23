@@ -77,11 +77,11 @@ scripts/live-site-addon-package.py \
 
 Addon package:
 
-- source repo: `/Users/muze/gitee/magick-ai-cloud-addon`
+- source repo: `/Users/muze/gitee/npcink-cloud-addon`
 - build zip:
-  `/Users/muze/gitee/magick-ai-cloud-addon/build/magick-ai-cloud-addon.zip`
+  `/Users/muze/gitee/npcink-cloud-addon/build/npcink-cloud-addon.zip`
 - plugin basename after install:
-  `magick-ai-cloud-addon/magick-ai-cloud-addon.php`
+  `npcink-cloud-addon/npcink-cloud-addon.php`
 - display name: `Npcink Cloud Addon`
 - settings option: `npcink_cloud_addon_settings`
 
@@ -137,7 +137,7 @@ identity, call runtime, run Site Knowledge, enable monitoring, or write
 content.
 
 The readiness, identity, and Stage 1 helpers resolve
-`MAGICK_CLOUD_INTERNAL_AUTH_TOKEN` in this order:
+`NPCINK_CLOUD_INTERNAL_AUTH_TOKEN` in this order:
 
 1. explicit `--internal-token`;
 2. current process environment;
@@ -196,7 +196,7 @@ settings, run runtime smoke, run Site Knowledge sync/search, write content, or
 enable monitoring.
 
 After the exact approval text above is provided and
-`MAGICK_CLOUD_INTERNAL_AUTH_TOKEN` is available, stage 1 can be executed with:
+`NPCINK_CLOUD_INTERNAL_AUTH_TOKEN` is available, stage 1 can be executed with:
 
 ```bash
 scripts/live-site-stage1.py \
@@ -228,7 +228,7 @@ secret file exists and contains the required fields, and prints the exact addon
 admin URL:
 
 ```text
-http://npcink.local/wp-admin/admin.php?page=magick-ai-cloud-addon
+http://npcink.local/wp-admin/admin.php?page=npcink-cloud-addon
 ```
 
 It reports only secret presence and length. It does not print the Cloud API Key,
@@ -433,7 +433,7 @@ account upsert, site provision, site activation, and site key issue. It does not
 call the Cloud service.
 
 After the exact approval text above is provided and
-`MAGICK_CLOUD_INTERNAL_AUTH_TOKEN` is available, the identity step can be
+`NPCINK_CLOUD_INTERNAL_AUTH_TOKEN` is available, the identity step can be
 executed with:
 
 ```bash
@@ -476,7 +476,7 @@ Continue only if the package reports:
 
 - database export ok;
 - addon zip exists;
-- addon zip contains `magick-ai-cloud-addon/magick-ai-cloud-addon.php`;
+- addon zip contains `npcink-cloud-addon/npcink-cloud-addon.php`;
 - active plugin snapshot captured;
 - `npcink_cloud_addon_settings` snapshot captured with secret presence only.
 
@@ -488,7 +488,7 @@ Use the fresh package snapshot to avoid hard-coding a stale Local MySQL socket:
 export NPCINK_WP_PATH="/Users/muze/Local Sites/npcink/app/public"
 export NPCINK_WP_URL="http://npcink.local/"
 export NPCINK_PACKAGE_DIR=".tmp/live-site-addon-package/npcink-before-addon-write"
-export NPCINK_ADDON_ZIP="/Users/muze/gitee/magick-ai-cloud-addon/build/magick-ai-cloud-addon.zip"
+export NPCINK_ADDON_ZIP="/Users/muze/gitee/npcink-cloud-addon/build/npcink-cloud-addon.zip"
 export NPCINK_MYSQL_SOCKET="$(
   uv run python -c 'import json, os; print(json.load(open(os.environ["NPCINK_PACKAGE_DIR"] + "/snapshot.json"))["preflight"]["local_site"]["mysql_socket"])'
 )"
@@ -532,7 +532,7 @@ Verify activation:
 
 Expected addon row:
 
-- `name`: `magick-ai-cloud-addon`
+- `name`: `npcink-cloud-addon`
 - `status`: `active`
 - `version`: `0.1.0`
 
@@ -565,7 +565,7 @@ Reason:
 Steps:
 
 1. Log in to `http://npcink.local/wp-admin/` as a local administrator.
-2. Open `Magick AI > Cloud Addon`.
+2. Open `Npcink AI > Cloud Addon`.
 3. Enter the approved Cloud Base URL.
 4. Paste the dedicated Cloud API Key.
 5. Leave monitoring disabled.
@@ -652,7 +652,7 @@ scripts/live-site-addon-rollback.py \
   --output-dir .tmp/live-site-addon-rollback/npcink-stage1
 ```
 
-The helper only deactivates `magick-ai-cloud-addon`. It deletes
+The helper only deactivates `npcink-cloud-addon`. It deletes
 `npcink_cloud_addon_settings` only when the pre-write snapshot showed empty
 addon settings. If the snapshot contained existing base URL, site ID, key, or
 secret presence, it will not attempt to restore or delete that redacted state.

@@ -39,7 +39,7 @@ def main() -> None:
     configure_logging(settings.log_level)
     require_database_connection(settings.database_url)
 
-    logger = get_logger("magick_ai_cloud.callback_dispatch")
+    logger = get_logger("npcink_ai_cloud.callback_dispatch")
     callback_dispatcher = HttpRuntimeCallbackDispatcher(
         timeout_seconds=settings.runtime_callback_timeout_seconds,
     )

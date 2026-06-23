@@ -6,7 +6,7 @@ Scope: local development, mini/remote preview, and pre-release Cloud validation
 
 ## Purpose
 
-This plan records the next execution order while Magick AI Cloud is still under
+This plan records the next execution order while Npcink AI Cloud is still under
 local development and has no external users.
 
 The current objective is not GA release, not a customer-facing commercial front
@@ -168,9 +168,9 @@ Current local target:
 
 - Cloud base URL: `http://127.0.0.1:8010`
 - Portal public base URL: `http://127.0.0.1:8010`
-- WordPress site: `https://magick-ai.local/`
+- WordPress site: `https://npcink.local/`
 - WordPress addon settings path:
-  `https://magick-ai.local/wp-admin/admin.php?page=magick-ai-cloud-addon`
+  `https://npcink.local/wp-admin/admin.php?page=npcink-cloud-addon`
 - Portal login path for local alpha: `/portal/dev-entry`
 - Local dev-entry origin allowlist:
   `http://127.0.0.1:8010,http://localhost:8010`
@@ -183,7 +183,7 @@ Done:
 - Deterministic pytest entrypoints clear OpenAI-compatible API key environment
   variables so local real-provider credentials do not leak into baseline tests.
 - Cloud site/key/site-admin/subscription baseline is seeded for
-  `site_magick_ai_local`.
+  `site_npcink_local`.
 - WordPress Cloud addon is saved and verified against the local Cloud base URL.
 - Portal dev-entry login works and shows the bound WordPress site.
 - DeepSeek API credentials are configured locally.
@@ -218,7 +218,7 @@ Current local result:
 
 - `pnpm run smoke:local-alpha` passed against:
   - Cloud: `http://127.0.0.1:8010`
-  - WordPress: `https://magick-ai.local/`
+  - WordPress: `https://npcink.local/`
   - Provider/model: DeepSeek via OpenAI-compatible adapter, `deepseek-v4-flash`
 - Evidence is written under `.tmp/local-alpha-smoke/` and intentionally excludes
   secrets.

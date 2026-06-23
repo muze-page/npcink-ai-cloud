@@ -926,7 +926,7 @@ def test_http_callback_dispatcher_reuses_one_client_across_dispatches(
 
         def post(self, url: str, *, content: bytes, headers: dict[str, str]) -> httpx.Response:
             assert url == "https://example.com/reuse"
-            assert headers["X-Magick-Run-Id"] in {"run-1", "run-2"}
+            assert headers["X-Npcink-Run-Id"] in {"run-1", "run-2"}
             assert cast(dict[str, object], json.loads(content.decode("utf-8")))["run_id"] in {
                 "run-1",
                 "run-2",

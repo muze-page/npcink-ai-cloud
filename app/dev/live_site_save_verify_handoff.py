@@ -10,7 +10,7 @@ from app.dev.live_site_preflight import _dict, _list, _text
 from app.dev.live_site_stage1_acceptance import DEFAULT_STAGE_REPORT, load_json
 
 DEFAULT_OUTPUT_ROOT = Path(".tmp/live-site-save-verify-handoff")
-ADDON_ADMIN_PAGE_SLUG = "magick-ai-cloud-addon"
+ADDON_ADMIN_PAGE_SLUG = "npcink-cloud-addon"
 
 
 def _site_admin_base(url: str) -> str:
@@ -175,7 +175,7 @@ def build_handoff_report(
         "admin": {
             "login_url": _site_admin_base(site_url) if site_url else "",
             "addon_admin_url": _addon_admin_url(site_url) if site_url else "",
-            "menu_path": "Magick AI > Cloud Addon",
+            "menu_path": "Npcink AI > Cloud Addon",
             "save_button_label": "Save and Verify",
             "base_url_to_paste": _text(identity_target.get("base_url")),
             "cloud_api_key_source": str(secret_file) if secret_file is not None else "",

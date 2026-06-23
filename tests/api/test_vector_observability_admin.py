@@ -27,7 +27,7 @@ def _build_client(tmp_path: Path) -> tuple[str, TestClient]:
     seed_site_auth(database_url, site_id="site-vector-001", scopes=["runtime:execute"])
     seed_site_auth(database_url, site_id="site-vector-002", scopes=["runtime:execute"])
     settings = Settings(
-        project_name="Magick AI Cloud Test",
+        project_name="Npcink AI Cloud Test",
         environment="test",
         database_url=database_url,
         redis_url="redis://localhost:6379/0",
@@ -87,21 +87,21 @@ def _seed_vector_metrics(database_url: str) -> None:
                 _run_record(
                     "run-vector-sync-001",
                     "site-vector-001",
-                    ability_name="magick-ai-cloud/site-knowledge-sync",
+                    ability_name="npcink-cloud/site-knowledge-sync",
                     status="succeeded",
                     now=now,
                 ),
                 _run_record(
                     "run-vector-search-001",
                     "site-vector-001",
-                    ability_name="magick-ai-cloud/site-knowledge-search",
+                    ability_name="npcink-cloud/site-knowledge-search",
                     status="succeeded",
                     now=now,
                 ),
                 _run_record(
                     "run-vector-search-002",
                     "site-vector-002",
-                    ability_name="magick-ai-cloud/site-knowledge-search",
+                    ability_name="npcink-cloud/site-knowledge-search",
                     status="failed",
                     now=now,
                 ),

@@ -1,9 +1,9 @@
-# Nightly Inspection Real-Site Trial Record: magick-ai.local - 2026-06-17
+# Nightly Inspection Real-Site Trial Record: npcink.local - 2026-06-17
 
 Status: completed controlled local Cloud inspection runs.
 
 Purpose: record the first local controlled-trial attempt for Nightly Site
-Inspection / Morning Brief on `magick-ai.local`. This record follows
+Inspection / Morning Brief on `npcink.local`. This record follows
 `docs/nightly-inspection-real-site-operator-trial-2026-06-17.md`.
 
 This is a local development trial record. It is not external production
@@ -14,7 +14,7 @@ cycle for the current development stage.
 
 - Date: 2026-06-17
 - Operator: Codex local operator
-- WordPress site URL: `https://magick-ai.local`
+- WordPress site URL: `https://npcink.local`
 - Cloud base URL: local Cloud development worktree evidence only
 - Site ID: not confirmed from the WordPress admin HTML in this pass
 - Account ID: not confirmed from the WordPress admin HTML in this pass
@@ -76,7 +76,7 @@ a literal browser click on the Toolbox `Run Cloud inspection` button.
 ## Sample Expansion Trial
 
 Six additional authenticated Toolbox REST route runs were completed after the
-initial real-site trial. These runs used the same local `magick-ai.local`
+initial real-site trial. These runs used the same local `npcink.local`
 development site and compared three sample sizes across `metadata_only` and
 `excerpt` payload modes. No WordPress write, Core proposal, automatic publish,
 or Cloud scheduler-truth path was used.
@@ -127,7 +127,7 @@ Observed sample expansion findings:
 
 Cloud clean worktree:
 
-- Branch/worktree: `/tmp/magick-ai-cloud-local-trial`
+- Branch/worktree: `/tmp/npcink-ai-cloud-local-trial`
 - Base commit: `a4153db Add nightly inspection feedback loop`
 - `make lint-changed`: passed, no changed Cloud Python files
 - `.venv/bin/pytest tests/api/test_cloud_batch_runtime.py tests/api/test_agent_feedback_routes.py tests/contract/test_nightly_site_inspection_contract.py`: 19 passed
@@ -153,8 +153,8 @@ Browser and WordPress site checks:
   the wrong local MySQL socket.
 - WP-CLI succeeded with a temporary local-only `DB_HOST=127.0.0.1:10004`
   bootstrap file.
-- WordPress `siteurl`: `https://magick-ai.local`.
-- WordPress `home`: `https://magick-ai.local`.
+- WordPress `siteurl`: `https://npcink.local`.
+- WordPress `home`: `https://npcink.local`.
 - Published post/page count: `608`.
 - Active runtime-related plugins included `npcink-governance-core`,
   `npcink-abilities-toolkit`, `npcink-ai-client-adapter`,
@@ -172,7 +172,7 @@ Browser and WordPress site checks:
   run detail, rendered the Morning Brief review queue, merged 15 local
   priorities, and displayed `Writes None` for Cloud review items.
 - `wp eval-file tests/smoke-nightly-inspection-cloud-e2e.php`: passed against
-  `magick-ai.local`; run id
+  `npcink.local`; run id
   `run_a14776eeb51043b7a1e016c5300b7aa6`.
 - Cloud entitlement exposed the Nightly Site Inspection runtime feature and
   allowed Pro Nightly Inspection batch submit.
@@ -219,7 +219,7 @@ Browser and WordPress site checks:
   `.venv/bin/pytest tests/api/test_cloud_batch_runtime.py tests/contract/test_nightly_site_inspection_contract.py tests/api/test_agent_feedback_routes.py`:
   19 passed.
 - `magick-ai-eval-lab` cross-check:
-  `composer eval:task -- task=project_quality_gate project=/Users/muze/gitee/magick-ai-cloud mode=working_diff`
+  `composer eval:task -- task=project_quality_gate project=/Users/muze/gitee/npcink-ai-cloud mode=working_diff`
   wrote local generated reports under
   `/Users/muze/gitee/magick-ai-eval-lab/project-review/generated/`.
   The only review item was an existing `sk-` shaped test marker in tracked
@@ -244,7 +244,7 @@ Browser and WordPress site checks:
 Before the next local trial batch:
 
 1. Use the Local MySQL port/socket-aware WP-CLI bootstrap when checking
-   `magick-ai.local` from the terminal.
+   `npcink.local` from the terminal.
 2. Run additional varied-content samples on a second real site before changing
    score weights.
 3. Review Cloud feedback quality rollups for `already_handled`,

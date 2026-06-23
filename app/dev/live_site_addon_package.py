@@ -24,11 +24,11 @@ DEFAULT_NPCINK_SITE = SiteTarget(
     "http://npcink.local/",
     Path("/Users/muze/Local Sites/npcink/app/public"),
 )
-DEFAULT_ADDON_ZIP = Path("/Users/muze/gitee/magick-ai-cloud-addon/build/magick-ai-cloud-addon.zip")
+DEFAULT_ADDON_ZIP = Path("/Users/muze/gitee/npcink-cloud-addon/build/npcink-cloud-addon.zip")
 DEFAULT_OUTPUT_ROOT = Path(".tmp/live-site-addon-package")
-ADDON_OPTION_NAMES = ("magick_ai_cloud_addon_settings", "npcink_cloud_addon_settings")
+ADDON_OPTION_NAMES = ("npcink_cloud_addon_settings", "npcink_cloud_addon_settings")
 ADDON_OPTION_NAME = ADDON_OPTION_NAMES[-1]
-ADDON_PLUGIN_BASENAME = "magick-ai-cloud-addon/magick-ai-cloud-addon.php"
+ADDON_PLUGIN_BASENAME = "npcink-cloud-addon/npcink-cloud-addon.php"
 
 
 def sha256_file(path: Path) -> str:

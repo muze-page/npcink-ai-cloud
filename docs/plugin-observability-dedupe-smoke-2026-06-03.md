@@ -97,7 +97,7 @@ count(event_id='smoke_event_id_timestamp_drift_20260603') = 0
 After the real flush, the local Portal page showed:
 
 - URL: `http://127.0.0.1:8010/portal/monitoring`
-- site: `site_magick_ai_local`
+- site: `site_npcink_local`
 - events: `1,522`
 - errors: `82`
 - plugins: `3`
@@ -110,7 +110,7 @@ The local Admin page showed:
 - cross-site errors: `83`
 - sites: `2`
 - plugins: `3`
-- local site row: `site_magick_ai_local`, `1,522` events, `82` errors
+- local site row: `site_npcink_local`, `1,522` events, `82` errors
 
 Local screenshots were generated under `.tmp/observability-smoke/` during the
 smoke run. They are validation artifacts and are not committed.

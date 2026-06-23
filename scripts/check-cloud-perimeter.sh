@@ -7,9 +7,9 @@ CLOUD_DIR="${ROOT_DIR}"
 cd "${CLOUD_DIR}"
 
 POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-perimeter-prod-password-32-characters-secret}" \
-MAGICK_CLOUD_DATABASE_URL="${MAGICK_CLOUD_DATABASE_URL:-postgresql+psycopg://magick:perimeter-prod-password-32-characters-secret@postgres:5432/magick_ai_cloud}" \
+NPCINK_CLOUD_DATABASE_URL="${NPCINK_CLOUD_DATABASE_URL:-postgresql+psycopg://npcink:perimeter-prod-password-32-characters-secret@postgres:5432/npcink_ai_cloud}" \
   docker compose -f docker-compose.prod.yml config >/dev/null
 docker compose -f docker-compose.dev.yml run --rm \
-  -e MAGICK_CLOUD_OPENAI_API_KEY= \
-  -e MAGICK_CLOUD_OPENAI_COMPATIBLE_API_KEY= \
+  -e NPCINK_CLOUD_OPENAI_API_KEY= \
+  -e NPCINK_CLOUD_OPENAI_COMPATIBLE_API_KEY= \
   api python -m pytest tests/api/test_health.py tests/contract/test_health_contract.py -q

@@ -3,14 +3,14 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 . "${ROOT_DIR}/deploy/common.sh"
-magick_ai_cloud_load_env_file "${ROOT_DIR}"
+npcink_ai_cloud_load_env_file "${ROOT_DIR}"
 
-magick_ai_cloud_require_cmd curl
-magick_ai_cloud_require_cmd python3
-magick_ai_cloud_require_cmd mktemp
+npcink_ai_cloud_require_cmd curl
+npcink_ai_cloud_require_cmd python3
+npcink_ai_cloud_require_cmd mktemp
 
-BASE_URL="${MAGICK_CLOUD_BASE_URL:-http://127.0.0.1:${MAGICK_CLOUD_PORT:-8010}}"
-UNKNOWN_EMAIL="${MAGICK_CLOUD_ROTATION_CHECK_EMAIL:-rotation-check@example.invalid}"
+BASE_URL="${NPCINK_CLOUD_BASE_URL:-http://127.0.0.1:${NPCINK_CLOUD_PORT:-8010}}"
+UNKNOWN_EMAIL="${NPCINK_CLOUD_ROTATION_CHECK_EMAIL:-rotation-check@example.invalid}"
 RUN_LOCAL_TESTS=0
 
 while [ "$#" -gt 0 ]; do
@@ -155,7 +155,7 @@ assert_header_contains() {
 	fi
 }
 
-magick_ai_cloud_require_internal_token
+npcink_ai_cloud_require_internal_token
 
 if [ "${RUN_LOCAL_TESTS}" = "1" ] && [ -x "${ROOT_DIR}/.venv/bin/python" ]; then
 	ok "Running local compile and targeted security tests"
@@ -171,7 +171,7 @@ if [ "${RUN_LOCAL_TESTS}" = "1" ] && [ -x "${ROOT_DIR}/.venv/bin/python" ]; then
 fi
 
 ok "Waiting for cloud ready: ${BASE_URL}"
-if ! magick_ai_cloud_wait_for_ready "${BASE_URL}" 20 2; then
+if ! npcink_ai_cloud_wait_for_ready "${BASE_URL}" 20 2; then
 	fail "Cloud API did not become ready"
 fi
 
@@ -182,21 +182,21 @@ http_request \
 	"GET" \
 	"${BASE_URL%/}/health/ready" \
 	"" \
-	"X-Magick-Internal-Token: ${MAGICK_CLOUD_INTERNAL_AUTH_TOKEN}"
+	"X-Npcink-Internal-Token: ${NPCINK_CLOUD_INTERNAL_AUTH_TOKEN}"
 assert_status "${HTTP_STATUS}" "200" "internal readiness check should succeed"
 
 http_request \
 	"GET" \
 	"${BASE_URL%/}/health/operational-ready" \
 	"" \
-	"X-Magick-Internal-Token: ${MAGICK_CLOUD_INTERNAL_AUTH_TOKEN}"
+	"X-Npcink-Internal-Token: ${NPCINK_CLOUD_INTERNAL_AUTH_TOKEN}"
 assert_status "${HTTP_STATUS}" "200" "operational readiness should succeed with the rotated internal token"
 
 http_request \
 	"GET" \
 	"${BASE_URL%/}/internal/service/observability/summary" \
 	"" \
-	"X-Magick-Internal-Token: ${MAGICK_CLOUD_INTERNAL_AUTH_TOKEN}"
+	"X-Npcink-Internal-Token: ${NPCINK_CLOUD_INTERNAL_AUTH_TOKEN}"
 assert_status "${HTTP_STATUS}" "200" "observability summary should succeed with the rotated internal token"
 assert_json_non_empty "${HTTP_BODY}" "data.tracing.trace_sink_otlp_endpoint" "observability summary should expose trace sink identity"
 

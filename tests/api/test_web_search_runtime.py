@@ -59,7 +59,7 @@ def _build_client(
         scopes=["runtime:execute", "runtime:read"],
     )
     settings_kwargs: dict[str, object] = {
-        "project_name": "Magick AI Cloud Web Search Test",
+        "project_name": "Npcink AI Cloud Web Search Test",
         "environment": "test",
         "database_url": database_url,
         "redis_url": "redis://localhost:6379/0",
@@ -89,7 +89,7 @@ def _build_client(
 def _payload(
     input_overrides: dict[str, Any] | None = None,
     *,
-    ability_name: str = "magick-ai-cloud/web-search",
+    ability_name: str = "npcink-cloud/web-search",
 ) -> dict[str, Any]:
     input_payload: dict[str, Any] = {
         "contract_version": "web_search.v1",
@@ -239,7 +239,7 @@ def test_cloud_managed_web_search_executes_and_records_provider_usage(
     assert result["workflow_metadata"]["workflow_id"] == "external_web_evidence_preflight"
     assert result["workflow_metadata"]["workflow_version"] == "web_search_evidence_workflow.v1"
     assert result["workflow_metadata"]["workflow_kind"] == "fixed_evidence_workflow"
-    assert result["workflow_metadata"]["triggering_ability"] == "magick-ai-cloud/web-search"
+    assert result["workflow_metadata"]["triggering_ability"] == "npcink-cloud/web-search"
     assert result["workflow_metadata"]["triggering_contract"] == "web_search.v1"
     assert result["workflow_metadata"]["intent"] == "news"
     assert result["workflow_metadata"]["cloud_output"] == "external_web_evidence"

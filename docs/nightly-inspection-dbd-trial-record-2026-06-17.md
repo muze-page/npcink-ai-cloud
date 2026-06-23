@@ -98,7 +98,7 @@ The production fix should be in the WordPress-side payload minimization path, no
 
 ## Follow-Up Verification
 
-After adding WordPress-side payload minimization in `magick-ai-toolbox`, the
+After adding WordPress-side payload minimization in `npcink-toolbox`, the
 same clone was tested again without any temporary WP-CLI payload filter.
 
 - Cloud run ID: `run_95bf2056717f48df83901a73571f86ed`

@@ -283,7 +283,7 @@ export async function proxyAdminServiceGet(
     response = await fetch(buildBackendUrl(servicePath, request.nextUrl.search), {
       headers: {
         Accept: 'application/json',
-        'X-Magick-Internal-Token': getInternalAuthToken(),
+        'X-Npcink-Internal-Token': getInternalAuthToken(),
       },
       cache: 'no-store',
     });
@@ -320,7 +320,7 @@ export async function proxyAdminServiceJsonPost(
       headers: {
         Accept: 'application/json',
         'Content-Type': 'application/json',
-        'X-Magick-Internal-Token': getInternalAuthToken(),
+        'X-Npcink-Internal-Token': getInternalAuthToken(),
         'Idempotency-Key': request.headers.get('idempotency-key') || crypto.randomUUID(),
       },
       body: JSON.stringify(payload),

@@ -4,15 +4,15 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 . "${ROOT_DIR}/deploy/common.sh"
 
-BASE_URL="${MAGICK_CLOUD_BASE_URL:-http://127.0.0.1:8010}"
-COMPOSE_FILE="${MAGICK_CLOUD_COMPOSE_FILE:-${ROOT_DIR}/docker-compose.dev.yml}"
-COMPOSE_PROJECT_NAME="${MAGICK_CLOUD_COMPOSE_PROJECT_NAME:-magick-ai-cloud}"
-SMOKE_SUFFIX="${MAGICK_CLOUD_SITE_KNOWLEDGE_SMOKE_SUFFIX:-$(date -u '+%Y%m%d%H%M%S')}"
-SITE_ID="${MAGICK_CLOUD_SITE_KNOWLEDGE_SMOKE_SITE_ID:-site_knowledge_smoke_${SMOKE_SUFFIX}}"
-KEY_ID="${MAGICK_CLOUD_SITE_KNOWLEDGE_SMOKE_KEY_ID:-key_site_knowledge_smoke_${SMOKE_SUFFIX}}"
-SECRET="${MAGICK_CLOUD_SITE_KNOWLEDGE_SMOKE_SECRET:-}"
-EVIDENCE_DIR="${MAGICK_CLOUD_SITE_KNOWLEDGE_SMOKE_EVIDENCE_DIR:-${ROOT_DIR}/.tmp/site-knowledge-real-chain-smoke}"
-RUN_COMPOSE_UP="${MAGICK_CLOUD_SITE_KNOWLEDGE_SMOKE_COMPOSE_UP:-true}"
+BASE_URL="${NPCINK_CLOUD_BASE_URL:-http://127.0.0.1:8010}"
+COMPOSE_FILE="${NPCINK_CLOUD_COMPOSE_FILE:-${ROOT_DIR}/docker-compose.dev.yml}"
+COMPOSE_PROJECT_NAME="${NPCINK_CLOUD_COMPOSE_PROJECT_NAME:-npcink-ai-cloud}"
+SMOKE_SUFFIX="${NPCINK_CLOUD_SITE_KNOWLEDGE_SMOKE_SUFFIX:-$(date -u '+%Y%m%d%H%M%S')}"
+SITE_ID="${NPCINK_CLOUD_SITE_KNOWLEDGE_SMOKE_SITE_ID:-site_knowledge_smoke_${SMOKE_SUFFIX}}"
+KEY_ID="${NPCINK_CLOUD_SITE_KNOWLEDGE_SMOKE_KEY_ID:-key_site_knowledge_smoke_${SMOKE_SUFFIX}}"
+SECRET="${NPCINK_CLOUD_SITE_KNOWLEDGE_SMOKE_SECRET:-}"
+EVIDENCE_DIR="${NPCINK_CLOUD_SITE_KNOWLEDGE_SMOKE_EVIDENCE_DIR:-${ROOT_DIR}/.tmp/site-knowledge-real-chain-smoke}"
+RUN_COMPOSE_UP="${NPCINK_CLOUD_SITE_KNOWLEDGE_SMOKE_COMPOSE_UP:-true}"
 
 fail() {
 	echo "[fail] $*" >&2
@@ -185,13 +185,13 @@ signed_request() {
 
 	local headers=(
 		"traceparent: ${traceparent}"
-		"X-Magick-Site-Id: ${SITE_ID}"
-		"X-Magick-Key-Id: ${KEY_ID}"
-		"X-Magick-Timestamp: ${timestamp}"
-		"X-Magick-Signature: ${signature}"
+		"X-Npcink-Site-Id: ${SITE_ID}"
+		"X-Npcink-Key-Id: ${KEY_ID}"
+		"X-Npcink-Timestamp: ${timestamp}"
+		"X-Npcink-Signature: ${signature}"
 	)
 	if [ -n "${nonce}" ]; then
-		headers+=("X-Magick-Nonce: ${nonce}")
+		headers+=("X-Npcink-Nonce: ${nonce}")
 	fi
 	if [ -n "${idempotency_key}" ]; then
 		headers+=("Idempotency-Key: ${idempotency_key}")
@@ -212,10 +212,10 @@ docker_compose() {
 	COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME}" docker compose -f "${COMPOSE_FILE}" "$@"
 }
 
-magick_ai_cloud_require_cmd curl
-magick_ai_cloud_require_cmd docker
-magick_ai_cloud_require_cmd openssl
-magick_ai_cloud_require_cmd python3
+npcink_ai_cloud_require_cmd curl
+npcink_ai_cloud_require_cmd docker
+npcink_ai_cloud_require_cmd openssl
+npcink_ai_cloud_require_cmd python3
 
 mkdir -p "${EVIDENCE_DIR}"
 TMP_DIR="$(mktemp -d)"
@@ -236,7 +236,7 @@ if [ "${RUN_COMPOSE_UP}" = "true" ]; then
 fi
 
 ok "Waiting for Cloud API at ${BASE_URL}"
-if ! magick_ai_cloud_wait_for_ready "${BASE_URL}" 30 2; then
+if ! npcink_ai_cloud_wait_for_ready "${BASE_URL}" 30 2; then
 	fail "Cloud API did not become live"
 fi
 
@@ -306,7 +306,7 @@ SYNC_BODY="$(
 import json
 
 payload = {
-    "ability_name": "magick-ai-cloud/site-knowledge-sync",
+    "ability_name": "npcink-cloud/site-knowledge-sync",
     "contract_version": "site_knowledge_sync.v1",
     "execution_pattern": "whole_run_offload",
     "data_classification": "public_site_content",
@@ -328,7 +328,7 @@ payload = {
                 "modified_gmt": "2026-06-04 00:00:00",
                 "excerpt": "A smoke article for Cloud-managed Site Knowledge.",
                 "content_excerpt": (
-                    "Magick AI Cloud indexes public WordPress content with BGE-M3 "
+                    "Npcink AI Cloud indexes public WordPress content with BGE-M3 "
                     "embeddings and Zilliz Cloud to support source-grounded site "
                     "search, internal links, FAQ candidates, and anti-hallucination "
                     "evidence gates."
@@ -403,7 +403,7 @@ SEARCH_BODY="$(
 import json
 
 payload = {
-    "ability_name": "magick-ai-cloud/site-knowledge-search",
+    "ability_name": "npcink-cloud/site-knowledge-search",
     "contract_version": "site_knowledge_search.v1",
     "execution_pattern": "inline",
     "data_classification": "public_site_content",
@@ -460,7 +460,7 @@ STATUS_BODY="$(
 import json
 
 payload = {
-    "ability_name": "magick-ai-cloud/site-knowledge-status",
+    "ability_name": "npcink-cloud/site-knowledge-status",
     "contract_version": "site_knowledge_status.v1",
     "execution_pattern": "inline",
     "data_classification": "public_site_content",

@@ -12,10 +12,10 @@ import {
 const COPIED_REQUEST_HEADERS = [
   'accept-language',
   'authorization',
-  'x-magick-portal-member-ref',
-  'x-magick-portal-site-admin-ref',
+  'x-npcink-portal-member-ref',
+  'x-npcink-portal-site-admin-ref',
   'idempotency-key',
-  'x-magick-portal-token',
+  'x-npcink-portal-token',
 ] as const;
 
 function buildPortalBackendPath(pathSegments: string[]): string {
@@ -52,9 +52,9 @@ export async function proxyPortalBackendPath(
   headers['X-Forwarded-Proto'] = requestProto;
   headers['X-Forwarded-Port'] = request.nextUrl.port || '';
 
-  const debugPortalLink = request.headers.get('x-magick-debug-portal-link');
+  const debugPortalLink = request.headers.get('x-npcink-debug-portal-link');
   if (debugPortalLink) {
-    headers['X-Magick-Debug-Portal-Link'] = debugPortalLink;
+    headers['X-Npcink-Debug-Portal-Link'] = debugPortalLink;
   }
 
   for (const headerName of COPIED_REQUEST_HEADERS) {

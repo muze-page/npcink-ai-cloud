@@ -1727,7 +1727,10 @@ def _zhihu_hot_items(payload: Any) -> list[dict[str, Any]]:
     if isinstance(data, list):
         items = data
     elif isinstance(data, dict):
-        items = data.get("Items") or data.get("items")
+        raw_items = data.get("Items") or data.get("items")
+        if not isinstance(raw_items, list):
+            return []
+        items = raw_items
     else:
         return []
     if not isinstance(items, list):

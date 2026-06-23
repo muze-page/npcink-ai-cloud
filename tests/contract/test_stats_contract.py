@@ -93,7 +93,7 @@ def test_stats_response_shapes_are_stable(tmp_path: Path) -> None:
     )
 
     settings = Settings(
-        project_name="Magick AI Cloud Test",
+        project_name="Npcink AI Cloud Test",
         environment="test",
         database_url=database_url,
         redis_url="redis://localhost:6379/0",
@@ -786,7 +786,7 @@ def test_instance_stats_contract_exposes_latency_probe_delivery_buffer_metadata(
     )
 
     settings = Settings(
-        project_name="Magick AI Cloud Test",
+        project_name="Npcink AI Cloud Test",
         environment="test",
         database_url=database_url,
         redis_url="redis://localhost:6379/0",
@@ -879,7 +879,7 @@ def test_alert_provider_degradation_contract_exposes_delivery_buffer_metadata(
     )
 
     settings = Settings(
-        project_name="Magick AI Cloud Test",
+        project_name="Npcink AI Cloud Test",
         environment="test",
         database_url=database_url,
         redis_url="redis://localhost:6379/0",
@@ -993,7 +993,7 @@ def test_router_diagnostics_contract_exposes_case_detail_shape(tmp_path: Path) -
     )
 
     settings = Settings(
-        project_name="Magick AI Cloud Test",
+        project_name="Npcink AI Cloud Test",
         environment="test",
         database_url=database_url,
         redis_url="redis://localhost:6379/0",
@@ -1116,7 +1116,7 @@ def test_router_diagnostics_contract_exposes_delivery_buffer_metadata(
     )
 
     settings = Settings(
-        project_name="Magick AI Cloud Test",
+        project_name="Npcink AI Cloud Test",
         environment="test",
         database_url=database_url,
         redis_url="redis://localhost:6379/0",
@@ -1249,7 +1249,7 @@ def test_router_performance_snapshot_contract_exposes_first_tranche_dimensions(
     )
 
     settings = Settings(
-        project_name="Magick AI Cloud Test",
+        project_name="Npcink AI Cloud Test",
         environment="test",
         database_url=database_url,
         redis_url="redis://localhost:6379/0",
@@ -1359,7 +1359,7 @@ def test_router_performance_projection_contract_exposes_delivery_buffer_metadata
     )
 
     settings = Settings(
-        project_name="Magick AI Cloud Test",
+        project_name="Npcink AI Cloud Test",
         environment="test",
         database_url=database_url,
         redis_url="redis://localhost:6379/0",

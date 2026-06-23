@@ -3,7 +3,7 @@
 Status: active development decision.
 
 Purpose: summarize the current platform-admin account management decision while
-Magick AI Cloud is still pre-release and internally tested. The goal is to keep
+Npcink AI Cloud is still pre-release and internally tested. The goal is to keep
 the operator surface usable without prematurely building a full enterprise
 account-governance system.
 

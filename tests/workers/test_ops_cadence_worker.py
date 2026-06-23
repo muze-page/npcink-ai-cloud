@@ -21,7 +21,7 @@ def test_ops_cadence_worker_records_managed_task_audit_and_respects_intervals(
     init_schema(database_url)
     CatalogService(database_url).refresh_catalog()
     settings = Settings(
-        project_name="Magick AI Cloud Test",
+        project_name="Npcink AI Cloud Test",
         environment="test",
         database_url=database_url,
         redis_url="redis://localhost:6379/0",
@@ -113,7 +113,7 @@ def test_cadence_summary_hides_stale_error_details_after_newer_success(
     init_schema(database_url)
     CatalogService(database_url).refresh_catalog()
     settings = Settings(
-        project_name="Magick AI Cloud Test",
+        project_name="Npcink AI Cloud Test",
         environment="test",
         database_url=database_url,
         redis_url="redis://localhost:6379/0",

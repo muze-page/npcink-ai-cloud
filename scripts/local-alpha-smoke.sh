@@ -4,32 +4,32 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 . "${ROOT_DIR}/deploy/common.sh"
 
-if [ -z "${MAGICK_CLOUD_ENV_FILE:-}" ] && [ -f "${ROOT_DIR}/.env.local" ]; then
-	export MAGICK_CLOUD_ENV_FILE="${ROOT_DIR}/.env.local"
+if [ -z "${NPCINK_CLOUD_ENV_FILE:-}" ] && [ -f "${ROOT_DIR}/.env.local" ]; then
+	export NPCINK_CLOUD_ENV_FILE="${ROOT_DIR}/.env.local"
 fi
-magick_ai_cloud_load_env_file "${ROOT_DIR}"
+npcink_ai_cloud_load_env_file "${ROOT_DIR}"
 
-magick_ai_cloud_require_cmd curl
-magick_ai_cloud_require_cmd docker
-magick_ai_cloud_require_cmd openssl
-magick_ai_cloud_require_cmd python3
+npcink_ai_cloud_require_cmd curl
+npcink_ai_cloud_require_cmd docker
+npcink_ai_cloud_require_cmd openssl
+npcink_ai_cloud_require_cmd python3
 
-BASE_URL="${MAGICK_CLOUD_BASE_URL:-http://127.0.0.1:${MAGICK_CLOUD_PORT:-8010}}"
-WORDPRESS_URL="${MAGICK_AI_WORDPRESS_URL:-https://magick-ai.local/}"
+BASE_URL="${NPCINK_CLOUD_BASE_URL:-http://127.0.0.1:${NPCINK_CLOUD_PORT:-8010}}"
+WORDPRESS_URL="${MAGICK_AI_WORDPRESS_URL:-https://npcink.local/}"
 WORDPRESS_ADMIN_USER="${MAGICK_AI_WORDPRESS_ADMIN_USER:-1}"
 WORDPRESS_ADMIN_PASSWORD="${MAGICK_AI_WORDPRESS_ADMIN_PASSWORD:-1}"
-SITE_ID="${MAGICK_CLOUD_SITE_ID:-${MAGICK_CLOUD_DEV_PORTAL_SITE_ID:-${MAGICK_CLOUD_ALPHA_SITE_ID:-site_magick_ai_local}}}"
-KEY_ID="${MAGICK_CLOUD_KEY_ID:-${MAGICK_CLOUD_ALPHA_KEY_ID:-key_ec8ba4d6ac914507ac3cf8e7a9efa264}}"
-SECRET="${MAGICK_CLOUD_SECRET:-${MAGICK_CLOUD_SITE_KEY_SECRET:-${MAGICK_CLOUD_ALPHA_SITE_SECRET:-}}}"
+SITE_ID="${NPCINK_CLOUD_SITE_ID:-${NPCINK_CLOUD_DEV_PORTAL_SITE_ID:-${NPCINK_CLOUD_ALPHA_SITE_ID:-site_npcink_local}}}"
+KEY_ID="${NPCINK_CLOUD_KEY_ID:-${NPCINK_CLOUD_ALPHA_KEY_ID:-key_ec8ba4d6ac914507ac3cf8e7a9efa264}}"
+SECRET="${NPCINK_CLOUD_SECRET:-${NPCINK_CLOUD_SITE_KEY_SECRET:-${NPCINK_CLOUD_ALPHA_SITE_SECRET:-}}}"
 IDEMPOTENCY_SUFFIX="${MAGICK_AI_LOCAL_ALPHA_SMOKE_SUFFIX:-$(date -u '+%Y%m%d%H%M%S')}"
-MEMBER_EMAIL="${MAGICK_AI_LOCAL_ALPHA_SMOKE_MEMBER_EMAIL:-${MAGICK_CLOUD_MEMBER_EMAIL:-admin+local-alpha-${IDEMPOTENCY_SUFFIX}@magick-ai.local}}"
-PROFILE_ID="${MAGICK_CLOUD_PROFILE_ID:-text.balanced}"
-ABILITY_NAME="${MAGICK_CLOUD_ABILITY_NAME:-magick-ai/workflows/generate-post-draft}"
-CHANNEL="${MAGICK_CLOUD_CHANNEL:-openapi}"
-EXECUTION_KIND="${MAGICK_CLOUD_EXECUTION_KIND:-text}"
-PROMPT_TEXT="${MAGICK_CLOUD_PROMPT_TEXT:-Magick AI DeepSeek smoke ok}"
-EXPECTED_PROVIDER_ID="${MAGICK_CLOUD_EXPECTED_PROVIDER_ID:-openai}"
-EXPECTED_MODEL_ID="${MAGICK_CLOUD_EXPECTED_MODEL_ID:-}"
+MEMBER_EMAIL="${MAGICK_AI_LOCAL_ALPHA_SMOKE_MEMBER_EMAIL:-${NPCINK_CLOUD_MEMBER_EMAIL:-admin+local-alpha-${IDEMPOTENCY_SUFFIX}@npcink.local}}"
+PROFILE_ID="${NPCINK_CLOUD_PROFILE_ID:-text.balanced}"
+ABILITY_NAME="${NPCINK_CLOUD_ABILITY_NAME:-magick-ai/workflows/generate-post-draft}"
+CHANNEL="${NPCINK_CLOUD_CHANNEL:-openapi}"
+EXECUTION_KIND="${NPCINK_CLOUD_EXECUTION_KIND:-text}"
+PROMPT_TEXT="${NPCINK_CLOUD_PROMPT_TEXT:-Npcink AI DeepSeek smoke ok}"
+EXPECTED_PROVIDER_ID="${NPCINK_CLOUD_EXPECTED_PROVIDER_ID:-openai}"
+EXPECTED_MODEL_ID="${NPCINK_CLOUD_EXPECTED_MODEL_ID:-}"
 EVIDENCE_DIR="${MAGICK_AI_LOCAL_ALPHA_SMOKE_EVIDENCE_DIR:-${ROOT_DIR}/.tmp/local-alpha-smoke}"
 
 fail() {
@@ -49,11 +49,11 @@ require_value() {
 	fi
 }
 
-require_value "${MAGICK_CLOUD_INTERNAL_AUTH_TOKEN:-}" "MAGICK_CLOUD_INTERNAL_AUTH_TOKEN is required"
-require_value "${MAGICK_CLOUD_ADMIN_BOOTSTRAP_TOKEN:-}" "MAGICK_CLOUD_ADMIN_BOOTSTRAP_TOKEN is required"
-require_value "${SITE_ID}" "MAGICK_CLOUD_SITE_ID or default site id is required"
-require_value "${KEY_ID}" "MAGICK_CLOUD_KEY_ID or default key id is required"
-require_value "${SECRET}" "MAGICK_CLOUD_SECRET or MAGICK_CLOUD_SITE_KEY_SECRET is required"
+require_value "${NPCINK_CLOUD_INTERNAL_AUTH_TOKEN:-}" "NPCINK_CLOUD_INTERNAL_AUTH_TOKEN is required"
+require_value "${NPCINK_CLOUD_ADMIN_BOOTSTRAP_TOKEN:-}" "NPCINK_CLOUD_ADMIN_BOOTSTRAP_TOKEN is required"
+require_value "${SITE_ID}" "NPCINK_CLOUD_SITE_ID or default site id is required"
+require_value "${KEY_ID}" "NPCINK_CLOUD_KEY_ID or default key id is required"
+require_value "${SECRET}" "NPCINK_CLOUD_SECRET or NPCINK_CLOUD_SITE_KEY_SECRET is required"
 
 json_read_path() {
 	local json_payload="$1"
@@ -264,11 +264,11 @@ signed_request() {
 	fi
 	http_request "${method}" "${url}" "${PORTAL_COOKIE_JAR}" "${body}" \
 		"traceparent: ${traceparent}" \
-		"X-Magick-Site-Id: ${SITE_ID}" \
-		"X-Magick-Key-Id: ${KEY_ID}" \
-		"X-Magick-Timestamp: ${timestamp}" \
-		"X-Magick-Signature: sha256=${signature}" \
-		"X-Magick-Nonce: ${nonce}" \
+		"X-Npcink-Site-Id: ${SITE_ID}" \
+		"X-Npcink-Key-Id: ${KEY_ID}" \
+		"X-Npcink-Timestamp: ${timestamp}" \
+		"X-Npcink-Signature: sha256=${signature}" \
+		"X-Npcink-Nonce: ${nonce}" \
 		"Idempotency-Key: ${idempotency_key}"
 }
 
@@ -285,7 +285,7 @@ docker compose -f "${ROOT_DIR}/docker-compose.dev.yml" \
 	restart worker callback-worker ops-worker >/dev/null
 
 ok "Waiting for local Cloud: ${BASE_URL}"
-if ! magick_ai_cloud_wait_for_ready "${BASE_URL}" 20 2; then
+if ! npcink_ai_cloud_wait_for_ready "${BASE_URL}" 20 2; then
 	fail "Cloud API did not become ready"
 fi
 
@@ -306,7 +306,7 @@ WORDPRESS_ADDON_PATH=""
 WORDPRESS_ADDON_BODY=""
 for candidate_path in \
 	"/wp-admin/admin.php?page=npcink-cloud-addon&tab=settings" \
-	"/wp-admin/admin.php?page=magick-ai-cloud-addon" \
+	"/wp-admin/admin.php?page=npcink-cloud-addon" \
 	"/wp-admin/plugins.php?page=magick-ai-settings&tab=cloud"
 do
 	candidate_body="$(
@@ -353,14 +353,14 @@ assert_status "${HTTP_STATUS}" "200" "health/live should succeed"
 assert_json_equals "${HTTP_BODY}" "status" "ok" "health/live envelope should be ok"
 
 http_request "GET" "${BASE_URL%/}/health/ready" "${PORTAL_COOKIE_JAR}" "" \
-	"X-Magick-Internal-Token: ${MAGICK_CLOUD_INTERNAL_AUTH_TOKEN}"
+	"X-Npcink-Internal-Token: ${NPCINK_CLOUD_INTERNAL_AUTH_TOKEN}"
 assert_status "${HTTP_STATUS}" "200" "health/ready should succeed"
 
-OPERATIONAL_READY_ATTEMPTS="${MAGICK_CLOUD_OPERATIONAL_READY_WAIT_ATTEMPTS:-36}"
-OPERATIONAL_READY_DELAY_SECONDS="${MAGICK_CLOUD_OPERATIONAL_READY_WAIT_DELAY_SECONDS:-5}"
+OPERATIONAL_READY_ATTEMPTS="${NPCINK_CLOUD_OPERATIONAL_READY_WAIT_ATTEMPTS:-36}"
+OPERATIONAL_READY_DELAY_SECONDS="${NPCINK_CLOUD_OPERATIONAL_READY_WAIT_DELAY_SECONDS:-5}"
 for ((attempt = 1; attempt <= OPERATIONAL_READY_ATTEMPTS; attempt++)); do
 	http_request "GET" "${BASE_URL%/}/health/operational-ready" "${PORTAL_COOKIE_JAR}" "" \
-		"X-Magick-Internal-Token: ${MAGICK_CLOUD_INTERNAL_AUTH_TOKEN}"
+		"X-Npcink-Internal-Token: ${NPCINK_CLOUD_INTERNAL_AUTH_TOKEN}"
 	if [ "${HTTP_STATUS}" = "200" ]; then
 		break
 	fi
@@ -372,7 +372,7 @@ assert_status "${HTTP_STATUS}" "200" "health/operational-ready should succeed"
 OPERATIONAL_READY_BODY="${HTTP_BODY}"
 
 http_request "GET" "${BASE_URL%/}/internal/service/observability/summary" "${PORTAL_COOKIE_JAR}" "" \
-	"X-Magick-Internal-Token: ${MAGICK_CLOUD_INTERNAL_AUTH_TOKEN}"
+	"X-Npcink-Internal-Token: ${NPCINK_CLOUD_INTERNAL_AUTH_TOKEN}"
 assert_status "${HTTP_STATUS}" "200" "observability summary should succeed"
 assert_json_equals "${HTTP_BODY}" "data.workers.totals.missing_total" "0" "workers should not be missing"
 assert_json_equals "${HTTP_BODY}" "data.cadence.totals.non_fresh_total" "0" "cadence tasks should be fresh"
@@ -390,7 +390,7 @@ assert_body_contains "${HTTP_BODY}" "_next/" "portal login page should be served
 LOGIN_BODY="$(printf '{"email":%s}' "$(json_quote "${MEMBER_EMAIL}")")"
 http_request "POST" "${BASE_URL%/}/portal/v1/auth/code/request" "${PORTAL_COOKIE_JAR}" "${LOGIN_BODY}" \
 	"Origin: ${BASE_URL%/}" \
-	"X-Magick-Dev-Login-Code: 1"
+	"X-Npcink-Dev-Login-Code: 1"
 assert_status "${HTTP_STATUS}" "200" "portal development login code request should succeed"
 LOGIN_CODE="$(json_read_path "${HTTP_BODY}" "data.code")"
 require_value "${LOGIN_CODE}" "development login code was not returned"
@@ -432,7 +432,7 @@ assert_json_non_empty "${HTTP_BODY}" "data.items" "portal API key list should no
 
 http_request "GET" "${BASE_URL%/}/admin/login" "${ADMIN_COOKIE_JAR}" ""
 assert_status "${HTTP_STATUS}" "200" "admin login page should load"
-ADMIN_BODY="$(ADMIN_TOKEN_VALUE="${MAGICK_CLOUD_ADMIN_BOOTSTRAP_TOKEN}" python3 - <<'PY'
+ADMIN_BODY="$(ADMIN_TOKEN_VALUE="${NPCINK_CLOUD_ADMIN_BOOTSTRAP_TOKEN}" python3 - <<'PY'
 import json
 import os
 
@@ -453,7 +453,7 @@ assert_status "${HTTP_STATUS}" "200" "catalog/models should succeed"
 assert_json_non_empty "${HTTP_BODY}" "data.items" "catalog/models should return models"
 CATALOG_MODELS_BODY="${HTTP_BODY}"
 
-if [ -n "${MAGICK_CLOUD_OPENAI_PROVIDER_LABEL:-}" ]; then
+if [ -n "${NPCINK_CLOUD_OPENAI_PROVIDER_LABEL:-}" ]; then
 	ok "DeepSeek Provider Label Smoke"
 	CATALOG_LABEL=$(json_read_path "$CATALOG_MODELS_BODY" "data.items.0.provider_display_name" 2>/dev/null || echo "")
 	if [ -z "$CATALOG_LABEL" ]; then
@@ -513,7 +513,7 @@ assert_json_non_empty "${HTTP_BODY}" "data.windows.rolling_24h.provider_calls_to
 USAGE_BODY="${HTTP_BODY}"
 
 http_request "GET" "${BASE_URL%/}/internal/service/sites/${SITE_ID}/usage-meter?limit=20" "${PORTAL_COOKIE_JAR}" "" \
-	"X-Magick-Internal-Token: ${MAGICK_CLOUD_INTERNAL_AUTH_TOKEN}"
+	"X-Npcink-Internal-Token: ${NPCINK_CLOUD_INTERNAL_AUTH_TOKEN}"
 assert_status "${HTTP_STATUS}" "200" "internal usage meter should succeed"
 assert_json_non_empty "${HTTP_BODY}" "data.totals.provider_calls" "usage meter should expose provider calls"
 USAGE_METER_BODY="${HTTP_BODY}"

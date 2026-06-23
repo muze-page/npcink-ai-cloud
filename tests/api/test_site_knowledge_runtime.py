@@ -104,7 +104,7 @@ def _build_client(
         scopes=["runtime:execute", "runtime:read"],
     )
     settings_kwargs = {
-        "project_name": "Magick AI Cloud Site Knowledge Test",
+        "project_name": "Npcink AI Cloud Site Knowledge Test",
         "environment": "test",
         "database_url": database_url,
         "redis_url": "redis://localhost:6379/0",
@@ -159,7 +159,7 @@ def _execute(
 
 def _sync_payload() -> dict[str, object]:
     return {
-        "ability_name": "magick-ai-cloud/site-knowledge-sync",
+        "ability_name": "npcink-cloud/site-knowledge-sync",
         "contract_version": "site_knowledge_sync.v1",
         "execution_pattern": "whole_run_offload",
         "data_classification": "public_site_content",
@@ -209,7 +209,7 @@ def _search_payload(
     if source_types is not None:
         filters["source_types"] = source_types
     return {
-        "ability_name": "magick-ai-cloud/site-knowledge-search",
+        "ability_name": "npcink-cloud/site-knowledge-search",
         "contract_version": "site_knowledge_search.v1",
         "execution_pattern": "inline",
         "data_classification": "public_site_content",
@@ -269,7 +269,7 @@ def test_sync_then_search_and_status_coverage(tmp_path: Path) -> None:
     queued_status = _execute(
         client,
         {
-            "ability_name": "magick-ai-cloud/site-knowledge-status",
+            "ability_name": "npcink-cloud/site-knowledge-status",
             "contract_version": "site_knowledge_status.v1",
             "execution_pattern": "inline",
             "data_classification": "public_site_content",
@@ -328,7 +328,7 @@ def test_sync_then_search_and_status_coverage(tmp_path: Path) -> None:
     status_result = _execute(
         client,
         {
-            "ability_name": "magick-ai-cloud/site-knowledge-status",
+            "ability_name": "npcink-cloud/site-knowledge-status",
             "contract_version": "site_knowledge_status.v1",
             "execution_pattern": "inline",
             "data_classification": "public_site_content",
@@ -532,7 +532,7 @@ def test_high_value_intents_return_advisory_product_metadata(tmp_path: Path) -> 
     assert gap["workflow_support"]["workflow"] == "content_gap_analysis"
     assert gap["workflow_support"]["cloud_output"] == "gap_evidence"
     assert gap["agent_handoff"]["agent_id"] == "site_knowledge_suggestion_agent"
-    assert gap["agent_handoff"]["triggering_ability"] == ("magick-ai-cloud/site-knowledge-search")
+    assert gap["agent_handoff"]["triggering_ability"] == ("npcink-cloud/site-knowledge-search")
     assert gap["agent_handoff"]["triggering_contract"] == "site_knowledge_search.v1"
     assert gap["agent_handoff"]["handoff_type"] == "proposal_input"
     assert gap["agent_handoff"]["handoff_owner"] == "wordpress_local"
@@ -744,7 +744,7 @@ def test_site_knowledge_jina_rerank_requires_cloud_managed_key(tmp_path: Path) -
     with pytest.raises(ValidationError):
         Settings(
             _env_file=None,
-            project_name="Magick AI Cloud Site Knowledge Test",
+            project_name="Npcink AI Cloud Site Knowledge Test",
             environment="test",
             database_url=_sqlite_url(tmp_path),
             redis_url="redis://localhost:6379/0",
@@ -756,7 +756,7 @@ def test_site_knowledge_jina_rerank_requires_cloud_managed_key(tmp_path: Path) -
 
     settings = Settings(
         _env_file=None,
-        project_name="Magick AI Cloud Site Knowledge Test",
+        project_name="Npcink AI Cloud Site Knowledge Test",
         environment="test",
         database_url=_sqlite_url(tmp_path),
         redis_url="redis://localhost:6379/0",
@@ -777,7 +777,7 @@ def test_jina_reranker_reorders_candidates_without_exposing_key(
 ) -> None:
     settings = Settings(
         _env_file=None,
-        project_name="Magick AI Cloud Site Knowledge Test",
+        project_name="Npcink AI Cloud Site Knowledge Test",
         environment="test",
         database_url=_sqlite_url(tmp_path),
         redis_url="redis://localhost:6379/0",
@@ -856,7 +856,7 @@ def test_jina_reranker_rejects_oversized_provider_response(
 ) -> None:
     settings = Settings(
         _env_file=None,
-        project_name="Magick AI Cloud Site Knowledge Test",
+        project_name="Npcink AI Cloud Site Knowledge Test",
         environment="test",
         database_url=_sqlite_url(tmp_path),
         redis_url="redis://localhost:6379/0",
@@ -1063,7 +1063,7 @@ def test_sync_caps_long_documents_and_reports_truncation(tmp_path: Path) -> None
     status_result = _execute(
         client,
         {
-            "ability_name": "magick-ai-cloud/site-knowledge-status",
+            "ability_name": "npcink-cloud/site-knowledge-status",
             "contract_version": "site_knowledge_status.v1",
             "execution_pattern": "inline",
             "data_classification": "public_site_content",
@@ -1154,7 +1154,7 @@ def test_status_reports_site_knowledge_quota_limits(tmp_path: Path) -> None:
     status_result = _execute(
         client,
         {
-            "ability_name": "magick-ai-cloud/site-knowledge-status",
+            "ability_name": "npcink-cloud/site-knowledge-status",
             "contract_version": "site_knowledge_status.v1",
             "execution_pattern": "inline",
             "data_classification": "public_site_content",
@@ -1181,7 +1181,7 @@ def test_site_knowledge_quota_settings_validate_positive_values(tmp_path: Path) 
     with pytest.raises(ValidationError):
         Settings(
             _env_file=None,
-            project_name="Magick AI Cloud Site Knowledge Test",
+            project_name="Npcink AI Cloud Site Knowledge Test",
             environment="test",
             database_url=_sqlite_url(tmp_path),
             redis_url="redis://localhost:6379/0",
@@ -1295,7 +1295,7 @@ def test_zilliz_backend_requires_cloud_managed_credentials(tmp_path: Path) -> No
     with pytest.raises(ValidationError):
         Settings(
             _env_file=None,
-            project_name="Magick AI Cloud Site Knowledge Test",
+            project_name="Npcink AI Cloud Site Knowledge Test",
             environment="test",
             database_url=_sqlite_url(tmp_path),
             redis_url="redis://localhost:6379/0",
@@ -1307,14 +1307,14 @@ def test_zilliz_backend_requires_cloud_managed_credentials(tmp_path: Path) -> No
 
     settings = Settings(
         _env_file=None,
-        project_name="Magick AI Cloud Site Knowledge Test",
+        project_name="Npcink AI Cloud Site Knowledge Test",
         environment="test",
         database_url=_sqlite_url(tmp_path),
         redis_url="redis://localhost:6379/0",
         site_knowledge_vector_backend="zilliz_cloud",
         site_knowledge_zilliz_uri="https://example.zillizcloud.com",
         site_knowledge_zilliz_token="unit-test-redacted",
-        site_knowledge_zilliz_collection="magick_site_knowledge_chunks",
+        site_knowledge_zilliz_collection="npcink_site_knowledge_chunks",
     )
 
     assert settings.site_knowledge_vector_backend == "zilliz_cloud"
@@ -1327,7 +1327,7 @@ def test_site_knowledge_tei_embedding_requires_configured_model(tmp_path: Path) 
     with pytest.raises(ValidationError):
         Settings(
             _env_file=None,
-            project_name="Magick AI Cloud Site Knowledge Test",
+            project_name="Npcink AI Cloud Site Knowledge Test",
             environment="test",
             database_url=_sqlite_url(tmp_path),
             redis_url="redis://localhost:6379/0",
@@ -1345,7 +1345,7 @@ def test_site_knowledge_siliconflow_embedding_requires_cloud_managed_key(
     with pytest.raises(ValidationError):
         Settings(
             _env_file=None,
-            project_name="Magick AI Cloud Site Knowledge Test",
+            project_name="Npcink AI Cloud Site Knowledge Test",
             environment="test",
             database_url=_sqlite_url(tmp_path),
             redis_url="redis://localhost:6379/0",

@@ -6,9 +6,9 @@ Date: 2026-06-09
 
 Scope:
 
-- Cloud repo: `/Users/muze/gitee/magick-ai-cloud`
-- Toolbox repo: `/Users/muze/gitee/magick-ai-toolbox`
-- Local WordPress editor: `https://magick-ai.local/wp-admin/post.php?post=5824&action=edit`
+- Cloud repo: `/Users/muze/gitee/npcink-ai-cloud`
+- Toolbox repo: `/Users/muze/gitee/npcink-toolbox`
+- Local WordPress editor: `https://npcink.local/wp-admin/post.php?post=5824&action=edit`
 
 This document records the implementation history for the hosted AI image
 generation flow, including the Cloud runtime, Toolbox editor UX, media SEO
@@ -191,7 +191,7 @@ Toolbox-side verification included:
   - selected generated candidate shows media SEO fields derived from article
     context, not prompt instructions.
 
-The latest checked state had both `magick-ai-cloud` and `magick-ai-toolbox`
+The latest checked state had both `npcink-ai-cloud` and `npcink-toolbox`
 worktrees clean after commits.
 
 ## Operational Notes

@@ -49,7 +49,7 @@ COPY deploy ./deploy
 RUN if [ -n "${PIP_INDEX_URL}" ]; then export PIP_INDEX_URL="${PIP_INDEX_URL}"; fi \
     && if [ -n "${PIP_EXTRA_INDEX_URL}" ]; then export PIP_EXTRA_INDEX_URL="${PIP_EXTRA_INDEX_URL}"; fi \
     && if [ -n "${PIP_TRUSTED_HOST}" ]; then export PIP_TRUSTED_HOST="${PIP_TRUSTED_HOST}"; fi \
-    && pip install --no-cache-dir --retries 10 --timeout 60 --no-index --find-links /tmp/wheels "magick-ai-cloud[dev]" \
+    && pip install --no-cache-dir --retries 10 --timeout 60 --no-index --find-links /tmp/wheels "npcink-ai-cloud[dev]" \
     && rm -rf /tmp/wheels
 
 USER app

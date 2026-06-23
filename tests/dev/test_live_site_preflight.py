@@ -32,7 +32,7 @@ def _wp_summary(**overrides: object) -> dict[str, object]:
         "active_plugins": ["npcink-cloud-addon/npcink-cloud-addon.php"],
         "counts": {"publish_post_page": 25},
         "cloud_settings": {
-            "option_name": "magick_ai_cloud_addon_settings",
+            "option_name": "npcink_cloud_addon_settings",
             "base_url": "https://cloud.example.com",
             "site_id": "site_example",
             "key_id_present": True,

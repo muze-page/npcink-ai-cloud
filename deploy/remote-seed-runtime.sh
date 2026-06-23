@@ -5,11 +5,11 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 # Shared compose/env helpers for deploy scripts.
 . "${ROOT_DIR}/deploy/common.sh"
 
-SITE_ID="${MAGICK_CLOUD_SITE_ID:-site_smoke}"
-KEY_ID="${MAGICK_CLOUD_KEY_ID:-key_default}"
-SECRET="${MAGICK_CLOUD_SECRET:-magick-cloud-test-secret}"
-SITE_NAME="${MAGICK_CLOUD_SITE_NAME:-}"
-SCOPES="${MAGICK_CLOUD_SCOPES:-catalog:read,runtime:resolve,runtime:execute,runtime:read,stats:read}"
+SITE_ID="${NPCINK_CLOUD_SITE_ID:-site_smoke}"
+KEY_ID="${NPCINK_CLOUD_KEY_ID:-key_default}"
+SECRET="${NPCINK_CLOUD_SECRET:-npcink-cloud-test-secret}"
+SITE_NAME="${NPCINK_CLOUD_SITE_NAME:-}"
+SCOPES="${NPCINK_CLOUD_SCOPES:-catalog:read,runtime:resolve,runtime:execute,runtime:read,stats:read}"
 SKIP_CATALOG_REFRESH=0
 SKIP_HEALTH_SCAN=0
 
@@ -50,7 +50,7 @@ while [ "$#" -gt 0 ]; do
 	esac
 done
 
-magick_ai_cloud_require_cmd docker
+npcink_ai_cloud_require_cmd docker
 
 SEED_ARGS=(
 	python -m app.dev.seed_runtime
@@ -70,4 +70,4 @@ if [ "${SKIP_HEALTH_SCAN}" -eq 1 ]; then
 	SEED_ARGS+=(--skip-health-scan)
 fi
 
-magick_ai_cloud_compose "${ROOT_DIR}" run --rm api "${SEED_ARGS[@]}"
+npcink_ai_cloud_compose "${ROOT_DIR}" run --rm api "${SEED_ARGS[@]}"

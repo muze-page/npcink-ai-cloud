@@ -76,7 +76,7 @@ def main() -> None:
     require_database_connection(settings.database_url)
 
     result = run_once(settings)
-    get_logger("magick_ai_cloud.alert_provider_degradation").info(
+    get_logger("npcink_ai_cloud.alert_provider_degradation").info(
         "alert provider degradation cadence generated: %s",
         result,
     )

@@ -3,19 +3,19 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 . "${ROOT_DIR}/deploy/common.sh"
-magick_ai_cloud_load_env_file "${ROOT_DIR}"
+npcink_ai_cloud_load_env_file "${ROOT_DIR}"
 
-magick_ai_cloud_require_cmd docker
+npcink_ai_cloud_require_cmd docker
 
-BASE_URL="${MAGICK_CLOUD_PORTAL_PUBLIC_BASE_URL:-${MAGICK_CLOUD_BASE_URL:-http://127.0.0.1:${MAGICK_CLOUD_PORT:-8010}}}"
-SITE_ID="${MAGICK_CLOUD_SITE_ID:-}"
-MEMBER_EMAIL="${MAGICK_CLOUD_MEMBER_EMAIL:-}"
-MEMBER_ROLE="${MAGICK_CLOUD_MEMBER_ROLE:-user_admin}"
+BASE_URL="${NPCINK_CLOUD_PORTAL_PUBLIC_BASE_URL:-${NPCINK_CLOUD_BASE_URL:-http://127.0.0.1:${NPCINK_CLOUD_PORT:-8010}}}"
+SITE_ID="${NPCINK_CLOUD_SITE_ID:-}"
+MEMBER_EMAIL="${NPCINK_CLOUD_MEMBER_EMAIL:-}"
+MEMBER_ROLE="${NPCINK_CLOUD_MEMBER_ROLE:-user_admin}"
 ISSUE_KEY=0
-KEY_ID="${MAGICK_CLOUD_KEY_ID:-}"
-SECRET="${MAGICK_CLOUD_SECRET:-}"
+KEY_ID="${NPCINK_CLOUD_KEY_ID:-}"
+SECRET="${NPCINK_CLOUD_SECRET:-}"
 KEY_LABEL="Portal bootstrap key"
-SCOPES="${MAGICK_CLOUD_SCOPES:-catalog:read,runtime:resolve,runtime:execute,runtime:read,stats:read}"
+SCOPES="${NPCINK_CLOUD_SCOPES:-catalog:read,runtime:resolve,runtime:execute,runtime:read,stats:read}"
 SKIP_BILLING_REBUILD=0
 
 while [ "$#" -gt 0 ]; do
@@ -68,12 +68,12 @@ while [ "$#" -gt 0 ]; do
 done
 
 if [ -z "${SITE_ID}" ]; then
-	echo "[fail] --site-id or MAGICK_CLOUD_SITE_ID is required" >&2
+	echo "[fail] --site-id or NPCINK_CLOUD_SITE_ID is required" >&2
 	exit 1
 fi
 
 if [ -z "${MEMBER_EMAIL}" ]; then
-	echo "[fail] --member-email or MAGICK_CLOUD_MEMBER_EMAIL is required" >&2
+	echo "[fail] --member-email or NPCINK_CLOUD_MEMBER_EMAIL is required" >&2
 	exit 1
 fi
 
@@ -100,4 +100,4 @@ if [ -n "${SECRET}" ]; then
 	BOOTSTRAP_ARGS+=(--secret "${SECRET}")
 fi
 
-magick_ai_cloud_compose "${ROOT_DIR}" run --rm api "${BOOTSTRAP_ARGS[@]}"
+npcink_ai_cloud_compose "${ROOT_DIR}" run --rm api "${BOOTSTRAP_ARGS[@]}"

@@ -1,4 +1,4 @@
-# Magick AI Cloud Frontend Development
+# Npcink AI Cloud Frontend Development
 
 This document describes the current repository truth for the Cloud frontend.
 Treat it as an execution guide for local development, verification, and bounded
@@ -100,7 +100,7 @@ Local development URL:
 - `http://127.0.0.1:8010`
 
 If you need a non-default mini-dev hostname or tunnel endpoint, set
-`MAGICK_CLOUD_FRONTEND_DEV_HOST_ALLOWLIST=host1,host2` before starting the
+`NPCINK_CLOUD_FRONTEND_DEV_HOST_ALLOWLIST=host1,host2` before starting the
 frontend. The default allowlist only includes `127.0.0.1`, `localhost`, and
 `0.0.0.0`.
 

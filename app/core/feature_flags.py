@@ -137,9 +137,9 @@ class EnvFeatureFlagProvider:
         try:
             parsed = json.loads(raw)
         except json.JSONDecodeError as exc:
-            return {}, f"invalid MAGICK_CLOUD_FEATURE_FLAGS_JSON: {exc.msg}"
+            return {}, f"invalid NPCINK_CLOUD_FEATURE_FLAGS_JSON: {exc.msg}"
         if not isinstance(parsed, dict):
-            return {}, "invalid MAGICK_CLOUD_FEATURE_FLAGS_JSON: top-level value must be an object"
+            return {}, "invalid NPCINK_CLOUD_FEATURE_FLAGS_JSON: top-level value must be an object"
         overrides: dict[str, bool] = {}
         invalid_keys: list[str] = []
         for key, value in parsed.items():
@@ -152,7 +152,7 @@ class EnvFeatureFlagProvider:
         if invalid_keys:
             return (
                 overrides,
-                "invalid MAGICK_CLOUD_FEATURE_FLAGS_JSON entries: "
+                "invalid NPCINK_CLOUD_FEATURE_FLAGS_JSON entries: "
                 + ", ".join(sorted(set(invalid_keys))),
             )
         return overrides, ""

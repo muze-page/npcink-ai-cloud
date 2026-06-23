@@ -7,7 +7,7 @@ Date: 2026-06-20
 Prepare the first live-site Cloud proof candidate after the Local socket-aware
 preflight corrected WP-CLI targeting.
 
-The target remains narrow: prove Magick AI Cloud can serve a real WordPress site
+The target remains narrow: prove Npcink AI Cloud can serve a real WordPress site
 as a hosted runtime/detail layer while WordPress keeps configuration, approval,
 and write ownership.
 
@@ -30,9 +30,9 @@ Read-only evidence:
 
 Candidate addon package:
 
-- Source repo: `/Users/muze/gitee/magick-ai-cloud-addon`
-- Build package: `/Users/muze/gitee/magick-ai-cloud-addon/build/magick-ai-cloud-addon.zip`
-- Main plugin file in build: `magick-ai-cloud-addon/magick-ai-cloud-addon.php`
+- Source repo: `/Users/muze/gitee/npcink-cloud-addon`
+- Build package: `/Users/muze/gitee/npcink-cloud-addon/build/npcink-cloud-addon.zip`
+- Main plugin file in build: `npcink-cloud-addon/npcink-cloud-addon.php`
 - Source repo status at inspection time: clean
 
 Observed addon contract:
@@ -79,7 +79,7 @@ Before any write action, prepare and confirm:
    - files/plugin state snapshot
 3. Addon install method:
    - install from the build zip or copy the build directory
-   - activate only `magick-ai-cloud-addon/magick-ai-cloud-addon.php`
+   - activate only `npcink-cloud-addon/npcink-cloud-addon.php`
 4. Pre-write snapshot:
    - current active plugins
    - current `npcink_cloud_addon_settings`

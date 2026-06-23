@@ -1,4 +1,4 @@
-# Magick AI Cloud Frontend
+# Npcink AI Cloud Frontend
 
 Next.js App Router frontend for the bounded Cloud web surfaces. The shipped
 frontend has three clearly separated surface families:

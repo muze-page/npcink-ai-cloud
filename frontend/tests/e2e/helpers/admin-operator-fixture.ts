@@ -2,8 +2,8 @@ import type { Page, Route } from '@playwright/test';
 
 
 export const BASE_URL =
-  process.env.MAGICK_AI_CLOUD_FRONTEND_BASE_URL ||
-  `http://127.0.0.1:${process.env.MAGICK_AI_CLOUD_FRONTEND_PORT || '3301'}`;
+  process.env.NPCINK_CLOUD_FRONTEND_BASE_URL ||
+  `http://127.0.0.1:${process.env.NPCINK_CLOUD_FRONTEND_PORT || '3301'}`;
 export const LONG_ACCOUNT_ID = 'acct_mvp_enterprise_primary';
 export const LONG_PROVIDER_ID = 'mini-vllm-demo-execution-primary';
 export const LONG_PLAN_ID = 'plan_basic_primary';

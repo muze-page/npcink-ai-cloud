@@ -5,14 +5,14 @@ Status: active contract
 Date: 2026-06-03
 
 Scope: `magick-ai-abilities`, `magick-ai-core`, `magick-ai-adapter`,
-`magick-ai-cloud-addon`, and the Cloud plugin observability read surfaces.
+`npcink-cloud-addon`, and the Cloud plugin observability read surfaces.
 
 ## Boundary
 
 Plugin observability is a metadata-only monitoring contract. Local WordPress
 plugins remain the source of truth for abilities, governance, approval,
 OpenClaw projection, routing decisions, and WordPress writes. Cloud only
-receives bounded metadata from `magick-ai-cloud-addon` after the addon is
+receives bounded metadata from `npcink-cloud-addon` after the addon is
 installed, verified, and monitoring is enabled.
 
 Cloud must not use this stream to create a second plugin registry, second
@@ -20,8 +20,8 @@ approval plane, second router truth, or second WordPress write owner.
 
 ## Transport
 
-- WordPress plugins emit local events through `magick_ai_observability_event`.
-- `magick-ai-cloud-addon` is the only WordPress-side uploader.
+- WordPress plugins emit local events through `npcink_observability_event`.
+- `npcink-cloud-addon` is the only WordPress-side uploader.
 - If the addon is absent, unverified, or monitoring is disabled, events stay
   local and are not uploaded.
 - Cloud receives batches at `POST /v1/observability/plugin-events`.
@@ -34,7 +34,7 @@ Every uploaded event should include:
 
 - `schema_version`: current value `2026-06-01`.
 - `plugin_slug`: one of `magick-ai-abilities`, `magick-ai-core`,
-  `magick-ai-adapter`, or `magick-ai-cloud-addon`.
+  `magick-ai-adapter`, or `npcink-cloud-addon`.
 - `plugin_version`: emitter plugin version.
 - `source`: normally `local`.
 - `event_kind`: stable dotted event name.

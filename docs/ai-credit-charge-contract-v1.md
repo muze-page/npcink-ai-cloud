@@ -2,7 +2,7 @@
 
 Status: active
 
-This contract defines how new AI abilities or cloud features become billable in Magick AI Cloud.
+This contract defines how new AI abilities or cloud features become billable in Npcink AI Cloud.
 
 Cloud remains the billing and runtime detail owner. This contract does not move ability, workflow, approval, or WordPress write truth out of the local/plugin side.
 

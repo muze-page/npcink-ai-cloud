@@ -155,7 +155,7 @@ export async function GET(request: NextRequest) {
   const requestHeaders = buildForwardedRequestHeaders(request, {
     Accept: 'application/json',
     'Content-Type': 'application/json',
-    'X-Magick-Debug-Portal-Link': '1',
+    'X-Npcink-Debug-Portal-Link': '1',
     Host: resolvedOriginUrl.host,
     'X-Forwarded-Host': resolvedOriginUrl.host,
     'X-Forwarded-Proto': resolvedOriginUrl.protocol.replace(/:$/, ''),

@@ -35,8 +35,8 @@ from app.core.security import (
 )
 from app.core.services import CloudServices
 
-INTERNAL_TOKEN_HEADER = "X-Magick-Internal-Token"
-PORTAL_SITE_ADMIN_REF_HEADER = "X-Magick-Portal-Site-Admin-Ref"
+INTERNAL_TOKEN_HEADER = "X-Npcink-Internal-Token"
+PORTAL_SITE_ADMIN_REF_HEADER = "X-Npcink-Portal-Site-Admin-Ref"
 AUTHORIZATION_HEADER = "Authorization"
 PORTAL_LOGIN_CODE_REQUEST_SCOPE_EMAIL = "portal_login_code_email"
 PORTAL_LOGIN_CODE_REQUEST_SCOPE_CLIENT = "portal_login_code_client"
@@ -86,7 +86,7 @@ def _portal_local_debug_login_code_request(request: Request) -> bool:
     environment = str(settings.environment or "").strip().lower()
     if environment not in {"development", "test"}:
         return False
-    if str(request.headers.get("x-magick-debug-portal-link") or "").strip() != "1":
+    if str(request.headers.get("x-npcink-debug-portal-link") or "").strip() != "1":
         return False
     candidates = (
         str(request.headers.get("origin") or ""),

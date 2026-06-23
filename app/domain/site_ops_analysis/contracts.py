@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
-SITE_OPS_ANALYSIS_CLOUD_ABILITY = "magick-ai-cloud/analyze-site-ops"
-SITE_OPS_ANALYSIS_TOOLBOX_ABILITY = "magick-ai-toolbox/analyze-site-ops"
+SITE_OPS_ANALYSIS_CLOUD_ABILITY = "npcink-cloud/analyze-site-ops"
+SITE_OPS_ANALYSIS_TOOLBOX_ABILITY = "npcink-toolbox/analyze-site-ops"
 SITE_OPS_ANALYSIS_ABILITIES = frozenset(
     {SITE_OPS_ANALYSIS_CLOUD_ABILITY, SITE_OPS_ANALYSIS_TOOLBOX_ABILITY}
 )

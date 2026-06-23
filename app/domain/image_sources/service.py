@@ -1018,7 +1018,7 @@ def _build_result(
         "artifact_type": "image_source_candidates",
         "composition_role": "image_source_candidates",
         "status": "ready",
-        "provider": "magick_ai_cloud",
+        "provider": "npcink_ai_cloud",
         "provider_mode": provider_mode or provider_id,
         "requested_provider_mode": str(options.get("provider") or "auto"),
         "resolved_provider": resolved_provider or provider_id,

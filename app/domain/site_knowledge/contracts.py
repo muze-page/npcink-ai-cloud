@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from typing import Any
 
-SITE_KNOWLEDGE_SEARCH_ABILITY = "magick-ai-cloud/site-knowledge-search"
-SITE_KNOWLEDGE_STATUS_ABILITY = "magick-ai-cloud/site-knowledge-status"
-SITE_KNOWLEDGE_SYNC_ABILITY = "magick-ai-cloud/site-knowledge-sync"
+SITE_KNOWLEDGE_SEARCH_ABILITY = "npcink-cloud/site-knowledge-search"
+SITE_KNOWLEDGE_STATUS_ABILITY = "npcink-cloud/site-knowledge-status"
+SITE_KNOWLEDGE_SYNC_ABILITY = "npcink-cloud/site-knowledge-sync"
 
 SITE_KNOWLEDGE_ABILITIES = frozenset(
     {

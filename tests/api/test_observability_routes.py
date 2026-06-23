@@ -21,7 +21,7 @@ def _build_client(tmp_path: Path) -> tuple[str, TestClient]:
     init_schema(database_url)
     seed_site_auth(database_url, site_id="site_obs", scopes=["stats:read"])
     settings = Settings(
-        project_name="Magick AI Cloud Test",
+        project_name="Npcink AI Cloud Test",
         environment="test",
         database_url=database_url,
         redis_url="redis://localhost:6379/0",
@@ -33,7 +33,7 @@ def test_plugin_observability_batch_is_signed_and_metadata_only(tmp_path: Path) 
     database_url, client = _build_client(tmp_path)
     payload = {
         "contract_version": "magick-plugin-observability-v1",
-        "source": "magick-ai-cloud-addon",
+        "source": "npcink-cloud-addon",
         "events": [
             {
                 "schema_version": "2026-06-01",

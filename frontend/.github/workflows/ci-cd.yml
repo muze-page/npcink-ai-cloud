@@ -1,4 +1,4 @@
-# Magick AI Cloud Portal - CI/CD Pipeline
+# Npcink AI Cloud Portal - CI/CD Pipeline
 # GitHub Actions workflow for building, testing, and deploying
 
 name: CI/CD
@@ -221,16 +221,16 @@ jobs:
     - name: Deploy to Kubernetes
       run: |
         kubectl apply -f k8s/namespace.yaml
-        kubectl apply -f k8s/configmap.yaml -n magick-cloud
-        kubectl apply -f k8s/deployment.yaml -n magick-cloud
-        kubectl set image deployment/magick-cloud-portal \
-          portal=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }} -n magick-cloud
-        kubectl rollout status deployment/magick-cloud-portal -n magick-cloud
+        kubectl apply -f k8s/configmap.yaml -n npcink-cloud
+        kubectl apply -f k8s/deployment.yaml -n npcink-cloud
+        kubectl set image deployment/npcink-cloud-portal \
+          portal=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }} -n npcink-cloud
+        kubectl rollout status deployment/npcink-cloud-portal -n npcink-cloud
     
     - name: Verify deployment
       run: |
-        kubectl get pods -n magick-cloud -l app=magick-cloud-portal
-        kubectl get svc -n magick-cloud
+        kubectl get pods -n npcink-cloud -l app=npcink-cloud-portal
+        kubectl get svc -n npcink-cloud
 
   # ============================================
   # Job 6: Deploy to Production
@@ -261,16 +261,16 @@ jobs:
     - name: Deploy to Kubernetes
       run: |
         kubectl apply -f k8s/namespace.yaml
-        kubectl apply -f k8s/configmap.yaml -n magick-cloud
-        kubectl apply -f k8s/deployment.yaml -n magick-cloud
-        kubectl set image deployment/magick-cloud-portal \
-          portal=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.ref_name }} -n magick-cloud
-        kubectl rollout status deployment/magick-cloud-portal -n magick-cloud
+        kubectl apply -f k8s/configmap.yaml -n npcink-cloud
+        kubectl apply -f k8s/deployment.yaml -n npcink-cloud
+        kubectl set image deployment/npcink-cloud-portal \
+          portal=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.ref_name }} -n npcink-cloud
+        kubectl rollout status deployment/npcink-cloud-portal -n npcink-cloud
     
     - name: Verify deployment
       run: |
-        kubectl get pods -n magick-cloud -l app=magick-cloud-portal
-        kubectl get svc -n magick-cloud
+        kubectl get pods -n npcink-cloud -l app=npcink-cloud-portal
+        kubectl get svc -n npcink-cloud
     
     - name: Create GitHub Release
       uses: softprops/action-gh-release@v1

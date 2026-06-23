@@ -55,7 +55,7 @@ export function Navbar() {
           <Link
             href="/" 
             className="flex items-center gap-3"
-            aria-label={`Magick AI Cloud ${t('nav.home', undefined, 'Home')}`}
+            aria-label={`Npcink AI Cloud ${t('nav.home', undefined, 'Home')}`}
           >
             <span className="brand-mark" aria-hidden="true">
               <svg className="h-5 w-5" viewBox="0 0 24 24" fill="none">

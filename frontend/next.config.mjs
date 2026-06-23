@@ -29,7 +29,7 @@ function parseMiniDevOrigins(rawValue) {
   return normalized.filter(Boolean).length > 0 ? [...new Set(normalized.filter(Boolean))] : defaultMiniDevOrigins;
 }
 
-const miniDevOrigins = parseMiniDevOrigins(process.env.MAGICK_CLOUD_FRONTEND_DEV_HOST_ALLOWLIST);
+const miniDevOrigins = parseMiniDevOrigins(process.env.NPCINK_CLOUD_FRONTEND_DEV_HOST_ALLOWLIST);
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {

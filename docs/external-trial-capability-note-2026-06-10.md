@@ -3,7 +3,7 @@
 Status: active trial handoff.
 
 Purpose: give future engineers and AI agents a single, repo-grounded summary of
-what Magick AI Cloud can expose for trial use now, what must stay prohibited,
+what Npcink AI Cloud can expose for trial use now, what must stay prohibited,
 and how to verify the current hosted runtime loop without turning Cloud into a
 content factory or a second WordPress control plane.
 
@@ -12,7 +12,7 @@ language must be reviewed by counsel before GA.
 
 ## Current Product Position
 
-Magick AI Cloud is a hosted runtime and service-detail layer for the local
+Npcink AI Cloud is a hosted runtime and service-detail layer for the local
 Magick AI stack.
 
 Current trial positioning:
@@ -32,9 +32,9 @@ write execution.
   audit.
 - `magick-ai-adapter`: OpenClaw channel adapter that calls Core and the
   WordPress Abilities API.
-- `magick-ai-cloud-addon`: thin WordPress connector for Cloud URL/API key,
+- `npcink-cloud-addon`: thin WordPress connector for Cloud URL/API key,
   signing, hosted runtime calls, and read-only service status.
-- `magick-ai-cloud`: hosted runtime, routing, provider execution, usage,
+- `npcink-ai-cloud`: hosted runtime, routing, provider execution, usage,
   entitlement, health, diagnostics, service-plane audit evidence, Site
   Knowledge, and structured Agent feedback evaluation data.
 
@@ -115,8 +115,8 @@ See `docs/cloud-agent-feedback-contract-v1.md` and
 
 The current local alpha verification evidence is:
 
-- `/Users/muze/gitee/magick-ai-cloud/.tmp/local-alpha-smoke/evidence-20260611050446.json`
-- `/Users/muze/gitee/magick-ai-cloud/.tmp/site-knowledge-real-chain-smoke/evidence-20260611050150.json`
+- `/Users/muze/gitee/npcink-cloud/.tmp/local-alpha-smoke/evidence-20260611050446.json`
+- `/Users/muze/gitee/npcink-cloud/.tmp/site-knowledge-real-chain-smoke/evidence-20260611050150.json`
 
 Commands used for the verified baseline:
 

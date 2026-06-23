@@ -3,7 +3,7 @@
 Status: active controlled-trial template.
 
 Purpose: keep first-batch trial messaging and evidence capture consistent while
-Magick AI Cloud remains pre-release and operator-managed.
+Npcink AI Cloud remains pre-release and operator-managed.
 
 ## Approved Trial Copy
 
@@ -29,7 +29,7 @@ English copy:
 
 ```text
 This controlled trial provides reviewable AI suggestions, writing preparation,
-site evidence, and hosted runtime assistance. Magick AI Cloud does not publish
+site evidence, and hosted runtime assistance. Npcink AI Cloud does not publish
 or directly modify WordPress content. Local WordPress/Core review remains the
 final write owner.
 ```

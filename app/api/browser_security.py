@@ -46,7 +46,7 @@ def _allow_local_debug_portal_same_origin_bypass(request: Request) -> bool:
     environment = str(settings.environment or "").strip().lower()
     if environment not in {"development", "test"}:
         return False
-    if str(request.headers.get("x-magick-debug-portal-link") or "").strip() != "1":
+    if str(request.headers.get("x-npcink-debug-portal-link") or "").strip() != "1":
         return False
     candidates = (
         str(request.headers.get("origin") or ""),

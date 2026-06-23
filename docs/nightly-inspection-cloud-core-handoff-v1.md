@@ -14,7 +14,7 @@ The intended chain is:
 
 1. Toolbox keeps schedule truth locally through WP-Cron and submits a signed
    Pro runtime request to Cloud.
-2. Cloud executes `magick-ai-toolbox/analyze-nightly-content-batch` through the
+2. Cloud executes `npcink-toolbox/analyze-nightly-content-batch` through the
    existing hosted runtime queue and worker.
 3. Cloud stores canonical run state in `run_records` and returns polling or
    callback-compatible results.
@@ -123,7 +123,7 @@ Core must reject the plan when:
 Cloud:
 
 ```bash
-cd /Users/muze/gitee/magick-ai-cloud
+cd /Users/muze/gitee/npcink-ai-cloud
 .venv/bin/pytest tests/api/test_cloud_batch_runtime.py \
   tests/contract/test_nightly_site_inspection_contract.py
 ```

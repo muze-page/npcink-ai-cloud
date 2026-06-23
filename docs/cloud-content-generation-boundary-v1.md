@@ -2,13 +2,13 @@
 
 Status: active.
 
-Purpose: define how Magick AI Cloud may support content generation without
+Purpose: define how Npcink AI Cloud may support content generation without
 becoming a content factory, a second WordPress control plane, or a high-risk
 abuse surface.
 
 ## 1. Positioning
 
-Magick AI Cloud may provide hosted model execution for content assistance, but
+Npcink AI Cloud may provide hosted model execution for content assistance, but
 it must remain the runtime enhancement layer for the local Magick AI stack.
 
 Cloud is allowed to help produce text, summaries, translations, SEO metadata,
@@ -30,9 +30,9 @@ Current ownership remains:
   audit.
 - `magick-ai-adapter`: OpenClaw channel adapter that calls Core and the
   WordPress Abilities API.
-- `magick-ai-cloud-addon`: thin connector for Cloud URL/API key, signing,
+- `npcink-cloud-addon`: thin connector for Cloud URL/API key, signing,
   runtime calls, and read-only service status.
-- `magick-ai-cloud`: hosted model runtime, routing, provider execution, usage,
+- `npcink-ai-cloud`: hosted model runtime, routing, provider execution, usage,
   entitlement, health, diagnostics, and service-plane audit evidence.
 
 Cloud may execute a content-related runtime request only as a bounded hosted

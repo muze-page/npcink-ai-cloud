@@ -64,10 +64,10 @@ Payload hardening:
 Local-only payload files:
 
 ```text
-/Users/muze/gitee/magick-ai-cloud/.tmp/npcink-trial-500-batch-20260620/sync-payload.json
-/Users/muze/gitee/magick-ai-cloud/.tmp/npcink-trial-500-batch-20260620/sync-rebuild-200-payload.json
-/Users/muze/gitee/magick-ai-cloud/.tmp/npcink-trial-500-batch-20260620/sync-refresh-200-payload.json
-/Users/muze/gitee/magick-ai-cloud/.tmp/npcink-trial-500-batch-20260620/sync-refresh-100-payload.json
+/Users/muze/gitee/npcink-cloud/.tmp/npcink-trial-500-batch-20260620/sync-payload.json
+/Users/muze/gitee/npcink-cloud/.tmp/npcink-trial-500-batch-20260620/sync-rebuild-200-payload.json
+/Users/muze/gitee/npcink-cloud/.tmp/npcink-trial-500-batch-20260620/sync-refresh-200-payload.json
+/Users/muze/gitee/npcink-cloud/.tmp/npcink-trial-500-batch-20260620/sync-refresh-100-payload.json
 ```
 
 ## Payload Bound Handling
@@ -91,7 +91,7 @@ All three payloads passed runtime schema validation before execution.
 ### Rebuild 200
 
 - Run ID: `run_f3d650edda3f46578649924b4283c886`
-- Ability: `magick-ai-cloud/site-knowledge-sync`
+- Ability: `npcink-cloud/site-knowledge-sync`
 - Contract: `site_knowledge_sync.v1`
 - Status: succeeded
 - Sync status: completed
@@ -110,7 +110,7 @@ All three payloads passed runtime schema validation before execution.
 ### Refresh 200
 
 - Run ID: `run_51790f57f9494dc0b23164d1b84979ca`
-- Ability: `magick-ai-cloud/site-knowledge-sync`
+- Ability: `npcink-cloud/site-knowledge-sync`
 - Contract: `site_knowledge_sync.v1`
 - Status: succeeded
 - Sync status: completed
@@ -129,7 +129,7 @@ All three payloads passed runtime schema validation before execution.
 ### Refresh 100
 
 - Run ID: `run_3239e1e6a3de4629a9983321ad517410`
-- Ability: `magick-ai-cloud/site-knowledge-sync`
+- Ability: `npcink-cloud/site-knowledge-sync`
 - Contract: `site_knowledge_sync.v1`
 - Status: succeeded
 - Sync status: completed
@@ -159,7 +159,7 @@ The search was submitted through the verified WordPress Cloud addon runtime
 client after the three sync runs.
 
 - Run ID: `run_258c6ded79ad44f7ab01eba5f522aa7e`
-- Ability: `magick-ai-cloud/site-knowledge-search`
+- Ability: `npcink-cloud/site-knowledge-search`
 - Contract: `site_knowledge_search.v1`
 - Intent: `writing_support_plan`
 - Query:
@@ -207,7 +207,7 @@ The response retained these boundaries:
 The status check was submitted through the verified addon client after search.
 
 - Run ID: `run_200f694f33fa47338e96e9aa49df00c1`
-- Ability: `magick-ai-cloud/site-knowledge-status`
+- Ability: `npcink-cloud/site-knowledge-status`
 - Contract: `site_knowledge_status.v1`
 - Status: succeeded
 - Index status: ready
@@ -254,9 +254,9 @@ Billing breakdown:
 Run record totals for this site:
 
 - `npcink.runtime_smoke`: 1 succeeded
-- `magick-ai-cloud/site-knowledge-sync`: 7 succeeded
-- `magick-ai-cloud/site-knowledge-search`: 4 succeeded
-- `magick-ai-cloud/site-knowledge-status`: 4 succeeded
+- `npcink-cloud/site-knowledge-sync`: 7 succeeded
+- `npcink-cloud/site-knowledge-search`: 4 succeeded
+- `npcink-cloud/site-knowledge-status`: 4 succeeded
 
 ## WordPress Content Verification
 

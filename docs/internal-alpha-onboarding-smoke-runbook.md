@@ -22,7 +22,7 @@ WordPress control plane.
 
 ## Fast Contract Smoke
 
-Run from `/Users/muze/gitee/magick-ai-cloud`:
+Run from `/Users/muze/gitee/npcink-ai-cloud`:
 
 ```bash
 pnpm run smoke:internal-alpha-onboarding

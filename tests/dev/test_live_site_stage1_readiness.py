@@ -108,7 +108,7 @@ def test_probe_cloud_uses_live_and_ready_without_exposing_token() -> None:
         ("http://127.0.0.1:8010/health/live", {}),
         (
             "http://127.0.0.1:8010/health/ready",
-            {"X-Magick-Internal-Token": "internal-token"},
+            {"X-Npcink-Internal-Token": "internal-token"},
         ),
     ]
     assert "internal-token" not in json.dumps(report)

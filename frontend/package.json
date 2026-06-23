@@ -1,7 +1,7 @@
 {
   "name": "frontend",
   "version": "0.1.0",
-  "description": "Magick AI Cloud Frontend",
+  "description": "Npcink AI Cloud Frontend",
   "private": true,
   "type": "module",
   "scripts": {
@@ -26,7 +26,7 @@
     "test:e2e:admin-operator-path": "CLOUD_API_BASE_URL=${CLOUD_API_BASE_URL:-https://api.example.com} CLOUD_PUBLIC_BASE_URL=${CLOUD_PUBLIC_BASE_URL:-https://cloud.example.com} node ../scripts/run-cloud-frontend-playwright.js test -c playwright.config.ts tests/e2e/admin-operator-path.spec.ts",
     "test:e2e:admin-operator-path:ci": "PLAYWRIGHT_BROWSERS_PATH=${PLAYWRIGHT_BROWSERS_PATH:-$HOME/.local/share/magick-ai-playwright} CLOUD_API_BASE_URL=${CLOUD_API_BASE_URL:-https://api.example.com} CLOUD_PUBLIC_BASE_URL=${CLOUD_PUBLIC_BASE_URL:-https://cloud.example.com} node ../scripts/run-cloud-frontend-playwright.js test -c playwright.config.ts tests/e2e/admin-operator-path.spec.ts",
     "test:e2e:portal-workspace-path": "CLOUD_API_BASE_URL=${CLOUD_API_BASE_URL:-https://api.example.com} CLOUD_PUBLIC_BASE_URL=${CLOUD_PUBLIC_BASE_URL:-https://cloud.example.com} node ../scripts/run-cloud-frontend-playwright.js test -c playwright.config.ts tests/e2e/portal-workspace-path.spec.ts",
-    "test:e2e:agent-workflow-metadata": "MAGICK_AI_CLOUD_FRONTEND_BASE_URL=${MAGICK_AI_CLOUD_FRONTEND_BASE_URL:-http://127.0.0.1:8010} node ../scripts/run-cloud-frontend-playwright.js test -c playwright.config.ts tests/e2e/agent-workflow-metadata-smoke.spec.ts",
+    "test:e2e:agent-workflow-metadata": "NPCINK_CLOUD_FRONTEND_BASE_URL=${NPCINK_CLOUD_FRONTEND_BASE_URL:-http://127.0.0.1:8010} node ../scripts/run-cloud-frontend-playwright.js test -c playwright.config.ts tests/e2e/agent-workflow-metadata-smoke.spec.ts",
     "test:visual": "node ../scripts/run-cloud-frontend-playwright.js test -c playwright.config.ts tests/e2e/marketing-home.spec.ts tests/e2e/portal-login.spec.ts tests/e2e/visual-baseline.spec.ts",
     "test:visual:baseline": "node ../scripts/run-cloud-frontend-playwright.js test -c playwright.config.ts tests/e2e/visual-baseline.spec.ts --update-snapshots",
     "test:unit": "vitest run",

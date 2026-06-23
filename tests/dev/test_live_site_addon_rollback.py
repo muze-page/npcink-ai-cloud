@@ -46,7 +46,7 @@ def _snapshot(
             "ok": True,
             "payload": [
                 {
-                    "name": "magick-ai-cloud-addon",
+                    "name": "npcink-cloud-addon",
                     "status": "active" if active else "inactive",
                     "version": "0.1.0",
                 }
@@ -136,7 +136,7 @@ def test_wp_commands_target_addon_slug_and_option_name() -> None:
         mysql_socket="/tmp/mysql.sock",
     )
 
-    assert deactivate[-3:] == ["plugin", "deactivate", "magick-ai-cloud-addon"]
+    assert deactivate[-3:] == ["plugin", "deactivate", "npcink-cloud-addon"]
     assert option_delete[-3:] == ["option", "delete", ADDON_OPTION_NAME]
     assert option_snapshot[-2] == "eval"
     assert "secret_present" in option_snapshot[-1]
@@ -214,7 +214,7 @@ def test_execute_deactivates_and_deletes_option_when_snapshot_was_empty(tmp_path
         if command[-4:] == ["plugin", "list", "--fields=name,status,version", "--format=json"]:
             return {
                 "ok": True,
-                "payload": [{"name": "magick-ai-cloud-addon", "status": "inactive"}],
+                "payload": [{"name": "npcink-cloud-addon", "status": "inactive"}],
             }, "[]"
         return {"ok": True, "payload": {"option_exists": False}}, "{}"
 
@@ -234,7 +234,7 @@ def test_execute_deactivates_and_deletes_option_when_snapshot_was_empty(tmp_path
     assert report["ok"] is True
     assert report["addon_active_after"] is False
     assert report["option_exists_after"] is False
-    assert calls[0][-3:] == ["plugin", "deactivate", "magick-ai-cloud-addon"]
+    assert calls[0][-3:] == ["plugin", "deactivate", "npcink-cloud-addon"]
     assert calls[1][-3:] == ["option", "delete", ADDON_OPTION_NAME]
 
 
@@ -262,7 +262,7 @@ def test_execute_skips_option_delete_when_snapshot_had_existing_settings(tmp_pat
         if command[-4:] == ["plugin", "list", "--fields=name,status,version", "--format=json"]:
             return {
                 "ok": True,
-                "payload": [{"name": "magick-ai-cloud-addon", "status": "inactive"}],
+                "payload": [{"name": "npcink-cloud-addon", "status": "inactive"}],
             }, "[]"
         return {"ok": True, "payload": {"option_exists": True}}, "{}"
 

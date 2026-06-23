@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
-IMAGE_SOURCE_CLOUD_ABILITY = "magick-ai-cloud/search-image-source"
-IMAGE_SOURCE_TOOLBOX_ABILITY = "magick-ai-toolbox/search-image-source"
+IMAGE_SOURCE_CLOUD_ABILITY = "npcink-cloud/search-image-source"
+IMAGE_SOURCE_TOOLBOX_ABILITY = "npcink-toolbox/search-image-source"
 IMAGE_SOURCE_ABILITIES = frozenset({IMAGE_SOURCE_CLOUD_ABILITY, IMAGE_SOURCE_TOOLBOX_ABILITY})
 IMAGE_SOURCE_CONTRACT = "image_source_cloud_request.v1"
 IMAGE_SOURCE_PROFILE_ID = "image-source.managed"

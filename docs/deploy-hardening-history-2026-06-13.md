@@ -3,7 +3,7 @@
 Status: project history, closeout summary, and operator handoff.
 
 This document records the June 2026 quality and deploy hardening work for the
-standalone Magick AI Cloud repository. It summarizes what was found, what was
+standalone Npcink AI Cloud repository. It summarizes what was found, what was
 fixed, what was verified, and what still requires external operator action.
 
 It is intentionally a history document. It does not define a new runtime
@@ -27,7 +27,7 @@ WordPress-owned decisions into Cloud.
   - Hardened upstream provider and callback response handling.
   - Updated stale README commands and frontend handoff checks.
 - `0fdb611 Preserve portal member proxy header`
-  - Preserved `x-magick-portal-member-ref` through the portal proxy.
+  - Preserved `x-npcink-portal-member-ref` through the portal proxy.
 - `ef84647 Update cloud feature base guidance`
   - Removed stale feature-base guidance that referenced a nonexistent
     `codex/cloud-hardening-base` worktree.
@@ -73,7 +73,7 @@ provided, while still enforcing checks when a handoff path is supplied.
 
 ### Portal proxy contract
 
-The portal proxy did not preserve `x-magick-portal-member-ref`, which risked
+The portal proxy did not preserve `x-npcink-portal-member-ref`, which risked
 breaking contract expectations for member-scoped portal calls.
 
 The proxy shared header allowlist now includes that header, and the frontend
@@ -96,10 +96,10 @@ the static frontend upstream.
 The production nginx config now uses Docker DNS resolution and a runtime
 frontend proxy variable so it can start without a frontend container. Remote
 smoke skips buyer-home and portal-login page checks only when
-`MAGICK_CLOUD_SKIP_FRONTEND_IMAGE=1`, while API, internal, and runtime checks
+`NPCINK_CLOUD_SKIP_FRONTEND_IMAGE=1`, while API, internal, and runtime checks
 continue to run.
 
-The smoke flow also defaults `MAGICK_CLOUD_ENVIRONMENT=test` for local replay
+The smoke flow also defaults `NPCINK_CLOUD_ENVIRONMENT=test` for local replay
 so sample provider configuration can work without real production keys.
 
 ### Full frontend deploy bundle build
@@ -145,7 +145,7 @@ The following checks passed during this hardening pass:
 - `pnpm --dir frontend run test:portal-proxy-contract`
 - `pnpm --dir frontend run test:admin-dev-autologin-contract`
 - `docker compose -f docker-compose.prod.yml config`
-- `MAGICK_CLOUD_SKIP_FRONTEND_IMAGE=1 pnpm run check:e2e:deploy-bundle:smoke`
+- `NPCINK_CLOUD_SKIP_FRONTEND_IMAGE=1 pnpm run check:e2e:deploy-bundle:smoke`
 - `pnpm install --frozen-lockfile`
 - `docker compose -f docker-compose.prod.yml build frontend`
 - `pnpm run check:e2e:deploy-bundle:smoke`
@@ -205,7 +205,7 @@ The repository-side work is complete for the problems found in this pass.
 Before attempting a real remote deploy again, an operator should:
 
 1. Place the correct SSH key at the path exported by
-   `MAGICK_CLOUD_DEPLOY_SSH_KEY`, or update `deploy/workspace-target.env.sh` to
+   `NPCINK_CLOUD_DEPLOY_SSH_KEY`, or update `deploy/workspace-target.env.sh` to
    point at the correct key.
 2. Confirm the remote host accepts SSH from the current network.
 3. Re-run the deploy preflight:

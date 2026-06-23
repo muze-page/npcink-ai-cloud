@@ -12,7 +12,7 @@ commercial release.
 
 ## One-Line Positioning
 
-Magick AI Cloud is the hosted runtime and service-detail layer for the local
+Npcink AI Cloud is the hosted runtime and service-detail layer for the local
 Magick AI WordPress stack.
 
 It is not:
@@ -36,9 +36,9 @@ The safe product sentence is:
   audit.
 - `magick-ai-adapter`: OpenClaw channel adapter that calls Core and WordPress
   Abilities API.
-- `magick-ai-cloud-addon`: thin WordPress connector for Cloud URL/API key,
+- `npcink-cloud-addon`: thin WordPress connector for Cloud URL/API key,
   signing, hosted runtime calls, and read-only service status.
-- `magick-ai-cloud`: hosted runtime, provider routing/execution, usage,
+- `npcink-ai-cloud`: hosted runtime, provider routing/execution, usage,
   entitlement, health, diagnostics, service-plane evidence, Site Knowledge, and
   Agent feedback evaluation data.
 
@@ -157,7 +157,7 @@ Main files:
 
 Purpose:
 
-- records `https://magick-ai.local/` as a local dry-run only
+- records `https://npcink.local/` as a local dry-run only
 - confirms this is not an external customer invite
 - provides Chinese trial briefing copy that avoids article-generation and
   direct-publishing claims
@@ -233,14 +233,14 @@ Observed result:
 
 Evidence JSON paths recorded:
 
-- `/Users/muze/gitee/magick-ai-cloud/.tmp/site-knowledge-real-chain-smoke/evidence-20260610085114.json`
-- `/Users/muze/gitee/magick-ai-cloud/.tmp/local-alpha-smoke/evidence-20260610090134.json`
+- `/Users/muze/gitee/npcink-cloud/.tmp/site-knowledge-real-chain-smoke/evidence-20260610085114.json`
+- `/Users/muze/gitee/npcink-cloud/.tmp/local-alpha-smoke/evidence-20260610090134.json`
 
 Key local dry-run evidence:
 
 - Cloud base URL: `http://127.0.0.1:8010`
-- WordPress URL: `https://magick-ai.local/`
-- Site ID: `site_magick_ai_local`
+- WordPress URL: `https://npcink.local/`
+- Site ID: `site_npcink_local`
 - Site Knowledge sync run ID: `run_d97fa56b2ffb44b3b91deccd982ad383`
 - Hosted runtime run ID: `run_7fd3bf61107d47cd8df58c9b3876e5a7`
 - Hosted runtime status: `succeeded`
@@ -285,7 +285,7 @@ Required site information:
 - declared use case
 - site category review
 - target Cloud base URL
-- whether `magick-ai-cloud-addon` is installed and verified
+- whether `npcink-cloud-addon` is installed and verified
 - whether the operator accepts the briefing copy
 - whether the trial will expose only:
   - Site Knowledge evidence/search

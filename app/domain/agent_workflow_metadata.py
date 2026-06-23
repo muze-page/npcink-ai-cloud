@@ -169,7 +169,7 @@ _WORKFLOWS: dict[str, WorkflowMetadata] = {
             "Fixed runtime evidence workflow. It produces source grounding only "
             "and hands control back to the local WordPress path."
         ),
-        ability_name="magick-ai-cloud/web-search",
+        ability_name="npcink-cloud/web-search",
         contract="web_search_runtime_request.v1",
         owner="cloud_runtime",
         handoff_owner="wordpress_local",
@@ -203,7 +203,7 @@ _WORKFLOWS: dict[str, WorkflowMetadata] = {
             "Fixed worker workflow for temporary image derivatives. Cloud returns "
             "an artifact reference; local WordPress remains the approval and write owner."
         ),
-        ability_name="magick-ai-cloud/media-derivative",
+        ability_name="npcink-cloud/media-derivative",
         contract="media_derivative_cloud_request.v1",
         owner="cloud_worker",
         handoff_owner="wordpress_local",

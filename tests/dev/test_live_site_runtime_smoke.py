@@ -83,9 +83,9 @@ def test_signed_headers_do_not_include_secret() -> None:
 
     encoded = json.dumps(headers)
     assert "secret_live" not in encoded
-    assert headers["X-Magick-Site-Id"] == "site_live"
-    assert headers["X-Magick-Key-Id"] == "key_live"
-    assert len(headers["X-Magick-Signature"]) == 64
+    assert headers["X-Npcink-Site-Id"] == "site_live"
+    assert headers["X-Npcink-Key-Id"] == "key_live"
+    assert len(headers["X-Npcink-Signature"]) == 64
 
 
 def test_execute_requires_exact_approval_before_http(tmp_path) -> None:

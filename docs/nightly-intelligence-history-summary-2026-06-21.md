@@ -219,7 +219,7 @@ Core 必须保持治理内核定位，不变成产品工作台。
 
 本阶段做过多轮 trial 和交叉验证，包括：
 
-- `magick-ai.local`；
+- `npcink.local`；
 - `dbd.local`；
 - `wp.local`；
 - `npcink.local`；

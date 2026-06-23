@@ -20,30 +20,30 @@ def test_prod_env_files_use_canonical_admin_and_openai_names() -> None:
     checklist_text = (cloud_root / "deploy" / "RELEASE_CHECKLIST.md").read_text()
 
     for text in (compose_text, env_example_text, readme_text, checklist_text):
-        assert "MAGICK_CLOUD_ADMIN_SESSION_SECRET" in text
-        assert "MAGICK_CLOUD_ADMIN_BOOTSTRAP_TOKEN" in text
-        assert "MAGICK_CLOUD_OPS_CADENCE_POLL_SECONDS" in text
-        assert "MAGICK_CLOUD_RUNTIME_CALLBACK_WORKER_POLL_SECONDS" in text or text is checklist_text
-        assert "MAGICK_CLOUD_WORKER_HEARTBEAT_INTERVAL_SECONDS" in text or text is checklist_text
+        assert "NPCINK_CLOUD_ADMIN_SESSION_SECRET" in text
+        assert "NPCINK_CLOUD_ADMIN_BOOTSTRAP_TOKEN" in text
+        assert "NPCINK_CLOUD_OPS_CADENCE_POLL_SECONDS" in text
+        assert "NPCINK_CLOUD_RUNTIME_CALLBACK_WORKER_POLL_SECONDS" in text or text is checklist_text
+        assert "NPCINK_CLOUD_WORKER_HEARTBEAT_INTERVAL_SECONDS" in text or text is checklist_text
         assert (
-            "MAGICK_CLOUD_PROVIDER_HEALTH_SCAN_INTERVAL_SECONDS" in text or text is checklist_text
+            "NPCINK_CLOUD_PROVIDER_HEALTH_SCAN_INTERVAL_SECONDS" in text or text is checklist_text
         )
-        assert "MAGICK_CLOUD_OTEL_TRACE_SINK_OTLP_ENDPOINT" in text or text is checklist_text
-        assert "MAGICK_CLOUD_OPENAI_BASE_URL" in text or text is checklist_text
+        assert "NPCINK_CLOUD_OTEL_TRACE_SINK_OTLP_ENDPOINT" in text or text is checklist_text
+        assert "NPCINK_CLOUD_OPENAI_BASE_URL" in text or text is checklist_text
 
     assert "callback-worker:" in compose_text
     assert "otel-collector:" in compose_text
     assert "jaeger:" in compose_text
 
-    assert "MAGICK_CLOUD_OPS_SESSION_SECRET" not in compose_text
-    assert "MAGICK_CLOUD_OPS_SESSION_SECRET" not in env_example_text
-    assert "MAGICK_CLOUD_OPS_SESSION_SECRET" not in readme_text
-    assert "MAGICK_CLOUD_OPS_SESSION_SECRET" not in checklist_text
-    assert "MAGICK_CLOUD_OPENAI_COMPATIBLE_" not in compose_text
-    assert "MAGICK_CLOUD_OPENAI_COMPATIBLE_" not in env_example_text
-    assert "MAGICK_CLOUD_OPENAI_COMPATIBLE_" not in readme_text
-    assert "MAGICK_CLOUD_FEATURE_FLAGS_JSON" in env_example_text
-    assert "MAGICK_CLOUD_FEATURE_FLAGS_JSON" in readme_text
+    assert "NPCINK_CLOUD_OPS_SESSION_SECRET" not in compose_text
+    assert "NPCINK_CLOUD_OPS_SESSION_SECRET" not in env_example_text
+    assert "NPCINK_CLOUD_OPS_SESSION_SECRET" not in readme_text
+    assert "NPCINK_CLOUD_OPS_SESSION_SECRET" not in checklist_text
+    assert "NPCINK_CLOUD_OPENAI_COMPATIBLE_" not in compose_text
+    assert "NPCINK_CLOUD_OPENAI_COMPATIBLE_" not in env_example_text
+    assert "NPCINK_CLOUD_OPENAI_COMPATIBLE_" not in readme_text
+    assert "NPCINK_CLOUD_FEATURE_FLAGS_JSON" in env_example_text
+    assert "NPCINK_CLOUD_FEATURE_FLAGS_JSON" in readme_text
 
 
 def test_env_example_production_payload_validates_with_canonical_names(
@@ -51,27 +51,27 @@ def test_env_example_production_payload_validates_with_canonical_names(
     monkeypatch,
 ) -> None:
     for key in list(os.environ):
-        if key.startswith("MAGICK_CLOUD_"):
+        if key.startswith("NPCINK_CLOUD_"):
             monkeypatch.delenv(key, raising=False)
 
     env_text = (_cloud_root() / ".env.example").read_text()
     env_text = env_text.replace(
-        "MAGICK_CLOUD_ENVIRONMENT=development",
-        "MAGICK_CLOUD_ENVIRONMENT=production",
+        "NPCINK_CLOUD_ENVIRONMENT=development",
+        "NPCINK_CLOUD_ENVIRONMENT=production",
     )
     replacements = {
-        "MAGICK_CLOUD_INTERNAL_AUTH_TOKEN=": "MAGICK_CLOUD_INTERNAL_AUTH_TOKEN=" + ("i" * 32),
-        "MAGICK_CLOUD_ADMIN_BOOTSTRAP_TOKEN=": "MAGICK_CLOUD_ADMIN_BOOTSTRAP_TOKEN=" + ("b" * 32),
-        "MAGICK_CLOUD_ADMIN_SESSION_SECRET=": "MAGICK_CLOUD_ADMIN_SESSION_SECRET=" + ("a" * 32),
-        "MAGICK_CLOUD_PORTAL_JWT_SECRET=": "MAGICK_CLOUD_PORTAL_JWT_SECRET=" + ("j" * 32),
-        "MAGICK_CLOUD_PORTAL_PUBLIC_BASE_URL=": (
-            "MAGICK_CLOUD_PORTAL_PUBLIC_BASE_URL=https://cloud.example.com"
+        "NPCINK_CLOUD_INTERNAL_AUTH_TOKEN=": "NPCINK_CLOUD_INTERNAL_AUTH_TOKEN=" + ("i" * 32),
+        "NPCINK_CLOUD_ADMIN_BOOTSTRAP_TOKEN=": "NPCINK_CLOUD_ADMIN_BOOTSTRAP_TOKEN=" + ("b" * 32),
+        "NPCINK_CLOUD_ADMIN_SESSION_SECRET=": "NPCINK_CLOUD_ADMIN_SESSION_SECRET=" + ("a" * 32),
+        "NPCINK_CLOUD_PORTAL_JWT_SECRET=": "NPCINK_CLOUD_PORTAL_JWT_SECRET=" + ("j" * 32),
+        "NPCINK_CLOUD_PORTAL_PUBLIC_BASE_URL=": (
+            "NPCINK_CLOUD_PORTAL_PUBLIC_BASE_URL=https://cloud.example.com"
         ),
-        "MAGICK_CLOUD_PORTAL_EMAIL_SMTP_HOST=": (
-            "MAGICK_CLOUD_PORTAL_EMAIL_SMTP_HOST=smtp.example.com"
+        "NPCINK_CLOUD_PORTAL_EMAIL_SMTP_HOST=": (
+            "NPCINK_CLOUD_PORTAL_EMAIL_SMTP_HOST=smtp.example.com"
         ),
-        "MAGICK_CLOUD_PORTAL_EMAIL_FROM_EMAIL=": (
-            "MAGICK_CLOUD_PORTAL_EMAIL_FROM_EMAIL=noreply@example.com"
+        "NPCINK_CLOUD_PORTAL_EMAIL_FROM_EMAIL=": (
+            "NPCINK_CLOUD_PORTAL_EMAIL_FROM_EMAIL=noreply@example.com"
         ),
     }
     for original, updated in replacements.items():
@@ -93,19 +93,19 @@ def test_env_example_production_payload_validates_with_canonical_names(
 
 
 def test_settings_accept_legacy_admin_and_openai_env_aliases(monkeypatch) -> None:
-    monkeypatch.setenv("MAGICK_CLOUD_ENVIRONMENT", "production")
-    monkeypatch.setenv("MAGICK_CLOUD_DATABASE_URL", "sqlite+pysqlite:///:memory:")
-    monkeypatch.setenv("MAGICK_CLOUD_REDIS_URL", "redis://localhost:6379/0")
-    monkeypatch.setenv("MAGICK_CLOUD_INTERNAL_AUTH_TOKEN", "i" * 32)
-    monkeypatch.setenv("MAGICK_CLOUD_ADMIN_BOOTSTRAP_TOKEN", "b" * 32)
-    monkeypatch.setenv("MAGICK_CLOUD_ADMIN_SESSION_SECRET", "a" * 32)
-    monkeypatch.setenv("MAGICK_CLOUD_OPS_SESSION_SECRET", "a" * 32)
-    monkeypatch.setenv("MAGICK_CLOUD_PORTAL_JWT_SECRET", "j" * 32)
-    monkeypatch.setenv("MAGICK_CLOUD_PORTAL_PUBLIC_BASE_URL", "https://cloud.example.com")
-    monkeypatch.setenv("MAGICK_CLOUD_PORTAL_EMAIL_SMTP_HOST", "smtp.example.com")
-    monkeypatch.setenv("MAGICK_CLOUD_PORTAL_EMAIL_FROM_EMAIL", "noreply@example.com")
-    monkeypatch.setenv("MAGICK_CLOUD_OPENAI_API_KEY", "sk-current")
-    monkeypatch.setenv("MAGICK_CLOUD_OPENAI_BASE_URL", "https://current.example.com/v1")
+    monkeypatch.setenv("NPCINK_CLOUD_ENVIRONMENT", "production")
+    monkeypatch.setenv("NPCINK_CLOUD_DATABASE_URL", "sqlite+pysqlite:///:memory:")
+    monkeypatch.setenv("NPCINK_CLOUD_REDIS_URL", "redis://localhost:6379/0")
+    monkeypatch.setenv("NPCINK_CLOUD_INTERNAL_AUTH_TOKEN", "i" * 32)
+    monkeypatch.setenv("NPCINK_CLOUD_ADMIN_BOOTSTRAP_TOKEN", "b" * 32)
+    monkeypatch.setenv("NPCINK_CLOUD_ADMIN_SESSION_SECRET", "a" * 32)
+    monkeypatch.setenv("NPCINK_CLOUD_OPS_SESSION_SECRET", "a" * 32)
+    monkeypatch.setenv("NPCINK_CLOUD_PORTAL_JWT_SECRET", "j" * 32)
+    monkeypatch.setenv("NPCINK_CLOUD_PORTAL_PUBLIC_BASE_URL", "https://cloud.example.com")
+    monkeypatch.setenv("NPCINK_CLOUD_PORTAL_EMAIL_SMTP_HOST", "smtp.example.com")
+    monkeypatch.setenv("NPCINK_CLOUD_PORTAL_EMAIL_FROM_EMAIL", "noreply@example.com")
+    monkeypatch.setenv("NPCINK_CLOUD_OPENAI_API_KEY", "sk-current")
+    monkeypatch.setenv("NPCINK_CLOUD_OPENAI_BASE_URL", "https://current.example.com/v1")
 
     settings = Settings(_env_file=None)
 
@@ -138,15 +138,15 @@ def test_preview_and_baseline_scripts_lock_migration_and_schema_checks() -> None
     )
     assert "for service in ${SERVICES}; do" in preview_script
     assert "fatal startup log detected" in preview_script
-    assert "MAGICK_CLOUD_TRUSTED_HOST_ALLOWLIST" in preview_script
-    assert "MAGICK_CLOUD_BROWSER_ORIGIN_ALLOWLIST" in preview_script
-    assert "MAGICK_CLOUD_OTEL_EXPORTER_OTLP_ENDPOINT" in preview_script
-    assert "MAGICK_CLOUD_OTEL_TRACE_SINK_OTLP_ENDPOINT" in preview_script
-    assert "MAGICK_CLOUD_OTEL_TRACE_QUERY_URL" in preview_script
+    assert "NPCINK_CLOUD_TRUSTED_HOST_ALLOWLIST" in preview_script
+    assert "NPCINK_CLOUD_BROWSER_ORIGIN_ALLOWLIST" in preview_script
+    assert "NPCINK_CLOUD_OTEL_EXPORTER_OTLP_ENDPOINT" in preview_script
+    assert "NPCINK_CLOUD_OTEL_TRACE_SINK_OTLP_ENDPOINT" in preview_script
+    assert "NPCINK_CLOUD_OTEL_TRACE_QUERY_URL" in preview_script
     assert "ensure_remote_trace_sink" in preview_script
     assert "verify_remote_trace_sink" in preview_script
     assert "reload_remote_proxy" in preview_script
-    assert ".cache/magick-ai-cloud-mini" in preview_script
+    assert ".cache/npcink-ai-cloud-mini" in preview_script
     assert "PREVIEW_STACK_SERVICES" in preview_script
     assert "DEPENDENCY_IMAGES=(" in preview_script
     assert (
@@ -171,7 +171,7 @@ def test_preview_and_baseline_scripts_lock_migration_and_schema_checks() -> None
     assert "ops-worker:" in preview_script
     assert "ops-worker:" in dev_compose_text
     assert "python -m app.workers.ops_cadence" in dev_compose_text
-    assert "magick-ai-cloud-ops-worker:dev" in dev_compose_text
+    assert "npcink-ai-cloud-ops-worker:dev" in dev_compose_text
     assert "/health/operational-ready" in preview_script
     assert "python -m app.dev.baseline_status" in baseline_script
     assert "/internal/service/observability/summary" in release_smoke_script
@@ -210,21 +210,21 @@ def test_deploy_bundle_smoke_uses_sample_provider_and_skip_frontend_contract() -
     assert "corepack prepare pnpm@10.33.0 --activate" in frontend_dockerfile
     assert "pnpm install --frozen-lockfile --filter frontend..." in frontend_dockerfile
 
-    assert 'export MAGICK_CLOUD_ENVIRONMENT="${MAGICK_CLOUD_ENVIRONMENT:-test}"' in (
+    assert 'export NPCINK_CLOUD_ENVIRONMENT="${NPCINK_CLOUD_ENVIRONMENT:-test}"' in (
         deploy_bundle_smoke
     )
-    assert "MAGICK_CLOUD_ENVIRONMENT" in deploy_bundle_smoke
-    assert "MAGICK_CLOUD_SKIP_FRONTEND_IMAGE" in deploy_bundle_smoke
+    assert "NPCINK_CLOUD_ENVIRONMENT" in deploy_bundle_smoke
+    assert "NPCINK_CLOUD_SKIP_FRONTEND_IMAGE" in deploy_bundle_smoke
 
-    assert 'if [ "${MAGICK_CLOUD_SKIP_FRONTEND_IMAGE:-0}" = "1" ]; then' in (
+    assert 'if [ "${NPCINK_CLOUD_SKIP_FRONTEND_IMAGE:-0}" = "1" ]; then' in (
         remote_smoke_script
     )
     assert "Skipping frontend page checks" in remote_smoke_script
     assert "buyer-facing home page should succeed" in remote_smoke_script
 
-    assert "upstream magick_ai_cloud_frontend" not in nginx_prod_conf
+    assert "upstream npcink_ai_cloud_frontend" not in nginx_prod_conf
     assert "resolver 127.0.0.11" in nginx_prod_conf
-    assert 'set $magick_ai_cloud_frontend "frontend:3000";' in nginx_prod_conf
+    assert 'set $npcink_ai_cloud_frontend "frontend:3000";' in nginx_prod_conf
 
 
 def test_release_gate_documents_cloud_hardening_blockers() -> None:

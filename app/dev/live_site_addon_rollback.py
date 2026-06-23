@@ -129,7 +129,7 @@ def deactivate_command(
         php_bin=php_bin,
         wp_bin=wp_bin,
         mysql_socket=mysql_socket,
-        args=["plugin", "deactivate", "magick-ai-cloud-addon"],
+        args=["plugin", "deactivate", "npcink-cloud-addon"],
     )
 
 

@@ -1177,7 +1177,7 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
                 until=period_end_at,
                 limit=None,
             )
-            payload = {
+            payload: dict[str, object] = {
                 "account_id": account_id,
                 "period_start_at": self._serialize_datetime(period_start_at),
                 "period_end_at": self._serialize_datetime(period_end_at),

@@ -8,7 +8,7 @@ Date: 2026-06-16
 
 This document summarizes the historical decisions, implementation scope,
 verification evidence, and next-stage boundary for the Nightly Site Inspection
-work across Magick AI Cloud, Toolbox, and Governance Core.
+work across Npcink AI Cloud, Toolbox, and Governance Core.
 
 The product framing is fixed as:
 
@@ -74,7 +74,7 @@ result.
 
 The first supported runtime ability is:
 
-`magick-ai-toolbox/analyze-nightly-content-batch`
+`npcink-toolbox/analyze-nightly-content-batch`
 
 The Cloud result uses:
 
@@ -126,7 +126,7 @@ Cloud must not own:
 
 ## Implemented Components
 
-### Magick AI Cloud
+### Npcink AI Cloud
 
 Implemented:
 
@@ -207,7 +207,7 @@ Merged Core PRs relevant to this stage:
 Full Cloud test suite:
 
 ```bash
-cd /Users/muze/gitee/magick-ai-cloud
+cd /Users/muze/gitee/npcink-ai-cloud
 .venv/bin/pytest
 ```
 
@@ -236,7 +236,7 @@ Result:
 Default Toolbox test gate:
 
 ```bash
-cd /Users/muze/gitee/magick-ai-toolbox
+cd /Users/muze/gitee/npcink-toolbox
 composer test:all
 ```
 
@@ -317,8 +317,8 @@ all passed
 
 At closeout, the three repositories were clean and tracking GitHub master:
 
-- `/Users/muze/gitee/magick-ai-cloud`
-- `/Users/muze/gitee/magick-ai-toolbox`
+- `/Users/muze/gitee/npcink-ai-cloud`
+- `/Users/muze/gitee/npcink-toolbox`
 - `/Users/muze/gitee/npcink-governance-core`
 
 Each reported:

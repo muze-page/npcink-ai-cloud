@@ -8,41 +8,41 @@ import jwt
 import pytest
 from sqlalchemy import select
 
-os.environ["MAGICK_CLOUD_INTERNAL_AUTH_TOKEN"] = "magick-cloud-internal-test-token-32b"
-os.environ["MAGICK_CLOUD_ADMIN_SESSION_SECRET"] = "magick-cloud-ops-session-secret-32b"
-os.environ["MAGICK_CLOUD_PORTAL_JWT_SECRET"] = "magick-cloud-portal-jwt-secret-32b"
+os.environ["NPCINK_CLOUD_INTERNAL_AUTH_TOKEN"] = "npcink-cloud-internal-test-token-32b"
+os.environ["NPCINK_CLOUD_ADMIN_SESSION_SECRET"] = "npcink-cloud-ops-session-secret-32b"
+os.environ["NPCINK_CLOUD_PORTAL_JWT_SECRET"] = "npcink-cloud-portal-jwt-secret-32b"
 for _provider_env_name in (
-    "MAGICK_CLOUD_OPENAI_API_KEY",
-    "MAGICK_CLOUD_OPENAI_COMPATIBLE_API_KEY",
-    "MAGICK_CLOUD_ANTHROPIC_API_KEY",
-    "MAGICK_CLOUD_LITELLM_API_KEY",
-    "MAGICK_CLOUD_VLLM_API_KEY",
-    "MAGICK_CLOUD_TEI_API_KEY",
-    "MAGICK_CLOUD_OPENROUTER_API_KEY",
-    "MAGICK_CLOUD_SILICONFLOW_API_KEY",
-    "MAGICK_CLOUD_WEB_SEARCH_TAVILY_API_KEY",
-    "MAGICK_CLOUD_WEB_SEARCH_TAVILY_API_KEYS",
-    "MAGICK_CLOUD_WEB_SEARCH_TAVILY_API_KEY_LABELS",
-    "MAGICK_CLOUD_WEB_SEARCH_BOCHA_API_KEY",
-    "MAGICK_CLOUD_WEB_SEARCH_JINA_READER_API_KEY",
-    "MAGICK_CLOUD_WEB_SEARCH_APIFY_API_TOKEN",
+    "NPCINK_CLOUD_OPENAI_API_KEY",
+    "NPCINK_CLOUD_OPENAI_COMPATIBLE_API_KEY",
+    "NPCINK_CLOUD_ANTHROPIC_API_KEY",
+    "NPCINK_CLOUD_LITELLM_API_KEY",
+    "NPCINK_CLOUD_VLLM_API_KEY",
+    "NPCINK_CLOUD_TEI_API_KEY",
+    "NPCINK_CLOUD_OPENROUTER_API_KEY",
+    "NPCINK_CLOUD_SILICONFLOW_API_KEY",
+    "NPCINK_CLOUD_WEB_SEARCH_TAVILY_API_KEY",
+    "NPCINK_CLOUD_WEB_SEARCH_TAVILY_API_KEYS",
+    "NPCINK_CLOUD_WEB_SEARCH_TAVILY_API_KEY_LABELS",
+    "NPCINK_CLOUD_WEB_SEARCH_BOCHA_API_KEY",
+    "NPCINK_CLOUD_WEB_SEARCH_JINA_READER_API_KEY",
+    "NPCINK_CLOUD_WEB_SEARCH_APIFY_API_TOKEN",
 ):
     os.environ[_provider_env_name] = ""
-os.environ["MAGICK_CLOUD_WEB_SEARCH_PROVIDER"] = "disabled"
-os.environ["MAGICK_CLOUD_WEB_SEARCH_JINA_READER_ENABLED"] = "false"
+os.environ["NPCINK_CLOUD_WEB_SEARCH_PROVIDER"] = "disabled"
+os.environ["NPCINK_CLOUD_WEB_SEARCH_JINA_READER_ENABLED"] = "false"
 for _provider_flag_name in (
-    "MAGICK_CLOUD_LITELLM_PROVIDER_ENABLED",
-    "MAGICK_CLOUD_VLLM_PROVIDER_ENABLED",
-    "MAGICK_CLOUD_TEI_PROVIDER_ENABLED",
-    "MAGICK_CLOUD_OPENROUTER_PROVIDER_ENABLED",
-    "MAGICK_CLOUD_SILICONFLOW_PROVIDER_ENABLED",
+    "NPCINK_CLOUD_LITELLM_PROVIDER_ENABLED",
+    "NPCINK_CLOUD_VLLM_PROVIDER_ENABLED",
+    "NPCINK_CLOUD_TEI_PROVIDER_ENABLED",
+    "NPCINK_CLOUD_OPENROUTER_PROVIDER_ENABLED",
+    "NPCINK_CLOUD_SILICONFLOW_PROVIDER_ENABLED",
 ):
     os.environ[_provider_flag_name] = "false"
-os.environ["MAGICK_CLOUD_OPENAI_SAMPLE_CATALOG_PROFILE"] = ""
-os.environ["MAGICK_CLOUD_OPENAI_COMPATIBLE_SAMPLE_CATALOG_PROFILE"] = ""
-os.environ["MAGICK_CLOUD_SITE_KNOWLEDGE_EMBEDDING_PROVIDER"] = "deterministic"
-os.environ["MAGICK_CLOUD_SITE_KNOWLEDGE_VECTOR_BACKEND"] = "postgres_json"
-os.environ["MAGICK_CLOUD_OTEL_EXPORTER_OTLP_ENDPOINT"] = ""
+os.environ["NPCINK_CLOUD_OPENAI_SAMPLE_CATALOG_PROFILE"] = ""
+os.environ["NPCINK_CLOUD_OPENAI_COMPATIBLE_SAMPLE_CATALOG_PROFILE"] = ""
+os.environ["NPCINK_CLOUD_SITE_KNOWLEDGE_EMBEDDING_PROVIDER"] = "deterministic"
+os.environ["NPCINK_CLOUD_SITE_KNOWLEDGE_VECTOR_BACKEND"] = "postgres_json"
+os.environ["NPCINK_CLOUD_OTEL_EXPORTER_OTLP_ENDPOINT"] = ""
 
 from app.core.config import Settings
 from app.core.db import get_session
@@ -65,11 +65,11 @@ from app.core.security import (
 )
 from app.domain.commercial.service import CommercialService
 
-TEST_SECRET = "magick-cloud-test-secret-for-hmac-sha256-32b"
+TEST_SECRET = "npcink-cloud-test-secret-for-hmac-sha256-32b"
 TEST_KEY_ID = "key_default"
-TEST_INTERNAL_AUTH_TOKEN = "magick-cloud-internal-test-token-32b"
-TEST_ADMIN_SESSION_SECRET = "magick-cloud-ops-session-secret-32b"
-TEST_PORTAL_JWT_SECRET = "magick-cloud-portal-jwt-secret-32b"
+TEST_INTERNAL_AUTH_TOKEN = "npcink-cloud-internal-test-token-32b"
+TEST_ADMIN_SESSION_SECRET = "npcink-cloud-ops-session-secret-32b"
+TEST_PORTAL_JWT_SECRET = "npcink-cloud-portal-jwt-secret-32b"
 
 
 @pytest.fixture
@@ -234,14 +234,14 @@ def build_auth_headers(
     signature = build_hmac_signature(secret, canonical_request)
 
     headers = {
-        "X-Magick-Site-Id": site_id,
-        "X-Magick-Key-Id": key_id,
-        "X-Magick-Timestamp": resolved_timestamp,
-        "X-Magick-Signature": signature,
+        "X-Npcink-Site-Id": site_id,
+        "X-Npcink-Key-Id": key_id,
+        "X-Npcink-Timestamp": resolved_timestamp,
+        "X-Npcink-Signature": signature,
         "traceparent": traceparent,
     }
     if resolved_nonce:
-        headers["X-Magick-Nonce"] = resolved_nonce
+        headers["X-Npcink-Nonce"] = resolved_nonce
     if idempotency_key:
         headers["Idempotency-Key"] = idempotency_key
     return headers
@@ -268,7 +268,7 @@ def build_internal_headers(
     trace_id: str = "fedcba9876543210fedcba9876543210",
 ) -> dict[str, str]:
     headers = {
-        "X-Magick-Internal-Token": internal_token,
+        "X-Npcink-Internal-Token": internal_token,
         "traceparent": build_traceparent(trace_id),
     }
     if idempotency_key:

@@ -8,7 +8,7 @@
 
 ## Purpose
 
-This playbook is the minimum operator contract for Magick AI Cloud production work.
+This playbook is the minimum operator contract for Npcink AI Cloud production work.
 If a release depends on manual knowledge that is not written here, the release is not closed.
 
 Primary internal checkpoints:
@@ -49,7 +49,7 @@ Manual refresh guidance:
 
 ### Admin bootstrap token
 
-1. Generate a new `MAGICK_CLOUD_ADMIN_BOOTSTRAP_TOKEN`.
+1. Generate a new `NPCINK_CLOUD_ADMIN_BOOTSTRAP_TOKEN`.
 2. Update the deploy secret store.
 3. Restart `api`.
 4. Verify `POST /admin/auth/bootstrap` succeeds with the new token and fails with the old token.
@@ -57,7 +57,7 @@ Manual refresh guidance:
 
 ### Internal service token
 
-1. Generate a new `MAGICK_CLOUD_INTERNAL_AUTH_TOKEN`.
+1. Generate a new `NPCINK_CLOUD_INTERNAL_AUTH_TOKEN`.
 2. Update the deploy secret store for `api`, `frontend`, `worker`, `callback-worker`, and `ops-worker`.
 3. Restart those services together.
 4. Verify `GET /health/ready` and `GET /internal/service/observability/summary` with the new token.
@@ -65,8 +65,8 @@ Manual refresh guidance:
 
 ### Session invalidation
 
-1. Rotate `MAGICK_CLOUD_ADMIN_SESSION_SECRET` to invalidate `/admin/*` sessions.
-2. Rotate `MAGICK_CLOUD_PORTAL_JWT_SECRET` to invalidate `/portal/*` sessions.
+1. Rotate `NPCINK_CLOUD_ADMIN_SESSION_SECRET` to invalidate `/admin/*` sessions.
+2. Rotate `NPCINK_CLOUD_PORTAL_JWT_SECRET` to invalidate `/portal/*` sessions.
 3. Restart `api` and `frontend`.
 4. Verify stale cookies no longer access `/admin/session` or `/portal/v1/session`.
 
@@ -99,8 +99,8 @@ Then verify:
 Use only when cadence is stale or blocked:
 
 ```bash
-curl -X POST "$MAGICK_CLOUD_BASE_URL/internal/service/runtime/retention/cleanup" \
-  -H "X-Magick-Internal-Token: $MAGICK_CLOUD_INTERNAL_AUTH_TOKEN" \
+curl -X POST "$NPCINK_CLOUD_BASE_URL/internal/service/runtime/retention/cleanup" \
+  -H "X-Npcink-Internal-Token: $NPCINK_CLOUD_INTERNAL_AUTH_TOKEN" \
   -H "Idempotency-Key: manual-retention-cleanup-$(date +%s)"
 ```
 
@@ -144,7 +144,7 @@ If real runtime smoke returns `runtime.provider_not_configured`, treat it as a r
 1. Read `data.tracing.trace_sink_otlp_endpoint` and `data.tracing.trace_sink_query_url` from `GET /internal/service/observability/summary`.
 2. Open the configured query URL or trace UI.
 3. Trigger a fresh internal request such as `GET /health/operational-ready`.
-4. Confirm a new trace for `magick-ai-cloud` appears in the sink.
+4. Confirm a new trace for `npcink-ai-cloud` appears in the sink.
 5. If the collector is reachable but no trace lands in the sink, the release is not closed.
 
 ## Release Gate

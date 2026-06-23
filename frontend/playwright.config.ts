@@ -1,12 +1,12 @@
 import { defineConfig } from '@playwright/test';
 const port = Number.parseInt(
-  String(process.env.MAGICK_AI_CLOUD_FRONTEND_PORT || '3301'),
+  String(process.env.NPCINK_CLOUD_FRONTEND_PORT || '3301'),
   10,
 );
 const baseURL =
-  process.env.MAGICK_AI_CLOUD_FRONTEND_BASE_URL ||
+  process.env.NPCINK_CLOUD_FRONTEND_BASE_URL ||
   `http://127.0.0.1:${Number.isFinite(port) ? port : 3301}`;
-const useExternalServer = Boolean(process.env.MAGICK_AI_CLOUD_FRONTEND_BASE_URL);
+const useExternalServer = Boolean(process.env.NPCINK_CLOUD_FRONTEND_BASE_URL);
 const webServerEnv = {
   ...process.env,
   NEXT_TELEMETRY_DISABLED: '1',

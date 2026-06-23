@@ -26,7 +26,7 @@ def test_catalog_models_response_shape_is_stable(tmp_path: Path) -> None:
     seed_site_auth(database_url, site_id="site_contract", scopes=["catalog:read"])
 
     settings = Settings(
-        project_name="Magick AI Cloud Test",
+        project_name="Npcink AI Cloud Test",
         environment="test",
         database_url=database_url,
         redis_url="redis://localhost:6379/0",

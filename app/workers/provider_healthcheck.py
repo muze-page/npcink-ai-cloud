@@ -19,7 +19,7 @@ def main() -> None:
             include_enabled_connections=True,
         ),
     ).scan_provider_health()
-    get_logger("magick_ai_cloud.provider_healthcheck").info("provider health scanned: %s", result)
+    get_logger("npcink_ai_cloud.provider_healthcheck").info("provider health scanned: %s", result)
 
 
 if __name__ == "__main__":

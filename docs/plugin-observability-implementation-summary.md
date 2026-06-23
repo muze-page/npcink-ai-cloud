@@ -162,7 +162,7 @@ The smoke script flushes the verified local Cloud Addon buffer, refreshes the
 cached Cloud summary, prints sent/stored/duplicate counters, and prints the
 Portal/Admin smoke URLs. It defaults to the current LocalWP and Docker Compose
 dev environment; override `MAGICK_WP_PATH`, `MAGICK_WP_PHP`,
-`MAGICK_WP_CLI`, or `MAGICK_CLOUD_POSTGRES_CONTAINER` when needed.
+`MAGICK_WP_CLI`, or `NPCINK_CLOUD_POSTGRES_CONTAINER` when needed.
 
 For local visual smoke testing, use:
 

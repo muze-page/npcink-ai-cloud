@@ -159,12 +159,12 @@ def _dispatch_callback(
     ).hexdigest()
     headers = {
         "content-type": "application/json",
-        "X-Magick-Site-Id": site_id,
-        "X-Magick-Key-Id": key_id,
-        "X-Magick-Timestamp": timestamp,
-        "X-Magick-Signature": signature,
-        "X-Magick-Cloud-Event": CALLBACK_EVENT,
-        "X-Magick-Callback-Id": callback_id,
+        "X-Npcink-Site-Id": site_id,
+        "X-Npcink-Key-Id": key_id,
+        "X-Npcink-Timestamp": timestamp,
+        "X-Npcink-Signature": signature,
+        "X-Npcink-Cloud-Event": CALLBACK_EVENT,
+        "X-Npcink-Callback-Id": callback_id,
         "traceparent": traceparent,
     }
 
@@ -312,7 +312,7 @@ def main() -> None:
     require_database_connection(settings.database_url)
 
     result = run_once(settings)
-    get_logger("magick_ai_cloud.router_performance_snapshot").info(
+    get_logger("npcink_ai_cloud.router_performance_snapshot").info(
         "router performance projection cadence generated: %s",
         result,
     )

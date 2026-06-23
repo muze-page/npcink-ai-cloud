@@ -22,7 +22,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
   const requestProto = getExternalRequestProto(request) || request.nextUrl.protocol.replace(/:$/, '');
   const headers = buildForwardedRequestHeaders(request, {
     Accept: 'application/json',
-    'X-Magick-Internal-Token': getInternalAuthToken(),
+    'X-Npcink-Internal-Token': getInternalAuthToken(),
   });
 
   headers.Origin = request.headers.get('origin') || requestOrigin;

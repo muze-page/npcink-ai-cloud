@@ -59,7 +59,7 @@ def _build_client(tmp_path: Path) -> tuple[str, TestClient, AlphaProviderAdapter
     CatalogService(database_url, providers={"openai": provider}).refresh_catalog()
     settings = Settings(
         _env_file=None,
-        project_name="Magick AI Cloud Test",
+        project_name="Npcink AI Cloud Test",
         environment="test",
         database_url=database_url,
         redis_url="redis://localhost:6379/0",
@@ -207,7 +207,7 @@ def test_internal_alpha_onboarding_flow_closes_admin_user_site_key_usage_audit(
         json={"email": "alpha@example.com"},
         headers={
             **_origin_headers(),
-            "X-Magick-Dev-Login-Code": "1",
+            "X-Npcink-Dev-Login-Code": "1",
         },
     )
     assert login_code_response.status_code == 200, login_code_response.text

@@ -65,7 +65,7 @@ def test_redact_addon_settings_keeps_presence_only_for_secret_fields() -> None:
 
 
 def test_addon_option_names_prefers_current_magick_option() -> None:
-    assert ADDON_OPTION_NAMES[0] == "magick_ai_cloud_addon_settings"
+    assert ADDON_OPTION_NAMES[0] == "npcink_cloud_addon_settings"
     assert "npcink_cloud_addon_settings" in ADDON_OPTION_NAMES
 
 

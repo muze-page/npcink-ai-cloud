@@ -63,7 +63,7 @@ Payload hardening:
 The runtime input file was kept local-only under:
 
 ```text
-/Users/muze/gitee/magick-ai-cloud/.tmp/npcink-trial-large-batch-20260620/sync-payload.json
+/Users/muze/gitee/npcink-cloud/.tmp/npcink-trial-large-batch-20260620/sync-payload.json
 ```
 
 ## Sync Evidence
@@ -73,7 +73,7 @@ client. It used `sync_mode=rebuild`, so the previous 9-document trial index was
 replaced by this 100-document staging index in Cloud.
 
 - Run ID: `run_722d6f50f10049578d68b4de24afd36c`
-- Ability: `magick-ai-cloud/site-knowledge-sync`
+- Ability: `npcink-cloud/site-knowledge-sync`
 - Contract: `site_knowledge_sync.v1`
 - Status: succeeded
 - Sync status: completed
@@ -102,7 +102,7 @@ Quota after sync:
 The search was submitted through the verified addon client after the rebuild.
 
 - Run ID: `run_6426cc25e4954ffa836a05ebddd06691`
-- Ability: `magick-ai-cloud/site-knowledge-search`
+- Ability: `npcink-cloud/site-knowledge-search`
 - Contract: `site_knowledge_search.v1`
 - Intent: `writing_support_plan`
 - Query:
@@ -150,7 +150,7 @@ The response's handoff retained these boundaries:
 The status check was submitted through the verified addon client after search.
 
 - Run ID: `run_ceec2f6be1b04ce98ba10d5fee10ecbd`
-- Ability: `magick-ai-cloud/site-knowledge-status`
+- Ability: `npcink-cloud/site-knowledge-status`
 - Contract: `site_knowledge_status.v1`
 - Status: succeeded
 - Index status: ready

@@ -16,7 +16,7 @@ class VLLMProviderAdapter(OpenAIProviderAdapter):
         base_url: str,
         api_key: str | None = None,
         timeout_seconds: float = 30.0,
-        app_name: str = "magick-ai-cloud",
+        app_name: str = "npcink-ai-cloud",
         transport: httpx.BaseTransport | None = None,
     ) -> None:
         super().__init__(

@@ -17,7 +17,7 @@ class OpenRouterProviderAdapter(OpenAIProviderAdapter):
         api_key: str,
         timeout_seconds: float = 30.0,
         site_url: str | None = None,
-        app_name: str = "Magick AI Cloud",
+        app_name: str = "Npcink AI Cloud",
         transport: httpx.BaseTransport | None = None,
     ) -> None:
         extra_headers = {"X-Title": app_name}

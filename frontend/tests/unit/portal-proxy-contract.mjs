@@ -13,9 +13,9 @@ const adminSharedSource = readFileSync(adminSharedPath, 'utf8');
 for (const headerName of [
   'authorization',
   'idempotency-key',
-  'x-magick-debug-portal-link',
-  'x-magick-portal-member-ref',
-  'x-magick-portal-token',
+  'x-npcink-debug-portal-link',
+  'x-npcink-portal-member-ref',
+  'x-npcink-portal-token',
 ]) {
   assert.match(
     portalSharedSource,

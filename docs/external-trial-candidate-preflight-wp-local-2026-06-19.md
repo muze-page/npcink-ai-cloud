@@ -115,9 +115,9 @@ Observed `wp-trial` details:
 
 `wp-trial` currently points its Cloud addon at this Cloud site ID:
 
-- `site_magick_ai_local`
+- `site_npcink_local`
 
-That site ID was already used by the previous `magick-ai.local` local alpha
+That site ID was already used by the previous `npcink.local` local alpha
 rehearsal. Reusing it would mix evidence across two WordPress targets and make
 usage, credit ledger, billing/detail, audit, and guard records harder to
 explain.

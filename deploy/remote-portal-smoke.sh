@@ -3,18 +3,18 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 . "${ROOT_DIR}/deploy/common.sh"
-magick_ai_cloud_load_env_file "${ROOT_DIR}"
+npcink_ai_cloud_load_env_file "${ROOT_DIR}"
 
-magick_ai_cloud_require_cmd curl
-magick_ai_cloud_require_cmd python3
-magick_ai_cloud_require_cmd mktemp
+npcink_ai_cloud_require_cmd curl
+npcink_ai_cloud_require_cmd python3
+npcink_ai_cloud_require_cmd mktemp
 
-BASE_URL="${MAGICK_CLOUD_BASE_URL:-http://127.0.0.1:${MAGICK_CLOUD_PORT:-8010}}"
-SITE_ID="${MAGICK_CLOUD_SITE_ID:-}"
-MEMBER_EMAIL="${MAGICK_CLOUD_MEMBER_EMAIL:-}"
+BASE_URL="${NPCINK_CLOUD_BASE_URL:-http://127.0.0.1:${NPCINK_CLOUD_PORT:-8010}}"
+SITE_ID="${NPCINK_CLOUD_SITE_ID:-}"
+MEMBER_EMAIL="${NPCINK_CLOUD_MEMBER_EMAIL:-}"
 MEMBER_EMAIL_NORMALIZED="$(printf '%s' "${MEMBER_EMAIL}" | tr '[:upper:]' '[:lower:]')"
-MEMBER_REF="${MAGICK_CLOUD_MEMBER_REF:-}"
-LOGIN_CODE="${MAGICK_CLOUD_PORTAL_LOGIN_CODE:-}"
+MEMBER_REF="${NPCINK_CLOUD_MEMBER_REF:-}"
+LOGIN_CODE="${NPCINK_CLOUD_PORTAL_LOGIN_CODE:-}"
 
 while [ "$#" -gt 0 ]; do
 	case "$1" in
@@ -60,10 +60,10 @@ if [ -z "${MEMBER_REF}" ] && [ -n "${MEMBER_EMAIL_NORMALIZED}" ]; then
 	MEMBER_REF="user:${MEMBER_EMAIL_NORMALIZED}"
 fi
 if [ -z "${SITE_ID}" ]; then
-	fail "--site-id or MAGICK_CLOUD_SITE_ID is required"
+	fail "--site-id or NPCINK_CLOUD_SITE_ID is required"
 fi
 if [ -z "${MEMBER_EMAIL}" ] && [ -z "${MEMBER_REF}" ]; then
-	fail "--member-email, --member-ref, or MAGICK_CLOUD_MEMBER_EMAIL is required"
+	fail "--member-email, --member-ref, or NPCINK_CLOUD_MEMBER_EMAIL is required"
 fi
 
 json_read_path() {
@@ -187,7 +187,7 @@ http_request() {
 }
 
 ok "Waiting for cloud ready: ${BASE_URL}"
-if ! magick_ai_cloud_wait_for_ready "${BASE_URL}" 20 2; then
+if ! npcink_ai_cloud_wait_for_ready "${BASE_URL}" 20 2; then
 	fail "Cloud API did not become ready"
 fi
 
@@ -219,7 +219,7 @@ PY
 	http_request "POST" "${BASE_URL%/}/portal/v1/auth/code/verify" "${LOGIN_VERIFY_BODY}"
 	assert_status "${HTTP_STATUS}" "200" "portal login code verification should succeed"
 else
-	fail "portal login code is required to continue; pass MAGICK_CLOUD_PORTAL_LOGIN_CODE or --login-code."
+	fail "portal login code is required to continue; pass NPCINK_CLOUD_PORTAL_LOGIN_CODE or --login-code."
 fi
 
 http_request "GET" "${BASE_URL%/}/portal/v1/session"

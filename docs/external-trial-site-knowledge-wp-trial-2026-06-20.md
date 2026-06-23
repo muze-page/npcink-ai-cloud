@@ -79,7 +79,7 @@ cannot accidentally look like PII or secrets.
 Sync run:
 
 - Run ID: `run_49f826fdfea149b5b4b1a7cff170bd1b`
-- Ability: `magick-ai-cloud/site-knowledge-sync`
+- Ability: `npcink-cloud/site-knowledge-sync`
 - Status: succeeded
 - Sync mode: rebuild
 - Indexed documents: 8
@@ -90,7 +90,7 @@ Sync run:
 Search run:
 
 - Run ID: `run_0eae360356e3469b9938f1f681177acc`
-- Ability: `magick-ai-cloud/site-knowledge-search`
+- Ability: `npcink-cloud/site-knowledge-search`
 - Intent: `writing_support_plan`
 - Query: `image alignment headings blockquotes WordPress sample page`
 - Status: succeeded
@@ -105,7 +105,7 @@ Search run:
 Status run:
 
 - Run ID: `run_61994f26b4044f1ebeb6423557aa3d6a`
-- Ability: `magick-ai-cloud/site-knowledge-status`
+- Ability: `npcink-cloud/site-knowledge-status`
 - Status: succeeded
 - Index status: ready
 - Indexed posts/pages: 8

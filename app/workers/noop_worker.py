@@ -12,7 +12,7 @@ def main() -> None:
     configure_logging(settings.log_level)
     configure_tracing(settings)
 
-    logger = get_logger("magick_ai_cloud.worker")
+    logger = get_logger("npcink_ai_cloud.worker")
     logger.info("noop worker started")
 
     while True:

@@ -5,7 +5,7 @@ Date: 2026-06-04
 
 ## Scope
 
-Internal AI Advisor defines how Magick AI Cloud may use AI for our own cloud
+Internal AI Advisor defines how Npcink AI Cloud may use AI for our own cloud
 operations, analytics, diagnostics, and recommendations.
 
 This contract does not define customer-facing AI features, a second product
@@ -227,7 +227,7 @@ prompts, raw provider payloads, full `source_context`, callback bodies, secrets,
 or WordPress content.
 Provider execution requires both:
 
-- `MAGICK_CLOUD_INTERNAL_OPS_SUMMARIZER_PROVIDER_ALLOWLIST` includes the
+- `NPCINK_CLOUD_INTERNAL_OPS_SUMMARIZER_PROVIDER_ALLOWLIST` includes the
   provider id
 - the request explicitly passes that `provider_id`
 

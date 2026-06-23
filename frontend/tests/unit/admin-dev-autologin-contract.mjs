@@ -98,7 +98,7 @@ assert.match(
 );
 assert.match(
   portalRouteSource,
-  /'X-Magick-Debug-Portal-Link':\s*'1'/,
+  /'X-Npcink-Debug-Portal-Link':\s*'1'/,
   'portal dev-entry must opt into the debug portal-link flow'
 );
 assert.match(

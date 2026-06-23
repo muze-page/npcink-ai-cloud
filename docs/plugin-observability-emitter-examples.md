@@ -213,7 +213,7 @@ Example addon batch event:
 ```json
 {
   "schema_version": "2026-06-01",
-  "plugin_slug": "magick-ai-cloud-addon",
+  "plugin_slug": "npcink-cloud-addon",
   "plugin_version": "0.1.0",
   "source": "local",
   "event_kind": "addon.batch.uploaded",

@@ -61,7 +61,7 @@ def test_catalog_routes_return_seeded_models(tmp_path: Path) -> None:
     seed_site_auth(database_url, site_id="site_catalog", scopes=["catalog:read"])
 
     settings = Settings(
-        project_name="Magick AI Cloud Test",
+        project_name="Npcink AI Cloud Test",
         environment="test",
         database_url=database_url,
         redis_url="redis://localhost:6379/0",
@@ -97,7 +97,7 @@ def test_catalog_routes_support_recommended_profile_filter(tmp_path: Path) -> No
     seed_site_auth(database_url, site_id="site_catalog", scopes=["catalog:read"])
 
     settings = Settings(
-        project_name="Magick AI Cloud Test",
+        project_name="Npcink AI Cloud Test",
         environment="test",
         database_url=database_url,
         redis_url="redis://localhost:6379/0",
@@ -135,7 +135,7 @@ def test_catalog_platform_model_alias_routes_match_models_surface(tmp_path: Path
     seed_site_auth(database_url, site_id="site_catalog", scopes=["catalog:read"])
 
     settings = Settings(
-        project_name="Magick AI Cloud Test",
+        project_name="Npcink AI Cloud Test",
         environment="test",
         database_url=database_url,
         redis_url="redis://localhost:6379/0",
@@ -187,7 +187,7 @@ def test_internal_refresh_rejects_replayed_idempotency_marker(tmp_path: Path) ->
     init_schema(database_url)
 
     settings = Settings(
-        project_name="Magick AI Cloud Test",
+        project_name="Npcink AI Cloud Test",
         environment="test",
         database_url=database_url,
         redis_url="redis://localhost:6379/0",
@@ -228,7 +228,7 @@ def test_catalog_routes_require_signed_headers(tmp_path: Path) -> None:
     CatalogService(database_url).refresh_catalog()
 
     settings = Settings(
-        project_name="Magick AI Cloud Test",
+        project_name="Npcink AI Cloud Test",
         environment="test",
         database_url=database_url,
         redis_url="redis://localhost:6379/0",
@@ -248,7 +248,7 @@ def test_internal_refresh_requires_idempotency_header(tmp_path: Path) -> None:
     init_schema(database_url)
 
     settings = Settings(
-        project_name="Magick AI Cloud Test",
+        project_name="Npcink AI Cloud Test",
         environment="test",
         database_url=database_url,
         redis_url="redis://localhost:6379/0",
@@ -284,7 +284,7 @@ def test_internal_refresh_rejects_public_runtime_hmac_headers(tmp_path: Path) ->
     )
 
     settings = Settings(
-        project_name="Magick AI Cloud Test",
+        project_name="Npcink AI Cloud Test",
         environment="test",
         database_url=database_url,
         redis_url="redis://localhost:6379/0",
@@ -319,7 +319,7 @@ def test_internal_refresh_requires_internal_auth_configuration(tmp_path: Path) -
     init_schema(database_url)
 
     settings = Settings(
-        project_name="Magick AI Cloud Test",
+        project_name="Npcink AI Cloud Test",
         environment="test",
         database_url=database_url,
         redis_url="redis://localhost:6379/0",
@@ -352,7 +352,7 @@ def test_catalog_routes_do_not_accept_internal_token_only(tmp_path: Path) -> Non
     CatalogService(database_url).refresh_catalog()
 
     settings = Settings(
-        project_name="Magick AI Cloud Test",
+        project_name="Npcink AI Cloud Test",
         environment="test",
         database_url=database_url,
         redis_url="redis://localhost:6379/0",
@@ -377,7 +377,7 @@ def test_internal_portal_email_test_sends_message(tmp_path: Path) -> None:
     fake_sender = FakePortalEmailSender()
 
     settings = Settings(
-        project_name="Magick AI Cloud Test",
+        project_name="Npcink AI Cloud Test",
         environment="test",
         database_url=database_url,
         redis_url="redis://localhost:6379/0",
@@ -411,7 +411,7 @@ def test_internal_portal_email_test_sends_message(tmp_path: Path) -> None:
     assert fake_sender.test_messages == [
         {
             "recipient_email": "admin@example.com",
-            "project_name": "Magick AI Cloud Test",
+            "project_name": "Npcink AI Cloud Test",
             "portal_url": "https://cloud.example.com/portal/login",
         }
     ]
@@ -424,7 +424,7 @@ def test_internal_portal_email_test_requires_configured_sender(tmp_path: Path) -
     init_schema(database_url)
 
     settings = Settings(
-        project_name="Magick AI Cloud Test",
+        project_name="Npcink AI Cloud Test",
         environment="test",
         database_url=database_url,
         redis_url="redis://localhost:6379/0",

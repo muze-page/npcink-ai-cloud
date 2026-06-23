@@ -37,7 +37,7 @@ def _build_client(tmp_path: Path) -> tuple[str, TestClient]:
     )
     settings = Settings(
         _env_file=None,
-        project_name="Magick AI Cloud Site Ops Analysis Test",
+        project_name="Npcink AI Cloud Site Ops Analysis Test",
         environment="test",
         database_url=database_url,
         redis_url="redis://localhost:6379/0",
@@ -150,7 +150,7 @@ def _site_ops_request(input_overrides: dict[str, Any] | None = None) -> dict[str
     }
     input_payload.update(input_overrides or {})
     return {
-        "ability_name": "magick-ai-toolbox/analyze-site-ops",
+        "ability_name": "npcink-toolbox/analyze-site-ops",
         "contract_version": "site_ops_cloud_analysis_request.v1",
         "execution_pattern": "whole_run_offload",
         "data_classification": "public_site_aggregate",

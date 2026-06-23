@@ -323,7 +323,7 @@ from tests.conftest import TEST_PORTAL_AUTH_TOKEN, build_portal_bearer_headers, 
 
 def _build_client(*, jwt_secret: str = "") -> TestClient:
     settings_kwargs = {
-        "project_name": "Magick AI Cloud Test",
+        "project_name": "Npcink AI Cloud Test",
         "environment": "test",
         "database_url": "sqlite+pysqlite:///:memory:",
         "redis_url": "redis://localhost:6379/0",
@@ -389,7 +389,7 @@ from tests.conftest import TEST_PORTAL_AUTH_TOKEN, build_portal_headers
 
 def _build_client() -> TestClient:
     settings = Settings(
-        project_name="Magick AI Cloud Test",
+        project_name="Npcink AI Cloud Test",
         environment="test",
         database_url="sqlite+pysqlite:///:memory:",
         redis_url="redis://localhost:6379/0",

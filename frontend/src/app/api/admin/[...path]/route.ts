@@ -23,7 +23,7 @@ import { getInternalAuthToken } from '@/lib/env';
 const COPIED_REQUEST_HEADERS = [
   'accept-language',
   'idempotency-key',
-  'x-magick-debug-portal-link',
+  'x-npcink-debug-portal-link',
 ] as const;
 
 function buildAdminBackendPath(pathSegments: string[], method: string): string {
@@ -120,7 +120,7 @@ async function proxyAdminRequest(
   }
 
   // Add internal token for all admin requests
-  headers['X-Magick-Internal-Token'] = getInternalAuthToken();
+  headers['X-Npcink-Internal-Token'] = getInternalAuthToken();
 
   // Add idempotency key for write requests
   if (method !== 'GET' && method !== 'HEAD') {

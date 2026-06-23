@@ -126,7 +126,7 @@ def _build_client(
     )
     settings = Settings(
         _env_file=None,
-        project_name="Magick AI Cloud Image Context Evidence Test",
+        project_name="Npcink AI Cloud Image Context Evidence Test",
         environment="test",
         database_url=database_url,
         redis_url="redis://localhost:6379/0",

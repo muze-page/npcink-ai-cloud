@@ -7,7 +7,7 @@ Date: 2026-06-16
 ## Purpose
 
 Pro Cloud Batch Runtime lets paid sites offload bounded nightly analysis work to
-Magick AI Cloud without moving schedule truth, editorial workflow truth, or
+Npcink AI Cloud without moving schedule truth, editorial workflow truth, or
 WordPress write authority out of the local stack.
 
 The first supported profile is:
@@ -30,7 +30,7 @@ Local WordPress owns:
   rollback;
 - all final WordPress writes.
 
-Magick AI Cloud owns:
+Npcink AI Cloud owns:
 
 - signed runtime request acceptance for provisioned active sites;
 - queue-backed execution through the existing hosted runtime worker;
@@ -55,8 +55,8 @@ Use the existing public runtime route:
 
 Supported ability names:
 
-- `magick-ai-toolbox/analyze-nightly-content-batch`
-- `magick-ai-cloud/analyze-nightly-content-batch`
+- `npcink-toolbox/analyze-nightly-content-batch`
+- `npcink-cloud/analyze-nightly-content-batch`
 
 Defaults:
 

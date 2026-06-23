@@ -239,7 +239,7 @@ class SiteKnowledgeRepository:
             .select_from(RunRecord)
             .where(
                 RunRecord.site_id == site_id,
-                RunRecord.ability_name == "magick-ai-cloud/site-knowledge-sync",
+                RunRecord.ability_name == "npcink-cloud/site-knowledge-sync",
                 RunRecord.status.in_(("queued", "running")),
             )
         )
@@ -250,7 +250,7 @@ class SiteKnowledgeRepository:
             select(RunRecord)
             .where(
                 RunRecord.site_id == site_id,
-                RunRecord.ability_name == "magick-ai-cloud/site-knowledge-sync",
+                RunRecord.ability_name == "npcink-cloud/site-knowledge-sync",
                 RunRecord.status.in_(("queued", "running")),
             )
             .order_by(
@@ -266,7 +266,7 @@ class SiteKnowledgeRepository:
             select(RunRecord)
             .where(
                 RunRecord.site_id == site_id,
-                RunRecord.ability_name == "magick-ai-cloud/site-knowledge-sync",
+                RunRecord.ability_name == "npcink-cloud/site-knowledge-sync",
                 RunRecord.status == "failed",
             )
             .order_by(RunRecord.finished_at.desc(), RunRecord.started_at.desc())

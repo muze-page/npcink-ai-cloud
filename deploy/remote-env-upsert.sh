@@ -11,7 +11,7 @@ fi
 
 ENV_PATH=".env.deploy"
 SHARED_ENV_PATH=""
-BASE_URL="${MAGICK_CLOUD_BASE_URL:-http://127.0.0.1:${MAGICK_CLOUD_PORT:-8010}}"
+BASE_URL="${NPCINK_CLOUD_BASE_URL:-http://127.0.0.1:${NPCINK_CLOUD_PORT:-8010}}"
 RESTART_SERVICES="proxy,api,worker,callback-worker,ops-worker"
 RESTART_AFTER_UPDATE=1
 declare -a SET_ENTRIES=()
@@ -33,7 +33,7 @@ resolve_env_path() {
 validate_key() {
 	local key="$1"
 	case "${key}" in
-		MAGICK_CLOUD_[A-Z0-9_]*)
+		NPCINK_CLOUD_[A-Z0-9_]*)
 			return 0
 			;;
 		*)
@@ -46,11 +46,11 @@ validate_key() {
 fail_if_internal_token_removed() {
 	local key="$1"
 	local value="${2:-__UNSET__}"
-	if [ "${key}" != "MAGICK_CLOUD_INTERNAL_AUTH_TOKEN" ]; then
+	if [ "${key}" != "NPCINK_CLOUD_INTERNAL_AUTH_TOKEN" ]; then
 		return 0
 	fi
 	if [ "${value}" = "__UNSET__" ] || [ -z "${value}" ]; then
-		echo "[fail] MAGICK_CLOUD_INTERNAL_AUTH_TOKEN must remain non-empty for production perimeter" >&2
+		echo "[fail] NPCINK_CLOUD_INTERNAL_AUTH_TOKEN must remain non-empty for production perimeter" >&2
 		exit 1
 	fi
 }
@@ -62,9 +62,9 @@ assert_env_file_internal_token() {
 		exit 1
 	fi
 	local value
-	value="$(awk -F= '$1=="MAGICK_CLOUD_INTERNAL_AUTH_TOKEN"{print substr($0, index($0,"=")+1)}' "${file}" | tail -n 1)"
+	value="$(awk -F= '$1=="NPCINK_CLOUD_INTERNAL_AUTH_TOKEN"{print substr($0, index($0,"=")+1)}' "${file}" | tail -n 1)"
 	if [ -z "${value}" ]; then
-		echo "[fail] MAGICK_CLOUD_INTERNAL_AUTH_TOKEN must remain non-empty in ${file}" >&2
+		echo "[fail] NPCINK_CLOUD_INTERNAL_AUTH_TOKEN must remain non-empty in ${file}" >&2
 		exit 1
 	fi
 }
@@ -240,16 +240,16 @@ if [ -n "${SHARED_FILE}" ] && [ "${SHARED_FILE}" != "${ENV_FILE}" ]; then
 fi
 
 if [ "${RESTART_AFTER_UPDATE}" -eq 1 ]; then
-	magick_ai_cloud_require_cmd docker
+	npcink_ai_cloud_require_cmd docker
 	OLD_IFS="${IFS}"
 	IFS=','
 	read -r -a restart_service_array <<< "${RESTART_SERVICES}"
 	IFS="${OLD_IFS}"
-	magick_ai_cloud_compose "${ROOT_DIR}" up -d "${restart_service_array[@]}"
+	npcink_ai_cloud_compose "${ROOT_DIR}" up -d "${restart_service_array[@]}"
 
 	case ",${RESTART_SERVICES}," in
 		*,api,*)
-			if ! magick_ai_cloud_wait_for_ready "${BASE_URL}" 20 2; then
+			if ! npcink_ai_cloud_wait_for_ready "${BASE_URL}" 20 2; then
 				echo "[fail] Cloud API did not become ready at ${BASE_URL}" >&2
 				exit 1
 			fi

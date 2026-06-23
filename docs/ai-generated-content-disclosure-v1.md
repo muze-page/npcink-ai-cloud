@@ -11,7 +11,7 @@ advice.
 
 ## 1. Scope
 
-This standard applies to all Magick AI Cloud surfaces that return text, images,
+This standard applies to all Npcink AI Cloud surfaces that return text, images,
 audio, video, summaries, recommendations, support drafts, analysis, or other
 content where an AI model materially contributed to the output.
 
