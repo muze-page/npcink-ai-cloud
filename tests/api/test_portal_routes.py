@@ -1767,7 +1767,14 @@ def test_portal_summary_usage_entitlements_and_audit_routes(tmp_path: Path) -> N
         "tokens_total",
         "zhihu_hot_topics",
     }
+    assert {item["category"] for item in credit_ledger_data["items"]} == {"ai_usage"}
+    assert credit_ledger_data["summary"]["category_totals"]["ai_usage"][
+        "net_credit_delta"
+    ] == -3.0
     assert credit_ledger_data["usage_detail"]["surface"] == "portal_personal_credit_usage"
+    assert {
+        item["category"] for item in credit_ledger_data["usage_detail"]["legend"]
+    } >= {"ai_usage", "credit_pack_purchase", "refund_adjustment", "operator_adjustment"}
     assert {item["key"] for item in credit_ledger_data["usage_detail"]["breakdown"]} >= {
         "tokens_total",
         "zhihu_hot_topics",
@@ -1800,6 +1807,20 @@ def test_portal_summary_usage_entitlements_and_audit_routes(tmp_path: Path) -> N
     assert credit_pack_order["purchase_kind"] == "credit_pack"
     assert credit_pack_order["credit_pack"]["ai_credits"] == 10000
     assert credit_pack_order["target_subscription_id"] == "sub_portal_reads"
+    assert credit_pack_order["status_detail"]["code"] == "awaiting_payment_confirmation"
+
+    payment_orders_response = client.get(
+        "/portal/v1/sites/site_portal_reads/payment-orders?limit=10",
+        headers=build_portal_headers(site_admin_ref="site_admin:portal-reads@example.com"),
+    )
+    assert payment_orders_response.status_code == 200
+    payment_orders = payment_orders_response.json()["data"]
+    assert payment_orders["pagination"]["total"] == 1
+    assert payment_orders["items"][0]["order_id"] == credit_pack_order["order_id"]
+    assert payment_orders["items"][0]["status"] == "pending"
+    assert payment_orders["items"][0]["status_detail"]["next_action"] == (
+        "provider_payment_or_callback"
+    )
 
     mark_paid_response = client.post(
         f"/internal/service/payments/orders/{credit_pack_order['order_id']}/mark-paid",
@@ -1812,6 +1833,18 @@ def test_portal_summary_usage_entitlements_and_audit_routes(tmp_path: Path) -> N
     )
     assert mark_paid_response.status_code == 200, mark_paid_response.text
     assert mark_paid_response.json()["data"]["credit_ledger_entry"]["credit_delta"] == 10000.0
+    assert mark_paid_response.json()["data"]["credit_ledger_entry"]["category"] == (
+        "credit_pack_purchase"
+    )
+
+    paid_payment_orders_response = client.get(
+        "/portal/v1/sites/site_portal_reads/payment-orders?limit=10",
+        headers=build_portal_headers(site_admin_ref="site_admin:portal-reads@example.com"),
+    )
+    assert paid_payment_orders_response.status_code == 200
+    paid_payment_order = paid_payment_orders_response.json()["data"]["items"][0]
+    assert paid_payment_order["status"] == "paid"
+    assert paid_payment_order["status_detail"]["code"] == "paid_and_granted"
 
     refreshed_credit_ledger_response = client.get(
         "/portal/v1/sites/site_portal_reads/credit-ledger?limit=10",
@@ -1821,6 +1854,9 @@ def test_portal_summary_usage_entitlements_and_audit_routes(tmp_path: Path) -> N
     refreshed_ledger = refreshed_credit_ledger_response.json()["data"]
     assert refreshed_ledger["summary"]["granted_credits"] == 10000.0
     assert refreshed_ledger["summary"]["net_used_credits"] == 0.0
+    assert refreshed_ledger["summary"]["category_totals"]["credit_pack_purchase"][
+        "net_credit_delta"
+    ] == 10000.0
     assert "credit_pack_purchase" in {
         item["source_type"] for item in refreshed_ledger["items"]
     }

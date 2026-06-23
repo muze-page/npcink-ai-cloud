@@ -11,8 +11,12 @@ from app.domain.commercial.credits import (
     AI_CREDIT_CHARGE_COMPONENT_REQUIRED_FIELDS,
     AI_CREDIT_CHARGE_CONTRACT_VERSION,
     AI_CREDIT_COMPONENT_POLICY_REGISTRY,
+    AI_CREDIT_FEATURE_CHARGE_RULE_REQUIRED_FIELDS,
+    AI_CREDIT_FEATURE_CHARGE_RULES,
+    AI_CREDIT_FEATURE_CHARGE_RULES_VERSION,
     AI_CREDIT_RATE_VERSION,
     estimate_runtime_request_ai_credits,
+    list_ai_credit_feature_charge_rules,
     record_credit_ledger_component,
     vector_credit_component,
 )
@@ -52,11 +56,41 @@ def test_ai_credit_capability_registry_defines_required_runtime_families() -> No
         assert policy["budget_key"] == "ai_credits"
 
 
+def test_ai_credit_feature_charge_rules_cover_billable_components() -> None:
+    assert list_ai_credit_feature_charge_rules()
+    referenced_components: set[str] = set()
+    for feature_key, rule in AI_CREDIT_FEATURE_CHARGE_RULES.items():
+        assert rule["feature_key"] == feature_key
+        assert set(AI_CREDIT_FEATURE_CHARGE_RULE_REQUIRED_FIELDS) <= set(rule)
+        assert rule["contract_version"] == AI_CREDIT_FEATURE_CHARGE_RULES_VERSION
+        assert rule["budget_key"] == "ai_credits"
+        capability_key = str(rule["capability_key"])
+        assert capability_key in AI_CREDIT_CAPABILITY_POLICY_REGISTRY
+        capability_components = set(
+            str(component)
+            for component in AI_CREDIT_CAPABILITY_POLICY_REGISTRY[capability_key][
+                "ledger_components"
+            ]
+        )
+        rule_components = {str(component) for component in rule["ledger_components"]}
+        assert rule_components <= capability_components
+        assert rule_components <= set(AI_CREDIT_COMPONENT_POLICY_REGISTRY)
+        referenced_components.update(rule_components)
+
+    billable_components = {
+        source_type
+        for source_type, policy in AI_CREDIT_COMPONENT_POLICY_REGISTRY.items()
+        if policy["charge_mode"] == "consume"
+    }
+    assert billable_components <= referenced_components
+
+
 def test_ai_credit_charge_contract_document_points_to_single_registry() -> None:
     contract = Path("docs/ai-credit-charge-contract-v1.md").read_text(encoding="utf-8")
     assert AI_CREDIT_CHARGE_CONTRACT_VERSION == "ai-credit-charge-contract-v1"
     assert "app/domain/commercial/credits.py" in contract
     assert "Do not add a second billing registry" in contract
+    assert AI_CREDIT_FEATURE_CHARGE_RULES_VERSION in contract
 
 
 def test_runtime_execute_authorization_calls_include_ai_credit_estimates() -> None:

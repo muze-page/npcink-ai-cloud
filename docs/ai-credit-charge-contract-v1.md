@@ -14,6 +14,7 @@ Every billable AI capability must be represented by:
 
 - `AI_CREDIT_COMPONENT_POLICY_REGISTRY` for ledger components.
 - `AI_CREDIT_CAPABILITY_POLICY_REGISTRY` for runtime capability classification.
+- `AI_CREDIT_FEATURE_CHARGE_RULES` for product feature to capability/component mapping.
 
 Do not add a second billing registry in route handlers, workers, providers, or frontend code.
 
@@ -46,9 +47,26 @@ Each runtime capability policy must declare:
 
 1. Add or reuse a component policy before writing ledger entries.
 2. Add or reuse a capability policy before authorizing runtime usage.
-3. Include focused tests covering estimate, ledger entry, and idempotency.
-4. Do not charge from frontend input. The server owns amount, rate, and ledger delta.
-5. Grants, refunds, and operator adjustments must stay separate from consume components.
+3. Add or reuse a feature charge rule before exposing a product feature.
+4. Include focused tests covering estimate, ledger entry, feature rule coverage, and idempotency.
+5. Do not charge from frontend input. The server owns amount, rate, and ledger delta.
+6. Grants, refunds, and operator adjustments must stay separate from consume components.
+
+## Feature Rule Fields
+
+Feature charge rules use `AI_CREDIT_FEATURE_CHARGE_RULES_VERSION=ai-credit-feature-charge-rules-v1`.
+
+Each feature rule must declare:
+
+- `feature_key`: stable product feature identifier.
+- `capability_key`: existing runtime capability policy used for authorization and estimates.
+- `charge_policy`: operator-readable policy name.
+- `ledger_components`: allowed ledger components for realized usage.
+- `limit_policy`: budget gate policy, currently AI credits required before execute.
+- `budget_key`: commercial budget key, currently `ai_credits`.
+- `contract_version`: feature rule contract version.
+
+WeChat Pay and Alipay affect order confirmation and credit grants. They do not create a second AI usage billing path.
 
 ## Current Non-Consume Sources
 

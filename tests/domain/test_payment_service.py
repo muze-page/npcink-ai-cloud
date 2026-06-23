@@ -241,6 +241,15 @@ def test_credit_pack_payment_success_grants_ai_credits_once(tmp_path: Path) -> N
         provider="alipay",
         audit_context=_audit("credit-pack-order"),
     )
+    pending_orders = service.list_account_payment_orders(
+        "acct_pay",
+        limit=10,
+    )
+    pending_credit_pack_order = next(
+        item
+        for item in pending_orders["items"]
+        if item["order_id"] == order["order_id"]
+    )
     paid = service.mark_payment_order_paid(
         order_id=str(order["order_id"]),
         provider_trade_no="202606230000000001",
@@ -262,13 +271,34 @@ def test_credit_pack_payment_success_grants_ai_credits_once(tmp_path: Path) -> N
     assert order["purchase_kind"] == "credit_pack"
     assert order["credit_pack"]["pack_id"] == "pack_small"
     assert order["target_subscription_id"] == base_paid["subscription"]["subscription_id"]
+    assert order["status_detail"]["code"] == "awaiting_payment_confirmation"
+    assert order["status_detail"]["simulated_payment"] is True
+    assert pending_credit_pack_order["status"] == PAYMENT_ORDER_STATUS_PENDING
+    assert pending_credit_pack_order["status_detail"]["next_action"] == (
+        "provider_payment_or_callback"
+    )
     assert paid["order"]["status"] == PAYMENT_ORDER_STATUS_PAID
+    assert paid["order"]["status_detail"]["code"] == "paid_and_granted"
     assert paid["credit_ledger_entry"]["event_type"] == "grant"
     assert paid["credit_ledger_entry"]["source_type"] == "credit_pack_purchase"
+    assert paid["credit_ledger_entry"]["category"] == "credit_pack_purchase"
+    assert paid["credit_ledger_entry"]["direction"] == "credit_in"
+    assert "Credit pack payment added" in paid["credit_ledger_entry"]["explanation"]
     assert paid["credit_ledger_entry"]["credit_delta"] == 10000.0
     assert paid_again["credit_ledger_entry"]["ledger_entry_id"] == (
         paid["credit_ledger_entry"]["ledger_entry_id"]
     )
+    paid_orders = service.list_account_payment_orders(
+        "acct_pay",
+        limit=10,
+    )
+    paid_credit_pack_order = next(
+        item
+        for item in paid_orders["items"]
+        if item["order_id"] == order["order_id"]
+    )
+    assert paid_credit_pack_order["status"] == PAYMENT_ORDER_STATUS_PAID
+    assert paid_credit_pack_order["status_detail"]["code"] == "paid_and_granted"
     with get_session(database_url) as session:
         assert len(list(session.scalars(select(AccountSubscription)))) == 1
         entries = list(session.scalars(select(CreditLedgerEntry)))
@@ -327,6 +357,8 @@ def test_credit_pack_refund_reverses_credit_grant_without_canceling_subscription
     assert result["revoked_subscription"] == {}
     assert result["credit_ledger_entry"]["event_type"] == "adjustment"
     assert result["credit_ledger_entry"]["source_type"] == "credit_pack_refund"
+    assert result["credit_ledger_entry"]["category"] == "refund_adjustment"
+    assert result["credit_ledger_entry"]["direction"] == "credit_out"
     assert result["credit_ledger_entry"]["credit_delta"] == -10000.0
     with get_session(database_url) as session:
         subscription = session.scalar(select(AccountSubscription))

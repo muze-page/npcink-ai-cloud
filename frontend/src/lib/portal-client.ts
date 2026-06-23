@@ -1105,6 +1105,7 @@ export interface PortalUsageBundle {
   entitlements: Entitlements;
   creditLedger: PortalCreditLedgerPayload;
   creditPacks: PortalCreditPackCatalogPayload;
+  paymentOrders: PortalPaymentOrderListPayload;
 }
 
 export interface PortalCreditLedgerEntry {
@@ -1112,6 +1113,10 @@ export interface PortalCreditLedgerEntry {
   site_id?: string;
   event_type?: string;
   source_type: string;
+  category?: string;
+  category_label?: string;
+  direction?: string;
+  explanation?: string;
   source_id?: string;
   run_id?: string;
   credit_delta: number;
@@ -1161,14 +1166,38 @@ export interface PortalCreditPackPaymentOrder {
   subject: string;
   checkout_url?: string;
   purchase_kind?: string;
+  status_detail?: {
+    code?: string;
+    label?: string;
+    detail?: string;
+    next_action?: string;
+    simulated_payment?: boolean;
+  };
   credit_pack?: PortalCreditPack;
   created_at?: string;
+  paid_at?: string;
+  refunded_at?: string;
 }
 
 export interface PortalCreditPackOrderPayload {
   site_id?: string;
   account_id?: string;
   order: PortalCreditPackPaymentOrder;
+}
+
+export type PortalPaymentOrder = PortalCreditPackPaymentOrder;
+
+export interface PortalPaymentOrderListPayload {
+  site_id?: string;
+  account_id?: string;
+  generated_at?: string;
+  pagination?: {
+    limit?: number;
+    offset?: number;
+    total?: number;
+    has_more?: boolean;
+  };
+  items: PortalPaymentOrder[];
 }
 
 export interface PortalCreditLedgerPayload {
@@ -1193,6 +1222,13 @@ export interface PortalCreditLedgerPayload {
     net_credit_delta?: number;
     net_used_credits?: number;
     entry_count?: number;
+    category_totals?: Record<
+      string,
+      {
+        label?: string;
+        net_credit_delta?: number;
+      }
+    >;
     breakdown?: Array<{
       key?: string;
       label?: string;
@@ -1597,6 +1633,18 @@ export class PortalClient {
     return this.request('GET', `/sites/${siteId}/credit-packs`, undefined, { requireAuth: true });
   }
 
+  async listPaymentOrders(
+    siteId: string,
+    options?: { limit?: number; offset?: number }
+  ): Promise<PortalEnvelope<PortalPaymentOrderListPayload>> {
+    const params = new URLSearchParams();
+    if (options?.limit) params.set('limit', String(options.limit));
+    if (options?.offset) params.set('offset', String(options.offset));
+
+    const query = params.toString() ? `?${params.toString()}` : '';
+    return this.request('GET', `/sites/${siteId}/payment-orders${query}`, undefined, { requireAuth: true });
+  }
+
   async createCreditPackOrder(
     siteId: string,
     packId: string,
@@ -1673,17 +1721,25 @@ export class PortalClient {
   }
 
   async getUsageBundle(siteId: string): Promise<PortalUsageBundle> {
-    const [usageResponse, entitlementsResponse, creditLedgerResponse, creditPacksResponse] = await Promise.all([
+    const [
+      usageResponse,
+      entitlementsResponse,
+      creditLedgerResponse,
+      creditPacksResponse,
+      paymentOrdersResponse,
+    ] = await Promise.all([
       this.getUsageSummary(siteId),
       this.getEntitlements(siteId),
       this.getCreditLedger(siteId, { limit: 12 }),
       this.listCreditPacks(siteId),
+      this.listPaymentOrders(siteId, { limit: 8 }),
     ]);
     return {
       usage: usageResponse.data,
       entitlements: entitlementsResponse.data,
       creditLedger: creditLedgerResponse.data,
       creditPacks: creditPacksResponse.data,
+      paymentOrders: paymentOrdersResponse.data,
     };
   }
 

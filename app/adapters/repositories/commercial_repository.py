@@ -959,6 +959,37 @@ class CommercialRepository:
             select(PaymentOrder).where(PaymentOrder.idempotency_key == idempotency_key)
         )
 
+    def list_payment_orders(
+        self,
+        *,
+        account_id: str,
+        site_id: str | None = None,
+        limit: int | None = None,
+        offset: int = 0,
+    ) -> list[PaymentOrder]:
+        statement = select(PaymentOrder).where(PaymentOrder.account_id == account_id)
+        if site_id:
+            statement = statement.where(PaymentOrder.site_id == site_id)
+        statement = statement.order_by(PaymentOrder.created_at.desc(), PaymentOrder.order_id.desc())
+        if offset > 0:
+            statement = statement.offset(offset)
+        if limit is not None and limit > 0:
+            statement = statement.limit(limit)
+        return list(self.session.scalars(statement))
+
+    def count_payment_orders(
+        self,
+        *,
+        account_id: str,
+        site_id: str | None = None,
+    ) -> int:
+        statement = select(func.count(PaymentOrder.order_id)).where(
+            PaymentOrder.account_id == account_id
+        )
+        if site_id:
+            statement = statement.where(PaymentOrder.site_id == site_id)
+        return int(self.session.scalar(statement) or 0)
+
     def create_payment_order(
         self,
         *,

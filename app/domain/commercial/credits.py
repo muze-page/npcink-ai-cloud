@@ -24,6 +24,15 @@ AI_CREDIT_CHARGE_CAPABILITY_REQUIRED_FIELDS = (
     "idempotency_scope",
     "budget_key",
 )
+AI_CREDIT_FEATURE_CHARGE_RULE_REQUIRED_FIELDS = (
+    "feature_key",
+    "capability_key",
+    "charge_policy",
+    "ledger_components",
+    "limit_policy",
+    "budget_key",
+    "contract_version",
+)
 
 AI_CREDIT_BREAKDOWN_ORDER = (
     "runs",
@@ -234,6 +243,64 @@ AI_CREDIT_CAPABILITY_POLICY_REGISTRY: dict[str, dict[str, object]] = {
     },
 }
 
+AI_CREDIT_FEATURE_CHARGE_RULES_VERSION = "ai-credit-feature-charge-rules-v1"
+AI_CREDIT_FEATURE_CHARGE_RULES: dict[str, dict[str, object]] = {
+    "hosted_text_runtime": {
+        "feature_key": "hosted_text_runtime",
+        "capability_key": "runtime:text",
+        "charge_policy": "charge_base_run_and_provider_usage",
+        "ledger_components": ["runs", "tokens_total", "provider_calls_other"],
+        "limit_policy": "ai_credits_required_before_execute",
+        "budget_key": "ai_credits",
+        "contract_version": AI_CREDIT_FEATURE_CHARGE_RULES_VERSION,
+    },
+    "ai_search": {
+        "feature_key": "ai_search",
+        "capability_key": "runtime:web_search",
+        "charge_policy": "charge_base_run_and_search_provider_usage",
+        "ledger_components": [
+            "runs",
+            "web_search",
+            "zhihu_global_search",
+            "zhihu_research",
+            "zhihu_hot_topics",
+            "zhihu_direct_answer_simple",
+            "zhihu_direct_answer_deep",
+            "zhihu_direct_answer_deepsearch",
+        ],
+        "limit_policy": "ai_credits_required_before_execute",
+        "budget_key": "ai_credits",
+        "contract_version": AI_CREDIT_FEATURE_CHARGE_RULES_VERSION,
+    },
+    "image_recommendation_generation": {
+        "feature_key": "image_recommendation_generation",
+        "capability_key": "runtime:image",
+        "charge_policy": "charge_base_run_tokens_and_image_provider_usage",
+        "ledger_components": ["runs", "tokens_total", "image_recommendation"],
+        "limit_policy": "ai_credits_required_before_execute",
+        "budget_key": "ai_credits",
+        "contract_version": AI_CREDIT_FEATURE_CHARGE_RULES_VERSION,
+    },
+    "site_knowledge_indexing": {
+        "feature_key": "site_knowledge_indexing",
+        "capability_key": "runtime:site_knowledge",
+        "charge_policy": "charge_base_run_tokens_and_vector_index_usage",
+        "ledger_components": ["runs", "tokens_total", "vector_documents", "vector_chunks"],
+        "limit_policy": "ai_credits_required_before_execute",
+        "budget_key": "ai_credits",
+        "contract_version": AI_CREDIT_FEATURE_CHARGE_RULES_VERSION,
+    },
+    "batch_cloud_runtime": {
+        "feature_key": "batch_cloud_runtime",
+        "capability_key": "runtime:batch",
+        "charge_policy": "charge_base_run_and_provider_usage",
+        "ledger_components": ["runs", "tokens_total", "provider_calls_other"],
+        "limit_policy": "ai_credits_required_before_execute",
+        "budget_key": "ai_credits",
+        "contract_version": AI_CREDIT_FEATURE_CHARGE_RULES_VERSION,
+    },
+}
+
 for component_policy in AI_CREDIT_COMPONENT_POLICY_REGISTRY.values():
     component_policy.setdefault("minimum_charge", 0.0)
     component_policy.setdefault("idempotency_scope", "ledger_component")
@@ -379,6 +446,13 @@ def resolve_ai_credit_capability_policy(
     if normalized_kind in {"nightly_site_inspection", "cloud_batch_runtime"}:
         return dict(AI_CREDIT_CAPABILITY_POLICY_REGISTRY["runtime:batch"])
     return dict(AI_CREDIT_CAPABILITY_POLICY_REGISTRY["runtime:text"])
+
+
+def list_ai_credit_feature_charge_rules() -> list[dict[str, object]]:
+    return [
+        dict(rule)
+        for _, rule in sorted(AI_CREDIT_FEATURE_CHARGE_RULES.items(), key=lambda item: item[0])
+    ]
 
 
 def estimate_runtime_request_ai_credits(

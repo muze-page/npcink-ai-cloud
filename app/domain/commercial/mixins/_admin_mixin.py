@@ -58,6 +58,16 @@ AI_CREDIT_VISIBLE_LEDGER_EVENT_TYPES = [
     CREDIT_LEDGER_EVENT_REFUND,
 ]
 
+AI_CREDIT_LEDGER_CATEGORY_LABELS = {
+    "monthly_plan_grant": "Monthly plan grant",
+    "credit_pack_purchase": "Credit pack purchase",
+    "ai_usage": "AI usage",
+    "refund_adjustment": "Refund adjustment",
+    "operator_adjustment": "Operator adjustment",
+    "refund": "Refund",
+    "other": "Other credit event",
+}
+
 
 class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
     def upsert_platform_admin_identity(
@@ -1374,17 +1384,25 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
         refund = 0.0
         net_delta = 0.0
         by_event_type: dict[str, float] = defaultdict(float)
+        by_category: dict[str, float] = defaultdict(float)
 
         for entry in entries:
             if isinstance(entry, dict):
                 event_type = str(entry.get("event_type") or "")
+                source_type = str(entry.get("source_type") or "")
                 delta = service._coerce_float(entry.get("credit_delta"))
             else:
                 event_type = str(getattr(entry, "event_type", "") or "")
+                source_type = str(getattr(entry, "source_type", "") or "")
                 delta = service._coerce_float(getattr(entry, "credit_delta", 0.0))
 
+            category = self._credit_ledger_entry_category(
+                event_type=event_type,
+                source_type=source_type,
+            )
             net_delta += delta
             by_event_type[event_type] += delta
+            by_category[category] += delta
             if event_type == CREDIT_LEDGER_EVENT_CONSUME:
                 consumed += max(0.0, -delta)
             elif event_type == CREDIT_LEDGER_EVENT_GRANT:
@@ -1403,6 +1421,13 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
             "net_used_credits": round(max(0.0, -net_delta), 6),
             "event_type_totals": {
                 key: round(value, 6) for key, value in sorted(by_event_type.items())
+            },
+            "category_totals": {
+                key: {
+                    "label": AI_CREDIT_LEDGER_CATEGORY_LABELS.get(key, key),
+                    "net_credit_delta": round(value, 6),
+                }
+                for key, value in sorted(by_category.items())
             },
             "entry_count": len(entries),
         }
@@ -1449,6 +1474,10 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
                 "summary": "Current-period Cloud usage is grouped by capability.",
                 "addon_summary": "View credit details in the Cloud portal.",
             },
+            "legend": [
+                {"category": key, "label": label}
+                for key, label in AI_CREDIT_LEDGER_CATEGORY_LABELS.items()
+            ],
             "portal_paths": {
                 "credit_usage": "/portal/usage",
                 "credit_ledger": "/portal/usage/credits",
@@ -1486,6 +1515,55 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
             return "hosted_runtime"
         return "other"
 
+    def _credit_ledger_entry_category(self, *, event_type: str, source_type: str) -> str:
+        if event_type == CREDIT_LEDGER_EVENT_CONSUME:
+            return "ai_usage"
+        if event_type == CREDIT_LEDGER_EVENT_GRANT:
+            if source_type == "credit_pack_purchase":
+                return "credit_pack_purchase"
+            if source_type == "operator_credit_adjustment":
+                return "operator_adjustment"
+            return "monthly_plan_grant"
+        if event_type == CREDIT_LEDGER_EVENT_ADJUSTMENT:
+            if source_type == "credit_pack_refund":
+                return "refund_adjustment"
+            return "operator_adjustment"
+        if event_type == CREDIT_LEDGER_EVENT_REFUND:
+            return "refund"
+        return "other"
+
+    def _credit_ledger_entry_direction(self, credit_delta: float) -> str:
+        if credit_delta > 0:
+            return "credit_in"
+        if credit_delta < 0:
+            return "credit_out"
+        return "neutral"
+
+    def _credit_ledger_entry_explanation(
+        self,
+        *,
+        event_type: str,
+        source_type: str,
+        category: str,
+        credit_delta: float,
+    ) -> str:
+        credits = round(abs(credit_delta), 6)
+        if category == "monthly_plan_grant":
+            return f"Monthly package grant added {credits} AI credits to the current period."
+        if category == "credit_pack_purchase":
+            return f"Credit pack payment added {credits} AI credits after payment confirmation."
+        if category == "ai_usage":
+            label = AI_CREDIT_COMPONENT_LABELS.get(source_type, source_type or "AI capability")
+            return f"{label} consumed {credits} AI credits."
+        if category == "refund_adjustment":
+            return f"Refund adjustment removed {credits} AI credits from the current period."
+        if category == "operator_adjustment":
+            direction = "added" if credit_delta >= 0 else "removed"
+            return f"Operator adjustment {direction} {credits} AI credits."
+        if category == "refund":
+            return f"Refund event added {credits} AI credits back to the account."
+        return f"{event_type or 'Credit'} ledger event recorded {credits} AI credits."
+
     def _serialize_credit_ledger_entry(
         self,
         entry: object,
@@ -1500,12 +1578,27 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
             return getattr(entry, key, default)
 
         credit_delta = service._coerce_float(value("credit_delta", 0.0))
+        event_type = str(value("event_type", "") or "")
+        source_type = str(value("source_type", "") or "")
+        category = self._credit_ledger_entry_category(
+            event_type=event_type,
+            source_type=source_type,
+        )
         created_at = value("created_at")
         payload: dict[str, object] = {
             "ledger_entry_id": str(value("ledger_entry_id", "") or ""),
             "site_id": str(value("site_id", "") or ""),
-            "event_type": str(value("event_type", "") or ""),
-            "source_type": str(value("source_type", "") or ""),
+            "event_type": event_type,
+            "source_type": source_type,
+            "category": category,
+            "category_label": AI_CREDIT_LEDGER_CATEGORY_LABELS.get(category, category),
+            "direction": self._credit_ledger_entry_direction(credit_delta),
+            "explanation": self._credit_ledger_entry_explanation(
+                event_type=event_type,
+                source_type=source_type,
+                category=category,
+                credit_delta=credit_delta,
+            ),
             "source_id": str(value("source_id", "") or ""),
             "run_id": str(value("run_id", "") or ""),
             "credit_delta": credit_delta,

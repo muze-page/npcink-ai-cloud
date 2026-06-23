@@ -28,6 +28,7 @@ import {
   type PortalCreditPackCatalogPayload,
   type PortalCreditPackPaymentOrder,
   type PortalCreditLedgerPayload,
+  type PortalPaymentOrderListPayload,
   type PortalUsageSummaryPayload,
   type PortalUsageWindow,
 } from '@/lib/portal-client';
@@ -125,6 +126,7 @@ function PortalUsageContent() {
   const [entitlements, setEntitlements] = useState<Entitlements | null>(null);
   const [creditLedger, setCreditLedger] = useState<PortalCreditLedgerPayload | null>(null);
   const [creditPacks, setCreditPacks] = useState<PortalCreditPackCatalogPayload | null>(null);
+  const [paymentOrders, setPaymentOrders] = useState<PortalPaymentOrderListPayload | null>(null);
   const [creditPackOrder, setCreditPackOrder] = useState<PortalCreditPackPaymentOrder | null>(null);
   const [creditPackPending, setCreditPackPending] = useState<string | null>(null);
   const [creditPackError, setCreditPackError] = useState<string | null>(null);
@@ -136,6 +138,7 @@ function PortalUsageContent() {
     setEntitlements(bundle.entitlements);
     setCreditLedger(bundle.creditLedger);
     setCreditPacks(bundle.creditPacks);
+    setPaymentOrders(bundle.paymentOrders);
   }, [selectedSiteId]);
 
   const { execute, isLoading: retryLoading, error: retryError, retry } = useRetry(loadBundle, {
@@ -155,6 +158,7 @@ function PortalUsageContent() {
     await setSelectedSiteId(siteId);
     setCreditPackOrder(null);
     setCreditPackError(null);
+    setPaymentOrders(null);
   };
 
   const handleCreateCreditPackOrder = async (packId: string) => {
@@ -165,6 +169,13 @@ function PortalUsageContent() {
     try {
       const response = await portalClient.createCreditPackOrder(selectedSiteId, packId);
       setCreditPackOrder(response.data.order);
+      setPaymentOrders((current) => ({
+        ...(current || { items: [] }),
+        items: [
+          response.data.order,
+          ...(current?.items || []).filter((item) => item.order_id !== response.data.order.order_id),
+        ].slice(0, 8),
+      }));
       if (response.data.order.checkout_url) {
         window.location.assign(response.data.order.checkout_url);
       }
@@ -287,6 +298,7 @@ function PortalUsageContent() {
   );
   const creditLedgerCount = Number(creditLedger?.pagination?.total ?? creditLedger?.summary?.entry_count ?? 0);
   const availableCreditPacks = creditPacks?.items || [];
+  const recentPaymentOrders = paymentOrders?.items || [];
   const unlimitedLabel = t('common.unlimited', {}, 'Unlimited');
   const quotaResourceByKey = new Map(
     quotaResources.map((item) => [String(item.key || ''), item])
@@ -685,6 +697,69 @@ function PortalUsageContent() {
             <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
               <div>
                 <p className="text-sm font-semibold text-gray-950 dark:text-white">
+                  {t('portal.usage.payment_orders_title', {}, 'Recent payment orders')}
+                </p>
+                <p className="mt-1 text-sm text-gray-600 dark:text-gray-400">
+                  {t(
+                    'portal.usage.payment_orders_desc',
+                    {},
+                    'Credit pack orders wait for Alipay or WeChat Pay confirmation before credits are granted.'
+                  )}
+                </p>
+              </div>
+              <p className="text-xs font-medium uppercase tracking-[0.14em] text-slate-500 dark:text-slate-400">
+                {t('portal.usage.payment_orders_provider_note', {}, 'Alipay / WeChat Pay ready')}
+              </p>
+            </div>
+            {recentPaymentOrders.length > 0 ? (
+              <div className="mt-4 divide-y divide-slate-200 rounded-[1rem] border border-slate-200 text-sm dark:divide-slate-800 dark:border-slate-800">
+                {recentPaymentOrders.map((order) => (
+                  <div
+                    key={order.order_id}
+                    className="grid grid-cols-1 gap-3 px-4 py-3 sm:grid-cols-[1fr_0.7fr_0.8fr]"
+                  >
+                    <div>
+                      <p className="font-medium text-slate-950 dark:text-white">
+                        {order.credit_pack?.label || order.subject || order.order_id}
+                      </p>
+                      <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                        {order.status_detail?.detail ||
+                          t('portal.usage.payment_order_default_detail', {}, 'Payment status is recorded by Cloud.')}
+                      </p>
+                    </div>
+                    <div>
+                      <BackofficeStatusBadge
+                        label={order.status_detail?.label || order.status || 'pending'}
+                        status={order.status || 'pending'}
+                      />
+                      <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
+                        {order.status_detail?.label || order.status}
+                      </p>
+                    </div>
+                    <div className="sm:text-right">
+                      <p className="font-semibold text-slate-950 dark:text-white">
+                        {formatPortalCurrency(Number(order.amount || 0), {
+                          from: normalizePortalCurrency(order.currency),
+                          to: DEFAULT_PORTAL_CURRENCY,
+                        })}
+                      </p>
+                      <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                        {order.created_at ? formatDate(order.created_at) : order.order_id}
+                      </p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="mt-4 rounded-[1rem] border border-dashed border-slate-300 px-4 py-5 text-sm text-slate-500 dark:border-slate-700 dark:text-slate-400">
+                {t('portal.usage.payment_orders_empty', {}, 'No payment orders for this site yet.')}
+              </div>
+            )}
+          </BackofficeStackCard>
+          <BackofficeStackCard className="bg-white/80 dark:bg-slate-950/45">
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+              <div>
+                <p className="text-sm font-semibold text-gray-950 dark:text-white">
                   {t('portal.usage.credit_ledger_title', {}, 'Credit ledger detail')}
                 </p>
                 <p className="mt-1 text-sm text-gray-600 dark:text-gray-400">
@@ -724,10 +799,13 @@ function PortalUsageContent() {
                     >
                       <div>
                         <p className="font-medium text-slate-950 dark:text-white">
-                          {portalCreditBreakdownLabel(entry.source_type, '', t)}
+                          {entry.category_label || portalCreditBreakdownLabel(entry.source_type, '', t)}
                         </p>
                         <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                          {[entry.event_type, entry.site_id, entry.run_id].filter(Boolean).join(' · ') || entry.source_id || '-'}
+                          {entry.explanation ||
+                            [entry.event_type, entry.site_id, entry.run_id].filter(Boolean).join(' · ') ||
+                            entry.source_id ||
+                            '-'}
                         </p>
                       </div>
                       <p className="text-slate-700 dark:text-slate-300">

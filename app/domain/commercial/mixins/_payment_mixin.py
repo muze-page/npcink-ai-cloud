@@ -10,6 +10,7 @@ from app.core.models import (
     CREDIT_LEDGER_EVENT_ADJUSTMENT,
     CREDIT_LEDGER_EVENT_GRANT,
     PAYMENT_EVENT_STATUS_PROCESSED,
+    PAYMENT_ORDER_STATUS_CANCELED,
     PAYMENT_ORDER_STATUS_PAID,
     PAYMENT_ORDER_STATUS_PENDING,
     PAYMENT_ORDER_STATUS_REFUNDED,
@@ -48,6 +49,70 @@ class CommercialServicePaymentMixin(CommercialServiceAuditMixin):
             "grant_event_type": CREDIT_LEDGER_EVENT_GRANT,
             "items": list_credit_packs(),
         }
+
+    def list_account_payment_orders(
+        self,
+        account_id: str,
+        *,
+        site_id: str | None = None,
+        limit: int = 20,
+        offset: int = 0,
+    ) -> dict[str, object]:
+        service = cast(Any, self)
+        normalized_limit = min(50, max(1, int(limit or 20)))
+        normalized_offset = max(0, int(offset or 0))
+        normalized_site_id = str(site_id or "").strip() or None
+        with get_session(service.database_url) as session:
+            repository = CommercialRepository(session)
+            if repository.get_account(account_id) is None:
+                raise CommercialNotFoundError(
+                    "service.account_not_found",
+                    f"account '{account_id}' was not found",
+                )
+            total = repository.count_payment_orders(
+                account_id=account_id,
+                site_id=normalized_site_id,
+            )
+            orders = repository.list_payment_orders(
+                account_id=account_id,
+                site_id=normalized_site_id,
+                limit=normalized_limit,
+                offset=normalized_offset,
+            )
+            return {
+                "generated_at": service._serialize_datetime(service.now_factory()),
+                "pagination": {
+                    "limit": normalized_limit,
+                    "offset": normalized_offset,
+                    "total": total,
+                    "has_more": normalized_offset + len(orders) < total,
+                },
+                "items": [self._serialize_payment_order_for_kind(order) for order in orders],
+            }
+
+    def get_account_payment_order(
+        self,
+        *,
+        account_id: str,
+        order_id: str,
+        site_id: str | None = None,
+    ) -> dict[str, object]:
+        with get_session(cast(Any, self).database_url) as session:
+            repository = CommercialRepository(session)
+            order = repository.get_payment_order(order_id)
+            if order is None:
+                raise CommercialNotFoundError(
+                    "service.payment_order_not_found",
+                    f"payment order '{order_id}' was not found",
+                )
+            if order.account_id != account_id or (
+                site_id and order.site_id and order.site_id != site_id
+            ):
+                raise CommercialNotFoundError(
+                    "service.payment_order_not_found",
+                    f"payment order '{order_id}' was not found",
+                )
+            return self._serialize_payment_order_for_kind(order)
 
     def create_credit_pack_payment_order(
         self,
@@ -766,10 +831,12 @@ class CommercialServicePaymentMixin(CommercialServiceAuditMixin):
 
     def _normalize_payment_provider(self, provider: str) -> str:
         normalized = str(provider or "").strip().lower()
-        if normalized not in {"alipay", "manual"}:
+        if normalized in {"wechat", "wxpay"}:
+            normalized = "wechat_pay"
+        if normalized not in {"alipay", "wechat_pay", "manual"}:
             raise CommercialValidationError(
                 "service.payment_provider_unsupported",
-                "payment provider must be alipay or manual",
+                "payment provider must be alipay, wechat_pay, or manual",
             )
         return normalized
 
@@ -796,6 +863,7 @@ class CommercialServicePaymentMixin(CommercialServiceAuditMixin):
 
     def _serialize_payment_order(self, order: PaymentOrder) -> dict[str, object]:
         service = cast(Any, self)
+        purchase_kind = self._payment_order_purchase_kind(order)
         return {
             "order_id": order.order_id,
             "account_id": order.account_id,
@@ -811,6 +879,8 @@ class CommercialServicePaymentMixin(CommercialServiceAuditMixin):
             "currency": order.currency,
             "subject": order.subject,
             "checkout_url": order.checkout_url or "",
+            "purchase_kind": purchase_kind,
+            "status_detail": self._payment_order_status_detail(order),
             "refund_window_end_at": service._serialize_datetime(order.refund_window_end_at),
             "paid_at": service._serialize_datetime(order.paid_at),
             "canceled_at": service._serialize_datetime(order.canceled_at),
@@ -819,6 +889,11 @@ class CommercialServicePaymentMixin(CommercialServiceAuditMixin):
             "created_at": service._serialize_datetime(order.created_at),
             "updated_at": service._serialize_datetime(order.updated_at),
         }
+
+    def _serialize_payment_order_for_kind(self, order: PaymentOrder) -> dict[str, object]:
+        if self._payment_order_purchase_kind(order) == "credit_pack":
+            return self._serialize_credit_pack_payment_order(order)
+        return self._serialize_payment_order(order)
 
     def _serialize_credit_pack_payment_order(self, order: PaymentOrder) -> dict[str, object]:
         payload = self._serialize_payment_order(order)
@@ -830,6 +905,58 @@ class CommercialServicePaymentMixin(CommercialServiceAuditMixin):
             (metadata or {}).get("target_subscription_id") or payload.get("subscription_id") or ""
         )
         return payload
+
+    def _payment_order_status_detail(self, order: PaymentOrder) -> dict[str, object]:
+        provider_label = {
+            "alipay": "Alipay",
+            "wechat_pay": "WeChat Pay",
+            "manual": "manual confirmation",
+        }.get(str(order.provider or ""), str(order.provider or "payment provider"))
+        if order.status == PAYMENT_ORDER_STATUS_PENDING:
+            return {
+                "code": "awaiting_payment_confirmation",
+                "label": "Waiting for payment confirmation",
+                "detail": (
+                    f"This order is created for {provider_label}. Credits are granted only "
+                    "after the provider success event is confirmed."
+                ),
+                "next_action": "provider_payment_or_callback",
+                "simulated_payment": not bool(order.checkout_url),
+            }
+        if order.status == PAYMENT_ORDER_STATUS_PAID:
+            return {
+                "code": "paid_and_granted",
+                "label": "Paid",
+                "detail": (
+                    "Payment has been confirmed and related entitlements or credits "
+                    "were applied."
+                ),
+                "next_action": "none",
+                "simulated_payment": False,
+            }
+        if order.status == PAYMENT_ORDER_STATUS_REFUNDED:
+            return {
+                "code": "refunded_and_adjusted",
+                "label": "Refunded",
+                "detail": "Refund has been confirmed and related credits were adjusted.",
+                "next_action": "none",
+                "simulated_payment": False,
+            }
+        if order.status == PAYMENT_ORDER_STATUS_CANCELED:
+            return {
+                "code": "canceled",
+                "label": "Canceled",
+                "detail": "The payment order was canceled before confirmation.",
+                "next_action": "none",
+                "simulated_payment": False,
+            }
+        return {
+            "code": str(order.status or "unknown"),
+            "label": str(order.status or "Unknown"),
+            "detail": "Payment order status is recorded by the Cloud payment ledger.",
+            "next_action": "review_status",
+            "simulated_payment": not bool(order.checkout_url),
+        }
 
     def _serialize_payment_refund(self, refund: PaymentRefund) -> dict[str, object]:
         service = cast(Any, self)
