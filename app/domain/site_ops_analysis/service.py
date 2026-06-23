@@ -36,6 +36,13 @@ class SiteOpsAnalysisService:
         blocked_items = _list(request_input.get("blocked_items"))
         priority_queue = _priority_queue(local_findings, sample_summaries)
         normalized_blocked_items = _blocked_items(blocked_items, request_input)
+        dimension_summaries = _dimension_summaries(
+            local_findings,
+            sample_summaries,
+            priority_queue,
+        )
+        trend_notes = _trend_notes(sample_summaries)
+        trend_explanations = _trend_explanations(trend_notes, sample_summaries)
         result = {
             "contract_version": SITE_OPS_ANALYSIS_RESULT_CONTRACT,
             "artifact_type": "site_ops_cloud_analysis_result",
@@ -49,13 +56,26 @@ class SiteOpsAnalysisService:
                 "source_pack_contract": _text(input_payload.get("source_pack_contract")),
                 "request_id_hash": _hash_text(_text(input_payload.get("request_id"))),
             },
+            "executive_summary": _executive_summary(
+                priority_queue,
+                dimension_summaries,
+                normalized_blocked_items,
+            ),
             "priority_queue": priority_queue,
-            "trend_notes": _trend_notes(sample_summaries),
+            "dimension_summaries": dimension_summaries,
+            "semantic_ranked_findings": _semantic_ranked_findings(priority_queue),
+            "trend_notes": trend_notes,
+            "trend_explanations": trend_explanations,
             "confidence": _confidence(sample_summaries, priority_queue),
             "blocked_items": normalized_blocked_items,
             "core_handoff_candidates": _core_handoff_candidates(priority_queue),
             "operator_next_actions": _operator_next_actions(
                 priority_queue,
+                normalized_blocked_items,
+            ),
+            "analysis_closure": _analysis_closure(
+                priority_queue,
+                dimension_summaries,
                 normalized_blocked_items,
             ),
             "safety": {
@@ -170,6 +190,182 @@ def _trend_notes(sample_summaries: dict[str, Any]) -> list[dict[str, Any]]:
             }
         )
     return notes
+
+
+def _executive_summary(
+    priority_queue: list[dict[str, Any]],
+    dimension_summaries: list[dict[str, Any]],
+    blocked_items: list[dict[str, Any]],
+) -> dict[str, Any]:
+    primary = priority_queue[0] if priority_queue else {}
+    active_dimensions = [
+        str(item["dimension"])
+        for item in dimension_summaries
+        if int(item.get("finding_count") or 0) > 0 or int(item.get("signal_score") or 0) > 0
+    ]
+    primary_focus = str(primary.get("finding_id") or "")
+    if not primary_focus and active_dimensions:
+        primary_focus = active_dimensions[0]
+    if not primary_focus:
+        primary_focus = "collect_stronger_site_context"
+
+    return {
+        "headline": _summary_headline(priority_queue, blocked_items),
+        "primary_focus": primary_focus,
+        "affected_dimensions": active_dimensions[:4],
+        "operator_sequence": _operator_sequence(priority_queue, blocked_items),
+        "cloud_role": "runtime_detail",
+        "write_posture": "suggestion_only",
+        "summary": _summary_sentence(priority_queue, active_dimensions, blocked_items),
+    }
+
+
+def _dimension_summaries(
+    local_findings: list[Any],
+    sample_summaries: dict[str, Any],
+    priority_queue: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    dimensions = [
+        (
+            "content",
+            {"content_freshness", "content_quality", "metadata"},
+            _content_signal_score(sample_summaries),
+            "Review stale, thin, and weakly connected public content before scaling output.",
+        ),
+        (
+            "media",
+            {"media"},
+            _media_signal_score(sample_summaries),
+            "Review image ALT/caption gaps and referenced media metadata as a bounded set.",
+        ),
+        (
+            "comments",
+            {"comments"},
+            _comment_signal_score(sample_summaries),
+            "Review approved-comment demand signals without exposing raw comment text.",
+        ),
+        (
+            "structure",
+            {"taxonomy", "site_context", "site_knowledge"},
+            _structure_signal_score(sample_summaries),
+            "Review taxonomy shape, Site Context readiness, and Cloud Site Knowledge readiness.",
+        ),
+    ]
+    queued_by_type = {
+        str(item.get("issue_type") or ""): item
+        for item in priority_queue
+        if isinstance(item, dict)
+    }
+    summaries: list[dict[str, Any]] = []
+    for dimension, issue_types, signal_score, guidance in dimensions:
+        findings = [
+            finding
+            for finding in local_findings
+            if isinstance(finding, dict) and _key(finding.get("issue_type")) in issue_types
+        ]
+        top_score = max(
+            [signal_score]
+            + [
+                int(queued_by_type.get(issue_type, {}).get("cloud_priority_score") or 0)
+                for issue_type in issue_types
+            ]
+        )
+        summaries.append(
+            {
+                "dimension": dimension,
+                "finding_count": len(findings),
+                "signal_score": min(100, top_score),
+                "priority": _dimension_priority(top_score, len(findings)),
+                "summary": _dimension_summary_text(dimension, len(findings), signal_score),
+                "recommended_next": guidance,
+                "write_posture": "suggestion_only",
+            }
+        )
+    return summaries
+
+
+def _semantic_ranked_findings(priority_queue: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = []
+    for item in priority_queue:
+        issue_type = _key(item.get("issue_type"))
+        items.append(
+            {
+                "rank": int(item.get("rank") or 0),
+                "finding_id": str(item.get("finding_id") or ""),
+                "semantic_cluster": _semantic_cluster(issue_type),
+                "reason": _semantic_reason(issue_type, _list(item.get("reason_codes"))),
+                "score": int(item.get("cloud_priority_score") or 0),
+                "recommended_action": str(item.get("recommended_action") or ""),
+                "write_boundary": str(item.get("write_boundary") or "suggestion_only"),
+            }
+        )
+    return items
+
+
+def _trend_explanations(
+    trend_notes: list[dict[str, Any]],
+    sample_summaries: dict[str, Any],
+) -> list[dict[str, Any]]:
+    explanations: list[dict[str, Any]] = []
+    for note in trend_notes:
+        note_id = _key(note.get("id"))
+        explanations.append(
+            {
+                "id": note_id or "trend",
+                "summary": str(note.get("summary") or ""),
+                "operator_impact": _trend_operator_impact(note_id),
+                "next_check": _trend_next_check(note_id),
+                "signal_count": _coerce_int(note.get("signal_count")),
+            }
+        )
+    if not explanations and _total_sample_size(sample_summaries) == 0:
+        explanations.append(
+            {
+                "id": "insufficient_signal",
+                "summary": "No aggregate signal was strong enough for trend explanation.",
+                "operator_impact": (
+                    "Run the local scan after more public content evidence is available."
+                ),
+                "next_check": "complete_site_context_and_repeat_local_preview",
+                "signal_count": 0,
+            }
+        )
+    return explanations[:6]
+
+
+def _analysis_closure(
+    priority_queue: list[dict[str, Any]],
+    dimension_summaries: list[dict[str, Any]],
+    blocked_items: list[dict[str, Any]],
+) -> dict[str, Any]:
+    covered_dimensions = [
+        str(item["dimension"])
+        for item in dimension_summaries
+        if int(item.get("finding_count") or 0) > 0 or int(item.get("signal_score") or 0) > 0
+    ]
+    if blocked_items:
+        loop_status = "blocked_until_operator_review"
+    elif priority_queue:
+        loop_status = "ready_for_operator_prioritization"
+    else:
+        loop_status = "no_priority_findings"
+    return {
+        "loop_status": loop_status,
+        "covered_dimensions": covered_dimensions,
+        "answered_questions": [
+            "which_site_areas_need_attention",
+            "which_findings_should_be_reviewed_first",
+            "which_items_are_only_planning_hints",
+        ],
+        "cloud_only_reasons": [
+            "cross_run_trend_explanation",
+            "semantic_ranking",
+            "heavier_runtime_detail",
+        ],
+        "next_step": _closure_next_step(loop_status),
+        "core_proposal_created": False,
+        "direct_wordpress_write": False,
+    }
 
 
 def _confidence(
@@ -292,6 +488,171 @@ def _reason_codes(issue_type: str, sample_summaries: dict[str, Any]) -> list[str
     if _coerce_int(media.get("missing_alt_count")) > 0:
         codes.append("media_metadata_gap")
     return sorted(set(codes))
+
+
+def _summary_headline(
+    priority_queue: list[dict[str, Any]],
+    blocked_items: list[dict[str, Any]],
+) -> str:
+    if blocked_items:
+        return "Review blockers before turning findings into an action plan."
+    if priority_queue:
+        return "Prioritize the strongest full-site signals before creating new work."
+    return "No priority full-site findings were detected in the current aggregate sample."
+
+
+def _summary_sentence(
+    priority_queue: list[dict[str, Any]],
+    active_dimensions: list[str],
+    blocked_items: list[dict[str, Any]],
+) -> str:
+    if blocked_items:
+        return "The analysis found prerequisites that should be cleared before repeated review."
+    if priority_queue:
+        dimension_text = ", ".join(active_dimensions[:4]) or "the sampled site data"
+        return (
+            f"Cloud runtime/detail ranked {len(priority_queue)} findings across "
+            f"{dimension_text}; review the first item before expanding work."
+        )
+    return "The current aggregate sample is reviewable, but it did not produce a priority queue."
+
+
+def _operator_sequence(
+    priority_queue: list[dict[str, Any]],
+    blocked_items: list[dict[str, Any]],
+) -> list[str]:
+    sequence: list[str] = []
+    if blocked_items:
+        sequence.append("clear_blocked_prerequisites")
+    if priority_queue:
+        sequence.append("review_top_ranked_finding")
+        sequence.append("select_manual_or_core_handoff_path")
+    else:
+        sequence.append("refresh_local_scan_after_context_changes")
+    sequence.append("keep_wordpress_writes_in_core_governance")
+    return sequence
+
+
+def _dimension_priority(score: int, finding_count: int) -> str:
+    if score >= 80 or finding_count >= 2:
+        return "high"
+    if score >= 40 or finding_count == 1:
+        return "medium"
+    return "low"
+
+
+def _dimension_summary_text(dimension: str, finding_count: int, signal_score: int) -> str:
+    if finding_count > 0:
+        return f"{dimension} has {finding_count} ranked finding(s) in the current request."
+    if signal_score > 0:
+        return f"{dimension} has aggregate signals but no ranked local finding."
+    return f"{dimension} has no priority signal in the current aggregate sample."
+
+
+def _semantic_cluster(issue_type: str) -> str:
+    if issue_type in {"content_freshness", "content_quality", "metadata"}:
+        return "content_quality_and_discoverability"
+    if issue_type == "media":
+        return "media_accessibility_and_reuse"
+    if issue_type == "comments":
+        return "audience_demand_signal"
+    if issue_type in {"taxonomy", "site_context", "site_knowledge"}:
+        return "site_structure_and_context"
+    return "general_site_review"
+
+
+def _semantic_reason(issue_type: str, reason_codes: list[Any]) -> str:
+    codes = {_key(code) for code in reason_codes}
+    if issue_type == "media" or "media_metadata_gap" in codes:
+        return "Media metadata affects accessibility, reuse, and evidence quality."
+    if issue_type == "comments" or "comment_question_signal" in codes:
+        return "Approved comment signals can reveal unanswered audience needs."
+    if issue_type == "content_freshness" or "stale_content_signal" in codes:
+        return "Older active content should be refreshed before expanding similar work."
+    return "This finding is ranked from aggregate local evidence and operator review value."
+
+
+def _trend_operator_impact(note_id: str) -> str:
+    impacts = {
+        "content_refresh_trend": "Refresh planning should start with active stale pages.",
+        "comment_question_trend": "Repeated questions can become FAQ or article-refresh work.",
+        "media_metadata_trend": "Accessibility and media search quality may be weaker.",
+        "taxonomy_drift_trend": "Sparse vocabulary can fragment discovery and recommendations.",
+    }
+    return impacts.get(note_id, "Review the aggregate signal before creating new work.")
+
+
+def _trend_next_check(note_id: str) -> str:
+    checks = {
+        "content_refresh_trend": "compare_stale_items_with_recent_comment_activity",
+        "comment_question_trend": "group_repeated_comment_questions_without_raw_text",
+        "media_metadata_trend": "sample_media_alt_and_caption_review_set",
+        "taxonomy_drift_trend": "review_empty_and_low_use_terms",
+    }
+    return checks.get(note_id, "repeat_cloud_detail_after_next_local_scan")
+
+
+def _closure_next_step(loop_status: str) -> str:
+    if loop_status == "blocked_until_operator_review":
+        return "clear_blocked_items_then_repeat_cloud_analysis"
+    if loop_status == "ready_for_operator_prioritization":
+        return "review_top_ranked_finding_then_choose_manual_or_core_handoff"
+    return "keep_as_current_snapshot_or_refresh_after_site_changes"
+
+
+def _content_signal_score(sample_summaries: dict[str, Any]) -> int:
+    posts = _dict(sample_summaries.get("posts"))
+    return min(
+        100,
+        _coerce_int(posts.get("stale_180d_count")) * 8
+        + _coerce_int(posts.get("short_content_count")) * 6
+        + _coerce_int(posts.get("no_internal_link_count")) * 5
+        + _coerce_int(posts.get("commented_item_count")) * 4,
+    )
+
+
+def _media_signal_score(sample_summaries: dict[str, Any]) -> int:
+    media = _dict(sample_summaries.get("media"))
+    return min(
+        100,
+        _coerce_int(media.get("missing_alt_count")) * 8
+        + _coerce_int(media.get("missing_caption_count")) * 4
+        + _coerce_int(media.get("referenced_alt_gap_count")) * 6,
+    )
+
+
+def _comment_signal_score(sample_summaries: dict[str, Any]) -> int:
+    comments = _dict(sample_summaries.get("comments"))
+    return min(
+        100,
+        _coerce_int(comments.get("question_like_count")) * 10
+        + _coerce_int(comments.get("long_comment_count")) * 4
+        + _coerce_int(comments.get("pending_total")) * 3,
+    )
+
+
+def _structure_signal_score(sample_summaries: dict[str, Any]) -> int:
+    taxonomies = _dict(sample_summaries.get("taxonomies"))
+    category = _dict(taxonomies.get("category"))
+    tag = _dict(taxonomies.get("post_tag"))
+    return min(
+        100,
+        _coerce_int(category.get("empty_count")) * 6
+        + _coerce_int(category.get("low_count")) * 5
+        + _coerce_int(tag.get("empty_count")) * 4
+        + _coerce_int(tag.get("low_count")) * 3,
+    )
+
+
+def _total_sample_size(sample_summaries: dict[str, Any]) -> int:
+    posts = _dict(sample_summaries.get("posts"))
+    media = _dict(sample_summaries.get("media"))
+    comments = _dict(sample_summaries.get("comments"))
+    return (
+        _coerce_int(posts.get("sampled_count"))
+        + _coerce_int(media.get("sampled_count"))
+        + _coerce_int(comments.get("recent_sample_count"))
+    )
 
 
 def _source_refs(refs: list[Any]) -> list[dict[str, Any]]:

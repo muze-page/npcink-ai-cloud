@@ -214,6 +214,23 @@ def test_site_ops_analysis_runtime_returns_suggestion_only_detail(tmp_path: Path
     assert result["safety"]["private_comment_network_metadata_returned"] is False
     assert result["priority_queue"][0]["finding_id"] == "media_metadata_debt"
     assert result["priority_queue"][0]["cloud_priority_score"] >= 82
+    assert result["executive_summary"]["cloud_role"] == "runtime_detail"
+    assert result["executive_summary"]["write_posture"] == "suggestion_only"
+    assert result["executive_summary"]["primary_focus"] == "media_metadata_debt"
+    assert "media" in result["executive_summary"]["affected_dimensions"]
+    assert "review_top_ranked_finding" in result["executive_summary"]["operator_sequence"]
+    assert result["dimension_summaries"][0]["dimension"] == "content"
+    assert result["dimension_summaries"][1]["dimension"] == "media"
+    assert result["dimension_summaries"][1]["priority"] == "high"
+    assert result["dimension_summaries"][1]["write_posture"] == "suggestion_only"
+    assert result["semantic_ranked_findings"][0]["finding_id"] == "media_metadata_debt"
+    assert result["semantic_ranked_findings"][0]["semantic_cluster"] == (
+        "media_accessibility_and_reuse"
+    )
+    assert result["trend_explanations"][0]["operator_impact"]
+    assert result["analysis_closure"]["loop_status"] == "ready_for_operator_prioritization"
+    assert "semantic_ranking" in result["analysis_closure"]["cloud_only_reasons"]
+    assert result["analysis_closure"]["direct_wordpress_write"] is False
     assert result["core_handoff_candidates"][0]["proposal_ready"] is False
     assert result["core_handoff_candidates"][0]["direct_wordpress_write"] is False
     assert any(note["id"] == "comment_question_trend" for note in result["trend_notes"])
@@ -348,6 +365,20 @@ def test_site_ops_analysis_low_signal_request_degrades_to_reviewable_empty_detai
     assert result["contract_version"] == "site_ops_cloud_analysis_result.v1"
     assert result["priority_queue"] == []
     assert result["trend_notes"] == []
+    assert result["executive_summary"]["primary_focus"] == "collect_stronger_site_context"
+    assert result["semantic_ranked_findings"] == []
+    assert result["analysis_closure"]["loop_status"] == "blocked_until_operator_review"
+    assert result["trend_explanations"] == [
+        {
+            "id": "insufficient_signal",
+            "summary": "No aggregate signal was strong enough for trend explanation.",
+            "operator_impact": (
+                "Run the local scan after more public content evidence is available."
+            ),
+            "next_check": "complete_site_context_and_repeat_local_preview",
+            "signal_count": 0,
+        }
+    ]
     assert result["confidence"]["level"] == "low"
     assert result["confidence"]["sample_size"] == 0
     assert result["blocked_items"] == [

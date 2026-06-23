@@ -9,8 +9,9 @@ returns `site_ops_cloud_analysis_result.v1`.
 ## Runtime Role
 
 Cloud role is `runtime_detail`. The Cloud result may rank local findings,
-explain aggregate drivers, surface trend notes, and prepare operator next
-actions. It must not become a second WordPress control plane.
+produce an executive summary, explain aggregate drivers, build dimension-level
+summaries, surface semantic ranking and trend explanations, and prepare
+operator next actions. It must not become a second WordPress control plane.
 
 The runtime result keeps:
 
@@ -37,16 +38,31 @@ content, request logs, local scheduler instructions, or WordPress write actions.
 
 The result can include:
 
+- executive summary;
 - priority queue;
+- dimension summaries;
+- semantic ranked findings;
 - trend notes;
+- trend explanations;
 - confidence and limitations;
 - blocked items;
 - Core handoff candidates with `proposal_ready=false`;
 - operator next actions.
+- analysis closure state for whether the current loop is blocked, ready for
+  operator prioritization, or has no priority findings.
 
 Core handoff candidates are planning hints only. Toolbox, Adapter, Core, and
 Abilities still own review, proposal creation, approval, preflight, audit, and
 final WordPress writes.
+
+Cloud-only detail is limited to explanation and prioritization:
+
+- cross-run or heavier trend explanation;
+- semantic ranking;
+- higher-cost runtime/detail analysis.
+
+The result must not claim that Cloud created proposals, scheduled work, or
+changed WordPress data.
 
 ## Failure And Degraded Detail
 
