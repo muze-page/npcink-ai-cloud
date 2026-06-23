@@ -17,7 +17,7 @@ from app.core.logging import configure_logging, get_logger
 from app.core.models import SITE_STATUS_ACTIVE
 from app.domain.usage.rollup import UsageRollupService
 
-CALLBACK_ROUTE = "/magick-ai/open/v1/router/diagnostics/callback"
+CALLBACK_ROUTE = "/npcink/open/v1/router/diagnostics/callback"
 CALLBACK_EVENT = "router.diagnostics.batch"
 
 

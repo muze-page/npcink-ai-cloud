@@ -1210,7 +1210,7 @@ and logs a per-site batch summary. If site metadata explicitly provides
 `router_performance_callback_secret` (or the nested
 `projection_callbacks.router_performance_snapshot.*` equivalents), the worker can
 also POST the exact-window batch to the WordPress callback route
-`/wp-json/magick-ai/open/v1/router/performance-snapshot/callback`. This remains
+`/wp-json/npcink/open/v1/router/performance-snapshot/callback`. This remains
 optional and metadata-gated; WordPress fetch/apply still owns cursor advance and
 final snapshot truth.
 
@@ -1226,7 +1226,7 @@ lane remains the delivery owner. If site metadata explicitly provides
 `router_diagnostics_callback_secret` (or the nested
 `projection_callbacks.router_diagnostics.*` equivalents, or a derivable
 `public_base_url` plus key/secret), the worker can also POST the exact batch to
-`/wp-json/magick-ai/open/v1/router/diagnostics/callback`; otherwise it keeps
+`/wp-json/npcink/open/v1/router/diagnostics/callback`; otherwise it keeps
 relying on the delivery buffer plus pull fallback.
 
 For latency-probe offload staging, `python -m app.workers.latency_probe_summary`

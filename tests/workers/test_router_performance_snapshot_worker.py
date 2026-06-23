@@ -219,7 +219,7 @@ def test_router_performance_snapshot_worker_dispatches_optional_callback_when_co
     delivered = delivered_requests[0]
     assert (
         delivered["url"]
-        == "https://wp.example.test/wp-json/magick-ai/open/v1/router/performance-snapshot/callback"
+        == "https://wp.example.test/wp-json/npcink/open/v1/router/performance-snapshot/callback"
     )
     assert delivered["headers"]["x-npcink-cloud-event"] == "router.performance_snapshot.batch"
     assert delivered["headers"]["x-npcink-key-id"] == "kp_alpha"
@@ -236,7 +236,7 @@ def test_router_performance_snapshot_callback_rejects_private_target_before_disp
 
     with pytest.raises(RuntimeCallbackTargetValidationError):
         _dispatch_callback(
-            callback_url="https://127.0.0.1/wp-json/magick-ai/open/v1/router/performance-snapshot/callback",
+            callback_url="https://127.0.0.1/wp-json/npcink/open/v1/router/performance-snapshot/callback",
             site_id="site_alpha",
             key_id="kp_alpha",
             secret="callback-secret-alpha",
@@ -257,7 +257,7 @@ def test_router_performance_snapshot_callback_bounds_response_body(
         return httpx.Response(500, text="x" * 5000)
 
     delivery = _dispatch_callback(
-        callback_url="https://wp.example.test/wp-json/magick-ai/open/v1/router/performance-snapshot/callback",
+        callback_url="https://wp.example.test/wp-json/npcink/open/v1/router/performance-snapshot/callback",
         site_id="site_alpha",
         key_id="kp_alpha",
         secret="callback-secret-alpha",

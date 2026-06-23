@@ -237,7 +237,7 @@ def test_router_diagnostics_summary_worker_dispatches_optional_callback_when_con
     delivered = delivered_requests[0]
     assert (
         delivered["url"]
-        == "https://wp.example.test/wp-json/magick-ai/open/v1/router/diagnostics/callback"
+        == "https://wp.example.test/wp-json/npcink/open/v1/router/diagnostics/callback"
     )
     assert delivered["headers"]["x-npcink-cloud-event"] == "router.diagnostics.batch"
     assert delivered["headers"]["x-npcink-key-id"] == "kd_alpha"
@@ -254,7 +254,7 @@ def test_router_diagnostics_callback_rejects_private_target_before_dispatch() ->
 
     with pytest.raises(RuntimeCallbackTargetValidationError):
         _dispatch_callback(
-            callback_url="https://127.0.0.1/wp-json/magick-ai/open/v1/router/diagnostics/callback",
+            callback_url="https://127.0.0.1/wp-json/npcink/open/v1/router/diagnostics/callback",
             site_id="site_alpha",
             key_id="kd_alpha",
             secret="callback-secret-alpha",

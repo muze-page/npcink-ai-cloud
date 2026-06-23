@@ -20,7 +20,7 @@ from app.core.logging import configure_logging, get_logger
 from app.core.models import SITE_STATUS_ACTIVE
 from app.domain.usage.rollup import UsageRollupService
 
-CALLBACK_ROUTE = "/magick-ai/open/v1/router/performance-snapshot/callback"
+CALLBACK_ROUTE = "/npcink/open/v1/router/performance-snapshot/callback"
 CALLBACK_EVENT = "router.performance_snapshot.batch"
 MAX_CALLBACK_RESPONSE_BODY_CHARS = 4000
 
