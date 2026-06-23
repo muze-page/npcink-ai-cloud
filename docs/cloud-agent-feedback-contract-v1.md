@@ -11,7 +11,7 @@ The product posture is:
 
 `Cloud Agent recommendation + local governance + feedback for Cloud evaluation`
 
-This is the differentiation loop for Magick AI Cloud: Cloud can improve its
+This is the differentiation loop for Npcink AI Cloud: Cloud can improve its
 recommendation quality from customer review signals, while the customer site
 keeps approval, preflight, audit, and final WordPress writes local.
 

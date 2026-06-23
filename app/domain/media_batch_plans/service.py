@@ -85,7 +85,7 @@ class MediaBatchPlanService:
             "plan_id": f"mbp_{_hash_text(f'{site_id}:{run_id}:{user_request}')[:24]}",
             "intent": "optimize_media_batch",
             "source": {
-                "provider": "magick_ai_cloud",
+                "provider": "npcink_ai_cloud",
                 "provider_mode": "deterministic_intent_parser",
                 "user_request_hash": _hash_text(user_request),
                 "user_request_chars": len(user_request),

@@ -1,14 +1,14 @@
-# Magick AI Cloud
+# Npcink AI Cloud
 
-Hosted Model Runtime for Magick AI.
+Hosted Model Runtime for Npcink AI.
 
-Magick AI Cloud is the runtime enhancement layer for the local Magick AI plugin.
+Npcink AI Cloud is the runtime enhancement layer for the local Magick AI plugin.
 It is not a second control plane, a second source of truth, or a SaaS
 replacement for the plugin.
 
 ## Scope Reminder
 
-Magick AI Cloud is the runtime enhancement layer for the local Magick AI plugin.
+Npcink AI Cloud is the runtime enhancement layer for the local Magick AI plugin.
 It is not a second control plane, a second source of truth, or a SaaS
 replacement for the plugin.
 
@@ -109,7 +109,7 @@ This project does not define a second `abilities/workflows/projections` source o
 truth. WordPress remains the control plane.
 
 Local Python packaging artifacts such as `build/lib/**` and
-`magick_ai_cloud.egg-info/**` are not source truth. They are local setuptools
+`npcink_ai_cloud.egg-info/**` are not source truth. They are local setuptools
 build outputs and should not be committed as routine source changes.
 
 Current Cloud frontend status is bounded:
@@ -253,7 +253,7 @@ bespoke second-truth systems:
   - prefer extending this path rather than inventing a custom trace protocol or
     local-only telemetry format
 - bounded kill switches should go through one env-backed feature-flag seam:
-  - `MAGICK_CLOUD_FEATURE_FLAGS_JSON` is the current lightweight override path
+  - `NPCINK_CLOUD_FEATURE_FLAGS_JSON` is the current lightweight override path
   - it is intentionally read-only/runtime-only and does not create a new DB
     registry or customer-visible control plane
   - observability summary now reports the effective flag set and override count
@@ -378,9 +378,9 @@ After hardening-sensitive changes, also rerun the production packaging lane:
 
 ```bash
 POSTGRES_PASSWORD='prod-password-32-characters-secret' \
-MAGICK_CLOUD_DATABASE_URL='postgresql+psycopg://magick:prod-password-32-characters-secret@postgres:5432/magick_ai_cloud' \
+NPCINK_CLOUD_DATABASE_URL='postgresql+psycopg://npcink:prod-password-32-characters-secret@postgres:5432/npcink_ai_cloud' \
 docker compose -f docker-compose.prod.yml config >/dev/null
-docker build -t magick-cloud-prod-check -f Dockerfile .
+docker build -t npcink-cloud-prod-check -f Dockerfile .
 ```
 
 ## Approved Feature Base
@@ -463,7 +463,7 @@ Verify the local stack with:
 
 ```bash
 docker compose -f docker-compose.dev.yml ps
-docker inspect magick-ai-cloud-api-1 --format '{{.HostConfig.RestartPolicy.Name}}'
+docker inspect npcink-ai-cloud-api-1 --format '{{.HostConfig.RestartPolicy.Name}}'
 curl -fsS http://127.0.0.1:8010/health/live
 curl -fsS http://127.0.0.1:8010/ -o /dev/null -w '%{http_code}\n'
 ```
@@ -473,22 +473,22 @@ Expected results: the required containers are `Up`, the restart policy prints
 entrypoint returns HTTP `200`. A running `proxy` with `502 Bad Gateway` usually
 means `api` or `frontend` is not running yet.
 
-Keep local-only debug credentials such as `MAGICK_CLOUD_INTERNAL_AUTH_TOKEN`,
-`MAGICK_CLOUD_ADMIN_BOOTSTRAP_TOKEN`, `MAGICK_CLOUD_ADMIN_SESSION_SECRET`, and
-`MAGICK_CLOUD_PORTAL_JWT_SECRET` in `.env.local` for dev Docker runs.
+Keep local-only debug credentials such as `NPCINK_CLOUD_INTERNAL_AUTH_TOKEN`,
+`NPCINK_CLOUD_ADMIN_BOOTSTRAP_TOKEN`, `NPCINK_CLOUD_ADMIN_SESSION_SECRET`, and
+`NPCINK_CLOUD_PORTAL_JWT_SECRET` in `.env.local` for dev Docker runs.
 `.env.local` is gitignored, while production-style deploy helpers read
 `.env.deploy` instead.
 
 Runtime catalog metadata can also include Ollama-sourced model records in two modes:
 
 - self-hosted/local node allowlist:
-  - `MAGICK_CLOUD_OLLAMA_BASE_URL=http://host.docker.internal:11434`
-  - `MAGICK_CLOUD_OLLAMA_MODEL_ALLOWLIST=llava:13b,bge-m3:latest`
+  - `NPCINK_CLOUD_OLLAMA_BASE_URL=http://host.docker.internal:11434`
+  - `NPCINK_CLOUD_OLLAMA_MODEL_ALLOWLIST=llava:13b,bge-m3:latest`
 - official Ollama cloud catalog:
-  - `MAGICK_CLOUD_OLLAMA_BASE_URL=https://ollama.com`
-  - `MAGICK_CLOUD_OLLAMA_API_KEY=<optional api key>`
-  - `MAGICK_CLOUD_OLLAMA_CATALOG_ENABLED=true`
-  - `MAGICK_CLOUD_OLLAMA_CATALOG_LIMIT=250`
+  - `NPCINK_CLOUD_OLLAMA_BASE_URL=https://ollama.com`
+  - `NPCINK_CLOUD_OLLAMA_API_KEY=<optional api key>`
+  - `NPCINK_CLOUD_OLLAMA_CATALOG_ENABLED=true`
+  - `NPCINK_CLOUD_OLLAMA_CATALOG_LIMIT=250`
 
 The allowlist mode is best for private nodes you actually run. Ollama metadata is consumed as runtime catalog input only; it does not create a platform model operations surface.
 
@@ -496,13 +496,13 @@ For production-style remote deploys, start from [.env.example](.env.example),
 then copy it to `.env.deploy` or another deploy env file. Production-style
 config now fails fast when these are missing:
 
-- `MAGICK_CLOUD_INTERNAL_AUTH_TOKEN`
-- `MAGICK_CLOUD_ADMIN_BOOTSTRAP_TOKEN`
-- `MAGICK_CLOUD_ADMIN_SESSION_SECRET`
-- `MAGICK_CLOUD_PORTAL_JWT_SECRET`
-- `MAGICK_CLOUD_PORTAL_PUBLIC_BASE_URL`
-- `MAGICK_CLOUD_PORTAL_EMAIL_SMTP_HOST`
-- `MAGICK_CLOUD_PORTAL_EMAIL_FROM_EMAIL`
+- `NPCINK_CLOUD_INTERNAL_AUTH_TOKEN`
+- `NPCINK_CLOUD_ADMIN_BOOTSTRAP_TOKEN`
+- `NPCINK_CLOUD_ADMIN_SESSION_SECRET`
+- `NPCINK_CLOUD_PORTAL_JWT_SECRET`
+- `NPCINK_CLOUD_PORTAL_PUBLIC_BASE_URL`
+- `NPCINK_CLOUD_PORTAL_EMAIL_SMTP_HOST`
+- `NPCINK_CLOUD_PORTAL_EMAIL_FROM_EMAIL`
 
 Additional hardening rules now enforced:
 
@@ -511,7 +511,7 @@ Additional hardening rules now enforced:
 - browser same-origin checks use explicit origin allowlists and fail closed on bad forwarded origin input
 - trusted host / forwarded host validation no longer assumes ingress is always configured correctly
 - callback registration and dispatch only accept `https://` targets that resolve to public IP space
-- `MAGICK_CLOUD_DEBUG_LOCAL_ORIGIN_ALLOWLIST` defaults to empty and only applies in `development` / `test`
+- `NPCINK_CLOUD_DEBUG_LOCAL_ORIGIN_ALLOWLIST` defaults to empty and only applies in `development` / `test`
 
 ## Release Smoke
 
@@ -520,8 +520,8 @@ Before a formal deploy, run the combined release smoke:
 ```bash
 bash deploy/release-smoke.sh \
   --base-url https://cloud.example.com \
-  --internal-auth-token "$MAGICK_CLOUD_INTERNAL_AUTH_TOKEN" \
-  --admin-token "$MAGICK_CLOUD_ADMIN_BOOTSTRAP_TOKEN" \
+  --internal-auth-token "$NPCINK_CLOUD_INTERNAL_AUTH_TOKEN" \
+  --admin-token "$NPCINK_CLOUD_ADMIN_BOOTSTRAP_TOKEN" \
   --member-email invited-admin@example.com \
   --login-code 123456
 ```
@@ -529,7 +529,7 @@ bash deploy/release-smoke.sh \
 The release smoke verifies:
 
 - `GET /health/live`
-- `GET /health/ready` with `X-Magick-Internal-Token`
+- `GET /health/ready` with `X-Npcink-Internal-Token`
 - `GET /`
 - `GET /portal/login`
 - `POST /portal/v1/auth/code/request`
@@ -568,7 +568,7 @@ Default behavior:
 - installs one managed `crontab` block on the remote host
 - uses `flock` to avoid overlapping runs
 - calls `<site>/wp-cron.php?doing_wp_cron=cloud`
-- defaults to `*/5 * * * *`, configurable via `MAGICK_CLOUD_WP_CRON_SCHEDULE`
+- defaults to `*/5 * * * *`, configurable via `NPCINK_CLOUD_WP_CRON_SCHEDULE`
 
 Remove it with:
 
@@ -595,10 +595,10 @@ Platform identity/admin roadmap:
 Health endpoints:
 
 - `GET /health/live`
-- `GET /health/ready` with `X-Magick-Internal-Token`
+- `GET /health/ready` with `X-Npcink-Internal-Token`
 
 If you need `/internal/*` routes in dev or prod, set
-`MAGICK_CLOUD_INTERNAL_AUTH_TOKEN`. Internal routes fail closed when the token is
+`NPCINK_CLOUD_INTERNAL_AUTH_TOKEN`. Internal routes fail closed when the token is
 not configured.
 
 Internal read-only detail examples:
@@ -617,8 +617,8 @@ Portal member auth:
 - successful verification establishes the cookie-backed portal session used by
   `/portal/*` and `/portal/v1/*`
 - production deploys should set:
-  - `MAGICK_CLOUD_PORTAL_JWT_SECRET`
-  - `MAGICK_CLOUD_PORTAL_PUBLIC_BASE_URL`
+  - `NPCINK_CLOUD_PORTAL_JWT_SECRET`
+  - `NPCINK_CLOUD_PORTAL_PUBLIC_BASE_URL`
   - SMTP sender settings for verification-code delivery
 Platform admin bootstrap auth:
 
@@ -664,8 +664,8 @@ removed.
 For the fastest local verification loop:
 
 1. Configure local portal auth in `.env`:
-   - `MAGICK_CLOUD_PORTAL_JWT_SECRET=dev-portal-jwt-secret-with-at-least-thirty-two-bytes`
-   - `MAGICK_CLOUD_PORTAL_PUBLIC_BASE_URL=http://127.0.0.1:8010`
+   - `NPCINK_CLOUD_PORTAL_JWT_SECRET=dev-portal-jwt-secret-with-at-least-thirty-two-bytes`
+   - `NPCINK_CLOUD_PORTAL_PUBLIC_BASE_URL=http://127.0.0.1:8010`
 2. Start local Cloud:
    - `pnpm run dev`
    - optional frontend auto-sync loop: `pnpm run frontend:watch`
@@ -745,7 +745,7 @@ Cloud now also exposes one internal-only admin console:
 
 Admin auth is bounded to the dedicated admin bootstrap token seam:
 
-- `POST /admin/auth/bootstrap` with `token=<MAGICK_CLOUD_ADMIN_BOOTSTRAP_TOKEN>`
+- `POST /admin/auth/bootstrap` with `token=<NPCINK_CLOUD_ADMIN_BOOTSTRAP_TOKEN>`
   establishes one bounded ops cookie session
 - it does not replace future formal admin auth or IAM
 
@@ -813,7 +813,7 @@ Current admin list filters:
 Current login shape:
 
 - open `/admin/login`
-- provide the current `MAGICK_CLOUD_ADMIN_BOOTSTRAP_TOKEN`
+- provide the current `NPCINK_CLOUD_ADMIN_BOOTSTRAP_TOKEN`
 - the page sets one bounded admin cookie session for `/admin`
 
 This remains an internal runtime/operations surface. It is not a customer portal
@@ -846,18 +846,18 @@ Portal email login delivery:
   locale; current supported values are `en`, `zh-CN`, and `zh-TW`
 - if SMTP is not configured, development/test mode falls back to returning the
   verification code in-app for local debugging
-- set `MAGICK_CLOUD_PORTAL_PUBLIC_BASE_URL` when email links must point at the
+- set `NPCINK_CLOUD_PORTAL_PUBLIC_BASE_URL` when email links must point at the
   external customer-facing domain instead of the direct request host
 - for SMTP delivery, configure:
-  - `MAGICK_CLOUD_PORTAL_EMAIL_SMTP_HOST`
-  - `MAGICK_CLOUD_PORTAL_EMAIL_SMTP_PORT`
-  - `MAGICK_CLOUD_PORTAL_EMAIL_SMTP_USERNAME`
-  - `MAGICK_CLOUD_PORTAL_EMAIL_SMTP_PASSWORD`
-  - `MAGICK_CLOUD_PORTAL_EMAIL_SMTP_USE_SSL`
-  - `MAGICK_CLOUD_PORTAL_EMAIL_SMTP_USE_STARTTLS`
-  - `MAGICK_CLOUD_PORTAL_EMAIL_FROM_EMAIL`
-  - `MAGICK_CLOUD_PORTAL_EMAIL_FROM_NAME`
-  - `MAGICK_CLOUD_PORTAL_EMAIL_REPLY_TO`
+  - `NPCINK_CLOUD_PORTAL_EMAIL_SMTP_HOST`
+  - `NPCINK_CLOUD_PORTAL_EMAIL_SMTP_PORT`
+  - `NPCINK_CLOUD_PORTAL_EMAIL_SMTP_USERNAME`
+  - `NPCINK_CLOUD_PORTAL_EMAIL_SMTP_PASSWORD`
+  - `NPCINK_CLOUD_PORTAL_EMAIL_SMTP_USE_SSL`
+  - `NPCINK_CLOUD_PORTAL_EMAIL_SMTP_USE_STARTTLS`
+  - `NPCINK_CLOUD_PORTAL_EMAIL_FROM_EMAIL`
+  - `NPCINK_CLOUD_PORTAL_EMAIL_FROM_NAME`
+  - `NPCINK_CLOUD_PORTAL_EMAIL_REPLY_TO`
 
 For Alibaba Cloud enterprise mailbox, point the SMTP settings above at the
 SMTP host/port and SSL or STARTTLS mode provided by your mailbox admin panel.
@@ -869,7 +869,7 @@ env file rather than committing provider-specific secrets.
 Portal email self-test:
 
 - `POST /internal/portal/email/test`
-- requires `X-Magick-Internal-Token` and `Idempotency-Key`
+- requires `X-Npcink-Internal-Token` and `Idempotency-Key`
 - request body:
 
 ```json
@@ -881,7 +881,7 @@ Portal email self-test:
 ```bash
 curl -X POST http://127.0.0.1:8000/internal/portal/email/test \
   -H "Content-Type: application/json" \
-  -H "X-Magick-Internal-Token: ${MAGICK_CLOUD_INTERNAL_AUTH_TOKEN}" \
+  -H "X-Npcink-Internal-Token: ${NPCINK_CLOUD_INTERNAL_AUTH_TOKEN}" \
   -H "Idempotency-Key: portal-email-test-001" \
   -d '{"recipient_email":"you@example.com"}'
 ```
@@ -889,21 +889,21 @@ curl -X POST http://127.0.0.1:8000/internal/portal/email/test \
 Provider execution modes:
 
 - default: sample mode, no external provider calls
-- set `MAGICK_CLOUD_OPENAI_API_KEY` to enable real OpenAI-compatible
+- set `NPCINK_CLOUD_OPENAI_API_KEY` to enable real OpenAI-compatible
   HTTP execution for `chat_completions / responses / embeddings`
-- set `MAGICK_CLOUD_ANTHROPIC_API_KEY` to enable real Anthropic HTTP execution
+- set `NPCINK_CLOUD_ANTHROPIC_API_KEY` to enable real Anthropic HTTP execution
   for text-only `messages`
-- set `MAGICK_CLOUD_LITELLM_PROVIDER_ENABLED=true` with
-  `MAGICK_CLOUD_LITELLM_BASE_URL` to enable LiteLLM Gateway as a hosted
+- set `NPCINK_CLOUD_LITELLM_PROVIDER_ENABLED=true` with
+  `NPCINK_CLOUD_LITELLM_BASE_URL` to enable LiteLLM Gateway as a hosted
   provider source
-- set `MAGICK_CLOUD_VLLM_PROVIDER_ENABLED=true` with
-  `MAGICK_CLOUD_VLLM_BASE_URL` to enable a self-hosted vLLM OpenAI-compatible
+- set `NPCINK_CLOUD_VLLM_PROVIDER_ENABLED=true` with
+  `NPCINK_CLOUD_VLLM_BASE_URL` to enable a self-hosted vLLM OpenAI-compatible
   provider
-- set `MAGICK_CLOUD_TEI_PROVIDER_ENABLED=true` with
-  `MAGICK_CLOUD_TEI_BASE_URL` and `MAGICK_CLOUD_TEI_MODEL_IDS` to enable a
+- set `NPCINK_CLOUD_TEI_PROVIDER_ENABLED=true` with
+  `NPCINK_CLOUD_TEI_BASE_URL` and `NPCINK_CLOUD_TEI_MODEL_IDS` to enable a
   self-hosted TEI embedding provider
-- set `MAGICK_CLOUD_OPENROUTER_PROVIDER_ENABLED=true` with
-  `MAGICK_CLOUD_OPENROUTER_API_KEY` to enable OpenRouter as a hosted provider
+- set `NPCINK_CLOUD_OPENROUTER_PROVIDER_ENABLED=true` with
+  `NPCINK_CLOUD_OPENROUTER_API_KEY` to enable OpenRouter as a hosted provider
 
 Provider integration boundary:
 
@@ -929,7 +929,7 @@ Public runtime surface:
 Public runtime auth:
 
 - site-scoped `HMAC-SHA256` headers
-- public signed `POST` 额外要求 `X-Magick-Nonce`
+- public signed `POST` 额外要求 `X-Npcink-Nonce`
 - `catalog:read` required for `/v1/catalog/*`
 - runtime/runs/stats keep their existing scope checks
 
@@ -1011,7 +1011,7 @@ Bounded admin audit UX stays split on purpose:
 
 Internal auth:
 
-- `X-Magick-Internal-Token`
+- `X-Npcink-Internal-Token`
 - `Idempotency-Key` on POST
 - repeated internal POST replay markers are rejected as `auth.replay_blocked`
 - not interchangeable with the public runtime HMAC headers
@@ -1038,7 +1038,7 @@ Deploy perimeter:
   limiting. TLS termination, source restriction, IP allowlist, WAF, and stronger
   edge controls still depend on deployment.
 - `remote-smoke.sh` also verifies `/docs`, `/redoc`, and internal POST fail
-  closed without `X-Magick-Internal-Token`.
+  closed without `X-Npcink-Internal-Token`.
 
 Queued whole-run offload behavior:
 
@@ -1056,8 +1056,8 @@ Queued whole-run offload behavior:
 - worker heartbeats now land in `service_audit_events` as `worker.heartbeat`
   so `worker`, `callback-worker`, and `ops-worker` liveness can be checked
   without adding a second scheduler or registry
-- each worker poll now drains up to `MAGICK_CLOUD_RUNTIME_WORKER_BATCH_SIZE`
-  queued runs and up to `MAGICK_CLOUD_RUNTIME_CALLBACK_BATCH_SIZE` pending
+- each worker poll now drains up to `NPCINK_CLOUD_RUNTIME_WORKER_BATCH_SIZE`
+  queued runs and up to `NPCINK_CLOUD_RUNTIME_CALLBACK_BATCH_SIZE` pending
   callbacks before sleeping again; this keeps queue orchestration in the worker
   without turning Redis into a second truth source
 - Redis is only a wake-up signal for the worker; `run_records` remains the
@@ -1080,7 +1080,7 @@ Queued whole-run offload behavior:
   entrypoints so execution backlog and callback backlog can be operated
   independently without introducing a second queue truth
 - callback dispatch polling is controlled by
-  `MAGICK_CLOUD_RUNTIME_CALLBACK_WORKER_POLL_SECONDS`
+  `NPCINK_CLOUD_RUNTIME_CALLBACK_WORKER_POLL_SECONDS`
 - once `retention_expires_at` is in the past, `GET /v1/runs/{run_id}/result`
   returns `410 runtime.result_expired`; asynchronous cleanup may purge the
   stored inline result later without changing the terminal run record
@@ -1093,7 +1093,7 @@ Public runtime abuse boundary:
 
 - app-side rejects malformed `Idempotency-Key` values and payloads above the
   current request-size cap before they reach runtime business logic
-- public signed POST requests must also carry `X-Magick-Nonce`; reused nonce
+- public signed POST requests must also carry `X-Npcink-Nonce`; reused nonce
   values are rejected as `auth.replay_blocked`
 - public short-window rate limiting now enforces `site + key + client IP`
   scopes before runtime business logic and still returns stable
@@ -1172,32 +1172,32 @@ docker compose -f docker-compose.dev.yml run --rm api alembic upgrade head
 docker compose -f docker-compose.dev.yml run --rm api python -m app.dev.seed_runtime \
   --site-id site_smoke \
   --key-id key_default \
-  --secret magick-cloud-test-secret
+  --secret npcink-cloud-test-secret
 ```
 
 Example real provider env:
 
 ```bash
-export MAGICK_CLOUD_OPENAI_API_KEY=sk-...
-export MAGICK_CLOUD_OPENAI_BASE_URL=https://api.openai.com/v1
-export MAGICK_CLOUD_ANTHROPIC_API_KEY=sk-ant-...
-export MAGICK_CLOUD_ANTHROPIC_BASE_URL=https://api.anthropic.com
-export MAGICK_CLOUD_ANTHROPIC_VERSION=2023-06-01
+export NPCINK_CLOUD_OPENAI_API_KEY=sk-...
+export NPCINK_CLOUD_OPENAI_BASE_URL=https://api.openai.com/v1
+export NPCINK_CLOUD_ANTHROPIC_API_KEY=sk-ant-...
+export NPCINK_CLOUD_ANTHROPIC_BASE_URL=https://api.anthropic.com
+export NPCINK_CLOUD_ANTHROPIC_VERSION=2023-06-01
 ```
 
 If cross-arch Docker builds are unstable from your network, you can also export
 optional pip mirror args before `make bundle` or `deploy-to-ssh-host.sh`:
 
 ```bash
-export MAGICK_CLOUD_PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
-export MAGICK_CLOUD_PIP_TRUSTED_HOST=pypi.tuna.tsinghua.edu.cn
+export NPCINK_CLOUD_PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
+export NPCINK_CLOUD_PIP_TRUSTED_HOST=pypi.tuna.tsinghua.edu.cn
 ```
 
 With a real API key, `POST /internal/catalog/refresh` plus a valid
-`X-Magick-Internal-Token`, and
+`X-Npcink-Internal-Token`, and
 `python -m app.workers.catalog_refresh` fetch `/models` from the configured
 provider instead of using the built-in sample catalog. Anthropic is only added
-to the runtime registry when `MAGICK_CLOUD_ANTHROPIC_API_KEY` is configured, so
+to the runtime registry when `NPCINK_CLOUD_ANTHROPIC_API_KEY` is configured, so
 an unconfigured sample adapter does not silently alter default routing.
 
 For router-performance offload staging, `python -m app.workers.router_performance_snapshot`
@@ -1256,14 +1256,14 @@ official cadence lane for:
 Cadence polling and per-task intervals are configured with:
 
 ```bash
-MAGICK_CLOUD_WORKER_HEARTBEAT_INTERVAL_SECONDS=60
-MAGICK_CLOUD_OPS_CADENCE_POLL_SECONDS=30
-MAGICK_CLOUD_RETENTION_CLEANUP_INTERVAL_SECONDS=3600
-MAGICK_CLOUD_USAGE_ROLLUP_INTERVAL_SECONDS=3600
-MAGICK_CLOUD_ROUTER_DIAGNOSTICS_INTERVAL_SECONDS=900
-MAGICK_CLOUD_LATENCY_PROBE_INTERVAL_SECONDS=900
-MAGICK_CLOUD_ALERT_PROVIDER_DEGRADATION_INTERVAL_SECONDS=900
-MAGICK_CLOUD_PROVIDER_HEALTH_SCAN_INTERVAL_SECONDS=900
+NPCINK_CLOUD_WORKER_HEARTBEAT_INTERVAL_SECONDS=60
+NPCINK_CLOUD_OPS_CADENCE_POLL_SECONDS=30
+NPCINK_CLOUD_RETENTION_CLEANUP_INTERVAL_SECONDS=3600
+NPCINK_CLOUD_USAGE_ROLLUP_INTERVAL_SECONDS=3600
+NPCINK_CLOUD_ROUTER_DIAGNOSTICS_INTERVAL_SECONDS=900
+NPCINK_CLOUD_LATENCY_PROBE_INTERVAL_SECONDS=900
+NPCINK_CLOUD_ALERT_PROVIDER_DEGRADATION_INTERVAL_SECONDS=900
+NPCINK_CLOUD_PROVIDER_HEALTH_SCAN_INTERVAL_SECONDS=900
 ```
 
 The internal operator summary endpoints:
@@ -1282,9 +1282,9 @@ surface:
 
 Production-style compose now includes a minimal `otel-collector` sidecar using
 [`deploy/otel-collector.config.yml`](deploy/otel-collector.config.yml).
-By default, `MAGICK_CLOUD_OTEL_EXPORTER_OTLP_ENDPOINT` points at
+By default, `NPCINK_CLOUD_OTEL_EXPORTER_OTLP_ENDPOINT` points at
 `http://otel-collector:4318/v1/traces` and the collector forwards to the
-default Jaeger sink at `MAGICK_CLOUD_OTEL_TRACE_SINK_OTLP_ENDPOINT=jaeger:4317`.
+default Jaeger sink at `NPCINK_CLOUD_OTEL_TRACE_SINK_OTLP_ENDPOINT=jaeger:4317`.
 `otel-collector debug exporter` no longer counts as release-complete state.
 
 Formal operator procedures now live in
@@ -1343,11 +1343,11 @@ tar xzf deploy-bundle.tgz
 bash deploy/remote-load-and-up.sh
 bash deploy/remote-migrate.sh
 bash deploy/remote-baseline-status.sh
-bash deploy/remote-seed-runtime.sh --site-id site_smoke --key-id key_default --secret magick-cloud-test-secret
+bash deploy/remote-seed-runtime.sh --site-id site_smoke --key-id key_default --secret npcink-cloud-test-secret
 bash deploy/remote-smoke.sh --base-url http://127.0.0.1:8010
 ```
 
-`remote-smoke.sh` now expects `MAGICK_CLOUD_INTERNAL_AUTH_TOKEN` from the deploy
+`remote-smoke.sh` now expects `NPCINK_CLOUD_INTERNAL_AUTH_TOKEN` from the deploy
 env file so it can verify `GET /health/ready`, `/docs`, `/redoc`, and internal
 POST routes all respect the perimeter contract before it runs the public runtime
 smoke.
@@ -1366,11 +1366,11 @@ Remote SSH deploy from your local machine:
 pnpm run deploy:ssh -- \
   --ssh-host your-cloud-host \
   --ssh-user root \
-  --remote-dir /opt/magick-ai-cloud \
+  --remote-dir /opt/npcink-ai-cloud \
   --env-file .env.deploy \
   --site-id site_smoke \
   --key-id key_default \
-  --secret magick-cloud-test-secret
+  --secret npcink-cloud-test-secret
 ```
 
 To also run the buyer-facing portal verification after the standard runtime smoke,
@@ -1381,7 +1381,7 @@ runs real-site bootstrap plus `remote-portal-smoke.sh` on the fresh release:
 pnpm run deploy:ssh -- \
   --ssh-host your-cloud-host \
   --ssh-user root \
-  --remote-dir /opt/magick-ai-cloud \
+  --remote-dir /opt/npcink-ai-cloud \
   --env-file .env.deploy \
   --with-portal-smoke \
   --site-id site_smoke \
@@ -1395,11 +1395,11 @@ expectations through the same deploy command:
 pnpm run deploy:ssh -- \
   --ssh-host your-cloud-host \
   --ssh-user root \
-  --remote-dir /opt/magick-ai-cloud \
+  --remote-dir /opt/npcink-ai-cloud \
   --env-file .env.deploy \
   --site-id site_smoke \
   --key-id key_default \
-  --secret magick-cloud-test-secret \
+  --secret npcink-cloud-test-secret \
   --profile-id text.balanced \
   --prompt-text "anthropic remote smoke request" \
   --expected-provider-id anthropic
@@ -1419,7 +1419,7 @@ Notes:
   `scripts/mini-cloud-deploy.sh -> deploy/deploy-to-ssh-host.sh`.
   Do not treat the mini dev compose stack as the production release path.
 - `--env-file` is optional; when present it is copied to the remote release and
-  exposed as `MAGICK_CLOUD_ENV_FILE` for the remote scripts.
+  exposed as `NPCINK_CLOUD_ENV_FILE` for the remote scripts.
 - If `--env-file` is omitted but the current remote release already has
   `.env.deploy`, `deploy-to-ssh-host.sh` now carries that file forward into the
   new release automatically.
@@ -1433,13 +1433,13 @@ Notes:
 - `remote-baseline-status.sh` is now the fixed remote schema/env gate. It fails
   fast if the remote release is not on the current Alembic head, if critical
   commercial/runtime tables or columns are missing, or if
-  `MAGICK_CLOUD_INTERNAL_AUTH_TOKEN` is not actually visible inside the running
+  `NPCINK_CLOUD_INTERNAL_AUTH_TOKEN` is not actually visible inside the running
   `api` container.
 - If remote deploy fails while local Docker checks still pass, suspect
   `.env.deploy`, persisted database drift, release carry-forward behavior, or
   provider reachability before suspecting the local source tree.
 - `env-to-ssh-host.sh` updates the remote release `.env.deploy` in place,
-  carries the same values into the shared `/opt/magick-ai-cloud/.env.deploy`
+  carries the same values into the shared `/opt/npcink-cloud/.env.deploy`
   file, and restarts `api,worker` by default so new provider env takes effect
   immediately without a full redeploy.
 - Final off-machine deploy evidence still requires a real external host; this
@@ -1450,20 +1450,20 @@ Notes:
 Remote provider env sync example:
 
 ```bash
-export MAGICK_CLOUD_ANTHROPIC_API_KEY=sk-ant-...
+export NPCINK_CLOUD_ANTHROPIC_API_KEY=sk-ant-...
 pnpm run env:ssh -- \
   --ssh-host your-cloud-host \
   --ssh-user root \
-  --remote-dir /opt/magick-ai-cloud \
-  --set MAGICK_CLOUD_ANTHROPIC_BASE_URL=https://api.anthropic.com \
-  --set MAGICK_CLOUD_ANTHROPIC_VERSION=2023-06-01 \
-  --from-env MAGICK_CLOUD_ANTHROPIC_API_KEY
+  --remote-dir /opt/npcink-ai-cloud \
+  --set NPCINK_CLOUD_ANTHROPIC_BASE_URL=https://api.anthropic.com \
+  --set NPCINK_CLOUD_ANTHROPIC_VERSION=2023-06-01 \
+  --from-env NPCINK_CLOUD_ANTHROPIC_API_KEY
 ```
 
 After syncing env, confirm readiness before running Anthropic smoke:
 
 ```bash
-ssh root@your-cloud-host 'cd /opt/magick-ai-cloud/current && bash -s' \
+ssh root@your-cloud-host 'cd /opt/npcink-cloud/current && bash -s' \
   < deploy/remote-provider-status.sh
 ```
 

@@ -2,7 +2,7 @@
 
 Status: active
 
-This contract defines the boundary between Magick AI Cloud payment orders and
+This contract defines the boundary between Npcink AI Cloud payment orders and
 external payment providers.
 
 The code truth is `app/domain/commercial/payment_gateways.py`.

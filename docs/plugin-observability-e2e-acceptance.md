@@ -6,7 +6,7 @@ Date: 2026-06-02
 
 Use this checklist before claiming that plugin observability is ready for
 internal alpha. It verifies the real chain from WordPress emitters, through
-`magick-ai-cloud-addon`, into Cloud Admin and Portal read surfaces.
+`npcink-cloud-addon`, into Cloud Admin and Portal read surfaces.
 
 ## Boundary
 
@@ -27,7 +27,7 @@ only an observability read surface and operator workflow detail.
 
 WordPress side:
 
-- `magick-ai-cloud-addon`
+- `npcink-cloud-addon`
 - `magick-ai-abilities`
 - `magick-ai-core`
 - `magick-ai-adapter`
@@ -48,7 +48,7 @@ http://127.0.0.1:8010/portal/dev-entry?redirect=%2Fportal%2Fmonitoring
 
 ## Cloud Setup Check
 
-Run from `/Users/muze/gitee/magick-ai-cloud`:
+Run from `/Users/muze/gitee/npcink-ai-cloud`:
 
 ```bash
 docker compose -f docker-compose.dev.yml ps
@@ -92,7 +92,7 @@ When WP-CLI is unavailable in the shell, do not use Homebrew PHP directly
 against a LocalWP site. It may fail to connect to the LocalWP MySQL instance
 because `wp-config.php` uses `DB_HOST=localhost`.
 
-For the local `magick-ai.local` smoke site, use the LocalWP PHP binary and
+For the local `npcink.local` smoke site, use the LocalWP PHP binary and
 LocalWP MySQL socket:
 
 ```bash
@@ -101,7 +101,7 @@ LocalWP MySQL socket:
   -d pdo_mysql.default_socket='/Users/muze/Library/Application Support/Local/run/NPb24Zg9g/mysql/mysqld.sock' \
   -d display_errors=0 <<'PHP'
 <?php
-chdir('/Users/muze/Local Sites/magick-ai/app/public');
+chdir('/Users/muze/Local Sites/npcink/app/public');
 require 'wp-load.php';
 
 for ($i = 1; $i <= 5; $i++) {
@@ -143,7 +143,7 @@ Expected:
 - Final `buffer_count` reaches `0`.
 - Summary refresh reports current `events_total` and `error_total`.
 
-If Addon status reports `X-Magick-Timestamp header is outside the accepted time
+If Addon status reports `X-Npcink-Timestamp header is outside the accepted time
 window`, first compare the local PHP clock and Cloud API clock. If clocks match,
 trigger a fresh direct flush with the LocalWP PHP command above before assuming
 the Cloud verifier is broken. A stale timestamp error can be historical status
@@ -233,7 +233,7 @@ Expected Cloud evidence:
 - Cloud does not expose raw OpenClaw requests, raw responses, or WordPress write
   payloads.
 
-### magick-ai-cloud-addon
+### npcink-cloud-addon
 
 Trigger:
 
@@ -291,7 +291,7 @@ curl -sS "http://127.0.0.1:8010/api/admin/plugin-observability?window_hours=24"
 Portal summary:
 
 ```bash
-curl -sS "http://127.0.0.1:8010/api/portal/sites/site_magick_ai_local/plugin-observability?window_hours=24"
+curl -sS "http://127.0.0.1:8010/api/portal/sites/site_npcink_local/plugin-observability?window_hours=24"
 ```
 
 Expected response shape:

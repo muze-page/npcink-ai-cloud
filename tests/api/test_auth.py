@@ -66,10 +66,10 @@ class TestBuildPortalSessionToken:
         assert payload["iss"] == "https://cloud.example.com"
 
     def test_includes_audience_when_configured(self) -> None:
-        settings = _test_settings(portal_jwt_audience="magick-cloud")
+        settings = _test_settings(portal_jwt_audience="npcink-cloud")
         token = build_portal_session_token(settings, site_admin_ref="site_admin:aud@example.com")
         payload = decode_portal_session_cookie_claims(settings, token)
-        assert payload["aud"] == "magick-cloud"
+        assert payload["aud"] == "npcink-cloud"
 
     def test_raises_when_portal_not_configured(self) -> None:
         settings = _test_settings(portal_jwt_secret="")

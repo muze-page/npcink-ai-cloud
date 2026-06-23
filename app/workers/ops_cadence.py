@@ -328,7 +328,7 @@ def run_due_tasks(
 ) -> list[dict[str, object]]:
     current_time = (now or datetime.now(UTC)).astimezone(UTC)
     commercial_service = CommercialService(settings.database_url, settings=settings)
-    logger = get_logger("magick_ai_cloud.ops_cadence")
+    logger = get_logger("npcink_ai_cloud.ops_cadence")
     results: list[dict[str, object]] = []
 
     for spec in cadence_task_specs():
@@ -390,7 +390,7 @@ def main() -> None:
     settings = get_settings()
     configure_logging(settings.log_level)
     require_database_connection(settings.database_url)
-    logger = get_logger("magick_ai_cloud.ops_cadence")
+    logger = get_logger("npcink_ai_cloud.ops_cadence")
     heartbeat = WorkerHeartbeat(
         settings=settings,
         worker_id="ops_cadence",

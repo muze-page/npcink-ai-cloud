@@ -9,7 +9,7 @@ processors:
 
 exporters:
   otlp:
-    endpoint: ${env:MAGICK_CLOUD_OTEL_TRACE_SINK_OTLP_ENDPOINT}
+    endpoint: ${env:NPCINK_CLOUD_OTEL_TRACE_SINK_OTLP_ENDPOINT}
     tls:
       insecure: true
 

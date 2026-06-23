@@ -411,8 +411,8 @@ async def request_portal_login_code(
     email_sender = get_cloud_services(request).portal_email_sender
     environment = str(get_cloud_services(request).settings.environment or "").strip().lower()
     allow_development_code = environment in {"development", "test"} and (
-        str(request.headers.get("x-magick-dev-login-code") or "").strip() == "1"
-        or str(request.headers.get("x-magick-debug-portal-link") or "").strip() == "1"
+        str(request.headers.get("x-npcink-dev-login-code") or "").strip() == "1"
+        or str(request.headers.get("x-npcink-debug-portal-link") or "").strip() == "1"
     )
     try:
         issued = _get_commercial_service(request).issue_portal_login_code(

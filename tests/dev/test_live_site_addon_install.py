@@ -31,7 +31,7 @@ def test_plugin_active_matches_build_slug_and_active_status() -> None:
     assert (
         plugin_active(
             [
-                {"name": "magick-ai-cloud-addon", "status": "active", "version": "0.1.0"},
+                {"name": "npcink-cloud-addon", "status": "active", "version": "0.1.0"},
             ]
         )
         is True
@@ -39,7 +39,7 @@ def test_plugin_active_matches_build_slug_and_active_status() -> None:
     assert (
         plugin_active(
             [
-                {"name": "magick-ai-cloud-addon", "status": "inactive", "version": "0.1.0"},
+                {"name": "npcink-cloud-addon", "status": "inactive", "version": "0.1.0"},
             ]
         )
         is False
@@ -99,4 +99,4 @@ def test_wp_commands_target_addon_zip_and_plugin_list() -> None:
         "--fields=name,status,version",
         "--format=json",
     ]
-    assert ADDON_PLUGIN_BASENAME == "magick-ai-cloud-addon/magick-ai-cloud-addon.php"
+    assert ADDON_PLUGIN_BASENAME == "npcink-cloud-addon/npcink-cloud-addon.php"

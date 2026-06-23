@@ -45,5 +45,5 @@ def test_feature_flags_provider_reports_parse_errors_without_crashing() -> None:
         _settings(feature_flags_json='{"portal.billing.readonly.enabled":"maybe"}')
     )
 
-    assert "invalid MAGICK_CLOUD_FEATURE_FLAGS_JSON entries" in provider.parse_error
+    assert "invalid NPCINK_CLOUD_FEATURE_FLAGS_JSON entries" in provider.parse_error
     assert provider.is_enabled("portal.billing.readonly.enabled") is True

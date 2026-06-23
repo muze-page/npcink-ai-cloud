@@ -46,7 +46,7 @@ def _build_client(tmp_path: Path) -> tuple[str, Settings, InMemoryRuntimeQueue, 
     )
     settings = Settings(
         _env_file=None,
-        project_name="Magick AI Cloud Batch Runtime Test",
+        project_name="Npcink AI Cloud Batch Runtime Test",
         environment="test",
         database_url=database_url,
         redis_url="redis://localhost:6379/0",
@@ -100,7 +100,7 @@ def _payload(input_overrides: dict[str, Any] | None = None) -> dict[str, Any]:
     }
     input_payload.update(input_overrides or {})
     return {
-        "ability_name": "magick-ai-toolbox/analyze-nightly-content-batch",
+        "ability_name": "npcink-toolbox/analyze-nightly-content-batch",
         "contract_version": "cloud_batch_runtime_request.v1",
         "execution_pattern": "whole_run_offload",
         "storage_mode": "result_only",

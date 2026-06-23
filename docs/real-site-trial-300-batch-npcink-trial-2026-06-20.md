@@ -65,9 +65,9 @@ Payload hardening:
 Local-only payload files:
 
 ```text
-/Users/muze/gitee/magick-ai-cloud/.tmp/npcink-trial-300-batch-20260620/sync-payload.json
-/Users/muze/gitee/magick-ai-cloud/.tmp/npcink-trial-300-batch-20260620/sync-rebuild-200-payload.json
-/Users/muze/gitee/magick-ai-cloud/.tmp/npcink-trial-300-batch-20260620/sync-refresh-100-payload.json
+/Users/muze/gitee/npcink-cloud/.tmp/npcink-trial-300-batch-20260620/sync-payload.json
+/Users/muze/gitee/npcink-cloud/.tmp/npcink-trial-300-batch-20260620/sync-rebuild-200-payload.json
+/Users/muze/gitee/npcink-cloud/.tmp/npcink-trial-300-batch-20260620/sync-refresh-100-payload.json
 ```
 
 ## Payload Bound Finding
@@ -89,7 +89,7 @@ The 300-document batch was instead executed as two bounded runtime calls:
 ### Rebuild 200
 
 - Run ID: `run_dfc84176526e40da90383fd198e4f7e3`
-- Ability: `magick-ai-cloud/site-knowledge-sync`
+- Ability: `npcink-cloud/site-knowledge-sync`
 - Contract: `site_knowledge_sync.v1`
 - Status: succeeded
 - Sync status: completed
@@ -108,7 +108,7 @@ The 300-document batch was instead executed as two bounded runtime calls:
 ### Refresh 100
 
 - Run ID: `run_7207e3416d854087be485ce97c363aac`
-- Ability: `magick-ai-cloud/site-knowledge-sync`
+- Ability: `npcink-cloud/site-knowledge-sync`
 - Contract: `site_knowledge_sync.v1`
 - Status: succeeded
 - Sync status: completed
@@ -138,7 +138,7 @@ The search was submitted through the verified WordPress Cloud addon runtime
 client after the two sync runs.
 
 - Run ID: `run_28cceb62161e4cddaef13ffa7093910f`
-- Ability: `magick-ai-cloud/site-knowledge-search`
+- Ability: `npcink-cloud/site-knowledge-search`
 - Contract: `site_knowledge_search.v1`
 - Intent: `writing_support_plan`
 - Query:
@@ -184,7 +184,7 @@ The response retained these boundaries:
 The status check was submitted through the verified addon client after search.
 
 - Run ID: `run_ecaa488de2ef4453a7a75fc7590dcb64`
-- Ability: `magick-ai-cloud/site-knowledge-status`
+- Ability: `npcink-cloud/site-knowledge-status`
 - Contract: `site_knowledge_status.v1`
 - Status: succeeded
 - Index status: ready
@@ -231,9 +231,9 @@ Billing breakdown:
 Run record totals for this site:
 
 - `npcink.runtime_smoke`: 1 succeeded
-- `magick-ai-cloud/site-knowledge-sync`: 4 succeeded
-- `magick-ai-cloud/site-knowledge-search`: 3 succeeded
-- `magick-ai-cloud/site-knowledge-status`: 3 succeeded
+- `npcink-cloud/site-knowledge-sync`: 4 succeeded
+- `npcink-cloud/site-knowledge-search`: 3 succeeded
+- `npcink-cloud/site-knowledge-status`: 3 succeeded
 
 ## WordPress Content Verification
 

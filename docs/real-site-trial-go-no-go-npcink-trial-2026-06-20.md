@@ -4,13 +4,13 @@ Status: go for a larger staging batch; no-go for live-site execution without a
 second explicit live approval.
 
 Purpose: close the `npcink-trial` real-site clone evidence chain and decide the
-next safe step toward proving Magick AI Cloud as a WordPress hosted AI runtime
+next safe step toward proving Npcink AI Cloud as a WordPress hosted AI runtime
 enhancement layer.
 
 ## Final Objective
 
 The objective is not to expand the Cloud product surface. The objective is to
-prove that Magick AI Cloud can safely operate beside a real WordPress site as:
+prove that Npcink AI Cloud can safely operate beside a real WordPress site as:
 
 - hosted runtime;
 - Site Knowledge runtime/detail;
@@ -64,14 +64,14 @@ Before the one intended WordPress option write, rollback artifacts were saved
 outside Git:
 
 ```text
-/Users/muze/gitee/magick-ai-cloud/.tmp/npcink-trial-setup-20260620/npcink_cloud_addon_settings-before-20260619165455.json
-/Users/muze/gitee/magick-ai-cloud/.tmp/npcink-trial-setup-20260620/npcink-trial-db-before-20260619165535.sql
+/Users/muze/gitee/npcink-cloud/.tmp/npcink-trial-setup-20260620/npcink_cloud_addon_settings-before-20260619165455.json
+/Users/muze/gitee/npcink-cloud/.tmp/npcink-trial-setup-20260620/npcink-trial-db-before-20260619165535.sql
 ```
 
 Only one intended WordPress write was performed:
 
 - option: `npcink_cloud_addon_settings`
-- previous Cloud site: `site_magick_ai_local`
+- previous Cloud site: `site_npcink_local`
 - new Cloud site: `site_npcink_trial`
 
 No WordPress content object or unrelated option was changed by the setup,
@@ -107,9 +107,9 @@ Current read-only Cloud DB snapshot for `site_npcink_trial`:
 Run records:
 
 - `npcink.runtime_smoke`: 1 succeeded
-- `magick-ai-cloud/site-knowledge-sync`: 1 succeeded
-- `magick-ai-cloud/site-knowledge-search`: 1 succeeded
-- `magick-ai-cloud/site-knowledge-status`: 1 succeeded
+- `npcink-cloud/site-knowledge-sync`: 1 succeeded
+- `npcink-cloud/site-knowledge-search`: 1 succeeded
+- `npcink-cloud/site-knowledge-status`: 1 succeeded
 
 Usage totals:
 

@@ -29,7 +29,7 @@ logger = get_logger(__name__)
 PUBLIC_RUNTIME_MAX_BODY_BYTES = 1_048_576
 PUBLIC_RUNTIME_MAX_IDEMPOTENCY_KEY_LENGTH = 128
 PUBLIC_RUNTIME_MAX_NONCE_LENGTH = 128
-NONCE_HEADER = "X-Magick-Nonce"
+NONCE_HEADER = "X-Npcink-Nonce"
 IDEMPOTENCY_KEY_PATTERN = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
 NONCE_PATTERN = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
 REPLAY_SCOPE_PUBLIC_POST_SITE = "public_post_site"
@@ -164,7 +164,7 @@ def _validate_timestamp(
         raise RequestAuthError(
             401,
             "auth.invalid_timestamp",
-            "X-Magick-Timestamp header is invalid",
+            "X-Npcink-Timestamp header is invalid",
         ) from error
 
     age_seconds = abs((now - parsed).total_seconds())
@@ -172,7 +172,7 @@ def _validate_timestamp(
         raise RequestAuthError(
             401,
             "auth.stale_timestamp",
-            "X-Magick-Timestamp header is outside the accepted time window",
+            "X-Npcink-Timestamp header is outside the accepted time window",
         )
 
 
@@ -605,11 +605,11 @@ async def authorize_request(
     client_scope_id = ""
 
     try:
-        site_id = _require_header(request, "X-Magick-Site-Id", "auth.site_id_required")
-        key_id = _require_header(request, "X-Magick-Key-Id", "auth.key_id_required")
+        site_id = _require_header(request, "X-Npcink-Site-Id", "auth.site_id_required")
+        key_id = _require_header(request, "X-Npcink-Key-Id", "auth.key_id_required")
         timestamp = _require_header(
             request,
-            "X-Magick-Timestamp",
+            "X-Npcink-Timestamp",
             "auth.timestamp_required",
         )
         traceparent = _require_header(request, "traceparent", "auth.traceparent_required")
@@ -624,7 +624,7 @@ async def authorize_request(
         _validate_idempotency_key(idempotency_key, required=require_idempotency)
 
         signature = normalize_signature(
-            _require_header(request, "X-Magick-Signature", "auth.signature_required")
+            _require_header(request, "X-Npcink-Signature", "auth.signature_required")
         )
         body = await request.body()
         _validate_payload_size(body, max_body_bytes=max_body_bytes)

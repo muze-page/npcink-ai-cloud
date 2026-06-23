@@ -7,7 +7,7 @@ import { DEFAULT_LOCALE } from '@/lib/i18n';
 import './globals.css';
 
 export const metadata: Metadata = {
-  title: 'Magick AI Cloud',
+  title: 'Npcink AI Cloud',
   description: 'Hosted AI runtime and service platform',
 };
 

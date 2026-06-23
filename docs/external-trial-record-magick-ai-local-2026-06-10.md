@@ -1,4 +1,4 @@
-# External Trial Record - magick-ai.local - 2026-06-10
+# External Trial Record - npcink.local - 2026-06-10
 
 Status: local dry-run complete; not an external customer invite.
 
@@ -18,8 +18,8 @@ Read first:
 - Date: 2026-06-10
 - Environment: local alpha dry-run
 - Cloud base URL: `http://127.0.0.1:8010`
-- WordPress site URL: `https://magick-ai.local/`
-- Site ID: `site_magick_ai_local`
+- WordPress site URL: `https://npcink.local/`
+- Site ID: `site_npcink_local`
 - Declared use case: verify hosted runtime assistance, Site Knowledge evidence,
   writing preparation, and Agent feedback boundaries before external trial.
 - Site category review: low-risk local development site; not a sexual,
@@ -43,12 +43,12 @@ Read first:
   - Perimeter: 9 passed.
 - `pnpm run smoke:site-knowledge`: passed.
 - Site Knowledge evidence JSON:
-  `/Users/muze/gitee/magick-ai-cloud/.tmp/site-knowledge-real-chain-smoke/evidence-20260610085114.json`
+  `/Users/muze/gitee/npcink-cloud/.tmp/site-knowledge-real-chain-smoke/evidence-20260610085114.json`
 - Site Knowledge sync run ID: `run_d97fa56b2ffb44b3b91deccd982ad383`
 - Site Knowledge evidence gate: passed.
 - `pnpm run smoke:local-alpha`: passed.
 - Local alpha evidence JSON:
-  `/Users/muze/gitee/magick-ai-cloud/.tmp/local-alpha-smoke/evidence-20260610090134.json`
+  `/Users/muze/gitee/npcink-cloud/.tmp/local-alpha-smoke/evidence-20260610090134.json`
 - Hosted runtime run ID: `run_7fd3bf61107d47cd8df58c9b3876e5a7`
 - Hosted runtime status: succeeded.
 - Hosted runtime provider ID: `openai`

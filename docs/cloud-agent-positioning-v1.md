@@ -5,7 +5,7 @@ Date: 2026-06-07
 
 ## Purpose
 
-This document defines how Magick AI Cloud should understand and implement
+This document defines how Npcink AI Cloud should understand and implement
 Agent-shaped capabilities without becoming a second control plane, a second
 workflow truth, or a cloud-side WordPress write owner.
 
@@ -13,12 +13,12 @@ The working definition is:
 
 `Agent = goal + context + allowed abilities + planning policy + execution loop + guardrails + handoff result`
 
-In Magick AI Cloud, an Agent is best treated as a bounded runtime mode, not as a
+In Npcink AI Cloud, an Agent is best treated as a bounded runtime mode, not as a
 new platform layer.
 
 ## Product Positioning
 
-Magick AI Cloud may support Agentic execution when the Agent remains a
+Npcink AI Cloud may support Agentic execution when the Agent remains a
 controlled assistant for hosted runtime, analysis, retrieval, diagnostics, and
 recommendation work.
 
@@ -51,7 +51,7 @@ Local WordPress, Core, and the plugin stack remain responsible for:
 - permission gates and write confirmation
 - final WordPress object writes
 
-Magick AI Cloud may be responsible for:
+Npcink AI Cloud may be responsible for:
 
 - hosted model execution
 - provider routing and fallback execution

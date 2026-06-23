@@ -19,7 +19,7 @@ def _build_client(tmp_path: Path) -> tuple[str, TestClient]:
     seed_site_auth(database_url, site_id="site-media-001", scopes=["runtime:execute"])
     seed_site_auth(database_url, site_id="site-media-002", scopes=["runtime:execute"])
     settings = Settings(
-        project_name="Magick AI Cloud Test",
+        project_name="Npcink AI Cloud Test",
         environment="test",
         database_url=database_url,
         redis_url="redis://localhost:6379/0",

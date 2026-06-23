@@ -2,7 +2,7 @@
 
 Status: prohibited and deprecated planning contract.
 
-Purpose: record the decision that Magick AI Cloud must not develop hosted
+Purpose: record the decision that Npcink AI Cloud must not develop hosted
 article writing generation, batch article drafting, SEO-copy generation, or
 Cloud publishing capabilities.
 
@@ -36,7 +36,7 @@ Article drafting belongs to the local Magick AI stack:
 ```text
 local Ability recipe
   -> local/operator-reviewed artifacts
-  -> magick-ai-toolbox/build-article-write-plan
+  -> npcink-toolbox/build-article-write-plan
   -> Core /proposals/from-plan
   -> Core approval and commit preflight
   -> Adapter executes magick-ai/create-draft through WordPress Abilities API

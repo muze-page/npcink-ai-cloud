@@ -11,9 +11,9 @@ workflow registry, or write WordPress content.
 
 The Cloud runtime accepts these static managed ability names:
 
-- `magick-ai-cloud/site-knowledge-search`
-- `magick-ai-cloud/site-knowledge-status`
-- `magick-ai-cloud/site-knowledge-sync`
+- `npcink-cloud/site-knowledge-search`
+- `npcink-cloud/site-knowledge-status`
+- `npcink-cloud/site-knowledge-sync`
 
 The matching contract versions are:
 
@@ -69,58 +69,58 @@ Toolbox or WordPress-side settings. The WordPress side only sends bounded
 
 Cloud-managed settings:
 
-- `MAGICK_CLOUD_SITE_KNOWLEDGE_VECTOR_BACKEND`: `postgres_json` or
+- `NPCINK_CLOUD_SITE_KNOWLEDGE_VECTOR_BACKEND`: `postgres_json` or
   `zilliz_cloud`
-- `MAGICK_CLOUD_SITE_KNOWLEDGE_EMBEDDING_PROVIDER`: `deterministic`, `tei`,
+- `NPCINK_CLOUD_SITE_KNOWLEDGE_EMBEDDING_PROVIDER`: `deterministic`, `tei`,
   `openai`, or `siliconflow`; production validation in China should use
   `siliconflow` with `BAAI/bge-m3`
-- `MAGICK_CLOUD_SITE_KNOWLEDGE_EMBEDDING_MODEL`: default `BAAI/bge-m3`
-- `MAGICK_CLOUD_SITE_KNOWLEDGE_EMBEDDING_DIMENSIONS`: default `1024`
-- `MAGICK_CLOUD_SITE_KNOWLEDGE_VECTOR_METRIC_TYPE`: default `COSINE`
-- `MAGICK_CLOUD_SITE_KNOWLEDGE_COMMENTS_ENABLED`: default `false`; when true,
+- `NPCINK_CLOUD_SITE_KNOWLEDGE_EMBEDDING_MODEL`: default `BAAI/bge-m3`
+- `NPCINK_CLOUD_SITE_KNOWLEDGE_EMBEDDING_DIMENSIONS`: default `1024`
+- `NPCINK_CLOUD_SITE_KNOWLEDGE_VECTOR_METRIC_TYPE`: default `COSINE`
+- `NPCINK_CLOUD_SITE_KNOWLEDGE_COMMENTS_ENABLED`: default `false`; when true,
   Cloud may index approved public comments supplied by WordPress.
-- `MAGICK_CLOUD_SITE_KNOWLEDGE_MAX_SYNC_DOCUMENTS_PER_RUN`: default `500`.
+- `NPCINK_CLOUD_SITE_KNOWLEDGE_MAX_SYNC_DOCUMENTS_PER_RUN`: default `500`.
   Limits how many public documents or comments one sync run may index.
-- `MAGICK_CLOUD_SITE_KNOWLEDGE_MAX_SYNC_CHUNKS_PER_RUN`: default `5000`.
+- `NPCINK_CLOUD_SITE_KNOWLEDGE_MAX_SYNC_CHUNKS_PER_RUN`: default `5000`.
   Limits how many chunks one sync run may embed and write.
-- `MAGICK_CLOUD_SITE_KNOWLEDGE_MAX_INDEXED_DOCUMENTS_PER_SITE`: default
+- `NPCINK_CLOUD_SITE_KNOWLEDGE_MAX_INDEXED_DOCUMENTS_PER_SITE`: default
   `10000`. Protects per-site storage and provider cost for very large sites.
-- `MAGICK_CLOUD_SITE_KNOWLEDGE_MAX_INDEXED_CHUNKS_PER_SITE`: default
+- `NPCINK_CLOUD_SITE_KNOWLEDGE_MAX_INDEXED_CHUNKS_PER_SITE`: default
   `200000`. This is the main vector storage guardrail.
-- `MAGICK_CLOUD_SITE_KNOWLEDGE_QUOTA_WARNING_RATIO`: default `0.85`.
+- `NPCINK_CLOUD_SITE_KNOWLEDGE_QUOTA_WARNING_RATIO`: default `0.85`.
   Status returns `near_limit` once document or chunk utilization reaches this
   ratio.
-- `MAGICK_CLOUD_SITE_KNOWLEDGE_RERANK_PROVIDER`: `disabled` or `jina`;
+- `NPCINK_CLOUD_SITE_KNOWLEDGE_RERANK_PROVIDER`: `disabled` or `jina`;
   default `disabled`. Rerank is a Cloud-only enhancement after vector recall.
-- `MAGICK_CLOUD_SITE_KNOWLEDGE_RERANK_TOP_K`: default `30`
-- `MAGICK_CLOUD_SITE_KNOWLEDGE_RERANK_TIMEOUT_SECONDS`: default `8`
-- `MAGICK_CLOUD_SITE_KNOWLEDGE_JINA_BASE_URL`: default `https://api.jina.ai`
-- `MAGICK_CLOUD_SITE_KNOWLEDGE_JINA_API_KEY`: required only when
-  `MAGICK_CLOUD_SITE_KNOWLEDGE_RERANK_PROVIDER=jina`; keep it only in Cloud
+- `NPCINK_CLOUD_SITE_KNOWLEDGE_RERANK_TOP_K`: default `30`
+- `NPCINK_CLOUD_SITE_KNOWLEDGE_RERANK_TIMEOUT_SECONDS`: default `8`
+- `NPCINK_CLOUD_SITE_KNOWLEDGE_JINA_BASE_URL`: default `https://api.jina.ai`
+- `NPCINK_CLOUD_SITE_KNOWLEDGE_JINA_API_KEY`: required only when
+  `NPCINK_CLOUD_SITE_KNOWLEDGE_RERANK_PROVIDER=jina`; keep it only in Cloud
   deploy secrets.
-- `MAGICK_CLOUD_SITE_KNOWLEDGE_JINA_RERANK_MODEL`: default
+- `NPCINK_CLOUD_SITE_KNOWLEDGE_JINA_RERANK_MODEL`: default
   `jina-reranker-v3`
-- `MAGICK_CLOUD_SITE_KNOWLEDGE_ZILLIZ_URI`: required when `zilliz_cloud`
+- `NPCINK_CLOUD_SITE_KNOWLEDGE_ZILLIZ_URI`: required when `zilliz_cloud`
   is enabled
-- `MAGICK_CLOUD_SITE_KNOWLEDGE_ZILLIZ_TOKEN`: required when `zilliz_cloud`
+- `NPCINK_CLOUD_SITE_KNOWLEDGE_ZILLIZ_TOKEN`: required when `zilliz_cloud`
   is enabled
-- `MAGICK_CLOUD_SITE_KNOWLEDGE_ZILLIZ_DATABASE`: optional
-- `MAGICK_CLOUD_SITE_KNOWLEDGE_ZILLIZ_COLLECTION`: default
-  `magick_site_knowledge_chunks`
-- `MAGICK_CLOUD_SITE_KNOWLEDGE_ZILLIZ_TIMEOUT_SECONDS`: default `10`
-- `MAGICK_CLOUD_TEI_PROVIDER_ENABLED`: `true` when
-  `MAGICK_CLOUD_SITE_KNOWLEDGE_EMBEDDING_PROVIDER=tei`
-- `MAGICK_CLOUD_TEI_BASE_URL`: Cloud-managed TEI or compatible embedding
+- `NPCINK_CLOUD_SITE_KNOWLEDGE_ZILLIZ_DATABASE`: optional
+- `NPCINK_CLOUD_SITE_KNOWLEDGE_ZILLIZ_COLLECTION`: default
+  `npcink_site_knowledge_chunks`
+- `NPCINK_CLOUD_SITE_KNOWLEDGE_ZILLIZ_TIMEOUT_SECONDS`: default `10`
+- `NPCINK_CLOUD_TEI_PROVIDER_ENABLED`: `true` when
+  `NPCINK_CLOUD_SITE_KNOWLEDGE_EMBEDDING_PROVIDER=tei`
+- `NPCINK_CLOUD_TEI_BASE_URL`: Cloud-managed TEI or compatible embedding
   endpoint
-- `MAGICK_CLOUD_TEI_API_KEY`: optional, only when the embedding endpoint
+- `NPCINK_CLOUD_TEI_API_KEY`: optional, only when the embedding endpoint
   requires it
-- `MAGICK_CLOUD_TEI_MODEL_IDS`: must include `BAAI/bge-m3`
-- `MAGICK_CLOUD_SILICONFLOW_PROVIDER_ENABLED`: `true` when
-  `MAGICK_CLOUD_SITE_KNOWLEDGE_EMBEDDING_PROVIDER=siliconflow`
-- `MAGICK_CLOUD_SILICONFLOW_BASE_URL`: default `https://api.siliconflow.cn/v1`
-- `MAGICK_CLOUD_SILICONFLOW_API_KEY`: required when SiliconFlow embeddings are
+- `NPCINK_CLOUD_TEI_MODEL_IDS`: must include `BAAI/bge-m3`
+- `NPCINK_CLOUD_SILICONFLOW_PROVIDER_ENABLED`: `true` when
+  `NPCINK_CLOUD_SITE_KNOWLEDGE_EMBEDDING_PROVIDER=siliconflow`
+- `NPCINK_CLOUD_SILICONFLOW_BASE_URL`: default `https://api.siliconflow.cn/v1`
+- `NPCINK_CLOUD_SILICONFLOW_API_KEY`: required when SiliconFlow embeddings are
   enabled; keep it only in Cloud deploy secrets
-- `MAGICK_CLOUD_SILICONFLOW_TIMEOUT_SECONDS`: default `30`
+- `NPCINK_CLOUD_SILICONFLOW_TIMEOUT_SECONDS`: default `30`
 
 The Zilliz adapter is intentionally behind a small backend interface. A later
 DashVector migration should add a new backend implementation and preserve the
@@ -182,7 +182,7 @@ become the quota control plane.
 
 Post and page content is supplied through `documents`. Comments are supplied
 through `comments` and are ignored unless
-`MAGICK_CLOUD_SITE_KNOWLEDGE_COMMENTS_ENABLED=true`.
+`NPCINK_CLOUD_SITE_KNOWLEDGE_COMMENTS_ENABLED=true`.
 
 Comment input must be bounded public data:
 

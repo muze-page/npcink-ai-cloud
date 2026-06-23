@@ -348,7 +348,7 @@ from tests.conftest import TEST_INTERNAL_AUTH_TOKEN, build_internal_headers
 class StubServices:
     def __init__(self) -> None:
         self.settings = Settings(
-            project_name="Magick AI Cloud Test",
+            project_name="Npcink AI Cloud Test",
             environment="test",
             database_url="sqlite+pysqlite:///:memory:",
             redis_url="redis://localhost:6379/0",
@@ -395,7 +395,7 @@ from tests.conftest import TEST_INTERNAL_AUTH_TOKEN, build_internal_headers
 class StubServices:
     def __init__(self) -> None:
         self.settings = Settings(
-            project_name="Magick AI Cloud Test",
+            project_name="Npcink AI Cloud Test",
             environment="test",
             database_url="sqlite+pysqlite:///:memory:",
             redis_url="redis://localhost:6379/0",
@@ -466,7 +466,7 @@ def test_${ tokens.functionBase }_status_returns_ok_envelope(tmp_path: Path) -> 
     )
 
     settings = Settings(
-        project_name="Magick AI Cloud Test",
+        project_name="Npcink AI Cloud Test",
         environment="test",
         database_url=database_url,
         redis_url="redis://localhost:6379/0",
@@ -518,7 +518,7 @@ def test_${ tokens.functionBase }_dispatch_returns_ok_envelope(tmp_path: Path) -
     )
 
     settings = Settings(
-        project_name="Magick AI Cloud Test",
+        project_name="Npcink AI Cloud Test",
         environment="test",
         database_url=database_url,
         redis_url="redis://localhost:6379/0",
@@ -566,7 +566,7 @@ ${ surface === 'internal'
 	? `class StubServices:
     def __init__(self) -> None:
         self.settings = Settings(
-            project_name="Magick AI Cloud Test",
+            project_name="Npcink AI Cloud Test",
             environment="test",
             database_url="sqlite+pysqlite:///:memory:",
             redis_url="redis://localhost:6379/0",
@@ -597,7 +597,7 @@ ${ surface === 'internal'
     )
 
     settings = Settings(
-        project_name="Magick AI Cloud Test",
+        project_name="Npcink AI Cloud Test",
         environment="test",
         database_url=database_url,
         redis_url="redis://localhost:6379/0",
@@ -632,7 +632,7 @@ ${ surface === 'internal'
 	? `class StubServices:
     def __init__(self) -> None:
         self.settings = Settings(
-            project_name="Magick AI Cloud Test",
+            project_name="Npcink AI Cloud Test",
             environment="test",
             database_url="sqlite+pysqlite:///:memory:",
             redis_url="redis://localhost:6379/0",
@@ -665,7 +665,7 @@ ${ surface === 'internal'
     )
 
     settings = Settings(
-        project_name="Magick AI Cloud Test",
+        project_name="Npcink AI Cloud Test",
         environment="test",
         database_url=database_url,
         redis_url="redis://localhost:6379/0",

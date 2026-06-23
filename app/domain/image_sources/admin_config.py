@@ -10,16 +10,16 @@ PROVIDER_IDS = ("unsplash", "pixabay", "pexels")
 PROVIDER_MODES = ("disabled", "auto", "unsplash", "pixabay", "pexels")
 
 ENV_KEYS = {
-    "provider": "MAGICK_CLOUD_IMAGE_SOURCE_PROVIDER",
-    "auto_strategy": "MAGICK_CLOUD_IMAGE_SOURCE_AUTO_STRATEGY",
-    "unsplash_base_url": "MAGICK_CLOUD_IMAGE_SOURCE_UNSPLASH_BASE_URL",
-    "unsplash_access_key": "MAGICK_CLOUD_IMAGE_SOURCE_UNSPLASH_ACCESS_KEY",
-    "pixabay_base_url": "MAGICK_CLOUD_IMAGE_SOURCE_PIXABAY_BASE_URL",
-    "pixabay_api_key": "MAGICK_CLOUD_IMAGE_SOURCE_PIXABAY_API_KEY",
-    "pexels_base_url": "MAGICK_CLOUD_IMAGE_SOURCE_PEXELS_BASE_URL",
-    "pexels_api_key": "MAGICK_CLOUD_IMAGE_SOURCE_PEXELS_API_KEY",
-    "timeout_seconds": "MAGICK_CLOUD_IMAGE_SOURCE_TIMEOUT_SECONDS",
-    "cost_per_query": "MAGICK_CLOUD_IMAGE_SOURCE_COST_PER_QUERY",
+    "provider": "NPCINK_CLOUD_IMAGE_SOURCE_PROVIDER",
+    "auto_strategy": "NPCINK_CLOUD_IMAGE_SOURCE_AUTO_STRATEGY",
+    "unsplash_base_url": "NPCINK_CLOUD_IMAGE_SOURCE_UNSPLASH_BASE_URL",
+    "unsplash_access_key": "NPCINK_CLOUD_IMAGE_SOURCE_UNSPLASH_ACCESS_KEY",
+    "pixabay_base_url": "NPCINK_CLOUD_IMAGE_SOURCE_PIXABAY_BASE_URL",
+    "pixabay_api_key": "NPCINK_CLOUD_IMAGE_SOURCE_PIXABAY_API_KEY",
+    "pexels_base_url": "NPCINK_CLOUD_IMAGE_SOURCE_PEXELS_BASE_URL",
+    "pexels_api_key": "NPCINK_CLOUD_IMAGE_SOURCE_PEXELS_API_KEY",
+    "timeout_seconds": "NPCINK_CLOUD_IMAGE_SOURCE_TIMEOUT_SECONDS",
+    "cost_per_query": "NPCINK_CLOUD_IMAGE_SOURCE_COST_PER_QUERY",
 }
 
 SECRET_FIELDS = {

@@ -16,14 +16,14 @@ def test_parse_env_file_handles_export_quotes_and_comments(tmp_path: Path) -> No
         "\n".join(
             [
                 "# ignored",
-                "export MAGICK_CLOUD_INTERNAL_AUTH_TOKEN='quoted-token'",
+                "export NPCINK_CLOUD_INTERNAL_AUTH_TOKEN='quoted-token'",
                 "OTHER=value # comment",
             ]
         )
     )
 
     assert parse_env_file(env_file) == {
-        "MAGICK_CLOUD_INTERNAL_AUTH_TOKEN": "quoted-token",
+        "NPCINK_CLOUD_INTERNAL_AUTH_TOKEN": "quoted-token",
         "OTHER": "value",
     }
 

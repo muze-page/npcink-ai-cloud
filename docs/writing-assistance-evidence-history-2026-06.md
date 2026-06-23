@@ -31,9 +31,9 @@ The fixed product posture is:
 
 Cloud accepts the static managed runtime abilities:
 
-- `magick-ai-cloud/site-knowledge-search`
-- `magick-ai-cloud/site-knowledge-status`
-- `magick-ai-cloud/site-knowledge-sync`
+- `npcink-cloud/site-knowledge-search`
+- `npcink-cloud/site-knowledge-status`
+- `npcink-cloud/site-knowledge-sync`
 
 The matching contracts are:
 
@@ -66,7 +66,7 @@ Cloud Web Search provides external-web evidence through the hosted runtime
 surface. It now supports both the original Cloud ability name and the current
 Npcink alias:
 
-- `magick-ai-cloud/web-search`
+- `npcink-cloud/web-search`
 - `npcink-cloud/web-search`
 
 The runtime contract remains `web_search.v1`. The normalized output includes a

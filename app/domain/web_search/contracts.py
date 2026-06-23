@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-WEB_SEARCH_ABILITY = "magick-ai-cloud/web-search"
+WEB_SEARCH_ABILITY = "npcink-cloud/web-search"
 NPCINK_WEB_SEARCH_ABILITY = "npcink-cloud/web-search"
 WEB_SEARCH_ABILITIES = frozenset({WEB_SEARCH_ABILITY, NPCINK_WEB_SEARCH_ABILITY})
 WEB_SEARCH_CONTRACT = "web_search.v1"

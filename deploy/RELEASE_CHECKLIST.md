@@ -8,7 +8,7 @@
 
 ## 1. Purpose
 
-This checklist is the final gate before formally releasing Magick AI Cloud.
+This checklist is the final gate before formally releasing Npcink AI Cloud.
 
 It is intentionally split into:
 
@@ -61,53 +61,53 @@ All items in this section are `Required`.
 
 ### 3.1 Secrets
 
-- [ ] `MAGICK_CLOUD_INTERNAL_AUTH_TOKEN` is set to a production value
-- [ ] `MAGICK_CLOUD_ADMIN_BOOTSTRAP_TOKEN` is set to a separate production value
-- [ ] `MAGICK_CLOUD_ADMIN_SESSION_SECRET` is set to a production value
-- [ ] `MAGICK_CLOUD_PORTAL_JWT_SECRET` is set to a production value
+- [ ] `NPCINK_CLOUD_INTERNAL_AUTH_TOKEN` is set to a production value
+- [ ] `NPCINK_CLOUD_ADMIN_BOOTSTRAP_TOKEN` is set to a separate production value
+- [ ] `NPCINK_CLOUD_ADMIN_SESSION_SECRET` is set to a production value
+- [ ] `NPCINK_CLOUD_PORTAL_JWT_SECRET` is set to a production value
 - [ ] at least one real hosted-runtime provider credential is configured for the release host
-- [ ] `MAGICK_CLOUD_ADMIN_BOOTSTRAP_TOKEN` is not equal to `MAGICK_CLOUD_INTERNAL_AUTH_TOKEN`
+- [ ] `NPCINK_CLOUD_ADMIN_BOOTSTRAP_TOKEN` is not equal to `NPCINK_CLOUD_INTERNAL_AUTH_TOKEN`
 - [ ] browser origin allowlist and trusted host settings match the public release origin
 
 ### 3.2 Public Base URLs
 
-- [ ] `MAGICK_CLOUD_BASE_URL` matches the real public release URL
-- [ ] `MAGICK_CLOUD_PORTAL_PUBLIC_BASE_URL` matches the real public portal URL
+- [ ] `NPCINK_CLOUD_BASE_URL` matches the real public release URL
+- [ ] `NPCINK_CLOUD_PORTAL_PUBLIC_BASE_URL` matches the real public portal URL
 - [ ] public reverse proxy and TLS are already valid for the release host
 
 ### 3.3 Portal Email Delivery
 
-- [ ] `MAGICK_CLOUD_PORTAL_EMAIL_SMTP_HOST` is configured
-- [ ] `MAGICK_CLOUD_PORTAL_EMAIL_SMTP_PORT` is configured
-- [ ] `MAGICK_CLOUD_PORTAL_EMAIL_SMTP_USERNAME` is configured if required by provider
-- [ ] `MAGICK_CLOUD_PORTAL_EMAIL_SMTP_PASSWORD` is configured if required by provider
-- [ ] `MAGICK_CLOUD_PORTAL_EMAIL_FROM_EMAIL` is configured
-- [ ] `MAGICK_CLOUD_PORTAL_EMAIL_FROM_NAME` is configured
+- [ ] `NPCINK_CLOUD_PORTAL_EMAIL_SMTP_HOST` is configured
+- [ ] `NPCINK_CLOUD_PORTAL_EMAIL_SMTP_PORT` is configured
+- [ ] `NPCINK_CLOUD_PORTAL_EMAIL_SMTP_USERNAME` is configured if required by provider
+- [ ] `NPCINK_CLOUD_PORTAL_EMAIL_SMTP_PASSWORD` is configured if required by provider
+- [ ] `NPCINK_CLOUD_PORTAL_EMAIL_FROM_EMAIL` is configured
+- [ ] `NPCINK_CLOUD_PORTAL_EMAIL_FROM_NAME` is configured
 - [ ] one real mailbox can receive login codes from production SMTP
 
 ### 3.4 Production Guardrails
 
-- [ ] `MAGICK_CLOUD_ALLOW_DEV_ADMIN_INTERNAL_TOKEN_FALLBACK=false`
+- [ ] `NPCINK_CLOUD_ALLOW_DEV_ADMIN_INTERNAL_TOKEN_FALLBACK=false`
 - [ ] no development-code seam is relied on for release verification
 - [ ] no stub-only login path is used during production smoke
 - [ ] `ops-worker` is deployed and running with the intended cadence intervals
 - [ ] `callback-worker` is deployed and running for terminal callback delivery
-- [ ] `MAGICK_CLOUD_WORKER_HEARTBEAT_INTERVAL_SECONDS` is set for the release host
+- [ ] `NPCINK_CLOUD_WORKER_HEARTBEAT_INTERVAL_SECONDS` is set for the release host
 - [ ] cadence env is explicitly set for the release host:
-  - `MAGICK_CLOUD_OPS_CADENCE_POLL_SECONDS`
-  - `MAGICK_CLOUD_RETENTION_CLEANUP_INTERVAL_SECONDS`
-  - `MAGICK_CLOUD_USAGE_ROLLUP_INTERVAL_SECONDS`
-  - `MAGICK_CLOUD_ROUTER_DIAGNOSTICS_INTERVAL_SECONDS`
-  - `MAGICK_CLOUD_LATENCY_PROBE_INTERVAL_SECONDS`
-  - `MAGICK_CLOUD_ALERT_PROVIDER_DEGRADATION_INTERVAL_SECONDS`
-  - `MAGICK_CLOUD_HOSTED_MODEL_GOVERNANCE_INTERVAL_SECONDS`
-  - `MAGICK_CLOUD_PROVIDER_HEALTH_SCAN_INTERVAL_SECONDS`
-  - `MAGICK_CLOUD_HOSTED_MODEL_GOVERNANCE_WORKER_RECENT_MINUTES`
-  - `MAGICK_CLOUD_HOSTED_MODEL_GOVERNANCE_WORKER_LIMIT`
+  - `NPCINK_CLOUD_OPS_CADENCE_POLL_SECONDS`
+  - `NPCINK_CLOUD_RETENTION_CLEANUP_INTERVAL_SECONDS`
+  - `NPCINK_CLOUD_USAGE_ROLLUP_INTERVAL_SECONDS`
+  - `NPCINK_CLOUD_ROUTER_DIAGNOSTICS_INTERVAL_SECONDS`
+  - `NPCINK_CLOUD_LATENCY_PROBE_INTERVAL_SECONDS`
+  - `NPCINK_CLOUD_ALERT_PROVIDER_DEGRADATION_INTERVAL_SECONDS`
+  - `NPCINK_CLOUD_HOSTED_MODEL_GOVERNANCE_INTERVAL_SECONDS`
+  - `NPCINK_CLOUD_PROVIDER_HEALTH_SCAN_INTERVAL_SECONDS`
+  - `NPCINK_CLOUD_HOSTED_MODEL_GOVERNANCE_WORKER_RECENT_MINUTES`
+  - `NPCINK_CLOUD_HOSTED_MODEL_GOVERNANCE_WORKER_LIMIT`
 - [ ] OTLP export target is explicit for the release host:
-  - `MAGICK_CLOUD_OTEL_EXPORTER_OTLP_ENDPOINT`
-  - `MAGICK_CLOUD_OTEL_TRACE_SINK_OTLP_ENDPOINT`
-  - `MAGICK_CLOUD_OTEL_TRACE_QUERY_URL`
+  - `NPCINK_CLOUD_OTEL_EXPORTER_OTLP_ENDPOINT`
+  - `NPCINK_CLOUD_OTEL_TRACE_SINK_OTLP_ENDPOINT`
+  - `NPCINK_CLOUD_OTEL_TRACE_QUERY_URL`
 
 ## 4. Database Readiness
 
@@ -132,13 +132,13 @@ Run:
 cd cloud
 bash deploy/release-smoke.sh \
   --base-url https://cloud.example.com \
-  --internal-auth-token "$MAGICK_CLOUD_INTERNAL_AUTH_TOKEN" \
-  --admin-token "$MAGICK_CLOUD_ADMIN_BOOTSTRAP_TOKEN" \
+  --internal-auth-token "$NPCINK_CLOUD_INTERNAL_AUTH_TOKEN" \
+  --admin-token "$NPCINK_CLOUD_ADMIN_BOOTSTRAP_TOKEN" \
   --member-email invited-admin@example.com \
   --login-code 123456 \
   --addon-site-id site_example \
   --addon-key-id key_example \
-  --addon-secret "$MAGICK_CLOUD_RELEASE_KEY_SECRET"
+  --addon-secret "$NPCINK_CLOUD_RELEASE_KEY_SECRET"
 ```
 
 Required outcomes:

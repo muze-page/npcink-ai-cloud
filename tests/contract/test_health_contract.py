@@ -11,7 +11,7 @@ from tests.conftest import TEST_INTERNAL_AUTH_TOKEN, build_internal_headers
 class FailingStubServices:
     def __init__(self) -> None:
         self.settings = Settings(
-            project_name="Magick AI Cloud Test",
+            project_name="Npcink AI Cloud Test",
             environment="test",
             database_url="sqlite+pysqlite:///:memory:",
             redis_url="redis://localhost:6379/0",

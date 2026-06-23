@@ -31,13 +31,13 @@ trial and does not authorize any write to `npcink.local`, `dbd.local`,
 Before changing the addon option, a local addon option snapshot was saved:
 
 ```text
-/Users/muze/gitee/magick-ai-cloud/.tmp/npcink-trial-setup-20260620/npcink_cloud_addon_settings-before-20260619165455.json
+/Users/muze/gitee/npcink-cloud/.tmp/npcink-trial-setup-20260620/npcink_cloud_addon_settings-before-20260619165455.json
 ```
 
 A full Local WordPress database export was also saved:
 
 ```text
-/Users/muze/gitee/magick-ai-cloud/.tmp/npcink-trial-setup-20260620/npcink-trial-db-before-20260619165535.sql
+/Users/muze/gitee/npcink-cloud/.tmp/npcink-trial-setup-20260620/npcink-trial-db-before-20260619165535.sql
 ```
 
 Both files were set to local-only mode `600`.
@@ -76,7 +76,7 @@ Exactly one intended WordPress-side write was performed:
 
 - option: `npcink_cloud_addon_settings`
 - target site: `npcink-trial`
-- previous Cloud site: `site_magick_ai_local`
+- previous Cloud site: `site_npcink_local`
 - new Cloud site: `site_npcink_trial`
 
 No WordPress posts, pages, taxonomies, users, menus, media records, or unrelated
@@ -143,7 +143,7 @@ Current decision: setup complete; hold before runtime execution.
 Blockers cleared:
 
 - rollback artifacts exist;
-- `npcink-trial` no longer shares Cloud evidence with `site_magick_ai_local`;
+- `npcink-trial` no longer shares Cloud evidence with `site_npcink_local`;
 - addon credentials verify with a dedicated Cloud site and key.
 
 Still not started:

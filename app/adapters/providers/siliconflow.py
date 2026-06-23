@@ -16,7 +16,7 @@ class SiliconFlowProviderAdapter(OpenAIProviderAdapter):
         base_url: str = "https://api.siliconflow.cn/v1",
         api_key: str,
         timeout_seconds: float = 30.0,
-        app_name: str = "magick-ai-cloud",
+        app_name: str = "npcink-ai-cloud",
         transport: httpx.BaseTransport | None = None,
     ) -> None:
         super().__init__(

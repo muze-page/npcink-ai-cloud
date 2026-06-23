@@ -13,8 +13,8 @@ stable, low-noise trigger coverage and tests.
 
 Local smoke site:
 
-- WordPress site: `https://magick-ai.local`
-- Cloud site id: `site_magick_ai_local`
+- WordPress site: `https://npcink.local`
+- Cloud site id: `site_npcink_local`
 - Cloud base URL: `http://127.0.0.1:8010`
 - Cloud Addon: verified and monitoring enabled
 
@@ -49,7 +49,7 @@ Observed registration-class behavior:
 All plugin-side changes must keep this boundary:
 
 - Cloud Addon is the only uploader.
-- Plugins emit local events through `magick_ai_observability_event`.
+- Plugins emit local events through `npcink_observability_event`.
 - Events are metadata-only.
 - Do not emit prompts, generated content, raw callback payloads, raw HTTP bodies,
   request/response payloads, auth headers, keys, cookies, nonces, signatures,
@@ -82,14 +82,14 @@ You are working in /Users/muze/gitee/magick-ai-abilities.
 Goal: finish plugin-side observability trigger coverage for Cloud monitoring.
 
 Context:
-- Cloud docs are in /Users/muze/gitee/magick-ai-cloud/docs:
+- Cloud docs are in /Users/muze/gitee/npcink-cloud/docs:
   - plugin-observability-v1.md
   - plugin-observability-event-catalog.md
   - plugin-observability-emitter-examples.md
   - plugin-observability-e2e-acceptance.md
   - plugin-observability-plugin-side-handoff.md
 - Cloud Addon is the only uploader. This plugin only emits local
-  magick_ai_observability_event metadata.
+  npcink_observability_event metadata.
 - Do not emit prompts, generated content, raw callback payloads, auth material,
   or WordPress content bodies.
 
@@ -129,14 +129,14 @@ Goal: finish plugin-side observability trigger coverage for Core governance,
 approval, preflight, and audit metadata.
 
 Context:
-- Cloud docs are in /Users/muze/gitee/magick-ai-cloud/docs:
+- Cloud docs are in /Users/muze/gitee/npcink-cloud/docs:
   - plugin-observability-v1.md
   - plugin-observability-event-catalog.md
   - plugin-observability-emitter-examples.md
   - plugin-observability-e2e-acceptance.md
   - plugin-observability-plugin-side-handoff.md
 - Cloud Addon is the only uploader. Core only emits local
-  magick_ai_observability_event metadata.
+  npcink_observability_event metadata.
 - Core remains the local governance truth. Cloud must not approve, reject,
   preflight, mutate proposals, or write WordPress content.
 
@@ -183,14 +183,14 @@ OpenClaw dispatch, Core request relay, proposal handoff, commit preflight, and
 failure paths.
 
 Context:
-- Cloud docs are in /Users/muze/gitee/magick-ai-cloud/docs:
+- Cloud docs are in /Users/muze/gitee/npcink-cloud/docs:
   - plugin-observability-v1.md
   - plugin-observability-event-catalog.md
   - plugin-observability-emitter-examples.md
   - plugin-observability-e2e-acceptance.md
   - plugin-observability-plugin-side-handoff.md
 - Cloud Addon is the only uploader. Adapter only emits local
-  magick_ai_observability_event metadata.
+  npcink_observability_event metadata.
 - Adapter stays thin. Core remains governance truth. WordPress final writes stay
   local and governed.
 
@@ -229,23 +229,23 @@ Acceptance:
 - Cloud must not see raw OpenClaw or WordPress write payloads.
 ```
 
-## Prompt: magick-ai-cloud-addon
+## Prompt: npcink-cloud-addon
 
-Copy this into the `magick-ai-cloud-addon` AI session if addon-side refinement is
+Copy this into the `npcink-cloud-addon` AI session if addon-side refinement is
 needed:
 
 ```text
-You are working in /Users/muze/gitee/magick-ai-cloud-addon.
+You are working in /Users/muze/gitee/npcink-cloud-addon.
 
 Goal: harden the Addon observability collector and local monitoring status.
 
 Context:
-- Cloud docs are in /Users/muze/gitee/magick-ai-cloud/docs:
+- Cloud docs are in /Users/muze/gitee/npcink-cloud/docs:
   - plugin-observability-v1.md
   - plugin-observability-e2e-acceptance.md
   - plugin-observability-plugin-side-handoff.md
 - Cloud Addon is the only uploader. Other plugins emit local
-  magick_ai_observability_event metadata.
+  npcink_observability_event metadata.
 
 Required work:
 1. Verify collection is disabled unless settings are verified and

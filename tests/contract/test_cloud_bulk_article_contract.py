@@ -28,7 +28,7 @@ def test_cloud_bulk_article_contract_prohibits_cloud_writing_generation() -> Non
         "direct Cloud publishing",
         "local Ability recipe",
         "article_write_plan",
-        "magick-ai-toolbox/build-article-write-plan",
+        "npcink-toolbox/build-article-write-plan",
         "Core /proposals/from-plan",
         "WordPress Abilities API",
         "must not become article workflow",

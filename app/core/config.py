@@ -11,23 +11,23 @@ from app.core.models import PLATFORM_ADMIN_ROLE_PLATFORM_ADMIN
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_prefix="MAGICK_CLOUD_",
+        env_prefix="NPCINK_CLOUD_",
         env_file=(".env", ".env.local"),
         env_file_encoding="utf-8",
         extra="ignore",
         populate_by_name=True,
     )
 
-    project_name: str = Field(default="Magick AI Cloud")
+    project_name: str = Field(default="Npcink AI Cloud")
     environment: str = Field(default="development")
     log_level: str = Field(default="INFO")
     host: str = Field(default="0.0.0.0")
     port: int = Field(default=8000)
     database_url: str = Field(
-        default="postgresql+psycopg://magick:magick@postgres:5432/magick_ai_cloud"
+        default="postgresql+psycopg://npcink:npcink@postgres:5432/npcink_ai_cloud"
     )
     redis_url: str = Field(default="redis://redis:6379/0")
-    runtime_queue_key: str = Field(default="magick_ai_cloud:runtime_queue")
+    runtime_queue_key: str = Field(default="npcink_ai_cloud:runtime_queue")
     runtime_worker_poll_seconds: int = Field(default=5)
     runtime_callback_worker_poll_seconds: int = Field(default=5)
     worker_heartbeat_interval_seconds: int = Field(default=60)
@@ -86,8 +86,8 @@ class Settings(BaseSettings):
     admin_session_secret: str | None = Field(
         default=None,
         validation_alias=AliasChoices(
-            "MAGICK_CLOUD_ADMIN_SESSION_SECRET",
-            "MAGICK_CLOUD_OPS_SESSION_SECRET",
+            "NPCINK_CLOUD_ADMIN_SESSION_SECRET",
+            "NPCINK_CLOUD_OPS_SESSION_SECRET",
         ),
     )
     debug_local_origin_allowlist: str = Field(default="")
@@ -96,30 +96,30 @@ class Settings(BaseSettings):
     allow_dev_admin_internal_token_fallback: bool = Field(
         default=False,
         validation_alias=AliasChoices(
-            "MAGICK_CLOUD_ALLOW_DEV_ADMIN_INTERNAL_TOKEN_FALLBACK",
-            "MAGICK_CLOUD_ALLOW_DEV_OPS_INTERNAL_TOKEN_FALLBACK",
+            "NPCINK_CLOUD_ALLOW_DEV_ADMIN_INTERNAL_TOKEN_FALLBACK",
+            "NPCINK_CLOUD_ALLOW_DEV_OPS_INTERNAL_TOKEN_FALLBACK",
         ),
     )
     allow_dev_ops_internal_token_fallback: bool = Field(default=False)
     admin_session_ttl_seconds: int = Field(
         default=8 * 60 * 60,
         validation_alias=AliasChoices(
-            "MAGICK_CLOUD_ADMIN_SESSION_TTL_SECONDS",
-            "MAGICK_CLOUD_OPS_SESSION_TTL_SECONDS",
+            "NPCINK_CLOUD_ADMIN_SESSION_TTL_SECONDS",
+            "NPCINK_CLOUD_OPS_SESSION_TTL_SECONDS",
         ),
     )
     admin_bootstrap_admin_ref: str = Field(
         default="platform:internal_root",
         validation_alias=AliasChoices(
-            "MAGICK_CLOUD_ADMIN_BOOTSTRAP_ADMIN_REF",
-            "MAGICK_CLOUD_OPS_BOOTSTRAP_ADMIN_REF",
+            "NPCINK_CLOUD_ADMIN_BOOTSTRAP_ADMIN_REF",
+            "NPCINK_CLOUD_OPS_BOOTSTRAP_ADMIN_REF",
         ),
     )
     admin_bootstrap_admin_role: str = Field(
         default=PLATFORM_ADMIN_ROLE_PLATFORM_ADMIN,
         validation_alias=AliasChoices(
-            "MAGICK_CLOUD_ADMIN_BOOTSTRAP_ADMIN_ROLE",
-            "MAGICK_CLOUD_OPS_BOOTSTRAP_ADMIN_ROLE",
+            "NPCINK_CLOUD_ADMIN_BOOTSTRAP_ADMIN_ROLE",
+            "NPCINK_CLOUD_OPS_BOOTSTRAP_ADMIN_ROLE",
         ),
     )
     portal_jwt_secret: str | None = Field(default=None)
@@ -140,7 +140,7 @@ class Settings(BaseSettings):
     portal_email_from_email: str | None = Field(default=None)
     portal_email_from_name: str | None = Field(default=None)
     portal_email_reply_to: str | None = Field(default=None)
-    otel_service_name: str = Field(default="magick-ai-cloud")
+    otel_service_name: str = Field(default="npcink-ai-cloud")
     otel_exporter_otlp_endpoint: str | None = Field(default=None)
     otel_trace_sink_otlp_endpoint: str | None = Field(default=None)
     otel_trace_query_url: str | None = Field(default=None)
@@ -150,43 +150,43 @@ class Settings(BaseSettings):
     openai_base_url: str = Field(
         default="https://api.openai.com/v1",
         validation_alias=AliasChoices(
-            "MAGICK_CLOUD_OPENAI_BASE_URL",
-            "MAGICK_CLOUD_OPENAI_COMPATIBLE_BASE_URL",
+            "NPCINK_CLOUD_OPENAI_BASE_URL",
+            "NPCINK_CLOUD_OPENAI_COMPATIBLE_BASE_URL",
         ),
     )
     openai_api_key: str | None = Field(
         default=None,
         validation_alias=AliasChoices(
-            "MAGICK_CLOUD_OPENAI_API_KEY",
-            "MAGICK_CLOUD_OPENAI_COMPATIBLE_API_KEY",
+            "NPCINK_CLOUD_OPENAI_API_KEY",
+            "NPCINK_CLOUD_OPENAI_COMPATIBLE_API_KEY",
         ),
     )
     openai_organization: str | None = Field(
         default=None,
         validation_alias=AliasChoices(
-            "MAGICK_CLOUD_OPENAI_ORGANIZATION",
-            "MAGICK_CLOUD_OPENAI_COMPATIBLE_ORGANIZATION",
+            "NPCINK_CLOUD_OPENAI_ORGANIZATION",
+            "NPCINK_CLOUD_OPENAI_COMPATIBLE_ORGANIZATION",
         ),
     )
     openai_timeout_seconds: float = Field(
         default=30.0,
         validation_alias=AliasChoices(
-            "MAGICK_CLOUD_OPENAI_TIMEOUT_SECONDS",
-            "MAGICK_CLOUD_OPENAI_COMPATIBLE_TIMEOUT_SECONDS",
+            "NPCINK_CLOUD_OPENAI_TIMEOUT_SECONDS",
+            "NPCINK_CLOUD_OPENAI_COMPATIBLE_TIMEOUT_SECONDS",
         ),
     )
     openai_sample_catalog_profile: str = Field(
         default="",
         validation_alias=AliasChoices(
-            "MAGICK_CLOUD_OPENAI_SAMPLE_CATALOG_PROFILE",
-            "MAGICK_CLOUD_OPENAI_COMPATIBLE_SAMPLE_CATALOG_PROFILE",
+            "NPCINK_CLOUD_OPENAI_SAMPLE_CATALOG_PROFILE",
+            "NPCINK_CLOUD_OPENAI_COMPATIBLE_SAMPLE_CATALOG_PROFILE",
         ),
     )
     openai_provider_label: str = Field(
         default="",
         validation_alias=AliasChoices(
-            "MAGICK_CLOUD_OPENAI_PROVIDER_LABEL",
-            "MAGICK_CLOUD_OPENAI_COMPATIBLE_PROVIDER_LABEL",
+            "NPCINK_CLOUD_OPENAI_PROVIDER_LABEL",
+            "NPCINK_CLOUD_OPENAI_COMPATIBLE_PROVIDER_LABEL",
         ),
     )
     litellm_provider_enabled: bool = Field(default=False)
@@ -223,8 +223,8 @@ class Settings(BaseSettings):
     site_knowledge_jina_api_key: str | None = Field(
         default=None,
         validation_alias=AliasChoices(
-            "MAGICK_CLOUD_SITE_KNOWLEDGE_JINA_API_KEY",
-            "MAGICK_CLOUD_JINA_API_KEY",
+            "NPCINK_CLOUD_SITE_KNOWLEDGE_JINA_API_KEY",
+            "NPCINK_CLOUD_JINA_API_KEY",
             "JINA_API_KEY",
         ),
     )
@@ -232,7 +232,7 @@ class Settings(BaseSettings):
     site_knowledge_zilliz_uri: str | None = Field(default=None)
     site_knowledge_zilliz_token: str | None = Field(default=None)
     site_knowledge_zilliz_database: str | None = Field(default=None)
-    site_knowledge_zilliz_collection: str = Field(default="magick_site_knowledge_chunks")
+    site_knowledge_zilliz_collection: str = Field(default="npcink_site_knowledge_chunks")
     site_knowledge_zilliz_timeout_seconds: float = Field(default=10.0)
     web_search_provider: str = Field(default="disabled")
     web_search_tavily_base_url: str = Field(default="https://api.tavily.com")

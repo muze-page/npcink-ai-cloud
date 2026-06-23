@@ -50,7 +50,7 @@ def _preflight(*, verified: bool = True, site_id: str = "site_live") -> dict[str
                 "evaluation": {"decision": "go" if verified else "no-go", "blockers": blockers},
                 "wordpress": {
                     "ok": True,
-                    "active_plugins": ["magick-ai-cloud-addon/magick-ai-cloud-addon.php"],
+                    "active_plugins": ["npcink-cloud-addon/npcink-cloud-addon.php"],
                     "cloud_settings": {
                         "base_url": "http://127.0.0.1:8010",
                         "site_id": site_id,

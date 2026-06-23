@@ -91,7 +91,7 @@ raw full post bodies were not sent.
 Sync run:
 
 - Run ID: `run_cb5380d9aba34d58ac6e3a3c626fc3c8`
-- Ability: `magick-ai-cloud/site-knowledge-sync`
+- Ability: `npcink-cloud/site-knowledge-sync`
 - Status: succeeded
 - Sync status: completed
 - Sync mode: rebuild
@@ -106,7 +106,7 @@ Sync run:
 Search run:
 
 - Run ID: `run_318cd6d61b4642fd93549911c1945774`
-- Ability: `magick-ai-cloud/site-knowledge-search`
+- Ability: `npcink-cloud/site-knowledge-search`
 - Intent: `writing_support_plan`
 - Query: `WordPress AI 导航主题 多语言插件 开发调试工具 图片清理插件 写作准备`
 - Status: succeeded
@@ -140,7 +140,7 @@ The search response included a `site_knowledge_suggestion_agent` handoff with:
 Status run:
 
 - Run ID: `run_0c36b9da127a487889a6ecbe41698067`
-- Ability: `magick-ai-cloud/site-knowledge-status`
+- Ability: `npcink-cloud/site-knowledge-status`
 - Status: succeeded
 - Index status: ready
 - Indexed documents: 9

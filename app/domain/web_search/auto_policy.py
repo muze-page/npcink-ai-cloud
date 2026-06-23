@@ -298,7 +298,7 @@ def _has_channel_auto_search_hint(
     if detected_channel not in AUTO_SEARCH_CHANNELS:
         return False
 
-    if str(ability_name or "").startswith("magick-ai-cloud/"):
+    if str(ability_name or "").startswith("npcink-cloud/"):
         return False
 
     text = " ".join(

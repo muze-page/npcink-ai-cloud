@@ -89,7 +89,7 @@ def probe_cloud(
     else:
         ready = health_getter(
             urljoin(normalized, "health/ready"),
-            {"X-Magick-Internal-Token": internal_token},
+            {"X-Npcink-Internal-Token": internal_token},
             timeout_seconds,
         )
     return {
@@ -391,7 +391,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="append",
         type=Path,
         help=(
-            "Env file to read for MAGICK_CLOUD_INTERNAL_AUTH_TOKEN. "
+            "Env file to read for NPCINK_CLOUD_INTERNAL_AUTH_TOKEN. "
             "Defaults to .env and .env.local."
         ),
     )

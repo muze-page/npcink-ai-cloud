@@ -9,7 +9,7 @@ from app.core.services import CloudServices
 
 def _client(tmp_path) -> TestClient:
     settings = Settings(
-        project_name="Magick AI Cloud Test",
+        project_name="Npcink AI Cloud Test",
         environment="test",
         database_url=f"sqlite+pysqlite:///{tmp_path / 'removed-surfaces.sqlite3'}",
         redis_url="redis://localhost:6379/0",

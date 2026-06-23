@@ -176,7 +176,7 @@ The following verification passed during this stage:
 
 The following local eval-lab checks were run:
 
-- `project_quality_gate` against `magick-ai-cloud`;
+- `project_quality_gate` against `npcink-ai-cloud`;
 - `project_boundary_review_triad` with `dry_run=true`.
 
 Results:
@@ -198,7 +198,7 @@ Recommendation:
 
 - use eval-lab provider-backed triad review before merging real Alipay/WeChat
   callback verification, not for every small internal refactor;
-- run it with an explicit `project_label=magick-ai-cloud`, because the dry-run
+- run it with an explicit `project_label=npcink-ai-cloud`, because the dry-run
   report showed a misleading default project label.
 
 ## Known Gaps

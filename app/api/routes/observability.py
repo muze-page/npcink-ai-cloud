@@ -49,7 +49,7 @@ class PluginEventBatchPayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     contract_version: str = Field(default=CONTRACT_VERSION, max_length=64)
-    source: str = Field(default="magick-ai-cloud-addon", max_length=64)
+    source: str = Field(default="npcink-cloud-addon", max_length=64)
     events: list[PluginEventPayload] = Field(min_length=1, max_length=100)
 
 

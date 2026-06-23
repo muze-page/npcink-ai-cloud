@@ -33,7 +33,7 @@ def _build_client(tmp_path: Path) -> tuple[str, TestClient]:
         scopes=["runtime:execute", "runtime:read", "runtime:resolve"],
     )
     settings = Settings(
-        project_name="Magick AI Cloud Test",
+        project_name="Npcink AI Cloud Test",
         environment="test",
         database_url=database_url,
         redis_url="redis://localhost:6379/0",

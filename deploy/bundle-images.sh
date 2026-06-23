@@ -3,12 +3,12 @@ set -euo pipefail
 
 CLOUD_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DIST_DIR="${CLOUD_DIR}/dist"
-IMAGE_PLATFORM="${MAGICK_CLOUD_IMAGE_PLATFORM:-}"
-PIP_INDEX_URL="${MAGICK_CLOUD_PIP_INDEX_URL:-}"
-PIP_EXTRA_INDEX_URL="${MAGICK_CLOUD_PIP_EXTRA_INDEX_URL:-}"
-PIP_TRUSTED_HOST="${MAGICK_CLOUD_PIP_TRUSTED_HOST:-}"
-SKIP_FRONTEND_IMAGE="${MAGICK_CLOUD_SKIP_FRONTEND_IMAGE:-0}"
-REMOTE_BUNDLE_ONLY="${MAGICK_CLOUD_REMOTE_BUNDLE_ONLY:-0}"
+IMAGE_PLATFORM="${NPCINK_CLOUD_IMAGE_PLATFORM:-}"
+PIP_INDEX_URL="${NPCINK_CLOUD_PIP_INDEX_URL:-}"
+PIP_EXTRA_INDEX_URL="${NPCINK_CLOUD_PIP_EXTRA_INDEX_URL:-}"
+PIP_TRUSTED_HOST="${NPCINK_CLOUD_PIP_TRUSTED_HOST:-}"
+SKIP_FRONTEND_IMAGE="${NPCINK_CLOUD_SKIP_FRONTEND_IMAGE:-0}"
+REMOTE_BUNDLE_ONLY="${NPCINK_CLOUD_REMOTE_BUNDLE_ONLY:-0}"
 REMOTE_DOCKER_HOST=""
 if [[ "${DOCKER_HOST:-}" == ssh://* ]]; then
 	REMOTE_DOCKER_HOST="${DOCKER_HOST#ssh://}"
@@ -45,23 +45,23 @@ if [ -n "${IMAGE_PLATFORM}" ]; then
 			--platform "${IMAGE_PLATFORM}" \
 			"${BUILD_ARGS[@]}" \
 			--load \
-			-t magick-ai-cloud-api:prod \
+			-t npcink-ai-cloud-api:prod \
 			-f "${CLOUD_DIR}/Dockerfile" \
 			"${CLOUD_DIR}"
 	else
 		docker buildx build \
 			--platform "${IMAGE_PLATFORM}" \
 			--load \
-			-t magick-ai-cloud-api:prod \
+			-t npcink-ai-cloud-api:prod \
 			-f "${CLOUD_DIR}/Dockerfile" \
 			"${CLOUD_DIR}"
 	fi
-	docker tag magick-ai-cloud-api:prod magick-ai-cloud-worker:prod
+	docker tag npcink-ai-cloud-api:prod npcink-ai-cloud-worker:prod
 	if [ "${SKIP_FRONTEND_IMAGE}" != "1" ]; then
 		docker buildx build \
 			--platform "${IMAGE_PLATFORM}" \
 			--load \
-			-t magick-ai-cloud-frontend:prod \
+			-t npcink-ai-cloud-frontend:prod \
 			-f "${CLOUD_DIR}/frontend/Dockerfile" \
 			"${CLOUD_DIR}/frontend"
 	fi
@@ -102,10 +102,10 @@ save_image() {
 	rsync -a -e "ssh -o ServerAliveInterval=30 -o ServerAliveCountMax=10" "${REMOTE_DOCKER_HOST}:${output}" "${output}"
 }
 
-save_image magick-ai-cloud-api:prod "${DIST_DIR}/api.tar.gz"
-save_image magick-ai-cloud-worker:prod "${DIST_DIR}/worker.tar.gz"
+save_image npcink-ai-cloud-api:prod "${DIST_DIR}/api.tar.gz"
+save_image npcink-ai-cloud-worker:prod "${DIST_DIR}/worker.tar.gz"
 if [ "${SKIP_FRONTEND_IMAGE}" != "1" ]; then
-	save_image magick-ai-cloud-frontend:prod "${DIST_DIR}/frontend.tar.gz"
+	save_image npcink-ai-cloud-frontend:prod "${DIST_DIR}/frontend.tar.gz"
 else
 	rm -f "${DIST_DIR}/frontend.tar.gz"
 fi

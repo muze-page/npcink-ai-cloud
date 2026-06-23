@@ -73,7 +73,7 @@ Before enabling the feature:
 2. Run migrations:
 
    ```bash
-   docker exec magick-ai-cloud-api-1 alembic upgrade head
+   docker exec npcink-ai-cloud-api-1 alembic upgrade head
    ```
 
 3. Confirm these migrations are present:
@@ -84,7 +84,7 @@ Before enabling the feature:
 4. Restart the runtime worker after migration:
 
    ```bash
-   docker restart magick-ai-cloud-worker-1
+   docker restart npcink-ai-cloud-worker-1
    ```
 
 5. Run the WordPress smoke:

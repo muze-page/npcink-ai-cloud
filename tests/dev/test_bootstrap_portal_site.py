@@ -18,7 +18,7 @@ def test_bootstrap_portal_site_binds_site_admin_to_existing_site_without_demo_us
     database_url = _sqlite_url(tmp_path)
     init_schema(database_url)
     settings = Settings(
-        project_name="Magick AI Cloud Test",
+        project_name="Npcink AI Cloud Test",
         environment="test",
         database_url=database_url,
         redis_url="redis://localhost:6379/0",
@@ -29,7 +29,7 @@ def test_bootstrap_portal_site_binds_site_admin_to_existing_site_without_demo_us
         settings=settings,
         site_id="site_realish",
         key_id="key_existing",
-        secret="magick-cloud-existing-secret",
+        secret="npcink-cloud-existing-secret",
         site_name="Realish Site",
         scopes=["runtime:resolve", "runtime:execute", "runtime:read", "stats:read"],
         account_id="acct_realish",
@@ -75,7 +75,7 @@ def test_bootstrap_portal_site_can_optionally_issue_one_new_key(tmp_path: Path) 
     database_url = _sqlite_url(tmp_path)
     init_schema(database_url)
     settings = Settings(
-        project_name="Magick AI Cloud Test",
+        project_name="Npcink AI Cloud Test",
         environment="test",
         database_url=database_url,
         redis_url="redis://localhost:6379/0",
@@ -86,7 +86,7 @@ def test_bootstrap_portal_site_can_optionally_issue_one_new_key(tmp_path: Path) 
         settings=settings,
         site_id="site_realish_issue",
         key_id="key_existing",
-        secret="magick-cloud-existing-secret",
+        secret="npcink-cloud-existing-secret",
         site_name="Realish Site",
         scopes=["runtime:resolve", "runtime:execute", "runtime:read", "stats:read"],
         account_id="acct_realish_issue",
@@ -103,13 +103,13 @@ def test_bootstrap_portal_site_can_optionally_issue_one_new_key(tmp_path: Path) 
         rebuild_billing_snapshot=False,
         issue_key=True,
         key_id="key_portal_issue",
-        secret="magick-cloud-issued-secret",
+        secret="npcink-cloud-issued-secret",
         key_label="Issued from bootstrap",
         scopes=["runtime:resolve", "stats:read"],
     )
 
     assert result["issued_key"]["key_id"] == "key_portal_issue"
-    assert result["issued_key"]["secret"] == "magick-cloud-issued-secret"
+    assert result["issued_key"]["secret"] == "npcink-cloud-issued-secret"
     assert result["sample_site"]["cloud_api_key"].startswith("mak1_")
     assert len(result["site_keys"]["items"]) == 2
 

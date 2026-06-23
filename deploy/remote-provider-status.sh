@@ -9,9 +9,9 @@ else
 fi
 . "${ROOT_DIR}/deploy/common.sh"
 
-magick_ai_cloud_require_cmd docker
+npcink_ai_cloud_require_cmd docker
 
-magick_ai_cloud_compose "${ROOT_DIR}" exec -T api python - <<'PY'
+npcink_ai_cloud_compose "${ROOT_DIR}" exec -T api python - <<'PY'
 from __future__ import annotations
 
 import json

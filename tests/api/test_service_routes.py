@@ -57,7 +57,7 @@ def _build_client(
 
     settings_kwargs = {
         "_env_file": None,
-        "project_name": "Magick AI Cloud Test",
+        "project_name": "Npcink AI Cloud Test",
         "environment": "test",
         "database_url": database_url,
         "redis_url": "redis://localhost:6379/0",
@@ -195,13 +195,13 @@ def test_admin_web_search_provider_settings_are_masked_and_update_runtime(
     assert "jina-test-secret" not in json.dumps(data)
     assert "apify-test-token" not in json.dumps(data)
     env_text = env_path.read_text(encoding="utf-8")
-    assert "MAGICK_CLOUD_WEB_SEARCH_PROVIDER=auto" in env_text
-    assert "MAGICK_CLOUD_WEB_SEARCH_TAVILY_API_KEY=tvly-test-secret" in env_text
-    assert "MAGICK_CLOUD_WEB_SEARCH_TAVILY_API_KEYS=tvly-pool-a,tvly-pool-b" in env_text
-    assert "MAGICK_CLOUD_WEB_SEARCH_TAVILY_API_KEY_LABELS=account-a,account-b" in env_text
-    assert "MAGICK_CLOUD_WEB_SEARCH_BOCHA_API_KEY=bocha-test-secret" in env_text
-    assert "MAGICK_CLOUD_WEB_SEARCH_JINA_READER_API_KEY=jina-test-secret" in env_text
-    assert "MAGICK_CLOUD_WEB_SEARCH_APIFY_API_TOKEN=apify-test-token" in env_text
+    assert "NPCINK_CLOUD_WEB_SEARCH_PROVIDER=auto" in env_text
+    assert "NPCINK_CLOUD_WEB_SEARCH_TAVILY_API_KEY=tvly-test-secret" in env_text
+    assert "NPCINK_CLOUD_WEB_SEARCH_TAVILY_API_KEYS=tvly-pool-a,tvly-pool-b" in env_text
+    assert "NPCINK_CLOUD_WEB_SEARCH_TAVILY_API_KEY_LABELS=account-a,account-b" in env_text
+    assert "NPCINK_CLOUD_WEB_SEARCH_BOCHA_API_KEY=bocha-test-secret" in env_text
+    assert "NPCINK_CLOUD_WEB_SEARCH_JINA_READER_API_KEY=jina-test-secret" in env_text
+    assert "NPCINK_CLOUD_WEB_SEARCH_APIFY_API_TOKEN=apify-test-token" in env_text
 
     services = client.app.state.services
     assert services.settings.web_search_provider == "auto"
@@ -294,11 +294,11 @@ def test_admin_image_source_provider_settings_are_masked_and_update_runtime(
     assert "pixabay-test-secret" not in json.dumps(data)
     assert "pexels-test-secret" not in json.dumps(data)
     env_text = env_path.read_text(encoding="utf-8")
-    assert "MAGICK_CLOUD_IMAGE_SOURCE_PROVIDER=auto" in env_text
-    assert "MAGICK_CLOUD_IMAGE_SOURCE_AUTO_STRATEGY=random" in env_text
-    assert "MAGICK_CLOUD_IMAGE_SOURCE_UNSPLASH_ACCESS_KEY=unsplash-test-secret" in env_text
-    assert "MAGICK_CLOUD_IMAGE_SOURCE_PIXABAY_API_KEY=pixabay-test-secret" in env_text
-    assert "MAGICK_CLOUD_IMAGE_SOURCE_PEXELS_API_KEY=pexels-test-secret" in env_text
+    assert "NPCINK_CLOUD_IMAGE_SOURCE_PROVIDER=auto" in env_text
+    assert "NPCINK_CLOUD_IMAGE_SOURCE_AUTO_STRATEGY=random" in env_text
+    assert "NPCINK_CLOUD_IMAGE_SOURCE_UNSPLASH_ACCESS_KEY=unsplash-test-secret" in env_text
+    assert "NPCINK_CLOUD_IMAGE_SOURCE_PIXABAY_API_KEY=pixabay-test-secret" in env_text
+    assert "NPCINK_CLOUD_IMAGE_SOURCE_PEXELS_API_KEY=pexels-test-secret" in env_text
 
     services = client.app.state.services
     assert services.settings.image_source_provider == "auto"
@@ -341,7 +341,7 @@ def test_image_source_readonly_metrics_summarizes_fast_first_runtime(
                     account_id=subscription.account_id,
                     subscription_id=subscription.subscription_id,
                     plan_version_id=subscription.plan_version_id,
-                    ability_name="magick-ai-toolbox/search-image-source",
+                    ability_name="npcink-toolbox/search-image-source",
                     ability_family="knowledge",
                     skill_id="",
                     workflow_id="",
@@ -492,7 +492,7 @@ def test_hosted_model_governance_diagnostics_summarizes_runtime_families(
                     account_id=subscription.account_id,
                     subscription_id=subscription.subscription_id,
                     plan_version_id=subscription.plan_version_id,
-                    ability_name=f"magick-ai-cloud/{execution_kind}",
+                    ability_name=f"npcink-cloud/{execution_kind}",
                     ability_family=ability_family,
                     skill_id="",
                     workflow_id="",
@@ -2757,7 +2757,7 @@ def test_service_routes_expose_observability_summary(tmp_path: Path) -> None:
     assert response.status_code == 200
     payload = response.json()["data"]
     assert payload["ready"]["status"] == "error"
-    assert payload["tracing"]["service_name"] == "magick-ai-cloud"
+    assert payload["tracing"]["service_name"] == "npcink-ai-cloud"
     assert isinstance(payload["tracing"]["trace_sink_configured"], bool)
     assert payload["feature_flags"]["summary"]["flags_total"] >= 1
     assert payload["feature_flags"]["summary"]["overridden_total"] == 0
@@ -3440,7 +3440,7 @@ def test_service_routes_runtime_backlog_diagnostics_exposes_scope_and_stale_laye
         database_url,
         site_id="site_backlog_b",
         key_id="key_backlog_b",
-        secret="magick-cloud-test-secret-backlog-b",
+        secret="npcink-cloud-test-secret-backlog-b",
         scopes=["runtime:execute", "runtime:read", "runtime:resolve"],
     )
 
@@ -3515,7 +3515,7 @@ def test_service_routes_runtime_backlog_diagnostics_exposes_scope_and_stale_laye
                 "/v1/runtime/execute",
                 site_id="site_backlog_b",
                 key_id="key_backlog_b",
-                secret="magick-cloud-test-secret-backlog-b",
+                secret="npcink-cloud-test-secret-backlog-b",
                 idempotency_key="idem-service-backlog-other-001",
                 trace_id="traceservicebacklogother0001",
                 body=other_body,

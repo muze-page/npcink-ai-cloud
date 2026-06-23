@@ -1,4 +1,4 @@
-# External Trial Record - magick-ai.local - 2026-06-15
+# External Trial Record - npcink.local - 2026-06-15
 
 Status: local rehearsal complete; not an external customer invite.
 
@@ -27,10 +27,10 @@ Read first:
 - Environment: local alpha rehearsal
 - Cloud commit SHA: `245f2c4`
 - Cloud base URL: `http://127.0.0.1:8010`
-- WordPress site URL: `https://magick-ai.local/`
+- WordPress site URL: `https://npcink.local/`
 - WordPress admin username: `1`
 - WordPress admin password: `[REDACTED_SECRET]`
-- Site ID: `site_magick_ai_local`
+- Site ID: `site_npcink_local`
 - Declared use case: verify the hosted runtime assistance, Site Knowledge
   evidence, writing preparation, Agent feedback boundary, and usage /
   entitlement / billing detail evidence before any real external site invite.
@@ -56,13 +56,13 @@ Read first:
 - `pnpm run smoke:internal-alpha-onboarding`: passed, 1 test.
 - `pnpm run smoke:site-knowledge`: passed.
 - Site Knowledge evidence JSON:
-  `/Users/muze/gitee/magick-ai-cloud/.tmp/site-knowledge-real-chain-smoke/evidence-20260615050032.json`
+  `/Users/muze/gitee/npcink-cloud/.tmp/site-knowledge-real-chain-smoke/evidence-20260615050032.json`
 - Site Knowledge sync run ID: `run_1c8ac355e28a4d3e913c1479681b3f5e`
 - Site Knowledge evidence gate: passed.
 - `pnpm run smoke:local-alpha`: passed after updating the smoke script to the
   current Portal CLI/session contract.
 - Local alpha evidence JSON:
-  `/Users/muze/gitee/magick-ai-cloud/.tmp/local-alpha-smoke/evidence-20260615050537.json`
+  `/Users/muze/gitee/npcink-cloud/.tmp/local-alpha-smoke/evidence-20260615050537.json`
 - Hosted runtime run ID: `run_5a42bd6453bc4c01a328b9e90b0c3570`
 - Hosted runtime status: succeeded.
 - Hosted runtime provider ID: `openai`
@@ -82,12 +82,12 @@ Read first:
 - Run ID: `run_5a42bd6453bc4c01a328b9e90b0c3570`
 - Provider health: fresh; 98 healthy instances, 0 degraded, 0 unhealthy.
 - Route selected: `openai-global-codex-auto-review`
-- API key verified: yes; `key_magick_ai_local` was active and had a
+- API key verified: yes; `key_npcink_local` was active and had a
   `last_used_at` timestamp of `2026-06-15T05:07:05.165736+00:00`.
 - Usage meter entry: present; current smoke period totals were 2 runs, 4
   provider calls, 615 input tokens, 434 output tokens, and 1049 total tokens.
 - Usage ledger entry: present; credit ledger returned 8 current-period entries
-  for `acct_site_magick_ai_local`.
+  for `acct_site_npcink_local`.
 - AI credit consumption: 4 recorded credits total under
   `ai-credit-ledger-v2`, split as 2 hosted-run credits, 2 model-token credits,
   and 0 other-provider-call credits.
@@ -96,7 +96,7 @@ Read first:
   `max_tokens_per_period`, and `max_cost_per_period` all at `0.0`, meaning no
   package-limit block in the local development baseline.
 - Billing/detail snapshot: present;
-  `bill_site_magick_ai_local_sub_site_magick_ai_local_1781499941_1784091941`
+  `bill_site_npcink_local_sub_site_npcink_local_1781499941_1784091941`
   reconciled the same 2 runs, 4 provider calls, and 1049 total tokens.
 - Audit event: recent service audit records exist for the local site, but the
   latest listed events were older runtime repair/internal advisor records, not
@@ -104,7 +104,7 @@ Read first:
 - Callback worker result: healthy; callback queue had 0 pending, 0 failed, and
   `pressure_state=healthy`.
 - Guard events: historical stale timestamp rejections exist for
-  `site_magick_ai_local`; no new guard pressure appeared in the local alpha
+  `site_npcink_local`; no new guard pressure appeared in the local alpha
   evidence, and runtime queue pressure remained healthy.
 
 ## Boundary Confirmation

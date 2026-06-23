@@ -2,7 +2,7 @@
 
 Status: active checklist.
 
-Scope: first controlled external trial of Magick AI Cloud hosted runtime and
+Scope: first controlled external trial of Npcink AI Cloud hosted runtime and
 reviewable WordPress assistance.
 
 Source note:
@@ -63,7 +63,7 @@ environment.
 2. Provision Cloud access
    - Provision the site through existing service-plane/dev seed path.
    - Issue or confirm an active Cloud API key.
-   - Save and verify the key in `magick-ai-cloud-addon`.
+   - Save and verify the key in `npcink-cloud-addon`.
    - Do not expose split `site_id / key_id / secret` fields in WordPress UI.
 
 3. Confirm environment readiness
@@ -73,7 +73,7 @@ environment.
    - Confirm provider health and cadence freshness are current.
 
 4. Run Cloud verification
-   - From `/Users/muze/gitee/magick-ai-cloud`:
+   - From `/Users/muze/gitee/npcink-ai-cloud`:
 
 ```bash
 pnpm run check:fast
@@ -84,7 +84,7 @@ pnpm run smoke:local-alpha
 ```
 
 5. Run Toolbox verification
-   - From `/Users/muze/gitee/magick-ai-toolbox`:
+   - From `/Users/muze/gitee/npcink-toolbox`:
 
 ```bash
 composer test:all

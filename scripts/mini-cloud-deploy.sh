@@ -118,8 +118,8 @@ test -f deploy/workspace-target.env.sh || {
   exit 1
 }
 source deploy/workspace-target.env.sh
-unset MAGICK_CLOUD_DEPLOY_IDENTITY_FILE
-export MAGICK_CLOUD_ENV_FILE=\"${REMOTE_PROJECT_DIR_SCRIPT}/.env.deploy\"
+unset NPCINK_CLOUD_DEPLOY_IDENTITY_FILE
+export NPCINK_CLOUD_ENV_FILE=\"${REMOTE_PROJECT_DIR_SCRIPT}/.env.deploy\"
 bash deploy/deploy-to-ssh-host.sh ${passthrough_escaped}
 "
 }

@@ -102,9 +102,9 @@ class HttpRuntimeCallbackDispatcher:
     ) -> dict[str, str]:
         headers = {
             "content-type": "application/json",
-            "X-Magick-Cloud-Event": request.event,
-            "X-Magick-Run-Id": request.run_id,
-            "X-Magick-Trace-Id": request.trace_id,
+            "X-Npcink-Cloud-Event": request.event,
+            "X-Npcink-Run-Id": request.run_id,
+            "X-Npcink-Trace-Id": request.trace_id,
         }
         if not request.key_id or not request.secret:
             return headers
@@ -124,14 +124,14 @@ class HttpRuntimeCallbackDispatcher:
         )
         headers.update(
             {
-                "X-Magick-Site-Id": request.site_id,
-                "X-Magick-Key-Id": request.key_id,
-                "X-Magick-Timestamp": timestamp,
-                "X-Magick-Signature": build_hmac_signature(
+                "X-Npcink-Site-Id": request.site_id,
+                "X-Npcink-Key-Id": request.key_id,
+                "X-Npcink-Timestamp": timestamp,
+                "X-Npcink-Signature": build_hmac_signature(
                     build_secret_hash(request.secret),
                     canonical,
                 ),
-                "X-Magick-Callback-Id": callback_id,
+                "X-Npcink-Callback-Id": callback_id,
                 "traceparent": traceparent,
             }
         )

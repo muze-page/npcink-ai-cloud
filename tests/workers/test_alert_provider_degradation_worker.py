@@ -84,7 +84,7 @@ def test_alert_worker_generates_active_provider_degradation_batches(
 
     summary = run_once(
         Settings(
-            project_name="Magick AI Cloud Test",
+            project_name="Npcink AI Cloud Test",
             environment="test",
             database_url=database_url,
             redis_url="redis://localhost:6379/0",

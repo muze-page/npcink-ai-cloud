@@ -11,7 +11,7 @@ Cloud to write WordPress content.
 
 Cloud accepts these static managed ability names:
 
-- `magick-ai-cloud/web-search`
+- `npcink-cloud/web-search`
 - `npcink-cloud/web-search`
 
 The matching contract version is:
@@ -51,51 +51,51 @@ does not change runtime routing or create a Cloud workflow truth.
 
 MVP provider support is Cloud-owned and configured only by Cloud operators:
 
-- `MAGICK_CLOUD_WEB_SEARCH_PROVIDER`: `disabled`, `auto`, `tavily`, `bocha`,
+- `NPCINK_CLOUD_WEB_SEARCH_PROVIDER`: `disabled`, `auto`, `tavily`, `bocha`,
   `apify`, or `zhihu`
-- `MAGICK_CLOUD_WEB_SEARCH_TAVILY_BASE_URL`: default `https://api.tavily.com`
-- `MAGICK_CLOUD_WEB_SEARCH_TAVILY_API_KEY`: required when provider is `tavily`
-  unless `MAGICK_CLOUD_WEB_SEARCH_TAVILY_API_KEYS` is configured
-- `MAGICK_CLOUD_WEB_SEARCH_TAVILY_API_KEYS`: optional Cloud-operator key pool.
+- `NPCINK_CLOUD_WEB_SEARCH_TAVILY_BASE_URL`: default `https://api.tavily.com`
+- `NPCINK_CLOUD_WEB_SEARCH_TAVILY_API_KEY`: required when provider is `tavily`
+  unless `NPCINK_CLOUD_WEB_SEARCH_TAVILY_API_KEYS` is configured
+- `NPCINK_CLOUD_WEB_SEARCH_TAVILY_API_KEYS`: optional Cloud-operator key pool.
   Values may be comma-, semicolon-, whitespace-, or newline-separated. Cloud
   rotates keys in memory with round-robin selection and temporarily skips keys
   that return auth, rate-limit, timeout, network, or provider-unavailable
   failures. WordPress users never submit these keys through runtime requests.
-- `MAGICK_CLOUD_WEB_SEARCH_TAVILY_API_KEY_LABELS`: optional Cloud-operator
+- `NPCINK_CLOUD_WEB_SEARCH_TAVILY_API_KEY_LABELS`: optional Cloud-operator
   labels for the Tavily key pool, aligned to `TAVILY_API_KEYS` order. Values may
   be comma-, semicolon-, or newline-separated. Labels are operational metadata;
   do not put provider secrets in labels.
-- `MAGICK_CLOUD_WEB_SEARCH_TAVILY_TIMEOUT_SECONDS`: default `15`
-- `MAGICK_CLOUD_WEB_SEARCH_TAVILY_COST_PER_QUERY`: optional shadow cost for
+- `NPCINK_CLOUD_WEB_SEARCH_TAVILY_TIMEOUT_SECONDS`: default `15`
+- `NPCINK_CLOUD_WEB_SEARCH_TAVILY_COST_PER_QUERY`: optional shadow cost for
   provider-call usage records
-- `MAGICK_CLOUD_WEB_SEARCH_BOCHA_BASE_URL`: default
+- `NPCINK_CLOUD_WEB_SEARCH_BOCHA_BASE_URL`: default
   `https://api.bochaai.com/v1`
-- `MAGICK_CLOUD_WEB_SEARCH_BOCHA_API_KEY`: required when provider is `bocha`
-- `MAGICK_CLOUD_WEB_SEARCH_BOCHA_TIMEOUT_SECONDS`: default `15`
-- `MAGICK_CLOUD_WEB_SEARCH_BOCHA_COST_PER_QUERY`: optional shadow cost
-- `MAGICK_CLOUD_WEB_SEARCH_APIFY_BASE_URL`: default `https://api.apify.com/v2`
-- `MAGICK_CLOUD_WEB_SEARCH_APIFY_API_TOKEN`: required when provider is `apify`
-- `MAGICK_CLOUD_WEB_SEARCH_APIFY_ACTOR_ID`: default
+- `NPCINK_CLOUD_WEB_SEARCH_BOCHA_API_KEY`: required when provider is `bocha`
+- `NPCINK_CLOUD_WEB_SEARCH_BOCHA_TIMEOUT_SECONDS`: default `15`
+- `NPCINK_CLOUD_WEB_SEARCH_BOCHA_COST_PER_QUERY`: optional shadow cost
+- `NPCINK_CLOUD_WEB_SEARCH_APIFY_BASE_URL`: default `https://api.apify.com/v2`
+- `NPCINK_CLOUD_WEB_SEARCH_APIFY_API_TOKEN`: required when provider is `apify`
+- `NPCINK_CLOUD_WEB_SEARCH_APIFY_ACTOR_ID`: default
   `apify/google-search-scraper`
-- `MAGICK_CLOUD_WEB_SEARCH_APIFY_TIMEOUT_SECONDS`: default `30`
-- `MAGICK_CLOUD_WEB_SEARCH_APIFY_COST_PER_QUERY`: optional shadow cost
-- `MAGICK_CLOUD_WEB_SEARCH_ZHIHU_BASE_URL`: default
+- `NPCINK_CLOUD_WEB_SEARCH_APIFY_TIMEOUT_SECONDS`: default `30`
+- `NPCINK_CLOUD_WEB_SEARCH_APIFY_COST_PER_QUERY`: optional shadow cost
+- `NPCINK_CLOUD_WEB_SEARCH_ZHIHU_BASE_URL`: default
   `https://developer.zhihu.com`
-- `MAGICK_CLOUD_WEB_SEARCH_ZHIHU_ACCESS_SECRET`: required when provider is
+- `NPCINK_CLOUD_WEB_SEARCH_ZHIHU_ACCESS_SECRET`: required when provider is
   `zhihu`; this is Cloud-operator configuration only and must not be supplied by
   WordPress runtime requests
-- `MAGICK_CLOUD_WEB_SEARCH_ZHIHU_TIMEOUT_SECONDS`: default `15`
-- `MAGICK_CLOUD_WEB_SEARCH_ZHIHU_COST_PER_QUERY`: optional shadow cost
-- `MAGICK_CLOUD_WEB_SEARCH_ZHIHU_HOT_LIST_CACHE_TTL_SECONDS`: default `3600`.
+- `NPCINK_CLOUD_WEB_SEARCH_ZHIHU_TIMEOUT_SECONDS`: default `15`
+- `NPCINK_CLOUD_WEB_SEARCH_ZHIHU_COST_PER_QUERY`: optional shadow cost
+- `NPCINK_CLOUD_WEB_SEARCH_ZHIHU_HOT_LIST_CACHE_TTL_SECONDS`: default `3600`.
   Cloud may cache Zhihu hot-list responses server-side so WordPress clients read
   a bounded topic pool without spending provider quota on every panel open.
-- `MAGICK_CLOUD_WEB_SEARCH_JINA_READER_ENABLED`: enables selected URL reader
+- `NPCINK_CLOUD_WEB_SEARCH_JINA_READER_ENABLED`: enables selected URL reader
   enhancement after Tavily, Bocha, or Apify returns result URLs
-- `MAGICK_CLOUD_WEB_SEARCH_JINA_READER_BASE_URL`: default `https://r.jina.ai`
-- `MAGICK_CLOUD_WEB_SEARCH_JINA_READER_API_KEY`: optional/required depending on
+- `NPCINK_CLOUD_WEB_SEARCH_JINA_READER_BASE_URL`: default `https://r.jina.ai`
+- `NPCINK_CLOUD_WEB_SEARCH_JINA_READER_API_KEY`: optional/required depending on
   the Cloud operator's Jina Reader account policy
-- `MAGICK_CLOUD_WEB_SEARCH_JINA_READER_MAX_PAGES`: default `2`, capped at `5`
-- `MAGICK_CLOUD_WEB_SEARCH_ADMIN_ENV_PATH`: local operator settings file path
+- `NPCINK_CLOUD_WEB_SEARCH_JINA_READER_MAX_PAGES`: default `2`, capped at `5`
+- `NPCINK_CLOUD_WEB_SEARCH_ADMIN_ENV_PATH`: local operator settings file path
   for the Cloud admin provider settings page
 
 The Cloud admin page `/admin/web-search` may update these runtime settings. It
@@ -110,7 +110,7 @@ default customer path uses Cloud-managed search.
 
 ```json
 {
-  "ability_name": "magick-ai-cloud/web-search",
+  "ability_name": "npcink-cloud/web-search",
   "contract_version": "web_search.v1",
   "execution_pattern": "inline",
   "storage_mode": "result_only",
@@ -515,7 +515,7 @@ factual truth.
 ## Site Knowledge Composition
 
 Web Search is external-web evidence. Site Knowledge remains site-owned evidence
-through `magick-ai-cloud/site-knowledge-search`. Product flows should combine
+through `npcink-cloud/site-knowledge-search`. Product flows should combine
 them explicitly:
 
 - time-sensitive external facts: Web Search first

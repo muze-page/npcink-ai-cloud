@@ -6,16 +6,16 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 # Shared compose/env helpers for deploy scripts.
 . "${ROOT_DIR}/deploy/common.sh"
 
-magick_ai_cloud_require_cmd docker
+npcink_ai_cloud_require_cmd docker
 
-magick_ai_cloud_compose "${ROOT_DIR}" run --rm api python -c '
+npcink_ai_cloud_compose "${ROOT_DIR}" run --rm api python -c '
 import os
 import sys
 import time
 
 import psycopg
 
-url = os.environ["MAGICK_CLOUD_DATABASE_URL"].replace("postgresql+psycopg://", "postgresql://")
+url = os.environ["NPCINK_CLOUD_DATABASE_URL"].replace("postgresql+psycopg://", "postgresql://")
 last_error = None
 for _ in range(30):
     try:
@@ -31,5 +31,5 @@ for _ in range(30):
 print(f"[fail] Database authentication did not become ready: {last_error}", file=sys.stderr)
 sys.exit(1)
 '
-magick_ai_cloud_compose "${ROOT_DIR}" run --rm api alembic upgrade head
-magick_ai_cloud_compose "${ROOT_DIR}" up -d worker callback-worker ops-worker
+npcink_ai_cloud_compose "${ROOT_DIR}" run --rm api alembic upgrade head
+npcink_ai_cloud_compose "${ROOT_DIR}" up -d worker callback-worker ops-worker

@@ -13,7 +13,7 @@ export function Footer() {
           <div className="col-span-1 md:col-span-2">
             <Link href="/" className="flex items-center gap-2 font-semibold">
               <span className="text-xl">⚡</span>
-              <span>Magick AI Cloud</span>
+              <span>Npcink AI Cloud</span>
             </Link>
             <p className="mt-4 text-sm text-gray-600 dark:text-gray-400 max-w-md">
               {t('footer.description')}
@@ -52,7 +52,7 @@ export function Footer() {
         </div>
         <div className="mt-8 pt-8 border-t border-gray-200 dark:border-gray-800">
           <p className="text-sm text-gray-600 dark:text-gray-400">
-            © {new Date().getFullYear()} Magick AI Cloud. {t('footer.rights')}
+            © {new Date().getFullYear()} Npcink AI Cloud. {t('footer.rights')}
           </p>
         </div>
       </div>

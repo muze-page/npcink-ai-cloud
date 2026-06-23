@@ -30,7 +30,7 @@ Build this feature in phases:
 1. Basic runs locally from WordPress using `WP-Cron` as the default trigger and
    a capped local dry-run/preview path first. Do not introduce Action Scheduler
    in the first implementation.
-2. Pro may offload heavy analysis to Magick AI Cloud through the existing hosted
+2. Pro may offload heavy analysis to Npcink AI Cloud through the existing hosted
    runtime contract.
 3. Agency may show multi-site read-only summaries in Cloud Portal/Admin, but
    WordPress remains the content, approval, schedule, and write owner.
@@ -196,11 +196,11 @@ publishing, or Cloud-owned editorial workflows.
 Use named runtime abilities owned outside Cloud. Candidate names:
 
 ```text
-magick-ai-toolbox/analyze-nightly-content-batch
-magick-ai-toolbox/score-content-item
-magick-ai-toolbox/prepare-writing-evidence
-magick-ai-toolbox/check-content-compliance
-magick-ai-toolbox/summarize-morning-brief
+npcink-toolbox/analyze-nightly-content-batch
+npcink-toolbox/score-content-item
+npcink-toolbox/prepare-writing-evidence
+npcink-toolbox/check-content-compliance
+npcink-toolbox/summarize-morning-brief
 ```
 
 Cloud may validate and execute the request, but the ability contract and feature

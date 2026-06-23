@@ -26,7 +26,7 @@ The gate does not cover:
 
 ## Command
 
-Run from `/Users/muze/gitee/magick-ai-cloud`:
+Run from `/Users/muze/gitee/npcink-ai-cloud`:
 
 ```bash
 pnpm run check:agent-feedback-quality
@@ -80,7 +80,7 @@ outcomes, labels, source reason-code counts, rejected reason-code counts,
 rejected labels, severity counts, average source score, and quality rates. This
 rollup is for scoring and Morning Brief tuning only.
 
-After the `magick-ai.local` sample-expansion trial, the first watchlist for
+After the `npcink.local` sample-expansion trial, the first watchlist for
 Nightly Intelligence quality review is:
 
 - `already_handled`: review whether the Morning Brief is repeating work the

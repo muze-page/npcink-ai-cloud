@@ -3,13 +3,13 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 PHP_BIN="${MAGICK_WP_PHP:-php}"
-WP_PATH="${MAGICK_WP_PATH:-$HOME/Local Sites/magick-ai/app/public}"
+WP_PATH="${MAGICK_WP_PATH:-$HOME/Local Sites/npcink/app/public}"
 MYSQL_SOCKET="${MAGICK_WP_MYSQL_SOCKET:-$HOME/Library/Application Support/Local/run/NPb24Zg9g/mysql/mysqld.sock}"
-API_CONTAINER="${MAGICK_CLOUD_API_CONTAINER:-magick-ai-cloud-api-1}"
-WORKER_CONTAINER="${MAGICK_CLOUD_WORKER_CONTAINER:-magick-ai-cloud-worker-1}"
-POSTGRES_CONTAINER="${MAGICK_CLOUD_POSTGRES_CONTAINER:-magick-ai-cloud-postgres-1}"
-POSTGRES_USER="${MAGICK_CLOUD_POSTGRES_USER:-magick}"
-POSTGRES_DB="${MAGICK_CLOUD_POSTGRES_DB:-magick_ai_cloud}"
+API_CONTAINER="${NPCINK_CLOUD_API_CONTAINER:-npcink-ai-cloud-api-1}"
+WORKER_CONTAINER="${NPCINK_CLOUD_WORKER_CONTAINER:-npcink-ai-cloud-worker-1}"
+POSTGRES_CONTAINER="${NPCINK_CLOUD_POSTGRES_CONTAINER:-npcink-ai-cloud-postgres-1}"
+POSTGRES_USER="${NPCINK_CLOUD_POSTGRES_USER:-npcink}"
+POSTGRES_DB="${NPCINK_CLOUD_POSTGRES_DB:-npcink_ai_cloud}"
 RUN_MIGRATIONS="${MAGICK_MEDIA_DERIVATIVE_E2E_RUN_MIGRATIONS:-1}"
 RESTART_WORKER="${MAGICK_MEDIA_DERIVATIVE_E2E_RESTART_WORKER:-1}"
 CLEANUP="${MAGICK_MEDIA_DERIVATIVE_E2E_CLEANUP:-1}"
@@ -201,11 +201,11 @@ function mde2e_smoke_media_attachment_ids() {
 						or pm.meta_value like %s
 					)",
 				"_wp_attached_file",
-				"_magick_ai_cloud_media_derivative_e2e_run_id",
+				"_npcink_ai_cloud_media_derivative_e2e_run_id",
 				"attachment",
 				"magick-e2e-media-derivative-%",
 				"magick-ai-e2e-media-derivative-%",
-				"Magick AI media derivative smoke%",
+				"Npcink AI media derivative smoke%",
 				"magick-media-derivative-smoke-%",
 				"magick-media-derivative-smoke-%",
 				"%magick-e2e-media-derivative-%",
@@ -310,19 +310,19 @@ try {
 	$filetype = wp_check_filetype($filename, null);
 	$attachment_id = wp_insert_attachment(array(
 		"post_mime_type" => $filetype["type"] ?: "image/png",
-		"post_title" => "Magick AI media derivative smoke " . gmdate("c"),
+		"post_title" => "Npcink AI media derivative smoke " . gmdate("c"),
 		"post_status" => "inherit",
 	), $path);
 	require_once ABSPATH . "wp-admin/includes/image.php";
 	wp_update_attachment_metadata($attachment_id, wp_generate_attachment_metadata($attachment_id, $path));
 	$created_attachment_id = (int) $attachment_id;
-	update_post_meta($created_attachment_id, "_magick_ai_cloud_media_derivative_e2e_run_id", $stamp);
+	update_post_meta($created_attachment_id, "_npcink_ai_cloud_media_derivative_e2e_run_id", $stamp);
 
 	$before_url = wp_get_attachment_url($attachment_id);
 	$before_rel = (string) get_post_meta($attachment_id, "_wp_attached_file", true);
 	$created_relative_files[] = $before_rel;
 	$page_id = wp_insert_post(array(
-		"post_title" => "Magick AI media derivative smoke page " . gmdate("c"),
+		"post_title" => "Npcink AI media derivative smoke page " . gmdate("c"),
 		"post_status" => "publish",
 		"post_type" => "page",
 		"post_content" => "<figure class=\"wp-block-image\"><img src=\"" . esc_url($before_url) . "\" class=\"wp-image-" . (int) $attachment_id . "\" alt=\"smoke\" /></figure>",

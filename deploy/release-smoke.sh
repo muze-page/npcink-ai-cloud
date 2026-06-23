@@ -3,20 +3,20 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 . "${ROOT_DIR}/deploy/common.sh"
-magick_ai_cloud_load_env_file "${ROOT_DIR}"
+npcink_ai_cloud_load_env_file "${ROOT_DIR}"
 
-magick_ai_cloud_require_cmd curl
-magick_ai_cloud_require_cmd python3
-magick_ai_cloud_require_cmd mktemp
+npcink_ai_cloud_require_cmd curl
+npcink_ai_cloud_require_cmd python3
+npcink_ai_cloud_require_cmd mktemp
 
-BASE_URL="${MAGICK_CLOUD_BASE_URL:-http://127.0.0.1:${MAGICK_CLOUD_PORT:-8010}}"
-INTERNAL_AUTH_TOKEN="${MAGICK_CLOUD_INTERNAL_AUTH_TOKEN:-}"
-ADMIN_TOKEN="${MAGICK_CLOUD_ADMIN_BOOTSTRAP_TOKEN:-}"
-MEMBER_EMAIL="${MAGICK_CLOUD_RELEASE_MEMBER_EMAIL:-}"
-LOGIN_CODE="${MAGICK_CLOUD_PORTAL_LOGIN_CODE:-}"
-ADDON_SITE_ID="${MAGICK_CLOUD_RELEASE_SITE_ID:-}"
-ADDON_KEY_ID="${MAGICK_CLOUD_RELEASE_KEY_ID:-}"
-ADDON_SECRET="${MAGICK_CLOUD_RELEASE_KEY_SECRET:-}"
+BASE_URL="${NPCINK_CLOUD_BASE_URL:-http://127.0.0.1:${NPCINK_CLOUD_PORT:-8010}}"
+INTERNAL_AUTH_TOKEN="${NPCINK_CLOUD_INTERNAL_AUTH_TOKEN:-}"
+ADMIN_TOKEN="${NPCINK_CLOUD_ADMIN_BOOTSTRAP_TOKEN:-}"
+MEMBER_EMAIL="${NPCINK_CLOUD_RELEASE_MEMBER_EMAIL:-}"
+LOGIN_CODE="${NPCINK_CLOUD_PORTAL_LOGIN_CODE:-}"
+ADDON_SITE_ID="${NPCINK_CLOUD_RELEASE_SITE_ID:-}"
+ADDON_KEY_ID="${NPCINK_CLOUD_RELEASE_KEY_ID:-}"
+ADDON_SECRET="${NPCINK_CLOUD_RELEASE_KEY_SECRET:-}"
 
 while [ "$#" -gt 0 ]; do
 	case "$1" in
@@ -69,16 +69,16 @@ ok() {
 }
 
 if [ -z "${INTERNAL_AUTH_TOKEN}" ]; then
-	fail "--internal-auth-token or MAGICK_CLOUD_INTERNAL_AUTH_TOKEN is required"
+	fail "--internal-auth-token or NPCINK_CLOUD_INTERNAL_AUTH_TOKEN is required"
 fi
 if [ -z "${ADMIN_TOKEN}" ]; then
-	fail "--admin-token or MAGICK_CLOUD_ADMIN_BOOTSTRAP_TOKEN is required"
+	fail "--admin-token or NPCINK_CLOUD_ADMIN_BOOTSTRAP_TOKEN is required"
 fi
 if [ -z "${MEMBER_EMAIL}" ]; then
-	fail "--member-email or MAGICK_CLOUD_RELEASE_MEMBER_EMAIL is required"
+	fail "--member-email or NPCINK_CLOUD_RELEASE_MEMBER_EMAIL is required"
 fi
 if [ -z "${ADDON_SITE_ID}" ] || [ -z "${ADDON_KEY_ID}" ] || [ -z "${ADDON_SECRET}" ]; then
-	fail "release smoke requires addon credentials: pass --addon-site-id, --addon-key-id, and --addon-secret (or set MAGICK_CLOUD_RELEASE_SITE_ID, MAGICK_CLOUD_RELEASE_KEY_ID, and MAGICK_CLOUD_RELEASE_KEY_SECRET)"
+	fail "release smoke requires addon credentials: pass --addon-site-id, --addon-key-id, and --addon-secret (or set NPCINK_CLOUD_RELEASE_SITE_ID, NPCINK_CLOUD_RELEASE_KEY_ID, and NPCINK_CLOUD_RELEASE_KEY_SECRET)"
 fi
 
 json_read_path() {
@@ -202,10 +202,10 @@ canonical_request = build_canonical_request(
     body_digest=build_body_digest(b""),
 )
 signature = build_hmac_signature(secret, canonical_request)
-print(f"X-Magick-Site-Id: {site_id}")
-print(f"X-Magick-Key-Id: {key_id}")
-print(f"X-Magick-Timestamp: {timestamp}")
-print(f"X-Magick-Signature: {signature}")
+print(f"X-Npcink-Site-Id: {site_id}")
+print(f"X-Npcink-Key-Id: {key_id}")
+print(f"X-Npcink-Timestamp: {timestamp}")
+print(f"X-Npcink-Signature: {signature}")
 print(f"traceparent: {traceparent}")
 PY
 }
@@ -262,7 +262,7 @@ http_request() {
 }
 
 ok "Waiting for cloud ready: ${BASE_URL}"
-if ! magick_ai_cloud_wait_for_ready "${BASE_URL}" 20 2; then
+if ! npcink_ai_cloud_wait_for_ready "${BASE_URL}" 20 2; then
 	fail "Cloud API did not become ready"
 fi
 
@@ -274,7 +274,7 @@ http_request \
 	"${BASE_URL%/}/health/ready" \
 	"${PORTAL_COOKIE_JAR}" \
 	"" \
-	"X-Magick-Internal-Token: ${INTERNAL_AUTH_TOKEN}"
+	"X-Npcink-Internal-Token: ${INTERNAL_AUTH_TOKEN}"
 assert_status "${HTTP_STATUS}" "200" "ready health should load"
 
 http_request \
@@ -282,7 +282,7 @@ http_request \
 	"${BASE_URL%/}/health/operational-ready" \
 	"${PORTAL_COOKIE_JAR}" \
 	"" \
-	"X-Magick-Internal-Token: ${INTERNAL_AUTH_TOKEN}"
+	"X-Npcink-Internal-Token: ${INTERNAL_AUTH_TOKEN}"
 assert_status "${HTTP_STATUS}" "200" "operational readiness should load"
 assert_json_non_empty "${HTTP_BODY}" "data.required_workers" "operational readiness should expose required workers"
 
@@ -291,7 +291,7 @@ http_request \
 	"${BASE_URL%/}/internal/service/observability/summary" \
 	"${PORTAL_COOKIE_JAR}" \
 	"" \
-	"X-Magick-Internal-Token: ${INTERNAL_AUTH_TOKEN}"
+	"X-Npcink-Internal-Token: ${INTERNAL_AUTH_TOKEN}"
 assert_status "${HTTP_STATUS}" "200" "observability summary should load"
 assert_json_non_empty "${HTTP_BODY}" "data.cadence.totals.tasks_total" "observability summary should expose cadence totals"
 assert_json_equals "${HTTP_BODY}" "data.workers.totals.missing_total" "0" "observability summary should not report missing workers"

@@ -5,8 +5,8 @@ from typing import Any
 
 from app.domain.hosted_model_defaults import GROK_IMAGINE_IMAGE_PROFILE_ID
 
-IMAGE_GENERATION_CLOUD_ABILITY = "magick-ai-cloud/generate-image"
-IMAGE_GENERATION_TOOLBOX_ABILITY = "magick-ai-toolbox/generate-image"
+IMAGE_GENERATION_CLOUD_ABILITY = "npcink-cloud/generate-image"
+IMAGE_GENERATION_TOOLBOX_ABILITY = "npcink-toolbox/generate-image"
 IMAGE_GENERATION_ABILITIES = frozenset(
     {IMAGE_GENERATION_CLOUD_ABILITY, IMAGE_GENERATION_TOOLBOX_ABILITY}
 )

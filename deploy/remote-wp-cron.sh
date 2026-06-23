@@ -8,7 +8,7 @@ if [ -n "${SCRIPT_DIR}" ] && [ -f "${SCRIPT_DIR}/../docker-compose.prod.yml" ]; 
 	ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd -P)"
 fi
 
-magick_ai_cloud_require_cmd() {
+npcink_ai_cloud_require_cmd() {
 	local cmd="$1"
 	command -v "${cmd}" >/dev/null 2>&1 || {
 		echo "[fail] Missing required command: ${cmd}" >&2
@@ -16,9 +16,9 @@ magick_ai_cloud_require_cmd() {
 	}
 }
 
-magick_ai_cloud_load_env_file() {
+npcink_ai_cloud_load_env_file() {
 	local root_dir="$1"
-	local env_file="${MAGICK_CLOUD_ENV_FILE:-}"
+	local env_file="${NPCINK_CLOUD_ENV_FILE:-}"
 	local line=""
 	local key=""
 
@@ -49,21 +49,21 @@ magick_ai_cloud_load_env_file() {
 	done < "${env_file}"
 }
 
-magick_ai_cloud_load_env_file "${ROOT_DIR}"
+npcink_ai_cloud_load_env_file "${ROOT_DIR}"
 
 ACTION="status"
 CRONTAB_FILE=""
 DRY_RUN=0
-SITE_URL="${MAGICK_CLOUD_WP_CRON_SITE_BASE_URL:-}"
-SCHEDULE="${MAGICK_CLOUD_WP_CRON_SCHEDULE:-*/5 * * * *}"
-CURL_TIMEOUT_SECONDS="${MAGICK_CLOUD_WP_CRON_CURL_TIMEOUT_SECONDS:-90}"
-CONNECT_TIMEOUT_SECONDS="${MAGICK_CLOUD_WP_CRON_CONNECT_TIMEOUT_SECONDS:-10}"
-DOING_WP_CRON="${MAGICK_CLOUD_WP_CRON_DOING_WP_CRON:-cloud}"
-LOCK_FILE="${MAGICK_CLOUD_WP_CRON_LOCK_FILE:-/tmp/magick-ai-wordpress-cron.lock}"
-COMMENT_TAG="${MAGICK_CLOUD_WP_CRON_COMMENT_TAG:-magick-ai-wordpress-cron}"
-USER_AGENT="${MAGICK_CLOUD_WP_CRON_USER_AGENT:-MagickAICloudWordPressCron/1.0}"
-CURL_BIN_OVERRIDE="${MAGICK_CLOUD_WP_CRON_CURL_BIN:-}"
-FLOCK_BIN_OVERRIDE="${MAGICK_CLOUD_WP_CRON_FLOCK_BIN:-}"
+SITE_URL="${NPCINK_CLOUD_WP_CRON_SITE_BASE_URL:-}"
+SCHEDULE="${NPCINK_CLOUD_WP_CRON_SCHEDULE:-*/5 * * * *}"
+CURL_TIMEOUT_SECONDS="${NPCINK_CLOUD_WP_CRON_CURL_TIMEOUT_SECONDS:-90}"
+CONNECT_TIMEOUT_SECONDS="${NPCINK_CLOUD_WP_CRON_CONNECT_TIMEOUT_SECONDS:-10}"
+DOING_WP_CRON="${NPCINK_CLOUD_WP_CRON_DOING_WP_CRON:-cloud}"
+LOCK_FILE="${NPCINK_CLOUD_WP_CRON_LOCK_FILE:-/tmp/magick-ai-wordpress-cron.lock}"
+COMMENT_TAG="${NPCINK_CLOUD_WP_CRON_COMMENT_TAG:-magick-ai-wordpress-cron}"
+USER_AGENT="${NPCINK_CLOUD_WP_CRON_USER_AGENT:-MagickAICloudWordPressCron/1.0}"
+CURL_BIN_OVERRIDE="${NPCINK_CLOUD_WP_CRON_CURL_BIN:-}"
+FLOCK_BIN_OVERRIDE="${NPCINK_CLOUD_WP_CRON_FLOCK_BIN:-}"
 
 while [ "$#" -gt 0 ]; do
 	case "$1" in
@@ -147,16 +147,16 @@ posture_note() {
 
 ensure_render_dependencies() {
 	if [ -z "${CURL_BIN_OVERRIDE}" ]; then
-		magick_ai_cloud_require_cmd curl
+		npcink_ai_cloud_require_cmd curl
 	fi
 	if [ -z "${FLOCK_BIN_OVERRIDE}" ]; then
-		magick_ai_cloud_require_cmd flock
+		npcink_ai_cloud_require_cmd flock
 	fi
 }
 
 ensure_status_dependencies() {
 	if [ -z "${CRONTAB_FILE}" ]; then
-		magick_ai_cloud_require_cmd crontab
+		npcink_ai_cloud_require_cmd crontab
 	fi
 }
 
@@ -188,7 +188,7 @@ write_crontab_file() {
 
 build_target_url() {
 	if [ -z "${SITE_URL}" ]; then
-		fail "--site-url or MAGICK_CLOUD_WP_CRON_SITE_BASE_URL is required for install"
+		fail "--site-url or NPCINK_CLOUD_WP_CRON_SITE_BASE_URL is required for install"
 	fi
 
 	local normalized_url="${SITE_URL%/}"

@@ -22,7 +22,7 @@ def _build_client(tmp_path: Path) -> tuple[str, TestClient]:
     CatalogService(database_url).refresh_catalog()
     CatalogService(database_url).scan_provider_health()
     settings = Settings(
-        project_name="Magick AI Cloud Test",
+        project_name="Npcink AI Cloud Test",
         environment="test",
         database_url=database_url,
         redis_url="redis://localhost:6379/0",

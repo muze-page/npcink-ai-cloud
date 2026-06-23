@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-magick_ai_cloud_require_cmd() {
+npcink_ai_cloud_require_cmd() {
 	local cmd="$1"
 	command -v "${cmd}" >/dev/null 2>&1 || {
 		echo "[fail] Missing required command: ${cmd}" >&2
@@ -8,7 +8,7 @@ magick_ai_cloud_require_cmd() {
 	}
 }
 
-magick_ai_cloud_require_env_value() {
+npcink_ai_cloud_require_env_value() {
 	local key="$1"
 	local description="${2:-${key}}"
 	local value="${!key:-}"
@@ -18,25 +18,25 @@ magick_ai_cloud_require_env_value() {
 	fi
 }
 
-magick_ai_cloud_require_internal_token() {
-	magick_ai_cloud_require_env_value \
-		"MAGICK_CLOUD_INTERNAL_AUTH_TOKEN" \
-		"MAGICK_CLOUD_INTERNAL_AUTH_TOKEN for internal-only perimeter checks"
+npcink_ai_cloud_require_internal_token() {
+	npcink_ai_cloud_require_env_value \
+		"NPCINK_CLOUD_INTERNAL_AUTH_TOKEN" \
+		"NPCINK_CLOUD_INTERNAL_AUTH_TOKEN for internal-only perimeter checks"
 }
 
-magick_ai_cloud_resolve_env_file() {
+npcink_ai_cloud_resolve_env_file() {
 	local root_dir="$1"
-	local env_file="${MAGICK_CLOUD_ENV_FILE:-}"
+	local env_file="${NPCINK_CLOUD_ENV_FILE:-}"
 	if [ -z "${env_file}" ] && [ -f "${root_dir}/.env.deploy" ]; then
 		env_file="${root_dir}/.env.deploy"
 	fi
 	printf '%s' "${env_file}"
 }
 
-magick_ai_cloud_load_env_file() {
+npcink_ai_cloud_load_env_file() {
 	local root_dir="$1"
 	local env_file
-	env_file="$(magick_ai_cloud_resolve_env_file "${root_dir}")"
+	env_file="$(npcink_ai_cloud_resolve_env_file "${root_dir}")"
 	if [ -z "${env_file}" ] || [ ! -f "${env_file}" ]; then
 		return 0
 	fi
@@ -62,16 +62,16 @@ magick_ai_cloud_load_env_file() {
 	done < "${env_file}"
 }
 
-magick_ai_cloud_compose() {
+npcink_ai_cloud_compose() {
 	local root_dir="$1"
 	shift
 
-	local compose_file="${MAGICK_CLOUD_COMPOSE_FILE:-${root_dir}/docker-compose.prod.yml}"
-	local env_file="${MAGICK_CLOUD_ENV_FILE:-}"
+	local compose_file="${NPCINK_CLOUD_COMPOSE_FILE:-${root_dir}/docker-compose.prod.yml}"
+	local env_file="${NPCINK_CLOUD_ENV_FILE:-}"
 	if [ -z "${env_file}" ] && [ -f "${root_dir}/.env.deploy" ]; then
 		env_file="${root_dir}/.env.deploy"
 	fi
-	local compose_project_name="${MAGICK_CLOUD_COMPOSE_PROJECT_NAME:-${COMPOSE_PROJECT_NAME:-magick-ai-cloud}}"
+	local compose_project_name="${NPCINK_CLOUD_COMPOSE_PROJECT_NAME:-${COMPOSE_PROJECT_NAME:-npcink-ai-cloud}}"
 
 	if [ -n "${env_file}" ]; then
 		COMPOSE_PROJECT_NAME="${compose_project_name}" \
@@ -83,7 +83,7 @@ magick_ai_cloud_compose() {
 		docker compose -f "${compose_file}" "$@"
 }
 
-magick_ai_cloud_wait_for_ready() {
+npcink_ai_cloud_wait_for_ready() {
 	local base_url="$1"
 	local attempts="${2:-20}"
 	local sleep_seconds="${3:-2}"

@@ -1,5 +1,5 @@
 /**
- * Magick AI Cloud Portal API Client
+ * Npcink AI Cloud Portal API Client
  *
  * 对接后端 Portal API (/portal/v1/*)
  * 支持邮箱验证码认证、Session 管理、API Key 管理等

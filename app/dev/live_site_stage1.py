@@ -422,7 +422,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="append",
         type=Path,
         help=(
-            "Env file to read for MAGICK_CLOUD_INTERNAL_AUTH_TOKEN. "
+            "Env file to read for NPCINK_CLOUD_INTERNAL_AUTH_TOKEN. "
             "Defaults to .env and .env.local."
         ),
     )

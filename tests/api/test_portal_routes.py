@@ -54,7 +54,7 @@ def _build_client(
     CatalogService(database_url).refresh_catalog()
 
     settings_kwargs: dict[str, object] = {
-        "project_name": "Magick AI Cloud Test",
+        "project_name": "Npcink AI Cloud Test",
         "environment": "test",
         "database_url": database_url,
         "redis_url": "redis://localhost:6379/0",
@@ -177,10 +177,10 @@ def _request_portal_login_code(
 ) -> dict[str, object]:
     request_headers = dict(headers or {})
     if (
-        str(request_headers.get("x-magick-debug-portal-link") or "").strip() == "1"
-        and "x-magick-dev-login-code" not in request_headers
+        str(request_headers.get("x-npcink-debug-portal-link") or "").strip() == "1"
+        and "x-npcink-dev-login-code" not in request_headers
     ):
-        request_headers["x-magick-dev-login-code"] = "1"
+        request_headers["x-npcink-dev-login-code"] = "1"
     response = client.post(
         "/portal/v1/auth/code/request",
         json={"email": email},
@@ -464,7 +464,7 @@ def test_portal_routes_require_authenticated_session(tmp_path: Path) -> None:
 
     response = client.get(
         "/portal/v1/sites/site_portal/api-keys",
-        headers={"X-Magick-Portal-Site-Admin-Ref": "site_admin:portal-admin@example.com"},
+        headers={"X-Npcink-Portal-Site-Admin-Ref": "site_admin:portal-admin@example.com"},
     )
 
     assert response.status_code == 401
@@ -479,7 +479,7 @@ def test_portal_routes_require_portal_auth_configuration(tmp_path: Path) -> None
     CatalogService(database_url).refresh_catalog()
 
     settings = Settings(
-        project_name="Magick AI Cloud Test",
+        project_name="Npcink AI Cloud Test",
         environment="test",
         database_url=database_url,
         redis_url="redis://localhost:6379/0",
@@ -748,8 +748,8 @@ def test_portal_jwt_allows_site_admin_access_without_dev_headers(tmp_path: Path)
         tmp_path,
         settings_overrides={
             "portal_jwt_secret": TEST_PORTAL_JWT_SECRET,
-            "portal_jwt_issuer": "magick-cloud-portal",
-            "portal_jwt_audience": "magick-cloud-customers",
+            "portal_jwt_issuer": "npcink-cloud-portal",
+            "portal_jwt_audience": "npcink-cloud-customers",
         },
     )
 
@@ -784,8 +784,8 @@ def test_portal_jwt_allows_site_admin_access_without_dev_headers(tmp_path: Path)
         json={"label": "JWT Key"},
         headers=build_portal_bearer_headers(
             site_admin_ref="site_admin:portal-jwt@example.com",
-            issuer="magick-cloud-portal",
-            audience="magick-cloud-customers",
+            issuer="npcink-cloud-portal",
+            audience="npcink-cloud-customers",
             idempotency_key="portal-jwt-issue-001",
         ),
     )
@@ -841,8 +841,8 @@ def test_portal_auth_login_code_request_and_verify_with_jwt(tmp_path: Path) -> N
         tmp_path,
         settings_overrides={
             "portal_jwt_secret": TEST_PORTAL_JWT_SECRET,
-            "portal_jwt_issuer": "magick-cloud-portal",
-            "portal_jwt_audience": "magick-cloud-customers",
+            "portal_jwt_issuer": "npcink-cloud-portal",
+            "portal_jwt_audience": "npcink-cloud-customers",
             "portal_session_ttl_seconds": 900,
             "portal_login_code_ttl_seconds": 300,
         },
@@ -876,7 +876,7 @@ def test_portal_auth_login_code_request_and_verify_with_jwt(tmp_path: Path) -> N
     request_data = _request_portal_login_code(
         client,
         email="portal-auth@example.com",
-        headers={"x-magick-debug-portal-link": "1"},
+        headers={"x-npcink-debug-portal-link": "1"},
     )
     assert request_data["expires_in_seconds"] == 300
     assert request_data["code"] != ""
@@ -1026,8 +1026,8 @@ def test_portal_login_code_request_accepts_forwarded_host_with_port(
         tmp_path,
         settings_overrides={
             "portal_jwt_secret": TEST_PORTAL_JWT_SECRET,
-            "portal_jwt_issuer": "magick-cloud-portal",
-            "portal_jwt_audience": "magick-cloud-customers",
+            "portal_jwt_issuer": "npcink-cloud-portal",
+            "portal_jwt_audience": "npcink-cloud-customers",
             "portal_login_code_ttl_seconds": 300,
             "portal_public_base_url": None,
         },
@@ -1068,8 +1068,8 @@ def test_portal_login_code_request_accepts_forwarded_host_with_port(
             "host": "127.0.0.1",
             "x-forwarded-host": "127.0.0.1:8010",
             "x-forwarded-proto": "http",
-            "x-magick-debug-portal-link": "1",
-            "x-magick-dev-login-code": "1",
+            "x-npcink-debug-portal-link": "1",
+            "x-npcink-dev-login-code": "1",
         },
     )
 
@@ -1087,8 +1087,8 @@ def test_portal_login_code_request_accepts_localhost_loopback_alias(
         tmp_path,
         settings_overrides={
             "portal_jwt_secret": TEST_PORTAL_JWT_SECRET,
-            "portal_jwt_issuer": "magick-cloud-portal",
-            "portal_jwt_audience": "magick-cloud-customers",
+            "portal_jwt_issuer": "npcink-cloud-portal",
+            "portal_jwt_audience": "npcink-cloud-customers",
             "portal_login_code_ttl_seconds": 300,
             "portal_public_base_url": "http://127.0.0.1:8010",
             "environment": "development",
@@ -1130,8 +1130,8 @@ def test_portal_login_code_request_accepts_localhost_loopback_alias(
             "host": "localhost:8010",
             "x-forwarded-host": "localhost:8010",
             "x-forwarded-proto": "http",
-            "x-magick-debug-portal-link": "1",
-            "x-magick-dev-login-code": "1",
+            "x-npcink-debug-portal-link": "1",
+            "x-npcink-dev-login-code": "1",
         },
     )
 
@@ -1149,8 +1149,8 @@ def test_portal_login_code_request_skips_rate_limit_for_local_debug_loopback(
         tmp_path,
         settings_overrides={
             "portal_jwt_secret": TEST_PORTAL_JWT_SECRET,
-            "portal_jwt_issuer": "magick-cloud-portal",
-            "portal_jwt_audience": "magick-cloud-customers",
+            "portal_jwt_issuer": "npcink-cloud-portal",
+            "portal_jwt_audience": "npcink-cloud-customers",
             "portal_login_code_ttl_seconds": 300,
             "portal_public_base_url": "http://127.0.0.1:8010",
             "environment": "development",
@@ -1189,8 +1189,8 @@ def test_portal_login_code_request_skips_rate_limit_for_local_debug_loopback(
         "host": "127.0.0.1:8010",
         "x-forwarded-host": "127.0.0.1:8010",
         "x-forwarded-proto": "http",
-        "x-magick-debug-portal-link": "1",
-        "x-magick-dev-login-code": "1",
+        "x-npcink-debug-portal-link": "1",
+        "x-npcink-dev-login-code": "1",
     }
 
     for _ in range(5):
@@ -1213,8 +1213,8 @@ def test_portal_session_sites_selection_and_logout_support_cookie_session(
         tmp_path,
         settings_overrides={
             "portal_jwt_secret": TEST_PORTAL_JWT_SECRET,
-            "portal_jwt_issuer": "magick-cloud-portal",
-            "portal_jwt_audience": "magick-cloud-customers",
+            "portal_jwt_issuer": "npcink-cloud-portal",
+            "portal_jwt_audience": "npcink-cloud-customers",
         },
     )
 
@@ -1247,7 +1247,7 @@ def test_portal_session_sites_selection_and_logout_support_cookie_session(
     request_data = _request_portal_login_code(
         client,
         email="portal-session@example.com",
-        headers={"x-magick-debug-portal-link": "1"},
+        headers={"x-npcink-debug-portal-link": "1"},
     )
     _verify_portal_login_code(
         client,
@@ -1294,8 +1294,8 @@ def test_portal_site_key_routes_allow_cookie_session_after_login_code_verificati
         tmp_path,
         settings_overrides={
             "portal_jwt_secret": TEST_PORTAL_JWT_SECRET,
-            "portal_jwt_issuer": "magick-cloud-portal",
-            "portal_jwt_audience": "magick-cloud-customers",
+            "portal_jwt_issuer": "npcink-cloud-portal",
+            "portal_jwt_audience": "npcink-cloud-customers",
             "portal_login_code_ttl_seconds": 300,
         },
     )
@@ -1329,7 +1329,7 @@ def test_portal_site_key_routes_allow_cookie_session_after_login_code_verificati
     request_data = _request_portal_login_code(
         client,
         email="portal-cookie-keys@example.com",
-        headers={"x-magick-debug-portal-link": "1"},
+        headers={"x-npcink-debug-portal-link": "1"},
     )
     _verify_portal_login_code(
         client,
@@ -1397,8 +1397,8 @@ def test_portal_cookie_write_requires_same_origin(tmp_path: Path) -> None:
         "/portal/v1/auth/code/request",
         json={"email": "portal-origin@example.com"},
         headers={
-            "x-magick-debug-portal-link": "1",
-            "x-magick-dev-login-code": "1",
+            "x-npcink-debug-portal-link": "1",
+            "x-npcink-dev-login-code": "1",
         },
     )
     code = request_response.json()["data"]["code"]
@@ -1447,7 +1447,7 @@ def test_portal_debug_bypass_is_disabled_in_production_even_with_allowlist(
         headers={
             "origin": "http://127.0.0.1:8010",
             "referer": "http://127.0.0.1:8010/",
-            "x-magick-debug-portal-link": "1",
+            "x-npcink-debug-portal-link": "1",
         },
     )
 
@@ -1507,8 +1507,8 @@ def test_portal_session_route_supports_jwt_with_session_cookies(tmp_path: Path) 
         tmp_path,
         settings_overrides={
             "portal_jwt_secret": TEST_PORTAL_JWT_SECRET,
-            "portal_jwt_issuer": "magick-cloud-portal",
-            "portal_jwt_audience": "magick-cloud-customers",
+            "portal_jwt_issuer": "npcink-cloud-portal",
+            "portal_jwt_audience": "npcink-cloud-customers",
         },
     )
 
@@ -1542,8 +1542,8 @@ def test_portal_session_route_supports_jwt_with_session_cookies(tmp_path: Path) 
         "/portal/v1/session",
         headers=build_portal_bearer_headers(
             site_admin_ref="site_admin:portal-session-jwt@example.com",
-            issuer="magick-cloud-portal",
-            audience="magick-cloud-customers",
+            issuer="npcink-cloud-portal",
+            audience="npcink-cloud-customers",
             expires_at=datetime.now(UTC) + timedelta(minutes=15),
         ),
     )

@@ -21,7 +21,7 @@ Related implementation and handoff documents:
 ## Why This Exists
 
 This document summarizes the product and engineering discussion that led to the
-current Magick AI Cloud monitoring design. It is intentionally historical: use
+current Npcink AI Cloud monitoring design. It is intentionally historical: use
 it to understand the trade-offs and avoid re-expanding the Portal monitoring
 surface without a clear operational reason.
 
@@ -45,7 +45,7 @@ systematic and professional for the Magick AI plugin series:
 Important product constraint:
 
 - The three plugins can be installed and listed independently on WordPress.org.
-- Monitoring should only be uploaded when `magick-ai-cloud-addon` is installed
+- Monitoring should only be uploaded when `npcink-cloud-addon` is installed
   and active.
 - The Cloud Addon is the uploader. The other plugins only emit local
   metadata-only events.

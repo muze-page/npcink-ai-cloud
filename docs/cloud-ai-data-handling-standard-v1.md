@@ -2,7 +2,7 @@
 
 Status: active.
 
-Purpose: define the minimum data-handling posture for Magick AI Cloud runtime
+Purpose: define the minimum data-handling posture for Npcink AI Cloud runtime
 requests that may reach hosted models, search providers, embedding providers,
 image providers, or other Cloud-managed AI services.
 
@@ -11,7 +11,7 @@ legal language must be reviewed separately before GA.
 
 ## 1. Positioning
 
-Magick AI Cloud remains a runtime/service enhancement layer. It must process only
+Npcink AI Cloud remains a runtime/service enhancement layer. It must process only
 the minimum data needed for the requested runtime task, and it must not become a
 second WordPress control plane, prompt/preset truth source, compliance portal, or
 content CMS.

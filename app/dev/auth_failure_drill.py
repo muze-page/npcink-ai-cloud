@@ -92,11 +92,11 @@ def _build_auth_headers(
     )
     signature = build_hmac_signature(secret, canonical_request)
     return {
-        "X-Magick-Site-Id": site_id,
-        "X-Magick-Key-Id": key_id,
-        "X-Magick-Timestamp": resolved_timestamp,
-        "X-Magick-Signature": signature,
-        "X-Magick-Nonce": nonce,
+        "X-Npcink-Site-Id": site_id,
+        "X-Npcink-Key-Id": key_id,
+        "X-Npcink-Timestamp": resolved_timestamp,
+        "X-Npcink-Signature": signature,
+        "X-Npcink-Nonce": nonce,
         "Idempotency-Key": idempotency_key,
         "traceparent": traceparent,
     }

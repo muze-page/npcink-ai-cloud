@@ -5088,7 +5088,7 @@ class RuntimeService:
         request = ProviderExecutionRequest(
             run_id=run.run_id,
             site_id=run.site_id,
-            ability_name="magick-ai-cloud/image-prompt-planner",
+            ability_name="npcink-cloud/image-prompt-planner",
             profile_id=profile_id,
             execution_kind="text",
             model_id=candidate.model_id,

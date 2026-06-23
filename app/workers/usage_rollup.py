@@ -12,7 +12,7 @@ def main() -> None:
     require_database_connection(settings.database_url)
 
     result = UsageRollupService(settings.database_url).generate_rollups()
-    get_logger("magick_ai_cloud.usage_rollup").info("usage rollups generated: %s", result)
+    get_logger("npcink_ai_cloud.usage_rollup").info("usage rollups generated: %s", result)
 
 
 if __name__ == "__main__":

@@ -3,15 +3,15 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
 . "${ROOT_DIR}/deploy/common.sh"
-magick_ai_cloud_load_env_file "${ROOT_DIR}"
+npcink_ai_cloud_load_env_file "${ROOT_DIR}"
 
-magick_ai_cloud_require_cmd curl
-magick_ai_cloud_require_cmd python3
+npcink_ai_cloud_require_cmd curl
+npcink_ai_cloud_require_cmd python3
 
-BASE_URL="${MAGICK_CLOUD_BASE_URL:-http://127.0.0.1:${MAGICK_CLOUD_PORT:-8010}}"
-SITE_ID="${MAGICK_CLOUD_SITE_ID:-}"
-MEMBER_EMAIL="${MAGICK_CLOUD_MEMBER_EMAIL:-}"
-LOGIN_CODE="${MAGICK_CLOUD_PORTAL_LOGIN_CODE:-}"
+BASE_URL="${NPCINK_CLOUD_BASE_URL:-http://127.0.0.1:${NPCINK_CLOUD_PORT:-8010}}"
+SITE_ID="${NPCINK_CLOUD_SITE_ID:-}"
+MEMBER_EMAIL="${NPCINK_CLOUD_MEMBER_EMAIL:-}"
+LOGIN_CODE="${NPCINK_CLOUD_PORTAL_LOGIN_CODE:-}"
 
 while [ "$#" -gt 0 ]; do
 	case "$1" in
@@ -39,12 +39,12 @@ while [ "$#" -gt 0 ]; do
 done
 
 if [ -z "${SITE_ID}" ]; then
-	echo "[fail] --site-id or MAGICK_CLOUD_SITE_ID is required" >&2
+	echo "[fail] --site-id or NPCINK_CLOUD_SITE_ID is required" >&2
 	exit 1
 fi
 
 if [ -z "${MEMBER_EMAIL}" ]; then
-	echo "[fail] --member-email or MAGICK_CLOUD_MEMBER_EMAIL is required" >&2
+	echo "[fail] --member-email or NPCINK_CLOUD_MEMBER_EMAIL is required" >&2
 	exit 1
 fi
 
@@ -61,7 +61,7 @@ PY
 			-X POST \
 			-H "Accept: application/json" \
 			-H "Content-Type: application/json" \
-			-H "X-Magick-Dev-Login-Code: 1" \
+			-H "X-Npcink-Dev-Login-Code: 1" \
 			--data "${REQUEST_BODY}" \
 			"${BASE_URL%/}/portal/v1/auth/code/request"
 	)"

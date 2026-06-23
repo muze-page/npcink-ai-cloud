@@ -24,7 +24,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   const headers = buildForwardedRequestHeaders(request, {
     Accept: 'application/json',
     'Content-Type': 'application/json',
-    'X-Magick-Internal-Token': getInternalAuthToken(),
+    'X-Npcink-Internal-Token': getInternalAuthToken(),
   });
 
   headers.Origin = request.headers.get('origin') || requestOrigin;

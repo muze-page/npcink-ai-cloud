@@ -26,7 +26,7 @@ candidates separate while letting the local product surface expose an
 
 The action uses:
 
-- `ability_name`: `magick-ai-cloud/generate-image`
+- `ability_name`: `npcink-cloud/generate-image`
 - `contract_version`: `image_generation_request.v1`
 - `profile_id`: `grok-imagine-image-quality`
 - `execution_kind`: `image_generation`
@@ -55,7 +55,7 @@ Phase 2 handoff includes `prompt_prefill_plan`:
   `direct_wordpress_write=false`
 
 The local UI should use this plan to build an editable prompt draft. It should
-not call `magick-ai-cloud/generate-image` until the user confirms the prompt.
+not call `npcink-cloud/generate-image` until the user confirms the prompt.
 The Cloud image-source result must not include the raw prompt draft.
 
 ## Phase 3: Batch

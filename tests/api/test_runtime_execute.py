@@ -95,7 +95,7 @@ def _build_client(
     )
 
     settings = Settings(
-        project_name="Magick AI Cloud Test",
+        project_name="Npcink AI Cloud Test",
         environment="test",
         database_url=database_url,
         redis_url="redis://localhost:6379/0",
@@ -548,10 +548,10 @@ def test_execute_route_runs_and_supports_idempotency(tmp_path: Path) -> None:
 
     assert first_response.status_code == 200
     assert second_response.status_code == 200
-    assert "X-Magick-Deprecated-Execution-Pattern" not in first_response.headers
-    assert "X-Magick-Canonical-Execution-Pattern" not in first_response.headers
-    assert "X-Magick-Deprecated-Execution-Pattern" not in second_response.headers
-    assert "X-Magick-Canonical-Execution-Pattern" not in second_response.headers
+    assert "X-Npcink-Deprecated-Execution-Pattern" not in first_response.headers
+    assert "X-Npcink-Canonical-Execution-Pattern" not in first_response.headers
+    assert "X-Npcink-Deprecated-Execution-Pattern" not in second_response.headers
+    assert "X-Npcink-Canonical-Execution-Pattern" not in second_response.headers
 
     first_data = first_response.json()["data"]
     second_data = second_response.json()["data"]
@@ -729,7 +729,7 @@ def test_execute_route_defaults_image_generation_to_grok_imagine(
     database_url, client = _build_client(tmp_path)
     payload = {
         "site_id": "site_alpha",
-        "ability_name": "magick-ai-cloud/generate-image",
+        "ability_name": "npcink-cloud/generate-image",
         "contract_version": "image_generation_request.v1",
         "channel": "openapi",
         "execution_tier": "cloud",
@@ -778,7 +778,7 @@ def test_execute_route_rejects_image_generation_write_controls(
     database_url, client = _build_client(tmp_path)
     payload = {
         "site_id": "site_alpha",
-        "ability_name": "magick-ai-cloud/generate-image",
+        "ability_name": "npcink-cloud/generate-image",
         "contract_version": "image_generation_request.v1",
         "channel": "openapi",
         "execution_tier": "cloud",
@@ -817,7 +817,7 @@ def test_execute_route_rejects_oversized_image_generation_inputs(
     database_url, client = _build_client(tmp_path)
     payload = {
         "site_id": "site_alpha",
-        "ability_name": "magick-ai-cloud/generate-image",
+        "ability_name": "npcink-cloud/generate-image",
         "contract_version": "image_generation_request.v1",
         "channel": "openapi",
         "execution_tier": "cloud",
@@ -2590,10 +2590,10 @@ def test_callback_delivery_worker_dispatches_terminal_run_payload(
     ]
     assert len(callback_requests) == 1
     assert callback_requests[0]["url"] == "https://example.com/runtime"
-    assert callback_requests[0]["headers"]["x-magick-cloud-event"] == "runtime.run.terminal"
-    assert callback_requests[0]["headers"]["x-magick-callback-id"] == "runtime-terminal-dispatch"
-    assert callback_requests[0]["headers"]["x-magick-signature"] != ""
-    assert callback_requests[0]["headers"]["x-magick-timestamp"] != ""
+    assert callback_requests[0]["headers"]["x-npcink-cloud-event"] == "runtime.run.terminal"
+    assert callback_requests[0]["headers"]["x-npcink-callback-id"] == "runtime-terminal-dispatch"
+    assert callback_requests[0]["headers"]["x-npcink-signature"] != ""
+    assert callback_requests[0]["headers"]["x-npcink-timestamp"] != ""
     assert callback_requests[0]["payload"]["run_id"] == run_id
     assert callback_requests[0]["payload"]["canonical_run_id"] == "wp_run_callback_dispatch_001"
     assert callback_requests[0]["payload"]["status"] == "succeeded"
@@ -3408,7 +3408,7 @@ def test_execute_route_rejects_invalid_signature(tmp_path: Path) -> None:
             trace_id="traceinvalidsig00000000000000000",
             body=body,
         ),
-        extra_headers={"X-Magick-Signature": "deadbeef"},
+        extra_headers={"X-Npcink-Signature": "deadbeef"},
     )
 
     response = client.post("/v1/runtime/execute", content=body, headers=headers)
@@ -3462,11 +3462,11 @@ def test_execute_route_rejects_signature_signed_with_stored_secret_hash(tmp_path
         content=body,
         headers=merge_json_headers(
             {
-                "X-Magick-Site-Id": "site_alpha",
-                "X-Magick-Key-Id": "key_default",
-                "X-Magick-Timestamp": timestamp,
-                "X-Magick-Nonce": nonce,
-                "X-Magick-Signature": build_hmac_signature(stolen_hash, canonical_request),
+                "X-Npcink-Site-Id": "site_alpha",
+                "X-Npcink-Key-Id": "key_default",
+                "X-Npcink-Timestamp": timestamp,
+                "X-Npcink-Nonce": nonce,
+                "X-Npcink-Signature": build_hmac_signature(stolen_hash, canonical_request),
                 "Idempotency-Key": idempotency_key,
                 "traceparent": traceparent,
             }

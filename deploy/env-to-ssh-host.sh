@@ -4,15 +4,15 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 . "${ROOT_DIR}/deploy/common.sh"
 
-magick_ai_cloud_require_cmd bash
-magick_ai_cloud_require_cmd ssh
+npcink_ai_cloud_require_cmd bash
+npcink_ai_cloud_require_cmd ssh
 
-SSH_HOST="${MAGICK_CLOUD_DEPLOY_SSH_HOST:-}"
-SSH_USER="${MAGICK_CLOUD_DEPLOY_SSH_USER:-}"
-SSH_PORT="${MAGICK_CLOUD_DEPLOY_SSH_PORT:-22}"
-SSH_IDENTITY_FILE="${MAGICK_CLOUD_DEPLOY_IDENTITY_FILE:-}"
-REMOTE_DIR="${MAGICK_CLOUD_DEPLOY_REMOTE_DIR:-/opt/magick-ai-cloud}"
-BASE_URL="${MAGICK_CLOUD_BASE_URL:-http://127.0.0.1:${MAGICK_CLOUD_PORT:-8010}}"
+SSH_HOST="${NPCINK_CLOUD_DEPLOY_SSH_HOST:-}"
+SSH_USER="${NPCINK_CLOUD_DEPLOY_SSH_USER:-}"
+SSH_PORT="${NPCINK_CLOUD_DEPLOY_SSH_PORT:-22}"
+SSH_IDENTITY_FILE="${NPCINK_CLOUD_DEPLOY_IDENTITY_FILE:-}"
+REMOTE_DIR="${NPCINK_CLOUD_DEPLOY_REMOTE_DIR:-/opt/npcink-ai-cloud}"
+BASE_URL="${NPCINK_CLOUD_BASE_URL:-http://127.0.0.1:${NPCINK_CLOUD_PORT:-8010}}"
 RESTART_AFTER_UPDATE=1
 RESTART_SERVICES="proxy,api,worker,callback-worker,ops-worker"
 declare -a SET_ENTRIES=()
@@ -22,7 +22,7 @@ declare -a FROM_ENV_KEYS=()
 validate_key() {
 	local key="$1"
 	case "${key}" in
-		MAGICK_CLOUD_[A-Z0-9_]*)
+		NPCINK_CLOUD_[A-Z0-9_]*)
 			return 0
 			;;
 		*)
@@ -91,7 +91,7 @@ while [ "$#" -gt 0 ]; do
 done
 
 if [ -z "${SSH_HOST}" ]; then
-	echo "[fail] Missing --ssh-host or MAGICK_CLOUD_DEPLOY_SSH_HOST" >&2
+	echo "[fail] Missing --ssh-host or NPCINK_CLOUD_DEPLOY_SSH_HOST" >&2
 	exit 1
 fi
 

@@ -29,7 +29,7 @@ class TEIProviderAdapter(OpenAIProviderAdapter):
         timeout_seconds: float = 30.0,
         region: str = "self-hosted",
         context_window: int = 8192,
-        app_name: str = "magick-ai-cloud",
+        app_name: str = "npcink-ai-cloud",
         transport: httpx.BaseTransport | None = None,
     ) -> None:
         super().__init__(

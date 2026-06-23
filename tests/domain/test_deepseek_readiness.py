@@ -4,11 +4,11 @@ import os
 
 import pytest
 
-_deepseek_key_available = bool(os.environ.get("MAGICK_CLOUD_OPENAI_API_KEY", "").strip())
+_deepseek_key_available = bool(os.environ.get("NPCINK_CLOUD_OPENAI_API_KEY", "").strip())
 
 
 @pytest.mark.skipif(
-    not _deepseek_key_available, reason="MAGICK_CLOUD_OPENAI_API_KEY not configured"
+    not _deepseek_key_available, reason="NPCINK_CLOUD_OPENAI_API_KEY not configured"
 )
 class TestDeepSeekReadiness:
     def test_catalog_refresh_includes_deepseek_models(self) -> None:
@@ -23,7 +23,7 @@ class TestDeepSeekReadiness:
         model_ids = [m.model_id for m in snapshot.models]
         assert len(model_ids) > 0, "catalog must contain at least one model"
         display_name = getattr(snapshot, "display_name", "")
-        provider_label = os.environ.get("MAGICK_CLOUD_OPENAI_PROVIDER_LABEL", "")
+        provider_label = os.environ.get("NPCINK_CLOUD_OPENAI_PROVIDER_LABEL", "")
         if provider_label:
             assert provider_label in display_name, (
                 f"provider label '{provider_label}' must appear in display name"
@@ -82,5 +82,5 @@ class TestDeepSeekReadiness:
 
 
 def test_deepseek_key_not_required_for_deterministic_baseline() -> None:
-    """Verify that the test suite runs without MAGICK_CLOUD_OPENAI_API_KEY."""
+    """Verify that the test suite runs without NPCINK_CLOUD_OPENAI_API_KEY."""
     pass

@@ -4,26 +4,26 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 # Shared compose/env helpers for deploy scripts.
 . "${ROOT_DIR}/deploy/common.sh"
-magick_ai_cloud_load_env_file "${ROOT_DIR}"
+npcink_ai_cloud_load_env_file "${ROOT_DIR}"
 
-magick_ai_cloud_require_cmd curl
-magick_ai_cloud_require_cmd openssl
-magick_ai_cloud_require_cmd python3
+npcink_ai_cloud_require_cmd curl
+npcink_ai_cloud_require_cmd openssl
+npcink_ai_cloud_require_cmd python3
 
-BASE_URL="${MAGICK_CLOUD_BASE_URL:-http://127.0.0.1:${MAGICK_CLOUD_PORT:-8010}}"
-INTERNAL_AUTH_TOKEN="${MAGICK_CLOUD_INTERNAL_AUTH_TOKEN:-}"
-SITE_ID="${MAGICK_CLOUD_SITE_ID:-site_smoke}"
-KEY_ID="${MAGICK_CLOUD_KEY_ID:-key_default}"
-SECRET="${MAGICK_CLOUD_SECRET:-magick-cloud-test-secret}"
-PROFILE_ID="${MAGICK_CLOUD_PROFILE_ID:-text.balanced}"
-ABILITY_NAME="${MAGICK_CLOUD_ABILITY_NAME:-magick-ai/workflows/generate-post-draft}"
-CHANNEL="${MAGICK_CLOUD_CHANNEL:-openapi}"
-EXECUTION_KIND="${MAGICK_CLOUD_EXECUTION_KIND:-text}"
-IDEMPOTENCY_SUFFIX="${MAGICK_CLOUD_IDEMPOTENCY_SUFFIX:-}"
-PROMPT_TEXT="${MAGICK_CLOUD_PROMPT_TEXT:-remote deploy smoke request}"
-EXPECTED_PROVIDER_ID="${MAGICK_CLOUD_EXPECTED_PROVIDER_ID:-}"
-EXPECTED_MODEL_ID="${MAGICK_CLOUD_EXPECTED_MODEL_ID:-}"
-EXPECTED_INSTANCE_ID="${MAGICK_CLOUD_EXPECTED_INSTANCE_ID:-}"
+BASE_URL="${NPCINK_CLOUD_BASE_URL:-http://127.0.0.1:${NPCINK_CLOUD_PORT:-8010}}"
+INTERNAL_AUTH_TOKEN="${NPCINK_CLOUD_INTERNAL_AUTH_TOKEN:-}"
+SITE_ID="${NPCINK_CLOUD_SITE_ID:-site_smoke}"
+KEY_ID="${NPCINK_CLOUD_KEY_ID:-key_default}"
+SECRET="${NPCINK_CLOUD_SECRET:-npcink-cloud-test-secret}"
+PROFILE_ID="${NPCINK_CLOUD_PROFILE_ID:-text.balanced}"
+ABILITY_NAME="${NPCINK_CLOUD_ABILITY_NAME:-magick-ai/workflows/generate-post-draft}"
+CHANNEL="${NPCINK_CLOUD_CHANNEL:-openapi}"
+EXECUTION_KIND="${NPCINK_CLOUD_EXECUTION_KIND:-text}"
+IDEMPOTENCY_SUFFIX="${NPCINK_CLOUD_IDEMPOTENCY_SUFFIX:-}"
+PROMPT_TEXT="${NPCINK_CLOUD_PROMPT_TEXT:-remote deploy smoke request}"
+EXPECTED_PROVIDER_ID="${NPCINK_CLOUD_EXPECTED_PROVIDER_ID:-}"
+EXPECTED_MODEL_ID="${NPCINK_CLOUD_EXPECTED_MODEL_ID:-}"
+EXPECTED_INSTANCE_ID="${NPCINK_CLOUD_EXPECTED_INSTANCE_ID:-}"
 
 while [ "$#" -gt 0 ]; do
 	case "$1" in
@@ -276,19 +276,19 @@ signed_request() {
 	fi
 	http_request "${method}" "${url}" "${body}" \
 		"traceparent: ${traceparent}" \
-		"X-Magick-Site-Id: ${SITE_ID}" \
-		"X-Magick-Key-Id: ${KEY_ID}" \
-		"X-Magick-Timestamp: ${timestamp}" \
-		"X-Magick-Signature: sha256=${signature}" \
-		"X-Magick-Nonce: ${nonce}" \
+		"X-Npcink-Site-Id: ${SITE_ID}" \
+		"X-Npcink-Key-Id: ${KEY_ID}" \
+		"X-Npcink-Timestamp: ${timestamp}" \
+		"X-Npcink-Signature: sha256=${signature}" \
+		"X-Npcink-Nonce: ${nonce}" \
 		"Idempotency-Key: ${idempotency_key}"
 }
 
 ok "Waiting for cloud ready: ${BASE_URL}"
-if ! magick_ai_cloud_wait_for_ready "${BASE_URL}" 20 2; then
+if ! npcink_ai_cloud_wait_for_ready "${BASE_URL}" 20 2; then
 	fail "Cloud API did not become ready"
 fi
-magick_ai_cloud_require_internal_token
+npcink_ai_cloud_require_internal_token
 
 IDEMPOTENCY_SUFFIX_NORMALIZED=""
 if [ -n "${IDEMPOTENCY_SUFFIX}" ]; then
@@ -299,8 +299,8 @@ http_request "GET" "${BASE_URL%/}/health/live" ""
 assert_status "${HTTP_STATUS}" "200" "health/live should succeed"
 assert_json_equals "${HTTP_BODY}" "status" "ok" "health/live envelope status should be ok"
 
-if [ "${MAGICK_CLOUD_SKIP_FRONTEND_IMAGE:-0}" = "1" ]; then
-	ok "Skipping frontend page checks because MAGICK_CLOUD_SKIP_FRONTEND_IMAGE=1"
+if [ "${NPCINK_CLOUD_SKIP_FRONTEND_IMAGE:-0}" = "1" ]; then
+	ok "Skipping frontend page checks because NPCINK_CLOUD_SKIP_FRONTEND_IMAGE=1"
 else
 	http_request "GET" "${BASE_URL%/}/" ""
 	assert_status "${HTTP_STATUS}" "200" "buyer-facing home page should succeed"
@@ -325,14 +325,14 @@ http_request "POST" "${BASE_URL%/}/internal/catalog/refresh" '{"providers":[]}' 
 assert_status "${HTTP_STATUS}" "401" "internal/catalog/refresh without token should fail closed"
 
 http_request "GET" "${BASE_URL%/}/health/ready" "" \
-	"X-Magick-Internal-Token: ${INTERNAL_AUTH_TOKEN}"
+	"X-Npcink-Internal-Token: ${INTERNAL_AUTH_TOKEN}"
 assert_status "${HTTP_STATUS}" "200" "health/ready with internal token should succeed"
 
-OPERATIONAL_READY_ATTEMPTS="${MAGICK_CLOUD_OPERATIONAL_READY_WAIT_ATTEMPTS:-36}"
-OPERATIONAL_READY_DELAY_SECONDS="${MAGICK_CLOUD_OPERATIONAL_READY_WAIT_DELAY_SECONDS:-5}"
+OPERATIONAL_READY_ATTEMPTS="${NPCINK_CLOUD_OPERATIONAL_READY_WAIT_ATTEMPTS:-36}"
+OPERATIONAL_READY_DELAY_SECONDS="${NPCINK_CLOUD_OPERATIONAL_READY_WAIT_DELAY_SECONDS:-5}"
 for ((attempt = 1; attempt <= OPERATIONAL_READY_ATTEMPTS; attempt++)); do
 	http_request "GET" "${BASE_URL%/}/health/operational-ready" "" \
-		"X-Magick-Internal-Token: ${INTERNAL_AUTH_TOKEN}"
+		"X-Npcink-Internal-Token: ${INTERNAL_AUTH_TOKEN}"
 	if [ "${HTTP_STATUS}" = "200" ]; then
 		break
 	fi
@@ -344,7 +344,7 @@ assert_status "${HTTP_STATUS}" "200" "health/operational-ready with internal tok
 assert_json_non_empty "${HTTP_BODY}" "data.required_workers" "operational readiness should expose required workers"
 
 http_request "GET" "${BASE_URL%/}/internal/service/observability/summary" "" \
-	"X-Magick-Internal-Token: ${INTERNAL_AUTH_TOKEN}"
+	"X-Npcink-Internal-Token: ${INTERNAL_AUTH_TOKEN}"
 assert_status "${HTTP_STATUS}" "200" "observability summary with internal token should succeed"
 assert_json_equals "${HTTP_BODY}" "data.workers.totals.missing_total" "0" "observability summary should not report missing workers"
 assert_json_equals "${HTTP_BODY}" "data.cadence.totals.non_fresh_total" "0" "observability summary should not report non-fresh cadence tasks"

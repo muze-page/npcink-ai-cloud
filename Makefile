@@ -1,12 +1,12 @@
 PYTHON ?= python3
 SITE_ID ?= site_smoke
 KEY_ID ?= key_default
-SECRET ?= magick-cloud-test-secret
+SECRET ?= npcink-cloud-test-secret
 SCOPES ?= catalog:read,runtime:resolve,runtime:execute,runtime:read,stats:read
 PYTEST_ARGS ?=
 CHANGED_BASE_REF ?= origin/master
-TEST_PROVIDER_ENV = MAGICK_CLOUD_OPENAI_API_KEY= MAGICK_CLOUD_OPENAI_COMPATIBLE_API_KEY=
-DOCKER_TEST_PROVIDER_ENV = -e MAGICK_CLOUD_OPENAI_API_KEY= -e MAGICK_CLOUD_OPENAI_COMPATIBLE_API_KEY=
+TEST_PROVIDER_ENV = NPCINK_CLOUD_OPENAI_API_KEY= NPCINK_CLOUD_OPENAI_COMPATIBLE_API_KEY=
+DOCKER_TEST_PROVIDER_ENV = -e NPCINK_CLOUD_OPENAI_API_KEY= -e NPCINK_CLOUD_OPENAI_COMPATIBLE_API_KEY=
 
 .PHONY: baseline bootstrap-dev dev test test-local lint lint-changed mypy-full mypy-targeted mypy-commercial-runtime perimeter frontend-sync frontend-watch migrate seed-dev rollup bundle deploy-smoke deploy-ssh provider-status env-ssh secret-rotation-check
 
@@ -42,7 +42,7 @@ lint:
 	docker compose -f docker-compose.dev.yml run --rm api python -m mypy app
 
 lint-changed:
-	MAGICK_CLOUD_CHANGED_BASE_REF="$(CHANGED_BASE_REF)" bash scripts/check-changed-python-quality.sh
+	NPCINK_CLOUD_CHANGED_BASE_REF="$(CHANGED_BASE_REF)" bash scripts/check-changed-python-quality.sh
 
 mypy-full:
 	.venv/bin/mypy app

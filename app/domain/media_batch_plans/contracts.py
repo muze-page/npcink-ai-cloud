@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
-MEDIA_BATCH_PLAN_CLOUD_ABILITY = "magick-ai-cloud/plan-media-derivative-batch"
-MEDIA_BATCH_PLAN_TOOLBOX_ABILITY = "magick-ai-toolbox/plan-media-derivative-batch"
+MEDIA_BATCH_PLAN_CLOUD_ABILITY = "npcink-cloud/plan-media-derivative-batch"
+MEDIA_BATCH_PLAN_TOOLBOX_ABILITY = "npcink-toolbox/plan-media-derivative-batch"
 MEDIA_BATCH_PLAN_ABILITIES = frozenset(
     {MEDIA_BATCH_PLAN_CLOUD_ABILITY, MEDIA_BATCH_PLAN_TOOLBOX_ABILITY}
 )

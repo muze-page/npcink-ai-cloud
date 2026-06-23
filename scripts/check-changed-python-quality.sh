@@ -4,7 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CLOUD_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 REPO_ROOT="${CLOUD_DIR}"
-BASE_REF="${MAGICK_CLOUD_CHANGED_BASE_REF:-origin/master}"
+BASE_REF="${NPCINK_CLOUD_CHANGED_BASE_REF:-origin/master}"
 
 TMP_PATHS="$(mktemp)"
 trap 'rm -f "${TMP_PATHS}"' EXIT

@@ -15,7 +15,7 @@ from tests.conftest import TEST_INTERNAL_AUTH_TOKEN, build_internal_headers
 class StubServices:
     def __init__(self) -> None:
         self.settings = Settings(
-            project_name="Magick AI Cloud Test",
+            project_name="Npcink AI Cloud Test",
             environment="test",
             database_url="sqlite+pysqlite:///:memory:",
             redis_url="redis://localhost:6379/0",
@@ -62,13 +62,13 @@ def test_live_endpoint_returns_ok_envelope() -> None:
     payload = response.json()
     assert payload["status"] == "ok"
     assert payload["error_code"] == ""
-    assert payload["data"]["service"] == "Magick AI Cloud Test"
+    assert payload["data"]["service"] == "Npcink AI Cloud Test"
 
 
 def test_live_endpoint_emits_request_span_when_tracing_is_configured() -> None:
     services = StubServices()
     services.settings = Settings(
-        project_name="Magick AI Cloud Test",
+        project_name="Npcink AI Cloud Test",
         environment="test",
         database_url="sqlite+pysqlite:///:memory:",
         redis_url="redis://localhost:6379/0",
@@ -136,7 +136,7 @@ def test_operational_ready_endpoint_requires_fresh_workers_and_cadence(tmp_path)
         def __init__(self) -> None:
             super().__init__()
             self.settings = Settings(
-                project_name="Magick AI Cloud Test",
+                project_name="Npcink AI Cloud Test",
                 environment="test",
                 database_url=database_url,
                 redis_url="redis://localhost:6379/0",

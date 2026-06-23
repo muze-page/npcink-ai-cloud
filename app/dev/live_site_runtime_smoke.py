@@ -128,11 +128,11 @@ def build_signed_headers(
     return {
         "content-type": "application/json",
         "accept": "application/json",
-        "X-Magick-Site-Id": site_id,
-        "X-Magick-Key-Id": key_id,
-        "X-Magick-Timestamp": timestamp,
-        "X-Magick-Nonce": nonce,
-        "X-Magick-Signature": build_hmac_signature(secret, canonical_request),
+        "X-Npcink-Site-Id": site_id,
+        "X-Npcink-Key-Id": key_id,
+        "X-Npcink-Timestamp": timestamp,
+        "X-Npcink-Nonce": nonce,
+        "X-Npcink-Signature": build_hmac_signature(secret, canonical_request),
         "Idempotency-Key": idempotency_key,
         "traceparent": traceparent,
     }
@@ -348,7 +348,7 @@ def redact_runtime_result(value: object) -> object:
         redacted: dict[str, object] = {}
         for key, item in value.items():
             key_text = str(key).lower()
-            if key_text in {"x-magick-signature", "signature", "secret", "cloud_api_key"}:
+            if key_text in {"x-npcink-signature", "signature", "secret", "cloud_api_key"}:
                 redacted[str(key)] = bool(str(item or ""))
             else:
                 redacted[str(key)] = redact_runtime_result(item)

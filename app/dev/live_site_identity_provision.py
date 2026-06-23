@@ -191,7 +191,7 @@ def execute_request_plan(
             url,
             item.payload,
             {
-                "X-Magick-Internal-Token": internal_token,
+                "X-Npcink-Internal-Token": internal_token,
                 "Idempotency-Key": item.idempotency_key,
             },
             timeout_seconds,
@@ -394,7 +394,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="append",
         type=Path,
         help=(
-            "Env file to read for MAGICK_CLOUD_INTERNAL_AUTH_TOKEN. "
+            "Env file to read for NPCINK_CLOUD_INTERNAL_AUTH_TOKEN. "
             "Defaults to .env and .env.local."
         ),
     )

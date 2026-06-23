@@ -42,7 +42,7 @@ def _build_client(tmp_path: Path) -> tuple[str, TestClient]:
     )
     settings = Settings(
         _env_file=None,
-        project_name="Magick AI Cloud Agent Feedback Test",
+        project_name="Npcink AI Cloud Agent Feedback Test",
         environment="test",
         database_url=database_url,
         redis_url="redis://localhost:6379/0",

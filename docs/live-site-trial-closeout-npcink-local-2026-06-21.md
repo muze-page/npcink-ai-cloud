@@ -191,7 +191,7 @@ Result:
 
 The active settings option detected after the actual addon install was:
 
-- `magick_ai_cloud_addon_settings`
+- `npcink_cloud_addon_settings`
 
 This replaced the older expected `npcink_cloud_addon_settings` path in tooling.
 

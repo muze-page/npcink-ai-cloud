@@ -50,7 +50,7 @@ class SiteOpsAnalysisService:
             "site_id": site_id,
             "analysis_id": f"site_ops_{_hash_text(f'{site_id}:{run_id}')[:24]}",
             "source": {
-                "provider": "magick_ai_cloud",
+                "provider": "npcink_ai_cloud",
                 "provider_mode": "deterministic_site_ops_analyzer",
                 "request_contract": contract_version,
                 "source_pack_contract": _text(input_payload.get("source_pack_contract")),

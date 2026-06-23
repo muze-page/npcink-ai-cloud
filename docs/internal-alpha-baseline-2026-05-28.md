@@ -95,7 +95,7 @@ Classification:
 Target:
 
 - Cloud base URL: `http://127.0.0.1:8010`
-- WordPress site: `https://magick-ai.local/`
+- WordPress site: `https://npcink.local/`
 - WordPress Cloud addon: installed and enabled
 - Portal login path: `/portal/dev-entry`
 - Local debug login origin allowlist:
@@ -116,8 +116,8 @@ Current results:
 - WordPress addon entitlement summary: loaded Free/starter entitlement details
   from Cloud.
 - Portal dev-entry login: passed and landed on `/portal`.
-- Portal site record: bound to `site_magick_ai_local` and updated with
-  `https://magick-ai.local/`.
+- Portal site record: bound to `site_npcink_local` and updated with
+  `https://npcink.local/`.
 
 Fix applied during the local alpha check:
 
@@ -130,8 +130,8 @@ Fix applied during the local alpha check:
 
 Still open:
 
-- `MAGICK_CLOUD_OPENAI_BASE_URL` points at `https://api.deepseek.com/v1`.
-- `MAGICK_CLOUD_OPENAI_API_KEY` is configured locally.
+- `NPCINK_CLOUD_OPENAI_BASE_URL` points at `https://api.deepseek.com/v1`.
+- `NPCINK_CLOUD_OPENAI_API_KEY` is configured locally.
 - The deterministic test entrypoints explicitly clear local OpenAI-compatible
   provider API key variables during pytest runs. Real provider verification is
   kept in manual smoke steps, not in the default baseline suite.

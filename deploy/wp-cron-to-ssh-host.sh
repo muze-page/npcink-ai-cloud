@@ -4,14 +4,14 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 . "${ROOT_DIR}/deploy/common.sh"
 
-magick_ai_cloud_require_cmd ssh
+npcink_ai_cloud_require_cmd ssh
 
-SSH_HOST="${MAGICK_CLOUD_DEPLOY_SSH_HOST:-}"
-SSH_USER="${MAGICK_CLOUD_DEPLOY_SSH_USER:-}"
-SSH_PORT="${MAGICK_CLOUD_DEPLOY_SSH_PORT:-22}"
-SSH_IDENTITY_FILE="${MAGICK_CLOUD_DEPLOY_IDENTITY_FILE:-}"
-REMOTE_DIR="${MAGICK_CLOUD_DEPLOY_REMOTE_DIR:-/opt/magick-ai-cloud}"
-DEFAULT_SITE_URL="${MAGICK_CLOUD_WP_CRON_SITE_BASE_URL:-}"
+SSH_HOST="${NPCINK_CLOUD_DEPLOY_SSH_HOST:-}"
+SSH_USER="${NPCINK_CLOUD_DEPLOY_SSH_USER:-}"
+SSH_PORT="${NPCINK_CLOUD_DEPLOY_SSH_PORT:-22}"
+SSH_IDENTITY_FILE="${NPCINK_CLOUD_DEPLOY_IDENTITY_FILE:-}"
+REMOTE_DIR="${NPCINK_CLOUD_DEPLOY_REMOTE_DIR:-/opt/npcink-ai-cloud}"
+DEFAULT_SITE_URL="${NPCINK_CLOUD_WP_CRON_SITE_BASE_URL:-}"
 declare -a REMOTE_ARGS=()
 HAS_SITE_URL_ARG=0
 
@@ -53,7 +53,7 @@ while [ "$#" -gt 0 ]; do
 done
 
 if [ -z "${SSH_HOST}" ]; then
-	echo "[fail] Missing --ssh-host or MAGICK_CLOUD_DEPLOY_SSH_HOST" >&2
+	echo "[fail] Missing --ssh-host or NPCINK_CLOUD_DEPLOY_SSH_HOST" >&2
 	exit 1
 fi
 

@@ -216,7 +216,7 @@ def test_openrouter_provider_sets_router_headers_and_namespaces_model_ids() -> N
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.headers["Authorization"] == "Bearer or-key"
         assert request.headers["HTTP-Referer"] == "https://magick.example.com"
-        assert request.headers["X-Title"] == "Magick AI Cloud"
+        assert request.headers["X-Title"] == "Npcink AI Cloud"
         return httpx.Response(
             200,
             json={"data": [{"id": "openai/gpt-4.1-mini"}]},
@@ -264,10 +264,10 @@ def test_provider_registry_omits_default_openai_without_credentials_outside_dev_
         environment="production",
         database_url="sqlite+pysqlite:///:memory:",
         redis_url="redis://localhost:6379/0",
-        internal_auth_token="magick-cloud-internal-prod-token-32b",
-        admin_bootstrap_token="magick-cloud-admin-bootstrap-token-32b",
-        admin_session_secret="magick-cloud-ops-session-secret-prod-32b",
-        portal_jwt_secret="magick-cloud-portal-jwt-secret-prod-32b",
+        internal_auth_token="npcink-cloud-internal-prod-token-32b",
+        admin_bootstrap_token="npcink-cloud-admin-bootstrap-token-32b",
+        admin_session_secret="npcink-cloud-ops-session-secret-prod-32b",
+        portal_jwt_secret="npcink-cloud-portal-jwt-secret-prod-32b",
         portal_public_base_url="https://cloud.example.com",
         portal_email_smtp_host="smtp.example.com",
         portal_email_from_email="no-reply@example.com",

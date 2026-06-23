@@ -24,7 +24,7 @@ def test_settings_require_admin_session_secret_outside_dev_and_test() -> None:
             environment="production",
             database_url="sqlite+pysqlite:///:memory:",
             redis_url="redis://localhost:6379/0",
-            internal_auth_token="magick-cloud-internal-prod-token-32b",
+            internal_auth_token="npcink-cloud-internal-prod-token-32b",
             admin_session_secret="",
         )
 
@@ -38,18 +38,18 @@ def test_settings_accept_hardened_production_auth_settings() -> None:
         environment="production",
         database_url="sqlite+pysqlite:///:memory:",
         redis_url="redis://localhost:6379/0",
-        internal_auth_token="magick-cloud-internal-prod-token-32b",
-        admin_bootstrap_token="magick-cloud-admin-bootstrap-prod-token",
-        admin_session_secret="magick-cloud-ops-session-secret-prod-32b",
-        portal_jwt_secret="magick-cloud-portal-jwt-secret-prod-32b",
+        internal_auth_token="npcink-cloud-internal-prod-token-32b",
+        admin_bootstrap_token="npcink-cloud-admin-bootstrap-prod-token",
+        admin_session_secret="npcink-cloud-ops-session-secret-prod-32b",
+        portal_jwt_secret="npcink-cloud-portal-jwt-secret-prod-32b",
         portal_public_base_url="https://cloud.example.com",
         portal_email_smtp_host="smtp.example.com",
         portal_email_from_email="no-reply@example.com",
     )
 
     assert settings.environment == "production"
-    assert settings.admin_session_secret == "magick-cloud-ops-session-secret-prod-32b"
-    assert settings.admin_bootstrap_token == "magick-cloud-admin-bootstrap-prod-token"
+    assert settings.admin_session_secret == "npcink-cloud-ops-session-secret-prod-32b"
+    assert settings.admin_bootstrap_token == "npcink-cloud-admin-bootstrap-prod-token"
 
 
 def test_settings_reject_dev_fallback_flag_outside_dev_and_test() -> None:
@@ -58,8 +58,8 @@ def test_settings_reject_dev_fallback_flag_outside_dev_and_test() -> None:
             environment="production",
             database_url="sqlite+pysqlite:///:memory:",
             redis_url="redis://localhost:6379/0",
-            internal_auth_token="magick-cloud-internal-prod-token-32b",
-            admin_session_secret="magick-cloud-ops-session-secret-prod-32b",
+            internal_auth_token="npcink-cloud-internal-prod-token-32b",
+            admin_session_secret="npcink-cloud-ops-session-secret-prod-32b",
             allow_dev_admin_internal_token_fallback=True,
         )
 
@@ -74,9 +74,9 @@ def test_settings_reject_openai_sample_catalog_profile_outside_dev_and_test() ->
             environment="production",
             database_url="sqlite+pysqlite:///:memory:",
             redis_url="redis://localhost:6379/0",
-            internal_auth_token="magick-cloud-internal-prod-token-32b",
-            admin_session_secret="magick-cloud-ops-session-secret-prod-32b",
-            portal_jwt_secret="magick-cloud-portal-jwt-secret-prod-32b",
+            internal_auth_token="npcink-cloud-internal-prod-token-32b",
+            admin_session_secret="npcink-cloud-ops-session-secret-prod-32b",
+            portal_jwt_secret="npcink-cloud-portal-jwt-secret-prod-32b",
             portal_public_base_url="https://cloud.example.com",
             portal_email_smtp_host="smtp.example.com",
             portal_email_from_email="no-reply@example.com",
@@ -99,7 +99,7 @@ def test_settings_reject_openai_sample_catalog_profile_outside_dev_and_test() ->
         ),
         (
             {
-                "admin_bootstrap_token": "magick-cloud-internal-prod-token-32b",
+                "admin_bootstrap_token": "npcink-cloud-internal-prod-token-32b",
             },
             "admin_bootstrap_token must differ from internal_auth_token outside development/test environments",
         ),
@@ -129,10 +129,10 @@ def test_settings_require_production_portal_and_secret_fields(
         "environment": "production",
         "database_url": "sqlite+pysqlite:///:memory:",
         "redis_url": "redis://localhost:6379/0",
-        "internal_auth_token": "magick-cloud-internal-prod-token-32b",
-        "admin_bootstrap_token": "magick-cloud-admin-bootstrap-prod-token",
-        "admin_session_secret": "magick-cloud-ops-session-secret-prod-32b",
-        "portal_jwt_secret": "magick-cloud-portal-jwt-secret-prod-32b",
+        "internal_auth_token": "npcink-cloud-internal-prod-token-32b",
+        "admin_bootstrap_token": "npcink-cloud-admin-bootstrap-prod-token",
+        "admin_session_secret": "npcink-cloud-ops-session-secret-prod-32b",
+        "portal_jwt_secret": "npcink-cloud-portal-jwt-secret-prod-32b",
         "portal_public_base_url": "https://cloud.example.com",
         "portal_email_smtp_host": "smtp.example.com",
         "portal_email_from_email": "no-reply@example.com",

@@ -32,7 +32,7 @@ def _database_url(tmp_path: Path) -> str:
 def _settings(database_url: str) -> Settings:
     return Settings(
         _env_file=None,
-        project_name="Magick AI Cloud Test",
+        project_name="Npcink AI Cloud Test",
         environment="test",
         database_url=database_url,
         redis_url="redis://localhost:6379/0",
