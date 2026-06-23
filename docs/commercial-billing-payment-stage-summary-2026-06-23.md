@@ -170,9 +170,9 @@ The following verification passed during this stage:
 
 ## Eval Lab Review
 
-`magick-ai-eval-lab` exists locally at:
+`npcink-eval-lab` exists locally at:
 
-- `/Users/muze/gitee/magick-ai-eval-lab`
+- `/Users/muze/gitee/npcink-eval-lab`
 
 The following local eval-lab checks were run:
 
@@ -265,7 +265,7 @@ while preserving the redaction test intent.
    - async notify route;
    - callback idempotency tests.
 5. Then add WeChat Pay using the same gateway contract.
-6. Run provider-backed `magick-ai-eval-lab` triad review after the first real
+6. Run provider-backed `npcink-eval-lab` triad review after the first real
    callback route exists and before merging payment-provider credentials or
    network code.
 

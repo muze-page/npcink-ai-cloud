@@ -224,7 +224,7 @@ Core 必须保持治理内核定位，不变成产品工作台。
 - `wp.local`；
 - `npcink.local`；
 - `npcink-trial` clone；
-- 以及可配合 `magick-ai-eval-lab` 做样本扩展和交叉验证的方向。
+- 以及可配合 `npcink-eval-lab` 做样本扩展和交叉验证的方向。
 
 关键结果：
 

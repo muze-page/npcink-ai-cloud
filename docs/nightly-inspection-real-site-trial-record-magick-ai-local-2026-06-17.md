@@ -218,10 +218,10 @@ Browser and WordPress site checks:
 - Cloud targeted verification after the sample expansion doc update:
   `.venv/bin/pytest tests/api/test_cloud_batch_runtime.py tests/contract/test_nightly_site_inspection_contract.py tests/api/test_agent_feedback_routes.py`:
   19 passed.
-- `magick-ai-eval-lab` cross-check:
+- `npcink-eval-lab` cross-check:
   `composer eval:task -- task=project_quality_gate project=/Users/muze/gitee/npcink-ai-cloud mode=working_diff`
   wrote local generated reports under
-  `/Users/muze/gitee/magick-ai-eval-lab/project-review/generated/`.
+  `/Users/muze/gitee/npcink-eval-lab/project-review/generated/`.
   The only review item was an existing `sk-` shaped test marker in tracked
   test/script fixtures, not this trial document or a newly introduced secret.
 
