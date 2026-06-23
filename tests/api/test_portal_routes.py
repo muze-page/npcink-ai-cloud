@@ -22,6 +22,7 @@ from app.core.db import dispose_engine, get_session, init_schema
 from app.core.models import (
     SITE_ADMIN_STATUS_ACTIVE,
     AccountSubscription,
+    CreditLedgerEntry,
     SiteAdminIdentity,
 )
 from app.core.services import CloudServices
@@ -1772,6 +1773,66 @@ def test_portal_summary_usage_entitlements_and_audit_routes(tmp_path: Path) -> N
         "zhihu_hot_topics",
     }
     assert len(credit_ledger_data["usage_detail"]["recent_items"]) == 2
+
+    credit_packs_response = client.get(
+        "/portal/v1/sites/site_portal_reads/credit-packs",
+        headers=build_portal_headers(site_admin_ref="site_admin:portal-reads@example.com"),
+    )
+    assert credit_packs_response.status_code == 200
+    credit_packs_data = credit_packs_response.json()["data"]
+    assert credit_packs_data["catalog_version"] == "ai-credit-packs-v1"
+    assert {item["pack_id"] for item in credit_packs_data["items"]} >= {
+        "pack_small",
+        "pack_medium",
+        "pack_large",
+    }
+
+    credit_pack_order_response = client.post(
+        "/portal/v1/sites/site_portal_reads/credit-pack-orders",
+        json={"pack_id": "pack_small"},
+        headers=build_portal_headers(
+            site_admin_ref="site_admin:portal-reads@example.com",
+            idempotency_key="portal-credit-pack-order-001",
+        ),
+    )
+    assert credit_pack_order_response.status_code == 200, credit_pack_order_response.text
+    credit_pack_order = credit_pack_order_response.json()["data"]["order"]
+    assert credit_pack_order["purchase_kind"] == "credit_pack"
+    assert credit_pack_order["credit_pack"]["ai_credits"] == 10000
+    assert credit_pack_order["target_subscription_id"] == "sub_portal_reads"
+
+    mark_paid_response = client.post(
+        f"/internal/service/payments/orders/{credit_pack_order['order_id']}/mark-paid",
+        json={
+            "provider_trade_no": "202606230000000002",
+            "provider_event_id": "portal-credit-pack-paid",
+            "amount": 99.0,
+        },
+        headers=build_internal_headers(idempotency_key="portal-credit-pack-paid-001"),
+    )
+    assert mark_paid_response.status_code == 200, mark_paid_response.text
+    assert mark_paid_response.json()["data"]["credit_ledger_entry"]["credit_delta"] == 10000.0
+
+    refreshed_credit_ledger_response = client.get(
+        "/portal/v1/sites/site_portal_reads/credit-ledger?limit=10",
+        headers=build_portal_headers(site_admin_ref="site_admin:portal-reads@example.com"),
+    )
+    assert refreshed_credit_ledger_response.status_code == 200
+    refreshed_ledger = refreshed_credit_ledger_response.json()["data"]
+    assert refreshed_ledger["summary"]["granted_credits"] == 10000.0
+    assert refreshed_ledger["summary"]["net_used_credits"] == 0.0
+    assert "credit_pack_purchase" in {
+        item["source_type"] for item in refreshed_ledger["items"]
+    }
+    with get_session(database_url) as session:
+        credit_pack_entries = list(
+            session.scalars(
+                select(CreditLedgerEntry).where(
+                    CreditLedgerEntry.source_type == "credit_pack_purchase"
+                )
+            )
+        )
+        assert len(credit_pack_entries) == 1
 
     audit_response = client.get(
         "/portal/v1/sites/site_portal_reads/audit-summary",

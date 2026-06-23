@@ -87,6 +87,11 @@ class PortalAIInsightAnalyzePayload(BaseModel):
     force_refresh: bool = False
 
 
+class PortalCreditPackOrderPayload(BaseModel):
+    pack_id: str = ""
+    provider: str = "alipay"
+
+
 def _object_list(value: object) -> list[object]:
     return value if isinstance(value, list) else []
 
@@ -1096,6 +1101,87 @@ async def get_portal_site_credit_ledger(
             ],
             "role": str(access.get("role") or ""),
             **ledger,
+        },
+    )
+
+
+@router.get("/sites/{site_id}/credit-packs")
+async def list_portal_site_credit_packs(request: Request, site_id: str) -> Any:
+    auth = await resolve_portal_request_context(
+        request,
+        require_idempotency=False,
+        allow_session_cookies=True,
+    )
+    if isinstance(auth, JSONResponse):
+        return auth
+    access = _authorize_portal_site_access(
+        request,
+        site_id=site_id,
+        site_admin_ref=auth.site_admin_ref,
+        required_roles=SITE_ADMIN_SITE_KEY_WRITE_ROLES,
+    )
+    if isinstance(access, JSONResponse):
+        return access
+    result = _get_commercial_service(request).list_credit_packs()
+    return _portal_route_envelope(
+        message="portal credit packs loaded",
+        data={
+            **result,
+            "site_id": site_id,
+            "account_id": str(access.get("account_id") or ""),
+            "site_admin_ref": auth.site_admin_ref,
+            "identity_type": str(access.get("identity_type") or ""),
+            "role": str(access.get("role") or ""),
+        },
+    )
+
+
+@router.post("/sites/{site_id}/credit-pack-orders")
+async def create_portal_site_credit_pack_order(
+    request: Request,
+    site_id: str,
+    payload: PortalCreditPackOrderPayload,
+) -> Any:
+    same_origin = _portal_same_origin_guard(request)
+    if same_origin is not None:
+        return same_origin
+    write_guard = _portal_write_guard(request)
+    if write_guard is not None:
+        return write_guard
+    auth = await resolve_portal_request_context(
+        request,
+        require_idempotency=True,
+        allow_session_cookies=True,
+    )
+    if isinstance(auth, JSONResponse):
+        return auth
+    access = _authorize_portal_site_access(
+        request,
+        site_id=site_id,
+        site_admin_ref=auth.site_admin_ref,
+        required_roles=SITE_ADMIN_SITE_KEY_WRITE_ROLES,
+    )
+    if isinstance(access, JSONResponse):
+        return access
+    try:
+        order = _get_commercial_service(request).create_credit_pack_payment_order(
+            account_id=str(access.get("account_id") or ""),
+            site_id=site_id,
+            pack_id=payload.pack_id,
+            provider=payload.provider,
+            audit_context=_build_portal_audit_context(request, auth.site_admin_ref),
+        )
+    except CommercialServiceError as error:
+        return _service_error_response(error, request=request)
+    return _portal_route_envelope(
+        message="portal credit pack payment order created",
+        data={
+            "site_id": site_id,
+            "account_id": str(access.get("account_id") or ""),
+            "site_admin_ref": auth.site_admin_ref,
+            "identity_type": str(access.get("identity_type") or ""),
+            "role": str(access.get("role") or ""),
+            "order": order,
         },
     )
 

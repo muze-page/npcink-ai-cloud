@@ -169,6 +169,13 @@ class PaymentOrderPayload(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
+class CreditPackPaymentOrderPayload(BaseModel):
+    account_id: str
+    pack_id: str
+    provider: str = "alipay"
+    site_id: str = ""
+
+
 class PaymentSucceededPayload(BaseModel):
     provider_trade_no: str = ""
     provider_event_id: str = ""
@@ -1193,6 +1200,56 @@ async def create_payment_order(request: Request, payload: PaymentOrderPayload) -
     return build_envelope(
         status="ok",
         message="payment order created",
+        data=result,
+        revision="m6",
+    )
+
+
+@router.get("/payments/credit-packs")
+async def list_credit_packs(request: Request) -> Any:
+    auth = await authorize_internal_request(request, require_idempotency=False)
+    if auth is not None:
+        return auth
+    return build_envelope(
+        status="ok",
+        message="credit packs loaded",
+        data=_get_commercial_service(request).list_credit_packs(),
+        revision="m6",
+    )
+
+
+@router.post("/payments/credit-pack-orders")
+async def create_credit_pack_payment_order(
+    request: Request,
+    payload: CreditPackPaymentOrderPayload,
+) -> Any:
+    auth = await authorize_internal_request(request, require_idempotency=True)
+    if auth is not None:
+        return auth
+    service = _get_commercial_service(request)
+    audit_context = _build_audit_context(request)
+    try:
+        result = service.create_credit_pack_payment_order(
+            account_id=payload.account_id,
+            pack_id=payload.pack_id,
+            provider=payload.provider,
+            site_id=payload.site_id,
+            audit_context=audit_context,
+        )
+    except CommercialServiceError as error:
+        _record_service_failure(
+            request,
+            event_kind="payment.credit_pack_order.create",
+            error=error,
+            account_id=payload.account_id,
+            scope_kind="payment_order",
+            scope_id=payload.account_id,
+            payload_json=_build_audit_payload(payload),
+        )
+        return _service_error_response(error)
+    return build_envelope(
+        status="ok",
+        message="credit pack payment order created",
         data=result,
         revision="m6",
     )

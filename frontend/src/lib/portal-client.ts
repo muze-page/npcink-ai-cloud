@@ -1104,6 +1104,7 @@ export interface PortalUsageBundle {
   usage: PortalUsageSummaryPayload;
   entitlements: Entitlements;
   creditLedger: PortalCreditLedgerPayload;
+  creditPacks: PortalCreditPackCatalogPayload;
 }
 
 export interface PortalCreditLedgerEntry {
@@ -1115,12 +1116,59 @@ export interface PortalCreditLedgerEntry {
   run_id?: string;
   credit_delta: number;
   consumed_credits: number;
+  granted_credits?: number;
+  net_credit_delta?: number;
   quantity: number;
   unit: string;
   rate?: number;
   rate_unit?: string;
   rate_version?: string;
   created_at?: string;
+}
+
+export interface PortalCreditPack {
+  pack_id: string;
+  label: string;
+  ai_credits: number;
+  amount: number;
+  currency: string;
+  recommended_for_tiers?: string[];
+  active?: boolean;
+  period_policy?: string;
+  grant_event_type?: string;
+  catalog_version?: string;
+}
+
+export interface PortalCreditPackCatalogPayload {
+  site_id?: string;
+  account_id?: string;
+  catalog_version?: string;
+  period_policy?: string;
+  grant_event_type?: string;
+  items: PortalCreditPack[];
+}
+
+export interface PortalCreditPackPaymentOrder {
+  order_id: string;
+  account_id: string;
+  site_id?: string;
+  subscription_id?: string;
+  target_subscription_id?: string;
+  provider: string;
+  status: string;
+  amount: number;
+  currency: string;
+  subject: string;
+  checkout_url?: string;
+  purchase_kind?: string;
+  credit_pack?: PortalCreditPack;
+  created_at?: string;
+}
+
+export interface PortalCreditPackOrderPayload {
+  site_id?: string;
+  account_id?: string;
+  order: PortalCreditPackPaymentOrder;
 }
 
 export interface PortalCreditLedgerPayload {
@@ -1138,6 +1186,12 @@ export interface PortalCreditLedgerPayload {
   };
   summary?: {
     total_credits?: number;
+    consumed_credits?: number;
+    granted_credits?: number;
+    adjustment_credits?: number;
+    refund_credits?: number;
+    net_credit_delta?: number;
+    net_used_credits?: number;
     entry_count?: number;
     breakdown?: Array<{
       key?: string;
@@ -1539,6 +1593,23 @@ export class PortalClient {
     return this.request('GET', `/sites/${siteId}/credit-ledger${query}`, undefined, { requireAuth: true });
   }
 
+  async listCreditPacks(siteId: string): Promise<PortalEnvelope<PortalCreditPackCatalogPayload>> {
+    return this.request('GET', `/sites/${siteId}/credit-packs`, undefined, { requireAuth: true });
+  }
+
+  async createCreditPackOrder(
+    siteId: string,
+    packId: string,
+    provider = 'alipay'
+  ): Promise<PortalEnvelope<PortalCreditPackOrderPayload>> {
+    return this.request(
+      'POST',
+      `/sites/${siteId}/credit-pack-orders`,
+      { pack_id: packId, provider },
+      { requireAuth: true }
+    );
+  }
+
   /**
    * 获取审计摘要
    * GET /portal/v1/sites/{siteId}/audit-summary
@@ -1602,15 +1673,17 @@ export class PortalClient {
   }
 
   async getUsageBundle(siteId: string): Promise<PortalUsageBundle> {
-    const [usageResponse, entitlementsResponse, creditLedgerResponse] = await Promise.all([
+    const [usageResponse, entitlementsResponse, creditLedgerResponse, creditPacksResponse] = await Promise.all([
       this.getUsageSummary(siteId),
       this.getEntitlements(siteId),
       this.getCreditLedger(siteId, { limit: 12 }),
+      this.listCreditPacks(siteId),
     ]);
     return {
       usage: usageResponse.data,
       entitlements: entitlementsResponse.data,
       creditLedger: creditLedgerResponse.data,
+      creditPacks: creditPacksResponse.data,
     };
   }
 

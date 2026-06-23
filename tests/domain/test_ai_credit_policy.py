@@ -7,6 +7,9 @@ from app.core.db import dispose_engine, get_session, init_schema
 from app.domain.commercial.credits import (
     AI_CREDIT_BREAKDOWN_ORDER,
     AI_CREDIT_CAPABILITY_POLICY_REGISTRY,
+    AI_CREDIT_CHARGE_CAPABILITY_REQUIRED_FIELDS,
+    AI_CREDIT_CHARGE_COMPONENT_REQUIRED_FIELDS,
+    AI_CREDIT_CHARGE_CONTRACT_VERSION,
     AI_CREDIT_COMPONENT_POLICY_REGISTRY,
     AI_CREDIT_RATE_VERSION,
     estimate_runtime_request_ai_credits,
@@ -23,9 +26,12 @@ def test_ai_credit_component_registry_covers_every_breakdown_key() -> None:
     assert set(AI_CREDIT_BREAKDOWN_ORDER) == set(AI_CREDIT_COMPONENT_POLICY_REGISTRY)
     for source_type, policy in AI_CREDIT_COMPONENT_POLICY_REGISTRY.items():
         assert policy["source_type"] == source_type
+        assert set(AI_CREDIT_CHARGE_COMPONENT_REQUIRED_FIELDS) <= set(policy)
         assert policy["charge_mode"] in {"consume", "meter_only"}
         assert policy["unit"]
         assert float(policy["rate"]) >= 0
+        assert float(policy["minimum_charge"]) >= 0
+        assert policy["budget_key"] == "ai_credits"
 
 
 def test_ai_credit_capability_registry_defines_required_runtime_families() -> None:
@@ -39,9 +45,18 @@ def test_ai_credit_capability_registry_defines_required_runtime_families() -> No
     assert required_keys <= set(AI_CREDIT_CAPABILITY_POLICY_REGISTRY)
     for capability_key, policy in AI_CREDIT_CAPABILITY_POLICY_REGISTRY.items():
         assert policy["capability_key"] == capability_key
+        assert set(AI_CREDIT_CHARGE_CAPABILITY_REQUIRED_FIELDS) <= set(policy)
         assert policy["charge_mode"]
         assert float(policy["request_base_credits"]) >= 0
         assert policy["ledger_components"]
+        assert policy["budget_key"] == "ai_credits"
+
+
+def test_ai_credit_charge_contract_document_points_to_single_registry() -> None:
+    contract = Path("docs/ai-credit-charge-contract-v1.md").read_text(encoding="utf-8")
+    assert AI_CREDIT_CHARGE_CONTRACT_VERSION == "ai-credit-charge-contract-v1"
+    assert "app/domain/commercial/credits.py" in contract
+    assert "Do not add a second billing registry" in contract
 
 
 def test_runtime_execute_authorization_calls_include_ai_credit_estimates() -> None:

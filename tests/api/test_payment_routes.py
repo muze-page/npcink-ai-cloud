@@ -3,14 +3,16 @@ from __future__ import annotations
 from pathlib import Path
 
 from fastapi.testclient import TestClient
+from sqlalchemy import select
 
 from app.api.main import create_app
 from app.core.config import Settings
-from app.core.db import dispose_engine, init_schema
+from app.core.db import dispose_engine, get_session, init_schema
 from app.core.models import (
     PAYMENT_ORDER_STATUS_PAID,
     PAYMENT_ORDER_STATUS_REFUNDED,
     PAYMENT_REFUND_STATUS_SUCCEEDED,
+    CreditLedgerEntry,
 )
 from app.core.services import CloudServices
 from app.domain.commercial.service import CommercialService
@@ -90,6 +92,52 @@ def test_internal_payment_routes_open_and_revoke_entitlement(tmp_path: Path) -> 
     assert paid_response.status_code == 200
     assert paid_response.json()["data"]["order"]["status"] == PAYMENT_ORDER_STATUS_PAID
     assert paid_response.json()["data"]["subscription"]["subscription_id"]
+
+    credit_packs_response = client.get(
+        "/internal/service/payments/credit-packs",
+        headers=build_internal_headers(),
+    )
+    assert credit_packs_response.status_code == 200
+    assert {item["pack_id"] for item in credit_packs_response.json()["data"]["items"]} >= {
+        "pack_small",
+        "pack_medium",
+        "pack_large",
+    }
+
+    credit_pack_order_response = client.post(
+        "/internal/service/payments/credit-pack-orders",
+        headers=build_internal_headers(idempotency_key="route-credit-pack-order"),
+        json={
+            "account_id": "acct_route_pay",
+            "pack_id": "pack_small",
+            "provider": "alipay",
+        },
+    )
+    assert credit_pack_order_response.status_code == 200, credit_pack_order_response.text
+    credit_pack_order = credit_pack_order_response.json()["data"]
+    assert credit_pack_order["purchase_kind"] == "credit_pack"
+    assert credit_pack_order["credit_pack"]["ai_credits"] == 10000
+
+    credit_pack_paid_response = client.post(
+        f"/internal/service/payments/orders/{credit_pack_order['order_id']}/mark-paid",
+        headers=build_internal_headers(idempotency_key="route-credit-pack-paid"),
+        json={
+            "provider_trade_no": "202606230000000003",
+            "provider_event_id": "route-credit-pack-paid-event",
+            "amount": 99.0,
+        },
+    )
+    assert credit_pack_paid_response.status_code == 200, credit_pack_paid_response.text
+    assert (
+        credit_pack_paid_response.json()["data"]["credit_ledger_entry"]["credit_delta"]
+        == 10000.0
+    )
+    with get_session(database_url) as session:
+        assert session.scalar(
+            select(CreditLedgerEntry).where(
+                CreditLedgerEntry.source_type == "credit_pack_purchase"
+            )
+        ) is not None
 
     refund_response = client.post(
         f"/internal/service/payments/orders/{order['order_id']}/refunds",

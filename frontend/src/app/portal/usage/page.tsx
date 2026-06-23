@@ -25,6 +25,8 @@ import {
 import {
   portalClient,
   type Entitlements,
+  type PortalCreditPackCatalogPayload,
+  type PortalCreditPackPaymentOrder,
   type PortalCreditLedgerPayload,
   type PortalUsageSummaryPayload,
   type PortalUsageWindow,
@@ -33,6 +35,7 @@ import { resolveCustomerPackageDisplay } from '@/lib/customer-package-display';
 import {
   DEFAULT_PORTAL_CURRENCY,
   formatPortalCurrency,
+  normalizePortalCurrency,
 } from '@/lib/currency';
 import { formatPortalErrorMessage } from '@/lib/portal-error';
 import { cn, formatCompactNumber, formatDate, formatNumber } from '@/lib/utils';
@@ -58,6 +61,14 @@ function toChartPoint(
 function formatQuotaValue(value: unknown, unlimited = false, unlimitedLabel = 'Unlimited'): string {
   if (unlimited) return unlimitedLabel;
   return formatNumber(Math.round(Number(value || 0)));
+}
+
+function formatSignedCreditDelta(value: number): string {
+  const rounded = Math.round(Number(value || 0));
+  const formatted = formatNumber(Math.abs(rounded));
+  if (rounded > 0) return `+${formatted}`;
+  if (rounded < 0) return `-${formatted}`;
+  return formatted;
 }
 
 function quotaStatusTone(status: string | undefined): 'ok' | 'warning' | 'error' {
@@ -113,6 +124,10 @@ function PortalUsageContent() {
   const [usage, setUsage] = useState<PortalUsageSummaryPayload | null>(null);
   const [entitlements, setEntitlements] = useState<Entitlements | null>(null);
   const [creditLedger, setCreditLedger] = useState<PortalCreditLedgerPayload | null>(null);
+  const [creditPacks, setCreditPacks] = useState<PortalCreditPackCatalogPayload | null>(null);
+  const [creditPackOrder, setCreditPackOrder] = useState<PortalCreditPackPaymentOrder | null>(null);
+  const [creditPackPending, setCreditPackPending] = useState<string | null>(null);
+  const [creditPackError, setCreditPackError] = useState<string | null>(null);
 
   const loadBundle = useCallback(async () => {
     if (!selectedSiteId) return;
@@ -120,6 +135,7 @@ function PortalUsageContent() {
     setUsage(bundle.usage);
     setEntitlements(bundle.entitlements);
     setCreditLedger(bundle.creditLedger);
+    setCreditPacks(bundle.creditPacks);
   }, [selectedSiteId]);
 
   const { execute, isLoading: retryLoading, error: retryError, retry } = useRetry(loadBundle, {
@@ -137,6 +153,26 @@ function PortalUsageContent() {
 
   const handleSiteChange = async (siteId: string) => {
     await setSelectedSiteId(siteId);
+    setCreditPackOrder(null);
+    setCreditPackError(null);
+  };
+
+  const handleCreateCreditPackOrder = async (packId: string) => {
+    if (!selectedSiteId) return;
+    setCreditPackPending(packId);
+    setCreditPackError(null);
+    setCreditPackOrder(null);
+    try {
+      const response = await portalClient.createCreditPackOrder(selectedSiteId, packId);
+      setCreditPackOrder(response.data.order);
+      if (response.data.order.checkout_url) {
+        window.location.assign(response.data.order.checkout_url);
+      }
+    } catch (err) {
+      setCreditPackError(formatPortalErrorMessage(err, t, t('error.failed_save')));
+    } finally {
+      setCreditPackPending(null);
+    }
   };
 
   const toFinite = (value: unknown): number => {
@@ -246,8 +282,11 @@ function PortalUsageContent() {
     ? quotaSummary.breakdown
     : [];
   const creditLedgerItems = creditLedger?.items || [];
-  const creditLedgerTotal = Number(creditLedger?.summary?.total_credits || 0);
+  const creditLedgerTotal = Number(
+    creditLedger?.summary?.net_used_credits ?? creditLedger?.summary?.total_credits ?? 0
+  );
   const creditLedgerCount = Number(creditLedger?.pagination?.total ?? creditLedger?.summary?.entry_count ?? 0);
+  const availableCreditPacks = creditPacks?.items || [];
   const unlimitedLabel = t('common.unlimited', {}, 'Unlimited');
   const quotaResourceByKey = new Map(
     quotaResources.map((item) => [String(item.key || ''), item])
@@ -575,6 +614,73 @@ function PortalUsageContent() {
               </div>
             </BackofficeStackCard>
           </div>
+          {availableCreditPacks.length > 0 ? (
+            <BackofficeStackCard className="bg-white/80 dark:bg-slate-950/45">
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                <div>
+                  <p className="text-sm font-semibold text-gray-950 dark:text-white">
+                    {t('portal.usage.credit_packs_title', {}, 'Credit packs')}
+                  </p>
+                  <p className="mt-1 text-sm text-gray-600 dark:text-gray-400">
+                    {t(
+                      'portal.usage.credit_packs_desc',
+                      {},
+                      'Add AI credits to the current package period without changing your plan.'
+                    )}
+                  </p>
+                </div>
+                <BackofficeStatusBadge
+                  status="warning"
+                  label={t('portal.usage.credit_packs_period_badge', {}, 'Current period')}
+                />
+              </div>
+              <div className="mt-4 grid gap-3 md:grid-cols-3">
+                {availableCreditPacks.map((pack) => (
+                  <div
+                    key={pack.pack_id}
+                    className="rounded-[1rem] border border-slate-200 bg-slate-50/70 p-4 dark:border-slate-800 dark:bg-slate-950/35"
+                  >
+                    <p className="text-sm font-semibold text-slate-950 dark:text-white">
+                      {t(`portal.usage.credit_pack_${pack.pack_id}`, {}, pack.label)}
+                    </p>
+                    <p className="mt-2 text-xl font-semibold text-slate-950 dark:text-white">
+                      {formatQuotaValue(pack.ai_credits)}
+                    </p>
+                    <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
+                      {formatPortalCurrency(Number(pack.amount || 0), {
+                        from: normalizePortalCurrency(pack.currency),
+                        to: DEFAULT_PORTAL_CURRENCY,
+                      })}
+                    </p>
+                    <button
+                      type="button"
+                      className="btn btn-secondary mt-4 w-full"
+                      disabled={creditPackPending !== null}
+                      onClick={() => void handleCreateCreditPackOrder(pack.pack_id)}
+                    >
+                      {creditPackPending === pack.pack_id
+                        ? t('common.saving', {}, 'Saving...')
+                        : t('portal.usage.credit_pack_buy_action', {}, 'Buy credits')}
+                    </button>
+                  </div>
+                ))}
+              </div>
+              {creditPackOrder ? (
+                <div className="mt-4 rounded-[1rem] border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800 dark:border-emerald-900/60 dark:bg-emerald-950/25 dark:text-emerald-200">
+                  {t(
+                    'portal.usage.credit_pack_order_created',
+                    { order: creditPackOrder.order_id },
+                    `Payment order ${creditPackOrder.order_id} has been created.`
+                  )}
+                </div>
+              ) : null}
+              {creditPackError ? (
+                <div className="mt-4 rounded-[1rem] border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-900/60 dark:bg-red-950/25 dark:text-red-200">
+                  {creditPackError}
+                </div>
+              ) : null}
+            </BackofficeStackCard>
+          ) : null}
           <BackofficeStackCard className="bg-white/80 dark:bg-slate-950/45">
             <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
               <div>
@@ -621,14 +727,14 @@ function PortalUsageContent() {
                           {portalCreditBreakdownLabel(entry.source_type, '', t)}
                         </p>
                         <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                          {[entry.site_id, entry.run_id].filter(Boolean).join(' · ') || entry.source_id || '-'}
+                          {[entry.event_type, entry.site_id, entry.run_id].filter(Boolean).join(' · ') || entry.source_id || '-'}
                         </p>
                       </div>
                       <p className="text-slate-700 dark:text-slate-300">
                         {formatQuotaValue(entry.quantity)} {entry.unit}
                       </p>
                       <p className="font-semibold text-slate-950 dark:text-white sm:text-right">
-                        {formatQuotaValue(entry.consumed_credits)}
+                        {formatSignedCreditDelta(Number(entry.net_credit_delta ?? entry.credit_delta ?? 0))}
                       </p>
                       <p className="text-slate-500 dark:text-slate-400 sm:text-right">
                         {entry.created_at ? formatDate(entry.created_at) : '-'}

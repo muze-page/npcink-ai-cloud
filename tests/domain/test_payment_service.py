@@ -17,6 +17,7 @@ from app.core.models import (
     SUBSCRIPTION_STATUS_CANCELED,
     AccountEntitlementSnapshot,
     AccountSubscription,
+    CreditLedgerEntry,
     PaymentEvent,
     PaymentOrder,
     PaymentRefund,
@@ -211,5 +212,127 @@ def test_full_refund_success_cancels_subscription_and_supersedes_entitlement(
         refund_record = session.scalar(select(PaymentRefund))
         assert refund_record is not None
         assert refund_record.status == PAYMENT_REFUND_STATUS_SUCCEEDED
+
+    dispose_engine(database_url)
+
+
+def test_credit_pack_payment_success_grants_ai_credits_once(tmp_path: Path) -> None:
+    database_url = _sqlite_url(tmp_path)
+    init_schema(database_url)
+    service = _service(database_url)
+    _seed_account_and_plan(service)
+    package_order = service.create_payment_order(
+        account_id="acct_pay",
+        plan_id="plan_pro",
+        plan_version_id="plan_pro_v1",
+        amount=199.0,
+        audit_context=_audit("credit-pack-base-order"),
+    )
+    base_paid = service.mark_payment_order_paid(
+        order_id=str(package_order["order_id"]),
+        provider_event_id="alipay-base-paid",
+        amount=199.0,
+        audit_context=_audit("credit-pack-base-paid"),
+    )
+
+    order = service.create_credit_pack_payment_order(
+        account_id="acct_pay",
+        pack_id="pack_small",
+        provider="alipay",
+        audit_context=_audit("credit-pack-order"),
+    )
+    paid = service.mark_payment_order_paid(
+        order_id=str(order["order_id"]),
+        provider_trade_no="202606230000000001",
+        provider_event_id="alipay-credit-pack-paid",
+        amount=99.0,
+        raw_event={"trade_status": "TRADE_SUCCESS"},
+        audit_context=_audit("credit-pack-paid"),
+    )
+    paid_again = service.mark_payment_order_paid(
+        order_id=str(order["order_id"]),
+        provider_trade_no="202606230000000001",
+        provider_event_id="alipay-credit-pack-paid",
+        amount=99.0,
+        raw_event={"trade_status": "TRADE_SUCCESS"},
+        audit_context=_audit("credit-pack-paid"),
+    )
+
+    assert order["status"] == PAYMENT_ORDER_STATUS_PENDING
+    assert order["purchase_kind"] == "credit_pack"
+    assert order["credit_pack"]["pack_id"] == "pack_small"
+    assert order["target_subscription_id"] == base_paid["subscription"]["subscription_id"]
+    assert paid["order"]["status"] == PAYMENT_ORDER_STATUS_PAID
+    assert paid["credit_ledger_entry"]["event_type"] == "grant"
+    assert paid["credit_ledger_entry"]["source_type"] == "credit_pack_purchase"
+    assert paid["credit_ledger_entry"]["credit_delta"] == 10000.0
+    assert paid_again["credit_ledger_entry"]["ledger_entry_id"] == (
+        paid["credit_ledger_entry"]["ledger_entry_id"]
+    )
+    with get_session(database_url) as session:
+        assert len(list(session.scalars(select(AccountSubscription)))) == 1
+        entries = list(session.scalars(select(CreditLedgerEntry)))
+        assert len(entries) == 1
+        assert entries[0].credit_delta == 10000.0
+
+    dispose_engine(database_url)
+
+
+def test_credit_pack_refund_reverses_credit_grant_without_canceling_subscription(
+    tmp_path: Path,
+) -> None:
+    database_url = _sqlite_url(tmp_path)
+    init_schema(database_url)
+    service = _service(database_url)
+    _seed_account_and_plan(service)
+    package_order = service.create_payment_order(
+        account_id="acct_pay",
+        plan_id="plan_pro",
+        plan_version_id="plan_pro_v1",
+        amount=199.0,
+        audit_context=_audit("credit-pack-refund-base-order"),
+    )
+    service.mark_payment_order_paid(
+        order_id=str(package_order["order_id"]),
+        provider_event_id="alipay-credit-pack-refund-base-paid",
+        amount=199.0,
+        audit_context=_audit("credit-pack-refund-base-paid"),
+    )
+    order = service.create_credit_pack_payment_order(
+        account_id="acct_pay",
+        pack_id="pack_small",
+        audit_context=_audit("credit-pack-refund-order"),
+    )
+    service.mark_payment_order_paid(
+        order_id=str(order["order_id"]),
+        provider_event_id="alipay-credit-pack-refund-paid",
+        amount=99.0,
+        audit_context=_audit("credit-pack-refund-paid"),
+    )
+    refund = service.request_payment_refund(
+        order_id=str(order["order_id"]),
+        amount=99.0,
+        reason="customer requested refund",
+        audit_context=_audit("credit-pack-refund-request"),
+    )
+    result = service.mark_payment_refund_succeeded(
+        refund_id=str(refund["refund_id"]),
+        provider_refund_no="20260623REFUND0001",
+        provider_event_id="alipay-credit-pack-refund-success",
+        raw_event={"refund_status": "REFUND_SUCCESS"},
+        audit_context=_audit("credit-pack-refund-success"),
+    )
+
+    assert result["order"]["status"] == PAYMENT_ORDER_STATUS_REFUNDED
+    assert result["revoked_subscription"] == {}
+    assert result["credit_ledger_entry"]["event_type"] == "adjustment"
+    assert result["credit_ledger_entry"]["source_type"] == "credit_pack_refund"
+    assert result["credit_ledger_entry"]["credit_delta"] == -10000.0
+    with get_session(database_url) as session:
+        subscription = session.scalar(select(AccountSubscription))
+        assert subscription is not None
+        assert subscription.status == SUBSCRIPTION_STATUS_ACTIVE
+        entries = list(session.scalars(select(CreditLedgerEntry)))
+        assert sorted(entry.credit_delta for entry in entries) == [-10000.0, 10000.0]
 
     dispose_engine(database_url)

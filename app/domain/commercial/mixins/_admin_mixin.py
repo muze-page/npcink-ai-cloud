@@ -1288,12 +1288,12 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
 
     def get_portal_account_quota_summary(self, account_id: str) -> dict[str, object]:
         summary = self.get_admin_account_quota_summary(account_id)
-        breakdown = (
-            summary.get("breakdown")
-            if isinstance(summary.get("breakdown"), list)
-            else []
+        raw_breakdown = summary.get("breakdown")
+        breakdown: list[object] = raw_breakdown if isinstance(raw_breakdown, list) else []
+        raw_credit = summary.get("credit")
+        credit: dict[str, object] = (
+            cast(dict[str, object], raw_credit) if isinstance(raw_credit, dict) else {}
         )
-        credit = summary.get("credit") if isinstance(summary.get("credit"), dict) else {}
         return {
             "account_id": str(summary.get("account_id") or account_id),
             "generated_at": summary.get("generated_at"),
@@ -1334,12 +1334,12 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
             limit=min(50, max(1, int(limit or 25))),
             offset=max(0, int(offset or 0)),
         )
-        summary = ledger.get("summary") if isinstance(ledger.get("summary"), dict) else {}
-        breakdown = (
-            summary.get("breakdown")
-            if isinstance(summary.get("breakdown"), list)
-            else []
+        raw_summary = ledger.get("summary")
+        summary: dict[str, object] = (
+            cast(dict[str, object], raw_summary) if isinstance(raw_summary, dict) else {}
         )
+        raw_breakdown = summary.get("breakdown")
+        breakdown: list[object] = raw_breakdown if isinstance(raw_breakdown, list) else []
         items = [
             self._serialize_credit_ledger_entry(entry, include_internal=False)
             for entry in self._credit_ledger_entries_from_payload(ledger.get("items"))

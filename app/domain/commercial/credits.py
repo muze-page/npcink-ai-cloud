@@ -6,6 +6,24 @@ from math import ceil
 from typing import Any, cast
 
 AI_CREDIT_RATE_VERSION = "ai-credit-ledger-v2"
+AI_CREDIT_CHARGE_CONTRACT_VERSION = "ai-credit-charge-contract-v1"
+AI_CREDIT_CHARGE_COMPONENT_REQUIRED_FIELDS = (
+    "source_type",
+    "charge_mode",
+    "unit",
+    "rate",
+    "minimum_charge",
+    "idempotency_scope",
+    "budget_key",
+)
+AI_CREDIT_CHARGE_CAPABILITY_REQUIRED_FIELDS = (
+    "capability_key",
+    "charge_mode",
+    "request_base_credits",
+    "ledger_components",
+    "idempotency_scope",
+    "budget_key",
+)
 
 AI_CREDIT_BREAKDOWN_ORDER = (
     "runs",
@@ -215,6 +233,15 @@ AI_CREDIT_CAPABILITY_POLICY_REGISTRY: dict[str, dict[str, object]] = {
         "ledger_components": ["runs", "tokens_total", "provider_calls_other"],
     },
 }
+
+for component_policy in AI_CREDIT_COMPONENT_POLICY_REGISTRY.values():
+    component_policy.setdefault("minimum_charge", 0.0)
+    component_policy.setdefault("idempotency_scope", "ledger_component")
+    component_policy.setdefault("budget_key", "ai_credits")
+
+for capability_policy in AI_CREDIT_CAPABILITY_POLICY_REGISTRY.values():
+    capability_policy.setdefault("idempotency_scope", "runtime_request")
+    capability_policy.setdefault("budget_key", "ai_credits")
 
 ZHIHU_PROVIDER_CREDIT_COMPONENTS: dict[str, dict[str, object]] = {
     "zhihu_global_search": {
