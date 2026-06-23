@@ -58,7 +58,7 @@ DEFAULT_RUNTIME_COMMERCIAL_POLICY = {
 SHADOW_PRICING_TARIFF_VERSION = "shadow-pricing-v1"
 SHADOW_PRICING_TARIFF_REGISTRY: dict[str, dict[str, dict[str, float | str]]] = {
     "ability": {
-        "magick-ai/workflows/generate-post-draft": {
+        "npcink-abilities-toolkit/build-article-block-plan": {
             "tariff_class": "medium",
             "base_run_price": 0.08,
             "per_1k_tokens_price": 0.018,

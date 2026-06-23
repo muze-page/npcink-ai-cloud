@@ -54,7 +54,7 @@ def _run_record(
         account_id=f"account_{site_id}",
         subscription_id=f"sub_{site_id}",
         plan_version_id="plan-test-v1",
-        ability_name="magick-ai/test",
+        ability_name="npcink-abilities-toolkit/test",
         ability_family=ability_family,
         skill_id="",
         workflow_id="",

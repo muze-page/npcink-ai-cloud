@@ -254,7 +254,7 @@ def test_internal_alpha_onboarding_flow_closes_admin_user_site_key_usage_audit(
 
     execute_payload = {
         "site_id": site_id,
-        "ability_name": "magick-ai/workflows/generate-post-draft",
+        "ability_name": "npcink-abilities-toolkit/build-article-block-plan",
         "ability_family": "workflow",
         "contract_version": "v1",
         "channel": "openapi",

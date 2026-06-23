@@ -33,7 +33,7 @@ def _build_client(tmp_path: Path) -> tuple[str, TestClient, datetime]:
     run_a = runtime_service.execute(
         RuntimeRequest(
             site_id="site_alpha",
-            ability_name="magick-ai/workflows/generate-post-draft",
+            ability_name="npcink-abilities-toolkit/build-article-block-plan",
             channel="openapi",
             execution_kind="text",
             profile_id="text.balanced",
@@ -45,7 +45,7 @@ def _build_client(tmp_path: Path) -> tuple[str, TestClient, datetime]:
     run_b = runtime_service.execute(
         RuntimeRequest(
             site_id="site_alpha",
-            ability_name="magick-ai/workflows/generate-post-draft",
+            ability_name="npcink-abilities-toolkit/build-article-block-plan",
             channel="openapi",
             execution_kind="text",
             profile_id="text.balanced",
@@ -348,7 +348,7 @@ def test_stats_routes_return_windowed_metrics_and_health(tmp_path: Path) -> None
     )
     rows = projection_payload["rows"]
     assert len(rows) >= 2
-    assert all(row["ability_id"] == "magick-ai/workflows/generate-post-draft" for row in rows)
+    assert all(row["ability_id"] == "npcink-abilities-toolkit/build-article-block-plan" for row in rows)
     assert all(row["caller_id"] == "openapi" for row in rows)
     assert sum(int(row["request_total"]) for row in rows) == 3
     assert sum(int(row["success_total"]) for row in rows) == 2
@@ -384,7 +384,7 @@ def test_stats_routes_return_windowed_metrics_and_health(tmp_path: Path) -> None
     assert diagnostics_payload["report"]["regressions"]["items"][0]["run_id"] != ""
     assert (
         diagnostics_payload["report"]["regressions"]["items"][0]["details"]["ability_name"]
-        == "magick-ai/workflows/generate-post-draft"
+        == "npcink-abilities-toolkit/build-article-block-plan"
     )
     assert (
         diagnostics_payload["report"]["regressions"]["items"][0]["details"]["channel"] == "openapi"
@@ -639,7 +639,7 @@ def test_router_diagnostics_summary_exposes_runtime_case_details(tmp_path: Path)
     assert payload["report"]["regressions"]["items"][0]["run_id"] != ""
     assert (
         payload["report"]["regressions"]["items"][0]["details"]["ability_name"]
-        == "magick-ai/workflows/generate-post-draft"
+        == "npcink-abilities-toolkit/build-article-block-plan"
     )
     assert payload["report"]["regressions"]["items"][0]["details"]["selected_instance_id"] != ""
     assert payload["report"]["quality_regressions"]["items"][0]["kind"] == "callback_due"

@@ -39,7 +39,7 @@ def test_usage_rollup_service_writes_summary_profile_and_instance_snapshots(
     runtime_result = RuntimeService(database_url).execute(
         RuntimeRequest(
             site_id="site_alpha",
-            ability_name="magick-ai/workflows/generate-post-draft",
+            ability_name="npcink-abilities-toolkit/build-article-block-plan",
             channel="openapi",
             execution_kind="text",
             profile_id="text.balanced",
@@ -132,7 +132,7 @@ def test_usage_rollup_service_stores_router_performance_projection_batches(
     runtime_result = RuntimeService(database_url).execute(
         RuntimeRequest(
             site_id="site_alpha",
-            ability_name="magick-ai/workflows/generate-post-draft",
+            ability_name="npcink-abilities-toolkit/build-article-block-plan",
             channel="openapi",
             execution_kind="text",
             profile_id="text.balanced",
@@ -210,7 +210,7 @@ def test_usage_rollup_service_stores_router_diagnostics_projection_batches(
     runtime_result = RuntimeService(database_url).execute(
         RuntimeRequest(
             site_id="site_alpha",
-            ability_name="magick-ai/workflows/generate-post-draft",
+            ability_name="npcink-abilities-toolkit/build-article-block-plan",
             channel="openapi",
             execution_kind="text",
             profile_id="text.balanced",
@@ -275,7 +275,7 @@ def test_usage_rollup_service_stores_latency_probe_projection_batches(
     runtime_result = RuntimeService(database_url).execute(
         RuntimeRequest(
             site_id="site_alpha",
-            ability_name="magick-ai/workflows/generate-post-draft",
+            ability_name="npcink-abilities-toolkit/build-article-block-plan",
             channel="openapi",
             execution_kind="text",
             profile_id="text.balanced",
@@ -410,7 +410,7 @@ def test_usage_rollup_service_stores_alert_provider_degradation_batches(
     runtime_result = RuntimeService(database_url).execute(
         RuntimeRequest(
             site_id="site_alpha",
-            ability_name="magick-ai/workflows/generate-post-draft",
+            ability_name="npcink-abilities-toolkit/build-article-block-plan",
             channel="openapi",
             execution_kind="text",
             profile_id="text.balanced",
@@ -486,7 +486,7 @@ def test_usage_rollup_service_stores_hosted_model_governance_batch(
     RuntimeService(database_url).execute(
         RuntimeRequest(
             site_id="site_alpha",
-            ability_name="magick-ai/workflows/generate-post-draft",
+            ability_name="npcink-abilities-toolkit/build-article-block-plan",
             channel="openapi",
             execution_kind="text",
             profile_id="text.balanced",

@@ -206,7 +206,7 @@ Request:
 - method: `POST`
 - path: `/v1/runtime/resolve`
 - site id: `site_npcink_local_live`
-- ability: `magick-ai/workflows/generate-post-draft`
+- ability: `npcink-abilities-toolkit/build-article-block-plan`
 - execution pattern: `inline`
 - storage mode: `result_only`
 - policy: `{"allow_fallback": true}`
@@ -240,7 +240,7 @@ Request:
 - method: `POST`
 - path: `/v1/runtime/execute`
 - site id: `site_npcink_local_live`
-- ability: `magick-ai/workflows/generate-post-draft`
+- ability: `npcink-abilities-toolkit/build-article-block-plan`
 - execution pattern: `inline`
 - storage mode: `result_only`
 - policy: `{"allow_fallback": true}`

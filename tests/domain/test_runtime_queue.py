@@ -714,7 +714,7 @@ def test_runtime_backlog_diagnostics_group_by_scope_and_classify_bottlenecks(
     running = service.execute(
         RuntimeRequest(
             site_id="site_queue",
-            ability_name="magick-ai/workflows/generate-post-draft",
+            ability_name="npcink-abilities-toolkit/build-article-block-plan",
             ability_family="workflow",
             channel="openapi",
             execution_kind="text",
@@ -727,7 +727,7 @@ def test_runtime_backlog_diagnostics_group_by_scope_and_classify_bottlenecks(
     other = service.execute(
         RuntimeRequest(
             site_id="site_other",
-            ability_name="magick-ai/workflows/generate-post-draft",
+            ability_name="npcink-abilities-toolkit/build-article-block-plan",
             ability_family="workflow",
             channel="openapi",
             execution_kind="text",

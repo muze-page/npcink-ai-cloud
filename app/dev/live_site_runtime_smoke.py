@@ -71,7 +71,7 @@ def build_traceparent(trace_id: str) -> str:
 def build_runtime_resolve_payload(*, site_id: str, trace_id: str) -> dict[str, object]:
     return {
         "site_id": site_id,
-        "ability_name": "magick-ai/workflows/generate-post-draft",
+        "ability_name": "npcink-abilities-toolkit/build-article-block-plan",
         "ability_family": "workflow",
         "canonical_run_id": f"npcink_runtime_resolve_smoke_{trace_id[:12]}",
         "skill_id": "content_summary_seo",

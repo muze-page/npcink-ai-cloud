@@ -195,7 +195,7 @@ def run_drill(
         response = service.execute(
             RuntimeRequest(
                 site_id=site_id,
-                ability_name="magick-ai/workflows/generate-post-draft",
+                ability_name="npcink-abilities-toolkit/build-article-block-plan",
                 ability_family="workflow",
                 channel="openapi",
                 execution_kind="text",

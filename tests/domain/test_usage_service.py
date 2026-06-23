@@ -29,7 +29,7 @@ def _seed_runtime_activity(database_url: str, now: datetime) -> None:
     run_a = runtime_service.execute(
         RuntimeRequest(
             site_id="site_alpha",
-            ability_name="magick-ai/workflows/generate-post-draft",
+            ability_name="npcink-abilities-toolkit/build-article-block-plan",
             channel="openapi",
             execution_kind="text",
             profile_id="text.balanced",
@@ -42,7 +42,7 @@ def _seed_runtime_activity(database_url: str, now: datetime) -> None:
     run_b = runtime_service.execute(
         RuntimeRequest(
             site_id="site_alpha",
-            ability_name="magick-ai/workflows/generate-post-draft",
+            ability_name="npcink-abilities-toolkit/build-article-block-plan",
             channel="openapi",
             execution_kind="text",
             profile_id="text.balanced",
@@ -61,7 +61,7 @@ def _seed_runtime_activity(database_url: str, now: datetime) -> None:
     run_c = runtime_service.execute(
         RuntimeRequest(
             site_id="site_alpha",
-            ability_name="magick-ai/workflows/generate-post-draft",
+            ability_name="npcink-abilities-toolkit/build-article-block-plan",
             channel="openapi",
             execution_kind="text",
             profile_id="text.balanced",
@@ -297,7 +297,7 @@ def test_usage_service_builds_router_performance_snapshot_projection(tmp_path: P
 
     rows = payload["rows"]
     assert all(row["bucket_gmt"] == "2026-03-12 07:00:00" for row in rows)
-    assert all(row["ability_id"] == "magick-ai/workflows/generate-post-draft" for row in rows)
+    assert all(row["ability_id"] == "npcink-abilities-toolkit/build-article-block-plan" for row in rows)
     assert all(row["caller_id"] == "openapi" for row in rows)
     assert {"preset.alpha", "preset.beta"} == {str(row["preset_id"]) for row in rows}
     assert sum(int(row["guard_fail_total"]) for row in rows) == 1
@@ -378,7 +378,7 @@ def test_usage_service_builds_prompt_governance_recommendation_summaries(
 
     service = UsageService(database_url, now_factory=lambda: fixed_now)
     filters = {
-        "ability_id": "magick-ai/workflows/generate-post-draft",
+        "ability_id": "npcink-abilities-toolkit/build-article-block-plan",
         "prompt_id": "text_generate_default",
         "current_variant": "current",
         "current_version": 3,

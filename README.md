@@ -1160,7 +1160,7 @@ make env-ssh
 ```
 
 `make deploy-smoke` currently reuses
-`../magick-ai/tests/e2e/cloud-deploy-bundle-smoke-flow.sh` as a plugin-side e2e
+`../npcink-abilities-toolkit/tests/e2e/cloud-deploy-bundle-smoke-flow.sh` as a plugin-side e2e
 test asset. This is a temporary test dependency for deploy verification only;
 it does not move control-plane ownership, settings truth, or runtime authorship
 back into the plugin workspace.

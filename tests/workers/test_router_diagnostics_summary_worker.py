@@ -56,7 +56,7 @@ def test_router_diagnostics_summary_worker_generates_active_site_runtime_summary
     result = runtime_service.execute(
         RuntimeRequest(
             site_id="site_alpha",
-            ability_name="magick-ai/workflows/generate-post-draft",
+            ability_name="npcink-abilities-toolkit/build-article-block-plan",
             channel="openapi",
             execution_kind="text",
             profile_id="text.balanced",
@@ -166,7 +166,7 @@ def test_router_diagnostics_summary_worker_dispatches_optional_callback_when_con
     result = runtime_service.execute(
         RuntimeRequest(
             site_id="site_alpha",
-            ability_name="magick-ai/workflows/generate-post-draft",
+            ability_name="npcink-abilities-toolkit/build-article-block-plan",
             channel="openapi",
             execution_kind="text",
             profile_id="text.balanced",
