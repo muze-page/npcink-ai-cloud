@@ -83,7 +83,7 @@ def test_runtime_execute_response_shape_is_stable(tmp_path: Path) -> None:
     database_url, client = _build_client(tmp_path)
     request_payload = {
         "site_id": "site_contract",
-        "ability_name": "magick-ai/workflows/generate-post-draft",
+        "ability_name": "npcink-abilities-toolkit/build-article-block-plan",
         "ability_family": "workflow",
         "canonical_run_id": "wp_run_contract_execute_001",
         "skill_id": "content_summary_seo",
@@ -337,7 +337,7 @@ def test_runtime_resolve_response_shape_includes_execution_context(tmp_path: Pat
     database_url, client = _build_client(tmp_path)
     request_payload = {
         "site_id": "site_contract",
-        "ability_name": "magick-ai/workflows/generate-post-draft",
+        "ability_name": "npcink-abilities-toolkit/build-article-block-plan",
         "ability_family": "workflow",
         "skill_id": "content_summary_seo",
         "workflow_id": "content_summary_seo_completion",
@@ -402,7 +402,7 @@ def test_runtime_public_ingress_rejects_step_offload(tmp_path: Path) -> None:
     database_url, client = _build_client(tmp_path)
     request_payload = {
         "site_id": "site_contract",
-        "ability_name": "magick-ai/workflows/generate-post-draft",
+        "ability_name": "npcink-abilities-toolkit/build-article-block-plan",
         "ability_family": "workflow",
         "skill_id": "content_summary_seo",
         "workflow_id": "content_summary_seo_completion",
@@ -457,7 +457,7 @@ def test_runtime_execute_requires_signed_headers(tmp_path: Path) -> None:
         "/v1/runtime/execute",
         json={
             "site_id": "site_contract",
-            "ability_name": "magick-ai/workflows/generate-post-draft",
+            "ability_name": "npcink-abilities-toolkit/build-article-block-plan",
             "channel": "openapi",
             "execution_kind": "text",
             "profile_id": "text.balanced",
@@ -587,7 +587,7 @@ def test_runtime_request_policy_boundary_is_frozen(tmp_path: Path) -> None:
     database_url, client = _build_client(tmp_path)
     blocked_payload = {
         "site_id": "site_contract",
-        "ability_name": "magick-ai/workflows/generate-post-draft",
+        "ability_name": "npcink-abilities-toolkit/build-article-block-plan",
         "channel": "openapi",
         "execution_kind": "text",
         "profile_id": "text.balanced",
@@ -627,7 +627,7 @@ def test_runtime_request_policy_boundary_is_frozen(tmp_path: Path) -> None:
 
     allowed_payload = {
         "site_id": "site_contract",
-        "ability_name": "magick-ai/workflows/generate-post-draft",
+        "ability_name": "npcink-abilities-toolkit/build-article-block-plan",
         "channel": "openapi",
         "execution_kind": "text",
         "profile_id": "text.balanced",
@@ -705,7 +705,7 @@ def test_runtime_internal_diagnostics_shape_exposes_pressure_and_stale_issue_kin
 
     callback_payload = {
         "site_id": "site_contract",
-        "ability_name": "magick-ai/workflows/generate-post-draft",
+        "ability_name": "npcink-abilities-toolkit/build-article-block-plan",
         "ability_family": "workflow",
         "contract_version": "v1",
         "channel": "openapi",
@@ -1132,7 +1132,7 @@ def test_runtime_internal_backlog_diagnostics_contract_exposes_scope_layering(
     }
     running_payload = {
         "site_id": "site_contract",
-        "ability_name": "magick-ai/workflows/generate-post-draft",
+        "ability_name": "npcink-abilities-toolkit/build-article-block-plan",
         "ability_family": "workflow",
         "channel": "openapi",
         "execution_kind": "text",

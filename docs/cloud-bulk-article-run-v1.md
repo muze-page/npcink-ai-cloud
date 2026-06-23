@@ -39,7 +39,7 @@ local Ability recipe
   -> npcink-toolbox/build-article-write-plan
   -> Core /proposals/from-plan
   -> Core approval and commit preflight
-  -> Adapter executes magick-ai/create-draft through WordPress Abilities API
+  -> Adapter executes npcink-abilities-toolkit/create-draft through WordPress Abilities API
 ```
 
 Cloud must not generate, store, or return article body content, draft

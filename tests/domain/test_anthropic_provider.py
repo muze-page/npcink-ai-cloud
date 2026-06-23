@@ -16,7 +16,7 @@ def _build_request(
     return ProviderExecutionRequest(
         run_id="run_anthropic_provider_test",
         site_id="site_alpha",
-        ability_name="magick-ai/workflows/generate-post-draft",
+        ability_name="npcink-abilities-toolkit/build-article-block-plan",
         profile_id="text.balanced",
         execution_kind="text",
         model_id=model_id,

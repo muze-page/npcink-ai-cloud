@@ -10,7 +10,7 @@ from app.api.routes.runtime import MAX_RUNTIME_STRING_CHARS, RuntimePayload
 def test_runtime_payload_rejects_oversized_input_string() -> None:
     with pytest.raises(ValidationError):
         RuntimePayload(
-            ability_name="magick-ai/test",
+            ability_name="npcink-abilities-toolkit/test",
             input={"prompt": "x" * (MAX_RUNTIME_STRING_CHARS + 1)},
         )
 
@@ -22,7 +22,7 @@ def test_runtime_payload_rejects_deep_task_backend() -> None:
 
     with pytest.raises(ValidationError):
         RuntimePayload(
-            ability_name="magick-ai/test",
+            ability_name="npcink-abilities-toolkit/test",
             task_backend={"root": value},
         )
 

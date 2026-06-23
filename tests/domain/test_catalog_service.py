@@ -382,7 +382,7 @@ def test_scan_provider_health_degrades_instance_after_failures(tmp_path: Path) -
     runtime_service.execute(
         RuntimeRequest(
             site_id="site_alpha",
-            ability_name="magick-ai/workflows/generate-post-draft",
+            ability_name="npcink-abilities-toolkit/build-article-block-plan",
             channel="openapi",
             execution_kind="text",
             profile_id="text.balanced",

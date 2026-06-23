@@ -32,7 +32,7 @@ def test_stats_response_shapes_are_stable(tmp_path: Path) -> None:
     runtime_result = RuntimeService(database_url).execute(
         RuntimeRequest(
             site_id="site_contract",
-            ability_name="magick-ai/workflows/generate-post-draft",
+            ability_name="npcink-abilities-toolkit/build-article-block-plan",
             channel="openapi",
             execution_kind="text",
             profile_id="text.balanced",
@@ -743,7 +743,7 @@ def test_instance_stats_contract_exposes_latency_probe_delivery_buffer_metadata(
     runtime_result = RuntimeService(database_url).execute(
         RuntimeRequest(
             site_id="site_contract",
-            ability_name="magick-ai/workflows/generate-post-draft",
+            ability_name="npcink-abilities-toolkit/build-article-block-plan",
             channel="openapi",
             execution_kind="text",
             profile_id="text.balanced",
@@ -831,7 +831,7 @@ def test_alert_provider_degradation_contract_exposes_delivery_buffer_metadata(
     runtime_result = RuntimeService(database_url).execute(
         RuntimeRequest(
             site_id="site_contract",
-            ability_name="magick-ai/workflows/generate-post-draft",
+            ability_name="npcink-abilities-toolkit/build-article-block-plan",
             channel="openapi",
             execution_kind="text",
             profile_id="text.balanced",
@@ -925,7 +925,7 @@ def test_router_diagnostics_contract_exposes_case_detail_shape(tmp_path: Path) -
     run_a = runtime_service.execute(
         RuntimeRequest(
             site_id="site_alpha",
-            ability_name="magick-ai/workflows/generate-post-draft",
+            ability_name="npcink-abilities-toolkit/build-article-block-plan",
             channel="openapi",
             execution_kind="text",
             profile_id="text.balanced",
@@ -937,7 +937,7 @@ def test_router_diagnostics_contract_exposes_case_detail_shape(tmp_path: Path) -
     run_b = runtime_service.execute(
         RuntimeRequest(
             site_id="site_alpha",
-            ability_name="magick-ai/workflows/generate-post-draft",
+            ability_name="npcink-abilities-toolkit/build-article-block-plan",
             channel="openapi",
             execution_kind="text",
             profile_id="text.balanced",
@@ -1087,7 +1087,7 @@ def test_router_diagnostics_contract_exposes_delivery_buffer_metadata(
     run = runtime_service.execute(
         RuntimeRequest(
             site_id="site_alpha",
-            ability_name="magick-ai/workflows/generate-post-draft",
+            ability_name="npcink-abilities-toolkit/build-article-block-plan",
             channel="openapi",
             execution_kind="text",
             profile_id="text.balanced",
@@ -1172,7 +1172,7 @@ def test_router_performance_snapshot_contract_exposes_first_tranche_dimensions(
     run_a = runtime_service.execute(
         RuntimeRequest(
             site_id="site_alpha",
-            ability_name="magick-ai/workflows/generate-post-draft",
+            ability_name="npcink-abilities-toolkit/build-article-block-plan",
             channel="openapi",
             execution_kind="text",
             profile_id="text.balanced",
@@ -1185,7 +1185,7 @@ def test_router_performance_snapshot_contract_exposes_first_tranche_dimensions(
     run_b = runtime_service.execute(
         RuntimeRequest(
             site_id="site_alpha",
-            ability_name="magick-ai/workflows/generate-post-draft",
+            ability_name="npcink-abilities-toolkit/build-article-block-plan",
             channel="openapi",
             execution_kind="text",
             profile_id="text.balanced",
@@ -1317,7 +1317,7 @@ def test_router_performance_projection_contract_exposes_delivery_buffer_metadata
     runtime_result = RuntimeService(database_url).execute(
         RuntimeRequest(
             site_id="site_contract",
-            ability_name="magick-ai/workflows/generate-post-draft",
+            ability_name="npcink-abilities-toolkit/build-article-block-plan",
             channel="openapi",
             execution_kind="text",
             profile_id="text.balanced",

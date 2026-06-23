@@ -240,7 +240,7 @@ def _build_request(
     return ProviderExecutionRequest(
         run_id="run_http_provider_test",
         site_id="site_alpha",
-        ability_name="magick-ai/workflows/generate-post-draft",
+        ability_name="npcink-abilities-toolkit/build-article-block-plan",
         profile_id="text.balanced",
         execution_kind=execution_kind,
         model_id=model_id,

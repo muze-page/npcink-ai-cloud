@@ -44,7 +44,7 @@ def test_plugin_observability_batch_is_signed_and_metadata_only(tmp_path: Path) 
                 "event_id": "evt_core_1",
                 "status": "ok",
                 "latency_ms": 12,
-                "ability_id": "magick-ai/create-draft",
+                "ability_id": "npcink-abilities-toolkit/create-draft",
                 "proposal_id": "proposal_123",
                 "captured_at": "2026-06-01T00:00:00Z",
             },
@@ -97,7 +97,7 @@ def test_plugin_observability_batch_is_signed_and_metadata_only(tmp_path: Path) 
         assert events[0].site_id == "site_obs"
         assert events[0].plugin_slug == "magick-ai-core"
         assert events[0].event_kind == "core.proposal.create"
-        assert events[0].ability_id == "magick-ai/create-draft"
+        assert events[0].ability_id == "npcink-abilities-toolkit/create-draft"
         assert events[0].payload_json == {}
         assert events[1].error_code == "magick_ai_adapter_upstream_failed"
         assert events[1].route == "/magick-ai-core/v1/proposals"
@@ -160,7 +160,7 @@ def test_plugin_observability_summary_returns_aggregates(tmp_path: Path) -> None
                 "status": "error",
                 "error_code": "core.proposal_invalid",
                 "latency_ms": 30,
-                "ability_id": "magick-ai/create-draft",
+                "ability_id": "npcink-abilities-toolkit/create-draft",
             },
             {
                 "plugin_slug": "magick-ai-adapter",
@@ -210,7 +210,7 @@ def test_plugin_observability_summary_returns_aggregates(tmp_path: Path) -> None
     assert plugins["magick-ai-core"]["error_total"] == 1
     assert plugins["magick-ai-core"]["avg_latency_ms"] == 20
     assert data["errors"][0]["error_code"] == "core.proposal_invalid"
-    assert data["recent_errors"][0]["ability_id"] == "magick-ai/create-draft"
+    assert data["recent_errors"][0]["ability_id"] == "npcink-abilities-toolkit/create-draft"
 
 
 def test_plugin_observability_event_id_is_deduped_after_replay_window(tmp_path: Path) -> None:

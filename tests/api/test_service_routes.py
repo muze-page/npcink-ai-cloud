@@ -1327,7 +1327,7 @@ def test_service_routes_bind_subscription_and_rebuild_billing_snapshot(
 
     execute_payload = {
         "site_id": "site_billing",
-        "ability_name": "magick-ai/workflows/generate-post-draft",
+        "ability_name": "npcink-abilities-toolkit/build-article-block-plan",
         "ability_family": "workflow",
         "channel": "openapi",
         "execution_kind": "text",
@@ -1519,7 +1519,7 @@ def test_service_routes_admin_read_facade(tmp_path: Path) -> None:
 
     execute_payload = {
         "site_id": "site_primary",
-        "ability_name": "magick-ai/workflows/generate-post-draft",
+        "ability_name": "npcink-abilities-toolkit/build-article-block-plan",
         "ability_family": "workflow",
         "channel": "openapi",
         "execution_kind": "text",
@@ -2525,7 +2525,7 @@ def test_service_routes_inspect_commercial_policy_and_reconciliation(
 
     execute_payload = {
         "site_id": "site_policy",
-        "ability_name": "magick-ai/workflows/generate-post-draft",
+        "ability_name": "npcink-abilities-toolkit/build-article-block-plan",
         "ability_family": "workflow",
         "channel": "openapi",
         "execution_kind": "text",
@@ -2609,7 +2609,7 @@ def test_service_routes_cleanup_retention_and_record_audit(tmp_path: Path) -> No
 
     payload = {
         "site_id": "site_cleanup",
-        "ability_name": "magick-ai/workflows/generate-post-draft",
+        "ability_name": "npcink-abilities-toolkit/build-article-block-plan",
         "ability_family": "workflow",
         "channel": "openapi",
         "execution_kind": "text",
@@ -2894,7 +2894,7 @@ def test_service_routes_runtime_diagnostics_summaries_and_abuse_guard(
 
     callback_payload = {
         "site_id": "site_diag",
-        "ability_name": "magick-ai/workflows/generate-post-draft",
+        "ability_name": "npcink-abilities-toolkit/build-article-block-plan",
         "ability_family": "workflow",
         "channel": "openapi",
         "execution_kind": "text",
@@ -2940,7 +2940,7 @@ def test_service_routes_runtime_diagnostics_summaries_and_abuse_guard(
     )
     queued_payload = {
         "site_id": "site_diag",
-        "ability_name": "magick-ai/workflows/generate-post-draft",
+        "ability_name": "npcink-abilities-toolkit/build-article-block-plan",
         "ability_family": "workflow",
         "channel": "openapi",
         "execution_kind": "text",
@@ -3339,7 +3339,7 @@ def test_service_routes_runtime_callback_dispatch_recovery_is_operator_visible(
 
     payload = {
         "site_id": "site_recovery",
-        "ability_name": "magick-ai/workflows/generate-post-draft",
+        "ability_name": "npcink-abilities-toolkit/build-article-block-plan",
         "ability_family": "workflow",
         "channel": "openapi",
         "execution_kind": "text",
@@ -3456,7 +3456,7 @@ def test_service_routes_runtime_backlog_diagnostics_exposes_scope_and_stale_laye
     }
     running_payload = {
         "site_id": "site_backlog_a",
-        "ability_name": "magick-ai/workflows/generate-post-draft",
+        "ability_name": "npcink-abilities-toolkit/build-article-block-plan",
         "ability_family": "workflow",
         "channel": "openapi",
         "execution_kind": "text",
@@ -3466,7 +3466,7 @@ def test_service_routes_runtime_backlog_diagnostics_exposes_scope_and_stale_laye
     }
     other_payload = {
         "site_id": "site_backlog_b",
-        "ability_name": "magick-ai/workflows/generate-post-draft",
+        "ability_name": "npcink-abilities-toolkit/build-article-block-plan",
         "ability_family": "workflow",
         "channel": "openapi",
         "execution_kind": "text",

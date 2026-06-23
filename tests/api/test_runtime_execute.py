@@ -288,7 +288,7 @@ def test_runtime_auto_web_search_enriches_provider_input(
     ).execute(
         RuntimeRequest(
             site_id="site_alpha",
-            ability_name="magick-ai/workflows/generate-post-draft",
+            ability_name="npcink-abilities-toolkit/build-article-block-plan",
             ability_family="workflow",
             channel="openapi",
             execution_kind="text",
@@ -350,7 +350,7 @@ def test_runtime_auto_web_search_dry_run_does_not_call_search(
     ).execute(
         RuntimeRequest(
             site_id="site_alpha",
-            ability_name="magick-ai/workflows/generate-post-draft",
+            ability_name="npcink-abilities-toolkit/build-article-block-plan",
             ability_family="workflow",
             channel="openapi",
             execution_kind="text",
@@ -486,7 +486,7 @@ def test_execute_route_runs_and_supports_idempotency(tmp_path: Path) -> None:
     database_url, client = _build_client(tmp_path)
     payload = {
         "site_id": "site_alpha",
-        "ability_name": "magick-ai/workflows/generate-post-draft",
+        "ability_name": "npcink-abilities-toolkit/build-article-block-plan",
         "ability_family": "workflow",
         "skill_id": "content_summary_seo",
         "workflow_id": "content_summary_seo_completion",
@@ -643,7 +643,7 @@ def test_execute_route_defaults_text_requests_to_free_gpt55(tmp_path: Path) -> N
     database_url, client = _build_client(tmp_path, providers={"openai": provider})
     payload = {
         "site_id": "site_alpha",
-        "ability_name": "magick-ai/workflows/generate-post-draft",
+        "ability_name": "npcink-abilities-toolkit/build-article-block-plan",
         "ability_family": "workflow",
         "contract_version": "v1",
         "channel": "openapi",
@@ -685,7 +685,7 @@ def test_execute_route_accepts_text_ai_profile_alias(tmp_path: Path) -> None:
     database_url, client = _build_client(tmp_path, providers={"openai": provider})
     payload = {
         "site_id": "site_alpha",
-        "ability_name": "magick-ai/content-support",
+        "ability_name": "npcink-abilities-toolkit/content-support",
         "ability_family": "text",
         "contract_version": "v1",
         "channel": "openapi",
@@ -879,7 +879,7 @@ def test_execute_route_rejects_step_offload_public_ingress(
     database_url, client = _build_client(tmp_path)
     payload = {
         "site_id": "site_alpha",
-        "ability_name": "magick-ai/workflows/generate-post-draft",
+        "ability_name": "npcink-abilities-toolkit/build-article-block-plan",
         "ability_family": "workflow",
         "skill_id": "content_summary_seo",
         "workflow_id": "content_summary_seo_completion",
@@ -923,7 +923,7 @@ def test_execute_route_rejects_unknown_policy_keys(tmp_path: Path) -> None:
     database_url, client = _build_client(tmp_path)
     payload = {
         "site_id": "site_alpha",
-        "ability_name": "magick-ai/workflows/generate-post-draft",
+        "ability_name": "npcink-abilities-toolkit/build-article-block-plan",
         "channel": "openapi",
         "execution_kind": "text",
         "profile_id": "text.balanced",
@@ -958,7 +958,7 @@ def test_execute_route_rejects_local_governance_policy_keys(tmp_path: Path) -> N
     database_url, client = _build_client(tmp_path)
     payload = {
         "site_id": "site_alpha",
-        "ability_name": "magick-ai/workflows/generate-post-draft",
+        "ability_name": "npcink-abilities-toolkit/build-article-block-plan",
         "channel": "openapi",
         "execution_kind": "text",
         "profile_id": "text.balanced",
@@ -1008,7 +1008,7 @@ def test_execute_route_rejects_reused_nonce(tmp_path: Path) -> None:
     database_url, client = _build_client(tmp_path)
     payload = {
         "site_id": "site_alpha",
-        "ability_name": "magick-ai/workflows/generate-post-draft",
+        "ability_name": "npcink-abilities-toolkit/build-article-block-plan",
         "execution_kind": "text",
         "profile_id": "text.balanced",
         "idempotency_key": "idem-reused-nonce-001",
@@ -1047,7 +1047,7 @@ def test_resolve_route_enforces_public_short_window_rate_limit(tmp_path: Path) -
     )
     payload = {
         "site_id": "site_alpha",
-        "ability_name": "magick-ai/workflows/generate-post-draft",
+        "ability_name": "npcink-abilities-toolkit/build-article-block-plan",
         "ability_family": "workflow",
         "execution_kind": "text",
         "profile_id": "text.balanced",
@@ -1109,7 +1109,7 @@ def test_resolve_route_enforces_public_key_short_window_rate_limit(tmp_path: Pat
     )
     payload = {
         "site_id": "site_alpha",
-        "ability_name": "magick-ai/workflows/generate-post-draft",
+        "ability_name": "npcink-abilities-toolkit/build-article-block-plan",
         "ability_family": "workflow",
         "execution_kind": "text",
         "profile_id": "text.balanced",
@@ -1173,7 +1173,7 @@ def test_resolve_route_enforces_public_ip_short_window_rate_limit(tmp_path: Path
     )
     first_payload = {
         "site_id": "site_alpha",
-        "ability_name": "magick-ai/workflows/generate-post-draft",
+        "ability_name": "npcink-abilities-toolkit/build-article-block-plan",
         "ability_family": "workflow",
         "execution_kind": "text",
         "profile_id": "text.balanced",
@@ -1181,7 +1181,7 @@ def test_resolve_route_enforces_public_ip_short_window_rate_limit(tmp_path: Path
     }
     second_payload = {
         "site_id": "site_beta",
-        "ability_name": "magick-ai/workflows/generate-post-draft",
+        "ability_name": "npcink-abilities-toolkit/build-article-block-plan",
         "ability_family": "workflow",
         "execution_kind": "text",
         "profile_id": "text.balanced",
@@ -1244,7 +1244,7 @@ def test_resolve_route_enforces_public_guard_cooldown_after_rejects(tmp_path: Pa
     )
     payload = {
         "site_id": "site_alpha",
-        "ability_name": "magick-ai/workflows/generate-post-draft",
+        "ability_name": "npcink-abilities-toolkit/build-article-block-plan",
         "ability_family": "workflow",
         "execution_kind": "text",
         "profile_id": "text.balanced",
@@ -1310,7 +1310,7 @@ def test_resolve_route_logs_guard_persistence_failure_without_relaxing_auth(
     database_url, client = _build_client(tmp_path)
     payload = {
         "site_id": "site_alpha",
-        "ability_name": "magick-ai/workflows/generate-post-draft",
+        "ability_name": "npcink-abilities-toolkit/build-article-block-plan",
         "ability_family": "workflow",
         "execution_kind": "text",
         "profile_id": "text.balanced",
@@ -1370,7 +1370,7 @@ def test_execute_route_keeps_idempotency_conflict_for_payload_mismatch(tmp_path:
     database_url, client = _build_client(tmp_path)
     first_payload = {
         "site_id": "site_alpha",
-        "ability_name": "magick-ai/workflows/generate-post-draft",
+        "ability_name": "npcink-abilities-toolkit/build-article-block-plan",
         "execution_kind": "text",
         "profile_id": "text.balanced",
         "idempotency_key": "idem-conflict-001",
@@ -1427,7 +1427,7 @@ def test_execute_route_rejects_unprovisioned_site(tmp_path: Path) -> None:
     database_url, client = _build_client(tmp_path)
     payload = {
         "site_id": "site_gamma",
-        "ability_name": "magick-ai/workflows/generate-post-draft",
+        "ability_name": "npcink-abilities-toolkit/build-article-block-plan",
         "execution_kind": "text",
         "profile_id": "text.balanced",
         "idempotency_key": "idem-unprovisioned-001",
@@ -1463,7 +1463,7 @@ def test_execute_route_rejects_revoked_key(tmp_path: Path) -> None:
     )
     payload = {
         "site_id": "site_alpha",
-        "ability_name": "magick-ai/workflows/generate-post-draft",
+        "ability_name": "npcink-abilities-toolkit/build-article-block-plan",
         "execution_kind": "text",
         "profile_id": "text.balanced",
         "idempotency_key": "idem-revoked-key-001",
@@ -1499,7 +1499,7 @@ def test_execute_route_rejects_expired_key(tmp_path: Path) -> None:
     )
     payload = {
         "site_id": "site_alpha",
-        "ability_name": "magick-ai/workflows/generate-post-draft",
+        "ability_name": "npcink-abilities-toolkit/build-article-block-plan",
         "execution_kind": "text",
         "profile_id": "text.balanced",
         "idempotency_key": "idem-expired-key-001",
@@ -1529,7 +1529,7 @@ def test_execute_route_rejects_invalid_idempotency_key(tmp_path: Path) -> None:
     database_url, client = _build_client(tmp_path)
     payload = {
         "site_id": "site_alpha",
-        "ability_name": "magick-ai/workflows/generate-post-draft",
+        "ability_name": "npcink-abilities-toolkit/build-article-block-plan",
         "execution_kind": "text",
         "profile_id": "text.balanced",
         "input": {"messages": [{"role": "user", "content": "should fail"}]},
@@ -1565,7 +1565,7 @@ def test_runtime_routes_reject_inactive_subscription(tmp_path: Path) -> None:
     )
     payload = {
         "site_id": "site_alpha",
-        "ability_name": "magick-ai/workflows/generate-post-draft",
+        "ability_name": "npcink-abilities-toolkit/build-article-block-plan",
         "ability_family": "workflow",
         "execution_kind": "text",
         "profile_id": "text.balanced",
@@ -1625,7 +1625,7 @@ def test_execute_route_rejects_entitlement_miss(tmp_path: Path) -> None:
     )
     payload = {
         "site_id": "site_alpha",
-        "ability_name": "magick-ai/workflows/generate-post-draft",
+        "ability_name": "npcink-abilities-toolkit/build-article-block-plan",
         "ability_family": "workflow",
         "canonical_run_id": "wp_run_callback_dispatch_001",
         "channel": "openapi",
@@ -1847,7 +1847,7 @@ def test_execute_route_rejects_budget_exhaustion(tmp_path: Path) -> None:
     )
     payload = {
         "site_id": "site_alpha",
-        "ability_name": "magick-ai/workflows/generate-post-draft",
+        "ability_name": "npcink-abilities-toolkit/build-article-block-plan",
         "ability_family": "workflow",
         "canonical_run_id": "wp_run_callback_dispatch_001",
         "channel": "openapi",
@@ -2090,7 +2090,7 @@ def test_execute_route_rejects_payloads_over_app_limit(tmp_path: Path) -> None:
     oversized_content = "x" * (1_048_576 + 1)
     payload = {
         "site_id": "site_alpha",
-        "ability_name": "magick-ai/workflows/generate-post-draft",
+        "ability_name": "npcink-abilities-toolkit/build-article-block-plan",
         "execution_kind": "text",
         "profile_id": "text.balanced",
         "idempotency_key": "idem-payload-too-large-001",
@@ -2337,7 +2337,7 @@ def test_cancel_route_rejects_inline_runs(tmp_path: Path) -> None:
     database_url, client = _build_client(tmp_path)
     payload = {
         "site_id": "site_alpha",
-        "ability_name": "magick-ai/workflows/generate-post-draft",
+        "ability_name": "npcink-abilities-toolkit/build-article-block-plan",
         "channel": "openapi",
         "execution_kind": "text",
         "profile_id": "text.balanced",
@@ -2532,7 +2532,7 @@ def test_callback_delivery_worker_dispatches_terminal_run_payload(
     )
     payload = {
         "site_id": "site_alpha",
-        "ability_name": "magick-ai/workflows/generate-post-draft",
+        "ability_name": "npcink-abilities-toolkit/build-article-block-plan",
         "ability_family": "workflow",
         "canonical_run_id": "wp_run_callback_dispatch_001",
         "contract_version": "v1",
@@ -2653,7 +2653,7 @@ def test_callback_delivery_worker_retries_retryable_failures(
     )
     payload = {
         "site_id": "site_alpha",
-        "ability_name": "magick-ai/workflows/generate-post-draft",
+        "ability_name": "npcink-abilities-toolkit/build-article-block-plan",
         "contract_version": "v1",
         "channel": "openapi",
         "execution_kind": "text",
@@ -2736,7 +2736,7 @@ def test_execute_route_rejects_public_callback_url_override_without_registration
     database_url, client = _build_client(tmp_path)
     payload = {
         "site_id": "site_alpha",
-        "ability_name": "magick-ai/workflows/generate-post-draft",
+        "ability_name": "npcink-abilities-toolkit/build-article-block-plan",
         "contract_version": "v1",
         "channel": "openapi",
         "execution_kind": "text",
@@ -2776,7 +2776,7 @@ def test_execute_route_rejects_contract_timeout_above_cloud_ceiling(tmp_path: Pa
     database_url, client = _build_client(tmp_path)
     payload = {
         "site_id": "site_alpha",
-        "ability_name": "magick-ai/workflows/generate-post-draft",
+        "ability_name": "npcink-abilities-toolkit/build-article-block-plan",
         "contract_version": "v1",
         "channel": "openapi",
         "execution_kind": "text",
@@ -2811,7 +2811,7 @@ def test_execute_route_rejects_sensitive_data_without_no_store(tmp_path: Path) -
     database_url, client = _build_client(tmp_path)
     payload = {
         "site_id": "site_alpha",
-        "ability_name": "magick-ai/workflows/generate-post-draft",
+        "ability_name": "npcink-abilities-toolkit/build-article-block-plan",
         "contract_version": "v1",
         "channel": "openapi",
         "execution_kind": "text",
@@ -2847,7 +2847,7 @@ def test_execute_route_rejects_secret_like_runtime_input(tmp_path: Path) -> None
     database_url, client = _build_client(tmp_path)
     payload = {
         "site_id": "site_alpha",
-        "ability_name": "magick-ai/workflows/generate-post-draft",
+        "ability_name": "npcink-abilities-toolkit/build-article-block-plan",
         "contract_version": "v1",
         "channel": "openapi",
         "execution_kind": "text",
@@ -2884,7 +2884,7 @@ def test_execute_route_rejects_unclassified_personal_data(tmp_path: Path) -> Non
     database_url, client = _build_client(tmp_path)
     payload = {
         "site_id": "site_alpha",
-        "ability_name": "magick-ai/workflows/generate-post-draft",
+        "ability_name": "npcink-abilities-toolkit/build-article-block-plan",
         "contract_version": "v1",
         "channel": "openapi",
         "execution_kind": "text",
@@ -2925,7 +2925,7 @@ def test_resolve_route_rejects_sensitive_data_without_no_store(tmp_path: Path) -
     database_url, client = _build_client(tmp_path)
     payload = {
         "site_id": "site_alpha",
-        "ability_name": "magick-ai/workflows/generate-post-draft",
+        "ability_name": "npcink-abilities-toolkit/build-article-block-plan",
         "contract_version": "v1",
         "channel": "openapi",
         "execution_kind": "text",
@@ -2959,7 +2959,7 @@ def test_execute_route_pii_no_store_omits_persisted_payloads(tmp_path: Path) -> 
     database_url, client = _build_client(tmp_path)
     payload = {
         "site_id": "site_alpha",
-        "ability_name": "magick-ai/workflows/generate-post-draft",
+        "ability_name": "npcink-abilities-toolkit/build-article-block-plan",
         "contract_version": "v1",
         "channel": "openapi",
         "execution_kind": "text",
@@ -3012,7 +3012,7 @@ def test_execute_route_secret_data_is_excluded_from_hosted_runtime(
     database_url, client = _build_client(tmp_path)
     payload = {
         "site_id": "site_alpha",
-        "ability_name": "magick-ai/workflows/generate-post-draft",
+        "ability_name": "npcink-abilities-toolkit/build-article-block-plan",
         "contract_version": "v1",
         "channel": "openapi",
         "execution_kind": "text",
@@ -3048,7 +3048,7 @@ def test_execute_route_result_only_storage_omits_persisted_input_payload(tmp_pat
     database_url, client = _build_client(tmp_path)
     payload = {
         "site_id": "site_alpha",
-        "ability_name": "magick-ai/workflows/generate-post-draft",
+        "ability_name": "npcink-abilities-toolkit/build-article-block-plan",
         "contract_version": "v1",
         "channel": "openapi",
         "execution_kind": "text",
@@ -3088,7 +3088,7 @@ def test_execute_route_no_store_omits_persisted_input_payload(tmp_path: Path) ->
     database_url, client = _build_client(tmp_path)
     payload = {
         "site_id": "site_alpha",
-        "ability_name": "magick-ai/workflows/generate-post-draft",
+        "ability_name": "npcink-abilities-toolkit/build-article-block-plan",
         "contract_version": "v1",
         "channel": "openapi",
         "execution_kind": "text",
@@ -3148,7 +3148,7 @@ def test_execute_route_rejects_plaintext_registered_callback_secret_without_ciph
     )
     payload = {
         "site_id": "site_alpha",
-        "ability_name": "magick-ai/workflows/generate-post-draft",
+        "ability_name": "npcink-abilities-toolkit/build-article-block-plan",
         "contract_version": "v1",
         "channel": "openapi",
         "execution_kind": "text",
@@ -3188,7 +3188,7 @@ def test_resolve_route_returns_execution_context(tmp_path: Path) -> None:
     database_url, client = _build_client(tmp_path)
     payload = {
         "site_id": "site_alpha",
-        "ability_name": "magick-ai/workflows/generate-post-draft",
+        "ability_name": "npcink-abilities-toolkit/build-article-block-plan",
         "ability_family": "workflow",
         "skill_id": "content_summary_seo",
         "workflow_id": "content_summary_seo_completion",
@@ -3278,7 +3278,7 @@ def test_execute_route_falls_back_to_next_candidate(tmp_path: Path) -> None:
     database_url, client = _build_client(tmp_path)
     payload = {
         "site_id": "site_alpha",
-        "ability_name": "magick-ai/workflows/generate-post-draft",
+        "ability_name": "npcink-abilities-toolkit/build-article-block-plan",
         "channel": "openapi",
         "execution_kind": "text",
         "profile_id": "text.balanced",
@@ -3330,7 +3330,7 @@ def test_run_result_route_returns_expired_after_retention_window(tmp_path: Path)
     database_url, client = _build_client(tmp_path)
     payload = {
         "site_id": "site_alpha",
-        "ability_name": "magick-ai/workflows/generate-post-draft",
+        "ability_name": "npcink-abilities-toolkit/build-article-block-plan",
         "channel": "openapi",
         "execution_kind": "text",
         "profile_id": "text.balanced",
@@ -3392,7 +3392,7 @@ def test_execute_route_rejects_invalid_signature(tmp_path: Path) -> None:
     database_url, client = _build_client(tmp_path)
     payload = {
         "site_id": "site_alpha",
-        "ability_name": "magick-ai/workflows/generate-post-draft",
+        "ability_name": "npcink-abilities-toolkit/build-article-block-plan",
         "channel": "openapi",
         "execution_kind": "text",
         "profile_id": "text.balanced",
@@ -3423,7 +3423,7 @@ def test_execute_route_rejects_signature_signed_with_stored_secret_hash(tmp_path
     database_url, client = _build_client(tmp_path)
     payload = {
         "site_id": "site_alpha",
-        "ability_name": "magick-ai/workflows/generate-post-draft",
+        "ability_name": "npcink-abilities-toolkit/build-article-block-plan",
         "channel": "openapi",
         "execution_kind": "text",
         "profile_id": "text.balanced",
@@ -3488,7 +3488,7 @@ def test_execute_route_rejects_key_without_signing_secret_ciphertext(tmp_path: P
         session.commit()
     payload = {
         "site_id": "site_alpha",
-        "ability_name": "magick-ai/workflows/generate-post-draft",
+        "ability_name": "npcink-abilities-toolkit/build-article-block-plan",
         "channel": "openapi",
         "execution_kind": "text",
         "profile_id": "text.balanced",
@@ -3521,7 +3521,7 @@ def test_run_route_is_scoped_to_authenticated_site(tmp_path: Path) -> None:
     database_url, client = _build_client(tmp_path)
     payload = {
         "site_id": "site_alpha",
-        "ability_name": "magick-ai/workflows/generate-post-draft",
+        "ability_name": "npcink-abilities-toolkit/build-article-block-plan",
         "channel": "openapi",
         "execution_kind": "text",
         "profile_id": "text.balanced",
@@ -3609,7 +3609,7 @@ def test_execute_route_can_use_http_provider_transport(tmp_path: Path) -> None:
     database_url, client = _build_client(tmp_path, providers=providers)
     payload = {
         "site_id": "site_alpha",
-        "ability_name": "magick-ai/workflows/generate-post-draft",
+        "ability_name": "npcink-abilities-toolkit/build-article-block-plan",
         "channel": "openapi",
         "execution_kind": "text",
         "profile_id": "text.balanced",
@@ -3678,7 +3678,7 @@ def test_execute_route_can_use_anthropic_http_provider_transport(tmp_path: Path)
     database_url, client = _build_client(tmp_path, providers=providers)
     payload = {
         "site_id": "site_alpha",
-        "ability_name": "magick-ai/workflows/generate-post-draft",
+        "ability_name": "npcink-abilities-toolkit/build-article-block-plan",
         "channel": "openapi",
         "execution_kind": "text",
         "profile_id": "text.balanced",
@@ -3736,7 +3736,7 @@ def test_execute_route_retries_retryable_provider_errors(tmp_path: Path) -> None
     database_url, client = _build_client(tmp_path, providers=providers)
     payload = {
         "site_id": "site_alpha",
-        "ability_name": "magick-ai/workflows/generate-post-draft",
+        "ability_name": "npcink-abilities-toolkit/build-article-block-plan",
         "channel": "openapi",
         "execution_kind": "text",
         "profile_id": "text.balanced",
@@ -3809,7 +3809,7 @@ def test_execute_route_stops_on_non_fallbackable_provider_error(tmp_path: Path) 
     database_url, client = _build_client(tmp_path, providers=providers)
     payload = {
         "site_id": "site_alpha",
-        "ability_name": "magick-ai/workflows/generate-post-draft",
+        "ability_name": "npcink-abilities-toolkit/build-article-block-plan",
         "channel": "openapi",
         "execution_kind": "text",
         "profile_id": "text.balanced",
@@ -3863,7 +3863,7 @@ def test_execute_route_marks_retry_exhausted_after_last_retry(tmp_path: Path) ->
     database_url, client = _build_client(tmp_path, providers=providers)
     payload = {
         "site_id": "site_alpha",
-        "ability_name": "magick-ai/workflows/generate-post-draft",
+        "ability_name": "npcink-abilities-toolkit/build-article-block-plan",
         "channel": "openapi",
         "execution_kind": "text",
         "profile_id": "text.balanced",
@@ -3922,7 +3922,7 @@ def test_failed_run_records_metered_provider_cost_and_purge_keeps_ledger(
     database_url, client = _build_client(tmp_path, providers=providers)
     payload = {
         "site_id": "site_alpha",
-        "ability_name": "magick-ai/workflows/generate-post-draft",
+        "ability_name": "npcink-abilities-toolkit/build-article-block-plan",
         "ability_family": "workflow",
         "channel": "openapi",
         "execution_kind": "text",

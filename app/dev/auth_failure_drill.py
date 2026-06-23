@@ -134,7 +134,7 @@ def run_drill(
 
         body_bytes = json.dumps(
             {
-                "ability_name": "magick-ai/workflows/generate-post-draft",
+                "ability_name": "npcink-abilities-toolkit/build-article-block-plan",
                 "ability_family": "workflow",
                 "channel": "openapi",
                 "execution_kind": "text",
