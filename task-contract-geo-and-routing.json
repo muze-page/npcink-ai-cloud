@@ -11,7 +11,7 @@
   "required_gates": [
     "pnpm run check:anti-drift",
     "pnpm run check:perimeter",
-    "pnpm --dir magick-ai run check:e2e:hosted-runtime:smoke",
+    "pnpm run smoke:local-alpha",
     "pnpm run check:risk"
   ],
   "description": "Strong contraction post-cleanup: remove dead code from backend and frontend after the cloud strong contraction. This PR only removes retired surfaces (PortalActionRequest, PlatformImpersonationSession, OperatorManagedTopupPackOverlay, portal thick features, admin thick features) and does NOT add new APIs, workers, projections, or migrations."

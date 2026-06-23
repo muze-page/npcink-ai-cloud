@@ -457,7 +457,7 @@ function AdminPluginObservabilityContent() {
   const pluginErrorData = useMemo(
     () =>
       (data?.plugins || []).map((plugin) => ({
-        label: plugin.pluginSlug.replace('magick-ai-', ''),
+        label: plugin.pluginSlug.replace('npcink-', ''),
         value: plugin.errorTotal,
         color: plugin.errorTotal > 0 ? '#f59e0b' : '#22c55e',
       })),
@@ -467,7 +467,7 @@ function AdminPluginObservabilityContent() {
   const pluginVolumeData = useMemo(
     () =>
       (data?.plugins || []).map((plugin) => ({
-        label: plugin.pluginSlug.replace('magick-ai-', ''),
+        label: plugin.pluginSlug.replace('npcink-', ''),
         value: plugin.eventsTotal,
         color: plugin.errorTotal > 0 ? '#f59e0b' : '#2563eb',
       })),

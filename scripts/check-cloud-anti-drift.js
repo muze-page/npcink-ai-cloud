@@ -446,28 +446,20 @@ function checkCloudAntiDrift( { contractPath, files } ) {
 
 	if (
 		touchesExecutableSeam &&
-		! contractRequiredGates.includes(
-			'pnpm --dir magick-ai run check:e2e:hosted-runtime:smoke'
-		)
+		! contractRequiredGates.includes( 'pnpm run smoke:local-alpha' )
 	) {
 		result.violations.missing_required_gates.push(
-			'pnpm --dir magick-ai run check:e2e:hosted-runtime:smoke'
+			'pnpm run smoke:local-alpha'
 		);
 	}
 
 	if (
 		touchesExecutableSeam &&
-		! contractRequiredGates.includes(
-			'pnpm --dir magick-ai run check:risk'
-		) &&
-		! contractRequiredGates.includes(
-			'pnpm --dir magick-ai run check:founder:heavy'
-		) &&
 		! contractRequiredGates.includes( 'pnpm run check:risk' ) &&
 		! contractRequiredGates.includes( 'pnpm run check:founder:heavy' )
 	) {
 		result.violations.missing_required_gates.push(
-			'pnpm --dir magick-ai run check:risk'
+			'pnpm run check:risk'
 		);
 	}
 

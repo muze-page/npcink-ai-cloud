@@ -15,14 +15,14 @@ npcink_ai_cloud_require_cmd openssl
 npcink_ai_cloud_require_cmd python3
 
 BASE_URL="${NPCINK_CLOUD_BASE_URL:-http://127.0.0.1:${NPCINK_CLOUD_PORT:-8010}}"
-WORDPRESS_URL="${MAGICK_AI_WORDPRESS_URL:-https://npcink.local/}"
-WORDPRESS_ADMIN_USER="${MAGICK_AI_WORDPRESS_ADMIN_USER:-1}"
-WORDPRESS_ADMIN_PASSWORD="${MAGICK_AI_WORDPRESS_ADMIN_PASSWORD:-1}"
+WORDPRESS_URL="${NPCINK_CLOUD_WORDPRESS_URL:-https://magick-ai.local/}"
+WORDPRESS_ADMIN_USER="${NPCINK_CLOUD_WORDPRESS_ADMIN_USER:-1}"
+WORDPRESS_ADMIN_PASSWORD="${NPCINK_CLOUD_WORDPRESS_ADMIN_PASSWORD:-1}"
 SITE_ID="${NPCINK_CLOUD_SITE_ID:-${NPCINK_CLOUD_DEV_PORTAL_SITE_ID:-${NPCINK_CLOUD_ALPHA_SITE_ID:-site_npcink_local}}}"
 KEY_ID="${NPCINK_CLOUD_KEY_ID:-${NPCINK_CLOUD_ALPHA_KEY_ID:-key_ec8ba4d6ac914507ac3cf8e7a9efa264}}"
 SECRET="${NPCINK_CLOUD_SECRET:-${NPCINK_CLOUD_SITE_KEY_SECRET:-${NPCINK_CLOUD_ALPHA_SITE_SECRET:-}}}"
-IDEMPOTENCY_SUFFIX="${MAGICK_AI_LOCAL_ALPHA_SMOKE_SUFFIX:-$(date -u '+%Y%m%d%H%M%S')}"
-MEMBER_EMAIL="${MAGICK_AI_LOCAL_ALPHA_SMOKE_MEMBER_EMAIL:-${NPCINK_CLOUD_MEMBER_EMAIL:-admin+local-alpha-${IDEMPOTENCY_SUFFIX}@npcink.local}}"
+IDEMPOTENCY_SUFFIX="${NPCINK_CLOUD_LOCAL_ALPHA_SMOKE_SUFFIX:-$(date -u '+%Y%m%d%H%M%S')}"
+MEMBER_EMAIL="${NPCINK_CLOUD_LOCAL_ALPHA_SMOKE_MEMBER_EMAIL:-${NPCINK_CLOUD_MEMBER_EMAIL:-admin+local-alpha-${IDEMPOTENCY_SUFFIX}@npcink.local}}"
 PROFILE_ID="${NPCINK_CLOUD_PROFILE_ID:-text.balanced}"
 ABILITY_NAME="${NPCINK_CLOUD_ABILITY_NAME:-npcink-abilities-toolkit/build-article-block-plan}"
 CHANNEL="${NPCINK_CLOUD_CHANNEL:-openapi}"
@@ -30,7 +30,7 @@ EXECUTION_KIND="${NPCINK_CLOUD_EXECUTION_KIND:-text}"
 PROMPT_TEXT="${NPCINK_CLOUD_PROMPT_TEXT:-Npcink AI DeepSeek smoke ok}"
 EXPECTED_PROVIDER_ID="${NPCINK_CLOUD_EXPECTED_PROVIDER_ID:-openai}"
 EXPECTED_MODEL_ID="${NPCINK_CLOUD_EXPECTED_MODEL_ID:-}"
-EVIDENCE_DIR="${MAGICK_AI_LOCAL_ALPHA_SMOKE_EVIDENCE_DIR:-${ROOT_DIR}/.tmp/local-alpha-smoke}"
+EVIDENCE_DIR="${NPCINK_CLOUD_LOCAL_ALPHA_SMOKE_EVIDENCE_DIR:-${ROOT_DIR}/.tmp/local-alpha-smoke}"
 
 fail() {
 	echo "[fail] $*" >&2
@@ -306,8 +306,7 @@ WORDPRESS_ADDON_PATH=""
 WORDPRESS_ADDON_BODY=""
 for candidate_path in \
 	"/wp-admin/admin.php?page=npcink-cloud-addon&tab=settings" \
-	"/wp-admin/admin.php?page=npcink-cloud-addon" \
-	"/wp-admin/plugins.php?page=magick-ai-settings&tab=cloud"
+	"/wp-admin/admin.php?page=npcink-cloud-addon"
 do
 	candidate_body="$(
 		curl -k -sS -L \

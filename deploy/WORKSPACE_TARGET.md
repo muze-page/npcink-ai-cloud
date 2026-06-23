@@ -46,7 +46,7 @@ Local inner loop:
 ```bash
 pnpm run cloud:test
 pnpm run check:cloud:perimeter
-bash scripts/local-wp.sh pnpm --dir magick-ai run check:e2e:hosted-runtime:smoke
+pnpm run smoke:local-alpha
 ```
 
 Bundle replay before remote deploy:
