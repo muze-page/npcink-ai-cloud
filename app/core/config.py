@@ -151,7 +151,6 @@ class Settings(BaseSettings):
         default="https://api.openai.com/v1",
         validation_alias=AliasChoices(
             "NPCINK_CLOUD_OPENAI_BASE_URL",
-            "MAGICK_CLOUD_OPENAI_BASE_URL",
             "NPCINK_CLOUD_OPENAI_COMPATIBLE_BASE_URL",
         ),
     )
@@ -159,7 +158,6 @@ class Settings(BaseSettings):
         default=None,
         validation_alias=AliasChoices(
             "NPCINK_CLOUD_OPENAI_API_KEY",
-            "MAGICK_CLOUD_OPENAI_API_KEY",
             "NPCINK_CLOUD_OPENAI_COMPATIBLE_API_KEY",
         ),
     )
@@ -167,7 +165,6 @@ class Settings(BaseSettings):
         default=None,
         validation_alias=AliasChoices(
             "NPCINK_CLOUD_OPENAI_ORGANIZATION",
-            "MAGICK_CLOUD_OPENAI_ORGANIZATION",
             "NPCINK_CLOUD_OPENAI_COMPATIBLE_ORGANIZATION",
         ),
     )
@@ -175,7 +172,6 @@ class Settings(BaseSettings):
         default=30.0,
         validation_alias=AliasChoices(
             "NPCINK_CLOUD_OPENAI_TIMEOUT_SECONDS",
-            "MAGICK_CLOUD_OPENAI_TIMEOUT_SECONDS",
             "NPCINK_CLOUD_OPENAI_COMPATIBLE_TIMEOUT_SECONDS",
         ),
     )
@@ -183,7 +179,6 @@ class Settings(BaseSettings):
         default="",
         validation_alias=AliasChoices(
             "NPCINK_CLOUD_OPENAI_SAMPLE_CATALOG_PROFILE",
-            "MAGICK_CLOUD_OPENAI_SAMPLE_CATALOG_PROFILE",
             "NPCINK_CLOUD_OPENAI_COMPATIBLE_SAMPLE_CATALOG_PROFILE",
         ),
     )
@@ -191,7 +186,6 @@ class Settings(BaseSettings):
         default="",
         validation_alias=AliasChoices(
             "NPCINK_CLOUD_OPENAI_PROVIDER_LABEL",
-            "MAGICK_CLOUD_OPENAI_PROVIDER_LABEL",
             "NPCINK_CLOUD_OPENAI_COMPATIBLE_PROVIDER_LABEL",
         ),
     )

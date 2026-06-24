@@ -51,7 +51,7 @@ def test_env_example_production_payload_validates_with_canonical_names(
     monkeypatch,
 ) -> None:
     for key in list(os.environ):
-        if key.startswith("NPCINK_CLOUD_") or key.startswith("MAGICK_CLOUD_OPENAI_"):
+        if key.startswith("NPCINK_CLOUD_"):
             monkeypatch.delenv(key, raising=False)
 
     env_text = (_cloud_root() / ".env.example").read_text()
@@ -112,34 +112,6 @@ def test_settings_accept_legacy_admin_and_openai_env_aliases(monkeypatch) -> Non
     assert settings.admin_session_secret == "a" * 32
     assert settings.openai_api_key == "sk-current"
     assert settings.openai_base_url == "https://current.example.com/v1"
-
-
-def test_settings_accept_magick_openai_env_aliases(monkeypatch) -> None:
-    monkeypatch.delenv("NPCINK_CLOUD_OPENAI_API_KEY", raising=False)
-    monkeypatch.delenv("NPCINK_CLOUD_OPENAI_BASE_URL", raising=False)
-    monkeypatch.delenv("NPCINK_CLOUD_OPENAI_PROVIDER_LABEL", raising=False)
-    monkeypatch.delenv("NPCINK_CLOUD_OPENAI_SAMPLE_CATALOG_PROFILE", raising=False)
-    monkeypatch.delenv("NPCINK_CLOUD_OPENAI_COMPATIBLE_API_KEY", raising=False)
-    monkeypatch.delenv("NPCINK_CLOUD_OPENAI_COMPATIBLE_BASE_URL", raising=False)
-    monkeypatch.delenv("NPCINK_CLOUD_OPENAI_COMPATIBLE_PROVIDER_LABEL", raising=False)
-    monkeypatch.delenv(
-        "NPCINK_CLOUD_OPENAI_COMPATIBLE_SAMPLE_CATALOG_PROFILE",
-        raising=False,
-    )
-    monkeypatch.setenv("NPCINK_CLOUD_ENVIRONMENT", "development")
-    monkeypatch.setenv("NPCINK_CLOUD_DATABASE_URL", "sqlite+pysqlite:///:memory:")
-    monkeypatch.setenv("NPCINK_CLOUD_REDIS_URL", "redis://localhost:6379/0")
-    monkeypatch.setenv("MAGICK_CLOUD_OPENAI_API_KEY", "sk-magick")
-    monkeypatch.setenv("MAGICK_CLOUD_OPENAI_BASE_URL", "https://magick.example.com/v1")
-    monkeypatch.setenv("MAGICK_CLOUD_OPENAI_PROVIDER_LABEL", "legacy-magick-openai")
-    monkeypatch.setenv("MAGICK_CLOUD_OPENAI_SAMPLE_CATALOG_PROFILE", "free-gpt55")
-
-    settings = Settings(_env_file=None)
-
-    assert settings.openai_api_key == "sk-magick"
-    assert settings.openai_base_url == "https://magick.example.com/v1"
-    assert settings.openai_provider_label == "legacy-magick-openai"
-    assert settings.openai_sample_catalog_profile == "free-gpt55"
 
 
 def test_preview_and_baseline_scripts_lock_migration_and_schema_checks() -> None:
