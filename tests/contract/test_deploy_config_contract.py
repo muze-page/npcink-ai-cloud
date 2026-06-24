@@ -202,8 +202,10 @@ def test_preview_and_baseline_scripts_lock_migration_and_schema_checks() -> None
 def test_deploy_bundle_smoke_uses_sample_provider_and_skip_frontend_contract() -> None:
     cloud_root = _cloud_root()
     compose_text = (cloud_root / "docker-compose.prod.yml").read_text()
+    runtime_compose_text = (cloud_root / "docker-compose.runtime.yml").read_text()
     package_json = (cloud_root / "package.json").read_text()
     frontend_dockerfile = (cloud_root / "frontend" / "Dockerfile").read_text()
+    bundle_script = (cloud_root / "deploy" / "bundle-images.sh").read_text()
     deploy_bundle_smoke = (cloud_root / "scripts" / "cloud-deploy-bundle-smoke-flow.sh").read_text()
     remote_smoke_script = (cloud_root / "deploy" / "remote-smoke.sh").read_text()
     nginx_prod_conf = (cloud_root / "deploy" / "nginx.prod.conf").read_text()
@@ -237,6 +239,43 @@ def test_deploy_bundle_smoke_uses_sample_provider_and_skip_frontend_contract() -
     assert "proxy_set_header X-Forwarded-Proto $npcink_forwarded_proto;" in nginx_prod_conf
     assert "header_up X-Forwarded-Host {host}" in caddy_prod_conf
     assert "header_up X-Forwarded-Proto {scheme}" in caddy_prod_conf
+    assert "./site:/usr/share/nginx/html/npcink-site:ro" in runtime_compose_text
+    assert "-C \"${CLOUD_DIR}\" site" in bundle_script
+    assert "location = /terms" in nginx_prod_conf
+    assert "location /terms/" in nginx_prod_conf
+    assert "root /usr/share/nginx/html/npcink-site;" in nginx_prod_conf
+    assert "/terms/en/terms.html" in remote_smoke_script
+    assert "/terms/zh/terms.html" in remote_smoke_script
+    assert "/terms/styles.css" in remote_smoke_script
+
+
+def test_static_terms_pages_are_in_release_tree() -> None:
+    cloud_root = _cloud_root()
+
+    expected_files = (
+        "site/terms/index.html",
+        "site/terms/styles.css",
+        "site/terms/assets/icon-128x128.png",
+        "site/terms/assets/icon-256x256.png",
+        "site/terms/en/index.html",
+        "site/terms/en/terms.html",
+        "site/terms/en/privacy.html",
+        "site/terms/en/data-retention.html",
+        "site/terms/zh/index.html",
+        "site/terms/zh/terms.html",
+        "site/terms/zh/privacy.html",
+        "site/terms/zh/data-retention.html",
+    )
+    for relative_path in expected_files:
+        assert (cloud_root / relative_path).is_file()
+
+    assert not (cloud_root / "site" / ".DS_Store").exists()
+    assert "Npcink Cloud Terms of Service" in (
+        cloud_root / "site" / "terms" / "en" / "terms.html"
+    ).read_text()
+    assert "Npcink Cloud 服务条款" in (
+        cloud_root / "site" / "terms" / "zh" / "terms.html"
+    ).read_text()
 
 
 def test_release_gate_documents_cloud_hardening_blockers() -> None:
@@ -268,3 +307,43 @@ def test_release_gate_documents_cloud_hardening_blockers() -> None:
     assert "deploy/RELEASE_CHECKLIST.md" in playbook_text
     assert "the release is blocked" in playbook_text
     assert "Do not replace it with a second release entry point" in playbook_text
+
+
+def test_lightweight_release_policy_gate_is_documented() -> None:
+    cloud_root = _cloud_root()
+    agents_text = (cloud_root / "AGENTS.md").read_text()
+    policy_text = (cloud_root / "docs" / "cloud-production-release-policy-v1.md").read_text()
+    deploy_text = (cloud_root / "deploy" / "PRODUCTION_GITHUB_DEPLOY.md").read_text()
+    pr_template_text = (cloud_root / ".github" / "pull_request_template.md").read_text()
+    package_text = (cloud_root / "package.json").read_text()
+    script_text = (cloud_root / "scripts" / "check-release-policy.sh").read_text()
+
+    for marker in (
+        "`master` is the development integration branch",
+        "`production` is the production release source",
+        "Do not directly edit production application code on the server.",
+        "Approved for production validation by operator.",
+        "Cloud is not becoming a WordPress write owner",
+    ):
+        assert marker in policy_text
+
+    assert "docs/cloud-production-release-policy-v1.md" in deploy_text
+    assert "pnpm run check:release-policy" in deploy_text
+    assert "/terms/en/terms.html" in deploy_text
+    assert "Focused module:" in pr_template_text
+    assert "Cloud boundary impact:" in pr_template_text
+    assert "does not commit production secrets" in pr_template_text
+    assert "check:release-policy" in package_text
+    assert "Lightweight release policy gate passed" in script_text
+    assert "/terms/en/terms.html" in script_text
+
+    for marker in (
+        "AI Production Operation Rules",
+        "Production source branch is `production`",
+        "Do not directly edit production application code on the server.",
+        "Any emergency server fix must be backported to Git before the next deploy.",
+        "Do not commit SMTP passwords",
+        "Do not push or deploy to Gitee unless the user explicitly asks.",
+        "pnpm run check:release-policy",
+    ):
+        assert marker in agents_text

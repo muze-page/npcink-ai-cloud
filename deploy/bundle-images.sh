@@ -115,6 +115,7 @@ if [ -n "${REMOTE_DOCKER_HOST}" ] && [ "${REMOTE_BUNDLE_ONLY}" = "1" ]; then
 		-C "${CLOUD_DIR}" docker-compose.prod.yml
 		-C "${CLOUD_DIR}" docker-compose.runtime.yml
 		-C "${CLOUD_DIR}" deploy
+		-C "${CLOUD_DIR}" site
 		-C "${CLOUD_DIR}" dist/api.tar.gz
 		-C "${CLOUD_DIR}" dist/worker.tar.gz
 	)
@@ -132,6 +133,7 @@ TAR_ARGS=(
 	-C "${CLOUD_DIR}" docker-compose.prod.yml
 	-C "${CLOUD_DIR}" docker-compose.runtime.yml
 	-C "${CLOUD_DIR}" deploy
+	-C "${CLOUD_DIR}" site
 	-C "${CLOUD_DIR}" dist/api.tar.gz
 	-C "${CLOUD_DIR}" dist/worker.tar.gz
 )

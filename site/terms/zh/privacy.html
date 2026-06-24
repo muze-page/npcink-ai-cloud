@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1">
+	<title>Npcink Cloud 隐私政策</title>
+	<link rel="stylesheet" href="../styles.css">
+</head>
+<body>
+	<header class="site-header">
+		<div class="site-header__inner">
+			<a class="brand" href="index.html">
+				<img src="../assets/icon-128x128.png" alt="Npcink Cloud Addon icon">
+				<span>
+					<strong>Npcink Cloud</strong>
+					<span>服务条款、隐私政策和数据保留</span>
+				</span>
+			</a>
+			<nav class="nav" aria-label="法律页面">
+				<a href="terms.html">服务条款</a>
+				<a href="privacy.html">隐私政策</a>
+				<a href="data-retention.html">数据保留</a>
+				<a href="../en/">English</a>
+			</nav>
+		</div>
+	</header>
+
+	<main class="content">
+		<section class="hero">
+			<div class="hero-card">
+				<div class="eyebrow">隐私政策</div>
+				<h1>Npcink Cloud 隐私政策</h1>
+				<p class="lead">本隐私政策说明，当 WordPress 站点管理员通过 Npcink Cloud Addon 插件将站点连接到 Npcink Cloud 时，Npcink Cloud 可能接收哪些信息。</p>
+			</div>
+		</section>
+
+		<article class="doc">
+			<div class="meta">
+				<div><strong>生效日期：</strong>2026年6月1日</div>
+				<div><strong>运营主体：</strong>麻城市牧泽世华工艺品</div>
+				<div><strong>联系邮箱：</strong>npc@npc.ink</div>
+				<div><strong>服务域名：</strong>https://cloud.npc.ink</div>
+			</div>
+
+			<h2>我们接收的信息</h2>
+			<p>根据站点配置和功能使用情况，发送到 Npcink Cloud 的请求可能包含：配置的 site identifier、key identifier、request timestamp、nonce、trace identifier、idempotency key、HMAC signature headers、Cloud Base URL target、本地 Npcink 组件提供的 runtime request payload、health check requests、run status 和 run result requests、usage、entitlement 和 observability summary requests、管理员启用后的 metadata-only 插件 monitoring events，以及本地 Npcink 组件启用后的 public content-change hints。</p>
+			<p>对于由本地主机提供的 media derivative runtime jobs，请求还可能包含短期 source artifact descriptor、derivative parameters，以及本地主机组件提供的 bounded media derivative inputs。</p>
+
+			<h2>我们不会有意收集的信息</h2>
+			<p>Npcink Cloud Addon 的 metadata-only monitoring 设计为不上传 prompts、generated content、article body content、raw request or response payloads、provider credentials、Cloud API secrets、passwords、cookies、无关系统的 nonces、Authorization headers、database names、table names 或 filesystem paths。</p>
+			<p>Cloud API Key secret 仅由本地 WordPress 站点用于服务端签名，不会打印到 wp-admin 页面。</p>
+
+			<h2>可选监控</h2>
+			<p>插件 monitoring 是可选功能，需要管理员明确 opt-in。启用后，monitoring 可能上传 plugin slug、plugin version、event kind、status、timing、error code、route、proposal id、ability id、correlation id、counters 和 latency 等运行元数据。</p>
+			<p>Monitoring 数据用于提供服务健康、可靠性、质量和诊断摘要。它不是本地 WordPress governance truth。</p>
+
+			<h2>信息用途</h2>
+			<p>Npcink Cloud 可能使用收到的信息来认证和验证签名请求、提供 hosted runtime 功能、返回 health、entitlement 和 usage summaries、处理 bounded media derivative jobs、提供可选 observability 和 quality summaries、保护服务可靠性、防止滥用并排查服务错误。</p>
+
+			<h2>数据共享</h2>
+			<p>我们不会出售个人信息。我们可能仅在运营 Npcink Cloud 所需范围内，与基础设施提供商、安全提供商或服务处理商共享有限数据。</p>
+
+			<h2>数据保留</h2>
+			<p>Operational logs、request metadata、entitlement records 和 monitoring summaries 仅在服务运营、安全、调试、滥用防范、会计或法律要求所需期间保留。</p>
+
+			<h2>删除请求</h2>
+			<p>站点管理员可以通过 <a href="mailto:npc@npc.ink">npc@npc.ink</a> 请求删除与账户相关的服务数据。</p>
+
+			<h2>联系</h2>
+			<p>如有隐私问题，请联系：<a href="mailto:npc@npc.ink">npc@npc.ink</a>。</p>
+		</article>
+	</main>
+
+	<footer class="site-footer">
+		<p>运营主体：麻城市牧泽世华工艺品。联系邮箱：npc@npc.ink。服务域名：https://cloud.npc.ink。</p>
+	</footer>
+</body>
+</html>
