@@ -992,10 +992,22 @@ def test_internal_site_diagnostic_advisor_uses_monitoring_actions(
     }
     assert payload["diagnostic_items"]
     first_item = payload["diagnostic_items"][0]
+    assert first_item["diagnostic_key"]
     assert first_item["source"] == "plugins"
+    assert first_item["workflow_status"] == "new"
+    assert first_item["status_detail"]["workflow_status"] == "new"
+    assert first_item["status_detail"]["status_source"] in {
+        "monitoring_signal",
+        "operator_state",
+    }
+    assert first_item["evidence_window"]["hours"] == 24
+    assert first_item["last_updated_at"]
     assert first_item["operator_review_required"] is True
     assert first_item["direct_wordpress_write"] is False
     assert first_item["recommended_action_id"] == "inspect_plugin_observability_attention"
+    assert payload["diagnostic_workflow"]["new"] >= 1
+    assert payload["diagnostic_workflow"]["needs_attention"] >= 1
+    assert payload["evidence_window"]["hours"] == 24
     assert any(
         action["action"] == "inspect_plugin_observability_attention"
         and action["requires_operator"] is True
@@ -1004,6 +1016,32 @@ def test_internal_site_diagnostic_advisor_uses_monitoring_actions(
     serialized = json.dumps(payload)
     assert "must stay out of advisor response" not in serialized
     assert "payload_json" not in serialized
+
+    attention_key = first_item["diagnostic_key"].replace("plugin_attention:", "", 1)
+    acknowledge_response = client.post(
+        "/internal/service/admin/plugin-observability/attention-state",
+        headers=build_internal_headers(idempotency_key="diag-attention-ack-001"),
+        json={
+            "attention_key": attention_key,
+            "attention_code": first_item["code"],
+            "action": "acknowledge",
+            "site_id": "site_diag",
+            "note": "Operator is reviewing the plugin error.",
+        },
+    )
+    follow_up_response = client.get(
+        "/internal/service/advisor/site-diagnostics?site_id=site_diag&window_hours=24",
+        headers=build_internal_headers(),
+    )
+
+    assert acknowledge_response.status_code == 200, acknowledge_response.text
+    assert follow_up_response.status_code == 200, follow_up_response.text
+    follow_up_item = follow_up_response.json()["data"]["diagnostic_items"][0]
+    assert follow_up_item["workflow_status"] == "acknowledged"
+    assert follow_up_item["status_detail"]["status_source"] == "operator_state"
+    assert follow_up_item["status_detail"]["operator_note"] == (
+        "Operator is reviewing the plugin error."
+    )
 
     dispose_engine(database_url)
 

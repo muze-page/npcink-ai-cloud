@@ -273,6 +273,7 @@ async function installPortalMocks(page: Page) {
         signals: [],
         diagnostic_items: [
           {
+            diagnostic_key: 'plugin_attention:e2e_plugin_runtime_failure',
             code: 'plugin_observability.plugin_error',
             severity: 'warning',
             source: 'plugins',
@@ -281,10 +282,39 @@ async function installPortalMocks(page: Page) {
             likely_cause: 'Plugin telemetry reports active errors.',
             next_step: 'Open Plugins and inspect recent errors.',
             recommended_action_id: 'inspect_plugin_observability_attention',
+            workflow_status: 'new',
+            status_detail: {
+              workflow_status: 'new',
+              status_source: 'monitoring_signal',
+              allowed_statuses: ['new', 'acknowledged', 'muted', 'resolved'],
+              muted_until: '',
+              operator_note: '',
+              updated_at: '2026-04-07T10:00:00Z',
+            },
+            evidence_window: {
+              hours: 24,
+              start_at: '2026-04-06T10:00:00Z',
+              end_at: '2026-04-07T10:00:00Z',
+            },
+            last_updated_at: '2026-04-07T10:00:00Z',
             operator_review_required: true,
             direct_wordpress_write: false,
           },
         ],
+        diagnostic_workflow: {
+          new: 1,
+          acknowledged: 0,
+          muted: 0,
+          resolved: 0,
+          total: 1,
+          needs_attention: 1,
+          allowed_statuses: ['new', 'acknowledged', 'muted', 'resolved'],
+        },
+        evidence_window: {
+          hours: 24,
+          start_at: '2026-04-06T10:00:00Z',
+          end_at: '2026-04-07T10:00:00Z',
+        },
         safety: {
           write_posture: 'suggestion_only',
           direct_wordpress_write: false,
@@ -765,7 +795,10 @@ test('portal monitoring shows diagnostic advisor and routes to plugin evidence',
   await expect(page.getByRole('heading', { name: /site diagnostics/i })).toBeVisible();
   await expect(page.getByText(/suggestion only/i)).toBeVisible();
   await expect(page.getByText(/no direct wordpress write/i)).toBeVisible();
+  await expect(page.getByText(/^New$/i).first()).toBeVisible();
+  await expect(page.getByText(/Evidence window/i)).toBeVisible();
   await expect(page.getByText(/Adapter runtime failure/i)).toBeVisible();
+  await expect(page.getByText(/^new$/i).first()).toBeVisible();
 
   await page.getByRole('button', { name: /Adapter runtime failure/i }).click();
 

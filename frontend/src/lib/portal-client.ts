@@ -525,7 +525,33 @@ export interface PortalDiagnosticAdvisorSafety {
   raw_payload_exposed: boolean;
 }
 
+export interface PortalDiagnosticEvidenceWindow {
+  hours: number;
+  start_at: string;
+  end_at: string;
+}
+
+export interface PortalDiagnosticStatusDetail {
+  workflow_status: string;
+  status_source: string;
+  allowed_statuses: string[];
+  muted_until: string;
+  operator_note: string;
+  updated_at: string;
+}
+
+export interface PortalDiagnosticWorkflowSummary {
+  new: number;
+  acknowledged: number;
+  muted: number;
+  resolved: number;
+  total: number;
+  needs_attention: number;
+  allowed_statuses: string[];
+}
+
 export interface PortalDiagnosticItem {
+  diagnostic_key: string;
   code: string;
   severity: 'warning' | 'error' | 'info' | string;
   source: string;
@@ -534,6 +560,10 @@ export interface PortalDiagnosticItem {
   likely_cause: string;
   next_step: string;
   recommended_action_id: string;
+  workflow_status: 'new' | 'acknowledged' | 'muted' | 'resolved' | string;
+  status_detail: PortalDiagnosticStatusDetail;
+  evidence_window: PortalDiagnosticEvidenceWindow;
+  last_updated_at: string;
   operator_review_required: boolean;
   direct_wordpress_write: boolean;
 }
@@ -555,6 +585,8 @@ export interface PortalDiagnosticAdvisorSummary {
   };
   signals: Array<Record<string, unknown>>;
   diagnostic_items: PortalDiagnosticItem[];
+  diagnostic_workflow?: PortalDiagnosticWorkflowSummary;
+  evidence_window?: PortalDiagnosticEvidenceWindow;
   safety: PortalDiagnosticAdvisorSafety;
   generated_at: string;
   site_id?: string;

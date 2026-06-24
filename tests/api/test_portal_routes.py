@@ -730,6 +730,17 @@ def test_portal_site_diagnostic_advisor_is_scoped_and_read_only(tmp_path: Path) 
     assert data["safety"]["automatic_repair_allowed"] is False
     assert data["diagnostic_items"]
     assert any(item["source"] == "plugins" for item in data["diagnostic_items"])
+    assert data["diagnostic_workflow"]["new"] >= 1
+    assert data["diagnostic_workflow"]["needs_attention"] >= 1
+    assert data["evidence_window"]["hours"] == 24
+    first_item = data["diagnostic_items"][0]
+    assert first_item["workflow_status"] == "new"
+    assert first_item["status_detail"]["allowed_statuses"] == [
+        "new",
+        "acknowledged",
+        "muted",
+        "resolved",
+    ]
     serialized = json.dumps(data)
     assert "portal raw payload must not leak" not in serialized
     assert "payload_json" not in serialized

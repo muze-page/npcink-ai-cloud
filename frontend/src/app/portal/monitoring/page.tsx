@@ -79,6 +79,20 @@ function statusTone(status: string): 'ok' | 'warning' | 'error' | 'inactive' {
   return 'inactive';
 }
 
+function diagnosticWorkflowLabel(status: string): string {
+  if (status === 'acknowledged') return 'acknowledged';
+  if (status === 'muted') return 'muted';
+  if (status === 'resolved') return 'resolved';
+  return 'new';
+}
+
+function diagnosticWorkflowTone(status: string): string {
+  if (status === 'resolved') return 'success';
+  if (status === 'muted') return 'inactive';
+  if (status === 'acknowledged') return 'warning';
+  return 'warning';
+}
+
 function resolveActionTarget(
   item: PortalMonitoringOverviewAction,
   siteId: string
@@ -641,6 +655,11 @@ function DiagnosticAdvisorPanel({
   const { t } = useLocale();
   const items = advisor?.diagnostic_items || [];
   const visibleItems = items.slice(0, 3);
+  const workflow = advisor?.diagnostic_workflow;
+  const evidenceWindow = advisor?.evidence_window;
+  const evidenceWindowLabel = evidenceWindow?.hours
+    ? `${evidenceWindow.hours}h`
+    : String(advisor?.filters?.window_hours || '');
   const hasUnsafeWritePosture =
     Boolean(advisor?.safety?.direct_wordpress_write) || Boolean(advisor?.safety?.automatic_repair_allowed);
   const status = advisor?.severity || advisor?.status || (items.length ? 'warning' : 'inactive');
@@ -673,6 +692,40 @@ function DiagnosticAdvisorPanel({
         </BackofficeTag>
       </div>
 
+      {advisor ? (
+        <BackofficeMetricStrip
+          columnsClassName="md:grid-cols-2 xl:grid-cols-4"
+          items={[
+            {
+              label: t('portal.monitoring.diagnostic_new', {}, 'New'),
+              value: formatNumber(Number(workflow?.new || 0)),
+              detail: t('portal.monitoring.diagnostic_new_detail', {}, 'Needs review'),
+              size: 'compact',
+            },
+            {
+              label: t('portal.monitoring.diagnostic_acknowledged', {}, 'Acknowledged'),
+              value: formatNumber(Number(workflow?.acknowledged || 0)),
+              detail: t('portal.monitoring.diagnostic_acknowledged_detail', {}, 'Operator noted'),
+              size: 'compact',
+            },
+            {
+              label: t('portal.monitoring.evidence_window', {}, 'Evidence window'),
+              value: evidenceWindowLabel || t('common.not_found'),
+              detail: evidenceWindow?.end_at
+                ? `${t('portal.monitoring.window_end', {}, 'Ends')}: ${formatDate(evidenceWindow.end_at)}`
+                : t('common.not_found'),
+              size: 'compact',
+            },
+            {
+              label: t('portal.monitoring.generated_at', {}, 'Generated'),
+              value: advisor.generated_at ? formatDate(advisor.generated_at) : t('common.not_found'),
+              detail: `${t('portal.monitoring.diagnostic_total', {}, 'Total')}: ${formatNumber(Number(workflow?.total || items.length))}`,
+              size: 'compact',
+            },
+          ]}
+        />
+      ) : null}
+
       {isLoading ? (
         <div className="rounded-[0.75rem] border border-dashed border-slate-200 p-4 text-sm text-slate-600 dark:border-slate-800 dark:text-slate-300">
           {t('portal.monitoring.loading_diagnostics', {}, 'Loading diagnostic recommendations.')}
@@ -704,6 +757,10 @@ function DiagnosticAdvisorPanel({
                     <div className="flex flex-wrap items-center gap-2">
                       <p className="text-sm font-semibold text-slate-950 dark:text-white">{item.title}</p>
                       <BackofficeStatusBadge status={item.severity} label={item.source} />
+                      <BackofficeStatusBadge
+                        status={diagnosticWorkflowTone(item.workflow_status)}
+                        label={diagnosticWorkflowLabel(item.workflow_status)}
+                      />
                     </div>
                     <p className="mt-2 text-sm leading-6 text-slate-600 dark:text-slate-300">
                       {item.evidence_summary}
@@ -724,8 +781,13 @@ function DiagnosticAdvisorPanel({
                     </div>
                   </div>
                   {target ? (
-                    <span className="shrink-0 text-xs font-semibold leading-5 text-slate-700 dark:text-slate-200">
-                      {target.label}
+                    <span className="shrink-0 space-y-1 text-xs font-semibold leading-5 text-slate-700 dark:text-slate-200">
+                      <span className="block">{target.label}</span>
+                      {item.last_updated_at ? (
+                        <span className="block font-medium text-slate-500 dark:text-slate-400">
+                          {formatDate(item.last_updated_at)}
+                        </span>
+                      ) : null}
                     </span>
                   ) : null}
                 </div>

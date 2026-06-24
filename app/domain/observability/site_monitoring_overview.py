@@ -335,6 +335,9 @@ class SiteMonitoringOverviewService:
                     detail=str(item.get("detail") or item.get("summary") or ""),
                     suggested_action=str(item.get("suggested_action") or "Open plugin monitoring."),
                     sort_weight=30,
+                    attention_key=str(item.get("attention_key") or ""),
+                    workflow_status=workflow_status,
+                    state=state,
                 )
             )
 
@@ -611,8 +614,11 @@ class SiteMonitoringOverviewService:
         detail: str,
         suggested_action: str,
         sort_weight: int,
+        attention_key: str = "",
+        workflow_status: str = "active",
+        state: dict[str, Any] | None = None,
     ) -> dict[str, object]:
-        return {
+        action: dict[str, object] = {
             "code": code,
             "severity": severity if severity in {"warning", "error"} else "warning",
             "source": source,
@@ -620,7 +626,13 @@ class SiteMonitoringOverviewService:
             "detail": detail,
             "suggested_action": suggested_action,
             "sort_weight": sort_weight,
+            "workflow_status": workflow_status if workflow_status else "active",
         }
+        if attention_key:
+            action["attention_key"] = attention_key
+        if state:
+            action["state"] = state
+        return action
 
     def _status_from_score(self, score: int) -> str:
         if score < 70:
