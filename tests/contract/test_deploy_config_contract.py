@@ -242,8 +242,10 @@ def test_deploy_bundle_smoke_uses_sample_provider_and_skip_frontend_contract() -
     assert "./site:/usr/share/nginx/html/npcink-site:ro" in runtime_compose_text
     assert "-C \"${CLOUD_DIR}\" site" in bundle_script
     assert "location = /terms" in nginx_prod_conf
+    assert "try_files /terms/index.html =404;" in nginx_prod_conf
     assert "location /terms/" in nginx_prod_conf
     assert "root /usr/share/nginx/html/npcink-site;" in nginx_prod_conf
+    assert "\"${BASE_URL%/}/terms\"" in remote_smoke_script
     assert "/terms/en/terms.html" in remote_smoke_script
     assert "/terms/zh/terms.html" in remote_smoke_script
     assert "/terms/styles.css" in remote_smoke_script

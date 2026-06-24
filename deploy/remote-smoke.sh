@@ -311,6 +311,10 @@ else
 	assert_body_contains "${HTTP_BODY}" "_next/" "portal login page should be served by Next frontend"
 fi
 
+http_request "GET" "${BASE_URL%/}/terms" ""
+assert_status "${HTTP_STATUS}" "200" "terms index should be served by the production static path without exposing internal proxy redirects"
+assert_body_contains "${HTTP_BODY}" "Npcink Cloud legal documents" "terms index should include the expected title"
+
 http_request "GET" "${BASE_URL%/}/terms/en/terms.html" ""
 assert_status "${HTTP_STATUS}" "200" "English terms page should be served by the production static path"
 assert_body_contains "${HTTP_BODY}" "Npcink Cloud Terms of Service" "English terms page should include the expected title"
