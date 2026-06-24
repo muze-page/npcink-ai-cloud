@@ -1439,7 +1439,7 @@ Notes:
   `.env.deploy`, persisted database drift, release carry-forward behavior, or
   provider reachability before suspecting the local source tree.
 - `env-to-ssh-host.sh` updates the remote release `.env.deploy` in place,
-  carries the same values into the shared `/opt/npcink-cloud/.env.deploy`
+  carries the same values into the shared `/opt/npcink-ai-cloud/.env.deploy`
   file, and restarts `api,worker` by default so new provider env takes effect
   immediately without a full redeploy.
 - Final off-machine deploy evidence still requires a real external host; this
@@ -1463,7 +1463,7 @@ pnpm run env:ssh -- \
 After syncing env, confirm readiness before running Anthropic smoke:
 
 ```bash
-ssh root@your-cloud-host 'cd /opt/npcink-cloud/current && bash -s' \
+ssh root@your-cloud-host 'cd /opt/npcink-ai-cloud/current && bash -s' \
   < deploy/remote-provider-status.sh
 ```
 

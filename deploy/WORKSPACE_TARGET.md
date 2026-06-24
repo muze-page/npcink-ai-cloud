@@ -24,19 +24,19 @@ history.
 - Current remote provider mode: OpenAI provider is configured against
   `https://api.deepseek.com/v1`
 - Current remote `.env.deploy` already contains active internal auth and provider
-  credentials; local `cloud/.env.deploy` has been synced from the remote target
+  credentials; local `.env.deploy` has been synced from the remote target
   for workspace handoff
 
 ## Saved launcher file
 
-- Shell exports: `cloud/deploy/workspace-target.env.sh`
-- Deploy env template: `cloud/.env.deploy`
-- Host nginx bind helper: `cloud/deploy/bind-domain-to-ssh-host.sh`
+- Shell exports: `deploy/workspace-target.env.sh`
+- Deploy env template: `.env.deploy`
+- Host nginx bind helper: `deploy/bind-domain-to-ssh-host.sh`
 
 Load it with:
 
 ```bash
-source cloud/deploy/workspace-target.env.sh
+source deploy/workspace-target.env.sh
 ```
 
 ## Current deploy loop
@@ -44,65 +44,65 @@ source cloud/deploy/workspace-target.env.sh
 Local inner loop:
 
 ```bash
-pnpm run cloud:test
-pnpm run check:cloud:perimeter
+pnpm run test
+pnpm run check:perimeter
 pnpm run smoke:local-alpha
 ```
 
 Bundle replay before remote deploy:
 
 ```bash
-pnpm run check:e2e:cloud-deploy-bundle:smoke
+pnpm run check:e2e:deploy-bundle:smoke
 ```
 
 Fast remote iteration after local checks pass:
 
 ```bash
-source cloud/deploy/workspace-target.env.sh
-pnpm run cloud:deploy:ssh -- --skip-bundle-build --skip-seed
+source deploy/workspace-target.env.sh
+pnpm run deploy:ssh -- --skip-bundle-build --skip-seed
 ```
 
 If only env values changed:
 
 ```bash
-source cloud/deploy/workspace-target.env.sh
-pnpm run cloud:env:ssh
+source deploy/workspace-target.env.sh
+pnpm run env:ssh
 ```
 
 ## Current release verification
 
-- `pnpm run check:e2e:cloud-deploy-bundle:smoke` -> passed
-- `pnpm run cloud:deploy:ssh` -> passed
+- `pnpm run check:e2e:deploy-bundle:smoke` -> passed
+- `pnpm run deploy:ssh` -> passed
 - `GET ${NPCINK_CLOUD_BASE_URL}/health/live` -> `200 OK`
 - `GET ${NPCINK_CLOUD_BASE_URL}/` -> buyer-facing home page present
 - `GET ${NPCINK_CLOUD_BASE_URL}/portal/login` -> portal login present
 
 Formal release gating now follows:
 
-- `cloud/deploy/RELEASE_CHECKLIST.md`
+- `deploy/RELEASE_CHECKLIST.md`
 
 Current remote portal verification commands:
 
 ```bash
-source cloud/deploy/workspace-target.env.sh
-pnpm run cloud:portal:bind:ssh -- --site-id <site-id> --member-email <email>
-pnpm run cloud:portal:smoke:ssh -- --site-id <site-id> --member-email <email>
+source deploy/workspace-target.env.sh
+pnpm run portal:bind:ssh -- --site-id <site-id> --member-email <email>
+pnpm run portal:smoke:ssh -- --site-id <site-id> --member-email <email>
 ```
 
 Dev-only development-code verification now uses a separate helper under
 `deploy/dev/`:
 
 ```bash
-source cloud/deploy/workspace-target.env.sh
+source deploy/workspace-target.env.sh
 bash deploy/dev/remote-portal-login-code-smoke.sh --site-id <site-id> --member-email <email>
 ```
 
 Preferred real-site portal verification commands:
 
 ```bash
-source cloud/deploy/workspace-target.env.sh
-pnpm run cloud:portal:bind:ssh -- --site-id <site-id> --member-email <email>
-pnpm run cloud:portal:smoke:ssh -- --site-id <site-id> --member-email <email>
+source deploy/workspace-target.env.sh
+pnpm run portal:bind:ssh -- --site-id <site-id> --member-email <email>
+pnpm run portal:smoke:ssh -- --site-id <site-id> --member-email <email>
 ```
 
 Short runbook:

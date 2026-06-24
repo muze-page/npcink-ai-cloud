@@ -62,7 +62,7 @@ GA-style customer billing front-office narrative.
 - Tailwind CSS `3.4`
 - ESLint `8` + `eslint-config-next`
 - Playwright for screenshot and smoke coverage
-- Docker local development via `cloud/docker-compose.dev.yml`
+- Docker local development via the repository root `docker-compose.dev.yml`
 
 Current dev compose runs the frontend with:
 
@@ -77,22 +77,22 @@ is actually migrated.
 
 Local development uses:
 
-- `cloud/.env`
-- `cloud/.env.local`
+- `.env`
+- `.env.local`
 
-`cloud/.env.local` is for local-only debug credentials and is gitignored.
+`.env.local` is for local-only debug credentials and is gitignored.
 Production-style remote deploys use:
 
-- `cloud/.env.deploy`
+- `.env.deploy`
 
 Do not move local debug tokens into deploy env files.
 
 ## Local Development
 
-Preferred entrypoint from `../../magick-ai`:
+Preferred entrypoint from the repository root:
 
 ```bash
-pnpm run cloud:dev
+pnpm run dev
 ```
 
 Local development URL:
@@ -114,19 +114,19 @@ Compose roles:
 
 ## Frontend Verification
 
-Run from `../../magick-ai`:
+Run from the repository root:
 
 ```bash
-pnpm run cloud:frontend:type-check
-pnpm run cloud:frontend:lint
-pnpm run check:visual:cloud-frontend
+pnpm run frontend:type-check
+pnpm run frontend:lint
+pnpm run check:visual:frontend
 ```
 
 Additional Cloud seam checks when the task touches auth, env, proxy, or BFF:
 
 ```bash
-pnpm run cloud:test:api
-pnpm run check:cloud:perimeter
+pnpm run test:api
+pnpm run check:perimeter
 ```
 
 ## i18n Rules

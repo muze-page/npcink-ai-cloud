@@ -199,7 +199,7 @@ All items in this section are `Required`.
 
 ## 8. Optional But Recommended
 
-- [ ] run `pnpm run check:e2e:cloud-deploy-bundle:smoke` before deploy
+- [ ] run `pnpm run check:e2e:deploy-bundle:smoke` before deploy
 - [ ] run remote portal smoke for a real invited user admin after deploy
 - [ ] verify one non-empty commercial/admin page:
   - `/admin/plans`

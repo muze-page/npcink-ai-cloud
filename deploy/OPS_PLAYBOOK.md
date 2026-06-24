@@ -4,7 +4,7 @@
 >
 > Updated: 2026-04-15
 >
-> Scope: `cloud/**` production operations, cadence recovery, addon projection-first runbook, release-time troubleshooting
+> Scope: standalone `npcink-ai-cloud` production operations, cadence recovery, addon projection-first runbook, release-time troubleshooting
 
 ## Purpose
 
@@ -77,7 +77,9 @@ Manual refresh guidance:
 Run on the release host:
 
 ```bash
-  docker compose -f cloud/docker-compose.prod.yml restart worker callback-worker ops-worker
+cd /opt/npcink-ai-cloud
+COMPOSE_PROJECT_NAME="${NPCINK_CLOUD_COMPOSE_PROJECT_NAME:-npcink-ai-cloud}" \
+  docker compose -f docker-compose.prod.yml restart worker callback-worker ops-worker
 ```
 
 Then verify:

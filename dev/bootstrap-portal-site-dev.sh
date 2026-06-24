@@ -8,9 +8,14 @@ for arg in "$@"; do
 	if [ "${arg}" = "--" ]; then
 		continue
 	fi
+	if [ "${arg}" = "--member-email" ]; then
+		ARGS+=("--site-admin-email")
+		continue
+	fi
 	ARGS+=("${arg}")
 done
 
-cd "${ROOT_DIR}/.."
-docker compose -f cloud/docker-compose.dev.yml run --rm api \
+cd "${ROOT_DIR}"
+COMPOSE_PROJECT_NAME="${NPCINK_CLOUD_COMPOSE_PROJECT_NAME:-${COMPOSE_PROJECT_NAME:-npcink-ai-cloud}}" \
+	docker compose -f docker-compose.dev.yml run --rm api \
 	python -m app.dev.bootstrap_portal_site "${ARGS[@]}"

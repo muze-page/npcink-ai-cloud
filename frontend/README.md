@@ -106,17 +106,17 @@ Commercial copy freeze for frontend surfaces:
 
 ### Preferred local dev
 
-From `../../magick-ai`:
+From the repository root:
 
 ```bash
-pnpm run cloud:dev
+pnpm run dev
 ```
 
 Unified local dev entry:
 
 - `http://127.0.0.1:8010`
 
-The dev stack is served through `cloud/docker-compose.dev.yml`:
+The dev stack is served through `docker-compose.dev.yml`:
 
 - `frontend` runs `next dev --webpack`
 - `proxy` exposes the unified local dev entry on port `8010`
@@ -124,7 +124,7 @@ The dev stack is served through `cloud/docker-compose.dev.yml`:
 
 ### Frontend-only commands
 
-From `../../cloud/frontend`:
+From `frontend/`:
 
 ```bash
 pnpm dev
@@ -150,10 +150,10 @@ Cloud frontend Playwright runs use one shared browser cache path by default:
 - `PLAYWRIGHT_BROWSERS_PATH=~/.local/share/magick-ai-playwright`
 
 This matches the project runner in
-[`cloud/scripts/run-cloud-frontend-playwright.js`](../../cloud/scripts/run-cloud-frontend-playwright.js)
+[`scripts/run-cloud-frontend-playwright.js`](../scripts/run-cloud-frontend-playwright.js)
 and avoids re-downloading Chromium into ad-hoc cache locations.
 
-From `../../cloud/frontend`:
+From `frontend/`:
 
 ```bash
 pnpm run playwright:browsers:check
@@ -184,12 +184,12 @@ Browser cache hygiene:
 
 ## Verification
 
-From `../../magick-ai`:
+From the repository root:
 
 ```bash
-pnpm run cloud:frontend:type-check
-pnpm run cloud:frontend:lint
-pnpm run check:visual:cloud-frontend
+pnpm run frontend:type-check
+pnpm run frontend:lint
+pnpm run check:visual:frontend
 ```
 
 When a task touches auth, admin, portal BFF, env, or proxy seams, keep using the
@@ -219,11 +219,11 @@ portal look like a reduced operator console.
 
 Keep local-only debug credentials in:
 
-- `cloud/.env.local`
+- `.env.local`
 
 That file is gitignored and used by local dev compose. Production-style remote
 deploys use:
 
-- `cloud/.env.deploy`
+- `.env.deploy`
 
 Do not copy local debug tokens into deploy env files.
