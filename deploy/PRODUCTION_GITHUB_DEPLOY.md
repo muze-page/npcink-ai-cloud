@@ -4,6 +4,14 @@ This repository uses `production` as the production release source for
 `https://cloud.npc.ink`. Protect the branch when the GitHub plan/repository
 visibility supports branch protection rules.
 
+The current early-validation process gate is
+[`docs/cloud-production-release-policy-v1.md`](../docs/cloud-production-release-policy-v1.md).
+Run it locally with:
+
+```bash
+pnpm run check:release-policy
+```
+
 ## Branch Model
 
 - `master`: development integration branch.

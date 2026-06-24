@@ -12,6 +12,7 @@
     "test:api": "docker compose -f docker-compose.dev.yml run --rm -e NPCINK_CLOUD_OPENAI_API_KEY= -e NPCINK_CLOUD_OPENAI_COMPATIBLE_API_KEY= api pytest tests/api",
     "test:domain": "docker compose -f docker-compose.dev.yml run --rm -e NPCINK_CLOUD_OPENAI_API_KEY= -e NPCINK_CLOUD_OPENAI_COMPATIBLE_API_KEY= api pytest tests/domain",
     "check:fast": "pnpm run test:contract && pnpm run test:domain",
+    "check:release-policy": "bash scripts/check-release-policy.sh",
     "check:seam": "pnpm run test:api && pnpm run check:perimeter",
     "check:perimeter": "make perimeter",
     "check:anti-drift": "node scripts/check-cloud-anti-drift.js",

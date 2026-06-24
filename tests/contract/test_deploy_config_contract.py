@@ -268,3 +268,29 @@ def test_release_gate_documents_cloud_hardening_blockers() -> None:
     assert "deploy/RELEASE_CHECKLIST.md" in playbook_text
     assert "the release is blocked" in playbook_text
     assert "Do not replace it with a second release entry point" in playbook_text
+
+
+def test_lightweight_release_policy_gate_is_documented() -> None:
+    cloud_root = _cloud_root()
+    policy_text = (cloud_root / "docs" / "cloud-production-release-policy-v1.md").read_text()
+    deploy_text = (cloud_root / "deploy" / "PRODUCTION_GITHUB_DEPLOY.md").read_text()
+    pr_template_text = (cloud_root / ".github" / "pull_request_template.md").read_text()
+    package_text = (cloud_root / "package.json").read_text()
+    script_text = (cloud_root / "scripts" / "check-release-policy.sh").read_text()
+
+    for marker in (
+        "`master` is the development integration branch",
+        "`production` is the production release source",
+        "Do not directly edit production application code on the server.",
+        "Approved for production validation by operator.",
+        "Cloud is not becoming a WordPress write owner",
+    ):
+        assert marker in policy_text
+
+    assert "docs/cloud-production-release-policy-v1.md" in deploy_text
+    assert "pnpm run check:release-policy" in deploy_text
+    assert "Focused module:" in pr_template_text
+    assert "Cloud boundary impact:" in pr_template_text
+    assert "does not commit production secrets" in pr_template_text
+    assert "check:release-policy" in package_text
+    assert "Lightweight release policy gate passed" in script_text
