@@ -342,6 +342,11 @@ fi
 export NPCINK_CLOUD_SKIP_FRONTEND_IMAGE="${SKIP_FRONTEND_IMAGE}"
 if [ -n "${REMOTE_COMPOSE_FILE}" ]; then
 	export NPCINK_CLOUD_COMPOSE_FILE="${RELEASE_DIR}/${REMOTE_COMPOSE_FILE}"
+	if [ ! -f "${NPCINK_CLOUD_COMPOSE_FILE}" ]; then
+		echo "[fail] Remote compose file not found: ${NPCINK_CLOUD_COMPOSE_FILE}" >&2
+		exit 1
+	fi
+	echo "[info] Remote compose file: ${NPCINK_CLOUD_COMPOSE_FILE}"
 fi
 
 ln -sfn "${RELEASE_DIR}" "${CURRENT_LINK}"

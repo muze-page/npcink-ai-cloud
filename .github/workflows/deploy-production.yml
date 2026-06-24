@@ -15,11 +15,22 @@ jobs:
   deploy:
     name: Deploy to cloud.npc.ink
     runs-on: ubuntu-latest
-    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    if: >-
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/production') ||
+      (github.event_name == 'workflow_run' &&
+       github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.head_branch == 'production')
     environment: production
     permissions:
       contents: read
     steps:
+      - name: Show deploy trigger
+        run: |
+          echo "event=${{ github.event_name }}"
+          echo "ref=${{ github.ref }}"
+          echo "workflow_run_head_branch=${{ github.event.workflow_run.head_branch }}"
+          echo "workflow_run_head_sha=${{ github.event.workflow_run.head_sha }}"
+
       - name: Checkout
         uses: actions/checkout@v4
         with:
