@@ -39,8 +39,6 @@ const nextConfig = {
     root: workspaceRoot,
   },
   env: {
-    CLOUD_API_BASE_URL: process.env.CLOUD_API_BASE_URL,
-    CLOUD_PUBLIC_BASE_URL: process.env.CLOUD_PUBLIC_BASE_URL,
     NEXT_PUBLIC_MINI_DEV_HOST_ALLOWLIST: miniDevOrigins.join(','),
   },
 };
