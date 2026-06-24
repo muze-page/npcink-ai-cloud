@@ -11,6 +11,11 @@
 - Explicit non-goals:
 - Cloud boundary impact:
 
+## Release Gate
+
+- [ ] This PR does not commit production secrets, SMTP passwords, provider keys, DB credentials, or internal tokens.
+- [ ] This PR does not make Cloud a WordPress write owner, second ability registry, second workflow registry, or second local control plane.
+
 ## Cloud Boundary
 
 - [ ] Cloud remains the hosted runtime enhancement layer.
