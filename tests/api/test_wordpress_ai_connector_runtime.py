@@ -20,12 +20,18 @@ from app.core.db import get_session, init_schema
 from app.core.models import RunRecord
 from app.core.services import CloudServices
 from app.domain.catalog.service import CatalogService
+from app.domain.wordpress_ai_connector.routing_profiles import (
+    WP_AI_CONNECTOR_CLASSIFICATION_PROFILE_ID,
+    WP_AI_CONNECTOR_EDITORIAL_PROFILE_ID,
+    WP_AI_CONNECTOR_SHORT_TEXT_PROFILE_ID,
+)
 from tests.conftest import (
     TEST_ADMIN_SESSION_SECRET,
     TEST_KEY_ID,
     TEST_PORTAL_JWT_SECRET,
     TEST_SECRET,
     build_auth_headers,
+    build_internal_headers,
     merge_json_headers,
     seed_site_auth,
 )
@@ -207,7 +213,8 @@ def test_wordpress_ai_connector_runtime_executes_scene_bound_text(tmp_path: Path
     assert data["execution_context"]["data_classification"] == "public_site_content"
     assert provider.requests[0].ability_name == "npcink-cloud/wp-ai-connector"
     assert provider.requests[0].execution_kind == "text"
-    assert provider.requests[0].timeout_ms == 60000
+    assert provider.requests[0].profile_id == WP_AI_CONNECTOR_SHORT_TEXT_PROFILE_ID
+    assert provider.requests[0].timeout_ms == 20000
     provider_input = provider.requests[0].input_payload
     assert "messages" not in provider_input
     assert "tools" not in provider_input
@@ -223,8 +230,16 @@ def test_wordpress_ai_connector_runtime_executes_scene_bound_text(tmp_path: Path
         assert run.ability_name == "npcink-cloud/wp-ai-connector"
         assert run.channel == "wordpress_ai_connector"
         assert run.execution_kind == "text"
+        assert run.profile_id == WP_AI_CONNECTOR_SHORT_TEXT_PROFILE_ID
+        assert run.policy_json["managed_surface"] == "wordpress_ai_connector"
+        assert run.policy_json["task_group"] == "short_text"
+        assert run.policy_json["timeout_ms"] == 20000
         assert run.policy_json["execution_contract"]["contract_version"] == (
             "wp_ai_connector_runtime.v1"
+        )
+        assert (
+            run.policy_json["execution_contract"]["managed_surface"]
+            == "wordpress_ai_connector"
         )
 
 
@@ -254,6 +269,7 @@ def test_wordpress_ai_connector_runtime_projects_classification_json_scene(
     assert "\"suggestions\"" in provider_input["input"]
     assert provider_input["max_tokens"] == 220
     assert provider_input["max_output_tokens"] == 220
+    assert provider.requests[0].profile_id == WP_AI_CONNECTOR_CLASSIFICATION_PROFILE_ID
     result = json.loads(response.json()["data"]["result"]["output_text"])
     assert result["suggestions"]
     assert all("term" in suggestion for suggestion in result["suggestions"])
@@ -271,7 +287,10 @@ def test_wordpress_ai_connector_runtime_normalizes_meta_description_scene(
         {
             "task": "meta_description",
             "request": {
-                "prompt": "为这篇文章生成 SEO 描述：Npcink Cloud Addon 让 WordPress AI 插件在固定能力场景中调用云端运行时，只提供建议式输出，不提供通用聊天入口。",
+                "prompt": (
+                    "为这篇文章生成 SEO 描述：Npcink Cloud Addon 让 WordPress AI 插件"
+                    "在固定能力场景中调用云端运行时，只提供建议式输出，不提供通用聊天入口。"
+                ),
             },
         }
     )
@@ -308,6 +327,7 @@ def test_wordpress_ai_connector_runtime_normalizes_summary_text_scene(
     provider_input = provider.requests[0].input_payload
     assert "Return only the summary" in provider_input["input"]
     assert provider_input["max_tokens"] == 160
+    assert provider.requests[0].profile_id == WP_AI_CONNECTOR_EDITORIAL_PROFILE_ID
     result_text = response.json()["data"]["result"]["output_text"]
     assert "**" not in result_text
     assert "###" not in result_text
@@ -351,3 +371,101 @@ def test_wordpress_ai_connector_runtime_rejects_generic_chat_shape(tmp_path: Pat
     payload = response.json()
     assert payload["error_code"] == "wp_ai_connector.chat_or_secret_field_forbidden"
     assert provider.requests == []
+
+
+def test_admin_wordpress_ai_routing_updates_platform_managed_candidates(
+    tmp_path: Path,
+) -> None:
+    database_url, client, _ = _build_client(tmp_path)
+
+    get_response = client.get(
+        "/internal/service/admin/wordpress-ai-routing",
+        headers=build_internal_headers(),
+    )
+
+    assert get_response.status_code == 200
+    data = get_response.json()["data"]
+    assert data["customer_model_selection"] is False
+    assert data["direct_wordpress_write"] is False
+    short_text = next(
+        profile
+        for profile in data["profiles"]
+        if profile["profile_id"] == WP_AI_CONNECTOR_SHORT_TEXT_PROFILE_ID
+    )
+    assert short_text["tasks"] == [
+        "alt_text_suggest",
+        "excerpt_generation",
+        "meta_description",
+        "title_generation",
+    ]
+
+    response = client.post(
+        "/internal/service/admin/wordpress-ai-routing",
+        headers=merge_json_headers(
+            build_internal_headers(idempotency_key="wp-ai-routing-admin-save-001")
+        ),
+        json={
+            "profiles": [
+                {
+                    "profile_id": WP_AI_CONNECTOR_SHORT_TEXT_PROFILE_ID,
+                    "candidate_instance_ids": ["openai-wp-ai-connector-test"],
+                    "timeout_ms": 12000,
+                    "allow_fallback": True,
+                    "max_retries": 1,
+                    "note": "short-text canary",
+                }
+            ]
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()["data"]
+    assert payload["receipt"]["event_kind"] == "wordpress_ai_routing.update"
+    updated = next(
+        profile
+        for profile in payload["profiles"]
+        if profile["profile_id"] == WP_AI_CONNECTOR_SHORT_TEXT_PROFILE_ID
+    )
+    assert updated["candidate_instance_ids"] == ["openai-wp-ai-connector-test"]
+    assert updated["timeout_ms"] == 12000
+    assert updated["max_retries"] == 1
+
+    run_response = _execute(
+        client,
+        _payload(),
+        idempotency_key="wp-ai-routing-admin-run-after-save",
+    )
+
+    assert run_response.status_code == 200
+    with get_session(database_url) as session:
+        run = session.execute(
+            select(RunRecord).where(RunRecord.run_id == run_response.json()["data"]["run_id"])
+        ).scalar_one()
+        assert run.profile_id == WP_AI_CONNECTOR_SHORT_TEXT_PROFILE_ID
+        assert run.policy_json["timeout_ms"] == 12000
+        assert run.policy_json["max_retries"] == 1
+
+
+def test_admin_wordpress_ai_routing_rejects_unknown_profile(tmp_path: Path) -> None:
+    _, client, _ = _build_client(tmp_path)
+
+    response = client.post(
+        "/internal/service/admin/wordpress-ai-routing",
+        headers=merge_json_headers(
+            build_internal_headers(idempotency_key="wp-ai-routing-admin-save-unknown")
+        ),
+        json={
+            "profiles": [
+                {
+                    "profile_id": "text.balanced",
+                    "candidate_instance_ids": ["openai-wp-ai-connector-test"],
+                    "timeout_ms": 12000,
+                    "allow_fallback": True,
+                    "max_retries": 0,
+                }
+            ]
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error_code"] == "wordpress_ai_routing.invalid_profile"

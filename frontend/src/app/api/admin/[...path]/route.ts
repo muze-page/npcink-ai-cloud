@@ -99,6 +99,12 @@ function buildAdminBackendPath(pathSegments: string[], method: string): string {
   ) {
     return '/internal/service/admin/ai-resources/profile-preferences';
   }
+  if (
+    upperMethod === 'POST' &&
+    normalized === 'wordpress-ai-routing'
+  ) {
+    return '/internal/service/admin/wordpress-ai-routing';
+  }
 
   return normalized ? `/internal/service/${normalized}` : '/internal/service';
 }

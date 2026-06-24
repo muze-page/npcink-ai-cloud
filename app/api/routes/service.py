@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import APIRouter, BackgroundTasks, Query, Request
@@ -9,8 +9,10 @@ from pydantic import BaseModel, Field
 
 from app.adapters.providers.base import ProviderExecutionError
 from app.adapters.providers.registry import resolve_live_provider_adapters
+from app.adapters.repositories.catalog_repository import CatalogRepository
 from app.api.auth import authorize_internal_request, get_cloud_services
 from app.api.envelope import build_envelope
+from app.core.db import get_session
 from app.core.security import extract_trace_id
 from app.domain.advisor.service import InternalAIAdvisorService
 from app.domain.agent_feedback.service import AgentFeedbackService
@@ -50,6 +52,10 @@ from app.domain.runtime.service import RuntimeRunNotFoundError, RuntimeService
 from app.domain.site_knowledge.metrics import SiteKnowledgeObservabilityService
 from app.domain.usage.rollup import UsageRollupService
 from app.domain.web_search.admin_config import WebSearchAdminConfigService
+from app.domain.wordpress_ai_connector.routing_profiles import (
+    WP_AI_CONNECTOR_PROFILE_SPECS,
+    WP_AI_CONNECTOR_PROFILE_SPECS_BY_ID,
+)
 from app.workers.ops_cadence import build_cadence_summary
 
 router = APIRouter(prefix="/internal/service", tags=["service"])
@@ -260,6 +266,19 @@ class AIResourceProfilePreferencePayload(BaseModel):
     )
 
 
+class WordPressAIRoutingProfilePayload(BaseModel):
+    profile_id: str = Field(max_length=64)
+    candidate_instance_ids: list[str] = Field(default_factory=list)
+    timeout_ms: int = Field(default=30000, ge=1000, le=60000)
+    allow_fallback: bool = True
+    max_retries: int = Field(default=0, ge=0, le=1)
+    note: str = Field(default="", max_length=512)
+
+
+class WordPressAIRoutingSettingsPayload(BaseModel):
+    profiles: list[WordPressAIRoutingProfilePayload] = Field(default_factory=list)
+
+
 class OpsSummaryDisclosureReviewPayload(BaseModel):
     cache_key: str = Field(min_length=16, max_length=128)
     review_status: str = Field(max_length=32)
@@ -407,6 +426,155 @@ def _merge_receipt(data: Any, receipt: dict[str, Any]) -> Any:
     if isinstance(data, dict):
         return {**data, "receipt": receipt}
     return {"value": data, "receipt": receipt}
+
+
+def _serialize_wordpress_ai_instance(instance: Any, model: Any) -> dict[str, Any]:
+    return {
+        "instance_id": str(instance.instance_id or ""),
+        "provider_id": str(instance.provider_id or ""),
+        "model_id": str(instance.model_id or ""),
+        "endpoint_variant": str(instance.endpoint_variant or ""),
+        "region": str(instance.region or ""),
+        "health_status": str(instance.health_status or "unknown"),
+        "weight": int(instance.weight or 0),
+        "capability_tags": list(instance.capability_tags or []),
+        "model_status": str(model.status or ""),
+        "model_feature": str(model.feature or ""),
+        "price_input": model.price_input,
+        "price_output": model.price_output,
+    }
+
+
+def _build_wordpress_ai_routing_projection(database_url: str) -> dict[str, Any]:
+    with get_session(database_url) as session:
+        repository = CatalogRepository(session)
+        instances = repository.list_instances_for_provider()
+        models = repository.list_models_by_ids([instance.model_id for instance in instances])
+        models_by_id = {model.model_id: model for model in models}
+        instances_by_id = {instance.instance_id: instance for instance in instances}
+
+        available_instances = [
+            _serialize_wordpress_ai_instance(instance, models_by_id[instance.model_id])
+            for instance in instances
+            if instance.model_id in models_by_id
+            and models_by_id[instance.model_id].feature == "text"
+            and models_by_id[instance.model_id].status == "available"
+        ]
+
+        profiles: list[dict[str, Any]] = []
+        for spec in WP_AI_CONNECTOR_PROFILE_SPECS:
+            profile = repository.get_routing_profile(spec.profile_id)
+            binding = repository.get_routing_binding(spec.profile_id)
+            policy = profile.default_policy_json if profile is not None else {}
+            if not isinstance(policy, dict):
+                policy = {}
+            selection_policy = binding.selection_policy_json if binding is not None else {}
+            if not isinstance(selection_policy, dict):
+                selection_policy = {}
+            candidate_instance_ids = (
+                list(binding.candidate_instance_ids or []) if binding is not None else []
+            )
+            candidate_items = []
+            for instance_id in candidate_instance_ids:
+                if instance_id not in instances_by_id:
+                    continue
+                instance = instances_by_id[instance_id]
+                model = models_by_id.get(instance.model_id)
+                if model is None:
+                    continue
+                candidate_items.append(_serialize_wordpress_ai_instance(instance, model))
+
+            profiles.append(
+                {
+                    "profile_id": spec.profile_id,
+                    "group_id": spec.group_id,
+                    "label": spec.label,
+                    "description": spec.description,
+                    "tasks": list(spec.tasks),
+                    "execution_kind": profile.execution_kind if profile is not None else "text",
+                    "candidate_instance_ids": candidate_instance_ids,
+                    "candidates": candidate_items,
+                    "timeout_ms": int(policy.get("timeout_ms") or spec.timeout_ms),
+                    "allow_fallback": bool(policy.get("allow_fallback", spec.allow_fallback)),
+                    "max_retries": int(policy.get("max_retries") or spec.max_retries),
+                    "revision": str(binding.revision if binding is not None else ""),
+                    "updated_at": (
+                        binding.updated_at.isoformat()
+                        if binding is not None and binding.updated_at is not None
+                        else ""
+                    ),
+                    "selection_policy": selection_policy,
+                    "status": "configured" if candidate_instance_ids else "needs_candidates",
+                }
+            )
+
+    return {
+        "surface": "wordpress_ai_connector_routing",
+        "owner": "cloud_runtime",
+        "local_control_plane": "wordpress_plugin",
+        "customer_model_selection": False,
+        "direct_wordpress_write": False,
+        "prompt_or_preset_editor": False,
+        "available_text_instances": available_instances,
+        "profiles": profiles,
+        "boundary": {
+            "public_runtime_accepts_raw_model_instance": False,
+            "results_write_posture": "suggestion_only",
+            "admin_surface": "platform_admin_only",
+        },
+    }
+
+
+def _validate_wordpress_ai_routing_payload(
+    database_url: str,
+    payload: WordPressAIRoutingSettingsPayload,
+) -> tuple[list[WordPressAIRoutingProfilePayload], str]:
+    if not payload.profiles:
+        return [], "at least one WordPress AI routing profile is required"
+
+    known_profile_ids = set(WP_AI_CONNECTOR_PROFILE_SPECS_BY_ID)
+    seen_profile_ids: set[str] = set()
+    with get_session(database_url) as session:
+        repository = CatalogRepository(session)
+        for profile_payload in payload.profiles:
+            profile_id = profile_payload.profile_id.strip()
+            if profile_id not in known_profile_ids:
+                return [], f"unsupported WordPress AI routing profile: {profile_id}"
+            if profile_id in seen_profile_ids:
+                return [], f"duplicate WordPress AI routing profile: {profile_id}"
+            seen_profile_ids.add(profile_id)
+            candidate_instance_ids = [
+                str(instance_id or "").strip()
+                for instance_id in profile_payload.candidate_instance_ids
+                if str(instance_id or "").strip()
+            ]
+            if not candidate_instance_ids:
+                return [], f"profile {profile_id} requires at least one candidate instance"
+            if len(candidate_instance_ids) != len(set(candidate_instance_ids)):
+                return [], f"profile {profile_id} includes duplicate candidate instances"
+
+            instances = repository.list_instances_by_ids(candidate_instance_ids)
+            instances_by_id = {instance.instance_id: instance for instance in instances}
+            missing = [
+                instance_id
+                for instance_id in candidate_instance_ids
+                if instance_id not in instances_by_id
+            ]
+            if missing:
+                return [], f"profile {profile_id} references unknown instance: {missing[0]}"
+
+            models = repository.list_models_by_ids([instance.model_id for instance in instances])
+            models_by_id = {model.model_id: model for model in models}
+            for instance in instances:
+                model = models_by_id.get(instance.model_id)
+                if model is None:
+                    return [], f"profile {profile_id} references an instance without a model"
+                if model.feature != "text" or model.status != "available":
+                    return [], (
+                        f"profile {profile_id} may only use available text instances"
+                    )
+
+    return payload.profiles, ""
 
 
 def _build_runtime_explanations(
@@ -2665,6 +2833,116 @@ async def update_admin_ai_resource_profile_preferences(
         status="ok",
         message="AI resource profile preferences saved",
         data=result,
+        revision="m6",
+    )
+
+
+@router.get("/admin/wordpress-ai-routing")
+async def get_admin_wordpress_ai_routing(request: Request) -> Any:
+    auth = await authorize_internal_request(request, require_idempotency=False)
+    if auth is not None:
+        return auth
+    services = get_cloud_services(request)
+    return build_envelope(
+        status="ok",
+        message="WordPress AI connector routing loaded",
+        data=_build_wordpress_ai_routing_projection(services.settings.database_url),
+        revision="m6",
+    )
+
+
+@router.post("/admin/wordpress-ai-routing")
+async def update_admin_wordpress_ai_routing(
+    request: Request,
+    payload: WordPressAIRoutingSettingsPayload,
+) -> Any:
+    auth = await authorize_internal_request(request, require_idempotency=True)
+    if auth is not None:
+        return auth
+    services = get_cloud_services(request)
+    profiles, error_message = _validate_wordpress_ai_routing_payload(
+        services.settings.database_url,
+        payload,
+    )
+    if error_message:
+        return JSONResponse(
+            status_code=400,
+            content=build_envelope(
+                status="error",
+                error_code="wordpress_ai_routing.invalid_profile",
+                message=error_message,
+                revision="m6",
+            ),
+        )
+
+    revision = f"wp-ai-admin-{int(datetime.now(UTC).timestamp())}"
+    with get_session(services.settings.database_url) as session:
+        repository = CatalogRepository(session)
+        for profile_payload in profiles:
+            profile_id = profile_payload.profile_id.strip()
+            spec = WP_AI_CONNECTOR_PROFILE_SPECS_BY_ID[profile_id]
+            candidate_instance_ids = [
+                str(instance_id or "").strip()
+                for instance_id in profile_payload.candidate_instance_ids
+                if str(instance_id or "").strip()
+            ]
+            repository.upsert_routing_profile(
+                profile_id=profile_id,
+                execution_kind="text",
+                default_policy_json={
+                    "allow_fallback": profile_payload.allow_fallback,
+                    "max_retries": profile_payload.max_retries,
+                    "timeout_ms": profile_payload.timeout_ms,
+                    "managed_surface": "wordpress_ai_connector",
+                    "task_group": spec.group_id,
+                    "tasks": list(spec.tasks),
+                    "operator_note": profile_payload.note.strip(),
+                },
+            )
+            repository.upsert_routing_binding(
+                profile_id=profile_id,
+                candidate_instance_ids=candidate_instance_ids,
+                selection_policy_json={
+                    "strategy": "ordered",
+                    "managed_surface": "wordpress_ai_connector",
+                    "task_group": spec.group_id,
+                    "operator_note": profile_payload.note.strip(),
+                },
+                revision=revision,
+            )
+        session.commit()
+
+    audit_event = None
+    try:
+        audit_event = _get_commercial_service(request).record_service_audit_event(
+            audit_context=_build_audit_context(request),
+            event_kind="wordpress_ai_routing.update",
+            outcome="succeeded",
+            scope_kind="runtime_profile",
+            scope_id="wordpress_ai_connector",
+            payload_json={
+                "profile_ids": [profile.profile_id for profile in profiles],
+                "revision": revision,
+            },
+        )
+    except Exception:
+        audit_event = None
+
+    result = _build_wordpress_ai_routing_projection(services.settings.database_url)
+    return build_envelope(
+        status="ok",
+        message="WordPress AI connector routing saved",
+        data=_merge_receipt(
+            result,
+            _build_operator_receipt(
+                event_kind="wordpress_ai_routing.update",
+                scope_kind="runtime_profile",
+                scope_id="wordpress_ai_connector",
+                outcome="succeeded",
+                effective_summary="WordPress AI connector task routing was updated.",
+                audit_event=audit_event,
+            ),
+        ),
         revision="m6",
     )
 

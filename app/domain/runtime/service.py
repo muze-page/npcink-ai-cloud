@@ -283,6 +283,11 @@ class RuntimeService:
             merged_policy,
             execution_contract=execution_contract,
         )
+        if self._is_wordpress_ai_connector_request(request):
+            merged_policy = self._apply_wordpress_ai_connector_managed_policy(
+                merged_policy,
+                default_policy=resolution.default_policy,
+            )
         merged_policy = self._apply_routing_snapshot(merged_policy, resolution)
         merged_policy = self._apply_commercial_policy_overrides(
             merged_policy,
@@ -360,6 +365,11 @@ class RuntimeService:
                 merged_policy,
                 execution_contract=execution_contract,
             )
+            if self._is_wordpress_ai_connector_request(request):
+                merged_policy = self._apply_wordpress_ai_connector_managed_policy(
+                    merged_policy,
+                    default_policy=resolution.default_policy,
+                )
 
             if request.idempotency_key:
                 existing = repository.get_run_by_idempotency(
@@ -5475,13 +5485,24 @@ class RuntimeService:
 
         task_instruction = {
             "alt_text_suggest": "Generate concise image alt text. Return only the alt text.",
-            "comment_moderation": "Classify the comment moderation outcome. Return strict JSON only. No markdown.",
+            "comment_moderation": (
+                "Classify the comment moderation outcome. Return strict JSON only. "
+                "No markdown."
+            ),
             "comment_reply_suggest": "Draft a concise comment reply. Return only the reply text.",
-            "content_classification": 'Classify the content. Return strict JSON only: {"suggestions":[{"term":"...","confidence":0.8,"is_new":false}]}. No markdown.',
-            "content_rewrite": "Rewrite the content as requested. Return only the rewritten content.",
+            "content_classification": (
+                'Classify the content. Return strict JSON only: {"suggestions":'
+                '[{"term":"...","confidence":0.8,"is_new":false}]}. No markdown.'
+            ),
+            "content_rewrite": (
+                "Rewrite the content as requested. Return only the rewritten content."
+            ),
             "content_summary": "Summarize the content. Return only the summary.",
             "excerpt_generation": "Generate a concise excerpt. Return only the excerpt.",
-            "meta_description": "Generate one SEO meta description, 120 to 155 characters. Return only the description.",
+            "meta_description": (
+                "Generate one SEO meta description, 120 to 155 characters. Return "
+                "only the description."
+            ),
             "title_generation": "Generate exactly one concise title. Return only the title text.",
         }.get(task, "Return only the requested suggestion. Do not explain.")
 
@@ -5620,7 +5641,11 @@ class RuntimeService:
     ) -> str:
         text = self._strip_wordpress_ai_markdown(output_text)
         if strip_explanation:
-            text = re.split(r"\s+(?:说明|解释|理由|Explanation|Reasoning)\s*[:：]", text, maxsplit=1)[0].strip()
+            text = re.split(
+                r"\s+(?:说明|解释|理由|Explanation|Reasoning)\s*[:：]",
+                text,
+                maxsplit=1,
+            )[0].strip()
         return self._trim_incomplete_wordpress_ai_tail(
             self._truncate_wordpress_ai_text(text, limit=limit)
         )
@@ -5760,7 +5785,10 @@ class RuntimeService:
         return latin_count > max(24, cjk_count * 2)
 
     def _extract_wordpress_ai_cjk_text(self, source_text: str, *, limit: int) -> str:
-        fragments = re.findall(r"[\u4e00-\u9fff][\u4e00-\u9fffA-Za-z0-9，。！？、：；（）《》“”\"'\\s-]{16,}", source_text)
+        fragments = re.findall(
+            r"[\u4e00-\u9fff][\u4e00-\u9fffA-Za-z0-9，。！？、：；（）《》“”\"'\\s-]{16,}",
+            source_text,
+        )
         if not fragments:
             return ""
         text = max((fragment.strip() for fragment in fragments), key=len)
@@ -6644,6 +6672,37 @@ class RuntimeService:
         else:
             policy.pop("runtime_callback", None)
             policy.pop("callback_url", None)
+        return policy
+
+    def _apply_wordpress_ai_connector_managed_policy(
+        self,
+        merged_policy: dict[str, object],
+        *,
+        default_policy: dict[str, object],
+    ) -> dict[str, object]:
+        if default_policy.get("managed_surface") != "wordpress_ai_connector":
+            return merged_policy
+
+        policy = dict(merged_policy)
+        timeout_ms = max(1, self._coerce_int(default_policy.get("timeout_ms"), default=30_000))
+        timeout_seconds = max(1, int((timeout_ms + 999) / 1000))
+        max_retries = max(0, self._coerce_int(default_policy.get("max_retries"), default=0))
+        policy["timeout_ms"] = timeout_ms
+        policy["timeout_seconds"] = timeout_seconds
+        policy["max_retries"] = max_retries
+        policy["retry_max"] = max_retries
+        policy["allow_fallback"] = bool(default_policy.get("allow_fallback", True))
+        policy["managed_surface"] = "wordpress_ai_connector"
+        if default_policy.get("task_group"):
+            policy["task_group"] = str(default_policy.get("task_group") or "")
+
+        execution_contract = policy.get("execution_contract")
+        if isinstance(execution_contract, dict):
+            execution_contract = dict(execution_contract)
+            execution_contract["timeout_seconds"] = timeout_seconds
+            execution_contract["retry_max"] = max_retries
+            execution_contract["managed_surface"] = "wordpress_ai_connector"
+            policy["execution_contract"] = execution_contract
         return policy
 
     def _apply_routing_snapshot(

@@ -91,6 +91,9 @@ from app.domain.wordpress_ai_connector.contracts import (
     WP_AI_CONNECTOR_DATA_CLASSIFICATION,
     WP_AI_CONNECTOR_EXECUTION_KIND,
 )
+from app.domain.wordpress_ai_connector.routing_profiles import (
+    resolve_wordpress_ai_connector_profile_id,
+)
 
 router = APIRouter(prefix="/v1/runtime", tags=["runtime"])
 
@@ -391,8 +394,9 @@ def _resolve_profile_id(payload: RuntimePayload) -> str:
         return SITE_KNOWLEDGE_PROFILE_ID
     if _is_web_search_payload(payload) and not payload.profile_id:
         return WEB_SEARCH_PROFILE_ID
-    if _is_wordpress_ai_connector_payload(payload) and not payload.profile_id:
-        return FREE_GPT55_TEXT_PROFILE_ID
+    if _is_wordpress_ai_connector_payload(payload):
+        input_payload = payload.input if isinstance(payload.input, dict) else {}
+        return resolve_wordpress_ai_connector_profile_id(input_payload)
     if not payload.profile_id and payload.ability_family in {
         "text",
         "openclaw",

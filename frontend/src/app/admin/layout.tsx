@@ -77,6 +77,7 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
         '/admin/audio-workbench',
         '/admin/vector-observability',
         '/admin/hosted-models',
+        '/admin/wordpress-ai-routing',
       ],
     },
   ];

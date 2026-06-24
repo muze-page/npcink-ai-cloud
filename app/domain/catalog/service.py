@@ -22,6 +22,9 @@ from app.domain.hosted_model_defaults import (
     TEXT_AI_PROFILE_ID,
     VISION_AI_PROFILE_ID,
 )
+from app.domain.wordpress_ai_connector.routing_profiles import (
+    WP_AI_CONNECTOR_PROFILE_SPECS,
+)
 
 DEFAULT_RECOMMENDED_PROFILE_IDS = (
     TEXT_AI_PROFILE_ID,
@@ -492,8 +495,22 @@ class CatalogService:
             ),
             "embed.default": ("embedding", ["default", "embedding"]),
         }
+        profile_specs.update(
+            {
+                spec.profile_id: ("text", list(spec.ordered_tiers))
+                for spec in WP_AI_CONNECTOR_PROFILE_SPECS
+            }
+        )
 
         for profile_id, (execution_kind, ordered_tiers) in profile_specs.items():
+            wp_ai_spec = next(
+                (
+                    spec
+                    for spec in WP_AI_CONNECTOR_PROFILE_SPECS
+                    if spec.profile_id == profile_id
+                ),
+                None,
+            )
             candidate_instance_ids = select_candidates(
                 execution_kind,
                 ordered_tiers,
@@ -507,14 +524,24 @@ class CatalogService:
                     else None
                 ),
             )
+            default_policy_json = {
+                "allow_fallback": True,
+                "max_retries": 0,
+                "timeout_ms": 30000,
+            }
+            if wp_ai_spec is not None:
+                default_policy_json = {
+                    "allow_fallback": wp_ai_spec.allow_fallback,
+                    "max_retries": wp_ai_spec.max_retries,
+                    "timeout_ms": wp_ai_spec.timeout_ms,
+                    "managed_surface": "wordpress_ai_connector",
+                    "task_group": wp_ai_spec.group_id,
+                    "tasks": list(wp_ai_spec.tasks),
+                }
             repository.upsert_routing_profile(
                 profile_id=profile_id,
                 execution_kind=execution_kind,
-                default_policy_json={
-                    "allow_fallback": True,
-                    "max_retries": 0,
-                    "timeout_ms": 30000,
-                },
+                default_policy_json=default_policy_json,
             )
             repository.upsert_routing_binding(
                 profile_id=profile_id,
@@ -522,6 +549,14 @@ class CatalogService:
                 selection_policy_json={
                     "strategy": "ordered",
                     "ordered_tiers": ordered_tiers,
+                    **(
+                        {
+                            "managed_surface": "wordpress_ai_connector",
+                            "task_group": wp_ai_spec.group_id,
+                        }
+                        if wp_ai_spec is not None
+                        else {}
+                    ),
                 },
                 revision=revision,
             )
