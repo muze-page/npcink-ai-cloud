@@ -175,6 +175,180 @@ async function installPortalMocks(page: Page) {
       return;
     }
 
+    if (pathname === '/sites/site_attention/monitoring-overview') {
+      await fulfillJson(route, {
+        contract_version: 'magick-site-monitoring-overview-v1',
+        site_id: 'site_attention',
+        account_id: 'acct_portal',
+        member_ref: 'user:portal-demo@example.com',
+        role: 'user',
+        generated_at: '2026-04-07T10:00:00Z',
+        window: {
+          hours: 24,
+          start_at: '2026-04-06T10:00:00Z',
+          end_at: '2026-04-07T10:00:00Z',
+        },
+        health: {
+          status: 'warning',
+          score: 72,
+          summary: '1 monitoring area should be reviewed.',
+          components_count: 3,
+        },
+        action_required: [
+          {
+            code: 'plugin_observability.plugin_error',
+            severity: 'warning',
+            source: 'plugins',
+            title: 'Plugin error detected',
+            detail: 'Adapter reported wordpress.fatal_error.',
+            suggested_action: 'Open plugin monitoring.',
+            sort_weight: 30,
+          },
+        ],
+        quota: {
+          period_start_at: '2026-04-01T00:00:00Z',
+          period_end_at: '2026-04-12T00:00:00Z',
+          runs: { used: 21, limit: 1000, remaining: 979, usage_ratio: 0.021, over_limit: false },
+          tokens: { used: 5000, limit: 50000, remaining: 45000, usage_ratio: 0.1, over_limit: false },
+          cost: { used: 18.42, limit: 250, remaining: 231.58, usage_ratio: 0.073, over_limit: false },
+          top_pressure: 'none',
+          summary: 'Quota is within current limits.',
+        },
+        activity: {
+          last_seen_at: '2026-04-07T09:00:00Z',
+          plugin_events_total: 24,
+          plugin_errors_total: 2,
+          media_jobs_total: 4,
+          media_failed_total: 0,
+          vector_searches_total: 8,
+          vector_no_hit_total: 1,
+          runtime_runs_total: 21,
+          runtime_success_rate: 0.98,
+          runtime_p95_latency_ms: 520,
+        },
+        components: [
+          {
+            component: 'plugins',
+            status: 'warning',
+            score: 70,
+            summary: 'Plugin telemetry reports recent errors.',
+          },
+          {
+            component: 'media',
+            status: 'ok',
+            score: 92,
+            summary: 'Media processing is healthy.',
+          },
+          {
+            component: 'vector',
+            status: 'ok',
+            score: 88,
+            summary: 'Site knowledge search is healthy.',
+          },
+        ],
+      });
+      return;
+    }
+
+    if (pathname === '/sites/site_attention/diagnostic-advisor') {
+      await fulfillJson(route, {
+        advisor_version: 'internal-ai-advisor-v1',
+        scope: 'site_diagnostics',
+        status: 'attention',
+        severity: 'warning',
+        headline: 'Site diagnostics need review',
+        summary: '1 prioritized recommendation is ready for operator review.',
+        evidence: [],
+        recommended_actions: [
+          {
+            action: 'inspect_plugin_observability_attention',
+            requires_operator: true,
+          },
+        ],
+        confidence: 'high',
+        filters: {
+          site_id: 'site_attention',
+          window_hours: 24,
+        },
+        signals: [],
+        diagnostic_items: [
+          {
+            code: 'plugin_observability.plugin_error',
+            severity: 'warning',
+            source: 'plugins',
+            title: 'Adapter runtime failure',
+            evidence_summary: 'Adapter reported wordpress.fatal_error.',
+            likely_cause: 'Plugin telemetry reports active errors.',
+            next_step: 'Open Plugins and inspect recent errors.',
+            recommended_action_id: 'inspect_plugin_observability_attention',
+            operator_review_required: true,
+            direct_wordpress_write: false,
+          },
+        ],
+        safety: {
+          write_posture: 'suggestion_only',
+          direct_wordpress_write: false,
+          operator_review_required: true,
+          automatic_repair_allowed: false,
+          raw_payload_exposed: false,
+        },
+        generated_at: '2026-04-07T10:00:00Z',
+      });
+      return;
+    }
+
+    if (pathname === '/sites/site_attention/plugin-observability') {
+      await fulfillJson(route, {
+        contract_version: 'magick-plugin-observability-v1',
+        site_id: 'site_attention',
+        account_id: 'acct_portal',
+        member_ref: 'user:portal-demo@example.com',
+        role: 'user',
+        generated_at: '2026-04-07T10:00:00Z',
+        window: {
+          hours: 24,
+          start_at: '2026-04-06T10:00:00Z',
+          end_at: '2026-04-07T10:00:00Z',
+        },
+        totals: {
+          events_total: 24,
+          ok_total: 22,
+          error_total: 2,
+          success_rate: 0.92,
+          avg_latency_ms: 410,
+          last_seen_at: '2026-04-07T09:00:00Z',
+        },
+        health: {
+          status: 'warning',
+          score: 70,
+          summary: 'Plugin telemetry reports recent errors.',
+          reasons: ['wordpress.fatal_error'],
+        },
+        attention: [],
+        attention_workflow: {
+          active: 0,
+          acknowledged: 0,
+          muted: 0,
+          resolved: 0,
+          total: 0,
+          needs_attention: 0,
+        },
+        digest: {
+          period_label: 'Last 24h',
+          window_hours: 24,
+          headline: 'Plugin errors need review',
+          bullets: ['Adapter reported wordpress.fatal_error.'],
+          top_plugin_slug: 'magick-ai-adapter',
+          top_error_code: 'wordpress.fatal_error',
+        },
+        plugins: [],
+        timeline: [],
+        errors: [],
+        recent_errors: [],
+      });
+      return;
+    }
+
     if (pathname === '/sites/site_clear/summary') {
       await fulfillJson(route, {
         site_id: 'site_clear',
@@ -439,6 +613,90 @@ async function installPortalMocks(page: Page) {
       return;
     }
 
+    if (pathname === '/sites/site_attention/credit-ledger') {
+      await fulfillJson(route, {
+        site_id: 'site_attention',
+        account_id: 'acct_portal',
+        generated_at: '2026-04-07T10:00:00Z',
+        period_start_at: '2026-04-01T00:00:00Z',
+        period_end_at: '2026-04-12T00:00:00Z',
+        rate_version: 'portal-e2e-v1',
+        pagination: {
+          limit: 12,
+          offset: 0,
+          total: 1,
+          has_more: false,
+        },
+        summary: {
+          total_credits: 120,
+          consumed_credits: 18,
+          granted_credits: 120,
+          net_used_credits: 18,
+          entry_count: 1,
+        },
+        items: [
+          {
+            ledger_entry_id: 'ledger_attention_001',
+            site_id: 'site_attention',
+            source_type: 'runtime',
+            category: 'hosted_runtime',
+            category_label: 'Hosted runtime',
+            explanation: 'Runtime execution credits',
+            credit_delta: -18,
+            consumed_credits: 18,
+            net_credit_delta: -18,
+            quantity: 21,
+            unit: 'run',
+            rate: 1,
+            rate_unit: 'run',
+            rate_version: 'portal-e2e-v1',
+            created_at: '2026-04-07T09:30:00Z',
+          },
+        ],
+      });
+      return;
+    }
+
+    if (pathname === '/sites/site_attention/credit-packs') {
+      await fulfillJson(route, {
+        site_id: 'site_attention',
+        account_id: 'acct_portal',
+        catalog_version: 'portal-e2e-v1',
+        period_policy: 'current_period',
+        grant_event_type: 'credit_pack_purchase',
+        items: [
+          {
+            pack_id: 'pack_small',
+            label: 'Small credit pack',
+            ai_credits: 100,
+            amount: 19,
+            currency: 'USD',
+            active: true,
+            period_policy: 'current_period',
+            grant_event_type: 'credit_pack_purchase',
+            catalog_version: 'portal-e2e-v1',
+          },
+        ],
+      });
+      return;
+    }
+
+    if (pathname === '/sites/site_attention/payment-orders') {
+      await fulfillJson(route, {
+        site_id: 'site_attention',
+        account_id: 'acct_portal',
+        generated_at: '2026-04-07T10:00:00Z',
+        pagination: {
+          limit: 8,
+          offset: 0,
+          total: 0,
+          has_more: false,
+        },
+        items: [],
+      });
+      return;
+    }
+
     await route.fulfill({
       status: 404,
       contentType: 'application/json',
@@ -497,6 +755,21 @@ test('portal workspace surfaces keep one primary action in the header', async ({
 
   await page.goto('/portal/keys?site=site_clear');
   await expect(page.locator('section').first().locator('.btn.btn-primary')).toHaveCount(1);
+});
+
+test('portal monitoring shows diagnostic advisor and routes to plugin evidence', async ({ page }) => {
+  await installPortalMocks(page);
+
+  await page.goto('/portal/monitoring?site=site_attention');
+
+  await expect(page.getByRole('heading', { name: /site diagnostics/i })).toBeVisible();
+  await expect(page.getByText(/suggestion only/i)).toBeVisible();
+  await expect(page.getByText(/no direct wordpress write/i)).toBeVisible();
+  await expect(page.getByText(/Adapter runtime failure/i)).toBeVisible();
+
+  await page.getByRole('button', { name: /Adapter runtime failure/i }).click();
+
+  await expect(page).toHaveURL(/\/portal\/monitoring\?site=site_attention&tab=plugins/);
 });
 
 test('portal site record prefers package alias, then formal plan name, before raw plan id', async ({ page }) => {

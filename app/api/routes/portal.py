@@ -770,6 +770,47 @@ async def get_portal_site_monitoring_overview(
     )
 
 
+@router.get("/sites/{site_id}/diagnostic-advisor")
+async def get_portal_site_diagnostic_advisor(
+    request: Request,
+    site_id: str,
+    window_hours: int = Query(default=24, ge=1, le=168),
+) -> Any:
+    auth = await resolve_portal_request_context(
+        request,
+        require_idempotency=False,
+        allow_session_cookies=True,
+    )
+    if isinstance(auth, JSONResponse):
+        return auth
+    access = _authorize_portal_site_access(
+        request,
+        site_id=site_id,
+        site_admin_ref=auth.site_admin_ref,
+    )
+    if isinstance(access, JSONResponse):
+        return access
+    try:
+        result = _get_portal_advisor_service(request).get_site_diagnostic_advisor(
+            site_id=site_id,
+            window_hours=window_hours,
+        )
+    except CommercialServiceError as error:
+        return _service_error_response(error, request=request)
+    result["site_id"] = site_id
+    result["account_id"] = str(access.get("account_id") or "")
+    result["site_admin_ref"] = auth.site_admin_ref
+    result["identity_type"] = str(access.get("identity_type") or "")
+    result["allowed_actions"] = [
+        str(action) for action in _object_list(access.get("allowed_actions")) if str(action).strip()
+    ]
+    result["role"] = str(access.get("role") or "")
+    return _portal_route_envelope(
+        message="portal diagnostic advisor loaded",
+        data=result,
+    )
+
+
 @router.get("/sites/{site_id}/plugin-observability")
 async def get_portal_site_plugin_observability(
     request: Request,

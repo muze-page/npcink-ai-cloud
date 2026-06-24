@@ -20,6 +20,8 @@ import { useLocale } from '@/contexts/LocaleContext';
 import { useSession } from '@/hooks/useSession';
 import {
   portalClient,
+  type PortalDiagnosticAdvisorSummary,
+  type PortalDiagnosticItem,
   type PortalMediaObservabilitySummary,
   type PortalMonitoringOverviewAction,
   type PortalMonitoringOverviewSummary,
@@ -94,6 +96,17 @@ function resolveActionTarget(
   return null;
 }
 
+function diagnosticItemToAction(item: PortalDiagnosticItem): PortalMonitoringOverviewAction {
+  return {
+    code: item.code,
+    severity: item.severity === 'error' ? 'error' : 'warning',
+    source: item.source,
+    title: item.title,
+    detail: item.evidence_summary || item.likely_cause,
+    suggested_action: item.next_step,
+  };
+}
+
 function PortalMonitoringContent() {
   const { t } = useLocale();
   const router = useRouter();
@@ -101,14 +114,17 @@ function PortalMonitoringContent() {
   const searchParams = useSearchParams();
   const { session, isLoading, isAuthenticated, selectSite } = useSession();
   const [monitoringOverview, setMonitoringOverview] = useState<PortalMonitoringOverviewSummary | null>(null);
+  const [diagnosticAdvisor, setDiagnosticAdvisor] = useState<PortalDiagnosticAdvisorSummary | null>(null);
   const [summary, setSummary] = useState<PortalPluginObservabilitySummary | null>(null);
   const [mediaSummary, setMediaSummary] = useState<PortalMediaObservabilitySummary | null>(null);
   const [vectorSummary, setVectorSummary] = useState<PortalVectorObservabilitySummary | null>(null);
   const [isMonitoringOverviewLoading, setIsMonitoringOverviewLoading] = useState(false);
+  const [isDiagnosticAdvisorLoading, setIsDiagnosticAdvisorLoading] = useState(false);
   const [isSummaryLoading, setIsSummaryLoading] = useState(false);
   const [isMediaSummaryLoading, setIsMediaSummaryLoading] = useState(false);
   const [isVectorSummaryLoading, setIsVectorSummaryLoading] = useState(false);
   const [monitoringOverviewError, setMonitoringOverviewError] = useState('');
+  const [diagnosticAdvisorError, setDiagnosticAdvisorError] = useState('');
   const [error, setError] = useState('');
   const [mediaError, setMediaError] = useState('');
   const [vectorError, setVectorError] = useState('');
@@ -123,10 +139,12 @@ function PortalMonitoringContent() {
   useEffect(() => {
     if (!selectedSiteId) {
       setMonitoringOverview(null);
+      setDiagnosticAdvisor(null);
       setSummary(null);
       setMediaSummary(null);
       setVectorSummary(null);
       setMonitoringOverviewError('');
+      setDiagnosticAdvisorError('');
       setError('');
       setMediaError('');
       setVectorError('');
@@ -135,10 +153,12 @@ function PortalMonitoringContent() {
     if (lastLoadedSiteRef.current !== selectedSiteId) {
       lastLoadedSiteRef.current = selectedSiteId;
       setMonitoringOverview(null);
+      setDiagnosticAdvisor(null);
       setSummary(null);
       setMediaSummary(null);
       setVectorSummary(null);
       setMonitoringOverviewError('');
+      setDiagnosticAdvisorError('');
       setError('');
       setMediaError('');
       setVectorError('');
@@ -175,6 +195,27 @@ function PortalMonitoringContent() {
         .finally(() => {
           if (!isCancelled) {
             setIsMonitoringOverviewLoading(false);
+          }
+        });
+
+      setIsDiagnosticAdvisorLoading(true);
+      setDiagnosticAdvisorError('');
+      void portalClient
+        .getDiagnosticAdvisor(selectedSiteId, { windowHours: 24 })
+        .then((response) => {
+          if (!isCancelled) {
+            setDiagnosticAdvisor(response.data);
+          }
+        })
+        .catch((err) => {
+          if (!isCancelled) {
+            setDiagnosticAdvisor(null);
+            setDiagnosticAdvisorError(formatPortalErrorMessage(err, t, t('error.failed_load')));
+          }
+        })
+        .finally(() => {
+          if (!isCancelled) {
+            setIsDiagnosticAdvisorLoading(false);
           }
         });
     }
@@ -318,6 +359,10 @@ function PortalMonitoringContent() {
     }
   };
 
+  const openDiagnosticTarget = (item: PortalDiagnosticItem) => {
+    openActionTarget(diagnosticItemToAction(item));
+  };
+
   return (
     <BackofficePageStack>
       <PortalWorkspaceHeader
@@ -365,11 +410,15 @@ function PortalMonitoringContent() {
       {activeTab === 'overview' ? (
         <MonitoringOverview
           monitoringOverview={monitoringOverview}
+          diagnosticAdvisor={diagnosticAdvisor}
           isLoading={isOverviewLoading}
+          isDiagnosticAdvisorLoading={isDiagnosticAdvisorLoading}
           errors={[monitoringOverviewError].filter(Boolean)}
+          diagnosticAdvisorError={diagnosticAdvisorError}
           onRefresh={() => setRefreshNonce((current) => current + 1)}
           onSelectTab={changeTab}
           onSelectAction={openActionTarget}
+          onSelectDiagnostic={openDiagnosticTarget}
           selectedSiteId={selectedSiteId}
         />
       ) : null}
@@ -467,19 +516,27 @@ function MonitoringTabs({
 
 function MonitoringOverview({
   monitoringOverview,
+  diagnosticAdvisor,
   isLoading,
+  isDiagnosticAdvisorLoading,
   errors,
+  diagnosticAdvisorError,
   onRefresh,
   onSelectTab,
   onSelectAction,
+  onSelectDiagnostic,
   selectedSiteId,
 }: {
   monitoringOverview: PortalMonitoringOverviewSummary | null;
+  diagnosticAdvisor: PortalDiagnosticAdvisorSummary | null;
   isLoading: boolean;
+  isDiagnosticAdvisorLoading: boolean;
   errors: string[];
+  diagnosticAdvisorError: string;
   onRefresh: () => void;
   onSelectTab: (tab: MonitoringTab) => void;
   onSelectAction: (item: PortalMonitoringOverviewAction) => void;
+  onSelectDiagnostic: (item: PortalDiagnosticItem) => void;
   selectedSiteId: string;
 }) {
   const { t } = useLocale();
@@ -521,6 +578,14 @@ function MonitoringOverview({
         </BackofficeStackCard>
       ) : null}
 
+      <DiagnosticAdvisorPanel
+        advisor={diagnosticAdvisor}
+        isLoading={isDiagnosticAdvisorLoading}
+        error={diagnosticAdvisorError}
+        onSelectDiagnostic={onSelectDiagnostic}
+        selectedSiteId={selectedSiteId}
+      />
+
       <ActionRequiredPanel
         items={actionItems}
         onSelectAction={onSelectAction}
@@ -557,6 +622,137 @@ function MonitoringOverview({
         />
       </div>
     </BackofficeSectionPanel>
+  );
+}
+
+function DiagnosticAdvisorPanel({
+  advisor,
+  isLoading,
+  error,
+  onSelectDiagnostic,
+  selectedSiteId,
+}: {
+  advisor: PortalDiagnosticAdvisorSummary | null;
+  isLoading: boolean;
+  error: string;
+  onSelectDiagnostic: (item: PortalDiagnosticItem) => void;
+  selectedSiteId: string;
+}) {
+  const { t } = useLocale();
+  const items = advisor?.diagnostic_items || [];
+  const visibleItems = items.slice(0, 3);
+  const hasUnsafeWritePosture =
+    Boolean(advisor?.safety?.direct_wordpress_write) || Boolean(advisor?.safety?.automatic_repair_allowed);
+  const status = advisor?.severity || advisor?.status || (items.length ? 'warning' : 'inactive');
+  return (
+    <BackofficeStackCard className="space-y-4">
+      <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+        <div>
+          <div className="flex flex-wrap items-center gap-2">
+            <h3 className="text-sm font-semibold text-slate-950 dark:text-white">
+              {t('portal.monitoring.diagnostic_advisor', {}, 'Site diagnostics')}
+            </h3>
+            <BackofficeStatusBadge
+              status={status}
+              label={advisor?.status || (isLoading ? 'loading' : items.length ? 'attention' : 'inactive')}
+            />
+          </div>
+          <p className="mt-1 max-w-3xl text-sm leading-6 text-slate-600 dark:text-slate-300">
+            {advisor?.summary ||
+              t(
+                'portal.monitoring.diagnostic_advisor_desc',
+                {},
+                'Cloud summarizes monitoring signals into reviewable next steps for this site.'
+              )}
+          </p>
+        </div>
+        <BackofficeTag tone={hasUnsafeWritePosture ? 'danger' : 'info'}>
+          {hasUnsafeWritePosture
+            ? t('portal.monitoring.write_posture_invalid', {}, 'write posture blocked')
+            : t('portal.monitoring.suggestion_only', {}, 'suggestion only')}
+        </BackofficeTag>
+      </div>
+
+      {isLoading ? (
+        <div className="rounded-[0.75rem] border border-dashed border-slate-200 p-4 text-sm text-slate-600 dark:border-slate-800 dark:text-slate-300">
+          {t('portal.monitoring.loading_diagnostics', {}, 'Loading diagnostic recommendations.')}
+        </div>
+      ) : null}
+
+      {error ? (
+        <div className="rounded-[0.75rem] border border-amber-200 bg-amber-50/70 p-4 text-sm text-amber-800 dark:border-amber-900/60 dark:bg-amber-950/20 dark:text-amber-200">
+          {error}
+        </div>
+      ) : null}
+
+      {!isLoading && !error && items.length ? (
+        <div className="divide-y divide-slate-200 overflow-hidden rounded-[0.75rem] border border-slate-200 dark:divide-slate-800 dark:border-slate-800">
+          {visibleItems.map((item) => {
+            const target = resolveActionTarget(diagnosticItemToAction(item), selectedSiteId);
+            return (
+              <button
+                key={`${item.code}-${item.recommended_action_id}`}
+                type="button"
+                aria-label={`${item.title} ${target?.label || ''}`.trim()}
+                onClick={() => {
+                  onSelectDiagnostic(item);
+                }}
+                className="block w-full cursor-pointer p-4 text-left transition hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-inset focus:ring-slate-300 dark:hover:bg-slate-900/50 dark:focus:ring-slate-700"
+              >
+                <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <p className="text-sm font-semibold text-slate-950 dark:text-white">{item.title}</p>
+                      <BackofficeStatusBadge status={item.severity} label={item.source} />
+                    </div>
+                    <p className="mt-2 text-sm leading-6 text-slate-600 dark:text-slate-300">
+                      {item.evidence_summary}
+                    </p>
+                    <div className="mt-3 grid gap-3 text-xs leading-5 text-slate-500 dark:text-slate-400 md:grid-cols-2">
+                      <p>
+                        <span className="font-semibold text-slate-700 dark:text-slate-200">
+                          {t('portal.monitoring.likely_cause', {}, 'Likely cause')}:
+                        </span>{' '}
+                        {item.likely_cause}
+                      </p>
+                      <p>
+                        <span className="font-semibold text-slate-700 dark:text-slate-200">
+                          {t('portal.monitoring.next_step', {}, 'Next step')}:
+                        </span>{' '}
+                        {item.next_step}
+                      </p>
+                    </div>
+                  </div>
+                  {target ? (
+                    <span className="shrink-0 text-xs font-semibold leading-5 text-slate-700 dark:text-slate-200">
+                      {target.label}
+                    </span>
+                  ) : null}
+                </div>
+              </button>
+            );
+          })}
+        </div>
+      ) : null}
+
+      {!isLoading && !error && !items.length ? (
+        <div className="rounded-[0.75rem] border border-dashed border-slate-200 p-4 text-sm text-slate-600 dark:border-slate-800 dark:text-slate-300">
+          {t('portal.monitoring.no_diagnostic_items', {}, 'No diagnostic recommendations for this site.')}
+        </div>
+      ) : null}
+
+      <div className="flex flex-wrap items-center gap-2 text-xs leading-5 text-slate-500 dark:text-slate-400">
+        <span>{t('portal.monitoring.advisor_safety', {}, 'Operator review required')}</span>
+        <span aria-hidden="true">·</span>
+        <span>{t('portal.monitoring.no_wordpress_write', {}, 'No direct WordPress write')}</span>
+        {advisor?.confidence ? (
+          <>
+            <span aria-hidden="true">·</span>
+            <span>{`${t('portal.monitoring.confidence', {}, 'Confidence')}: ${advisor.confidence}`}</span>
+          </>
+        ) : null}
+      </div>
+    </BackofficeStackCard>
   );
 }
 

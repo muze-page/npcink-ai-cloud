@@ -23,6 +23,7 @@ from app.core.models import (
     SITE_ADMIN_STATUS_ACTIVE,
     AccountSubscription,
     CreditLedgerEntry,
+    PluginObservabilityEvent,
     SiteAdminIdentity,
 )
 from app.core.services import CloudServices
@@ -647,6 +648,92 @@ def test_portal_ai_insights_reject_other_site(tmp_path: Path) -> None:
 
     assert response.status_code == 403
     assert response.json()["error_code"] == "service.site_admin_access_required"
+
+    dispose_engine(database_url)
+
+
+def test_portal_site_diagnostic_advisor_is_scoped_and_read_only(tmp_path: Path) -> None:
+    database_url, client = _build_client(tmp_path)
+
+    client.post(
+        "/internal/service/accounts",
+        json={"account_id": "acct_portal_diag", "name": "Portal Diagnostics"},
+        headers=build_internal_headers(idempotency_key="portal-diag-account-001"),
+    )
+    client.post(
+        "/internal/service/sites",
+        json={
+            "site_id": "site_portal_diag",
+            "account_id": "acct_portal_diag",
+            "name": "Portal Diagnostics Site",
+            "status": "active",
+        },
+        headers=build_internal_headers(idempotency_key="portal-diag-site-001"),
+    )
+    _grant_site_admin_access(
+        client,
+        site_id="site_portal_diag",
+        email="portal-diag@example.com",
+        idempotency_key="portal-diag-site-admin-access-001",
+    )
+    key_response = client.post(
+        "/portal/v1/sites/site_portal_diag/api-keys",
+        json={"label": "Portal Diagnostics Key"},
+        headers=build_portal_headers(
+            site_admin_ref="site_admin:portal-diag@example.com",
+            idempotency_key="portal-diag-key-001",
+        ),
+    )
+    assert key_response.status_code == 200, key_response.text
+
+    now = datetime.now(UTC)
+    with get_session(database_url) as session:
+        session.add(
+            PluginObservabilityEvent(
+                dedupe_key="portal-diag-plugin-error-001",
+                site_id="site_portal_diag",
+                key_id="key_default",
+                schema_version="2026-06-01",
+                plugin_slug="npcink-ai-client-adapter",
+                plugin_version="0.1.0",
+                source="local",
+                event_kind="adapter.runtime.failed",
+                event_id="portal-diag-plugin-error-event-001",
+                status="error",
+                error_code="wordpress.fatal_error",
+                latency_ms=3900,
+                ability_id="npcink-abilities-toolkit/create-draft",
+                payload_json={"raw": "portal raw payload must not leak"},
+                captured_at=now - timedelta(minutes=4),
+                received_at=now - timedelta(minutes=4),
+            )
+        )
+        session.commit()
+
+    response = client.get(
+        "/portal/v1/sites/site_portal_diag/diagnostic-advisor?window_hours=24",
+        headers=build_portal_headers(site_admin_ref="site_admin:portal-diag@example.com"),
+    )
+    outsider = client.get(
+        "/portal/v1/sites/site_portal_diag/diagnostic-advisor?window_hours=24",
+        headers=build_portal_headers(site_admin_ref="site_admin:outsider@example.com"),
+    )
+
+    assert response.status_code == 200, response.text
+    data = response.json()["data"]
+    assert data["scope"] == "site_diagnostics"
+    assert data["site_id"] == "site_portal_diag"
+    assert data["identity_type"] == "site_admin"
+    assert data["role"] == "site_admin"
+    assert data["safety"]["write_posture"] == "suggestion_only"
+    assert data["safety"]["direct_wordpress_write"] is False
+    assert data["safety"]["automatic_repair_allowed"] is False
+    assert data["diagnostic_items"]
+    assert any(item["source"] == "plugins" for item in data["diagnostic_items"])
+    serialized = json.dumps(data)
+    assert "portal raw payload must not leak" not in serialized
+    assert "payload_json" not in serialized
+    assert outsider.status_code == 403
 
     dispose_engine(database_url)
 

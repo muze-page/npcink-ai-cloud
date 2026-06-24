@@ -18,6 +18,7 @@ from app.core.models import (
     AccountEntitlementSnapshot,
     AccountSubscription,
     BillingSnapshot,
+    PluginObservabilityEvent,
     ProviderCallRecord,
     ReplayReceipt,
     RunRecord,
@@ -928,6 +929,81 @@ def test_internal_ai_advisor_routes_are_internal_and_evidence_backed(
         "monitor",
         "insufficient_data",
     }
+
+    dispose_engine(database_url)
+
+
+def test_internal_site_diagnostic_advisor_uses_monitoring_actions(
+    tmp_path: Path,
+) -> None:
+    database_url, client = _build_client(tmp_path)
+    seed_site_auth(
+        database_url,
+        site_id="site_diag",
+        scopes=["runtime:execute", "runtime:read", "stats:read"],
+    )
+    now = datetime.now(UTC)
+    with get_session(database_url) as session:
+        session.add(
+            PluginObservabilityEvent(
+                dedupe_key="diag-plugin-error-001",
+                site_id="site_diag",
+                key_id="key_default",
+                schema_version="2026-06-01",
+                plugin_slug="npcink-ai-client-adapter",
+                plugin_version="0.1.0",
+                source="local",
+                event_kind="adapter.runtime.failed",
+                event_id="diag-plugin-error-event-001",
+                status="error",
+                error_code="wordpress.fatal_error",
+                latency_ms=4200,
+                ability_id="npcink-abilities-toolkit/create-draft",
+                payload_json={"raw": "must stay out of advisor response"},
+                captured_at=now - timedelta(minutes=5),
+                received_at=now - timedelta(minutes=5),
+            )
+        )
+        session.commit()
+
+    unauthenticated = client.get(
+        "/internal/service/advisor/site-diagnostics?site_id=site_diag"
+    )
+    response = client.get(
+        "/internal/service/advisor/site-diagnostics?site_id=site_diag&window_hours=24",
+        headers=build_internal_headers(),
+    )
+
+    assert unauthenticated.status_code == 401
+    assert response.status_code == 200, response.text
+    payload = response.json()["data"]
+    assert payload["advisor_version"] == "internal-ai-advisor-v1"
+    assert payload["scope"] == "site_diagnostics"
+    assert payload["status"] == "attention"
+    assert payload["severity"] in {"warning", "error"}
+    assert payload["agent_handoff"]["requires_operator_review"] is True
+    assert payload["agent_handoff"]["direct_wordpress_write"] is False
+    assert payload["safety"] == {
+        "write_posture": "suggestion_only",
+        "direct_wordpress_write": False,
+        "operator_review_required": True,
+        "automatic_repair_allowed": False,
+        "raw_payload_exposed": False,
+    }
+    assert payload["diagnostic_items"]
+    first_item = payload["diagnostic_items"][0]
+    assert first_item["source"] == "plugins"
+    assert first_item["operator_review_required"] is True
+    assert first_item["direct_wordpress_write"] is False
+    assert first_item["recommended_action_id"] == "inspect_plugin_observability_attention"
+    assert any(
+        action["action"] == "inspect_plugin_observability_attention"
+        and action["requires_operator"] is True
+        for action in payload["recommended_actions"]
+    )
+    serialized = json.dumps(payload)
+    assert "must stay out of advisor response" not in serialized
+    assert "payload_json" not in serialized
 
     dispose_engine(database_url)
 

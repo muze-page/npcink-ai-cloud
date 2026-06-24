@@ -65,6 +65,14 @@ The first implementation phase should stay narrow:
    - Output: recommendation candidates for operator review, never automatic
      adoption.
 
+4. Site diagnostics advisor
+   - Inputs: site monitoring overview, plugin observability attention items,
+     media/vector/runtime/quota/key health, and recent activity summaries.
+   - Output: up to three prioritized diagnostic items with evidence summary,
+     likely cause, and one next step for operator review.
+   - Non-goal: automatic WordPress repair, plugin setting mutation, or Cloud
+     creation of local Core proposals.
+
 The first landed implementation is an on-demand read API over existing Cloud
 summaries. It does not persist advisor snapshots. It may call a configured
 provider only through the Internal Ops Summarizer contract below.
@@ -95,6 +103,7 @@ The advisor may read from existing Cloud-owned evidence surfaces:
 - service audit events
 - plugin observability summaries
 - media, vector, and site-knowledge observability summaries when present
+- site monitoring overview summaries and action-required items
 
 Advisor inputs should be pre-aggregated or redacted before model use whenever
 practical. Direct model access to production tables is not allowed. If natural
@@ -168,11 +177,13 @@ Forbidden:
 Initial API:
 
 - `GET /internal/service/advisor/operations`
+- `GET /internal/service/advisor/site-diagnostics`
 - `GET /internal/service/advisor/ops-summary`
 - `GET /internal/service/advisor/ops-summary-preview`
 - `POST /internal/service/advisor/ops-summary-review`
 - `GET /internal/service/advisor/ops-summary-history`
 - `GET /internal/service/advisor/ops-summary-value`
+- `GET /portal/v1/sites/{site_id}/diagnostic-advisor`
 - `GET /portal/v1/sites/{site_id}/ai-insights/history`
 - `POST /portal/v1/sites/{site_id}/ai-insights/analyze`
 
@@ -366,10 +377,11 @@ These endpoints are internal/operator read surfaces. They must use existing
 internal service or platform-admin authorization and must not be exposed as
 customer runtime APIs.
 
-Portal exposure is deferred. If a customer-facing portal summary is added
-later, it must be site-scoped, redacted, and limited to operational explanation;
-it must not expose internal operator guidance, cross-customer comparisons, or
-provider credential details.
+Portal exposure is limited to site-scoped, redacted operational explanation.
+`/portal/v1/sites/{site_id}/diagnostic-advisor` may show the current site's top
+diagnostic items, likely causes, and next steps. It must not expose internal
+operator guidance, cross-customer comparisons, provider credential details, raw
+plugin payloads, or repair controls.
 
 ## Frontend Surface
 
@@ -384,6 +396,7 @@ Admin UI may show advisor cards or panels on existing bounded pages:
 UI rules:
 
 - show the recommendation, evidence, confidence, and next operator action
+- keep site diagnostics to three default-visible items
 - make action buttons explicit operator commands when mutation already exists
   elsewhere
 - do not add a new AI command center

@@ -1653,6 +1653,27 @@ async def get_routing_advisor(
     )
 
 
+@router.get("/advisor/site-diagnostics")
+async def get_site_diagnostic_advisor(
+    request: Request,
+    site_id: str = Query(min_length=1, max_length=191),
+    window_hours: int = Query(default=24, ge=1, le=168),
+) -> Any:
+    auth = await authorize_internal_request(request, require_idempotency=False)
+    if auth is not None:
+        return auth
+    result = _get_advisor_service(request).get_site_diagnostic_advisor(
+        site_id=site_id,
+        window_hours=window_hours,
+    )
+    return build_envelope(
+        status="ok",
+        message="site diagnostic advisor loaded",
+        data=result,
+        revision="m1",
+    )
+
+
 @router.get("/advisor/operations")
 async def get_operations_advisor(
     request: Request,

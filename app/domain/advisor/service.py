@@ -26,6 +26,7 @@ from app.domain.agent_workflow_metadata import (
 )
 from app.domain.commercial.service import CommercialService
 from app.domain.hosted_model_defaults import FREE_GPT55_MODEL_ID
+from app.domain.observability.site_monitoring_overview import SiteMonitoringOverviewService
 from app.domain.runtime.service import RuntimeService
 from app.domain.site_knowledge.metrics import SiteKnowledgeObservabilityService
 from app.domain.usage.service import UsageService
@@ -341,6 +342,129 @@ class InternalAIAdvisorService:
             signals=signals,
             source={"router_recommendation": recommendation},
         )
+
+    def get_site_diagnostic_advisor(
+        self,
+        *,
+        site_id: str,
+        window_hours: int = 24,
+    ) -> dict[str, Any]:
+        normalized_site_id = str(site_id or "").strip()
+        if not normalized_site_id:
+            raise ValueError("site_id is required for site diagnostics")
+        bounded_window_hours = min(168, max(1, int(window_hours or 24)))
+        commercial_service = CommercialService(self.database_url)
+        commercial_policy = commercial_service.inspect_commercial_policy(normalized_site_id)
+        overview = SiteMonitoringOverviewService(self.database_url).get_summary(
+            site_id=normalized_site_id,
+            commercial_policy=commercial_policy,
+            window_hours=bounded_window_hours,
+        )
+        action_required = _list(overview.get("action_required"))
+        health = _dict(overview.get("health"))
+        diagnostic_items = [
+            _site_diagnostic_item(_dict(item))
+            for item in action_required[:3]
+            if isinstance(item, dict)
+        ]
+        status = "attention" if diagnostic_items else "ok"
+        severity = "info"
+        if any(item.get("severity") == "error" for item in diagnostic_items):
+            severity = "error"
+        elif diagnostic_items:
+            severity = "warning"
+
+        if diagnostic_items:
+            headline = "Site diagnostics need review"
+            summary = (
+                f"{len(diagnostic_items)} prioritized diagnostic item(s) need operator review. "
+                f"Top item: {diagnostic_items[0].get('title') or 'Review monitoring detail'}."
+            )
+            recommended_actions = [
+                _action(str(item.get("recommended_action_id") or "inspect_site_monitoring_detail"))
+                for item in diagnostic_items
+            ]
+        else:
+            headline = "Site diagnostics look stable"
+            summary = "Current site monitoring evidence does not show an immediate diagnostic item."
+            recommended_actions = [_action("continue_site_monitoring")]
+
+        signals = [
+            {
+                "code": "site_diagnostics.health",
+                "status": str(health.get("status") or "inactive"),
+                "score": _int(health.get("score")),
+                "action_required_count": len(action_required),
+            },
+            {
+                "code": "site_diagnostics.priority_items",
+                "items": [
+                    {
+                        "code": str(item.get("code") or ""),
+                        "severity": str(item.get("severity") or ""),
+                        "source": str(item.get("source") or ""),
+                    }
+                    for item in diagnostic_items
+                ],
+            },
+        ]
+
+        payload = self._advisor_payload(
+            scope="site_diagnostics",
+            status=status,
+            severity=severity,
+            headline=headline,
+            summary=summary,
+            evidence=[
+                _evidence(
+                    "site_monitoring_overview",
+                    "/portal/v1/sites/{site_id}/monitoring-overview",
+                    "site-scoped monitoring overview",
+                )
+            ],
+            recommended_actions=_dedupe_actions(recommended_actions),
+            confidence="high" if diagnostic_items else "medium",
+            filters={
+                "site_id": normalized_site_id,
+                "window_hours": bounded_window_hours,
+            },
+            signals=signals,
+            source={
+                "monitoring_overview": {
+                    "contract_version": str(overview.get("contract_version") or ""),
+                    "site_id": normalized_site_id,
+                    "window": _dict(overview.get("window")),
+                    "health": health,
+                    "activity": _dict(overview.get("activity")),
+                    "components": _list(overview.get("components")),
+                    "action_required": [
+                        _pick_fields(
+                            _dict(item),
+                            {
+                                "code",
+                                "severity",
+                                "source",
+                                "title",
+                                "detail",
+                                "suggested_action",
+                                "sort_weight",
+                            },
+                        )
+                        for item in action_required[:8]
+                        if isinstance(item, dict)
+                    ],
+                }
+            },
+        )
+        payload["diagnostic_items"] = diagnostic_items
+        payload["safety"] = {
+            "write_posture": "suggestion_only",
+            "direct_wordpress_write": False,
+            "operator_review_required": True,
+            "automatic_repair_allowed": False,
+            "raw_payload_exposed": False,
+        }
+        return payload
 
     def get_operations_advisor(
         self,
@@ -1307,6 +1431,13 @@ class InternalAIAdvisorService:
                 site_id=str(site_id or "").strip(),
                 filters={"range": range_filter, "limit": limit},
             )
+        if normalized_scope in {"site_diagnostics", "site", "diagnostics"}:
+            if not str(site_id or "").strip():
+                raise ValueError("site_id is required for site diagnostics ops summary")
+            return self.get_site_diagnostic_advisor(
+                site_id=str(site_id or "").strip(),
+                window_hours=_range_to_hours(range_filter),
+            )
         if normalized_scope in {"operations", "operations_analysis", "ops"}:
             return self.get_operations_advisor(
                 site_id=site_id,
@@ -1314,7 +1445,9 @@ class InternalAIAdvisorService:
                 usage_window_days=usage_window_days,
                 audit_window_minutes=audit_window_minutes,
             )
-        raise ValueError("scope must be runtime, commercial, routing, or operations")
+        raise ValueError(
+            "scope must be runtime, commercial, routing, site_diagnostics, or operations"
+        )
 
     def _build_redacted_summarizer_context(
         self,
@@ -1930,6 +2063,69 @@ def _action(action: str) -> dict[str, Any]:
     return {"action": action, "requires_operator": True}
 
 
+def _site_diagnostic_item(item: dict[str, Any]) -> dict[str, Any]:
+    source = str(item.get("source") or "").strip().lower()
+    code = str(item.get("code") or "site_diagnostics.attention").strip()
+    return {
+        "code": code,
+        "severity": str(item.get("severity") or "warning"),
+        "source": source or "monitoring",
+        "title": str(item.get("title") or "Site monitoring needs attention"),
+        "evidence_summary": str(item.get("detail") or ""),
+        "likely_cause": _site_diagnostic_likely_cause(source=source, code=code),
+        "next_step": str(item.get("suggested_action") or "Open site monitoring detail."),
+        "recommended_action_id": _site_diagnostic_action_id(source=source, code=code),
+        "operator_review_required": True,
+        "direct_wordpress_write": False,
+    }
+
+
+def _site_diagnostic_likely_cause(*, source: str, code: str) -> str:
+    if source == "keys":
+        return "Cloud API key state can block telemetry, runtime requests, or diagnostics."
+    if source == "plugins":
+        return (
+            "Plugin telemetry reports active errors, stale reporting, or missing expected "
+            "plugins."
+        )
+    if source == "media":
+        return "Cloud media processing is failing or receiving unsupported source assets."
+    if source == "vector":
+        return (
+            "Site Knowledge index coverage may be empty, stale, or missing matching public "
+            "content."
+        )
+    if source == "runtime":
+        return "Hosted runtime runs are failing or experiencing provider/runtime pressure."
+    if source == "quota":
+        return "Current period usage is close to or over the active entitlement budget."
+    if source == "activity":
+        return "The connected WordPress site may not be flushing recent telemetry to Cloud."
+    if "api_key" in code:
+        return "Cloud API key connectivity needs review."
+    return "Site monitoring has evidence that should be reviewed before attempting a local fix."
+
+
+def _site_diagnostic_action_id(*, source: str, code: str) -> str:
+    if source == "keys":
+        return "inspect_cloud_api_key_connection"
+    if source == "plugins":
+        return "inspect_plugin_observability_attention"
+    if source == "media":
+        return "inspect_media_failures_and_source_assets"
+    if source == "vector":
+        return "inspect_site_knowledge_index_and_refresh"
+    if source == "runtime":
+        return "inspect_runtime_runs_provider_health"
+    if source == "quota":
+        return "review_usage_quota_and_entitlement"
+    if source == "activity":
+        return "verify_cloud_addon_connection_and_event_flush"
+    if "api_key" in code:
+        return "inspect_cloud_api_key_connection"
+    return "inspect_site_monitoring_detail"
+
+
 def _redacted_agent_handoff(value: Any) -> dict[str, Any]:
     handoff = _dict(value)
     if not handoff:
@@ -2046,6 +2242,8 @@ def _normalize_advisor_scope(value: str) -> str:
         return "commercial_operations"
     if normalized in {"routing", "routing_operations"}:
         return "routing_operations"
+    if normalized in {"site", "diagnostics", "site_diagnostics"}:
+        return "site_diagnostics"
     if normalized in {"operations", "operations_analysis", "ops"}:
         return "operations_analysis"
     return normalized

@@ -506,6 +506,65 @@ export interface PortalMonitoringOverviewSummary {
   components: PortalMonitoringOverviewComponent[];
 }
 
+export interface PortalDiagnosticAdvisorEvidence {
+  kind: string;
+  ref: string;
+  label: string;
+}
+
+export interface PortalDiagnosticAdvisorAction {
+  action: string;
+  requires_operator: boolean;
+}
+
+export interface PortalDiagnosticAdvisorSafety {
+  write_posture: string;
+  direct_wordpress_write: boolean;
+  operator_review_required: boolean;
+  automatic_repair_allowed: boolean;
+  raw_payload_exposed: boolean;
+}
+
+export interface PortalDiagnosticItem {
+  code: string;
+  severity: 'warning' | 'error' | 'info' | string;
+  source: string;
+  title: string;
+  evidence_summary: string;
+  likely_cause: string;
+  next_step: string;
+  recommended_action_id: string;
+  operator_review_required: boolean;
+  direct_wordpress_write: boolean;
+}
+
+export interface PortalDiagnosticAdvisorSummary {
+  advisor_version: string;
+  scope: 'site_diagnostics' | string;
+  status: string;
+  severity: string;
+  headline: string;
+  summary: string;
+  evidence: PortalDiagnosticAdvisorEvidence[];
+  recommended_actions: PortalDiagnosticAdvisorAction[];
+  confidence: string;
+  filters: {
+    site_id?: string;
+    window_hours?: number;
+    [key: string]: unknown;
+  };
+  signals: Array<Record<string, unknown>>;
+  diagnostic_items: PortalDiagnosticItem[];
+  safety: PortalDiagnosticAdvisorSafety;
+  generated_at: string;
+  site_id?: string;
+  account_id?: string;
+  site_admin_ref?: string;
+  identity_type?: ProductIdentityType;
+  allowed_actions?: string[];
+  role?: string;
+}
+
 export interface PortalPluginObservabilitySummary {
   contract_version: string;
   site_id: string;
@@ -1514,6 +1573,22 @@ export class PortalClient {
     return this.request(
       'GET',
       `/sites/${siteId}/monitoring-overview?${params.toString()}`,
+      undefined,
+      { requireAuth: true }
+    );
+  }
+
+  async getDiagnosticAdvisor(
+    siteId: string,
+    options?: {
+      windowHours?: number;
+    }
+  ): Promise<PortalEnvelope<PortalDiagnosticAdvisorSummary>> {
+    const params = new URLSearchParams();
+    params.set('window_hours', String(options?.windowHours || 24));
+    return this.request(
+      'GET',
+      `/sites/${siteId}/diagnostic-advisor?${params.toString()}`,
       undefined,
       { requireAuth: true }
     );
