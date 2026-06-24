@@ -89,9 +89,21 @@ npcink_ai_cloud_wait_for_ready() {
 	local sleep_seconds="${3:-2}"
 	local health_url="${base_url%/}/health/live"
 	local attempt=0
+	local curl_args=(
+		-fsS
+		--connect-timeout 3
+		--max-time 10
+	)
+
+	if [ -n "${NPCINK_CLOUD_HEALTH_HOST_HEADER:-}" ]; then
+		curl_args+=(-H "Host: ${NPCINK_CLOUD_HEALTH_HOST_HEADER}")
+	fi
+	if [ -n "${NPCINK_CLOUD_HEALTH_FORWARDED_PROTO:-}" ]; then
+		curl_args+=(-H "X-Forwarded-Proto: ${NPCINK_CLOUD_HEALTH_FORWARDED_PROTO}")
+	fi
 
 	while [ "${attempt}" -lt "${attempts}" ]; do
-		if curl -fsS --connect-timeout 3 --max-time 10 "${health_url}" >/dev/null 2>&1; then
+		if curl "${curl_args[@]}" "${health_url}" >/dev/null 2>&1; then
 			return 0
 		fi
 		attempt=$((attempt + 1))

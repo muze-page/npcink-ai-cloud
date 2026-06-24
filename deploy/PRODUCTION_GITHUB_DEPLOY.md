@@ -18,10 +18,11 @@ are immediately backported to Git.
 
 `Cloud CI` runs on `master`, `main`, and `production`.
 
-`Deploy Production` runs after `Cloud CI` succeeds on `production`, and can also
-be run manually from GitHub Actions. The job is bound to the GitHub Environment
-named `production`; add environment approval rules when the GitHub plan supports
-them.
+On `production` push events, `Cloud CI` runs `backend` and `frontend` first,
+then runs the `deploy-production` job only after both pass. `Deploy Production`
+is a manual fallback workflow only, and must be run from the `production`
+branch. The deploy jobs are bound to the GitHub Environment named `production`;
+add environment approval rules when the GitHub plan supports them.
 
 The production deploy job:
 
@@ -83,7 +84,7 @@ local feature work
   -> PR master -> production
   -> Cloud CI passes on production
   -> GitHub Environment approval, when available
-  -> Deploy Production
+  -> Cloud CI deploy-production job
   -> operational-ready passes
 ```
 

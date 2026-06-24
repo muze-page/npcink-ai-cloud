@@ -130,6 +130,8 @@ def test_preview_and_baseline_scripts_lock_migration_and_schema_checks() -> None
     remote_env_script = (_cloud_root() / "deploy" / "remote-env-upsert.sh").read_text()
     remote_migrate_script = (_cloud_root() / "deploy" / "remote-migrate.sh").read_text()
     deploy_to_ssh_script = (_cloud_root() / "deploy" / "deploy-to-ssh-host.sh").read_text()
+    common_script = (_cloud_root() / "deploy" / "common.sh").read_text()
+    remote_load_script = (_cloud_root() / "deploy" / "remote-load-and-up.sh").read_text()
 
     assert "alembic upgrade head" in preview_script
     assert "python -m app.dev.baseline_status" in preview_script
@@ -191,6 +193,10 @@ def test_preview_and_baseline_scripts_lock_migration_and_schema_checks() -> None
     assert "BatchMode=yes" in deploy_to_ssh_script
     assert "ConnectTimeout" in deploy_to_ssh_script
     assert "SSH target is not reachable" in deploy_to_ssh_script
+    assert "NPCINK_CLOUD_HEALTH_HOST_HEADER" in common_script
+    assert "NPCINK_CLOUD_HEALTH_FORWARDED_PROTO" in common_script
+    assert "NPCINK_CLOUD_BROWSER_ORIGIN_ALLOWLIST" in remote_load_script
+    assert "configure_ready_origin_headers" in remote_load_script
 
 
 def test_deploy_bundle_smoke_uses_sample_provider_and_skip_frontend_contract() -> None:
@@ -201,6 +207,7 @@ def test_deploy_bundle_smoke_uses_sample_provider_and_skip_frontend_contract() -
     deploy_bundle_smoke = (cloud_root / "scripts" / "cloud-deploy-bundle-smoke-flow.sh").read_text()
     remote_smoke_script = (cloud_root / "deploy" / "remote-smoke.sh").read_text()
     nginx_prod_conf = (cloud_root / "deploy" / "nginx.prod.conf").read_text()
+    caddy_prod_conf = (cloud_root / "deploy" / "Caddyfile.prod").read_text()
 
     assert "packageManager" in package_json
     assert "pnpm@10.33.0" in package_json
@@ -225,6 +232,11 @@ def test_deploy_bundle_smoke_uses_sample_provider_and_skip_frontend_contract() -
     assert "upstream npcink_ai_cloud_frontend" not in nginx_prod_conf
     assert "resolver 127.0.0.11" in nginx_prod_conf
     assert 'set $npcink_ai_cloud_frontend "frontend:3000";' in nginx_prod_conf
+    assert "map $http_x_forwarded_proto $npcink_forwarded_proto" in nginx_prod_conf
+    assert "proxy_set_header X-Forwarded-Host $host;" in nginx_prod_conf
+    assert "proxy_set_header X-Forwarded-Proto $npcink_forwarded_proto;" in nginx_prod_conf
+    assert "header_up X-Forwarded-Host {host}" in caddy_prod_conf
+    assert "header_up X-Forwarded-Proto {scheme}" in caddy_prod_conf
 
 
 def test_release_gate_documents_cloud_hardening_blockers() -> None:

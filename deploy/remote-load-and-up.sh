@@ -14,6 +14,45 @@ npcink_ai_cloud_require_cmd docker
 npcink_ai_cloud_require_cmd curl
 npcink_ai_cloud_require_internal_token
 
+configure_ready_origin_headers() {
+	if [ -n "${NPCINK_CLOUD_HEALTH_HOST_HEADER:-}" ] ||
+		[ -n "${NPCINK_CLOUD_HEALTH_FORWARDED_PROTO:-}" ]; then
+		return
+	fi
+
+	local origin="${NPCINK_CLOUD_READY_ORIGIN:-}"
+	local proto=""
+	local without_scheme=""
+	local host=""
+
+	if [ -z "${origin}" ]; then
+		origin="${NPCINK_CLOUD_BROWSER_ORIGIN_ALLOWLIST:-}"
+		origin="${origin%%,*}"
+	fi
+	origin="${origin#"${origin%%[![:space:]]*}"}"
+	origin="${origin%"${origin##*[![:space:]]}"}"
+
+	case "${origin}" in
+		http://*|https://*)
+			proto="${origin%%://*}"
+			without_scheme="${origin#*://}"
+			host="${without_scheme%%/*}"
+			;;
+		*)
+			return
+			;;
+	esac
+
+	if [ -n "${host}" ]; then
+		export NPCINK_CLOUD_HEALTH_HOST_HEADER="${host}"
+	fi
+	if [ -n "${proto}" ]; then
+		export NPCINK_CLOUD_HEALTH_FORWARDED_PROTO="${proto}"
+	fi
+}
+
+configure_ready_origin_headers
+
 echo "[info] Using compose file: ${NPCINK_CLOUD_COMPOSE_FILE:-${ROOT_DIR}/docker-compose.prod.yml}"
 
 service_exists() {
