@@ -2699,6 +2699,7 @@ async def create_admin_audio_job(
                 status="error",
                 error_code=error.error_code,
                 message=error.message,
+                data=error.to_payload(),
                 revision="m6",
             ),
         )

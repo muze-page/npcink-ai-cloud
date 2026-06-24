@@ -15,6 +15,7 @@ from app.adapters.providers.base import (
     CatalogModelSeed,
     ProviderAdapter,
     ProviderCatalogSnapshot,
+    ProviderExecutionError,
     ProviderExecutionRequest,
     ProviderExecutionResult,
 )
@@ -200,6 +201,53 @@ class FixedAudioSummaryScriptProvider:
             latency_ms=25,
             tokens_in=80,
             tokens_out=60,
+            cost=0.0,
+        )
+
+
+class FlakyAudioSummaryScriptProvider(FixedAudioSummaryScriptProvider):
+    def execute(self, request: ProviderExecutionRequest) -> ProviderExecutionResult:
+        self.requests.append(request)
+        if len(self.requests) == 1:
+            raise ProviderExecutionError(
+                "provider.upstream_error",
+                "upstream error: temporary text provider failure",
+                retryable=True,
+            )
+        output_text = json.dumps(
+            {
+                "opening": "重试后生成的长文音频摘要。",
+                "key_points": ["模型第二次调用成功。"],
+                "closing": "可以继续生成音频候选。",
+                "assumptions_to_verify": [],
+            },
+            ensure_ascii=False,
+        )
+        return ProviderExecutionResult(
+            output={
+                "output_text": output_text,
+                "messages": [{"role": "assistant", "content": output_text}],
+                "model_id": request.model_id,
+            },
+            latency_ms=30,
+            tokens_in=80,
+            tokens_out=30,
+            cost=0.0,
+        )
+
+
+class EmptyAudioSummaryScriptProvider(FixedAudioSummaryScriptProvider):
+    def execute(self, request: ProviderExecutionRequest) -> ProviderExecutionResult:
+        self.requests.append(request)
+        return ProviderExecutionResult(
+            output={
+                "output_text": "",
+                "messages": [{"role": "assistant", "content": ""}],
+                "model_id": request.model_id,
+            },
+            latency_ms=20,
+            tokens_in=80,
+            tokens_out=0,
             cost=0.0,
         )
 
@@ -856,6 +904,100 @@ def test_admin_audio_workbench_builds_summary_script_before_audio_job(
     status_data = status_response.json()["data"]
     assert status_data["status"] == "succeeded"
     assert status_data["result"]["audios"][0]["duration_seconds"] > 0
+
+    dispose_engine(database_url)
+
+
+def test_admin_audio_workbench_retries_transient_summary_script_failure(
+    tmp_path: Path,
+) -> None:
+    audio_provider = MiniMaxProviderAdapter(
+        allow_sample_catalog=True,
+        allow_sample_execution=True,
+    )
+    script_provider = FlakyAudioSummaryScriptProvider()
+    database_url, client = _build_client(
+        tmp_path,
+        providers={"minimax": audio_provider, "openai": script_provider},
+        settings_overrides={
+            "minimax_provider_enabled": True,
+            "minimax_api_key": "minimax-test-secret",
+        },
+    )
+    seed_site_auth(
+        database_url,
+        site_id="site_audio_admin",
+        scopes=["runtime:execute", "runtime:read", "runtime:resolve"],
+    )
+
+    response = client.post(
+        "/internal/service/admin/audio-jobs",
+        headers=build_internal_headers(idempotency_key="audio-workbench-summary-retry"),
+        json={
+            "site_id": "site_audio_admin",
+            "intent": "article_audio_summary",
+            "title": "重试主题",
+            "body": "第一段介绍背景。第二段说明关键问题。",
+            "format": "mp3",
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    data = response.json()["data"]
+    assert len(script_provider.requests) == 2
+    assert script_provider.requests[0].input_payload["workbench_retry"]["attempt"] == 1
+    assert script_provider.requests[1].input_payload["workbench_retry"]["attempt"] == 2
+    assert data["script"]["generation"]["attempts"] == 2
+    assert data["script"]["generation"]["retry_attempted"] is True
+    assert "重试后生成的长文音频摘要" in data["script"]["text"]
+
+    dispose_engine(database_url)
+
+
+def test_admin_audio_workbench_returns_friendly_empty_summary_script_error(
+    tmp_path: Path,
+) -> None:
+    audio_provider = MiniMaxProviderAdapter(
+        allow_sample_catalog=True,
+        allow_sample_execution=True,
+    )
+    script_provider = EmptyAudioSummaryScriptProvider()
+    database_url, client = _build_client(
+        tmp_path,
+        providers={"minimax": audio_provider, "openai": script_provider},
+        settings_overrides={
+            "minimax_provider_enabled": True,
+            "minimax_api_key": "minimax-test-secret",
+        },
+    )
+    seed_site_auth(
+        database_url,
+        site_id="site_audio_admin",
+        scopes=["runtime:execute", "runtime:read", "runtime:resolve"],
+    )
+
+    response = client.post(
+        "/internal/service/admin/audio-jobs",
+        headers=build_internal_headers(idempotency_key="audio-workbench-empty-summary"),
+        json={
+            "site_id": "site_audio_admin",
+            "intent": "article_audio_summary",
+            "title": "空脚本主题",
+            "body": "第一段介绍背景。第二段说明关键问题。",
+            "format": "mp3",
+        },
+    )
+
+    assert response.status_code == 400, response.text
+    payload = response.json()
+    assert payload["error_code"] == "audio_workbench.summary_script_empty"
+    assert "returned an empty audio summary script" in payload["message"]
+    assert "audio summary script generation returned no usable script" not in payload["message"]
+    assert payload["data"]["retryable"] is True
+    assert payload["data"]["retry_attempted"] is True
+    assert payload["data"]["action"] == "retry_or_use_narration"
+    assert payload["data"]["stage"] == "audio_summary_script"
+    assert len(script_provider.requests) == 2
 
     dispose_engine(database_url)
 
