@@ -1,0 +1,73 @@
+name: Deploy Production
+
+on:
+  workflow_run:
+    workflows: ["Cloud CI"]
+    types: [completed]
+    branches: [production]
+  workflow_dispatch:
+
+concurrency:
+  group: production-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy to cloud.npc.ink
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    environment: production
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "pnpm"
+          cache-dependency-path: frontend/pnpm-lock.yaml
+
+      - name: Setup Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Install SSH key
+        env:
+          PROD_SSH_KEY: ${{ secrets.PROD_SSH_KEY }}
+          PROD_SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
+          PROD_SSH_PORT: ${{ secrets.PROD_SSH_PORT || '22' }}
+        run: |
+          set -euo pipefail
+          test -n "${PROD_SSH_KEY}"
+          test -n "${PROD_SSH_HOST}"
+          mkdir -p ~/.ssh
+          printf '%s\n' "${PROD_SSH_KEY}" > ~/.ssh/npcink_prod_deploy_key
+          chmod 600 ~/.ssh/npcink_prod_deploy_key
+          ssh-keyscan -p "${PROD_SSH_PORT}" -H "${PROD_SSH_HOST}" >> ~/.ssh/known_hosts
+
+      - name: Deploy
+        env:
+          NPCINK_CLOUD_DEPLOY_SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
+          NPCINK_CLOUD_DEPLOY_SSH_USER: ${{ secrets.PROD_SSH_USER || 'deploy' }}
+          NPCINK_CLOUD_DEPLOY_SSH_PORT: ${{ secrets.PROD_SSH_PORT || '22' }}
+          NPCINK_CLOUD_DEPLOY_IDENTITY_FILE: /home/runner/.ssh/npcink_prod_deploy_key
+          NPCINK_CLOUD_DEPLOY_REMOTE_DIR: ${{ secrets.PROD_REMOTE_DIR || '/opt/npcink-ai-cloud' }}
+          NPCINK_CLOUD_BASE_URL: ${{ secrets.PROD_BASE_URL || 'https://cloud.npc.ink' }}
+          NPCINK_CLOUD_REMOTE_COMPOSE_FILE: docker-compose.runtime.yml
+          NPCINK_CLOUD_REFRESH_PROVIDERS: "1"
+          NPCINK_CLOUD_WITH_OPERATIONAL_READY: "1"
+        run: |
+          set -euo pipefail
+          pnpm run deploy:ssh -- \
+            --skip-seed \
+            --skip-smoke \
+            --refresh-providers \
+            --with-operational-ready \
+            --remote-compose-file docker-compose.runtime.yml
