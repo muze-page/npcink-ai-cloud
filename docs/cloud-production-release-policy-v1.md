@@ -79,6 +79,13 @@ Cloud CI backend + frontend -> deploy-production -> cloud.npc.ink
 The manual `Deploy Production` workflow is a fallback only. It must be run from
 the `production` branch.
 
+If a `production` push changes only public static legal/policy content under
+`site/terms/*`, the static terms fast path may update the current release
+without rebuilding Docker images, running migrations, refreshing providers, or
+restarting runtime services. This exception is limited to static terms content;
+proxy, compose, application, runtime, provider, database, and workflow changes
+must use the full production deploy path.
+
 ## Emergency Rule
 
 If production is broken and SSH hotfixing is unavoidable:

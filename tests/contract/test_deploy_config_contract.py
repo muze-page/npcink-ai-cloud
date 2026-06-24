@@ -201,11 +201,15 @@ def test_preview_and_baseline_scripts_lock_migration_and_schema_checks() -> None
 
 def test_deploy_bundle_smoke_uses_sample_provider_and_skip_frontend_contract() -> None:
     cloud_root = _cloud_root()
+    ci_workflow = (cloud_root / ".github" / "workflows" / "ci.yml").read_text()
     compose_text = (cloud_root / "docker-compose.prod.yml").read_text()
     runtime_compose_text = (cloud_root / "docker-compose.runtime.yml").read_text()
     package_json = (cloud_root / "package.json").read_text()
     frontend_dockerfile = (cloud_root / "frontend" / "Dockerfile").read_text()
     bundle_script = (cloud_root / "deploy" / "bundle-images.sh").read_text()
+    static_terms_deploy_script = (
+        cloud_root / "deploy" / "deploy-static-terms-to-ssh-host.sh"
+    ).read_text()
     deploy_bundle_smoke = (cloud_root / "scripts" / "cloud-deploy-bundle-smoke-flow.sh").read_text()
     remote_smoke_script = (cloud_root / "deploy" / "remote-smoke.sh").read_text()
     nginx_prod_conf = (cloud_root / "deploy" / "nginx.prod.conf").read_text()
@@ -249,6 +253,17 @@ def test_deploy_bundle_smoke_uses_sample_provider_and_skip_frontend_contract() -
     assert "/terms/en/terms.html" in remote_smoke_script
     assert "/terms/zh/terms.html" in remote_smoke_script
     assert "/terms/styles.css" in remote_smoke_script
+    assert "static_terms_only" in ci_workflow
+    assert "site/terms/*" in ci_workflow
+    assert "needs: [classify, backend, frontend, static-terms]" in ci_workflow
+    assert "bash deploy/deploy-static-terms-to-ssh-host.sh" in ci_workflow
+    assert "deploy:static-terms:ssh" in package_json
+    assert "CURRENT_LINK=\"${REMOTE_DIR}/current\"" in static_terms_deploy_script
+    assert "tar czf \"${TERMS_BUNDLE}\" -C \"${ROOT_DIR}/site\" terms" in (
+        static_terms_deploy_script
+    )
+    assert "assert_public_static_page \"/terms\"" in static_terms_deploy_script
+    assert "Static terms deploy completed" in static_terms_deploy_script
 
 
 def test_static_terms_pages_are_in_release_tree() -> None:
@@ -332,12 +347,14 @@ def test_lightweight_release_policy_gate_is_documented() -> None:
     assert "docs/cloud-production-release-policy-v1.md" in deploy_text
     assert "pnpm run check:release-policy" in deploy_text
     assert "/terms/en/terms.html" in deploy_text
+    assert "static terms fast path" in deploy_text
     assert "Focused module:" in pr_template_text
     assert "Cloud boundary impact:" in pr_template_text
     assert "does not commit production secrets" in pr_template_text
     assert "check:release-policy" in package_text
     assert "Lightweight release policy gate passed" in script_text
     assert "/terms/en/terms.html" in script_text
+    assert "deploy-static-terms-to-ssh-host.sh" in script_text
 
     for marker in (
         "AI Production Operation Rules",

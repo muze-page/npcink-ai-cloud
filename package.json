@@ -41,6 +41,7 @@
     "portal:smoke:ssh": "bash deploy/portal-smoke-to-ssh-host.sh",
     "bundle": "bash deploy/bundle-images.sh",
     "deploy:ssh": "bash deploy/deploy-to-ssh-host.sh",
+    "deploy:static-terms:ssh": "bash deploy/deploy-static-terms-to-ssh-host.sh",
     "env:ssh": "bash deploy/env-to-ssh-host.sh",
     "wp-cron:ssh": "bash deploy/wp-cron-to-ssh-host.sh",
     "sync:mini": "pnpm run mini:preview:frontend",

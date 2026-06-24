@@ -6,7 +6,41 @@ on:
   pull_request:
 
 jobs:
+  classify:
+    runs-on: ubuntu-latest
+    outputs:
+      static_terms_only: ${{ steps.changed.outputs.static_terms_only }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Classify changed files
+        id: changed
+        run: |
+          set -euo pipefail
+          static_terms_only="false"
+
+          if [ "${GITHUB_EVENT_NAME}" = "push" ] && [ "${GITHUB_REF}" = "refs/heads/production" ]; then
+            mapfile -t changed_files < <(git diff --name-only "${{ github.event.before }}" "${{ github.sha }}")
+            if [ "${#changed_files[@]}" -gt 0 ]; then
+              static_terms_only="true"
+              for changed_file in "${changed_files[@]}"; do
+                if [[ "${changed_file}" != site/terms/* ]]; then
+                  static_terms_only="false"
+                  break
+                fi
+              done
+            fi
+          fi
+
+          printf 'static_terms_only=%s\n' "${static_terms_only}" >> "${GITHUB_OUTPUT}"
+          printf 'static_terms_only=%s\n' "${static_terms_only}"
+
   backend:
+    needs: [classify]
+    if: needs.classify.outputs.static_terms_only != 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -46,6 +80,8 @@ jobs:
         run: .venv/bin/python -m pytest tests/api tests/contract tests/domain -q
 
   frontend:
+    needs: [classify]
+    if: needs.classify.outputs.static_terms_only != 'true'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -84,8 +120,8 @@ jobs:
 
   deploy-production:
     name: Deploy to cloud.npc.ink
-    needs: [backend, frontend]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/production'
+    needs: [classify, backend, frontend, static-terms]
+    if: always() && github.event_name == 'push' && github.ref == 'refs/heads/production' && ((needs.classify.outputs.static_terms_only == 'true' && needs['static-terms'].result == 'success') || (needs.classify.outputs.static_terms_only != 'true' && needs.backend.result == 'success' && needs.frontend.result == 'success'))
     runs-on: ubuntu-latest
     environment: production
     concurrency:
@@ -98,9 +134,11 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Setup pnpm
+        if: needs.classify.outputs.static_terms_only != 'true'
         uses: pnpm/action-setup@v4
 
       - name: Setup Node
+        if: needs.classify.outputs.static_terms_only != 'true'
         uses: actions/setup-node@v4
         with:
           node-version: "20"
@@ -108,6 +146,7 @@ jobs:
           cache-dependency-path: frontend/pnpm-lock.yaml
 
       - name: Setup Docker Buildx
+        if: needs.classify.outputs.static_terms_only != 'true'
         uses: docker/setup-buildx-action@v3
 
       - name: Install SSH key
@@ -125,6 +164,7 @@ jobs:
           ssh-keyscan -p "${PROD_SSH_PORT}" -H "${PROD_SSH_HOST}" >> ~/.ssh/known_hosts
 
       - name: Deploy
+        if: needs.classify.outputs.static_terms_only != 'true'
         env:
           NPCINK_CLOUD_DEPLOY_SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
           NPCINK_CLOUD_DEPLOY_SSH_USER: ${{ secrets.PROD_SSH_USER || 'deploy' }}
@@ -143,3 +183,34 @@ jobs:
             --refresh-providers \
             --with-operational-ready \
             --remote-compose-file docker-compose.runtime.yml
+
+      - name: Deploy static terms
+        if: needs.classify.outputs.static_terms_only == 'true'
+        env:
+          NPCINK_CLOUD_DEPLOY_SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
+          NPCINK_CLOUD_DEPLOY_SSH_USER: ${{ secrets.PROD_SSH_USER || 'deploy' }}
+          NPCINK_CLOUD_DEPLOY_SSH_PORT: ${{ secrets.PROD_SSH_PORT || '22' }}
+          NPCINK_CLOUD_DEPLOY_IDENTITY_FILE: /home/runner/.ssh/npcink_prod_deploy_key
+          NPCINK_CLOUD_DEPLOY_REMOTE_DIR: ${{ secrets.PROD_REMOTE_DIR || '/opt/npcink-ai-cloud' }}
+          NPCINK_CLOUD_BASE_URL: ${{ secrets.PROD_BASE_URL || 'https://cloud.npc.ink' }}
+        run: |
+          set -euo pipefail
+          bash deploy/deploy-static-terms-to-ssh-host.sh
+
+  static-terms:
+    needs: [classify]
+    if: needs.classify.outputs.static_terms_only == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate static terms tree
+        run: |
+          set -euo pipefail
+          bash scripts/check-release-policy.sh
+          test -f site/terms/index.html
+          test -f site/terms/en/terms.html
+          test -f site/terms/zh/terms.html
+          test -f site/terms/styles.css
+          ! find site/terms -name '.DS_Store' -print -quit | grep -q .

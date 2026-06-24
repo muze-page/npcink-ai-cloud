@@ -32,6 +32,12 @@ is a manual fallback workflow only, and must be run from the `production`
 branch. The deploy jobs are bound to the GitHub Environment named `production`;
 add environment approval rules when the GitHub plan supports them.
 
+Exception: if a `production` push changes only `site/terms/*`, `Cloud CI` uses
+the static terms fast path. That path skips backend/frontend/full Docker
+deployment, uploads only the checked-in `site/terms` tree to the current release,
+and verifies `/terms`, `/terms/en/terms.html`, `/terms/zh/terms.html`,
+`/terms/styles.css`, and `/health/live`.
+
 The production deploy job:
 
 1. Builds the production Docker image bundle.
@@ -42,6 +48,16 @@ The production deploy job:
 6. Refreshes provider catalog and provider health.
 7. Verifies `/health/operational-ready`.
 8. Verifies public static legal pages, including `/terms/en/terms.html`.
+
+The static terms fast path runs:
+
+```bash
+pnpm run deploy:static-terms:ssh
+```
+
+Use it only for public static legal/policy page content under `site/terms/*`.
+Any proxy, compose, application, API, provider, database, or runtime change must
+use the full production deploy path.
 
 ## GitHub Secrets
 
