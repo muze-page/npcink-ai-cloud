@@ -8,6 +8,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from app.api.envelope import build_envelope
 from app.api.routes.agent_feedback import router as agent_feedback_router
+from app.api.routes.audio_assets import router as audio_assets_router
 from app.api.routes.auth import router as auth_router
 from app.api.routes.catalog import router as catalog_router
 from app.api.routes.entitlements import router as entitlements_router
@@ -150,6 +151,7 @@ def create_app(services: CloudServices | None = None) -> FastAPI:
     app.include_router(service_router)
     app.include_router(observability_router)
     app.include_router(runtime_router)
+    app.include_router(audio_assets_router)
     app.include_router(agent_feedback_router)
     app.include_router(media_derivatives_router)
     app.include_router(runs_router)

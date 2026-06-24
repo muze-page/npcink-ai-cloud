@@ -1189,6 +1189,38 @@ class MediaDerivativeArtifact(Base):
     )
 
 
+class AudioAsset(Base):
+    __tablename__ = "audio_assets"
+
+    asset_id: Mapped[str] = mapped_column(String(191), primary_key=True)
+    site_id: Mapped[str] = mapped_column(ForeignKey("sites.site_id"), index=True)
+    source_artifact_id: Mapped[str | None] = mapped_column(String(191), index=True)
+    source_run_id: Mapped[str | None] = mapped_column(String(191), index=True)
+    status: Mapped[str] = mapped_column(String(32), default="active", index=True)
+    storage_ref: Mapped[str] = mapped_column(String(512))
+    blob_data: Mapped[bytes] = mapped_column(LargeBinary)
+    mime_type: Mapped[str] = mapped_column(String(64))
+    format: Mapped[str] = mapped_column(String(16))
+    duration_seconds: Mapped[float] = mapped_column(Float, default=0.0)
+    filesize_bytes: Mapped[int] = mapped_column(Integer, default=0)
+    checksum: Mapped[str] = mapped_column(String(128), index=True)
+    source_content_hash: Mapped[str | None] = mapped_column(String(128), index=True)
+    provider_id: Mapped[str | None] = mapped_column(String(64), index=True)
+    model_id: Mapped[str | None] = mapped_column(String(191), index=True)
+    trace_id: Mapped[str | None] = mapped_column(String(64), index=True)
+    metadata_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+
 class MediaDerivativeJobMetric(Base):
     __tablename__ = "media_derivative_job_metrics"
     __table_args__ = (UniqueConstraint("run_id", name="uq_media_derivative_job_metrics_run"),)
