@@ -2713,6 +2713,20 @@ async def create_admin_audio_job(
     )
 
 
+@router.get("/admin/audio-jobs/recent")
+async def list_admin_audio_jobs_recent(request: Request, limit: int = Query(default=10)) -> Any:
+    auth = await authorize_internal_request(request, require_idempotency=False)
+    if auth is not None:
+        return auth
+    result = _audio_workbench_service(request).list_recent_jobs(limit=limit)
+    return build_envelope(
+        status="ok",
+        message="recent audio jobs loaded",
+        data=result,
+        revision="m6",
+    )
+
+
 @router.get("/admin/audio-jobs/{run_id}")
 async def get_admin_audio_job(request: Request, run_id: str) -> Any:
     auth = await authorize_internal_request(request, require_idempotency=False)

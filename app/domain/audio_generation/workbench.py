@@ -7,11 +7,15 @@ from html import unescape
 from typing import Any
 from uuid import uuid4
 
+from sqlalchemy import select
+
 from app.adapters.callbacks.base import RuntimeCallbackDispatcher
 from app.adapters.providers.base import ProviderAdapter
 from app.adapters.providers.registry import resolve_execution_provider_adapters
 from app.adapters.queue.base import RuntimeQueue
 from app.core.config import Settings
+from app.core.db import get_session
+from app.core.models import RunRecord
 from app.domain.audio_generation.contracts import (
     AUDIO_GENERATION_ABILITY_FAMILY,
     AUDIO_GENERATION_CLOUD_ABILITY,
@@ -118,7 +122,7 @@ class AudioWorkbenchService:
                     "title": str(request_payload["title"]),
                     "source_chars": len(str(request_payload["body"])),
                     "script_source": script_bundle["source"],
-                    "script_generation_run_id": script_bundle["generation"].get("run_id", ""),
+                    "script_generation_present": bool(script_bundle["generation"].get("run_id")),
                     "audio_profile_id": audio_profile_id,
                 },
             },
@@ -163,6 +167,28 @@ class AudioWorkbenchService:
             payload["error_code"] = error.error_code
             payload["error_message"] = error.message
         return payload
+
+    def list_recent_jobs(self, *, limit: int = 10) -> dict[str, object]:
+        max_items = max(1, min(20, int(limit)))
+        with get_session(self.database_url) as session:
+            runs = list(
+                session.scalars(
+                    select(RunRecord)
+                    .where(
+                        RunRecord.ability_name == AUDIO_GENERATION_CLOUD_ABILITY,
+                        RunRecord.channel == "admin",
+                    )
+                    .order_by(RunRecord.started_at.desc(), RunRecord.run_id.desc())
+                    .limit(max_items)
+                )
+            )
+
+        return {
+            "contract_version": "admin_audio_workbench_recent_runs.v1",
+            "limit": max_items,
+            "items": [_recent_audio_run_summary(run) for run in runs],
+            "boundary": self._boundary(),
+        }
 
     def process_one_queued_job(self) -> None:
         self._runtime_service().process_next_queued_run(timeout_seconds=0)
@@ -442,6 +468,59 @@ def _clean_article_text(value: str) -> str:
 
 def _compact_text(value: str) -> str:
     return re.sub(r"\s+", " ", value or "").strip()
+
+
+def _recent_audio_run_summary(run: RunRecord) -> dict[str, object]:
+    input_payload = run.input_json if isinstance(run.input_json, dict) else {}
+    result_payload = run.result_json if isinstance(run.result_json, dict) else {}
+    article_context = _dict(input_payload.get("article_context"))
+    audio_summary = _recent_audio_artifact_summary(result_payload)
+    return {
+        "run_id": run.run_id,
+        "site_id": run.site_id,
+        "status": run.status,
+        "intent": str(input_payload.get("intent") or "audio_generation"),
+        "script_source": str(article_context.get("script_source") or ""),
+        "provider_id": run.selected_provider_id or "",
+        "model_id": run.selected_model_id or "",
+        "instance_id": run.selected_instance_id or "",
+        "profile_id": run.profile_id,
+        "trace_id": run.trace_id,
+        "error_code": run.error_code or "",
+        "error_message": _compact_text(run.error_message or "")[:180],
+        "started_at": _isoformat_or_empty(run.started_at),
+        "finished_at": _isoformat_or_empty(run.finished_at),
+        "duration_seconds": audio_summary["duration_seconds"],
+        "audio_ready": audio_summary["audio_ready"],
+        "mime_type": audio_summary["mime_type"],
+        "direct_wordpress_write": bool(result_payload.get("direct_wordpress_write", False)),
+    }
+
+
+def _recent_audio_artifact_summary(result_payload: dict[str, Any]) -> dict[str, object]:
+    audio = _first_dict(result_payload.get("audios"))
+    return {
+        "audio_ready": bool(audio.get("url") or audio.get("b64_json")),
+        "duration_seconds": float(audio.get("duration_seconds") or 0.0),
+        "mime_type": str(audio.get("mime_type") or ""),
+    }
+
+
+def _first_dict(value: object) -> dict[str, Any]:
+    if not isinstance(value, list):
+        return {}
+    for item in value:
+        if isinstance(item, dict):
+            return item
+    return {}
+
+
+def _dict(value: object) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
+
+
+def _isoformat_or_empty(value: Any) -> str:
+    return value.isoformat() if value else ""
 
 
 def _audio_summary_issue(

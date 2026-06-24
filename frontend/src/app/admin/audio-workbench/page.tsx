@@ -96,6 +96,30 @@ type AudioWorkbenchNotice = {
   data: AudioWorkbenchFailureData;
 };
 
+type RecentAudioJob = {
+  run_id: string;
+  site_id: string;
+  status: string;
+  intent: AudioIntent | string;
+  script_source?: string;
+  provider_id?: string;
+  model_id?: string;
+  profile_id?: string;
+  trace_id?: string;
+  error_code?: string;
+  error_message?: string;
+  started_at?: string;
+  finished_at?: string;
+  duration_seconds?: number;
+  audio_ready?: boolean;
+  mime_type?: string;
+  direct_wordpress_write?: boolean;
+};
+
+type RecentAudioJobs = {
+  items: RecentAudioJob[];
+};
+
 type RuntimeProfile = {
   profile_id: string;
   status: string;
@@ -194,6 +218,16 @@ function actionLabel(action: string): string {
   return 'Retry';
 }
 
+function recentIntentLabel(intentValue: string): string {
+  if (intentValue === 'article_audio_summary') {
+    return 'Audio summary';
+  }
+  if (intentValue === 'article_narration') {
+    return 'Article narration';
+  }
+  return 'Audio generation';
+}
+
 function AudioWorkbenchContent() {
   const [intent, setIntent] = useState<AudioIntent>('article_narration');
   const [siteId, setSiteId] = useState('site_smoke');
@@ -205,6 +239,9 @@ function AudioWorkbenchContent() {
   const [errorNotice, setErrorNotice] = useState<AudioWorkbenchNotice | null>(null);
   const [message, setMessage] = useState('');
   const [resourceError, setResourceError] = useState('');
+  const [recentJobs, setRecentJobs] = useState<RecentAudioJob[]>([]);
+  const [recentLoading, setRecentLoading] = useState(false);
+  const [recentError, setRecentError] = useState('');
 
   const terminal = job ? ['succeeded', 'failed', 'canceled'].includes(job.status) : true;
   const source = audioSource(job);
@@ -230,7 +267,11 @@ function AudioWorkbenchContent() {
           throw new Error(buildFailureNotice(payload, 'Failed to load audio job.').message);
         }
         if (!cancelled) {
-          setJob(payload.data as AudioJob);
+          const nextJob = payload.data as AudioJob;
+          setJob(nextJob);
+          if (['succeeded', 'failed', 'canceled'].includes(nextJob.status)) {
+            void loadRecentJobs();
+          }
         }
       } catch (pollError) {
         if (!cancelled) {
@@ -273,6 +314,10 @@ function AudioWorkbenchContent() {
     };
   }, []);
 
+  useEffect(() => {
+    void loadRecentJobs();
+  }, []);
+
   const metrics = useMemo(() => {
     return [
       {
@@ -303,6 +348,48 @@ function AudioWorkbenchContent() {
     ];
   }, [audioProfile?.status, intent, job?.run_id, job?.status, siteId, summaryProfile?.status]);
 
+  async function loadRecentJobs() {
+    setRecentLoading(true);
+    setRecentError('');
+    try {
+      const response = await fetch('/api/admin/audio-jobs/recent?limit=10', {
+        credentials: 'include',
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(buildFailureNotice(payload, 'Failed to load recent audio jobs.').message);
+      }
+      const data = isRecord(payload) && isRecord(payload.data) ? (payload.data as RecentAudioJobs) : { items: [] };
+      setRecentJobs(Array.isArray(data.items) ? data.items : []);
+    } catch (loadError) {
+      setRecentError(loadError instanceof Error ? loadError.message : 'Failed to load recent audio jobs.');
+    } finally {
+      setRecentLoading(false);
+    }
+  }
+
+  async function loadJob(runId: string) {
+    setErrorNotice(null);
+    setMessage('');
+    try {
+      const response = await fetch(`/api/admin/audio-jobs/${encodeURIComponent(runId)}`, {
+        credentials: 'include',
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        setErrorNotice(buildFailureNotice(payload, 'Failed to load audio job.'));
+        return;
+      }
+      setJob(payload.data as AudioJob);
+    } catch (loadError) {
+      setErrorNotice({
+        message: loadError instanceof Error ? loadError.message : 'Failed to load audio job.',
+        errorCode: 'audio_workbench.load_failed',
+        data: { action: 'retry_later', retryable: false },
+      });
+    }
+  }
+
   async function createJob(nextIntent: AudioIntent = intent) {
     setCreating(true);
     setErrorNotice(null);
@@ -328,6 +415,7 @@ function AudioWorkbenchContent() {
       }
       setJob(payload.data as AudioJob);
       setMessage('Audio job created. Status will update automatically.');
+      void loadRecentJobs();
     } catch (createError) {
       setErrorNotice({
         message: createError instanceof Error ? createError.message : 'Failed to create audio job.',
@@ -581,6 +669,69 @@ function AudioWorkbenchContent() {
                 Create a job to see status, script, and playback.
               </div>
             )}
+
+            <div className="rounded-lg border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-950/60">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <h2 className="text-sm font-semibold text-slate-950 dark:text-white">Recent runs</h2>
+                  <p className="mt-1 text-xs leading-5 text-slate-500 dark:text-slate-400">
+                    Last 10 Admin audio runtime records. Detail is read from the existing run result.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => void loadRecentJobs()}
+                  disabled={recentLoading}
+                  className="btn btn-secondary shrink-0"
+                >
+                  {recentLoading ? 'Refreshing...' : 'Refresh'}
+                </button>
+              </div>
+              {recentError ? (
+                <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-900 dark:bg-amber-950/25 dark:text-amber-200">
+                  {recentError}
+                </div>
+              ) : null}
+              {recentJobs.length ? (
+                <div className="mt-3 divide-y divide-slate-200 dark:divide-slate-800">
+                  {recentJobs.map((recent) => (
+                    <div key={recent.run_id} className="flex items-start justify-between gap-3 py-3">
+                      <div className="min-w-0 text-xs leading-5 text-slate-600 dark:text-slate-300">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <BackofficeStatusBadge
+                            label={recent.status || 'unknown'}
+                            status={recent.status === 'failed' ? 'error' : recent.status === 'succeeded' ? 'success' : 'info'}
+                          />
+                          <span className="font-semibold text-slate-900 dark:text-white">
+                            {recentIntentLabel(String(recent.intent || ''))}
+                          </span>
+                        </div>
+                        <div className="mt-1 truncate">Run: {recent.run_id}</div>
+                        <div className="truncate">
+                          {recent.provider_id || 'provider'} / {recent.model_id || 'model'}
+                        </div>
+                        <div className="flex flex-wrap gap-x-3 gap-y-1 text-slate-500 dark:text-slate-400">
+                          {recent.audio_ready ? <span>Audio ready</span> : <span>No playable audio yet</span>}
+                          {recent.duration_seconds ? <span>{recent.duration_seconds}s</span> : null}
+                          {recent.error_code ? <span>{recent.error_code}</span> : null}
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => void loadJob(recent.run_id)}
+                        className="btn btn-secondary shrink-0"
+                      >
+                        Inspect
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="mt-3 rounded-lg border border-dashed border-slate-300 p-3 text-xs text-slate-500 dark:border-slate-700 dark:text-slate-400">
+                  No recent Admin audio runs.
+                </div>
+              )}
+            </div>
           </div>
         </div>
       </BackofficeSectionPanel>

@@ -59,4 +59,22 @@ assert.match(
   'audio workbench must continue to present generated audio as a candidate-only artifact'
 );
 
+assert.match(
+  pageSource,
+  /fetch\('\/api\/admin\/audio-jobs\/recent\?limit=10'/,
+  'audio workbench must load a bounded recent-runs projection instead of creating a separate audio job store'
+);
+
+assert.match(
+  pageSource,
+  /Last 10 Admin audio runtime records/,
+  'audio workbench recent runs copy must present the list as runtime evidence, not a media library'
+);
+
+assert.match(
+  pageSource,
+  /onClick=\{\(\) => void loadJob\(recent\.run_id\)\}/,
+  'audio workbench recent runs must inspect existing run detail instead of exposing direct media management actions'
+);
+
 console.log('admin_audio_workbench_contract: ok');

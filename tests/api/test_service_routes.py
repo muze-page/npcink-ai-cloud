@@ -847,6 +847,64 @@ def test_admin_audio_workbench_creates_narration_job_and_exposes_result(
     dispose_engine(database_url)
 
 
+def test_admin_audio_workbench_recent_runs_are_lightweight_runtime_evidence(
+    tmp_path: Path,
+) -> None:
+    provider = MiniMaxProviderAdapter(
+        allow_sample_catalog=True,
+        allow_sample_execution=True,
+    )
+    database_url, client = _build_client(
+        tmp_path,
+        providers={"minimax": provider},
+        settings_overrides={
+            "minimax_provider_enabled": True,
+            "minimax_api_key": "minimax-test-secret",
+        },
+    )
+    seed_site_auth(
+        database_url,
+        site_id="site_audio_admin",
+        scopes=["runtime:execute", "runtime:read", "runtime:resolve"],
+    )
+
+    create_response = client.post(
+        "/internal/service/admin/audio-jobs",
+        headers=build_internal_headers(idempotency_key="audio-workbench-recent-create"),
+        json={
+            "site_id": "site_audio_admin",
+            "intent": "article_narration",
+            "title": "Recent audio test",
+            "body": "这是一段文章正文，用于验证最近音频任务摘要。",
+            "format": "mp3",
+        },
+    )
+
+    assert create_response.status_code == 200, create_response.text
+    run_id = create_response.json()["data"]["run_id"]
+
+    recent_response = client.get(
+        "/internal/service/admin/audio-jobs/recent?limit=5",
+        headers=build_internal_headers(),
+    )
+
+    assert recent_response.status_code == 200, recent_response.text
+    data = recent_response.json()["data"]
+    assert data["contract_version"] == "admin_audio_workbench_recent_runs.v1"
+    assert data["boundary"]["direct_wordpress_write"] is False
+    assert data["items"][0]["run_id"] == run_id
+    assert data["items"][0]["intent"] in {"article_narration", "audio_generation"}
+    assert data["items"][0]["audio_ready"] is True
+    assert data["items"][0]["mime_type"] == "audio/mpeg"
+    serialized = json.dumps(data, ensure_ascii=False)
+    assert "audios" not in serialized
+    assert "url" not in serialized
+    assert "transcript" not in serialized
+    assert "这是一段文章正文" not in serialized
+
+    dispose_engine(database_url)
+
+
 def test_admin_audio_workbench_builds_summary_script_before_audio_job(
     tmp_path: Path,
 ) -> None:
