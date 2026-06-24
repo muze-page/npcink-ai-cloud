@@ -137,7 +137,7 @@ jobs:
           NPCINK_CLOUD_WITH_OPERATIONAL_READY: "1"
         run: |
           set -euo pipefail
-          pnpm run deploy:ssh -- \
+          bash deploy/deploy-to-ssh-host.sh \
             --skip-seed \
             --skip-smoke \
             --refresh-providers \

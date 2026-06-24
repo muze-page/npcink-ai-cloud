@@ -188,6 +188,10 @@ if [ -n "${ENV_FILE}" ] && [ ! -f "${ENV_FILE}" ]; then
 	exit 1
 fi
 
+if [ -n "${REMOTE_COMPOSE_FILE}" ]; then
+	echo "[info] Requested remote compose file: ${REMOTE_COMPOSE_FILE}"
+fi
+
 SSH_TARGET="${SSH_HOST}"
 if [ -n "${SSH_USER}" ]; then
 	SSH_TARGET="${SSH_USER}@${SSH_HOST}"
