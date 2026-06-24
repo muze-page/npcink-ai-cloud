@@ -5502,11 +5502,24 @@ class RuntimeService:
 
         normalized_text = ""
         if task == "meta_description":
-            normalized_text = self._normalize_wordpress_ai_meta_description(output_text)
+            normalized_text = self._normalize_wordpress_ai_meta_description(
+                output_text,
+                source_text=str(input_payload.get("text") or ""),
+            )
         elif task == "content_classification":
             normalized_text = self._normalize_wordpress_ai_classification_output(
                 output_text,
                 source_text=str(input_payload.get("text") or ""),
+            )
+        elif task in ("title_generation", "excerpt_generation", "content_summary"):
+            normalized_text = self._normalize_wordpress_ai_plain_text_output(
+                output_text,
+                limit={
+                    "title_generation": 80,
+                    "excerpt_generation": 180,
+                    "content_summary": 220,
+                }[task],
+                strip_explanation=task == "title_generation",
             )
 
         if not normalized_text:
@@ -5538,12 +5551,35 @@ class RuntimeService:
 
         return ""
 
-    def _normalize_wordpress_ai_meta_description(self, output_text: str) -> str:
+    def _normalize_wordpress_ai_meta_description(
+        self,
+        output_text: str,
+        *,
+        source_text: str = "",
+    ) -> str:
         text = self._strip_wordpress_ai_markdown(output_text)
         text = re.split(r"\s+#{1,6}\s+", text, maxsplit=1)[0].strip()
         if ":" in text[:64] and len(text.split(":", 1)[1].strip()) >= 40:
             text = text.split(":", 1)[1].strip()
+        if self._is_latin_heavy(text):
+            cjk_fallback = self._extract_wordpress_ai_cjk_text(source_text, limit=155)
+            if cjk_fallback:
+                return cjk_fallback
         return self._truncate_wordpress_ai_text(text, limit=155)
+
+    def _normalize_wordpress_ai_plain_text_output(
+        self,
+        output_text: str,
+        *,
+        limit: int,
+        strip_explanation: bool = False,
+    ) -> str:
+        text = self._strip_wordpress_ai_markdown(output_text)
+        if strip_explanation:
+            text = re.split(r"\s+(?:说明|解释|理由|Explanation|Reasoning)\s*[:：]", text, maxsplit=1)[0].strip()
+        return self._trim_incomplete_wordpress_ai_tail(
+            self._truncate_wordpress_ai_text(text, limit=limit)
+        )
 
     def _normalize_wordpress_ai_classification_output(
         self,
@@ -5669,9 +5705,26 @@ class RuntimeService:
         text = output_text.strip()
         text = re.sub(r"^```(?:json|text|markdown)?\s*", "", text, flags=re.I)
         text = re.sub(r"\s*```$", "", text)
+        text = re.sub(r"(?m)^\s*#{1,6}\s*", "", text)
         text = re.sub(r"[*_`]+", "", text)
         text = re.sub(r"\s+", " ", text)
         return text.strip()
+
+    def _is_latin_heavy(self, text: str) -> bool:
+        cjk_count = len(re.findall(r"[\u4e00-\u9fff]", text))
+        latin_count = len(re.findall(r"[A-Za-z]", text))
+        return latin_count > max(24, cjk_count * 2)
+
+    def _extract_wordpress_ai_cjk_text(self, source_text: str, *, limit: int) -> str:
+        fragments = re.findall(r"[\u4e00-\u9fff][\u4e00-\u9fffA-Za-z0-9，。！？、：；（）《》“”\"'\\s-]{16,}", source_text)
+        if not fragments:
+            return ""
+        text = max((fragment.strip() for fragment in fragments), key=len)
+        text = re.sub(r"\s+", "", text)
+        return self._truncate_wordpress_ai_text(text, limit=limit)
+
+    def _trim_incomplete_wordpress_ai_tail(self, text: str) -> str:
+        return re.sub(r"\s+\d+[.)、]?$", "", text).strip()
 
     def _truncate_wordpress_ai_text(self, text: str, *, limit: int) -> str:
         text = text.strip()

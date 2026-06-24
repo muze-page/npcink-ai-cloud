@@ -74,9 +74,17 @@ class WordPressAIConnectorTextProvider:
         metadata = request.input_payload.get("metadata")
         if isinstance(metadata, dict):
             task = str(metadata.get("task") or "")
-        output_text = "Suggested scene-bound title"
+        output_text = "Npcink Cloud Addon: WordPress AI scene helper 说明：short title rationale"
         if task == "content_classification":
             output_text = "- WordPress AI\n- Cloud connector\n- Scene runtime"
+        elif task == "content_summary":
+            output_text = (
+                "### **1. Fast editing support**\n"
+                "Npcink Cloud Addon helps WordPress administrators generate useful "
+                "scene-specific AI suggestions for titles, excerpts, summaries, SEO "
+                "descriptions, and taxonomy classification without exposing chat or "
+                "direct WordPress writes.\n\n### **2. Safe operations**"
+            )
         elif task == "meta_description":
             output_text = (
                 "**Npcink Cloud AI Connector: WordPress AI plugin scene runtime** "
@@ -193,7 +201,7 @@ def test_wordpress_ai_connector_runtime_executes_scene_bound_text(tmp_path: Path
     assert response.status_code == 200
     data = response.json()["data"]
     assert data["status"] == "succeeded"
-    assert data["result"]["output_text"] == "Suggested scene-bound title"
+    assert data["result"]["output_text"] == "Npcink Cloud Addon: WordPress AI scene helper"
     assert data["execution_context"]["contract_version"] == "wp_ai_connector_runtime.v1"
     assert data["execution_context"]["ability_family"] == "text"
     assert data["execution_context"]["data_classification"] == "public_site_content"
@@ -263,7 +271,7 @@ def test_wordpress_ai_connector_runtime_normalizes_meta_description_scene(
         {
             "task": "meta_description",
             "request": {
-                "prompt": "Generate a meta description for this post.",
+                "prompt": "为这篇文章生成 SEO 描述：Npcink Cloud Addon 让 WordPress AI 插件在固定能力场景中调用云端运行时，只提供建议式输出，不提供通用聊天入口。",
             },
         }
     )
@@ -278,6 +286,33 @@ def test_wordpress_ai_connector_runtime_normalizes_meta_description_scene(
     assert "**" not in result_text
     assert "###" not in result_text
     assert len(result_text) <= 155
+    assert "云端运行时" in result_text
+
+
+def test_wordpress_ai_connector_runtime_normalizes_summary_text_scene(
+    tmp_path: Path,
+) -> None:
+    _, client, provider = _build_client(tmp_path)
+    payload = _payload(
+        {
+            "task": "content_summary",
+            "request": {
+                "prompt": "Summarize this post.",
+            },
+        }
+    )
+
+    response = _execute(client, payload, idempotency_key="wp-ai-connector-summary")
+
+    assert response.status_code == 200
+    provider_input = provider.requests[0].input_payload
+    assert "Return only the summary" in provider_input["input"]
+    assert provider_input["max_tokens"] == 160
+    result_text = response.json()["data"]["result"]["output_text"]
+    assert "**" not in result_text
+    assert "###" not in result_text
+    assert not result_text.endswith("2.")
+    assert len(result_text) <= 220
 
 
 def test_wordpress_ai_connector_runtime_rejects_timeout_above_scene_limit(
