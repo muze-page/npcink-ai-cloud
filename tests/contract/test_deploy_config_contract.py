@@ -272,6 +272,7 @@ def test_release_gate_documents_cloud_hardening_blockers() -> None:
 
 def test_lightweight_release_policy_gate_is_documented() -> None:
     cloud_root = _cloud_root()
+    agents_text = (cloud_root / "AGENTS.md").read_text()
     policy_text = (cloud_root / "docs" / "cloud-production-release-policy-v1.md").read_text()
     deploy_text = (cloud_root / "deploy" / "PRODUCTION_GITHUB_DEPLOY.md").read_text()
     pr_template_text = (cloud_root / ".github" / "pull_request_template.md").read_text()
@@ -294,3 +295,14 @@ def test_lightweight_release_policy_gate_is_documented() -> None:
     assert "does not commit production secrets" in pr_template_text
     assert "check:release-policy" in package_text
     assert "Lightweight release policy gate passed" in script_text
+
+    for marker in (
+        "AI Production Operation Rules",
+        "Production source branch is `production`",
+        "Do not directly edit production application code on the server.",
+        "Any emergency server fix must be backported to Git before the next deploy.",
+        "Do not commit SMTP passwords",
+        "Do not push or deploy to Gitee unless the user explicitly asks.",
+        "pnpm run check:release-policy",
+    ):
+        assert marker in agents_text
