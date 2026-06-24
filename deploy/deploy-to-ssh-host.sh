@@ -19,6 +19,7 @@ BUNDLE_PATH="${NPCINK_CLOUD_DEPLOY_BUNDLE_PATH:-${ROOT_DIR}/dist/deploy-bundle.t
 ENV_FILE="${NPCINK_CLOUD_ENV_FILE:-}"
 IMAGE_PLATFORM="${NPCINK_CLOUD_IMAGE_PLATFORM:-}"
 BASE_URL="${NPCINK_CLOUD_BASE_URL:-http://127.0.0.1:${NPCINK_CLOUD_PORT:-8010}}"
+REMOTE_COMPOSE_FILE="${NPCINK_CLOUD_REMOTE_COMPOSE_FILE:-}"
 SITE_ID="${NPCINK_CLOUD_SITE_ID:-site_smoke}"
 KEY_ID="${NPCINK_CLOUD_KEY_ID:-key_default}"
 SECRET="${NPCINK_CLOUD_SECRET:-npcink-cloud-test-secret}"
@@ -36,6 +37,8 @@ SKIP_BUNDLE_BUILD=0
 SKIP_SEED=0
 SKIP_SMOKE=0
 WITH_PORTAL_SMOKE=0
+REFRESH_PROVIDERS="${NPCINK_CLOUD_REFRESH_PROVIDERS:-0}"
+WITH_OPERATIONAL_READY="${NPCINK_CLOUD_WITH_OPERATIONAL_READY:-0}"
 SKIP_FRONTEND_IMAGE="${NPCINK_CLOUD_SKIP_FRONTEND_IMAGE:-0}"
 
 while [ "$#" -gt 0 ]; do
@@ -77,6 +80,10 @@ while [ "$#" -gt 0 ]; do
 			;;
 		--base-url)
 			BASE_URL="$2"
+			shift 2
+			;;
+		--remote-compose-file)
+			REMOTE_COMPOSE_FILE="$2"
 			shift 2
 			;;
 		--site-id)
@@ -145,6 +152,14 @@ while [ "$#" -gt 0 ]; do
 			;;
 		--with-portal-smoke)
 			WITH_PORTAL_SMOKE=1
+			shift
+			;;
+		--refresh-providers)
+			REFRESH_PROVIDERS=1
+			shift
+			;;
+		--with-operational-ready)
+			WITH_OPERATIONAL_READY=1
 			shift
 			;;
 		--skip-frontend-image)
@@ -278,7 +293,10 @@ ssh "${SSH_ARGS[@]}" "${SSH_TARGET}" bash -s -- \
 	"${SKIP_SMOKE}" \
 	"${REMOTE_ENV_PATH}" \
 	"${WITH_PORTAL_SMOKE}" \
-	"${SKIP_FRONTEND_IMAGE}" <<'EOF'
+	"${SKIP_FRONTEND_IMAGE}" \
+	"${REMOTE_COMPOSE_FILE}" \
+	"${REFRESH_PROVIDERS}" \
+	"${WITH_OPERATIONAL_READY}" <<'EOF'
 set -euo pipefail
 
 REMOTE_DIR="$1"
@@ -303,6 +321,9 @@ SKIP_SMOKE="${19:-0}"
 REMOTE_ENV_PATH="${20:-}"
 WITH_PORTAL_SMOKE="${21:-0}"
 SKIP_FRONTEND_IMAGE="${22:-0}"
+REMOTE_COMPOSE_FILE="${23:-}"
+REFRESH_PROVIDERS="${24:-0}"
+WITH_OPERATIONAL_READY="${25:-0}"
 
 RELEASE_DIR="${REMOTE_DIR}/${RELEASE_NAME}"
 CURRENT_LINK="${REMOTE_DIR}/current"
@@ -319,6 +340,9 @@ elif [ -f "${CURRENT_LINK}/${REMOTE_ENV_BASENAME}" ]; then
 fi
 
 export NPCINK_CLOUD_SKIP_FRONTEND_IMAGE="${SKIP_FRONTEND_IMAGE}"
+if [ -n "${REMOTE_COMPOSE_FILE}" ]; then
+	export NPCINK_CLOUD_COMPOSE_FILE="${RELEASE_DIR}/${REMOTE_COMPOSE_FILE}"
+fi
 
 ln -sfn "${RELEASE_DIR}" "${CURRENT_LINK}"
 
@@ -326,6 +350,10 @@ cd "${RELEASE_DIR}"
 bash deploy/remote-load-and-up.sh
 bash deploy/remote-migrate.sh
 bash deploy/remote-baseline-status.sh
+
+if [ "${REFRESH_PROVIDERS}" = "1" ]; then
+	bash deploy/remote-refresh-providers.sh
+fi
 
 if [ "${SKIP_SEED}" != "1" ]; then
 	bash deploy/remote-seed-runtime.sh \
@@ -374,6 +402,10 @@ if [ "${WITH_PORTAL_SMOKE}" = "1" ]; then
 		--base-url "${BASE_URL}" \
 		--site-id "${SITE_ID}" \
 		--member-email "${MEMBER_EMAIL}"
+fi
+
+if [ "${WITH_OPERATIONAL_READY}" = "1" ]; then
+	bash deploy/remote-operational-ready.sh --base-url "${BASE_URL}"
 fi
 
 echo "[ok] Remote release ready at ${RELEASE_DIR}"

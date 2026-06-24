@@ -1325,6 +1325,7 @@ pnpm run bundle
 Bundle contents:
 
 - `docker-compose.prod.yml`
+- `docker-compose.runtime.yml`
 - `deploy/common.sh`
 - `deploy/deploy-to-ssh-host.sh`
 - `deploy/nginx.prod.conf`
@@ -1411,6 +1412,9 @@ Notes:
   `deploy-bundle.tgz` via `scp`, then runs
   `load -> migrate -> baseline-status -> seed -> smoke`
   over `ssh`.
+- Formal production automation uses the `production` branch and
+  `docker-compose.runtime.yml`; see
+  [`deploy/PRODUCTION_GITHUB_DEPLOY.md`](deploy/PRODUCTION_GITHUB_DEPLOY.md).
 - The recommended order is now fixed:
   `local code/docs -> local Docker/perimeter -> remote SSH deploy`.
   Do not use the remote host as the default inner-loop environment.
