@@ -15,31 +15,64 @@ jobs:
   deploy:
     name: Deploy to cloud.npc.ink
     runs-on: ubuntu-latest
-    if: >-
-      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/production') ||
-      (github.event_name == 'workflow_run' &&
-       github.event.workflow_run.conclusion == 'success' &&
-       github.event.workflow_run.head_branch == 'production')
     environment: production
     permissions:
       contents: read
     steps:
-      - name: Show deploy trigger
+      - name: Validate deploy trigger
+        id: deploy_guard
         run: |
-          echo "event=${{ github.event_name }}"
-          echo "ref=${{ github.ref }}"
-          echo "workflow_run_head_branch=${{ github.event.workflow_run.head_branch }}"
-          echo "workflow_run_head_sha=${{ github.event.workflow_run.head_sha }}"
+          set -euo pipefail
+          should_deploy="false"
+          workflow_run_conclusion=""
+          workflow_run_head_branch=""
+          workflow_run_head_sha=""
+
+          if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ]; then
+            if [ "${GITHUB_REF}" = "refs/heads/production" ]; then
+              should_deploy="true"
+            fi
+          elif [ "${GITHUB_EVENT_NAME}" = "workflow_run" ]; then
+            read -r workflow_run_conclusion workflow_run_head_branch workflow_run_head_sha < <(
+              python3 - <<'PY'
+          import json
+          import os
+
+          with open(os.environ["GITHUB_EVENT_PATH"], encoding="utf-8") as handle:
+              event = json.load(handle)
+          workflow_run = event.get("workflow_run") or {}
+          print(
+              workflow_run.get("conclusion") or "",
+              workflow_run.get("head_branch") or "",
+              workflow_run.get("head_sha") or "",
+          )
+          PY
+            )
+            if [ "${workflow_run_conclusion}" = "success" ] && [ "${workflow_run_head_branch}" = "production" ]; then
+              should_deploy="true"
+            fi
+          fi
+
+          echo "should_deploy=${should_deploy}" >> "${GITHUB_OUTPUT}"
+          echo "event=${GITHUB_EVENT_NAME}"
+          echo "ref=${GITHUB_REF}"
+          echo "workflow_run_conclusion=${workflow_run_conclusion}"
+          echo "workflow_run_head_branch=${workflow_run_head_branch}"
+          echo "workflow_run_head_sha=${workflow_run_head_sha}"
+          echo "should_deploy=${should_deploy}"
 
       - name: Checkout
+        if: steps.deploy_guard.outputs.should_deploy == 'true'
         uses: actions/checkout@v4
         with:
           ref: ${{ github.event.workflow_run.head_sha || github.sha }}
 
       - name: Setup pnpm
+        if: steps.deploy_guard.outputs.should_deploy == 'true'
         uses: pnpm/action-setup@v4
 
       - name: Setup Node
+        if: steps.deploy_guard.outputs.should_deploy == 'true'
         uses: actions/setup-node@v4
         with:
           node-version: "20"
@@ -47,9 +80,11 @@ jobs:
           cache-dependency-path: frontend/pnpm-lock.yaml
 
       - name: Setup Docker Buildx
+        if: steps.deploy_guard.outputs.should_deploy == 'true'
         uses: docker/setup-buildx-action@v3
 
       - name: Install SSH key
+        if: steps.deploy_guard.outputs.should_deploy == 'true'
         env:
           PROD_SSH_KEY: ${{ secrets.PROD_SSH_KEY }}
           PROD_SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
@@ -64,6 +99,7 @@ jobs:
           ssh-keyscan -p "${PROD_SSH_PORT}" -H "${PROD_SSH_HOST}" >> ~/.ssh/known_hosts
 
       - name: Deploy
+        if: steps.deploy_guard.outputs.should_deploy == 'true'
         env:
           NPCINK_CLOUD_DEPLOY_SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
           NPCINK_CLOUD_DEPLOY_SSH_USER: ${{ secrets.PROD_SSH_USER || 'deploy' }}
