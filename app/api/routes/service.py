@@ -3,10 +3,11 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from fastapi import APIRouter, Query, Request
+from fastapi import APIRouter, BackgroundTasks, Query, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
+from app.adapters.providers.base import ProviderExecutionError
 from app.adapters.providers.registry import resolve_live_provider_adapters
 from app.api.auth import authorize_internal_request, get_cloud_services
 from app.api.envelope import build_envelope
@@ -19,6 +20,14 @@ from app.domain.agent_workflow_metadata import (
     get_agent_workflow_metadata_projection,
     get_workflow_metadata,
 )
+from app.domain.audio_generation.admin_config import (
+    AudioProviderAdminConfigError,
+    AudioProviderAdminConfigService,
+)
+from app.domain.audio_generation.workbench import (
+    AudioWorkbenchError,
+    AudioWorkbenchService,
+)
 from app.domain.catalog.service import CatalogService
 from app.domain.commercial.errors import CommercialServiceError
 from app.domain.commercial.service import CommercialService, ServiceAuditContext
@@ -28,11 +37,16 @@ from app.domain.image_sources.metrics import ImageSourceMetricsService
 from app.domain.media_derivatives.metrics import MediaDerivativeObservabilityService
 from app.domain.observability.plugin_events import PluginObservabilityService
 from app.domain.observability.service import ObservabilityService
+from app.domain.provider_resources import (
+    AIResourceProfilePreferenceError,
+    AIResourceProfilePreferenceService,
+    build_admin_ai_resource_projection,
+)
 from app.domain.runtime.models import (
     RUNTIME_BACKLOG_SCOPE_KIND_PATTERN,
     RUNTIME_DIAGNOSTIC_ISSUE_KIND_PATTERN,
 )
-from app.domain.runtime.service import RuntimeService
+from app.domain.runtime.service import RuntimeRunNotFoundError, RuntimeService
 from app.domain.site_knowledge.metrics import SiteKnowledgeObservabilityService
 from app.domain.usage.rollup import UsageRollupService
 from app.domain.web_search.admin_config import WebSearchAdminConfigService
@@ -218,6 +232,32 @@ class ImageSourceProviderSettingsPayload(BaseModel):
     provider_mode: str = Field(default="disabled", max_length=32)
     providers: dict[str, Any] = Field(default_factory=dict)
     runtime: dict[str, Any] = Field(default_factory=dict)
+
+
+class AudioProviderSettingsPayload(BaseModel):
+    provider_mode: str = Field(default="disabled", max_length=32)
+    providers: dict[str, Any] = Field(default_factory=dict)
+    runtime: dict[str, Any] = Field(default_factory=dict)
+
+
+class AudioWorkbenchCreatePayload(BaseModel):
+    intent: str = Field(default="article_narration", max_length=64)
+    site_id: str = Field(default="site_smoke", max_length=191)
+    title: str = Field(default="", max_length=240)
+    body: str = Field(min_length=1, max_length=25000)
+    format: str = Field(default="mp3", max_length=16)
+
+
+class AIResourceProfilePreferencePayload(BaseModel):
+    audio_summary_text_profile_id: str = Field(default="text.ai", max_length=64)
+    audio_narration_profile_id: str = Field(
+        default="audio.narration.default",
+        max_length=64,
+    )
+    audio_summary_audio_profile_id: str = Field(
+        default="audio.narration.default",
+        max_length=64,
+    )
 
 
 class OpsSummaryDisclosureReviewPayload(BaseModel):
@@ -2505,6 +2545,192 @@ async def update_admin_image_source_providers(
     return build_envelope(
         status="ok",
         message="image source provider settings saved",
+        data=result,
+        revision="m6",
+    )
+
+
+@router.get("/admin/audio-providers")
+async def get_admin_audio_providers(request: Request) -> Any:
+    auth = await authorize_internal_request(request, require_idempotency=False)
+    if auth is not None:
+        return auth
+    services = get_cloud_services(request)
+    return build_envelope(
+        status="ok",
+        message="audio provider settings loaded",
+        data=AudioProviderAdminConfigService(services.settings).get_config(),
+        revision="m6",
+    )
+
+
+@router.post("/admin/audio-providers")
+async def update_admin_audio_providers(
+    request: Request,
+    payload: AudioProviderSettingsPayload,
+) -> Any:
+    auth = await authorize_internal_request(request, require_idempotency=True)
+    if auth is not None:
+        return auth
+    services = get_cloud_services(request)
+    result = AudioProviderAdminConfigService(services.settings).save_config(
+        payload.model_dump(mode="json")
+    )
+    return build_envelope(
+        status="ok",
+        message="audio provider settings saved",
+        data=result,
+        revision="m6",
+    )
+
+
+@router.post("/admin/audio-providers/minimax/test")
+async def test_admin_audio_provider_minimax(request: Request) -> Any:
+    auth = await authorize_internal_request(request, require_idempotency=True)
+    if auth is not None:
+        return auth
+    services = get_cloud_services(request)
+    try:
+        result = AudioProviderAdminConfigService(services.settings).test_minimax_connection()
+    except AudioProviderAdminConfigError as error:
+        return JSONResponse(
+            status_code=409,
+            content=build_envelope(
+                status="error",
+                error_code=error.error_code,
+                message=error.message,
+                revision="m6",
+            ),
+        )
+    except ProviderExecutionError as error:
+        return JSONResponse(
+            status_code=502,
+            content=build_envelope(
+                status="error",
+                error_code=error.error_code,
+                message=error.message,
+                revision="m6",
+            ),
+        )
+    return build_envelope(
+        status="ok",
+        message="MiniMax sample audio generated",
+        data=result,
+        revision="m6",
+    )
+
+
+@router.get("/admin/ai-resources")
+async def get_admin_ai_resources(request: Request) -> Any:
+    auth = await authorize_internal_request(request, require_idempotency=False)
+    if auth is not None:
+        return auth
+    services = get_cloud_services(request)
+    return build_envelope(
+        status="ok",
+        message="AI resource projection loaded",
+        data=build_admin_ai_resource_projection(
+            services.settings,
+            providers=services.providers,
+        ),
+        revision="m6",
+    )
+
+
+@router.post("/admin/ai-resources/profile-preferences")
+async def update_admin_ai_resource_profile_preferences(
+    request: Request,
+    payload: AIResourceProfilePreferencePayload,
+) -> Any:
+    auth = await authorize_internal_request(request, require_idempotency=True)
+    if auth is not None:
+        return auth
+    services = get_cloud_services(request)
+    try:
+        result = AIResourceProfilePreferenceService(services.settings).save(
+            payload.model_dump(mode="json")
+        )
+    except AIResourceProfilePreferenceError as error:
+        return JSONResponse(
+            status_code=400,
+            content=build_envelope(
+                status="error",
+                error_code=error.error_code,
+                message=error.message,
+                revision="m6",
+            ),
+        )
+    return build_envelope(
+        status="ok",
+        message="AI resource profile preferences saved",
+        data=result,
+        revision="m6",
+    )
+
+
+def _audio_workbench_service(request: Request) -> AudioWorkbenchService:
+    services = get_cloud_services(request)
+    return AudioWorkbenchService(
+        services.settings.database_url,
+        settings=services.settings,
+        providers=services.providers,
+        runtime_queue=services.runtime_queue,
+        callback_dispatcher=services.callback_dispatcher,
+    )
+
+
+@router.post("/admin/audio-jobs")
+async def create_admin_audio_job(
+    request: Request,
+    payload: AudioWorkbenchCreatePayload,
+    background_tasks: BackgroundTasks,
+) -> Any:
+    auth = await authorize_internal_request(request, require_idempotency=True)
+    if auth is not None:
+        return auth
+    service = _audio_workbench_service(request)
+    try:
+        result = service.create_job(payload.model_dump(mode="json"))
+    except AudioWorkbenchError as error:
+        return JSONResponse(
+            status_code=400,
+            content=build_envelope(
+                status="error",
+                error_code=error.error_code,
+                message=error.message,
+                revision="m6",
+            ),
+        )
+    if str(result.get("status") or "") == "queued":
+        background_tasks.add_task(service.process_one_queued_job)
+    return build_envelope(
+        status="ok",
+        message="audio job created",
+        data=result,
+        revision="m6",
+    )
+
+
+@router.get("/admin/audio-jobs/{run_id}")
+async def get_admin_audio_job(request: Request, run_id: str) -> Any:
+    auth = await authorize_internal_request(request, require_idempotency=False)
+    if auth is not None:
+        return auth
+    try:
+        result = _audio_workbench_service(request).get_job(run_id)
+    except RuntimeRunNotFoundError as error:
+        return JSONResponse(
+            status_code=404,
+            content=build_envelope(
+                status="error",
+                error_code=error.error_code,
+                message=error.message,
+                revision="m6",
+            ),
+        )
+    return build_envelope(
+        status="ok",
+        message="audio job loaded",
         data=result,
         revision="m6",
     )

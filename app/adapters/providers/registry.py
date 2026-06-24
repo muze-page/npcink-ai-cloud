@@ -6,6 +6,7 @@ from typing import Any, cast
 from app.adapters.providers.anthropic import AnthropicProviderAdapter
 from app.adapters.providers.base import ProviderAdapter
 from app.adapters.providers.litellm_gateway import LiteLLMGatewayProviderAdapter
+from app.adapters.providers.minimax import MiniMaxProviderAdapter
 from app.adapters.providers.openai import OpenAIProviderAdapter
 from app.adapters.providers.openrouter import OpenRouterProviderAdapter
 from app.adapters.providers.siliconflow import SiliconFlowProviderAdapter
@@ -83,6 +84,17 @@ def build_provider_adapters_with_overrides(
             allow_sample_catalog=allow_sample_fallback,
             allow_sample_execution=allow_sample_fallback,
             provider_label=settings.openai_provider_label,
+        )
+
+    if settings.minimax_provider_enabled or settings.minimax_api_key:
+        providers[MiniMaxProviderAdapter.provider_id] = MiniMaxProviderAdapter(
+            base_url=settings.minimax_base_url,
+            api_key=settings.minimax_api_key,
+            group_id=settings.minimax_group_id,
+            timeout_seconds=settings.minimax_timeout_seconds,
+            default_voice_id=settings.minimax_default_voice_id,
+            allow_sample_catalog=allow_sample_fallback,
+            allow_sample_execution=allow_sample_fallback,
         )
 
     if settings.anthropic_api_key:

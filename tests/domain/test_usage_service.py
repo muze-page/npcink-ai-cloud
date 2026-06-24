@@ -5,6 +5,7 @@ from pathlib import Path
 
 from sqlalchemy import select
 
+from app.adapters.providers.openai import OpenAIProviderAdapter
 from app.adapters.repositories.stats_repository import StatsRepository
 from app.core.db import dispose_engine, get_session, init_schema
 from app.core.models import HealthSnapshot, ProviderCallRecord, RunRecord
@@ -20,12 +21,13 @@ def _sqlite_url(tmp_path: Path) -> str:
 
 
 def _seed_runtime_activity(database_url: str, now: datetime) -> None:
-    catalog_service = CatalogService(database_url)
+    providers = {"openai": OpenAIProviderAdapter()}
+    catalog_service = CatalogService(database_url, providers=providers)
     catalog_service.refresh_catalog()
     catalog_service.scan_provider_health()
     seed_site_auth(database_url, site_id="site_alpha")
 
-    runtime_service = RuntimeService(database_url)
+    runtime_service = RuntimeService(database_url, providers=providers)
     run_a = runtime_service.execute(
         RuntimeRequest(
             site_id="site_alpha",

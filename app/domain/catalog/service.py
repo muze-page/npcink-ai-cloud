@@ -12,6 +12,10 @@ from app.core.db import get_session
 from app.core.models import ProviderCallRecord
 from app.domain.health.scoring import assess_instance_health
 from app.domain.hosted_model_defaults import (
+    AUDIO_NARRATION_MODEL_ID,
+    AUDIO_NARRATION_PROFILE_ID,
+    AUDIO_NARRATION_QUALITY_MODEL_ID,
+    AUDIO_NARRATION_QUALITY_PROFILE_ID,
     FREE_GPT55_TEXT_PROFILE_ID,
     GROK_IMAGINE_IMAGE_MODEL_ID,
     GROK_IMAGINE_IMAGE_PROFILE_ID,
@@ -27,6 +31,8 @@ DEFAULT_RECOMMENDED_PROFILE_IDS = (
     "text.quality",
     VISION_AI_PROFILE_ID,
     "vision.default",
+    AUDIO_NARRATION_PROFILE_ID,
+    AUDIO_NARRATION_QUALITY_PROFILE_ID,
     GROK_IMAGINE_IMAGE_PROFILE_ID,
     "embed.default",
 )
@@ -472,6 +478,14 @@ class CatalogService:
             "text.quality": ("text", ["quality", "balanced"]),
             VISION_AI_PROFILE_ID: ("vision", ["default", "quality"]),
             "vision.default": ("vision", ["default", "quality"]),
+            AUDIO_NARRATION_PROFILE_ID: (
+                "audio_generation",
+                ["default", "balanced", "narration"],
+            ),
+            AUDIO_NARRATION_QUALITY_PROFILE_ID: (
+                "audio_generation",
+                ["quality", "narration"],
+            ),
             GROK_IMAGINE_IMAGE_PROFILE_ID: (
                 "image_generation",
                 ["z-image", "quality", "default"],
@@ -486,6 +500,10 @@ class CatalogService:
                 exact_model_id=(
                     GROK_IMAGINE_IMAGE_MODEL_ID
                     if profile_id == GROK_IMAGINE_IMAGE_PROFILE_ID
+                    else AUDIO_NARRATION_MODEL_ID
+                    if profile_id == AUDIO_NARRATION_PROFILE_ID
+                    else AUDIO_NARRATION_QUALITY_MODEL_ID
+                    if profile_id == AUDIO_NARRATION_QUALITY_PROFILE_ID
                     else None
                 ),
             )

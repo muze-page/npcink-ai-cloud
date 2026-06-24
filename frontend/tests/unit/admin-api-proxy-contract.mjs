@@ -37,6 +37,24 @@ assert.match(
 
 assert.match(
   source,
+  /normalized === 'audio-providers\/minimax\/test'[\s\S]*?return '\/internal\/service\/admin\/audio-providers\/minimax\/test';/,
+  'MiniMax audio test must route through the backend admin service namespace'
+);
+
+assert.match(
+  source,
+  /normalized === 'audio-jobs'[\s\S]*?return '\/internal\/service\/admin\/audio-jobs';/,
+  'audio workbench job creation must route through the backend admin service namespace'
+);
+
+assert.match(
+  source,
+  /normalized === 'ai-resources\/profile-preferences'[\s\S]*?return '\/internal\/service\/admin\/ai-resources\/profile-preferences';/,
+  'AI resource profile preference saves must route through the backend admin service namespace'
+);
+
+assert.match(
+  source,
   /\^subscriptions\\\/\[\^\/\]\+\\\/topup\$/,
   'subscription top-up writes must route to the service top-up endpoint'
 );

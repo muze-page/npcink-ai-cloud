@@ -11,7 +11,7 @@ const envSchema = z.object({
   NPCINK_CLOUD_ADMIN_BOOTSTRAP_TOKEN: z.string().optional().default(''),
   NPCINK_CLOUD_ADMIN_BOOTSTRAP_ADMIN_REF: z.string().optional().default('platform:internal_root'),
   NPCINK_CLOUD_DEV_PORTAL_EMAIL: z.string().optional().default('portal-demo@example.com'),
-  NPCINK_CLOUD_DEV_PORTAL_SITE_ID: z.string().optional().default('site_npcink-local'),
+  NPCINK_CLOUD_DEV_PORTAL_SITE_ID: z.string().optional().default('site_smoke'),
 });
 
 export type Env = z.infer<typeof envSchema>;
@@ -170,18 +170,6 @@ export function isMiniDevRequestHost(hostHeader: string | null | undefined): boo
   return isMiniDevHost(hostname);
 }
 
-export function isMiniDevDockEnabled(): boolean {
-  if (!isBrowserRuntime()) {
-    return false;
-  }
-
-  if (process.env.NODE_ENV === 'production') {
-    return false;
-  }
-
-  return isMiniDevHost(window.location.hostname);
-}
-
 export function getPortalApiBaseUrl(): string {
   if (isBrowserRuntime()) {
     return '/api/portal';
@@ -234,5 +222,5 @@ export function getDevPortalEmail(): string {
 }
 
 export function getDevPortalSiteId(): string {
-  return getEnv().NPCINK_CLOUD_DEV_PORTAL_SITE_ID.trim() || 'site_npcink-local';
+  return getEnv().NPCINK_CLOUD_DEV_PORTAL_SITE_ID.trim() || 'site_smoke';
 }

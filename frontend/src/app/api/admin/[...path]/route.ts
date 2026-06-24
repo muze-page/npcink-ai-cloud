@@ -75,6 +75,30 @@ function buildAdminBackendPath(pathSegments: string[], method: string): string {
   ) {
     return '/internal/service/admin/image-source-providers';
   }
+  if (
+    upperMethod === 'POST' &&
+    normalized === 'audio-providers'
+  ) {
+    return '/internal/service/admin/audio-providers';
+  }
+  if (
+    upperMethod === 'POST' &&
+    normalized === 'audio-providers/minimax/test'
+  ) {
+    return '/internal/service/admin/audio-providers/minimax/test';
+  }
+  if (
+    upperMethod === 'POST' &&
+    normalized === 'audio-jobs'
+  ) {
+    return '/internal/service/admin/audio-jobs';
+  }
+  if (
+    upperMethod === 'POST' &&
+    normalized === 'ai-resources/profile-preferences'
+  ) {
+    return '/internal/service/admin/ai-resources/profile-preferences';
+  }
 
   return normalized ? `/internal/service/${normalized}` : '/internal/service';
 }

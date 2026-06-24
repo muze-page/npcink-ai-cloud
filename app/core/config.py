@@ -189,6 +189,17 @@ class Settings(BaseSettings):
             "NPCINK_CLOUD_OPENAI_COMPATIBLE_PROVIDER_LABEL",
         ),
     )
+    minimax_provider_enabled: bool = Field(default=False)
+    minimax_base_url: str = Field(default="https://api.minimaxi.com")
+    minimax_api_key: str | None = Field(default=None)
+    minimax_group_id: str | None = Field(default=None)
+    minimax_timeout_seconds: float = Field(default=30.0)
+    minimax_default_voice_id: str = Field(default="male-qn-qingse")
+    minimax_admin_env_path: str = Field(default=".env.local")
+    ai_resources_admin_env_path: str = Field(default=".env.local")
+    audio_summary_text_profile_id: str = Field(default="text.ai")
+    audio_narration_profile_id: str = Field(default="audio.narration.default")
+    audio_summary_audio_profile_id: str = Field(default="audio.narration.default")
     litellm_provider_enabled: bool = Field(default=False)
     litellm_base_url: str | None = Field(default=None)
     litellm_api_key: str | None = Field(default=None)

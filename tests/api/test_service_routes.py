@@ -5,10 +5,20 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import httpx
+import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
 from app.adapters.callbacks.http import HttpRuntimeCallbackDispatcher
+from app.adapters.providers.base import (
+    CatalogInstanceSeed,
+    CatalogModelSeed,
+    ProviderAdapter,
+    ProviderCatalogSnapshot,
+    ProviderExecutionRequest,
+    ProviderExecutionResult,
+)
+from app.adapters.providers.minimax import MiniMaxProviderAdapter
 from app.adapters.repositories.commercial_repository import CommercialRepository
 from app.api.main import create_app
 from app.core.config import Settings
@@ -29,6 +39,11 @@ from app.core.security import REPLAY_SCOPE_PUBLIC_POST_SITE
 from app.core.services import CloudServices
 from app.domain.catalog.service import CatalogService
 from app.domain.commercial.service import CommercialService, ServiceAuditContext
+from app.domain.hosted_model_defaults import (
+    AUDIO_NARRATION_QUALITY_PROFILE_ID,
+    FREE_GPT55_TEXT_PROFILE_ID,
+    TEXT_AI_PROFILE_ID,
+)
 from app.domain.runtime.service import RuntimeService
 from app.domain.usage.rollup import UsageRollupService
 from app.workers.ops_cadence import run_due_tasks
@@ -51,10 +66,11 @@ def _build_client(
     tmp_path: Path,
     *,
     settings_overrides: dict[str, object] | None = None,
+    providers: dict[str, ProviderAdapter] | None = None,
 ) -> tuple[str, TestClient]:
     database_url = _sqlite_url(tmp_path)
     init_schema(database_url)
-    CatalogService(database_url).refresh_catalog()
+    CatalogService(database_url, providers=providers).refresh_catalog()
 
     settings_kwargs = {
         "_env_file": None,
@@ -77,6 +93,9 @@ def _build_client(
         "openrouter_api_key": "",
         "siliconflow_provider_enabled": False,
         "siliconflow_api_key": "",
+        "minimax_provider_enabled": False,
+        "minimax_api_key": "",
+        "minimax_group_id": "",
         "web_search_provider": "disabled",
         "web_search_tavily_api_key": "",
         "web_search_bocha_api_key": "",
@@ -91,7 +110,8 @@ def _build_client(
     }
     settings_kwargs.update(settings_overrides or {})
     settings = Settings(**settings_kwargs)
-    return database_url, TestClient(create_app(CloudServices(settings=settings)))
+    services = CloudServices(settings=settings, providers=providers or {})
+    return database_url, TestClient(create_app(services))
 
 
 def _runtime_service_settings(database_url: str) -> Settings:
@@ -117,6 +137,71 @@ def _runtime_service_settings(database_url: str) -> Settings:
         siliconflow_api_key="",
         site_knowledge_embedding_provider="deterministic",
     )
+
+
+class FixedAudioSummaryScriptProvider:
+    provider_id = "openai"
+    display_name = "Fixed Text Provider"
+    adapter_type = "openai"
+
+    def __init__(self) -> None:
+        self.requests: list[ProviderExecutionRequest] = []
+
+    def fetch_catalog(self) -> ProviderCatalogSnapshot:
+        return ProviderCatalogSnapshot(
+            provider_id=self.provider_id,
+            display_name=self.display_name,
+            adapter_type=self.adapter_type,
+            models=[
+                CatalogModelSeed(
+                    model_id="gpt-hosted-free-next",
+                    family="gpt-hosted-free",
+                    feature="text",
+                    status="available",
+                    context_window=256000,
+                    price_input=0.0,
+                    price_output=0.0,
+                    raw_json={"tier": "quality", "surface": "hosted_free_tools"},
+                    instances=[
+                        CatalogInstanceSeed(
+                            instance_id="openai-global-hosted-free-next",
+                            endpoint_variant="responses",
+                            region="global",
+                            capability_tags=["text", "quality", "hosted-free"],
+                            is_default=True,
+                            weight=140,
+                        )
+                    ],
+                )
+            ],
+        )
+
+    def execute(self, request: ProviderExecutionRequest) -> ProviderExecutionResult:
+        self.requests.append(request)
+        output_text = json.dumps(
+            {
+                "opening": "这是一段适合收听的长文摘要。",
+                "key_points": [
+                    "第一，文章先交代背景。",
+                    "第二，文章说明关键问题。",
+                    "第三，文章给出解决方案。",
+                ],
+                "closing": "如果你需要完整细节，再回到原文继续阅读。",
+                "assumptions_to_verify": [],
+            },
+            ensure_ascii=False,
+        )
+        return ProviderExecutionResult(
+            output={
+                "output_text": output_text,
+                "messages": [{"role": "assistant", "content": output_text}],
+                "model_id": request.model_id,
+            },
+            latency_ms=25,
+            tokens_in=80,
+            tokens_out=60,
+            cost=0.0,
+        )
 
 
 def test_admin_web_search_provider_settings_are_masked_and_update_runtime(
@@ -306,6 +391,436 @@ def test_admin_image_source_provider_settings_are_masked_and_update_runtime(
     assert services.settings.image_source_auto_strategy == "random"
     assert services.settings.image_source_pixabay_api_key == "pixabay-test-secret"
     assert services.settings.image_source_timeout_seconds == 8
+
+
+def test_admin_audio_provider_settings_are_masked_and_update_runtime(
+    tmp_path: Path,
+) -> None:
+    env_path = tmp_path / ".env.local"
+    _, client = _build_client(
+        tmp_path,
+        settings_overrides={
+            "minimax_admin_env_path": str(env_path),
+            "minimax_provider_enabled": False,
+            "minimax_api_key": "",
+            "minimax_group_id": "",
+        },
+    )
+
+    initial = client.get(
+        "/internal/service/admin/audio-providers",
+        headers=build_internal_headers(),
+    )
+    assert initial.status_code == 200
+    assert initial.json()["data"]["providers"]["minimax"]["configured"] is False
+    assert initial.json()["data"]["boundary"]["secret_exposure"] == "masked_status_only"
+
+    response = client.post(
+        "/internal/service/admin/audio-providers",
+        headers=build_internal_headers(idempotency_key="audio-provider-save"),
+        json={
+            "provider_mode": "minimax",
+            "providers": {
+                "minimax": {
+                    "enabled": True,
+                    "base_url": "https://api.minimaxi.com",
+                    "secret": "minimax-test-secret",
+                    "group_id": "minimax-test-group",
+                },
+            },
+            "runtime": {
+                "timeout_seconds": 12,
+                "default_voice_id": "male-qn-qingse",
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["provider_mode"] == "minimax"
+    assert data["providers"]["minimax"]["enabled"] is True
+    assert data["providers"]["minimax"]["configured"] is True
+    assert data["providers"]["minimax"]["api_key"]["configured"] is True
+    assert data["providers"]["minimax"]["group_id"]["configured"] is True
+    assert data["runtime"]["default_voice_id"] == "male-qn-qingse"
+    assert data["boundary"]["final_writes"] == "core_proposal_required"
+    assert "minimax-test-secret" not in json.dumps(data)
+    assert "minimax-test-group" not in json.dumps(data)
+    env_text = env_path.read_text(encoding="utf-8")
+    assert "NPCINK_CLOUD_MINIMAX_PROVIDER_ENABLED=true" in env_text
+    assert "NPCINK_CLOUD_MINIMAX_BASE_URL=https://api.minimaxi.com" in env_text
+    assert "NPCINK_CLOUD_MINIMAX_API_KEY=minimax-test-secret" in env_text
+    assert "NPCINK_CLOUD_MINIMAX_GROUP_ID=minimax-test-group" in env_text
+    assert "NPCINK_CLOUD_MINIMAX_TIMEOUT_SECONDS=12.0" in env_text
+    assert "NPCINK_CLOUD_MINIMAX_DEFAULT_VOICE_ID=male-qn-qingse" in env_text
+
+    services = client.app.state.services
+    assert services.settings.minimax_provider_enabled is True
+    assert services.settings.minimax_api_key == "minimax-test-secret"
+    assert services.settings.minimax_group_id == "minimax-test-group"
+    assert services.settings.minimax_timeout_seconds == 12
+
+
+def test_admin_audio_provider_test_requires_configured_minimax_key(
+    tmp_path: Path,
+) -> None:
+    _, client = _build_client(
+        tmp_path,
+        settings_overrides={
+            "minimax_provider_enabled": False,
+            "minimax_api_key": "",
+            "minimax_group_id": "",
+        },
+    )
+
+    response = client.post(
+        "/internal/service/admin/audio-providers/minimax/test",
+        headers=build_internal_headers(idempotency_key="audio-provider-test-missing"),
+        json={},
+    )
+
+    assert response.status_code == 409
+    assert response.json()["error_code"] == "audio_provider.minimax_secret_missing"
+
+
+def test_admin_audio_provider_test_returns_candidate_artifact(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _, client = _build_client(
+        tmp_path,
+        settings_overrides={
+            "minimax_provider_enabled": True,
+            "minimax_api_key": "minimax-test-secret",
+            "minimax_group_id": "",
+        },
+    )
+
+    def fake_test_minimax_connection(self: object) -> dict[str, object]:
+        return {
+            "provider_id": "minimax",
+            "status": "ok",
+            "generated_at": "2026-06-24T00:00:00+00:00",
+            "sample_text": "sample",
+            "model_id": "speech-2.8-turbo",
+            "profile_id": "audio.narration.default",
+            "default_voice_id": "male-qn-qingse",
+            "latency_ms": 123,
+            "artifact": {
+                "artifact_type": "audio_generation_candidates",
+                "provider": "minimax",
+                "provider_response_format": "url",
+                "direct_wordpress_write": False,
+                "usage": {"characters": 6, "duration_ms": 1200, "trace_id": "trace-test"},
+                "audios": [
+                    {
+                        "url": "https://example.test/audio/sample.mp3",
+                        "mime_type": "audio/mpeg",
+                        "duration_seconds": 1.2,
+                    }
+                ],
+            },
+            "boundary": {
+                "owner": "cloud_runtime",
+                "direct_wordpress_write": False,
+                "final_writes": "core_proposal_required",
+            },
+        }
+
+    monkeypatch.setattr(
+        "app.domain.audio_generation.admin_config.AudioProviderAdminConfigService.test_minimax_connection",
+        fake_test_minimax_connection,
+    )
+
+    response = client.post(
+        "/internal/service/admin/audio-providers/minimax/test",
+        headers=build_internal_headers(idempotency_key="audio-provider-test-ok"),
+        json={},
+    )
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["provider_id"] == "minimax"
+    assert data["artifact"]["artifact_type"] == "audio_generation_candidates"
+    assert data["artifact"]["direct_wordpress_write"] is False
+    assert data["boundary"]["final_writes"] == "core_proposal_required"
+    assert "minimax-test-secret" not in json.dumps(data)
+
+
+def test_admin_ai_resources_projects_connections_capabilities_and_profiles(
+    tmp_path: Path,
+) -> None:
+    _, client = _build_client(
+        tmp_path,
+        settings_overrides={
+            "openai_api_key": "openai-test-secret",
+            "openai_provider_label": "GPT 5.5 hosted",
+            "minimax_provider_enabled": True,
+            "minimax_api_key": "minimax-test-secret",
+            "minimax_group_id": "group-test-secret",
+        },
+    )
+
+    response = client.get(
+        "/internal/service/admin/ai-resources",
+        headers=build_internal_headers(),
+    )
+
+    assert response.status_code == 200, response.text
+    data = response.json()["data"]
+    assert data["surface"] == "admin_ai_resources"
+    connection_ids = {item["connection_id"] for item in data["connections"]}
+    capability_ids = {item["capability_id"] for item in data["capabilities"]}
+    profile_ids = {item["profile_id"] for item in data["runtime_profiles"]}
+    assert {"openai_compatible", "minimax_audio"}.issubset(connection_ids)
+    assert {"text_generation", "audio_generation"}.issubset(capability_ids)
+    assert {TEXT_AI_PROFILE_ID, "audio.narration.default", "audio.summary.default"}.issubset(
+        profile_ids
+    )
+    assert data["boundary"]["direct_wordpress_write"] is False
+    assert data["boundary"]["not_a_control_plane"] is True
+    serialized = json.dumps(data)
+    assert "openai-test-secret" not in serialized
+    assert "minimax-test-secret" not in serialized
+    assert "group-test-secret" not in serialized
+
+
+def test_admin_ai_resources_reads_injected_runtime_provider_adapters(
+    tmp_path: Path,
+) -> None:
+    script_provider = FixedAudioSummaryScriptProvider()
+    audio_provider = MiniMaxProviderAdapter(
+        allow_sample_catalog=True,
+        allow_sample_execution=True,
+    )
+    _, client = _build_client(
+        tmp_path,
+        providers={"openai": script_provider, "minimax": audio_provider},
+        settings_overrides={
+            "openai_api_key": "",
+            "minimax_provider_enabled": False,
+            "minimax_api_key": "",
+        },
+    )
+
+    response = client.get(
+        "/internal/service/admin/ai-resources",
+        headers=build_internal_headers(),
+    )
+
+    assert response.status_code == 200, response.text
+    data = response.json()["data"]
+    profiles = {item["profile_id"]: item for item in data["runtime_profiles"]}
+    assert profiles[TEXT_AI_PROFILE_ID]["status"] == "ready"
+    assert profiles["audio.narration.default"]["status"] == "ready"
+    assert profiles["audio.summary.default"]["status"] == "ready"
+
+
+def test_admin_ai_resources_saves_profile_preferences_without_secrets(
+    tmp_path: Path,
+) -> None:
+    env_path = tmp_path / ".env.local"
+    _, client = _build_client(
+        tmp_path,
+        settings_overrides={
+            "ai_resources_admin_env_path": str(env_path),
+            "openai_api_key": "openai-test-secret",
+            "minimax_provider_enabled": True,
+            "minimax_api_key": "minimax-test-secret",
+        },
+    )
+
+    response = client.post(
+        "/internal/service/admin/ai-resources/profile-preferences",
+        headers=build_internal_headers(idempotency_key="ai-resource-profile-save"),
+        json={
+            "audio_summary_text_profile_id": FREE_GPT55_TEXT_PROFILE_ID,
+            "audio_narration_profile_id": AUDIO_NARRATION_QUALITY_PROFILE_ID,
+            "audio_summary_audio_profile_id": AUDIO_NARRATION_QUALITY_PROFILE_ID,
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    data = response.json()["data"]
+    preferences = data["profile_preferences"]
+    assert preferences["audio_summary_text_profile_id"] == FREE_GPT55_TEXT_PROFILE_ID
+    assert preferences["audio_narration_profile_id"] == AUDIO_NARRATION_QUALITY_PROFILE_ID
+    assert preferences["audio_summary_audio_profile_id"] == AUDIO_NARRATION_QUALITY_PROFILE_ID
+    assert preferences["boundary"]["direct_wordpress_write"] is False
+    serialized = json.dumps(data)
+    assert "openai-test-secret" not in serialized
+    assert "minimax-test-secret" not in serialized
+    env_text = env_path.read_text(encoding="utf-8")
+    assert f"NPCINK_CLOUD_AUDIO_SUMMARY_TEXT_PROFILE_ID={FREE_GPT55_TEXT_PROFILE_ID}" in env_text
+    assert (
+        f"NPCINK_CLOUD_AUDIO_NARRATION_PROFILE_ID={AUDIO_NARRATION_QUALITY_PROFILE_ID}"
+        in env_text
+    )
+    assert (
+        f"NPCINK_CLOUD_AUDIO_SUMMARY_AUDIO_PROFILE_ID={AUDIO_NARRATION_QUALITY_PROFILE_ID}"
+        in env_text
+    )
+    services = client.app.state.services
+    assert services.settings.audio_summary_text_profile_id == FREE_GPT55_TEXT_PROFILE_ID
+    assert services.settings.audio_narration_profile_id == AUDIO_NARRATION_QUALITY_PROFILE_ID
+
+
+def test_admin_audio_workbench_creates_narration_job_and_exposes_result(
+    tmp_path: Path,
+) -> None:
+    provider = MiniMaxProviderAdapter(
+        allow_sample_catalog=True,
+        allow_sample_execution=True,
+    )
+    database_url, client = _build_client(
+        tmp_path,
+        providers={"minimax": provider},
+        settings_overrides={
+            "minimax_provider_enabled": True,
+            "minimax_api_key": "minimax-test-secret",
+        },
+    )
+    seed_site_auth(
+        database_url,
+        site_id="site_audio_admin",
+        scopes=["runtime:execute", "runtime:read", "runtime:resolve"],
+    )
+
+    response = client.post(
+        "/internal/service/admin/audio-jobs",
+        headers=build_internal_headers(idempotency_key="audio-workbench-narration"),
+        json={
+            "site_id": "site_audio_admin",
+            "intent": "article_narration",
+            "title": "Audio test",
+            "body": "这是一段文章正文，用于生成旁白音频。",
+            "format": "mp3",
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    data = response.json()["data"]
+    assert data["status"] == "queued"
+    assert data["script"]["source"] == "full_article"
+    assert data["boundary"]["direct_wordpress_write"] is False
+
+    status_response = client.get(
+        f"/internal/service/admin/audio-jobs/{data['run_id']}",
+        headers=build_internal_headers(),
+    )
+
+    assert status_response.status_code == 200, status_response.text
+    status_data = status_response.json()["data"]
+    assert status_data["status"] == "succeeded"
+    assert status_data["result_ready"] is True
+    assert status_data["result"]["artifact_type"] == "audio_generation_candidates"
+    assert status_data["result"]["direct_wordpress_write"] is False
+    assert status_data["result"]["audios"][0]["mime_type"] == "audio/mpeg"
+
+    dispose_engine(database_url)
+
+
+def test_admin_audio_workbench_builds_summary_script_before_audio_job(
+    tmp_path: Path,
+) -> None:
+    audio_provider = MiniMaxProviderAdapter(
+        allow_sample_catalog=True,
+        allow_sample_execution=True,
+    )
+    script_provider = FixedAudioSummaryScriptProvider()
+    database_url, client = _build_client(
+        tmp_path,
+        providers={"minimax": audio_provider, "openai": script_provider},
+        settings_overrides={
+            "minimax_provider_enabled": True,
+            "minimax_api_key": "minimax-test-secret",
+        },
+    )
+    seed_site_auth(
+        database_url,
+        site_id="site_audio_admin",
+        scopes=["runtime:execute", "runtime:read", "runtime:resolve"],
+    )
+
+    response = client.post(
+        "/internal/service/admin/audio-jobs",
+        headers=build_internal_headers(idempotency_key="audio-workbench-summary"),
+        json={
+            "site_id": "site_audio_admin",
+            "intent": "article_audio_summary",
+            "title": "长文主题",
+            "body": "第一段介绍背景。第二段说明关键问题。第三段给出解决方案。第四段补充风险。",
+            "format": "mp3",
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    data = response.json()["data"]
+    assert data["script"]["source"] == "audio_summary_script"
+    assert data["script"]["intent"] == "audio_summary_script"
+    assert data["script"]["generation"]["mode"] == "hosted_ai_content_support"
+    assert data["script"]["generation"]["ability_name"] == "npcink-toolbox/ai-content-support"
+    assert data["script"]["generation"]["contract_version"] == "hosted_ai_content_support.v1"
+    assert data["script"]["generation"]["profile_id"] == TEXT_AI_PROFILE_ID
+    assert data["script"]["output_json"]["opening"] == "这是一段适合收听的长文摘要。"
+    assert "适合收听的长文摘要" in data["script"]["text"]
+    assert data["script"]["characters"] <= 4800
+    assert len(script_provider.requests) == 1
+    assert script_provider.requests[0].input_payload["intent"] == "audio_summary_script"
+
+    status_response = client.get(
+        f"/internal/service/admin/audio-jobs/{data['run_id']}",
+        headers=build_internal_headers(),
+    )
+
+    assert status_response.status_code == 200, status_response.text
+    status_data = status_response.json()["data"]
+    assert status_data["status"] == "succeeded"
+    assert status_data["result"]["audios"][0]["duration_seconds"] > 0
+
+    dispose_engine(database_url)
+
+
+def test_admin_audio_workbench_uses_selected_audio_profile(
+    tmp_path: Path,
+) -> None:
+    provider = MiniMaxProviderAdapter(
+        allow_sample_catalog=True,
+        allow_sample_execution=True,
+    )
+    database_url, client = _build_client(
+        tmp_path,
+        providers={"minimax": provider},
+        settings_overrides={
+            "minimax_provider_enabled": True,
+            "minimax_api_key": "minimax-test-secret",
+            "audio_narration_profile_id": AUDIO_NARRATION_QUALITY_PROFILE_ID,
+        },
+    )
+    seed_site_auth(
+        database_url,
+        site_id="site_audio_admin",
+        scopes=["runtime:execute", "runtime:read", "runtime:resolve"],
+    )
+
+    response = client.post(
+        "/internal/service/admin/audio-jobs",
+        headers=build_internal_headers(idempotency_key="audio-workbench-quality-profile"),
+        json={
+            "site_id": "site_audio_admin",
+            "intent": "article_narration",
+            "title": "Audio quality test",
+            "body": "这是一段文章正文，用于验证音频 profile 偏好。",
+            "format": "mp3",
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    data = response.json()["data"]
+    assert data["profile_id"] == AUDIO_NARRATION_QUALITY_PROFILE_ID
+    assert data["script"]["generation"]["audio_profile_id"] == AUDIO_NARRATION_QUALITY_PROFILE_ID
+
+    dispose_engine(database_url)
 
 
 def test_image_source_readonly_metrics_summarizes_fast_first_runtime(

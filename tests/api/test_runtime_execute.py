@@ -20,6 +20,7 @@ from app.adapters.providers.base import (
     ProviderExecutionRequest,
     ProviderExecutionResult,
 )
+from app.adapters.providers.minimax import MiniMaxProviderAdapter
 from app.adapters.providers.openai import OpenAIProviderAdapter
 from app.adapters.queue.in_memory import InMemoryRuntimeQueue
 from app.api.main import create_app
@@ -45,6 +46,8 @@ from app.core.security import (
 from app.core.services import CloudServices
 from app.domain.catalog.service import CatalogService
 from app.domain.hosted_model_defaults import (
+    AUDIO_NARRATION_MODEL_ID,
+    AUDIO_NARRATION_PROFILE_ID,
     FREE_GPT55_MODEL_ID,
     FREE_GPT55_TEXT_PROFILE_ID,
     GROK_IMAGINE_IMAGE_MODEL_ID,
@@ -869,6 +872,103 @@ def test_execute_route_rejects_oversized_image_generation_inputs(
 
     assert response.status_code == 400, response.text
     assert response.json()["error_code"] == "image_generation.image_count_invalid"
+
+    dispose_engine(database_url)
+
+
+def test_execute_route_defaults_audio_generation_to_minimax_narration(
+    tmp_path: Path,
+) -> None:
+    provider = MiniMaxProviderAdapter(
+        allow_sample_catalog=True,
+        allow_sample_execution=True,
+    )
+    database_url, client = _build_client(tmp_path, providers={"minimax": provider})
+    payload = {
+        "site_id": "site_alpha",
+        "ability_name": "npcink-cloud/generate-audio",
+        "contract_version": "audio_generation_request.v1",
+        "channel": "openapi",
+        "execution_tier": "cloud",
+        "execution_pattern": "inline",
+        "input": {
+            "contract_version": "audio_generation_request.v1",
+            "intent": "article_narration",
+            "text": "这是一段文章旁白。",
+            "format": "mp3",
+            "response_format": "url",
+        },
+        "policy": {"allow_fallback": False},
+    }
+    body = json.dumps(payload).encode("utf-8")
+    headers = merge_json_headers(
+        build_auth_headers(
+            "POST",
+            "/v1/runtime/execute",
+            site_id="site_alpha",
+            idempotency_key="idem-audio-generation-default-001",
+            nonce="nonce-audio-generation-default-001",
+            trace_id="1234567890abcdef1234567890abcd06",
+            body=body,
+        )
+    )
+
+    response = client.post("/v1/runtime/execute", content=body, headers=headers)
+
+    assert response.status_code == 200, response.text
+    data = response.json()["data"]
+    assert data["status"] == "succeeded"
+    assert data["profile_id"] == AUDIO_NARRATION_PROFILE_ID
+    assert data["model_id"] == AUDIO_NARRATION_MODEL_ID
+    assert data["execution_context"]["ability_family"] == "audio"
+    assert data["execution_context"]["data_classification"] == "internal"
+    assert data["result"]["artifact_type"] == "audio_generation_candidates"
+    assert data["result"]["direct_wordpress_write"] is False
+    assert data["result"]["audios"][0]["mime_type"] == "audio/mpeg"
+
+    dispose_engine(database_url)
+
+
+def test_execute_route_rejects_audio_generation_write_controls(
+    tmp_path: Path,
+) -> None:
+    provider = MiniMaxProviderAdapter(
+        allow_sample_catalog=True,
+        allow_sample_execution=True,
+    )
+    database_url, client = _build_client(tmp_path, providers={"minimax": provider})
+    payload = {
+        "site_id": "site_alpha",
+        "ability_name": "npcink-cloud/generate-audio",
+        "contract_version": "audio_generation_request.v1",
+        "channel": "openapi",
+        "execution_tier": "cloud",
+        "execution_pattern": "inline",
+        "input": {
+            "contract_version": "audio_generation_request.v1",
+            "intent": "article_narration",
+            "text": "这是一段文章旁白。",
+            "direct_wordpress_write": True,
+        },
+        "policy": {"allow_fallback": False},
+    }
+    body = json.dumps(payload).encode("utf-8")
+    headers = merge_json_headers(
+        build_auth_headers(
+            "POST",
+            "/v1/runtime/execute",
+            site_id="site_alpha",
+            idempotency_key="idem-audio-generation-reject-001",
+            nonce="nonce-audio-generation-reject-001",
+            trace_id="1234567890abcdef1234567890abcd07",
+            body=body,
+        )
+    )
+
+    response = client.post("/v1/runtime/execute", content=body, headers=headers)
+
+    assert response.status_code == 400, response.text
+    assert response.json()["error_code"] == "audio_generation.write_or_secret_field_forbidden"
 
     dispose_engine(database_url)
 

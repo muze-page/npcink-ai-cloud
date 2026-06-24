@@ -11,11 +11,14 @@ from app.adapters.providers.base import (
     CatalogModelSeed,
     ProviderCatalogSnapshot,
 )
+from app.adapters.providers.minimax import MiniMaxProviderAdapter
 from app.adapters.providers.openai import OpenAIProviderAdapter
 from app.core.db import dispose_engine, get_session, init_schema
 from app.core.models import CatalogRevision
 from app.domain.catalog.service import CatalogService
 from app.domain.hosted_model_defaults import (
+    AUDIO_NARRATION_MODEL_ID,
+    AUDIO_NARRATION_PROFILE_ID,
     GROK_IMAGINE_IMAGE_MODEL_ID,
     GROK_IMAGINE_IMAGE_PROFILE_ID,
     TEXT_AI_PROFILE_ID,
@@ -49,7 +52,7 @@ def test_refresh_catalog_creates_revision_and_models(tmp_path: Path) -> None:
     database_url = _sqlite_url(tmp_path)
     init_schema(database_url)
 
-    service = CatalogService(database_url)
+    service = CatalogService(database_url, providers={"openai": OpenAIProviderAdapter()})
     refresh_result = service.refresh_catalog()
     models = service.list_models()
 
@@ -138,7 +141,7 @@ def test_list_models_supports_feature_filter(tmp_path: Path) -> None:
     database_url = _sqlite_url(tmp_path)
     init_schema(database_url)
 
-    service = CatalogService(database_url)
+    service = CatalogService(database_url, providers={"openai": OpenAIProviderAdapter()})
     service.refresh_catalog()
     embedding_models = service.list_models(feature="embedding")
 
@@ -152,7 +155,7 @@ def test_list_models_returns_recommended_sets_and_profile_filter(tmp_path: Path)
     database_url = _sqlite_url(tmp_path)
     init_schema(database_url)
 
-    service = CatalogService(database_url)
+    service = CatalogService(database_url, providers={"openai": OpenAIProviderAdapter()})
     service.refresh_catalog()
 
     all_models = service.list_models()
@@ -329,6 +332,33 @@ def test_grok_image_quality_profile_filters_to_exact_image_model(
     assert recommended_set["instance_ids"] == ["openai-global-tongyi-mai-z-image-turbo"]
     assert models["total"] == 1
     assert models["items"][0]["model_id"] == GROK_IMAGINE_IMAGE_MODEL_ID
+
+    dispose_engine(database_url)
+
+
+def test_audio_narration_profile_filters_to_minimax_audio_model(tmp_path: Path) -> None:
+    database_url = _sqlite_url(tmp_path)
+    init_schema(database_url)
+
+    service = CatalogService(
+        database_url,
+        providers={
+            "minimax": MiniMaxProviderAdapter(
+                api_key="test-api-key",
+                group_id="test-group",
+            )
+        },
+    )
+    service.refresh_catalog()
+
+    models = service.list_models(recommended_for=AUDIO_NARRATION_PROFILE_ID)
+
+    recommended_set = models["recommended_sets"][AUDIO_NARRATION_PROFILE_ID]
+    assert recommended_set["model_ids"] == [AUDIO_NARRATION_MODEL_ID]
+    assert recommended_set["instance_ids"] == ["minimax-global-speech-28-turbo"]
+    assert models["total"] == 1
+    assert models["items"][0]["model_id"] == AUDIO_NARRATION_MODEL_ID
+    assert AUDIO_NARRATION_PROFILE_ID in models["items"][0]["recommended_profiles"]
 
     dispose_engine(database_url)
 

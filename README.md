@@ -85,6 +85,7 @@ repository; it points at a path that no longer exists here.
 ## Seed & Smoke Quick Entry
 
 - local runtime seed: `pnpm run seed:smoke`
+- local login seed: `pnpm run login:seed:dev`
 - local portal real-site bootstrap: `pnpm run portal:bind:dev -- --site-id <site-id> --member-email <email>`
 - scaffold one new Cloud route pack: `pnpm run scaffold:route -- --route-id <route-id>`
 - scaffold one new Portal route pack: `pnpm run scaffold:portal-route -- --route-id <route-id>`
@@ -669,9 +670,13 @@ For the fastest local verification loop:
 2. Start local Cloud:
    - `pnpm run dev`
    - optional frontend auto-sync loop: `pnpm run frontend:watch`
-3. Prefer binding Portal to one already provisioned real site:
+3. For stable local admin/portal debugging, seed the fixed local login data:
+   - `pnpm run login:seed:dev`
+   - default site: `site_smoke`
+   - default portal email: `portal-demo@example.com`
+4. Prefer binding Portal to one already provisioned real site:
    - `pnpm run portal:bind:dev -- --site-id <site-id> --member-email <email>`
-4. If the environment is empty, seed a runtime baseline and then bind Portal:
+5. If the environment is empty and you need a custom site, seed a runtime baseline and then bind Portal:
    - `pnpm run seed:smoke`
    - `pnpm run portal:bind:dev -- --site-id <site-id> --member-email <email>`
 
@@ -686,6 +691,7 @@ operator smoke, and does not create portal members or portal-facing sample data.
 
 Primary local verification routes:
 
+- `http://127.0.0.1:8010/admin/login`
 - `http://127.0.0.1:8010/portal/login`
 - `http://127.0.0.1:8010/portal`
 - `http://127.0.0.1:8010/portal/overview`

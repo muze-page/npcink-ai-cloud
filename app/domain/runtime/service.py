@@ -52,6 +52,11 @@ from app.core.security import (
     REPLAY_SCOPE_PUBLIC_POST_KEY,
     REPLAY_SCOPE_PUBLIC_POST_SITE,
 )
+from app.domain.audio_generation.contracts import (
+    AUDIO_GENERATION_ABILITIES,
+    AudioGenerationContractViolation,
+    validate_audio_generation_runtime_contract,
+)
 from app.domain.cloud_batch_runtime.contracts import (
     CLOUD_BATCH_RUNTIME_ABILITIES,
     CLOUD_BATCH_RUNTIME_EXECUTION_KIND,
@@ -223,6 +228,8 @@ class RuntimeService:
 
     def resolve(self, request: RuntimeRequest) -> dict[str, object]:
         self._validate_runtime_data_handling_contract(request)
+        if self._is_audio_generation_request(request):
+            self._validate_audio_generation_contract(request)
         if self._is_image_generation_request(request):
             self._validate_image_generation_contract(request)
 
@@ -308,6 +315,8 @@ class RuntimeService:
             return self._execute_site_knowledge_request(request)
         if self._is_web_search_request(request):
             return self._execute_web_search_request(request)
+        if self._is_audio_generation_request(request):
+            self._validate_audio_generation_contract(request)
         if self._is_image_generation_request(request):
             self._validate_image_generation_contract(request)
 
@@ -5331,6 +5340,9 @@ class RuntimeService:
     def _is_image_generation_request(self, request: RuntimeRequest) -> bool:
         return request.ability_name in IMAGE_GENERATION_ABILITIES
 
+    def _is_audio_generation_request(self, request: RuntimeRequest) -> bool:
+        return request.ability_name in AUDIO_GENERATION_ABILITIES
+
     def _is_media_batch_plan_request(self, request: RuntimeRequest) -> bool:
         return request.ability_name in MEDIA_BATCH_PLAN_ABILITIES
 
@@ -5354,6 +5366,9 @@ class RuntimeService:
 
     def _is_image_generation_run(self, run: RunRecord) -> bool:
         return str(run.ability_name or "") in IMAGE_GENERATION_ABILITIES
+
+    def _is_audio_generation_run(self, run: RunRecord) -> bool:
+        return str(run.ability_name or "") in AUDIO_GENERATION_ABILITIES
 
     def _is_media_batch_plan_run(self, run: RunRecord) -> bool:
         return str(run.ability_name or "") in MEDIA_BATCH_PLAN_ABILITIES
@@ -5510,6 +5525,41 @@ class RuntimeService:
             raise RuntimeExecutionContractError(
                 "image_source.inline_required",
                 "image source currently supports inline-compatible execution only",
+            )
+        if request.timeout_seconds > RUNTIME_MAX_TIMEOUT_SECONDS:
+            raise RuntimeExecutionContractError(
+                "runtime.contract_timeout_exceeded",
+                f"timeout_seconds exceeds max allowed value {RUNTIME_MAX_TIMEOUT_SECONDS}",
+            )
+        if request.retry_max > RUNTIME_MAX_RETRY_MAX:
+            raise RuntimeExecutionContractError(
+                "runtime.contract_retry_exceeded",
+                f"retry_max exceeds max allowed value {RUNTIME_MAX_RETRY_MAX}",
+            )
+        if request.retention_ttl > RUNTIME_MAX_RETENTION_TTL:
+            raise RuntimeExecutionContractError(
+                "runtime.contract_retention_exceeded",
+                f"retention_ttl exceeds max allowed value {RUNTIME_MAX_RETENTION_TTL}",
+            )
+
+    def _validate_audio_generation_contract(self, request: RuntimeRequest) -> None:
+        try:
+            validate_audio_generation_runtime_contract(
+                ability_name=request.ability_name,
+                contract_version=request.contract_version,
+                input_payload=request.input_payload,
+            )
+        except AudioGenerationContractViolation as error:
+            raise RuntimeExecutionContractError(error.error_code, error.message) from error
+        if request.ability_name not in AUDIO_GENERATION_ABILITIES:
+            raise RuntimeExecutionContractError(
+                "audio_generation.unknown_ability",
+                "audio generation ability_name is not supported",
+            )
+        if request.execution_pattern not in {"inline", "whole_run_offload"}:
+            raise RuntimeExecutionContractError(
+                "audio_generation.execution_pattern_invalid",
+                "audio generation supports inline or whole_run_offload execution",
             )
         if request.timeout_seconds > RUNTIME_MAX_TIMEOUT_SECONDS:
             raise RuntimeExecutionContractError(

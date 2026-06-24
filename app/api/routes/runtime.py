@@ -12,6 +12,13 @@ from app.adapters.providers.registry import resolve_execution_provider_adapters
 from app.api.auth import authorize_public_request, get_cloud_services
 from app.api.envelope import build_envelope
 from app.core.security import PUBLIC_RUNTIME_MAX_BODY_BYTES, RequestAuthContext
+from app.domain.audio_generation.contracts import (
+    AUDIO_GENERATION_ABILITIES,
+    AUDIO_GENERATION_ABILITY_FAMILY,
+    AUDIO_GENERATION_DATA_CLASSIFICATION,
+    AUDIO_GENERATION_EXECUTION_KIND,
+    AUDIO_GENERATION_PROFILE_ID,
+)
 from app.domain.cloud_batch_runtime.contracts import (
     CLOUD_BATCH_RUNTIME_ABILITIES,
     CLOUD_BATCH_RUNTIME_ABILITY_FAMILY,
@@ -127,6 +134,7 @@ class RuntimePayload(BaseModel):
         "mcp",
         "openclaw",
         "knowledge",
+        "audio",
     ] = "text"
     canonical_run_id: str | None = Field(default=None, max_length=191)
     skill_id: str | None = Field(default=None, max_length=191)
@@ -286,6 +294,10 @@ def _is_image_generation_payload(payload: RuntimePayload) -> bool:
     return payload.ability_name in IMAGE_GENERATION_ABILITIES
 
 
+def _is_audio_generation_payload(payload: RuntimePayload) -> bool:
+    return payload.ability_name in AUDIO_GENERATION_ABILITIES
+
+
 def _is_image_context_evidence_payload(payload: RuntimePayload) -> bool:
     return payload.ability_name in IMAGE_CONTEXT_EVIDENCE_ABILITIES
 
@@ -311,6 +323,8 @@ def _resolve_ability_family(payload: RuntimePayload) -> str:
         return MEDIA_BATCH_PLAN_ABILITY_FAMILY
     if _is_image_context_evidence_payload(payload):
         return IMAGE_CONTEXT_EVIDENCE_ABILITY_FAMILY
+    if _is_audio_generation_payload(payload):
+        return AUDIO_GENERATION_ABILITY_FAMILY
     if _is_image_generation_payload(payload):
         return IMAGE_GENERATION_ABILITY_FAMILY
     if _is_image_source_payload(payload):
@@ -331,6 +345,8 @@ def _resolve_execution_kind(payload: RuntimePayload) -> str:
         return MEDIA_BATCH_PLAN_EXECUTION_KIND
     if _is_image_context_evidence_payload(payload) and not payload.execution_kind:
         return IMAGE_CONTEXT_EVIDENCE_EXECUTION_KIND
+    if _is_audio_generation_payload(payload) and not payload.execution_kind:
+        return AUDIO_GENERATION_EXECUTION_KIND
     if _is_image_generation_payload(payload) and not payload.execution_kind:
         return IMAGE_GENERATION_EXECUTION_KIND
     if _is_image_source_payload(payload) and not payload.execution_kind:
@@ -351,6 +367,8 @@ def _resolve_profile_id(payload: RuntimePayload) -> str:
         return MEDIA_BATCH_PLAN_PROFILE_ID
     if _is_image_context_evidence_payload(payload) and not payload.profile_id:
         return IMAGE_CONTEXT_EVIDENCE_PROFILE_ID
+    if _is_audio_generation_payload(payload) and not payload.profile_id:
+        return AUDIO_GENERATION_PROFILE_ID
     if _is_image_generation_payload(payload) and not payload.profile_id:
         return IMAGE_GENERATION_PROFILE_ID
     if _is_image_source_payload(payload) and not payload.profile_id:
@@ -379,6 +397,8 @@ def _resolve_data_classification(payload: RuntimePayload) -> str:
         return MEDIA_BATCH_PLAN_DATA_CLASSIFICATION
     if _is_image_context_evidence_payload(payload):
         return IMAGE_CONTEXT_EVIDENCE_DATA_CLASSIFICATION
+    if _is_audio_generation_payload(payload):
+        return _resolve_feature_data_classification(payload, AUDIO_GENERATION_DATA_CLASSIFICATION)
     if _is_image_generation_payload(payload):
         return _resolve_feature_data_classification(payload, IMAGE_GENERATION_DATA_CLASSIFICATION)
     if _is_image_source_payload(payload):
