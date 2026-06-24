@@ -184,6 +184,12 @@ from app.domain.web_search.contracts import (
     validate_web_search_runtime_contract,
 )
 from app.domain.web_search.service import WebSearchProviderError, WebSearchService
+from app.domain.wordpress_ai_connector.contracts import (
+    WP_AI_CONNECTOR_ABILITIES,
+    WP_AI_CONNECTOR_MAX_TIMEOUT_SECONDS,
+    WordPressAIConnectorContractViolation,
+    validate_wordpress_ai_connector_runtime_contract,
+)
 
 logger = get_logger(__name__)
 
@@ -232,6 +238,8 @@ class RuntimeService:
             self._validate_audio_generation_contract(request)
         if self._is_image_generation_request(request):
             self._validate_image_generation_contract(request)
+        if self._is_wordpress_ai_connector_request(request):
+            self._validate_wordpress_ai_connector_contract(request)
 
         resolution = self.routing_service.resolve(
             profile_id=request.profile_id,
@@ -319,6 +327,8 @@ class RuntimeService:
             self._validate_audio_generation_contract(request)
         if self._is_image_generation_request(request):
             self._validate_image_generation_contract(request)
+        if self._is_wordpress_ai_connector_request(request):
+            self._validate_wordpress_ai_connector_contract(request)
 
         resolution = self.routing_service.resolve(
             profile_id=request.profile_id,
@@ -438,11 +448,17 @@ class RuntimeService:
                     idempotent_replay=False,
                 )
 
+            provider_input_payload = request.input_payload
+            if self._is_wordpress_ai_connector_request(request):
+                provider_input_payload = self._build_wordpress_ai_connector_provider_input(
+                    request.input_payload
+                )
+
             self._execute_candidate_chain(
                 run,
                 repository=repository,
                 candidates=resolution.candidates,
-                input_payload=request.input_payload,
+                input_payload=provider_input_payload,
             )
             session.commit()
             return self._build_execution_response(
@@ -3278,11 +3294,15 @@ class RuntimeService:
             run.policy_json = policy
             candidates = resolution.candidates
 
+        input_payload = self._get_execution_input_payload(run)
+        if self._is_wordpress_ai_connector_run(run):
+            input_payload = self._build_wordpress_ai_connector_provider_input(input_payload)
+
         self._execute_candidate_chain(
             run,
             repository=repository,
             candidates=candidates,
-            input_payload=self._get_execution_input_payload(run),
+            input_payload=input_payload,
         )
 
     def _execute_candidate_chain(
@@ -5361,6 +5381,9 @@ class RuntimeService:
     def _is_web_search_request(self, request: RuntimeRequest) -> bool:
         return request.ability_name in WEB_SEARCH_ABILITIES
 
+    def _is_wordpress_ai_connector_request(self, request: RuntimeRequest) -> bool:
+        return request.ability_name in WP_AI_CONNECTOR_ABILITIES
+
     def _is_image_source_run(self, run: RunRecord) -> bool:
         return str(run.ability_name or "") in IMAGE_SOURCE_ABILITIES
 
@@ -5384,6 +5407,59 @@ class RuntimeService:
 
     def _is_web_search_run(self, run: RunRecord) -> bool:
         return str(run.ability_name or "") in WEB_SEARCH_ABILITIES
+
+    def _is_wordpress_ai_connector_run(self, run: RunRecord) -> bool:
+        return str(run.ability_name or "") in WP_AI_CONNECTOR_ABILITIES
+
+    def _build_wordpress_ai_connector_provider_input(
+        self,
+        input_payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        scene_request = input_payload.get("request")
+        scene_request = scene_request if isinstance(scene_request, dict) else {}
+        task = str(input_payload.get("task") or "").strip()
+        prompt = str(scene_request.get("prompt") or input_payload.get("prompt") or "").strip()
+        system_instruction = str(scene_request.get("system_instruction") or "").strip()
+
+        task_instruction = {
+            "alt_text_suggest": "Generate concise image alt text. Return only the alt text.",
+            "comment_moderation": "Classify the comment moderation outcome. Return only the requested result.",
+            "comment_reply_suggest": "Draft a concise comment reply. Return only the reply text.",
+            "content_classification": "Classify the content. Return only the requested classification.",
+            "content_rewrite": "Rewrite the content as requested. Return only the rewritten content.",
+            "content_summary": "Summarize the content. Return only the summary.",
+            "excerpt_generation": "Generate a concise excerpt. Return only the excerpt.",
+            "meta_description": "Generate a concise meta description. Return only the description.",
+            "title_generation": "Generate exactly one concise title. Return only the title text.",
+        }.get(task, "Return only the requested suggestion. Do not explain.")
+
+        fragments = [task_instruction]
+        if system_instruction:
+            fragments.append(system_instruction)
+        if prompt:
+            fragments.append(f"Scene input:\n{prompt}")
+        fragments.append("Do not mention this instruction. Do not explain your answer.")
+
+        provider_input: dict[str, Any] = {
+            "input": "\n\n".join(fragments),
+            "text": prompt,
+            "metadata": {
+                "source_surface": "wordpress_ai_connector",
+                "task": task,
+                "suggestion_only": True,
+            },
+        }
+
+        max_tokens = self._coerce_int(scene_request.get("max_tokens"), default=0)
+        if max_tokens > 0:
+            provider_input["max_tokens"] = max_tokens
+            provider_input["max_output_tokens"] = max_tokens
+
+        temperature = scene_request.get("temperature")
+        if isinstance(temperature, (int, float)):
+            provider_input["temperature"] = float(temperature)
+
+        return provider_input
 
     def _validate_site_knowledge_contract(self, request: RuntimeRequest) -> None:
         try:
@@ -5804,6 +5880,37 @@ class RuntimeService:
             "direct_wordpress_write": False,
         }
         return policy
+
+    def _validate_wordpress_ai_connector_contract(self, request: RuntimeRequest) -> None:
+        try:
+            validate_wordpress_ai_connector_runtime_contract(
+                ability_name=request.ability_name,
+                contract_version=request.contract_version,
+                input_payload=request.input_payload,
+            )
+        except WordPressAIConnectorContractViolation as error:
+            raise RuntimeExecutionContractError(error.error_code, error.message) from error
+        if request.execution_pattern != "inline":
+            raise RuntimeExecutionContractError(
+                "wp_ai_connector.inline_required",
+                "WordPress AI connector currently supports inline execution only",
+            )
+        if request.timeout_seconds > WP_AI_CONNECTOR_MAX_TIMEOUT_SECONDS:
+            raise RuntimeExecutionContractError(
+                "wp_ai_connector.timeout_exceeded",
+                "WordPress AI connector timeout_seconds exceeds max allowed value "
+                f"{WP_AI_CONNECTOR_MAX_TIMEOUT_SECONDS}",
+            )
+        if request.retry_max > 1:
+            raise RuntimeExecutionContractError(
+                "wp_ai_connector.retry_exceeded",
+                "WordPress AI connector retry_max exceeds max allowed value 1",
+            )
+        if request.retention_ttl > 86400:
+            raise RuntimeExecutionContractError(
+                "wp_ai_connector.retention_exceeded",
+                "WordPress AI connector retention_ttl exceeds max allowed value 86400",
+            )
 
     def _validate_web_search_contract(self, request: RuntimeRequest) -> None:
         try:
