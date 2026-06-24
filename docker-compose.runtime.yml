@@ -1,0 +1,138 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-npcink_ai_cloud}
+      POSTGRES_USER: ${POSTGRES_USER:-npcink}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD?POSTGRES_PASSWORD is required}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-npcink} -d ${POSTGRES_DB:-npcink_ai_cloud}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    volumes:
+      - cloud-postgres-prod:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    volumes:
+      - cloud-redis-prod:/data
+
+  api:
+    image: npcink-ai-cloud-api:prod
+    restart: unless-stopped
+    command: gunicorn -k uvicorn.workers.UvicornWorker -w ${NPCINK_CLOUD_API_WORKERS:-1} -b 0.0.0.0:8000 app.api.main:app
+    env_file:
+      - .env.deploy
+    environment:
+      NPCINK_CLOUD_OTEL_EXPORTER_OTLP_ENDPOINT: ""
+      NPCINK_CLOUD_OTEL_TRACE_SINK_OTLP_ENDPOINT: ""
+      NPCINK_CLOUD_OTEL_TRACE_QUERY_URL: ""
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    expose:
+      - "8000"
+
+  frontend:
+    image: npcink-ai-cloud-frontend:prod
+    restart: unless-stopped
+    env_file:
+      - .env.deploy
+    environment:
+      CLOUD_API_BASE_URL: http://api:8000
+      CLOUD_PUBLIC_BASE_URL: ${NPCINK_CLOUD_PORTAL_PUBLIC_BASE_URL:-${NPCINK_CLOUD_BASE_URL:-http://127.0.0.1:${NPCINK_CLOUD_PORT:-8010}}}
+      NODE_ENV: production
+    expose:
+      - "3000"
+
+  worker:
+    image: npcink-ai-cloud-worker:prod
+    restart: unless-stopped
+    command: python -m app.workers.runtime_queue
+    env_file:
+      - .env.deploy
+    environment:
+      NPCINK_CLOUD_OTEL_EXPORTER_OTLP_ENDPOINT: ""
+      NPCINK_CLOUD_OTEL_TRACE_SINK_OTLP_ENDPOINT: ""
+      NPCINK_CLOUD_OTEL_TRACE_QUERY_URL: ""
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  callback-worker:
+    image: npcink-ai-cloud-worker:prod
+    restart: unless-stopped
+    command: python -m app.workers.callback_dispatch
+    env_file:
+      - .env.deploy
+    environment:
+      NPCINK_CLOUD_OTEL_EXPORTER_OTLP_ENDPOINT: ""
+      NPCINK_CLOUD_OTEL_TRACE_SINK_OTLP_ENDPOINT: ""
+      NPCINK_CLOUD_OTEL_TRACE_QUERY_URL: ""
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  ops-worker:
+    image: npcink-ai-cloud-worker:prod
+    restart: unless-stopped
+    command: python -m app.workers.ops_cadence
+    env_file:
+      - .env.deploy
+    environment:
+      NPCINK_CLOUD_OTEL_EXPORTER_OTLP_ENDPOINT: ""
+      NPCINK_CLOUD_OTEL_TRACE_SINK_OTLP_ENDPOINT: ""
+      NPCINK_CLOUD_OTEL_TRACE_QUERY_URL: ""
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  proxy:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_started
+      frontend:
+        condition: service_started
+    ports:
+      - "127.0.0.1:${NPCINK_CLOUD_PORT:-8010}:8080"
+    volumes:
+      - ./deploy/nginx.prod.conf:/etc/nginx/conf.d/default.conf:ro
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on:
+      proxy:
+        condition: service_started
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./deploy/Caddyfile.prod:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+
+volumes:
+  cloud-postgres-prod:
+  cloud-redis-prod:
+  caddy-data:
+  caddy-config:

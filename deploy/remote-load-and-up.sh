@@ -14,6 +14,11 @@ npcink_ai_cloud_require_cmd docker
 npcink_ai_cloud_require_cmd curl
 npcink_ai_cloud_require_internal_token
 
+service_exists() {
+	local service_name="$1"
+	npcink_ai_cloud_compose "${ROOT_DIR}" config --services | grep -qx "${service_name}"
+}
+
 if [ -f "${DIST_DIR}/api.tar.gz" ]; then
   gzip -dc "${DIST_DIR}/api.tar.gz" | docker load
 fi
@@ -26,12 +31,16 @@ if [ -f "${DIST_DIR}/frontend.tar.gz" ]; then
   gzip -dc "${DIST_DIR}/frontend.tar.gz" | docker load
 fi
 
-if [ "${SKIP_FRONTEND_IMAGE}" = "1" ]; then
-  npcink_ai_cloud_compose "${ROOT_DIR}" up -d postgres redis api
-  npcink_ai_cloud_compose "${ROOT_DIR}" up -d --no-deps proxy
-else
-  npcink_ai_cloud_compose "${ROOT_DIR}" up -d postgres redis api frontend proxy
+SERVICES=(postgres redis api)
+if [ "${SKIP_FRONTEND_IMAGE}" != "1" ]; then
+	SERVICES+=(frontend)
 fi
+SERVICES+=(proxy)
+if service_exists caddy; then
+	SERVICES+=(caddy)
+fi
+
+npcink_ai_cloud_compose "${ROOT_DIR}" up -d "${SERVICES[@]}"
 
 if ! npcink_ai_cloud_wait_for_ready "${BASE_URL}" 20 2; then
 	echo "[fail] Cloud API did not become ready at ${BASE_URL}" >&2

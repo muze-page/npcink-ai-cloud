@@ -1,0 +1,4 @@
+{$NPCINK_CLOUD_DOMAIN_NAME:cloud.npc.ink} {
+	encode zstd gzip
+	reverse_proxy proxy:8080
+}

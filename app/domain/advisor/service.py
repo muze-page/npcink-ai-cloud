@@ -389,7 +389,7 @@ class InternalAIAdvisorService:
             summary = "Current site monitoring evidence does not show an immediate diagnostic item."
             recommended_actions = [_action("continue_site_monitoring")]
 
-        signals = [
+        signals: list[dict[str, Any]] = [
             {
                 "code": "site_diagnostics.health",
                 "status": str(health.get("status") or "inactive"),
@@ -508,7 +508,7 @@ class InternalAIAdvisorService:
         guard = _dict(runtime.get("guard"))
         knowledge_totals = _dict(knowledge.get("totals"))
 
-        signals = [
+        signals: list[dict[str, Any]] = [
             {
                 "code": "ops.platform_coverage",
                 "active_sites": _int(counts.get("sites_active")),
