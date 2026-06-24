@@ -230,6 +230,10 @@ resolve_remote_platform() {
 	esac
 }
 
+remote_shell_arg() {
+	printf '%q' "$1"
+}
+
 if [ -z "${IMAGE_PLATFORM}" ]; then
 	if ! ssh "${SSH_ARGS[@]}" "${SSH_TARGET}" "true" >/dev/null 2>&1; then
 		echo "[fail] SSH target is not reachable: ${SSH_TARGET}:${SSH_PORT}" >&2
@@ -276,31 +280,31 @@ fi
 
 echo "[info] Running remote deploy sequence on ${SSH_TARGET}"
 ssh "${SSH_ARGS[@]}" "${SSH_TARGET}" bash -s -- \
-	"${REMOTE_DIR}" \
-	"${RELEASE_NAME}" \
-	"${REMOTE_ENV_BASENAME}" \
-	"${SITE_ID}" \
-	"${KEY_ID}" \
-	"${SECRET}" \
-	"${SCOPES}" \
-	"${BASE_URL}" \
-	"${PROFILE_ID}" \
-	"${ABILITY_NAME}" \
-	"${EXECUTION_KIND}" \
-	"${IDEMPOTENCY_SUFFIX}" \
-	"${PROMPT_TEXT}" \
-	"${EXPECTED_PROVIDER_ID}" \
-	"${EXPECTED_MODEL_ID}" \
-	"${EXPECTED_INSTANCE_ID}" \
-	"${MEMBER_EMAIL}" \
-	"${SKIP_SEED}" \
-	"${SKIP_SMOKE}" \
-	"${REMOTE_ENV_PATH}" \
-	"${WITH_PORTAL_SMOKE}" \
-	"${SKIP_FRONTEND_IMAGE}" \
-	"${REMOTE_COMPOSE_FILE}" \
-	"${REFRESH_PROVIDERS}" \
-	"${WITH_OPERATIONAL_READY}" <<'EOF'
+	"$(remote_shell_arg "${REMOTE_DIR}")" \
+	"$(remote_shell_arg "${RELEASE_NAME}")" \
+	"$(remote_shell_arg "${REMOTE_ENV_BASENAME}")" \
+	"$(remote_shell_arg "${SITE_ID}")" \
+	"$(remote_shell_arg "${KEY_ID}")" \
+	"$(remote_shell_arg "${SECRET}")" \
+	"$(remote_shell_arg "${SCOPES}")" \
+	"$(remote_shell_arg "${BASE_URL}")" \
+	"$(remote_shell_arg "${PROFILE_ID}")" \
+	"$(remote_shell_arg "${ABILITY_NAME}")" \
+	"$(remote_shell_arg "${EXECUTION_KIND}")" \
+	"$(remote_shell_arg "${IDEMPOTENCY_SUFFIX}")" \
+	"$(remote_shell_arg "${PROMPT_TEXT}")" \
+	"$(remote_shell_arg "${EXPECTED_PROVIDER_ID}")" \
+	"$(remote_shell_arg "${EXPECTED_MODEL_ID}")" \
+	"$(remote_shell_arg "${EXPECTED_INSTANCE_ID}")" \
+	"$(remote_shell_arg "${MEMBER_EMAIL}")" \
+	"$(remote_shell_arg "${SKIP_SEED}")" \
+	"$(remote_shell_arg "${SKIP_SMOKE}")" \
+	"$(remote_shell_arg "${REMOTE_ENV_PATH}")" \
+	"$(remote_shell_arg "${WITH_PORTAL_SMOKE}")" \
+	"$(remote_shell_arg "${SKIP_FRONTEND_IMAGE}")" \
+	"$(remote_shell_arg "${REMOTE_COMPOSE_FILE}")" \
+	"$(remote_shell_arg "${REFRESH_PROVIDERS}")" \
+	"$(remote_shell_arg "${WITH_OPERATIONAL_READY}")" <<'EOF'
 set -euo pipefail
 
 REMOTE_DIR="$1"
