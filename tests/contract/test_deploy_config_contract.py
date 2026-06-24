@@ -210,6 +210,7 @@ def test_deploy_bundle_smoke_uses_sample_provider_and_skip_frontend_contract() -
     static_terms_deploy_script = (
         cloud_root / "deploy" / "deploy-static-terms-to-ssh-host.sh"
     ).read_text()
+    next_config = (cloud_root / "frontend" / "next.config.mjs").read_text()
     deploy_bundle_smoke = (cloud_root / "scripts" / "cloud-deploy-bundle-smoke-flow.sh").read_text()
     remote_smoke_script = (cloud_root / "deploy" / "remote-smoke.sh").read_text()
     nginx_prod_conf = (cloud_root / "deploy" / "nginx.prod.conf").read_text()
@@ -222,6 +223,9 @@ def test_deploy_bundle_smoke_uses_sample_provider_and_skip_frontend_contract() -
     assert "COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./" in frontend_dockerfile
     assert "corepack prepare pnpm@10.33.0 --activate" in frontend_dockerfile
     assert "pnpm install --frozen-lockfile --filter frontend..." in frontend_dockerfile
+
+    assert "CLOUD_API_BASE_URL: process.env.CLOUD_API_BASE_URL" not in next_config
+    assert "CLOUD_PUBLIC_BASE_URL: process.env.CLOUD_PUBLIC_BASE_URL" not in next_config
 
     assert 'export NPCINK_CLOUD_ENVIRONMENT="${NPCINK_CLOUD_ENVIRONMENT:-test}"' in (
         deploy_bundle_smoke
