@@ -300,15 +300,17 @@ class MiniMaxProviderAdapter:
             "audios": [
                 {
                     "index": 1,
-                    "url": f"https://example.invalid/npcink-ai/audio/{request.run_id}.mp3",
-                    "b64_json": "",
+                    "url": "",
+                    "b64_json": base64.b64encode(b"ID3\x04\x00\x00\x00\x00\x00\x00").decode(
+                        "ascii"
+                    ),
                     "mime_type": "audio/mpeg",
                     "format": "mp3",
                     "duration_seconds": max(1, round(usage_characters / 12, 3)),
                     "transcript": text,
                 }
             ],
-            "provider_response_format": "url",
+            "provider_response_format": "b64_json",
             "direct_wordpress_write": False,
             "usage": {"characters": usage_characters, "duration_ms": usage_characters * 80},
         }

@@ -53,6 +53,11 @@ from app.core.security import (
     REPLAY_SCOPE_PUBLIC_POST_KEY,
     REPLAY_SCOPE_PUBLIC_POST_SITE,
 )
+from app.domain.audio_generation.artifacts import (
+    AudioArtifactMaterializationConfig,
+    AudioArtifactMaterializationError,
+    materialize_audio_generation_candidates,
+)
 from app.domain.audio_generation.contracts import (
     AUDIO_GENERATION_ABILITIES,
     AudioGenerationContractViolation,
@@ -3458,6 +3463,24 @@ class RuntimeService:
                         provider_output,
                         input_payload=input_payload,
                     )
+                if self._is_audio_generation_run(run):
+                    try:
+                        provider_output = self._materialize_audio_generation_output(
+                            run,
+                            repository=repository,
+                            provider_output=provider_output,
+                        )
+                    except AudioArtifactMaterializationError as error:
+                        repository.mark_run_failed(
+                            run,
+                            error_code=error.error_code,
+                            error_message=error.message,
+                            provider_id=candidate.provider_id,
+                            model_id=candidate.model_id,
+                            instance_id=candidate.instance_id,
+                            fallback_used=fallback_used,
+                        )
+                        return
 
                 storage_mode = self._get_storage_mode(
                     run.policy_json if isinstance(run.policy_json, dict) else {}
@@ -5400,6 +5423,27 @@ class RuntimeService:
 
     def _is_audio_generation_run(self, run: RunRecord) -> bool:
         return str(run.ability_name or "") in AUDIO_GENERATION_ABILITIES
+
+    def _materialize_audio_generation_output(
+        self,
+        run: RunRecord,
+        *,
+        repository: RuntimeRepository,
+        provider_output: dict[str, Any],
+    ) -> dict[str, Any]:
+        return materialize_audio_generation_candidates(
+            session=repository.session,
+            run=run,
+            result_json=provider_output,
+            config=AudioArtifactMaterializationConfig(
+                ttl_minutes=max(1, int(self.settings.audio_generation_artifact_ttl_minutes)),
+                max_bytes=max(1, int(self.settings.audio_generation_artifact_max_bytes)),
+                timeout_seconds=max(
+                    0.001,
+                    float(self.settings.audio_generation_artifact_download_timeout_seconds),
+                ),
+            ),
+        )
 
     def _is_media_batch_plan_run(self, run: RunRecord) -> bool:
         return str(run.ability_name or "") in MEDIA_BATCH_PLAN_ABILITIES

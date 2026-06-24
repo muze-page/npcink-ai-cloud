@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import hmac
 import json
 from datetime import UTC, datetime
 from typing import Any
@@ -71,6 +73,47 @@ def _media_error_response(
 def _parse_request_json(request_str: str) -> MediaDerivativeRequest:
     data = json.loads(request_str)
     return MediaDerivativeRequest.model_validate(data)
+
+
+def _remaining_artifact_seconds(artifact: Any) -> int:
+    if not artifact.expires_at:
+        return 0
+    expires_at = artifact.expires_at
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=UTC)
+    remaining = expires_at - datetime.now(UTC)
+    return max(0, int(remaining.total_seconds()))
+
+
+def _stream_artifact_response(artifact: Any, *, cache_control: str) -> StreamingResponse:
+    format_ext = artifact.format
+    if format_ext == "jpeg":
+        format_ext = "jpg"
+
+    return StreamingResponse(
+        iter([artifact.blob_data or b""]),
+        media_type=artifact.mime_type,
+        headers={
+            "Content-Disposition": f'inline; filename="{artifact.artifact_id}.{format_ext}"',
+            "X-Content-Type-Options": "nosniff",
+            "Cache-Control": cache_control,
+        },
+    )
+
+
+def _public_download_token_valid(artifact: Any, token: str) -> bool:
+    if artifact.source_media_type != "audio":
+        return False
+    if not token:
+        return False
+    metadata = artifact.processing_warnings_json
+    if not isinstance(metadata, dict):
+        return False
+    expected = str(metadata.get("public_download_token_sha256") or "")
+    if not expected:
+        return False
+    actual = hashlib.sha256(token.encode("utf-8")).hexdigest()
+    return hmac.compare_digest(expected, actual)
 
 
 @router.post("/media-derivatives")
@@ -400,31 +443,57 @@ async def download_artifact(
                 trace_id=auth.trace_id,
             )
 
-        remaining_seconds = 0
-        if artifact.expires_at:
-            expires_at = artifact.expires_at
-            if expires_at.tzinfo is None:
-                expires_at = expires_at.replace(tzinfo=UTC)
-            remaining = expires_at - datetime.now(UTC)
-            remaining_seconds = max(0, int(remaining.total_seconds()))
-
-        blob_data = artifact.blob_data or b""
+        remaining_seconds = _remaining_artifact_seconds(artifact)
         record_media_derivative_artifact_download(
             session=session,
             artifact_id=artifact.artifact_id,
         )
         session.commit()
 
-    format_ext = artifact.format
-    if format_ext == "jpeg":
-        format_ext = "jpg"
+    return _stream_artifact_response(
+        artifact,
+        cache_control=f"private, max-age={remaining_seconds}",
+    )
 
-    return StreamingResponse(
-        iter([blob_data]),
-        media_type=artifact.mime_type,
-        headers={
-            "Content-Disposition": f'inline; filename="{artifact.artifact_id}.{format_ext}"',
-            "X-Content-Type-Options": "nosniff",
-            "Cache-Control": f"private, max-age={remaining_seconds}",
-        },
+
+@router.get("/artifacts/{artifact_id}/public-download")
+async def public_download_artifact(
+    request: Request,
+    artifact_id: str,
+    token: str = "",
+) -> Any:
+    services = get_cloud_services(request)
+    with get_session(services.settings.database_url) as session:
+        artifact = get_artifact(session, artifact_id)
+        if artifact is None:
+            return _media_error_response(
+                status_code=404,
+                error_code="media_derivative.artifact_not_found",
+                message="artifact not found",
+            )
+
+        if is_artifact_expired(artifact):
+            return _media_error_response(
+                status_code=410,
+                error_code="media_derivative.artifact_expired",
+                message=f"artifact '{artifact_id}' has expired",
+            )
+
+        if not _public_download_token_valid(artifact, token):
+            return _media_error_response(
+                status_code=403,
+                error_code="media_derivative.public_artifact_token_invalid",
+                message="artifact download token is invalid",
+            )
+
+        remaining_seconds = _remaining_artifact_seconds(artifact)
+        record_media_derivative_artifact_download(
+            session=session,
+            artifact_id=artifact.artifact_id,
+        )
+        session.commit()
+
+    return _stream_artifact_response(
+        artifact,
+        cache_control=f"public, max-age={remaining_seconds}",
     )

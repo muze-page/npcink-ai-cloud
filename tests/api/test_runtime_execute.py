@@ -30,6 +30,7 @@ from app.core.db import dispose_engine, get_session, init_schema
 from app.core.models import (
     SITE_API_KEY_STATUS_REVOKED,
     AccountSubscription,
+    MediaDerivativeArtifact,
     PlanVersion,
     RunRecord,
     RuntimeGuardEvent,
@@ -925,6 +926,123 @@ def test_execute_route_defaults_audio_generation_to_minimax_narration(
     assert data["result"]["artifact_type"] == "audio_generation_candidates"
     assert data["result"]["direct_wordpress_write"] is False
     assert data["result"]["audios"][0]["mime_type"] == "audio/mpeg"
+    audio_url = data["result"]["audios"][0]["url"]
+    assert audio_url.startswith("/v1/runtime/artifacts/")
+    assert "/public-download?token=" in audio_url
+    assert data["result"]["audios"][0]["artifact"]["source_media_type"] == "audio"
+    assert data["result"]["audios"][0]["artifact"]["download_url"] == audio_url
+    assert data["result"]["audios"][0]["artifact"]["authenticated_download_url"].endswith(
+        "/download"
+    )
+    assert data["result"]["audio_materialization"]["status"] == "materialized"
+
+    with get_session(database_url) as session:
+        artifact = session.query(MediaDerivativeArtifact).filter_by(site_id="site_alpha").one()
+        assert artifact.source_media_type == "audio"
+        assert artifact.blob_data
+        assert artifact.mime_type == "audio/mpeg"
+        artifact_id = artifact.artifact_id
+
+    download_headers = build_auth_headers(
+        "GET",
+        f"/v1/runtime/artifacts/{artifact_id}/download",
+        site_id="site_alpha",
+    )
+    download_response = client.get(
+        f"/v1/runtime/artifacts/{artifact_id}/download",
+        headers=download_headers,
+    )
+    assert download_response.status_code == 200
+    assert download_response.headers["content-type"].startswith("audio/mpeg")
+    assert download_response.content.startswith(b"ID3")
+
+    public_download_response = client.get(audio_url)
+    assert public_download_response.status_code == 200
+    assert public_download_response.headers["content-type"].startswith("audio/mpeg")
+    assert public_download_response.content.startswith(b"ID3")
+
+    invalid_public_download_response = client.get(
+        f"/v1/runtime/artifacts/{artifact_id}/public-download?token=bad"
+    )
+    assert invalid_public_download_response.status_code == 403
+
+    dispose_engine(database_url)
+
+
+def test_execute_route_fails_audio_generation_when_provider_url_cannot_materialize(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "data": {
+                    "audio_url": "https://minimax.example.test/audio/signed.mp3",
+                    "extra_info": {
+                        "usage_characters": 9,
+                        "audio_length": 2400,
+                        "audio_format": "mp3",
+                    },
+                },
+                "base_resp": {"status_code": 0, "status_msg": "success"},
+            },
+        )
+
+    provider = MiniMaxProviderAdapter(
+        api_key="test-minimax-key",
+        allow_sample_catalog=True,
+        transport=httpx.MockTransport(handler),
+    )
+    database_url, client = _build_client(tmp_path, providers={"minimax": provider})
+
+    from app.domain.audio_generation import artifacts as audio_artifacts
+
+    def fail_download(*args: object, **kwargs: object) -> bytes:
+        raise audio_artifacts.AudioArtifactMaterializationError(
+            "provider audio URL returned HTTP 403"
+        )
+
+    monkeypatch.setattr(audio_artifacts, "_download_audio_url", fail_download)
+
+    payload = {
+        "site_id": "site_alpha",
+        "ability_name": "npcink-cloud/generate-audio",
+        "contract_version": "audio_generation_request.v1",
+        "channel": "openapi",
+        "execution_tier": "cloud",
+        "execution_pattern": "inline",
+        "input": {
+            "contract_version": "audio_generation_request.v1",
+            "intent": "article_narration",
+            "text": "这是一段文章旁白。",
+            "format": "mp3",
+            "response_format": "url",
+        },
+        "policy": {"allow_fallback": False},
+    }
+    body = json.dumps(payload).encode("utf-8")
+    headers = merge_json_headers(
+        build_auth_headers(
+            "POST",
+            "/v1/runtime/execute",
+            site_id="site_alpha",
+            idempotency_key="idem-audio-generation-materialize-fail-001",
+            nonce="nonce-audio-generation-materialize-fail-001",
+            trace_id="1234567890abcdef1234567890abcd16",
+            body=body,
+        )
+    )
+
+    response = client.post("/v1/runtime/execute", content=body, headers=headers)
+
+    assert response.status_code == 200, response.text
+    data = response.json()["data"]
+    assert data["status"] == "failed"
+    assert data["error_code"] == "audio_generation.artifact_materialization_failed"
+    assert "HTTP 403" in data["error_message"]
+    with get_session(database_url) as session:
+        assert session.query(MediaDerivativeArtifact).count() == 0
 
     dispose_engine(database_url)
 
