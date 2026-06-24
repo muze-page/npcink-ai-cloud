@@ -311,6 +311,18 @@ else
 	assert_body_contains "${HTTP_BODY}" "_next/" "portal login page should be served by Next frontend"
 fi
 
+http_request "GET" "${BASE_URL%/}/terms/en/terms.html" ""
+assert_status "${HTTP_STATUS}" "200" "English terms page should be served by the production static path"
+assert_body_contains "${HTTP_BODY}" "Npcink Cloud Terms of Service" "English terms page should include the expected title"
+
+http_request "GET" "${BASE_URL%/}/terms/zh/terms.html" ""
+assert_status "${HTTP_STATUS}" "200" "Chinese terms page should be served by the production static path"
+assert_body_contains "${HTTP_BODY}" "Npcink Cloud 服务条款" "Chinese terms page should include the expected title"
+
+http_request "GET" "${BASE_URL%/}/terms/styles.css" ""
+assert_status "${HTTP_STATUS}" "200" "terms stylesheet should be served by the production static path"
+assert_body_contains "${HTTP_BODY}" "site-header" "terms stylesheet should include the expected layout selectors"
+
 http_request "GET" "${BASE_URL%/}/docs" ""
 assert_status "${HTTP_STATUS}" "404" "docs should stay disabled in production perimeter"
 

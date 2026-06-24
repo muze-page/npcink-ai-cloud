@@ -45,6 +45,30 @@ prompt/router/preset local truth, or WordPress write owner.
   `composer quality:matrix` for status and `composer quality:matrix:run` before
   cross-repo closeout.
 
+## AI Production Operation Rules
+
+- Production source branch is `production`; development integration branch is
+  `master`.
+- Follow `docs/cloud-production-release-policy-v1.md` for production release
+  and emergency rules.
+- Do not directly edit production application code on the server.
+- Server-side changes are limited to `.env.deploy` secrets/config and emergency
+  break-glass fixes.
+- Any emergency server fix must be backported to Git before the next deploy.
+- Do not commit SMTP passwords, provider keys, database credentials, internal
+  tokens, SSH keys, or `.env.deploy`.
+- Before promoting to `production`, confirm:
+  - `master` CI is green;
+  - release scope is intentional;
+  - rollback path is known;
+  - `docs/cloud-production-release-policy-v1.md` is satisfied;
+  - PR body includes `Approved for production validation by operator.`
+- When the worktree is dirty, use a clean temporary worktree for
+  release/process changes.
+- Do not use `git add -A` in a mixed worktree.
+- Do not push or deploy to Gitee unless the user explicitly asks.
+- After changing release policy, run `pnpm run check:release-policy`.
+
 ## Verification Gates
 
 Default fast gate:

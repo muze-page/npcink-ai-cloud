@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1">
+	<title>Npcink Cloud 服务条款</title>
+	<link rel="stylesheet" href="../styles.css">
+</head>
+<body>
+	<header class="site-header">
+		<div class="site-header__inner">
+			<a class="brand" href="index.html">
+				<img src="../assets/icon-128x128.png" alt="Npcink Cloud Addon icon">
+				<span>
+					<strong>Npcink Cloud</strong>
+					<span>服务条款、隐私政策和数据保留</span>
+				</span>
+			</a>
+			<nav class="nav" aria-label="法律页面">
+				<a href="terms.html">服务条款</a>
+				<a href="privacy.html">隐私政策</a>
+				<a href="data-retention.html">数据保留</a>
+				<a href="../en/">English</a>
+			</nav>
+		</div>
+	</header>
+
+	<main class="content">
+		<section class="hero">
+			<div class="hero-card">
+				<div class="eyebrow">服务条款</div>
+				<h1>Npcink Cloud 服务条款</h1>
+				<p class="lead">本服务条款适用于 Npcink Cloud 的访问和使用。Npcink Cloud 是面向 Npcink WordPress 插件的 hosted runtime 和服务端点。</p>
+			</div>
+		</section>
+
+		<article class="doc">
+			<div class="meta">
+				<div><strong>生效日期：</strong>2026年6月1日</div>
+				<div><strong>运营主体：</strong>麻城市牧泽世华工艺品</div>
+				<div><strong>联系邮箱：</strong>npc@npc.ink</div>
+				<div><strong>服务域名：</strong>https://cloud.npc.ink</div>
+			</div>
+
+			<h2>服务</h2>
+			<p>Npcink Cloud 提供 hosted runtime access、签名请求处理、health checks、entitlement summaries、媒体衍生处理、Site Knowledge 同步提示，以及可选的 metadata-only 插件监控能力。</p>
+			<p>只有当站点管理员配置 Cloud Base URL 和 Cloud API Key、验证连接，或本地 Npcink 组件显式调用 Cloud runtime client 时，才会使用 Npcink Cloud。</p>
+
+			<h2>账户和 API Keys</h2>
+			<p>访问 Npcink Cloud 可能需要账户以及由 Npcink Cloud 签发的 Cloud API Key。站点管理员负责妥善保管 API key，并在不再需要访问时移除访问权限。</p>
+			<p>Npcink Cloud Addon 插件会在 WordPress 服务器端保存 Cloud API Key secret，用于服务端请求签名。该 secret 不会打印到 wp-admin 页面。</p>
+
+			<h2>本地 WordPress 控制权</h2>
+			<p>Npcink Cloud 不拥有 WordPress 写入权限。最终 WordPress 写入、审批、proposal 记录、rollback、preflight 和本地治理仍由本地 WordPress 站点及其安装的 Npcink governance 组件负责。</p>
+			<p>Npcink Cloud 不作为 WordPress 控制面、WordPress 内的 billing truth、workflow engine、scheduler truth、prompt registry、router registry 或 approval system。</p>
+
+			<h2>可接受使用</h2>
+			<p>你不得使用 Npcink Cloud 传输违法内容、未经授权使用的凭据、恶意软件、缺乏合法基础或授权的敏感个人数据，或任何违反适用法律的内容。</p>
+
+			<h2>可用性</h2>
+			<p>Npcink Cloud 可能因维护、安全、滥用防范或运营原因变更、暂停或停止部分服务功能。</p>
+
+			<h2>费用</h2>
+			<p>部分 Npcink Cloud 功能可能需要付费计划或 entitlement。计划可用性、配额和限制可能因账户而异。</p>
+
+			<h2>外部服务</h2>
+			<p>Npcink Cloud 是由管理员配置的 WordPress 站点使用的外部服务。Npcink Cloud Addon 插件仅在管理员配置、验证、本地 Npcink 组件显式 runtime 调用，或管理员启用 monitoring 后联系配置的服务。</p>
+
+			<h2>联系</h2>
+			<p>如对本条款有疑问，请联系：<a href="mailto:npc@npc.ink">npc@npc.ink</a>。</p>
+		</article>
+	</main>
+
+	<footer class="site-footer">
+		<p>运营主体：麻城市牧泽世华工艺品。联系邮箱：npc@npc.ink。服务域名：https://cloud.npc.ink。</p>
+	</footer>
+</body>
+</html>

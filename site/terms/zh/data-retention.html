@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1">
+	<title>Npcink Cloud 数据保留与删除</title>
+	<link rel="stylesheet" href="../styles.css">
+</head>
+<body>
+	<header class="site-header">
+		<div class="site-header__inner">
+			<a class="brand" href="index.html">
+				<img src="../assets/icon-128x128.png" alt="Npcink Cloud Addon icon">
+				<span>
+					<strong>Npcink Cloud</strong>
+					<span>服务条款、隐私政策和数据保留</span>
+				</span>
+			</a>
+			<nav class="nav" aria-label="法律页面">
+				<a href="terms.html">服务条款</a>
+				<a href="privacy.html">隐私政策</a>
+				<a href="data-retention.html">数据保留</a>
+				<a href="../en/">English</a>
+			</nav>
+		</div>
+	</header>
+
+	<main class="content">
+		<section class="hero">
+			<div class="hero-card">
+				<div class="eyebrow">数据保留与删除</div>
+				<h1>Npcink Cloud 数据保留与删除</h1>
+				<p class="lead">Npcink Cloud 仅出于运营、安全、调试、滥用防范、entitlement、会计和法律目的保留服务数据。</p>
+			</div>
+		</section>
+
+		<article class="doc">
+			<div class="meta">
+				<div><strong>生效日期：</strong>2026年6月1日</div>
+				<div><strong>运营主体：</strong>麻城市牧泽世华工艺品</div>
+				<div><strong>联系邮箱：</strong>npc@npc.ink</div>
+				<div><strong>服务域名：</strong>https://cloud.npc.ink</div>
+			</div>
+
+			<h2>典型保留类别</h2>
+			<ul>
+				<li><strong>认证和请求签名元数据：</strong>用于安全和调试。</li>
+				<li><strong>Runtime request 和 result metadata：</strong>用于服务运营和故障排查。</li>
+				<li><strong>可选 monitoring metadata：</strong>用于服务健康、可靠性、质量摘要和诊断。</li>
+				<li><strong>Entitlement 和 usage summaries：</strong>用于账户状态、配额和服务访问。</li>
+				<li><strong>Media derivative artifacts：</strong>根据其配置的过期时间或服务政策保留。</li>
+				<li><strong>Site Knowledge change hints：</strong>仅在向 Cloud Site Knowledge 系统递送 public content-change hints 所需期间保留。</li>
+			</ul>
+
+			<h2>数据最小化</h2>
+			<p>Npcink Cloud Addon monitoring 是 metadata-only，设计上不收集 prompts、article body content、generated content、raw payloads、provider credentials、Cloud API secrets、passwords、cookies、Authorization headers、database names、table names 或 filesystem paths。</p>
+
+			<h2>删除</h2>
+			<p>管理员可以通过 <a href="mailto:npc@npc.ink">npc@npc.ink</a> 请求删除与账户相关的 Npcink Cloud 服务数据。</p>
+			<p>部分记录可能因安全、滥用防范、会计、法律合规或备份完整性要求而继续保留。</p>
+
+			<h2>联系</h2>
+			<p>如对数据保留或删除有疑问，请联系：<a href="mailto:npc@npc.ink">npc@npc.ink</a>。</p>
+		</article>
+	</main>
+
+	<footer class="site-footer">
+		<p>运营主体：麻城市牧泽世华工艺品。联系邮箱：npc@npc.ink。服务域名：https://cloud.npc.ink。</p>
+	</footer>
+</body>
+</html>
