@@ -14,6 +14,8 @@ npcink_ai_cloud_require_cmd docker
 npcink_ai_cloud_require_cmd curl
 npcink_ai_cloud_require_internal_token
 
+echo "[info] Using compose file: ${NPCINK_CLOUD_COMPOSE_FILE:-${ROOT_DIR}/docker-compose.prod.yml}"
+
 service_exists() {
 	local service_name="$1"
 	npcink_ai_cloud_compose "${ROOT_DIR}" config --services | grep -qx "${service_name}"
@@ -40,6 +42,7 @@ if service_exists caddy; then
 	SERVICES+=(caddy)
 fi
 
+echo "[info] Starting services: ${SERVICES[*]}"
 npcink_ai_cloud_compose "${ROOT_DIR}" up -d "${SERVICES[@]}"
 
 if ! npcink_ai_cloud_wait_for_ready "${BASE_URL}" 20 2; then
