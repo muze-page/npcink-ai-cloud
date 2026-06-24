@@ -239,8 +239,14 @@ def test_deploy_bundle_smoke_uses_sample_provider_and_skip_frontend_contract() -
     assert "resolver 127.0.0.11" in nginx_prod_conf
     assert 'set $npcink_ai_cloud_frontend "frontend:3000";' in nginx_prod_conf
     assert "map $http_x_forwarded_proto $npcink_forwarded_proto" in nginx_prod_conf
+    assert "map $http_x_forwarded_host $npcink_forwarded_host" in nginx_prod_conf
     assert "proxy_set_header X-Forwarded-Host $host;" in nginx_prod_conf
     assert "proxy_set_header X-Forwarded-Proto $npcink_forwarded_proto;" in nginx_prod_conf
+    assert "location = /admin/auth/bootstrap" in nginx_prod_conf
+    assert "proxy_set_header Host $npcink_forwarded_host;" in nginx_prod_conf
+    assert "proxy_set_header X-Forwarded-Host $npcink_forwarded_host;" in nginx_prod_conf
+    assert "proxy_pass http://npcink_ai_cloud_api;" in nginx_prod_conf
+    assert "header_up Host {host}" in caddy_prod_conf
     assert "header_up X-Forwarded-Host {host}" in caddy_prod_conf
     assert "header_up X-Forwarded-Proto {scheme}" in caddy_prod_conf
     assert "./site:/usr/share/nginx/html/npcink-site:ro" in runtime_compose_text
