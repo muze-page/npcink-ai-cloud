@@ -154,8 +154,9 @@ def build_admin_ai_resource_projection(
     audio_narration_profile_id = _selected_audio_narration_profile_id(settings)
     audio_summary_text_profile_id = _selected_audio_summary_text_profile_id(settings)
     audio_summary_audio_profile_id = _selected_audio_summary_audio_profile_id(settings)
+    resolved_database_url = str(database_url or getattr(settings, "database_url", "") or "")
     recent_runs = _recent_runtime_evidence(
-        database_url or getattr(settings, "database_url", ""),
+        resolved_database_url,
         profile_ids=[
             TEXT_AI_PROFILE_ID,
             FREE_GPT55_TEXT_PROFILE_ID,

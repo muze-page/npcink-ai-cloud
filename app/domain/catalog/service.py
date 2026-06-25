@@ -524,7 +524,7 @@ class CatalogService:
                     else None
                 ),
             )
-            default_policy_json = {
+            default_policy_json: dict[str, object] = {
                 "allow_fallback": True,
                 "max_retries": 0,
                 "timeout_ms": 30000,

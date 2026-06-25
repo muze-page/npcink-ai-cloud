@@ -13,7 +13,6 @@ from sqlalchemy.orm import Session
 
 from app.core.models import MediaDerivativeArtifact, RunRecord
 
-
 AUDIO_ARTIFACT_DEFAULT_TTL_MINUTES = 60
 AUDIO_ARTIFACT_DEFAULT_MAX_BYTES = 24 * 1024 * 1024
 AUDIO_ARTIFACT_DEFAULT_TIMEOUT_SECONDS = 20.0

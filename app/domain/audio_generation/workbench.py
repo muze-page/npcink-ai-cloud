@@ -90,6 +90,7 @@ class AudioWorkbenchService:
         runtime_service = self._runtime_service()
         script_bundle = self._build_script_bundle(request_payload, runtime_service=runtime_service)
         audio_profile_id = self._audio_profile_id_for_intent(str(request_payload["intent"]))
+        script_generation = _dict(script_bundle["generation"])
         runtime_request = RuntimeRequest(
             site_id=str(request_payload["site_id"]),
             ability_name=AUDIO_GENERATION_CLOUD_ABILITY,
@@ -122,7 +123,7 @@ class AudioWorkbenchService:
                     "title": str(request_payload["title"]),
                     "source_chars": len(str(request_payload["body"])),
                     "script_source": script_bundle["source"],
-                    "script_generation_present": bool(script_bundle["generation"].get("run_id")),
+                    "script_generation_present": bool(script_generation.get("run_id")),
                     "audio_profile_id": audio_profile_id,
                 },
             },
