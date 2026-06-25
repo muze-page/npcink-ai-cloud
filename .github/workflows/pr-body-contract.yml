@@ -1,0 +1,47 @@
+name: PR Body Contract
+
+on:
+  pull_request:
+    types:
+      - opened
+      - edited
+      - reopened
+      - synchronize
+      - ready_for_review
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: pr-body-contract-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pr-body-contract:
+    name: PR body contract
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require AI change envelope sections
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          python3 - <<'PY'
+          import os
+          import re
+          import sys
+
+          body = os.environ.get("PR_BODY") or ""
+          required = {
+              "Scope": r"(?im)^#{1,6}\s+.*\bscope\b",
+              "Boundary": r"(?im)^#{1,6}\s+.*\bboundary\b",
+              "Verification": r"(?im)^#{1,6}\s+.*\bverification\b",
+              "Risk": r"(?im)^#{1,6}\s+.*\brisk\b",
+          }
+          missing = [name for name, pattern in required.items() if not re.search(pattern, body)]
+          if missing:
+              print("PR body is missing required section heading(s): " + ", ".join(missing))
+              print("Add headings for Scope, Boundary, Verification, and Risk before merge.")
+              sys.exit(1)
+          print("PR body contract: ok")
+          PY
