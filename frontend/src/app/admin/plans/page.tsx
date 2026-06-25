@@ -286,7 +286,6 @@ function PlansContent() {
     }
     for (const shell of missingShells) {
       // Sequential bootstrap keeps notices and server-side upserts predictable.
-      // eslint-disable-next-line no-await-in-loop
       await handleBootstrapShell(shell);
     }
   }, [handleBootstrapShell, plans, t, tierTemplates]);
