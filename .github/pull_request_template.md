@@ -36,6 +36,11 @@
 
 ```
 
+## Risk
+
+- Residual risk:
+- Rollback plan:
+
 ## Deployment Impact
 
 - [ ] No production deployment impact.
