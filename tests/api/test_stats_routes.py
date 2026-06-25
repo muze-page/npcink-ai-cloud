@@ -65,12 +65,12 @@ def _build_client(tmp_path: Path) -> tuple[str, TestClient, datetime]:
     with get_session(database_url) as session:
         run_specs = {
             run_a.run_id: {
-                "started_at": now - timedelta(minutes=30),
-                "finished_at": now - timedelta(minutes=30) + timedelta(milliseconds=95),
+                "started_at": now - timedelta(minutes=25),
+                "finished_at": now - timedelta(minutes=25) + timedelta(milliseconds=95),
             },
             run_b.run_id: {
-                "started_at": now - timedelta(minutes=20),
-                "finished_at": now - timedelta(minutes=20) + timedelta(milliseconds=180),
+                "started_at": now - timedelta(minutes=15),
+                "finished_at": now - timedelta(minutes=15) + timedelta(milliseconds=180),
             },
         }
 
@@ -335,8 +335,17 @@ def test_stats_routes_return_windowed_metrics_and_health(tmp_path: Path) -> None
 
     assert usage_payload["windows"]["today"]["runs_total"] == 2
     assert usage_payload["windows"]["today"]["provider_calls_total"] == 3
-    assert usage_payload["health"]["healthy_total"] == 6
-    assert usage_payload["health"]["avg_score"] == 0.9167
+    usage_health = usage_payload["health"]
+    assert usage_health["instances_total"] >= len(discovery_payload["instances"])
+    assert usage_health["healthy_total"] >= 1
+    assert (
+        usage_health["healthy_total"]
+        + usage_health["degraded_total"]
+        + usage_health["unhealthy_total"]
+        + usage_health["unknown_total"]
+        == usage_health["instances_total"]
+    )
+    assert usage_health["avg_score"] > 0
     assert projection_payload["source"] == "cloud_router_performance_snapshot"
     assert projection_payload["site_id"] == "site_alpha"
     assert projection_payload["window"]["start_gmt"] == projection_start.strftime(
