@@ -24,6 +24,15 @@ _SECRET_CONFIG_KEY_PARTS = (
     "apikey",
     "group_id",
 )
+_RUNTIME_CONFIG_CONNECTION_KINDS = frozenset(
+    {
+        "web_search_provider",
+        "image_source_provider",
+        "embedding_provider",
+        "rerank_provider",
+        "vector_store_provider",
+    }
+)
 
 
 class ProviderConnectionAdminError(ValueError):
@@ -157,24 +166,65 @@ class ProviderConnectionAdminService:
             result["connection"] = self._serialize(row)
             return result
 
-    def import_env_connections(self) -> dict[str, Any]:
-        candidates = self._env_import_candidates()
-        imported: list[dict[str, Any]] = []
-        skipped: list[dict[str, str]] = []
-        for candidate in candidates:
-            if not str(candidate.get("credential") or "").strip():
-                skipped.append(
-                    {
-                        "connection_id": str(candidate["connection_id"]),
-                        "reason": "missing_env_secret",
-                    }
-                )
-                continue
-            imported.append(self.save_connection(candidate))
+    def preview_catalog(self, payload: dict[str, Any]) -> dict[str, Any]:
+        normalized = self._normalize_payload(payload, connection_id=None)
+        secret_ciphertext = ""
+        if normalized["credential"]:
+            secret_ciphertext = encrypt_provider_connection_secret(
+                str(normalized["credential"]),
+                settings=self.settings,
+            )
+        elif not bool(normalized["config_json"].get("secretless")):
+            with get_session(self.database_url) as session:
+                existing = session.get(ProviderConnection, normalized["connection_id"])
+                if existing is not None:
+                    secret_ciphertext = _string(existing.secret_ciphertext)
+        if not secret_ciphertext and not bool(normalized["config_json"].get("secretless")):
+            raise ProviderConnectionAdminError(
+                "provider_connection.preview_credential_required",
+                "provider credential is required to fetch upstream models",
+            )
+        row = ProviderConnection(
+            connection_id=normalized["connection_id"],
+            provider_type=normalized["provider_type"],
+            display_name=normalized["display_name"],
+            enabled=True,
+            base_url=normalized["base_url"],
+            config_json=normalized["config_json"],
+            secret_ciphertext=secret_ciphertext or None,
+            status="ready",
+            source_role=normalized["source_role"],
+            metadata_json=normalized["metadata_json"],
+            last_tested_at=None,
+            last_sync_at=None,
+            last_error_code=None,
+            last_error_message=None,
+        )
+        adapter = build_provider_adapter_from_connection(self.settings, row)
+        if adapter is None:
+            raise ProviderConnectionAdminError(
+                "provider_connection.unsupported_provider_kind",
+                "provider kind is not supported by the runtime adapter registry",
+            )
+        try:
+            snapshot = adapter.fetch_catalog()
+        except Exception as error:
+            raise ProviderConnectionAdminError(
+                _map_test_error_code(error),
+                _truncate_message(str(error) or error.__class__.__name__),
+                status_code=502,
+            ) from error
+
+        model_ids = [str(model.model_id) for model in list(snapshot.models or []) if model.model_id]
         return {
-            "surface": "admin_provider_connection_env_import",
-            "imported": imported,
-            "skipped": skipped,
+            "surface": "admin_provider_connection_catalog_preview",
+            "provider_id": str(snapshot.provider_id or normalized["provider_id"]),
+            "display_name": str(snapshot.display_name or normalized["display_name"]),
+            "adapter_type": str(snapshot.adapter_type or ""),
+            "model_count": len(model_ids),
+            "model_ids": model_ids[:100],
+            "truncated": len(model_ids) > 100,
+            "credential_value_exposure": "none",
             "boundary": _boundary(),
         }
 
@@ -201,6 +251,16 @@ class ProviderConnectionAdminService:
                 stage="preflight",
                 error_code="provider_connection.missing_secret",
                 message="provider credential is missing",
+                now=now,
+            )
+
+        if str(serialized.get("kind") or "").strip().lower() in _RUNTIME_CONFIG_CONNECTION_KINDS:
+            return _test_result(
+                connection=serialized,
+                status="ready",
+                stage="config_preflight",
+                error_code="",
+                message="provider runtime configuration is present",
                 now=now,
             )
 
@@ -254,48 +314,6 @@ class ProviderConnectionAdminService:
                 "sample_model_ids": [str(model.model_id) for model in models[:5]],
             },
         )
-
-    def _env_import_candidates(self) -> list[dict[str, Any]]:
-        candidates: list[dict[str, Any]] = [
-            {
-                "connection_id": "openai_env",
-                "provider_id": "openai",
-                "provider_type": "openai_compatible",
-                "kind": "openai_compatible",
-                "display_name": str(self.settings.openai_provider_label or "").strip()
-                or "OpenAI-compatible env",
-                "enabled": True,
-                "base_url": str(self.settings.openai_base_url or ""),
-                "source_role": "execution_source",
-                "capability_ids": ["text_generation", "image_generation"],
-                "runtime_profile_ids": ["text.ai", "text.free-gpt55", "grok-imagine-image-quality"],
-                "credential": self.settings.openai_api_key or "",
-                "metadata": {"imported_from": "env", "env_prefix": "NPCINK_CLOUD_OPENAI"},
-            },
-            {
-                "connection_id": "minimax_env",
-                "provider_id": "minimax",
-                "provider_type": "minimax",
-                "kind": "minimax",
-                "display_name": "MiniMax env",
-                "enabled": bool(self.settings.minimax_provider_enabled)
-                or bool(str(self.settings.minimax_api_key or "").strip()),
-                "base_url": str(self.settings.minimax_base_url or ""),
-                "source_role": "execution_source",
-                "capability_ids": ["audio_generation"],
-                "runtime_profile_ids": [
-                    "audio.narration.default",
-                    "audio.narration.quality",
-                ],
-                "credential": self.settings.minimax_api_key or "",
-                "config": {
-                    "group_id": self.settings.minimax_group_id or "",
-                    "default_voice_id": self.settings.minimax_default_voice_id,
-                },
-                "metadata": {"imported_from": "env", "env_prefix": "NPCINK_CLOUD_MINIMAX"},
-            },
-        ]
-        return candidates
 
     def _normalize_payload(
         self,

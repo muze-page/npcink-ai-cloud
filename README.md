@@ -63,6 +63,7 @@ Operational references:
 - [docs/site-ops-cloud-analysis-runtime-v1.md](docs/site-ops-cloud-analysis-runtime-v1.md)
 - [docs/writing-assistance-evidence-history-2026-06.md](docs/writing-assistance-evidence-history-2026-06.md)
 - [docs/cloud-production-deployment-history-2026-06-24.md](docs/cloud-production-deployment-history-2026-06-24.md)
+- [docs/ai-provider-env-config-retirement-2026-06-26.md](docs/ai-provider-env-config-retirement-2026-06-26.md)
 
 ## Test Entry For Agents
 
@@ -899,21 +900,8 @@ curl -X POST http://127.0.0.1:8000/internal/portal/email/test \
 Provider execution modes:
 
 - default: sample mode, no external provider calls
-- set `NPCINK_CLOUD_OPENAI_API_KEY` to enable real OpenAI-compatible
-  HTTP execution for `chat_completions / responses / embeddings`
-- set `NPCINK_CLOUD_ANTHROPIC_API_KEY` to enable real Anthropic HTTP execution
-  for text-only `messages`
-- set `NPCINK_CLOUD_LITELLM_PROVIDER_ENABLED=true` with
-  `NPCINK_CLOUD_LITELLM_BASE_URL` to enable LiteLLM Gateway as a hosted
-  provider source
-- set `NPCINK_CLOUD_VLLM_PROVIDER_ENABLED=true` with
-  `NPCINK_CLOUD_VLLM_BASE_URL` to enable a self-hosted vLLM OpenAI-compatible
-  provider
-- set `NPCINK_CLOUD_TEI_PROVIDER_ENABLED=true` with
-  `NPCINK_CLOUD_TEI_BASE_URL` and `NPCINK_CLOUD_TEI_MODEL_IDS` to enable a
-  self-hosted TEI embedding provider
-- set `NPCINK_CLOUD_OPENROUTER_PROVIDER_ENABLED=true` with
-  `NPCINK_CLOUD_OPENROUTER_API_KEY` to enable OpenRouter as a hosted provider
+- configure model provider channels in `/admin/ai-resources`;
+  provider keys are stored as DB provider connections, not `.env.local` values
 
 Provider integration boundary:
 
@@ -1185,16 +1173,6 @@ docker compose -f docker-compose.dev.yml run --rm api python -m app.dev.seed_run
   --secret npcink-cloud-test-secret
 ```
 
-Example real provider env:
-
-```bash
-export NPCINK_CLOUD_OPENAI_API_KEY=sk-...
-export NPCINK_CLOUD_OPENAI_BASE_URL=https://api.openai.com/v1
-export NPCINK_CLOUD_ANTHROPIC_API_KEY=sk-ant-...
-export NPCINK_CLOUD_ANTHROPIC_BASE_URL=https://api.anthropic.com
-export NPCINK_CLOUD_ANTHROPIC_VERSION=2023-06-01
-```
-
 If cross-arch Docker builds are unstable from your network, you can also export
 optional pip mirror args before `make bundle` or `deploy-to-ssh-host.sh`:
 
@@ -1461,20 +1439,9 @@ Notes:
   `deploy/WORKSPACE_TARGET.md`, but SSH user, base URL, and deploy env
   still need to be completed before the host is deploy-ready.
 
-Remote provider env sync example:
-
-```bash
-export NPCINK_CLOUD_ANTHROPIC_API_KEY=sk-ant-...
-pnpm run env:ssh -- \
-  --ssh-host your-cloud-host \
-  --ssh-user root \
-  --remote-dir /opt/npcink-ai-cloud \
-  --set NPCINK_CLOUD_ANTHROPIC_BASE_URL=https://api.anthropic.com \
-  --set NPCINK_CLOUD_ANTHROPIC_VERSION=2023-06-01 \
-  --from-env NPCINK_CLOUD_ANTHROPIC_API_KEY
-```
-
-After syncing env, confirm readiness before running Anthropic smoke:
+Remote model provider setup now happens through `/admin/ai-resources` after
+deploy. Add or update the provider connection there, then use the masked
+connection test before running provider-specific smoke.
 
 ```bash
 ssh root@your-cloud-host 'cd /opt/npcink-ai-cloud/current && bash -s' \

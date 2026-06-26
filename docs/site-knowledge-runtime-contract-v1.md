@@ -67,16 +67,28 @@ Cloud can switch the vector index to Zilliz Cloud for validation without any
 Toolbox or WordPress-side settings. The WordPress side only sends bounded
 `publish` public content and executes the managed Cloud abilities.
 
-Cloud-managed settings:
+Cloud-managed provider settings:
 
-- `NPCINK_CLOUD_SITE_KNOWLEDGE_VECTOR_BACKEND`: `postgres_json` or
-  `zilliz_cloud`
-- `NPCINK_CLOUD_SITE_KNOWLEDGE_EMBEDDING_PROVIDER`: `deterministic`, `tei`,
-  `openai`, or `siliconflow`; production validation in China should use
-  `siliconflow` with `BAAI/bge-m3`
-- `NPCINK_CLOUD_SITE_KNOWLEDGE_EMBEDDING_MODEL`: default `BAAI/bge-m3`
-- `NPCINK_CLOUD_SITE_KNOWLEDGE_EMBEDDING_DIMENSIONS`: default `1024`
-- `NPCINK_CLOUD_SITE_KNOWLEDGE_VECTOR_METRIC_TYPE`: default `COSINE`
+- Embedding suppliers are DB-managed provider connections with
+  `kind=embedding_provider`.
+- Rerank suppliers are DB-managed provider connections with
+  `kind=rerank_provider`.
+- Vector store suppliers are DB-managed provider connections with
+  `kind=vector_store_provider`.
+- Provider credentials must be managed in `/admin/ai-resources`, not in
+  `.env.local` provider keys.
+
+Supported built-in vector-related provider IDs:
+
+- `siliconflow` embedding provider, commonly with `BAAI/bge-m3`
+- `openai` embedding provider
+- `tei` embedding provider
+- `jina` rerank provider, commonly with `jina-reranker-v3`
+- `zilliz` vector store provider
+
+The following remain environment-controlled runtime guardrails, because they
+bound workload shape rather than identify a provider secret:
+
 - `NPCINK_CLOUD_SITE_KNOWLEDGE_COMMENTS_ENABLED`: default `false`; when true,
   Cloud may index approved public comments supplied by WordPress.
 - `NPCINK_CLOUD_SITE_KNOWLEDGE_MAX_SYNC_DOCUMENTS_PER_RUN`: default `500`.
@@ -90,37 +102,13 @@ Cloud-managed settings:
 - `NPCINK_CLOUD_SITE_KNOWLEDGE_QUOTA_WARNING_RATIO`: default `0.85`.
   Status returns `near_limit` once document or chunk utilization reaches this
   ratio.
-- `NPCINK_CLOUD_SITE_KNOWLEDGE_RERANK_PROVIDER`: `disabled` or `jina`;
-  default `disabled`. Rerank is a Cloud-only enhancement after vector recall.
 - `NPCINK_CLOUD_SITE_KNOWLEDGE_RERANK_TOP_K`: default `30`
 - `NPCINK_CLOUD_SITE_KNOWLEDGE_RERANK_TIMEOUT_SECONDS`: default `8`
-- `NPCINK_CLOUD_SITE_KNOWLEDGE_JINA_BASE_URL`: default `https://api.jina.ai`
-- `NPCINK_CLOUD_SITE_KNOWLEDGE_JINA_API_KEY`: required only when
-  `NPCINK_CLOUD_SITE_KNOWLEDGE_RERANK_PROVIDER=jina`; keep it only in Cloud
-  deploy secrets.
-- `NPCINK_CLOUD_SITE_KNOWLEDGE_JINA_RERANK_MODEL`: default
-  `jina-reranker-v3`
-- `NPCINK_CLOUD_SITE_KNOWLEDGE_ZILLIZ_URI`: required when `zilliz_cloud`
-  is enabled
-- `NPCINK_CLOUD_SITE_KNOWLEDGE_ZILLIZ_TOKEN`: required when `zilliz_cloud`
-  is enabled
-- `NPCINK_CLOUD_SITE_KNOWLEDGE_ZILLIZ_DATABASE`: optional
-- `NPCINK_CLOUD_SITE_KNOWLEDGE_ZILLIZ_COLLECTION`: default
-  `npcink_site_knowledge_chunks`
 - `NPCINK_CLOUD_SITE_KNOWLEDGE_ZILLIZ_TIMEOUT_SECONDS`: default `10`
-- `NPCINK_CLOUD_TEI_PROVIDER_ENABLED`: `true` when
-  `NPCINK_CLOUD_SITE_KNOWLEDGE_EMBEDDING_PROVIDER=tei`
-- `NPCINK_CLOUD_TEI_BASE_URL`: Cloud-managed TEI or compatible embedding
-  endpoint
-- `NPCINK_CLOUD_TEI_API_KEY`: optional, only when the embedding endpoint
-  requires it
-- `NPCINK_CLOUD_TEI_MODEL_IDS`: must include `BAAI/bge-m3`
-- `NPCINK_CLOUD_SILICONFLOW_PROVIDER_ENABLED`: `true` when
-  `NPCINK_CLOUD_SITE_KNOWLEDGE_EMBEDDING_PROVIDER=siliconflow`
-- `NPCINK_CLOUD_SILICONFLOW_BASE_URL`: default `https://api.siliconflow.cn/v1`
-- `NPCINK_CLOUD_SILICONFLOW_API_KEY`: required when SiliconFlow embeddings are
-  enabled; keep it only in Cloud deploy secrets
-- `NPCINK_CLOUD_SILICONFLOW_TIMEOUT_SECONDS`: default `30`
+
+The runtime may project DB provider connections onto legacy in-process settings
+fields while the Site Knowledge adapters are being simplified. That bridge is
+an implementation detail, not a supported env credential surface.
 
 The Zilliz adapter is intentionally behind a small backend interface. A later
 DashVector migration should add a new backend implementation and preserve the
@@ -129,7 +117,8 @@ same runtime contracts, response shape, and WordPress write boundary.
 The deterministic embedding provider exists for local tests and controlled
 fallback only. The managed embedding provider paths use the existing Cloud
 provider adapter boundary, so embedding endpoint credentials remain
-Cloud-managed and are not accepted from or returned to WordPress.
+Cloud-managed provider connection secrets and are not accepted from or returned
+to WordPress.
 
 Managed embedding provider calls are runtime-governed provider calls. When
 Site Knowledge uses TEI, OpenAI, SiliconFlow, or another Cloud-managed

@@ -11,7 +11,6 @@ from app.adapters.providers.base import ProviderAdapter
 from app.core.config import Settings
 from app.core.db import get_session
 from app.core.models import ProviderCallRecord, RunRecord
-from app.domain.audio_generation.admin_config import AudioProviderAdminConfigService
 from app.domain.hosted_model_defaults import (
     AUDIO_NARRATION_MODEL_ID,
     AUDIO_NARRATION_PROFILE_ID,
@@ -23,9 +22,7 @@ from app.domain.hosted_model_defaults import (
     GROK_IMAGINE_IMAGE_PROFILE_ID,
     TEXT_AI_PROFILE_ID,
 )
-from app.domain.image_sources.admin_config import ImageSourceAdminConfigService
 from app.domain.provider_connections.service import ProviderConnectionAdminService
-from app.domain.web_search.admin_config import WebSearchAdminConfigService
 
 AI_RESOURCES_PROFILE_ENV_KEYS = {
     "audio_summary_text_profile_id": "NPCINK_CLOUD_AUDIO_SUMMARY_TEXT_PROFILE_ID",
@@ -132,29 +129,6 @@ def build_admin_ai_resource_projection(
     database_url: str | None = None,
 ) -> dict[str, Any]:
     provider_adapters = providers or {}
-    audio_config = AudioProviderAdminConfigService(settings).get_config()
-    image_source_config = ImageSourceAdminConfigService(settings).get_config()
-    web_search_config = WebSearchAdminConfigService(settings).get_config()
-
-    text_configured = (
-        bool(str(settings.openai_api_key or "").strip()) or "openai" in provider_adapters
-    )
-    text_status = "ready" if text_configured else "missing_secret"
-    text_label = str(settings.openai_provider_label or "").strip() or "OpenAI-compatible"
-
-    minimax = _dict(audio_config.get("providers")).get("minimax", {})
-    minimax_configured = bool(_dict(minimax).get("configured")) or "minimax" in provider_adapters
-    minimax_enabled = bool(_dict(minimax).get("enabled")) or "minimax" in provider_adapters
-    audio_status = "ready" if minimax_configured and minimax_enabled else "missing_secret"
-
-    web_search_mode = str(web_search_config.get("provider_mode") or "disabled")
-    web_search_ready = web_search_mode != "disabled" and _has_configured_provider(
-        _dict(web_search_config.get("providers"))
-    )
-    image_source_mode = str(image_source_config.get("provider_mode") or "disabled")
-    image_source_ready = image_source_mode != "disabled" and _has_configured_provider(
-        _dict(image_source_config.get("providers"))
-    )
     audio_narration_profile_id = _selected_audio_narration_profile_id(settings)
     audio_summary_text_profile_id = _selected_audio_summary_text_profile_id(settings)
     audio_summary_audio_profile_id = _selected_audio_summary_audio_profile_id(settings)
@@ -173,120 +147,47 @@ def build_admin_ai_resource_projection(
     managed_connections = _managed_provider_connections(settings, resolved_database_url)
     managed_connection_ids_by_capability = _connection_ids_by_capability(managed_connections)
     managed_ready_by_capability = _ready_by_capability(managed_connections)
-
-    connections = [
-        {
-            "connection_id": "openai_compatible",
-            "provider_id": "openai",
-            "display_name": text_label,
-            "kind": "text_provider",
-            "enabled": text_configured,
-            "configured": text_configured,
-            "status": text_status,
-            "base_url": str(settings.openai_base_url or ""),
-            "secrets": {
-                "api_key": {
-                    "configured": text_configured,
-                    "display": "configured" if text_configured else "missing",
-                }
-            },
-            "capability_ids": ["text_generation"],
-            "runtime_profile_ids": [TEXT_AI_PROFILE_ID, FREE_GPT55_TEXT_PROFILE_ID],
-        },
-        {
-            "connection_id": "minimax_audio",
-            "provider_id": "minimax",
-            "display_name": str(_dict(minimax).get("display_name") or "MiniMax"),
-            "kind": "audio_provider",
-            "enabled": minimax_enabled,
-            "configured": minimax_configured,
-            "status": audio_status,
-            "base_url": str(_dict(minimax).get("base_url") or ""),
-            "secrets": {
-                "api_key": _dict(_dict(minimax).get("api_key")),
-                "group_id": _dict(_dict(minimax).get("group_id")),
-            },
-            "capability_ids": ["audio_generation"],
-            "runtime_profile_ids": [
-                AUDIO_NARRATION_PROFILE_ID,
-                AUDIO_NARRATION_QUALITY_PROFILE_ID,
-            ],
-            "detail_href": "/admin/audio-providers",
-        },
-    ]
-    connections.extend(
-        _provider_connections_from_config(
-            web_search_config,
-            connection_prefix="web_search",
-            kind="web_search_provider",
-            capability_ids=["web_search"],
-            runtime_profile_ids=["web-search.managed"],
-            detail_href="/admin/web-search",
-        )
+    text_connection_id = _first_connection_id_for_capability(
+        managed_connections,
+        "text_generation",
+        fallback="openai" if "openai" in provider_adapters else "",
     )
-    connections.extend(
-        _provider_connections_from_config(
-            image_source_config,
-            connection_prefix="image_source",
-            kind="image_source_provider",
-            capability_ids=["image_source"],
-            runtime_profile_ids=["image-source.managed"],
-            detail_href="/admin/image-sources",
-        )
+    text_provider_id = _provider_id_for_connection(
+        managed_connections,
+        text_connection_id,
+        fallback="openai" if "openai" in provider_adapters else "",
+    )
+    text_configured = bool(text_connection_id)
+    audio_connection_id = _first_connection_id_for_capability(
+        managed_connections,
+        "audio_generation",
+        fallback="minimax" if "minimax" in provider_adapters else "",
+    )
+    audio_provider_id = _provider_id_for_connection(
+        managed_connections,
+        audio_connection_id,
+        fallback="minimax" if "minimax" in provider_adapters else "",
+    )
+    audio_status = "ready" if audio_connection_id else "missing_secret"
+    image_generation_connection_id = _first_connection_id_for_capability(
+        managed_connections,
+        "image_generation",
+        fallback=text_connection_id,
+    )
+    image_generation_provider_id = _provider_id_for_connection(
+        managed_connections,
+        image_generation_connection_id,
+        fallback=text_provider_id,
     )
     embedding_provider = str(settings.site_knowledge_embedding_provider or "deterministic")
     embedding_model = str(settings.site_knowledge_embedding_model or "BAAI/bge-m3")
-    connections.append(
-        {
-            "connection_id": f"embedding_{embedding_provider}",
-            "provider_id": embedding_provider,
-            "display_name": f"Site Knowledge embedding ({embedding_provider})",
-            "kind": "embedding_provider",
-            "enabled": True,
-            "configured": _site_knowledge_embedding_configured(settings),
-            "status": "ready"
-            if _site_knowledge_embedding_configured(settings)
-            else "missing_secret",
-            "base_url": _site_knowledge_embedding_base_url(settings),
-            "secrets": {
-                "secret": {
-                    "configured": _site_knowledge_embedding_configured(settings),
-                    "display": (
-                        "configured"
-                        if _site_knowledge_embedding_configured(settings)
-                        else "missing"
-                    ),
-                }
-            },
-            "capability_ids": ["embedding"],
-            "runtime_profile_ids": ["embed.default"],
-        }
+    embedding_connection_id = _first_connection_id_for_capability(
+        managed_connections,
+        "embedding",
+        fallback="" if embedding_provider == "deterministic" else f"embedding_{embedding_provider}",
     )
-    rerank_provider = str(settings.site_knowledge_rerank_provider or "disabled")
-    if rerank_provider != "disabled":
-        rerank_configured = bool(str(settings.site_knowledge_jina_api_key or "").strip())
-        connections.append(
-            {
-                "connection_id": f"rerank_{rerank_provider}",
-                "provider_id": rerank_provider,
-                "display_name": f"Site Knowledge rerank ({rerank_provider})",
-                "kind": "rerank_provider",
-                "enabled": True,
-                "configured": rerank_configured,
-                "status": "ready" if rerank_configured else "missing_secret",
-                "base_url": str(settings.site_knowledge_jina_base_url or ""),
-                "secrets": {
-                    "secret": {
-                        "configured": rerank_configured,
-                        "display": "configured" if rerank_configured else "missing",
-                    }
-                },
-                "capability_ids": ["site_knowledge_rerank"],
-                "runtime_profile_ids": ["site-knowledge.rerank"],
-            }
-        )
 
-    connections = _merge_connections(connections, managed_connections)
+    connections = _merge_connections([], managed_connections)
 
     capabilities = [
         {
@@ -297,7 +198,7 @@ def build_admin_ai_resource_projection(
             else "missing_provider",
             "default_profile_id": audio_summary_text_profile_id,
             "connection_ids": _merge_ids(
-                ["openai_compatible"] if text_configured else [],
+                [text_connection_id] if text_connection_id else [],
                 managed_connection_ids_by_capability.get("text_generation", []),
             ),
             "used_by": ["Content Support", "Audio summary script"],
@@ -311,7 +212,7 @@ def build_admin_ai_resource_projection(
             else "missing_provider",
             "default_profile_id": audio_narration_profile_id,
             "connection_ids": _merge_ids(
-                ["minimax_audio"] if audio_status == "ready" else [],
+                [audio_connection_id] if audio_connection_id else [],
                 managed_connection_ids_by_capability.get("audio_generation", []),
             ),
             "used_by": ["Article narration", "Audio summary playback"],
@@ -321,16 +222,10 @@ def build_admin_ai_resource_projection(
             "capability_id": "web_search",
             "label": "Web search",
             "status": "ready"
-            if web_search_ready or managed_ready_by_capability.get("web_search")
+            if managed_ready_by_capability.get("web_search")
             else "disabled",
             "default_profile_id": "web-search.managed",
-            "connection_ids": _merge_ids(
-                _configured_provider_ids(
-                    web_search_config,
-                    connection_prefix="web_search",
-                ),
-                managed_connection_ids_by_capability.get("web_search", []),
-            ),
+            "connection_ids": managed_connection_ids_by_capability.get("web_search", []),
             "used_by": ["Evidence preflight"],
             "write_posture": "suggestion_only",
         },
@@ -338,16 +233,10 @@ def build_admin_ai_resource_projection(
             "capability_id": "image_source",
             "label": "Image source",
             "status": "ready"
-            if image_source_ready or managed_ready_by_capability.get("image_source")
+            if managed_ready_by_capability.get("image_source")
             else "disabled",
             "default_profile_id": "image-source.managed",
-            "connection_ids": _merge_ids(
-                _configured_provider_ids(
-                    image_source_config,
-                    connection_prefix="image_source",
-                ),
-                managed_connection_ids_by_capability.get("image_source", []),
-            ),
+            "connection_ids": managed_connection_ids_by_capability.get("image_source", []),
             "used_by": ["Image source candidates"],
             "write_posture": "candidate_artifact_only",
         },
@@ -359,7 +248,7 @@ def build_admin_ai_resource_projection(
             else "missing_provider",
             "default_profile_id": GROK_IMAGINE_IMAGE_PROFILE_ID,
             "connection_ids": _merge_ids(
-                ["openai_compatible"] if text_configured else [],
+                [image_generation_connection_id] if image_generation_connection_id else [],
                 managed_connection_ids_by_capability.get("image_generation", []),
             ),
             "used_by": ["Generated image candidates"],
@@ -374,7 +263,7 @@ def build_admin_ai_resource_projection(
             else "missing_provider",
             "default_profile_id": "embed.default",
             "connection_ids": _merge_ids(
-                [f"embedding_{embedding_provider}"],
+                [embedding_connection_id] if embedding_connection_id else [],
                 managed_connection_ids_by_capability.get("embedding", []),
             ),
             "used_by": ["Site Knowledge"],
@@ -387,8 +276,8 @@ def build_admin_ai_resource_projection(
             "profile_id": TEXT_AI_PROFILE_ID,
             "kind": "runtime_profile",
             "capability_id": "text_generation",
-            "selected_connection_id": "openai_compatible",
-            "selected_provider_id": "openai",
+            "selected_connection_id": text_connection_id,
+            "selected_provider_id": text_provider_id,
             "selected_model_id": FREE_GPT55_MODEL_ID,
             "status": "ready" if text_configured else "missing_provider",
             "selection_owner": "cloud_runtime_metadata",
@@ -404,8 +293,8 @@ def build_admin_ai_resource_projection(
             "profile_id": FREE_GPT55_TEXT_PROFILE_ID,
             "kind": "runtime_profile",
             "capability_id": "text_generation",
-            "selected_connection_id": "openai_compatible",
-            "selected_provider_id": "openai",
+            "selected_connection_id": text_connection_id,
+            "selected_provider_id": text_provider_id,
             "selected_model_id": FREE_GPT55_MODEL_ID,
             "status": "ready" if text_configured else "missing_provider",
             "selection_owner": "cloud_runtime_metadata",
@@ -421,8 +310,8 @@ def build_admin_ai_resource_projection(
             "profile_id": AUDIO_NARRATION_PROFILE_ID,
             "kind": "runtime_profile",
             "capability_id": "audio_generation",
-            "selected_connection_id": "minimax_audio",
-            "selected_provider_id": "minimax",
+            "selected_connection_id": audio_connection_id,
+            "selected_provider_id": audio_provider_id,
             "selected_model_id": AUDIO_NARRATION_MODEL_ID,
             "status": "ready" if audio_status == "ready" else "missing_provider",
             "selection_owner": "cloud_runtime_metadata",
@@ -438,8 +327,8 @@ def build_admin_ai_resource_projection(
             "profile_id": AUDIO_NARRATION_QUALITY_PROFILE_ID,
             "kind": "runtime_profile",
             "capability_id": "audio_generation",
-            "selected_connection_id": "minimax_audio",
-            "selected_provider_id": "minimax",
+            "selected_connection_id": audio_connection_id,
+            "selected_provider_id": audio_provider_id,
             "selected_model_id": AUDIO_NARRATION_QUALITY_MODEL_ID,
             "status": "ready" if audio_status == "ready" else "missing_provider",
             "selection_owner": "cloud_runtime_metadata",
@@ -456,9 +345,9 @@ def build_admin_ai_resource_projection(
             "kind": "pipeline_profile",
             "capability_id": "audio_generation",
             "selected_connection_id": (
-                f"{audio_summary_text_profile_id} + {audio_summary_audio_profile_id}"
+                f"{text_connection_id or audio_summary_text_profile_id} + {audio_connection_id or audio_summary_audio_profile_id}"
             ),
-            "selected_provider_id": "openai + minimax",
+            "selected_provider_id": f"{text_provider_id or 'text'} + {audio_provider_id or 'audio'}",
             "selected_model_id": (
                 f"{TEXT_PROFILE_MODEL_IDS[audio_summary_text_profile_id]} + "
                 f"{AUDIO_PROFILE_MODEL_IDS[audio_summary_audio_profile_id]}"
@@ -479,8 +368,8 @@ def build_admin_ai_resource_projection(
             "profile_id": GROK_IMAGINE_IMAGE_PROFILE_ID,
             "kind": "runtime_profile",
             "capability_id": "image_generation",
-            "selected_connection_id": "openai_compatible",
-            "selected_provider_id": "openai",
+            "selected_connection_id": image_generation_connection_id,
+            "selected_provider_id": image_generation_provider_id,
             "selected_model_id": GROK_IMAGINE_IMAGE_MODEL_ID,
             "status": "ready" if text_configured else "missing_provider",
             "selection_owner": "cloud_runtime_metadata",
@@ -492,7 +381,7 @@ def build_admin_ai_resource_projection(
             "profile_id": "embed.default",
             "kind": "runtime_profile",
             "capability_id": "embedding",
-            "selected_connection_id": f"embedding_{embedding_provider}",
+            "selected_connection_id": embedding_connection_id,
             "selected_provider_id": embedding_provider,
             "selected_model_id": embedding_model,
             "status": "ready"
@@ -523,10 +412,6 @@ def build_admin_ai_resource_projection(
         audio_narration_profile_id=audio_narration_profile_id,
     )
     provider_model_health = _build_provider_model_health(resolved_database_url)
-    env_migration = _build_env_migration_summary(
-        settings,
-        managed_connections,
-    )
 
     return {
         "surface": "admin_ai_resources",
@@ -542,7 +427,6 @@ def build_admin_ai_resource_projection(
             "content_exposed": False,
             "profiles": recent_runs,
         },
-        "env_migration": env_migration,
         "profile_preferences": {
             "env_path": str(settings.ai_resources_admin_env_path or ".env.local"),
             "requires_worker_restart_after_save": True,
@@ -607,45 +491,6 @@ def _audio_selected_for(
 
 def _dict(value: object) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
-
-
-def _provider_connections_from_config(
-    config: dict[str, Any],
-    *,
-    connection_prefix: str,
-    kind: str,
-    capability_ids: list[str],
-    runtime_profile_ids: list[str],
-    detail_href: str,
-) -> list[dict[str, Any]]:
-    providers = _dict(config.get("providers"))
-    connections: list[dict[str, Any]] = []
-    for provider_id, provider_value in sorted(providers.items()):
-        provider = _dict(provider_value)
-        configured = bool(provider.get("configured"))
-        enabled = bool(provider.get("enabled"))
-        connections.append(
-            {
-                "connection_id": f"{connection_prefix}_{provider_id}",
-                "provider_id": str(provider_id),
-                "display_name": str(provider.get("display_name") or provider_id),
-                "kind": kind,
-                "enabled": enabled,
-                "configured": configured,
-                "status": str(provider.get("status") or "missing_secret"),
-                "base_url": str(provider.get("base_url") or ""),
-                "secrets": {
-                    "secret": {
-                        "configured": configured,
-                        "display": "configured" if configured else "missing",
-                    }
-                },
-                "capability_ids": capability_ids,
-                "runtime_profile_ids": runtime_profile_ids,
-                "detail_href": detail_href,
-            }
-        )
-    return connections
 
 
 def _build_runtime_resolution(
@@ -1201,81 +1046,45 @@ def _percentile_index(count: int, percentile: int) -> int:
     return min(count - 1, max(0, ((count * percentile) + 99) // 100 - 1))
 
 
-def _build_env_migration_summary(
-    settings: Settings,
-    managed_connections: list[dict[str, Any]],
-) -> dict[str, Any]:
-    managed_ids = {str(item.get("provider_id") or "") for item in managed_connections}
-    sources = [
-        {
-            "connection_id": "openai_env",
-            "provider_id": "openai",
-            "label": "OpenAI-compatible",
-            "source": "env",
-            "configured": bool(str(settings.openai_api_key or "").strip()),
-            "managed_connection_present": "openai" in managed_ids,
-            "env_keys": [
-                "NPCINK_CLOUD_OPENAI_API_KEY",
-                "NPCINK_CLOUD_OPENAI_BASE_URL",
-                "NPCINK_CLOUD_OPENAI_PROVIDER_LABEL",
-            ],
-            "import_supported": True,
-        },
-        {
-            "connection_id": "minimax_env",
-            "provider_id": "minimax",
-            "label": "MiniMax",
-            "source": "env",
-            "configured": bool(str(settings.minimax_api_key or "").strip()),
-            "managed_connection_present": "minimax" in managed_ids,
-            "env_keys": [
-                "NPCINK_CLOUD_MINIMAX_API_KEY",
-                "NPCINK_CLOUD_MINIMAX_BASE_URL",
-                "NPCINK_CLOUD_MINIMAX_GROUP_ID",
-            ],
-            "import_supported": True,
-        },
-    ]
-    configured_env_sources = [
-        source for source in sources if bool(source.get("configured"))
-    ]
-    importable_sources = [
-        source
-        for source in configured_env_sources
-        if not bool(source.get("managed_connection_present"))
-    ]
-    return {
-        "surface": "admin_provider_connection_env_migration",
-        "env_path": str(settings.ai_resources_admin_env_path or ".env.local"),
-        "configured_env_source_count": len(configured_env_sources),
-        "importable_source_count": len(importable_sources),
-        "sources": sources,
-        "recommended_primary": "provider_connections",
-        "env_role": "fallback",
-        "secret_exposure": "presence_only",
-        "boundary": {
-            "owner": "cloud_runtime",
-            "direct_wordpress_write": False,
-            "not_a_control_plane": True,
-        },
-    }
+def _normalize_id_list(value: object) -> list[str]:
+    if isinstance(value, list):
+        raw_items = value
+    else:
+        raw_items = str(value or "").split(",")
+    normalized: list[str] = []
+    for item in raw_items:
+        text = str(item or "").strip()
+        if text and text not in normalized:
+            normalized.append(text)
+    return normalized
 
 
-def _has_configured_provider(providers: dict[str, Any]) -> bool:
-    return any(bool(_dict(provider).get("configured")) for provider in providers.values())
-
-
-def _configured_provider_ids(
-    config: dict[str, Any],
+def _first_connection_id_for_capability(
+    connections: list[dict[str, Any]],
+    capability_id: str,
     *,
-    connection_prefix: str,
-) -> list[str]:
-    providers = _dict(config.get("providers"))
-    return [
-        f"{connection_prefix}_{provider_id}"
-        for provider_id, provider in providers.items()
-        if bool(_dict(provider).get("configured"))
-    ]
+    fallback: str = "",
+) -> str:
+    for connection in connections:
+        if (
+            bool(connection.get("configured"))
+            and bool(connection.get("enabled", True))
+            and capability_id in _normalize_id_list(connection.get("capability_ids"))
+        ):
+            return str(connection.get("connection_id") or "")
+    return fallback
+
+
+def _provider_id_for_connection(
+    connections: list[dict[str, Any]],
+    connection_id: str,
+    *,
+    fallback: str = "",
+) -> str:
+    for connection in connections:
+        if str(connection.get("connection_id") or "") == connection_id:
+            return str(connection.get("provider_id") or "")
+    return fallback
 
 
 def _managed_provider_connections(
@@ -1354,17 +1163,6 @@ def _site_knowledge_embedding_configured(settings: Settings) -> bool:
             and str(settings.siliconflow_api_key or "").strip()
         )
     return False
-
-
-def _site_knowledge_embedding_base_url(settings: Settings) -> str:
-    provider = str(settings.site_knowledge_embedding_provider or "deterministic")
-    if provider == "tei":
-        return str(settings.tei_base_url or "")
-    if provider == "openai":
-        return str(settings.openai_base_url or "")
-    if provider == "siliconflow":
-        return str(settings.siliconflow_base_url or "")
-    return "local-deterministic"
 
 
 def _build_capability_matrix(

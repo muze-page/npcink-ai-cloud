@@ -22,6 +22,8 @@ type AdvancedEntry = {
   groupFallback: string;
 };
 
+type RelatedEntry = Omit<AdvancedEntry, 'groupKey' | 'groupFallback'>;
+
 const advancedEntries: AdvancedEntry[] = [
   {
     href: '/admin/plugin-observability',
@@ -90,50 +92,6 @@ const advancedEntries: AdvancedEntry[] = [
     groupFallback: 'Governance',
   },
   {
-    href: '/admin/web-search',
-    titleKey: 'admin.nav_web_search',
-    titleFallback: 'Web Search',
-    descKey: 'admin.advanced.web_search_desc',
-    descFallback: 'Web-search capability checks and service-plane configuration evidence.',
-    actionKey: 'admin.advanced.action_view_search_readiness',
-    actionFallback: 'View search readiness',
-    groupKey: 'admin.advanced.group_capabilities',
-    groupFallback: 'Capabilities',
-  },
-  {
-    href: '/admin/image-sources',
-    titleKey: 'admin.nav_image_sources',
-    titleFallback: 'Image Sources',
-    descKey: 'admin.advanced.image_sources_desc',
-    descFallback: 'Image-source capability checks and provider/source readiness.',
-    actionKey: 'admin.advanced.action_view_image_readiness',
-    actionFallback: 'View image readiness',
-    groupKey: 'admin.advanced.group_capabilities',
-    groupFallback: 'Capabilities',
-  },
-  {
-    href: '/admin/ai-resources',
-    titleKey: 'admin.nav_ai_resources',
-    titleFallback: 'AI Resources',
-    descKey: 'admin.advanced.ai_resources_desc',
-    descFallback: 'Central view of Cloud runtime provider connections, capabilities, and profile mapping.',
-    actionKey: 'admin.advanced.action_view_ai_resources',
-    actionFallback: 'View AI resources',
-    groupKey: 'admin.advanced.group_capabilities',
-    groupFallback: 'Capabilities',
-  },
-  {
-    href: '/admin/audio-providers',
-    titleKey: 'admin.nav_audio_providers',
-    titleFallback: 'Audio Providers',
-    descKey: 'admin.advanced.audio_providers_desc',
-    descFallback: 'Audio-generation provider keys and MiniMax runtime readiness.',
-    actionKey: 'admin.advanced.action_view_audio_readiness',
-    actionFallback: 'View audio providers',
-    groupKey: 'admin.advanced.group_capabilities',
-    groupFallback: 'Capabilities',
-  },
-  {
     href: '/admin/audio-workbench',
     titleKey: 'admin.nav_audio_workbench',
     titleFallback: 'Audio Workbench',
@@ -143,6 +101,19 @@ const advancedEntries: AdvancedEntry[] = [
     actionFallback: 'Open audio workbench',
     groupKey: 'admin.advanced.group_capabilities',
     groupFallback: 'Capabilities',
+  },
+];
+
+const relatedEntries: RelatedEntry[] = [
+  {
+    href: '/admin/ai-resources',
+    titleKey: 'admin.nav_ai_resources',
+    titleFallback: 'Provider Management',
+    descKey: 'admin.advanced.ai_resources_related_desc',
+    descFallback:
+      'Top-level model and capability supplier operations. Open it from here when provider configuration needs attention.',
+    actionKey: 'admin.advanced.action_open_ai_resources',
+    actionFallback: 'Open provider management',
   },
 ];
 
@@ -208,6 +179,34 @@ export default function AdminTroubleshootingPage() {
           </BackofficeSectionPanel>
         );
       })}
+
+      <BackofficeSectionPanel className="space-y-4">
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-gray-500 dark:text-gray-400">
+            {t('admin.advanced.related', {}, 'Related operations')}
+          </p>
+          <h2 className="mt-2 text-xl font-semibold text-gray-950 dark:text-white">
+            {t('admin.advanced.related_ai_operations', {}, 'AI operations')}
+          </h2>
+        </div>
+        <div className="grid gap-3 lg:grid-cols-2">
+          {relatedEntries.map((entry) => (
+            <BackofficeStackCard key={entry.href} className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+              <div>
+                <h3 className="text-base font-semibold text-slate-950 dark:text-white">
+                  {t(entry.titleKey, {}, entry.titleFallback)}
+                </h3>
+                <p className="mt-2 text-sm leading-6 text-slate-600 dark:text-slate-300">
+                  {t(entry.descKey, {}, entry.descFallback)}
+                </p>
+              </div>
+              <Link href={entry.href} className="btn btn-secondary shrink-0">
+                {t(entry.actionKey, {}, entry.actionFallback)}
+              </Link>
+            </BackofficeStackCard>
+          ))}
+        </div>
+      </BackofficeSectionPanel>
     </BackofficePageStack>
   );
 }

@@ -255,96 +255,26 @@ class EmptyAudioSummaryScriptProvider(FixedAudioSummaryScriptProvider):
         )
 
 
-def test_admin_web_search_provider_settings_are_masked_and_update_runtime(
+def test_admin_web_search_provider_env_settings_route_is_retired(
     tmp_path: Path,
 ) -> None:
-    env_path = tmp_path / ".env.local"
-    database_url, client = _build_client(
-        tmp_path,
-        settings_overrides={
-            "web_search_admin_env_path": str(env_path),
-        },
-    )
+    _, client = _build_client(tmp_path)
 
-    initial = client.get(
+    get_response = client.get(
         "/internal/service/admin/web-search-providers",
         headers=build_internal_headers(),
     )
-    assert initial.status_code == 200
-    assert initial.json()["data"]["providers"]["tavily"]["configured"] is False
-    assert initial.json()["data"]["workflow_metadata"]["workflow_id"] == (
-        "external_web_evidence_preflight"
-    )
-    assert initial.json()["data"]["workflow_metadata"]["direct_wordpress_write"] is False
-
-    response = client.post(
+    post_response = client.post(
         "/internal/service/admin/web-search-providers",
         headers=build_internal_headers(idempotency_key="web-search-provider-save"),
         json={
             "provider_mode": "auto",
-            "providers": {
-                "tavily": {
-                    "base_url": "https://api.tavily.com",
-                    "secret": "tvly-test-secret",
-                    "secret_pool": ["tvly-pool-a", "tvly-pool-b"],
-                    "secret_pool_labels": ["account-a", "account-b"],
-                    "timeout_seconds": 9,
-                    "cost": 0.001,
-                },
-                "bocha": {
-                    "base_url": "https://api.bochaai.com/v1",
-                    "secret": "bocha-test-secret",
-                    "timeout_seconds": 11,
-                    "cost": 0.002,
-                },
-                "jina_reader": {
-                    "enabled": True,
-                    "base_url": "https://r.jina.ai",
-                    "secret": "jina-test-secret",
-                    "timeout_seconds": 7,
-                    "max_pages": 3,
-                    "cost": 0.0003,
-                },
-                "apify": {
-                    "base_url": "https://api.apify.com/v2",
-                    "secret": "apify-test-token",
-                    "actor_id": "apify/google-search-scraper",
-                    "timeout_seconds": 30,
-                    "cost": 0.01,
-                },
-            },
+            "providers": {},
         },
     )
 
-    assert response.status_code == 200
-    data = response.json()["data"]
-    assert data["provider_mode"] == "auto"
-    assert data["providers"]["tavily"]["configured"] is True
-    assert data["providers"]["tavily"]["key_pool_count"] == 2
-    assert data["providers"]["tavily"]["key_pool_labels"] == ["account-a", "account-b"]
-    assert data["providers"]["bocha"]["configured"] is True
-    assert data["providers"]["jina_reader"]["enabled"] is True
-    assert data["workflow_metadata"]["workflow_version"] == ("web_search_evidence_workflow.v1")
-    assert "tvly-test-secret" not in json.dumps(data)
-    assert "tvly-pool-a" not in json.dumps(data)
-    assert "tvly-pool-b" not in json.dumps(data)
-    assert "bocha-test-secret" not in json.dumps(data)
-    assert "jina-test-secret" not in json.dumps(data)
-    assert "apify-test-token" not in json.dumps(data)
-    env_text = env_path.read_text(encoding="utf-8")
-    assert "NPCINK_CLOUD_WEB_SEARCH_PROVIDER=auto" in env_text
-    assert "NPCINK_CLOUD_WEB_SEARCH_TAVILY_API_KEY=tvly-test-secret" in env_text
-    assert "NPCINK_CLOUD_WEB_SEARCH_TAVILY_API_KEYS=tvly-pool-a,tvly-pool-b" in env_text
-    assert "NPCINK_CLOUD_WEB_SEARCH_TAVILY_API_KEY_LABELS=account-a,account-b" in env_text
-    assert "NPCINK_CLOUD_WEB_SEARCH_BOCHA_API_KEY=bocha-test-secret" in env_text
-    assert "NPCINK_CLOUD_WEB_SEARCH_JINA_READER_API_KEY=jina-test-secret" in env_text
-    assert "NPCINK_CLOUD_WEB_SEARCH_APIFY_API_TOKEN=apify-test-token" in env_text
-
-    services = client.app.state.services
-    assert services.settings.web_search_provider == "auto"
-    assert services.settings.web_search_tavily_api_keys == "tvly-pool-a,tvly-pool-b"
-    assert services.settings.web_search_tavily_api_key_labels == "account-a,account-b"
-    assert services.settings.web_search_bocha_api_key == "bocha-test-secret"
+    assert get_response.status_code == 404
+    assert post_response.status_code == 404
 
 
 def test_admin_agent_workflow_metadata_projection_is_read_only(tmp_path: Path) -> None:
@@ -372,230 +302,57 @@ def test_admin_agent_workflow_metadata_projection_is_read_only(tmp_path: Path) -
     assert unauthorized.status_code in (401, 403)
 
 
-def test_admin_image_source_provider_settings_are_masked_and_update_runtime(
+def test_admin_image_source_provider_env_settings_route_is_retired(
     tmp_path: Path,
 ) -> None:
-    env_path = tmp_path / ".env.local"
     _, client = _build_client(
         tmp_path,
         settings_overrides={
-            "image_source_admin_env_path": str(env_path),
             "image_source_provider": "disabled",
         },
     )
 
-    initial = client.get(
+    get_response = client.get(
         "/internal/service/admin/image-source-providers",
         headers=build_internal_headers(),
     )
-    assert initial.status_code == 200
-    assert initial.json()["data"]["providers"]["unsplash"]["configured"] is False
-
-    response = client.post(
+    post_response = client.post(
         "/internal/service/admin/image-source-providers",
         headers=build_internal_headers(idempotency_key="image-source-provider-save"),
         json={
             "provider_mode": "auto",
-            "providers": {
-                "unsplash": {
-                    "base_url": "https://api.unsplash.com",
-                    "secret": "unsplash-test-secret",
-                },
-                "pixabay": {
-                    "base_url": "https://pixabay.com/api/",
-                    "secret": "pixabay-test-secret",
-                },
-                "pexels": {
-                    "base_url": "https://api.pexels.com/v1",
-                    "secret": "pexels-test-secret",
-                },
-            },
-            "runtime": {
-                "timeout_seconds": 8,
-                "cost_per_query": 0.004,
-                "auto_strategy": "random",
-            },
+            "providers": {},
+            "runtime": {},
         },
     )
 
-    assert response.status_code == 200
-    data = response.json()["data"]
-    assert data["provider_mode"] == "auto"
-    assert data["auto_strategy"] == "random"
-    assert data["runtime"]["auto_strategy"] == "random"
-    assert data["providers"]["unsplash"]["configured"] is True
-    assert data["providers"]["pixabay"]["configured"] is True
-    assert data["providers"]["pexels"]["configured"] is True
-    assert data["boundary"]["final_writes"] == "core_proposal_required"
-    assert "unsplash-test-secret" not in json.dumps(data)
-    assert "pixabay-test-secret" not in json.dumps(data)
-    assert "pexels-test-secret" not in json.dumps(data)
-    env_text = env_path.read_text(encoding="utf-8")
-    assert "NPCINK_CLOUD_IMAGE_SOURCE_PROVIDER=auto" in env_text
-    assert "NPCINK_CLOUD_IMAGE_SOURCE_AUTO_STRATEGY=random" in env_text
-    assert "NPCINK_CLOUD_IMAGE_SOURCE_UNSPLASH_ACCESS_KEY=unsplash-test-secret" in env_text
-    assert "NPCINK_CLOUD_IMAGE_SOURCE_PIXABAY_API_KEY=pixabay-test-secret" in env_text
-    assert "NPCINK_CLOUD_IMAGE_SOURCE_PEXELS_API_KEY=pexels-test-secret" in env_text
-
-    services = client.app.state.services
-    assert services.settings.image_source_provider == "auto"
-    assert services.settings.image_source_auto_strategy == "random"
-    assert services.settings.image_source_pixabay_api_key == "pixabay-test-secret"
-    assert services.settings.image_source_timeout_seconds == 8
+    assert get_response.status_code == 404
+    assert post_response.status_code == 404
 
 
-def test_admin_audio_provider_settings_are_masked_and_update_runtime(
+def test_admin_audio_provider_env_settings_routes_are_retired(
     tmp_path: Path,
 ) -> None:
-    env_path = tmp_path / ".env.local"
-    _, client = _build_client(
-        tmp_path,
-        settings_overrides={
-            "minimax_admin_env_path": str(env_path),
-            "minimax_provider_enabled": False,
-            "minimax_api_key": "",
-            "minimax_group_id": "",
-        },
-    )
+    _, client = _build_client(tmp_path)
 
-    initial = client.get(
+    get_response = client.get(
         "/internal/service/admin/audio-providers",
         headers=build_internal_headers(),
     )
-    assert initial.status_code == 200
-    assert initial.json()["data"]["providers"]["minimax"]["configured"] is False
-    assert initial.json()["data"]["boundary"]["secret_exposure"] == "masked_status_only"
-
-    response = client.post(
+    post_response = client.post(
         "/internal/service/admin/audio-providers",
-        headers=build_internal_headers(idempotency_key="audio-provider-save"),
-        json={
-            "provider_mode": "minimax",
-            "providers": {
-                "minimax": {
-                    "enabled": True,
-                    "base_url": "https://api.minimaxi.com",
-                    "secret": "minimax-test-secret",
-                    "group_id": "minimax-test-group",
-                },
-            },
-            "runtime": {
-                "timeout_seconds": 12,
-                "default_voice_id": "male-qn-qingse",
-            },
-        },
+        headers=build_internal_headers(idempotency_key="audio-provider-save-retired"),
+        json={"provider_mode": "minimax"},
     )
-
-    assert response.status_code == 200
-    data = response.json()["data"]
-    assert data["provider_mode"] == "minimax"
-    assert data["providers"]["minimax"]["enabled"] is True
-    assert data["providers"]["minimax"]["configured"] is True
-    assert data["providers"]["minimax"]["api_key"]["configured"] is True
-    assert data["providers"]["minimax"]["group_id"]["configured"] is True
-    assert data["runtime"]["default_voice_id"] == "male-qn-qingse"
-    assert data["boundary"]["final_writes"] == "core_proposal_required"
-    assert "minimax-test-secret" not in json.dumps(data)
-    assert "minimax-test-group" not in json.dumps(data)
-    env_text = env_path.read_text(encoding="utf-8")
-    assert "NPCINK_CLOUD_MINIMAX_PROVIDER_ENABLED=true" in env_text
-    assert "NPCINK_CLOUD_MINIMAX_BASE_URL=https://api.minimaxi.com" in env_text
-    assert "NPCINK_CLOUD_MINIMAX_API_KEY=minimax-test-secret" in env_text
-    assert "NPCINK_CLOUD_MINIMAX_GROUP_ID=minimax-test-group" in env_text
-    assert "NPCINK_CLOUD_MINIMAX_TIMEOUT_SECONDS=12.0" in env_text
-    assert "NPCINK_CLOUD_MINIMAX_DEFAULT_VOICE_ID=male-qn-qingse" in env_text
-
-    services = client.app.state.services
-    assert services.settings.minimax_provider_enabled is True
-    assert services.settings.minimax_api_key == "minimax-test-secret"
-    assert services.settings.minimax_group_id == "minimax-test-group"
-    assert services.settings.minimax_timeout_seconds == 12
-
-
-def test_admin_audio_provider_test_requires_configured_minimax_key(
-    tmp_path: Path,
-) -> None:
-    _, client = _build_client(
-        tmp_path,
-        settings_overrides={
-            "minimax_provider_enabled": False,
-            "minimax_api_key": "",
-            "minimax_group_id": "",
-        },
-    )
-
-    response = client.post(
+    test_response = client.post(
         "/internal/service/admin/audio-providers/minimax/test",
-        headers=build_internal_headers(idempotency_key="audio-provider-test-missing"),
+        headers=build_internal_headers(idempotency_key="audio-provider-test-retired"),
         json={},
     )
 
-    assert response.status_code == 409
-    assert response.json()["error_code"] == "audio_provider.minimax_secret_missing"
-
-
-def test_admin_audio_provider_test_returns_candidate_artifact(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    _, client = _build_client(
-        tmp_path,
-        settings_overrides={
-            "minimax_provider_enabled": True,
-            "minimax_api_key": "minimax-test-secret",
-            "minimax_group_id": "",
-        },
-    )
-
-    def fake_test_minimax_connection(self: object) -> dict[str, object]:
-        return {
-            "provider_id": "minimax",
-            "status": "ok",
-            "generated_at": "2026-06-24T00:00:00+00:00",
-            "sample_text": "sample",
-            "model_id": "speech-2.8-turbo",
-            "profile_id": "audio.narration.default",
-            "default_voice_id": "male-qn-qingse",
-            "latency_ms": 123,
-            "artifact": {
-                "artifact_type": "audio_generation_candidates",
-                "provider": "minimax",
-                "provider_response_format": "url",
-                "direct_wordpress_write": False,
-                "usage": {"characters": 6, "duration_ms": 1200, "trace_id": "trace-test"},
-                "audios": [
-                    {
-                        "url": "https://example.test/audio/sample.mp3",
-                        "mime_type": "audio/mpeg",
-                        "duration_seconds": 1.2,
-                    }
-                ],
-            },
-            "boundary": {
-                "owner": "cloud_runtime",
-                "direct_wordpress_write": False,
-                "final_writes": "core_proposal_required",
-            },
-        }
-
-    monkeypatch.setattr(
-        "app.domain.audio_generation.admin_config.AudioProviderAdminConfigService.test_minimax_connection",
-        fake_test_minimax_connection,
-    )
-
-    response = client.post(
-        "/internal/service/admin/audio-providers/minimax/test",
-        headers=build_internal_headers(idempotency_key="audio-provider-test-ok"),
-        json={},
-    )
-
-    assert response.status_code == 200
-    data = response.json()["data"]
-    assert data["provider_id"] == "minimax"
-    assert data["artifact"]["artifact_type"] == "audio_generation_candidates"
-    assert data["artifact"]["direct_wordpress_write"] is False
-    assert data["boundary"]["final_writes"] == "core_proposal_required"
-    assert "minimax-test-secret" not in json.dumps(data)
+    assert get_response.status_code == 404
+    assert post_response.status_code == 404
+    assert test_response.status_code == 404
 
 
 def test_admin_ai_resources_projects_connections_capabilities_and_profiles(
@@ -624,7 +381,9 @@ def test_admin_ai_resources_projects_connections_capabilities_and_profiles(
     capability_ids = {item["capability_id"] for item in data["capabilities"]}
     matrix_ids = {item["capability_id"] for item in data["capability_matrix"]}
     profile_ids = {item["profile_id"] for item in data["runtime_profiles"]}
-    assert {"openai_compatible", "minimax_audio"}.issubset(connection_ids)
+    assert "web_search_tavily" not in connection_ids
+    assert "image_source_unsplash" not in connection_ids
+    assert "embedding_deterministic" not in connection_ids
     assert {"text_generation", "audio_generation", "image_generation", "embedding"}.issubset(
         capability_ids
     )
@@ -733,8 +492,202 @@ def test_admin_provider_connections_store_encrypted_credentials_and_project_to_a
     assert "openai_primary" in capabilities["text_generation"]["connection_ids"]
     assert "openai_primary" in capabilities["image_generation"]["connection_ids"]
     assert projection["runtime_resolution"]
-    assert projection["env_migration"]["secret_exposure"] == "presence_only"
+    assert "env_migration" not in projection
     assert "provider-connection-test-secret" not in json.dumps(projection)
+
+
+def test_admin_provider_connection_catalog_preview_fetches_models_without_persisting(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database_url, client = _build_client(tmp_path)
+
+    def fake_fetch_catalog(self: object) -> ProviderCatalogSnapshot:
+        return ProviderCatalogSnapshot(
+            provider_id="mqzj",
+            display_name="MQZJ",
+            adapter_type="openai",
+            models=[
+                CatalogModelSeed(
+                    model_id="gpt-5.5",
+                    family="gpt-5.5",
+                    feature="text",
+                    status="available",
+                    instances=[
+                        CatalogInstanceSeed(
+                            instance_id="mqzj-gpt55",
+                            endpoint_variant="chat_completions",
+                            region="test",
+                        )
+                    ],
+                ),
+                CatalogModelSeed(
+                    model_id="gpt-4o-mini",
+                    family="gpt-4o",
+                    feature="text",
+                    status="available",
+                    instances=[],
+                ),
+            ],
+        )
+
+    monkeypatch.setattr(
+        "app.adapters.providers.openai.OpenAIProviderAdapter.fetch_catalog",
+        fake_fetch_catalog,
+    )
+
+    response = client.post(
+        "/internal/service/admin/provider-connections/preview-catalog",
+        headers=build_internal_headers(idempotency_key="provider-connection-preview-catalog"),
+        json={
+            "connection_id": "mqzj_preview",
+            "provider_id": "mqzj",
+            "provider_type": "openai_compatible",
+            "kind": "openai_compatible",
+            "display_name": "MQZJ",
+            "enabled": True,
+            "base_url": "https://api.mqzj.top/v1",
+            "capability_ids": ["text_generation"],
+            "runtime_profile_ids": [TEXT_AI_PROFILE_ID],
+            "credential": "preview-secret-value",
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    data = response.json()["data"]
+    assert data["surface"] == "admin_provider_connection_catalog_preview"
+    assert data["model_count"] == 2
+    assert data["model_ids"] == ["gpt-5.5", "gpt-4o-mini"]
+    assert data["credential_value_exposure"] == "none"
+    assert data["boundary"]["secret_exposure"] == "masked_status_only"
+    assert "preview-secret-value" not in json.dumps(response.json())
+    with get_session(database_url) as session:
+        assert session.get(ProviderConnection, "mqzj_preview") is None
+
+
+def test_admin_provider_connection_catalog_preview_uses_saved_secret_without_exposing_it(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database_url, client = _build_client(tmp_path)
+    create_response = client.post(
+        "/internal/service/admin/provider-connections",
+        headers=build_internal_headers(idempotency_key="provider-connection-preview-saved-create"),
+        json={
+            "connection_id": "mqzj_saved",
+            "provider_id": "mqzj",
+            "provider_type": "openai_compatible",
+            "kind": "openai_compatible",
+            "display_name": "MQZJ",
+            "enabled": True,
+            "base_url": "https://api.mqzj.top/v1",
+            "capability_ids": ["text_generation"],
+            "runtime_profile_ids": [TEXT_AI_PROFILE_ID],
+            "credential": "saved-preview-secret",
+        },
+    )
+    assert create_response.status_code == 200, create_response.text
+
+    def fake_fetch_catalog(self: object) -> ProviderCatalogSnapshot:
+        return ProviderCatalogSnapshot(
+            provider_id="mqzj",
+            display_name="MQZJ",
+            adapter_type="openai",
+            models=[
+                CatalogModelSeed(
+                    model_id="gpt-5.5",
+                    family="gpt-5.5",
+                    feature="text",
+                    status="available",
+                    instances=[],
+                )
+            ],
+        )
+
+    monkeypatch.setattr(
+        "app.adapters.providers.openai.OpenAIProviderAdapter.fetch_catalog",
+        fake_fetch_catalog,
+    )
+
+    response = client.post(
+        "/internal/service/admin/provider-connections/preview-catalog",
+        headers=build_internal_headers(idempotency_key="provider-connection-preview-saved"),
+        json={
+            "connection_id": "mqzj_saved",
+            "provider_id": "mqzj",
+            "provider_type": "openai_compatible",
+            "kind": "openai_compatible",
+            "display_name": "MQZJ",
+            "enabled": True,
+            "base_url": "https://api.mqzj.top/v1",
+            "capability_ids": ["text_generation"],
+            "runtime_profile_ids": [TEXT_AI_PROFILE_ID],
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    data = response.json()["data"]
+    assert data["model_ids"] == ["gpt-5.5"]
+    assert "saved-preview-secret" not in json.dumps(response.json())
+    with get_session(database_url) as session:
+        assert session.get(ProviderConnection, "mqzj_saved") is not None
+
+
+def test_admin_ai_resources_lists_only_added_capability_provider_connections(
+    tmp_path: Path,
+) -> None:
+    _, client = _build_client(tmp_path)
+
+    initial_response = client.get(
+        "/internal/service/admin/ai-resources",
+        headers=build_internal_headers(),
+    )
+    assert initial_response.status_code == 200, initial_response.text
+    initial_connections = {
+        item["connection_id"]: item
+        for item in initial_response.json()["data"]["connections"]
+    }
+    assert "search_apify" not in initial_connections
+    assert "web_search_tavily" not in initial_connections
+
+    create_response = client.post(
+        "/internal/service/admin/provider-connections",
+        headers=build_internal_headers(idempotency_key="provider-connection-apify-save"),
+        json={
+            "connection_id": "search_apify",
+            "provider_id": "apify",
+            "provider_type": "web_search_provider",
+            "kind": "web_search_provider",
+            "display_name": "Apify",
+            "enabled": True,
+            "base_url": "https://api.apify.com/v2",
+            "capability_ids": ["web_search"],
+            "runtime_profile_ids": ["web-search.managed"],
+            "credential": "apify-provider-secret",
+        },
+    )
+    assert create_response.status_code == 200, create_response.text
+
+    projection_response = client.get(
+        "/internal/service/admin/ai-resources",
+        headers=build_internal_headers(),
+    )
+    assert projection_response.status_code == 200, projection_response.text
+    projection = projection_response.json()["data"]
+    connections = {item["connection_id"]: item for item in projection["connections"]}
+    web_search_connections = [
+        item
+        for item in projection["connections"]
+        if item.get("kind") == "web_search_provider"
+    ]
+
+    assert list(connections.keys()).count("search_apify") == 1
+    assert connections["search_apify"]["provider_id"] == "apify"
+    assert connections["search_apify"]["status"] == "ready"
+    assert [item["connection_id"] for item in web_search_connections] == ["search_apify"]
+    capabilities = {item["capability_id"]: item for item in projection["capabilities"]}
+    assert capabilities["web_search"]["connection_ids"] == ["search_apify"]
+    assert "apify-provider-secret" not in json.dumps(projection)
 
 
 def test_admin_provider_connection_test_updates_masked_diagnostics(
@@ -850,7 +803,7 @@ def test_admin_provider_connection_test_reports_missing_secret_without_leaking(
         )
 
 
-def test_admin_provider_connections_import_env_values_as_masked_connections(
+def test_admin_provider_connections_env_import_route_is_retired(
     tmp_path: Path,
 ) -> None:
     _, client = _build_client(
@@ -869,29 +822,14 @@ def test_admin_provider_connections_import_env_values_as_masked_connections(
         headers=build_internal_headers(idempotency_key="provider-connection-import-env"),
     )
 
-    assert response.status_code == 200, response.text
-    data = response.json()["data"]
-    imported_ids = {item["connection_id"] for item in data["imported"]}
-    assert {"openai_env", "minimax_env"}.issubset(imported_ids)
-    serialized = json.dumps(response.json())
-    assert "openai-env-secret" not in serialized
-    assert "minimax-env-secret" not in serialized
-    assert "minimax-env-group" not in serialized
+    assert response.status_code in {404, 405}, response.text
     with get_session(_sqlite_url(tmp_path)) as session:
         audit_event = session.scalar(
             select(ServiceAuditEvent)
             .where(ServiceAuditEvent.event_kind == "provider_connection.import_env")
             .order_by(ServiceAuditEvent.id.desc())
         )
-        assert audit_event is not None
-        assert audit_event.outcome == "succeeded"
-        assert audit_event.scope_id == "env_import"
-        audit_payload = audit_event.payload_json or {}
-        assert {"openai_env", "minimax_env"}.issubset(
-            set(audit_payload["result"]["imported_connection_ids"])
-        )
-        assert "openai-env-secret" not in json.dumps(audit_payload)
-        assert "minimax-env-secret" not in json.dumps(audit_payload)
+        assert audit_event is None
 
     projection_response = client.get(
         "/internal/service/admin/ai-resources",
@@ -899,8 +837,9 @@ def test_admin_provider_connections_import_env_values_as_masked_connections(
     )
     assert projection_response.status_code == 200, projection_response.text
     projection = projection_response.json()["data"]
-    assert projection["env_migration"]["configured_env_source_count"] >= 2
-    assert projection["env_migration"]["recommended_primary"] == "provider_connections"
+    assert "env_migration" not in projection
+    assert "openai-env-secret" not in json.dumps(projection)
+    assert "minimax-env-secret" not in json.dumps(projection)
 
 
 def test_admin_provider_connections_can_be_deleted(

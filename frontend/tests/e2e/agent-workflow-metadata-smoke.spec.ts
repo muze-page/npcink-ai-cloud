@@ -191,7 +191,7 @@ test('admin agent and workflow metadata panels render from Cloud registry respon
   await expect(page.getByText('write blocked', { exact: true })).toBeVisible();
   await expect(page.getByText(/Cloud Workflow Truth/i)).toBeVisible();
 
-  await page.goto('/admin/web-search');
+  await page.goto('/admin/ai-resources?view=connections&supplier=capability');
   await expect(page.getByText('Workflow metadata')).toBeVisible();
   await expect(page.getByText('external_web_evidence_preflight')).toBeVisible();
   await expect(page.getByText('step_offload')).toBeVisible();

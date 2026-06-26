@@ -128,10 +128,13 @@ Fix applied during the local alpha check:
 - A focused WordPress contract check was added to prevent signing with the
   stored secret hash.
 
-Still open:
+Historical note:
 
-- `NPCINK_CLOUD_OPENAI_BASE_URL` points at `https://api.deepseek.com/v1`.
-- `NPCINK_CLOUD_OPENAI_API_KEY` is configured locally.
+- Earlier local alpha checks used `NPCINK_CLOUD_OPENAI_BASE_URL` and
+  `NPCINK_CLOUD_OPENAI_API_KEY` for a DeepSeek OpenAI-compatible provider.
+- As of 2026-06-26, OpenAI-compatible runtime providers are configured through
+  `/admin/ai-resources` DB provider connections instead of `.env.local`
+  provider keys.
 - The deterministic test entrypoints explicitly clear local OpenAI-compatible
   provider API key variables during pytest runs. Real provider verification is
   kept in manual smoke steps, not in the default baseline suite.

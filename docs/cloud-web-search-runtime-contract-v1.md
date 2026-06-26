@@ -49,59 +49,37 @@ does not change runtime routing or create a Cloud workflow truth.
 
 ## Cloud-Managed Providers
 
-MVP provider support is Cloud-owned and configured only by Cloud operators:
+MVP provider support is Cloud-owned and configured by Cloud operators through
+`/admin/ai-resources` using DB-managed provider connections. Search providers
+use `kind=web_search_provider`; URL reader enhancement uses the same provider
+connection path.
 
-- `NPCINK_CLOUD_WEB_SEARCH_PROVIDER`: `disabled`, `auto`, `tavily`, `bocha`,
-  `apify`, or `zhihu`
-- `NPCINK_CLOUD_WEB_SEARCH_TAVILY_BASE_URL`: default `https://api.tavily.com`
-- `NPCINK_CLOUD_WEB_SEARCH_TAVILY_API_KEY`: required when provider is `tavily`
-  unless `NPCINK_CLOUD_WEB_SEARCH_TAVILY_API_KEYS` is configured
-- `NPCINK_CLOUD_WEB_SEARCH_TAVILY_API_KEYS`: optional Cloud-operator key pool.
-  Values may be comma-, semicolon-, whitespace-, or newline-separated. Cloud
-  rotates keys in memory with round-robin selection and temporarily skips keys
-  that return auth, rate-limit, timeout, network, or provider-unavailable
-  failures. WordPress users never submit these keys through runtime requests.
-- `NPCINK_CLOUD_WEB_SEARCH_TAVILY_API_KEY_LABELS`: optional Cloud-operator
-  labels for the Tavily key pool, aligned to `TAVILY_API_KEYS` order. Values may
-  be comma-, semicolon-, or newline-separated. Labels are operational metadata;
-  do not put provider secrets in labels.
-- `NPCINK_CLOUD_WEB_SEARCH_TAVILY_TIMEOUT_SECONDS`: default `15`
-- `NPCINK_CLOUD_WEB_SEARCH_TAVILY_COST_PER_QUERY`: optional shadow cost for
-  provider-call usage records
-- `NPCINK_CLOUD_WEB_SEARCH_BOCHA_BASE_URL`: default
-  `https://api.bochaai.com/v1`
-- `NPCINK_CLOUD_WEB_SEARCH_BOCHA_API_KEY`: required when provider is `bocha`
-- `NPCINK_CLOUD_WEB_SEARCH_BOCHA_TIMEOUT_SECONDS`: default `15`
-- `NPCINK_CLOUD_WEB_SEARCH_BOCHA_COST_PER_QUERY`: optional shadow cost
-- `NPCINK_CLOUD_WEB_SEARCH_APIFY_BASE_URL`: default `https://api.apify.com/v2`
-- `NPCINK_CLOUD_WEB_SEARCH_APIFY_API_TOKEN`: required when provider is `apify`
-- `NPCINK_CLOUD_WEB_SEARCH_APIFY_ACTOR_ID`: default
-  `apify/google-search-scraper`
-- `NPCINK_CLOUD_WEB_SEARCH_APIFY_TIMEOUT_SECONDS`: default `30`
-- `NPCINK_CLOUD_WEB_SEARCH_APIFY_COST_PER_QUERY`: optional shadow cost
-- `NPCINK_CLOUD_WEB_SEARCH_ZHIHU_BASE_URL`: default
-  `https://developer.zhihu.com`
-- `NPCINK_CLOUD_WEB_SEARCH_ZHIHU_ACCESS_SECRET`: required when provider is
-  `zhihu`; this is Cloud-operator configuration only and must not be supplied by
-  WordPress runtime requests
-- `NPCINK_CLOUD_WEB_SEARCH_ZHIHU_TIMEOUT_SECONDS`: default `15`
-- `NPCINK_CLOUD_WEB_SEARCH_ZHIHU_COST_PER_QUERY`: optional shadow cost
-- `NPCINK_CLOUD_WEB_SEARCH_ZHIHU_HOT_LIST_CACHE_TTL_SECONDS`: default `3600`.
-  Cloud may cache Zhihu hot-list responses server-side so WordPress clients read
-  a bounded topic pool without spending provider quota on every panel open.
-- `NPCINK_CLOUD_WEB_SEARCH_JINA_READER_ENABLED`: enables selected URL reader
-  enhancement after Tavily, Bocha, or Apify returns result URLs
-- `NPCINK_CLOUD_WEB_SEARCH_JINA_READER_BASE_URL`: default `https://r.jina.ai`
-- `NPCINK_CLOUD_WEB_SEARCH_JINA_READER_API_KEY`: optional/required depending on
-  the Cloud operator's Jina Reader account policy
-- `NPCINK_CLOUD_WEB_SEARCH_JINA_READER_MAX_PAGES`: default `2`, capped at `5`
-- `NPCINK_CLOUD_WEB_SEARCH_ADMIN_ENV_PATH`: local operator settings file path
-  for the Cloud admin provider settings page
+Supported built-in provider IDs:
 
-The Cloud admin page `/admin/web-search` may update these runtime settings. It
-must not expose plaintext secrets after save. Saving updates the current API
-process settings and writes the configured env file; queue workers should be
-restarted after provider changes so queued runs see the same configuration.
+- `tavily`
+- `bocha`
+- `apify`
+- `jina_reader`
+- `zhihu`
+
+Provider credentials must be stored as provider connection secrets. Runtime
+requests must never carry provider API keys. Secrets are encrypted at rest and
+returned to admin browsers only as masked configured/missing status.
+
+The retired `/admin/web-search` page and
+`/internal/service/admin/web-search-providers` env-writer API are not the
+operator path anymore. New changes should use the provider connection CRUD
+surface instead:
+
+- `GET /internal/service/admin/provider-connections`
+- `POST /internal/service/admin/provider-connections`
+- `PATCH /internal/service/admin/provider-connections/{connection_id}`
+- `DELETE /internal/service/admin/provider-connections/{connection_id}`
+- `POST /internal/service/admin/provider-connections/{connection_id}/test`
+
+The runtime may still project DB provider connections onto legacy in-process
+settings fields while the search adapters are being simplified. That bridge is
+an implementation detail, not a supported env configuration surface.
 
 The WordPress-side search key path is intentionally removed from Toolbox. The
 default customer path uses Cloud-managed search.

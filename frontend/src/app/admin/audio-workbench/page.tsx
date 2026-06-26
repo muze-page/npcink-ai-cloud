@@ -210,7 +210,7 @@ function actionLabel(action: string): string {
     action === 'check_text_provider' ||
     action === 'configure_text_profile'
   ) {
-    return 'Open AI resources';
+    return 'Open provider management';
   }
   if (action === 'retry_or_use_narration') {
     return 'Retry summary';
@@ -297,14 +297,14 @@ function AudioWorkbenchContent() {
         const response = await fetch('/api/admin/ai-resources', { credentials: 'include' });
         const payload = await response.json().catch(() => ({}));
         if (!response.ok) {
-          throw new Error(buildFailureNotice(payload, 'Failed to load AI resources.').message);
+          throw new Error(buildFailureNotice(payload, 'Failed to load provider management.').message);
         }
         if (mounted) {
           setResources(payload.data as AiResources);
         }
       } catch (loadError) {
         if (mounted) {
-          setResourceError(loadError instanceof Error ? loadError.message : 'Failed to load AI resources.');
+          setResourceError(loadError instanceof Error ? loadError.message : 'Failed to load provider management.');
         }
       }
     }
@@ -529,7 +529,7 @@ function AudioWorkbenchContent() {
                   ) : null}
                 </div>
                 <Link href="/admin/ai-resources" className="btn btn-secondary shrink-0">
-                  AI resources
+                  Provider management
                 </Link>
               </div>
             </div>

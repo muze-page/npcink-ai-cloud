@@ -12,7 +12,7 @@ def _cloud_root() -> Path:
     return Path(__file__).resolve().parents[2]
 
 
-def test_prod_env_files_use_canonical_admin_and_openai_names() -> None:
+def test_prod_env_files_use_canonical_admin_names_and_do_not_expose_ai_provider_env() -> None:
     cloud_root = _cloud_root()
     compose_text = (cloud_root / "docker-compose.prod.yml").read_text()
     env_example_text = (cloud_root / ".env.example").read_text()
@@ -29,7 +29,6 @@ def test_prod_env_files_use_canonical_admin_and_openai_names() -> None:
             "NPCINK_CLOUD_PROVIDER_HEALTH_SCAN_INTERVAL_SECONDS" in text or text is checklist_text
         )
         assert "NPCINK_CLOUD_OTEL_TRACE_SINK_OTLP_ENDPOINT" in text or text is checklist_text
-        assert "NPCINK_CLOUD_OPENAI_BASE_URL" in text or text is checklist_text
 
     assert "callback-worker:" in compose_text
     assert "otel-collector:" in compose_text
@@ -42,6 +41,17 @@ def test_prod_env_files_use_canonical_admin_and_openai_names() -> None:
     assert "NPCINK_CLOUD_OPENAI_COMPATIBLE_" not in compose_text
     assert "NPCINK_CLOUD_OPENAI_COMPATIBLE_" not in env_example_text
     assert "NPCINK_CLOUD_OPENAI_COMPATIBLE_" not in readme_text
+    assert "NPCINK_CLOUD_OPENAI_API_KEY=" not in env_example_text
+    assert "NPCINK_CLOUD_OPENAI_BASE_URL=" not in env_example_text
+    assert "NPCINK_CLOUD_MINIMAX_API_KEY=" not in env_example_text
+    assert "NPCINK_CLOUD_MINIMAX_BASE_URL=" not in env_example_text
+    assert "NPCINK_CLOUD_ANTHROPIC_API_KEY=" not in env_example_text
+    assert "NPCINK_CLOUD_LITELLM_API_KEY=" not in env_example_text
+    assert "NPCINK_CLOUD_VLLM_API_KEY=" not in env_example_text
+    assert "NPCINK_CLOUD_TEI_API_KEY=" not in env_example_text
+    assert "NPCINK_CLOUD_OPENROUTER_API_KEY=" not in env_example_text
+    assert "NPCINK_CLOUD_SILICONFLOW_API_KEY=" not in env_example_text
+    assert "AI provider channels are managed in Cloud runtime storage" in env_example_text
     assert "NPCINK_CLOUD_FEATURE_FLAGS_JSON" in env_example_text
     assert "NPCINK_CLOUD_FEATURE_FLAGS_JSON" in readme_text
 
@@ -92,7 +102,7 @@ def test_env_example_production_payload_validates_with_canonical_names(
     assert settings.openai_base_url == "https://api.openai.com/v1"
 
 
-def test_settings_accept_legacy_admin_and_openai_env_aliases(monkeypatch) -> None:
+def test_settings_accept_legacy_admin_aliases_without_requiring_openai_env(monkeypatch) -> None:
     monkeypatch.setenv("NPCINK_CLOUD_ENVIRONMENT", "production")
     monkeypatch.setenv("NPCINK_CLOUD_DATABASE_URL", "sqlite+pysqlite:///:memory:")
     monkeypatch.setenv("NPCINK_CLOUD_REDIS_URL", "redis://localhost:6379/0")
@@ -104,14 +114,12 @@ def test_settings_accept_legacy_admin_and_openai_env_aliases(monkeypatch) -> Non
     monkeypatch.setenv("NPCINK_CLOUD_PORTAL_PUBLIC_BASE_URL", "https://cloud.example.com")
     monkeypatch.setenv("NPCINK_CLOUD_PORTAL_EMAIL_SMTP_HOST", "smtp.example.com")
     monkeypatch.setenv("NPCINK_CLOUD_PORTAL_EMAIL_FROM_EMAIL", "noreply@example.com")
-    monkeypatch.setenv("NPCINK_CLOUD_OPENAI_API_KEY", "sk-current")
-    monkeypatch.setenv("NPCINK_CLOUD_OPENAI_BASE_URL", "https://current.example.com/v1")
 
     settings = Settings(_env_file=None)
 
     assert settings.admin_session_secret == "a" * 32
-    assert settings.openai_api_key == "sk-current"
-    assert settings.openai_base_url == "https://current.example.com/v1"
+    assert settings.openai_api_key in {None, ""}
+    assert settings.openai_base_url == "https://api.openai.com/v1"
 
 
 def test_preview_and_baseline_scripts_lock_migration_and_schema_checks() -> None:

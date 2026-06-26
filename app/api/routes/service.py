@@ -7,7 +7,6 @@ from fastapi import APIRouter, BackgroundTasks, Query, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
-from app.adapters.providers.base import ProviderExecutionError
 from app.adapters.providers.registry import resolve_live_provider_adapters
 from app.adapters.repositories.catalog_repository import CatalogRepository
 from app.api.auth import authorize_internal_request, get_cloud_services
@@ -18,13 +17,8 @@ from app.domain.advisor.service import InternalAIAdvisorService
 from app.domain.agent_feedback.service import AgentFeedbackService
 from app.domain.agent_workflow_metadata import (
     MEDIA_DERIVATIVE_WORKFLOW_ID,
-    WEB_SEARCH_EVIDENCE_WORKFLOW_ID,
     get_agent_workflow_metadata_projection,
     get_workflow_metadata,
-)
-from app.domain.audio_generation.admin_config import (
-    AudioProviderAdminConfigError,
-    AudioProviderAdminConfigService,
 )
 from app.domain.audio_generation.workbench import (
     AudioWorkbenchError,
@@ -34,7 +28,6 @@ from app.domain.catalog.service import CatalogService
 from app.domain.commercial.errors import CommercialServiceError
 from app.domain.commercial.service import CommercialService, ServiceAuditContext
 from app.domain.hosted_model_defaults import FREE_GPT55_MODEL_ID
-from app.domain.image_sources.admin_config import ImageSourceAdminConfigService
 from app.domain.image_sources.metrics import ImageSourceMetricsService
 from app.domain.media_derivatives.metrics import MediaDerivativeObservabilityService
 from app.domain.observability.plugin_events import PluginObservabilityService
@@ -55,7 +48,6 @@ from app.domain.runtime.models import (
 from app.domain.runtime.service import RuntimeRunNotFoundError, RuntimeService
 from app.domain.site_knowledge.metrics import SiteKnowledgeObservabilityService
 from app.domain.usage.rollup import UsageRollupService
-from app.domain.web_search.admin_config import WebSearchAdminConfigService
 from app.domain.wordpress_ai_connector.routing_profiles import (
     WP_AI_CONNECTOR_PROFILE_SPECS,
     WP_AI_CONNECTOR_PROFILE_SPECS_BY_ID,
@@ -231,23 +223,6 @@ class PluginAttentionStatePayload(BaseModel):
     error_code: str = Field(default="", max_length=128)
     mute_hours: int = Field(default=24, ge=1, le=720)
     note: str = Field(default="", max_length=512)
-
-
-class WebSearchProviderSettingsPayload(BaseModel):
-    provider_mode: str = Field(default="disabled", max_length=32)
-    providers: dict[str, Any] = Field(default_factory=dict)
-
-
-class ImageSourceProviderSettingsPayload(BaseModel):
-    provider_mode: str = Field(default="disabled", max_length=32)
-    providers: dict[str, Any] = Field(default_factory=dict)
-    runtime: dict[str, Any] = Field(default_factory=dict)
-
-
-class AudioProviderSettingsPayload(BaseModel):
-    provider_mode: str = Field(default="disabled", max_length=32)
-    providers: dict[str, Any] = Field(default_factory=dict)
-    runtime: dict[str, Any] = Field(default_factory=dict)
 
 
 class AudioWorkbenchCreatePayload(BaseModel):
@@ -2795,22 +2770,6 @@ async def get_admin_agent_feedback(
     )
 
 
-@router.get("/admin/web-search-providers")
-async def get_admin_web_search_providers(request: Request) -> Any:
-    auth = await authorize_internal_request(request, require_idempotency=False)
-    if auth is not None:
-        return auth
-    services = get_cloud_services(request)
-    result = WebSearchAdminConfigService(services.settings).get_config()
-    result["workflow_metadata"] = get_workflow_metadata(WEB_SEARCH_EVIDENCE_WORKFLOW_ID)
-    return build_envelope(
-        status="ok",
-        message="web search provider settings loaded",
-        data=result,
-        revision="m6",
-    )
-
-
 @router.get("/admin/agent-workflow-metadata")
 async def get_admin_agent_workflow_metadata(request: Request) -> Any:
     auth = await authorize_internal_request(request, require_idempotency=False)
@@ -2820,131 +2779,6 @@ async def get_admin_agent_workflow_metadata(request: Request) -> Any:
         status="ok",
         message="agent workflow metadata projection loaded",
         data=get_agent_workflow_metadata_projection(),
-        revision="m6",
-    )
-
-
-@router.post("/admin/web-search-providers")
-async def update_admin_web_search_providers(
-    request: Request,
-    payload: WebSearchProviderSettingsPayload,
-) -> Any:
-    auth = await authorize_internal_request(request, require_idempotency=True)
-    if auth is not None:
-        return auth
-    services = get_cloud_services(request)
-    result = WebSearchAdminConfigService(services.settings).save_config(
-        payload.model_dump(mode="json")
-    )
-    result["workflow_metadata"] = get_workflow_metadata(WEB_SEARCH_EVIDENCE_WORKFLOW_ID)
-    return build_envelope(
-        status="ok",
-        message="web search provider settings saved",
-        data=result,
-        revision="m6",
-    )
-
-
-@router.get("/admin/image-source-providers")
-async def get_admin_image_source_providers(request: Request) -> Any:
-    auth = await authorize_internal_request(request, require_idempotency=False)
-    if auth is not None:
-        return auth
-    services = get_cloud_services(request)
-    return build_envelope(
-        status="ok",
-        message="image source provider settings loaded",
-        data=ImageSourceAdminConfigService(services.settings).get_config(),
-        revision="m6",
-    )
-
-
-@router.post("/admin/image-source-providers")
-async def update_admin_image_source_providers(
-    request: Request,
-    payload: ImageSourceProviderSettingsPayload,
-) -> Any:
-    auth = await authorize_internal_request(request, require_idempotency=True)
-    if auth is not None:
-        return auth
-    services = get_cloud_services(request)
-    result = ImageSourceAdminConfigService(services.settings).save_config(
-        payload.model_dump(mode="json")
-    )
-    return build_envelope(
-        status="ok",
-        message="image source provider settings saved",
-        data=result,
-        revision="m6",
-    )
-
-
-@router.get("/admin/audio-providers")
-async def get_admin_audio_providers(request: Request) -> Any:
-    auth = await authorize_internal_request(request, require_idempotency=False)
-    if auth is not None:
-        return auth
-    services = get_cloud_services(request)
-    return build_envelope(
-        status="ok",
-        message="audio provider settings loaded",
-        data=AudioProviderAdminConfigService(services.settings).get_config(),
-        revision="m6",
-    )
-
-
-@router.post("/admin/audio-providers")
-async def update_admin_audio_providers(
-    request: Request,
-    payload: AudioProviderSettingsPayload,
-) -> Any:
-    auth = await authorize_internal_request(request, require_idempotency=True)
-    if auth is not None:
-        return auth
-    services = get_cloud_services(request)
-    result = AudioProviderAdminConfigService(services.settings).save_config(
-        payload.model_dump(mode="json")
-    )
-    return build_envelope(
-        status="ok",
-        message="audio provider settings saved",
-        data=result,
-        revision="m6",
-    )
-
-
-@router.post("/admin/audio-providers/minimax/test")
-async def test_admin_audio_provider_minimax(request: Request) -> Any:
-    auth = await authorize_internal_request(request, require_idempotency=True)
-    if auth is not None:
-        return auth
-    services = get_cloud_services(request)
-    try:
-        result = AudioProviderAdminConfigService(services.settings).test_minimax_connection()
-    except AudioProviderAdminConfigError as error:
-        return JSONResponse(
-            status_code=409,
-            content=build_envelope(
-                status="error",
-                error_code=error.error_code,
-                message=error.message,
-                revision="m6",
-            ),
-        )
-    except ProviderExecutionError as error:
-        return JSONResponse(
-            status_code=502,
-            content=build_envelope(
-                status="error",
-                error_code=error.error_code,
-                message=error.message,
-                revision="m6",
-            ),
-        )
-    return build_envelope(
-        status="ok",
-        message="MiniMax sample audio generated",
-        data=result,
         revision="m6",
     )
 
@@ -3066,6 +2900,38 @@ async def update_admin_provider_connection(
     )
 
 
+@router.post("/admin/provider-connections/preview-catalog")
+async def preview_admin_provider_connection_catalog(
+    request: Request,
+    payload: ProviderConnectionPayload,
+) -> Any:
+    auth = await authorize_internal_request(request, require_idempotency=True)
+    if auth is not None:
+        return auth
+    services = get_cloud_services(request)
+    try:
+        result = ProviderConnectionAdminService(
+            services.settings.database_url,
+            services.settings,
+        ).preview_catalog(payload.model_dump(mode="json"))
+    except ProviderConnectionAdminError as error:
+        return JSONResponse(
+            status_code=error.status_code,
+            content=build_envelope(
+                status="error",
+                error_code=error.error_code,
+                message=error.message,
+                revision="m6",
+            ),
+        )
+    return build_envelope(
+        status="ok",
+        message="provider catalog preview loaded",
+        data=result,
+        revision="m6",
+    )
+
+
 @router.delete("/admin/provider-connections/{connection_id}")
 async def delete_admin_provider_connection(request: Request, connection_id: str) -> Any:
     auth = await authorize_internal_request(request, require_idempotency=True)
@@ -3151,31 +3017,6 @@ async def test_admin_provider_connection(request: Request, connection_id: str) -
     return build_envelope(
         status="ok" if result.get("ok") else "error",
         message=str(result.get("message") or "provider connection tested"),
-        data=result,
-        revision="m6",
-    )
-
-
-@router.post("/admin/provider-connections/import-env")
-async def import_admin_provider_connections_from_env(request: Request) -> Any:
-    auth = await authorize_internal_request(request, require_idempotency=True)
-    if auth is not None:
-        return auth
-    services = get_cloud_services(request)
-    result = ProviderConnectionAdminService(
-        services.settings.database_url,
-        services.settings,
-    ).import_env_connections()
-    _record_provider_connection_audit(
-        request,
-        event_kind="provider_connection.import_env",
-        outcome="succeeded",
-        scope_id="env_import",
-        result=result,
-    )
-    return build_envelope(
-        status="ok",
-        message="environment provider connections imported",
         data=result,
         revision="m6",
     )

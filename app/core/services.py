@@ -14,6 +14,9 @@ from app.adapters.queue.base import RuntimeQueue
 from app.adapters.queue.redis_runtime_queue import RedisRuntimeQueue
 from app.core.config import Settings
 from app.core.db import check_database_connection
+from app.domain.provider_connections.runtime_settings import (
+    apply_provider_connection_runtime_settings,
+)
 
 
 @dataclass(slots=True)
@@ -68,6 +71,7 @@ class CloudServices:
 
 
 def create_default_services(settings: Settings) -> CloudServices:
+    apply_provider_connection_runtime_settings(settings)
     return CloudServices(
         settings=settings,
         providers=build_provider_adapters(settings),

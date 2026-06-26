@@ -65,30 +65,6 @@ function buildAdminBackendPath(pathSegments: string[], method: string): string {
   }
   if (
     upperMethod === 'POST' &&
-    normalized === 'web-search-providers'
-  ) {
-    return '/internal/service/admin/web-search-providers';
-  }
-  if (
-    upperMethod === 'POST' &&
-    normalized === 'image-source-providers'
-  ) {
-    return '/internal/service/admin/image-source-providers';
-  }
-  if (
-    upperMethod === 'POST' &&
-    normalized === 'audio-providers'
-  ) {
-    return '/internal/service/admin/audio-providers';
-  }
-  if (
-    upperMethod === 'POST' &&
-    normalized === 'audio-providers/minimax/test'
-  ) {
-    return '/internal/service/admin/audio-providers/minimax/test';
-  }
-  if (
-    upperMethod === 'POST' &&
     normalized === 'audio-jobs'
   ) {
     return '/internal/service/admin/audio-jobs';
@@ -107,9 +83,9 @@ function buildAdminBackendPath(pathSegments: string[], method: string): string {
   }
   if (
     upperMethod === 'POST' &&
-    normalized === 'provider-connections/import-env'
+    normalized === 'provider-connections/preview-catalog'
   ) {
-    return '/internal/service/admin/provider-connections/import-env';
+    return '/internal/service/admin/provider-connections/preview-catalog';
   }
   if (
     upperMethod === 'POST' &&

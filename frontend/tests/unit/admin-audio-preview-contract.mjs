@@ -3,11 +3,9 @@ import { resolve } from 'node:path';
 import assert from 'node:assert/strict';
 
 const routePath = resolve(process.cwd(), 'src/app/api/admin/audio-preview/route.ts');
-const providerPagePath = resolve(process.cwd(), 'src/app/admin/audio-providers/page.tsx');
 const workbenchPagePath = resolve(process.cwd(), 'src/app/admin/audio-workbench/page.tsx');
 
 const routeSource = readFileSync(routePath, 'utf8');
-const providerPageSource = readFileSync(providerPagePath, 'utf8');
 const workbenchPageSource = readFileSync(workbenchPagePath, 'utf8');
 
 assert.match(
@@ -32,12 +30,6 @@ assert.match(
   routeSource,
   /headers\.Range = 'bytes=0-0';/,
   'audio preview proxy must avoid upstream HEAD requests against signed MiniMax URLs'
-);
-
-assert.match(
-  providerPageSource,
-  /\/api\/admin\/audio-preview\?url=\$\{encodeURIComponent\(audio\.url\)\}/,
-  'audio provider test playback must use the same-origin audio preview proxy'
 );
 
 assert.match(

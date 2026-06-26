@@ -232,7 +232,7 @@ def test_openrouter_provider_sets_router_headers_and_namespaces_model_ids() -> N
     assert [model.model_id for model in snapshot.models] == ["openrouter/openai/gpt-4.1-mini"]
 
 
-def test_provider_registry_registers_optional_upstreams_only_when_enabled() -> None:
+def test_provider_registry_does_not_register_optional_upstreams_from_env_flags() -> None:
     settings = Settings(
         _env_file=None,
         environment="development",
@@ -251,11 +251,11 @@ def test_provider_registry_registers_optional_upstreams_only_when_enabled() -> N
 
     providers = build_provider_adapters(settings)
 
-    assert "litellm" in providers
-    assert "vllm" in providers
-    assert "tei" in providers
-    assert "openrouter" in providers
-    assert "siliconflow" in providers
+    assert "litellm" not in providers
+    assert "vllm" not in providers
+    assert "tei" not in providers
+    assert "openrouter" not in providers
+    assert "siliconflow" not in providers
 
 
 def test_provider_registry_omits_default_openai_without_credentials_outside_dev_test() -> None:

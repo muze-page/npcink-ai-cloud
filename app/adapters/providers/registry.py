@@ -19,6 +19,9 @@ from app.core.config import Settings
 from app.core.db import get_session
 from app.core.models import ProviderConnection
 from app.core.secrets import decrypt_provider_connection_secret
+from app.domain.provider_connections.runtime_settings import (
+    apply_provider_connection_runtime_settings,
+)
 
 EXECUTION_PROVIDER_SOURCE_ROLES = frozenset({"execution_source", "dual_source"})
 PRODUCTION_LIKE_ENVIRONMENTS = frozenset({"production", "prod", "staging"})
@@ -75,6 +78,7 @@ def resolve_execution_provider_adapters(
     *,
     base_providers: dict[str, ProviderAdapter] | None = None,
 ) -> dict[str, ProviderAdapter]:
+    apply_provider_connection_runtime_settings(settings)
     providers = build_provider_adapters(settings, include_enabled_connections=False)
     if base_providers:
         providers.update(base_providers)
@@ -97,11 +101,11 @@ def build_provider_adapters_with_overrides(
     providers: dict[str, ProviderAdapter] = {}
     allow_sample_fallback = _allow_sample_provider_fallback(settings)
 
-    if settings.openai_api_key or allow_sample_fallback:
+    if allow_sample_fallback:
         providers[OpenAIProviderAdapter.provider_id] = OpenAIProviderAdapter(
             base_url=settings.openai_base_url,
-            api_key=settings.openai_api_key,
-            organization=settings.openai_organization,
+            api_key=None,
+            organization=None,
             timeout_seconds=settings.openai_timeout_seconds,
             sample_catalog_profile=(
                 settings.openai_sample_catalog_profile
@@ -109,78 +113,9 @@ def build_provider_adapters_with_overrides(
                 else openai_sample_catalog_profile
             ),
             app_name=settings.project_name,
-            allow_sample_catalog=allow_sample_fallback,
-            allow_sample_execution=allow_sample_fallback,
-            provider_label=settings.openai_provider_label,
-        )
-
-    if settings.minimax_provider_enabled or settings.minimax_api_key:
-        providers[MiniMaxProviderAdapter.provider_id] = MiniMaxProviderAdapter(
-            base_url=settings.minimax_base_url,
-            api_key=settings.minimax_api_key,
-            group_id=settings.minimax_group_id,
-            timeout_seconds=settings.minimax_timeout_seconds,
-            default_voice_id=settings.minimax_default_voice_id,
-            allow_sample_catalog=allow_sample_fallback,
-            allow_sample_execution=allow_sample_fallback,
-        )
-
-    if settings.anthropic_api_key:
-        providers[AnthropicProviderAdapter.provider_id] = AnthropicProviderAdapter(
-            base_url=settings.anthropic_base_url,
-            api_key=settings.anthropic_api_key,
-            api_version=settings.anthropic_version,
-            timeout_seconds=settings.anthropic_timeout_seconds,
-            app_name=settings.project_name,
-            allow_sample_catalog=allow_sample_fallback,
-            allow_sample_execution=allow_sample_fallback,
-        )
-
-    if settings.litellm_provider_enabled:
-        providers[LiteLLMGatewayProviderAdapter.provider_id] = LiteLLMGatewayProviderAdapter(
-            base_url=str(settings.litellm_base_url or "").strip(),
-            api_key=settings.litellm_api_key,
-            timeout_seconds=settings.litellm_timeout_seconds,
-            app_name=settings.project_name,
-        )
-
-    if settings.vllm_provider_enabled:
-        providers[VLLMProviderAdapter.provider_id] = VLLMProviderAdapter(
-            base_url=str(settings.vllm_base_url or "").strip(),
-            api_key=settings.vllm_api_key,
-            timeout_seconds=settings.vllm_timeout_seconds,
-            app_name=settings.project_name,
-        )
-
-    if settings.tei_provider_enabled:
-        tei_model_ids = [
-            item.strip() for item in str(settings.tei_model_ids or "").split(",") if item.strip()
-        ]
-        providers[TEIProviderAdapter.provider_id] = TEIProviderAdapter(
-            base_url=str(settings.tei_base_url or "").strip(),
-            api_key=settings.tei_api_key,
-            timeout_seconds=settings.tei_timeout_seconds,
-            model_ids=tei_model_ids,
-            region=settings.tei_region,
-            context_window=settings.tei_context_window,
-            app_name=settings.project_name,
-        )
-
-    if settings.openrouter_provider_enabled:
-        providers[OpenRouterProviderAdapter.provider_id] = OpenRouterProviderAdapter(
-            base_url=settings.openrouter_base_url,
-            api_key=str(settings.openrouter_api_key or "").strip(),
-            timeout_seconds=settings.openrouter_timeout_seconds,
-            site_url=settings.openrouter_site_url,
-            app_name=settings.project_name,
-        )
-
-    if settings.siliconflow_provider_enabled:
-        providers[SiliconFlowProviderAdapter.provider_id] = SiliconFlowProviderAdapter(
-            base_url=settings.siliconflow_base_url,
-            api_key=str(settings.siliconflow_api_key or "").strip(),
-            timeout_seconds=settings.siliconflow_timeout_seconds,
-            app_name=settings.project_name,
+            allow_sample_catalog=True,
+            allow_sample_execution=True,
+            provider_label="Sample OpenAI-compatible",
         )
 
     if include_enabled_connections:

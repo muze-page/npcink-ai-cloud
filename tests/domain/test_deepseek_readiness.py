@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 import pytest
 
@@ -11,12 +12,11 @@ _deepseek_key_available = bool(os.environ.get("NPCINK_CLOUD_OPENAI_API_KEY", "")
     not _deepseek_key_available, reason="NPCINK_CLOUD_OPENAI_API_KEY not configured"
 )
 class TestDeepSeekReadiness:
-    def test_catalog_refresh_includes_deepseek_models(self) -> None:
+    def test_catalog_refresh_includes_deepseek_models(self, tmp_path: Path) -> None:
         from app.adapters.providers.registry import build_provider_adapters
-        from app.core.config import Settings
 
-        settings = Settings(_env_file=None, environment="test")
-        providers = build_provider_adapters(settings)
+        settings = _settings_with_deepseek_connection(tmp_path)
+        providers = build_provider_adapters(settings, include_enabled_connections=True)
         assert "openai" in providers, "OpenAI-compatible provider must be registered"
 
         snapshot = providers["openai"].fetch_catalog()
@@ -29,12 +29,11 @@ class TestDeepSeekReadiness:
                 f"provider label '{provider_label}' must appear in display name"
             )
 
-    def test_provider_health_check_passes(self) -> None:
+    def test_provider_health_check_passes(self, tmp_path: Path) -> None:
         from app.adapters.providers.registry import build_provider_adapters
-        from app.core.config import Settings
 
-        settings = Settings(_env_file=None, environment="test")
-        providers = build_provider_adapters(settings)
+        settings = _settings_with_deepseek_connection(tmp_path)
+        providers = build_provider_adapters(settings, include_enabled_connections=True)
         assert "openai" in providers
         snapshot = providers["openai"].fetch_catalog()
         for model in snapshot.models:
@@ -43,13 +42,12 @@ class TestDeepSeekReadiness:
                     f"instance {instance.instance_id} should be available, got {instance.health_status}"
                 )
 
-    def test_runtime_execute_with_deepseek_provider(self) -> None:
+    def test_runtime_execute_with_deepseek_provider(self, tmp_path: Path) -> None:
         from app.adapters.providers.base import ProviderExecutionRequest
         from app.adapters.providers.registry import build_provider_adapters
-        from app.core.config import Settings
 
-        settings = Settings(_env_file=None, environment="test")
-        providers = build_provider_adapters(settings)
+        settings = _settings_with_deepseek_connection(tmp_path)
+        providers = build_provider_adapters(settings, include_enabled_connections=True)
         assert "openai" in providers
 
         snapshot = providers["openai"].fetch_catalog()
@@ -84,3 +82,34 @@ class TestDeepSeekReadiness:
 def test_deepseek_key_not_required_for_deterministic_baseline() -> None:
     """Verify that the test suite runs without NPCINK_CLOUD_OPENAI_API_KEY."""
     pass
+
+
+def _settings_with_deepseek_connection(tmp_path: Path):
+    from app.core.config import Settings
+    from app.core.db import init_schema
+    from app.domain.provider_connections.service import ProviderConnectionAdminService
+
+    database_url = f"sqlite+pysqlite:///{tmp_path / 'deepseek-readiness.sqlite3'}"
+    init_schema(database_url)
+    settings = Settings(_env_file=None, environment="test", database_url=database_url)
+    ProviderConnectionAdminService(database_url, settings).save_connection(
+        {
+            "connection_id": "deepseek_readiness",
+            "provider_id": "openai",
+            "provider_type": "openai_compatible",
+            "kind": "openai_compatible",
+            "display_name": os.environ.get(
+                "NPCINK_CLOUD_OPENAI_PROVIDER_LABEL",
+                "DeepSeek readiness",
+            ),
+            "enabled": True,
+            "base_url": os.environ.get(
+                "NPCINK_CLOUD_OPENAI_BASE_URL",
+                "https://api.deepseek.com/v1",
+            ),
+            "capability_ids": ["text_generation"],
+            "runtime_profile_ids": ["text.ai"],
+            "credential": os.environ["NPCINK_CLOUD_OPENAI_API_KEY"],
+        }
+    )
+    return settings

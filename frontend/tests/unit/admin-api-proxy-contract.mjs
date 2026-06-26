@@ -35,10 +35,16 @@ assert.match(
   'admin-prefixed write exceptions must preserve /internal/service/admin'
 );
 
-assert.match(
+assert.doesNotMatch(
   source,
-  /normalized === 'audio-providers\/minimax\/test'[\s\S]*?return '\/internal\/service\/admin\/audio-providers\/minimax\/test';/,
-  'MiniMax audio test must route through the backend admin service namespace'
+  /audio-providers/,
+  'admin proxy must not expose the retired env-backed audio provider settings routes'
+);
+
+assert.doesNotMatch(
+  source,
+  /web-search-providers|image-source-providers/,
+  'admin proxy must not expose retired env-backed capability provider settings routes'
 );
 
 assert.match(
@@ -51,6 +57,12 @@ assert.match(
   source,
   /normalized === 'ai-resources\/profile-preferences'[\s\S]*?return '\/internal\/service\/admin\/ai-resources\/profile-preferences';/,
   'AI resource profile preference saves must route through the backend admin service namespace'
+);
+
+assert.match(
+  source,
+  /normalized === 'provider-connections\/preview-catalog'[\s\S]*?return '\/internal\/service\/admin\/provider-connections\/preview-catalog';/,
+  'provider connection catalog previews must route through the backend admin service namespace'
 );
 
 assert.match(

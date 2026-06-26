@@ -62,6 +62,10 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
       activePrefixes: ['/admin/coverage', '/admin/subscriptions', '/admin/plans'],
     },
     {
+      href: '/admin/ai-resources',
+      label: t('admin.nav_ai_resources', {}, 'Provider Management'),
+    },
+    {
       href: '/admin/troubleshooting',
       label: t('admin.nav_advanced_troubleshooting', {}, 'Advanced Troubleshooting'),
       activePrefixes: [
@@ -70,10 +74,6 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
         '/admin/media-observability',
         '/admin/agent-feedback',
         '/admin/ai-advisor',
-        '/admin/web-search',
-        '/admin/image-sources',
-        '/admin/ai-resources',
-        '/admin/audio-providers',
         '/admin/audio-workbench',
         '/admin/vector-observability',
         '/admin/hosted-models',
