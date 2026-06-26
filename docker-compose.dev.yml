@@ -48,7 +48,13 @@ services:
       dockerfile: Dockerfile
     image: npcink-ai-cloud-api:dev
     restart: unless-stopped
-    command: uvicorn app.api.main:app --host 0.0.0.0 --port 8000 --reload
+    command: >-
+      uvicorn app.api.main:app
+      --host 0.0.0.0
+      --port 8000
+      --reload
+      --reload-dir app
+      --reload-dir migrations
     env_file:
       - ./.env
       - ./.env.local
@@ -165,11 +171,13 @@ services:
       - "3000"
     volumes:
       - ./frontend:/app
-      - ./node_modules/.pnpm:/node_modules/.pnpm
-      - /app/.next
+      - cloud-frontend-node-modules-dev:/app/node_modules
+      - cloud-frontend-next-cache-dev:/app/.next
     depends_on:
       - api
 
 volumes:
   cloud-postgres-dev:
   cloud-redis-dev:
+  cloud-frontend-node-modules-dev:
+  cloud-frontend-next-cache-dev:

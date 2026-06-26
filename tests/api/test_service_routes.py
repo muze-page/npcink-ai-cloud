@@ -31,11 +31,13 @@ from app.core.models import (
     BillingSnapshot,
     PluginObservabilityEvent,
     ProviderCallRecord,
+    ProviderConnection,
     ReplayReceipt,
     RunRecord,
     RuntimeGuardEvent,
     UsageMeterEvent,
 )
+from app.core.secrets import decrypt_provider_connection_secret
 from app.core.security import REPLAY_SCOPE_PUBLIC_POST_SITE
 from app.core.services import CloudServices
 from app.domain.catalog.service import CatalogService
@@ -628,6 +630,18 @@ def test_admin_ai_resources_projects_connections_capabilities_and_profiles(
     assert {"text_generation", "audio_generation", "image_generation", "embedding"}.issubset(
         matrix_ids
     )
+    feature_ids = {item["feature_id"] for item in data["feature_model_usage"]}
+    assert {
+        "content_support",
+        "audio_summary_script",
+        "article_narration",
+        "article_audio_summary",
+        "generated_image_candidates",
+        "site_knowledge_embedding",
+    }.issubset(feature_ids)
+    assert data["provider_model_health"]["source"] == "provider_call_records"
+    assert data["provider_model_health"]["content_exposed"] is False
+    assert data["provider_model_health"]["boundary"]["not_a_control_plane"] is True
     assert {
         TEXT_AI_PROFILE_ID,
         "audio.narration.default",
@@ -646,6 +660,241 @@ def test_admin_ai_resources_projects_connections_capabilities_and_profiles(
     assert "openai-test-secret" not in serialized
     assert "minimax-test-secret" not in serialized
     assert "group-test-secret" not in serialized
+
+
+def test_admin_provider_connections_store_encrypted_credentials_and_project_to_ai_resources(
+    tmp_path: Path,
+) -> None:
+    database_url, client = _build_client(tmp_path)
+
+    response = client.post(
+        "/internal/service/admin/provider-connections",
+        headers=build_internal_headers(idempotency_key="provider-connection-save"),
+        json={
+            "connection_id": "openai_primary",
+            "provider_id": "openai",
+            "provider_type": "openai_compatible",
+            "kind": "openai_compatible",
+            "display_name": "OpenAI primary",
+            "enabled": True,
+            "base_url": "https://api.openai.test/v1",
+            "capability_ids": ["text_generation", "image_generation"],
+            "runtime_profile_ids": [TEXT_AI_PROFILE_ID, "grok-imagine-image-quality"],
+            "credential": "provider-connection-test-secret",
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    data = response.json()["data"]
+    assert data["connection_id"] == "openai_primary"
+    assert data["status"] == "ready"
+    assert data["configured"] is True
+    assert data["secrets"]["credential"]["display"] == "configured"
+    serialized = json.dumps(response.json())
+    assert "provider-connection-test-secret" not in serialized
+
+    with get_session(database_url) as session:
+        row = session.get(ProviderConnection, "openai_primary")
+        assert row is not None
+        assert row.secret_ciphertext
+        assert "provider-connection-test-secret" not in row.secret_ciphertext
+        services = client.app.state.services
+        assert (
+            decrypt_provider_connection_secret(
+                row.secret_ciphertext,
+                settings=services.settings,
+            )
+            == "provider-connection-test-secret"
+        )
+
+    projection_response = client.get(
+        "/internal/service/admin/ai-resources",
+        headers=build_internal_headers(),
+    )
+    assert projection_response.status_code == 200, projection_response.text
+    projection = projection_response.json()["data"]
+    connections = {item["connection_id"]: item for item in projection["connections"]}
+    assert connections["openai_primary"]["managed_by"] == "cloud_provider_connections"
+    capabilities = {item["capability_id"]: item for item in projection["capabilities"]}
+    assert "openai_primary" in capabilities["text_generation"]["connection_ids"]
+    assert "openai_primary" in capabilities["image_generation"]["connection_ids"]
+    assert projection["runtime_resolution"]
+    assert projection["env_migration"]["secret_exposure"] == "presence_only"
+    assert "provider-connection-test-secret" not in json.dumps(projection)
+
+
+def test_admin_provider_connection_test_updates_masked_diagnostics(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database_url, client = _build_client(tmp_path)
+    client.post(
+        "/internal/service/admin/provider-connections",
+        headers=build_internal_headers(idempotency_key="provider-connection-test-create"),
+        json={
+            "connection_id": "openai_testable",
+            "provider_id": "openai",
+            "provider_type": "openai_compatible",
+            "kind": "openai_compatible",
+            "display_name": "OpenAI testable",
+            "enabled": True,
+            "base_url": "https://api.openai.test/v1",
+            "capability_ids": ["text_generation"],
+            "runtime_profile_ids": [TEXT_AI_PROFILE_ID],
+            "credential": "provider-connection-test-secret",
+        },
+    )
+
+    def fake_fetch_catalog(self: object) -> ProviderCatalogSnapshot:
+        return ProviderCatalogSnapshot(
+            provider_id="openai",
+            display_name="OpenAI testable",
+            adapter_type="openai",
+            models=[
+                CatalogModelSeed(
+                    model_id="gpt-test",
+                    family="gpt-test",
+                    feature="text",
+                    status="available",
+                    instances=[
+                        CatalogInstanceSeed(
+                            instance_id="openai-test-text",
+                            endpoint_variant="responses",
+                            region="test",
+                        )
+                    ],
+                )
+            ],
+        )
+
+    monkeypatch.setattr(
+        "app.adapters.providers.openai.OpenAIProviderAdapter.fetch_catalog",
+        fake_fetch_catalog,
+    )
+
+    response = client.post(
+        "/internal/service/admin/provider-connections/openai_testable/test",
+        headers=build_internal_headers(idempotency_key="provider-connection-test-run"),
+    )
+
+    assert response.status_code == 200, response.text
+    data = response.json()["data"]
+    assert data["ok"] is True
+    assert data["status"] == "ready"
+    assert data["catalog"]["model_count"] == 1
+    assert data["catalog"]["sample_model_ids"] == ["gpt-test"]
+    assert "provider-connection-test-secret" not in json.dumps(response.json())
+    with get_session(database_url) as session:
+        row = session.get(ProviderConnection, "openai_testable")
+        assert row is not None
+        assert row.last_tested_at is not None
+        assert row.last_error_code in {None, ""}
+
+
+def test_admin_provider_connection_test_reports_missing_secret_without_leaking(
+    tmp_path: Path,
+) -> None:
+    _, client = _build_client(tmp_path)
+    create_response = client.post(
+        "/internal/service/admin/provider-connections",
+        headers=build_internal_headers(idempotency_key="provider-connection-test-missing-create"),
+        json={
+            "connection_id": "missing_secret_provider",
+            "provider_id": "missing_secret",
+            "provider_type": "openai_compatible",
+            "kind": "openai_compatible",
+            "display_name": "Missing secret",
+            "enabled": True,
+            "capability_ids": ["text_generation"],
+            "runtime_profile_ids": [TEXT_AI_PROFILE_ID],
+        },
+    )
+    assert create_response.status_code == 200, create_response.text
+
+    response = client.post(
+        "/internal/service/admin/provider-connections/missing_secret_provider/test",
+        headers=build_internal_headers(idempotency_key="provider-connection-test-missing"),
+    )
+
+    assert response.status_code == 200, response.text
+    data = response.json()["data"]
+    assert data["ok"] is False
+    assert data["status"] == "missing_secret"
+    assert data["error_code"] == "provider_connection.missing_secret"
+    assert data["boundary"]["secret_exposure"] == "masked_status_only"
+
+
+def test_admin_provider_connections_import_env_values_as_masked_connections(
+    tmp_path: Path,
+) -> None:
+    _, client = _build_client(
+        tmp_path,
+        settings_overrides={
+            "openai_api_key": "openai-env-secret",
+            "openai_base_url": "https://env-openai.test/v1",
+            "minimax_provider_enabled": True,
+            "minimax_api_key": "minimax-env-secret",
+            "minimax_group_id": "minimax-env-group",
+        },
+    )
+
+    response = client.post(
+        "/internal/service/admin/provider-connections/import-env",
+        headers=build_internal_headers(idempotency_key="provider-connection-import-env"),
+    )
+
+    assert response.status_code == 200, response.text
+    data = response.json()["data"]
+    imported_ids = {item["connection_id"] for item in data["imported"]}
+    assert {"openai_env", "minimax_env"}.issubset(imported_ids)
+    serialized = json.dumps(response.json())
+    assert "openai-env-secret" not in serialized
+    assert "minimax-env-secret" not in serialized
+    assert "minimax-env-group" not in serialized
+
+    projection_response = client.get(
+        "/internal/service/admin/ai-resources",
+        headers=build_internal_headers(),
+    )
+    assert projection_response.status_code == 200, projection_response.text
+    projection = projection_response.json()["data"]
+    assert projection["env_migration"]["configured_env_source_count"] >= 2
+    assert projection["env_migration"]["recommended_primary"] == "provider_connections"
+
+
+def test_admin_provider_connections_can_be_deleted(
+    tmp_path: Path,
+) -> None:
+    _, client = _build_client(tmp_path)
+    create_response = client.post(
+        "/internal/service/admin/provider-connections",
+        headers=build_internal_headers(idempotency_key="provider-connection-create-delete"),
+        json={
+            "connection_id": "delete_me_provider",
+            "provider_id": "delete_me",
+            "provider_type": "web_search_provider",
+            "display_name": "Delete me",
+            "enabled": True,
+            "capability_ids": ["web_search"],
+            "runtime_profile_ids": ["web-search.managed"],
+            "credential": "delete-me-secret",
+        },
+    )
+    assert create_response.status_code == 200, create_response.text
+
+    delete_response = client.delete(
+        "/internal/service/admin/provider-connections/delete_me_provider",
+        headers=build_internal_headers(idempotency_key="provider-connection-delete"),
+    )
+    assert delete_response.status_code == 200, delete_response.text
+    assert delete_response.json()["data"]["deleted"] is True
+
+    list_response = client.get(
+        "/internal/service/admin/provider-connections",
+        headers=build_internal_headers(),
+    )
+    assert list_response.status_code == 200, list_response.text
+    assert list_response.json()["data"]["connections"] == []
 
 
 def test_admin_ai_resources_reads_injected_runtime_provider_adapters(
@@ -741,6 +990,22 @@ def test_admin_ai_resources_exposes_recent_runtime_evidence_without_content(
                 result_purged_at=None,
             )
         )
+        session.add(
+            ProviderCallRecord(
+                run_id="run_ai_resources_text_recent",
+                provider_id="openai",
+                model_id="gpt-5.5",
+                instance_id="openai-global-gpt-5-5",
+                region="global",
+                latency_ms=1234,
+                tokens_in=12,
+                tokens_out=34,
+                cost=0.0042,
+                retry_count=0,
+                fallback_used=False,
+                error_code=None,
+            )
+        )
         session.commit()
 
     response = client.get(
@@ -754,6 +1019,29 @@ def test_admin_ai_resources_exposes_recent_runtime_evidence_without_content(
     assert evidence["run_id"] == "run_ai_resources_text_recent"
     assert evidence["status"] == "succeeded"
     assert evidence["provider_id"] == "openai"
+    usage = {item["feature_id"]: item for item in data["feature_model_usage"]}
+    assert usage["content_support"]["last_run"]["run_id"] == "run_ai_resources_text_recent"
+    assert usage["content_support"]["last_provider_call"]["latency_ms"] == 1234
+    assert usage["content_support"]["last_provider_call"]["cost"] == 0.0042
+    assert usage["content_support"]["evidence"]["content_exposed"] is False
+    assert usage["content_support"]["boundary"]["direct_wordpress_write"] is False
+    health_rows = {
+        (item["provider_id"], item["model_id"]): item
+        for item in data["provider_model_health"]["rows"]
+    }
+    health = health_rows[("openai", "gpt-5.5")]
+    assert health["status"] == "healthy"
+    assert health["call_count"] == 1
+    assert health["success_count"] == 1
+    assert health["error_count"] == 0
+    assert health["success_rate"] == 1.0
+    assert health["avg_latency_ms"] == 1234
+    assert health["p95_latency_ms"] == 1234
+    assert health["tokens_in"] == 12
+    assert health["tokens_out"] == 34
+    assert health["cost"] == 0.0042
+    assert health["evidence"]["content_exposed"] is False
+    assert health["boundary"]["direct_wordpress_write"] is False
     serialized = json.dumps(data)
     assert "sensitive draft body" not in serialized
     assert "generated text should not appear" not in serialized

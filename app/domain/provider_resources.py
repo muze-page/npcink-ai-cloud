@@ -9,7 +9,7 @@ from sqlalchemy import select
 from app.adapters.providers.base import ProviderAdapter
 from app.core.config import Settings
 from app.core.db import get_session
-from app.core.models import RunRecord
+from app.core.models import ProviderCallRecord, RunRecord
 from app.domain.audio_generation.admin_config import AudioProviderAdminConfigService
 from app.domain.hosted_model_defaults import (
     AUDIO_NARRATION_MODEL_ID,
@@ -23,6 +23,7 @@ from app.domain.hosted_model_defaults import (
     TEXT_AI_PROFILE_ID,
 )
 from app.domain.image_sources.admin_config import ImageSourceAdminConfigService
+from app.domain.provider_connections.service import ProviderConnectionAdminService
 from app.domain.web_search.admin_config import WebSearchAdminConfigService
 
 AI_RESOURCES_PROFILE_ENV_KEYS = {
@@ -168,6 +169,9 @@ def build_admin_ai_resource_projection(
             "embed.default",
         ],
     )
+    managed_connections = _managed_provider_connections(settings, resolved_database_url)
+    managed_connection_ids_by_capability = _connection_ids_by_capability(managed_connections)
+    managed_ready_by_capability = _ready_by_capability(managed_connections)
 
     connections = [
         {
@@ -281,33 +285,50 @@ def build_admin_ai_resource_projection(
             }
         )
 
+    connections = _merge_connections(connections, managed_connections)
+
     capabilities = [
         {
             "capability_id": "text_generation",
             "label": "Text generation",
-            "status": "ready" if text_configured else "missing_provider",
+            "status": "ready"
+            if text_configured or managed_ready_by_capability.get("text_generation")
+            else "missing_provider",
             "default_profile_id": audio_summary_text_profile_id,
-            "connection_ids": ["openai_compatible"] if text_configured else [],
+            "connection_ids": _merge_ids(
+                ["openai_compatible"] if text_configured else [],
+                managed_connection_ids_by_capability.get("text_generation", []),
+            ),
             "used_by": ["Content Support", "Audio summary script"],
             "write_posture": "suggestion_only",
         },
         {
             "capability_id": "audio_generation",
             "label": "Audio generation",
-            "status": "ready" if audio_status == "ready" else "missing_provider",
+            "status": "ready"
+            if audio_status == "ready" or managed_ready_by_capability.get("audio_generation")
+            else "missing_provider",
             "default_profile_id": audio_narration_profile_id,
-            "connection_ids": ["minimax_audio"] if audio_status == "ready" else [],
+            "connection_ids": _merge_ids(
+                ["minimax_audio"] if audio_status == "ready" else [],
+                managed_connection_ids_by_capability.get("audio_generation", []),
+            ),
             "used_by": ["Article narration", "Audio summary playback"],
             "write_posture": "candidate_artifact_only",
         },
         {
             "capability_id": "web_search",
             "label": "Web search",
-            "status": "ready" if web_search_ready else "disabled",
+            "status": "ready"
+            if web_search_ready or managed_ready_by_capability.get("web_search")
+            else "disabled",
             "default_profile_id": "web-search.managed",
-            "connection_ids": _configured_provider_ids(
-                web_search_config,
-                connection_prefix="web_search",
+            "connection_ids": _merge_ids(
+                _configured_provider_ids(
+                    web_search_config,
+                    connection_prefix="web_search",
+                ),
+                managed_connection_ids_by_capability.get("web_search", []),
             ),
             "used_by": ["Evidence preflight"],
             "write_posture": "suggestion_only",
@@ -315,11 +336,16 @@ def build_admin_ai_resource_projection(
         {
             "capability_id": "image_source",
             "label": "Image source",
-            "status": "ready" if image_source_ready else "disabled",
+            "status": "ready"
+            if image_source_ready or managed_ready_by_capability.get("image_source")
+            else "disabled",
             "default_profile_id": "image-source.managed",
-            "connection_ids": _configured_provider_ids(
-                image_source_config,
-                connection_prefix="image_source",
+            "connection_ids": _merge_ids(
+                _configured_provider_ids(
+                    image_source_config,
+                    connection_prefix="image_source",
+                ),
+                managed_connection_ids_by_capability.get("image_source", []),
             ),
             "used_by": ["Image source candidates"],
             "write_posture": "candidate_artifact_only",
@@ -327,9 +353,14 @@ def build_admin_ai_resource_projection(
         {
             "capability_id": "image_generation",
             "label": "Image generation",
-            "status": "ready" if text_configured else "missing_provider",
+            "status": "ready"
+            if text_configured or managed_ready_by_capability.get("image_generation")
+            else "missing_provider",
             "default_profile_id": GROK_IMAGINE_IMAGE_PROFILE_ID,
-            "connection_ids": ["openai_compatible"] if text_configured else [],
+            "connection_ids": _merge_ids(
+                ["openai_compatible"] if text_configured else [],
+                managed_connection_ids_by_capability.get("image_generation", []),
+            ),
             "used_by": ["Generated image candidates"],
             "write_posture": "candidate_artifact_only",
         },
@@ -338,9 +369,13 @@ def build_admin_ai_resource_projection(
             "label": "Embedding",
             "status": "ready"
             if _site_knowledge_embedding_configured(settings)
+            or managed_ready_by_capability.get("embedding")
             else "missing_provider",
             "default_profile_id": "embed.default",
-            "connection_ids": [f"embedding_{embedding_provider}"],
+            "connection_ids": _merge_ids(
+                [f"embedding_{embedding_provider}"],
+                managed_connection_ids_by_capability.get("embedding", []),
+            ),
             "used_by": ["Site Knowledge"],
             "write_posture": "runtime_metadata_only",
         },
@@ -468,18 +503,45 @@ def build_admin_ai_resource_projection(
             "selected_for": ["site_knowledge"],
         },
     ]
+    runtime_resolution = _build_runtime_resolution(
+        capabilities,
+        runtime_profiles,
+        connections,
+        provider_adapters,
+    )
+    provider_call_evidence = _provider_call_evidence(
+        resolved_database_url,
+        _runtime_profile_run_ids(runtime_profiles),
+    )
+    feature_model_usage = _build_feature_model_usage(
+        capabilities,
+        runtime_profiles,
+        connections,
+        provider_call_evidence,
+        audio_summary_text_profile_id=audio_summary_text_profile_id,
+        audio_narration_profile_id=audio_narration_profile_id,
+    )
+    provider_model_health = _build_provider_model_health(resolved_database_url)
+    env_migration = _build_env_migration_summary(
+        settings,
+        managed_connections,
+    )
 
     return {
         "surface": "admin_ai_resources",
         "connections": connections,
         "capabilities": capabilities,
         "capability_matrix": _build_capability_matrix(capabilities, runtime_profiles),
+        "runtime_resolution": runtime_resolution,
+        "feature_model_usage": feature_model_usage,
+        "provider_model_health": provider_model_health,
         "runtime_profiles": runtime_profiles,
         "recent_runtime_evidence": {
             "source": "run_records",
             "content_exposed": False,
             "profiles": recent_runs,
         },
+        "env_migration": env_migration,
         "profile_preferences": {
             "env_path": str(settings.ai_resources_admin_env_path or ".env.local"),
             "requires_worker_restart_after_save": True,
@@ -585,6 +647,458 @@ def _provider_connections_from_config(
     return connections
 
 
+def _build_runtime_resolution(
+    capabilities: list[dict[str, Any]],
+    runtime_profiles: list[dict[str, Any]],
+    connections: list[dict[str, Any]],
+    provider_adapters: dict[str, ProviderAdapter],
+) -> list[dict[str, Any]]:
+    connections_by_id = {str(item.get("connection_id") or ""): item for item in connections}
+    rows: list[dict[str, Any]] = []
+    for capability in capabilities:
+        capability_id = str(capability.get("capability_id") or "")
+        profiles = [
+            profile
+            for profile in runtime_profiles
+            if str(profile.get("capability_id") or "") == capability_id
+        ]
+        connection_ids = [
+            str(connection_id)
+            for connection_id in capability.get("connection_ids", [])
+            if str(connection_id)
+        ]
+        ready_connection_ids = [
+            connection_id
+            for connection_id in connection_ids
+            if _dict(connections_by_id.get(connection_id)).get("status") == "ready"
+        ]
+        selected_profile_id = str(capability.get("default_profile_id") or "")
+        selected_profiles = [
+            profile
+            for profile in profiles
+            if str(profile.get("profile_id") or "") == selected_profile_id
+        ]
+        if not selected_profiles and profiles:
+            selected_profiles = [profiles[0]]
+        selected_profile = selected_profiles[0] if selected_profiles else {}
+        provider_id = str(selected_profile.get("selected_provider_id") or "")
+        model_id = str(selected_profile.get("selected_model_id") or "")
+        rows.append(
+            {
+                "capability_id": capability_id,
+                "label": str(capability.get("label") or capability_id),
+                "status": str(capability.get("status") or "disabled"),
+                "selected_profile_id": selected_profile_id,
+                "selected_provider_id": provider_id,
+                "selected_model_id": model_id,
+                "selected_connection_ids": connection_ids,
+                "ready_connection_ids": ready_connection_ids,
+                "runtime_provider_available": bool(
+                    provider_id and provider_id in provider_adapters
+                ),
+                "runtime_provider_ids": sorted(provider_adapters.keys()),
+                "write_posture": str(capability.get("write_posture") or ""),
+                "selection_owner": str(
+                    selected_profile.get("selection_owner") or "cloud_runtime_metadata"
+                ),
+                "direct_wordpress_write": False,
+            }
+        )
+    return rows
+
+
+def _build_feature_model_usage(
+    capabilities: list[dict[str, Any]],
+    runtime_profiles: list[dict[str, Any]],
+    connections: list[dict[str, Any]],
+    provider_call_evidence: dict[str, dict[str, Any]],
+    *,
+    audio_summary_text_profile_id: str,
+    audio_narration_profile_id: str,
+) -> list[dict[str, Any]]:
+    capabilities_by_id = {str(item.get("capability_id") or ""): item for item in capabilities}
+    profiles_by_id = {str(item.get("profile_id") or ""): item for item in runtime_profiles}
+    connections_by_id = {str(item.get("connection_id") or ""): item for item in connections}
+    specs = [
+        {
+            "feature_id": "content_support",
+            "label": "Content Support",
+            "capability_id": "text_generation",
+            "profile_id": TEXT_AI_PROFILE_ID,
+            "surface": "Hosted Content Support",
+        },
+        {
+            "feature_id": "audio_summary_script",
+            "label": "Audio summary script",
+            "capability_id": "text_generation",
+            "profile_id": audio_summary_text_profile_id,
+            "surface": "Audio summary",
+        },
+        {
+            "feature_id": "article_narration",
+            "label": "Article narration",
+            "capability_id": "audio_generation",
+            "profile_id": audio_narration_profile_id,
+            "surface": "Audio workbench",
+        },
+        {
+            "feature_id": "article_audio_summary",
+            "label": "Long-form audio summary",
+            "capability_id": "audio_generation",
+            "profile_id": "audio.summary.default",
+            "surface": "Audio workbench",
+        },
+        {
+            "feature_id": "generated_image_candidates",
+            "label": "Generated image candidates",
+            "capability_id": "image_generation",
+            "profile_id": GROK_IMAGINE_IMAGE_PROFILE_ID,
+            "surface": "Image generation",
+        },
+        {
+            "feature_id": "site_knowledge_embedding",
+            "label": "Site Knowledge embedding",
+            "capability_id": "embedding",
+            "profile_id": "embed.default",
+            "surface": "Site Knowledge",
+        },
+        {
+            "feature_id": "evidence_preflight",
+            "label": "Evidence preflight",
+            "capability_id": "web_search",
+            "profile_id": "web-search.managed",
+            "surface": "Runtime evidence",
+        },
+        {
+            "feature_id": "image_source_candidates",
+            "label": "Image source candidates",
+            "capability_id": "image_source",
+            "profile_id": "image-source.managed",
+            "surface": "Media candidates",
+        },
+    ]
+    rows: list[dict[str, Any]] = []
+    for spec in specs:
+        capability = _dict(capabilities_by_id.get(str(spec["capability_id"])))
+        profile = _dict(profiles_by_id.get(str(spec["profile_id"])))
+        last_run = _feature_last_run(profile)
+        provider_call = provider_call_evidence.get(str(last_run.get("run_id") or ""), {})
+        selected_connection_ids = _feature_connection_ids(capability, profile)
+        selected_connections = [
+            _dict(connections_by_id.get(connection_id))
+            for connection_id in selected_connection_ids
+        ]
+        rows.append(
+            {
+                "feature_id": spec["feature_id"],
+                "label": spec["label"],
+                "surface": spec["surface"],
+                "capability_id": spec["capability_id"],
+                "profile_id": spec["profile_id"],
+                "status": str(profile.get("status") or capability.get("status") or "disabled"),
+                "provider_id": str(
+                    provider_call.get("provider_id")
+                    or last_run.get("provider_id")
+                    or profile.get("selected_provider_id")
+                    or ""
+                ),
+                "model_id": str(
+                    provider_call.get("model_id")
+                    or last_run.get("model_id")
+                    or profile.get("selected_model_id")
+                    or ""
+                ),
+                "connection_ids": selected_connection_ids,
+                "connection_sources": sorted(
+                    {
+                        str(connection.get("managed_by") or "env_or_legacy")
+                        for connection in selected_connections
+                        if connection
+                    }
+                ),
+                "write_posture": str(capability.get("write_posture") or ""),
+                "selection_owner": str(
+                    profile.get("selection_owner") or "cloud_runtime_metadata"
+                ),
+                "last_run": last_run,
+                "last_provider_call": provider_call,
+                "evidence": {
+                    "run_metadata_only": True,
+                    "content_exposed": False,
+                    "source": "run_records+provider_call_records",
+                },
+                "boundary": {
+                    "direct_wordpress_write": False,
+                    "not_a_control_plane": True,
+                },
+            }
+        )
+    return rows
+
+
+def _feature_connection_ids(
+    capability: dict[str, Any],
+    profile: dict[str, Any],
+) -> list[str]:
+    selected = str(profile.get("selected_connection_id") or "").strip()
+    if selected and " + " not in selected:
+        return [selected]
+    values = [str(item).strip() for item in capability.get("connection_ids", [])]
+    return [item for item in values if item]
+
+
+def _feature_last_run(profile: dict[str, Any]) -> dict[str, Any]:
+    last_run = profile.get("last_run")
+    if isinstance(last_run, dict) and str(last_run.get("run_id") or ""):
+        return last_run
+    if isinstance(last_run, dict):
+        audio = _dict(last_run.get("audio"))
+        text = _dict(last_run.get("text"))
+        if str(audio.get("run_id") or ""):
+            return audio
+        if str(text.get("run_id") or ""):
+            return text
+    return {}
+
+
+def _runtime_profile_run_ids(runtime_profiles: list[dict[str, Any]]) -> list[str]:
+    run_ids: list[str] = []
+    for profile in runtime_profiles:
+        last_run = profile.get("last_run")
+        if isinstance(last_run, dict):
+            for candidate in (
+                last_run,
+                _dict(last_run.get("text")),
+                _dict(last_run.get("audio")),
+            ):
+                run_id = str(candidate.get("run_id") or "")
+                if run_id and run_id not in run_ids:
+                    run_ids.append(run_id)
+    return run_ids
+
+
+def _provider_call_evidence(
+    database_url: str,
+    run_ids: list[str],
+) -> dict[str, dict[str, Any]]:
+    if not database_url or not run_ids:
+        return {}
+    with get_session(database_url) as session:
+        statement = (
+            select(ProviderCallRecord)
+            .where(ProviderCallRecord.run_id.in_(run_ids))
+            .order_by(ProviderCallRecord.created_at.desc(), ProviderCallRecord.id.desc())
+        )
+        rows = list(session.scalars(statement))
+    evidence: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        if row.run_id in evidence:
+            continue
+        evidence[row.run_id] = {
+            "provider_id": row.provider_id,
+            "model_id": row.model_id,
+            "instance_id": row.instance_id,
+            "latency_ms": row.latency_ms,
+            "tokens_in": row.tokens_in,
+            "tokens_out": row.tokens_out,
+            "cost": row.cost,
+            "retry_count": row.retry_count,
+            "fallback_used": bool(row.fallback_used),
+            "error_code": row.error_code or "",
+            "created_at": _iso(row.created_at),
+        }
+    return evidence
+
+
+def _build_provider_model_health(
+    database_url: str,
+    *,
+    recent_call_limit: int = 200,
+) -> dict[str, Any]:
+    rows: list[ProviderCallRecord] = []
+    if database_url:
+        with get_session(database_url) as session:
+            statement = (
+                select(ProviderCallRecord)
+                .order_by(ProviderCallRecord.created_at.desc(), ProviderCallRecord.id.desc())
+                .limit(recent_call_limit)
+            )
+            rows = list(session.scalars(statement))
+
+    grouped: dict[tuple[str, str], list[ProviderCallRecord]] = {}
+    for row in rows:
+        provider_id = str(row.provider_id or "")
+        model_id = str(row.model_id or "")
+        if not provider_id or not model_id:
+            continue
+        grouped.setdefault((provider_id, model_id), []).append(row)
+
+    health_rows = [
+        _provider_model_health_row(
+            provider_id,
+            model_id,
+            records,
+            recent_call_limit=recent_call_limit,
+        )
+        for (provider_id, model_id), records in grouped.items()
+    ]
+    status_priority = {"error": 0, "degraded": 1, "healthy": 2, "not_observed": 3}
+    health_rows.sort(
+        key=lambda item: (
+            status_priority.get(str(item.get("status") or ""), 9),
+            str(item.get("provider_id") or ""),
+            str(item.get("model_id") or ""),
+        )
+    )
+    return {
+        "source": "provider_call_records",
+        "content_exposed": False,
+        "recent_call_limit": recent_call_limit,
+        "rows": health_rows,
+        "boundary": {
+            "owner": "cloud_runtime_diagnostics",
+            "direct_wordpress_write": False,
+            "not_a_control_plane": True,
+            "prompt_router_preset_truth": False,
+        },
+    }
+
+
+def _provider_model_health_row(
+    provider_id: str,
+    model_id: str,
+    records: list[ProviderCallRecord],
+    *,
+    recent_call_limit: int,
+) -> dict[str, Any]:
+    call_count = len(records)
+    success_count = sum(1 for record in records if not record.error_code)
+    error_count = call_count - success_count
+    latencies = sorted(
+        int(record.latency_ms)
+        for record in records
+        if isinstance(record.latency_ms, int)
+    )
+    success_rate = (success_count / call_count) if call_count else 0.0
+    avg_latency_ms = round(sum(latencies) / len(latencies), 2) if latencies else None
+    p95_latency_ms = latencies[_percentile_index(len(latencies), 95)] if latencies else None
+    status = _provider_model_health_status(
+        call_count=call_count,
+        success_rate=success_rate,
+        p95_latency_ms=p95_latency_ms,
+    )
+    last_observed = max((_iso(record.created_at) for record in records), default="")
+    last_error = next((record.error_code for record in records if record.error_code), "")
+    return {
+        "provider_id": provider_id,
+        "model_id": model_id,
+        "status": status,
+        "call_count": call_count,
+        "success_count": success_count,
+        "error_count": error_count,
+        "success_rate": round(success_rate, 4),
+        "avg_latency_ms": avg_latency_ms,
+        "p95_latency_ms": p95_latency_ms,
+        "tokens_in": sum(int(record.tokens_in or 0) for record in records),
+        "tokens_out": sum(int(record.tokens_out or 0) for record in records),
+        "cost": round(sum(float(record.cost or 0.0) for record in records), 6),
+        "retry_count": sum(int(record.retry_count or 0) for record in records),
+        "fallback_count": sum(1 for record in records if bool(record.fallback_used)),
+        "last_error_code": str(last_error or ""),
+        "last_observed_at": last_observed,
+        "evidence": {
+            "source": "provider_call_records",
+            "content_exposed": False,
+            "recent_call_limit": recent_call_limit,
+        },
+        "boundary": {
+            "direct_wordpress_write": False,
+            "not_a_control_plane": True,
+        },
+    }
+
+
+def _provider_model_health_status(
+    *,
+    call_count: int,
+    success_rate: float,
+    p95_latency_ms: int | None,
+) -> str:
+    if call_count <= 0:
+        return "not_observed"
+    if success_rate <= 0:
+        return "error"
+    if success_rate < 0.95 or (p95_latency_ms is not None and p95_latency_ms > 20_000):
+        return "degraded"
+    return "healthy"
+
+
+def _percentile_index(count: int, percentile: int) -> int:
+    if count <= 1:
+        return 0
+    return min(count - 1, max(0, ((count * percentile) + 99) // 100 - 1))
+
+
+def _build_env_migration_summary(
+    settings: Settings,
+    managed_connections: list[dict[str, Any]],
+) -> dict[str, Any]:
+    managed_ids = {str(item.get("provider_id") or "") for item in managed_connections}
+    sources = [
+        {
+            "connection_id": "openai_env",
+            "provider_id": "openai",
+            "label": "OpenAI-compatible",
+            "source": "env",
+            "configured": bool(str(settings.openai_api_key or "").strip()),
+            "managed_connection_present": "openai" in managed_ids,
+            "env_keys": [
+                "NPCINK_CLOUD_OPENAI_API_KEY",
+                "NPCINK_CLOUD_OPENAI_BASE_URL",
+                "NPCINK_CLOUD_OPENAI_PROVIDER_LABEL",
+            ],
+            "import_supported": True,
+        },
+        {
+            "connection_id": "minimax_env",
+            "provider_id": "minimax",
+            "label": "MiniMax",
+            "source": "env",
+            "configured": bool(str(settings.minimax_api_key or "").strip()),
+            "managed_connection_present": "minimax" in managed_ids,
+            "env_keys": [
+                "NPCINK_CLOUD_MINIMAX_API_KEY",
+                "NPCINK_CLOUD_MINIMAX_BASE_URL",
+                "NPCINK_CLOUD_MINIMAX_GROUP_ID",
+            ],
+            "import_supported": True,
+        },
+    ]
+    configured_env_sources = [
+        source for source in sources if bool(source.get("configured"))
+    ]
+    importable_sources = [
+        source
+        for source in configured_env_sources
+        if not bool(source.get("managed_connection_present"))
+    ]
+    return {
+        "surface": "admin_provider_connection_env_migration",
+        "env_path": str(settings.ai_resources_admin_env_path or ".env.local"),
+        "configured_env_source_count": len(configured_env_sources),
+        "importable_source_count": len(importable_sources),
+        "sources": sources,
+        "recommended_primary": "provider_connections",
+        "env_role": "fallback",
+        "secret_exposure": "presence_only",
+        "boundary": {
+            "owner": "cloud_runtime",
+            "direct_wordpress_write": False,
+            "not_a_control_plane": True,
+        },
+    }
+
+
 def _has_configured_provider(providers: dict[str, Any]) -> bool:
     return any(bool(_dict(provider).get("configured")) for provider in providers.values())
 
@@ -600,6 +1114,68 @@ def _configured_provider_ids(
         for provider_id, provider in providers.items()
         if bool(_dict(provider).get("configured"))
     ]
+
+
+def _managed_provider_connections(
+    settings: Settings,
+    database_url: str,
+) -> list[dict[str, Any]]:
+    if not database_url:
+        return []
+    try:
+        result = ProviderConnectionAdminService(database_url, settings).list_connections()
+    except Exception:
+        return []
+    connections = result.get("connections")
+    if not isinstance(connections, list):
+        return []
+    return [item for item in connections if isinstance(item, dict)]
+
+
+def _connection_ids_by_capability(
+    connections: list[dict[str, Any]],
+) -> dict[str, list[str]]:
+    grouped: dict[str, list[str]] = {}
+    for connection in connections:
+        if not bool(connection.get("configured")):
+            continue
+        connection_id = str(connection.get("connection_id") or "")
+        if not connection_id:
+            continue
+        for capability_id in connection.get("capability_ids") or []:
+            grouped.setdefault(str(capability_id), []).append(connection_id)
+    return grouped
+
+
+def _ready_by_capability(connections: list[dict[str, Any]]) -> dict[str, bool]:
+    ready: dict[str, bool] = {}
+    for connection in connections:
+        if connection.get("status") != "ready":
+            continue
+        for capability_id in connection.get("capability_ids") or []:
+            ready[str(capability_id)] = True
+    return ready
+
+
+def _merge_connections(
+    base_connections: list[dict[str, Any]],
+    managed_connections: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    merged: dict[str, dict[str, Any]] = {}
+    for connection in base_connections + managed_connections:
+        connection_id = str(connection.get("connection_id") or "")
+        if not connection_id:
+            continue
+        merged[connection_id] = connection
+    return list(merged.values())
+
+
+def _merge_ids(base_ids: list[str], extra_ids: list[str]) -> list[str]:
+    merged: list[str] = []
+    for item in base_ids + extra_ids:
+        if item and item not in merged:
+            merged.append(item)
+    return merged
 
 
 def _site_knowledge_embedding_configured(settings: Settings) -> bool:
@@ -713,6 +1289,10 @@ def _pipeline_last_run(
         "audio": audio_run,
         "status": "ready" if text_run and audio_run else "not_observed",
     }
+
+
+def _iso(value: Any) -> str:
+    return value.isoformat() if value is not None and hasattr(value, "isoformat") else ""
 
 
 def _read_env_file(path: Path) -> dict[str, str]:

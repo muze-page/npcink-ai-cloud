@@ -39,6 +39,10 @@ from app.domain.image_sources.metrics import ImageSourceMetricsService
 from app.domain.media_derivatives.metrics import MediaDerivativeObservabilityService
 from app.domain.observability.plugin_events import PluginObservabilityService
 from app.domain.observability.service import ObservabilityService
+from app.domain.provider_connections.service import (
+    ProviderConnectionAdminError,
+    ProviderConnectionAdminService,
+)
 from app.domain.provider_resources import (
     AIResourceProfilePreferenceError,
     AIResourceProfilePreferenceService,
@@ -264,6 +268,24 @@ class AIResourceProfilePreferencePayload(BaseModel):
         default="audio.narration.default",
         max_length=64,
     )
+
+
+class ProviderConnectionPayload(BaseModel):
+    connection_id: str | None = Field(default=None, max_length=64)
+    provider_id: str | None = Field(default=None, max_length=64)
+    provider_type: str | None = Field(default=None, max_length=64)
+    kind: str | None = Field(default=None, max_length=64)
+    display_name: str = Field(default="", max_length=191)
+    enabled: bool = True
+    base_url: str = Field(default="", max_length=500)
+    source_role: str = Field(default="execution_source", max_length=32)
+    capability_ids: list[str] = Field(default_factory=list)
+    runtime_profile_ids: list[str] = Field(default_factory=list)
+    config: dict[str, Any] = Field(default_factory=dict)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    credential: str | None = None
+    secret: str | None = None
+    secretless: bool = False
 
 
 class WordPressAIRoutingProfilePayload(BaseModel):
@@ -2807,6 +2829,165 @@ async def test_admin_audio_provider_minimax(request: Request) -> Any:
     )
 
 
+@router.get("/admin/provider-connections")
+async def list_admin_provider_connections(request: Request) -> Any:
+    auth = await authorize_internal_request(request, require_idempotency=False)
+    if auth is not None:
+        return auth
+    services = get_cloud_services(request)
+    result = ProviderConnectionAdminService(
+        services.settings.database_url,
+        services.settings,
+    ).list_connections()
+    return build_envelope(
+        status="ok",
+        message="provider connections loaded",
+        data=result,
+        revision="m6",
+    )
+
+
+@router.post("/admin/provider-connections")
+async def create_admin_provider_connection(
+    request: Request,
+    payload: ProviderConnectionPayload,
+) -> Any:
+    auth = await authorize_internal_request(request, require_idempotency=True)
+    if auth is not None:
+        return auth
+    services = get_cloud_services(request)
+    try:
+        result = ProviderConnectionAdminService(
+            services.settings.database_url,
+            services.settings,
+        ).save_connection(payload.model_dump(mode="json"))
+    except ProviderConnectionAdminError as error:
+        return JSONResponse(
+            status_code=error.status_code,
+            content=build_envelope(
+                status="error",
+                error_code=error.error_code,
+                message=error.message,
+                revision="m6",
+            ),
+        )
+    return build_envelope(
+        status="ok",
+        message="provider connection saved",
+        data=result,
+        revision="m6",
+    )
+
+
+@router.patch("/admin/provider-connections/{connection_id}")
+async def update_admin_provider_connection(
+    request: Request,
+    connection_id: str,
+    payload: ProviderConnectionPayload,
+) -> Any:
+    auth = await authorize_internal_request(request, require_idempotency=True)
+    if auth is not None:
+        return auth
+    services = get_cloud_services(request)
+    try:
+        result = ProviderConnectionAdminService(
+            services.settings.database_url,
+            services.settings,
+        ).save_connection(payload.model_dump(mode="json"), connection_id=connection_id)
+    except ProviderConnectionAdminError as error:
+        return JSONResponse(
+            status_code=error.status_code,
+            content=build_envelope(
+                status="error",
+                error_code=error.error_code,
+                message=error.message,
+                revision="m6",
+            ),
+        )
+    return build_envelope(
+        status="ok",
+        message="provider connection saved",
+        data=result,
+        revision="m6",
+    )
+
+
+@router.delete("/admin/provider-connections/{connection_id}")
+async def delete_admin_provider_connection(request: Request, connection_id: str) -> Any:
+    auth = await authorize_internal_request(request, require_idempotency=True)
+    if auth is not None:
+        return auth
+    services = get_cloud_services(request)
+    try:
+        result = ProviderConnectionAdminService(
+            services.settings.database_url,
+            services.settings,
+        ).delete_connection(connection_id)
+    except ProviderConnectionAdminError as error:
+        return JSONResponse(
+            status_code=error.status_code,
+            content=build_envelope(
+                status="error",
+                error_code=error.error_code,
+                message=error.message,
+                revision="m6",
+            ),
+        )
+    return build_envelope(
+        status="ok",
+        message="provider connection deleted",
+        data=result,
+        revision="m6",
+    )
+
+
+@router.post("/admin/provider-connections/{connection_id}/test")
+async def test_admin_provider_connection(request: Request, connection_id: str) -> Any:
+    auth = await authorize_internal_request(request, require_idempotency=True)
+    if auth is not None:
+        return auth
+    services = get_cloud_services(request)
+    try:
+        result = ProviderConnectionAdminService(
+            services.settings.database_url,
+            services.settings,
+        ).test_connection(connection_id)
+    except ProviderConnectionAdminError as error:
+        return JSONResponse(
+            status_code=error.status_code,
+            content=build_envelope(
+                status="error",
+                error_code=error.error_code,
+                message=error.message,
+                revision="m6",
+            ),
+        )
+    return build_envelope(
+        status="ok" if result.get("ok") else "error",
+        message=str(result.get("message") or "provider connection tested"),
+        data=result,
+        revision="m6",
+    )
+
+
+@router.post("/admin/provider-connections/import-env")
+async def import_admin_provider_connections_from_env(request: Request) -> Any:
+    auth = await authorize_internal_request(request, require_idempotency=True)
+    if auth is not None:
+        return auth
+    services = get_cloud_services(request)
+    result = ProviderConnectionAdminService(
+        services.settings.database_url,
+        services.settings,
+    ).import_env_connections()
+    return build_envelope(
+        status="ok",
+        message="environment provider connections imported",
+        data=result,
+        revision="m6",
+    )
+
+
 @router.get("/admin/ai-resources")
 async def get_admin_ai_resources(request: Request) -> Any:
     auth = await authorize_internal_request(request, require_idempotency=False)
@@ -2818,7 +2999,11 @@ async def get_admin_ai_resources(request: Request) -> Any:
         message="AI resource projection loaded",
         data=build_admin_ai_resource_projection(
             services.settings,
-            providers=services.providers,
+            providers=resolve_live_provider_adapters(
+                services.settings,
+                base_providers=services.providers,
+                include_enabled_connections=True,
+            ),
             database_url=services.settings.database_url,
         ),
         revision="m6",

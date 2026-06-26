@@ -19,8 +19,26 @@ assert.match(
 
 assert.match(
   pageSource,
-  /Provider keys stay in Cloud runtime settings/,
-  'AI resources page must explain provider settings stay in Cloud runtime'
+  /fetch\('\/api\/admin\/provider-connections'/,
+  'AI resources page must save provider connections through the bounded admin endpoint'
+);
+
+assert.match(
+  pageSource,
+  /provider-connections\/.*\/test/,
+  'AI resources page must test managed provider connections through the bounded admin endpoint'
+);
+
+assert.match(
+  pageSource,
+  /fetch\('\/api\/admin\/provider-connections\/import-env'/,
+  'AI resources page must import environment providers through a bounded admin endpoint'
+);
+
+assert.match(
+  pageSource,
+  /Provider connections can be managed in Cloud runtime storage/,
+  'AI resources page must explain provider connections are managed by Cloud runtime storage'
 );
 
 assert.match(
@@ -39,6 +57,72 @@ assert.match(
   pageSource,
   /Capability Matrix/,
   'AI resources page must expose the capability-to-provider-model matrix'
+);
+
+assert.match(
+  pageSource,
+  /Runtime resolution/,
+  'AI resources page must expose the current runtime resolution'
+);
+
+assert.match(
+  pageSource,
+  /Feature usage/,
+  'AI resources page must expose feature-to-model usage'
+);
+
+assert.match(
+  pageSource,
+  /Model health/,
+  'AI resources page must expose provider-model health diagnostics'
+);
+
+assert.match(
+  pageSource,
+  /Feature-to-model evidence from Cloud runtime metadata/,
+  'Feature usage must be framed as runtime metadata evidence'
+);
+
+assert.match(
+  pageSource,
+  /does not change routing, prompts, abilities, or WordPress writes/,
+  'Feature usage must remain read-only and outside control-plane truth'
+);
+
+assert.match(
+  pageSource,
+  /Provider\/model health from provider_call_records/,
+  'Model health must be backed by provider call metadata'
+);
+
+assert.match(
+  pageSource,
+  /Metadata only: prompts, results, and provider secrets are not exposed/,
+  'Model health must not expose prompt, result, or secret material'
+);
+
+assert.match(
+  pageSource,
+  /read-only diagnostics and does not change routing, prompts, abilities, or WordPress writes/,
+  'Model health must remain diagnostics-only'
+);
+
+assert.match(
+  pageSource,
+  /read-only operator evidence, not a router editor/,
+  'AI resources runtime resolution must not present itself as a router editor'
+);
+
+assert.match(
+  pageSource,
+  /Environment migration/,
+  'AI resources page must expose environment-to-DB migration status'
+);
+
+assert.match(
+  pageSource,
+  /Environment values remain fallback only/,
+  'AI resources page must explain env values are fallback only'
 );
 
 assert.match(
@@ -63,6 +147,12 @@ assert.match(
   pageSource,
   /Configured:/,
   'AI resources connections view must expose masked provider configured state'
+);
+
+assert.match(
+  pageSource,
+  /Last test:/,
+  'AI resources connections view must expose masked provider test diagnostics'
 );
 
 assert.match(

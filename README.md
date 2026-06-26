@@ -91,6 +91,8 @@ repository; it points at a path that no longer exists here.
 - local portal real-site bootstrap: `pnpm run portal:bind:dev -- --site-id <site-id> --member-email <email>`
 - scaffold one new Cloud route pack: `pnpm run scaffold:route -- --route-id <route-id>`
 - scaffold one new Portal route pack: `pnpm run scaffold:portal-route -- --route-id <route-id>`
+- local frontend health check: `bash scripts/dev-frontend-doctor.sh`
+- local frontend dependency recovery: `bash scripts/dev-frontend-recover.sh`
 - perimeter seam: `pnpm run check:perimeter`
 - hosted runtime smoke: `pnpm run smoke:local-alpha`
 - internal alpha onboarding smoke: `pnpm run smoke:internal-alpha-onboarding`

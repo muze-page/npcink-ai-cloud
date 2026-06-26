@@ -14,3 +14,8 @@ ignoredBuiltDependencies:
   - core-js
   - core-js-pure
   - unrs-resolver
+
+allowBuilds:
+  esbuild: true
+  sharp: true
+  unrs-resolver: true

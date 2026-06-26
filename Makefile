@@ -8,7 +8,7 @@ CHANGED_BASE_REF ?= origin/master
 TEST_PROVIDER_ENV = NPCINK_CLOUD_OPENAI_API_KEY= NPCINK_CLOUD_OPENAI_COMPATIBLE_API_KEY=
 DOCKER_TEST_PROVIDER_ENV = -e NPCINK_CLOUD_OPENAI_API_KEY= -e NPCINK_CLOUD_OPENAI_COMPATIBLE_API_KEY=
 
-.PHONY: baseline bootstrap-dev dev test test-local lint lint-changed mypy-full mypy-targeted mypy-commercial-runtime perimeter frontend-sync frontend-watch migrate seed-dev rollup bundle deploy-smoke deploy-ssh provider-status env-ssh secret-rotation-check
+.PHONY: baseline bootstrap-dev dev test test-local lint lint-changed mypy-full mypy-targeted mypy-commercial-runtime perimeter frontend-sync frontend-watch frontend-doctor frontend-recover migrate seed-dev rollup bundle deploy-smoke deploy-ssh provider-status env-ssh secret-rotation-check
 
 baseline:
 	.venv/bin/pytest --version
@@ -61,6 +61,12 @@ frontend-sync:
 
 frontend-watch:
 	node scripts/watch-cloud-frontend-sync.js
+
+frontend-doctor:
+	bash scripts/dev-frontend-doctor.sh
+
+frontend-recover:
+	bash scripts/dev-frontend-recover.sh
 
 migrate:
 	docker compose -f docker-compose.dev.yml run --rm api alembic upgrade head

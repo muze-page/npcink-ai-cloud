@@ -101,6 +101,30 @@ function buildAdminBackendPath(pathSegments: string[], method: string): string {
   }
   if (
     upperMethod === 'POST' &&
+    normalized === 'provider-connections'
+  ) {
+    return '/internal/service/admin/provider-connections';
+  }
+  if (
+    upperMethod === 'POST' &&
+    normalized === 'provider-connections/import-env'
+  ) {
+    return '/internal/service/admin/provider-connections/import-env';
+  }
+  if (
+    upperMethod === 'POST' &&
+    /^provider-connections\/[^/]+\/test$/.test(normalized)
+  ) {
+    return `/internal/service/admin/${normalized}`;
+  }
+  if (
+    (upperMethod === 'PATCH' || upperMethod === 'DELETE') &&
+    /^provider-connections\/[^/]+$/.test(normalized)
+  ) {
+    return `/internal/service/admin/${normalized}`;
+  }
+  if (
+    upperMethod === 'POST' &&
     normalized === 'wordpress-ai-routing'
   ) {
     return '/internal/service/admin/wordpress-ai-routing';
