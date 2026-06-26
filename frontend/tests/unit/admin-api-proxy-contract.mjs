@@ -25,6 +25,18 @@ assert.match(
 
 assert.match(
   source,
+  /ADMIN_IDEMPOTENCY_KEY_PATTERN[\s\S]*resolveAdminIdempotencyKey[\s\S]*createAdminIdempotencyKey/,
+  'admin proxy must sanitize or replace invalid write idempotency keys before forwarding to backend'
+);
+
+assert.doesNotMatch(
+  source,
+  /'idempotency-key',/,
+  'admin proxy must not copy raw idempotency-key as a generic forwarded header'
+);
+
+assert.match(
+  source,
   /\^accounts\\\/\[\^\/\]\+\\\/subscription\(\?:\\\/\(\?:suspend\|cancel\)\)\?\$/,
   'admin account subscription writes must route to the backend admin service namespace'
 );

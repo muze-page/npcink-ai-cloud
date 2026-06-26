@@ -66,6 +66,10 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
       label: t('admin.nav_ai_resources', {}, 'Provider Management'),
     },
     {
+      href: '/admin/ability-models',
+      label: t('admin.nav_ability_models', {}, 'Ability Models'),
+    },
+    {
       href: '/admin/troubleshooting',
       label: t('admin.nav_advanced_troubleshooting', {}, 'Advanced Troubleshooting'),
       activePrefixes: [

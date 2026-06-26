@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
@@ -414,12 +415,32 @@ def test_wordpress_ai_connector_runtime_normalizes_summary_text_scene(
 
 def test_wordpress_ai_connector_image_generation_uses_managed_image_profile(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    from app.domain.runtime import service as runtime_service
+
+    def materialize_provider_url(result_json: dict[str, Any], **_: object) -> dict[str, Any]:
+        next_result = dict(result_json)
+        next_result["provider_response_format"] = "b64_json"
+        next_result["images"] = [
+            {
+                **dict(next_result["images"][0]),
+                "b64_json": "aW1hZ2UtYnl0ZXM=",
+            }
+        ]
+        return next_result
+
+    monkeypatch.setattr(
+        runtime_service,
+        "materialize_inline_image_candidates_from_urls",
+        materialize_provider_url,
+    )
+
     database_url, client, provider = _build_client(tmp_path)
 
     response = _execute(
         client,
-        _image_payload(),
+        _image_payload({"response_format": "b64_json"}),
         idempotency_key="wp-ai-image-generation",
     )
 
@@ -428,10 +449,13 @@ def test_wordpress_ai_connector_image_generation_uses_managed_image_profile(
     assert data["status"] == "succeeded"
     assert data["profile_id"] == WP_AI_CONNECTOR_IMAGE_GENERATION_PROFILE_ID
     assert data["result"]["artifact_type"] == "image_generation_candidates"
+    assert data["result"]["provider_response_format"] == "b64_json"
+    assert data["result"]["images"][0]["b64_json"] == "aW1hZ2UtYnl0ZXM="
     assert data["result"]["direct_wordpress_write"] is False
     assert provider.requests[0].execution_kind == "image_generation"
     assert provider.requests[0].profile_id == WP_AI_CONNECTOR_IMAGE_GENERATION_PROFILE_ID
     assert provider.requests[0].timeout_ms == 90000
+    assert provider.requests[0].input_payload["response_format"] == "b64_json"
 
     with get_session(database_url) as session:
         run = session.execute(select(RunRecord)).scalar_one()

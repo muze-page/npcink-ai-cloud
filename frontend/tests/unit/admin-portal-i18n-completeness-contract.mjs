@@ -54,9 +54,14 @@ function collectTranslationKeys(filePath) {
 
 const localeBlocks = {
   en: getLocaleBlock('en', 'zh-CN'),
-  'zh-CN': getLocaleBlock('zh-CN', 'zh-TW'),
-  'zh-TW': getLocaleBlock('zh-TW'),
+  'zh-CN': getLocaleBlock('zh-CN'),
 };
+
+assert.doesNotMatch(
+  source,
+  /^\s*'zh-TW': \{/m,
+  'Traditional Chinese translations are intentionally not part of the bilingual surface'
+);
 
 const translationLockedFiles = [
   resolve(root, 'src/app/admin/layout.tsx'),

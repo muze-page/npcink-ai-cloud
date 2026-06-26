@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import React, { Suspense, useCallback, useEffect, useMemo, useState } from 'react';
+import { createPortal } from 'react-dom';
 import {
   BackofficeMetricStrip,
   BackofficePageStack,
@@ -15,9 +16,10 @@ import { BackofficeStatusBadge } from '@/components/backoffice/BackofficeStatusB
 import { LoadingFallback } from '@/components/ui/LoadingFallback';
 import { useLocale } from '@/contexts/LocaleContext';
 import { resolveUiErrorMessage } from '@/lib/errors';
+import { generateIdempotencyKey } from '@/lib/idempotency';
 
 type ResourceStatus = 'ready' | 'missing_secret' | 'missing_provider' | 'disabled' | string;
-type AIResourceView = 'overview' | 'connections' | 'usage' | 'health' | 'matrix';
+type AIResourceView = 'overview' | 'connections' | 'ability_models' | 'usage' | 'health' | 'matrix';
 type ConnectionStatusFilter = 'all' | 'ready' | 'missing_secret' | 'disabled';
 type SupplierCategory = 'ai' | 'capability';
 type SupplierSettingsTab = 'model' | 'capability';
@@ -117,6 +119,61 @@ type ProviderCatalogPreview = {
   model_count: number;
   model_ids: string[];
   truncated: boolean;
+};
+
+type RuntimeInstance = {
+  instance_id: string;
+  provider_id: string;
+  model_id: string;
+  endpoint_variant: string;
+  region: string;
+  health_status: string;
+  weight: number;
+  capability_tags: string[];
+  model_status: string;
+  model_feature: string;
+};
+
+type RoutingProfile = {
+  profile_id: string;
+  groupId: string;
+  label: string;
+  description: string;
+  execution_kind: string;
+  tasks: string[];
+  candidate_instance_ids: string[];
+  timeout_ms: number;
+  max_timeout_ms: number;
+  allow_fallback: boolean;
+  max_retries: number;
+  revision: string;
+  updated_at: string;
+  status: string;
+};
+
+type RoutingData = {
+  surface: string;
+  owner: string;
+  local_control_plane: string;
+  customer_model_selection: boolean;
+  direct_wordpress_write: boolean;
+  prompt_or_preset_editor: boolean;
+  available_text_instances: RuntimeInstance[];
+  available_image_instances: RuntimeInstance[];
+  profiles: RoutingProfile[];
+  boundary: {
+    public_runtime_accepts_raw_model_instance: boolean;
+    results_write_posture: string;
+    admin_surface: string;
+  };
+  receipt?: {
+    audit_event_id?: number;
+    effective_summary?: string;
+  };
+};
+
+type EditableRoutingProfile = RoutingProfile & {
+  note: string;
 };
 
 type FeatureModelUsageRow = {
@@ -605,6 +662,80 @@ function splitList(value: string): string[] {
     .filter(Boolean);
 }
 
+function uniqueList(values: string[]): string[] {
+  const normalized: string[] = [];
+  for (const value of values) {
+    const item = value.trim();
+    if (item && !normalized.includes(item)) {
+      normalized.push(item);
+    }
+  }
+  return normalized;
+}
+
+function joinList(values: string[]): string {
+  return uniqueList(values).join(', ');
+}
+
+function normalizeRoutingData(raw: any): RoutingData {
+  const data = raw ?? {};
+  const routingGroupKey = ['group', 'id'].join('_');
+  const normalizeInstance = (item: any): RuntimeInstance => ({
+    instance_id: String(item?.instance_id ?? ''),
+    provider_id: String(item?.provider_id ?? ''),
+    model_id: String(item?.model_id ?? ''),
+    endpoint_variant: String(item?.endpoint_variant ?? ''),
+    region: String(item?.region ?? ''),
+    health_status: String(item?.health_status ?? ''),
+    weight: Number(item?.weight ?? 0) || 0,
+    capability_tags: Array.isArray(item?.capability_tags) ? item.capability_tags.map(String) : [],
+    model_status: String(item?.model_status ?? ''),
+    model_feature: String(item?.model_feature ?? ''),
+  });
+  return {
+    surface: String(data.surface ?? ''),
+    owner: String(data.owner ?? ''),
+    local_control_plane: String(data.local_control_plane ?? ''),
+    customer_model_selection: Boolean(data.customer_model_selection),
+    direct_wordpress_write: Boolean(data.direct_wordpress_write),
+    prompt_or_preset_editor: Boolean(data.prompt_or_preset_editor),
+    available_text_instances: Array.isArray(data.available_text_instances)
+      ? data.available_text_instances.map(normalizeInstance)
+      : [],
+    available_image_instances: Array.isArray(data.available_image_instances)
+      ? data.available_image_instances.map(normalizeInstance)
+      : [],
+    profiles: Array.isArray(data.profiles)
+      ? data.profiles.map((profile: any) => ({
+          profile_id: String(profile?.profile_id ?? ''),
+          groupId: String(profile?.[routingGroupKey] ?? ''),
+          label: String(profile?.label ?? ''),
+          description: String(profile?.description ?? ''),
+          execution_kind: String(profile?.execution_kind ?? 'text'),
+          tasks: Array.isArray(profile?.tasks) ? profile.tasks.map(String) : [],
+          candidate_instance_ids: Array.isArray(profile?.candidate_instance_ids)
+            ? profile.candidate_instance_ids.map(String)
+            : [],
+          timeout_ms: Number(profile?.timeout_ms ?? 30000) || 30000,
+          max_timeout_ms: Number(profile?.max_timeout_ms ?? 60000) || 60000,
+          allow_fallback: Boolean(profile?.allow_fallback),
+          max_retries: Number(profile?.max_retries ?? 0) || 0,
+          revision: String(profile?.revision ?? ''),
+          updated_at: String(profile?.updated_at ?? ''),
+          status: String(profile?.status ?? 'unknown'),
+        }))
+      : [],
+    boundary: {
+      public_runtime_accepts_raw_model_instance: Boolean(
+        data.boundary?.public_runtime_accepts_raw_model_instance
+      ),
+      results_write_posture: String(data.boundary?.results_write_posture ?? ''),
+      admin_surface: String(data.boundary?.admin_surface ?? ''),
+    },
+    receipt: data.receipt,
+  };
+}
+
 function slugifyProviderValue(value: string): string {
   const slug = value
     .trim()
@@ -665,6 +796,40 @@ function formatRate(value: number | undefined): string {
   return `${Math.round(value * 100)}%`;
 }
 
+function routingIdempotencyKey(): string {
+  return generateIdempotencyKey('ai_resources_routing');
+}
+
+function resolveAdminApiPayloadMessage(payload: any, fallback: string): string {
+  if (payload && typeof payload === 'object') {
+    const message = typeof payload.message === 'string' ? payload.message : '';
+    if (message.trim()) {
+      return resolveUiErrorMessage(message, fallback);
+    }
+    const detail = payload.detail;
+    if (Array.isArray(detail)) {
+      const detailMessage = detail
+        .map((item) => {
+          if (typeof item === 'string') return item;
+          if (item && typeof item === 'object' && typeof item.msg === 'string') return item.msg;
+          return '';
+        })
+        .filter(Boolean)
+        .join('; ');
+      if (detailMessage) {
+        return resolveUiErrorMessage(detailMessage, fallback);
+      }
+    }
+    if (typeof detail === 'string' && detail.trim()) {
+      return resolveUiErrorMessage(detail, fallback);
+    }
+    if (typeof payload.error_code === 'string' && payload.error_code.trim()) {
+      return resolveUiErrorMessage(payload.error_code, fallback);
+    }
+  }
+  return resolveUiErrorMessage(payload, fallback);
+}
+
 function AiResourcesContent() {
   const { t } = useLocale();
   const searchParams = useSearchParams();
@@ -673,6 +838,11 @@ function AiResourcesContent() {
     [t]
   );
   const [data, setData] = useState<AiResources | null>(null);
+  const [routingData, setRoutingData] = useState<RoutingData | null>(null);
+  const [routingDrafts, setRoutingDrafts] = useState<EditableRoutingProfile[]>([]);
+  const [abilityModelDialogProfileId, setAbilityModelDialogProfileId] = useState('');
+  const [abilityModelDialogError, setAbilityModelDialogError] = useState('');
+  const [abilityModelDialogMessage, setAbilityModelDialogMessage] = useState('');
   const [preferences, setPreferences] = useState<ProfilePreferences | null>(null);
   const [activeView, setActiveView] = useState<AIResourceView>('overview');
   const [activeSupplierTab, setActiveSupplierTab] = useState<SupplierSettingsTab>('model');
@@ -683,7 +853,9 @@ function AiResourcesContent() {
   const [connectionStatusFilter, setConnectionStatusFilter] = useState<ConnectionStatusFilter>('all');
   const [connectionSearch, setConnectionSearch] = useState('');
   const [loading, setLoading] = useState(true);
+  const [loadingRouting, setLoadingRouting] = useState(true);
   const [savingPreferences, setSavingPreferences] = useState(false);
+  const [savingRouting, setSavingRouting] = useState(false);
   const [savingConnection, setSavingConnection] = useState(false);
   const [testingConnectionId, setTestingConnectionId] = useState('');
   const [fetchingProviderCatalog, setFetchingProviderCatalog] = useState(false);
@@ -694,6 +866,7 @@ function AiResourcesContent() {
   const [providerConnectionForm, setProviderConnectionForm] = useState<ProviderConnectionForm>(
     EMPTY_PROVIDER_CONNECTION_FORM
   );
+  const [customModelInput, setCustomModelInput] = useState('');
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
 
@@ -715,6 +888,25 @@ function AiResourcesContent() {
       setError(loadError instanceof Error ? loadError.message : aiText('error_load', 'Failed to load provider management.'));
     } finally {
       setLoading(false);
+    }
+  }, [aiText]);
+
+  const loadRouting = useCallback(async () => {
+    setLoadingRouting(true);
+    setError('');
+    try {
+      const response = await fetch('/api/admin/wordpress-ai-routing', { credentials: 'include' });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(resolveUiErrorMessage(payload, aiText('error_load_ability_models', 'Failed to load ability model routing.')));
+      }
+      const normalized = normalizeRoutingData(payload.data);
+      setRoutingData(normalized);
+      setRoutingDrafts(normalized.profiles.map((profile) => ({ ...profile, note: '' })));
+    } catch (loadError) {
+      setError(loadError instanceof Error ? loadError.message : aiText('error_load_ability_models', 'Failed to load ability model routing.'));
+    } finally {
+      setLoadingRouting(false);
     }
   }, [aiText]);
 
@@ -879,7 +1071,7 @@ function AiResourcesContent() {
       const preview = payload.data as ProviderCatalogPreview;
       setProviderCatalogPreview(preview);
       if (preview.model_ids?.length) {
-        updateProviderConnectionForm({ modelIds: preview.model_ids.join(', ') });
+        setProviderModelIds(preview.model_ids);
       }
       setMessage(aiText('message_catalog_fetched', 'Fetched {{count}} upstream models.', {
         count: String(preview.model_count || preview.model_ids?.length || 0),
@@ -965,11 +1157,101 @@ function AiResourcesContent() {
     }
   }
 
+  function updateRoutingDraft(profileId: string, patch: Partial<EditableRoutingProfile>) {
+    setRoutingDrafts((current) =>
+      current.map((profile) => (profile.profile_id === profileId ? { ...profile, ...patch } : profile))
+    );
+  }
+
+  function updateRoutingCandidate(profileId: string, index: number, instanceId: string) {
+    setRoutingDrafts((current) =>
+      current.map((profile) => {
+        if (profile.profile_id !== profileId) return profile;
+        const nextCandidates = [...profile.candidate_instance_ids];
+        nextCandidates[index] = instanceId;
+        const uniqueCandidates = nextCandidates
+          .map((value) => value.trim())
+          .filter(Boolean)
+          .filter((value, candidateIndex, values) => values.indexOf(value) === candidateIndex);
+        return { ...profile, candidate_instance_ids: uniqueCandidates };
+      })
+    );
+  }
+
+  async function saveAbilityModelProfile(profileId: string) {
+    const profile = routingDrafts.find((item) => item.profile_id === profileId);
+    if (!profile) {
+      setAbilityModelDialogError(aiText('error_save_ability_models', 'Failed to save ability model routing.'));
+      return;
+    }
+    setSavingRouting(true);
+    setAbilityModelDialogError('');
+    setAbilityModelDialogMessage('');
+    setError('');
+    setMessage('');
+    try {
+      const response = await fetch('/api/admin/wordpress-ai-routing', {
+        method: 'POST',
+        credentials: 'include',
+        headers: {
+          'Content-Type': 'application/json',
+          'Idempotency-Key': routingIdempotencyKey(),
+        },
+        body: JSON.stringify({
+          profiles: [
+            {
+              profile_id: profile.profile_id,
+              candidate_instance_ids: profile.candidate_instance_ids,
+              timeout_ms: profile.timeout_ms,
+              allow_fallback: profile.allow_fallback,
+              max_retries: profile.max_retries,
+              note: profile.note,
+            },
+          ],
+        }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(
+          resolveAdminApiPayloadMessage(
+            payload,
+            aiText('error_save_ability_models', 'Failed to save ability model routing.')
+          )
+        );
+      }
+      const normalized = normalizeRoutingData(payload.data);
+      setRoutingData(normalized);
+      setRoutingDrafts(normalized.profiles.map((item) => ({ ...item, note: '' })));
+      setAbilityModelDialogMessage(aiText('message_ability_models_saved', 'Ability model routing saved.'));
+    } catch (saveError) {
+      setAbilityModelDialogError(
+        saveError instanceof Error ? saveError.message : aiText('error_save_ability_models', 'Failed to save ability model routing.')
+      );
+    } finally {
+      setSavingRouting(false);
+    }
+  }
+
+  function openAbilityModelDialog(profileId: string) {
+    setAbilityModelDialogProfileId(profileId);
+    setAbilityModelDialogError('');
+    setAbilityModelDialogMessage('');
+    setError('');
+    setMessage('');
+  }
+
+  function closeAbilityModelDialog() {
+    setAbilityModelDialogProfileId('');
+    setAbilityModelDialogError('');
+    setAbilityModelDialogMessage('');
+  }
+
   function openNewProviderConnection() {
     setProviderConnectionForm(EMPTY_PROVIDER_CONNECTION_FORM);
     setProviderFormMode('create');
     setProviderFormOpen(true);
     setProviderCatalogPreview(null);
+    setCustomModelInput('');
     setError('');
     setMessage('');
   }
@@ -980,6 +1262,7 @@ function AiResourcesContent() {
     }));
     setError('');
     setProviderCatalogPreview(null);
+    setCustomModelInput('');
     setProviderFormMode('edit');
     setProviderConnectionForm({
       providerPreset: inferProviderPreset(connection),
@@ -1010,9 +1293,29 @@ function AiResourcesContent() {
     }
   }
 
+  function setProviderModelIds(modelIds: string[]) {
+    updateProviderConnectionForm({ modelIds: joinList(modelIds) });
+  }
+
+  function addProviderModelIds(modelIds: string[]) {
+    setProviderModelIds([...splitList(providerConnectionForm.modelIds), ...modelIds]);
+  }
+
+  function removeProviderModelId(modelId: string) {
+    setProviderModelIds(splitList(providerConnectionForm.modelIds).filter((item) => item !== modelId));
+  }
+
+  function addCustomProviderModels() {
+    const modelIds = splitList(customModelInput);
+    if (!modelIds.length) return;
+    addProviderModelIds(modelIds);
+    setCustomModelInput('');
+  }
+
   function applyProviderPreset(presetId: string) {
     const preset = providerPresetById(presetId);
     setProviderCatalogPreview(null);
+    setCustomModelInput('');
     setProviderConnectionForm((current) => {
       const displayName = current.displayName && current.providerPreset === presetId ? current.displayName : preset.displayName;
       return {
@@ -1036,6 +1339,7 @@ function AiResourcesContent() {
     setCapabilityAddDialogOpen(false);
     setProviderFormMode('create');
     setProviderCatalogPreview(null);
+    setCustomModelInput('');
     setProviderConnectionForm({
       providerPreset: 'custom',
       connectionId: `${template.category}_${template.id}`,
@@ -1195,6 +1499,128 @@ function AiResourcesContent() {
     if (category === 'image') return aiText('capability_category_image', 'Images');
     return aiText('capability_category_vector', 'Vector');
   }, [aiText]);
+
+  const routingInstancesById = useMemo(() => {
+    const map = new Map<string, RuntimeInstance>();
+    for (const instance of [
+      ...(routingData?.available_text_instances || []),
+      ...(routingData?.available_image_instances || []),
+    ]) {
+      map.set(instance.instance_id, instance);
+    }
+    return map;
+  }, [routingData]);
+
+  const routingCandidateInstancesFor = useCallback(
+    (profile: RoutingProfile): RuntimeInstance[] =>
+      profile.execution_kind === 'image_generation'
+        ? routingData?.available_image_instances || []
+        : routingData?.available_text_instances || [],
+    [routingData]
+  );
+
+  const abilityTaskLabel = useCallback((taskId: string): string => {
+    const labels: Record<string, string> = {
+      alt_text_suggest: aiText('ability_task_alt_text_suggest', 'Alt text generation'),
+      excerpt_generation: aiText('ability_task_excerpt_generation', 'Excerpt generation'),
+      meta_description: aiText('ability_task_meta_description', 'Meta description generation'),
+      title_generation: aiText('ability_task_title_generation', 'Title generation'),
+      comment_reply_suggest: aiText('ability_task_comment_reply_suggest', 'Comment reply suggestion'),
+      content_rewrite: aiText('ability_task_content_rewrite', 'Content resizing'),
+      content_summary: aiText('ability_task_content_summary', 'Content summary'),
+      comment_moderation: aiText('ability_task_comment_moderation', 'Comment moderation'),
+      content_classification: aiText('ability_task_content_classification', 'Content classification'),
+      image_generation: aiText('ability_task_image_generation', 'Image generation'),
+    };
+    return labels[taskId] || taskId;
+  }, [aiText]);
+
+  const abilityTaskDescription = useCallback((taskId: string): string => {
+    const descriptions: Record<string, string> = {
+      alt_text_suggest: aiText('ability_task_alt_text_suggest_desc', 'Generate accessible alt text suggestions for media.'),
+      excerpt_generation: aiText('ability_task_excerpt_generation_desc', 'Generate reviewable excerpt suggestions from post content.'),
+      meta_description: aiText('ability_task_meta_description_desc', 'Generate reviewable SEO meta description suggestions.'),
+      title_generation: aiText('ability_task_title_generation_desc', 'Generate title suggestions for the editor.'),
+      comment_reply_suggest: aiText('ability_task_comment_reply_suggest_desc', 'Draft reviewable comment reply suggestions.'),
+      content_rewrite: aiText('ability_task_content_rewrite_desc', 'Shorten, expand, or rephrase selected editor content.'),
+      content_summary: aiText('ability_task_content_summary_desc', 'Summarize content for editor assistance.'),
+      comment_moderation: aiText('ability_task_comment_moderation_desc', 'Classify comments for moderation assistance.'),
+      content_classification: aiText('ability_task_content_classification_desc', 'Suggest tags and categories from content context.'),
+      image_generation: aiText('ability_task_image_generation_desc', 'Generate image candidates for review before WordPress use.'),
+    };
+    return descriptions[taskId] || aiText('ability_task_default_desc', 'Cloud runtime task from the WordPress AI connector.');
+  }, [aiText]);
+
+  const abilityModelFeatureLabel = useCallback((feature: string): string => {
+    const normalized = feature.trim();
+    if (normalized === 'image_generation' || normalized === 'image_generations') {
+      return aiText('ability_model_feature_image_generation', 'Image generation');
+    }
+    if (normalized === 'text_generation' || normalized === 'text_generations' || normalized === 'text') {
+      return aiText('ability_model_feature_text_generation', 'Text generation');
+    }
+    return normalized || aiText('ability_model_feature_unknown', 'Unknown');
+  }, [aiText]);
+
+  const abilityModelRegionLabel = useCallback((region: string): string => {
+    const normalized = region.trim();
+    if (!normalized || normalized === 'global') {
+      return aiText('ability_model_region_global', 'Global');
+    }
+    return normalized;
+  }, [aiText]);
+
+  const abilityModelHealthLabel = useCallback((status: string): string => {
+    const normalized = status.trim();
+    if (normalized === 'healthy') return aiText('status_healthy_label', 'Healthy');
+    if (normalized === 'degraded') return aiText('status_degraded_label', 'Degraded');
+    if (normalized === 'error') return aiText('status_error_label', 'Error');
+    if (normalized === 'warning') return aiText('status_warning_label', 'Warning');
+    return normalized || aiText('status_not_observed', 'not observed');
+  }, [aiText]);
+
+  const abilityModelInstanceDetail = useCallback((instance: RuntimeInstance): string => (
+    aiText('ability_model_instance_detail', 'Instance: {{instance}} · Capability: {{feature}} · Region: {{region}} · Status: {{status}}', {
+      instance: instance.instance_id,
+      feature: abilityModelFeatureLabel(instance.model_feature || instance.endpoint_variant),
+      region: abilityModelRegionLabel(instance.region),
+      status: abilityModelHealthLabel(instance.health_status),
+    })
+  ), [abilityModelFeatureLabel, abilityModelHealthLabel, abilityModelRegionLabel, aiText]);
+
+  const abilityModelRows = useMemo(() => {
+    return routingDrafts.flatMap((profile) => {
+      const primaryInstance = routingInstancesById.get(profile.candidate_instance_ids[0] || '');
+      const fallbackCount = Math.max(0, profile.candidate_instance_ids.length - 1);
+      return profile.tasks.map((taskId) => ({
+        taskId,
+        label: abilityTaskLabel(taskId),
+        description: abilityTaskDescription(taskId),
+        profile,
+        primaryInstance,
+        fallbackCount,
+      }));
+    });
+  }, [abilityTaskDescription, abilityTaskLabel, routingDrafts, routingInstancesById]);
+
+  const activeAbilityModelProfile = useMemo(
+    () => routingDrafts.find((profile) => profile.profile_id === abilityModelDialogProfileId) || null,
+    [abilityModelDialogProfileId, routingDrafts]
+  );
+
+  const activeAbilityModelTitle = useMemo(() => {
+    if (!activeAbilityModelProfile) return '';
+    if (activeAbilityModelProfile.tasks.length === 1) {
+      return abilityTaskLabel(activeAbilityModelProfile.tasks[0]);
+    }
+    if (activeAbilityModelProfile.tasks.length > 1) {
+      return aiText('ability_model_group_title', '{{name}} 等 {{count}} 个能力', {
+        name: abilityTaskLabel(activeAbilityModelProfile.tasks[0]),
+        count: String(activeAbilityModelProfile.tasks.length),
+      });
+    }
+    return activeAbilityModelProfile.label;
+  }, [abilityTaskLabel, activeAbilityModelProfile, aiText]);
 
   const matrixRows = useMemo<CapabilityMatrixRow[]>(() => {
     if (!data) return [];
@@ -1365,16 +1791,6 @@ function AiResourcesContent() {
             {error}
           </BackofficeStackCard>
         ) : null}
-        <BackofficeStackCard className="flex flex-col gap-3 text-sm leading-6 text-slate-600 dark:text-slate-300 lg:flex-row lg:items-center lg:justify-between">
-          <span>
-            {aiText('boundary_notice', 'Provider connections can be managed in Cloud runtime storage. WordPress writes, approvals, abilities, workflows, prompts, and router truth stay outside this page.')}
-          </span>
-          <div className="flex flex-wrap gap-2">
-            <Link href="/admin/audio-workbench" className="btn btn-primary">
-              {aiText('link_audio_workbench', 'Audio workbench')}
-            </Link>
-          </div>
-        </BackofficeStackCard>
       </BackofficePrimaryPanel>
 
       <div className="flex flex-wrap gap-2">
@@ -1636,26 +2052,56 @@ function AiResourcesContent() {
                       placeholder="https://api.example.com/v1"
                     />
                   </label>
-                  <label className="grid gap-2 text-sm font-medium text-slate-700 dark:text-slate-200">
-                    <span className="flex items-center justify-between gap-3">
+                  <div className="grid gap-2 text-sm font-medium text-slate-700 dark:text-slate-200 md:col-span-2">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
                       <span>{aiText('field_models', 'Models')}</span>
-                      <button
-                        type="button"
-                        className="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-semibold text-slate-700 transition hover:border-slate-300 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-200 dark:hover:border-slate-700"
-                        disabled={fetchingProviderCatalog || savingConnection}
-                        onClick={() => void fetchProviderCatalogPreview()}
-                      >
-                        {fetchingProviderCatalog
-                          ? aiText('action_fetching_upstream_models', 'Fetching...')
-                          : aiText('action_fetch_upstream_models', 'Fetch from upstream')}
-                      </button>
-                    </span>
-                    <input
-                      className="h-11 rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-white"
-                      value={providerConnectionForm.modelIds}
-                      onChange={(event) => updateProviderConnectionForm({ modelIds: event.target.value })}
-                      placeholder="gpt-4o, gpt-4o-mini"
-                    />
+                      <div className="flex flex-wrap items-center gap-2">
+                        <button
+                          type="button"
+                          className="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-semibold text-slate-700 transition hover:border-slate-300 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-200 dark:hover:border-slate-700"
+                          disabled={fetchingProviderCatalog || savingConnection}
+                          onClick={() => void fetchProviderCatalogPreview()}
+                        >
+                          {fetchingProviderCatalog
+                            ? aiText('action_fetching_upstream_models', 'Fetching...')
+                            : aiText('action_fetch_upstream_models', 'Fetch from upstream')}
+                        </button>
+                        <button
+                          type="button"
+                          className="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-semibold text-slate-600 transition hover:border-slate-300 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-300 dark:hover:border-slate-700"
+                          disabled={!splitList(providerConnectionForm.modelIds).length || savingConnection}
+                          onClick={() => setProviderModelIds([])}
+                        >
+                          {aiText('action_clear_all_models', 'Clear all')}
+                        </button>
+                      </div>
+                    </div>
+                    <div className="min-h-[5.5rem] max-h-44 overflow-y-auto rounded-lg border border-slate-300 bg-white p-3 dark:border-slate-700 dark:bg-slate-950">
+                      {splitList(providerConnectionForm.modelIds).length ? (
+                        <div className="flex flex-wrap gap-2">
+                          {splitList(providerConnectionForm.modelIds).map((modelId) => (
+                            <span
+                              key={modelId}
+                              className="inline-flex max-w-full items-center gap-2 rounded-full bg-slate-100 px-3 py-1 text-sm font-semibold text-slate-800 dark:bg-slate-800 dark:text-slate-100"
+                            >
+                              <span className="truncate">{modelId}</span>
+                              <button
+                                type="button"
+                                className="text-lg leading-none text-slate-500 hover:text-slate-950 dark:text-slate-400 dark:hover:text-white"
+                                aria-label={aiText('action_remove_model_named', 'Remove {{name}}', { name: modelId })}
+                                onClick={() => removeProviderModelId(modelId)}
+                              >
+                                ×
+                              </button>
+                            </span>
+                          ))}
+                        </div>
+                      ) : (
+                        <div className="flex h-full min-h-[4rem] items-center text-sm font-normal text-slate-400 dark:text-slate-500">
+                          {aiText('models_empty', 'No models selected. Fetch from upstream or add specified models.')}
+                        </div>
+                      )}
+                    </div>
                     {providerCatalogPreview ? (
                       <span className="text-xs font-normal leading-5 text-slate-500 dark:text-slate-400">
                         {aiText('catalog_preview_loaded', 'Loaded {{count}} models from upstream.', {
@@ -1664,7 +2110,29 @@ function AiResourcesContent() {
                         {providerCatalogPreview.truncated ? ` ${aiText('catalog_preview_truncated', 'Showing first 100.')}` : ''}
                       </span>
                     ) : null}
-                  </label>
+                    <div className="flex flex-col gap-2 sm:flex-row">
+                      <input
+                        className="h-11 min-w-0 flex-1 rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-white"
+                        value={customModelInput}
+                        onChange={(event) => setCustomModelInput(event.target.value)}
+                        onKeyDown={(event) => {
+                          if (event.key === 'Enter') {
+                            event.preventDefault();
+                            addCustomProviderModels();
+                          }
+                        }}
+                        placeholder={aiText('placeholder_add_custom_models', 'Add specified models, separated by commas')}
+                      />
+                      <button
+                        type="button"
+                        className="btn btn-secondary shrink-0"
+                        disabled={!customModelInput.trim()}
+                        onClick={addCustomProviderModels}
+                      >
+                        {aiText('action_add_model', 'Add')}
+                      </button>
+                    </div>
+                  </div>
                   <label className="mt-6 inline-flex items-center gap-2 text-sm text-slate-600 dark:text-slate-300">
                     <input
                       type="checkbox"
@@ -1761,13 +2229,6 @@ function AiResourcesContent() {
                 <div className="flex flex-col gap-3 text-sm text-slate-600 dark:text-slate-300 sm:flex-row sm:items-center sm:justify-between">
                   <span>{aiText('save_test_notice', 'Saving will immediately run a masked provider test. Secrets are never returned to the browser.')}</span>
                   <div className="flex flex-wrap gap-2">
-                    <button
-                      type="button"
-                      className="btn btn-secondary"
-                      onClick={() => setProviderConnectionForm(EMPTY_PROVIDER_CONNECTION_FORM)}
-                    >
-                      {aiText('action_clear', 'Clear')}
-                    </button>
                     <button
                       type="button"
                       className="btn btn-secondary"
@@ -2186,75 +2647,203 @@ function AiResourcesContent() {
           </div>
         )}
           </BackofficeSectionPanel>
+        </>
+      ) : null}
 
-          {activeSupplierTab === 'model' && preferences ? (
-            <BackofficeSectionPanel>
+      {activeView === 'ability_models' ? (
+        <>
+        {preferences ? (
+          <BackofficeSectionPanel>
+            <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+              <div>
+                <h2 className="text-lg font-semibold text-slate-950 dark:text-white">{aiText('profile_preferences_title', 'Audio ability models')}</h2>
+                <p className="mt-1 text-sm leading-6 text-slate-600 dark:text-slate-300">
+                  {aiText('profile_preferences_desc', 'Runtime profile selection for audio summary, narration, and playback. This does not edit prompts, router rules, or WordPress write policy.')}
+                </p>
+              </div>
+              <BackofficeStatusBadge label={aiText('badge_runtime_metadata', 'Runtime metadata')} status="info" />
+            </div>
+            <div className="mt-4 grid gap-4 lg:grid-cols-3">
+              <label className="grid gap-2 text-sm font-medium text-slate-700 dark:text-slate-200">
+                {aiText('field_audio_summary_text_profile', 'Audio summary text profile')}
+                <select
+                  className="h-11 rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-white"
+                  value={preferences.audio_summary_text_profile_id}
+                  onChange={(event) => updatePreferences({ audio_summary_text_profile_id: event.target.value })}
+                >
+                  {preferences.allowed.text_profile_ids.map((profileId) => (
+                    <option key={profileId} value={profileId}>
+                      {profileId}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="grid gap-2 text-sm font-medium text-slate-700 dark:text-slate-200">
+                {aiText('field_article_narration_audio_profile', 'Article narration audio profile')}
+                <select
+                  className="h-11 rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-white"
+                  value={preferences.audio_narration_profile_id}
+                  onChange={(event) => updatePreferences({ audio_narration_profile_id: event.target.value })}
+                >
+                  {preferences.allowed.audio_profile_ids.map((profileId) => (
+                    <option key={profileId} value={profileId}>
+                      {profileId}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="grid gap-2 text-sm font-medium text-slate-700 dark:text-slate-200">
+                {aiText('field_audio_summary_playback_profile', 'Audio summary playback profile')}
+                <select
+                  className="h-11 rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-white"
+                  value={preferences.audio_summary_audio_profile_id}
+                  onChange={(event) => updatePreferences({ audio_summary_audio_profile_id: event.target.value })}
+                >
+                  {preferences.allowed.audio_profile_ids.map((profileId) => (
+                    <option key={profileId} value={profileId}>
+                      {profileId}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+            <div className="mt-4 flex flex-col gap-3 text-sm text-slate-600 dark:text-slate-300 sm:flex-row sm:items-center sm:justify-between">
+              <span>{aiText('preferences_storage_notice', 'Stored in {{path}}. Secrets are not part of this save path.', { path: preferences.env_path })}</span>
+              <button
+                type="button"
+                onClick={saveProfilePreferences}
+                disabled={savingPreferences}
+                className="btn btn-primary justify-center disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {savingPreferences ? aiText('saving', 'Saving...') : aiText('action_save_preferences', 'Save profile preferences')}
+              </button>
+            </div>
+          </BackofficeSectionPanel>
+        ) : null}
+
+        <BackofficeSectionPanel>
           <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
             <div>
-              <h2 className="text-lg font-semibold text-slate-950 dark:text-white">{aiText('profile_preferences_title', 'Profile preferences')}</h2>
+              <h2 className="text-lg font-semibold text-slate-950 dark:text-white">
+                {aiText('ability_models_title', 'Ability models')}
+              </h2>
               <p className="mt-1 text-sm leading-6 text-slate-600 dark:text-slate-300">
-                {aiText('profile_preferences_desc', 'Runtime profile selection for Admin audio tools. This does not edit prompts, router rules, or WordPress write policy.')}
+                {aiText('ability_models_desc', 'WordPress AI connector abilities mapped to Cloud runtime profiles and model instances. Local plugin enablement and WordPress writes stay outside this page.')}
               </p>
             </div>
-            <BackofficeStatusBadge label={aiText('badge_runtime_metadata', 'Runtime metadata')} status="info" />
-          </div>
-          <div className="mt-4 grid gap-4 lg:grid-cols-3">
-            <label className="grid gap-2 text-sm font-medium text-slate-700 dark:text-slate-200">
-              {aiText('field_audio_summary_text_profile', 'Audio summary text profile')}
-              <select
-                className="h-11 rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-white"
-                value={preferences.audio_summary_text_profile_id}
-                onChange={(event) => updatePreferences({ audio_summary_text_profile_id: event.target.value })}
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                className="btn btn-secondary justify-center"
+                disabled={loadingRouting}
+                onClick={() => void loadRouting()}
               >
-                {preferences.allowed.text_profile_ids.map((profileId) => (
-                  <option key={profileId} value={profileId}>
-                    {profileId}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="grid gap-2 text-sm font-medium text-slate-700 dark:text-slate-200">
-              {aiText('field_article_narration_audio_profile', 'Article narration audio profile')}
-              <select
-                className="h-11 rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-white"
-                value={preferences.audio_narration_profile_id}
-                onChange={(event) => updatePreferences({ audio_narration_profile_id: event.target.value })}
-              >
-                {preferences.allowed.audio_profile_ids.map((profileId) => (
-                  <option key={profileId} value={profileId}>
-                    {profileId}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="grid gap-2 text-sm font-medium text-slate-700 dark:text-slate-200">
-              {aiText('field_audio_summary_playback_profile', 'Audio summary playback profile')}
-              <select
-                className="h-11 rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-white"
-                value={preferences.audio_summary_audio_profile_id}
-                onChange={(event) => updatePreferences({ audio_summary_audio_profile_id: event.target.value })}
-              >
-                {preferences.allowed.audio_profile_ids.map((profileId) => (
-                  <option key={profileId} value={profileId}>
-                    {profileId}
-                  </option>
-                ))}
-              </select>
-            </label>
+                {loadingRouting ? aiText('loading', 'Loading...') : aiText('action_refresh', 'Refresh')}
+              </button>
+            </div>
           </div>
-          <div className="mt-4 flex flex-col gap-3 text-sm text-slate-600 dark:text-slate-300 sm:flex-row sm:items-center sm:justify-between">
-            <span>{aiText('preferences_storage_notice', 'Stored in {{path}}. Secrets are not part of this save path.', { path: preferences.env_path })}</span>
-            <button
-              type="button"
-              onClick={saveProfilePreferences}
-              disabled={savingPreferences}
-              className="btn btn-primary justify-center disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              {savingPreferences ? aiText('saving', 'Saving...') : aiText('action_save_preferences', 'Save profile preferences')}
-            </button>
+          <div className="mt-4 grid gap-3 lg:grid-cols-4">
+            <BackofficeStackCard>
+              <div className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500 dark:text-slate-400">
+                {aiText('ability_models_metric_abilities', 'Abilities')}
+              </div>
+              <div className="mt-2 text-2xl font-semibold text-slate-950 dark:text-white">{abilityModelRows.length}</div>
+              <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                {aiText('ability_models_metric_abilities_detail', 'WordPress AI connector tasks')}
+              </div>
+            </BackofficeStackCard>
+            <BackofficeStackCard>
+              <div className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500 dark:text-slate-400">
+                {aiText('ability_models_metric_profiles', 'Profiles')}
+              </div>
+              <div className="mt-2 text-2xl font-semibold text-slate-950 dark:text-white">{routingDrafts.length}</div>
+              <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                {aiText('ability_models_metric_profiles_detail', 'Shared runtime routing groups')}
+              </div>
+            </BackofficeStackCard>
+            <BackofficeStackCard>
+              <div className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500 dark:text-slate-400">
+                {aiText('ability_models_metric_text_instances', 'Text models')}
+              </div>
+              <div className="mt-2 text-2xl font-semibold text-slate-950 dark:text-white">
+                {routingData?.available_text_instances.length || 0}
+              </div>
+              <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                {aiText('ability_models_metric_text_instances_detail', 'Available text runtime instances')}
+              </div>
+            </BackofficeStackCard>
+            <BackofficeStackCard>
+              <div className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500 dark:text-slate-400">
+                {aiText('ability_models_metric_image_instances', 'Image models')}
+              </div>
+              <div className="mt-2 text-2xl font-semibold text-slate-950 dark:text-white">
+                {routingData?.available_image_instances.length || 0}
+              </div>
+              <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                {aiText('ability_models_metric_image_instances_detail', 'Available image runtime instances')}
+              </div>
+            </BackofficeStackCard>
           </div>
-            </BackofficeSectionPanel>
-          ) : null}
+          <div className="mt-4 overflow-hidden rounded-lg border border-slate-200 dark:border-slate-800">
+            <div className="grid grid-cols-[8rem_1.4fr_1fr_1.4fr_8rem_8rem] gap-3 border-b border-slate-200 bg-slate-50 px-4 py-3 text-xs font-semibold uppercase tracking-[0.16em] text-slate-500 dark:border-slate-800 dark:bg-slate-900/70 dark:text-slate-400">
+              <span>{aiText('column_status', 'Status')}</span>
+              <span>{aiText('column_ability', 'Ability')}</span>
+              <span>{aiText('column_profile', 'Profile')}</span>
+              <span>{aiText('column_provider_model', 'Provider / model')}</span>
+              <span>{aiText('column_fallback', 'Fallback')}</span>
+              <span className="text-right">{aiText('column_actions', 'Actions')}</span>
+            </div>
+            {abilityModelRows.map((row) => (
+              <div
+                key={`${row.profile.profile_id}-${row.taskId}`}
+                className="grid grid-cols-[8rem_1.4fr_1fr_1.4fr_8rem_8rem] gap-3 border-b border-slate-200 px-4 py-3 text-sm last:border-b-0 dark:border-slate-800"
+              >
+                <BackofficeStatusBadge
+                  label={row.primaryInstance ? aiText('status_ready', 'Ready') : aiText('status_missing', 'Missing')}
+                  status={row.primaryInstance ? 'success' : 'warning'}
+                />
+                <div>
+                  <div className="font-medium text-slate-950 dark:text-white">{row.label}</div>
+                  <div className="mt-1 text-xs leading-5 text-slate-500 dark:text-slate-400">{row.description}</div>
+                </div>
+                <div className="text-slate-600 dark:text-slate-300">
+                  <div>{row.profile.label}</div>
+                  <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">{row.profile.profile_id}</div>
+                </div>
+                <div className="text-slate-600 dark:text-slate-300">
+                  <div>{row.primaryInstance?.provider_id || '-'}</div>
+                  <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                    {row.primaryInstance?.model_id || '-'}
+                  </div>
+                </div>
+                <div className="text-slate-600 dark:text-slate-300">
+                  {row.fallbackCount
+                    ? aiText('fallback_count', '{{count}} fallback', { count: String(row.fallbackCount) })
+                    : aiText('fallback_none', 'None')}
+                </div>
+                <div className="text-right">
+                  <button
+                    type="button"
+                    className="btn btn-secondary justify-center"
+                    onClick={() => openAbilityModelDialog(row.profile.profile_id)}
+                  >
+                    {aiText('action_configure', 'Configure')}
+                  </button>
+                </div>
+              </div>
+            ))}
+            {abilityModelRows.length ? null : (
+              <div className="px-4 py-6 text-sm text-slate-500 dark:text-slate-400">
+                {loadingRouting
+                  ? aiText('ability_models_loading', 'Loading ability model routing...')
+                  : aiText('ability_models_empty', 'No WordPress AI connector abilities are available.')}
+              </div>
+            )}
+          </div>
+          <div className="mt-3 text-xs leading-5 text-slate-500 dark:text-slate-400">
+            {aiText('ability_models_boundary_notice', 'This changes Cloud runtime profile bindings only. It does not enable plugin abilities, edit prompts, or write to WordPress.')}
+          </div>
+        </BackofficeSectionPanel>
         </>
       ) : null}
 
@@ -2622,6 +3211,193 @@ function AiResourcesContent() {
           </BackofficeSectionPanel>
         </>
       ) : null}
+      {activeAbilityModelProfile && typeof document !== 'undefined' ? createPortal((
+        <div
+          className="fixed inset-0 z-[2147483647] flex items-center justify-center p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="ability-model-dialog-title"
+        >
+          <div className="absolute inset-0 bg-slate-950/55" />
+          <div className="relative z-10 max-h-[90vh] w-full max-w-4xl overflow-y-auto rounded-2xl bg-white p-6 shadow-2xl dark:bg-slate-950">
+            <div className="flex flex-col gap-3 border-b border-slate-200 pb-4 dark:border-slate-800 sm:flex-row sm:items-start sm:justify-between">
+              <div>
+                <h2 id="ability-model-dialog-title" className="text-xl font-semibold text-slate-950 dark:text-white">
+                  {aiText('ability_model_dialog_title', 'Configure ability model')}
+                </h2>
+                <p className="mt-1 text-sm leading-6 text-slate-600 dark:text-slate-300">
+                  {aiText('ability_model_dialog_desc', 'This updates one shared Cloud runtime profile. WordPress plugin feature switches and final writes are not changed.')}
+                </p>
+              </div>
+              <button type="button" className="btn btn-secondary" onClick={closeAbilityModelDialog}>
+                {aiText('action_close_dialog', 'Close')}
+              </button>
+            </div>
+            <div className="mt-4 grid gap-4 lg:grid-cols-[1.2fr_0.8fr]">
+              <div className="space-y-3">
+                <div>
+                  <div className="text-base font-semibold text-slate-950 dark:text-white">{activeAbilityModelTitle}</div>
+                  <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">{activeAbilityModelProfile.profile_id}</div>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {activeAbilityModelProfile.tasks.map((taskId) => (
+                    <span
+                      key={taskId}
+                      className="rounded-full border border-slate-200 px-2.5 py-1 text-xs text-slate-600 dark:border-slate-800 dark:text-slate-300"
+                    >
+                      {abilityTaskLabel(taskId)}
+                    </span>
+                  ))}
+                </div>
+                {[0, 1].map((index) => {
+                  const selectedId = activeAbilityModelProfile.candidate_instance_ids[index] || '';
+                  const selected = routingInstancesById.get(selectedId);
+                  const candidates = routingCandidateInstancesFor(activeAbilityModelProfile);
+                  return (
+                    <label
+                      key={`${activeAbilityModelProfile.profile_id}-${index}`}
+                      className="block rounded-xl border border-slate-200 bg-white/70 p-3 dark:border-slate-800 dark:bg-slate-950/40"
+                    >
+                      <span className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">
+                        {index === 0 ? aiText('ability_model_primary_model', 'Primary model') : aiText('ability_model_fallback_model', 'Fallback model')}
+                      </span>
+                      <select
+                        value={selectedId}
+                        onChange={(event) =>
+                          updateRoutingCandidate(activeAbilityModelProfile.profile_id, index, event.target.value)
+                        }
+                        className="mt-2 w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+                      >
+                        <option value="">{aiText('ability_model_unassigned', 'Unassigned')}</option>
+                        {candidates.map((instance) => (
+                          <option
+                            key={`${activeAbilityModelProfile.profile_id}-${index}-${instance.instance_id}`}
+                            value={instance.instance_id}
+                          >
+                            {instance.provider_id} · {instance.model_id}
+                          </option>
+                        ))}
+                      </select>
+                      {selected ? (
+                        <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
+                          {abilityModelInstanceDetail(selected)}
+                        </p>
+                      ) : null}
+                    </label>
+                  );
+                })}
+              </div>
+              <div className="space-y-3">
+                <label className="block">
+                  <span className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">
+                    {aiText('field_timeout_ms', 'Timeout ms')}
+                  </span>
+                  <input
+                    type="number"
+                    min={1000}
+                    max={activeAbilityModelProfile.max_timeout_ms}
+                    step={1000}
+                    value={activeAbilityModelProfile.timeout_ms}
+                    onChange={(event) =>
+                      updateRoutingDraft(activeAbilityModelProfile.profile_id, {
+                        timeout_ms: Number(event.target.value) || 30000,
+                      })
+                    }
+                    className="mt-2 w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+                  />
+                </label>
+                <label className="flex items-center justify-between rounded-xl border border-slate-200 bg-white/70 px-3 py-2 dark:border-slate-800 dark:bg-slate-950/40">
+                  <span className="text-sm font-medium text-slate-700 dark:text-slate-200">
+                    {aiText('field_allow_fallback', 'Provider fallback')}
+                  </span>
+                  <input
+                    type="checkbox"
+                    checked={activeAbilityModelProfile.allow_fallback}
+                    onChange={(event) =>
+                      updateRoutingDraft(activeAbilityModelProfile.profile_id, {
+                        allow_fallback: event.target.checked,
+                      })
+                    }
+                  />
+                </label>
+                <label className="block">
+                  <span className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">
+                    {aiText('field_retry_max', 'Retry max')}
+                  </span>
+                  <select
+                    value={activeAbilityModelProfile.max_retries}
+                    onChange={(event) =>
+                      updateRoutingDraft(activeAbilityModelProfile.profile_id, {
+                        max_retries: Number(event.target.value) || 0,
+                      })
+                    }
+                    className="mt-2 w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+                  >
+                    <option value={0}>0</option>
+                    <option value={1}>1</option>
+                  </select>
+                </label>
+                <label className="block">
+                  <span className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">
+                    {aiText('field_operator_note', 'Operator note')}
+                  </span>
+                  <textarea
+                    value={activeAbilityModelProfile.note}
+                    onChange={(event) =>
+                      updateRoutingDraft(activeAbilityModelProfile.profile_id, { note: event.target.value })
+                    }
+                    rows={3}
+                    className="mt-2 w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+                    placeholder={aiText('placeholder_ability_model_note', 'Why this ability model binding is being changed')}
+                  />
+                </label>
+              </div>
+            </div>
+            <div className="mt-5 grid gap-3 border-t border-slate-200 pt-4 text-sm text-slate-600 dark:border-slate-800 dark:text-slate-300">
+              <div className="grid gap-2">
+                <span>
+                  {aiText('ability_model_save_notice', 'Saving updates the Cloud runtime routing profile used by this ability group.')}
+                </span>
+                {abilityModelDialogMessage ? (
+                  <span
+                    className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950/25 dark:text-emerald-200"
+                    role="status"
+                    aria-live="polite"
+                  >
+                    {abilityModelDialogMessage}
+                  </span>
+                ) : null}
+                {abilityModelDialogError ? (
+                  <span
+                    className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-rose-800 dark:border-rose-900 dark:bg-rose-950/25 dark:text-rose-200"
+                    role="alert"
+                  >
+                    {abilityModelDialogError}
+                  </span>
+                ) : null}
+              </div>
+              <div className="flex flex-wrap justify-end gap-2">
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  disabled={savingRouting}
+                  onClick={closeAbilityModelDialog}
+                >
+                  {aiText('action_cancel', 'Cancel')}
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-primary justify-center disabled:cursor-not-allowed disabled:opacity-60"
+                  disabled={savingRouting || !activeAbilityModelProfile.candidate_instance_ids.length}
+                  onClick={() => void saveAbilityModelProfile(activeAbilityModelProfile.profile_id)}
+                >
+                  {savingRouting ? aiText('saving', 'Saving...') : aiText('action_save_ability_model', 'Save ability model')}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      ), document.body) : null}
     </BackofficePageStack>
   );
 }

@@ -104,7 +104,7 @@ export interface RotateKeyResponse {
 
 export interface PortalLoginCodeRequest {
   email: string;
-  locale?: 'en' | 'zh-CN' | 'zh-TW';
+  locale?: 'en' | 'zh-CN';
 }
 
 export interface PortalLoginCodeVerifyRequest {

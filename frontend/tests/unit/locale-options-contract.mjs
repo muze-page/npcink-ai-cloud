@@ -30,6 +30,24 @@ assert.doesNotMatch(
 
 assert.match(
   i18nSource,
+  /export type Locale = 'en' \| 'zh-CN';/,
+  'Locale type must stay bilingual-only until Traditional Chinese is restored completely'
+);
+
+assert.doesNotMatch(
+  i18nSource,
+  /^\s*'zh-TW': \{/m,
+  'Traditional Chinese translation dictionary must be removed while the product is bilingual-only'
+);
+
+assert.doesNotMatch(
+  i18nSource,
+  /'language\.zh-TW'/,
+  'Traditional Chinese language label must be removed while the product is bilingual-only'
+);
+
+assert.match(
+  i18nSource,
   /if \(raw === 'zh-TW'\) \{\s*return 'zh-CN';\s*\}/,
   'stored Traditional Chinese locale must downgrade to Simplified Chinese'
 );

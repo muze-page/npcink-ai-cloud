@@ -93,6 +93,11 @@ from app.domain.image_generation.contracts import (
     ImageGenerationContractViolation,
     validate_image_generation_runtime_contract,
 )
+from app.domain.image_generation.inline_images import (
+    InlineImageMaterializationConfig,
+    InlineImageMaterializationError,
+    materialize_inline_image_candidates_from_urls,
+)
 from app.domain.image_sources.contracts import (
     IMAGE_SOURCE_ABILITIES,
     IMAGE_SOURCE_PROFILE_ID,
@@ -3473,6 +3478,25 @@ class RuntimeService:
                         provider_output,
                         input_payload=input_payload,
                     )
+                if self._is_wordpress_ai_connector_image_generation_run(
+                    run,
+                    input_payload=input_payload,
+                ):
+                    try:
+                        provider_output = self._materialize_wordpress_ai_inline_image_output(
+                            provider_output,
+                        )
+                    except InlineImageMaterializationError as error:
+                        repository.mark_run_failed(
+                            run,
+                            error_code=error.error_code,
+                            error_message=error.message,
+                            provider_id=candidate.provider_id,
+                            model_id=candidate.model_id,
+                            instance_id=candidate.instance_id,
+                            fallback_used=fallback_used,
+                        )
+                        return
                 if self._is_audio_generation_run(run):
                     try:
                         provider_output = self._materialize_audio_generation_output(
@@ -5455,6 +5479,15 @@ class RuntimeService:
             ),
         )
 
+    def _materialize_wordpress_ai_inline_image_output(
+        self,
+        provider_output: dict[str, Any],
+    ) -> dict[str, Any]:
+        return materialize_inline_image_candidates_from_urls(
+            provider_output,
+            config=InlineImageMaterializationConfig(),
+        )
+
     def _is_media_batch_plan_run(self, run: RunRecord) -> bool:
         return str(run.ability_name or "") in MEDIA_BATCH_PLAN_ABILITIES
 
@@ -5472,6 +5505,21 @@ class RuntimeService:
 
     def _is_wordpress_ai_connector_run(self, run: RunRecord) -> bool:
         return str(run.ability_name or "") in WP_AI_CONNECTOR_ABILITIES
+
+    def _is_wordpress_ai_connector_image_generation_run(
+        self,
+        run: RunRecord,
+        *,
+        input_payload: dict[str, Any],
+    ) -> bool:
+        return (
+            self._is_image_generation_run(run)
+            and str(run.channel or "") == "wordpress_ai_connector"
+            and str(input_payload.get("source_surface") or "") == "wordpress_ai_connector"
+            and str(input_payload.get("connector_id") or "") == "npcink-cloud"
+            and str(input_payload.get("task") or "") == "image_generation"
+            and str(input_payload.get("response_format") or "") == "b64_json"
+        )
 
     def _build_wordpress_ai_connector_provider_input(
         self,

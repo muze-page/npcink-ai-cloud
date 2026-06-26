@@ -22,9 +22,26 @@ import { getInternalAuthToken } from '@/lib/env';
 
 const COPIED_REQUEST_HEADERS = [
   'accept-language',
-  'idempotency-key',
   'x-npcink-debug-portal-link',
 ] as const;
+
+const ADMIN_IDEMPOTENCY_KEY_PATTERN = /^[A-Za-z0-9._:-]{1,128}$/;
+
+function createAdminIdempotencyKey(): string {
+  const random =
+    typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+      ? crypto.randomUUID().replace(/-/g, '')
+      : Math.random().toString(36).slice(2);
+  return `admin_write_${Date.now()}_${random}`.slice(0, 128);
+}
+
+function resolveAdminIdempotencyKey(request: NextRequest): string {
+  const requested = String(request.headers.get('idempotency-key') || '').trim();
+  if (ADMIN_IDEMPOTENCY_KEY_PATTERN.test(requested)) {
+    return requested;
+  }
+  return createAdminIdempotencyKey();
+}
 
 function buildAdminBackendPath(pathSegments: string[], method: string): string {
   const normalized = pathSegments
@@ -154,7 +171,7 @@ async function proxyAdminRequest(
 
   // Add idempotency key for write requests
   if (method !== 'GET' && method !== 'HEAD') {
-    headers['Idempotency-Key'] = request.headers.get('idempotency-key') || crypto.randomUUID();
+    headers['Idempotency-Key'] = resolveAdminIdempotencyKey(request);
   }
 
   let body: string | undefined;

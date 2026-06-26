@@ -119,8 +119,8 @@ export const EmptyStates = {
   /** 无项目 */
   NoItems: ({ itemType, action }: { itemType?: string; action?: ReactNode }) => {
     const { locale, t } = useLocale();
-    const plural = itemType || (locale === 'en' ? 'items' : locale === 'zh-CN' ? '项目' : '項目');
-    const singular = itemType || (locale === 'en' ? 'item' : locale === 'zh-CN' ? '项目' : '項目');
+    const plural = itemType || (locale === 'en' ? 'items' : '项目');
+    const singular = itemType || (locale === 'en' ? 'item' : '项目');
     return (
       <EmptyState
         icon="📭"

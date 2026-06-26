@@ -3,11 +3,13 @@ import { resolve } from 'node:path';
 import assert from 'node:assert/strict';
 
 const pagePath = resolve(process.cwd(), 'src/app/admin/ai-resources/page.tsx');
+const abilityModelsPath = resolve(process.cwd(), 'src/app/admin/ability-models/page.tsx');
 const layoutPath = resolve(process.cwd(), 'src/app/admin/layout.tsx');
 const troubleshootingPath = resolve(process.cwd(), 'src/app/admin/troubleshooting/page.tsx');
 const webSearchPagePath = resolve(process.cwd(), 'src/app/admin/web-search/page.tsx');
 const imageSourcesPagePath = resolve(process.cwd(), 'src/app/admin/image-sources/page.tsx');
 const pageSource = readFileSync(pagePath, 'utf8');
+const abilityModelsSource = readFileSync(abilityModelsPath, 'utf8');
 const layoutSource = readFileSync(layoutPath, 'utf8');
 const troubleshootingSource = readFileSync(troubleshootingPath, 'utf8');
 const i18nSource = readFileSync(resolve(process.cwd(), 'src/lib/i18n.ts'), 'utf8');
@@ -17,6 +19,7 @@ const openCapabilityTemplateSource = openCapabilityTemplateStart >= 0
   : '';
 
 const aiResourcesNavIndex = layoutSource.indexOf("href: '/admin/ai-resources'");
+const abilityModelsNavIndex = layoutSource.indexOf("href: '/admin/ability-models'");
 const troubleshootingNavIndex = layoutSource.indexOf("href: '/admin/troubleshooting'");
 const troubleshootingNavBlock = layoutSource.slice(
   troubleshootingNavIndex,
@@ -29,14 +32,24 @@ assert.ok(
 );
 
 assert.ok(
+  abilityModelsNavIndex >= 0,
+  'Ability models must have a top-level admin navigation entry'
+);
+
+assert.ok(
   aiResourcesNavIndex < troubleshootingNavIndex,
   'AI resources must appear before Advanced Troubleshooting in primary navigation'
 );
 
+assert.ok(
+  aiResourcesNavIndex < abilityModelsNavIndex && abilityModelsNavIndex < troubleshootingNavIndex,
+  'Ability models must sit beside Provider Management before Advanced Troubleshooting'
+);
+
 assert.doesNotMatch(
   troubleshootingNavBlock,
-  /\/admin\/ai-resources/,
-  'Advanced Troubleshooting must not own the AI resources active path'
+  /\/admin\/ai-resources|\/admin\/ability-models/,
+  'Advanced Troubleshooting must not own the provider management or ability model active paths'
 );
 
 assert.match(
@@ -73,6 +86,12 @@ assert.match(
   i18nSource,
   /'admin\.nav_ai_resources': '供应商管理'/,
   'Top-level admin navigation must call the surface Provider Management in Simplified Chinese'
+);
+
+assert.match(
+  i18nSource,
+  /'admin\.nav_ability_models': '能力模型'/,
+  'Top-level admin navigation must expose Ability Models in Simplified Chinese'
 );
 
 assert.match(
@@ -130,9 +149,27 @@ assert.match(
 );
 
 assert.match(
-  pageSource,
+  abilityModelsSource,
   /fetch\('\/api\/admin\/ai-resources\/profile-preferences'/,
-  'AI resources page must save only bounded profile preferences through the admin projection'
+  'Ability models page must save only bounded profile preferences through the admin projection'
+);
+
+assert.match(
+  abilityModelsSource,
+  /profile_preferences_title[\s\S]*audio_summary_text_profile_id/,
+  'Audio profile preferences must live on the top-level ability models page'
+);
+
+assert.doesNotMatch(
+  pageSource,
+  /activeSupplierTab === 'model' && preferences/,
+  'AI resource audio profile preferences must not stay under the model supplier tab'
+);
+
+assert.doesNotMatch(
+  pageSource,
+  /tab_ability_models/,
+  'Provider Management must not expose Ability Models as an internal tab'
 );
 
 assert.match(
@@ -148,6 +185,90 @@ assert.match(
 );
 
 assert.match(
+  abilityModelsSource,
+  /fetch\('\/api\/admin\/wordpress-ai-routing'/,
+  'Ability models page must load and save Cloud runtime ability model routing through the bounded admin endpoint'
+);
+
+assert.match(
+  abilityModelsSource,
+  /Cloud-native ability models|cloud_native_title/,
+  'Ability models page must reserve a Cloud-native ability section without creating a second control plane'
+);
+
+assert.match(
+  abilityModelsSource,
+  /abilityModelRows/,
+  'Ability models page must render WordPress AI connector tasks as ability model rows'
+);
+
+assert.match(
+  abilityModelsSource,
+  /saveAbilityModelProfile/,
+  'Ability models configuration must save the selected shared runtime profile'
+);
+
+assert.match(
+  abilityModelsSource,
+  /generateIdempotencyKey\('ability_models_routing'\)/,
+  'Ability model saves must use backend-safe idempotency keys without unsupported header characters'
+);
+
+assert.match(
+  abilityModelsSource,
+  /dialogError[\s\S]*role="alert"/,
+  'Ability model save failures must be visible inside the configuration dialog'
+);
+
+assert.match(
+  abilityModelsSource,
+  /resolveAdminApiPayloadMessage[\s\S]*payload\.message[\s\S]*payload\.detail[\s\S]*payload\.error_code/,
+  'Ability model save failures must surface backend validation details instead of a generic fallback'
+);
+
+assert.match(
+  abilityModelsSource,
+  /dialogMessage[\s\S]*role="status"/,
+  'Ability model save success must be visible inside the configuration dialog'
+);
+
+assert.match(
+  abilityModelsSource,
+  /setDialogMessage\(aiText\('message_ability_models_saved'/,
+  'Ability model save success must use localized UI copy instead of backend English receipt summaries'
+);
+
+assert.match(
+  abilityModelsSource,
+  /abilityModelInstanceDetail[\s\S]*ability_model_instance_detail[\s\S]*abilityModelFeatureLabel[\s\S]*abilityModelRegionLabel[\s\S]*abilityModelHealthLabel/,
+  'Ability model instance details must localize runtime feature, region, and health labels while preserving technical ids'
+);
+
+assert.match(
+  abilityModelsSource,
+  /activeProfileTitle[\s\S]*abilityTaskLabel/,
+  'Ability model dialog must use localized ability labels instead of raw backend profile labels'
+);
+
+assert.match(
+  abilityModelsSource,
+  /createPortal[\s\S]*document\.body/,
+  'Ability model dialog must render through a body portal instead of being trapped below the admin shell'
+);
+
+assert.match(
+  abilityModelsSource,
+  /z-\[2147483647\][\s\S]*absolute inset-0 bg-slate-950\/55/,
+  'Ability model dialog overlay must cover the whole admin shell above sticky headers'
+);
+
+assert.match(
+  abilityModelsSource,
+  /Local plugin enablement and WordPress writes stay outside this page/,
+  'Ability model configuration must preserve local plugin and WordPress write boundaries'
+);
+
+assert.match(
   pageSource,
   /action_fetch_upstream_models/,
   'Provider channel form must expose a fetch-from-upstream models action'
@@ -157,6 +278,30 @@ assert.match(
   pageSource,
   /providerCatalogPreview/,
   'Provider channel form must show upstream model preview state'
+);
+
+assert.match(
+  pageSource,
+  /removeProviderModelId/,
+  'Provider channel form must render selected models as removable chips'
+);
+
+assert.match(
+  pageSource,
+  /action_clear_all_models/,
+  'Provider channel form must support clearing upstream model selections before adding a narrow set'
+);
+
+assert.match(
+  pageSource,
+  /customModelInput/,
+  'Provider channel form must support adding specified models after clearing upstream selections'
+);
+
+assert.doesNotMatch(
+  pageSource,
+  /action_fill_related_models|action_fill_all_models|action_copy_all_models/,
+  'Provider channel form should avoid low-frequency bulk helpers beyond upstream fetch, clear all, and specified add'
 );
 
 assert.match(
@@ -507,16 +652,22 @@ assert.doesNotMatch(
   'AI resources page must not expose env provider import after DB-managed provider migration'
 );
 
-assert.match(
+assert.doesNotMatch(
   pageSource,
   /Provider connections can be managed in Cloud runtime storage/,
-  'AI resources page must explain provider connections are managed by Cloud runtime storage'
+  'AI resources page should not render a redundant hero-level boundary explainer card'
 );
 
-assert.match(
+assert.doesNotMatch(
   pageSource,
   /WordPress writes, approvals, abilities, workflows, prompts, and router truth stay outside this page/,
-  'AI resources page must not present itself as a second control plane'
+  'AI resources page should keep boundary copy scoped to relevant detail sections instead of a large hero card'
+);
+
+assert.doesNotMatch(
+  pageSource,
+  /\/admin\/audio-workbench/,
+  'AI resources page should not place an unrelated audio workbench CTA in the primary supplier management header'
 );
 
 assert.match(
