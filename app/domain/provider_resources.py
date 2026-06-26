@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -914,12 +915,64 @@ def _build_provider_model_health(
     database_url: str,
     *,
     recent_call_limit: int = 200,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    resolved_now = now or datetime.now(UTC)
+    window_specs = [
+        {"window_id": "last_24h", "label": "Last 24h", "hours": 24},
+        {"window_id": "last_7d", "label": "Last 7d", "hours": 168},
+    ]
+    windows = [
+        _build_provider_model_health_window(
+            database_url,
+            window_id=str(spec["window_id"]),
+            label=str(spec["label"]),
+            hours=int(spec["hours"]),
+            recent_call_limit=recent_call_limit,
+            now=resolved_now,
+        )
+        for spec in window_specs
+    ]
+    default_window = windows[0] if windows else {}
+    default_rows = [
+        item for item in default_window.get("rows", []) if isinstance(item, dict)
+    ]
+    return {
+        "source": "provider_call_records",
+        "content_exposed": False,
+        "recent_call_limit": recent_call_limit,
+        "default_window_id": str(default_window.get("window_id") or "last_24h"),
+        "rows": default_rows,
+        "windows": windows,
+        "alert_summary": _build_provider_model_alert_summary(
+            default_rows,
+            window_id=str(default_window.get("window_id") or "last_24h"),
+        ),
+        "boundary": {
+            "owner": "cloud_runtime_diagnostics",
+            "direct_wordpress_write": False,
+            "not_a_control_plane": True,
+            "prompt_router_preset_truth": False,
+        },
+    }
+
+
+def _build_provider_model_health_window(
+    database_url: str,
+    *,
+    window_id: str,
+    label: str,
+    hours: int,
+    recent_call_limit: int,
+    now: datetime,
 ) -> dict[str, Any]:
     rows: list[ProviderCallRecord] = []
+    since = now - timedelta(hours=hours)
     if database_url:
         with get_session(database_url) as session:
             statement = (
                 select(ProviderCallRecord)
+                .where(ProviderCallRecord.created_at >= since)
                 .order_by(ProviderCallRecord.created_at.desc(), ProviderCallRecord.id.desc())
                 .limit(recent_call_limit)
             )
@@ -951,15 +1004,20 @@ def _build_provider_model_health(
         )
     )
     return {
-        "source": "provider_call_records",
-        "content_exposed": False,
-        "recent_call_limit": recent_call_limit,
+        "window_id": window_id,
+        "label": label,
+        "hours": hours,
+        "started_at": _iso(since),
+        "ended_at": _iso(now),
         "rows": health_rows,
-        "boundary": {
-            "owner": "cloud_runtime_diagnostics",
-            "direct_wordpress_write": False,
-            "not_a_control_plane": True,
-            "prompt_router_preset_truth": False,
+        "alert_summary": _build_provider_model_alert_summary(
+            health_rows,
+            window_id=window_id,
+        ),
+        "evidence": {
+            "source": "provider_call_records",
+            "content_exposed": False,
+            "recent_call_limit": recent_call_limit,
         },
     }
 
@@ -1031,6 +1089,110 @@ def _provider_model_health_status(
     if success_rate < 0.95 or (p95_latency_ms is not None and p95_latency_ms > 20_000):
         return "degraded"
     return "healthy"
+
+
+def _build_provider_model_alert_summary(
+    rows: list[dict[str, Any]],
+    *,
+    window_id: str,
+) -> dict[str, Any]:
+    alerts: list[dict[str, Any]] = []
+    for row in rows:
+        provider_id = str(row.get("provider_id") or "")
+        model_id = str(row.get("model_id") or "")
+        status = str(row.get("status") or "")
+        if status == "error":
+            alerts.append(
+                _provider_model_alert(
+                    code="provider_model.all_calls_failed",
+                    severity="error",
+                    provider_id=provider_id,
+                    model_id=model_id,
+                    message="All observed calls failed in this window.",
+                    row=row,
+                )
+            )
+        elif status == "degraded":
+            alerts.append(
+                _provider_model_alert(
+                    code="provider_model.degraded",
+                    severity="warning",
+                    provider_id=provider_id,
+                    model_id=model_id,
+                    message="Success rate or p95 latency is outside the operator threshold.",
+                    row=row,
+                )
+            )
+        if float(row.get("cost") or 0.0) >= 1.0:
+            alerts.append(
+                _provider_model_alert(
+                    code="provider_model.cost_threshold",
+                    severity="warning",
+                    provider_id=provider_id,
+                    model_id=model_id,
+                    message="Observed cost crossed the diagnostic threshold for this window.",
+                    row=row,
+                )
+            )
+        if int(row.get("fallback_count") or 0) > 0:
+            alerts.append(
+                _provider_model_alert(
+                    code="provider_model.fallback_used",
+                    severity="info",
+                    provider_id=provider_id,
+                    model_id=model_id,
+                    message="Fallback was used for this provider/model in this window.",
+                    row=row,
+                )
+            )
+    severity_counts = {
+        "error": sum(1 for item in alerts if item.get("severity") == "error"),
+        "warning": sum(1 for item in alerts if item.get("severity") == "warning"),
+        "info": sum(1 for item in alerts if item.get("severity") == "info"),
+    }
+    return {
+        "window_id": window_id,
+        "alert_count": len(alerts),
+        "severity_counts": severity_counts,
+        "thresholds": {
+            "minimum_success_rate": 0.95,
+            "p95_latency_ms": 20_000,
+            "cost": 1.0,
+        },
+        "alerts": alerts[:20],
+        "boundary": {
+            "direct_wordpress_write": False,
+            "not_a_control_plane": True,
+            "automatic_routing_change": False,
+        },
+    }
+
+
+def _provider_model_alert(
+    *,
+    code: str,
+    severity: str,
+    provider_id: str,
+    model_id: str,
+    message: str,
+    row: dict[str, Any],
+) -> dict[str, Any]:
+    return {
+        "code": code,
+        "severity": severity,
+        "provider_id": provider_id,
+        "model_id": model_id,
+        "message": message,
+        "evidence": {
+            "status": str(row.get("status") or ""),
+            "call_count": int(row.get("call_count") or 0),
+            "success_rate": float(row.get("success_rate") or 0.0),
+            "p95_latency_ms": row.get("p95_latency_ms"),
+            "cost": float(row.get("cost") or 0.0),
+            "fallback_count": int(row.get("fallback_count") or 0),
+            "content_exposed": False,
+        },
+    }
 
 
 def _percentile_index(count: int, percentile: int) -> int:

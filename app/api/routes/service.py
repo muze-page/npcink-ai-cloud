@@ -393,6 +393,126 @@ def _build_audit_payload(payload: BaseModel | None = None) -> dict[str, Any]:
     return payload.model_dump(mode="json")
 
 
+def _record_provider_connection_audit(
+    request: Request,
+    *,
+    event_kind: str,
+    outcome: str,
+    scope_id: str,
+    request_payload: ProviderConnectionPayload | None = None,
+    result: dict[str, Any] | None = None,
+    error_code: str = "",
+    message: str = "",
+) -> None:
+    try:
+        _get_commercial_service(request).record_service_audit_event(
+            audit_context=_build_audit_context(request),
+            event_kind=event_kind,
+            outcome=outcome,
+            scope_kind="provider_connection",
+            scope_id=scope_id,
+            payload_json=_provider_connection_audit_payload(
+                request_payload=request_payload,
+                result=result,
+                error_code=error_code,
+                message=message,
+            ),
+        )
+    except Exception:
+        return
+
+
+def _provider_connection_audit_payload(
+    *,
+    request_payload: ProviderConnectionPayload | None,
+    result: dict[str, Any] | None,
+    error_code: str,
+    message: str,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "surface": "admin_provider_connections",
+        "credential_value_exposure": "presence_only",
+        "content_exposed": False,
+    }
+    if request_payload is not None:
+        raw = request_payload.model_dump(mode="json")
+        payload["request"] = {
+            "connection_id": str(raw.get("connection_id") or ""),
+            "provider_id": str(raw.get("provider_id") or ""),
+            "provider_type": str(raw.get("provider_type") or ""),
+            "kind": str(raw.get("kind") or ""),
+            "enabled": bool(raw.get("enabled", True)),
+            "base_url_present": bool(str(raw.get("base_url") or "").strip()),
+            "capability_ids": [
+                str(item) for item in raw.get("capability_ids", []) if str(item)
+            ],
+            "runtime_profile_ids": [
+                str(item) for item in raw.get("runtime_profile_ids", []) if str(item)
+            ],
+            "credential_provided": bool(str(raw.get("credential") or "").strip()),
+            "secret_provided": bool(str(raw.get("secret") or "").strip()),
+            "config_present": bool(raw.get("config")),
+            "metadata_present": bool(raw.get("metadata")),
+        }
+    if result:
+        payload["result"] = _provider_connection_result_summary(result)
+    if error_code:
+        payload["error_code"] = error_code
+    if message:
+        payload["message"] = message[:360]
+    return payload
+
+
+def _provider_connection_result_summary(result: dict[str, Any]) -> dict[str, Any]:
+    connection = _dict_value(result.get("connection"))
+    if not connection and str(result.get("connection_id") or ""):
+        connection = result
+    summary: dict[str, Any] = {}
+    if connection:
+        summary["connection"] = {
+            "connection_id": str(connection.get("connection_id") or ""),
+            "provider_id": str(connection.get("provider_id") or ""),
+            "provider_type": str(connection.get("provider_type") or ""),
+            "kind": str(connection.get("kind") or ""),
+            "enabled": bool(connection.get("enabled")),
+            "configured": bool(connection.get("configured")),
+            "status": str(connection.get("status") or ""),
+            "capability_ids": [
+                str(item) for item in connection.get("capability_ids", []) if str(item)
+            ],
+            "runtime_profile_ids": [
+                str(item) for item in connection.get("runtime_profile_ids", []) if str(item)
+            ],
+        }
+    if "imported" in result or "skipped" in result:
+        summary["imported_connection_ids"] = [
+            str(_dict_value(item).get("connection_id") or "")
+            for item in result.get("imported", [])
+            if isinstance(item, dict)
+        ]
+        summary["skipped"] = [
+            {
+                "connection_id": str(_dict_value(item).get("connection_id") or ""),
+                "reason": str(_dict_value(item).get("reason") or ""),
+            }
+            for item in result.get("skipped", [])
+            if isinstance(item, dict)
+        ]
+    if "deleted" in result:
+        summary["deleted"] = bool(result.get("deleted"))
+    if "ok" in result:
+        summary["test"] = {
+            "ok": bool(result.get("ok")),
+            "status": str(result.get("status") or ""),
+            "stage": str(result.get("stage") or ""),
+            "error_code": str(result.get("error_code") or ""),
+            "catalog_model_count": int(
+                _dict_value(result.get("catalog")).get("model_count") or 0
+            ),
+        }
+    return summary
+
+
 def _build_audit_filters(
     *,
     account_id: str | None = None,
@@ -2862,6 +2982,15 @@ async def create_admin_provider_connection(
             services.settings,
         ).save_connection(payload.model_dump(mode="json"))
     except ProviderConnectionAdminError as error:
+        _record_provider_connection_audit(
+            request,
+            event_kind="provider_connection.save",
+            outcome="error",
+            scope_id=str(payload.connection_id or payload.provider_id or ""),
+            request_payload=payload,
+            error_code=error.error_code,
+            message=error.message,
+        )
         return JSONResponse(
             status_code=error.status_code,
             content=build_envelope(
@@ -2871,6 +3000,14 @@ async def create_admin_provider_connection(
                 revision="m6",
             ),
         )
+    _record_provider_connection_audit(
+        request,
+        event_kind="provider_connection.save",
+        outcome="succeeded",
+        scope_id=str(result.get("connection_id") or ""),
+        request_payload=payload,
+        result=result,
+    )
     return build_envelope(
         status="ok",
         message="provider connection saved",
@@ -2895,6 +3032,15 @@ async def update_admin_provider_connection(
             services.settings,
         ).save_connection(payload.model_dump(mode="json"), connection_id=connection_id)
     except ProviderConnectionAdminError as error:
+        _record_provider_connection_audit(
+            request,
+            event_kind="provider_connection.save",
+            outcome="error",
+            scope_id=connection_id,
+            request_payload=payload,
+            error_code=error.error_code,
+            message=error.message,
+        )
         return JSONResponse(
             status_code=error.status_code,
             content=build_envelope(
@@ -2904,6 +3050,14 @@ async def update_admin_provider_connection(
                 revision="m6",
             ),
         )
+    _record_provider_connection_audit(
+        request,
+        event_kind="provider_connection.save",
+        outcome="succeeded",
+        scope_id=str(result.get("connection_id") or connection_id),
+        request_payload=payload,
+        result=result,
+    )
     return build_envelope(
         status="ok",
         message="provider connection saved",
@@ -2924,6 +3078,14 @@ async def delete_admin_provider_connection(request: Request, connection_id: str)
             services.settings,
         ).delete_connection(connection_id)
     except ProviderConnectionAdminError as error:
+        _record_provider_connection_audit(
+            request,
+            event_kind="provider_connection.delete",
+            outcome="error",
+            scope_id=connection_id,
+            error_code=error.error_code,
+            message=error.message,
+        )
         return JSONResponse(
             status_code=error.status_code,
             content=build_envelope(
@@ -2933,6 +3095,13 @@ async def delete_admin_provider_connection(request: Request, connection_id: str)
                 revision="m6",
             ),
         )
+    _record_provider_connection_audit(
+        request,
+        event_kind="provider_connection.delete",
+        outcome="succeeded",
+        scope_id=connection_id,
+        result=result,
+    )
     return build_envelope(
         status="ok",
         message="provider connection deleted",
@@ -2953,6 +3122,14 @@ async def test_admin_provider_connection(request: Request, connection_id: str) -
             services.settings,
         ).test_connection(connection_id)
     except ProviderConnectionAdminError as error:
+        _record_provider_connection_audit(
+            request,
+            event_kind="provider_connection.test",
+            outcome="error",
+            scope_id=connection_id,
+            error_code=error.error_code,
+            message=error.message,
+        )
         return JSONResponse(
             status_code=error.status_code,
             content=build_envelope(
@@ -2962,6 +3139,15 @@ async def test_admin_provider_connection(request: Request, connection_id: str) -
                 revision="m6",
             ),
         )
+    _record_provider_connection_audit(
+        request,
+        event_kind="provider_connection.test",
+        outcome="succeeded" if result.get("ok") else "error",
+        scope_id=connection_id,
+        result=result,
+        error_code=str(result.get("error_code") or ""),
+        message=str(result.get("message") or ""),
+    )
     return build_envelope(
         status="ok" if result.get("ok") else "error",
         message=str(result.get("message") or "provider connection tested"),
@@ -2980,6 +3166,13 @@ async def import_admin_provider_connections_from_env(request: Request) -> Any:
         services.settings.database_url,
         services.settings,
     ).import_env_connections()
+    _record_provider_connection_audit(
+        request,
+        event_kind="provider_connection.import_env",
+        outcome="succeeded",
+        scope_id="env_import",
+        result=result,
+    )
     return build_envelope(
         status="ok",
         message="environment provider connections imported",

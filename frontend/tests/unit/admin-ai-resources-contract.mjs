@@ -79,6 +79,18 @@ assert.match(
 
 assert.match(
   pageSource,
+  /Last 24h/,
+  'Model health must expose a short diagnostic window'
+);
+
+assert.match(
+  pageSource,
+  /Last 7d/,
+  'Model health must expose a longer diagnostic window'
+);
+
+assert.match(
+  pageSource,
   /Feature-to-model evidence from Cloud runtime metadata/,
   'Feature usage must be framed as runtime metadata evidence'
 );
@@ -103,8 +115,14 @@ assert.match(
 
 assert.match(
   pageSource,
-  /read-only diagnostics and does not change routing, prompts, abilities, or WordPress writes/,
+  /Health alerts are diagnostic only and do not change routing, prompts, abilities, or WordPress writes/,
   'Model health must remain diagnostics-only'
+);
+
+assert.match(
+  pageSource,
+  /read-only diagnostics/,
+  'Model health alerts must be framed as read-only diagnostics'
 );
 
 assert.match(

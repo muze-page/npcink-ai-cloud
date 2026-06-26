@@ -35,6 +35,7 @@ from app.core.models import (
     ReplayReceipt,
     RunRecord,
     RuntimeGuardEvent,
+    ServiceAuditEvent,
     UsageMeterEvent,
 )
 from app.core.secrets import decrypt_provider_connection_secret
@@ -706,6 +707,19 @@ def test_admin_provider_connections_store_encrypted_credentials_and_project_to_a
             )
             == "provider-connection-test-secret"
         )
+        audit_event = session.scalar(
+            select(ServiceAuditEvent)
+            .where(ServiceAuditEvent.event_kind == "provider_connection.save")
+            .order_by(ServiceAuditEvent.id.desc())
+        )
+        assert audit_event is not None
+        assert audit_event.outcome == "succeeded"
+        assert audit_event.scope_kind == "provider_connection"
+        assert audit_event.scope_id == "openai_primary"
+        audit_payload = audit_event.payload_json or {}
+        assert audit_payload["request"]["credential_provided"] is True
+        assert audit_payload["credential_value_exposure"] == "presence_only"
+        assert "provider-connection-test-secret" not in json.dumps(audit_payload)
 
     projection_response = client.get(
         "/internal/service/admin/ai-resources",
@@ -822,6 +836,18 @@ def test_admin_provider_connection_test_reports_missing_secret_without_leaking(
     assert data["status"] == "missing_secret"
     assert data["error_code"] == "provider_connection.missing_secret"
     assert data["boundary"]["secret_exposure"] == "masked_status_only"
+    with get_session(_sqlite_url(tmp_path)) as session:
+        audit_event = session.scalar(
+            select(ServiceAuditEvent)
+            .where(ServiceAuditEvent.event_kind == "provider_connection.test")
+            .order_by(ServiceAuditEvent.id.desc())
+        )
+        assert audit_event is not None
+        assert audit_event.outcome == "error"
+        assert audit_event.scope_id == "missing_secret_provider"
+        assert (audit_event.payload_json or {})["result"]["test"]["error_code"] == (
+            "provider_connection.missing_secret"
+        )
 
 
 def test_admin_provider_connections_import_env_values_as_masked_connections(
@@ -851,6 +877,21 @@ def test_admin_provider_connections_import_env_values_as_masked_connections(
     assert "openai-env-secret" not in serialized
     assert "minimax-env-secret" not in serialized
     assert "minimax-env-group" not in serialized
+    with get_session(_sqlite_url(tmp_path)) as session:
+        audit_event = session.scalar(
+            select(ServiceAuditEvent)
+            .where(ServiceAuditEvent.event_kind == "provider_connection.import_env")
+            .order_by(ServiceAuditEvent.id.desc())
+        )
+        assert audit_event is not None
+        assert audit_event.outcome == "succeeded"
+        assert audit_event.scope_id == "env_import"
+        audit_payload = audit_event.payload_json or {}
+        assert {"openai_env", "minimax_env"}.issubset(
+            set(audit_payload["result"]["imported_connection_ids"])
+        )
+        assert "openai-env-secret" not in json.dumps(audit_payload)
+        assert "minimax-env-secret" not in json.dumps(audit_payload)
 
     projection_response = client.get(
         "/internal/service/admin/ai-resources",
@@ -888,6 +929,16 @@ def test_admin_provider_connections_can_be_deleted(
     )
     assert delete_response.status_code == 200, delete_response.text
     assert delete_response.json()["data"]["deleted"] is True
+    with get_session(_sqlite_url(tmp_path)) as session:
+        audit_event = session.scalar(
+            select(ServiceAuditEvent)
+            .where(ServiceAuditEvent.event_kind == "provider_connection.delete")
+            .order_by(ServiceAuditEvent.id.desc())
+        )
+        assert audit_event is not None
+        assert audit_event.outcome == "succeeded"
+        assert audit_event.scope_id == "delete_me_provider"
+        assert "delete-me-secret" not in json.dumps(audit_event.payload_json or {})
 
     list_response = client.get(
         "/internal/service/admin/provider-connections",
@@ -1004,6 +1055,24 @@ def test_admin_ai_resources_exposes_recent_runtime_evidence_without_content(
                 retry_count=0,
                 fallback_used=False,
                 error_code=None,
+                created_at=now,
+            )
+        )
+        session.add(
+            ProviderCallRecord(
+                run_id="run_ai_resources_text_recent",
+                provider_id="openai",
+                model_id="gpt-5.5",
+                instance_id="openai-global-gpt-5-5",
+                region="global",
+                latency_ms=25_000,
+                tokens_in=10,
+                tokens_out=0,
+                cost=0.0,
+                retry_count=1,
+                fallback_used=True,
+                error_code="provider.timeout",
+                created_at=now - timedelta(days=2),
             )
         )
         session.commit()
@@ -1042,6 +1111,22 @@ def test_admin_ai_resources_exposes_recent_runtime_evidence_without_content(
     assert health["cost"] == 0.0042
     assert health["evidence"]["content_exposed"] is False
     assert health["boundary"]["direct_wordpress_write"] is False
+    windows = {item["window_id"]: item for item in data["provider_model_health"]["windows"]}
+    assert {"last_24h", "last_7d"}.issubset(windows)
+    assert windows["last_24h"]["rows"][0]["status"] == "healthy"
+    assert windows["last_24h"]["alert_summary"]["alert_count"] == 0
+    seven_day_rows = {
+        (item["provider_id"], item["model_id"]): item
+        for item in windows["last_7d"]["rows"]
+    }
+    assert seven_day_rows[("openai", "gpt-5.5")]["status"] == "degraded"
+    assert windows["last_7d"]["alert_summary"]["alert_count"] >= 2
+    assert {
+        alert["code"] for alert in windows["last_7d"]["alert_summary"]["alerts"]
+    }.issuperset({"provider_model.degraded", "provider_model.fallback_used"})
+    assert data["provider_model_health"]["alert_summary"]["boundary"][
+        "automatic_routing_change"
+    ] is False
     serialized = json.dumps(data)
     assert "sensitive draft body" not in serialized
     assert "generated text should not appear" not in serialized

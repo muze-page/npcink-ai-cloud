@@ -182,11 +182,57 @@ type ProviderModelHealthRow = {
   };
 };
 
+type ProviderModelHealthAlert = {
+  code: string;
+  severity: ResourceStatus;
+  provider_id: string;
+  model_id: string;
+  message: string;
+  evidence?: {
+    status?: string;
+    call_count?: number;
+    success_rate?: number;
+    p95_latency_ms?: number;
+    cost?: number;
+    fallback_count?: number;
+    content_exposed?: boolean;
+  };
+};
+
+type ProviderModelHealthAlertSummary = {
+  window_id: string;
+  alert_count: number;
+  severity_counts: {
+    error?: number;
+    warning?: number;
+    info?: number;
+  };
+  thresholds: {
+    minimum_success_rate?: number;
+    p95_latency_ms?: number;
+    cost?: number;
+  };
+  alerts: ProviderModelHealthAlert[];
+};
+
+type ProviderModelHealthWindow = {
+  window_id: string;
+  label: string;
+  hours: number;
+  started_at: string;
+  ended_at: string;
+  rows: ProviderModelHealthRow[];
+  alert_summary?: ProviderModelHealthAlertSummary;
+};
+
 type ProviderModelHealth = {
   source: string;
   content_exposed: boolean;
   recent_call_limit: number;
+  default_window_id?: string;
   rows: ProviderModelHealthRow[];
+  windows?: ProviderModelHealthWindow[];
+  alert_summary?: ProviderModelHealthAlertSummary;
 };
 
 type RuntimeEvidence = {
@@ -271,6 +317,11 @@ const EMPTY_PROVIDER_CONNECTION_FORM: ProviderConnectionForm = {
   enabled: true,
 };
 
+const LEGACY_HEALTH_WINDOW_FALLBACKS = [
+  { window_id: 'last_24h', label: 'Last 24h', hours: 24 },
+  { window_id: 'last_7d', label: 'Last 7d', hours: 168 },
+];
+
 function statusTone(status: ResourceStatus): 'success' | 'warning' | 'disabled' | 'info' {
   if (status === 'ready') return 'success';
   if (status === 'disabled') return 'disabled';
@@ -284,6 +335,13 @@ function healthTone(status: ResourceStatus): 'success' | 'warning' | 'disabled' 
   if (status === 'error') return 'error';
   if (status === 'not_observed') return 'disabled';
   return 'info';
+}
+
+function severityTone(status: ResourceStatus): 'success' | 'warning' | 'disabled' | 'info' | 'error' {
+  if (status === 'error') return 'error';
+  if (status === 'warning') return 'warning';
+  if (status === 'info') return 'info';
+  return 'disabled';
 }
 
 function labelList(values: string[]): string {
@@ -336,6 +394,7 @@ function AiResourcesContent() {
   const [data, setData] = useState<AiResources | null>(null);
   const [preferences, setPreferences] = useState<ProfilePreferences | null>(null);
   const [activeView, setActiveView] = useState<'connections' | 'usage' | 'health' | 'matrix'>('connections');
+  const [activeHealthWindowId, setActiveHealthWindowId] = useState('last_24h');
   const [loading, setLoading] = useState(true);
   const [savingPreferences, setSavingPreferences] = useState(false);
   const [savingConnection, setSavingConnection] = useState(false);
@@ -604,6 +663,27 @@ function AiResourcesContent() {
       direct_wordpress_write: row.direct_wordpress_write,
     }));
   }, [data, matrixRows]);
+
+  const healthWindows = useMemo<ProviderModelHealthWindow[]>(() => {
+    const configured = data?.provider_model_health?.windows || [];
+    if (configured.length) return configured;
+    return LEGACY_HEALTH_WINDOW_FALLBACKS.map((windowItem) => ({
+      ...windowItem,
+      started_at: '',
+      ended_at: '',
+      rows: data?.provider_model_health?.rows || [],
+      alert_summary: data?.provider_model_health?.alert_summary,
+    }));
+  }, [data]);
+
+  const activeHealthWindow = useMemo<ProviderModelHealthWindow | null>(() => {
+    if (!healthWindows.length) return null;
+    return (
+      healthWindows.find((windowItem) => windowItem.window_id === activeHealthWindowId) ||
+      healthWindows.find((windowItem) => windowItem.window_id === data?.provider_model_health?.default_window_id) ||
+      healthWindows[0]
+    );
+  }, [activeHealthWindowId, data, healthWindows]);
 
   if (loading) {
     return <LoadingFallback />;
@@ -1083,6 +1163,81 @@ function AiResourcesContent() {
         <p className="mt-1 text-sm leading-6 text-slate-600 dark:text-slate-300">
           Provider/model health from provider_call_records. Metadata only: prompts, results, and provider secrets are not exposed.
         </p>
+        <div className="mt-4 flex flex-wrap gap-2">
+          {healthWindows.map((windowItem) => (
+            <BackofficeFilterPill
+              key={windowItem.window_id}
+              active={activeHealthWindow?.window_id === windowItem.window_id}
+              onClick={() => setActiveHealthWindowId(windowItem.window_id)}
+            >
+              {windowItem.label}
+            </BackofficeFilterPill>
+          ))}
+        </div>
+        <div className="mt-4 grid gap-3 lg:grid-cols-4">
+          <BackofficeStackCard>
+            <div className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500 dark:text-slate-400">Alerts</div>
+            <div className="mt-2 text-2xl font-semibold text-slate-950 dark:text-white">
+              {activeHealthWindow?.alert_summary?.alert_count || 0}
+            </div>
+            <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">read-only diagnostics</div>
+          </BackofficeStackCard>
+          <BackofficeStackCard>
+            <div className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500 dark:text-slate-400">Errors</div>
+            <div className="mt-2 text-2xl font-semibold text-slate-950 dark:text-white">
+              {activeHealthWindow?.alert_summary?.severity_counts?.error || 0}
+            </div>
+            <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">all calls failed</div>
+          </BackofficeStackCard>
+          <BackofficeStackCard>
+            <div className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500 dark:text-slate-400">Warnings</div>
+            <div className="mt-2 text-2xl font-semibold text-slate-950 dark:text-white">
+              {activeHealthWindow?.alert_summary?.severity_counts?.warning || 0}
+            </div>
+            <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">latency, success, or cost</div>
+          </BackofficeStackCard>
+          <BackofficeStackCard>
+            <div className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500 dark:text-slate-400">Window</div>
+            <div className="mt-2 text-2xl font-semibold text-slate-950 dark:text-white">
+              {activeHealthWindow?.hours || 24}h
+            </div>
+            <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+              limit {data.provider_model_health?.recent_call_limit || 200} calls
+            </div>
+          </BackofficeStackCard>
+        </div>
+        {activeHealthWindow?.alert_summary?.alerts?.length ? (
+          <div className="mt-4 overflow-hidden rounded-lg border border-slate-200 dark:border-slate-800">
+            <div className="grid grid-cols-[8rem_1fr_1fr_1fr] gap-3 border-b border-slate-200 bg-slate-50 px-4 py-3 text-xs font-semibold uppercase tracking-[0.16em] text-slate-500 dark:border-slate-800 dark:bg-slate-900/70 dark:text-slate-400">
+              <span>Severity</span>
+              <span>Provider / model</span>
+              <span>Signal</span>
+              <span>Evidence</span>
+            </div>
+            {activeHealthWindow.alert_summary.alerts.map((alert, index) => (
+              <div
+                key={`${alert.code}-${alert.provider_id}-${alert.model_id}-${index}`}
+                className="grid grid-cols-[8rem_1fr_1fr_1fr] gap-3 border-b border-slate-200 px-4 py-3 text-sm last:border-b-0 dark:border-slate-800"
+              >
+                <BackofficeStatusBadge label={alert.severity} status={severityTone(alert.severity)} />
+                <div className="text-slate-600 dark:text-slate-300">
+                  <div>{alert.provider_id || '-'}</div>
+                  <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">{alert.model_id || '-'}</div>
+                </div>
+                <div className="text-slate-600 dark:text-slate-300">
+                  <div>{alert.code}</div>
+                  <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">{alert.message}</div>
+                </div>
+                <div className="text-slate-600 dark:text-slate-300">
+                  <div>{formatRate(alert.evidence?.success_rate)} success</div>
+                  <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                    {alert.evidence?.p95_latency_ms ? `${alert.evidence.p95_latency_ms}ms p95` : '-'} · {formatCost(alert.evidence?.cost)} credits
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : null}
         <div className="mt-4 overflow-hidden rounded-lg border border-slate-200 dark:border-slate-800">
           <div className="grid grid-cols-[1.2fr_8rem_1fr_1fr_1fr_1.2fr] gap-3 border-b border-slate-200 bg-slate-50 px-4 py-3 text-xs font-semibold uppercase tracking-[0.16em] text-slate-500 dark:border-slate-800 dark:bg-slate-900/70 dark:text-slate-400">
             <span>Provider / model</span>
@@ -1092,7 +1247,7 @@ function AiResourcesContent() {
             <span>Tokens / cost</span>
             <span>Last error</span>
           </div>
-          {(data.provider_model_health?.rows || []).map((row) => (
+          {(activeHealthWindow?.rows || []).map((row) => (
             <div
               key={`${row.provider_id}-${row.model_id}`}
               className="grid grid-cols-[1.2fr_8rem_1fr_1fr_1fr_1.2fr] gap-3 border-b border-slate-200 px-4 py-3 text-sm last:border-b-0 dark:border-slate-800"
@@ -1128,14 +1283,14 @@ function AiResourcesContent() {
               </div>
             </div>
           ))}
-          {data.provider_model_health?.rows?.length ? null : (
+          {activeHealthWindow?.rows?.length ? null : (
             <div className="px-4 py-6 text-sm text-slate-500 dark:text-slate-400">
               No provider call records observed in the current evidence window.
             </div>
           )}
         </div>
         <div className="mt-3 text-xs leading-5 text-slate-500 dark:text-slate-400">
-          Evidence source: {data.provider_model_health?.source || 'provider_call_records'}; recent call limit {data.provider_model_health?.recent_call_limit || 200}. This view is read-only diagnostics and does not change routing, prompts, abilities, or WordPress writes.
+          Evidence source: {data.provider_model_health?.source || 'provider_call_records'}; recent call limit {data.provider_model_health?.recent_call_limit || 200}. Health alerts are diagnostic only and do not change routing, prompts, abilities, or WordPress writes.
         </div>
         </BackofficeSectionPanel>
       ) : null}
