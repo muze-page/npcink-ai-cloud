@@ -38,6 +38,11 @@ type BackofficeMetricStripProps = {
   columnsClassName?: string;
 };
 
+type BackofficeSummaryStripProps = {
+  items: BackofficeMetricItem[];
+  className?: string;
+};
+
 type BackofficeEmptyStateProps = {
   title: string;
   description: string;
@@ -162,6 +167,25 @@ export function BackofficeMetricStrip({ items, columnsClassName }: BackofficeMet
           </div>
         );
       })}
+    </div>
+  );
+}
+
+export function BackofficeSummaryStrip({ items, className }: BackofficeSummaryStripProps) {
+  return (
+    <div className={cn('flex flex-wrap items-center gap-2 text-sm', className)}>
+      {items.map((item) => (
+        <div
+          key={item.label}
+          className="inline-flex min-h-9 items-center gap-2 rounded-full border border-slate-200 bg-white/80 px-3 py-1.5 text-slate-600 dark:border-slate-800 dark:bg-slate-950/45 dark:text-slate-300"
+          title={item.detail || undefined}
+        >
+          <span className="text-xs font-medium text-slate-500 dark:text-slate-400">{item.label}</span>
+          <span className={cn('font-semibold text-slate-950 dark:text-white', item.toneClassName)}>
+            {item.value}
+          </span>
+        </div>
+      ))}
     </div>
   );
 }

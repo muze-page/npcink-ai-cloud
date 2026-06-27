@@ -4,11 +4,11 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
 import {
   BackofficeEmptyState,
-  BackofficeMetricStrip,
   BackofficePageStack,
   BackofficePrimaryPanel,
   BackofficeSectionPanel,
   BackofficeStackCard,
+  BackofficeSummaryStrip,
 } from '@/components/backoffice/BackofficeScaffold';
 import { BackofficeFilterPill } from '@/components/backoffice/BackofficeFilterPill';
 import { BackofficeStatusBadge } from '@/components/backoffice/BackofficeStatusBadge';
@@ -624,7 +624,9 @@ export default function AbilityModelsPage() {
         title={text('title', 'Ability models')}
         description={text('description', 'Configure shared plugin ability defaults and Cloud-native runtime ability model bindings.')}
         aside={<BackofficeStatusBadge label={text('badge_runtime_binding', 'Runtime binding')} status="success" />}
-        summary={<BackofficeMetricStrip items={metrics} columnsClassName="xl:grid-cols-4" />}
+        contentClassName="py-5 md:py-5"
+        summary={<BackofficeSummaryStrip items={metrics} />}
+        summaryClassName="px-5 py-3 md:px-7 md:py-3"
       >
         {pageMessage ? (
           <BackofficeStackCard className="border-emerald-200 bg-emerald-50 text-sm text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950/25 dark:text-emerald-200">

@@ -505,6 +505,10 @@ def test_admin_provider_connections_store_encrypted_credentials_and_project_to_a
             "base_url": "https://api.openai.test/v1",
             "capability_ids": ["text_generation", "image_generation"],
             "runtime_profile_ids": [TEXT_AI_PROFILE_ID, "grok-imagine-image-quality"],
+            "config": {
+                "model_ids": ["gpt-5.5", "gpt-4o-mini"],
+                "model_id": "gpt-5.5",
+            },
             "credential": "provider-connection-test-secret",
         },
     )
@@ -514,6 +518,7 @@ def test_admin_provider_connections_store_encrypted_credentials_and_project_to_a
     assert data["connection_id"] == "openai_primary"
     assert data["status"] == "ready"
     assert data["configured"] is True
+    assert data["model_ids"] == ["gpt-5.5", "gpt-4o-mini"]
     assert data["secrets"]["credential"]["display"] == "configured"
     serialized = json.dumps(response.json())
     assert "provider-connection-test-secret" not in serialized
@@ -553,6 +558,7 @@ def test_admin_provider_connections_store_encrypted_credentials_and_project_to_a
     projection = projection_response.json()["data"]
     connections = {item["connection_id"]: item for item in projection["connections"]}
     assert connections["openai_primary"]["managed_by"] == "cloud_provider_connections"
+    assert connections["openai_primary"]["model_ids"] == ["gpt-5.5", "gpt-4o-mini"]
     capabilities = {item["capability_id"]: item for item in projection["capabilities"]}
     assert "openai_primary" in capabilities["text_generation"]["connection_ids"]
     assert "openai_primary" in capabilities["image_generation"]["connection_ids"]
@@ -623,6 +629,17 @@ def test_admin_provider_connection_catalog_preview_fetches_models_without_persis
     assert data["surface"] == "admin_provider_connection_catalog_preview"
     assert data["model_count"] == 2
     assert data["model_ids"] == ["gpt-5.5", "gpt-4o-mini"]
+    assert data["models"][0] == {
+        "model_id": "gpt-5.5",
+        "family": "gpt-5.5",
+        "feature": "text",
+        "status": "available",
+        "is_deprecated": False,
+        "runtime_supported": True,
+        "verified": True,
+        "capability_tags": [],
+    }
+    assert data["models"][1]["runtime_supported"] is False
     assert data["credential_value_exposure"] == "none"
     assert data["boundary"]["secret_exposure"] == "masked_status_only"
     assert "preview-secret-value" not in json.dumps(response.json())

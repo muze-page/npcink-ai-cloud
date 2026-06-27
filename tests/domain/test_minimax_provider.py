@@ -46,12 +46,19 @@ def test_minimax_adapter_fetches_audio_catalog() -> None:
     snapshot = adapter.fetch_catalog()
 
     assert snapshot.provider_id == "minimax"
-    assert [model.model_id for model in snapshot.models] == [
-        "speech-2.8-turbo",
-        "speech-2.8-hd",
-    ]
-    assert snapshot.models[0].feature == "audio_generation"
-    assert snapshot.models[0].instances[0].endpoint_variant == "t2a_v2"
+    assert snapshot.display_name == "MiniMax"
+    models = {model.model_id: model for model in snapshot.models}
+    assert "speech-2.8-turbo" in models
+    assert "speech-2.8-hd" in models
+    assert "speech-2.6-turbo" in models
+    assert "image-01" in models
+    assert "MiniMax-Hailuo-02" in models
+    assert "MiniMax-M3" in models
+    assert models["speech-2.8-turbo"].feature == "audio_generation"
+    assert models["speech-2.8-turbo"].status == "available"
+    assert models["speech-2.8-turbo"].instances[0].endpoint_variant == "t2a_v2"
+    assert models["speech-2.6-turbo"].status == "catalog_only"
+    assert models["speech-2.6-turbo"].instances == []
 
 
 def test_minimax_adapter_executes_t2a_over_http() -> None:

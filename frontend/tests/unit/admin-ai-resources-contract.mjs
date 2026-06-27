@@ -120,32 +120,26 @@ assert.match(
 
 assert.match(
   pageSource,
-  /useState<AIResourceView>\('overview'\)/,
-  'AI resources page must default to the low-noise overview'
+  /useState<AIResourceView>\('connections'\)/,
+  'AI resources page must default to the supplier list workflow'
 );
 
 assert.match(
   pageSource,
-  /Operations overview/,
-  'AI resources page must expose an operations overview'
+  /supplier_tab_model[\s\S]*supplier_tab_capability[\s\S]*tab_diagnostics/,
+  'AI resources top-level tabs must stay focused on model suppliers, capability suppliers, and diagnostics'
+);
+
+assert.doesNotMatch(
+  pageSource,
+  /active=\{activeView === 'overview'\}/,
+  'AI resources overview must not remain a top-level default tab'
 );
 
 assert.match(
   pageSource,
-  /Daily provider readiness and diagnostic attention/,
-  'AI resources overview must summarize daily provider readiness'
-);
-
-assert.match(
-  pageSource,
-  /Manage suppliers/,
-  'Provider management overview must route primary work to supplier management'
-);
-
-assert.match(
-  pageSource,
-  /Overview actions open detail surfaces only/,
-  'AI resources overview must keep actions as detail navigation only'
+  /requestedView === 'overview'[\s\S]*setActiveView\('diagnostics'\)/,
+  'Legacy overview deep links must land in diagnostics instead of restoring a separate overview page'
 );
 
 assert.match(
@@ -254,6 +248,18 @@ assert.match(
   abilityModelsSource,
   /fetch\('\/api\/admin\/wordpress-ai-routing'/,
   'Ability models page must load and save Cloud runtime ability model routing through the bounded admin endpoint'
+);
+
+assert.match(
+  pageSource,
+  /BackofficeSummaryStrip/,
+  'Provider management page must use a compact summary strip instead of oversized metric cards'
+);
+
+assert.match(
+  abilityModelsSource,
+  /BackofficeSummaryStrip/,
+  'Ability models page must use a compact summary strip instead of oversized metric cards'
 );
 
 assert.match(
@@ -432,20 +438,50 @@ assert.match(
 
 assert.match(
   pageSource,
+  /id: 'deepseek'[\s\S]*baseUrl: 'https:\/\/api\.deepseek\.com\/v1'[\s\S]*deepseek-chat, deepseek-reasoner/,
+  'Provider channel presets must include DeepSeek as an OpenAI-compatible text supplier'
+);
+
+assert.match(
+  pageSource,
+  /providerId\.includes\('deepseek'\)[\s\S]*return 'deepseek'/,
+  'Provider channel edit form must infer existing DeepSeek connections back to the DeepSeek preset'
+);
+
+assert.match(
+  pageSource,
   /providerCatalogPreview/,
   'Provider channel form must show upstream model preview state'
 );
 
 assert.match(
   pageSource,
-  /removeProviderModelId/,
-  'Provider channel form must render selected models as removable chips'
+  /verifiedModelIds[\s\S]*runtime_supported[\s\S]*setProviderModelIds\(verifiedModelIds\)/,
+  'Provider channel catalog sync must only auto-enable runtime verified models'
 );
 
 assert.match(
   pageSource,
-  /action_clear_all_models/,
-  'Provider channel form must support clearing upstream model selections before adding a narrow set'
+  /catalog_model_header_feature[\s\S]*catalog_model_status_catalog_only/,
+  'Provider channel model preview must expose model feature and catalog-only status'
+);
+
+assert.match(
+  pageSource,
+  /modelIds:\s*\(connection\.model_ids \|\| \[\]\)\.join/,
+  'Provider channel edit form must restore saved model ids from the backend projection'
+);
+
+assert.doesNotMatch(
+  pageSource,
+  /enabled_models_title|action_remove_model_named/,
+  'Provider channel form should avoid duplicate selected-model chip panels above the catalog list'
+);
+
+assert.match(
+  pageSource,
+  /action_clear_all_models[\s\S]*action_fetch_upstream_models/,
+  'Provider channel form must keep clear and catalog-sync actions in the catalog list header'
 );
 
 assert.match(
@@ -592,10 +628,10 @@ assert.doesNotMatch(
   'Image-source provider configuration must not open the whole image provider panel from the list'
 );
 
-assert.match(
+assert.doesNotMatch(
   pageSource,
   /activeCapabilityPanel === 'vector'/,
-  'Vector supplier detail must remain visible as a category-specific summary'
+  'Vector suppliers must not render a duplicate category-specific panel below the unified capability supplier list'
 );
 
 assert.match(

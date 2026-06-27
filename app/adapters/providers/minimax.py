@@ -24,6 +24,125 @@ from app.domain.hosted_model_defaults import (
 )
 
 
+def _catalog_only_model(
+    model_id: str,
+    *,
+    family: str,
+    feature: str,
+    surface: str,
+    tier: str | None = None,
+    deprecated: bool = False,
+) -> CatalogModelSeed:
+    raw_json: dict[str, object] = {
+        "surface": surface,
+        "runtime_support": "not_verified",
+    }
+    if tier:
+        raw_json["tier"] = tier
+    return CatalogModelSeed(
+        model_id=model_id,
+        family=family,
+        feature=feature,
+        status="catalog_only",
+        is_deprecated=deprecated,
+        raw_json=raw_json,
+        instances=[],
+    )
+
+
+def _catalog_only_models() -> list[CatalogModelSeed]:
+    return [
+        _catalog_only_model(
+            "speech-2.6-turbo",
+            family="speech-2.6",
+            feature="audio_generation",
+            surface="audio_generation",
+            tier="balanced",
+        ),
+        _catalog_only_model(
+            "speech-2.6-hd",
+            family="speech-2.6",
+            feature="audio_generation",
+            surface="audio_generation",
+            tier="quality",
+        ),
+        _catalog_only_model(
+            "speech-02-turbo",
+            family="speech-02",
+            feature="audio_generation",
+            surface="audio_generation",
+            tier="balanced",
+            deprecated=True,
+        ),
+        _catalog_only_model(
+            "speech-02-hd",
+            family="speech-02",
+            feature="audio_generation",
+            surface="audio_generation",
+            tier="quality",
+            deprecated=True,
+        ),
+        _catalog_only_model(
+            "speech-01-turbo",
+            family="speech-01",
+            feature="audio_generation",
+            surface="audio_generation",
+            tier="balanced",
+            deprecated=True,
+        ),
+        _catalog_only_model(
+            "speech-01-hd",
+            family="speech-01",
+            feature="audio_generation",
+            surface="audio_generation",
+            tier="quality",
+            deprecated=True,
+        ),
+        _catalog_only_model(
+            "image-01",
+            family="image",
+            feature="image_generation",
+            surface="image_generation",
+        ),
+        _catalog_only_model(
+            "MiniMax-Hailuo-02",
+            family="video",
+            feature="video_generation",
+            surface="video_generation",
+        ),
+        _catalog_only_model(
+            "MiniMax-Hailuo-2.3",
+            family="video",
+            feature="video_generation",
+            surface="video_generation",
+        ),
+        _catalog_only_model(
+            "music-2.6",
+            family="music",
+            feature="audio_generation",
+            surface="music_generation",
+        ),
+        *[
+            _catalog_only_model(
+                model_id,
+                family="MiniMax-M",
+                feature="text_generation",
+                surface="text_generation",
+            )
+            for model_id in (
+                "MiniMax-M2",
+                "MiniMax-M2.1",
+                "MiniMax-M2.1-highspeed",
+                "MiniMax-M2.5",
+                "MiniMax-M2.5-highspeed",
+                "MiniMax-M2.7",
+                "MiniMax-M2.7-highspeed",
+                "MiniMax-M3",
+            )
+        ],
+    ]
+
+
 class MiniMaxProviderAdapter:
     provider_id = "minimax"
     display_name = "MiniMax"
@@ -118,6 +237,7 @@ class MiniMaxProviderAdapter:
                         )
                     ],
                 ),
+                *_catalog_only_models(),
             ],
         )
 

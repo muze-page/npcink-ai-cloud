@@ -215,7 +215,8 @@ class ProviderConnectionAdminService:
                 status_code=502,
             ) from error
 
-        model_ids = [str(model.model_id) for model in list(snapshot.models or []) if model.model_id]
+        preview_models = [_catalog_preview_model(model) for model in list(snapshot.models or [])]
+        model_ids = [model["model_id"] for model in preview_models if model["model_id"]]
         return {
             "surface": "admin_provider_connection_catalog_preview",
             "provider_id": str(snapshot.provider_id or normalized["provider_id"]),
@@ -223,6 +224,7 @@ class ProviderConnectionAdminService:
             "adapter_type": str(snapshot.adapter_type or ""),
             "model_count": len(model_ids),
             "model_ids": model_ids[:100],
+            "models": preview_models[:100],
             "truncated": len(model_ids) > 100,
             "credential_value_exposure": "none",
             "boundary": _boundary(),
@@ -386,6 +388,10 @@ class ProviderConnectionAdminService:
         config = _dict(row.config_json)
         capability_ids = _normalize_id_list(config.get("capability_ids"))
         runtime_profile_ids = _normalize_id_list(config.get("runtime_profile_ids"))
+        metadata = _dict(row.metadata_json)
+        model_ids = _normalize_id_list(config.get("model_ids"))
+        if not model_ids:
+            model_ids = _normalize_id_list(metadata.get("model_ids"))
         provider_id = _string(config.get("provider_id") or row.connection_id)
         configured = bool(str(row.secret_ciphertext or "").strip()) or bool(
             config.get("secretless")
@@ -403,6 +409,7 @@ class ProviderConnectionAdminService:
             "base_url": row.base_url or "",
             "capability_ids": capability_ids,
             "runtime_profile_ids": runtime_profile_ids,
+            "model_ids": model_ids,
             "secrets": {
                 "credential": {
                     "configured": configured,
@@ -410,7 +417,7 @@ class ProviderConnectionAdminService:
                 }
             },
             "config": _public_config(config),
-            "metadata": _dict(row.metadata_json),
+            "metadata": metadata,
             "last_tested_at": _iso(row.last_tested_at),
             "last_sync_at": _iso(row.last_sync_at),
             "last_error_code": row.last_error_code or "",
@@ -435,6 +442,29 @@ def _boundary() -> dict[str, Any]:
             "workflow_registry",
             "prompt_router_preset_truth",
         ],
+    }
+
+
+def _catalog_preview_model(model: Any) -> dict[str, Any]:
+    instances = list(getattr(model, "instances", []) or [])
+    capability_tags = sorted(
+        {
+            str(tag)
+            for instance in instances
+            for tag in list(getattr(instance, "capability_tags", []) or [])
+            if str(tag)
+        }
+    )
+    runtime_supported = bool(instances)
+    return {
+        "model_id": str(getattr(model, "model_id", "") or ""),
+        "family": str(getattr(model, "family", "") or ""),
+        "feature": str(getattr(model, "feature", "") or ""),
+        "status": str(getattr(model, "status", "") or ""),
+        "is_deprecated": bool(getattr(model, "is_deprecated", False)),
+        "runtime_supported": runtime_supported,
+        "verified": runtime_supported,
+        "capability_tags": capability_tags,
     }
 
 
