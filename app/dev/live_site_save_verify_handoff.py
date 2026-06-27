@@ -13,12 +13,12 @@ DEFAULT_OUTPUT_ROOT = Path(".tmp/live-site-save-verify-handoff")
 ADDON_ADMIN_PAGE_SLUG = "npcink-cloud-addon"
 
 
-def _site_admin_base(url: str) -> str:
+def _principal_base(url: str) -> str:
     return url.rstrip("/") + "/wp-admin/"
 
 
 def _addon_admin_url(url: str) -> str:
-    return _site_admin_base(url) + "admin.php?page=" + ADDON_ADMIN_PAGE_SLUG
+    return _principal_base(url) + "admin.php?page=" + ADDON_ADMIN_PAGE_SLUG
 
 
 def _secret_path_from_stage(stage_report: dict[str, object]) -> Path | None:
@@ -173,7 +173,7 @@ def build_handoff_report(
             "secret_file": str(secret_file) if secret_file is not None else "",
         },
         "admin": {
-            "login_url": _site_admin_base(site_url) if site_url else "",
+            "login_url": _principal_base(site_url) if site_url else "",
             "addon_admin_url": _addon_admin_url(site_url) if site_url else "",
             "menu_path": "Npcink AI > Cloud Addon",
             "save_button_label": "Save and Verify",

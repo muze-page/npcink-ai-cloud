@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import json
+import secrets
 from datetime import datetime
 from typing import Any
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
+import httpx
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
@@ -45,7 +49,13 @@ from app.domain.commercial.customer_api_keys import (
     serialize_portal_site_key,
 )
 from app.domain.commercial.errors import CommercialServiceError
-from app.domain.commercial.identity import SITE_ADMIN_SITE_KEY_WRITE_ROLES
+from app.domain.commercial.identity import (
+    USER_ALLOWED_ACTION_MANAGE_SITE_KEYS,
+    USER_ALLOWED_ACTION_VIEW_AUDIT,
+    USER_ALLOWED_ACTION_VIEW_BILLING,
+    USER_ALLOWED_ACTION_VIEW_USAGE,
+    USER_SITE_KEY_WRITE_ROLES,
+)
 from app.domain.hosted_model_defaults import FREE_GPT55_MODEL_ID
 from app.domain.media_derivatives.metrics import MediaDerivativeObservabilityService
 from app.domain.observability.plugin_events import PluginObservabilityService
@@ -54,6 +64,7 @@ from app.domain.site_knowledge.metrics import SiteKnowledgeObservabilityService
 from app.domain.usage.service import UsageService
 
 router = APIRouter(prefix="/portal/v1", tags=["portal"])
+COOKIE_PORTAL_QQ_OAUTH_NONCE = "magick_portal_qq_oauth_nonce"
 
 
 class PortalSiteKeyPayload(BaseModel):
@@ -83,6 +94,16 @@ class PortalLoginCodeVerifyPayload(BaseModel):
     code: str = ""
 
 
+class PortalQQBindPayload(BaseModel):
+    code: str = ""
+    state: str = ""
+    nonce: str = ""
+
+
+class PortalQQUnbindPayload(BaseModel):
+    provider: str = "qq"
+
+
 class PortalAIInsightAnalyzePayload(BaseModel):
     force_refresh: bool = False
 
@@ -100,10 +121,10 @@ def _dict_value(value: object) -> dict[str, object]:
     return value if isinstance(value, dict) else {}
 
 
-def _build_portal_audit_context(request: Request, site_admin_ref: str) -> ServiceAuditContext:
+def _build_portal_audit_context(request: Request, principal_id: str) -> ServiceAuditContext:
     audit_context = _build_audit_context(request)
-    audit_context.actor_kind = "site_admin"
-    audit_context.actor_ref = site_admin_ref
+    audit_context.actor_kind = "principal"
+    audit_context.actor_ref = principal_id
     return audit_context
 
 
@@ -111,17 +132,33 @@ def _authorize_portal_site_access(
     request: Request,
     *,
     site_id: str,
-    site_admin_ref: str,
+    principal_id: str,
     required_roles: set[str] | None = None,
+    required_action: str | None = None,
 ) -> dict[str, object] | JSONResponse:
     try:
-        return _get_commercial_service(request).resolve_portal_site_access(
+        access = _get_commercial_service(request).resolve_portal_site_access(
             site_id=site_id,
-            site_admin_ref=site_admin_ref,
+            principal_id=principal_id,
             required_roles=required_roles,
         )
     except CommercialServiceError as error:
         return _service_error_response(error, request=request)
+    normalized_action = str(required_action or "").strip()
+    if normalized_action:
+        allowed_actions = {
+            str(action).strip()
+            for action in _object_list(access.get("allowed_actions"))
+            if str(action).strip()
+        }
+        if normalized_action not in allowed_actions:
+            return portal_json_error(
+                request,
+                status_code=403,
+                error_code="service.portal_action_forbidden",
+                message=f"principal '{principal_id}' lacks required action '{normalized_action}'",
+            )
+    return access
 
 
 def _portal_route_envelope(
@@ -149,6 +186,170 @@ def _portal_session_cleared_response() -> JSONResponse:
     return response
 
 
+def _portal_qq_config_error(request: Request) -> JSONResponse | None:
+    settings = get_cloud_services(request).settings
+    if not str(settings.portal_qq_client_id or "").strip():
+        return portal_json_error(
+            request,
+            status_code=503,
+            error_code="portal.qq_login_not_configured",
+            message="QQ login is not configured",
+        )
+    if not str(settings.portal_qq_client_secret or "").strip():
+        return portal_json_error(
+            request,
+            status_code=503,
+            error_code="portal.qq_login_not_configured",
+            message="QQ login is not configured",
+        )
+    if not _portal_qq_redirect_uri(request):
+        return portal_json_error(
+            request,
+            status_code=503,
+            error_code="portal.qq_login_not_configured",
+            message="QQ login redirect uri is not configured",
+        )
+    return None
+
+
+def _portal_qq_redirect_uri(request: Request) -> str:
+    settings = get_cloud_services(request).settings
+    configured = str(settings.portal_qq_redirect_uri or "").strip()
+    if configured:
+        return configured if _portal_qq_redirect_uri_allowed(request, configured) else ""
+    base_url = str(settings.portal_public_base_url or "").strip()
+    if not base_url:
+        return ""
+    parsed = urlsplit(base_url)
+    if not parsed.scheme or not parsed.netloc:
+        return ""
+    redirect_uri = urlunsplit(
+        (parsed.scheme, parsed.netloc, "/portal/v1/auth/qq/callback", "", "")
+    )
+    return redirect_uri if _portal_qq_redirect_uri_allowed(request, redirect_uri) else ""
+
+
+def _portal_qq_redirect_uri_allowed(request: Request, value: str) -> bool:
+    parsed = urlsplit(str(value or "").strip())
+    if parsed.path != "/portal/v1/auth/qq/callback":
+        return False
+    if parsed.scheme not in {"https", "http"} or not parsed.netloc:
+        return False
+    settings = get_cloud_services(request).settings
+    environment = str(settings.environment or "").strip().lower()
+    if parsed.scheme != "https" and environment not in {"development", "test"}:
+        return False
+    allowed_hosts = {
+        str(urlsplit(str(settings.portal_public_base_url or "")).netloc or "").lower(),
+    }
+    if environment in {"development", "test"}:
+        allowed_hosts.add(str(urlsplit(str(request.base_url)).netloc or "").lower())
+    return parsed.netloc.lower() in {host for host in allowed_hosts if host}
+
+
+def _portal_qq_oauth_nonce(request: Request, payload_nonce: str = "") -> str:
+    return str(payload_nonce or request.cookies.get(COOKIE_PORTAL_QQ_OAUTH_NONCE) or "").strip()
+
+
+def _set_portal_qq_oauth_nonce_cookie(
+    request: Request,
+    response: JSONResponse,
+    *,
+    nonce: str,
+    max_age: int,
+) -> None:
+    response.set_cookie(
+        COOKIE_PORTAL_QQ_OAUTH_NONCE,
+        nonce,
+        httponly=True,
+        secure=portal_cookie_secure(request),
+        samesite="lax",
+        path="/portal/v1/auth/qq",
+        max_age=max(60, int(max_age or 0)),
+    )
+
+
+def _clear_portal_qq_oauth_nonce_cookie(response: JSONResponse) -> None:
+    response.delete_cookie(COOKIE_PORTAL_QQ_OAUTH_NONCE, path="/portal/v1/auth/qq")
+
+
+def _build_qq_authorization_url(request: Request, *, state: str) -> str:
+    settings = get_cloud_services(request).settings
+    query = urlencode(
+        {
+            "response_type": "code",
+            "client_id": str(settings.portal_qq_client_id or "").strip(),
+            "redirect_uri": _portal_qq_redirect_uri(request),
+            "state": state,
+            "scope": str(settings.portal_qq_scope or "get_user_info").strip(),
+        }
+    )
+    return f"https://graph.qq.com/oauth2.0/authorize?{query}"
+
+
+def _parse_qq_query_response(value: str) -> dict[str, str]:
+    return {key: item for key, item in parse_qsl(str(value or ""), keep_blank_values=True)}
+
+
+def _parse_qq_me_response(value: str) -> dict[str, object]:
+    raw = str(value or "").strip()
+    if raw.startswith("callback(") and raw.endswith(");"):
+        raw = raw[len("callback(") : -2].strip()
+    payload = json.loads(raw)
+    return payload if isinstance(payload, dict) else {}
+
+
+def _exchange_qq_code(request: Request, *, code: str) -> dict[str, str]:
+    settings = get_cloud_services(request).settings
+    with httpx.Client(timeout=float(settings.portal_qq_timeout_seconds or 10.0)) as client:
+        response = client.get(
+            "https://graph.qq.com/oauth2.0/token",
+            params={
+                "grant_type": "authorization_code",
+                "client_id": str(settings.portal_qq_client_id or "").strip(),
+                "client_secret": str(settings.portal_qq_client_secret or "").strip(),
+                "code": code,
+                "redirect_uri": _portal_qq_redirect_uri(request),
+                "fmt": "xhtml",
+            },
+        )
+        response.raise_for_status()
+    payload = _parse_qq_query_response(response.text)
+    if not str(payload.get("access_token") or "").strip():
+        raise CommercialServiceError(
+            502,
+            "portal.qq_token_exchange_failed",
+            "QQ token exchange failed",
+        )
+    return payload
+
+
+def _fetch_qq_openid(request: Request, *, access_token: str) -> dict[str, str]:
+    settings = get_cloud_services(request).settings
+    with httpx.Client(timeout=float(settings.portal_qq_timeout_seconds or 10.0)) as client:
+        response = client.get(
+            "https://graph.qq.com/oauth2.0/me",
+            params={
+                "access_token": access_token,
+                "unionid": "1",
+                "fmt": "json",
+            },
+        )
+        response.raise_for_status()
+    payload = _parse_qq_me_response(response.text)
+    openid = str(payload.get("openid") or "").strip()
+    if not openid:
+        raise CommercialServiceError(
+            502,
+            "portal.qq_openid_fetch_failed",
+            "QQ openid fetch failed",
+        )
+    return {
+        "openid": openid,
+        "unionid": str(payload.get("unionid") or "").strip(),
+    }
+
+
 def _portal_write_guard(request: Request) -> JSONResponse | None:
     return None
 
@@ -158,6 +359,17 @@ def _portal_same_origin_guard(
     *,
     always: bool = False,
 ) -> JSONResponse | None:
+    settings = get_cloud_services(request).settings
+    if (
+        settings.production_like_environment()
+        and str(request.headers.get("x-npcink-debug-portal-link") or "").strip() == "1"
+    ):
+        return portal_json_error(
+            request,
+            status_code=403,
+            error_code="auth.origin_forbidden",
+            message="cross-site browser writes are not allowed",
+        )
     if not always:
         has_header_auth = any(
             [
@@ -201,6 +413,226 @@ def _resolve_portal_ai_provider_id(request: Request) -> str:
         if provider_id in services.providers
     ]
     return sorted(allowed_provider_ids)[0] if allowed_provider_ids else ""
+
+
+@router.get("/auth/qq/start")
+async def start_portal_qq_login(
+    request: Request,
+    return_to: str = Query(default="/portal"),
+) -> Any:
+    same_origin = _portal_same_origin_guard(request, always=True)
+    if same_origin is not None:
+        return same_origin
+    config_error = _portal_qq_config_error(request)
+    if config_error is not None:
+        return config_error
+    nonce = secrets.token_urlsafe(32)
+    issued = _get_commercial_service(request).issue_portal_oauth_state(
+        provider="qq",
+        return_to=return_to,
+        client_scope_id=str(request.client.host if request.client else ""),
+        ttl_seconds=int(get_cloud_services(request).settings.portal_oauth_state_ttl_seconds or 0),
+        nonce=nonce,
+    )
+    authorization_url = _build_qq_authorization_url(
+        request,
+        state=str(issued.get("state") or ""),
+    )
+    response = JSONResponse(
+        status_code=200,
+        content=_portal_route_envelope(
+            message="portal QQ login started",
+            data={
+                "provider": "qq",
+                "authorization_url": authorization_url,
+                "state": str(issued.get("state") or ""),
+                "expires_in_seconds": int(issued.get("expires_in_seconds") or 0),
+                "return_to": str(issued.get("return_to") or "/portal"),
+            },
+        ),
+    )
+    _set_portal_qq_oauth_nonce_cookie(
+        request,
+        response,
+        nonce=nonce,
+        max_age=int(issued.get("expires_in_seconds") or 0),
+    )
+    return response
+
+
+@router.get("/auth/qq/callback")
+async def finish_portal_qq_login(
+    request: Request,
+    code: str = Query(default=""),
+    state: str = Query(default=""),
+) -> Any:
+    if not code.strip() or not state.strip():
+        return portal_json_error(
+            request,
+            status_code=400,
+            error_code="portal.qq_callback_required",
+            message="QQ authorization code and state are required",
+        )
+    config_error = _portal_qq_config_error(request)
+    if config_error is not None:
+        return config_error
+    try:
+        consumed_state = _get_commercial_service(request).consume_portal_oauth_state(
+            provider="qq",
+            state=state,
+            nonce=_portal_qq_oauth_nonce(request),
+        )
+        token = _exchange_qq_code(request, code=code.strip())
+        subject = _fetch_qq_openid(
+            request,
+            access_token=str(token.get("access_token") or ""),
+        )
+        login = _get_commercial_service(request).resolve_portal_identity_provider_login(
+            provider="qq",
+            external_subject=str(subject.get("openid") or ""),
+            unionid=str(subject.get("unionid") or ""),
+        )
+        if str(login.get("status") or "") == "binding_required":
+            response = JSONResponse(
+                status_code=200,
+                content=_portal_route_envelope(
+                    message="portal QQ binding required",
+                    data={
+                        **login,
+                        "return_to": str(consumed_state.get("return_to") or "/portal"),
+                    },
+                ),
+            )
+            _clear_portal_qq_oauth_nonce_cookie(response)
+            return response
+        principal_id = str(login.get("principal_id") or "")
+        data = serialize_portal_session(
+            request,
+            principal_id=principal_id,
+            site_id="",
+            strict_site=False,
+            session_metadata=build_new_portal_session_metadata(request),
+        )
+        data["auth_provider"] = "qq"
+        data["return_to"] = str(consumed_state.get("return_to") or "/portal")
+    except CommercialServiceError as error:
+        return _service_error_response(error, request=request)
+    except httpx.HTTPError as error:
+        return portal_json_error(
+            request,
+            status_code=502,
+            error_code="portal.qq_provider_unavailable",
+            message=str(error),
+        )
+
+    response = JSONResponse(
+        status_code=200,
+        content=_portal_route_envelope(
+            message="portal session created",
+            data=data,
+        ),
+    )
+    set_portal_session_cookies(
+        request,
+        response,
+        principal_id=principal_id,
+        site_id="",
+    )
+    _clear_portal_qq_oauth_nonce_cookie(response)
+    return response
+
+
+@router.post("/auth/qq/bind")
+async def bind_portal_qq_login(
+    request: Request,
+    payload: PortalQQBindPayload,
+) -> Any:
+    same_origin = _portal_same_origin_guard(request, always=True)
+    if same_origin is not None:
+        return same_origin
+    auth = await resolve_portal_request_context(
+        request,
+        require_idempotency=False,
+        allow_session_cookies=True,
+    )
+    if isinstance(auth, JSONResponse):
+        return auth
+    config_error = _portal_qq_config_error(request)
+    if config_error is not None:
+        return config_error
+    code = payload.code.strip()
+    state = payload.state.strip()
+    if not code or not state:
+        return portal_json_error(
+            request,
+            status_code=400,
+            error_code="portal.qq_bind_required",
+            message="QQ authorization code and state are required",
+        )
+    try:
+        _get_commercial_service(request).consume_portal_oauth_state(
+            provider="qq",
+            state=state,
+            nonce=_portal_qq_oauth_nonce(request, payload.nonce),
+        )
+        token = _exchange_qq_code(request, code=code)
+        subject = _fetch_qq_openid(
+            request,
+            access_token=str(token.get("access_token") or ""),
+        )
+        binding = _get_commercial_service(request).bind_portal_identity_provider(
+            principal_id=auth.principal_id,
+            provider="qq",
+            external_subject=str(subject.get("openid") or ""),
+            unionid=str(subject.get("unionid") or ""),
+            metadata_json={"source": "portal_qq_bind"},
+        )
+    except CommercialServiceError as error:
+        return _service_error_response(error, request=request)
+    except httpx.HTTPError as error:
+        return portal_json_error(
+            request,
+            status_code=502,
+            error_code="portal.qq_provider_unavailable",
+            message=str(error),
+        )
+    response = JSONResponse(
+        status_code=200,
+        content=_portal_route_envelope(
+            message="portal QQ login bound",
+            data={"binding": binding},
+        ),
+    )
+    _clear_portal_qq_oauth_nonce_cookie(response)
+    return response
+
+
+@router.post("/auth/qq/unbind")
+async def unbind_portal_qq_login(
+    request: Request,
+    payload: PortalQQUnbindPayload,
+) -> Any:
+    same_origin = _portal_same_origin_guard(request, always=True)
+    if same_origin is not None:
+        return same_origin
+    auth = await resolve_portal_request_context(
+        request,
+        require_idempotency=False,
+        allow_session_cookies=True,
+    )
+    if isinstance(auth, JSONResponse):
+        return auth
+    try:
+        result = _get_commercial_service(request).revoke_portal_identity_provider(
+            principal_id=auth.principal_id,
+            provider=payload.provider,
+        )
+    except CommercialServiceError as error:
+        return _service_error_response(error, request=request)
+    return _portal_route_envelope(
+        message="portal QQ login unbound",
+        data=result,
+    )
 
 
 def _portal_ai_disclosure(disclosure: dict[str, Any]) -> dict[str, Any]:
@@ -341,12 +773,12 @@ def _resolve_portal_site_summary(
     request: Request,
     *,
     site_id: str,
-    site_admin_ref: str,
+    principal_id: str,
 ) -> dict[str, object] | JSONResponse:
     access = _authorize_portal_site_access(
         request,
         site_id=site_id,
-        site_admin_ref=site_admin_ref,
+        principal_id=principal_id,
     )
     if isinstance(access, JSONResponse):
         return access
@@ -360,7 +792,7 @@ def _resolve_portal_site_summary(
     return {
         "site_id": site_id,
         "account_id": str(access.get("account_id") or ""),
-        "site_admin_ref": site_admin_ref,
+        "principal_id": principal_id,
         "identity_type": str(access.get("identity_type") or ""),
         "allowed_actions": [
             str(action)
@@ -422,7 +854,7 @@ async def request_portal_login_code(
     except CommercialServiceError as error:
         if error.error_code in {
             "service.portal_email_not_found",
-            "service.site_admin_email_not_found",
+            "service.principal_email_not_found",
         }:
             return _portal_route_envelope(
                 message="portal login code request accepted",
@@ -438,7 +870,7 @@ async def request_portal_login_code(
         try:
             email_sender.send_login_code(
                 recipient_email=str(issued.get("email") or ""),
-                site_admin_ref=str(issued.get("site_admin_ref") or ""),
+                principal_id=str(issued.get("principal_id") or ""),
                 code=str(issued.get("code") or ""),
                 expires_in_seconds=ttl_seconds,
                 project_name=get_cloud_services(request).settings.project_name,
@@ -488,10 +920,10 @@ async def verify_portal_login_code(
                 int(get_cloud_services(request).settings.portal_login_code_max_attempts or 0),
             ),
         )
-        site_admin_ref = str(verified.get("site_admin_ref") or "")
+        principal_id = str(verified.get("principal_id") or "")
         data = serialize_portal_session(
             request,
-            site_admin_ref=site_admin_ref,
+            principal_id=principal_id,
             site_id="",
             strict_site=False,
             session_metadata=build_new_portal_session_metadata(request),
@@ -516,7 +948,7 @@ async def verify_portal_login_code(
     set_portal_session_cookies(
         request,
         response,
-        site_admin_ref=site_admin_ref,
+        principal_id=principal_id,
         site_id="",
     )
     return response
@@ -535,7 +967,7 @@ async def get_portal_session(request: Request) -> Any:
     try:
         data = serialize_portal_session(
             request,
-            site_admin_ref=auth.site_admin_ref,
+            principal_id=auth.principal_id,
             site_id=selected_site_id,
             strict_site=False,
         )
@@ -573,7 +1005,7 @@ async def select_portal_session_site(
     try:
         data = serialize_portal_session(
             request,
-            site_admin_ref=auth.site_admin_ref,
+            principal_id=auth.principal_id,
             site_id=site_id,
             strict_site=True,
         )
@@ -623,7 +1055,7 @@ async def list_portal_sites(request: Request) -> Any:
         return auth
     try:
         result = _get_commercial_service(request).list_portal_sites(
-            site_admin_ref=auth.site_admin_ref,
+            principal_id=auth.principal_id,
         )
     except CommercialServiceError as error:
         return _service_error_response(error, request=request)
@@ -653,11 +1085,11 @@ async def create_portal_site(
         return auth
 
     service = _get_commercial_service(request)
-    audit_context = _build_portal_audit_context(request, auth.site_admin_ref)
+    audit_context = _build_portal_audit_context(request, auth.principal_id)
     try:
         result = service.provision_portal_site(
             account_id=payload.account_id,
-            site_admin_ref=auth.site_admin_ref,
+            principal_id=auth.principal_id,
             wordpress_url=payload.wordpress_url,
             site_name=payload.site_name,
             audit_context=audit_context,
@@ -683,7 +1115,7 @@ async def get_portal_site_summary(request: Request, site_id: str) -> Any:
     result = _resolve_portal_site_summary(
         request,
         site_id=site_id,
-        site_admin_ref=auth.site_admin_ref,
+        principal_id=auth.principal_id,
     )
     if isinstance(result, JSONResponse):
         return result
@@ -705,8 +1137,9 @@ async def get_portal_site_usage_summary(request: Request, site_id: str) -> Any:
     access = _authorize_portal_site_access(
         request,
         site_id=site_id,
-        site_admin_ref=auth.site_admin_ref,
-        required_roles=SITE_ADMIN_SITE_KEY_WRITE_ROLES,
+        principal_id=auth.principal_id,
+        required_roles=USER_SITE_KEY_WRITE_ROLES,
+        required_action=USER_ALLOWED_ACTION_VIEW_USAGE,
     )
     if isinstance(access, JSONResponse):
         return access
@@ -715,7 +1148,7 @@ async def get_portal_site_usage_summary(request: Request, site_id: str) -> Any:
     )
     result["site_id"] = site_id
     result["account_id"] = str(access.get("account_id") or "")
-    result["site_admin_ref"] = auth.site_admin_ref
+    result["principal_id"] = auth.principal_id
     result["identity_type"] = str(access.get("identity_type") or "")
     result["allowed_actions"] = [
         str(action) for action in _object_list(access.get("allowed_actions")) if str(action).strip()
@@ -743,7 +1176,7 @@ async def get_portal_site_monitoring_overview(
     access = _authorize_portal_site_access(
         request,
         site_id=site_id,
-        site_admin_ref=auth.site_admin_ref,
+        principal_id=auth.principal_id,
     )
     if isinstance(access, JSONResponse):
         return access
@@ -758,7 +1191,7 @@ async def get_portal_site_monitoring_overview(
     except CommercialServiceError as error:
         return _service_error_response(error, request=request)
     result["account_id"] = str(access.get("account_id") or "")
-    result["site_admin_ref"] = auth.site_admin_ref
+    result["principal_id"] = auth.principal_id
     result["identity_type"] = str(access.get("identity_type") or "")
     result["allowed_actions"] = [
         str(action) for action in _object_list(access.get("allowed_actions")) if str(action).strip()
@@ -786,7 +1219,7 @@ async def get_portal_site_diagnostic_advisor(
     access = _authorize_portal_site_access(
         request,
         site_id=site_id,
-        site_admin_ref=auth.site_admin_ref,
+        principal_id=auth.principal_id,
     )
     if isinstance(access, JSONResponse):
         return access
@@ -799,7 +1232,7 @@ async def get_portal_site_diagnostic_advisor(
         return _service_error_response(error, request=request)
     result["site_id"] = site_id
     result["account_id"] = str(access.get("account_id") or "")
-    result["site_admin_ref"] = auth.site_admin_ref
+    result["principal_id"] = auth.principal_id
     result["identity_type"] = str(access.get("identity_type") or "")
     result["allowed_actions"] = [
         str(action) for action in _object_list(access.get("allowed_actions")) if str(action).strip()
@@ -828,7 +1261,7 @@ async def get_portal_site_plugin_observability(
     access = _authorize_portal_site_access(
         request,
         site_id=site_id,
-        site_admin_ref=auth.site_admin_ref,
+        principal_id=auth.principal_id,
     )
     if isinstance(access, JSONResponse):
         return access
@@ -839,7 +1272,7 @@ async def get_portal_site_plugin_observability(
     )
     result["site_id"] = site_id
     result["account_id"] = str(access.get("account_id") or "")
-    result["site_admin_ref"] = auth.site_admin_ref
+    result["principal_id"] = auth.principal_id
     result["identity_type"] = str(access.get("identity_type") or "")
     result["allowed_actions"] = [
         str(action) for action in _object_list(access.get("allowed_actions")) if str(action).strip()
@@ -868,7 +1301,7 @@ async def get_portal_site_media_observability(
     access = _authorize_portal_site_access(
         request,
         site_id=site_id,
-        site_admin_ref=auth.site_admin_ref,
+        principal_id=auth.principal_id,
     )
     if isinstance(access, JSONResponse):
         return access
@@ -887,7 +1320,7 @@ async def get_portal_site_media_observability(
     result["workflow_metadata"] = get_workflow_metadata(MEDIA_DERIVATIVE_WORKFLOW_ID)
     result["site_id"] = site_id
     result["account_id"] = str(access.get("account_id") or "")
-    result["site_admin_ref"] = auth.site_admin_ref
+    result["principal_id"] = auth.principal_id
     result["identity_type"] = str(access.get("identity_type") or "")
     result["allowed_actions"] = [
         str(action) for action in _object_list(access.get("allowed_actions")) if str(action).strip()
@@ -915,7 +1348,7 @@ async def get_portal_site_vector_observability(
     access = _authorize_portal_site_access(
         request,
         site_id=site_id,
-        site_admin_ref=auth.site_admin_ref,
+        principal_id=auth.principal_id,
     )
     if isinstance(access, JSONResponse):
         return access
@@ -928,7 +1361,7 @@ async def get_portal_site_vector_observability(
     result.pop("sites", None)
     result["site_id"] = site_id
     result["account_id"] = str(access.get("account_id") or "")
-    result["site_admin_ref"] = auth.site_admin_ref
+    result["principal_id"] = auth.principal_id
     result["identity_type"] = str(access.get("identity_type") or "")
     result["allowed_actions"] = [
         str(action) for action in _object_list(access.get("allowed_actions")) if str(action).strip()
@@ -956,7 +1389,7 @@ async def list_portal_site_ai_insight_history(
     access = _authorize_portal_site_access(
         request,
         site_id=site_id,
-        site_admin_ref=auth.site_admin_ref,
+        principal_id=auth.principal_id,
     )
     if isinstance(access, JSONResponse):
         return access
@@ -971,7 +1404,7 @@ async def list_portal_site_ai_insight_history(
             "portal_ai_insight_version": "portal-ai-insight-v1",
             "site_id": site_id,
             "account_id": str(access.get("account_id") or ""),
-            "site_admin_ref": auth.site_admin_ref,
+            "principal_id": auth.principal_id,
             "identity_type": str(access.get("identity_type") or ""),
             "role": str(access.get("role") or ""),
             "items": [
@@ -1003,7 +1436,7 @@ async def analyze_portal_site_ai_insight(
     access = _authorize_portal_site_access(
         request,
         site_id=site_id,
-        site_admin_ref=auth.site_admin_ref,
+        principal_id=auth.principal_id,
     )
     if isinstance(access, JSONResponse):
         return access
@@ -1035,7 +1468,7 @@ async def analyze_portal_site_ai_insight(
             "portal_ai_insight_version": "portal-ai-insight-v1",
             "site_id": site_id,
             "account_id": str(access.get("account_id") or ""),
-            "site_admin_ref": auth.site_admin_ref,
+            "principal_id": auth.principal_id,
             "identity_type": str(access.get("identity_type") or ""),
             "role": str(access.get("role") or ""),
             "analysis": _portal_ai_summary(summary),
@@ -1056,8 +1489,9 @@ async def get_portal_site_entitlements(request: Request, site_id: str) -> Any:
     access = _authorize_portal_site_access(
         request,
         site_id=site_id,
-        site_admin_ref=auth.site_admin_ref,
-        required_roles=SITE_ADMIN_SITE_KEY_WRITE_ROLES,
+        principal_id=auth.principal_id,
+        required_roles=USER_SITE_KEY_WRITE_ROLES,
+        required_action=USER_ALLOWED_ACTION_VIEW_BILLING,
     )
     if isinstance(access, JSONResponse):
         return access
@@ -1074,7 +1508,7 @@ async def get_portal_site_entitlements(request: Request, site_id: str) -> Any:
         data={
             "site_id": site_id,
             "account_id": str(access.get("account_id") or ""),
-            "site_admin_ref": auth.site_admin_ref,
+            "principal_id": auth.principal_id,
             "identity_type": str(access.get("identity_type") or ""),
             "allowed_actions": [
                 str(action)
@@ -1115,8 +1549,9 @@ async def get_portal_site_credit_ledger(
     access = _authorize_portal_site_access(
         request,
         site_id=site_id,
-        site_admin_ref=auth.site_admin_ref,
-        required_roles=SITE_ADMIN_SITE_KEY_WRITE_ROLES,
+        principal_id=auth.principal_id,
+        required_roles=USER_SITE_KEY_WRITE_ROLES,
+        required_action=USER_ALLOWED_ACTION_VIEW_BILLING,
     )
     if isinstance(access, JSONResponse):
         return access
@@ -1133,7 +1568,7 @@ async def get_portal_site_credit_ledger(
         data={
             "site_id": site_id,
             "account_id": str(access.get("account_id") or ""),
-            "site_admin_ref": auth.site_admin_ref,
+            "principal_id": auth.principal_id,
             "identity_type": str(access.get("identity_type") or ""),
             "allowed_actions": [
                 str(action)
@@ -1158,8 +1593,9 @@ async def list_portal_site_credit_packs(request: Request, site_id: str) -> Any:
     access = _authorize_portal_site_access(
         request,
         site_id=site_id,
-        site_admin_ref=auth.site_admin_ref,
-        required_roles=SITE_ADMIN_SITE_KEY_WRITE_ROLES,
+        principal_id=auth.principal_id,
+        required_roles=USER_SITE_KEY_WRITE_ROLES,
+        required_action=USER_ALLOWED_ACTION_VIEW_BILLING,
     )
     if isinstance(access, JSONResponse):
         return access
@@ -1170,7 +1606,7 @@ async def list_portal_site_credit_packs(request: Request, site_id: str) -> Any:
             **result,
             "site_id": site_id,
             "account_id": str(access.get("account_id") or ""),
-            "site_admin_ref": auth.site_admin_ref,
+            "principal_id": auth.principal_id,
             "identity_type": str(access.get("identity_type") or ""),
             "role": str(access.get("role") or ""),
         },
@@ -1194,8 +1630,9 @@ async def list_portal_site_payment_orders(
     access = _authorize_portal_site_access(
         request,
         site_id=site_id,
-        site_admin_ref=auth.site_admin_ref,
-        required_roles=SITE_ADMIN_SITE_KEY_WRITE_ROLES,
+        principal_id=auth.principal_id,
+        required_roles=USER_SITE_KEY_WRITE_ROLES,
+        required_action=USER_ALLOWED_ACTION_VIEW_BILLING,
     )
     if isinstance(access, JSONResponse):
         return access
@@ -1214,7 +1651,7 @@ async def list_portal_site_payment_orders(
             **result,
             "site_id": site_id,
             "account_id": str(access.get("account_id") or ""),
-            "site_admin_ref": auth.site_admin_ref,
+            "principal_id": auth.principal_id,
             "identity_type": str(access.get("identity_type") or ""),
             "role": str(access.get("role") or ""),
         },
@@ -1243,8 +1680,9 @@ async def create_portal_site_credit_pack_order(
     access = _authorize_portal_site_access(
         request,
         site_id=site_id,
-        site_admin_ref=auth.site_admin_ref,
-        required_roles=SITE_ADMIN_SITE_KEY_WRITE_ROLES,
+        principal_id=auth.principal_id,
+        required_roles=USER_SITE_KEY_WRITE_ROLES,
+        required_action=USER_ALLOWED_ACTION_VIEW_BILLING,
     )
     if isinstance(access, JSONResponse):
         return access
@@ -1254,7 +1692,7 @@ async def create_portal_site_credit_pack_order(
             site_id=site_id,
             pack_id=payload.pack_id,
             provider=payload.provider,
-            audit_context=_build_portal_audit_context(request, auth.site_admin_ref),
+            audit_context=_build_portal_audit_context(request, auth.principal_id),
         )
     except CommercialServiceError as error:
         return _service_error_response(error, request=request)
@@ -1263,7 +1701,7 @@ async def create_portal_site_credit_pack_order(
         data={
             "site_id": site_id,
             "account_id": str(access.get("account_id") or ""),
-            "site_admin_ref": auth.site_admin_ref,
+            "principal_id": auth.principal_id,
             "identity_type": str(access.get("identity_type") or ""),
             "role": str(access.get("role") or ""),
             "order": order,
@@ -1283,8 +1721,9 @@ async def get_portal_site_audit_summary(request: Request, site_id: str) -> Any:
     access = _authorize_portal_site_access(
         request,
         site_id=site_id,
-        site_admin_ref=auth.site_admin_ref,
-        required_roles=SITE_ADMIN_SITE_KEY_WRITE_ROLES,
+        principal_id=auth.principal_id,
+        required_roles=USER_SITE_KEY_WRITE_ROLES,
+        required_action=USER_ALLOWED_ACTION_VIEW_AUDIT,
     )
     if isinstance(access, JSONResponse):
         return access
@@ -1299,7 +1738,7 @@ async def get_portal_site_audit_summary(request: Request, site_id: str) -> Any:
         data={
             "site_id": site_id,
             "account_id": str(access.get("account_id") or ""),
-            "site_admin_ref": auth.site_admin_ref,
+            "principal_id": auth.principal_id,
             "identity_type": str(access.get("identity_type") or ""),
             "allowed_actions": [
                 str(action)
@@ -1330,8 +1769,9 @@ async def list_portal_site_audit_events(
     access = _authorize_portal_site_access(
         request,
         site_id=site_id,
-        site_admin_ref=auth.site_admin_ref,
-        required_roles=SITE_ADMIN_SITE_KEY_WRITE_ROLES,
+        principal_id=auth.principal_id,
+        required_roles=USER_SITE_KEY_WRITE_ROLES,
+        required_action=USER_ALLOWED_ACTION_VIEW_AUDIT,
     )
     if isinstance(access, JSONResponse):
         return access
@@ -1349,7 +1789,7 @@ async def list_portal_site_audit_events(
         data={
             "site_id": site_id,
             "account_id": str(access.get("account_id") or ""),
-            "site_admin_ref": auth.site_admin_ref,
+            "principal_id": auth.principal_id,
             "identity_type": str(access.get("identity_type") or ""),
             "allowed_actions": [
                 str(action)
@@ -1374,7 +1814,7 @@ async def list_portal_site_billing_snapshots(request: Request, site_id: str) -> 
     access = _authorize_portal_site_access(
         request,
         site_id=site_id,
-        site_admin_ref=auth.site_admin_ref,
+        principal_id=auth.principal_id,
     )
     if isinstance(access, JSONResponse):
         return access
@@ -1387,7 +1827,7 @@ async def list_portal_site_billing_snapshots(request: Request, site_id: str) -> 
         data={
             "site_id": site_id,
             "account_id": str(access.get("account_id") or ""),
-            "site_admin_ref": auth.site_admin_ref,
+            "principal_id": auth.principal_id,
             "identity_type": str(access.get("identity_type") or ""),
             "allowed_actions": [
                 str(action)
@@ -1412,7 +1852,7 @@ async def get_portal_site_billing_reconciliation(request: Request, site_id: str)
     access = _authorize_portal_site_access(
         request,
         site_id=site_id,
-        site_admin_ref=auth.site_admin_ref,
+        principal_id=auth.principal_id,
     )
     if isinstance(access, JSONResponse):
         return access
@@ -1425,7 +1865,7 @@ async def get_portal_site_billing_reconciliation(request: Request, site_id: str)
         data={
             "site_id": site_id,
             "account_id": str(access.get("account_id") or ""),
-            "site_admin_ref": auth.site_admin_ref,
+            "principal_id": auth.principal_id,
             "identity_type": str(access.get("identity_type") or ""),
             "role": str(access.get("role") or ""),
             **reconciliation,
@@ -1450,8 +1890,9 @@ async def list_portal_site_keys(
     access = _authorize_portal_site_access(
         request,
         site_id=site_id,
-        site_admin_ref=auth.site_admin_ref,
-        required_roles=SITE_ADMIN_SITE_KEY_WRITE_ROLES,
+        principal_id=auth.principal_id,
+        required_roles=USER_SITE_KEY_WRITE_ROLES,
+        required_action=USER_ALLOWED_ACTION_MANAGE_SITE_KEYS,
     )
     if isinstance(access, JSONResponse):
         return access
@@ -1506,14 +1947,15 @@ async def issue_portal_site_key(
     access = _authorize_portal_site_access(
         request,
         site_id=site_id,
-        site_admin_ref=auth.site_admin_ref,
-        required_roles=SITE_ADMIN_SITE_KEY_WRITE_ROLES,
+        principal_id=auth.principal_id,
+        required_roles=USER_SITE_KEY_WRITE_ROLES,
+        required_action=USER_ALLOWED_ACTION_MANAGE_SITE_KEYS,
     )
     if isinstance(access, JSONResponse):
         return access
 
     service = _get_commercial_service(request)
-    audit_context = _build_portal_audit_context(request, auth.site_admin_ref)
+    audit_context = _build_portal_audit_context(request, auth.principal_id)
 
     try:
         result = service.issue_site_key(
@@ -1567,14 +2009,15 @@ async def rotate_portal_site_key(
     access = _authorize_portal_site_access(
         request,
         site_id=site_id,
-        site_admin_ref=auth.site_admin_ref,
-        required_roles=SITE_ADMIN_SITE_KEY_WRITE_ROLES,
+        principal_id=auth.principal_id,
+        required_roles=USER_SITE_KEY_WRITE_ROLES,
+        required_action=USER_ALLOWED_ACTION_MANAGE_SITE_KEYS,
     )
     if isinstance(access, JSONResponse):
         return access
 
     service = _get_commercial_service(request)
-    audit_context = _build_portal_audit_context(request, auth.site_admin_ref)
+    audit_context = _build_portal_audit_context(request, auth.principal_id)
 
     try:
         result = service.rotate_site_key(
@@ -1632,14 +2075,15 @@ async def revoke_portal_site_key(
     access = _authorize_portal_site_access(
         request,
         site_id=site_id,
-        site_admin_ref=auth.site_admin_ref,
-        required_roles=SITE_ADMIN_SITE_KEY_WRITE_ROLES,
+        principal_id=auth.principal_id,
+        required_roles=USER_SITE_KEY_WRITE_ROLES,
+        required_action=USER_ALLOWED_ACTION_MANAGE_SITE_KEYS,
     )
     if isinstance(access, JSONResponse):
         return access
 
     service = _get_commercial_service(request)
-    audit_context = _build_portal_audit_context(request, auth.site_admin_ref)
+    audit_context = _build_portal_audit_context(request, auth.principal_id)
 
     try:
         result = service.revoke_site_key(

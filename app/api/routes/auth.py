@@ -63,17 +63,19 @@ def _resolve_admin_session_secret(request: Request) -> str:
 def _build_admin_session_token(
     request: Request,
     *,
-    platform_admin_ref: str,
+    principal_id: str,
     role: str,
     auth_mode: str,
+    session_version: int = 1,
 ) -> str:
     settings = get_cloud_services(request).settings
     now = datetime.now(UTC)
     expires_at = now.timestamp() + max(60, int(settings.admin_session_ttl_seconds or 0))
     payload = {
-        "sub": platform_admin_ref,
+        "sub": principal_id,
         "role": role,
         "auth_mode": auth_mode,
+        "session_version": int(session_version or 1),
         "iat": int(now.timestamp()),
         "exp": int(expires_at),
     }
@@ -137,20 +139,21 @@ def _current_admin_session(request: Request) -> dict[str, Any]:
             "admin session is invalid",
         ) from decode_error
 
-    platform_admin_ref = str(claims.get("sub") or "").strip()
+    principal_id = str(claims.get("sub") or "").strip()
     auth_mode = str(claims.get("auth_mode") or "admin_bootstrap_token").strip()
-    bootstrap_admin_ref = str(
-        get_cloud_services(request).settings.admin_bootstrap_admin_ref or "platform:internal_root"
+    settings = get_cloud_services(request).settings
+    bootstrap_principal_id = str(
+        settings.admin_bootstrap_principal_id or "platform:internal_root"
     ).strip()
     allow_bootstrap = auth_mode in {"admin_bootstrap_token", "dev_internal_autologin"} and (
-        platform_admin_ref in {bootstrap_admin_ref, "platform:internal_root"}
+        principal_id in {bootstrap_principal_id, "platform:internal_root"}
     )
 
     from app.api.routes.service import _get_commercial_service
 
     try:
-        identity = _get_commercial_service(request).resolve_platform_admin_identity(
-            admin_ref=platform_admin_ref,
+        identity = _get_commercial_service(request).resolve_platform_admin_grant(
+            principal_id=principal_id,
             bootstrap_role=PLATFORM_ADMIN_ROLE_PLATFORM_ADMIN,
             allow_bootstrap=allow_bootstrap,
         )
@@ -160,6 +163,14 @@ def _current_admin_session(request: Request) -> dict[str, Any]:
             "auth.admin_session_revoked",
             "admin session is no longer valid",
         ) from error
+    token_session_version = int(claims.get("session_version") or 1)
+    current_session_version = int(identity.get("session_version") or 1)
+    if token_session_version != current_session_version:
+        raise PortalBearerTokenError(
+            401,
+            "auth.admin_session_revoked",
+            "admin session is no longer valid",
+        )
     identity_metadata = identity.get("metadata")
     revocable = (
         not bool(identity_metadata.get("bootstrap"))
@@ -178,7 +189,7 @@ def _current_admin_session(request: Request) -> dict[str, Any]:
             datetime.fromtimestamp(int(claims["exp"]), tz=UTC).isoformat().replace("+00:00", "Z")
         )
     return {
-        "platform_admin_ref": str(identity.get("admin_ref") or platform_admin_ref),
+        "principal_id": str(identity.get("principal_id") or principal_id),
         "identity_type": IDENTITY_TYPE_PLATFORM_ADMIN,
         "role": str(identity.get("role") or claims.get("role") or "").strip(),
         "capabilities": _dict_value(identity.get("capabilities"))
@@ -190,6 +201,7 @@ def _current_admin_session(request: Request) -> dict[str, Any]:
         "expires_at": expires_at,
         "transport": "cookie",
         "revocable": revocable,
+        "session_version": current_session_version,
     }
 
 
@@ -278,9 +290,10 @@ def _issue_admin_session_cookie(
         request,
         _build_admin_session_token(
             request,
-            platform_admin_ref=session.platform_admin_ref,
+            principal_id=session.principal_id,
             role=session.role,
             auth_mode=session.auth_mode,
+            session_version=session.session_version,
         ),
     )
 
@@ -346,7 +359,7 @@ async def web_admin_auth_bootstrap(request: Request) -> Any:
             message=error.message,
         )
     token = str(payload.get("token") or "").strip()
-    admin_ref = str(payload.get("admin_ref") or "").strip()
+    principal_id = str(payload.get("principal_id") or "").strip()
     redirect_to = payload.get("redirect") or request.query_params.get("redirect")
     if not token:
         if wants_redirect:
@@ -368,14 +381,14 @@ async def web_admin_auth_bootstrap(request: Request) -> Any:
         identity = resolve_admin_login_identity(
             request,
             token=token,
-            admin_ref=admin_ref,
+            principal_id=principal_id,
         )
         session = ResolvedAdminSession.from_identity(
             identity,
             auth_mode="admin_bootstrap_token",
-            fallback_admin_ref=admin_ref
+            fallback_principal_id=principal_id
             or str(
-                get_cloud_services(request).settings.admin_bootstrap_admin_ref
+                get_cloud_services(request).settings.admin_bootstrap_principal_id
                 or "platform:internal_root"
             ),
         )

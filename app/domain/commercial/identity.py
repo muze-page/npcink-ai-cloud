@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from urllib.parse import urlsplit
+from uuid import uuid4
 
 from app.core.models import (
     PLATFORM_ADMIN_ROLE_PLATFORM_ADMIN,
@@ -11,8 +12,9 @@ from app.core.models import (
 )
 from app.domain.commercial.errors import CommercialPermissionError
 
-SITE_ADMIN_ROLE_SITE_ADMIN = "site_admin"
-SITE_ADMIN_SITE_KEY_WRITE_ROLES = {SITE_ADMIN_ROLE_SITE_ADMIN}
+USER_ROLE_USER = "user"
+USER_ALLOWED_ROLES = {USER_ROLE_USER}
+USER_SITE_KEY_WRITE_ROLES = {USER_ROLE_USER}
 PLATFORM_ADMIN_ALLOWED_ROLES = {
     PLATFORM_ADMIN_ROLE_PLATFORM_ADMIN,
 }
@@ -23,14 +25,14 @@ PLATFORM_ADMIN_CATALOG_WRITE_ROLES = {
     PLATFORM_ADMIN_ROLE_PLATFORM_ADMIN,
 }
 IDENTITY_TYPE_PLATFORM_ADMIN = "platform_admin"
-IDENTITY_TYPE_SITE_ADMIN = "site_admin"
-SITE_ADMIN_ALLOWED_ACTION_VIEW_SITES = "view_sites"
-SITE_ADMIN_ALLOWED_ACTION_VIEW_USAGE = "view_usage"
-SITE_ADMIN_ALLOWED_ACTION_VIEW_BILLING = "view_billing"
-SITE_ADMIN_ALLOWED_ACTION_VIEW_AUDIT = "view_audit"
-SITE_ADMIN_ALLOWED_ACTION_PROVISION_SITES = "provision_sites"
-SITE_ADMIN_ALLOWED_ACTION_MANAGE_SITE_KEYS = "manage_site_keys"
-SITE_ADMIN_ALLOWED_ACTION_ARCHIVE_SITES = "archive_sites"
+IDENTITY_TYPE_USER = "user"
+USER_ALLOWED_ACTION_VIEW_SITES = "view_sites"
+USER_ALLOWED_ACTION_VIEW_USAGE = "view_usage"
+USER_ALLOWED_ACTION_VIEW_BILLING = "view_billing"
+USER_ALLOWED_ACTION_VIEW_AUDIT = "view_audit"
+USER_ALLOWED_ACTION_PROVISION_SITES = "provision_sites"
+USER_ALLOWED_ACTION_MANAGE_SITE_KEYS = "manage_site_keys"
+USER_ALLOWED_ACTION_ARCHIVE_SITES = "archive_sites"
 
 
 def _normalize_platform_admin_role(role: str) -> str:
@@ -44,29 +46,38 @@ def _canonicalize_platform_admin_role_for_write(role: str) -> str:
     return PLATFORM_ADMIN_ROLE_PLATFORM_ADMIN
 
 
-def resolve_site_admin_allowed_actions() -> list[str]:
+def resolve_principal_allowed_actions() -> list[str]:
     return [
-        SITE_ADMIN_ALLOWED_ACTION_VIEW_SITES,
-        SITE_ADMIN_ALLOWED_ACTION_VIEW_USAGE,
-        SITE_ADMIN_ALLOWED_ACTION_VIEW_BILLING,
-        SITE_ADMIN_ALLOWED_ACTION_VIEW_AUDIT,
-        SITE_ADMIN_ALLOWED_ACTION_PROVISION_SITES,
-        SITE_ADMIN_ALLOWED_ACTION_MANAGE_SITE_KEYS,
-        SITE_ADMIN_ALLOWED_ACTION_ARCHIVE_SITES,
+        USER_ALLOWED_ACTION_VIEW_SITES,
+        USER_ALLOWED_ACTION_VIEW_USAGE,
+        USER_ALLOWED_ACTION_VIEW_BILLING,
+        USER_ALLOWED_ACTION_VIEW_AUDIT,
+        USER_ALLOWED_ACTION_PROVISION_SITES,
+        USER_ALLOWED_ACTION_MANAGE_SITE_KEYS,
+        USER_ALLOWED_ACTION_ARCHIVE_SITES,
     ]
 
 
-def _build_site_admin_ref(email: str) -> str:
-    normalized_email = str(email or "").strip().lower()
-    return f"site_admin:{normalized_email}" if normalized_email else ""
+def normalize_user_role(role: str) -> str:
+    normalized_role = str(role or USER_ROLE_USER).strip().lower()
+    if normalized_role not in USER_ALLOWED_ROLES:
+        raise CommercialPermissionError(
+            "service.portal_user_role_invalid",
+            f"unsupported user role '{normalized_role}'",
+        )
+    return normalized_role
 
 
-def _normalize_site_admin_email(email: str) -> str:
+def _new_principal_id() -> str:
+    return f"prn_{uuid4().hex}"
+
+
+def _normalize_principal_email(email: str) -> str:
     normalized_email = str(email or "").strip().lower()
     if not normalized_email or "@" not in normalized_email or " " in normalized_email:
         raise CommercialPermissionError(
-            "service.site_admin_email_invalid",
-            "a valid site admin email is required",
+            "service.principal_email_invalid",
+            "a valid user email is required",
         )
     return normalized_email
 

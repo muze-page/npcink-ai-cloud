@@ -108,19 +108,13 @@ class Settings(BaseSettings):
             "NPCINK_CLOUD_OPS_SESSION_TTL_SECONDS",
         ),
     )
-    admin_bootstrap_admin_ref: str = Field(
+    admin_bootstrap_principal_id: str = Field(
         default="platform:internal_root",
-        validation_alias=AliasChoices(
-            "NPCINK_CLOUD_ADMIN_BOOTSTRAP_ADMIN_REF",
-            "NPCINK_CLOUD_OPS_BOOTSTRAP_ADMIN_REF",
-        ),
+        validation_alias="NPCINK_CLOUD_ADMIN_BOOTSTRAP_PRINCIPAL_ID",
     )
-    admin_bootstrap_admin_role: str = Field(
+    admin_bootstrap_platform_admin_role: str = Field(
         default=PLATFORM_ADMIN_ROLE_PLATFORM_ADMIN,
-        validation_alias=AliasChoices(
-            "NPCINK_CLOUD_ADMIN_BOOTSTRAP_ADMIN_ROLE",
-            "NPCINK_CLOUD_OPS_BOOTSTRAP_ADMIN_ROLE",
-        ),
+        validation_alias="NPCINK_CLOUD_ADMIN_BOOTSTRAP_PLATFORM_ADMIN_ROLE",
     )
     portal_jwt_secret: str | None = Field(default=None)
     portal_jwt_algorithm: str = Field(default="HS256")
@@ -129,6 +123,12 @@ class Settings(BaseSettings):
     portal_session_ttl_seconds: int = Field(default=8 * 60 * 60)
     portal_login_code_ttl_seconds: int = Field(default=10 * 60)
     portal_login_code_max_attempts: int = Field(default=5)
+    portal_oauth_state_ttl_seconds: int = Field(default=10 * 60)
+    portal_qq_client_id: str | None = Field(default=None)
+    portal_qq_client_secret: str | None = Field(default=None)
+    portal_qq_redirect_uri: str | None = Field(default=None)
+    portal_qq_scope: str = Field(default="get_user_info")
+    portal_qq_timeout_seconds: float = Field(default=10.0)
     portal_public_base_url: str | None = Field(default=None)
     portal_email_smtp_host: str | None = Field(default=None)
     portal_email_smtp_port: int = Field(default=465)
@@ -466,6 +466,10 @@ class Settings(BaseSettings):
                 "trusted_host_allowlist or portal_public_base_url is required outside "
                 "development/test environments"
             )
+        if self.portal_oauth_state_ttl_seconds < 60:
+            raise ValueError("portal_oauth_state_ttl_seconds must be at least 60")
+        if self.portal_qq_timeout_seconds <= 0:
+            raise ValueError("portal_qq_timeout_seconds must be greater than 0")
         if self.ops_cadence_poll_seconds < 5:
             raise ValueError("ops_cadence_poll_seconds must be at least 5")
         if self.runtime_callback_worker_poll_seconds < 1:

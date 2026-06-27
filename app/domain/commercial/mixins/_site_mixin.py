@@ -17,8 +17,8 @@ from app.core.callback_security import (
 from app.core.db import get_session
 from app.core.models import (
     ACCOUNT_STATUS_ACTIVE,
-    SITE_ADMIN_SITE_GRANT_STATUS_ACTIVE,
-    SITE_ADMIN_STATUS_ACTIVE,
+    ACCOUNT_USER_MEMBERSHIP_STATUS_ACTIVE,
+    PRINCIPAL_STATUS_ACTIVE,
     SITE_API_KEY_STATUS_ACTIVE,
     SITE_API_KEY_STATUS_EXPIRED,
     SITE_API_KEY_STATUS_REVOKED,
@@ -26,6 +26,7 @@ from app.core.models import (
     SITE_STATUS_ARCHIVED,
     SITE_STATUS_PROVISIONING,
     SITE_STATUS_SUSPENDED,
+    SITE_USER_GRANT_STATUS_ACTIVE,
     AccountSubscription,
     Site,
     SiteApiKey,
@@ -43,12 +44,13 @@ from app.domain.commercial.errors import (
     CommercialValidationError,
 )
 from app.domain.commercial.identity import (
-    IDENTITY_TYPE_SITE_ADMIN,
-    SITE_ADMIN_ROLE_SITE_ADMIN,
+    IDENTITY_TYPE_USER,
+    USER_ROLE_USER,
     _extract_site_wordpress_url,
     _normalize_portal_site_url,
     _slugify_portal_site_segment,
-    resolve_site_admin_allowed_actions,
+    normalize_user_role,
+    resolve_principal_allowed_actions,
 )
 from app.domain.commercial.mixins._audit_mixin import CommercialServiceAuditMixin
 from app.domain.commercial.service import (
@@ -125,13 +127,13 @@ class CommercialServiceSiteMixin(CommercialServiceAuditMixin):
         self,
         *,
         account_id: str,
-        site_admin_ref: str,
+        principal_id: str,
         wordpress_url: str,
         site_name: str = "",
         audit_context: ServiceAuditContext | None = None,
     ) -> dict[str, object]:
         normalized_account_id = str(account_id or "").strip()
-        normalized_site_admin_ref = str(site_admin_ref or "").strip()
+        normalized_principal_id = str(principal_id or "").strip()
         canonical_wordpress_url, site_source = _normalize_portal_site_url(wordpress_url)
         site_slug = _slugify_portal_site_segment(site_source)
         if not normalized_account_id:
@@ -139,10 +141,10 @@ class CommercialServiceSiteMixin(CommercialServiceAuditMixin):
                 "service.account_id_required",
                 "account id is required",
             )
-        if not normalized_site_admin_ref:
+        if not normalized_principal_id:
             raise CommercialPermissionError(
-                "service.site_admin_ref_required",
-                "site admin ref is required",
+                "service.principal_id_required",
+                "principal id is required",
             )
         if not site_slug:
             raise CommercialPermissionError(
@@ -169,13 +171,13 @@ class CommercialServiceSiteMixin(CommercialServiceAuditMixin):
                     "service.portal_account_inactive",
                     f"account '{normalized_account_id}' is not active",
                 )
-            identity = repository.get_site_admin_identity_by_ref(
-                site_admin_ref=normalized_site_admin_ref,
+            identity = repository.get_principal_identity_by_ref(
+                principal_id=normalized_principal_id,
             )
-            if identity is None or identity.status != SITE_ADMIN_STATUS_ACTIVE:
+            if identity is None or identity.status != PRINCIPAL_STATUS_ACTIVE:
                 raise CommercialPermissionError(
-                    "service.site_admin_access_required",
-                    f"site admin '{normalized_site_admin_ref}' is not active",
+                    "service.principal_access_required",
+                    f"principal '{normalized_principal_id}' is not active",
                 )
             existing_site = repository.get_site(normalized_site_id)
             if existing_site is not None:
@@ -221,18 +223,27 @@ class CommercialServiceSiteMixin(CommercialServiceAuditMixin):
                 },
                 provisioned_at=now,
             )
-            repository.upsert_site_admin_site_grant(
+            repository.upsert_principal_site_grant(
                 grant_id=f"sadmg_{uuid4().hex}",
-                site_admin_id=identity.site_admin_id,
+                principal_id=identity.principal_id,
                 site_id=site.site_id,
-                status=SITE_ADMIN_SITE_GRANT_STATUS_ACTIVE,
+                status=SITE_USER_GRANT_STATUS_ACTIVE,
+                metadata_json={"source": "portal_connect_site"},
+            )
+            repository.upsert_account_user_membership(
+                membership_id=f"aum_{uuid4().hex}",
+                principal_id=identity.principal_id,
+                account_id=normalized_account_id,
+                role=normalize_user_role(USER_ROLE_USER),
+                status=ACCOUNT_USER_MEMBERSHIP_STATUS_ACTIVE,
+                allowed_actions_json=resolve_principal_allowed_actions(),
                 metadata_json={"source": "portal_connect_site"},
             )
             payload = {
                 "account_id": normalized_account_id,
-                "site_admin_ref": normalized_site_admin_ref,
-                "identity_type": IDENTITY_TYPE_SITE_ADMIN,
-                "role": SITE_ADMIN_ROLE_SITE_ADMIN,
+                "principal_id": normalized_principal_id,
+                "identity_type": IDENTITY_TYPE_USER,
+                "role": USER_ROLE_USER,
                 "wordpress_url": canonical_wordpress_url,
                 "site": self._serialize_site(site),
                 "subscription": service._serialize_subscription(subscription),
@@ -784,7 +795,7 @@ class CommercialServiceSiteMixin(CommercialServiceAuditMixin):
         self,
         *,
         site_id: str,
-        site_admin_ref: str,
+        principal_id: str,
         required_roles: set[str] | None = None,
     ) -> dict[str, object]:
         with get_session(self.database_url) as session:
@@ -806,63 +817,87 @@ class CommercialServiceSiteMixin(CommercialServiceAuditMixin):
                     "service.portal_account_inactive",
                     f"account '{site.account_id}' is not active",
                 )
-            grant_pair = repository.get_site_admin_site_grant(
-                site_admin_ref=site_admin_ref,
+            grant_pair = repository.get_principal_site_grant(
+                principal_id=principal_id,
                 site_id=site_id,
             )
             if grant_pair is None:
                 raise CommercialPermissionError(
-                    "service.site_admin_access_required",
-                    f"site admin '{site_admin_ref}' is not active for site '{site_id}'",
+                    "service.principal_access_required",
+                    f"principal '{principal_id}' is not active for site '{site_id}'",
                 )
             identity, grant = grant_pair
             if (
-                identity.status != SITE_ADMIN_STATUS_ACTIVE
-                or grant.status != SITE_ADMIN_SITE_GRANT_STATUS_ACTIVE
+                identity.status != PRINCIPAL_STATUS_ACTIVE
+                or grant.status != SITE_USER_GRANT_STATUS_ACTIVE
             ):
                 raise CommercialPermissionError(
-                    "service.site_admin_access_required",
-                    f"site admin '{site_admin_ref}' is not active for site '{site_id}'",
+                    "service.principal_access_required",
+                    f"principal '{principal_id}' is not active for site '{site_id}'",
                 )
-            if required_roles is not None and SITE_ADMIN_ROLE_SITE_ADMIN not in required_roles:
+            membership_row = repository.get_account_user_membership(
+                principal_id=principal_id,
+                account_id=site.account_id,
+            )
+            if membership_row is None:
+                raise CommercialPermissionError(
+                    "service.principal_access_required",
+                    f"principal '{principal_id}' is not active for account '{site.account_id}'",
+                )
+            _account, _membership_identity, membership = membership_row
+            if membership.status != ACCOUNT_USER_MEMBERSHIP_STATUS_ACTIVE:
+                raise CommercialPermissionError(
+                    "service.principal_access_required",
+                    f"principal '{principal_id}' is not active for account '{site.account_id}'",
+                )
+            role = normalize_user_role(str(membership.role or USER_ROLE_USER))
+            allowed_actions = (
+                [
+                    str(action).strip()
+                    for action in (membership.allowed_actions_json or [])
+                    if str(action).strip()
+                ]
+                or resolve_principal_allowed_actions()
+            )
+            if required_roles is not None and role not in required_roles:
                 raise CommercialPermissionError(
                     "service.portal_role_forbidden",
-                    f"site admin '{site_admin_ref}' lacks required role for site '{site_id}'",
+                    f"principal '{principal_id}' lacks required role for site '{site_id}'",
                 )
         return {
             "site_id": site.site_id,
             "account_id": site.account_id,
-            "site_admin_ref": site_admin_ref,
-            "identity_type": IDENTITY_TYPE_SITE_ADMIN,
-            "allowed_actions": resolve_site_admin_allowed_actions(),
-            "role": SITE_ADMIN_ROLE_SITE_ADMIN,
+            "principal_id": principal_id,
+            "identity_type": IDENTITY_TYPE_USER,
+            "allowed_actions": allowed_actions,
+            "role": role,
             "site": self._serialize_site(site),
         }
 
     def list_portal_sites(
         self,
         *,
-        site_admin_ref: str,
+        principal_id: str,
     ) -> dict[str, object]:
         with get_session(self.database_url) as session:
             repository = CommercialRepository(session)
             items = []
-            for site, _identity, grant in repository.list_sites_for_site_admin(
-                site_admin_ref=site_admin_ref,
-                grant_statuses=[SITE_ADMIN_SITE_GRANT_STATUS_ACTIVE],
+            for site, _identity, grant in repository.list_sites_for_principal(
+                principal_id=principal_id,
+                grant_statuses=[SITE_USER_GRANT_STATUS_ACTIVE],
             ):
                 items.append(
                     {
-                        "site_admin_ref": site_admin_ref,
-                        "identity_type": IDENTITY_TYPE_SITE_ADMIN,
-                        "allowed_actions": resolve_site_admin_allowed_actions(),
-                        "role": SITE_ADMIN_ROLE_SITE_ADMIN,
+                        "principal_id": principal_id,
+                        "identity_type": IDENTITY_TYPE_USER,
+                        "allowed_actions": resolve_principal_allowed_actions(),
+                        "role": USER_ROLE_USER,
                         "grant_status": grant.status,
                         "site": self._serialize_site(site),
                     }
                 )
             return {
-                "site_admin_ref": site_admin_ref,
+                "principal_id": principal_id,
                 "items": items,
             }
 

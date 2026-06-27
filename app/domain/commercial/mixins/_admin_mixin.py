@@ -18,7 +18,7 @@ from app.core.models import (
     CREDIT_LEDGER_EVENT_REFUND,
     PLATFORM_ADMIN_ROLE_PLATFORM_ADMIN,
     PLATFORM_ADMIN_STATUS_ACTIVE,
-    SITE_ADMIN_STATUS_ACTIVE,
+    PRINCIPAL_STATUS_ACTIVE,
     SITE_API_KEY_STATUS_ACTIVE,
     SITE_STATUS_ACTIVE,
     SUBSCRIPTION_STATUS_ACTIVE,
@@ -70,10 +70,35 @@ AI_CREDIT_LEDGER_CATEGORY_LABELS = {
 
 
 class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
-    def upsert_platform_admin_identity(
+    def _serialize_platform_admin_grant(
+        self,
+        identity: Any,
+        *,
+        principal: Any | None = None,
+    ) -> dict[str, object]:
+        metadata = getattr(identity, "metadata_json", None)
+        return {
+            "grant_id": str(getattr(identity, "grant_id", "") or ""),
+            "principal_id": str(getattr(identity, "principal_id", "") or ""),
+            "identity_type": IDENTITY_TYPE_PLATFORM_ADMIN,
+            "role": str(getattr(identity, "role", "") or PLATFORM_ADMIN_ROLE_PLATFORM_ADMIN),
+            "capabilities": _platform_capability_flags(
+                str(getattr(identity, "role", "") or PLATFORM_ADMIN_ROLE_PLATFORM_ADMIN)
+            ),
+            "status": str(getattr(identity, "status", "") or ""),
+            "provider": str(getattr(identity, "provider", "") or ""),
+            "external_subject": str(getattr(identity, "external_subject", "") or ""),
+            "email": str(getattr(identity, "email", "") or ""),
+            "session_version": int(getattr(principal, "session_version", 1) or 1),
+            "metadata": metadata if isinstance(metadata, dict) else {},
+            "created_at": self._serialize_datetime(getattr(identity, "created_at", None)),
+            "updated_at": self._serialize_datetime(getattr(identity, "updated_at", None)),
+        }
+
+    def upsert_platform_admin_grant(
         self,
         *,
-        admin_ref: str,
+        principal_id: str,
         role: str = PLATFORM_ADMIN_ROLE_PLATFORM_ADMIN,
         status: str = PLATFORM_ADMIN_STATUS_ACTIVE,
         provider: str = "manual",
@@ -82,22 +107,28 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
         metadata_json: dict[str, object] | None = None,
         audit_context: ServiceAuditContext | None = None,
     ) -> dict[str, object]:
-        normalized_admin_ref = admin_ref.strip()
+        normalized_principal_id = principal_id.strip()
         normalized_role = _canonicalize_platform_admin_role_for_write(role)
         normalized_status = status.strip() or PLATFORM_ADMIN_STATUS_ACTIVE
         normalized_provider = provider.strip().lower() or "manual"
         normalized_email = email.strip().lower() if email else None
         normalized_subject = external_subject.strip() if external_subject else None
-        if not normalized_admin_ref:
+        if not normalized_principal_id:
             raise CommercialPermissionError(
-                "service.platform_admin_ref_required",
-                "platform admin ref is required",
+                "service.principal_id_required",
+                "principal id is required",
             )
         with get_session(self.database_url) as session:
             repository = CommercialRepository(session)
-            identity = repository.upsert_platform_admin_identity(
-                admin_id=f"pad_{uuid4().hex}",
-                admin_ref=normalized_admin_ref,
+            principal = repository.upsert_principal_identity(
+                principal_id=normalized_principal_id,
+                email=normalized_email,
+                status=PRINCIPAL_STATUS_ACTIVE,
+                metadata_json={"source": "platform_admin_grant"},
+            )
+            identity = repository.upsert_platform_admin_grant(
+                grant_id=f"pad_{uuid4().hex}",
+                principal_id=normalized_principal_id,
                 provider=normalized_provider,
                 external_subject=normalized_subject,
                 email=normalized_email,
@@ -105,43 +136,43 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
                 status=normalized_status,
                 metadata_json=metadata_json,
             )
-            payload = cast(Any, self)._serialize_platform_admin_identity(identity)
+            payload = self._serialize_platform_admin_grant(identity, principal=principal)
             self._record_service_audit_in_session(
                 repository=repository,
                 audit_context=audit_context,
-                event_kind="platform_admin_identity.upsert",
+                event_kind="platform_admin_grant.upsert",
                 outcome="succeeded",
                 scope_kind="platform_admin",
-                scope_id=normalized_admin_ref,
+                scope_id=normalized_principal_id,
                 payload_json=payload,
             )
             session.commit()
             return payload
 
-    def resolve_platform_admin_identity(
+    def resolve_platform_admin_grant(
         self,
         *,
-        admin_ref: str,
+        principal_id: str,
         bootstrap_role: str = PLATFORM_ADMIN_ROLE_PLATFORM_ADMIN,
         allow_bootstrap: bool = False,
     ) -> dict[str, object]:
-        normalized_admin_ref = admin_ref.strip()
-        if not normalized_admin_ref:
+        normalized_principal_id = principal_id.strip()
+        if not normalized_principal_id:
             raise CommercialPermissionError(
-                "service.platform_admin_ref_required",
-                "platform admin ref is required",
+                "service.principal_id_required",
+                "principal id is required",
             )
         with get_session(self.database_url) as session:
             repository = CommercialRepository(session)
-            identity = repository.get_platform_admin_identity(admin_ref=normalized_admin_ref)
+            identity = repository.get_platform_admin_grant(principal_id=normalized_principal_id)
             if identity is None:
                 if not allow_bootstrap:
                     raise CommercialNotFoundError(
                         "service.platform_admin_not_found",
-                        f"platform admin '{normalized_admin_ref}' was not found",
+                        f"platform admin '{normalized_principal_id}' was not found",
                     )
                 return {
-                    "admin_ref": normalized_admin_ref,
+                    "principal_id": normalized_principal_id,
                     "identity_type": IDENTITY_TYPE_PLATFORM_ADMIN,
                     "role": _canonicalize_platform_admin_role_for_write(bootstrap_role),
                     "capabilities": _platform_capability_flags(
@@ -158,39 +189,45 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
             if str(identity.status or "") != PLATFORM_ADMIN_STATUS_ACTIVE:
                 raise CommercialPermissionError(
                     "service.platform_admin_disabled",
-                    f"platform admin '{normalized_admin_ref}' is disabled",
+                    f"platform admin '{normalized_principal_id}' is disabled",
                 )
-            return cast(Any, self)._serialize_platform_admin_identity(identity)
+            principal = repository.get_principal_identity_by_ref(
+                principal_id=normalized_principal_id,
+            )
+            return self._serialize_platform_admin_grant(identity, principal=principal)
 
-    def delete_platform_admin_identity(
+    def delete_platform_admin_grant(
         self,
         *,
-        admin_ref: str,
+        principal_id: str,
         audit_context: ServiceAuditContext | None = None,
     ) -> dict[str, object]:
-        normalized_admin_ref = admin_ref.strip()
-        if not normalized_admin_ref:
+        normalized_principal_id = principal_id.strip()
+        if not normalized_principal_id:
             raise CommercialPermissionError(
-                "service.platform_admin_ref_required",
-                "platform admin ref is required",
+                "service.principal_id_required",
+                "principal id is required",
             )
         with get_session(self.database_url) as session:
             repository = CommercialRepository(session)
-            identity = repository.get_platform_admin_identity(admin_ref=normalized_admin_ref)
+            identity = repository.get_platform_admin_grant(principal_id=normalized_principal_id)
             if identity is None:
                 raise CommercialNotFoundError(
                     "service.platform_admin_not_found",
-                    f"platform admin '{normalized_admin_ref}' was not found",
+                    f"platform admin '{normalized_principal_id}' was not found",
                 )
-            payload = cast(Any, self)._serialize_platform_admin_identity(identity)
-            repository.delete_platform_admin_identity(admin_ref=normalized_admin_ref)
+            principal = repository.get_principal_identity_by_ref(
+                principal_id=normalized_principal_id,
+            )
+            payload = self._serialize_platform_admin_grant(identity, principal=principal)
+            repository.delete_platform_admin_grant(principal_id=normalized_principal_id)
             self._record_service_audit_in_session(
                 repository=repository,
                 audit_context=audit_context,
-                event_kind="platform_admin_identity.delete",
+                event_kind="platform_admin_grant.delete",
                 outcome="succeeded",
                 scope_kind="platform_admin",
-                scope_id=normalized_admin_ref,
+                scope_id=normalized_principal_id,
                 payload_json=payload,
             )
             session.commit()
@@ -215,8 +252,8 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
         with get_session(self.database_url) as session:
             repository = CommercialRepository(session)
             accounts_total = repository.count_accounts()
-            site_admins_active = repository.count_site_admin_identities(
-                status=SITE_ADMIN_STATUS_ACTIVE
+            principals_active = repository.count_principals(
+                status=PRINCIPAL_STATUS_ACTIVE
             )
             sites_total = repository.count_sites()
             sites_active = repository.count_sites(status=SITE_STATUS_ACTIVE)
@@ -384,7 +421,7 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
             "generated_at": self._serialize_datetime(now),
             "counts": {
                 "accounts_total": accounts_total,
-                "site_admins_active": site_admins_active,
+                "principals_active": principals_active,
                 "sites_total": sites_total,
                 "sites_active": sites_active,
                 "subscriptions_total": subscriptions_total,
@@ -2125,7 +2162,7 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
                 "detail": (
                     f"{package_label} coverage is ready."
                     if has_coverage and subscription_stable
-                    else "Apply Free, Pro, or Agency coverage before granting site admin access."
+                    else "Apply Free, Pro, or Agency coverage before granting site user access."
                 ),
             },
         ]
@@ -2133,8 +2170,8 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
         status = "ready" if not blocking_codes else "action_required"
         if not account_active or site_count == 0:
             status = "blocked"
-        next_action = "review_site_admin_access"
-        next_action_label = "Review site admin access"
+        next_action = "review_principal_access"
+        next_action_label = "Review site user access"
         if not account_active:
             next_action = "review_customer_status"
             next_action_label = "Review customer status"
@@ -2166,7 +2203,7 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
             "checks": checks,
         }
 
-    def list_admin_platform_admin_identities(
+    def list_admin_platform_admin_grants(
         self,
         *,
         status: str | None = None,
@@ -2176,12 +2213,21 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
     ) -> dict[str, object]:
         with get_session(self.database_url) as session:
             repository = CommercialRepository(session)
-            identities = repository.list_platform_admin_identities(
+            identities = repository.list_platform_admin_grants(
                 status=status,
                 role=role,
                 provider=provider,
                 limit=limit,
             )
+            items = [
+                self._serialize_platform_admin_grant(
+                    identity,
+                    principal=repository.get_principal_identity_by_ref(
+                        principal_id=str(identity.principal_id)
+                    ),
+                )
+                for identity in identities
+            ]
         return {
             "filters": {
                 "status": status or "",
@@ -2189,10 +2235,7 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
                 "provider": provider or "",
                 "limit": limit,
             },
-            "items": [
-                cast(Any, self)._serialize_platform_admin_identity(identity)
-                for identity in identities
-            ],
+            "items": items,
         }
 
     def _resolve_shadow_tariff(

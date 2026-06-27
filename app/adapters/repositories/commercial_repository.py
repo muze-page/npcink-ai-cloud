@@ -9,33 +9,39 @@ from sqlalchemy.orm import Session
 from sqlalchemy.sql.elements import ColumnElement
 
 from app.core.models import (
+    ACCOUNT_USER_MEMBERSHIP_STATUS_ACTIVE,
     CREDIT_LEDGER_EVENT_CONSUME,
+    IDENTITY_PROVIDER_BINDING_STATUS_ACTIVE,
     PORTAL_LOGIN_CODE_STATUS_PENDING,
-    SITE_ADMIN_SITE_GRANT_STATUS_ACTIVE,
-    SITE_ADMIN_STATUS_ACTIVE,
+    PORTAL_OAUTH_STATE_STATUS_PENDING,
+    PRINCIPAL_STATUS_ACTIVE,
+    SITE_USER_GRANT_STATUS_ACTIVE,
     Account,
     AccountEntitlementSnapshot,
     AccountSubscription,
+    AccountUserMembership,
     BillingSnapshot,
     CommercialDecisionEvent,
     CreditLedgerEntry,
+    IdentityProviderBinding,
     PaymentEvent,
     PaymentOrder,
     PaymentRefund,
     Plan,
     PlanVersion,
-    PlatformAdminIdentity,
+    PlatformAdminGrant,
     PortalLoginCode,
+    PortalOAuthState,
+    Principal,
     ProviderCallRecord,
     RunRecord,
     ServiceAuditEvent,
     Site,
-    SiteAdminIdentity,
-    SiteAdminSiteGrant,
     SiteApiKey,
     SiteKnowledgeChunk,
     SiteKnowledgeDocument,
     SiteKnowledgeIndexJobMetric,
+    SiteUserGrant,
     UsageMeterEvent,
 )
 
@@ -103,7 +109,7 @@ class CommercialRepository:
         *,
         code_id: str,
         email: str,
-        site_admin_ref: str,
+        principal_id: str,
         code_hash: str,
         expires_at: datetime,
         metadata_json: dict[str, object] | None = None,
@@ -111,7 +117,7 @@ class CommercialRepository:
         code = PortalLoginCode(
             code_id=code_id,
             email=email,
-            site_admin_ref=site_admin_ref,
+            principal_id=principal_id,
             code_hash=code_hash,
             status=PORTAL_LOGIN_CODE_STATUS_PENDING,
             expires_at=expires_at,
@@ -127,7 +133,7 @@ class CommercialRepository:
         self,
         *,
         email: str | None = None,
-        site_admin_ref: str | None = None,
+        principal_id: str | None = None,
         status: str | None = None,
         active_only: bool = False,
         now: datetime | None = None,
@@ -136,8 +142,8 @@ class CommercialRepository:
         statement = select(PortalLoginCode)
         if email:
             statement = statement.where(func.lower(PortalLoginCode.email) == email.lower())
-        if site_admin_ref:
-            statement = statement.where(PortalLoginCode.site_admin_ref == site_admin_ref)
+        if principal_id:
+            statement = statement.where(PortalLoginCode.principal_id == principal_id)
         if status:
             statement = statement.where(PortalLoginCode.status == status)
         if active_only:
@@ -154,43 +160,171 @@ class CommercialRepository:
             statement = statement.limit(limit)
         return list(self.session.scalars(statement))
 
-    def get_site_admin_identity_by_email(self, *, email: str) -> SiteAdminIdentity | None:
+    def get_principal_identity_by_email(self, *, email: str) -> Principal | None:
+        if not str(email or "").strip():
+            return None
         return self.session.scalar(
-            select(SiteAdminIdentity).where(func.lower(SiteAdminIdentity.email) == email.lower())
+            select(Principal).where(func.lower(Principal.email) == email.lower())
         )
 
-    def get_site_admin_identity_by_ref(
+    def get_principal_identity(self, principal_id: str) -> Principal | None:
+        return self.session.get(Principal, principal_id)
+
+    def get_principal_identity_by_ref(
         self,
         *,
-        site_admin_ref: str,
-    ) -> SiteAdminIdentity | None:
+        principal_id: str,
+    ) -> Principal | None:
         return self.session.scalar(
-            select(SiteAdminIdentity).where(SiteAdminIdentity.site_admin_ref == site_admin_ref)
+            select(Principal).where(Principal.principal_id == principal_id)
         )
 
-    def count_site_admin_identities(self, *, status: str | None = None) -> int:
-        statement = select(func.count(SiteAdminIdentity.site_admin_id))
+    def get_identity_provider_binding(
+        self,
+        *,
+        provider: str,
+        external_subject_hash: str,
+    ) -> IdentityProviderBinding | None:
+        return self.session.scalar(
+            select(IdentityProviderBinding).where(
+                IdentityProviderBinding.provider == provider,
+                IdentityProviderBinding.external_subject_hash == external_subject_hash,
+            )
+        )
+
+    def get_identity_provider_binding_by_unionid(
+        self,
+        *,
+        provider: str,
+        unionid_hash: str,
+    ) -> IdentityProviderBinding | None:
+        if not unionid_hash:
+            return None
+        return self.session.scalar(
+            select(IdentityProviderBinding).where(
+                IdentityProviderBinding.provider == provider,
+                IdentityProviderBinding.unionid_hash == unionid_hash,
+            )
+        )
+
+    def list_identity_provider_bindings_for_principal(
+        self,
+        *,
+        principal_id: str,
+        provider: str | None = None,
+        status: str | None = None,
+    ) -> list[IdentityProviderBinding]:
+        statement = select(IdentityProviderBinding).where(
+            IdentityProviderBinding.principal_id == principal_id,
+        )
+        if provider:
+            statement = statement.where(IdentityProviderBinding.provider == provider)
         if status:
-            statement = statement.where(SiteAdminIdentity.status == status)
-        return int(self.session.scalar(statement) or 0)
+            statement = statement.where(IdentityProviderBinding.status == status)
+        statement = statement.order_by(
+            IdentityProviderBinding.created_at.desc(),
+            IdentityProviderBinding.binding_id.desc(),
+        )
+        return list(self.session.scalars(statement))
 
-    def upsert_site_admin_identity(
+    def upsert_identity_provider_binding(
         self,
         *,
-        site_admin_id: str,
-        site_admin_ref: str,
-        email: str,
-        status: str = SITE_ADMIN_STATUS_ACTIVE,
+        binding_id: str,
+        principal_id: str,
+        provider: str,
+        external_subject_hash: str,
+        unionid_hash: str | None,
+        status: str = IDENTITY_PROVIDER_BINDING_STATUS_ACTIVE,
         metadata_json: dict[str, object] | None = None,
         last_login_at: datetime | None = None,
-    ) -> SiteAdminIdentity:
-        identity = self.get_site_admin_identity_by_ref(site_admin_ref=site_admin_ref)
+    ) -> IdentityProviderBinding:
+        binding = self.get_identity_provider_binding(
+            provider=provider,
+            external_subject_hash=external_subject_hash,
+        )
+        if binding is None:
+            binding = IdentityProviderBinding(
+                binding_id=binding_id,
+                principal_id=principal_id,
+                provider=provider,
+                external_subject_hash=external_subject_hash,
+                unionid_hash=unionid_hash or None,
+                status=status,
+                metadata_json=metadata_json,
+                last_login_at=last_login_at,
+            )
+            self.session.add(binding)
+        else:
+            binding.principal_id = principal_id
+            binding.unionid_hash = unionid_hash or None
+            binding.status = status
+            binding.metadata_json = metadata_json
+            if last_login_at is not None:
+                binding.last_login_at = last_login_at
+        self.session.flush()
+        return binding
+
+    def get_portal_oauth_state(
+        self,
+        *,
+        provider: str,
+        state_hash: str,
+    ) -> PortalOAuthState | None:
+        return self.session.scalar(
+            select(PortalOAuthState).where(
+                PortalOAuthState.provider == provider,
+                PortalOAuthState.state_hash == state_hash,
+            )
+        )
+
+    def create_portal_oauth_state(
+        self,
+        *,
+        state_id: str,
+        provider: str,
+        state_hash: str,
+        return_to: str | None,
+        client_scope_id: str | None,
+        expires_at: datetime,
+        metadata_json: dict[str, object] | None = None,
+    ) -> PortalOAuthState:
+        state = PortalOAuthState(
+            state_id=state_id,
+            provider=provider,
+            state_hash=state_hash,
+            status=PORTAL_OAUTH_STATE_STATUS_PENDING,
+            return_to=return_to or None,
+            client_scope_id=client_scope_id or None,
+            expires_at=expires_at,
+            consumed_at=None,
+            metadata_json=metadata_json,
+        )
+        self.session.add(state)
+        self.session.flush()
+        return state
+
+    def count_principals(self, *, status: str | None = None) -> int:
+        statement = select(func.count(Principal.principal_id))
+        if status:
+            statement = statement.where(Principal.status == status)
+        return int(self.session.scalar(statement) or 0)
+
+    def upsert_principal_identity(
+        self,
+        *,
+        principal_id: str,
+        email: str | None,
+        status: str = PRINCIPAL_STATUS_ACTIVE,
+        metadata_json: dict[str, object] | None = None,
+        last_login_at: datetime | None = None,
+    ) -> Principal:
+        identity = self.get_principal_identity_by_ref(principal_id=principal_id)
+        if identity is None and email:
+            identity = self.get_principal_identity_by_email(email=email)
         if identity is None:
-            identity = self.get_site_admin_identity_by_email(email=email)
-        if identity is None:
-            identity = SiteAdminIdentity(
-                site_admin_id=site_admin_id,
-                site_admin_ref=site_admin_ref,
+            identity = Principal(
+                principal_id=principal_id,
                 email=email,
                 status=status,
                 metadata_json=metadata_json,
@@ -198,7 +332,6 @@ class CommercialRepository:
             )
             self.session.add(identity)
         else:
-            identity.site_admin_ref = site_admin_ref
             identity.email = email
             identity.status = status
             identity.metadata_json = metadata_json
@@ -207,25 +340,118 @@ class CommercialRepository:
         self.session.flush()
         return identity
 
-    def upsert_site_admin_site_grant(
+    def increment_principal_session_version(self, *, principal_id: str) -> Principal | None:
+        identity = self.get_principal_identity_by_ref(principal_id=principal_id)
+        if identity is None:
+            return None
+        identity.session_version = int(identity.session_version or 0) + 1
+        self.session.flush()
+        return identity
+
+    def upsert_account_user_membership(
+        self,
+        *,
+        membership_id: str,
+        principal_id: str,
+        account_id: str,
+        role: str,
+        status: str = ACCOUNT_USER_MEMBERSHIP_STATUS_ACTIVE,
+        allowed_actions_json: list[str] | None = None,
+        metadata_json: dict[str, object] | None = None,
+    ) -> AccountUserMembership:
+        membership = self.session.scalar(
+            select(AccountUserMembership).where(
+                AccountUserMembership.principal_id == principal_id,
+                AccountUserMembership.account_id == account_id,
+            )
+        )
+        if membership is None:
+            membership = AccountUserMembership(
+                membership_id=membership_id,
+                principal_id=principal_id,
+                account_id=account_id,
+                role=role,
+                status=status,
+                allowed_actions_json=allowed_actions_json or [],
+                metadata_json=metadata_json,
+            )
+            self.session.add(membership)
+        else:
+            membership.role = role
+            membership.status = status
+            membership.allowed_actions_json = allowed_actions_json or []
+            membership.metadata_json = metadata_json
+        self.session.flush()
+        return membership
+
+    def get_account_user_membership(
+        self,
+        *,
+        principal_id: str,
+        account_id: str,
+    ) -> tuple[Account, Principal, AccountUserMembership] | None:
+        row = self.session.execute(
+            select(Account, Principal, AccountUserMembership)
+            .join(
+                AccountUserMembership,
+                AccountUserMembership.account_id == Account.account_id,
+            )
+            .join(Principal, Principal.principal_id == AccountUserMembership.principal_id)
+            .where(
+                AccountUserMembership.principal_id == principal_id,
+                AccountUserMembership.account_id == account_id,
+            )
+        ).first()
+        if row is None:
+            return None
+        return row[0], row[1], row[2]
+
+    def list_accounts_for_principal(
+        self,
+        *,
+        principal_id: str,
+        membership_statuses: list[str] | None = None,
+    ) -> list[tuple[Account, Principal, AccountUserMembership]]:
+        statuses = membership_statuses or [ACCOUNT_USER_MEMBERSHIP_STATUS_ACTIVE]
+        statement = (
+            select(Account, Principal, AccountUserMembership)
+            .join(
+                AccountUserMembership,
+                AccountUserMembership.account_id == Account.account_id,
+            )
+            .join(Principal, Principal.principal_id == AccountUserMembership.principal_id)
+            .where(
+                Principal.principal_id == principal_id,
+                Principal.status == PRINCIPAL_STATUS_ACTIVE,
+                AccountUserMembership.status.in_(statuses),
+                Account.status == "active",
+            )
+            .order_by(Account.created_at.desc(), Account.account_id.asc())
+        )
+        return [
+            (account, identity, membership)
+            for account, identity, membership in self.session.execute(statement).all()
+        ]
+
+    def upsert_principal_site_grant(
         self,
         *,
         grant_id: str,
-        site_admin_id: str,
+        principal_id: str,
         site_id: str,
-        status: str = SITE_ADMIN_SITE_GRANT_STATUS_ACTIVE,
+        status: str = SITE_USER_GRANT_STATUS_ACTIVE,
         metadata_json: dict[str, object] | None = None,
-    ) -> SiteAdminSiteGrant:
+    ) -> SiteUserGrant:
         grant = self.session.scalar(
-            select(SiteAdminSiteGrant).where(
-                SiteAdminSiteGrant.site_admin_id == site_admin_id,
-                SiteAdminSiteGrant.site_id == site_id,
+            select(SiteUserGrant).where(
+                SiteUserGrant.principal_id == principal_id,
+                SiteUserGrant.site_id == site_id,
             )
         )
         if grant is None:
-            grant = SiteAdminSiteGrant(
+            grant = SiteUserGrant(
                 grant_id=grant_id,
-                site_admin_id=site_admin_id,
+                principal_id=principal_id,
                 site_id=site_id,
                 status=status,
                 metadata_json=metadata_json,
@@ -237,46 +463,46 @@ class CommercialRepository:
         self.session.flush()
         return grant
 
-    def get_site_admin_site_grant(
+    def get_principal_site_grant(
         self,
         *,
-        site_admin_ref: str,
+        principal_id: str,
         site_id: str,
-    ) -> tuple[SiteAdminIdentity, SiteAdminSiteGrant] | None:
+    ) -> tuple[Principal, SiteUserGrant] | None:
         row = self.session.execute(
-            select(SiteAdminIdentity, SiteAdminSiteGrant)
+            select(Principal, SiteUserGrant)
             .join(
-                SiteAdminSiteGrant,
-                SiteAdminSiteGrant.site_admin_id == SiteAdminIdentity.site_admin_id,
+                SiteUserGrant,
+                SiteUserGrant.principal_id == Principal.principal_id,
             )
             .where(
-                SiteAdminIdentity.site_admin_ref == site_admin_ref,
-                SiteAdminSiteGrant.site_id == site_id,
+                Principal.principal_id == principal_id,
+                SiteUserGrant.site_id == site_id,
             )
         ).first()
         if row is None:
             return None
         return row[0], row[1]
 
-    def list_sites_for_site_admin(
+    def list_sites_for_principal(
         self,
         *,
-        site_admin_ref: str,
+        principal_id: str,
         grant_statuses: list[str] | None = None,
-    ) -> list[tuple[Site, SiteAdminIdentity, SiteAdminSiteGrant]]:
-        statuses = grant_statuses or [SITE_ADMIN_SITE_GRANT_STATUS_ACTIVE]
+    ) -> list[tuple[Site, Principal, SiteUserGrant]]:
+        statuses = grant_statuses or [SITE_USER_GRANT_STATUS_ACTIVE]
         statement = (
-            select(Site, SiteAdminIdentity, SiteAdminSiteGrant)
-            .join(SiteAdminSiteGrant, SiteAdminSiteGrant.site_id == Site.site_id)
+            select(Site, Principal, SiteUserGrant)
+            .join(SiteUserGrant, SiteUserGrant.site_id == Site.site_id)
             .join(
-                SiteAdminIdentity,
-                SiteAdminIdentity.site_admin_id == SiteAdminSiteGrant.site_admin_id,
+                Principal,
+                Principal.principal_id == SiteUserGrant.principal_id,
             )
             .join(Account, Account.account_id == Site.account_id)
             .where(
-                SiteAdminIdentity.site_admin_ref == site_admin_ref,
-                SiteAdminIdentity.status == SITE_ADMIN_STATUS_ACTIVE,
-                SiteAdminSiteGrant.status.in_(statuses),
+                Principal.principal_id == principal_id,
+                Principal.status == PRINCIPAL_STATUS_ACTIVE,
+                SiteUserGrant.status.in_(statuses),
                 Account.status == "active",
             )
             .order_by(Site.created_at.desc(), Site.site_id.asc())
@@ -286,60 +512,60 @@ class CommercialRepository:
             for site, identity, grant in self.session.execute(statement).all()
         ]
 
-    def get_platform_admin_identity(
+    def get_platform_admin_grant(
         self,
         *,
-        admin_ref: str,
-    ) -> PlatformAdminIdentity | None:
+        principal_id: str,
+    ) -> PlatformAdminGrant | None:
         return self.session.scalar(
-            select(PlatformAdminIdentity).where(
-                PlatformAdminIdentity.admin_ref == admin_ref,
+            select(PlatformAdminGrant).where(
+                PlatformAdminGrant.principal_id == principal_id,
             )
         )
 
-    def get_platform_admin_identity_by_subject(
+    def get_platform_admin_grant_by_subject(
         self,
         *,
         provider: str,
         external_subject: str,
-    ) -> PlatformAdminIdentity | None:
+    ) -> PlatformAdminGrant | None:
         return self.session.scalar(
-            select(PlatformAdminIdentity).where(
-                PlatformAdminIdentity.provider == provider,
-                PlatformAdminIdentity.external_subject == external_subject,
+            select(PlatformAdminGrant).where(
+                PlatformAdminGrant.provider == provider,
+                PlatformAdminGrant.external_subject == external_subject,
             )
         )
 
-    def get_platform_admin_identity_by_email(
+    def get_platform_admin_grant_by_email(
         self,
         *,
         provider: str,
         email: str,
-    ) -> PlatformAdminIdentity | None:
+    ) -> PlatformAdminGrant | None:
         return self.session.scalar(
-            select(PlatformAdminIdentity).where(
-                PlatformAdminIdentity.provider == provider,
-                func.lower(PlatformAdminIdentity.email) == email.lower(),
+            select(PlatformAdminGrant).where(
+                PlatformAdminGrant.provider == provider,
+                func.lower(PlatformAdminGrant.email) == email.lower(),
             )
         )
 
-    def upsert_platform_admin_identity(
+    def upsert_platform_admin_grant(
         self,
         *,
-        admin_id: str,
-        admin_ref: str,
+        grant_id: str,
+        principal_id: str,
         provider: str,
         external_subject: str | None,
         email: str | None,
         role: str,
         status: str,
         metadata_json: dict[str, object] | None = None,
-    ) -> PlatformAdminIdentity:
-        identity = self.get_platform_admin_identity(admin_ref=admin_ref)
+    ) -> PlatformAdminGrant:
+        identity = self.get_platform_admin_grant(principal_id=principal_id)
         if identity is None:
-            identity = PlatformAdminIdentity(
-                admin_id=admin_id,
-                admin_ref=admin_ref,
+            identity = PlatformAdminGrant(
+                grant_id=grant_id,
+                principal_id=principal_id,
                 provider=provider,
                 external_subject=external_subject,
                 email=email,
@@ -358,35 +584,35 @@ class CommercialRepository:
         self.session.flush()
         return identity
 
-    def list_platform_admin_identities(
+    def list_platform_admin_grants(
         self,
         *,
         status: str | None = None,
         role: str | None = None,
         provider: str | None = None,
         limit: int | None = None,
-    ) -> list[PlatformAdminIdentity]:
-        statement = select(PlatformAdminIdentity)
+    ) -> list[PlatformAdminGrant]:
+        statement = select(PlatformAdminGrant)
         if status:
-            statement = statement.where(PlatformAdminIdentity.status == status)
+            statement = statement.where(PlatformAdminGrant.status == status)
         if role:
-            statement = statement.where(PlatformAdminIdentity.role == role)
+            statement = statement.where(PlatformAdminGrant.role == role)
         if provider:
-            statement = statement.where(PlatformAdminIdentity.provider == provider)
+            statement = statement.where(PlatformAdminGrant.provider == provider)
         statement = statement.order_by(
-            PlatformAdminIdentity.created_at.desc(),
-            PlatformAdminIdentity.admin_ref.asc(),
+            PlatformAdminGrant.created_at.desc(),
+            PlatformAdminGrant.principal_id.asc(),
         )
         if limit is not None and limit > 0:
             statement = statement.limit(limit)
         return list(self.session.scalars(statement))
 
-    def delete_platform_admin_identity(
+    def delete_platform_admin_grant(
         self,
         *,
-        admin_ref: str,
+        principal_id: str,
     ) -> bool:
-        identity = self.get_platform_admin_identity(admin_ref=admin_ref)
+        identity = self.get_platform_admin_grant(principal_id=principal_id)
         if identity is None:
             return False
         self.session.delete(identity)

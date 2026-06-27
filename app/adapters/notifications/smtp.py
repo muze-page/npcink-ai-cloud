@@ -71,7 +71,7 @@ class SmtpPortalEmailSender(PortalEmailSender):
         self,
         *,
         recipient_email: str,
-        site_admin_ref: str,
+        principal_id: str,
         code: str,
         expires_in_seconds: int,
         project_name: str,
@@ -88,7 +88,7 @@ class SmtpPortalEmailSender(PortalEmailSender):
         message.set_content(
             self._build_login_code_text_body(
                 recipient_email=recipient_email,
-                site_admin_ref=site_admin_ref,
+                principal_id=principal_id,
                 code=code,
                 expires_in_seconds=expires_in_seconds,
                 project_name=project_name,
@@ -137,7 +137,7 @@ class SmtpPortalEmailSender(PortalEmailSender):
         self,
         *,
         recipient_email: str,
-        site_admin_ref: str,
+        principal_id: str,
         code: str,
         expires_in_seconds: int,
         project_name: str,

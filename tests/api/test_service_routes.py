@@ -2786,9 +2786,9 @@ def test_service_routes_admin_read_facade(tmp_path: Path) -> None:
         headers=build_internal_headers(idempotency_key="svc-admin-site-activate-001"),
     )
     client.post(
-        "/internal/service/sites/site_primary/site-admin-access",
+        "/internal/service/sites/site_primary/user-grants",
         json={"email": "admin@example.com"},
-        headers=build_internal_headers(idempotency_key="svc-admin-site-admin-access-001"),
+        headers=build_internal_headers(idempotency_key="svc-admin-user-grants-001"),
     )
     client.post(
         "/internal/service/sites/site_primary/keys",
@@ -2927,7 +2927,7 @@ def test_service_routes_admin_read_facade(tmp_path: Path) -> None:
     assert overview_response.status_code == 200
     overview = overview_response.json()["data"]
     assert overview["counts"]["accounts_total"] == 1
-    assert overview["counts"]["site_admins_active"] == 1
+    assert overview["counts"]["principals_active"] == 1
     assert overview["counts"]["sites_active"] == 1
     assert overview["counts"]["site_keys_active"] == 1
     assert overview["recent_usage"]["event_count"] >= 1
@@ -3334,13 +3334,13 @@ def test_service_routes_plan_tier_fallback_and_package_fit_cues(tmp_path: Path) 
     dispose_engine(database_url)
 
 
-def test_service_routes_removed_platform_admin_identity_routes(tmp_path: Path) -> None:
+def test_service_routes_removed_platform_admin_grant_routes(tmp_path: Path) -> None:
     database_url, client = _build_client(tmp_path)
 
     response = client.post(
         "/internal/service/platform-admin-identities",
         json={
-            "admin_ref": "platform:founder",
+            "principal_id": "platform:founder",
             "role": "platform_admin",
             "email": "founder@example.com",
             "provider": "manual",

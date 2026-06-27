@@ -15,10 +15,11 @@ from app.core.models import PLATFORM_ADMIN_ROLE_PLATFORM_ADMIN
 
 @dataclass(frozen=True)
 class ResolvedAdminSession:
-    platform_admin_ref: str
+    principal_id: str
     role: str
     auth_mode: str
     revocable: bool
+    session_version: int
 
     @classmethod
     def from_identity(
@@ -26,7 +27,7 @@ class ResolvedAdminSession:
         identity: Mapping[str, object],
         *,
         auth_mode: str,
-        fallback_admin_ref: str = "",
+        fallback_principal_id: str = "",
         fallback_role: str = PLATFORM_ADMIN_ROLE_PLATFORM_ADMIN,
     ) -> ResolvedAdminSession:
         identity_metadata = identity.get("metadata")
@@ -36,19 +37,21 @@ class ResolvedAdminSession:
             else True
         )
         return cls(
-            platform_admin_ref=str(identity.get("admin_ref") or fallback_admin_ref),
+            principal_id=str(identity.get("principal_id") or fallback_principal_id),
             role=str(identity.get("role") or fallback_role),
             auth_mode=auth_mode,
             revocable=revocable,
+            session_version=int(identity.get("session_version") or 1),
         )
 
     def as_payload(self) -> dict[str, object]:
         return {
-            "platform_admin_ref": self.platform_admin_ref,
+            "principal_id": self.principal_id,
             "role": self.role,
             "auth_mode": self.auth_mode,
             "transport": "cookie",
             "revocable": self.revocable,
+            "session_version": self.session_version,
             "issued_at": "",
             "expires_at": "",
         }
@@ -58,7 +61,7 @@ def resolve_admin_login_identity(
     request: Request,
     *,
     token: str,
-    admin_ref: str,
+    principal_id: str,
 ) -> dict[str, object]:
     settings = get_cloud_services(request).settings
     expected_token = str(settings.admin_bootstrap_token or "").strip()
@@ -77,13 +80,13 @@ def resolve_admin_login_identity(
             "auth.admin_bootstrap_token_invalid",
             "invalid admin bootstrap token",
         )
-    bootstrap_admin_ref = str(
-        settings.admin_bootstrap_admin_ref or "platform:internal_root"
+    bootstrap_principal_id = str(
+        settings.admin_bootstrap_principal_id or "platform:internal_root"
     ).strip()
-    requested_admin_ref = str(admin_ref or "").strip()
-    platform_admin_ref = requested_admin_ref or bootstrap_admin_ref or "platform:internal_root"
-    return get_commercial_service(request).resolve_platform_admin_identity(
-        admin_ref=platform_admin_ref,
+    requested_principal_id = str(principal_id or "").strip()
+    principal_id = requested_principal_id or bootstrap_principal_id or "platform:internal_root"
+    return get_commercial_service(request).resolve_platform_admin_grant(
+        principal_id=principal_id,
         bootstrap_role=PLATFORM_ADMIN_ROLE_PLATFORM_ADMIN,
-        allow_bootstrap=(platform_admin_ref == bootstrap_admin_ref),
+        allow_bootstrap=(principal_id == bootstrap_principal_id),
     )

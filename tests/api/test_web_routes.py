@@ -45,8 +45,8 @@ def _build_client(
         "admin_session_secret": TEST_ADMIN_SESSION_SECRET,
         "allow_dev_admin_internal_token_fallback": False,
         "portal_jwt_secret": TEST_PORTAL_JWT_SECRET,
-        "admin_bootstrap_admin_ref": "platform:founder",
-        "admin_bootstrap_admin_role": "platform_admin",
+        "admin_bootstrap_principal_id": "platform:founder",
+        "admin_bootstrap_platform_admin_role": "platform_admin",
     }
     settings_kwargs.update(settings_overrides or {})
     settings = Settings(**settings_kwargs)
@@ -91,7 +91,7 @@ class FakePortalEmailSender(PortalEmailSender):
         self,
         *,
         recipient_email: str,
-        site_admin_ref: str,
+        principal_id: str,
         code: str,
         expires_in_seconds: int,
         project_name: str,
@@ -101,7 +101,7 @@ class FakePortalEmailSender(PortalEmailSender):
             {
                 "kind": "login_code",
                 "recipient_email": recipient_email,
-                "site_admin_ref": site_admin_ref,
+                "principal_id": principal_id,
                 "code": code,
                 "expires_in_seconds": expires_in_seconds,
                 "project_name": project_name,
@@ -109,12 +109,16 @@ class FakePortalEmailSender(PortalEmailSender):
             }
         )
 
-def _login_platform_admin(client: TestClient, *, admin_ref: str = "platform:founder") -> TestClient:
+def _login_platform_admin(
+    client: TestClient,
+    *,
+    principal_id: str = "platform:founder",
+) -> TestClient:
     response = client.post(
         "/admin/auth/bootstrap",
         data={
             "token": TEST_ADMIN_BOOTSTRAP_TOKEN,
-            "admin_ref": admin_ref,
+            "principal_id": principal_id,
         },
         follow_redirects=False,
     )
@@ -137,12 +141,12 @@ def _seed_account(
     assert response.status_code == 200, response.text
 
 
-def _grant_site_admin_access(client: TestClient, *, site_id: str, email: str) -> None:
+def _grant_principal_access(client: TestClient, *, site_id: str, email: str) -> None:
     safe_email = email.replace("@", "-").replace(".", "-")
     response = client.post(
-        f"/internal/service/sites/{site_id}/site-admin-access",
+        f"/internal/service/sites/{site_id}/user-grants",
         json={"email": email},
-        headers=build_internal_headers(idempotency_key=f"{site_id}-{safe_email}-site-admin-access"),
+        headers=build_internal_headers(idempotency_key=f"{site_id}-{safe_email}-user-grants"),
     )
     assert response.status_code == 200, response.text
 
@@ -170,7 +174,7 @@ def test_web_removed_ops_routes_and_bad_admin_token(tmp_path: Path) -> None:
     removed_logout = client.get("/ops/logout", follow_redirects=False)
     invalid_login = client.post(
         "/admin/auth/bootstrap",
-        data={"token": "wrong-token", "admin_ref": "platform:founder"},
+        data={"token": "wrong-token", "principal_id": "platform:founder"},
         follow_redirects=False,
     )
 
@@ -186,12 +190,12 @@ def test_web_removed_ops_routes_and_bad_admin_token(tmp_path: Path) -> None:
 def test_web_admin_bootstrap_issues_cookie_session(tmp_path: Path) -> None:
     database_url, client = _build_client(tmp_path)
 
-    _login_platform_admin(client, admin_ref="platform:founder")
+    _login_platform_admin(client, principal_id="platform:founder")
 
     session_response = client.get("/admin/session")
 
     assert session_response.status_code == 200
-    assert session_response.json()["data"]["platform_admin_ref"] == "platform:founder"
+    assert session_response.json()["data"]["principal_id"] == "platform:founder"
     assert session_response.json()["data"]["identity_type"] == "platform_admin"
     assert session_response.json()["data"]["role"] == "platform_admin"
     assert session_response.json()["data"]["auth_mode"] == "admin_bootstrap_token"
@@ -206,7 +210,7 @@ def test_web_admin_bootstrap_token_is_separate_from_internal_service_token(tmp_p
         "/admin/auth/bootstrap",
         data={
             "token": TEST_INTERNAL_AUTH_TOKEN,
-            "admin_ref": "platform:founder",
+            "principal_id": "platform:founder",
         },
         follow_redirects=False,
     )
@@ -325,7 +329,7 @@ def test_web_rejects_untrusted_forwarded_origin_in_production(tmp_path: Path) ->
 
 def test_web_removed_multi_admin_pages_return_not_found(tmp_path: Path) -> None:
     database_url, client = _build_client(tmp_path)
-    _login_platform_admin(client, admin_ref="platform:founder")
+    _login_platform_admin(client, principal_id="platform:founder")
 
     platform_admins_page = client.get("/admin/platform-admins", follow_redirects=False)
     identities_page = client.get("/admin/identities", follow_redirects=False)
@@ -346,7 +350,7 @@ def test_internal_platform_admin_directory_routes_are_removed(tmp_path: Path) ->
     create_response = client.post(
         "/internal/service/platform-admin-identities",
         json={
-            "admin_ref": "platform:anything",
+            "principal_id": "platform:anything",
             "role": "platform_admin",
             "email": "founder@example.com",
         },
@@ -406,7 +410,7 @@ def test_web_portal_email_code_and_key_actions_with_jwt(tmp_path: Path) -> None:
         "/internal/service/sites/site_web/activate",
         headers=build_internal_headers(idempotency_key="web-site-activate-001"),
     )
-    _grant_site_admin_access(client, site_id="site_web", email="web@example.com")
+    _grant_principal_access(client, site_id="site_web", email="web@example.com")
 
     login_request_response = client.post(
         "/portal/v1/auth/code/request",
@@ -422,7 +426,7 @@ def test_web_portal_email_code_and_key_actions_with_jwt(tmp_path: Path) -> None:
         json={"email": "web@example.com", "code": str(fake_sender.messages[0]["code"])},
     )
     assert login_verify_response.status_code == 200
-    assert login_verify_response.json()["data"]["site_admin_ref"] == "site_admin:web@example.com"
+    assert login_verify_response.json()["data"]["principal_id"].startswith("prn_")
 
     issue_response = client.post(
         "/portal/v1/sites/site_web/api-keys",

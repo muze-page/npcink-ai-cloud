@@ -37,7 +37,7 @@ def _test_settings(**overrides: object) -> Settings:
 class TestBuildPortalSessionToken:
     def test_creates_valid_token_with_default_expiry(self) -> None:
         settings = _test_settings()
-        token = build_portal_session_token(settings, site_admin_ref="site_admin:abc@example.com")
+        token = build_portal_session_token(settings, principal_id="principal:abc@example.com")
         assert isinstance(token, str)
         assert len(token) > 0
 
@@ -46,7 +46,7 @@ class TestBuildPortalSessionToken:
         expires_at = datetime.now(UTC) + timedelta(hours=2)
         token = build_portal_session_token(
             settings,
-            site_admin_ref="site_admin:def@example.com",
+            principal_id="principal:def@example.com",
             expires_at=expires_at,
         )
         assert isinstance(token, str)
@@ -54,41 +54,41 @@ class TestBuildPortalSessionToken:
 
     def test_decoded_token_contains_expected_claims(self) -> None:
         settings = _test_settings()
-        token = build_portal_session_token(settings, site_admin_ref="site_admin:xyz@example.com")
+        token = build_portal_session_token(settings, principal_id="principal:xyz@example.com")
         payload = decode_portal_session_cookie_claims(settings, token)
-        assert payload["sub"] == "site_admin:xyz@example.com"
+        assert payload["sub"] == "principal:xyz@example.com"
         assert payload["purpose"] == "portal_session"
 
     def test_includes_issuer_when_configured(self) -> None:
         settings = _test_settings(portal_jwt_issuer="https://cloud.example.com")
-        token = build_portal_session_token(settings, site_admin_ref="site_admin:iss@example.com")
+        token = build_portal_session_token(settings, principal_id="principal:iss@example.com")
         payload = decode_portal_session_cookie_claims(settings, token)
         assert payload["iss"] == "https://cloud.example.com"
 
     def test_includes_audience_when_configured(self) -> None:
         settings = _test_settings(portal_jwt_audience="npcink-cloud")
-        token = build_portal_session_token(settings, site_admin_ref="site_admin:aud@example.com")
+        token = build_portal_session_token(settings, principal_id="principal:aud@example.com")
         payload = decode_portal_session_cookie_claims(settings, token)
         assert payload["aud"] == "npcink-cloud"
 
     def test_raises_when_portal_not_configured(self) -> None:
         settings = _test_settings(portal_jwt_secret="")
         with pytest.raises(RuntimeError, match="Portal auth is not configured"):
-            build_portal_session_token(settings, site_admin_ref="site_admin:fail@example.com")
+            build_portal_session_token(settings, principal_id="principal:fail@example.com")
 
 
 class TestDecodePortalBearerClaims:
     def test_decodes_valid_token(self) -> None:
         settings = _test_settings()
-        token = build_portal_session_token(settings, site_admin_ref="site_admin:test@example.com")
+        token = build_portal_session_token(settings, principal_id="principal:test@example.com")
         payload = decode_portal_bearer_claims(settings, token)
-        assert payload["sub"] == "site_admin:test@example.com"
+        assert payload["sub"] == "principal:test@example.com"
 
     def test_rejects_expired_token(self) -> None:
         settings = _test_settings()
         expires_at = datetime.now(UTC) - timedelta(seconds=1)
         token = build_portal_session_token(
-            settings, site_admin_ref="expired_site_admin", expires_at=expires_at
+            settings, principal_id="expired_principal", expires_at=expires_at
         )
         with pytest.raises(PortalBearerTokenError) as exc_info:
             decode_portal_bearer_claims(settings, token)
@@ -108,21 +108,21 @@ class TestDecodePortalBearerClaims:
 
 
 class TestDecodePortalBearerToken:
-    def test_extracts_site_admin_ref_from_valid_token(self) -> None:
+    def test_extracts_principal_id_from_valid_token(self) -> None:
         settings = _test_settings()
         token = build_portal_session_token(
             settings,
-            site_admin_ref="site_admin:extract@example.com",
+            principal_id="principal:extract@example.com",
         )
-        site_admin_ref = decode_portal_bearer_token(settings, token)
-        assert site_admin_ref == "site_admin:extract@example.com"
+        principal_id = decode_portal_bearer_token(settings, token)
+        assert principal_id == "principal:extract@example.com"
 
     def test_rejects_token_without_sub(self) -> None:
         settings = _test_settings()
-        token = build_portal_session_token(settings, site_admin_ref="")
+        token = build_portal_session_token(settings, principal_id="")
         with pytest.raises(PortalBearerTokenError) as exc_info:
             decode_portal_bearer_token(settings, token)
-        assert exc_info.value.error_code == "auth.site_admin_ref_required"
+        assert exc_info.value.error_code == "auth.principal_id_required"
 
     def test_rejects_token_with_empty_sub(self) -> None:
         import jwt as _jwt
@@ -135,7 +135,7 @@ class TestDecodePortalBearerToken:
         token = _jwt.encode(payload, settings.portal_jwt_secret, algorithm="HS256")
         with pytest.raises(PortalBearerTokenError) as exc_info:
             decode_portal_bearer_token(settings, token)
-        assert exc_info.value.error_code == "auth.site_admin_ref_required"
+        assert exc_info.value.error_code == "auth.principal_id_required"
 
 
 class TestDecodePortalSessionCookieClaims:
@@ -145,7 +145,7 @@ class TestDecodePortalSessionCookieClaims:
         settings = _test_settings()
         now = datetime.now(UTC)
         payload = {
-            "sub": "site_admin:x@example.com",
+            "sub": "principal:x@example.com",
             "purpose": "other_purpose",
             "iat": int(now.timestamp()),
             "exp": int((now + timedelta(hours=1)).timestamp()),
@@ -159,7 +159,7 @@ class TestDecodePortalSessionCookieClaims:
         settings = _test_settings()
         expires_at = datetime.now(UTC) - timedelta(seconds=10)
         token = build_portal_session_token(
-            settings, site_admin_ref="expired_session", expires_at=expires_at
+            settings, principal_id="expired_session", expires_at=expires_at
         )
         with pytest.raises(PortalBearerTokenError) as exc_info:
             decode_portal_session_cookie_claims(settings, token)

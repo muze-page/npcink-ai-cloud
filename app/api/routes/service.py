@@ -105,7 +105,7 @@ class SiteStatusPayload(BaseModel):
     reason: str = ""
 
 
-class SiteAdminAccessPayload(BaseModel):
+class PrincipalAccessPayload(BaseModel):
     email: str
     status: str = "active"
     metadata: dict[str, Any] = Field(default_factory=dict)
@@ -987,11 +987,11 @@ async def provision_site(
     return build_envelope(status="ok", message="site provisioned", data=result, revision="m6")
 
 
-@router.post("/sites/{site_id}/site-admin-access")
-async def upsert_site_admin_access(
+@router.post("/sites/{site_id}/user-grants")
+async def upsert_principal_access(
     request: Request,
     site_id: str,
-    payload: SiteAdminAccessPayload,
+    payload: PrincipalAccessPayload,
 ) -> Any:
     auth = await authorize_internal_request(request, require_idempotency=True)
     if auth is not None:
@@ -999,7 +999,7 @@ async def upsert_site_admin_access(
     service = _get_commercial_service(request)
     audit_context = _build_audit_context(request)
     try:
-        result = service.upsert_site_admin_access(
+        result = service.upsert_principal_access(
             site_id=site_id,
             email=payload.email,
             status=payload.status,
@@ -1009,17 +1009,17 @@ async def upsert_site_admin_access(
     except CommercialServiceError as error:
         _record_service_failure(
             request,
-            event_kind="site_admin_access.upsert",
+            event_kind="principal_access.upsert",
             error=error,
             site_id=site_id,
-            scope_kind="site_admin_access",
+            scope_kind="principal_access",
             scope_id=site_id,
             payload_json=_build_audit_payload(payload),
         )
         return _service_error_response(error)
     return build_envelope(
         status="ok",
-        message="site admin access saved",
+        message="user site grant saved",
         data=result,
         revision="m6",
     )

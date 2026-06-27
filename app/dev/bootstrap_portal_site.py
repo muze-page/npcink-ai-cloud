@@ -27,12 +27,12 @@ def _dict_value(value: object) -> dict[str, object]:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Bind a site administrator to one existing Cloud site so the workspace can expose "
+            "Bind a user to one existing Cloud site so the workspace can expose "
             "real site/subscription/usage/billing data."
         )
     )
     parser.add_argument("--site-id", required=True)
-    parser.add_argument("--site-admin-email", dest="site_admin_email", required=True)
+    parser.add_argument("--site-admin-email", dest="principal_email", required=True)
     parser.add_argument("--public-base-url", default="http://127.0.0.1:8010")
     parser.add_argument(
         "--skip-billing-rebuild",
@@ -64,7 +64,7 @@ def bootstrap_portal_site(
     *,
     settings: Settings,
     site_id: str,
-    site_admin_email: str,
+    principal_email: str,
     public_base_url: str,
     rebuild_billing_snapshot: bool,
     issue_key: bool,
@@ -74,7 +74,7 @@ def bootstrap_portal_site(
     scopes: list[str],
 ) -> dict[str, object]:
     commercial_service = CommercialService(settings.database_url, settings=settings)
-    normalized_email = site_admin_email.strip().lower()
+    normalized_email = principal_email.strip().lower()
     base_url = _normalized_base_url(public_base_url)
 
     policy = commercial_service.inspect_commercial_policy(site_id)
@@ -95,7 +95,7 @@ def bootstrap_portal_site(
             f"no subscription was found for site '{site_id}'",
         )
 
-    site_admin_access = commercial_service.upsert_site_admin_access(
+    principal_access = commercial_service.upsert_principal_access(
         site_id=site_id,
         email=normalized_email,
         status="active",
@@ -104,8 +104,8 @@ def bootstrap_portal_site(
             "site_id": site_id,
         },
     )
-    site_admin_ref = str(site_admin_access.get("site_admin_ref") or "")
-    portal_sites = commercial_service.list_portal_sites(site_admin_ref=site_admin_ref)
+    principal_id = str(principal_access.get("principal_id") or "")
+    portal_sites = commercial_service.list_portal_sites(principal_id=principal_id)
     usage_summary = UsageService(settings.database_url).get_usage_summary(site_id=site_id)
     usage_meter = commercial_service.inspect_usage_meter(site_id)
     billing_snapshot = (
@@ -141,9 +141,9 @@ def bootstrap_portal_site(
             "subscription_id": str(subscription.get("subscription_id") or ""),
             "plan_id": str(subscription.get("plan_id") or ""),
             "plan_version_id": str(subscription.get("plan_version_id") or ""),
-            "site_admin_email": normalized_email,
-            "site_admin_ref": site_admin_ref,
-            "identity_type": "site_admin",
+            "principal_email": normalized_email,
+            "principal_id": principal_id,
+            "identity_type": "principal",
             "routes": {
                 "login_url": f"{base_url}/portal/login",
                 "portal_url": f"{base_url}/portal",
@@ -159,7 +159,7 @@ def bootstrap_portal_site(
             "auth_configured": auth_configured,
         },
         "portal": {
-            "site_admin_access": site_admin_access,
+            "principal_access": principal_access,
             "sites": portal_sites,
         },
         "site_summary": {
@@ -200,7 +200,7 @@ def main() -> None:
     result = bootstrap_portal_site(
         settings=settings,
         site_id=args.site_id,
-        site_admin_email=args.site_admin_email,
+        principal_email=args.principal_email,
         public_base_url=args.public_base_url,
         rebuild_billing_snapshot=not args.skip_billing_rebuild,
         issue_key=args.issue_key,

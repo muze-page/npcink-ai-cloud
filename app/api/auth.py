@@ -12,9 +12,11 @@ from fastapi import Request
 from fastapi.responses import JSONResponse
 from jwt import ExpiredSignatureError, InvalidTokenError
 
+from app.adapters.repositories.commercial_repository import CommercialRepository
 from app.api.envelope import build_envelope
 from app.core.config import Settings
 from app.core.db import get_session
+from app.core.models import PRINCIPAL_STATUS_ACTIVE
 from app.core.security import (
     PUBLIC_RUNTIME_MAX_BODY_BYTES,
     REPLAY_SCOPE_INTERNAL,
@@ -36,7 +38,6 @@ from app.core.security import (
 from app.core.services import CloudServices
 
 INTERNAL_TOKEN_HEADER = "X-Npcink-Internal-Token"
-PORTAL_SITE_ADMIN_REF_HEADER = "X-Npcink-Portal-Site-Admin-Ref"
 AUTHORIZATION_HEADER = "Authorization"
 PORTAL_LOGIN_CODE_REQUEST_SCOPE_EMAIL = "portal_login_code_email"
 PORTAL_LOGIN_CODE_REQUEST_SCOPE_CLIENT = "portal_login_code_client"
@@ -47,7 +48,7 @@ PORTAL_LOGIN_CODE_MAX_REQUESTS_PER_CLIENT_WINDOW = 10
 
 @dataclass(slots=True)
 class PortalAuthContext:
-    site_admin_ref: str
+    principal_id: str
 
 
 class PortalBearerTokenError(ValueError):
@@ -125,7 +126,8 @@ def _build_auth_error_response(
 def build_portal_session_token(
     settings: Settings,
     *,
-    site_admin_ref: str,
+    principal_id: str,
+    session_version: int = 1,
     expires_at: datetime | None = None,
 ) -> str:
     now = datetime.now(UTC)
@@ -133,8 +135,9 @@ def build_portal_session_token(
         now + timedelta(seconds=resolve_portal_session_ttl_seconds(settings))
     )
     payload: dict[str, Any] = {
-        "sub": site_admin_ref,
+        "sub": principal_id,
         "purpose": "portal_session",
+        "session_version": int(session_version or 1),
         "iat": int(now.timestamp()),
         "exp": int(resolved_expires_at.timestamp()),
     }
@@ -243,14 +246,50 @@ def decode_portal_session_cookie_claims(settings: Settings, token: str) -> dict[
 def decode_portal_bearer_token(settings: Settings, token: str) -> str:
     payload = decode_portal_bearer_claims(settings, token)
 
-    site_admin_ref = str(payload.get("sub") or "").strip()
-    if not site_admin_ref:
+    return _extract_portal_principal_id(payload)
+
+
+def _extract_portal_principal_id(payload: dict[str, Any]) -> str:
+    principal_id = str(payload.get("sub") or "").strip()
+    if not principal_id:
         raise PortalBearerTokenError(
             401,
-            "auth.site_admin_ref_required",
-            "missing portal site admin ref",
+            "auth.principal_id_required",
+            "missing portal principal id",
         )
-    return site_admin_ref
+    return principal_id
+
+
+def _extract_portal_session_version(payload: dict[str, Any]) -> int:
+    try:
+        return int(payload.get("session_version") or 1)
+    except (TypeError, ValueError) as error:
+        raise PortalBearerTokenError(
+            403,
+            "auth.portal_session_invalid",
+            "invalid portal session token",
+        ) from error
+
+
+def validate_portal_principal_session(
+    settings: Settings,
+    *,
+    principal_id: str,
+    session_version: int,
+) -> None:
+    with get_session(settings.database_url) as session:
+        repository = CommercialRepository(session)
+        identity = repository.get_principal_identity_by_ref(principal_id=principal_id)
+        if (
+            identity is None
+            or identity.status != PRINCIPAL_STATUS_ACTIVE
+            or int(identity.session_version or 1) != int(session_version or 1)
+        ):
+            raise PortalBearerTokenError(
+                401,
+                "auth.portal_session_revoked",
+                "portal session is no longer valid",
+            )
 
 
 def enforce_portal_login_code_request_rate_limit(
@@ -557,7 +596,13 @@ def _authorize_portal_bearer_jwt_request(
         )
 
     try:
-        site_admin_ref = decode_portal_bearer_token(services.settings, token)
+        claims = decode_portal_bearer_claims(services.settings, token)
+        principal_id = _extract_portal_principal_id(claims)
+        validate_portal_principal_session(
+            services.settings,
+            principal_id=principal_id,
+            session_version=_extract_portal_session_version(claims),
+        )
     except PortalBearerTokenError as error:
         return _build_auth_error_response(
             request,
@@ -565,4 +610,4 @@ def _authorize_portal_bearer_jwt_request(
             error_code=error.error_code,
             message=error.message,
         )
-    return PortalAuthContext(site_admin_ref=site_admin_ref)
+    return PortalAuthContext(principal_id=principal_id)

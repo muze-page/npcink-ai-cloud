@@ -23,7 +23,7 @@ class PortalEmailSender(ABC):
         self,
         *,
         recipient_email: str,
-        site_admin_ref: str,
+        principal_id: str,
         code: str,
         expires_in_seconds: int,
         project_name: str,

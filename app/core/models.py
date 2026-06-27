@@ -6,6 +6,7 @@ from typing import Any
 from sqlalchemy import (
     JSON,
     Boolean,
+    CheckConstraint,
     DateTime,
     Float,
     ForeignKey,
@@ -39,11 +40,18 @@ PORTAL_LOGIN_CODE_STATUS_PENDING = "pending"
 PORTAL_LOGIN_CODE_STATUS_CONSUMED = "consumed"
 PORTAL_LOGIN_CODE_STATUS_EXPIRED = "expired"
 PORTAL_LOGIN_CODE_STATUS_LOCKED = "locked"
+IDENTITY_PROVIDER_BINDING_STATUS_ACTIVE = "active"
+IDENTITY_PROVIDER_BINDING_STATUS_REVOKED = "revoked"
+PORTAL_OAUTH_STATE_STATUS_PENDING = "pending"
+PORTAL_OAUTH_STATE_STATUS_CONSUMED = "consumed"
+PORTAL_OAUTH_STATE_STATUS_EXPIRED = "expired"
 
-SITE_ADMIN_STATUS_ACTIVE = "active"
-SITE_ADMIN_STATUS_DISABLED = "disabled"
-SITE_ADMIN_SITE_GRANT_STATUS_ACTIVE = "active"
-SITE_ADMIN_SITE_GRANT_STATUS_REVOKED = "revoked"
+PRINCIPAL_STATUS_ACTIVE = "active"
+PRINCIPAL_STATUS_DISABLED = "disabled"
+ACCOUNT_USER_MEMBERSHIP_STATUS_ACTIVE = "active"
+ACCOUNT_USER_MEMBERSHIP_STATUS_REVOKED = "revoked"
+SITE_USER_GRANT_STATUS_ACTIVE = "active"
+SITE_USER_GRANT_STATUS_REVOKED = "revoked"
 
 PLATFORM_ADMIN_ROLE_PLATFORM_ADMIN = "platform_admin"
 
@@ -118,7 +126,7 @@ class PortalLoginCode(Base):
 
     code_id: Mapped[str] = mapped_column(String(191), primary_key=True)
     email: Mapped[str] = mapped_column(String(191), index=True)
-    site_admin_ref: Mapped[str] = mapped_column(String(191), index=True)
+    principal_id: Mapped[str] = mapped_column(String(191), index=True)
     code_hash: Mapped[str] = mapped_column(String(191))
     status: Mapped[str] = mapped_column(
         String(32),
@@ -140,12 +148,14 @@ class PortalLoginCode(Base):
     )
 
 
-class PlatformAdminIdentity(Base):
-    __tablename__ = "platform_admin_identities"
-    __table_args__ = (UniqueConstraint("admin_ref", name="uq_platform_admin_identities_admin_ref"),)
+class PlatformAdminGrant(Base):
+    __tablename__ = "platform_admin_grants"
+    __table_args__ = (
+        UniqueConstraint("principal_id", name="uq_platform_admin_grants_principal_id"),
+    )
 
-    admin_id: Mapped[str] = mapped_column(String(191), primary_key=True)
-    admin_ref: Mapped[str] = mapped_column(String(191), index=True)
+    grant_id: Mapped[str] = mapped_column(String(191), primary_key=True)
+    principal_id: Mapped[str] = mapped_column(ForeignKey("principals.principal_id"), index=True)
     provider: Mapped[str] = mapped_column(String(64), default="manual", index=True)
     external_subject: Mapped[str | None] = mapped_column(String(191), index=True)
     email: Mapped[str | None] = mapped_column(String(191), index=True)
@@ -252,19 +262,123 @@ class Site(Base):
     )
 
 
-class SiteAdminIdentity(Base):
-    __tablename__ = "site_admin_identities"
+class Principal(Base):
+    __tablename__ = "principals"
     __table_args__ = (
-        UniqueConstraint("site_admin_ref", name="uq_site_admin_identities_ref"),
-        UniqueConstraint("email", name="uq_site_admin_identities_email"),
+        UniqueConstraint("email", name="uq_principals_email"),
     )
 
-    site_admin_id: Mapped[str] = mapped_column(String(191), primary_key=True)
-    site_admin_ref: Mapped[str] = mapped_column(String(191), index=True)
-    email: Mapped[str] = mapped_column(String(191), index=True)
+    principal_id: Mapped[str] = mapped_column(String(191), primary_key=True)
+    email: Mapped[str | None] = mapped_column(String(191), index=True)
     status: Mapped[str] = mapped_column(
         String(32),
-        default=SITE_ADMIN_STATUS_ACTIVE,
+        default=PRINCIPAL_STATUS_ACTIVE,
+        index=True,
+    )
+    session_version: Mapped[int] = mapped_column(Integer, default=1)
+    metadata_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+
+class SiteUserGrant(Base):
+    __tablename__ = "site_user_grants"
+    __table_args__ = (
+        UniqueConstraint(
+            "principal_id",
+            "site_id",
+            name="uq_site_user_grants_principal_site",
+        ),
+    )
+
+    grant_id: Mapped[str] = mapped_column(String(191), primary_key=True)
+    principal_id: Mapped[str] = mapped_column(
+        ForeignKey("principals.principal_id"),
+        index=True,
+    )
+    site_id: Mapped[str] = mapped_column(ForeignKey("sites.site_id"), index=True)
+    status: Mapped[str] = mapped_column(
+        String(32),
+        default=SITE_USER_GRANT_STATUS_ACTIVE,
+        index=True,
+    )
+    metadata_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+
+class AccountUserMembership(Base):
+    __tablename__ = "account_user_memberships"
+    __table_args__ = (
+        UniqueConstraint(
+            "principal_id",
+            "account_id",
+            name="uq_account_user_memberships_principal_account",
+        ),
+        CheckConstraint("role IN ('user')", name="ck_account_user_memberships_role"),
+    )
+
+    membership_id: Mapped[str] = mapped_column(String(191), primary_key=True)
+    principal_id: Mapped[str] = mapped_column(
+        ForeignKey("principals.principal_id"),
+        index=True,
+    )
+    account_id: Mapped[str] = mapped_column(ForeignKey("accounts.account_id"), index=True)
+    role: Mapped[str] = mapped_column(String(64), default="user", index=True)
+    status: Mapped[str] = mapped_column(
+        String(32),
+        default=ACCOUNT_USER_MEMBERSHIP_STATUS_ACTIVE,
+        index=True,
+    )
+    allowed_actions_json: Mapped[list[str]] = mapped_column(JSON, default=list)
+    metadata_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+
+class IdentityProviderBinding(Base):
+    __tablename__ = "identity_provider_bindings"
+    __table_args__ = (
+        UniqueConstraint(
+            "provider",
+            "external_subject_hash",
+            name="uq_identity_provider_bindings_provider_subject",
+        ),
+    )
+
+    binding_id: Mapped[str] = mapped_column(String(191), primary_key=True)
+    principal_id: Mapped[str] = mapped_column(
+        ForeignKey("principals.principal_id"),
+        index=True,
+    )
+    provider: Mapped[str] = mapped_column(String(64), index=True)
+    external_subject_hash: Mapped[str] = mapped_column(String(191), index=True)
+    unionid_hash: Mapped[str | None] = mapped_column(String(191), index=True)
+    status: Mapped[str] = mapped_column(
+        String(32),
+        default=IDENTITY_PROVIDER_BINDING_STATUS_ACTIVE,
         index=True,
     )
     metadata_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
@@ -280,27 +394,28 @@ class SiteAdminIdentity(Base):
     )
 
 
-class SiteAdminSiteGrant(Base):
-    __tablename__ = "site_admin_site_grants"
+class PortalOAuthState(Base):
+    __tablename__ = "portal_oauth_states"
     __table_args__ = (
         UniqueConstraint(
-            "site_admin_id",
-            "site_id",
-            name="uq_site_admin_site_grants_admin_site",
+            "provider",
+            "state_hash",
+            name="uq_portal_oauth_states_provider_state",
         ),
     )
 
-    grant_id: Mapped[str] = mapped_column(String(191), primary_key=True)
-    site_admin_id: Mapped[str] = mapped_column(
-        ForeignKey("site_admin_identities.site_admin_id"),
-        index=True,
-    )
-    site_id: Mapped[str] = mapped_column(ForeignKey("sites.site_id"), index=True)
+    state_id: Mapped[str] = mapped_column(String(191), primary_key=True)
+    provider: Mapped[str] = mapped_column(String(64), index=True)
+    state_hash: Mapped[str] = mapped_column(String(191), index=True)
     status: Mapped[str] = mapped_column(
         String(32),
-        default=SITE_ADMIN_SITE_GRANT_STATUS_ACTIVE,
+        default=PORTAL_OAUTH_STATE_STATUS_PENDING,
         index=True,
     )
+    return_to: Mapped[str | None] = mapped_column(String(255))
+    client_scope_id: Mapped[str | None] = mapped_column(String(191), index=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
     metadata_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
