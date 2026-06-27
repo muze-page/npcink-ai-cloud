@@ -156,8 +156,74 @@ assert.match(
 
 assert.match(
   abilityModelsSource,
-  /profile_preferences_title[\s\S]*audio_summary_text_profile_id/,
-  'Audio profile preferences must live on the top-level ability models page'
+  /type AbilityModelTab = 'wordpress' \| 'cloud'/,
+  'Ability models page must keep only WordPress and Cloud-native top-level tabs explicitly'
+);
+
+assert.match(
+  abilityModelsSource,
+  /type CloudAbilityMediaTab = 'text' \| 'image' \| 'audio' \| 'video'/,
+  'Cloud-native ability models must be grouped by text, image, audio, and video media tabs'
+);
+
+assert.match(
+  abilityModelsSource,
+  /useState<AbilityModelTab>\('wordpress'\)/,
+  'Ability models page must default to the plugin ability defaults tab'
+);
+
+assert.match(
+  abilityModelsSource,
+  /tab_wordpress[\s\S]*tab_cloud/,
+  'Ability models page must expose plugin ability and Cloud-native top-level tabs'
+);
+
+assert.doesNotMatch(
+  abilityModelsSource,
+  /activeAbilityTab === 'audio'|tab_audio/,
+  'Audio ability models must not remain a top-level ability tab'
+);
+
+assert.match(
+  abilityModelsSource,
+  /\(\['text', 'image', 'audio', 'video'\] as CloudAbilityMediaTab\[\]\)\.map[\s\S]*cloud_media_tab_\$\{tab\}/,
+  'Cloud-native ability models must expose text, image, audio, and video media tabs'
+);
+
+assert.match(
+  abilityModelsSource,
+  /activeAbilityTab === 'cloud'[\s\S]*activeCloudMediaTab === 'audio'[\s\S]*audioPreferenceRows\.map/,
+  'Audio profile preferences must render only under the Cloud-native audio media tab'
+);
+
+assert.match(
+  abilityModelsSource,
+  /audioPreferenceRows[\s\S]*column_audio_ability[\s\S]*column_current_profile[\s\S]*column_configure_profile/,
+  'Audio ability models must render as a scannable list with ability, current profile, and configuration columns'
+);
+
+assert.match(
+  abilityModelsSource,
+  /audioPreferenceRows\.map[\s\S]*row\.label[\s\S]*row\.description[\s\S]*row\.value[\s\S]*row\.update/,
+  'Audio ability model rows must keep label, description, current value, and profile selector together'
+);
+
+assert.doesNotMatch(
+  abilityModelsSource,
+  /mt-4 grid gap-4 lg:grid-cols-3[\s\S]*audio_summary_text_profile_id/,
+  'Audio ability models must not use the old three-column field layout'
+);
+
+assert.match(
+  abilityModelsSource,
+  /audioPreferenceRows/,
+  'Audio profile preferences must live on the ability models page'
+);
+
+assert.match(
+  abilityModelsSource,
+  /audioPreferenceRows[\s\S]*audio_summary_text_profile_id/,
+  'Audio profile preference rows must include the audio summary text profile binding'
 );
 
 assert.doesNotMatch(
@@ -192,8 +258,80 @@ assert.match(
 
 assert.match(
   abilityModelsSource,
-  /Cloud-native ability models|cloud_native_title/,
-  'Ability models page must reserve a Cloud-native ability section without creating a second control plane'
+  /activeAbilityTab === 'wordpress'[\s\S]*wordpress_title/,
+  'Plugin ability model routing must render only under the plugin ability child tab'
+);
+
+assert.match(
+  abilityModelsSource,
+  /activeAbilityTab === 'cloud'[\s\S]*cloud_native_title/,
+  'Ability models page must reserve a Cloud-native child tab without creating a second control plane'
+);
+
+assert.match(
+  abilityModelsSource,
+  /cloudNativeAbilityRows[\s\S]*id: 'content_support'[\s\S]*media: 'text'[\s\S]*cloud_ability_content_support[\s\S]*id: 'image_source_candidates'[\s\S]*media: 'image'/,
+  'Cloud-native ability tab must list Cloud-owned runtime abilities without duplicating plugin content tasks'
+);
+
+assert.doesNotMatch(
+  abilityModelsSource,
+  /id: 'tag_recommendation'|id: 'category_recommendation'|id: 'title_suggestion'|id: 'meta_description'/,
+  'Cloud-native ability tab must not duplicate plugin taxonomy, title, or SEO metadata abilities'
+);
+
+assert.doesNotMatch(
+  abilityModelsSource,
+  /cloud_ability_tag_recommendation|cloud_ability_category_recommendation|cloud_ability_title_suggestion|cloud_ability_meta_description/,
+  'Cloud-native ability copy must not reintroduce duplicate plugin ability rows'
+);
+
+assert.match(
+  abilityModelsSource,
+  /cloud_native_status_connected/,
+  'Cloud-native existing abilities must expose a connected status instead of all planned placeholders'
+);
+
+assert.match(
+  abilityModelsSource,
+  /cloud_native_profile_runtime[\s\S]*cloud_native_action_readonly/,
+  'Cloud-native existing abilities must render as read-only runtime projections instead of all planned placeholders'
+);
+
+assert.match(
+  abilityModelsSource,
+  /status: 'planned'[\s\S]*cloud_native_profile_pending[\s\S]*cloud_native_action_pending/,
+  'Cloud-native planned abilities must keep configuration disabled until a Cloud routing projection exists'
+);
+
+assert.match(
+  abilityModelsSource,
+  /cloud_native_badge_readonly/,
+  'Cloud-native ability section must not present the whole list as planned when existing runtime projections are connected'
+);
+
+assert.match(
+  abilityModelsSource,
+  /activeCloudMediaTab === 'video'[\s\S]*video_empty_title[\s\S]*video_empty_desc/,
+  'Cloud-native video tab must stay as an explicit empty state until a video runtime contract exists'
+);
+
+assert.match(
+  abilityModelsSource,
+  /cloud_native_boundary_notice/,
+  'Cloud-native planned ability rows must preserve the no-control-plane boundary notice'
+);
+
+assert.doesNotMatch(
+  abilityModelsSource,
+  /\/api\/admin\/cloud-ability-routing|saveCloudNativeAbility|generateIdempotencyKey\('cloud_ability/,
+  'Cloud-native planned abilities must not introduce a fake Cloud ability routing write path'
+);
+
+assert.doesNotMatch(
+  abilityModelsSource,
+  /\/api\/admin\/plugin-ability-routing|savePluginAbilityOverride|generateIdempotencyKey\('plugin_ability/,
+  'Plugin ability defaults must not introduce plugin-specific override persistence before the boundary is defined'
 );
 
 assert.match(
@@ -264,8 +402,14 @@ assert.match(
 
 assert.match(
   abilityModelsSource,
-  /Local plugin enablement and WordPress writes stay outside this page/,
-  'Ability model configuration must preserve local plugin and WordPress write boundaries'
+  /Plugin-specific overrides can be added later when a plugin needs a different model/,
+  'Ability model configuration must frame plugin-specific overrides as a later bounded enhancement'
+);
+
+assert.match(
+  abilityModelsSource,
+  /plugin_default_notice[\s\S]*Plugin switches, prompts, approvals, and final WordPress writes stay in the local plugin path/,
+  'Plugin ability defaults must preserve local plugin prompt, approval, and WordPress write boundaries'
 );
 
 assert.match(

@@ -10,6 +10,7 @@ import {
   BackofficeSectionPanel,
   BackofficeStackCard,
 } from '@/components/backoffice/BackofficeScaffold';
+import { BackofficeFilterPill } from '@/components/backoffice/BackofficeFilterPill';
 import { BackofficeStatusBadge } from '@/components/backoffice/BackofficeStatusBadge';
 import { LoadingFallback } from '@/components/ui/LoadingFallback';
 import { useLocale } from '@/contexts/LocaleContext';
@@ -67,6 +68,9 @@ type RoutingData = {
 type EditableRoutingProfile = RoutingProfile & {
   note: string;
 };
+
+type AbilityModelTab = 'wordpress' | 'cloud';
+type CloudAbilityMediaTab = 'text' | 'image' | 'audio' | 'video';
 
 function normalizeProfilePreferences(raw: any): ProfilePreferences | null {
   if (!raw || typeof raw !== 'object') return null;
@@ -167,6 +171,8 @@ export default function AbilityModelsPage() {
   const [preferences, setPreferences] = useState<ProfilePreferences | null>(null);
   const [routingData, setRoutingData] = useState<RoutingData | null>(null);
   const [routingDrafts, setRoutingDrafts] = useState<EditableRoutingProfile[]>([]);
+  const [activeAbilityTab, setActiveAbilityTab] = useState<AbilityModelTab>('wordpress');
+  const [activeCloudMediaTab, setActiveCloudMediaTab] = useState<CloudAbilityMediaTab>('text');
   const [activeProfileId, setActiveProfileId] = useState('');
   const [loading, setLoading] = useState(true);
   const [loadingRouting, setLoadingRouting] = useState(true);
@@ -468,6 +474,109 @@ export default function AbilityModelsPage() {
     setDialogMessage('');
   }
 
+  const audioPreferenceRows = preferences
+    ? [
+        {
+          id: 'audio_summary_text',
+          label: aiText('field_audio_summary_text_profile', 'Audio summary text profile'),
+          description: text('audio_summary_text_desc', 'Text model profile used before generating audio summaries.'),
+          value: preferences.audio_summary_text_profile_id,
+          options: preferences.allowed.text_profile_ids,
+          update: (value: string) => updatePreferences({ audio_summary_text_profile_id: value }),
+        },
+        {
+          id: 'audio_narration',
+          label: aiText('field_article_narration_audio_profile', 'Article narration audio profile'),
+          description: text('audio_narration_desc', 'Audio model profile used for article narration.'),
+          value: preferences.audio_narration_profile_id,
+          options: preferences.allowed.audio_profile_ids,
+          update: (value: string) => updatePreferences({ audio_narration_profile_id: value }),
+        },
+        {
+          id: 'audio_summary_playback',
+          label: aiText('field_audio_summary_playback_profile', 'Audio summary playback profile'),
+          description: text('audio_summary_playback_desc', 'Audio model profile used for summary playback.'),
+          value: preferences.audio_summary_audio_profile_id,
+          options: preferences.allowed.audio_profile_ids,
+          update: (value: string) => updatePreferences({ audio_summary_audio_profile_id: value }),
+        },
+      ]
+    : [];
+
+  const cloudNativeAbilityRows = [
+    {
+      id: 'content_support',
+      media: 'text',
+      status: 'connected',
+      label: text('cloud_ability_content_support', 'Content support'),
+      description: text('cloud_ability_content_support_desc', 'Cloud runtime support for writing assistance and evidence-backed editor help.'),
+      modelKind: text('cloud_model_kind_text', 'Text model'),
+      profile: text('cloud_native_profile_runtime', 'Runtime projection'),
+      action: text('cloud_native_action_readonly', 'Runtime managed'),
+    },
+    {
+      id: 'site_knowledge_summary',
+      media: 'text',
+      status: 'connected',
+      label: text('cloud_ability_site_knowledge_summary', 'Site knowledge summary'),
+      description: text('cloud_ability_site_knowledge_summary_desc', 'Summarize indexed site knowledge as runtime detail, not local knowledge-base truth.'),
+      modelKind: text('cloud_model_kind_text', 'Text model'),
+      profile: text('cloud_native_profile_runtime', 'Runtime projection'),
+      action: text('cloud_native_action_readonly', 'Runtime managed'),
+    },
+    {
+      id: 'external_evidence_preflight',
+      media: 'text',
+      status: 'connected',
+      label: text('cloud_ability_external_evidence', 'External evidence preflight'),
+      description: text('cloud_ability_external_evidence_desc', 'Prepare evidence grounding before handing control back to the local WordPress path.'),
+      modelKind: text('cloud_model_kind_search_text', 'Search + text model'),
+      profile: text('cloud_native_profile_runtime', 'Runtime projection'),
+      action: text('cloud_native_action_readonly', 'Runtime managed'),
+    },
+    {
+      id: 'generated_image_candidates',
+      media: 'image',
+      status: 'connected',
+      label: text('cloud_ability_generated_image_candidates', 'Generated image candidates'),
+      description: text('cloud_ability_generated_image_candidates_desc', 'Generate reviewable image candidates while WordPress keeps approval and final media use.'),
+      modelKind: text('cloud_model_kind_vision_image', 'Vision / image model'),
+      profile: text('cloud_native_profile_runtime', 'Runtime projection'),
+      action: text('cloud_native_action_readonly', 'Runtime managed'),
+    },
+    {
+      id: 'image_source_candidates',
+      media: 'image',
+      status: 'connected',
+      label: text('cloud_ability_image_source_candidates', 'Image source candidates'),
+      description: text('cloud_ability_image_source_candidates_desc', 'Search external image sources and return reviewable media candidates.'),
+      modelKind: text('cloud_model_kind_image_source', 'Image source provider'),
+      profile: text('cloud_native_profile_runtime', 'Runtime projection'),
+      action: text('cloud_native_action_readonly', 'Runtime managed'),
+    },
+    {
+      id: 'image_context_evidence',
+      media: 'image',
+      status: 'planned',
+      label: text('cloud_ability_image_context_evidence', 'Image context evidence'),
+      description: text('cloud_ability_image_context_evidence_desc', 'Use bounded vision evidence to describe media context without updating WordPress attachments.'),
+      modelKind: text('cloud_model_kind_vision_image', 'Vision / image model'),
+      profile: text('cloud_native_profile_pending', 'Not connected'),
+      action: text('cloud_native_action_pending', 'Configure after connection'),
+    },
+    {
+      id: 'media_derivative_plan',
+      media: 'image',
+      status: 'connected',
+      label: text('cloud_ability_media_derivative_plan', 'Media derivative plan'),
+      description: text('cloud_ability_media_derivative_plan_desc', 'Plan temporary media derivative artifacts while local WordPress keeps approval and writes.'),
+      modelKind: text('cloud_model_kind_vision_image', 'Vision / image model'),
+      profile: text('cloud_native_profile_runtime', 'Runtime projection'),
+      action: text('cloud_native_action_readonly', 'Runtime managed'),
+    },
+  ];
+  const activeCloudNativeAbilityRows = cloudNativeAbilityRows.filter((row) => row.media === activeCloudMediaTab);
+
   if (loading) {
     return <LoadingFallback />;
   }
@@ -477,7 +586,7 @@ export default function AbilityModelsPage() {
       <BackofficePrimaryPanel
         eyebrow={text('eyebrow', 'Runtime model routing')}
         title={text('title', 'Ability models')}
-        description={text('description', 'Configure the Cloud runtime profiles and model instances used by audio abilities, WordPress AI connector abilities, and future Cloud-native abilities.')}
+        description={text('description', 'Configure shared plugin ability defaults and Cloud-native runtime ability model bindings.')}
         aside={<BackofficeStatusBadge label={text('badge_runtime_binding', 'Runtime binding')} status="success" />}
         summary={<BackofficeMetricStrip items={metrics} columnsClassName="xl:grid-cols-4" />}
       >
@@ -493,77 +602,30 @@ export default function AbilityModelsPage() {
         ) : null}
       </BackofficePrimaryPanel>
 
-      {preferences ? (
-        <BackofficeSectionPanel>
-          <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-            <div>
-              <h2 className="text-lg font-semibold text-slate-950 dark:text-white">{aiText('profile_preferences_title', 'Audio ability models')}</h2>
-              <p className="mt-1 text-sm leading-6 text-slate-600 dark:text-slate-300">
-                {aiText('profile_preferences_desc', 'Runtime profile selection for audio summary, narration, and playback. This does not edit prompts, router rules, or WordPress write policy.')}
-              </p>
-            </div>
-            <BackofficeStatusBadge label={text('badge_audio', 'Audio ability')} status="success" />
-          </div>
-          <div className="mt-4 grid gap-4 lg:grid-cols-3">
-            <label className="grid gap-2 text-sm font-medium text-slate-700 dark:text-slate-200">
-              {aiText('field_audio_summary_text_profile', 'Audio summary text profile')}
-              <select
-                className="h-11 rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-white"
-                value={preferences.audio_summary_text_profile_id}
-                onChange={(event) => updatePreferences({ audio_summary_text_profile_id: event.target.value })}
-              >
-                {preferences.allowed.text_profile_ids.map((profileId) => (
-                  <option key={profileId} value={profileId}>{profileId}</option>
-                ))}
-              </select>
-            </label>
-            <label className="grid gap-2 text-sm font-medium text-slate-700 dark:text-slate-200">
-              {aiText('field_article_narration_audio_profile', 'Article narration audio profile')}
-              <select
-                className="h-11 rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-white"
-                value={preferences.audio_narration_profile_id}
-                onChange={(event) => updatePreferences({ audio_narration_profile_id: event.target.value })}
-              >
-                {preferences.allowed.audio_profile_ids.map((profileId) => (
-                  <option key={profileId} value={profileId}>{profileId}</option>
-                ))}
-              </select>
-            </label>
-            <label className="grid gap-2 text-sm font-medium text-slate-700 dark:text-slate-200">
-              {aiText('field_audio_summary_playback_profile', 'Audio summary playback profile')}
-              <select
-                className="h-11 rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-white"
-                value={preferences.audio_summary_audio_profile_id}
-                onChange={(event) => updatePreferences({ audio_summary_audio_profile_id: event.target.value })}
-              >
-                {preferences.allowed.audio_profile_ids.map((profileId) => (
-                  <option key={profileId} value={profileId}>{profileId}</option>
-                ))}
-              </select>
-            </label>
-          </div>
-          <div className="mt-4 flex flex-col gap-3 text-sm text-slate-600 dark:text-slate-300 sm:flex-row sm:items-center sm:justify-between">
-            <span>{text('audio_save_notice', 'Only Cloud runtime profile preferences are changed here.')}</span>
-            <button
-              type="button"
-              onClick={saveProfilePreferences}
-              disabled={savingPreferences}
-              className="btn btn-primary justify-center disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              {savingPreferences ? aiText('saving', 'Saving...') : aiText('action_save_preferences', 'Save profile preferences')}
-            </button>
-          </div>
-        </BackofficeSectionPanel>
-      ) : null}
+      <div className="flex flex-wrap gap-2">
+        <BackofficeFilterPill
+          active={activeAbilityTab === 'wordpress'}
+          onClick={() => setActiveAbilityTab('wordpress')}
+        >
+          {text('tab_wordpress', 'Plugin ability models')}
+        </BackofficeFilterPill>
+        <BackofficeFilterPill
+          active={activeAbilityTab === 'cloud'}
+          onClick={() => setActiveAbilityTab('cloud')}
+        >
+          {text('tab_cloud', 'Cloud-native abilities')}
+        </BackofficeFilterPill>
+      </div>
 
-      <BackofficeSectionPanel>
+      {activeAbilityTab === 'wordpress' ? (
+        <BackofficeSectionPanel>
         <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
           <div>
             <h2 className="text-lg font-semibold text-slate-950 dark:text-white">
-              {text('wordpress_title', 'WordPress ability models')}
+              {text('wordpress_title', 'Plugin ability defaults')}
             </h2>
             <p className="mt-1 text-sm leading-6 text-slate-600 dark:text-slate-300">
-              {aiText('ability_models_desc', 'WordPress AI connector abilities mapped to Cloud runtime profiles and model instances. Local plugin enablement and WordPress writes stay outside this page.')}
+              {aiText('ability_models_desc', 'Plugin abilities mapped to shared Cloud runtime profiles and model instances. Plugin-specific overrides can be added later when a plugin needs a different model.')}
             </p>
           </div>
           <button
@@ -627,21 +689,172 @@ export default function AbilityModelsPage() {
             <div className="px-4 py-6 text-sm text-slate-500 dark:text-slate-400">
               {loadingRouting
                 ? aiText('ability_models_loading', 'Loading ability model routing...')
-                : aiText('ability_models_empty', 'No WordPress AI connector abilities are available.')}
+                : aiText('ability_models_empty', 'No plugin ability model routing is available.')}
             </div>
           )}
         </div>
         <div className="mt-3 text-xs leading-5 text-slate-500 dark:text-slate-400">
           {aiText('ability_models_boundary_notice', 'This changes Cloud runtime profile bindings only. It does not enable plugin abilities, edit prompts, or write to WordPress.')}
         </div>
-      </BackofficeSectionPanel>
+        <div className="mt-2 text-xs leading-5 text-slate-500 dark:text-slate-400">
+          {text('plugin_default_notice', 'These are common defaults for plugin abilities. Plugin switches, prompts, approvals, and final WordPress writes stay in the local plugin path.')}
+        </div>
+        </BackofficeSectionPanel>
+      ) : null}
 
-      <BackofficeSectionPanel>
-        <BackofficeEmptyState
-          title={text('cloud_native_title', 'Cloud-native ability models')}
-          description={text('cloud_native_desc', 'No Cloud-native ability model bindings are configurable yet. When Cloud-owned runtime abilities are added, they will appear here without becoming a WordPress control plane.')}
-        />
-      </BackofficeSectionPanel>
+      {activeAbilityTab === 'cloud' ? (
+        <BackofficeSectionPanel>
+          <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+            <div>
+              <h2 className="text-lg font-semibold text-slate-950 dark:text-white">
+                {text('cloud_native_title', 'Cloud-native ability models')}
+              </h2>
+              <p className="mt-1 text-sm leading-6 text-slate-600 dark:text-slate-300">
+                {text('cloud_native_desc', 'Cloud-owned runtime abilities are grouped by text, image, audio, and video. Existing rows are read-only runtime projections; future rows stay planned until a routing projection exists.')}
+              </p>
+            </div>
+            <BackofficeStatusBadge label={text('cloud_native_badge_readonly', 'Read-only list')} status="success" />
+          </div>
+
+          <div className="mt-4 flex flex-wrap gap-2">
+            {(['text', 'image', 'audio', 'video'] as CloudAbilityMediaTab[]).map((tab) => (
+              <BackofficeFilterPill
+                key={tab}
+                active={activeCloudMediaTab === tab}
+                onClick={() => setActiveCloudMediaTab(tab)}
+              >
+                {text(`cloud_media_tab_${tab}`, tab)}
+              </BackofficeFilterPill>
+            ))}
+          </div>
+
+          {activeCloudMediaTab === 'audio' && preferences ? (
+            <>
+              <div className="mt-4 overflow-hidden rounded-lg border border-slate-200 dark:border-slate-800">
+                <div className="hidden grid-cols-[1.4fr_1fr_1.2fr] gap-3 border-b border-slate-200 bg-slate-50 px-4 py-3 text-xs font-semibold uppercase tracking-[0.16em] text-slate-500 dark:border-slate-800 dark:bg-slate-900/70 dark:text-slate-400 md:grid">
+                  <span>{text('column_audio_ability', 'Audio ability')}</span>
+                  <span>{text('column_current_profile', 'Current profile')}</span>
+                  <span>{text('column_configure_profile', 'Configure profile')}</span>
+                </div>
+                {audioPreferenceRows.map((row) => {
+                  const options = row.options.length ? row.options : row.value ? [row.value] : [];
+                  return (
+                    <div
+                      key={row.id}
+                      className="grid gap-3 border-b border-slate-200 px-4 py-4 text-sm last:border-b-0 dark:border-slate-800 md:grid-cols-[1.4fr_1fr_1.2fr] md:items-center"
+                    >
+                      <div>
+                        <div className="font-medium text-slate-950 dark:text-white">{row.label}</div>
+                        <div className="mt-1 text-xs leading-5 text-slate-500 dark:text-slate-400">{row.description}</div>
+                      </div>
+                      <div>
+                        <div className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500 dark:text-slate-400 md:hidden">
+                          {text('column_current_profile', 'Current profile')}
+                        </div>
+                        <div className="mt-1 font-mono text-sm text-slate-700 dark:text-slate-200 md:mt-0">{row.value || '-'}</div>
+                      </div>
+                      <label className="grid gap-1 text-sm font-medium text-slate-700 dark:text-slate-200">
+                        <span className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500 dark:text-slate-400 md:hidden">
+                          {text('column_configure_profile', 'Configure profile')}
+                        </span>
+                        <select
+                          className="h-11 rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-white"
+                          value={row.value}
+                          onChange={(event) => row.update(event.target.value)}
+                        >
+                          {options.map((profileId) => (
+                            <option key={`${row.id}-${profileId}`} value={profileId}>{profileId}</option>
+                          ))}
+                        </select>
+                      </label>
+                    </div>
+                  );
+                })}
+              </div>
+              <div className="mt-4 flex flex-col gap-3 text-sm text-slate-600 dark:text-slate-300 sm:flex-row sm:items-center sm:justify-between">
+                <span>{text('audio_save_notice', 'Only Cloud runtime profile preferences are changed here.')}</span>
+                <button
+                  type="button"
+                  onClick={saveProfilePreferences}
+                  disabled={savingPreferences}
+                  className="btn btn-primary justify-center disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {savingPreferences ? aiText('saving', 'Saving...') : aiText('action_save_preferences', 'Save profile preferences')}
+                </button>
+              </div>
+            </>
+          ) : null}
+
+          {activeCloudMediaTab === 'audio' && !preferences ? (
+            <div className="mt-4">
+              <BackofficeEmptyState
+                title={text('audio_empty_title', 'Audio ability models unavailable')}
+                description={text('audio_empty_desc', 'Audio runtime profile preferences are not available from the provider management projection.')}
+              />
+            </div>
+          ) : null}
+
+          {activeCloudMediaTab !== 'audio' && activeCloudNativeAbilityRows.length > 0 ? (
+            <div className="mt-4 overflow-hidden rounded-lg border border-slate-200 dark:border-slate-800">
+              <div className="hidden grid-cols-[8rem_1.4fr_1fr_1.1fr_9rem] gap-3 border-b border-slate-200 bg-slate-50 px-4 py-3 text-xs font-semibold uppercase tracking-[0.16em] text-slate-500 dark:border-slate-800 dark:bg-slate-900/70 dark:text-slate-400 md:grid">
+                <span>{aiText('column_status', 'Status')}</span>
+                <span>{aiText('column_ability', 'Ability')}</span>
+                <span>{text('column_model_kind', 'Model kind')}</span>
+                <span>{aiText('column_profile', 'Profile')}</span>
+                <span className="text-right">{aiText('column_actions', 'Actions')}</span>
+              </div>
+              {activeCloudNativeAbilityRows.map((row) => (
+                <div
+                  key={row.id}
+                  className="grid gap-3 border-b border-slate-200 px-4 py-4 text-sm last:border-b-0 dark:border-slate-800 md:grid-cols-[8rem_1.4fr_1fr_1.1fr_9rem] md:items-center"
+                >
+                  <BackofficeStatusBadge
+                    label={row.status === 'connected'
+                      ? text('cloud_native_status_connected', 'Connected')
+                      : text('cloud_native_status_planned', 'Planned')}
+                    status={row.status === 'connected' ? 'success' : 'warning'}
+                  />
+                  <div>
+                    <div className="font-medium text-slate-950 dark:text-white">{row.label}</div>
+                    <div className="mt-1 text-xs leading-5 text-slate-500 dark:text-slate-400">{row.description}</div>
+                  </div>
+                  <div className="text-slate-600 dark:text-slate-300">
+                    <div className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500 dark:text-slate-400 md:hidden">
+                      {text('column_model_kind', 'Model kind')}
+                    </div>
+                    <div className="mt-1 md:mt-0">{row.modelKind}</div>
+                  </div>
+                  <div className="font-mono text-sm text-slate-500 dark:text-slate-400">
+                    {row.profile}
+                  </div>
+                  <div className="text-right">
+                    <button
+                      type="button"
+                      className="btn btn-secondary justify-center disabled:cursor-not-allowed disabled:opacity-50"
+                      disabled
+                    >
+                      {row.action}
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : null}
+
+          {activeCloudMediaTab === 'video' ? (
+            <div className="mt-4">
+              <BackofficeEmptyState
+                title={text('video_empty_title', 'Video ability models are not connected')}
+                description={text('video_empty_desc', 'No Cloud video runtime contract is available yet. This tab is reserved for future video summary, transcription, and cover candidate abilities.')}
+              />
+            </div>
+          ) : null}
+
+          <div className="mt-3 text-xs leading-5 text-slate-500 dark:text-slate-400">
+            {text('cloud_native_boundary_notice', 'This is a read-only runtime ability list. It does not define abilities, edit prompts or routers, or write to WordPress.')}
+          </div>
+        </BackofficeSectionPanel>
+      ) : null}
 
       {activeProfile && typeof document !== 'undefined' ? createPortal((
         <div
@@ -658,7 +871,7 @@ export default function AbilityModelsPage() {
                   {aiText('ability_model_dialog_title', 'Configure ability model')}
                 </h2>
                 <p className="mt-1 text-sm leading-6 text-slate-600 dark:text-slate-300">
-                  {aiText('ability_model_dialog_desc', 'This updates one shared Cloud runtime profile. WordPress plugin feature switches and final writes are not changed.')}
+                  {aiText('ability_model_dialog_desc', 'This updates one shared Cloud runtime profile. Plugin switches, prompts, approvals, and final writes are not changed.')}
                 </p>
               </div>
               <button type="button" className="btn btn-secondary" onClick={closeAbilityModelDialog}>
