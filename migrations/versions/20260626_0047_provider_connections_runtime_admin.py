@@ -56,7 +56,11 @@ def upgrade() -> None:
             nullable=False,
         ),
     )
-    op.create_index("ix_provider_connections_provider_type", "provider_connections", ["provider_type"])
+    op.create_index(
+        "ix_provider_connections_provider_type",
+        "provider_connections",
+        ["provider_type"],
+    )
     op.create_index("ix_provider_connections_enabled", "provider_connections", ["enabled"])
     op.create_index("ix_provider_connections_status", "provider_connections", ["status"])
     op.create_index("ix_provider_connections_source_role", "provider_connections", ["source_role"])
