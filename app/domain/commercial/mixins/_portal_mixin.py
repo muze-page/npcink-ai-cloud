@@ -27,7 +27,7 @@ from app.core.models import (
     SITE_USER_GRANT_STATUS_REVOKED,
     Site,
 )
-from app.core.security import build_secret_hash
+from app.core.security import build_secret_hash, verify_secret_hash
 from app.domain.commercial.audit_context import ServiceAuditContext
 from app.domain.commercial.errors import (
     CommercialPermissionError,
@@ -469,7 +469,7 @@ class CommercialServicePortalMixin(CommercialServiceAuditMixin):
                     "portal login code is invalid",
                 )
             active_code = active_codes[0]
-            if build_secret_hash(normalized_code) != str(active_code.code_hash or ""):
+            if not verify_secret_hash(normalized_code, str(active_code.code_hash or "")):
                 active_code.attempt_count = int(active_code.attempt_count or 0) + 1
                 if active_code.attempt_count >= bounded_attempts:
                     active_code.status = PORTAL_LOGIN_CODE_STATUS_LOCKED
