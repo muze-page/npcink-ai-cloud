@@ -456,6 +456,30 @@ assert.match(
 
 assert.match(
   pageSource,
+  /connection_section_title[\s\S]*model_visibility_title[\s\S]*usage_scope_title[\s\S]*advanced_settings_title/,
+  'Provider channel form must separate connection, model visibility, usage scope, and advanced runtime settings'
+);
+
+assert.match(
+  pageSource,
+  /model_visibility_desc[\s\S]*Configure which capability uses which model on the ability models page/,
+  'Provider channel model visibility copy must point capability-model binding to the ability models page'
+);
+
+assert.match(
+  pageSource,
+  /usage_scope_desc[\s\S]*This does not enable plugin features, edit prompts, router rules, or WordPress writes/,
+  'Provider channel usage scope copy must preserve Cloud runtime boundaries'
+);
+
+assert.ok(
+  pageSource.indexOf("usage_scope_title") < pageSource.indexOf("field_capabilities', 'Capabilities'") &&
+    pageSource.indexOf("field_capabilities', 'Capabilities'") < pageSource.indexOf("advanced_settings_title"),
+  'Provider channel capabilities/profiles must be visible usage scope fields, not buried in advanced runtime settings'
+);
+
+assert.match(
+  pageSource,
   /verifiedModelIds[\s\S]*runtime_supported[\s\S]*setProviderModelIds\(verifiedModelIds\)/,
   'Provider channel catalog sync must only auto-enable runtime verified models'
 );
@@ -494,6 +518,12 @@ assert.doesNotMatch(
   pageSource,
   /action_fill_related_models|action_fill_all_models|action_copy_all_models/,
   'Provider channel form should avoid low-frequency bulk helpers beyond upstream fetch, clear all, and specified add'
+);
+
+assert.doesNotMatch(
+  pageSource,
+  /batch_test_models|action_test_all_models|model_batch_test|Test all models/,
+  'Provider channel form must not introduce model batch testing in this phase'
 );
 
 assert.match(

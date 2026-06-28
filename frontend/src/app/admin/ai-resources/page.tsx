@@ -1884,65 +1884,83 @@ function AiResourcesContent() {
                   void saveProviderConnection();
                 }}
               >
-                <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-                  <label className="grid gap-2 text-sm font-medium text-slate-700 dark:text-slate-200">
-                    {aiText('field_provider_type', 'Provider type')}
-                    <select
-                      className="h-11 rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-white"
-                      value={providerConnectionForm.providerPreset}
-                      onChange={(event) => applyProviderPreset(event.target.value)}
-                    >
-                      {PROVIDER_PRESETS.map((preset) => (
-                        <option key={preset.id} value={preset.id}>
-                          {preset.label}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  <label className="grid gap-2 text-sm font-medium text-slate-700 dark:text-slate-200">
-                    {aiText('field_display_name', 'Display name')}
-                    <input
-                      className="h-11 rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-white"
-                      value={providerConnectionForm.displayName}
-                      onChange={(event) => {
-                        const displayName = event.target.value;
-                        updateProviderConnectionForm({
-                          displayName,
-                          connectionId: providerConnectionForm.connectionId ? providerConnectionForm.connectionId : slugifyProviderValue(displayName),
-                        });
-                      }}
-                      placeholder="GPT-5.5 via NewAPI"
-                      required
-                    />
-                  </label>
-                  <label className="grid gap-2 text-sm font-medium text-slate-700 dark:text-slate-200">
-                    {aiText('field_credential', 'API Key')}
-                    <input
-                      className="h-11 rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-white"
-                      type="password"
-                      value={providerConnectionForm.credential}
-                      onChange={(event) => updateProviderConnectionForm({ credential: event.target.value })}
-                      placeholder={aiText('placeholder_keep_current_credential', 'leave blank to keep current')}
-                    />
-                  </label>
-                </div>
+                <section className="grid gap-3 rounded-lg border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-950">
+                  <div>
+                    <h3 className="text-sm font-semibold text-slate-950 dark:text-white">{aiText('connection_section_title', 'Connection')}</h3>
+                    <p className="mt-1 text-xs leading-5 text-slate-500 dark:text-slate-400">
+                      {aiText('connection_section_desc', 'Choose the service, name, base URL, and credential for this runtime channel.')}
+                    </p>
+                  </div>
+                  <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                    <label className="grid gap-2 text-sm font-medium text-slate-700 dark:text-slate-200">
+                      {aiText('field_provider_type', 'Provider type')}
+                      <select
+                        className="h-11 rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-white"
+                        value={providerConnectionForm.providerPreset}
+                        onChange={(event) => applyProviderPreset(event.target.value)}
+                      >
+                        {PROVIDER_PRESETS.map((preset) => (
+                          <option key={preset.id} value={preset.id}>
+                            {preset.label}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label className="grid gap-2 text-sm font-medium text-slate-700 dark:text-slate-200">
+                      {aiText('field_display_name', 'Display name')}
+                      <input
+                        className="h-11 rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-white"
+                        value={providerConnectionForm.displayName}
+                        onChange={(event) => {
+                          const displayName = event.target.value;
+                          updateProviderConnectionForm({
+                            displayName,
+                            connectionId: providerConnectionForm.connectionId ? providerConnectionForm.connectionId : slugifyProviderValue(displayName),
+                          });
+                        }}
+                        placeholder="GPT-5.5 via NewAPI"
+                        required
+                      />
+                    </label>
+                    <label className="grid gap-2 text-sm font-medium text-slate-700 dark:text-slate-200">
+                      {aiText('field_credential', 'API Key')}
+                      <input
+                        className="h-11 rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-white"
+                        type="password"
+                        value={providerConnectionForm.credential}
+                        onChange={(event) => updateProviderConnectionForm({ credential: event.target.value })}
+                        placeholder={aiText('placeholder_keep_current_credential', 'leave blank to keep current')}
+                      />
+                    </label>
+                  </div>
 
-                <label className="grid gap-2 text-sm font-medium text-slate-700 dark:text-slate-200">
-                  {aiText('field_base_url', 'Base URL')}
-                  <input
-                    className="h-11 rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-white"
-                    value={providerConnectionForm.baseUrl}
-                    onChange={(event) => updateProviderConnectionForm({ baseUrl: event.target.value })}
-                    placeholder="https://api.example.com/v1"
-                  />
-                </label>
+                  <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_auto] md:items-end">
+                    <label className="grid gap-2 text-sm font-medium text-slate-700 dark:text-slate-200">
+                      {aiText('field_base_url', 'Base URL')}
+                      <input
+                        className="h-11 rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-white"
+                        value={providerConnectionForm.baseUrl}
+                        onChange={(event) => updateProviderConnectionForm({ baseUrl: event.target.value })}
+                        placeholder="https://api.example.com/v1"
+                      />
+                    </label>
+                    <label className="inline-flex min-h-11 items-center gap-2 text-sm text-slate-600 dark:text-slate-300">
+                      <input
+                        type="checkbox"
+                        checked={providerConnectionForm.enabled}
+                        onChange={(event) => updateProviderConnectionForm({ enabled: event.target.checked })}
+                      />
+                      {aiText('field_enabled_runtime', 'Enabled for runtime use')}
+                    </label>
+                  </div>
+                </section>
 
                 <section className="grid gap-3 rounded-lg border border-slate-200 bg-slate-50/60 p-4 dark:border-slate-800 dark:bg-slate-950/40">
                   <div className="grid gap-2">
                     <div className="flex flex-wrap items-center justify-between gap-3">
                       <div>
-                        <h3 className="text-sm font-semibold text-slate-950 dark:text-white">{aiText('model_catalog_title', 'Model catalog')}</h3>
-                        <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">{aiText('model_catalog_desc', 'Sync provider-visible models, then enable only the models you want this channel to expose.')}</p>
+                        <h3 className="text-sm font-semibold text-slate-950 dark:text-white">{aiText('model_visibility_title', 'Model visibility')}</h3>
+                        <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">{aiText('model_visibility_desc', 'These models only define what this channel exposes to Cloud runtime. Configure which capability uses which model on the ability models page.')}</p>
                         <p className="mt-1 text-xs font-normal text-slate-500 dark:text-slate-400">
                           {aiText('enabled_model_summary', 'Enabled {{enabled}} models.', {
                             enabled: String(splitList(providerConnectionForm.modelIds).length),
@@ -2071,14 +2089,34 @@ function AiResourcesContent() {
                   </div>
                 </section>
 
-                <label className="inline-flex items-center gap-2 text-sm text-slate-600 dark:text-slate-300">
-                  <input
-                    type="checkbox"
-                    checked={providerConnectionForm.enabled}
-                    onChange={(event) => updateProviderConnectionForm({ enabled: event.target.checked })}
-                  />
-                  {aiText('field_enabled_runtime', 'Enabled for runtime use')}
-                </label>
+                <section className="grid gap-3 rounded-lg border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-950">
+                  <div>
+                    <h3 className="text-sm font-semibold text-slate-950 dark:text-white">{aiText('usage_scope_title', 'Usage scope')}</h3>
+                    <p className="mt-1 text-xs leading-5 text-slate-500 dark:text-slate-400">
+                      {aiText('usage_scope_desc', 'Limit which capabilities and profiles may use this provider channel. This does not enable plugin features, edit prompts, router rules, or WordPress writes.')}
+                    </p>
+                  </div>
+                  <div className="grid gap-3 md:grid-cols-2">
+                    <label className="grid gap-2 text-sm font-medium text-slate-700 dark:text-slate-200">
+                      {aiText('field_capabilities', 'Capabilities')}
+                      <input
+                        className="h-11 rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-white"
+                        value={providerConnectionForm.capabilityIds}
+                        onChange={(event) => updateProviderConnectionForm({ capabilityIds: event.target.value })}
+                        placeholder="text_generation, image_generation"
+                      />
+                    </label>
+                    <label className="grid gap-2 text-sm font-medium text-slate-700 dark:text-slate-200">
+                      {aiText('field_profiles', 'Profiles')}
+                      <input
+                        className="h-11 rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-white"
+                        value={providerConnectionForm.runtimeProfileIds}
+                        onChange={(event) => updateProviderConnectionForm({ runtimeProfileIds: event.target.value })}
+                        placeholder="text.ai"
+                      />
+                    </label>
+                  </div>
+                </section>
 
                 <details className="rounded-lg border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-950">
                   <summary className="cursor-pointer text-sm font-semibold text-slate-900 dark:text-white">
@@ -2140,26 +2178,6 @@ function AiResourcesContent() {
                         <option value="runtime_metadata">runtime_metadata</option>
                         <option value="diagnostic_source">diagnostic_source</option>
                       </select>
-                    </label>
-                  </div>
-                  <div className="mt-3 grid gap-3 md:grid-cols-2">
-                    <label className="grid gap-2 text-sm font-medium text-slate-700 dark:text-slate-200">
-                      {aiText('field_capabilities', 'Capabilities')}
-                      <input
-                        className="h-11 rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-white"
-                        value={providerConnectionForm.capabilityIds}
-                        onChange={(event) => updateProviderConnectionForm({ capabilityIds: event.target.value })}
-                        placeholder="text_generation, image_generation"
-                      />
-                    </label>
-                    <label className="grid gap-2 text-sm font-medium text-slate-700 dark:text-slate-200">
-                      {aiText('field_profiles', 'Profiles')}
-                      <input
-                        className="h-11 rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-white"
-                        value={providerConnectionForm.runtimeProfileIds}
-                        onChange={(event) => updateProviderConnectionForm({ runtimeProfileIds: event.target.value })}
-                        placeholder="text.ai"
-                      />
                     </label>
                   </div>
                 </details>
