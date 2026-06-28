@@ -9,10 +9,10 @@ from app.adapters.providers.registry import (
 )
 from app.core.config import Settings
 from app.core.db import dispose_engine, init_schema
-from app.domain.provider_connections.service import ProviderConnectionAdminService
 from app.domain.provider_connections.runtime_settings import (
     apply_provider_connection_runtime_settings,
 )
+from app.domain.provider_connections.service import ProviderConnectionAdminService
 from tests.conftest import (
     TEST_ADMIN_SESSION_SECRET,
     TEST_INTERNAL_AUTH_TOKEN,

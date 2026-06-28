@@ -137,7 +137,8 @@ def _apply_web_search_connection(
             config.get("timeout_seconds"), settings.web_search_tavily_timeout_seconds
         )
         settings.web_search_tavily_cost_per_query = _nonnegative_float(
-            config.get("cost_per_query") or config.get("cost"), settings.web_search_tavily_cost_per_query
+            config.get("cost_per_query") or config.get("cost"),
+            settings.web_search_tavily_cost_per_query,
         )
     elif provider_id == "bocha":
         settings.web_search_bocha_base_url = row.base_url or settings.web_search_bocha_base_url
@@ -147,7 +148,8 @@ def _apply_web_search_connection(
             config.get("timeout_seconds"), settings.web_search_bocha_timeout_seconds
         )
         settings.web_search_bocha_cost_per_query = _nonnegative_float(
-            config.get("cost_per_query") or config.get("cost"), settings.web_search_bocha_cost_per_query
+            config.get("cost_per_query") or config.get("cost"),
+            settings.web_search_bocha_cost_per_query,
         )
     elif provider_id == "jina_reader":
         settings.web_search_jina_reader_enabled = True
@@ -178,7 +180,8 @@ def _apply_web_search_connection(
             config.get("timeout_seconds"), settings.web_search_apify_timeout_seconds
         )
         settings.web_search_apify_cost_per_query = _nonnegative_float(
-            config.get("cost_per_query") or config.get("cost"), settings.web_search_apify_cost_per_query
+            config.get("cost_per_query") or config.get("cost"),
+            settings.web_search_apify_cost_per_query,
         )
     elif provider_id == "zhihu":
         settings.web_search_zhihu_base_url = row.base_url or settings.web_search_zhihu_base_url
@@ -202,15 +205,21 @@ def _apply_image_source_connection(
     provider_seen: bool,
 ) -> bool:
     if provider_id == "unsplash":
-        settings.image_source_unsplash_base_url = row.base_url or settings.image_source_unsplash_base_url
+        settings.image_source_unsplash_base_url = (
+            row.base_url or settings.image_source_unsplash_base_url
+        )
         if credential:
             settings.image_source_unsplash_access_key = credential
     elif provider_id == "pixabay":
-        settings.image_source_pixabay_base_url = row.base_url or settings.image_source_pixabay_base_url
+        settings.image_source_pixabay_base_url = (
+            row.base_url or settings.image_source_pixabay_base_url
+        )
         if credential:
             settings.image_source_pixabay_api_key = credential
     elif provider_id == "pexels":
-        settings.image_source_pexels_base_url = row.base_url or settings.image_source_pexels_base_url
+        settings.image_source_pexels_base_url = (
+            row.base_url or settings.image_source_pexels_base_url
+        )
         if credential:
             settings.image_source_pexels_api_key = credential
     else:
@@ -279,7 +288,9 @@ def _apply_rerank_connection(
     if credential:
         settings.site_knowledge_jina_api_key = credential
     settings.site_knowledge_jina_rerank_model = _string(
-        config.get("model_id") or config.get("rerank_model") or settings.site_knowledge_jina_rerank_model
+        config.get("model_id")
+        or config.get("rerank_model")
+        or settings.site_knowledge_jina_rerank_model
     )
     settings.site_knowledge_rerank_top_k = _int(
         config.get("top_k"), settings.site_knowledge_rerank_top_k
