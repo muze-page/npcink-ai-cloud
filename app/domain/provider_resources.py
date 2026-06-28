@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from sqlalchemy import select
 
@@ -952,7 +952,7 @@ def _build_provider_model_health(
             database_url,
             window_id=str(spec["window_id"]),
             label=str(spec["label"]),
-            hours=int(spec["hours"]),
+            hours=int(cast(Any, spec["hours"])),
             recent_call_limit=recent_call_limit,
             now=resolved_now,
         )

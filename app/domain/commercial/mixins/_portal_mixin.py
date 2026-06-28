@@ -215,7 +215,7 @@ class CommercialServicePortalMixin(CommercialServiceAuditMixin):
                 )
             row.status = PORTAL_OAUTH_STATE_STATUS_CONSUMED
             row.consumed_at = now
-            payload = {
+            payload: dict[str, object] = {
                 "provider": row.provider,
                 "return_to": row.return_to or "/portal",
                 "client_scope_id": row.client_scope_id or "",
@@ -562,14 +562,14 @@ class CommercialServicePortalMixin(CommercialServiceAuditMixin):
             for account_id, sites in sites_by_account.items():
                 if account_id in seen_account_ids:
                     continue
-                account = repository.get_account(account_id)
-                if account is None:
+                unlisted_account = repository.get_account(account_id)
+                if unlisted_account is None:
                     continue
                 account_items.append(
                     {
                         "account_id": account_id,
-                        "name": str(getattr(account, "name", "") or ""),
-                        "status": str(getattr(account, "status", "") or ""),
+                        "name": str(getattr(unlisted_account, "name", "") or ""),
+                        "status": str(getattr(unlisted_account, "status", "") or ""),
                         "principal_id": principal_id,
                         "identity_type": IDENTITY_TYPE_USER,
                         "allowed_actions": resolve_principal_allowed_actions(),

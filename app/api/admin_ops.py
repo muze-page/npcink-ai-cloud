@@ -3,6 +3,7 @@ from __future__ import annotations
 import hmac
 from collections.abc import Mapping
 from dataclasses import dataclass
+from typing import Any
 
 from fastapi import Request
 
@@ -36,12 +37,13 @@ class ResolvedAdminSession:
             if isinstance(identity_metadata, dict)
             else True
         )
+        session_version_value: Any = identity.get("session_version") or 1
         return cls(
             principal_id=str(identity.get("principal_id") or fallback_principal_id),
             role=str(identity.get("role") or fallback_role),
             auth_mode=auth_mode,
             revocable=revocable,
-            session_version=int(identity.get("session_version") or 1),
+            session_version=int(session_version_value),
         )
 
     def as_payload(self) -> dict[str, object]:

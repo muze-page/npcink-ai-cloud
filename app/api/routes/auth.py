@@ -163,8 +163,10 @@ def _current_admin_session(request: Request) -> dict[str, Any]:
             "auth.admin_session_revoked",
             "admin session is no longer valid",
         ) from error
-    token_session_version = int(claims.get("session_version") or 1)
-    current_session_version = int(identity.get("session_version") or 1)
+    token_session_version_value: Any = claims.get("session_version") or 1
+    current_session_version_value: Any = identity.get("session_version") or 1
+    token_session_version = int(token_session_version_value)
+    current_session_version = int(current_session_version_value)
     if token_session_version != current_session_version:
         raise PortalBearerTokenError(
             401,

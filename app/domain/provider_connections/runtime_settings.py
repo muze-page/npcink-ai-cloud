@@ -346,23 +346,29 @@ def _string(value: object) -> str:
 
 
 def _positive_float(value: object, default: object) -> float:
+    raw_value: Any = value
+    raw_default: Any = default
     try:
-        number = float(value)
+        number = float(raw_value)
     except (TypeError, ValueError):
-        number = float(default or 0)
+        number = float(raw_default or 0)
     return max(0.001, number)
 
 
 def _nonnegative_float(value: object, default: object) -> float:
+    raw_value: Any = value
+    raw_default: Any = default
     try:
-        number = float(value)
+        number = float(raw_value)
     except (TypeError, ValueError):
-        number = float(default or 0)
+        number = float(raw_default or 0)
     return max(0.0, number)
 
 
 def _int(value: object, default: object) -> int:
+    raw_value: Any = value
+    raw_default: Any = default
     try:
-        return int(value)
+        return int(raw_value)
     except (TypeError, ValueError):
-        return int(default or 0)
+        return int(raw_default or 0)

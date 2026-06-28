@@ -438,6 +438,8 @@ async def start_portal_qq_login(
         request,
         state=str(issued.get("state") or ""),
     )
+    expires_in_seconds_value: Any = issued.get("expires_in_seconds") or 0
+    expires_in_seconds = int(expires_in_seconds_value)
     response = JSONResponse(
         status_code=200,
         content=_portal_route_envelope(
@@ -446,7 +448,7 @@ async def start_portal_qq_login(
                 "provider": "qq",
                 "authorization_url": authorization_url,
                 "state": str(issued.get("state") or ""),
-                "expires_in_seconds": int(issued.get("expires_in_seconds") or 0),
+                "expires_in_seconds": expires_in_seconds,
                 "return_to": str(issued.get("return_to") or "/portal"),
             },
         ),
@@ -455,7 +457,7 @@ async def start_portal_qq_login(
         request,
         response,
         nonce=nonce,
-        max_age=int(issued.get("expires_in_seconds") or 0),
+        max_age=expires_in_seconds,
     )
     return response
 
