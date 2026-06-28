@@ -56,6 +56,17 @@ def portal_auth_mode(request: Request) -> str:
     return "disabled"
 
 
+def _safe_portal_error_message(error_code: str) -> str:
+    messages = {
+        "auth.portal_session_required": "portal session is required",
+        "auth.portal_session_revoked": "portal session is no longer valid",
+        "auth.portal_session_invalid": "portal session is invalid",
+        "auth.portal_login_code_invalid": "portal login code is invalid",
+        "auth.portal_oauth_failed": "portal OAuth request failed",
+    }
+    return messages.get(str(error_code or ""), "portal request failed")
+
+
 def portal_json_error(
     request: Request,
     *,
@@ -68,7 +79,7 @@ def portal_json_error(
         content=build_envelope(
             status="error",
             error_code=error_code,
-            message=message,
+            message=_safe_portal_error_message(error_code),
             trace_id=extract_trace_id(request.headers.get("traceparent", "")),
             revision="m6",
         ),
