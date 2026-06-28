@@ -24,19 +24,6 @@ def _dict_value(value: object) -> dict[str, object]:
     return {str(key): item for key, item in value.items()}
 
 
-def _redacted_cli_result(result: dict[str, object]) -> dict[str, object]:
-    redacted = {key: item for key, item in result.items()}
-    issued_key = _dict_value(redacted.get("issued_key"))
-    if issued_key:
-        issued_key["secret"] = "[REDACTED]"
-        redacted["issued_key"] = issued_key
-    sample_site = _dict_value(redacted.get("sample_site"))
-    if sample_site and sample_site.get("cloud_api_key"):
-        sample_site["cloud_api_key"] = "[REDACTED]"
-        redacted["sample_site"] = sample_site
-    return redacted
-
-
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
@@ -210,7 +197,7 @@ def main() -> None:
     args = parse_args()
     settings = Settings()
     scopes = [scope.strip() for scope in args.scopes.split(",") if scope.strip()]
-    result = bootstrap_portal_site(
+    bootstrap_portal_site(
         settings=settings,
         site_id=args.site_id,
         principal_email=args.principal_email,
@@ -222,7 +209,18 @@ def main() -> None:
         key_label=args.key_label,
         scopes=scopes,
     )
-    print(json.dumps(_redacted_cli_result(result), ensure_ascii=True, sort_keys=True))
+    print(
+        json.dumps(
+            {
+                "status": "ok",
+                "site_id": args.site_id,
+                "issued_key_created": bool(args.issue_key),
+                "secret_output": "redacted",
+            },
+            ensure_ascii=True,
+            sort_keys=True,
+        )
+    )
 
 
 if __name__ == "__main__":
