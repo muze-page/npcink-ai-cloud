@@ -537,8 +537,8 @@ const PROVIDER_PRESETS: ProviderPreset[] = [
     kind: 'minimax',
     displayName: 'MiniMax',
     baseUrl: '',
-    capabilityIds: 'audio_generation',
-    runtimeProfileIds: 'audio.narration.default, audio.summary.default',
+    capabilityIds: 'text_generation, image_generation, audio_generation, video_generation',
+    runtimeProfileIds: '',
     modelIds: '',
   },
   {
@@ -742,6 +742,16 @@ function severityTone(status: ResourceStatus): 'success' | 'warning' | 'disabled
 
 function labelList(values: string[]): string {
   return values.length ? values.join(', ') : '-';
+}
+
+function connectionHost(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) return '-';
+  try {
+    return new URL(trimmed).host || trimmed;
+  } catch {
+    return trimmed.replace(/^https?:\/\//, '').split('/')[0] || trimmed;
+  }
 }
 
 function supplierCategory(connection: Connection): SupplierCategory {
@@ -1075,6 +1085,10 @@ function AiResourcesContent() {
     providerConnectionForm.kind,
     providerFormCapabilityIds
   );
+  const knownCapabilityProviderTemplate = CAPABILITY_PROVIDER_TEMPLATES.find(
+    (template) => template.id === providerConnectionForm.providerId && template.kind === providerConnectionForm.kind
+  );
+  const shouldLockCapabilityBaseUrl = isCapabilityProviderForm && Boolean(knownCapabilityProviderTemplate);
 
   const loadResources = useCallback(async (options: { showLoading?: boolean } = {}) => {
     if (options.showLoading !== false) {
@@ -1853,41 +1867,6 @@ function AiResourcesContent() {
     return normalized || aiText('ability_model_feature_unknown', 'Unknown');
   }, [aiText]);
 
-  const providerCapabilityLabel = useCallback((capabilityId: string): string => {
-    const normalized = capabilityId.trim();
-    const labels: Record<string, string> = {
-      text_generation: aiText('ability_model_feature_text_generation', 'Text generation'),
-      image_generation: aiText('ability_model_feature_image_generation', 'Image generation'),
-      audio_generation: aiText('ability_model_feature_audio_generation', 'Audio generation'),
-      video_generation: aiText('ability_model_feature_video_generation', 'Video generation'),
-      embedding: aiText('ability_model_feature_embedding', 'Embedding'),
-      web_search: aiText('capability_category_search', 'Search'),
-      image_source: aiText('capability_category_image', 'Image'),
-      site_knowledge_rerank: aiText('capability_category_vector', 'Vector'),
-      vector_store: aiText('capability_category_vector', 'Vector'),
-    };
-    return labels[normalized] || normalized || '-';
-  }, [aiText]);
-
-  const providerProfileLabel = useCallback((profileId: string): string => {
-    const normalized = profileId.trim();
-    const labels: Record<string, string> = {
-      'text.ai': aiText('profile_text_ai', 'Text generation'),
-      'text.free-gpt55': aiText('profile_text_free_gpt55', 'Text fallback'),
-      'grok-imagine-image-quality': aiText('profile_image_quality', 'Image quality'),
-      'audio.narration.default': aiText('profile_audio_narration_default', 'Audio narration'),
-      'audio.narration.quality': aiText('profile_audio_narration_quality', 'Audio narration quality'),
-      'audio.summary.default': aiText('profile_audio_summary_default', 'Audio summary playback'),
-      'web-search.managed': aiText('profile_web_search_managed', 'Managed web search'),
-      'web-search.reader': aiText('profile_web_search_reader', 'Web reader'),
-      'image-source.managed': aiText('profile_image_source_managed', 'Managed image source'),
-      'embed.default': aiText('profile_embed_default', 'Default embedding'),
-      'site-knowledge.rerank': aiText('profile_site_knowledge_rerank', 'Site Knowledge rerank'),
-      'site-knowledge.vector-store': aiText('profile_site_knowledge_vector_store', 'Site Knowledge vector store'),
-    };
-    return labels[normalized] || normalized || '-';
-  }, [aiText]);
-
   const modelReferenceCapabilityLabel = useCallback((tag: string): string => {
     const labels: Record<string, string> = {
       reasoning: aiText('model_reference_capability_reasoning', 'Reasoning'),
@@ -1917,15 +1896,7 @@ function AiResourcesContent() {
   }, [modelReferences, providerConnectionForm.providerId, providerConnectionForm.providerPreset]);
 
   const referenceProviderCanBeChanged = canChooseReferenceProvider(providerConnectionForm.providerPreset);
-  const providerUsesCustomRuntimeFields = providerConnectionForm.providerPreset === 'custom';
-  const usageScopeCapabilityLabels = useMemo(
-    () => splitList(providerConnectionForm.capabilityIds).map(providerCapabilityLabel),
-    [providerCapabilityLabel, providerConnectionForm.capabilityIds]
-  );
-  const usageScopeProfileLabels = useMemo(
-    () => splitList(providerConnectionForm.runtimeProfileIds).map(providerProfileLabel),
-    [providerConnectionForm.runtimeProfileIds, providerProfileLabel]
-  );
+  const providerUsesCustomRuntimeFields = !isCapabilityProviderForm && providerConnectionForm.providerPreset === 'custom';
 
   const modelVisibilityRows = useMemo<ModelVisibilityRow[]>(() => {
     const rows = new Map<string, ModelVisibilityRow>();
@@ -2303,11 +2274,19 @@ function AiResourcesContent() {
                           ? aiText('capability_channel_form_title', 'Add capability supplier')
                           : aiText('channel_form_title', 'Add provider channel')}
                     </h3>
+                    {isCapabilityProviderForm ? (
+                      <BackofficeStatusBadge
+                        label={aiText('capability_supplier_badge', '{{category}} supplier', {
+                          category: capabilityCategoryLabel(providerFormCapabilityCategory),
+                        })}
+                        status="info"
+                      />
+                    ) : null}
                     <BackofficeStatusBadge label={aiText('badge_save_and_test', 'Save and test')} status="info" />
                   </div>
                   <p className="mt-1 text-sm leading-6 text-slate-600 dark:text-slate-300">
                     {isCapabilityProviderForm
-                      ? aiText('capability_channel_form_desc', 'Configure the runtime service, credential, capability, and profile. Model visibility is only for model suppliers.')
+                      ? aiText('capability_channel_form_desc', 'Configure the runtime service and credential. Internal bindings stay read-only under technical information.')
                       : aiText('channel_form_desc', 'Choose a provider, paste the credential, then save and test. Advanced runtime fields stay folded unless you need them.')}
                   </p>
                 </div>
@@ -2337,16 +2316,7 @@ function AiResourcesContent() {
                     </p>
                   </div>
                   <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-                    {isCapabilityProviderForm ? (
-                      <label className="grid gap-2 text-sm font-medium text-slate-700 dark:text-slate-200">
-                        {aiText('field_capability_supplier_type', 'Capability supplier type')}
-                        <input
-                          className="h-11 rounded-lg border border-slate-200 bg-slate-50 px-3 text-sm text-slate-700 dark:border-slate-800 dark:bg-slate-900/50 dark:text-slate-200"
-                          value={`${providerKindLabel(providerConnectionForm.kind)} · ${capabilityCategoryLabel(providerFormCapabilityCategory)}`}
-                          readOnly
-                        />
-                      </label>
-                    ) : (
+                    {!isCapabilityProviderForm ? (
                       <label className="grid gap-2 text-sm font-medium text-slate-700 dark:text-slate-200">
                         {aiText('field_provider_type', 'Provider type')}
                         <select
@@ -2361,7 +2331,7 @@ function AiResourcesContent() {
                           ))}
                         </select>
                       </label>
-                    )}
+                    ) : null}
                     <label className="grid gap-2 text-sm font-medium text-slate-700 dark:text-slate-200">
                       {aiText('field_display_name', 'Display name')}
                       <input
@@ -2394,11 +2364,21 @@ function AiResourcesContent() {
                     <label className="grid gap-2 text-sm font-medium text-slate-700 dark:text-slate-200">
                       {aiText('field_base_url', 'Base URL')}
                       <input
-                        className="h-11 rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-white"
+                        className={`h-11 rounded-lg border px-3 text-sm ${
+                          shouldLockCapabilityBaseUrl
+                            ? 'border-slate-200 bg-slate-50 text-slate-700 dark:border-slate-800 dark:bg-slate-900/50 dark:text-slate-200'
+                            : 'border-slate-300 bg-white text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-white'
+                        }`}
                         value={providerConnectionForm.baseUrl}
                         onChange={(event) => updateProviderConnectionForm({ baseUrl: event.target.value })}
                         placeholder="https://api.example.com/v1"
+                        readOnly={shouldLockCapabilityBaseUrl}
                       />
+                      {shouldLockCapabilityBaseUrl ? (
+                        <span className="text-xs font-normal leading-5 text-slate-500 dark:text-slate-400">
+                          {aiText('capability_base_url_template_notice', 'Template value for this known supplier. Override only from diagnostics.')}
+                        </span>
+                      ) : null}
                     </label>
                     <label className="inline-flex min-h-11 items-center gap-2 text-sm text-slate-600 dark:text-slate-300">
                       <input
@@ -2691,71 +2671,34 @@ function AiResourcesContent() {
                 </section>
                 )}
 
-                <section className="grid gap-3 rounded-lg border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-950">
-                  <div>
-                    <h3 className="text-sm font-semibold text-slate-950 dark:text-white">{aiText('usage_scope_title', 'Usage scope')}</h3>
-                    <p className="mt-1 text-xs leading-5 text-slate-500 dark:text-slate-400">
-                      {isCapabilityProviderForm
-                        ? aiText('capability_usage_scope_desc', 'Declare which runtime capability and profile can use this supplier. This does not edit WordPress abilities, prompts, router rules, or writes.')
-                        : aiText('usage_scope_desc', 'Limit which capabilities and profiles may use this provider channel. This does not enable plugin features, edit prompts, router rules, or WordPress writes.')}
-                    </p>
-                  </div>
-                  <div className="grid gap-3 md:grid-cols-2">
-                    <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 dark:border-slate-800 dark:bg-slate-900/40">
-                      <div className="text-xs font-semibold text-slate-500 dark:text-slate-400">
-                        {aiText('usage_scope_capability_summary', 'Capabilities')}
-                      </div>
-                      <div className="mt-2 flex flex-wrap gap-2">
-                        {usageScopeCapabilityLabels.length ? usageScopeCapabilityLabels.map((label) => (
-                          <span key={label} className="rounded-full bg-white px-2.5 py-1 text-xs font-semibold text-slate-700 ring-1 ring-slate-200 dark:bg-slate-950 dark:text-slate-200 dark:ring-slate-800">
-                            {label}
-                          </span>
-                        )) : (
-                          <span className="text-xs text-slate-500 dark:text-slate-400">-</span>
-                        )}
-                      </div>
-                    </div>
-                    <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 dark:border-slate-800 dark:bg-slate-900/40">
-                      <div className="text-xs font-semibold text-slate-500 dark:text-slate-400">
-                        {aiText('usage_scope_profile_summary', 'Profiles')}
-                      </div>
-                      <div className="mt-2 flex flex-wrap gap-2">
-                        {usageScopeProfileLabels.length ? usageScopeProfileLabels.map((label) => (
-                          <span key={label} className="rounded-full bg-white px-2.5 py-1 text-xs font-semibold text-slate-700 ring-1 ring-slate-200 dark:bg-slate-950 dark:text-slate-200 dark:ring-slate-800">
-                            {label}
-                          </span>
-                        )) : (
-                          <span className="text-xs text-slate-500 dark:text-slate-400">-</span>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                  <details className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600 dark:border-slate-800 dark:bg-slate-900/40 dark:text-slate-300">
-                    <summary className="cursor-pointer font-semibold text-slate-700 dark:text-slate-200">
-                      {aiText('action_edit_usage_scope_advanced', 'Advanced usage scope')}
+                {isCapabilityProviderForm ? (
+                  <details className="rounded-lg border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-950">
+                    <summary className="cursor-pointer text-sm font-semibold text-slate-900 dark:text-white">
+                      {aiText('capability_diagnostics_title', 'Technical information')}
                     </summary>
-                    <div className="mt-3 grid gap-3 md:grid-cols-2">
-                      <label className="grid gap-2 text-sm font-medium text-slate-700 dark:text-slate-200">
-                        {aiText('field_capabilities', 'Capabilities')}
-                        <input
-                          className="h-11 rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-white"
-                          value={providerConnectionForm.capabilityIds}
-                          onChange={(event) => updateProviderConnectionForm({ capabilityIds: event.target.value })}
-                          placeholder="text_generation, image_generation"
-                        />
-                      </label>
-                      <label className="grid gap-2 text-sm font-medium text-slate-700 dark:text-slate-200">
-                        {aiText('field_profiles', 'Profiles')}
-                        <input
-                          className="h-11 rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-white"
-                          value={providerConnectionForm.runtimeProfileIds}
-                          onChange={(event) => updateProviderConnectionForm({ runtimeProfileIds: event.target.value })}
-                          placeholder="text.ai"
-                        />
-                      </label>
+                    <p className="mt-2 text-xs leading-5 text-slate-500 dark:text-slate-400">
+                      {aiText('capability_diagnostics_desc', 'Read-only runtime metadata for support and migration. These values are not normal setup fields.')}
+                    </p>
+                    <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                      {[
+                        [aiText('field_base_url', 'Base URL'), providerConnectionForm.baseUrl],
+                        [aiText('field_capabilities', 'Capabilities'), providerConnectionForm.capabilityIds],
+                        [aiText('field_profiles', 'Profiles'), providerConnectionForm.runtimeProfileIds],
+                        [aiText('field_connection_id', 'Connection ID'), providerConnectionForm.connectionId],
+                        [aiText('field_provider_id', 'Provider ID'), providerConnectionForm.providerId],
+                        [aiText('field_kind', 'Kind'), providerConnectionForm.kind],
+                        [aiText('field_source_role', 'Source role'), providerConnectionForm.sourceRole],
+                      ].map(([label, value]) => (
+                        <div key={label} className="rounded-lg border border-slate-200 bg-slate-50 p-3 dark:border-slate-800 dark:bg-slate-900/40">
+                          <div className="text-xs font-semibold text-slate-500 dark:text-slate-400">{label}</div>
+                          <code className="mt-2 block break-all text-sm font-semibold text-slate-800 dark:text-slate-100">
+                            {value || '-'}
+                          </code>
+                        </div>
+                      ))}
                     </div>
                   </details>
-                </section>
+                ) : null}
 
                 {providerUsesCustomRuntimeFields ? (
                   <details className="rounded-lg border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-950">
@@ -2818,6 +2761,24 @@ function AiResourcesContent() {
                           <option value="runtime_metadata">runtime_metadata</option>
                           <option value="diagnostic_source">diagnostic_source</option>
                         </select>
+                      </label>
+                      <label className="grid gap-2 text-sm font-medium text-slate-700 dark:text-slate-200">
+                        {aiText('field_capabilities', 'Capabilities')}
+                        <input
+                          className="h-11 rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-white"
+                          value={providerConnectionForm.capabilityIds}
+                          onChange={(event) => updateProviderConnectionForm({ capabilityIds: event.target.value })}
+                          placeholder="text_generation, image_generation"
+                        />
+                      </label>
+                      <label className="grid gap-2 text-sm font-medium text-slate-700 dark:text-slate-200">
+                        {aiText('field_profiles', 'Profiles')}
+                        <input
+                          className="h-11 rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-white"
+                          value={providerConnectionForm.runtimeProfileIds}
+                          onChange={(event) => updateProviderConnectionForm({ runtimeProfileIds: event.target.value })}
+                          placeholder="text.ai"
+                        />
                       </label>
                     </div>
                   </details>
@@ -3057,15 +3018,12 @@ function AiResourcesContent() {
                 </div>
               </div>
               <div className="overflow-x-auto">
-                <table className="min-w-[1040px] w-full text-left text-sm">
+                <table className="min-w-[760px] w-full text-left text-sm">
                   <thead className="bg-slate-50 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:bg-slate-900/60 dark:text-slate-400">
                     <tr>
-                      <th className="px-4 py-3">{aiText('column_status', 'Status')}</th>
                       <th className="px-4 py-3">{aiText('column_provider', 'Provider')}</th>
-                      <th className="px-4 py-3">{aiText('column_category', 'Category')}</th>
-                      <th className="px-4 py-3">{aiText('column_base_url', 'Base URL')}</th>
-                      <th className="px-4 py-3">{aiText('column_enabled_configured', 'Enabled / configured')}</th>
-                      <th className="px-4 py-3">{aiText('column_profiles', 'Profiles')}</th>
+                      <th className="px-4 py-3">{aiText('column_status', 'Status')}</th>
+                      <th className="px-4 py-3">{aiText('column_connection', 'Connection')}</th>
                       <th className="px-4 py-3 text-right">{aiText('column_actions', 'Actions')}</th>
                     </tr>
                   </thead>
@@ -3074,31 +3032,32 @@ function AiResourcesContent() {
                       const category = capabilityProviderCategory(connection);
                       return (
                         <tr key={connection.connection_id} className="align-top">
-                          <td className="px-4 py-4">
-                            <BackofficeStatusBadge label={resourceStatusLabel(connection.status)} status={statusTone(connection.status)} />
-                          </td>
-                          <td className="px-4 py-4">
+                          <td className="px-4 py-4 align-middle">
                             <div className="font-semibold text-slate-950 dark:text-white">{connection.display_name}</div>
                             <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                              {connection.provider_id} · {providerKindLabel(connection.kind)}
+                              {connectionHost(connection.base_url)}
                             </div>
                           </td>
-                          <td className="px-4 py-4 text-slate-600 dark:text-slate-300">{capabilityCategoryLabel(category)}</td>
-                          <td className="max-w-[16rem] px-4 py-4">
-                            <span className="break-all text-slate-600 dark:text-slate-300">{connection.base_url || '-'}</span>
+                          <td className="px-4 py-4 align-middle">
+                            <BackofficeStatusBadge label={resourceStatusLabel(connection.status)} status={statusTone(connection.status)} />
                           </td>
-                          <td className="px-4 py-4 text-slate-600 dark:text-slate-300">
-                            <div>{aiText('field_enabled', 'Enabled')}: {connection.enabled ? aiText('common_yes', 'yes') : aiText('common_no', 'no')}</div>
-                            <div>{aiText('field_configured', 'Configured')}: {connection.configured ? aiText('common_yes', 'yes') : aiText('common_no', 'no')}</div>
+                          <td className="px-4 py-4 align-middle">
+                            <div className="flex flex-wrap gap-2">
+                              <BackofficeStatusBadge
+                                label={connection.enabled ? aiText('field_enabled', 'Enabled') : aiText('status_disabled_label', 'Disabled')}
+                                status={connection.enabled ? 'success' : 'disabled'}
+                              />
+                              <BackofficeStatusBadge
+                                label={connection.configured ? aiText('status_configured_label', 'Configured') : aiText('status_missing_secret_label', 'Missing secret')}
+                                status={connection.configured ? 'success' : 'warning'}
+                              />
+                            </div>
                           </td>
-                          <td className="max-w-[18rem] px-4 py-4 text-slate-600 dark:text-slate-300">
-                            <div>{labelList(connection.runtime_profile_ids)}</div>
-                          </td>
-                          <td className="px-4 py-4">
+                          <td className="px-4 py-4 align-middle">
                             <div className="flex justify-end">
                               <button
                                 type="button"
-                                className="btn btn-secondary"
+                                className="rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:border-slate-300 hover:bg-slate-50 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-200 dark:hover:border-slate-700"
                                 onClick={() => {
                                   setActiveCapabilityCategory(category);
                                   if (connection.managed_by === 'cloud_provider_connections') {
@@ -3124,7 +3083,7 @@ function AiResourcesContent() {
                     })}
                     {activeCapabilityConnections.length === 0 ? (
                       <tr>
-                        <td colSpan={7} className="px-4 py-8 text-center text-sm text-slate-500 dark:text-slate-400">
+                        <td colSpan={4} className="px-4 py-8 text-center text-sm text-slate-500 dark:text-slate-400">
                           {aiText('capability_category_empty', 'No suppliers match the current category and filters.')}
                         </td>
                       </tr>
