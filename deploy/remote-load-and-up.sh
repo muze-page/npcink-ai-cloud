@@ -68,6 +68,14 @@ if [ -f "${DIST_DIR}/worker.tar.gz" ]; then
   gzip -dc "${DIST_DIR}/worker.tar.gz" | docker load
 fi
 
+if [ -f "${DIST_DIR}/callback-worker.tar.gz" ]; then
+  gzip -dc "${DIST_DIR}/callback-worker.tar.gz" | docker load
+fi
+
+if [ -f "${DIST_DIR}/ops-worker.tar.gz" ]; then
+  gzip -dc "${DIST_DIR}/ops-worker.tar.gz" | docker load
+fi
+
 if [ -f "${DIST_DIR}/frontend.tar.gz" ]; then
   gzip -dc "${DIST_DIR}/frontend.tar.gz" | docker load
 fi

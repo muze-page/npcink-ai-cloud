@@ -104,6 +104,8 @@ save_image() {
 
 save_image npcink-ai-cloud-api:prod "${DIST_DIR}/api.tar.gz"
 save_image npcink-ai-cloud-worker:prod "${DIST_DIR}/worker.tar.gz"
+save_image npcink-ai-cloud-callback-worker:prod "${DIST_DIR}/callback-worker.tar.gz"
+save_image npcink-ai-cloud-ops-worker:prod "${DIST_DIR}/ops-worker.tar.gz"
 if [ "${SKIP_FRONTEND_IMAGE}" != "1" ]; then
 	save_image npcink-ai-cloud-frontend:prod "${DIST_DIR}/frontend.tar.gz"
 else
@@ -118,6 +120,8 @@ if [ -n "${REMOTE_DOCKER_HOST}" ] && [ "${REMOTE_BUNDLE_ONLY}" = "1" ]; then
 		-C "${CLOUD_DIR}" site
 		-C "${CLOUD_DIR}" dist/api.tar.gz
 		-C "${CLOUD_DIR}" dist/worker.tar.gz
+		-C "${CLOUD_DIR}" dist/callback-worker.tar.gz
+		-C "${CLOUD_DIR}" dist/ops-worker.tar.gz
 	)
 	if [ "${SKIP_FRONTEND_IMAGE}" != "1" ]; then
 		REMOTE_TAR_ARGS+=(-C "${CLOUD_DIR}" dist/frontend.tar.gz)
@@ -136,6 +140,8 @@ TAR_ARGS=(
 	-C "${CLOUD_DIR}" site
 	-C "${CLOUD_DIR}" dist/api.tar.gz
 	-C "${CLOUD_DIR}" dist/worker.tar.gz
+	-C "${CLOUD_DIR}" dist/callback-worker.tar.gz
+	-C "${CLOUD_DIR}" dist/ops-worker.tar.gz
 )
 if [ "${SKIP_FRONTEND_IMAGE}" != "1" ]; then
 	TAR_ARGS+=(-C "${CLOUD_DIR}" dist/frontend.tar.gz)
