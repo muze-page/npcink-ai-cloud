@@ -2450,6 +2450,30 @@ async def list_admin_portal_users(
     )
 
 
+@router.get("/admin/portal-users/{principal_id}/audit")
+async def get_admin_portal_user_audit(
+    request: Request,
+    principal_id: str,
+    limit: int = Query(default=50, ge=1, le=100),
+) -> Any:
+    auth = await authorize_internal_request(request, require_idempotency=False)
+    if auth is not None:
+        return auth
+    try:
+        result = _get_commercial_service(request).get_admin_portal_user_audit(
+            principal_id=principal_id,
+            limit=limit,
+        )
+    except CommercialServiceError as error:
+        return _service_error_response(error, request=request)
+    return build_envelope(
+        status="ok",
+        message="admin portal user audit loaded",
+        data=result,
+        revision="m6",
+    )
+
+
 @router.post("/admin/portal-users/{principal_id}/disable")
 async def disable_admin_portal_user(
     request: Request,

@@ -30,6 +30,24 @@ assert.match(
 
 assert.match(
   pageSource,
+  /\/api\/admin\/portal-users\/\$\{encodeURIComponent\(user\.principal_id\)\}\/audit\?limit=50/,
+  'portal users page must load principal-scoped audit details'
+);
+
+assert.match(
+  pageSource,
+  /用户审计详情/,
+  'portal users page must expose a user audit detail inspector'
+);
+
+assert.match(
+  pageSource,
+  /最近禁用原因/,
+  'portal users audit inspector must expose disable reason evidence'
+);
+
+assert.match(
+  pageSource,
   /session_version/,
   'portal users page must surface session version invalidation data'
 );
@@ -56,6 +74,12 @@ assert.doesNotMatch(
   pageSource,
   /\/admin\/accounts\?/,
   'portal user management must stay separate from account billing management'
+);
+
+assert.doesNotMatch(
+  pageSource,
+  /batch|批量|restore|恢复/,
+  'portal users page must not introduce batch or restore controls in the audit-detail change'
 );
 
 console.log('admin_portal_users_ui_contract: ok');

@@ -10,7 +10,7 @@ import {
   BackofficeSectionPanel,
 } from '@/components/backoffice/BackofficeScaffold';
 import { LoadingFallback } from '@/components/ui/LoadingFallback';
-import { ConfirmModal } from '@/components/ui/Modal';
+import { ConfirmModal, Modal } from '@/components/ui/Modal';
 import { useLocale } from '@/contexts/LocaleContext';
 import { cn, formatDate } from '@/lib/utils';
 import { resolveUiErrorMessage } from '@/lib/errors';
@@ -55,6 +55,48 @@ type PortalUsersResponse = {
   summary?: PortalUsersSummary;
 };
 
+type PortalUserAuditEvent = {
+  event_id: number;
+  event_kind: string;
+  outcome: string;
+  actor_kind: string;
+  actor_ref: string;
+  method: string;
+  path: string;
+  trace_id: string;
+  idempotency_key: string;
+  scope_kind: string;
+  scope_id: string;
+  account_id?: string;
+  site_id?: string;
+  payload?: Record<string, unknown>;
+  created_at?: string;
+};
+
+type PortalUserAuditDetail = {
+  principal?: {
+    principal_id?: string;
+    email?: string;
+    status?: string;
+    session_version?: number;
+    last_login_at?: string;
+    created_at?: string;
+  };
+  items?: PortalUserAuditEvent[];
+  total?: number;
+  summary?: {
+    events?: number;
+    succeeded?: number;
+    failed?: number;
+    registration_events?: number;
+    disable_events?: number;
+    latest_disable_reason?: string;
+    latest_disable_revoked_site_grants?: number;
+    latest_disable_revoked_account_memberships?: number;
+    latest_disable_revoked_identity_provider_bindings?: number;
+  };
+};
+
 type Filters = {
   q: string;
   status: string;
@@ -74,6 +116,43 @@ function sourceLabel(source: string): string {
 
 function dateLabel(value?: string): string {
   return value ? formatDate(value) : '未记录';
+}
+
+function auditEventLabel(eventKind: string): string {
+  if (eventKind === 'portal.registration') {
+    return '自助注册';
+  }
+  if (eventKind === 'portal_user.disable') {
+    return '禁用用户';
+  }
+  if (eventKind === 'principal_access.upsert') {
+    return '访问开通';
+  }
+  return eventKind || '未知事件';
+}
+
+function payloadText(payload?: Record<string, unknown>): string {
+  if (!payload) {
+    return '';
+  }
+  const reason = String(payload.reason || '').trim();
+  const revokedSiteGrants = Number(payload.revoked_site_grants || 0);
+  const revokedMemberships = Number(payload.revoked_account_memberships || 0);
+  const revokedBindings = Number(payload.revoked_identity_provider_bindings || 0);
+  if (reason || revokedSiteGrants || revokedMemberships || revokedBindings) {
+    return [
+      reason ? `原因：${reason}` : '',
+      revokedSiteGrants ? `站点授权 ${revokedSiteGrants}` : '',
+      revokedMemberships ? `账号成员 ${revokedMemberships}` : '',
+      revokedBindings ? `QQ 绑定 ${revokedBindings}` : '',
+    ].filter(Boolean).join(' · ');
+  }
+  const email = String(payload.email || '').trim();
+  const siteId = String(payload.site_id || '').trim();
+  if (email || siteId) {
+    return [email ? `邮箱：${email}` : '', siteId ? `站点：${siteId}` : ''].filter(Boolean).join(' · ');
+  }
+  return '';
 }
 
 function buildQuery(filters: Filters): string {
@@ -105,6 +184,10 @@ export default function AdminPortalUsersPage() {
   const [pendingUser, setPendingUser] = useState<PortalUserItem | null>(null);
   const [disableReason, setDisableReason] = useState('');
   const [savingPrincipalId, setSavingPrincipalId] = useState<string | null>(null);
+  const [auditUser, setAuditUser] = useState<PortalUserItem | null>(null);
+  const [auditDetail, setAuditDetail] = useState<PortalUserAuditDetail | null>(null);
+  const [auditLoading, setAuditLoading] = useState(false);
+  const [auditError, setAuditError] = useState<string | null>(null);
 
   const loadUsers = useCallback(async () => {
     setLoading(true);
@@ -195,6 +278,28 @@ export default function AdminPortalUsersPage() {
       setActionError(resolveUiErrorMessage(err instanceof Error ? err.message : null, '禁用用户失败'));
     } finally {
       setSavingPrincipalId(null);
+    }
+  };
+
+  const loadAuditDetail = async (user: PortalUserItem) => {
+    setAuditUser(user);
+    setAuditDetail(null);
+    setAuditError(null);
+    setAuditLoading(true);
+    try {
+      const response = await fetch(
+        `/api/admin/portal-users/${encodeURIComponent(user.principal_id)}/audit?limit=50`,
+        { credentials: 'include' }
+      );
+      const payload = await response.json();
+      if (!response.ok) {
+        throw new Error(payload.message || '加载用户审计失败');
+      }
+      setAuditDetail((payload.data || {}) as PortalUserAuditDetail);
+    } catch (err) {
+      setAuditError(resolveUiErrorMessage(err instanceof Error ? err.message : null, '加载用户审计失败'));
+    } finally {
+      setAuditLoading(false);
     }
   };
 
@@ -360,14 +465,25 @@ export default function AdminPortalUsersPage() {
                       <div>登录：{dateLabel(user.last_login_at)}</div>
                     </td>
                     <td className="px-5 py-4">
-                      <button
-                        type="button"
-                        className={cn('btn btn-secondary', user.status === 'disabled' && 'opacity-60')}
-                        disabled={user.status === 'disabled' || savingPrincipalId === user.principal_id}
-                        onClick={() => setPendingUser(user)}
-                      >
-                        {savingPrincipalId === user.principal_id ? '处理中' : '禁用'}
-                      </button>
+                      <div className="flex flex-wrap gap-2">
+                        <button
+                          type="button"
+                          className="btn btn-secondary"
+                          onClick={() => {
+                            void loadAuditDetail(user);
+                          }}
+                        >
+                          审计
+                        </button>
+                        <button
+                          type="button"
+                          className={cn('btn btn-secondary', user.status === 'disabled' && 'opacity-60')}
+                          disabled={user.status === 'disabled' || savingPrincipalId === user.principal_id}
+                          onClick={() => setPendingUser(user)}
+                        >
+                          {savingPrincipalId === user.principal_id ? '处理中' : '禁用'}
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -400,6 +516,110 @@ export default function AdminPortalUsersPage() {
             placeholder="原因，可选"
           />
         </ConfirmModal>
+      ) : null}
+
+      {auditUser ? (
+        <Modal
+          isOpen={Boolean(auditUser)}
+          title="用户审计详情"
+          description={auditUser.email || auditUser.principal_id}
+          size="xl"
+          onClose={() => {
+            setAuditUser(null);
+            setAuditDetail(null);
+            setAuditError(null);
+          }}
+          footer={
+            <button
+              type="button"
+              className="btn btn-secondary"
+              onClick={() => {
+                setAuditUser(null);
+                setAuditDetail(null);
+                setAuditError(null);
+              }}
+            >
+              关闭
+            </button>
+          }
+        >
+          {auditLoading ? (
+            <LoadingFallback />
+          ) : auditError ? (
+            <div className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800 dark:border-rose-900/50 dark:bg-rose-950/25 dark:text-rose-200">
+              {auditError}
+            </div>
+          ) : (
+            <div className="space-y-5">
+              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                {[
+                  ['事件数', String(auditDetail?.summary?.events || 0)],
+                  ['注册事件', String(auditDetail?.summary?.registration_events || 0)],
+                  ['禁用事件', String(auditDetail?.summary?.disable_events || 0)],
+                  ['成功', String(auditDetail?.summary?.succeeded || 0)],
+                ].map(([label, value]) => (
+                  <div
+                    key={label}
+                    className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 dark:border-slate-800 dark:bg-slate-950/45"
+                  >
+                    <div className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500 dark:text-slate-400">
+                      {label}
+                    </div>
+                    <div className="mt-2 text-lg font-semibold text-slate-950 dark:text-white">{value}</div>
+                  </div>
+                ))}
+              </div>
+
+              {auditDetail?.summary?.latest_disable_reason ? (
+                <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-900/50 dark:bg-amber-950/25 dark:text-amber-200">
+                  最近禁用原因：{auditDetail.summary.latest_disable_reason}
+                </div>
+              ) : null}
+
+              <div className="space-y-3">
+                {(auditDetail?.items || []).length === 0 ? (
+                  <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-6 text-center text-sm text-slate-600 dark:border-slate-800 dark:bg-slate-950/45 dark:text-slate-300">
+                    暂无该用户的服务审计事件。
+                  </div>
+                ) : (
+                  (auditDetail?.items || []).map((event) => {
+                    const detail = payloadText(event.payload);
+                    return (
+                      <div
+                        key={event.event_id}
+                        className="rounded-2xl border border-slate-200 bg-white px-4 py-3 dark:border-slate-800 dark:bg-slate-950/45"
+                      >
+                        <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                          <div>
+                            <div className="font-semibold text-slate-950 dark:text-white">
+                              {auditEventLabel(event.event_kind)}
+                            </div>
+                            <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                              {dateLabel(event.created_at)} · {event.actor_kind || 'unknown'} · {event.actor_ref || '无操作人'}
+                            </div>
+                          </div>
+                          <BackofficeStatusBadge
+                            label={event.outcome || 'unknown'}
+                            status={event.outcome || 'inactive'}
+                          />
+                        </div>
+                        {detail ? (
+                          <div className="mt-3 text-sm text-slate-700 dark:text-slate-200">{detail}</div>
+                        ) : null}
+                        <div className="mt-3 grid gap-2 text-xs text-slate-500 dark:text-slate-400 sm:grid-cols-2">
+                          <div>scope：{event.scope_kind || '-'} / {event.scope_id || '-'}</div>
+                          <div>trace：{event.trace_id || '-'}</div>
+                          <div>path：{event.method || 'GET'} {event.path || '-'}</div>
+                          <div>idempotency：{event.idempotency_key || '-'}</div>
+                        </div>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+            </div>
+          )}
+        </Modal>
       ) : null}
     </BackofficePageStack>
   );

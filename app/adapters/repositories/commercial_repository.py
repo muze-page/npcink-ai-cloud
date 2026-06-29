@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 from typing import Any, cast
 from uuid import uuid4
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 from sqlalchemy.sql.elements import ColumnElement
 
@@ -2081,6 +2081,28 @@ class CommercialRepository:
             ServiceAuditEvent.created_at.desc(),
             ServiceAuditEvent.id.desc(),
         ).limit(limit)
+        return list(self.session.scalars(statement))
+
+    def list_service_audit_events_for_principal(
+        self,
+        *,
+        principal_id: str,
+        limit: int = 50,
+    ) -> list[ServiceAuditEvent]:
+        normalized_principal_id = str(principal_id or "").strip()
+        if not normalized_principal_id:
+            return []
+        statement = (
+            select(ServiceAuditEvent)
+            .where(
+                or_(
+                    ServiceAuditEvent.scope_id == normalized_principal_id,
+                    ServiceAuditEvent.scope_id.like(f"%:{normalized_principal_id}"),
+                )
+            )
+            .order_by(ServiceAuditEvent.created_at.desc(), ServiceAuditEvent.id.desc())
+            .limit(max(1, limit))
+        )
         return list(self.session.scalars(statement))
 
     def count_service_audit_events(

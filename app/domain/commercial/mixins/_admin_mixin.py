@@ -891,13 +891,13 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
                 "account_id": str(getattr(account, "account_id", "") or ""),
                 "account_name": str(getattr(account, "name", "") or ""),
                 "account_status": str(getattr(account, "status", "") or ""),
-                "membership_status": str(getattr(membership, "status", "") or ""),
+                "membership_status": str(getattr(selected_membership, "status", "") or ""),
                 "site": service._serialize_site(site) if site is not None else None,
                 "site_id": str(getattr(site, "site_id", "") or ""),
                 "site_name": str(getattr(site, "name", "") or ""),
                 "site_status": str(getattr(site, "status", "") or ""),
                 "wordpress_url": wordpress_url,
-                "grant_status": str(getattr(grant, "status", "") or ""),
+                "grant_status": str(getattr(selected_grant, "status", "") or ""),
                 "subscription": subscription_payload,
                 "subscription_id": str(getattr(primary_subscription, "subscription_id", "") or ""),
                 "subscription_status": str(getattr(primary_subscription, "status", "") or ""),
@@ -933,6 +933,82 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
                 "disabled": int(summary_counts.get(PRINCIPAL_STATUS_DISABLED, 0)),
                 "qq_bound": qq_bound_total,
                 "self_registered": self_registered_total,
+            },
+        }
+
+    def get_admin_portal_user_audit(
+        self,
+        *,
+        principal_id: str,
+        limit: int = 50,
+    ) -> dict[str, object]:
+        normalized_principal_id = str(principal_id or "").strip()
+        if not normalized_principal_id:
+            raise CommercialValidationError(
+                "service.principal_id_required",
+                "principal id is required",
+            )
+        resolved_limit = min(max(int(limit or 50), 1), 100)
+        with get_session(self.database_url) as session:
+            repository = CommercialRepository(session)
+            identity = repository.get_principal_identity_by_ref(
+                principal_id=normalized_principal_id,
+            )
+            if identity is None:
+                raise CommercialNotFoundError(
+                    "service.principal_not_found",
+                    f"principal '{normalized_principal_id}' was not found",
+                )
+            events = repository.list_service_audit_events_for_principal(
+                principal_id=normalized_principal_id,
+                limit=resolved_limit,
+            )
+
+        items = [self._serialize_service_audit_event(event) for event in events]
+        outcomes = Counter(str(item.get("outcome") or "unknown") for item in items)
+        event_kinds = Counter(str(item.get("event_kind") or "unknown") for item in items)
+        disable_events = [
+            item for item in items if str(item.get("event_kind") or "") == "portal_user.disable"
+        ]
+        latest_disable = disable_events[0] if disable_events else None
+        latest_payload = (
+            latest_disable.get("payload")
+            if isinstance(latest_disable, dict) and isinstance(latest_disable.get("payload"), dict)
+            else {}
+        )
+        return {
+            "principal": {
+                "principal_id": normalized_principal_id,
+                "email": str(getattr(identity, "email", "") or ""),
+                "status": str(getattr(identity, "status", "") or ""),
+                "session_version": int(getattr(identity, "session_version", 1) or 1),
+                "last_login_at": self._serialize_datetime(
+                    getattr(identity, "last_login_at", None)
+                ),
+                "created_at": self._serialize_datetime(getattr(identity, "created_at", None)),
+            },
+            "items": items,
+            "total": len(items),
+            "summary": {
+                "events": len(items),
+                "succeeded": int(outcomes.get("succeeded", 0)),
+                "failed": int(outcomes.get("failed", 0)),
+                "registration_events": int(event_kinds.get("portal.registration", 0)),
+                "disable_events": int(event_kinds.get("portal_user.disable", 0)),
+                "latest_disable_reason": str(latest_payload.get("reason") or ""),
+                "latest_disable_revoked_site_grants": self._coerce_int(
+                    latest_payload.get("revoked_site_grants")
+                ),
+                "latest_disable_revoked_account_memberships": self._coerce_int(
+                    latest_payload.get("revoked_account_memberships")
+                ),
+                "latest_disable_revoked_identity_provider_bindings": self._coerce_int(
+                    latest_payload.get("revoked_identity_provider_bindings")
+                ),
+            },
+            "filters": {
+                "principal_id": normalized_principal_id,
+                "limit": resolved_limit,
             },
         }
 

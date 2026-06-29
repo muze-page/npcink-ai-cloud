@@ -360,6 +360,23 @@ def test_admin_portal_users_lists_self_registered_users_and_disables_access(
     assert disable_data["revoked_site_grants"] == 1
     assert disable_data["revoked_account_memberships"] == 1
 
+    audit_response = client.get(
+        f"/internal/service/admin/portal-users/{principal_id}/audit",
+        headers=build_internal_headers(),
+    )
+    assert audit_response.status_code == 200, audit_response.text
+    audit_data = audit_response.json()["data"]
+    assert audit_data["principal"]["principal_id"] == principal_id
+    assert audit_data["principal"]["email"] == email
+    assert audit_data["summary"]["registration_events"] == 1
+    assert audit_data["summary"]["disable_events"] == 1
+    assert audit_data["summary"]["latest_disable_reason"] == "operator test disable"
+    assert audit_data["summary"]["latest_disable_revoked_site_grants"] == 1
+    assert audit_data["summary"]["latest_disable_revoked_account_memberships"] == 1
+    event_kinds = {item["event_kind"] for item in audit_data["items"]}
+    assert "portal.registration" in event_kinds
+    assert "portal_user.disable" in event_kinds
+
     disabled_list_response = client.get(
         "/internal/service/admin/portal-users?status=disabled&q=admin-portal-user",
         headers=build_internal_headers(),
