@@ -30,6 +30,7 @@ from app.domain.commercial.service import CommercialService, ServiceAuditContext
 from app.domain.hosted_model_defaults import FREE_GPT55_MODEL_ID
 from app.domain.image_sources.metrics import ImageSourceMetricsService
 from app.domain.media_derivatives.metrics import MediaDerivativeObservabilityService
+from app.domain.model_references import ModelReferenceError, ModelReferenceService
 from app.domain.observability.plugin_events import PluginObservabilityService
 from app.domain.observability.service import ObservabilityService
 from app.domain.provider_connections.service import (
@@ -262,6 +263,11 @@ class ProviderConnectionPayload(BaseModel):
     credential: str | None = None
     secret: str | None = None
     secretless: bool = False
+
+
+class ModelReferenceSyncPayload(BaseModel):
+    source_url: str = Field(default="", max_length=500)
+    payload: dict[str, Any] | None = None
 
 
 class WordPressAIRoutingProfilePayload(BaseModel):
@@ -3018,6 +3024,66 @@ async def test_admin_provider_connection(request: Request, connection_id: str) -
     return build_envelope(
         status="ok" if result.get("ok") else "error",
         message=str(result.get("message") or "provider connection tested"),
+        data=result,
+        revision="m6",
+    )
+
+
+@router.get("/admin/model-references")
+async def list_admin_model_references(
+    request: Request,
+    provider_id: str = "",
+    model_ids: str = "",
+    search: str = "",
+    limit: int = Query(default=200, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+) -> Any:
+    auth = await authorize_internal_request(request, require_idempotency=False)
+    if auth is not None:
+        return auth
+    services = get_cloud_services(request)
+    result = ModelReferenceService(services.settings.database_url).list_references(
+        provider_id=provider_id,
+        model_ids=[item.strip() for item in model_ids.split(",") if item.strip()],
+        search=search,
+        limit=limit,
+        offset=offset,
+    )
+    return build_envelope(
+        status="ok",
+        message="model references loaded",
+        data=result,
+        revision="m6",
+    )
+
+
+@router.post("/admin/model-references/sync")
+async def sync_admin_model_references(
+    request: Request,
+    payload: ModelReferenceSyncPayload,
+) -> Any:
+    auth = await authorize_internal_request(request, require_idempotency=True)
+    if auth is not None:
+        return auth
+    services = get_cloud_services(request)
+    try:
+        result = ModelReferenceService(services.settings.database_url).sync_models_dev(
+            payload=payload.payload,
+            source_url=payload.source_url,
+        )
+    except ModelReferenceError as error:
+        return JSONResponse(
+            status_code=error.status_code,
+            content=build_envelope(
+                status="error",
+                error_code=error.error_code,
+                message=error.message,
+                revision="m6",
+            ),
+        )
+    return build_envelope(
+        status="ok",
+        message="model references synced",
         data=result,
         revision="m6",
     )

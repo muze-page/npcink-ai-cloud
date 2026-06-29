@@ -106,6 +106,12 @@ function buildAdminBackendPath(pathSegments: string[], method: string): string {
   }
   if (
     upperMethod === 'POST' &&
+    normalized === 'model-references/sync'
+  ) {
+    return '/internal/service/admin/model-references/sync';
+  }
+  if (
+    upperMethod === 'POST' &&
     /^provider-connections\/[^/]+\/test$/.test(normalized)
   ) {
     return `/internal/service/admin/${normalized}`;

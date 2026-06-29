@@ -29,6 +29,7 @@ from app.core.models import (
     AccountEntitlementSnapshot,
     AccountSubscription,
     BillingSnapshot,
+    ModelReferenceModel,
     PluginObservabilityEvent,
     ProviderCallRecord,
     ProviderConnection,
@@ -713,6 +714,89 @@ def test_admin_provider_connection_catalog_preview_uses_saved_secret_without_exp
     assert "saved-preview-secret" not in json.dumps(response.json())
     with get_session(database_url) as session:
         assert session.get(ProviderConnection, "mqzj_saved") is not None
+
+
+def test_admin_model_references_syncs_models_dev_payload_as_reference_only(
+    tmp_path: Path,
+) -> None:
+    database_url, client = _build_client(tmp_path)
+    response = client.post(
+        "/internal/service/admin/model-references/sync",
+        headers=build_internal_headers(idempotency_key="model-references-sync"),
+        json={
+            "payload": {
+                "providers": {
+                    "openai": {
+                        "id": "openai",
+                        "name": "OpenAI",
+                        "doc": "https://platform.openai.com/docs",
+                        "models": {
+                            "gpt-5.5": {
+                                "id": "gpt-5.5",
+                                "name": "GPT-5.5",
+                                "family": "gpt",
+                                "reasoning": True,
+                                "tool_call": True,
+                                "structured_output": True,
+                                "release_date": "2026-06-01",
+                                "last_updated": "2026-06-18",
+                                "modalities": {
+                                    "input": ["text", "image"],
+                                    "output": ["text"],
+                                },
+                                "limit": {"context": 256000, "output": 64000},
+                                "cost": {
+                                    "input": 1.25,
+                                    "output": 10.0,
+                                    "cache_read": 0.125,
+                                },
+                            }
+                        },
+                    }
+                }
+            }
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    sync_data = response.json()["data"]
+    assert sync_data["surface"] == "admin_model_reference_sync"
+    assert sync_data["source_id"] == "models.dev"
+    assert sync_data["model_count"] == 1
+    assert sync_data["price_unit"] == "usd_per_1m_tokens"
+    assert sync_data["billing_truth"] is False
+    assert sync_data["boundary"]["reference_only"] is True
+    assert sync_data["boundary"]["routing_truth"] is False
+
+    list_response = client.get(
+        "/internal/service/admin/model-references?provider_id=openai",
+        headers=build_internal_headers(),
+    )
+    assert list_response.status_code == 200, list_response.text
+    data = list_response.json()["data"]
+    assert data["surface"] == "admin_model_references"
+    assert data["boundary"]["billing_truth"] is False
+    assert data["items"][0]["model_id"] == "gpt-5.5"
+    assert data["items"][0]["feature"] == "text"
+    assert data["items"][0]["capability_flags"]["reasoning"] is True
+    assert data["items"][0]["price"] == {
+        "input": 1.25,
+        "output": 10.0,
+        "cache_read": 0.125,
+        "cache_write": None,
+        "unit": "usd_per_1m_tokens",
+        "billing_truth": False,
+    }
+    assert "OpenAI" in json.dumps(data)
+    with get_session(database_url) as session:
+        row = session.scalar(
+            select(ModelReferenceModel).where(
+                ModelReferenceModel.provider_id == "openai",
+                ModelReferenceModel.model_id == "gpt-5.5",
+            )
+        )
+        assert row is not None
+        assert row.context_window == 256000
 
 
 def test_admin_ai_resources_lists_only_added_capability_provider_connections(
