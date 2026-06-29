@@ -97,6 +97,66 @@ assert.match(
 
 assert.match(
   source,
+  /function buildQqRedirectUri\(publicBaseUrl: string\)/,
+  'QQ redirect URI must be generated from the public base URL instead of hand-entered'
+);
+
+assert.match(
+  source,
+  /return `\$\{parsed\.protocol\}\/\/\$\{parsed\.host\}\/open\/auth\/qq\/callback`;/,
+  'QQ redirect URI generation must use the normalized /open/auth/qq/callback path'
+);
+
+assert.match(
+  source,
+  /const qqRedirectUri = useMemo/,
+  'service settings page must derive the QQ redirect URI as a computed value'
+);
+
+assert.match(
+  source,
+  /redirect_uri: qqRedirectUri,[\s\S]*scope: 'get_user_info',[\s\S]*timeout_seconds: 10,/,
+  'QQ save payload must use generated callback, fixed scope, and default timeout'
+);
+
+assert.doesNotMatch(
+  source,
+  /value=\{qqForm\.scope\}/,
+  'QQ OAuth scope must not be exposed as a routine editable field'
+);
+
+assert.doesNotMatch(
+  source,
+  /value=\{qqForm\.timeout_seconds\}/,
+  'QQ OAuth timeout must not be exposed as a routine editable field'
+);
+
+assert.match(
+  source,
+  /role="switch"[\s\S]*aria-label="启用 QQ 快捷登录"/,
+  'QQ enable control must render as a switch'
+);
+
+assert.match(
+  source,
+  /QQ 回调地址已复制/,
+  'service settings page must provide a copy action for the generated QQ callback URL'
+);
+
+assert.match(
+  source,
+  /门户基础地址[\s\S]*保存基础地址[\s\S]*QQ 快捷登录[\s\S]*保存 QQ 配置/,
+  'portal base URL and QQ login sections must use distinct save labels'
+);
+
+assert.match(
+  source,
+  /回调地址由门户基础地址自动生成/,
+  'QQ login section must explain that callback URLs are derived from the portal base URL'
+);
+
+assert.match(
+  source,
   /smtp_use_ssl: event\.target\.checked, smtp_use_starttls: event\.target\.checked \? false : current\.smtp_use_starttls/,
   'enabling SSL must turn off STARTTLS in the service settings form'
 );
