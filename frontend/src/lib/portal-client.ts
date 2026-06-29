@@ -1696,6 +1696,10 @@ export class PortalClient {
     return this.request('POST', `/sites/${siteId}/activate`, {}, { requireAuth: true });
   }
 
+  async deactivateSite(siteId: string): Promise<PortalEnvelope<{ site: Site }>> {
+    return this.request('POST', `/sites/${siteId}/deactivate`, {}, { requireAuth: true });
+  }
+
   async archiveSite(siteId: string): Promise<PortalEnvelope<PortalActivatedSite>> {
     return this.request('POST', `/sites/${siteId}/archive`, {}, { requireAuth: true });
   }

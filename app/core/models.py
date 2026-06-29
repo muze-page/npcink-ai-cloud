@@ -26,6 +26,7 @@ class Base(DeclarativeBase):
 
 SITE_STATUS_PROVISIONING = "provisioning"
 SITE_STATUS_ACTIVE = "active"
+SITE_STATUS_INACTIVE = "inactive"
 SITE_STATUS_SUSPENDED = "suspended"
 SITE_STATUS_ARCHIVED = "archived"
 

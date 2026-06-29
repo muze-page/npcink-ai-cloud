@@ -48,8 +48,8 @@ function PortalSitesContent() {
   const { t } = useLocale();
   const { session, isLoading, isAuthenticated, selectSite, refresh } = useSession();
   const [searchQuery, setSearchQuery] = useState(() => searchParams?.get('q') || '');
-  const [siteFilter, setSiteFilter] = useState<'all' | 'active' | 'archived' | 'missing_url' | 'uncovered'>(
-    () => (searchParams?.get('filter') as 'all' | 'active' | 'archived' | 'missing_url' | 'uncovered') || 'all'
+  const [siteFilter, setSiteFilter] = useState<'all' | 'active' | 'inactive' | 'archived' | 'missing_url' | 'uncovered'>(
+    () => (searchParams?.get('filter') as 'all' | 'active' | 'inactive' | 'archived' | 'missing_url' | 'uncovered') || 'all'
   );
   const [siteSort, setSiteSort] = useState<'current' | 'recent' | 'name'>(
     () => (searchParams?.get('sort') as 'current' | 'recent' | 'name') || 'current'
@@ -68,15 +68,13 @@ function PortalSitesContent() {
     action: 'archive' | 'restore';
     siteIds: string[];
   } | null>(null);
-  const [deleteRequestSiteId, setDeleteRequestSiteId] = useState('');
-  const [deleteRequestReason, setDeleteRequestReason] = useState('');
-  const [pendingDeleteSiteIds, setPendingDeleteSiteIds] = useState<Set<string>>(new Set());
   const [siteSummaryCache, setSiteSummaryCache] = useState<Record<string, PortalSiteSummaryRecord>>({});
   const siteMenuRef = useRef<HTMLDivElement>(null);
   const sites = session?.sites ?? EMPTY_SITES;
   const siteIdsKey = sites.map((site) => site.site_id).join('|');
-  const selectedSiteId = session?.site_id || sites[0]?.site_id || '';
-  const selectedSite = sites.find((site) => site.site_id === selectedSiteId) || sites[0] || null;
+  const activeSite = sites.find((site) => site.status === 'active') || null;
+  const selectedSiteId = session?.site_id || activeSite?.site_id || '';
+  const selectedSite = sites.find((site) => site.site_id === selectedSiteId) || activeSite || sites[0] || null;
   const selectedSiteWordPressUrl = getPortalSiteWordPressUrl(selectedSite);
   const addonConnectMode = searchParams?.get('connect') === 'wordpress-addon';
   const addonWordPressUrl = searchParams?.get('site_url') || '';
@@ -102,7 +100,10 @@ function PortalSitesContent() {
   const filteredSites = useMemo(() => {
     const query = searchQuery.trim().toLowerCase();
     return sites.filter((site) => {
-      if (siteFilter === 'active' && site.status === 'archived') {
+      if (siteFilter === 'active' && site.status !== 'active') {
+        return false;
+      }
+      if (siteFilter === 'inactive' && site.status !== 'inactive') {
         return false;
       }
       if (siteFilter === 'archived' && site.status !== 'archived') {
@@ -158,6 +159,7 @@ function PortalSitesContent() {
   );
   const missingUrlCount = sites.filter((site) => !getPortalSiteWordPressUrl(site)).length;
   const uncoveredCount = sites.filter((site) => !hasSiteCoverage(site)).length;
+  const inactiveCount = sites.filter((site) => site.status === 'inactive').length;
 
   useEffect(() => {
     if (!isAuthenticated || !siteIdsKey) {
@@ -192,7 +194,7 @@ function PortalSitesContent() {
   useEffect(() => {
     setSearchQuery(searchParams?.get('q') || '');
     setSiteFilter(
-      (searchParams?.get('filter') as 'all' | 'active' | 'archived' | 'missing_url' | 'uncovered') || 'all'
+      (searchParams?.get('filter') as 'all' | 'active' | 'inactive' | 'archived' | 'missing_url' | 'uncovered') || 'all'
     );
     setSiteSort((searchParams?.get('sort') as 'current' | 'recent' | 'name') || 'current');
   }, [searchParams]);
@@ -370,6 +372,48 @@ function PortalSitesContent() {
     setPendingBatchAction(failedBatchAction);
   };
 
+  const handleActivateSite = async (siteId: string) => {
+    if (!canArchiveSites || !window.confirm(t('portal.activate_site_confirm', {}, 'Enable this site? It will become the only active site that can use Cloud services.'))) {
+      return;
+    }
+    setSiteActionSiteId(siteId);
+    setSiteActionMessage(null);
+    setSiteActionError(null);
+    try {
+      await portalClient.activateSite(siteId);
+      await refresh();
+      setSiteActionMessage(
+        t('portal.site_activate_success', {}, 'Site enabled. Other active sites in this account were disabled.')
+      );
+    } catch (error) {
+      console.error('Failed to activate site:', error);
+      setSiteActionError(formatPortalErrorMessage(error, t, t('portal.site_activate_failed', {}, 'Failed to enable this site.')));
+    } finally {
+      setSiteActionSiteId('');
+    }
+  };
+
+  const handleDeactivateSite = async (siteId: string) => {
+    if (!canArchiveSites || !window.confirm(t('portal.deactivate_site_confirm', {}, 'Disable Cloud services for this site? The site record, keys, usage, and audit history will be kept.'))) {
+      return;
+    }
+    setSiteActionSiteId(siteId);
+    setSiteActionMessage(null);
+    setSiteActionError(null);
+    try {
+      await portalClient.deactivateSite(siteId);
+      await refresh();
+      setSiteActionMessage(
+        t('portal.site_deactivate_success', {}, 'Site disabled. It can be enabled again later.')
+      );
+    } catch (error) {
+      console.error('Failed to deactivate site:', error);
+      setSiteActionError(formatPortalErrorMessage(error, t, t('portal.site_deactivate_failed', {}, 'Failed to disable this site.')));
+    } finally {
+      setSiteActionSiteId('');
+    }
+  };
+
   const handleArchiveSite = async (siteId: string) => {
     if (!canArchiveSites || !window.confirm(t('portal.archive_site_confirm', {}, 'Archive this site? It will be hidden from the default workspace and site switcher until restored.'))) {
       return;
@@ -407,35 +451,6 @@ function PortalSitesContent() {
     } catch (error) {
       console.error('Failed to restore site:', error);
       setSiteActionError(t('portal.site_restore_failed', {}, 'Failed to restore this site.'));
-    } finally {
-      setSiteActionSiteId('');
-    }
-  };
-
-  const handleDeleteRequest = async () => {
-    if (!deleteRequestSiteId) {
-      return;
-    }
-    setSiteActionSiteId(deleteRequestSiteId);
-    setSiteActionMessage(null);
-    setSiteActionError(null);
-    try {
-      setSiteActionMessage(
-        t(
-          'portal.site_delete_request_success',
-          {},
-          '站点删除/断开申请已提交。站点会继续保留，直到运营确认处理。'
-        )
-      );
-      setPendingDeleteSiteIds((current) => {
-        const next = new Set(current);
-        next.add(deleteRequestSiteId);
-        return next;
-      });
-      setDeleteRequestSiteId('');
-      setDeleteRequestReason('');
-    } catch (error) {
-      setSiteActionError(formatPortalErrorMessage(error, t, t('portal.site_delete_request_failed', {}, '提交站点删除申请失败。')));
     } finally {
       setSiteActionSiteId('');
     }
@@ -648,6 +663,13 @@ function PortalSitesContent() {
                 </button>
                 <button
                   type="button"
+                  className={`btn btn-sm ${siteFilter === 'inactive' ? 'btn-primary' : 'btn-secondary'}`}
+                  onClick={() => setSiteFilter('inactive')}
+                >
+                  {t('portal.inactive_sites_filter', { count: String(inactiveCount) }, 'Inactive')}
+                </button>
+                <button
+                  type="button"
                   className={`btn btn-sm ${siteFilter === 'archived' ? 'btn-primary' : 'btn-secondary'}`}
                   onClick={() => setSiteFilter('archived')}
                 >
@@ -819,11 +841,6 @@ function PortalSitesContent() {
                         {t('portal.uncovered_sites_filter', {}, 'Uncovered')}
                       </span>
                     ) : null}
-                    {pendingDeleteSiteIds.has(site.site_id) ? (
-                      <span className="rounded-full bg-orange-100 px-2 py-1 text-[0.68rem] font-semibold uppercase tracking-[0.16em] text-orange-700 dark:bg-orange-900/30 dark:text-orange-300">
-                        {t('portal.site_delete_pending_badge', {}, '删除申请处理中')}
-                      </span>
-                    ) : null}
                     {site.site_id === selectedSiteId ? (
                       <span className="rounded-full bg-[color:var(--brand-primary-soft)] px-2 py-1 text-[0.68rem] font-semibold uppercase tracking-[0.16em] text-[color:var(--brand-primary)]">
                         {t('common.current', {}, 'Current')}
@@ -855,6 +872,15 @@ function PortalSitesContent() {
                       disabled={!canArchiveSites || siteActionSiteId === site.site_id}
                     >
                       {t('portal.restore_site_action', {}, 'Restore site')}
+                    </button>
+                  ) : site.status !== 'active' ? (
+                    <button
+                      type="button"
+                      onClick={() => void handleActivateSite(site.site_id)}
+                      className="btn btn-primary btn-sm"
+                      disabled={!canArchiveSites || siteActionSiteId === site.site_id}
+                    >
+                      {t('portal.activate_site_action', {}, 'Enable service')}
                     </button>
                   ) : site.site_id !== selectedSiteId ? (
                     <button type="button" onClick={() => void selectSite(site.site_id)} className="btn btn-primary btn-sm">
@@ -888,33 +914,20 @@ function PortalSitesContent() {
                           >
                             {t('nav.usage')}
                           </Link>
-                          {canArchiveSites ? (
+                          {canArchiveSites && site.status === 'active' ? (
                             <button
                               type="button"
                               role="menuitem"
                               onClick={() => {
                                 setOpenSiteMenuId('');
-                                void handleArchiveSite(site.site_id);
+                                void handleDeactivateSite(site.site_id);
                               }}
                               className="block w-full rounded-xl px-3 py-2 text-left text-sm font-medium text-slate-600 transition-colors hover:bg-slate-100 hover:text-slate-900 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-white"
                               disabled={siteActionSiteId === site.site_id}
                             >
-                              {t('portal.archive_site_action', {}, 'Archive site')}
+                              {t('portal.deactivate_site_action', {}, 'Disable service')}
                             </button>
                           ) : null}
-                          <button
-                            type="button"
-                            role="menuitem"
-                            onClick={() => {
-                              setOpenSiteMenuId('');
-                              setDeleteRequestSiteId(site.site_id);
-                              setDeleteRequestReason('');
-                            }}
-                            className="block w-full rounded-xl px-3 py-2 text-left text-sm font-medium text-rose-700 transition-colors hover:bg-rose-50 dark:text-rose-300 dark:hover:bg-rose-950/30"
-                            disabled={siteActionSiteId === site.site_id}
-                          >
-                            {t('portal.request_site_delete_action', {}, '申请删除/断开')}
-                          </button>
                         </div>
                       ) : null}
                     </div>
@@ -925,57 +938,6 @@ function PortalSitesContent() {
           ))}
         </div>
       </BackofficeSectionPanel>
-
-      <Modal
-        isOpen={Boolean(deleteRequestSiteId)}
-        onClose={() => {
-          if (siteActionSiteId === deleteRequestSiteId) {
-            return;
-          }
-          setDeleteRequestSiteId('');
-          setDeleteRequestReason('');
-        }}
-        title={t('portal.site_delete_request_title', {}, '申请删除/断开站点')}
-        description={t(
-          'portal.site_delete_request_desc',
-          {},
-          '这不是硬删除。申请提交后站点仍保留，运营处理前不会影响现有站点记录和密钥审计。'
-        )}
-        footer={
-          <>
-            <button
-              type="button"
-              className="btn btn-secondary"
-              onClick={() => {
-                setDeleteRequestSiteId('');
-                setDeleteRequestReason('');
-              }}
-              disabled={siteActionSiteId === deleteRequestSiteId}
-            >
-              {t('common.cancel')}
-            </button>
-            <button
-              type="button"
-              className="btn btn-primary"
-              onClick={() => void handleDeleteRequest()}
-              disabled={siteActionSiteId === deleteRequestSiteId}
-            >
-              {siteActionSiteId === deleteRequestSiteId ? t('common.saving') : t('portal.submit_request', {}, '提交申请')}
-            </button>
-          </>
-        }
-        size="lg"
-      >
-        <label className="block space-y-2 text-sm font-medium text-slate-700 dark:text-slate-200">
-          <span>{t('portal.site_delete_request_reason', {}, '申请原因')}</span>
-          <textarea
-            className="input min-h-28 w-full resize-y"
-            value={deleteRequestReason}
-            onChange={(event) => setDeleteRequestReason(event.target.value)}
-            placeholder={t('portal.site_delete_request_reason_placeholder', {}, '例如：站点已下线，需要断开云端记录。')}
-          />
-        </label>
-      </Modal>
 
       <Modal
         isOpen={Boolean(pendingBatchAction)}

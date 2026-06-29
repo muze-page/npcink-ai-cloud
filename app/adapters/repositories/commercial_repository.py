@@ -784,6 +784,7 @@ class CommercialRepository:
         *,
         account_ids: list[str] | None = None,
         status: str | None = None,
+        statuses: list[str] | None = None,
     ) -> dict[str, int]:
         statement = select(Site.account_id, func.count(Site.site_id)).group_by(Site.account_id)
         if account_ids is not None:
@@ -792,6 +793,11 @@ class CommercialRepository:
             statement = statement.where(Site.account_id.in_(account_ids))
         if status:
             statement = statement.where(Site.status == status)
+        if statuses is not None:
+            normalized_statuses = [str(item).strip() for item in statuses if str(item).strip()]
+            if not normalized_statuses:
+                return {}
+            statement = statement.where(Site.status.in_(normalized_statuses))
         return {
             str(account_id or ""): int(count or 0)
             for account_id, count in self.session.execute(statement)

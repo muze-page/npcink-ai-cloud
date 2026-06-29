@@ -11,6 +11,9 @@ from app.core.db import get_session
 from app.core.models import (
     ACCOUNT_STATUS_ACTIVE,
     ACCOUNT_STATUS_SUSPENDED,
+    SITE_STATUS_ACTIVE,
+    SITE_STATUS_PROVISIONING,
+    SITE_STATUS_SUSPENDED,
     SUBSCRIPTION_STATUS_ACTIVE,
     SUBSCRIPTION_STATUS_CANCELED,
     SUBSCRIPTION_STATUS_SUSPENDED,
@@ -380,6 +383,11 @@ class CommercialServiceAccountMixin(CommercialServiceAuditMixin):
         site_limit = cast(Any, self)._resolve_site_limit(snapshot=snapshot)
         site_counts = repository.count_sites_by_account(
             account_ids=[account_id],
+            statuses=[
+                SITE_STATUS_ACTIVE,
+                SITE_STATUS_PROVISIONING,
+                SITE_STATUS_SUSPENDED,
+            ],
         )
         current_count = self._coerce_int(site_counts.get(account_id, 0))
         if site_limit > 0 and current_count >= site_limit:
