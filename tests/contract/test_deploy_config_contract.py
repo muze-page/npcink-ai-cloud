@@ -33,6 +33,9 @@ def test_prod_env_files_use_canonical_admin_names_and_do_not_expose_ai_provider_
     readme_text = (cloud_root / "README.md").read_text()
     checklist_text = (cloud_root / "deploy" / "RELEASE_CHECKLIST.md").read_text()
     playbook_text = (cloud_root / "deploy" / "OPS_PLAYBOOK.md").read_text()
+    provider_runbook_text = (
+        cloud_root / "docs" / "provider-connection-production-runbook-2026-06-30.md"
+    ).read_text()
 
     for text in (compose_text, env_example_text, readme_text, checklist_text):
         assert "NPCINK_CLOUD_ADMIN_SESSION_SECRET" in text
@@ -88,6 +91,16 @@ def test_prod_env_files_use_canonical_admin_names_and_do_not_expose_ai_provider_
     assert "Resource Tuning Baseline" in playbook_text
     assert "NPCINK_CLOUD_API_WORKERS" in playbook_text
     assert "NPCINK_CLOUD_RUNTIME_WORKER_POLL_SECONDS" in playbook_text
+    assert "db_managed_provider_connections" in provider_runbook_text
+    assert "deploy/remote-provider-matrix-smoke.sh" in provider_runbook_text
+    assert "`search_zhihu`" in provider_runbook_text
+    assert "`image_unsplash`" in provider_runbook_text
+    assert "`embedding_siliconflow`" in provider_runbook_text
+    assert "`vector_zilliz`" in provider_runbook_text
+    assert "Do not put provider credentials back into `.env.deploy`" in provider_runbook_text
+    assert "NPCINK_CLOUD_WEB_SEARCH_ZHIHU_ACCESS_SECRET=" not in provider_runbook_text
+    assert "NPCINK_CLOUD_IMAGE_SOURCE_UNSPLASH_ACCESS_KEY=" not in provider_runbook_text
+    assert "NPCINK_CLOUD_SITE_KNOWLEDGE_ZILLIZ_TOKEN=" not in provider_runbook_text
     assert "NPCINK_CLOUD_RUNTIME_CALLBACK_WORKER_POLL_SECONDS" in playbook_text
 
 
