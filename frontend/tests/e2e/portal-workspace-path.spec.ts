@@ -745,10 +745,11 @@ test('portal workspace interaction path: attention strip to filtered table to dr
   const portalPrimaryNav = page.locator('[data-ui="portal-primary-nav"]');
   await expect(portalPrimaryNav.locator('> a')).toHaveCount(5);
   await expect(portalPrimaryNav.getByRole('link', { name: /^Workspace$|^工作区$|^工作區$/i })).toBeVisible();
-  await expect(portalPrimaryNav.getByRole('link', { name: /^Keys$|^密钥$|^金鑰$/i })).toBeVisible();
   await expect(portalPrimaryNav.getByRole('link', { name: /^Usage$|^用量$/i })).toBeVisible();
   await expect(portalPrimaryNav.getByRole('link', { name: /^Package$|^套餐$|^方案$/i })).toBeVisible();
   await expect(portalPrimaryNav.getByRole('link', { name: /^Sites$|^站点$|^站點$/i })).toBeVisible();
+  await expect(portalPrimaryNav.getByRole('link', { name: /^Account$|^账号中心$|^帳號中心$/i })).toBeVisible();
+  await expect(portalPrimaryNav.getByRole('link', { name: /^Keys$|^密钥$|^金鑰$/i })).toHaveCount(0);
   await expect(portalPrimaryNav.getByRole('link', { name: /^Audit$|^审计$|^稽核$/i })).toHaveCount(0);
   await expect(portalPrimaryNav.getByRole('link', { name: /^Preferences$|^个人偏好$|^偏好設定$/i })).toHaveCount(0);
   await expect(portalPrimaryNav.getByRole('link', { name: /Package Guide|套餐说明|方案說明/i })).toHaveCount(0);
@@ -760,7 +761,7 @@ test('portal workspace interaction path: attention strip to filtered table to dr
   await expect(page.getByRole('heading', { level: 2, name: /my sites|站点/i })).toBeVisible();
   await expect(page.getByRole('heading', { level: 2, name: /current status|当前状态|目前狀態/i })).toBeVisible();
   await expect(page.getByText(/Next action|下一步/i).first()).toBeVisible();
-  await expect(page.getByRole('link', { name: /open keys|打开密钥|打開金鑰/i })).toBeVisible();
+  await expect(page.getByRole('link', { name: /open site|查看站点|查看站點/i }).first()).toBeVisible();
 
   await page.getByRole('button', { name: /attention site.*查看|attention site.*view/i }).first().click();
 
@@ -777,14 +778,16 @@ test('portal workspace interaction path: attention strip to filtered table to dr
   await expect(page.getByText(/Cost headroom|剩余成本空间|剩餘成本空間/i)).toBeVisible();
 });
 
-test('portal workspace surfaces keep one primary action in the header', async ({ page }) => {
+test('portal workspace keeps one primary action and sites keeps add action secondary', async ({ page }) => {
   await installPortalMocks(page);
 
   await page.goto('/portal');
   await expect(page.locator('section').first().locator('.btn.btn-primary')).toHaveCount(1);
 
-  await page.goto('/portal/keys?site=site_clear');
-  await expect(page.locator('section').first().locator('.btn.btn-primary')).toHaveCount(1);
+  await page.goto('/portal/sites?site=site_clear');
+  await expect(page.locator('section').first().locator('.btn.btn-primary')).toHaveCount(0);
+  await expect(page.locator('section').first().locator('.btn.btn-secondary')).toHaveCount(1);
+  await expect(page.getByRole('button', { name: /add site|添加站点|新增站點/i })).toBeVisible();
 });
 
 test('portal monitoring shows diagnostic advisor and routes to plugin evidence', async ({ page }) => {
