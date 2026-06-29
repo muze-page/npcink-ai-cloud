@@ -418,7 +418,14 @@ function AccountsContent() {
                 },
                 {
                   label: t('admin.accounts.needs_action', {}, 'Needs action'),
-                  value: formatInteger(needsActionCount),
+                  value: (
+                    <Link
+                      href="/admin/coverage"
+                      className="text-blue-700 underline-offset-4 hover:underline dark:text-blue-300"
+                    >
+                      {formatInteger(needsActionCount)}
+                    </Link>
+                  ),
                   size: 'compact',
                 },
               ]}
