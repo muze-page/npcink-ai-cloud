@@ -24,7 +24,6 @@ from app.api.browser_security import enforce_browser_same_origin
 from app.api.envelope import build_envelope
 from app.api.portal_locale import resolve_portal_email_locale
 from app.api.portal_session import (
-    COOKIE_SITE_ID,
     build_new_portal_session_metadata,
     clear_portal_session_cookies,
     portal_cookie_secure,
@@ -618,7 +617,7 @@ async def finish_portal_qq_login(
         request,
         response,
         principal_id=principal_id,
-        site_id="",
+        site_id=str(data.get("site_id") or ""),
     )
     _clear_portal_qq_oauth_nonce_cookie(response)
     return response
@@ -1081,7 +1080,7 @@ async def verify_portal_login_code(
         request,
         response,
         principal_id=principal_id,
-        site_id="",
+        site_id=str(data.get("site_id") or ""),
     )
     return response
 
@@ -1246,7 +1245,7 @@ async def get_portal_session(request: Request) -> Any:
     )
     if isinstance(auth, JSONResponse):
         return auth
-    selected_site_id = request.cookies.get(COOKIE_SITE_ID, "").strip()
+    selected_site_id = str(auth.site_id or "").strip()
     try:
         data = serialize_portal_session(
             request,
@@ -1301,12 +1300,11 @@ async def select_portal_session_site(
             data=data,
         ),
     )
-    response.set_cookie(
-        COOKIE_SITE_ID,
-        site_id,
-        httponly=True,
-        secure=portal_cookie_secure(request),
-        samesite="lax",
+    set_portal_session_cookies(
+        request,
+        response,
+        principal_id=auth.principal_id,
+        site_id=site_id,
     )
     return response
 
