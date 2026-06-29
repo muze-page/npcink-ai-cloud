@@ -151,8 +151,34 @@ def test_runtime_settings_project_capability_provider_connections(
             "base_url": "https://api.tavily.example",
             "capability_ids": ["web_search"],
             "runtime_profile_ids": ["web-search.managed"],
-            "config": {"provider_mode": "auto", "timeout_seconds": 9},
+            "config": {
+                "provider_mode": "auto",
+                "timeout_seconds": 9,
+                "api_key_labels": "primary",
+            },
             "credential": "tavily-secret",
+        }
+    )
+    service.save_connection(
+        {
+            "connection_id": "search_zhihu",
+            "provider_id": "zhihu",
+            "provider_type": "web_search_provider",
+            "kind": "web_search_provider",
+            "display_name": "Zhihu Search",
+            "enabled": True,
+            "base_url": "https://developer.zhihu.example",
+            "capability_ids": ["web_search"],
+            "runtime_profile_ids": ["web-search.managed"],
+            "config": {
+                "provider_mode": "auto",
+                "search_path": "/api/v1/content/zhihu_search",
+                "global_search_path": "/api/v1/content/global_search",
+                "hot_list_path": "/api/v1/content/hot_list",
+                "direct_answer_path": "/v1/chat/completions",
+                "hot_list_cache_ttl_seconds": 120,
+            },
+            "credential": "zhihu-secret",
         }
     )
     service.save_connection(
@@ -182,6 +208,27 @@ def test_runtime_settings_project_capability_provider_connections(
             "runtime_profile_ids": ["embed.default"],
             "config": {"model_id": "BAAI/bge-m3", "dimensions": 1024},
             "credential": "siliconflow-secret",
+        }
+    )
+    service.save_connection(
+        {
+            "connection_id": "embedding_tei",
+            "provider_id": "tei",
+            "provider_type": "embedding_provider",
+            "kind": "embedding_provider",
+            "display_name": "TEI Embedding",
+            "enabled": True,
+            "base_url": "http://tei.example",
+            "capability_ids": ["embedding"],
+            "runtime_profile_ids": ["embed.default"],
+            "config": {
+                "model_id": "BAAI/bge-m3",
+                "model_ids": "BAAI/bge-m3,jinaai/jina-embeddings-v3",
+                "timeout_seconds": 12,
+                "region": "self-hosted-test",
+                "context_window": 4096,
+            },
+            "secretless": True,
         }
     )
     service.save_connection(
@@ -217,14 +264,22 @@ def test_runtime_settings_project_capability_provider_connections(
 
     projection = apply_provider_connection_runtime_settings(settings)
 
-    assert projection.applied_count == 5
+    assert projection.applied_count == 7
     assert settings.web_search_provider == "auto"
     assert settings.web_search_tavily_base_url == "https://api.tavily.example"
     assert settings.web_search_tavily_api_key == "tavily-secret"
+    assert settings.web_search_tavily_api_key_labels == "primary"
+    assert settings.web_search_zhihu_base_url == "https://developer.zhihu.example"
+    assert settings.web_search_zhihu_access_secret == "zhihu-secret"
+    assert settings.web_search_zhihu_hot_list_cache_ttl_seconds == 120
     assert settings.image_source_provider == "auto"
     assert settings.image_source_unsplash_access_key == "unsplash-secret"
-    assert settings.site_knowledge_embedding_provider == "siliconflow"
-    assert settings.siliconflow_api_key == "siliconflow-secret"
+    assert settings.site_knowledge_embedding_provider == "tei"
+    assert settings.tei_base_url == "http://tei.example"
+    assert settings.tei_model_ids == "BAAI/bge-m3,jinaai/jina-embeddings-v3"
+    assert settings.tei_timeout_seconds == 12
+    assert settings.tei_region == "self-hosted-test"
+    assert settings.tei_context_window == 4096
     assert settings.site_knowledge_rerank_provider == "jina"
     assert settings.site_knowledge_jina_api_key == "jina-secret"
     assert settings.site_knowledge_vector_backend == "zilliz_cloud"
@@ -233,6 +288,7 @@ def test_runtime_settings_project_capability_provider_connections(
     serialized = service.list_connections()
     serialized_text = str(serialized)
     assert "tavily-secret" not in serialized_text
+    assert "zhihu-secret" not in serialized_text
     assert "unsplash-secret" not in serialized_text
     assert "siliconflow-secret" not in serialized_text
     assert "jina-secret" not in serialized_text

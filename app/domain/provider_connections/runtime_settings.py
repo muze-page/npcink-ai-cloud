@@ -133,6 +133,9 @@ def _apply_web_search_connection(
         settings.web_search_tavily_base_url = row.base_url or settings.web_search_tavily_base_url
         if credential:
             settings.web_search_tavily_api_key = credential
+        settings.web_search_tavily_api_key_labels = _string(
+            config.get("api_key_labels") or settings.web_search_tavily_api_key_labels
+        )
         settings.web_search_tavily_timeout_seconds = _positive_float(
             config.get("timeout_seconds"), settings.web_search_tavily_timeout_seconds
         )
@@ -187,6 +190,29 @@ def _apply_web_search_connection(
         settings.web_search_zhihu_base_url = row.base_url or settings.web_search_zhihu_base_url
         if credential:
             settings.web_search_zhihu_access_secret = credential
+        settings.web_search_zhihu_search_path = _string(
+            config.get("search_path") or settings.web_search_zhihu_search_path
+        )
+        settings.web_search_zhihu_global_search_path = _string(
+            config.get("global_search_path") or settings.web_search_zhihu_global_search_path
+        )
+        settings.web_search_zhihu_hot_list_path = _string(
+            config.get("hot_list_path") or settings.web_search_zhihu_hot_list_path
+        )
+        settings.web_search_zhihu_direct_answer_path = _string(
+            config.get("direct_answer_path") or settings.web_search_zhihu_direct_answer_path
+        )
+        settings.web_search_zhihu_timeout_seconds = _positive_float(
+            config.get("timeout_seconds"), settings.web_search_zhihu_timeout_seconds
+        )
+        settings.web_search_zhihu_cost_per_query = _nonnegative_float(
+            config.get("cost_per_query") or config.get("cost"),
+            settings.web_search_zhihu_cost_per_query,
+        )
+        settings.web_search_zhihu_hot_list_cache_ttl_seconds = _int(
+            config.get("hot_list_cache_ttl_seconds"),
+            settings.web_search_zhihu_hot_list_cache_ttl_seconds,
+        )
     else:
         return False
 
@@ -267,6 +293,14 @@ def _apply_embedding_connection(
         settings.tei_base_url = row.base_url or settings.tei_base_url
         if credential:
             settings.tei_api_key = credential
+        settings.tei_timeout_seconds = _positive_float(
+            config.get("timeout_seconds"), settings.tei_timeout_seconds
+        )
+        settings.tei_region = _string(config.get("region") or settings.tei_region)
+        settings.tei_context_window = _int(
+            config.get("context_window"),
+            settings.tei_context_window,
+        )
         model_ids = _string(config.get("model_ids") or config.get("model_id") or "")
         if model_ids:
             settings.tei_model_ids = model_ids

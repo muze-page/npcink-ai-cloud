@@ -19,10 +19,14 @@ from datetime import datetime
 
 from sqlalchemy import func, select
 
-from app.adapters.providers.registry import build_provider_adapters
+from app.adapters.providers.registry import resolve_live_provider_adapters
 from app.core.config import Settings
 from app.core.db import get_session
 from app.core.models import CatalogInstance, CatalogModel, CatalogProvider
+from app.domain.provider_connections.runtime_settings import (
+    apply_provider_connection_runtime_settings,
+)
+from app.domain.provider_connections.service import ProviderConnectionAdminService
 
 
 def isoformat(value: object) -> str | None:
@@ -32,7 +36,12 @@ def isoformat(value: object) -> str | None:
 
 
 settings = Settings()
-providers = build_provider_adapters(settings)
+runtime_projection = apply_provider_connection_runtime_settings(settings)
+providers = resolve_live_provider_adapters(settings, include_enabled_connections=True)
+provider_connections = ProviderConnectionAdminService(
+    settings.database_url,
+    settings,
+).list_connections()["connections"]
 
 provider_rows: dict[str, dict[str, object]] = {}
 with get_session(settings.database_url) as session:
@@ -69,59 +78,72 @@ for provider_id, display_name, adapter_type, status, last_refreshed_at in catalo
         "catalog_instances_total": int(instance_counts.get(provider_id, 0)),
     }
 
+connections_by_provider = {
+    str(item.get("provider_id") or ""): item
+    for item in provider_connections
+    if str(item.get("provider_id") or "")
+}
+
+
+def connection_ready(provider_id: str) -> bool:
+    item = connections_by_provider.get(provider_id) or {}
+    return bool(item.get("enabled") and item.get("configured"))
+
+
 configured = [
     {
         "provider_id": "openai",
-        "configured": bool(settings.openai_api_key),
+        "configured": connection_ready("openai"),
         "registered": "openai" in providers,
-        "base_url": settings.openai_base_url,
+        "base_url": (connections_by_provider.get("openai") or {}).get("base_url") or settings.openai_base_url,
         "timeout_seconds": settings.openai_timeout_seconds,
-        "organization_configured": bool(settings.openai_organization),
+        "source": "provider_connections",
         "catalog": provider_rows.get("openai"),
     },
     {
         "provider_id": "anthropic",
-        "configured": bool(settings.anthropic_api_key),
+        "configured": connection_ready("anthropic"),
         "registered": "anthropic" in providers,
-        "base_url": settings.anthropic_base_url,
+        "base_url": (connections_by_provider.get("anthropic") or {}).get("base_url") or settings.anthropic_base_url,
         "timeout_seconds": settings.anthropic_timeout_seconds,
-        "api_version": settings.anthropic_version,
+        "source": "provider_connections",
         "catalog": provider_rows.get("anthropic"),
     },
     {
         "provider_id": "litellm",
-        "configured": bool(settings.litellm_provider_enabled and settings.litellm_base_url),
+        "configured": connection_ready("litellm"),
         "registered": "litellm" in providers,
-        "base_url": settings.litellm_base_url,
+        "base_url": (connections_by_provider.get("litellm") or {}).get("base_url") or settings.litellm_base_url,
         "timeout_seconds": settings.litellm_timeout_seconds,
+        "source": "provider_connections",
         "catalog": provider_rows.get("litellm"),
     },
     {
         "provider_id": "vllm",
-        "configured": bool(settings.vllm_provider_enabled and settings.vllm_base_url),
+        "configured": connection_ready("vllm"),
         "registered": "vllm" in providers,
-        "base_url": settings.vllm_base_url,
+        "base_url": (connections_by_provider.get("vllm") or {}).get("base_url") or settings.vllm_base_url,
         "timeout_seconds": settings.vllm_timeout_seconds,
-        "api_key_configured": bool(settings.vllm_api_key),
+        "source": "provider_connections",
         "catalog": provider_rows.get("vllm"),
     },
     {
         "provider_id": "tei",
-        "configured": bool(settings.tei_provider_enabled and settings.tei_base_url and settings.tei_model_ids),
+        "configured": connection_ready("tei") or connection_ready("embedding_tei"),
         "registered": "tei" in providers,
-        "base_url": settings.tei_base_url,
+        "base_url": (connections_by_provider.get("tei") or connections_by_provider.get("embedding_tei") or {}).get("base_url") or settings.tei_base_url,
         "timeout_seconds": settings.tei_timeout_seconds,
-        "api_key_configured": bool(settings.tei_api_key),
         "model_ids": [item.strip() for item in str(settings.tei_model_ids or "").split(",") if item.strip()],
+        "source": "provider_connections",
         "catalog": provider_rows.get("tei"),
     },
     {
         "provider_id": "openrouter",
-        "configured": bool(settings.openrouter_provider_enabled and settings.openrouter_api_key),
+        "configured": connection_ready("openrouter"),
         "registered": "openrouter" in providers,
-        "base_url": settings.openrouter_base_url,
+        "base_url": (connections_by_provider.get("openrouter") or {}).get("base_url") or settings.openrouter_base_url,
         "timeout_seconds": settings.openrouter_timeout_seconds,
-        "site_url": settings.openrouter_site_url,
+        "source": "provider_connections",
         "catalog": provider_rows.get("openrouter"),
     },
 ]
@@ -130,6 +152,29 @@ payload = {
     "environment": settings.environment,
     "database_url": settings.database_url,
     "providers": configured,
+    "provider_connections": [
+        {
+            "connection_id": item.get("connection_id"),
+            "provider_id": item.get("provider_id"),
+            "kind": item.get("kind"),
+            "enabled": item.get("enabled"),
+            "configured": item.get("configured"),
+            "status": item.get("status"),
+            "capability_ids": item.get("capability_ids"),
+            "runtime_profile_ids": item.get("runtime_profile_ids"),
+        }
+        for item in provider_connections
+    ],
+    "runtime_provider_projection": {
+        "applied_count": runtime_projection.applied_count,
+        "web_search_count": runtime_projection.web_search_count,
+        "image_source_count": runtime_projection.image_source_count,
+        "embedding_count": runtime_projection.embedding_count,
+        "rerank_count": runtime_projection.rerank_count,
+        "vector_store_count": runtime_projection.vector_store_count,
+    },
+    "provider_truth": "db_managed_provider_connections",
+    "secret_exposure": "none",
 }
 
 print(json.dumps(payload, ensure_ascii=True, indent=2, sort_keys=True))
