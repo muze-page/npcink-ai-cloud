@@ -44,9 +44,6 @@ type QQForm = {
   enabled: boolean;
   client_id: string;
   client_secret: string;
-  redirect_uri: string;
-  scope: string;
-  timeout_seconds: string;
 };
 
 type EmailForm = {
@@ -94,8 +91,33 @@ function checkboxClassName(): string {
   return 'h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500 dark:border-slate-700 dark:bg-slate-950';
 }
 
+function switchButtonClassName(checked: boolean): string {
+  return `relative inline-flex h-6 w-11 shrink-0 items-center rounded-full border transition focus:outline-none focus:ring-2 focus:ring-blue-200 disabled:cursor-not-allowed disabled:opacity-60 dark:focus:ring-blue-950 ${
+    checked
+      ? 'border-blue-600 bg-blue-600'
+      : 'border-slate-300 bg-slate-200 dark:border-slate-700 dark:bg-slate-800'
+  }`;
+}
+
+function switchKnobClassName(checked: boolean): string {
+  return `inline-block h-5 w-5 rounded-full bg-white shadow-sm transition ${
+    checked ? 'translate-x-5' : 'translate-x-0.5'
+  }`;
+}
+
 function labelClassName(): string {
   return 'text-sm font-medium text-slate-700 dark:text-slate-200';
+}
+
+function buildQqRedirectUri(publicBaseUrl: string): string {
+  const raw = publicBaseUrl.trim();
+  if (!raw) return '';
+  try {
+    const parsed = new URL(raw);
+    return `${parsed.protocol}//${parsed.host}/open/auth/qq/callback`;
+  } catch {
+    return '';
+  }
 }
 
 function payloadRecord(payload: BackendPayload): Record<string, unknown> | null {
@@ -208,9 +230,6 @@ export default function AdminServiceSettingsPage() {
     enabled: true,
     client_id: '',
     client_secret: '',
-    redirect_uri: '',
-    scope: 'get_user_info',
-    timeout_seconds: '10',
   });
   const [emailForm, setEmailForm] = useState<EmailForm>({
     enabled: true,
@@ -258,9 +277,6 @@ export default function AdminServiceSettingsPage() {
         enabled: qq.enabled,
         client_id: stringValue(qq.config.client_id),
         client_secret: '',
-        redirect_uri: stringValue(qq.config.redirect_uri),
-        scope: stringValue(qq.config.scope) || 'get_user_info',
-        timeout_seconds: stringValue(qq.config.timeout_seconds) || '10',
       });
       setEmailForm({
         enabled: email.enabled,
@@ -310,6 +326,26 @@ export default function AdminServiceSettingsPage() {
       },
     ];
   }, [data]);
+
+  const qqRedirectUri = useMemo(() => {
+    return buildQqRedirectUri(portalPublicForm.public_base_url);
+  }, [portalPublicForm.public_base_url]);
+
+  async function copyQqRedirectUri() {
+    if (!qqRedirectUri) {
+      setError('请先填写有效的公开基础 URL。');
+      setNotice('');
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(qqRedirectUri);
+      setError('');
+      setNotice('QQ 回调地址已复制。');
+    } catch {
+      setError('当前浏览器无法自动复制，请手动复制回调地址。');
+      setNotice('');
+    }
+  }
 
   async function saveJson(
     path: string,
@@ -381,12 +417,17 @@ export default function AdminServiceSettingsPage() {
 
   function submitQq(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (!qqRedirectUri) {
+      setNotice('');
+      setError('请先填写有效的公开基础 URL，QQ 回调地址会自动生成。');
+      return;
+    }
     const payload: Record<string, unknown> = {
       enabled: qqForm.enabled,
       client_id: qqForm.client_id,
-      redirect_uri: qqForm.redirect_uri,
-      scope: qqForm.scope,
-      timeout_seconds: Number(qqForm.timeout_seconds || 10),
+      redirect_uri: qqRedirectUri,
+      scope: 'get_user_info',
+      timeout_seconds: 10,
     };
     if (qqForm.client_secret) {
       payload.client_secret = qqForm.client_secret;
@@ -500,12 +541,15 @@ export default function AdminServiceSettingsPage() {
                 Portal URL
               </p>
               <h2 className="mt-2 text-xl font-semibold text-slate-950 dark:text-white">
-                公开访问地址
+                门户基础地址
               </h2>
+              <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
+                用于生成 QQ、微信登录和支付通知等公开回调地址。
+              </p>
             </div>
             <form className="grid gap-4 lg:grid-cols-[1fr_auto]" onSubmit={submitPortalPublic}>
               <label className={labelClassName()}>
-                公开基础 URL
+                基础 URL
                 <input
                   className={fieldClassName()}
                   value={portalPublicForm.public_base_url}
@@ -515,18 +559,22 @@ export default function AdminServiceSettingsPage() {
                 />
               </label>
               <div className="flex items-end gap-3">
-                <label className="mb-2 inline-flex items-center gap-2 text-sm text-slate-700 dark:text-slate-200">
-                  <input
-                    type="checkbox"
-                    className={checkboxClassName()}
-                    checked={portalPublicForm.enabled}
+                <div className="mb-2 inline-flex items-center gap-2 text-sm text-slate-700 dark:text-slate-200">
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-label="启用公开访问地址"
+                    aria-checked={portalPublicForm.enabled}
+                    className={switchButtonClassName(portalPublicForm.enabled)}
                     disabled={loading}
-                    onChange={(event) => setPortalPublicForm((current) => ({ ...current, enabled: event.target.checked }))}
-                  />
-                  启用
-                </label>
+                    onClick={() => setPortalPublicForm((current) => ({ ...current, enabled: !current.enabled }))}
+                  >
+                    <span className={switchKnobClassName(portalPublicForm.enabled)} />
+                  </button>
+                  门户入口启用
+                </div>
                 <button type="submit" className="btn btn-primary" disabled={saving === 'portal-public'}>
-                  {saving === 'portal-public' ? '保存中' : '保存'}
+                  {saving === 'portal-public' ? '保存中' : '保存基础地址'}
                 </button>
               </div>
             </form>
@@ -538,6 +586,9 @@ export default function AdminServiceSettingsPage() {
                 QQ OAuth
               </p>
               <h2 className="mt-2 text-xl font-semibold text-slate-950 dark:text-white">QQ 快捷登录</h2>
+              <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
+                回调地址由门户基础地址自动生成；这里仅保存 QQ App 凭据和登录开关。
+              </p>
             </div>
             <form className="grid gap-4 lg:grid-cols-2" onSubmit={submitQq}>
               <label className={labelClassName()}>
@@ -548,29 +599,49 @@ export default function AdminServiceSettingsPage() {
                 App Secret {secretConfigured.qq ? '（已配置）' : '（未配置）'}
                 <input className={fieldClassName()} type="password" value={qqForm.client_secret} disabled={loading} onChange={(event) => setQqForm((current) => ({ ...current, client_secret: event.target.value }))} placeholder={secretConfigured.qq ? '留空则保留当前密钥' : '必填'} />
               </label>
-              <label className={labelClassName()}>
-                回调地址
-                <input className={fieldClassName()} value={qqForm.redirect_uri} disabled={loading} onChange={(event) => setQqForm((current) => ({ ...current, redirect_uri: event.target.value }))} placeholder="https://cloud.example.com/open/auth/qq/callback" />
-              </label>
-              <label className={labelClassName()}>
-                授权范围
-                <input className={fieldClassName()} value={qqForm.scope} disabled={loading} onChange={(event) => setQqForm((current) => ({ ...current, scope: event.target.value }))} />
-              </label>
-              <label className={labelClassName()}>
-                超时时间（秒）
-                <input className={fieldClassName()} value={qqForm.timeout_seconds} disabled={loading} onChange={(event) => setQqForm((current) => ({ ...current, timeout_seconds: event.target.value }))} />
-              </label>
-              <div className="flex items-end justify-between gap-3">
-                <label className="mb-2 inline-flex items-center gap-2 text-sm text-slate-700 dark:text-slate-200">
-                  <input type="checkbox" className={checkboxClassName()} checked={qqForm.enabled} disabled={loading} onChange={(event) => setQqForm((current) => ({ ...current, enabled: event.target.checked }))} />
-                  启用
-                </label>
+              <div className="lg:col-span-2">
+                <div className={labelClassName()}>
+                  回调地址
+                  <div className="mt-1 grid gap-2 lg:grid-cols-[1fr_auto]">
+                    <input
+                      className={fieldClassName()}
+                      value={qqRedirectUri}
+                      readOnly
+                      disabled={loading}
+                      placeholder="填写公开基础 URL 后自动生成"
+                    />
+                    <button
+                      type="button"
+                      className="btn btn-secondary"
+                      disabled={!qqRedirectUri}
+                      onClick={() => void copyQqRedirectUri()}
+                    >
+                      复制
+                    </button>
+                  </div>
+                </div>
+              </div>
+              <div className="flex items-end justify-between gap-3 lg:col-span-2">
+                <div className="mb-2 inline-flex items-center gap-2 text-sm text-slate-700 dark:text-slate-200">
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-label="启用 QQ 快捷登录"
+                    aria-checked={qqForm.enabled}
+                    className={switchButtonClassName(qqForm.enabled)}
+                    disabled={loading}
+                    onClick={() => setQqForm((current) => ({ ...current, enabled: !current.enabled }))}
+                  >
+                    <span className={switchKnobClassName(qqForm.enabled)} />
+                  </button>
+                  启用 QQ 登录
+                </div>
                 <div className="flex gap-2">
                   <button type="button" className="btn btn-secondary" disabled={saving === 'qq-test'} onClick={() => postJson('/api/admin/service-settings/qq-login/test', {}, 'qq-test', 'QQ 登录配置检查完成。')}>
-                    检查配置
+                    检查 QQ 配置
                   </button>
                   <button type="submit" className="btn btn-primary" disabled={saving === 'qq-login'}>
-                    {saving === 'qq-login' ? '保存中' : '保存'}
+                    {saving === 'qq-login' ? '保存中' : '保存 QQ 配置'}
                   </button>
                 </div>
               </div>
