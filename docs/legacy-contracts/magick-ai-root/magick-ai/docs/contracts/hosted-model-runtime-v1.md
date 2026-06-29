@@ -131,14 +131,18 @@
   - `active`
   - `inactive`
   - `suspended`
-  - `archived`
+  - `archived`（产品语义为用户已移除）
 - `inactive` 表示用户在 Portal 中停用 Cloud 服务后保留的站点记录：
   - public runtime 不接受 `inactive` site；
   - `inactive` 不占用订阅的可用站点额度；
   - 用户可通过 Portal 或 WordPress addon 重连重新启用；
   - 站点密钥、用量、审计和历史记录继续保留。
 - `suspended` 表示服务面/运营面暂停，不能由用户自助绕过，也继续占用站点额度。
-- `archived` 表示隐藏在默认 Portal 工作区之外的历史站点记录；恢复时必须继续满足同账号单 active site 规则。
+- `archived` 表示用户已从 Portal 移除的历史站点记录：
+  - public runtime 不接受 `archived` site；
+  - `archived` 不占用订阅的可用站点额度；
+  - 移除时应撤销该站点 active API keys；
+  - 用量、账单和审计历史继续保留并按历史 `site_id` 可读。
 - 当前阶段允许的 provisioning owner 只有：
   - dev/test seed
   - 未来 Cloud `Service Plane / Internal Service Operations`

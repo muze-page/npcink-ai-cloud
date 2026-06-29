@@ -1700,12 +1700,8 @@ export class PortalClient {
     return this.request('POST', `/sites/${siteId}/deactivate`, {}, { requireAuth: true });
   }
 
-  async archiveSite(siteId: string): Promise<PortalEnvelope<PortalActivatedSite>> {
-    return this.request('POST', `/sites/${siteId}/archive`, {}, { requireAuth: true });
-  }
-
-  async restoreSite(siteId: string): Promise<PortalEnvelope<PortalActivatedSite>> {
-    return this.request('POST', `/sites/${siteId}/restore`, {}, { requireAuth: true });
+  async removeSite(siteId: string): Promise<PortalEnvelope<{ site: Site; revoked_key_ids: string[] }>> {
+    return this.request('POST', `/sites/${siteId}/remove`, {}, { requireAuth: true });
   }
 
   /**

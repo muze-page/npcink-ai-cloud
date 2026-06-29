@@ -533,7 +533,7 @@ class CommercialServiceSiteMixin(CommercialServiceAuditMixin):
             session.commit()
             return payload
 
-    def archive_site(
+    def remove_portal_site(
         self,
         site_id: str,
         *,
@@ -548,82 +548,53 @@ class CommercialServiceSiteMixin(CommercialServiceAuditMixin):
                     "service.site_not_found",
                     f"site '{site_id}' was not found",
                 )
+            if str(site.status or "") == SITE_STATUS_SUSPENDED:
+                raise CommercialPermissionError(
+                    "service.portal_site_not_removable",
+                    f"site '{site_id}' cannot be removed from the portal",
+                )
+            if str(site.status or "") == SITE_STATUS_ARCHIVED:
+                return {
+                    "site": self._serialize_site(site),
+                    "revoked_key_ids": [],
+                }
             metadata = dict(site.metadata_json or {})
             lifecycle = metadata.get("portal_lifecycle")
             lifecycle = dict(lifecycle) if isinstance(lifecycle, dict) else {}
             previous_status = str(site.status or "").strip()
             lifecycle["previous_status"] = previous_status
-            lifecycle["archived_at"] = self._serialize_datetime(now)
-            lifecycle["archived"] = True
+            lifecycle["removed_at"] = self._serialize_datetime(now)
+            lifecycle["removed"] = True
             metadata["portal_lifecycle"] = lifecycle
             site.metadata_json = metadata
             site.status = SITE_STATUS_ARCHIVED
+            revoked_key_ids: list[str] = []
+            for api_key in repository.list_site_keys(site.site_id):
+                if str(api_key.status or "") != SITE_API_KEY_STATUS_ACTIVE:
+                    continue
+                api_key.status = SITE_API_KEY_STATUS_REVOKED
+                api_key.revoked_at = now
+                revoked_key_ids.append(api_key.key_id)
+                key_payload = self._serialize_site_key(api_key)
+                self._record_service_audit_in_session(
+                    repository=repository,
+                    audit_context=audit_context,
+                    event_kind="site_key.revoke",
+                    outcome="succeeded",
+                    site_id=site.site_id,
+                    key_id=api_key.key_id,
+                    scope_kind="site_key",
+                    scope_id=api_key.key_id,
+                    payload_json={
+                        **key_payload,
+                        "reason": "portal_user_removed_site",
+                    },
+                )
             payload = self._serialize_site(site)
             self._record_service_audit_in_session(
                 repository=repository,
                 audit_context=audit_context,
-                event_kind="site.archive",
-                outcome="succeeded",
-                account_id=site.account_id,
-                site_id=site.site_id,
-                scope_kind="site",
-                scope_id=site.site_id,
-                payload_json=payload,
-            )
-            session.commit()
-            return payload
-
-    def restore_site(
-        self,
-        site_id: str,
-        *,
-        audit_context: ServiceAuditContext | None = None,
-    ) -> dict[str, object]:
-        now = self.now_factory()
-        with get_session(self.database_url) as session:
-            repository = CommercialRepository(session)
-            site = repository.get_site(site_id)
-            if site is None:
-                raise CommercialNotFoundError(
-                    "service.site_not_found",
-                    f"site '{site_id}' was not found",
-                )
-            metadata = dict(site.metadata_json or {})
-            lifecycle = metadata.get("portal_lifecycle")
-            lifecycle = dict(lifecycle) if isinstance(lifecycle, dict) else {}
-            previous_status = str(lifecycle.get("previous_status") or "").strip()
-            if previous_status not in {
-                SITE_STATUS_ACTIVE,
-                SITE_STATUS_INACTIVE,
-                SITE_STATUS_PROVISIONING,
-                SITE_STATUS_SUSPENDED,
-            }:
-                previous_status = (
-                    SITE_STATUS_ACTIVE
-                    if site.activated_at is not None
-                    else SITE_STATUS_PROVISIONING
-                )
-            deactivated_site_ids: list[str] = []
-            if previous_status == SITE_STATUS_ACTIVE:
-                deactivated_site_ids = [
-                    str(item.get("site_id") or "")
-                    for item in self._deactivate_account_active_sibling_sites(
-                        repository=repository,
-                        account_id=site.account_id or "",
-                        activated_site_id=site.site_id,
-                        audit_context=audit_context,
-                    )
-                ]
-            lifecycle["archived"] = False
-            lifecycle["restored_at"] = self._serialize_datetime(now)
-            metadata["portal_lifecycle"] = lifecycle
-            site.metadata_json = metadata
-            site.status = previous_status
-            payload = self._serialize_site(site)
-            self._record_service_audit_in_session(
-                repository=repository,
-                audit_context=audit_context,
-                event_kind="site.restore",
+                event_kind="site.remove",
                 outcome="succeeded",
                 account_id=site.account_id,
                 site_id=site.site_id,
@@ -631,11 +602,14 @@ class CommercialServiceSiteMixin(CommercialServiceAuditMixin):
                 scope_id=site.site_id,
                 payload_json={
                     **payload,
-                    "deactivated_site_ids": deactivated_site_ids,
+                    "revoked_key_ids": revoked_key_ids,
                 },
             )
             session.commit()
-            return payload
+            return {
+                "site": payload,
+                "revoked_key_ids": revoked_key_ids,
+            }
 
     def update_site_runtime_callbacks(
         self,
@@ -747,6 +721,16 @@ class CommercialServiceSiteMixin(CommercialServiceAuditMixin):
                 raise CommercialNotFoundError(
                     "service.site_not_found",
                     f"site '{site_id}' was not found",
+                )
+            if str(site.status or "") == SITE_STATUS_ARCHIVED:
+                raise CommercialPermissionError(
+                    "service.portal_site_removed",
+                    f"site '{site_id}' has been removed",
+                )
+            if str(site.status or "") == SITE_STATUS_SUSPENDED:
+                raise CommercialPermissionError(
+                    "service.portal_site_suspended",
+                    f"site '{site_id}' is suspended",
                 )
             api_key = repository.upsert_site_key(
                 key_id=resolved_key_id,
@@ -1623,7 +1607,7 @@ class CommercialServiceSiteMixin(CommercialServiceAuditMixin):
                     "site_status",
                     site.status == SITE_STATUS_ACTIVE,
                     "站点已激活" if site.status == SITE_STATUS_ACTIVE else "站点尚未激活或已暂停",
-                    "先在站点页恢复/激活站点，再重试云端请求。",
+                    "先在站点页启用站点，或重新接入已移除站点，再重试云端请求。",
                 ),
                 self._build_diagnostic_check(
                     "active_key",

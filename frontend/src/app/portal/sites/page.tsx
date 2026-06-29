@@ -48,8 +48,8 @@ function PortalSitesContent() {
   const { t } = useLocale();
   const { session, isLoading, isAuthenticated, selectSite, refresh } = useSession();
   const [searchQuery, setSearchQuery] = useState(() => searchParams?.get('q') || '');
-  const [siteFilter, setSiteFilter] = useState<'all' | 'active' | 'inactive' | 'archived' | 'missing_url' | 'uncovered'>(
-    () => (searchParams?.get('filter') as 'all' | 'active' | 'inactive' | 'archived' | 'missing_url' | 'uncovered') || 'all'
+  const [siteFilter, setSiteFilter] = useState<'all' | 'active' | 'inactive' | 'removed' | 'missing_url' | 'uncovered'>(
+    () => (searchParams?.get('filter') as 'all' | 'active' | 'inactive' | 'removed' | 'missing_url' | 'uncovered') || 'all'
   );
   const [siteSort, setSiteSort] = useState<'current' | 'recent' | 'name'>(
     () => (searchParams?.get('sort') as 'current' | 'recent' | 'name') || 'current'
@@ -61,13 +61,10 @@ function PortalSitesContent() {
   const [exportFormat, setExportFormat] = useState<'csv' | 'json'>('csv');
   const [failedSiteNamesToCopy, setFailedSiteNamesToCopy] = useState('');
   const [copiedFailedNames, setCopiedFailedNames] = useState(false);
-  const [failedBatchAction, setFailedBatchAction] = useState<{ action: 'archive' | 'restore'; siteIds: string[] } | null>(null);
+  const [failedBatchAction, setFailedBatchAction] = useState<{ siteIds: string[] } | null>(null);
   const [selectedSiteIds, setSelectedSiteIds] = useState<string[]>([]);
   const [openSiteMenuId, setOpenSiteMenuId] = useState('');
-  const [pendingBatchAction, setPendingBatchAction] = useState<{
-    action: 'archive' | 'restore';
-    siteIds: string[];
-  } | null>(null);
+  const [pendingBatchAction, setPendingBatchAction] = useState<{ siteIds: string[] } | null>(null);
   const [siteSummaryCache, setSiteSummaryCache] = useState<Record<string, PortalSiteSummaryRecord>>({});
   const siteMenuRef = useRef<HTMLDivElement>(null);
   const sites = session?.sites ?? EMPTY_SITES;
@@ -81,7 +78,7 @@ function PortalSitesContent() {
   const addonSiteName = searchParams?.get('site_name') || '';
   const addonReturnUrl = searchParams?.get('return_url') || '';
   const addonState = searchParams?.get('state') || '';
-  const canArchiveSites = Boolean(session?.allowed_actions?.includes('archive_sites'));
+  const canRemoveSites = Boolean(session?.allowed_actions?.includes('remove_sites'));
   const getSiteSummary = useCallback((siteId: string) => siteSummaryCache[siteId] || null, [siteSummaryCache]);
   const getSiteCoverage = useCallback((site: PortalSiteListItem) => getSiteSummary(site.site_id)?.coverage || null, [getSiteSummary]);
   const hasSiteCoverage = useCallback((site: PortalSiteListItem) => Boolean(getSiteCoverage(site) || site.plan_name), [getSiteCoverage]);
@@ -100,13 +97,16 @@ function PortalSitesContent() {
   const filteredSites = useMemo(() => {
     const query = searchQuery.trim().toLowerCase();
     return sites.filter((site) => {
+      if (site.status === 'archived' && siteFilter !== 'removed') {
+        return false;
+      }
       if (siteFilter === 'active' && site.status !== 'active') {
         return false;
       }
       if (siteFilter === 'inactive' && site.status !== 'inactive') {
         return false;
       }
-      if (siteFilter === 'archived' && site.status !== 'archived') {
+      if (siteFilter === 'removed' && site.status !== 'archived') {
         return false;
       }
       if (siteFilter === 'missing_url' && getPortalSiteWordPressUrl(site)) {
@@ -151,8 +151,8 @@ function PortalSitesContent() {
     () => sites.filter((site) => selectedSiteIds.includes(site.site_id)),
     [selectedSiteIds, sites]
   );
-  const selectedArchivedCount = selectedSites.filter((site) => site.status === 'archived').length;
-  const selectedActiveCount = selectedSites.length - selectedArchivedCount;
+  const selectedRemovedCount = selectedSites.filter((site) => site.status === 'archived').length;
+  const selectedRemovableCount = selectedSites.length - selectedRemovedCount;
   const pendingBatchSites = useMemo(
     () => sites.filter((site) => pendingBatchAction?.siteIds.includes(site.site_id)),
     [pendingBatchAction?.siteIds, sites]
@@ -194,7 +194,7 @@ function PortalSitesContent() {
   useEffect(() => {
     setSearchQuery(searchParams?.get('q') || '');
     setSiteFilter(
-      (searchParams?.get('filter') as 'all' | 'active' | 'inactive' | 'archived' | 'missing_url' | 'uncovered') || 'all'
+      (searchParams?.get('filter') as 'all' | 'active' | 'inactive' | 'removed' | 'missing_url' | 'uncovered') || 'all'
     );
     setSiteSort((searchParams?.get('sort') as 'current' | 'recent' | 'name') || 'current');
   }, [searchParams]);
@@ -373,7 +373,7 @@ function PortalSitesContent() {
   };
 
   const handleActivateSite = async (siteId: string) => {
-    if (!canArchiveSites || !window.confirm(t('portal.activate_site_confirm', {}, 'Enable this site? It will become the only active site that can use Cloud services.'))) {
+    if (!canRemoveSites || !window.confirm(t('portal.activate_site_confirm', {}, 'Enable this site? It will become the only active site that can use Cloud services.'))) {
       return;
     }
     setSiteActionSiteId(siteId);
@@ -394,7 +394,7 @@ function PortalSitesContent() {
   };
 
   const handleDeactivateSite = async (siteId: string) => {
-    if (!canArchiveSites || !window.confirm(t('portal.deactivate_site_confirm', {}, 'Disable Cloud services for this site? The site record, keys, usage, and audit history will be kept.'))) {
+    if (!canRemoveSites || !window.confirm(t('portal.deactivate_site_confirm', {}, 'Disable Cloud services for this site? The site record, keys, usage, and audit history will be kept.'))) {
       return;
     }
     setSiteActionSiteId(siteId);
@@ -414,76 +414,53 @@ function PortalSitesContent() {
     }
   };
 
-  const handleArchiveSite = async (siteId: string) => {
-    if (!canArchiveSites || !window.confirm(t('portal.archive_site_confirm', {}, 'Archive this site? It will be hidden from the default workspace and site switcher until restored.'))) {
+  const handleRemoveSite = async (siteId: string) => {
+    if (!canRemoveSites || !window.confirm(t('portal.remove_site_confirm', {}, 'Remove this site? Cloud service will stop, active keys will be revoked, and usage history will be kept.'))) {
       return;
     }
     setSiteActionSiteId(siteId);
     setSiteActionMessage(null);
     setSiteActionError(null);
     try {
-      await portalClient.archiveSite(siteId);
+      await portalClient.removeSite(siteId);
       await refresh();
       setSiteActionMessage(
-        t('portal.site_archive_success', {}, 'Site archived. It is now hidden from the default workspace flow.')
+        t('portal.site_remove_success', {}, 'Site removed. Active keys were revoked and history was kept.')
       );
     } catch (error) {
-      console.error('Failed to archive site:', error);
-      setSiteActionError(t('portal.site_archive_failed', {}, 'Failed to archive this site.'));
+      console.error('Failed to remove site:', error);
+      setSiteActionError(formatPortalErrorMessage(error, t, t('portal.site_remove_failed', {}, 'Failed to remove this site.')));
     } finally {
       setSiteActionSiteId('');
     }
   };
 
-  const handleRestoreSite = async (siteId: string) => {
-    if (!canArchiveSites || !window.confirm(t('portal.restore_site_confirm', {}, 'Restore this site to the active workspace?'))) {
-      return;
-    }
-    setSiteActionSiteId(siteId);
-    setSiteActionMessage(null);
-    setSiteActionError(null);
-    try {
-      await portalClient.restoreSite(siteId);
-      await refresh();
-      setSiteActionMessage(
-        t('portal.site_restore_success', {}, 'Site restored. It is available in the active workspace again.')
-      );
-    } catch (error) {
-      console.error('Failed to restore site:', error);
-      setSiteActionError(t('portal.site_restore_failed', {}, 'Failed to restore this site.'));
-    } finally {
-      setSiteActionSiteId('');
-    }
-  };
-
-  const openBatchSiteAction = (action: 'archive' | 'restore') => {
-    if (!canArchiveSites) {
+  const openBatchRemoveSites = () => {
+    if (!canRemoveSites) {
       return;
     }
     const targetSiteIds = selectedSites
-      .filter((site) => (action === 'archive' ? site.status !== 'archived' : site.status === 'archived'))
+      .filter((site) => site.status !== 'archived')
       .map((site) => site.site_id);
     if (targetSiteIds.length === 0) {
       return;
     }
-    setPendingBatchAction({ action, siteIds: targetSiteIds });
+    setPendingBatchAction({ siteIds: targetSiteIds });
   };
 
   const handleBatchSiteAction = async () => {
-    if (!canArchiveSites || !pendingBatchAction) {
+    if (!canRemoveSites || !pendingBatchAction) {
       return;
     }
-    const { action, siteIds: targetSiteIds } = pendingBatchAction;
-    setSiteActionSiteId(action === 'archive' ? '__batch_archive__' : '__batch_restore__');
+    const { siteIds: targetSiteIds } = pendingBatchAction;
+    setSiteActionSiteId('__batch_remove__');
     setSiteActionMessage(null);
     setSiteActionError(null);
     setFailedSiteNamesToCopy('');
     setCopiedFailedNames(false);
     setFailedBatchAction(null);
     const results = await Promise.allSettled(
-      targetSiteIds.map((siteId) =>
-        action === 'archive' ? portalClient.archiveSite(siteId) : portalClient.restoreSite(siteId)
-      )
+      targetSiteIds.map((siteId) => portalClient.removeSite(siteId))
     );
     const successCount = results.filter((result) => result.status === 'fulfilled').length;
     const failedSiteNames = results.flatMap((result, index) =>
@@ -506,38 +483,25 @@ function PortalSitesContent() {
       setSelectedSiteIds((current) => current.filter((siteId) => !targetSiteIds.includes(siteId)));
       if (successCount > 0) {
         setSiteActionMessage(
-          action === 'archive'
-            ? t(
-                'portal.site_archive_batch_success',
-                { count: String(successCount) },
-                '{{count}} sites archived. They are now hidden from the default workspace flow.'
-              )
-            : t(
-                'portal.site_restore_batch_success',
-                { count: String(successCount) },
-                '{{count}} sites restored. They are available in the active workspace again.'
-              )
+          t(
+            'portal.site_remove_batch_success',
+            { count: String(successCount) },
+            '{{count}} sites removed. Active keys were revoked and history was kept.'
+          )
         );
       }
       if (failureCount > 0) {
         const failedNames = failedSiteNames.join('、');
         setFailedSiteNamesToCopy(failedNames);
         setFailedBatchAction({
-          action,
           siteIds: results.flatMap((result, index) => (result.status === 'rejected' ? [targetSiteIds[index]] : [])),
         });
         setSiteActionError(
-          `${action === 'archive'
-            ? t(
-                'portal.site_archive_batch_failed',
-                { count: String(failureCount) },
-                'Failed to archive {{count}} selected sites.'
-              )
-            : t(
-                'portal.site_restore_batch_failed',
-                { count: String(failureCount) },
-                'Failed to restore {{count}} selected sites.'
-              )} ${t(
+          `${t(
+            'portal.site_remove_batch_failed',
+            { count: String(failureCount) },
+            'Failed to remove {{count}} selected sites.'
+          )} ${t(
             'portal.site_batch_failed_names',
             { sites: failedNames },
             'Failed sites: {{sites}}'
@@ -670,10 +634,10 @@ function PortalSitesContent() {
                 </button>
                 <button
                   type="button"
-                  className={`btn btn-sm ${siteFilter === 'archived' ? 'btn-primary' : 'btn-secondary'}`}
-                  onClick={() => setSiteFilter('archived')}
+                  className={`btn btn-sm ${siteFilter === 'removed' ? 'btn-primary' : 'btn-secondary'}`}
+                  onClick={() => setSiteFilter('removed')}
                 >
-                  {t('portal.archived_sites_filter', {}, 'Archived')}
+                  {t('portal.removed_sites_filter', {}, 'Removed')}
                 </button>
                 <button
                   type="button"
@@ -707,7 +671,7 @@ function PortalSitesContent() {
                 className="input w-full lg:max-w-sm"
               />
             </div>
-            {canArchiveSites ? (
+            {canRemoveSites ? (
               <div className="flex flex-col gap-3 border-t border-slate-200/80 pt-3 dark:border-slate-800">
                 <div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
                   <p className="text-sm text-gray-600 dark:text-gray-300">
@@ -715,16 +679,16 @@ function PortalSitesContent() {
                       ? t(
                           'portal.bulk_site_actions_selection',
                           {
-                            count: String(selectedSiteIds.length),
-                            activeCount: String(selectedActiveCount),
-                            archivedCount: String(selectedArchivedCount),
+                           count: String(selectedSiteIds.length),
+                            removableCount: String(selectedRemovableCount),
+                            removedCount: String(selectedRemovedCount),
                           },
-                          '{{count}} selected: {{activeCount}} active, {{archivedCount}} archived.'
+                          '{{count}} selected: {{removableCount}} removable, {{removedCount}} already removed.'
                         )
                       : t(
                           'portal.bulk_site_actions_desc',
                           {},
-                          'Select multiple sites to archive or restore them in one step.'
+                          'Select multiple sites to remove them in one step.'
                         )}
                   </p>
                   <div className="flex flex-wrap gap-2">
@@ -760,18 +724,10 @@ function PortalSitesContent() {
                     <button
                       type="button"
                       className="btn btn-secondary btn-sm"
-                      onClick={() => openBatchSiteAction('archive')}
-                      disabled={selectedActiveCount === 0 || siteActionSiteId !== ''}
+                      onClick={openBatchRemoveSites}
+                      disabled={selectedRemovableCount === 0 || siteActionSiteId !== ''}
                     >
-                      {t('portal.archive_selected_sites', { count: String(selectedActiveCount) }, 'Archive selected ({{count}})')}
-                    </button>
-                    <button
-                      type="button"
-                      className="btn btn-primary btn-sm"
-                      onClick={() => openBatchSiteAction('restore')}
-                      disabled={selectedArchivedCount === 0 || siteActionSiteId !== ''}
-                    >
-                      {t('portal.restore_selected_sites', { count: String(selectedArchivedCount) }, 'Restore selected ({{count}})')}
+                      {t('portal.remove_selected_sites', { count: String(selectedRemovableCount) }, 'Remove selected ({{count}})')}
                     </button>
                   </div>
                 </div>
@@ -784,15 +740,15 @@ function PortalSitesContent() {
           {filteredSites.length === 0 ? (
             <PortalEmptyState
               title={
-                siteFilter === 'archived'
-                  ? t('portal.archived_sites_empty_title', {}, 'No archived sites')
+                siteFilter === 'removed'
+                  ? t('portal.removed_sites_empty_title', {}, 'No removed sites')
                   : t('portal.sites.empty_title', {}, 'No sites match this search')
               }
               description={t(
-                siteFilter === 'archived' ? 'portal.archived_sites_empty_desc' : 'portal.sites.empty_desc',
+                siteFilter === 'removed' ? 'portal.removed_sites_empty_desc' : 'portal.sites.empty_desc',
                 {},
-                siteFilter === 'archived'
-                  ? 'Archived sites will appear here after you archive them from the site register.'
+                siteFilter === 'removed'
+                  ? 'Removed sites will appear here after you remove them from the site register.'
                   : 'No connected site matches the current search term. Clear the search or return to the workspace.'
               )}
               actionLabel={t('portal.workspace_label', {}, 'Workspace')}
@@ -810,7 +766,7 @@ function PortalSitesContent() {
               <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
                 <div className="min-w-0">
                   <div className="flex flex-wrap items-center gap-2">
-                    {canArchiveSites ? (
+                    {canRemoveSites ? (
                       <label className="flex items-center gap-2 text-sm text-gray-600 dark:text-gray-300">
                         <input
                           type="checkbox"
@@ -864,21 +820,12 @@ function PortalSitesContent() {
                   />
                 </div>
                 <div className="flex flex-wrap items-center gap-2 lg:justify-end">
-                  {site.status === 'archived' ? (
-                    <button
-                      type="button"
-                      onClick={() => void handleRestoreSite(site.site_id)}
-                      className="btn btn-primary btn-sm"
-                      disabled={!canArchiveSites || siteActionSiteId === site.site_id}
-                    >
-                      {t('portal.restore_site_action', {}, 'Restore site')}
-                    </button>
-                  ) : site.status !== 'active' ? (
+                  {site.status === 'archived' ? null : site.status !== 'active' ? (
                     <button
                       type="button"
                       onClick={() => void handleActivateSite(site.site_id)}
                       className="btn btn-primary btn-sm"
-                      disabled={!canArchiveSites || siteActionSiteId === site.site_id}
+                      disabled={!canRemoveSites || siteActionSiteId === site.site_id}
                     >
                       {t('portal.activate_site_action', {}, 'Enable service')}
                     </button>
@@ -914,7 +861,7 @@ function PortalSitesContent() {
                           >
                             {t('nav.usage')}
                           </Link>
-                          {canArchiveSites && site.status === 'active' ? (
+                          {canRemoveSites && site.status === 'active' ? (
                             <button
                               type="button"
                               role="menuitem"
@@ -926,6 +873,20 @@ function PortalSitesContent() {
                               disabled={siteActionSiteId === site.site_id}
                             >
                               {t('portal.deactivate_site_action', {}, 'Disable service')}
+                            </button>
+                          ) : null}
+                          {canRemoveSites ? (
+                            <button
+                              type="button"
+                              role="menuitem"
+                              onClick={() => {
+                                setOpenSiteMenuId('');
+                                void handleRemoveSite(site.site_id);
+                              }}
+                              className="block w-full rounded-xl px-3 py-2 text-left text-sm font-medium text-rose-700 transition-colors hover:bg-rose-50 dark:text-rose-300 dark:hover:bg-rose-950/30"
+                              disabled={siteActionSiteId === site.site_id}
+                            >
+                              {t('portal.remove_site_action', {}, 'Remove site')}
                             </button>
                           ) : null}
                         </div>
@@ -942,48 +903,34 @@ function PortalSitesContent() {
       <Modal
         isOpen={Boolean(pendingBatchAction)}
         onClose={() => {
-          if (siteActionSiteId === '__batch_archive__' || siteActionSiteId === '__batch_restore__') {
+          if (siteActionSiteId === '__batch_remove__') {
             return;
           }
           setPendingBatchAction(null);
         }}
-        title={
-          pendingBatchAction?.action === 'archive'
-            ? t('portal.archive_sites_modal_title', {}, 'Archive selected sites')
-            : t('portal.restore_sites_modal_title', {}, 'Restore selected sites')
-        }
-        description={
-          pendingBatchAction?.action === 'archive'
-            ? t(
-                'portal.archive_sites_confirm',
-                { count: String(pendingBatchAction?.siteIds.length || 0) },
-                'Archive {count} selected sites? They will be hidden from the default workspace and site switcher until restored.'
-              )
-            : t(
-                'portal.restore_sites_confirm',
-                { count: String(pendingBatchAction?.siteIds.length || 0) },
-                'Restore {count} selected sites to the active workspace?'
-              )
-        }
+        title={t('portal.remove_sites_modal_title', {}, 'Remove selected sites')}
+        description={t(
+          'portal.remove_sites_confirm',
+          { count: String(pendingBatchAction?.siteIds.length || 0) },
+          'Remove {{count}} selected sites? Cloud service will stop, active keys will be revoked, and usage history will be kept.'
+        )}
         footer={
           <>
             <button
               type="button"
               className="btn btn-secondary"
               onClick={() => setPendingBatchAction(null)}
-              disabled={siteActionSiteId === '__batch_archive__' || siteActionSiteId === '__batch_restore__'}
+              disabled={siteActionSiteId === '__batch_remove__'}
             >
               {t('common.cancel')}
             </button>
             <button
               type="button"
-              className={`btn ${pendingBatchAction?.action === 'archive' ? 'btn-secondary' : 'btn-primary'}`}
+              className="btn btn-secondary"
               onClick={() => void handleBatchSiteAction()}
-              disabled={siteActionSiteId === '__batch_archive__' || siteActionSiteId === '__batch_restore__'}
+              disabled={siteActionSiteId === '__batch_remove__'}
             >
-              {pendingBatchAction?.action === 'archive'
-                ? t('portal.archive_selected_sites', { count: String(pendingBatchSites.length) }, 'Archive selected ({count})')
-                : t('portal.restore_selected_sites', { count: String(pendingBatchSites.length) }, 'Restore selected ({count})')}
+              {t('portal.remove_selected_sites', { count: String(pendingBatchSites.length) }, 'Remove selected ({{count}})')}
             </button>
           </>
         }
@@ -1001,7 +948,7 @@ function PortalSitesContent() {
                 value: pendingBatchSites.filter((site) => site.status !== 'archived').length,
               },
               {
-                label: t('portal.archived_sites_filter', {}, 'Archived'),
+                label: t('portal.removed_sites_filter', {}, 'Removed'),
                 value: pendingBatchSites.filter((site) => site.status === 'archived').length,
               },
             ]}

@@ -773,8 +773,8 @@ export default function PortalPage() {
               <p className="text-xs font-semibold uppercase tracking-[0.18em] text-gray-500 dark:text-gray-400">{t('portal.active_sites_filter', {}, 'Active')}</p>
               <p className="mt-2 text-2xl font-semibold text-gray-950 dark:text-white">{visibleSites.length}</p>
             </Link>
-            <Link href="/portal/sites?filter=archived" className="rounded-[1.25rem] border border-slate-200/80 bg-white/85 px-4 py-4 transition hover:bg-slate-50 dark:border-slate-800 dark:bg-slate-950/40 dark:hover:bg-slate-900/60">
-              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-gray-500 dark:text-gray-400">{t('portal.archived_sites_filter', {}, 'Archived')}</p>
+            <Link href="/portal/sites?filter=removed" className="rounded-[1.25rem] border border-slate-200/80 bg-white/85 px-4 py-4 transition hover:bg-slate-50 dark:border-slate-800 dark:bg-slate-950/40 dark:hover:bg-slate-900/60">
+              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-gray-500 dark:text-gray-400">{t('portal.removed_sites_filter', {}, 'Removed')}</p>
               <p className="mt-2 text-2xl font-semibold text-gray-950 dark:text-white">{archivedCount}</p>
             </Link>
             <Link href="/portal/sites?filter=uncovered" className="rounded-[1.25rem] border border-slate-200/80 bg-white/85 px-4 py-4 transition hover:bg-slate-50 dark:border-slate-800 dark:bg-slate-950/40 dark:hover:bg-slate-900/60">

@@ -32,7 +32,7 @@ USER_ALLOWED_ACTION_VIEW_BILLING = "view_billing"
 USER_ALLOWED_ACTION_VIEW_AUDIT = "view_audit"
 USER_ALLOWED_ACTION_PROVISION_SITES = "provision_sites"
 USER_ALLOWED_ACTION_MANAGE_SITE_KEYS = "manage_site_keys"
-USER_ALLOWED_ACTION_ARCHIVE_SITES = "archive_sites"
+USER_ALLOWED_ACTION_REMOVE_SITES = "remove_sites"
 
 
 def _normalize_platform_admin_role(role: str) -> str:
@@ -54,7 +54,7 @@ def resolve_principal_allowed_actions() -> list[str]:
         USER_ALLOWED_ACTION_VIEW_AUDIT,
         USER_ALLOWED_ACTION_PROVISION_SITES,
         USER_ALLOWED_ACTION_MANAGE_SITE_KEYS,
-        USER_ALLOWED_ACTION_ARCHIVE_SITES,
+        USER_ALLOWED_ACTION_REMOVE_SITES,
     ]
 
 
