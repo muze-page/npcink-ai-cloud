@@ -10,12 +10,15 @@ from sqlalchemy.sql.elements import ColumnElement
 
 from app.core.models import (
     ACCOUNT_USER_MEMBERSHIP_STATUS_ACTIVE,
+    ACCOUNT_USER_MEMBERSHIP_STATUS_REVOKED,
     CREDIT_LEDGER_EVENT_CONSUME,
     IDENTITY_PROVIDER_BINDING_STATUS_ACTIVE,
+    IDENTITY_PROVIDER_BINDING_STATUS_REVOKED,
     PORTAL_LOGIN_CODE_STATUS_PENDING,
     PORTAL_OAUTH_STATE_STATUS_PENDING,
     PRINCIPAL_STATUS_ACTIVE,
     SITE_USER_GRANT_STATUS_ACTIVE,
+    SITE_USER_GRANT_STATUS_REVOKED,
     Account,
     AccountEntitlementSnapshot,
     AccountSubscription,
@@ -227,6 +230,46 @@ class CommercialRepository:
         )
         return list(self.session.scalars(statement))
 
+    def list_identity_provider_bindings(
+        self,
+        *,
+        principal_ids: list[str] | None = None,
+        provider: str | None = None,
+        statuses: list[str] | None = None,
+    ) -> list[IdentityProviderBinding]:
+        statement = select(IdentityProviderBinding)
+        if principal_ids is not None:
+            if not principal_ids:
+                return []
+            statement = statement.where(IdentityProviderBinding.principal_id.in_(principal_ids))
+        if provider:
+            statement = statement.where(IdentityProviderBinding.provider == provider)
+        if statuses is not None:
+            if not statuses:
+                return []
+            statement = statement.where(IdentityProviderBinding.status.in_(statuses))
+        statement = statement.order_by(
+            IdentityProviderBinding.created_at.desc(),
+            IdentityProviderBinding.binding_id.desc(),
+        )
+        return list(self.session.scalars(statement))
+
+    def revoke_identity_provider_bindings(
+        self,
+        *,
+        principal_id: str,
+        provider: str | None = None,
+    ) -> int:
+        bindings = self.list_identity_provider_bindings(
+            principal_ids=[principal_id],
+            provider=provider,
+            statuses=[IDENTITY_PROVIDER_BINDING_STATUS_ACTIVE],
+        )
+        for binding in bindings:
+            binding.status = IDENTITY_PROVIDER_BINDING_STATUS_REVOKED
+        self.session.flush()
+        return len(bindings)
+
     def upsert_identity_provider_binding(
         self,
         *,
@@ -310,6 +353,25 @@ class CommercialRepository:
             statement = statement.where(Principal.status == status)
         return int(self.session.scalar(statement) or 0)
 
+    def list_principals(
+        self,
+        *,
+        status: str | None = None,
+        principal_ids: list[str] | None = None,
+        limit: int | None = None,
+    ) -> list[Principal]:
+        statement = select(Principal)
+        if status:
+            statement = statement.where(Principal.status == status)
+        if principal_ids is not None:
+            if not principal_ids:
+                return []
+            statement = statement.where(Principal.principal_id.in_(principal_ids))
+        statement = statement.order_by(Principal.created_at.desc(), Principal.principal_id.asc())
+        if limit is not None and limit > 0:
+            statement = statement.limit(limit)
+        return list(self.session.scalars(statement))
+
     def upsert_principal_identity(
         self,
         *,
@@ -383,6 +445,37 @@ class CommercialRepository:
             membership.metadata_json = metadata_json
         self.session.flush()
         return membership
+
+    def list_account_user_memberships(
+        self,
+        *,
+        principal_ids: list[str] | None = None,
+        statuses: list[str] | None = None,
+    ) -> list[AccountUserMembership]:
+        statement = select(AccountUserMembership)
+        if principal_ids is not None:
+            if not principal_ids:
+                return []
+            statement = statement.where(AccountUserMembership.principal_id.in_(principal_ids))
+        if statuses is not None:
+            if not statuses:
+                return []
+            statement = statement.where(AccountUserMembership.status.in_(statuses))
+        statement = statement.order_by(
+            AccountUserMembership.created_at.desc(),
+            AccountUserMembership.membership_id.desc(),
+        )
+        return list(self.session.scalars(statement))
+
+    def revoke_account_user_memberships(self, *, principal_id: str) -> int:
+        memberships = self.list_account_user_memberships(
+            principal_ids=[principal_id],
+            statuses=[ACCOUNT_USER_MEMBERSHIP_STATUS_ACTIVE],
+        )
+        for membership in memberships:
+            membership.status = ACCOUNT_USER_MEMBERSHIP_STATUS_REVOKED
+        self.session.flush()
+        return len(memberships)
 
     def get_account_user_membership(
         self,
@@ -462,6 +555,37 @@ class CommercialRepository:
             grant.metadata_json = metadata_json
         self.session.flush()
         return grant
+
+    def list_site_user_grants(
+        self,
+        *,
+        principal_ids: list[str] | None = None,
+        statuses: list[str] | None = None,
+    ) -> list[SiteUserGrant]:
+        statement = select(SiteUserGrant)
+        if principal_ids is not None:
+            if not principal_ids:
+                return []
+            statement = statement.where(SiteUserGrant.principal_id.in_(principal_ids))
+        if statuses is not None:
+            if not statuses:
+                return []
+            statement = statement.where(SiteUserGrant.status.in_(statuses))
+        statement = statement.order_by(
+            SiteUserGrant.created_at.desc(),
+            SiteUserGrant.grant_id.desc(),
+        )
+        return list(self.session.scalars(statement))
+
+    def revoke_site_user_grants(self, *, principal_id: str) -> int:
+        grants = self.list_site_user_grants(
+            principal_ids=[principal_id],
+            statuses=[SITE_USER_GRANT_STATUS_ACTIVE],
+        )
+        for grant in grants:
+            grant.status = SITE_USER_GRANT_STATUS_REVOKED
+        self.session.flush()
+        return len(grants)
 
     def get_principal_site_grant(
         self,

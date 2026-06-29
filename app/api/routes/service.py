@@ -98,6 +98,10 @@ class AccountStatusPayload(BaseModel):
     reason: str = ""
 
 
+class PortalUserDisablePayload(BaseModel):
+    reason: str = ""
+
+
 class SiteProvisionPayload(BaseModel):
     site_id: str
     account_id: str
@@ -2410,6 +2414,84 @@ async def get_admin_account_credit_ledger(
         status="ok",
         message="admin account credit ledger loaded",
         data=result,
+        revision="m6",
+    )
+
+
+@router.get("/admin/portal-users")
+async def list_admin_portal_users(
+    request: Request,
+    q: str | None = Query(default=None, max_length=191),
+    source: str | None = Query(default="portal_self_registration", max_length=64),
+    status: str | None = Query(default=None, max_length=32),
+    package_alias: str | None = Query(default=None, max_length=64),
+    qq_bound: bool | None = Query(default=None),
+    limit: int = Query(default=100, ge=1, le=500),
+) -> Any:
+    auth = await authorize_internal_request(request, require_idempotency=False)
+    if auth is not None:
+        return auth
+    try:
+        result = _get_commercial_service(request).list_admin_portal_users(
+            q=q,
+            source=source,
+            status=status,
+            package_alias=package_alias,
+            qq_bound=qq_bound,
+            limit=limit,
+        )
+    except CommercialServiceError as error:
+        return _service_error_response(error, request=request)
+    return build_envelope(
+        status="ok",
+        message="admin portal users loaded",
+        data=result,
+        revision="m6",
+    )
+
+
+@router.post("/admin/portal-users/{principal_id}/disable")
+async def disable_admin_portal_user(
+    request: Request,
+    principal_id: str,
+    payload: PortalUserDisablePayload,
+) -> Any:
+    auth = await authorize_internal_request(request, require_idempotency=True)
+    if auth is not None:
+        return auth
+    service = _get_commercial_service(request)
+    audit_context = _build_audit_context(request)
+    try:
+        result = service.disable_admin_portal_user(
+            principal_id=principal_id,
+            reason=payload.reason,
+            audit_context=audit_context,
+        )
+    except CommercialServiceError as error:
+        _record_service_failure(
+            request,
+            event_kind="portal_user.disable",
+            error=error,
+            scope_kind="principal",
+            scope_id=principal_id,
+            payload_json=_build_audit_payload(payload),
+        )
+        return _service_error_response(error, request=request)
+    return build_envelope(
+        status="ok",
+        message="admin portal user disabled",
+        data=_merge_receipt(
+            result,
+            _build_operator_receipt(
+                event_kind="portal_user.disable",
+                scope_kind="principal",
+                scope_id=principal_id,
+                outcome="succeeded",
+                effective_summary=(
+                    f"Principal {principal_id} was disabled and active portal access was revoked."
+                ),
+            ),
+        ),
         revision="m6",
     )
 

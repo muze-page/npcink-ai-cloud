@@ -25,12 +25,17 @@ from app.api.main import create_app
 from app.core.config import Settings
 from app.core.db import dispose_engine, get_session, init_schema
 from app.core.models import (
+    ACCOUNT_USER_MEMBERSHIP_STATUS_REVOKED,
+    PRINCIPAL_STATUS_DISABLED,
+    SITE_USER_GRANT_STATUS_REVOKED,
     SUBSCRIPTION_STATUS_PAST_DUE,
     AccountEntitlementSnapshot,
     AccountSubscription,
+    AccountUserMembership,
     BillingSnapshot,
     ModelReferenceModel,
     PluginObservabilityEvent,
+    Principal,
     ProviderCallRecord,
     ProviderConnection,
     ReplayReceipt,
@@ -38,6 +43,7 @@ from app.core.models import (
     RuntimeGuardEvent,
     ServiceAuditEvent,
     ServiceSetting,
+    SiteUserGrant,
     UsageMeterEvent,
 )
 from app.core.secrets import decrypt_provider_connection_secret, decrypt_service_setting_secret
@@ -143,6 +149,50 @@ def _runtime_service_settings(database_url: str) -> Settings:
         siliconflow_api_key="",
         site_knowledge_embedding_provider="deterministic",
     )
+
+
+def _request_portal_registration_code(
+    client: TestClient,
+    *,
+    email: str,
+    site_url: str,
+    site_name: str = "",
+) -> dict[str, object]:
+    response = client.post(
+        "/portal/v1/register/code/request",
+        json={
+            "email": email,
+            "site_url": site_url,
+            "site_name": site_name,
+            "use_case": "content generation",
+        },
+        headers={
+            "origin": "http://testserver",
+            "referer": "http://testserver/",
+            "x-npcink-debug-portal-link": "1",
+            "x-npcink-dev-login-code": "1",
+        },
+    )
+    assert response.status_code == 200, response.text
+    return response.json()["data"]
+
+
+def _verify_portal_registration_code(
+    client: TestClient,
+    *,
+    email: str,
+    code: str,
+) -> dict[str, object]:
+    response = client.post(
+        "/portal/v1/register/verify",
+        json={"email": email, "code": code},
+        headers={
+            "origin": "http://testserver",
+            "referer": "http://testserver/",
+        },
+    )
+    assert response.status_code == 200, response.text
+    return response.json()["data"]
 
 
 class FixedAudioSummaryScriptProvider:
@@ -255,6 +305,92 @@ class EmptyAudioSummaryScriptProvider(FixedAudioSummaryScriptProvider):
             tokens_out=0,
             cost=0.0,
         )
+
+
+def test_admin_portal_users_lists_self_registered_users_and_disables_access(
+    tmp_path: Path,
+) -> None:
+    database_url, client = _build_client(
+        tmp_path,
+        settings_overrides={
+            "portal_jwt_secret": TEST_PORTAL_JWT_SECRET,
+            "portal_login_code_ttl_seconds": 300,
+            "debug_local_origin_allowlist": "http://testserver",
+        },
+    )
+
+    email = "admin-portal-user@example.com"
+    request_data = _request_portal_registration_code(
+        client,
+        email=email,
+        site_url="https://admin-portal-user.example.com",
+        site_name="Admin Portal User",
+    )
+    registration_data = _verify_portal_registration_code(
+        client,
+        email=email,
+        code=str(request_data["code"]),
+    )
+    principal_id = str(registration_data["principal_id"])
+
+    list_response = client.get(
+        "/internal/service/admin/portal-users?q=admin-portal-user",
+        headers=build_internal_headers(),
+    )
+    assert list_response.status_code == 200, list_response.text
+    list_data = list_response.json()["data"]
+    items = list_data["items"]
+    assert list_data["total"] == 1
+    assert items[0]["principal_id"] == principal_id
+    assert items[0]["email"] == email
+    assert items[0]["source"] == "portal_self_registration"
+    assert items[0]["package_alias"] == "Free"
+    assert items[0]["plan_id"] == "plan_free"
+    assert items[0]["qq_bound"] is False
+    assert items[0]["site_id"] == "site_admin-portal-user-example-com"
+
+    disable_response = client.post(
+        f"/internal/service/admin/portal-users/{principal_id}/disable",
+        json={"reason": "operator test disable"},
+        headers=build_internal_headers(idempotency_key="admin-portal-user-disable-001"),
+    )
+    assert disable_response.status_code == 200, disable_response.text
+    disable_data = disable_response.json()["data"]
+    assert disable_data["status"] == PRINCIPAL_STATUS_DISABLED
+    assert disable_data["revoked_site_grants"] == 1
+    assert disable_data["revoked_account_memberships"] == 1
+
+    disabled_list_response = client.get(
+        "/internal/service/admin/portal-users?status=disabled&q=admin-portal-user",
+        headers=build_internal_headers(),
+    )
+    assert disabled_list_response.status_code == 200, disabled_list_response.text
+    disabled_item = disabled_list_response.json()["data"]["items"][0]
+    assert disabled_item["status"] == PRINCIPAL_STATUS_DISABLED
+    assert disabled_item["membership_status"] == ACCOUNT_USER_MEMBERSHIP_STATUS_REVOKED
+    assert disabled_item["grant_status"] == SITE_USER_GRANT_STATUS_REVOKED
+
+    with get_session(database_url) as session:
+        identity = session.scalar(
+            select(Principal).where(Principal.principal_id == principal_id)
+        )
+        assert identity is not None
+        assert identity.status == PRINCIPAL_STATUS_DISABLED
+        assert int(identity.session_version or 0) > 1
+        membership = session.scalar(
+            select(AccountUserMembership).where(
+                AccountUserMembership.principal_id == principal_id
+            )
+        )
+        assert membership is not None
+        assert membership.status == ACCOUNT_USER_MEMBERSHIP_STATUS_REVOKED
+        grant = session.scalar(
+            select(SiteUserGrant).where(SiteUserGrant.principal_id == principal_id)
+        )
+        assert grant is not None
+        assert grant.status == SITE_USER_GRANT_STATUS_REVOKED
+
+    dispose_engine(database_url)
 
 
 def test_admin_web_search_provider_env_settings_route_is_retired(

@@ -12,15 +12,19 @@ from app.adapters.repositories.commercial_repository import CommercialRepository
 from app.core.db import get_session
 from app.core.models import (
     ACCOUNT_STATUS_ACTIVE,
+    ACCOUNT_USER_MEMBERSHIP_STATUS_ACTIVE,
     CREDIT_LEDGER_EVENT_ADJUSTMENT,
     CREDIT_LEDGER_EVENT_CONSUME,
     CREDIT_LEDGER_EVENT_GRANT,
     CREDIT_LEDGER_EVENT_REFUND,
+    IDENTITY_PROVIDER_BINDING_STATUS_ACTIVE,
     PLATFORM_ADMIN_ROLE_PLATFORM_ADMIN,
     PLATFORM_ADMIN_STATUS_ACTIVE,
     PRINCIPAL_STATUS_ACTIVE,
+    PRINCIPAL_STATUS_DISABLED,
     SITE_API_KEY_STATUS_ACTIVE,
     SITE_STATUS_ACTIVE,
+    SITE_USER_GRANT_STATUS_ACTIVE,
     SUBSCRIPTION_STATUS_ACTIVE,
     SUBSCRIPTION_STATUS_PAST_DUE,
     SUBSCRIPTION_STATUS_SUSPENDED,
@@ -681,6 +685,313 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
             "top_families": family_items[:resolved_limit],
             "attention_items": attention_items,
         }
+
+    def list_admin_portal_users(
+        self,
+        *,
+        q: str | None = None,
+        source: str | None = "portal_self_registration",
+        status: str | None = None,
+        package_alias: str | None = None,
+        qq_bound: bool | None = None,
+        limit: int = 100,
+    ) -> dict[str, object]:
+        normalized_q = str(q or "").strip().lower()
+        normalized_source = str(source or "portal_self_registration").strip().lower()
+        if normalized_source in {"", "self_registered", "self-registration"}:
+            normalized_source = "portal_self_registration"
+        if normalized_source not in {"all", "portal_self_registration", "principal_access"}:
+            raise CommercialValidationError(
+                "service.portal_user_source_invalid",
+                "portal user source must be all, portal_self_registration, or principal_access",
+            )
+        normalized_status = str(status or "").strip().lower()
+        if normalized_status and normalized_status not in {
+            PRINCIPAL_STATUS_ACTIVE,
+            PRINCIPAL_STATUS_DISABLED,
+        }:
+            raise CommercialValidationError(
+                "service.portal_user_status_invalid",
+                "portal user status must be active or disabled",
+            )
+        normalized_package = str(package_alias or "").strip().lower()
+        resolved_limit = min(max(int(limit or 100), 1), 500)
+
+        with get_session(self.database_url) as session:
+            repository = CommercialRepository(session)
+            principals = repository.list_principals(
+                status=normalized_status or None,
+                limit=None,
+            )
+            principal_ids = [str(principal.principal_id or "") for principal in principals]
+            memberships = repository.list_account_user_memberships(
+                principal_ids=principal_ids,
+                statuses=None,
+            )
+            grants = repository.list_site_user_grants(
+                principal_ids=principal_ids,
+                statuses=None,
+            )
+            qq_bindings = repository.list_identity_provider_bindings(
+                principal_ids=principal_ids,
+                provider="qq",
+                statuses=None,
+            )
+            account_ids = sorted(
+                {
+                    str(membership.account_id or "")
+                    for membership in memberships
+                    if str(membership.account_id or "").strip()
+                }
+            )
+            site_ids = sorted(
+                {
+                    str(grant.site_id or "")
+                    for grant in grants
+                    if str(grant.site_id or "").strip()
+                }
+            )
+            accounts = repository.list_accounts(account_ids=account_ids, limit=None)
+            sites = repository.list_sites(site_ids=site_ids, limit=None)
+            subscriptions = repository.list_subscriptions(account_ids=account_ids, limit=None)
+
+        memberships_by_principal: dict[str, list[Any]] = defaultdict(list)
+        for membership in memberships:
+            memberships_by_principal[str(membership.principal_id or "")].append(membership)
+
+        grants_by_principal: dict[str, list[Any]] = defaultdict(list)
+        for grant in grants:
+            grants_by_principal[str(grant.principal_id or "")].append(grant)
+
+        qq_bindings_by_principal: dict[str, list[Any]] = defaultdict(list)
+        for binding in qq_bindings:
+            qq_bindings_by_principal[str(binding.principal_id or "")].append(binding)
+
+        accounts_by_id = {str(account.account_id or ""): account for account in accounts}
+        sites_by_id = {str(site.site_id or ""): site for site in sites}
+        subscriptions_by_account: dict[str, list[AccountSubscription]] = defaultdict(list)
+        for subscription in subscriptions:
+            subscriptions_by_account[str(subscription.account_id or "")].append(subscription)
+
+        def metadata_source(*objects: Any) -> str:
+            for item in objects:
+                metadata = getattr(item, "metadata_json", None)
+                if isinstance(metadata, dict):
+                    source_value = str(metadata.get("source") or "").strip()
+                    if source_value:
+                        return source_value
+            return ""
+
+        def preferred_active(items: Sequence[Any], *, active_status: str) -> Any | None:
+            return next(
+                (item for item in items if str(getattr(item, "status", "") or "") == active_status),
+                items[0] if items else None,
+            )
+
+        service = cast(Any, self)
+        items: list[dict[str, object]] = []
+        for principal in principals:
+            principal_id = str(principal.principal_id or "")
+            principal_memberships = memberships_by_principal.get(principal_id, [])
+            principal_grants = grants_by_principal.get(principal_id, [])
+            if not principal_memberships and not principal_grants:
+                continue
+            membership = preferred_active(
+                principal_memberships,
+                active_status=ACCOUNT_USER_MEMBERSHIP_STATUS_ACTIVE,
+            )
+            account = accounts_by_id.get(str(getattr(membership, "account_id", "") or ""))
+            grant = preferred_active(
+                principal_grants,
+                active_status=SITE_USER_GRANT_STATUS_ACTIVE,
+            )
+            site = sites_by_id.get(str(getattr(grant, "site_id", "") or ""))
+            source_value = metadata_source(principal, membership, account, site, grant)
+            if normalized_source != "all" and source_value != normalized_source:
+                continue
+            account_subscriptions = (
+                subscriptions_by_account.get(str(getattr(account, "account_id", "") or ""), [])
+                if account is not None
+                else []
+            )
+            primary_subscription = service._select_primary_subscription(account_subscriptions)
+            package_summary = service._build_subscription_package_summary(
+                primary_subscription,
+                site_count=len(principal_grants),
+            )
+            subscription_payload = (
+                service._serialize_subscription(primary_subscription)
+                if primary_subscription is not None
+                else None
+            )
+            active_qq_bindings = [
+                binding
+                for binding in qq_bindings_by_principal.get(principal_id, [])
+                if str(getattr(binding, "status", "") or "")
+                == IDENTITY_PROVIDER_BINDING_STATUS_ACTIVE
+            ]
+            is_qq_bound = bool(active_qq_bindings)
+            if qq_bound is not None and is_qq_bound is not qq_bound:
+                continue
+            package_blob = " ".join(
+                [
+                    str(package_summary.get("package_alias") or ""),
+                    str(package_summary.get("display_package_label") or ""),
+                    str(getattr(primary_subscription, "plan_id", "") or ""),
+                ]
+            ).lower()
+            if normalized_package and normalized_package not in package_blob:
+                continue
+            site_metadata = getattr(site, "metadata_json", None)
+            wordpress_url = (
+                str(site_metadata.get("wordpress_url") or "").strip()
+                if isinstance(site_metadata, dict)
+                else ""
+            )
+            search_blob = " ".join(
+                [
+                    principal_id,
+                    str(getattr(principal, "email", "") or ""),
+                    str(getattr(account, "account_id", "") or ""),
+                    str(getattr(account, "name", "") or ""),
+                    str(getattr(site, "site_id", "") or ""),
+                    str(getattr(site, "name", "") or ""),
+                    wordpress_url,
+                    str(package_summary.get("package_alias") or ""),
+                ]
+            ).lower()
+            if normalized_q and normalized_q not in search_blob:
+                continue
+            latest_qq_login_at = next(
+                (
+                    getattr(binding, "last_login_at", None)
+                    for binding in active_qq_bindings
+                    if getattr(binding, "last_login_at", None) is not None
+                ),
+                None,
+            )
+            item = {
+                "principal_id": principal_id,
+                "email": str(getattr(principal, "email", "") or ""),
+                "status": str(getattr(principal, "status", "") or ""),
+                "session_version": int(getattr(principal, "session_version", 1) or 1),
+                "source": source_value,
+                "registration_source": source_value,
+                "last_login_at": self._serialize_datetime(
+                    getattr(principal, "last_login_at", None)
+                ),
+                "created_at": self._serialize_datetime(getattr(principal, "created_at", None)),
+                "account": service._serialize_account(account) if account is not None else None,
+                "account_id": str(getattr(account, "account_id", "") or ""),
+                "account_name": str(getattr(account, "name", "") or ""),
+                "account_status": str(getattr(account, "status", "") or ""),
+                "membership_status": str(getattr(membership, "status", "") or ""),
+                "site": service._serialize_site(site) if site is not None else None,
+                "site_id": str(getattr(site, "site_id", "") or ""),
+                "site_name": str(getattr(site, "name", "") or ""),
+                "site_status": str(getattr(site, "status", "") or ""),
+                "wordpress_url": wordpress_url,
+                "grant_status": str(getattr(grant, "status", "") or ""),
+                "subscription": subscription_payload,
+                "subscription_id": str(getattr(primary_subscription, "subscription_id", "") or ""),
+                "subscription_status": str(getattr(primary_subscription, "status", "") or ""),
+                "plan_id": str(getattr(primary_subscription, "plan_id", "") or ""),
+                **package_summary,
+                "qq_bound": is_qq_bound,
+                "qq_binding_count": len(active_qq_bindings),
+                "qq_last_login_at": self._serialize_datetime(latest_qq_login_at),
+            }
+            items.append(item)
+
+        summary_counts = Counter(str(item.get("status") or "") for item in items)
+        qq_bound_total = sum(1 for item in items if bool(item.get("qq_bound")))
+        self_registered_total = sum(
+            1 for item in items if str(item.get("source") or "") == "portal_self_registration"
+        )
+        filtered_total = len(items)
+        if resolved_limit > 0:
+            items = items[:resolved_limit]
+        return {
+            "filters": {
+                "q": normalized_q,
+                "source": normalized_source,
+                "status": normalized_status,
+                "package_alias": package_alias or "",
+                "qq_bound": qq_bound,
+                "limit": resolved_limit,
+            },
+            "items": items,
+            "total": filtered_total,
+            "summary": {
+                "active": int(summary_counts.get(PRINCIPAL_STATUS_ACTIVE, 0)),
+                "disabled": int(summary_counts.get(PRINCIPAL_STATUS_DISABLED, 0)),
+                "qq_bound": qq_bound_total,
+                "self_registered": self_registered_total,
+            },
+        }
+
+    def disable_admin_portal_user(
+        self,
+        *,
+        principal_id: str,
+        reason: str = "",
+        audit_context: ServiceAuditContext | None = None,
+    ) -> dict[str, object]:
+        normalized_principal_id = principal_id.strip()
+        if not normalized_principal_id:
+            raise CommercialValidationError(
+                "service.principal_id_required",
+                "principal id is required",
+            )
+        normalized_reason = str(reason or "").strip()[:500]
+        with get_session(self.database_url) as session:
+            repository = CommercialRepository(session)
+            identity = repository.get_principal_identity_by_ref(
+                principal_id=normalized_principal_id,
+            )
+            if identity is None:
+                raise CommercialNotFoundError(
+                    "service.principal_not_found",
+                    f"principal '{normalized_principal_id}' was not found",
+                )
+            identity.status = PRINCIPAL_STATUS_DISABLED
+            identity = (
+                repository.increment_principal_session_version(
+                    principal_id=normalized_principal_id,
+                )
+                or identity
+            )
+            revoked_grants = repository.revoke_site_user_grants(
+                principal_id=normalized_principal_id,
+            )
+            revoked_memberships = repository.revoke_account_user_memberships(
+                principal_id=normalized_principal_id,
+            )
+            revoked_bindings = repository.revoke_identity_provider_bindings(
+                principal_id=normalized_principal_id,
+                provider="qq",
+            )
+            payload: dict[str, object] = {
+                "principal_id": normalized_principal_id,
+                "email": str(getattr(identity, "email", "") or ""),
+                "status": str(getattr(identity, "status", "") or ""),
+                "session_version": int(getattr(identity, "session_version", 1) or 1),
+                "revoked_site_grants": revoked_grants,
+                "revoked_account_memberships": revoked_memberships,
+                "revoked_identity_provider_bindings": revoked_bindings,
+                "reason": normalized_reason,
+            }
+            self._record_service_audit_in_session(
+                repository=repository,
+                audit_context=audit_context,
+                event_kind="portal_user.disable",
+                outcome="succeeded",
+                scope_kind="principal",
+                scope_id=normalized_principal_id,
+                payload_json=payload,
+            )
+            session.commit()
+            return payload
 
     def list_admin_accounts(
         self,
