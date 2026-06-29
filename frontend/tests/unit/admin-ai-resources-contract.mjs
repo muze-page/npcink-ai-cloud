@@ -17,6 +17,14 @@ const openCapabilityTemplateStart = pageSource.indexOf('function openCapabilityP
 const openCapabilityTemplateSource = openCapabilityTemplateStart >= 0
   ? pageSource.slice(openCapabilityTemplateStart, pageSource.indexOf('const resourceStatusLabel', openCapabilityTemplateStart))
   : '';
+const capabilityDiagnosticsStart = pageSource.indexOf('capability_diagnostics_title');
+const capabilityDiagnosticsSource = capabilityDiagnosticsStart >= 0
+  ? pageSource.slice(capabilityDiagnosticsStart, pageSource.indexOf('{providerUsesCustomRuntimeFields', capabilityDiagnosticsStart))
+  : '';
+const capabilitySupplierTableStart = pageSource.indexOf('activeCapabilityConnections.map');
+const capabilitySupplierTableSource = capabilitySupplierTableStart >= 0
+  ? pageSource.slice(pageSource.lastIndexOf('<table', capabilitySupplierTableStart), pageSource.indexOf('{capabilityAddDialogOpen', capabilitySupplierTableStart))
+  : '';
 
 const aiResourcesNavIndex = layoutSource.indexOf("href: '/admin/ai-resources'");
 const abilityModelsNavIndex = layoutSource.indexOf("href: '/admin/ability-models'");
@@ -257,6 +265,24 @@ assert.match(
 );
 
 assert.match(
+  capabilitySupplierTableSource,
+  /column_provider[\s\S]*column_status[\s\S]*column_connection[\s\S]*column_actions/,
+  'Capability supplier list must use the compact provider/status/connection/actions columns'
+);
+
+assert.doesNotMatch(
+  capabilitySupplierTableSource,
+  /column_category|column_profiles|column_enabled_configured/,
+  'Capability supplier list must not expose category, profile id, or verbose enabled/configured columns'
+);
+
+assert.match(
+  capabilitySupplierTableSource,
+  /connectionHost\(connection\.base_url\)[\s\S]*status_configured_label/,
+  'Capability supplier list must show a domain summary and compact configured state'
+);
+
+assert.match(
   pageSource,
   /fetch\('\/api\/admin\/provider-connections'/,
   'AI resources page must save provider connections through the bounded admin endpoint'
@@ -478,6 +504,23 @@ assert.match(
   'Provider channel presets must include DeepSeek as an OpenAI-compatible text supplier'
 );
 
+const minimaxPresetStart = pageSource.indexOf("id: 'minimax'");
+const minimaxPresetSource = minimaxPresetStart >= 0
+  ? pageSource.slice(minimaxPresetStart, pageSource.indexOf("id: 'custom'", minimaxPresetStart))
+  : '';
+
+assert.match(
+  minimaxPresetSource,
+  /label: 'MiniMax'[\s\S]*capabilityIds: 'text_generation, image_generation, audio_generation, video_generation'[\s\S]*runtimeProfileIds: ''/,
+  'MiniMax preset must be a general model supplier and must not bind an audio-only runtime profile'
+);
+
+assert.doesNotMatch(
+  minimaxPresetSource,
+  /capabilityIds: 'audio_generation'|audio\.narration/,
+  'MiniMax preset must not regress to an audio-only channel'
+);
+
 assert.match(
   pageSource,
   /providerId\.includes\('deepseek'\)[\s\S]*return 'deepseek'/,
@@ -492,8 +535,8 @@ assert.match(
 
 assert.match(
   pageSource,
-  /connection_section_title[\s\S]*model_visibility_title[\s\S]*usage_scope_title/,
-  'Provider channel form must separate connection, model visibility, and usage scope'
+  /connection_section_title[\s\S]*model_visibility_title/,
+  'Provider channel form must separate connection and model visibility'
 );
 
 assert.match(
@@ -516,14 +559,56 @@ assert.match(
 
 assert.match(
   pageSource,
-  /field_capability_supplier_type[\s\S]*PROVIDER_PRESETS\.map/,
-  'Capability supplier dialog must show a capability supplier type instead of exposing model provider presets'
+  /capability_supplier_badge[\s\S]*capabilityCategoryLabel\(providerFormCapabilityCategory\)/,
+  'Capability supplier dialog must show the supplier category as a compact badge instead of a separate usage summary section'
+);
+
+assert.doesNotMatch(
+  pageSource,
+  /capability_usage_summary_title|usageScopeCapabilityLabels|usageScopeProfileLabels/,
+  'Capability supplier dialog must not render a separate usage summary section'
+);
+
+assert.match(
+  pageSource,
+  /capability_diagnostics_title[\s\S]*field_base_url[\s\S]*field_capabilities[\s\S]*field_profiles[\s\S]*field_connection_id[\s\S]*field_provider_id[\s\S]*field_kind[\s\S]*field_source_role/,
+  'Capability supplier internal IDs and usage scope must stay folded under technical information'
+);
+
+assert.doesNotMatch(
+  capabilityDiagnosticsSource,
+  /<input|<select|onChange=/,
+  'Capability supplier technical information must be read-only and must not expose internal edit controls'
+);
+
+assert.match(
+  pageSource,
+  /shouldLockCapabilityBaseUrl[\s\S]*readOnly=\{shouldLockCapabilityBaseUrl\}/,
+  'Known capability supplier base URLs must be read-only in the default connection section'
+);
+
+assert.match(
+  pageSource,
+  /!isCapabilityProviderForm \? \([\s\S]*PROVIDER_PRESETS\.map/,
+  'Model provider presets must not render for capability supplier dialogs'
+);
+
+assert.doesNotMatch(
+  pageSource,
+  /field_capability_supplier_type/,
+  'Capability supplier type must stay as a compact badge instead of a default form field'
 );
 
 assert.match(
   i18nSource,
   /'admin\.ai_resources\.capability_channel_form_edit_title': '编辑能力供应商'/,
   'Capability supplier dialog must provide Simplified Chinese copy distinct from model provider channels'
+);
+
+assert.match(
+  i18nSource,
+  /'admin\.ai_resources\.capability_diagnostics_title': '技术信息'/,
+  'Capability supplier diagnostics disclosure must provide Simplified Chinese copy'
 );
 
 assert.match(
@@ -534,20 +619,14 @@ assert.match(
 
 assert.match(
   pageSource,
-  /usage_scope_desc[\s\S]*This does not enable plugin features, edit prompts, router rules, or WordPress writes/,
-  'Provider channel usage scope copy must preserve Cloud runtime boundaries'
+  /capability_diagnostics_desc[\s\S]*Read-only runtime metadata for support and migration/,
+  'Capability supplier technical information copy must frame internal bindings as read-only metadata'
 );
 
 assert.match(
   pageSource,
-  /usage_scope_capability_summary[\s\S]*usage_scope_profile_summary[\s\S]*action_edit_usage_scope_advanced[\s\S]*field_capabilities[\s\S]*field_profiles/,
-  'Provider channel capabilities/profiles must default to readable summaries with advanced edit controls'
-);
-
-assert.match(
-  pageSource,
-  /providerUsesCustomRuntimeFields \? \([\s\S]*advanced_settings_title[\s\S]*field_connection_id[\s\S]*field_provider_id[\s\S]*field_kind[\s\S]*field_source_role/,
-  'Provider channel runtime identity fields must stay hidden unless the operator is configuring a custom channel'
+  /providerUsesCustomRuntimeFields \? \([\s\S]*advanced_settings_title[\s\S]*field_connection_id[\s\S]*field_provider_id[\s\S]*field_kind[\s\S]*field_source_role[\s\S]*field_capabilities[\s\S]*field_profiles/,
+  'Provider channel runtime identity and usage scope fields must stay hidden unless the operator is configuring a custom channel'
 );
 
 assert.match(
