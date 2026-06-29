@@ -76,6 +76,18 @@ if [ -f "${DIST_DIR}/ops-worker.tar.gz" ]; then
   gzip -dc "${DIST_DIR}/ops-worker.tar.gz" | docker load
 fi
 
+for image_archive in \
+  postgres.tar.gz \
+  redis.tar.gz \
+  nginx.tar.gz \
+  otel-collector.tar.gz \
+  jaeger.tar.gz
+do
+  if [ -f "${DIST_DIR}/${image_archive}" ]; then
+    gzip -dc "${DIST_DIR}/${image_archive}" | docker load
+  fi
+done
+
 if [ -f "${DIST_DIR}/frontend.tar.gz" ]; then
   gzip -dc "${DIST_DIR}/frontend.tar.gz" | docker load
 fi

@@ -57,6 +57,8 @@ if [ -n "${IMAGE_PLATFORM}" ]; then
 			"${CLOUD_DIR}"
 	fi
 	docker tag npcink-ai-cloud-api:prod npcink-ai-cloud-worker:prod
+	docker tag npcink-ai-cloud-api:prod npcink-ai-cloud-callback-worker:prod
+	docker tag npcink-ai-cloud-api:prod npcink-ai-cloud-ops-worker:prod
 	if [ "${SKIP_FRONTEND_IMAGE}" != "1" ]; then
 		docker buildx build \
 			--platform "${IMAGE_PLATFORM}" \
@@ -102,6 +104,23 @@ save_image() {
 	rsync -a -e "ssh -o ServerAliveInterval=30 -o ServerAliveCountMax=10" "${REMOTE_DOCKER_HOST}:${output}" "${output}"
 }
 
+ensure_image() {
+	local image="$1"
+
+	if [ -z "${REMOTE_DOCKER_HOST}" ]; then
+		if ! docker image inspect "${image}" >/dev/null 2>&1; then
+			if [ -n "${IMAGE_PLATFORM}" ]; then
+				docker pull --platform "${IMAGE_PLATFORM}" "${image}"
+			else
+				docker pull "${image}"
+			fi
+		fi
+		return 0
+	fi
+
+	ssh "${REMOTE_DOCKER_HOST}" "docker image inspect $(printf '%q' "${image}") >/dev/null 2>&1 || docker pull $(printf '%q' "${image}")"
+}
+
 save_image npcink-ai-cloud-api:prod "${DIST_DIR}/api.tar.gz"
 save_image npcink-ai-cloud-worker:prod "${DIST_DIR}/worker.tar.gz"
 save_image npcink-ai-cloud-callback-worker:prod "${DIST_DIR}/callback-worker.tar.gz"
@@ -111,6 +130,19 @@ if [ "${SKIP_FRONTEND_IMAGE}" != "1" ]; then
 else
 	rm -f "${DIST_DIR}/frontend.tar.gz"
 fi
+EXTERNAL_IMAGE_BUNDLES=(
+	"postgres:16-alpine|postgres.tar.gz"
+	"redis:7-alpine|redis.tar.gz"
+	"nginx:1.27-alpine|nginx.tar.gz"
+	"otel/opentelemetry-collector-contrib:0.104.0|otel-collector.tar.gz"
+	"jaegertracing/all-in-one:1.59|jaeger.tar.gz"
+)
+for item in "${EXTERNAL_IMAGE_BUNDLES[@]}"; do
+	image="${item%%|*}"
+	output="${item#*|}"
+	ensure_image "${image}"
+	save_image "${image}" "${DIST_DIR}/${output}"
+done
 
 if [ -n "${REMOTE_DOCKER_HOST}" ] && [ "${REMOTE_BUNDLE_ONLY}" = "1" ]; then
 	REMOTE_TAR_ARGS=(
@@ -122,6 +154,11 @@ if [ -n "${REMOTE_DOCKER_HOST}" ] && [ "${REMOTE_BUNDLE_ONLY}" = "1" ]; then
 		-C "${CLOUD_DIR}" dist/worker.tar.gz
 		-C "${CLOUD_DIR}" dist/callback-worker.tar.gz
 		-C "${CLOUD_DIR}" dist/ops-worker.tar.gz
+		-C "${CLOUD_DIR}" dist/postgres.tar.gz
+		-C "${CLOUD_DIR}" dist/redis.tar.gz
+		-C "${CLOUD_DIR}" dist/nginx.tar.gz
+		-C "${CLOUD_DIR}" dist/otel-collector.tar.gz
+		-C "${CLOUD_DIR}" dist/jaeger.tar.gz
 	)
 	if [ "${SKIP_FRONTEND_IMAGE}" != "1" ]; then
 		REMOTE_TAR_ARGS+=(-C "${CLOUD_DIR}" dist/frontend.tar.gz)
@@ -142,6 +179,11 @@ TAR_ARGS=(
 	-C "${CLOUD_DIR}" dist/worker.tar.gz
 	-C "${CLOUD_DIR}" dist/callback-worker.tar.gz
 	-C "${CLOUD_DIR}" dist/ops-worker.tar.gz
+	-C "${CLOUD_DIR}" dist/postgres.tar.gz
+	-C "${CLOUD_DIR}" dist/redis.tar.gz
+	-C "${CLOUD_DIR}" dist/nginx.tar.gz
+	-C "${CLOUD_DIR}" dist/otel-collector.tar.gz
+	-C "${CLOUD_DIR}" dist/jaeger.tar.gz
 )
 if [ "${SKIP_FRONTEND_IMAGE}" != "1" ]; then
 	TAR_ARGS+=(-C "${CLOUD_DIR}" dist/frontend.tar.gz)

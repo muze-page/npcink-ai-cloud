@@ -171,6 +171,9 @@ def test_preview_and_baseline_scripts_lock_migration_and_schema_checks() -> None
     deploy_to_ssh_script = (_cloud_root() / "deploy" / "deploy-to-ssh-host.sh").read_text()
     common_script = (_cloud_root() / "deploy" / "common.sh").read_text()
     remote_load_script = (_cloud_root() / "deploy" / "remote-load-and-up.sh").read_text()
+    provider_matrix_smoke = (
+        _cloud_root() / "deploy" / "remote-provider-matrix-smoke.sh"
+    ).read_text()
 
     assert "alembic upgrade head" in preview_script
     assert "python -m app.dev.baseline_status" in preview_script
@@ -237,6 +240,10 @@ def test_preview_and_baseline_scripts_lock_migration_and_schema_checks() -> None
     assert "NPCINK_CLOUD_HEALTH_FORWARDED_PROTO" in common_script
     assert "NPCINK_CLOUD_BROWSER_ORIGIN_ALLOWLIST" in remote_load_script
     assert "configure_ready_origin_headers" in remote_load_script
+    assert "NPCINK_CLOUD_REQUIRED_PROVIDER_CAPABILITIES" in provider_matrix_smoke
+    assert "db_managed_provider_connections" in provider_matrix_smoke
+    assert '"direct_wordpress_write": False' in provider_matrix_smoke
+    assert '"secret_exposure": "none"' in provider_matrix_smoke
 
 
 def test_deploy_bundle_smoke_uses_sample_provider_and_skip_frontend_contract() -> None:
@@ -247,6 +254,7 @@ def test_deploy_bundle_smoke_uses_sample_provider_and_skip_frontend_contract() -
     package_json = (cloud_root / "package.json").read_text()
     frontend_dockerfile = (cloud_root / "frontend" / "Dockerfile").read_text()
     bundle_script = (cloud_root / "deploy" / "bundle-images.sh").read_text()
+    remote_load_script = (cloud_root / "deploy" / "remote-load-and-up.sh").read_text()
     static_terms_deploy_script = (
         cloud_root / "deploy" / "deploy-static-terms-to-ssh-host.sh"
     ).read_text()
@@ -300,10 +308,19 @@ def test_deploy_bundle_smoke_uses_sample_provider_and_skip_frontend_contract() -
     assert "try_files /terms/index.html =404;" in nginx_prod_conf
     assert "location /terms/" in nginx_prod_conf
     assert "root /usr/share/nginx/html/npcink-site;" in nginx_prod_conf
+    assert "./site:/usr/share/nginx/html/npcink-site:ro" in compose_text
     assert "\"${BASE_URL%/}/terms\"" in remote_smoke_script
     assert "/terms/en/terms.html" in remote_smoke_script
     assert "/terms/zh/terms.html" in remote_smoke_script
     assert "/terms/styles.css" in remote_smoke_script
+    assert "--skip-terms-checks" in remote_smoke_script
+    assert "Npcink Cloud Legal Documents" in remote_smoke_script
+    assert "data.result.images" in remote_smoke_script
+    assert "postgres.tar.gz" in bundle_script
+    assert "otel-collector.tar.gz" in bundle_script
+    assert "jaeger.tar.gz" in bundle_script
+    assert "otel-collector.tar.gz" in remote_load_script
+    assert "jaeger.tar.gz" in remote_load_script
     assert "static_terms_only" in ci_workflow
     assert "site/terms/*" in ci_workflow
     assert "needs: [classify, backend, frontend, static-terms]" in ci_workflow
