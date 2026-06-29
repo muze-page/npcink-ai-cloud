@@ -6,7 +6,7 @@ import secrets
 from collections import Counter
 from datetime import UTC, datetime, timedelta
 from typing import Any, cast
-from urllib.parse import urlsplit
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from uuid import uuid4
 
 from app.adapters.repositories.commercial_repository import CommercialRepository
@@ -18,6 +18,9 @@ from app.core.db import get_session
 from app.core.models import (
     ACCOUNT_STATUS_ACTIVE,
     ACCOUNT_USER_MEMBERSHIP_STATUS_ACTIVE,
+    PORTAL_OAUTH_STATE_STATUS_CONSUMED,
+    PORTAL_OAUTH_STATE_STATUS_EXPIRED,
+    PORTAL_OAUTH_STATE_STATUS_PENDING,
     PRINCIPAL_STATUS_ACTIVE,
     SITE_API_KEY_STATUS_ACTIVE,
     SITE_API_KEY_STATUS_EXPIRED,
@@ -32,12 +35,18 @@ from app.core.models import (
     SiteApiKey,
 )
 from app.core.secrets import (
+    decrypt_addon_connection_payload,
+    encrypt_addon_connection_payload,
     encrypt_runtime_terminal_callback_secret,
     encrypt_site_api_signing_secret,
 )
 from app.core.security import build_secret_hash
 from app.domain.commercial.audit_context import ServiceAuditContext
-from app.domain.commercial.customer_api_keys import expand_api_key_scopes
+from app.domain.commercial.customer_api_keys import (
+    DEFAULT_PORTAL_RUNTIME_SCOPES,
+    build_customer_api_key,
+    expand_api_key_scopes,
+)
 from app.domain.commercial.errors import (
     CommercialNotFoundError,
     CommercialPermissionError,
@@ -57,6 +66,47 @@ from app.domain.commercial.service import (
     DEFAULT_PLAN_TIER_ID,
     PLAN_TIER_REGISTRY,
 )
+
+WORDPRESS_ADDON_CONNECTION_PROVIDER = "wordpress_addon_connection"
+WORDPRESS_ADDON_CONNECTION_TTL_SECONDS = 10 * 60
+
+
+def _hash_addon_connection_value(value: str, *, prefix: str) -> str:
+    normalized = str(value or "").strip()
+    if not normalized:
+        raise CommercialValidationError(
+            "service.wordpress_addon_connection_value_required",
+            "wordpress addon connection value is required",
+        )
+    return build_secret_hash(f"{WORDPRESS_ADDON_CONNECTION_PROVIDER}:{prefix}:{normalized}")
+
+
+def _normalize_addon_return_url(value: str) -> str:
+    raw = str(value or "").strip()
+    parsed = urlsplit(raw)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise CommercialValidationError(
+            "service.wordpress_addon_return_url_invalid",
+            "wordpress addon return_url must be an absolute http or https URL",
+        )
+    return raw[:2048]
+
+
+def _append_addon_return_query(return_url: str, *, code: str, state: str) -> str:
+    parsed = urlsplit(return_url)
+    query = dict(parse_qsl(parsed.query, keep_blank_values=True))
+    query["code"] = code
+    if state:
+        query["state"] = state
+    return urlunsplit(
+        (
+            parsed.scheme,
+            parsed.netloc,
+            parsed.path,
+            urlencode(query),
+            parsed.fragment,
+        )
+    )
 
 
 class CommercialServiceSiteMixin(CommercialServiceAuditMixin):
@@ -613,6 +663,330 @@ class CommercialServiceSiteMixin(CommercialServiceAuditMixin):
                 payload["site_activated"] = False
             session.commit()
             return payload
+
+    def create_wordpress_addon_connection(
+        self,
+        *,
+        account_id: str,
+        principal_id: str,
+        wordpress_url: str,
+        site_name: str,
+        return_url: str,
+        addon_state: str,
+        audit_context: ServiceAuditContext | None = None,
+    ) -> dict[str, object]:
+        normalized_account_id = str(account_id or "").strip()
+        normalized_principal_id = str(principal_id or "").strip()
+        safe_return_url = _normalize_addon_return_url(return_url)
+        normalized_addon_state = str(addon_state or "").strip()
+        if not normalized_addon_state:
+            raise CommercialValidationError(
+                "service.wordpress_addon_state_required",
+                "wordpress addon state is required",
+            )
+        canonical_wordpress_url, site_source = _normalize_portal_site_url(wordpress_url)
+        site_slug = _slugify_portal_site_segment(site_source)
+        if not normalized_account_id:
+            raise CommercialPermissionError(
+                "service.account_id_required",
+                "account id is required",
+            )
+        if not normalized_principal_id:
+            raise CommercialPermissionError(
+                "service.principal_id_required",
+                "principal id is required",
+            )
+        if not site_slug:
+            raise CommercialPermissionError(
+                "service.portal_site_slug_invalid",
+                "wordpress site url could not be converted into a stable site id",
+            )
+
+        normalized_site_id = f"site_{site_slug}"
+        resolved_site_name = (
+            str(site_name or "").strip()
+            or urlsplit(canonical_wordpress_url).hostname
+            or normalized_site_id
+        )
+        now = self.now_factory()
+        key_secret = f"sk_{secrets.token_urlsafe(24)}"
+        key_id = f"key_{uuid4().hex}"
+        connection_code = secrets.token_urlsafe(32)
+        expires_at = now + timedelta(seconds=WORDPRESS_ADDON_CONNECTION_TTL_SECONDS)
+
+        with get_session(self.database_url) as session:
+            repository = CommercialRepository(session)
+            account = repository.get_account(normalized_account_id)
+            if account is None:
+                raise CommercialNotFoundError(
+                    "service.account_not_found",
+                    f"account '{normalized_account_id}' was not found",
+                )
+            if str(account.status or "") != ACCOUNT_STATUS_ACTIVE:
+                raise CommercialPermissionError(
+                    "service.portal_account_inactive",
+                    f"account '{normalized_account_id}' is not active",
+                )
+            identity = repository.get_principal_identity_by_ref(
+                principal_id=normalized_principal_id,
+            )
+            if identity is None or identity.status != PRINCIPAL_STATUS_ACTIVE:
+                raise CommercialPermissionError(
+                    "service.principal_access_required",
+                    f"principal '{normalized_principal_id}' is not active",
+                )
+            subscription = repository.get_runtime_subscription(normalized_account_id)
+            if subscription is None:
+                raise CommercialPermissionError(
+                    "service.subscription_required",
+                    f"account '{normalized_account_id}' does not have an active customer subscription",
+                )
+            snapshot = repository.get_active_entitlement_snapshot(
+                normalized_account_id,
+                subscription_id=subscription.subscription_id,
+            )
+            if snapshot is None:
+                raise CommercialPermissionError(
+                    "service.entitlement_snapshot_required",
+                    f"account '{normalized_account_id}' does not have an active entitlement snapshot",
+                )
+
+            service = cast(Any, self)
+            existing_site = repository.get_site(normalized_site_id)
+            site_created = False
+            if existing_site is None:
+                service._assert_account_site_capacity(
+                    repository=repository,
+                    account_id=normalized_account_id,
+                    snapshot=snapshot,
+                )
+                site = repository.upsert_site(
+                    site_id=normalized_site_id,
+                    account_id=normalized_account_id,
+                    name=resolved_site_name,
+                    status=SITE_STATUS_PROVISIONING,
+                    metadata_json={
+                        "source": "portal_self_serve",
+                        "wordpress_url": canonical_wordpress_url,
+                        "created_via": "wordpress_addon_connection",
+                    },
+                    provisioned_at=now,
+                )
+                site_created = True
+                self._record_service_audit_in_session(
+                    repository=repository,
+                    audit_context=audit_context,
+                    event_kind="site.provision",
+                    outcome="succeeded",
+                    account_id=normalized_account_id,
+                    site_id=site.site_id,
+                    scope_kind="site",
+                    scope_id=site.site_id,
+                    payload_json=self._serialize_site(site),
+                )
+            else:
+                site = existing_site
+                if str(site.account_id or "") != normalized_account_id:
+                    raise CommercialPermissionError(
+                        "service.portal_site_conflict",
+                        f"site id '{normalized_site_id}' is already bound to another account",
+                    )
+                if str(site.status or "") in {SITE_STATUS_ARCHIVED, SITE_STATUS_SUSPENDED}:
+                    raise CommercialPermissionError(
+                        "service.portal_site_not_connectable",
+                        f"site '{normalized_site_id}' is not available for addon connection",
+                    )
+
+            repository.upsert_principal_site_grant(
+                grant_id=f"sadmg_{uuid4().hex}",
+                principal_id=identity.principal_id,
+                site_id=site.site_id,
+                status=SITE_USER_GRANT_STATUS_ACTIVE,
+                metadata_json={"source": "wordpress_addon_connection"},
+            )
+            repository.upsert_account_user_membership(
+                membership_id=f"aum_{uuid4().hex}",
+                principal_id=identity.principal_id,
+                account_id=normalized_account_id,
+                role=normalize_user_role(USER_ROLE_USER),
+                status=ACCOUNT_USER_MEMBERSHIP_STATUS_ACTIVE,
+                allowed_actions_json=resolve_principal_allowed_actions(),
+                metadata_json={"source": "wordpress_addon_connection"},
+            )
+
+            api_key = repository.upsert_site_key(
+                key_id=key_id,
+                site_id=site.site_id,
+                secret_hash=build_secret_hash(key_secret),
+                signing_secret_ciphertext=encrypt_site_api_signing_secret(
+                    key_secret,
+                    settings=self.settings,
+                ),
+                label="WordPress addon connection",
+                scopes_json=expand_api_key_scopes(DEFAULT_PORTAL_RUNTIME_SCOPES),
+                metadata_json={
+                    "source": "wordpress_addon_connection",
+                    "wordpress_url": canonical_wordpress_url,
+                },
+                status=SITE_API_KEY_STATUS_ACTIVE,
+                rotated_from_key_id=None,
+                replaced_by_key_id=None,
+                expires_at=None,
+                revoked_at=None,
+            )
+            if site.status == SITE_STATUS_PROVISIONING:
+                site.status = SITE_STATUS_ACTIVE
+                if site.provisioned_at is None:
+                    site.provisioned_at = now
+                site.activated_at = now
+                site.suspended_at = None
+                site.suspension_reason = None
+                self._record_service_audit_in_session(
+                    repository=repository,
+                    audit_context=audit_context,
+                    event_kind="site.activate",
+                    outcome="succeeded",
+                    account_id=site.account_id,
+                    site_id=site.site_id,
+                    key_id=api_key.key_id,
+                    scope_kind="site",
+                    scope_id=site.site_id,
+                    payload_json=self._serialize_site(site),
+                )
+
+            cloud_api_key = build_customer_api_key(
+                site_id=site.site_id,
+                key_id=api_key.key_id,
+                secret=key_secret,
+            )
+            repository.create_portal_oauth_state(
+                state_id=f"wacs_{uuid4().hex}",
+                provider=WORDPRESS_ADDON_CONNECTION_PROVIDER,
+                state_hash=_hash_addon_connection_value(connection_code, prefix="code"),
+                return_to=safe_return_url,
+                client_scope_id=site.site_id,
+                expires_at=expires_at,
+                metadata_json={
+                    "source": "wordpress_addon_connection",
+                    "site_id": site.site_id,
+                    "key_id": api_key.key_id,
+                    "addon_state_hash": _hash_addon_connection_value(
+                        normalized_addon_state,
+                        prefix="state",
+                    ),
+                    "payload_ciphertext": encrypt_addon_connection_payload(
+                        {
+                            "site_id": site.site_id,
+                            "key_id": api_key.key_id,
+                            "cloud_api_key": cloud_api_key,
+                        },
+                        settings=self.settings,
+                    ),
+                },
+            )
+
+            connection_payload = {
+                "site_id": site.site_id,
+                "key_id": api_key.key_id,
+                "site_created": site_created,
+                "expires_at": self._serialize_datetime(expires_at),
+                "return_url": safe_return_url,
+            }
+            self._record_service_audit_in_session(
+                repository=repository,
+                audit_context=audit_context,
+                event_kind="wordpress_addon_connection.issue",
+                outcome="succeeded",
+                account_id=site.account_id,
+                site_id=site.site_id,
+                key_id=api_key.key_id,
+                scope_kind="site",
+                scope_id=site.site_id,
+                payload_json=connection_payload,
+            )
+            session.commit()
+
+        return {
+            **connection_payload,
+            "redirect_url": _append_addon_return_query(
+                safe_return_url,
+                code=connection_code,
+                state=normalized_addon_state,
+            ),
+            "expires_in_seconds": WORDPRESS_ADDON_CONNECTION_TTL_SECONDS,
+        }
+
+    def consume_wordpress_addon_connection(
+        self,
+        *,
+        code: str,
+        addon_state: str,
+    ) -> dict[str, object]:
+        normalized_code = str(code or "").strip()
+        normalized_addon_state = str(addon_state or "").strip()
+        if not normalized_code or not normalized_addon_state:
+            raise CommercialPermissionError(
+                "service.wordpress_addon_connection_code_required",
+                "wordpress addon connection code and state are required",
+            )
+        now = self.now_factory()
+        with get_session(self.database_url) as session:
+            repository = CommercialRepository(session)
+            row = repository.get_portal_oauth_state(
+                provider=WORDPRESS_ADDON_CONNECTION_PROVIDER,
+                state_hash=_hash_addon_connection_value(normalized_code, prefix="code"),
+            )
+            if row is None:
+                raise CommercialPermissionError(
+                    "service.wordpress_addon_connection_code_invalid",
+                    "wordpress addon connection code is invalid",
+                )
+            if row.status != PORTAL_OAUTH_STATE_STATUS_PENDING or row.consumed_at is not None:
+                raise CommercialPermissionError(
+                    "service.wordpress_addon_connection_code_invalid",
+                    "wordpress addon connection code is invalid",
+                )
+            metadata = row.metadata_json if isinstance(row.metadata_json, dict) else {}
+            expected_state_hash = str(metadata.get("addon_state_hash") or "")
+            if expected_state_hash != _hash_addon_connection_value(
+                normalized_addon_state,
+                prefix="state",
+            ):
+                raise CommercialPermissionError(
+                    "service.wordpress_addon_connection_state_invalid",
+                    "wordpress addon connection state is invalid",
+                )
+            row_expires_at = (
+                row.expires_at.replace(tzinfo=UTC)
+                if row.expires_at.tzinfo is None
+                else row.expires_at.astimezone(UTC)
+            )
+            if row_expires_at <= now:
+                row.status = PORTAL_OAUTH_STATE_STATUS_EXPIRED
+                row.consumed_at = now
+                session.commit()
+                raise CommercialPermissionError(
+                    "service.wordpress_addon_connection_code_expired",
+                    "wordpress addon connection code has expired",
+                )
+            try:
+                payload = decrypt_addon_connection_payload(
+                    str(metadata.get("payload_ciphertext") or ""),
+                    settings=self.settings,
+                )
+            except RuntimeError as error:
+                raise CommercialPermissionError(
+                    "service.wordpress_addon_connection_payload_invalid",
+                    "wordpress addon connection payload is invalid",
+                ) from error
+            row.status = PORTAL_OAUTH_STATE_STATUS_CONSUMED
+            row.consumed_at = now
+            session.commit()
+        return {
+            "site_id": str(payload.get("site_id") or ""),
+            "key_id": str(payload.get("key_id") or ""),
+            "cloud_api_key": str(payload.get("cloud_api_key") or ""),
+        }
 
     def list_site_keys(
         self,

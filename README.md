@@ -513,6 +513,18 @@ After the first platform-admin login, configure Portal public URL, QQ login,
 and Portal email delivery in `/admin/service-settings`. These service settings
 are stored by Cloud runtime storage and are no longer read from `.env`.
 
+If a development deploy still has Portal public URL, QQ login, or SMTP values
+in `.env`, import the current `NPCINK_CLOUD_*` values once before removing
+those service-setting keys:
+
+```bash
+docker compose -f docker-compose.dev.yml run --rm api \
+  python -m app.dev.import_service_settings_from_env
+```
+
+The import command writes only to `service_settings`, keeps secret values out of
+stdout, and does not re-enable `.env` fallback.
+
 Additional hardening rules now enforced:
 
 - production API runs behind `gunicorn` + `uvicorn.workers.UvicornWorker`
@@ -625,6 +637,11 @@ Portal member auth:
   - `POST /portal/v1/auth/code/verify`
 - successful verification establishes the cookie-backed portal session used by
   `/portal/*` and `/portal/v1/*`
+- WordPress addon authorization uses the bounded Portal connection seam:
+  - `POST /portal/v1/addon-connections` requires a Portal session and issues a
+    short-lived return code after creating or activating the site connection
+  - `POST /portal/v1/addon-connections/exchange` consumes that one-time code
+    from the WordPress server and returns the customer-facing Cloud API key
 - production deploys should set:
   - `NPCINK_CLOUD_PORTAL_JWT_SECRET`
 - production deploys should configure in `/admin/service-settings`:

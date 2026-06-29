@@ -177,6 +177,24 @@ export interface CreateSiteRequest {
   wordpress_url: string;
 }
 
+export interface CreateAddonConnectionRequest {
+  account_id: string;
+  site_name?: string;
+  wordpress_url: string;
+  return_url: string;
+  state: string;
+}
+
+export interface AddonConnectionResult {
+  site_id: string;
+  key_id: string;
+  site_created: boolean;
+  redirect_url: string;
+  return_url: string;
+  expires_at: string;
+  expires_in_seconds: number;
+}
+
 export interface CreateKeyRequest {
   label?: string;
   scopes?: string[];
@@ -1668,6 +1686,10 @@ export class PortalClient {
 
   async createSite(payload: CreateSiteRequest): Promise<PortalEnvelope<PortalProvisionedSite>> {
     return this.request('POST', '/sites', payload, { requireAuth: true });
+  }
+
+  async createAddonConnection(payload: CreateAddonConnectionRequest): Promise<PortalEnvelope<AddonConnectionResult>> {
+    return this.request('POST', '/addon-connections', payload, { requireAuth: true });
   }
 
   async activateSite(siteId: string): Promise<PortalEnvelope<PortalActivatedSite>> {

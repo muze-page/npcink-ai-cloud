@@ -2,7 +2,7 @@
 
 > Status: canonical release gate
 >
-> Updated: 2026-04-15
+> Updated: 2026-06-29
 >
 > Scope: `cloud/**` formal release execution, production env verification, smoke, rollback readiness
 
@@ -72,7 +72,11 @@ All items in this section are `Required`.
 
 ### 3.2 Public Base URLs
 
-- [ ] `NPCINK_CLOUD_BASE_URL` matches the real public release URL
+- [ ] local development entry remains `http://127.0.0.1:8010/` and is not used
+  as a production public URL
+- [ ] production `.env.deploy` sets `NPCINK_CLOUD_BASE_URL=https://cloud.npc.ink`
+- [ ] `NPCINK_CLOUD_BROWSER_ORIGIN_ALLOWLIST=https://cloud.npc.ink`
+- [ ] `NPCINK_CLOUD_TRUSTED_HOST_ALLOWLIST=cloud.npc.ink`
 - [ ] `/admin/service-settings` Portal public URL matches the real public portal URL
 - [ ] public reverse proxy and TLS are already valid for the release host
 
@@ -91,6 +95,9 @@ All items in this section are `Required`.
 - [ ] no stub-only login path is used during production smoke
 - [ ] `ops-worker` is deployed and running with the intended cadence intervals
 - [ ] `callback-worker` is deployed and running for terminal callback delivery
+- [ ] `NPCINK_CLOUD_API_WORKERS` matches the release host CPU/memory budget
+- [ ] `NPCINK_CLOUD_RUNTIME_WORKER_POLL_SECONDS` is set for the release host
+- [ ] `NPCINK_CLOUD_RUNTIME_CALLBACK_WORKER_POLL_SECONDS` is set for the release host
 - [ ] `NPCINK_CLOUD_WORKER_HEARTBEAT_INTERVAL_SECONDS` is set for the release host
 - [ ] cadence env is explicitly set for the release host:
   - `NPCINK_CLOUD_OPS_CADENCE_POLL_SECONDS`

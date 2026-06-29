@@ -97,6 +97,62 @@ def decrypt_site_api_signing_secret(ciphertext: str | None, *, settings: Setting
         raise RuntimeError("site api signing secret could not be decrypted") from error
 
 
+def encrypt_addon_connection_payload(
+    payload: dict[str, object],
+    *,
+    settings: Settings,
+) -> str:
+    encoded = json.dumps(payload, ensure_ascii=True, separators=(",", ":"), sort_keys=True)
+    return (
+        _build_fernet(
+            _resolve_encryption_secret(
+                (
+                    settings.admin_session_secret,
+                    settings.portal_jwt_secret,
+                    settings.internal_auth_token,
+                ),
+                error_message="addon connection payload secret is not configured",
+            ),
+            purpose="wordpress_addon_connection_payload",
+        )
+        .encrypt(encoded.encode("utf-8"))
+        .decode("utf-8")
+    )
+
+
+def decrypt_addon_connection_payload(
+    ciphertext: str | None,
+    *,
+    settings: Settings,
+) -> dict[str, object]:
+    token = str(ciphertext or "").strip()
+    if not token:
+        return {}
+    try:
+        decoded = (
+            _build_fernet(
+                _resolve_encryption_secret(
+                    (
+                        settings.admin_session_secret,
+                        settings.portal_jwt_secret,
+                        settings.internal_auth_token,
+                    ),
+                    error_message="addon connection payload secret is not configured",
+                ),
+                purpose="wordpress_addon_connection_payload",
+            )
+            .decrypt(token.encode("utf-8"))
+            .decode("utf-8")
+        )
+    except InvalidToken as error:
+        raise RuntimeError("addon connection payload could not be decrypted") from error
+    try:
+        payload = json.loads(decoded)
+    except json.JSONDecodeError as error:
+        raise RuntimeError("addon connection payload is not valid json") from error
+    return payload if isinstance(payload, dict) else {}
+
+
 def encrypt_runtime_execution_input(
     input_payload: dict[str, object],
     *,

@@ -18,10 +18,12 @@ def test_prod_env_files_use_canonical_admin_names_and_do_not_expose_ai_provider_
     env_example_text = (cloud_root / ".env.example").read_text()
     readme_text = (cloud_root / "README.md").read_text()
     checklist_text = (cloud_root / "deploy" / "RELEASE_CHECKLIST.md").read_text()
+    playbook_text = (cloud_root / "deploy" / "OPS_PLAYBOOK.md").read_text()
 
     for text in (compose_text, env_example_text, readme_text, checklist_text):
         assert "NPCINK_CLOUD_ADMIN_SESSION_SECRET" in text
         assert "NPCINK_CLOUD_ADMIN_BOOTSTRAP_TOKEN" in text
+        assert "NPCINK_CLOUD_BASE_URL" in text or text is readme_text
         assert "NPCINK_CLOUD_OPS_CADENCE_POLL_SECONDS" in text
         assert "NPCINK_CLOUD_RUNTIME_CALLBACK_WORKER_POLL_SECONDS" in text or text is checklist_text
         assert "NPCINK_CLOUD_WORKER_HEARTBEAT_INTERVAL_SECONDS" in text or text is checklist_text
@@ -33,11 +35,19 @@ def test_prod_env_files_use_canonical_admin_names_and_do_not_expose_ai_provider_
     assert "callback-worker:" in compose_text
     assert "otel-collector:" in compose_text
     assert "jaeger:" in compose_text
+    assert "NPCINK_CLOUD_ADMIN_BOOTSTRAP_PRINCIPAL_ID" in compose_text
+    assert "NPCINK_CLOUD_ADMIN_BOOTSTRAP_PRINCIPAL_ID" in env_example_text
+    assert "NPCINK_CLOUD_ADMIN_BOOTSTRAP_PLATFORM_ADMIN_ROLE" in compose_text
+    assert "NPCINK_CLOUD_ADMIN_BOOTSTRAP_PLATFORM_ADMIN_ROLE" in env_example_text
 
     assert "NPCINK_CLOUD_OPS_SESSION_SECRET" not in compose_text
     assert "NPCINK_CLOUD_OPS_SESSION_SECRET" not in env_example_text
     assert "NPCINK_CLOUD_OPS_SESSION_SECRET" not in readme_text
     assert "NPCINK_CLOUD_OPS_SESSION_SECRET" not in checklist_text
+    assert "NPCINK_CLOUD_ADMIN_BOOTSTRAP_ADMIN_REF" not in compose_text
+    assert "NPCINK_CLOUD_ADMIN_BOOTSTRAP_ADMIN_REF" not in env_example_text
+    assert "NPCINK_CLOUD_ADMIN_BOOTSTRAP_ADMIN_ROLE" not in compose_text
+    assert "NPCINK_CLOUD_ADMIN_BOOTSTRAP_ADMIN_ROLE" not in env_example_text
     assert "NPCINK_CLOUD_OPENAI_COMPATIBLE_" not in compose_text
     assert "NPCINK_CLOUD_OPENAI_COMPATIBLE_" not in env_example_text
     assert "NPCINK_CLOUD_OPENAI_COMPATIBLE_" not in readme_text
@@ -54,6 +64,14 @@ def test_prod_env_files_use_canonical_admin_names_and_do_not_expose_ai_provider_
     assert "AI provider channels are managed in Cloud runtime storage" in env_example_text
     assert "NPCINK_CLOUD_FEATURE_FLAGS_JSON" in env_example_text
     assert "NPCINK_CLOUD_FEATURE_FLAGS_JSON" in readme_text
+    assert "http://127.0.0.1:8010" in env_example_text
+    assert "https://cloud.npc.ink" in checklist_text
+    assert "cloud.npc.ink" in checklist_text
+    assert "https://cloud.npc.ink" in playbook_text
+    assert "Resource Tuning Baseline" in playbook_text
+    assert "NPCINK_CLOUD_API_WORKERS" in playbook_text
+    assert "NPCINK_CLOUD_RUNTIME_WORKER_POLL_SECONDS" in playbook_text
+    assert "NPCINK_CLOUD_RUNTIME_CALLBACK_WORKER_POLL_SECONDS" in playbook_text
 
 
 def test_env_example_production_payload_validates_with_canonical_names(

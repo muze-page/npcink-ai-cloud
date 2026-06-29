@@ -558,6 +558,34 @@ def test_admin_service_settings_reject_qq_redirect_outside_public_base(
     dispose_engine(database_url)
 
 
+def test_admin_service_settings_reject_email_ssl_and_starttls(
+    tmp_path: Path,
+) -> None:
+    database_url, client = _build_client(tmp_path)
+
+    response = client.patch(
+        "/internal/service/admin/service-settings/email",
+        json={
+            "smtp_host": "smtp.example.com",
+            "smtp_port": 465,
+            "smtp_username": "smtp-user",
+            "smtp_password": "smtp-password",
+            "smtp_use_ssl": True,
+            "smtp_use_starttls": True,
+            "smtp_timeout_seconds": 20,
+            "from_email": "noreply@example.com",
+            "from_name": "Npcink AI Cloud",
+            "reply_to": "support@example.com",
+        },
+        headers=build_internal_headers(idempotency_key="service-settings-bad-email-tls-001"),
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error_code"] == "service_settings.email_tls_mode_invalid"
+
+    dispose_engine(database_url)
+
+
 def test_admin_image_source_provider_env_settings_route_is_retired(
     tmp_path: Path,
 ) -> None:

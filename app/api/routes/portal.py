@@ -88,6 +88,19 @@ class PortalCreateSitePayload(BaseModel):
     wordpress_url: str = ""
 
 
+class PortalAddonConnectionPayload(BaseModel):
+    account_id: str = ""
+    site_name: str = ""
+    wordpress_url: str = ""
+    return_url: str = ""
+    state: str = ""
+
+
+class PortalAddonConnectionExchangePayload(BaseModel):
+    code: str = ""
+    state: str = ""
+
+
 class PortalLoginCodeRequestPayload(BaseModel):
     email: str = ""
     locale: str = ""
@@ -1366,6 +1379,65 @@ async def create_portal_site(
 
     return _portal_route_envelope(
         message="portal site created",
+        data=result,
+    )
+
+
+@router.post("/addon-connections")
+async def create_portal_addon_connection(
+    request: Request,
+    payload: PortalAddonConnectionPayload,
+) -> Any:
+    same_origin = _portal_same_origin_guard(request)
+    if same_origin is not None:
+        return same_origin
+    write_guard = _portal_write_guard(request)
+    if write_guard is not None:
+        return write_guard
+    auth = await resolve_portal_request_context(
+        request,
+        require_idempotency=True,
+        allow_session_cookies=True,
+    )
+    if isinstance(auth, JSONResponse):
+        return auth
+
+    service = _get_commercial_service(request)
+    audit_context = _build_portal_audit_context(request, auth.principal_id)
+    try:
+        result = service.create_wordpress_addon_connection(
+            account_id=payload.account_id,
+            principal_id=auth.principal_id,
+            wordpress_url=payload.wordpress_url,
+            site_name=payload.site_name,
+            return_url=payload.return_url,
+            addon_state=payload.state,
+            audit_context=audit_context,
+        )
+    except CommercialServiceError as error:
+        return _service_error_response(error, request=request)
+
+    return _portal_route_envelope(
+        message="wordpress addon connection issued",
+        data=result,
+    )
+
+
+@router.post("/addon-connections/exchange")
+async def exchange_portal_addon_connection(
+    request: Request,
+    payload: PortalAddonConnectionExchangePayload,
+) -> Any:
+    try:
+        result = _get_commercial_service(request).consume_wordpress_addon_connection(
+            code=payload.code,
+            addon_state=payload.state,
+        )
+    except CommercialServiceError as error:
+        return _service_error_response(error, request=request)
+
+    return _portal_route_envelope(
+        message="wordpress addon connection exchanged",
         data=result,
     )
 

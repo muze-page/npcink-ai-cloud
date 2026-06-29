@@ -5,6 +5,7 @@ import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
+from urllib.parse import parse_qs, urlsplit
 
 from fastapi.testclient import TestClient
 from sqlalchemy import select
@@ -511,6 +512,93 @@ def test_portal_issue_rotate_list_and_revoke_site_key(tmp_path: Path) -> None:
     assert portal_issue_audit["actor_ref"] == _GRANTS_BY_EMAIL["portal-admin@example.com"][
         "principal_id"
     ]
+
+    dispose_engine(database_url)
+
+
+def test_portal_wordpress_addon_connection_issues_one_time_exchange_code(
+    tmp_path: Path,
+) -> None:
+    database_url, client = _build_client(tmp_path)
+
+    registration_request = _request_portal_registration_code(
+        client,
+        email="addon-connect@example.com",
+        site_url="https://primary.example.com",
+        site_name="Primary Site",
+        headers={
+            "x-npcink-debug-portal-link": "1",
+            "x-npcink-dev-login-code": "1",
+        },
+    )
+    registration = _verify_portal_registration_code(
+        client,
+        email="addon-connect@example.com",
+        code=str(registration_request["code"]),
+    )
+
+    return_url = (
+        "https://wp.example.com/wp-admin/admin-post.php"
+        "?action=npcink_cloud_addon_complete_auth&state=addon-state-001"
+    )
+    create_response = client.post(
+        "/portal/v1/addon-connections",
+        json={
+            "account_id": registration["account_id"],
+            "wordpress_url": "https://primary.example.com",
+            "site_name": "Primary Site",
+            "return_url": return_url,
+            "state": "addon-state-001",
+        },
+        headers={"Idempotency-Key": "portal-addon-connect-001"},
+    )
+    assert create_response.status_code == 200, create_response.text
+    create_data = create_response.json()["data"]
+    assert create_data["site_id"] == "site_primary-example-com"
+    assert create_data["site_created"] is False
+    assert create_data["redirect_url"].startswith(
+        "https://wp.example.com/wp-admin/admin-post.php?"
+    )
+    assert "mak1_" not in create_data["redirect_url"]
+    assert "sk_" not in create_data["redirect_url"]
+
+    redirect_query = parse_qs(urlsplit(str(create_data["redirect_url"])).query)
+    code = redirect_query["code"][0]
+    assert redirect_query["state"][0] == "addon-state-001"
+    assert code
+
+    exchange_response = client.post(
+        "/portal/v1/addon-connections/exchange",
+        json={"code": code, "state": "addon-state-001"},
+    )
+    assert exchange_response.status_code == 200, exchange_response.text
+    exchange_data = exchange_response.json()["data"]
+    assert exchange_data["site_id"] == "site_primary-example-com"
+    assert exchange_data["key_id"] == create_data["key_id"]
+    assert exchange_data["cloud_api_key"].startswith("mak1_")
+    decoded_key = _decode_customer_key(exchange_data["cloud_api_key"])
+    assert decoded_key["site_id"] == "site_primary-example-com"
+    assert decoded_key["key_id"] == create_data["key_id"]
+    assert decoded_key["secret"].startswith("sk_")
+
+    replay_response = client.post(
+        "/portal/v1/addon-connections/exchange",
+        json={"code": code, "state": "addon-state-001"},
+    )
+    assert replay_response.status_code != 200
+
+    with get_session(database_url) as session:
+        site = session.get(Site, "site_primary-example-com")
+        assert site is not None
+        assert site.status == "active"
+
+    audit_response = client.get(
+        "/internal/service/audit-events?site_id=site_primary-example-com&limit=20",
+        headers=build_internal_headers(),
+    )
+    assert audit_response.status_code == 200
+    audit_items = audit_response.json()["data"]["items"]
+    assert any(item["event_kind"] == "wordpress_addon_connection.issue" for item in audit_items)
 
     dispose_engine(database_url)
 

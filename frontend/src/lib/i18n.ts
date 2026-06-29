@@ -341,6 +341,10 @@ export const translations: Record<Locale, TranslationMap> = {
     'portal.connect_site_desc': 'Connect a WordPress site to inspect it inside the site admin workspace.',
     'portal.connect_site_title': 'Connect Site',
     'portal.connect_site_heading': 'Add another WordPress site',
+    'portal.connect_site_addon_title': 'Authorize WordPress addon',
+    'portal.connect_site_addon_desc':
+      'Create or activate this Cloud site connection, then return to WordPress with a one-time authorization code.',
+    'portal.connect_site_authorize_addon': 'Authorize addon',
     'portal.connect_site_action': 'Add site',
     'portal.connect_site_return_to_workspace': 'Return to workspace',
     'portal.connect_site_docs': 'Open setup guide',
@@ -995,7 +999,7 @@ export const translations: Record<Locale, TranslationMap> = {
     'admin.overview_title': 'Admin Overview',
     'admin.service_settings_title': 'Service Settings',
     'admin.service_settings_desc':
-      'Configure Cloud-owned portal login and email delivery. Values are stored in Cloud runtime storage; environment fallback is disabled.',
+      'Configure Cloud-owned portal login, QQ login, and email delivery. Values are stored in Cloud runtime storage; environment fallback is disabled.',
     'admin.overview_desc': 'System-wide statistics and health monitoring.',
     'admin.total_accounts': 'Total Customers',
     'admin.total_sites': 'Total Sites',
@@ -2996,6 +3000,9 @@ export const translations: Record<Locale, TranslationMap> = {
     'portal.connect_site_desc': '先连接 WordPress 站点，才能在站点管理员工作台中查看它。',
     'portal.connect_site_title': '连接站点',
     'portal.connect_site_heading': '添加新的 WordPress 站点',
+    'portal.connect_site_addon_title': '授权 WordPress 插件',
+    'portal.connect_site_addon_desc': '创建或激活这个 Cloud 站点连接，然后通过一次性授权码回到 WordPress。',
+    'portal.connect_site_authorize_addon': '授权插件',
     'portal.connect_site_action': '添加站点',
     'portal.connect_site_return_to_workspace': '返回工作区',
     'portal.connect_site_docs': '打开接入指南',
@@ -4007,7 +4014,7 @@ export const translations: Record<Locale, TranslationMap> = {
     'admin.overview_title': '后台概览',
     'admin.service_settings_title': '服务配置',
     'admin.service_settings_desc':
-      '配置 Cloud 自有的 Portal 登录和邮件发送。配置存储在 Cloud 运行时存储中，环境变量 fallback 已关闭。',
+      '配置 Cloud 自有的 Portal 登录、QQ 快捷登录和邮件发送。配置存储在 Cloud 运行时存储中，环境变量 fallback 已关闭。',
     'admin.overview_desc': '全局统计与健康监控。',
     'admin.total_accounts': '客户总数',
     'admin.total_sites': '站点总数',
