@@ -204,11 +204,13 @@ function AccountsContent() {
 
       try {
         const params = new URLSearchParams();
+        if (filters.q.trim()) params.set('q', filters.q.trim());
         if (filters.status) params.set('status', filters.status);
         if (filters.expires_before) params.set('expires_before', filters.expires_before);
         if (filters.coverage_state) params.set('coverage_state', filters.coverage_state);
         if (filters.package_kind) params.set('package_kind', filters.package_kind);
         if (filters.top_plan_id) params.set('top_plan_id', filters.top_plan_id);
+        params.set('sort', 'display_name');
 
         const response = await fetch(`/api/admin/accounts?${params.toString()}`, {
           credentials: 'include',
@@ -298,11 +300,13 @@ function AccountsContent() {
       });
       setIsCreateOpen(false);
       const params = new URLSearchParams();
+      if (filters.q.trim()) params.set('q', filters.q.trim());
       if (filters.status) params.set('status', filters.status);
       if (filters.expires_before) params.set('expires_before', filters.expires_before);
       if (filters.coverage_state) params.set('coverage_state', filters.coverage_state);
       if (filters.package_kind) params.set('package_kind', filters.package_kind);
       if (filters.top_plan_id) params.set('top_plan_id', filters.top_plan_id);
+      params.set('sort', 'display_name');
       const refresh = await fetch(`/api/admin/accounts?${params.toString()}`, { credentials: 'include' });
       if (refresh.ok) {
         const data = await refresh.json();
@@ -323,28 +327,9 @@ function AccountsContent() {
     () => (showInternalAccounts ? accounts : accounts.filter((account) => !isHiddenByDefaultAccount(account))),
     [accounts, showInternalAccounts]
   );
-  const searchedAccounts = useMemo(() => {
-    const query = filters.q.trim().toLowerCase();
-    if (!query) {
-      return visibleAccounts;
-    }
-    return visibleAccounts.filter((account) =>
-      [
-        account.display_name,
-        account.name,
-        account.account_id,
-        account.operator_note,
-        account.display_package_label,
-        account.top_plan || '',
-      ]
-        .join(' ')
-        .toLowerCase()
-        .includes(query)
-    );
-  }, [filters.q, visibleAccounts]);
   const listedAccounts = useMemo(
-    () => [...searchedAccounts].sort((left, right) => left.display_name.localeCompare(right.display_name)),
-    [searchedAccounts]
+    () => [...visibleAccounts].sort((left, right) => left.display_name.localeCompare(right.display_name)),
+    [visibleAccounts]
   );
 
   if (isLoading) {

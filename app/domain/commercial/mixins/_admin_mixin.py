@@ -1219,13 +1219,35 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
     def list_admin_accounts(
         self,
         *,
+        q: str | None = None,
         status: str | None = None,
         expires_before: datetime | None = None,
         coverage_state: str | None = None,
         package_kind: str | None = None,
         top_plan_id: str | None = None,
+        sort: str = "created_at",
+        offset: int = 0,
         limit: int = 100,
     ) -> dict[str, object]:
+        normalized_query = " ".join(str(q or "").strip().lower().split())
+        normalized_sort = sort if sort in {"created_at", "display_name"} else "created_at"
+        normalized_offset = max(0, int(offset or 0))
+
+        def account_payload_for(item: dict[str, object]) -> dict[str, object]:
+            account_payload = item.get("account")
+            return account_payload if isinstance(account_payload, dict) else {}
+
+        def account_display_sort_key(item: dict[str, object]) -> tuple[str, str]:
+            account_payload = account_payload_for(item)
+            metadata = account_payload.get("metadata")
+            metadata_payload = metadata if isinstance(metadata, dict) else {}
+            display_name = (
+                str(metadata_payload.get("operator_display_name") or "").strip()
+                or str(account_payload.get("name") or "").strip()
+                or str(account_payload.get("account_id") or "").strip()
+            )
+            return (display_name.lower(), str(account_payload.get("account_id") or ""))
+
         with get_session(self.database_url) as session:
             repository = CommercialRepository(session)
             filtered_account_ids: set[str] | None = None
@@ -1249,7 +1271,14 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
                 account_ids=(
                     sorted(filtered_account_ids) if filtered_account_ids is not None else None
                 ),
-                limit=None if coverage_state or package_kind or top_plan_id else limit,
+                limit=None
+                if coverage_state
+                or package_kind
+                or top_plan_id
+                or normalized_query
+                or normalized_sort == "display_name"
+                or normalized_offset
+                else limit,
             )
             account_ids = [account.account_id for account in accounts]
             site_counts = repository.count_sites_by_account(account_ids=account_ids)
@@ -1307,20 +1336,51 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
                 continue
             if top_plan_id and str(item.get("top_plan_id") or "") != top_plan_id:
                 continue
+            if normalized_query:
+                account_payload = account_payload_for(item)
+                metadata = (
+                    account_payload.get("metadata")
+                    if isinstance(account_payload.get("metadata"), dict)
+                    else {}
+                )
+                searchable_text = " ".join(
+                    str(value or "")
+                    for value in [
+                        account_payload.get("account_id"),
+                        account_payload.get("name"),
+                        metadata.get("operator_display_name"),
+                        metadata.get("operator_note"),
+                        metadata.get("account_status_note"),
+                        item.get("display_package_label"),
+                        item.get("package_kind"),
+                        item.get("coverage_state"),
+                        item.get("top_plan_id"),
+                    ]
+                ).lower()
+                if not all(term in searchable_text for term in normalized_query.split(" ")):
+                    continue
             items.append(item)
+        if normalized_sort == "display_name":
+            items = sorted(items, key=account_display_sort_key)
+        total = len(items)
+        if normalized_offset:
+            items = items[normalized_offset:]
         if limit > 0:
             items = items[:limit]
         return {
             "filters": {
+                "q": normalized_query,
                 "status": status or "",
                 "expires_before": self._serialize_datetime(expires_before),
                 "coverage_state": coverage_state or "",
                 "package_kind": package_kind or "",
                 "top_plan_id": top_plan_id or "",
+                "sort": normalized_sort,
+                "offset": normalized_offset,
                 "limit": limit,
             },
             "items": items,
-            "total": len(items),
+            "total": total,
         }
 
     def get_admin_coverage_work_queue(

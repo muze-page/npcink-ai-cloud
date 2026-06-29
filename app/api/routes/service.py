@@ -2351,11 +2351,14 @@ async def get_ops_summary_value_metrics(
 @router.get("/admin/accounts")
 async def list_admin_accounts(
     request: Request,
+    q: str | None = Query(default=None, max_length=128),
     status: str | None = Query(default=None),
     expires_before: datetime | None = Query(default=None),  # noqa: B008
     coverage_state: str | None = Query(default=None),
     package_kind: str | None = Query(default=None),
     top_plan_id: str | None = Query(default=None),
+    sort: str = Query(default="created_at", pattern="^(created_at|display_name)$"),
+    offset: int = Query(default=0, ge=0),
     limit: int = Query(default=100, ge=1, le=500),
 ) -> Any:
     auth = await authorize_internal_request(request, require_idempotency=False)
@@ -2363,11 +2366,14 @@ async def list_admin_accounts(
         return auth
     try:
         result = _get_commercial_service(request).list_admin_accounts(
+            q=q,
             status=status,
             expires_before=expires_before,
             coverage_state=coverage_state,
             package_kind=package_kind,
             top_plan_id=top_plan_id,
+            sort=sort,
+            offset=offset,
             limit=limit,
         )
     except CommercialServiceError as error:
@@ -2376,7 +2382,7 @@ async def list_admin_accounts(
         status="ok",
         message="admin accounts loaded",
         data=result,
-        revision="m6",
+        revision="m7",
     )
 
 
