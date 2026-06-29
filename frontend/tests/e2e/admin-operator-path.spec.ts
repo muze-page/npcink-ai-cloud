@@ -182,11 +182,14 @@ test('admin queue pages keep one primary header action and shared identifier tre
   await expect(page.getByText(/Uncovered Account|未覆盖客户|未覆蓋客戶/i)).toBeVisible();
   await expect(page.getByRole('heading', { name: /Users and current packages|用户与当前套餐|使用者與目前方案/i })).toBeVisible();
   await expect(page.getByRole('columnheader', { name: /Package|套餐|方案/i })).toBeVisible();
-  await expect(page.getByRole('columnheader', { name: /Next step|下一步/i })).toBeVisible();
+  await expect(page.getByRole('columnheader', { name: /Next step|下一步/i })).toHaveCount(0);
   await expect(page.getByRole('columnheader', { name: /Sites \/ members|站点\/成员|站點\/成員/i })).toBeVisible();
   await expect(page.locator(`a[href="/admin/subscriptions/sub_mvp"]`)).toHaveCount(0);
   await expect(page.locator(`a[href="/admin/accounts/${LONG_ACCOUNT_ID}#site-footprint"]`)).toHaveCount(0);
+  await expect(page.locator('a[href="/admin/coverage"]')).toBeVisible();
   await expect(page.getByRole('link', { name: /Details|详情|詳情/i }).first()).toBeVisible();
+  await expect(page.getByRole('button', { name: /Suspend account|暂停账户|暫停帳戶/i })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: /Restore account|恢复账户|恢復帳戶/i })).toHaveCount(0);
   await page.getByLabel(/Package kind|套餐类型|方案類型/i).selectOption('formal_free');
   await expect(page.getByText(/Free Account|免费客户|免費客戶/i)).toBeVisible();
   await expect(page.getByText(/Uncovered Account|未覆盖客户|未覆蓋客戶/i)).toHaveCount(0);

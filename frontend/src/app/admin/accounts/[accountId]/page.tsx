@@ -1416,53 +1416,14 @@ function AccountDetailContent() {
         eyebrow={t('admin.account_posture')}
         title={accountTitle}
         description={postureDescription}
-        actions={(
-          <>
-            <a href="#coverage-actions" className="btn btn-primary">
-              {t('admin.account_detail.manage_package_action', undefined, 'Manage package')}
-            </a>
-            <button
-              type="button"
-              onClick={() => {
-                setSuspendReason('');
-                setPendingConfirmation({
-                  title:
-                    account.status === 'suspended'
-                      ? t('admin.accounts.confirm_restore_title', {}, 'Confirm account restore')
-                      : t('admin.accounts.confirm_suspend_title', {}, 'Confirm account suspension'),
-                  message:
-                    account.status === 'suspended'
-                      ? t(
-                          'admin.accounts.confirm_restore_desc',
-                          { account: accountTitle },
-                          `Restore ${accountTitle} to active access?`
-                        )
-                      : t(
-                          'admin.accounts.confirm_suspend_desc',
-                          { account: accountTitle },
-                          `Suspend ${accountTitle}? Customer portal access and site actions will be blocked by account status.`
-                        ),
-                  confirmLabel:
-                    account.status === 'suspended'
-                      ? t('admin.accounts.restore_account_action', {}, 'Restore account')
-                      : t('admin.accounts.suspend_account_action', {}, 'Suspend account'),
-                  showSuspendReason: account.status !== 'suspended',
-                  variant: account.status === 'suspended' ? 'default' : 'danger',
-                  onConfirm: () => void handleAccountStatusMutation(account.status === 'suspended' ? 'restore' : 'suspend'),
-                });
-              }}
-              className="btn btn-secondary"
-              disabled={accountStatusPending !== null}
-            >
-              {accountStatusPending
-                ? t('common.saving', {}, 'Saving...')
-                : account.status === 'suspended'
-                  ? t('admin.accounts.restore_account_action', {}, 'Restore account')
-                  : t('admin.accounts.suspend_account_action', {}, 'Suspend account')}
-            </button>
-            <Link href="/admin/accounts" className="btn btn-secondary">
-              {t('admin.back_to_accounts')}
-            </Link>
+	        actions={(
+	          <>
+	            <a href="#coverage-actions" className="btn btn-primary">
+	              {t('admin.account_detail.manage_package_action', undefined, 'Manage package')}
+	            </a>
+	            <Link href="/admin/accounts" className="btn btn-secondary">
+	              {t('admin.back_to_accounts')}
+	            </Link>
           </>
         )}
         aside={(
@@ -1499,18 +1460,83 @@ function AccountDetailContent() {
           </div>
         )}
       >
-        <div className="flex flex-wrap items-center gap-2">
-          <BackofficeIdentifier value={account.account_id} className="text-xs text-gray-500 dark:text-gray-400" />
-          {showPostureBadge ? (
-            <BackofficeStatusBadge status={postureTone} label={translateStatusLabel(postureTone, t)} />
+	        <div className="flex flex-wrap items-center gap-2">
+	          <BackofficeIdentifier value={account.account_id} className="text-xs text-gray-500 dark:text-gray-400" />
+	          {showPostureBadge ? (
+	            <BackofficeStatusBadge status={postureTone} label={translateStatusLabel(postureTone, t)} />
           ) : null}
           {showAccountStatusBadge ? (
-            <BackofficeStatusBadge status={account.status} label={translateStatusLabel(account.status, t)} />
-          ) : null}
-        </div>
-        {accountStatusNotice ? (
-          <p className="text-sm text-emerald-700 dark:text-emerald-300">{accountStatusNotice}</p>
-        ) : null}
+	            <BackofficeStatusBadge status={account.status} label={translateStatusLabel(account.status, t)} />
+	          ) : null}
+	        </div>
+	        <BackofficeStackCard className="flex flex-col gap-4 bg-white/80 dark:bg-slate-950/55 lg:flex-row lg:items-center lg:justify-between">
+	          <div>
+	            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-gray-500 dark:text-gray-400">
+	              {t('admin.account_detail.access_status_title', undefined, 'Customer access status')}
+	            </p>
+	            <div className="mt-2 flex flex-wrap items-center gap-2">
+	              <BackofficeStatusBadge status={account.status} label={translateStatusLabel(account.status, t)} />
+	              <span className="text-sm text-slate-600 dark:text-slate-300">
+	                {account.status === 'suspended'
+	                  ? t(
+	                      'admin.account_detail.access_status_suspended_desc',
+	                      undefined,
+	                      'Portal access and site actions are currently blocked for this customer.'
+	                    )
+	                  : t(
+	                      'admin.account_detail.access_status_active_desc',
+	                      undefined,
+	                      'Portal access follows this customer record and related site grants.'
+	                    )}
+	              </span>
+	            </div>
+	          </div>
+	          <button
+	            type="button"
+	            onClick={() => {
+	              setSuspendReason('');
+	              setPendingConfirmation({
+	                title:
+	                  account.status === 'suspended'
+	                    ? t('admin.accounts.confirm_restore_title', {}, 'Confirm account restore')
+	                    : t('admin.accounts.confirm_suspend_title', {}, 'Confirm account suspension'),
+	                message:
+	                  account.status === 'suspended'
+	                    ? t(
+	                        'admin.accounts.confirm_restore_desc',
+	                        { account: accountTitle },
+	                        `Restore ${accountTitle} to active access?`
+	                      )
+	                    : t(
+	                        'admin.accounts.confirm_suspend_desc',
+	                        { account: accountTitle },
+	                        `Suspend ${accountTitle}? Customer portal access and site actions will be blocked by account status.`
+	                      ),
+	                confirmLabel:
+	                  account.status === 'suspended'
+	                    ? t('admin.accounts.restore_account_action', {}, 'Restore account')
+	                    : t('admin.accounts.suspend_account_action', {}, 'Suspend account'),
+	                showSuspendReason: account.status !== 'suspended',
+	                variant: account.status === 'suspended' ? 'default' : 'danger',
+	                onConfirm: () => void handleAccountStatusMutation(account.status === 'suspended' ? 'restore' : 'suspend'),
+	              });
+	            }}
+	            className={cn(
+	              'btn btn-secondary self-start lg:self-auto',
+	              account.status !== 'suspended' && 'border-amber-200 text-amber-700 hover:border-amber-300 dark:border-amber-900/60 dark:text-amber-200'
+	            )}
+	            disabled={accountStatusPending !== null}
+	          >
+	            {accountStatusPending
+	              ? t('common.saving', {}, 'Saving...')
+	              : account.status === 'suspended'
+	                ? t('admin.accounts.restore_account_action', {}, 'Restore account')
+	                : t('admin.accounts.suspend_account_action', {}, 'Suspend account')}
+	          </button>
+	        </BackofficeStackCard>
+	        {accountStatusNotice ? (
+	          <p className="text-sm text-emerald-700 dark:text-emerald-300">{accountStatusNotice}</p>
+	        ) : null}
         {accountStatusError ? (
           <p className="text-sm text-red-600 dark:text-red-300">{accountStatusError}</p>
         ) : null}
