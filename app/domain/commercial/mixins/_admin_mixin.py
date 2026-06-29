@@ -971,11 +971,9 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
             item for item in items if str(item.get("event_kind") or "") == "portal_user.disable"
         ]
         latest_disable = disable_events[0] if disable_events else None
-        latest_payload = (
-            latest_disable.get("payload")
-            if isinstance(latest_disable, dict) and isinstance(latest_disable.get("payload"), dict)
-            else {}
-        )
+        latest_payload: dict[str, object] = {}
+        if isinstance(latest_disable, dict) and isinstance(latest_disable.get("payload"), dict):
+            latest_payload = cast(dict[str, object], latest_disable.get("payload"))
         return {
             "principal": {
                 "principal_id": normalized_principal_id,
@@ -1338,10 +1336,9 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
                 continue
             if normalized_query:
                 account_payload = account_payload_for(item)
-                metadata = (
-                    account_payload.get("metadata")
-                    if isinstance(account_payload.get("metadata"), dict)
-                    else {}
+                raw_metadata = account_payload.get("metadata")
+                metadata: dict[str, object] = (
+                    cast(dict[str, object], raw_metadata) if isinstance(raw_metadata, dict) else {}
                 )
                 searchable_text = " ".join(
                     str(value or "")
@@ -1438,8 +1435,11 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
             missing_key_site_count = max(0, site_count - active_key_site_count)
             subscription_status = str(getattr(primary_subscription, "status", "") or "")
             coverage_state = str(package_summary.get("coverage_state") or "")
-            period_end_at = self._normalize_datetime(
-                getattr(primary_subscription, "current_period_end_at", None)
+            raw_period_end_at = getattr(primary_subscription, "current_period_end_at", None)
+            period_end_at = (
+                self._normalize_datetime(raw_period_end_at)
+                if isinstance(raw_period_end_at, datetime)
+                else None
             )
             days_until_end: int | None = None
             if period_end_at is not None:
@@ -1592,23 +1592,20 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
                 }
             )
 
-        items.sort(
-            key=lambda item: (
-                int(item.get("priority") or 100),
-                str(
-                    (item.get("account") if isinstance(item.get("account"), dict) else {}).get(
-                        "name"
-                    )
-                    or ""
-                ),
-                str(
-                    (item.get("account") if isinstance(item.get("account"), dict) else {}).get(
-                        "account_id"
-                    )
-                    or ""
-                ),
+        def work_queue_sort_key(item: dict[str, object]) -> tuple[int, str, str]:
+            priority_source = item.get("priority")
+            priority = self._coerce_int(priority_source if priority_source else 100)
+            account = item.get("account")
+            account_payload: dict[str, object] = (
+                cast(dict[str, object], account) if isinstance(account, dict) else {}
             )
-        )
+            return (
+                priority,
+                str(account_payload.get("name") or ""),
+                str(account_payload.get("account_id") or ""),
+            )
+
+        items.sort(key=work_queue_sort_key)
         visible_items = items[:limit] if limit > 0 else items
         reason_counts = Counter(str(item.get("reason_code") or "") for item in items)
         severity_counts = Counter(str(item.get("severity") or "") for item in items)
