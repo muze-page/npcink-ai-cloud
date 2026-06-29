@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 import httpx
 import pytest
@@ -58,6 +59,11 @@ from app.domain.hosted_model_defaults import (
 )
 from app.domain.runtime.service import RuntimeService
 from app.domain.usage.rollup import UsageRollupService
+from app.domain.web_search.service import (
+    TavilyWebSearchProvider,
+    WebSearchExecutionResult,
+    WebSearchProviderUsage,
+)
 from app.workers.ops_cadence import run_due_tasks
 from tests.conftest import (
     TEST_ADMIN_SESSION_SECRET,
@@ -1064,6 +1070,7 @@ def test_admin_provider_connection_catalog_preview_fetches_models_without_persis
     assert data["surface"] == "admin_provider_connection_catalog_preview"
     assert data["model_count"] == 2
     assert data["model_ids"] == ["gpt-5.5", "gpt-4o-mini"]
+    assert data["truncated"] is False
     assert data["models"][0] == {
         "model_id": "gpt-5.5",
         "family": "gpt-5.5",
@@ -1080,6 +1087,67 @@ def test_admin_provider_connection_catalog_preview_fetches_models_without_persis
     assert "preview-secret-value" not in json.dumps(response.json())
     with get_session(database_url) as session:
         assert session.get(ProviderConnection, "mqzj_preview") is None
+
+
+def test_admin_provider_connection_catalog_preview_returns_all_upstream_models(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database_url, client = _build_client(tmp_path)
+
+    def fake_fetch_catalog(self: Any) -> ProviderCatalogSnapshot:
+        return ProviderCatalogSnapshot(
+            provider_id="minimax",
+            display_name="MiniMax",
+            adapter_type="minimax",
+            models=[
+                CatalogModelSeed(
+                    model_id=f"minimax-model-{index:03d}",
+                    family="minimax",
+                    feature="text" if index % 2 else "audio",
+                    status="available",
+                    instances=[
+                        CatalogInstanceSeed(
+                            instance_id=f"minimax-model-{index:03d}",
+                            endpoint_variant="runtime",
+                            region="global",
+                        )
+                    ],
+                )
+                for index in range(1, 110)
+            ],
+        )
+
+    monkeypatch.setattr(
+        "app.adapters.providers.minimax.MiniMaxProviderAdapter.fetch_catalog",
+        fake_fetch_catalog,
+    )
+
+    response = client.post(
+        "/internal/service/admin/provider-connections/preview-catalog",
+        headers=build_internal_headers(idempotency_key="provider-connection-preview-full-catalog"),
+        json={
+            "connection_id": "minimax_preview",
+            "provider_id": "minimax",
+            "provider_type": "minimax",
+            "kind": "minimax",
+            "display_name": "MiniMax",
+            "enabled": True,
+            "base_url": "https://api.minimaxi.com",
+            "capability_ids": ["text_generation", "image_generation", "audio_generation", "video_generation"],
+            "runtime_profile_ids": [],
+            "credential": "preview-secret-value",
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    data = response.json()["data"]
+    assert data["model_count"] == 109
+    assert len(data["model_ids"]) == 109
+    assert len(data["models"]) == 109
+    assert data["model_ids"][-1] == "minimax-model-109"
+    assert data["models"][-1]["model_id"] == "minimax-model-109"
+    assert data["truncated"] is False
 
 
 def test_admin_provider_connection_catalog_preview_uses_saved_secret_without_exposing_it(
@@ -1390,6 +1458,177 @@ def test_admin_provider_connection_test_updates_masked_diagnostics(
     with get_session(database_url) as session:
         row = session.get(ProviderConnection, "openai_testable")
         assert row is not None
+        assert row.last_tested_at is not None
+        assert row.last_error_code in {None, ""}
+
+
+def test_admin_provider_connection_test_runs_web_search_probe_without_result_payload(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database_url, client = _build_client(tmp_path)
+    client.post(
+        "/internal/service/admin/provider-connections",
+        headers=build_internal_headers(idempotency_key="provider-connection-web-search-create"),
+        json={
+            "connection_id": "search_tavily_probe",
+            "provider_id": "tavily",
+            "provider_type": "web_search_provider",
+            "kind": "web_search_provider",
+            "display_name": "Tavily probe",
+            "enabled": True,
+            "base_url": "https://api.tavily.test",
+            "capability_ids": ["web_search"],
+            "runtime_profile_ids": ["web-search.managed"],
+            "credential": "tavily-provider-secret",
+        },
+    )
+
+    def fake_search(
+        self: TavilyWebSearchProvider,
+        *,
+        query: str,
+        options: dict[str, Any],
+        site_id: str,
+        run_id: str,
+    ) -> WebSearchExecutionResult:
+        assert query == "WordPress AI provider connection smoke test"
+        assert options["provider"] == "tavily"
+        assert site_id == "admin_provider_connection_test"
+        assert run_id.startswith("provider-connection-test-search_tavily_probe-")
+        return WebSearchExecutionResult(
+            result_json={
+                "artifact_type": "web_search_results",
+                "provider": "tavily",
+                "result_count": 1,
+                "results": [
+                    {
+                        "title": "Do not expose this result title",
+                        "url": "https://example.com/source",
+                        "snippet": "Do not expose this snippet",
+                    }
+                ],
+                "write_posture": "suggestion_only",
+                "direct_wordpress_write": False,
+            },
+            usage=WebSearchProviderUsage(
+                provider_id="tavily",
+                model_id="web-search",
+                instance_id="cloud-managed",
+                region="unspecified",
+                latency_ms=17,
+            ),
+        )
+
+    monkeypatch.setattr(TavilyWebSearchProvider, "search", fake_search)
+
+    response = client.post(
+        "/internal/service/admin/provider-connections/search_tavily_probe/test",
+        headers=build_internal_headers(idempotency_key="provider-connection-web-search-test"),
+    )
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    data = payload["data"]
+    assert data["ok"] is True
+    assert data["stage"] == "web_search_probe"
+    assert data["probe"] == {
+        "provider_id": "tavily",
+        "result_count": 1,
+        "latency_ms": 17,
+        "write_posture": "suggestion_only",
+        "direct_wordpress_write": False,
+    }
+    serialized = json.dumps(payload)
+    assert "tavily-provider-secret" not in serialized
+    assert "Do not expose this result title" not in serialized
+    with get_session(database_url) as session:
+        row = session.get(ProviderConnection, "search_tavily_probe")
+        assert row is not None
+        assert row.status == "ready"
+        assert row.last_tested_at is not None
+        assert row.last_error_code in {None, ""}
+
+
+def test_admin_provider_connection_test_runs_jina_reader_probe_as_secretless_enhancement(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database_url, client = _build_client(tmp_path)
+    create_response = client.post(
+        "/internal/service/admin/provider-connections",
+        headers=build_internal_headers(idempotency_key="provider-connection-jina-reader-create"),
+        json={
+            "connection_id": "search_jina_reader_probe",
+            "provider_id": "jina_reader",
+            "provider_type": "web_search_provider",
+            "kind": "web_search_provider",
+            "display_name": "Jina Reader probe",
+            "enabled": True,
+            "base_url": "https://r.jina.test",
+            "capability_ids": ["web_search"],
+            "runtime_profile_ids": ["web-search.reader"],
+        },
+    )
+    assert create_response.status_code == 200, create_response.text
+    created = create_response.json()["data"]
+    assert created["configured"] is True
+    assert created["status"] == "ready"
+
+    def fail_web_search_execute(*args: object, **kwargs: object) -> None:
+        raise AssertionError("Jina Reader probe must not run the primary web search service")
+
+    class FakeReaderClient:
+        def __init__(self, *, timeout: float) -> None:
+            assert timeout > 0
+
+        def __enter__(self) -> "FakeReaderClient":
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            return None
+
+        def get(self, url: str, *, headers: dict[str, str]) -> httpx.Response:
+            assert url == "https://r.jina.test/https://example.com/"
+            assert headers == {"Accept": "text/plain"}
+            return httpx.Response(
+                200,
+                content=b"Readable source text that must not leak.",
+                request=httpx.Request("GET", url),
+            )
+
+    monkeypatch.setattr(
+        "app.domain.provider_connections.service.WebSearchService.execute",
+        fail_web_search_execute,
+    )
+    monkeypatch.setattr("app.domain.provider_connections.service.httpx.Client", FakeReaderClient)
+
+    response = client.post(
+        "/internal/service/admin/provider-connections/search_jina_reader_probe/test",
+        headers=build_internal_headers(idempotency_key="provider-connection-jina-reader-test"),
+    )
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    data = payload["data"]
+    assert data["ok"] is True
+    assert data["stage"] == "web_search_reader_probe"
+    assert data["probe"] == {
+        "provider_id": "jina_reader",
+        "result_count": 1,
+        "latency_ms": data["probe"]["latency_ms"],
+        "write_posture": "suggestion_only",
+        "direct_wordpress_write": False,
+    }
+    assert isinstance(data["probe"]["latency_ms"], int)
+    assert data["probe"]["latency_ms"] >= 0
+    serialized = json.dumps(payload)
+    assert "Readable source text" not in serialized
+    with get_session(database_url) as session:
+        row = session.get(ProviderConnection, "search_jina_reader_probe")
+        assert row is not None
+        assert row.status == "ready"
+        assert (row.config_json or {})["secretless"] is True
         assert row.last_tested_at is not None
         assert row.last_error_code in {None, ""}
 

@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import re
+import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
+import httpx
 from sqlalchemy import select
 
 from app.adapters.providers.registry import build_provider_adapter_from_connection
@@ -12,6 +14,11 @@ from app.core.config import Settings
 from app.core.db import get_session
 from app.core.models import ProviderConnection
 from app.core.secrets import encrypt_provider_connection_secret
+from app.domain.provider_connections.runtime_settings import (
+    apply_provider_connection_runtime_settings,
+)
+from app.domain.web_search.contracts import WEB_SEARCH_ABILITY, WEB_SEARCH_CONTRACT
+from app.domain.web_search.service import WebSearchService
 
 _IDENTIFIER_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_.-]{1,63}$")
 _ALLOWED_SOURCE_ROLES = frozenset({"execution_source", "runtime_metadata", "diagnostic_source"})
@@ -222,9 +229,9 @@ class ProviderConnectionAdminService:
             "display_name": str(snapshot.display_name or normalized["display_name"]),
             "adapter_type": str(snapshot.adapter_type or ""),
             "model_count": len(model_ids),
-            "model_ids": model_ids[:100],
-            "models": preview_models[:100],
-            "truncated": len(model_ids) > 100,
+            "model_ids": model_ids,
+            "models": preview_models,
+            "truncated": False,
             "credential_value_exposure": "none",
             "boundary": _boundary(),
         }
@@ -254,6 +261,9 @@ class ProviderConnectionAdminService:
                 message="provider credential is missing",
                 now=now,
             )
+
+        if str(serialized.get("kind") or "").strip().lower() == "web_search_provider":
+            return self._build_web_search_test_result(row, serialized, now=now)
 
         if str(serialized.get("kind") or "").strip().lower() in _RUNTIME_CONFIG_CONNECTION_KINDS:
             return _test_result(
@@ -316,6 +326,139 @@ class ProviderConnectionAdminService:
             },
         )
 
+    def _build_web_search_test_result(
+        self,
+        row: ProviderConnection,
+        serialized: dict[str, Any],
+        *,
+        now: datetime,
+    ) -> dict[str, Any]:
+        provider_id = str(serialized.get("provider_id") or "").strip().lower()
+        if provider_id == "jina_reader":
+            return self._build_jina_reader_test_result(row, serialized, now=now)
+
+        test_settings = self.settings.model_copy(deep=True)
+        apply_provider_connection_runtime_settings(test_settings)
+        test_settings.web_search_provider = provider_id
+        input_payload = {
+            "contract_version": WEB_SEARCH_CONTRACT,
+            "query": "WordPress AI provider connection smoke test",
+            "intent": "general_research",
+            "max_results": 1,
+            "provider": provider_id,
+            "write_posture": "suggestion_only",
+            "direct_wordpress_write": False,
+        }
+        try:
+            result = WebSearchService(test_settings).execute(
+                site_id="admin_provider_connection_test",
+                ability_name=WEB_SEARCH_ABILITY,
+                contract_version=WEB_SEARCH_CONTRACT,
+                input_payload=input_payload,
+                run_id=f"provider-connection-test-{row.connection_id}-{int(now.timestamp())}",
+            )
+        except Exception as error:
+            error_code = _map_test_error_code(error)
+            return _test_result(
+                connection=serialized,
+                status=error_code.rsplit(".", 1)[-1],
+                stage="web_search_probe",
+                error_code=error_code,
+                message=_truncate_message(str(error) or error.__class__.__name__),
+                now=now,
+            )
+
+        result_json = result.result_json
+        results = result_json.get("results")
+        result_count = int(
+            result_json.get("result_count") or (len(results) if isinstance(results, list) else 0)
+        )
+        return _test_result(
+            connection=serialized,
+            status="ready",
+            stage="web_search_probe",
+            error_code="",
+            message=f"web search provider returned {result_count} source candidates",
+            now=now,
+            probe={
+                "provider_id": str(result.usage.provider_id or provider_id),
+                "result_count": result_count,
+                "latency_ms": int(result.usage.latency_ms),
+                "write_posture": str(result_json.get("write_posture") or "suggestion_only"),
+                "direct_wordpress_write": bool(result_json.get("direct_wordpress_write")),
+            },
+        )
+
+    def _build_jina_reader_test_result(
+        self,
+        row: ProviderConnection,
+        serialized: dict[str, Any],
+        *,
+        now: datetime,
+    ) -> dict[str, Any]:
+        test_settings = self.settings.model_copy(deep=True)
+        apply_provider_connection_runtime_settings(test_settings)
+        base_url = str(test_settings.web_search_jina_reader_base_url or "").strip().rstrip("/")
+        if not base_url:
+            return _test_result(
+                connection=serialized,
+                status="missing_base_url",
+                stage="web_search_reader_probe",
+                error_code="provider_connection.missing_base_url",
+                message="web search reader base URL is missing",
+                now=now,
+            )
+
+        headers = {"Accept": "text/plain"}
+        api_key = str(test_settings.web_search_jina_reader_api_key or "").strip()
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+
+        probe_url = "https://example.com/"
+        started = time.monotonic()
+        try:
+            with httpx.Client(timeout=float(test_settings.web_search_jina_reader_timeout_seconds)) as client:
+                response = client.get(f"{base_url}/{probe_url}", headers=headers)
+                response.raise_for_status()
+                readable_count = 1 if bytes(response.content[:4096]).strip() else 0
+        except Exception as error:
+            error_code = _map_test_error_code(error)
+            return _test_result(
+                connection=serialized,
+                status=error_code.rsplit(".", 1)[-1],
+                stage="web_search_reader_probe",
+                error_code=error_code,
+                message=_truncate_message(str(error) or error.__class__.__name__),
+                now=now,
+            )
+
+        if readable_count < 1:
+            return _test_result(
+                connection=serialized,
+                status="reader_empty",
+                stage="web_search_reader_probe",
+                error_code="provider_connection.reader_empty",
+                message="web search reader returned no readable content",
+                now=now,
+            )
+
+        latency_ms = max(0, int((time.monotonic() - started) * 1000))
+        return _test_result(
+            connection=serialized,
+            status="ready",
+            stage="web_search_reader_probe",
+            error_code="",
+            message="web search reader returned 1 readable source candidates",
+            now=now,
+            probe={
+                "provider_id": "jina_reader",
+                "result_count": readable_count,
+                "latency_ms": latency_ms,
+                "write_posture": "suggestion_only",
+                "direct_wordpress_write": False,
+            },
+        )
+
     def _normalize_payload(
         self,
         payload: dict[str, Any],
@@ -358,13 +501,16 @@ class ProviderConnectionAdminService:
         capability_ids = _normalize_id_list(payload.get("capability_ids"))
         runtime_profile_ids = _normalize_id_list(payload.get("runtime_profile_ids"))
         metadata = _dict(payload.get("metadata"))
+        secretless = bool(payload.get("secretless") or config.get("secretless"))
+        if normalized_provider_type == "web_search_provider" and normalized_provider_id == "jina_reader":
+            secretless = True
         config_json = {
             **config,
             "provider_id": normalized_provider_id,
             "kind": _string(payload.get("kind") or normalized_provider_type),
             "capability_ids": capability_ids,
             "runtime_profile_ids": runtime_profile_ids,
-            "secretless": bool(payload.get("secretless") or config.get("secretless")),
+            "secretless": secretless,
         }
         credential = payload.get("credential")
         if credential is None:
@@ -394,7 +540,7 @@ class ProviderConnectionAdminService:
         provider_id = _string(config.get("provider_id") or row.connection_id)
         configured = bool(str(row.secret_ciphertext or "").strip()) or bool(
             config.get("secretless")
-        )
+        ) or provider_id == "jina_reader"
         return {
             "connection_id": row.connection_id,
             "provider_id": provider_id,
@@ -482,6 +628,7 @@ def _test_result(
     message: str,
     now: datetime,
     catalog: dict[str, Any] | None = None,
+    probe: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     return {
         "surface": "admin_provider_connection_test",
@@ -495,12 +642,16 @@ def _test_result(
         "message": message,
         "tested_at": _iso(now),
         "catalog": catalog or {},
+        "probe": probe or {},
         "connection": connection,
         "boundary": _boundary(),
     }
 
 
 def _map_test_error_code(error: Exception) -> str:
+    provider_error_code = str(getattr(error, "error_code", "") or "").strip()
+    if provider_error_code:
+        return provider_error_code
     message = str(error).lower()
     if "401" in message or "403" in message or "auth" in message or "credential" in message:
         return "provider_connection.auth_failed"

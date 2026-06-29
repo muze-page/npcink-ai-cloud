@@ -116,6 +116,18 @@ assert.match(
 
 assert.match(
   i18nSource,
+  /'admin\.ai_resources\.test_stage_web_search_probe': '搜索探测'[\s\S]*'admin\.ai_resources\.test_message_web_search_candidates': '搜索供应商返回 \{\{count\}\} 条候选来源。'/,
+  'AI resources provider test diagnostics must provide Simplified Chinese copy'
+);
+
+assert.match(
+  i18nSource,
+  /'admin\.ai_resources\.test_stage_web_search_reader_probe': '读取探测'[\s\S]*'admin\.ai_resources\.test_message_web_search_reader_candidates': '网页读取增强返回 \{\{count\}\} 个可读取来源。'/,
+  'AI resources Jina Reader diagnostics must be labeled as reader enhancement copy'
+);
+
+assert.match(
+  i18nSource,
   /'admin\.ai_resources\.column_provider': '供应商'/,
   'AI resources provider table headings must provide Simplified Chinese copy'
 );
@@ -142,6 +154,24 @@ assert.match(
   pageSource,
   /setActiveView\('diagnostics'\)[\s\S]*action_view_diagnostics/,
   'Provider management diagnostics must be a secondary action, not a duplicate supplier tab'
+);
+
+assert.match(
+  pageSource,
+  /providerTestStageLabel\(testResult\.stage\)[\s\S]*providerTestMessage\(testResult\)/,
+  'Provider test results must render through localized stage and message helpers'
+);
+
+assert.match(
+  pageSource,
+  /web_search_reader_probe[\s\S]*test_message_web_search_reader_candidates/,
+  'Provider test results must treat Jina Reader as a reader probe instead of a primary search probe'
+);
+
+assert.doesNotMatch(
+  pageSource,
+  /\{testResult\.stage\}|\{testResult\.message\}/,
+  'Provider test results must not render raw backend diagnostics'
 );
 
 assert.doesNotMatch(
@@ -266,8 +296,8 @@ assert.match(
 
 assert.match(
   capabilitySupplierTableSource,
-  /column_provider[\s\S]*column_status[\s\S]*column_connection[\s\S]*column_actions/,
-  'Capability supplier list must use the compact provider/status/connection/actions columns'
+  /column_provider[\s\S]*column_status[\s\S]*column_connection[\s\S]*last_test[\s\S]*column_actions/,
+  'Capability supplier list must use the compact provider/status/connection/test/actions columns'
 );
 
 assert.doesNotMatch(
@@ -280,6 +310,18 @@ assert.match(
   capabilitySupplierTableSource,
   /connectionHost\(connection\.base_url\)[\s\S]*status_configured_label/,
   'Capability supplier list must show a domain summary and compact configured state'
+);
+
+assert.match(
+  capabilitySupplierTableSource,
+  /connectionTestResults\[connection\.connection_id\][\s\S]*runProviderConnectionTest\(connection\.connection_id\)/,
+  'Capability supplier list must expose a per-connection self-test action'
+);
+
+assert.doesNotMatch(
+  capabilitySupplierTableSource,
+  /cloud-checks|toolbox_tab/,
+  'Capability supplier self-test must not embed the Toolbox Cloud Checks end-to-end surface'
 );
 
 assert.match(
@@ -707,6 +749,12 @@ assert.match(
   'Provider channel form must merge upstream catalog and reference intelligence into one model list'
 );
 
+assert.doesNotMatch(
+  `${pageSource}\n${i18nSource}`,
+  /catalog_preview_truncated|前 100|first 100|only display/i,
+  'Provider channel model catalog must not present upstream models as a 100-item truncated preview'
+);
+
 assert.match(
   pageSource,
   /field_reference_provider/,
@@ -723,6 +771,12 @@ assert.match(
   pageSource,
   /field_search_models[\s\S]*model_visibility_result_count[\s\S]*field_feature_filter[\s\S]*field_visibility_filter/,
   'Provider channel model list must prioritize search and result count before secondary filters'
+);
+
+assert.doesNotMatch(
+  pageSource,
+  /rounded-lg border border-slate-200 bg-white p-3[\s\S]*model_visibility_list_title|modelVisibilityRows\.length \? \([\s\S]*max-h-80 overflow-auto rounded-lg border/,
+  'Provider channel model list must avoid nested card borders around filters and table'
 );
 
 assert.match(
@@ -751,14 +805,44 @@ assert.match(
 
 assert.match(
   pageSource,
-  /Add provider/,
-  'AI resources connections view must expose a compact add-provider action'
+  /action_add_model_supplier[\s\S]*action_add_capability_supplier[\s\S]*action_view_diagnostics/,
+  'AI resources primary panel must expose add actions and diagnostics without burying them in the list'
 );
 
 assert.match(
   pageSource,
-  /Provider channels/,
-  'AI resources connections view must list provider channels as the main working surface'
+  /supplier_tab_model[\s\S]*supplier_tab_capability[\s\S]*field_search_connections[\s\S]*status_filter_label/,
+  'AI resources connections view must keep supplier tabs, search, and status filtering in one toolbar'
+);
+
+assert.match(
+  pageSource,
+  /ai_suppliers_desc/,
+  'Model supplier list must keep utility copy for model supplier scope'
+);
+
+assert.match(
+  pageSource,
+  /column_enabled_models/,
+  'Model supplier list must expose enabled model count as the main model column'
+);
+
+assert.match(
+  pageSource,
+  /model_catalog_enabled_count/,
+  'Model supplier list must prioritize enabled model counts instead of channel-level capability/profile scope'
+);
+
+assert.doesNotMatch(
+  pageSource,
+  /column_base_url[\s\S]*model_catalog_enabled_count|modelSample/,
+  'Model supplier list must keep base URL and model-name previews out of the main table'
+);
+
+assert.doesNotMatch(
+  pageSource,
+  /column_capabilities_profiles/,
+  'Model supplier list must not foreground capability/profile scope as a main table column'
 );
 
 assert.match(
@@ -807,6 +891,18 @@ assert.match(
   pageSource,
   /capabilityAddDialogOpen/,
   'Capability supplier add flow must open an explicit template dialog'
+);
+
+assert.match(
+  pageSource,
+  /role="tablist"[\s\S]*capability_add_category_tabs[\s\S]*role="tab"/,
+  'Capability supplier add dialog must separate built-in templates by category tabs'
+);
+
+assert.match(
+  pageSource,
+  /visibleCapabilityTemplates[\s\S]*capability_add_active_category_count/,
+  'Capability supplier add dialog must render only the active category template list'
 );
 
 assert.match(
@@ -985,6 +1081,12 @@ assert.match(
 
 assert.match(
   i18nSource,
+  /'admin\.ai_resources\.capability_add_category_tabs': '能力供应商分类'[\s\S]*'admin\.ai_resources\.capability_add_active_category_count': '\{\{count\}\} 个模板'/,
+  'Capability supplier add dialog tab labels must provide Simplified Chinese copy'
+);
+
+assert.match(
+  i18nSource,
   /'admin\.ai_resources\.message_capability_provider_template_existing': '\{\{name\}\} 已存在/,
   'Capability supplier template selection must explain it opens existing configuration'
 );
@@ -1033,14 +1135,14 @@ assert.match(
 
 assert.match(
   pageSource,
-  /<table className="min-w-\[1120px\]/,
-  'AI resources provider channels must render as a compact table instead of large cards'
+  /<table className="min-w-\[760px\]/,
+  'AI resources model suppliers must render as a compact table instead of wide cards or duplicated panels'
 );
 
 assert.match(
   pageSource,
-  /Enabled \/ configured/,
-  'AI resources provider channel table must expose enabled and configured state in one scannable column'
+  /status_configured_label[\s\S]*status_missing_secret_label/,
+  'AI resources provider channel table must expose configured and missing-secret state as compact row badges'
 );
 
 assert.doesNotMatch(
@@ -1225,7 +1327,7 @@ assert.match(
 
 assert.match(
   pageSource,
-  /field_configured/,
+  /status_configured_label[\s\S]*status_missing_secret_label/,
   'AI resources connections view must expose masked provider configured state'
 );
 

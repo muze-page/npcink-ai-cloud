@@ -252,3 +252,85 @@ operators should still watch:
 If traffic or operational importance increases, revisit server sizing, managed
 database options, backup automation, observability, and stricter GitHub
 environment approvals.
+
+## 11. 2026-06-25 Admin Proxy Follow-Up
+
+After the first production deployment, the platform-admin page reported:
+
+```text
+GET https://cloud.npc.ink/api/admin/overview 502 (Bad Gateway)
+```
+
+The production symptom was treated as a runtime/proxy issue, not as an admin UI
+feature request. The validated fix was the admin proxy runtime environment
+backport:
+
+- production-facing fix PR: `#57` into `production`;
+- master backport PR: `#56` into `master`;
+- touched runtime contract surface:
+  - `frontend/next.config.mjs`;
+  - `tests/contract/test_deploy_config_contract.py`;
+- post-fix live probe without an admin session returned
+  `auth.admin_session_required` instead of `502`.
+
+That `401` style response is the expected unauthenticated behavior for the
+admin overview route. It confirms that the public proxy and backend chain are
+reachable; it does not grant admin access.
+
+Operational lesson: login/session or internal-token changes are runtime
+configuration work unless application code changes are required. They should not
+trigger a full code deployment by default. Prefer updating server-side
+`.env.deploy`, restarting only the needed service, and recording the operational
+assumption in Git documentation when the behavior matters.
+
+## 12. 2026-06-25 Master CI Cleanup During Backport
+
+While getting the `#56` backport into `master`, the branch exposed unrelated
+master baseline failures. Those were handled as separate cleanup PRs:
+
+- `#58`: fixed backend Ruff/import-order and typing baseline issues;
+- `#59`: stabilized the stats alert-window test.
+
+Both PRs merged with `classify`, `backend`, and `frontend` checks green. They
+were master-quality cleanup items and were not production feature changes.
+
+The final `#56` PR also showed `tests/api/test_stats_routes.py` in its PR file
+list because of the CI cleanup path. Treat that as repository-history
+cleanliness context only:
+
+- the mixed-in file was a test file, not production runtime code;
+- CI was green when `#56` merged;
+- the production validation signal remains `502` becoming
+  `auth.admin_session_required`;
+- do not rewrite merged `master` history during early validation only to remove
+  this cosmetic PR-history issue;
+- if cleanup is still useful later, open a small follow-up PR to normalize the
+  final stats test shape or document it.
+
+## 13. Captured Operating Decisions
+
+The first production rollout established these working rules for future agents
+and operators:
+
+- The current small server shape is acceptable for early validation with low
+  traffic, but memory pressure and database backup/restore readiness must remain
+  on the watchlist.
+- Docker makes the runtime repeatable; it does not make every deployment fast.
+  Full deployments still include CI, artifact upload, container orchestration,
+  migrations, provider refresh, and smoke checks.
+- Static legal/policy content under `site/terms/*` has a fast path. Do not use
+  that fast path for API, frontend app, Docker, proxy, database, provider,
+  runtime, CI, or deployment-script changes.
+- Production code and policy HTML should be changed through Git, not edited
+  directly on the server.
+- Server-side changes are limited to runtime secrets/config and emergency
+  break-glass fixes that are backported to Git before the next deploy.
+- GitHub remains the publish source for this early production flow. Do not push
+  or deploy to Gitee unless the operator explicitly asks.
+- Branch protection and GitHub Environment approvals can stay lightweight during
+  early validation. Revisit enforced approval when external usage, paid credits,
+  or multi-operator deployment risk increases.
+- Future AI agents should read this document together with
+  `docs/cloud-production-release-policy-v1.md` and
+  `deploy/PRODUCTION_GITHUB_DEPLOY.md` before changing production release
+  behavior.

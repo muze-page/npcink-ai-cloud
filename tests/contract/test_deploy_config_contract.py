@@ -93,7 +93,12 @@ def test_prod_env_files_use_canonical_admin_names_and_do_not_expose_ai_provider_
     assert "NPCINK_CLOUD_RUNTIME_WORKER_POLL_SECONDS" in playbook_text
     assert "db_managed_provider_connections" in provider_runbook_text
     assert "deploy/remote-provider-matrix-smoke.sh" in provider_runbook_text
+    assert "`search_tavily`" in provider_runbook_text
+    assert "`search_bocha`" in provider_runbook_text
+    assert "`search_apify`" in provider_runbook_text
     assert "`search_zhihu`" in provider_runbook_text
+    assert "`search_jina_reader`" in provider_runbook_text
+    assert "optional URL reader enhancement" in provider_runbook_text
     assert "`image_unsplash`" in provider_runbook_text
     assert "`embedding_siliconflow`" in provider_runbook_text
     assert "`vector_zilliz`" in provider_runbook_text

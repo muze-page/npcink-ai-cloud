@@ -52,16 +52,22 @@ Minimum field mapping:
 | Capability | Connection ID | Provider ID | Kind | Base URL | Runtime Profile |
 | --- | --- | --- | --- | --- | --- |
 | Generic web search | `search_tavily` | `tavily` | `web_search_provider` | `https://api.tavily.com` | `web-search.managed` |
+| Chinese/general web search | `search_bocha` | `bocha` | `web_search_provider` | `https://api.bochaai.com/v1` | `web-search.managed` |
+| Actor-backed web search | `search_apify` | `apify` | `web_search_provider` | `https://api.apify.com/v2` | `web-search.managed` |
 | Zhihu search | `search_zhihu` | `zhihu` | `web_search_provider` | `https://developer.zhihu.com` | `web-search.managed` |
+| URL reader enhancement | `search_jina_reader` | `jina_reader` | `web_search_provider` | `https://r.jina.ai` | `web-search.reader` |
 | Image source | `image_unsplash` | `unsplash` | `image_source_provider` | `https://api.unsplash.com` | `image-source.managed` |
 | Embedding, API-hosted | `embedding_siliconflow` | `siliconflow` | `embedding_provider` | `https://api.siliconflow.cn/v1` | `embed.default` |
 | Embedding, OpenAI-compatible | `embedding_openai` | `openai` | `embedding_provider` | upstream `/v1` URL | `embed.default` |
 | Embedding, self-hosted TEI | `embedding_tei` | `tei` | `embedding_provider` | TEI base URL | `embed.default` |
 | Vector store | `vector_zilliz` | `zilliz` | `vector_store_provider` | Zilliz URI | `site-knowledge.vector-store` |
 
-Use at least one configured provider for each required capability. It is valid
-to configure both `search_tavily` and `search_zhihu`; both project to
-`web_search`, while Zhihu-specific requests can still select the Zhihu provider.
+Use at least one configured provider for each required capability. For search,
+the supported primary providers are `search_tavily`, `search_bocha`,
+`search_apify`, and `search_zhihu`; they all project to `web_search`, while
+provider-specific requests can still select the matching provider. `search_jina_reader`
+is optional URL reader enhancement and should not be counted as the primary
+search provider.
 
 ## Config JSON Templates
 
@@ -75,6 +81,37 @@ Tavily:
   "provider_mode": "auto",
   "timeout_seconds": 15,
   "cost_per_query": 0
+}
+```
+
+Bocha:
+
+```json
+{
+  "provider_mode": "auto",
+  "timeout_seconds": 15,
+  "cost_per_query": 0
+}
+```
+
+Apify:
+
+```json
+{
+  "provider_mode": "auto",
+  "actor_id": "apify/google-search-scraper",
+  "timeout_seconds": 30,
+  "cost_per_query": 0
+}
+```
+
+Jina Reader:
+
+```json
+{
+  "timeout_seconds": 15,
+  "max_pages": 1,
+  "cost_per_page": 0
 }
 ```
 

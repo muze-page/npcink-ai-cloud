@@ -265,6 +265,8 @@ type PendingConfirmation = {
   onConfirm: () => void;
 };
 
+type AccountDetailTab = 'coverage' | 'quota' | 'sites' | 'advanced';
+
 function selectPrimarySubscription(account: AccountDetail | null): AccountDetail['subscriptions'][number] | null {
   if (!account?.subscriptions.length) {
     return null;
@@ -499,6 +501,7 @@ function AccountDetailContent() {
   const [quotaSummary, setQuotaSummary] = useState<AccountQuotaSummary | null>(null);
   const [creditLedger, setCreditLedger] = useState<AccountCreditLedger | null>(null);
   const [nowMs] = useState(() => Date.now());
+  const [activeDetailTab, setActiveDetailTab] = useState<AccountDetailTab>('coverage');
 
   const loadPackagePlans = useCallback(async () => {
     try {
@@ -1124,6 +1127,30 @@ function AccountDetailContent() {
     void loadPackagePlans();
   }, [loadAccount, loadPackagePlans]);
 
+  useEffect(() => {
+    const activateTabFromHash = () => {
+      if (window.location.hash === '#site-footprint') {
+        setActiveDetailTab('sites');
+        return;
+      }
+      if (window.location.hash === '#quota-posture') {
+        setActiveDetailTab('quota');
+        return;
+      }
+      if (window.location.hash === '#advanced-checks') {
+        setActiveDetailTab('advanced');
+        return;
+      }
+      if (window.location.hash === '#coverage-actions') {
+        setActiveDetailTab('coverage');
+      }
+    };
+
+    activateTabFromHash();
+    window.addEventListener('hashchange', activateTabFromHash);
+    return () => window.removeEventListener('hashchange', activateTabFromHash);
+  }, []);
+
   if (isLoading) {
     return (
       <div className="flex min-h-[60vh] items-center justify-center">
@@ -1410,6 +1437,37 @@ function AccountDetailContent() {
   const accountTitle = resolveAccountTitle(account, t);
   const showPostureBadge = postureTone !== 'ok';
   const showAccountStatusBadge = account.status !== 'active' && account.status !== 'unknown';
+  const hasAdvancedChecks = Object.keys(siteRuntimeData).length > 0;
+  const detailTabs: Array<{ id: AccountDetailTab; label: string; detail: string; href: string }> = [
+    {
+      id: 'coverage',
+      label: t('admin.account_detail.coverage_tab', undefined, 'Package'),
+      detail: primaryPackage.display_package_label,
+      href: '#coverage-actions',
+    },
+    {
+      id: 'quota',
+      label: t('admin.account_detail.quota_tab', undefined, 'Usage'),
+      detail: quotaNeedsAttention ? translateStatusLabel('warning', t) : translateStatusLabel('ok', t),
+      href: '#quota-posture',
+    },
+    {
+      id: 'sites',
+      label: t('admin.account_detail.sites_tab', undefined, 'Sites'),
+      detail: formatInteger(account.site_count),
+      href: '#site-footprint',
+    },
+    ...(hasAdvancedChecks
+      ? [
+          {
+            id: 'advanced' as const,
+            label: t('admin.account_detail.advanced_tab', undefined, 'Checks'),
+            detail: formatInteger(Object.keys(siteRuntimeData).length),
+            href: '#advanced-checks',
+          },
+        ]
+      : []),
+  ];
   return (
     <BackofficePageStack>
       <BackofficePrimaryPanel
@@ -1418,7 +1476,11 @@ function AccountDetailContent() {
         description={postureDescription}
 	        actions={(
 	          <>
-	            <a href="#coverage-actions" className="btn btn-primary">
+	            <a
+                href="#coverage-actions"
+                className="btn btn-primary"
+                onClick={() => setActiveDetailTab('coverage')}
+              >
 	              {t('admin.account_detail.manage_package_action', undefined, 'Manage package')}
 	            </a>
 	            <Link href="/admin/accounts" className="btn btn-secondary">
@@ -1600,6 +1662,34 @@ function AccountDetailContent() {
             ) : null}
           </form>
         </details>
+        <div
+          role="tablist"
+          aria-label={t('admin.account_detail.tabs_label', undefined, 'Customer detail sections')}
+          className="grid gap-2 rounded-[1rem] border border-slate-200/80 bg-white/75 p-2 dark:border-slate-800 dark:bg-slate-950/40 md:grid-cols-4"
+        >
+          {detailTabs.map((tab) => {
+            const isActive = activeDetailTab === tab.id;
+            return (
+              <a
+                key={tab.id}
+                role="tab"
+                aria-selected={isActive}
+                href={tab.href}
+                onClick={() => setActiveDetailTab(tab.id)}
+                className={cn(
+                  'rounded-[0.85rem] px-3 py-2.5 text-left transition hover:bg-slate-100 dark:hover:bg-slate-900',
+                  isActive
+                    ? 'border border-blue-200 bg-blue-50 text-blue-900 dark:border-blue-900/60 dark:bg-blue-950/25 dark:text-blue-100'
+                    : 'border border-transparent text-slate-600 dark:text-slate-300'
+                )}
+              >
+                <span className="block text-sm font-semibold">{tab.label}</span>
+                <span className="mt-1 block truncate text-xs text-slate-500 dark:text-slate-400">{tab.detail}</span>
+              </a>
+            );
+          })}
+        </div>
+        {activeDetailTab === 'coverage' ? (
         <div className="grid gap-4 xl:grid-cols-[0.9fr_1.1fr]">
           <div id="coverage-actions">
           <BackofficeStackCard className="bg-white/80 dark:bg-slate-950/55">
@@ -1892,7 +1982,7 @@ function AccountDetailContent() {
               </BackofficeStackCard>
             ) : null}
             <div className="mt-4 flex flex-wrap gap-3">
-              <a href="#site-footprint" className="btn btn-secondary">
+              <a href="#site-footprint" className="btn btn-secondary" onClick={() => setActiveDetailTab('sites')}>
                 {t('admin.account_detail.view_sites_action', undefined, 'View sites')}
               </a>
             </div>
@@ -2098,9 +2188,11 @@ function AccountDetailContent() {
             </details>
           </BackofficeStackCard>
         </div>
+        ) : null}
       </BackofficePrimaryPanel>
 
-      <BackofficeSectionPanel className="space-y-5">
+      {activeDetailTab === 'quota' ? (
+      <BackofficeSectionPanel id="quota-posture" className="space-y-5">
         <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
           <div>
             <p className="text-xs font-semibold uppercase tracking-[0.18em] text-gray-500 dark:text-gray-400">
@@ -2409,7 +2501,9 @@ function AccountDetailContent() {
           </BackofficeStackCard>
         </div>
       </BackofficeSectionPanel>
+      ) : null}
 
+      {activeDetailTab === 'sites' ? (
       <div id="site-footprint" className="grid gap-6 xl:grid-cols-[1.1fr_0.9fr]">
         <BackofficeSectionPanel className="space-y-4">
           <div>
@@ -2464,9 +2558,10 @@ function AccountDetailContent() {
           )}
         </BackofficeSectionPanel>
       </div>
+      ) : null}
 
-      {Object.keys(siteRuntimeData).length > 0 ? (
-        <BackofficeSectionPanel>
+      {activeDetailTab === 'advanced' && hasAdvancedChecks ? (
+        <BackofficeSectionPanel id="advanced-checks">
           <details className="group">
             <summary className="flex cursor-pointer list-none items-center justify-between gap-4">
               <div>

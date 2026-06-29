@@ -34,6 +34,11 @@ def test_import_provider_connections_from_env_stores_connections_without_secret_
     settings = _settings(database_url)
     env = {
         "NPCINK_CLOUD_WEB_SEARCH_PROVIDER": "zhihu",
+        "NPCINK_CLOUD_WEB_SEARCH_BOCHA_API_KEY": "bocha-secret",
+        "NPCINK_CLOUD_WEB_SEARCH_BOCHA_BASE_URL": "https://api.bochaai.test/v1",
+        "NPCINK_CLOUD_WEB_SEARCH_APIFY_API_TOKEN": "apify-token",
+        "NPCINK_CLOUD_WEB_SEARCH_APIFY_ACTOR_ID": "apify/test-search-scraper",
+        "NPCINK_CLOUD_WEB_SEARCH_JINA_READER_ENABLED": "1",
         "NPCINK_CLOUD_WEB_SEARCH_ZHIHU_ACCESS_SECRET": "zhihu-secret",
         "NPCINK_CLOUD_WEB_SEARCH_ZHIHU_BASE_URL": "https://developer.zhihu.test",
         "NPCINK_CLOUD_IMAGE_SOURCE_UNSPLASH_ACCESS_KEY": "unsplash-secret",
@@ -67,6 +72,9 @@ def test_import_provider_connections_from_env_stores_connections_without_secret_
 
     assert result["mode"] == "apply"
     assert set(result["imported"]) == {
+        "search_bocha",
+        "search_apify",
+        "search_jina_reader",
         "search_zhihu",
         "image_unsplash",
         "embedding_tei",
@@ -74,23 +82,44 @@ def test_import_provider_connections_from_env_stores_connections_without_secret_
     }
     assert result["credential_value_exposure"] == "none"
     assert "zhihu-secret" not in str(result)
+    assert "bocha-secret" not in str(result)
+    assert "apify-token" not in str(result)
     assert "unsplash-secret" not in str(result)
     assert "zilliz-token" not in str(result)
 
     with get_session(database_url) as session:
         zhihu = session.get(ProviderConnection, "search_zhihu")
+        bocha = session.get(ProviderConnection, "search_bocha")
+        apify = session.get(ProviderConnection, "search_apify")
+        jina_reader = session.get(ProviderConnection, "search_jina_reader")
         image = session.get(ProviderConnection, "image_unsplash")
         vector = session.get(ProviderConnection, "vector_zilliz")
         assert zhihu is not None
+        assert bocha is not None
+        assert apify is not None
+        assert jina_reader is not None
         assert image is not None
         assert vector is not None
         assert zhihu.config_json["provider_id"] == "zhihu"
         assert zhihu.config_json["provider_mode"] == "zhihu"
+        assert bocha.config_json["provider_id"] == "bocha"
+        assert apify.config_json["provider_id"] == "apify"
+        assert apify.config_json["actor_id"] == "apify/test-search-scraper"
+        assert jina_reader.config_json["provider_id"] == "jina_reader"
+        assert jina_reader.config_json["secretless"] is True
         assert image.config_json["provider_id"] == "unsplash"
         assert vector.config_json["collection"] == "site_chunks"
         assert (
             decrypt_provider_connection_secret(zhihu.secret_ciphertext, settings=settings)
             == "zhihu-secret"
+        )
+        assert (
+            decrypt_provider_connection_secret(bocha.secret_ciphertext, settings=settings)
+            == "bocha-secret"
+        )
+        assert (
+            decrypt_provider_connection_secret(apify.secret_ciphertext, settings=settings)
+            == "apify-token"
         )
 
     dispose_engine(database_url)
