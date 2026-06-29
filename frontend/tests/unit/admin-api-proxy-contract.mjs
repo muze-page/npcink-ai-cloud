@@ -47,6 +47,12 @@ assert.match(
   'admin-prefixed write exceptions must preserve /internal/service/admin'
 );
 
+assert.match(
+  source,
+  /\^service-settings\(\?:\\\/\.\+\)\?\$/,
+  'admin service-settings writes must route through the backend admin service namespace'
+);
+
 assert.doesNotMatch(
   source,
   /audio-providers/,

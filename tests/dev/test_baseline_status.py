@@ -25,9 +25,8 @@ def test_baseline_status_reports_missing_alembic_version_table(tmp_path: Path) -
             admin_bootstrap_token="b" * 32,
             admin_session_secret="a" * 32,
             portal_jwt_secret="j" * 32,
-            portal_public_base_url="https://cloud.example.com",
-            portal_email_smtp_host="smtp.example.com",
-            portal_email_from_email="noreply@example.com",
+            browser_origin_allowlist="https://cloud.example.com",
+            trusted_host_allowlist="cloud.example.com",
         )
     )
 
@@ -59,28 +58,3 @@ def test_baseline_status_returns_structured_config_failure_for_missing_prod_secr
     )
     assert report["schema"]["missing_tables"] == []
     assert report["alembic"]["expected_heads"]
-
-
-def test_baseline_status_returns_structured_config_failure_for_missing_portal_email() -> None:
-    def _load_invalid_settings() -> Settings:
-        return Settings(
-            _env_file=None,
-            environment="production",
-            database_url="sqlite+pysqlite:///:memory:",
-            redis_url="redis://localhost:6379/0",
-            internal_auth_token="i" * 32,
-            admin_bootstrap_token="b" * 32,
-            admin_session_secret="a" * 32,
-            portal_jwt_secret="j" * 32,
-            portal_public_base_url="https://cloud.example.com",
-            portal_email_smtp_host="",
-            portal_email_from_email="noreply@example.com",
-        )
-
-    report = load_remote_baseline_status(settings_loader=_load_invalid_settings)
-
-    assert report["status"] == "fail"
-    assert report["failures"] == ["settings_validation_error"]
-    assert any(
-        "portal_email_smtp_host is required" in item["message"] for item in report["config_errors"]
-    )

@@ -9,7 +9,7 @@ const envSchema = z.object({
   CLOUD_PUBLIC_BASE_URL: z.string().url().default('http://127.0.0.1:8010'),
   NPCINK_CLOUD_INTERNAL_AUTH_TOKEN: z.string().optional().default(''),
   NPCINK_CLOUD_ADMIN_BOOTSTRAP_TOKEN: z.string().optional().default(''),
-  NPCINK_CLOUD_ADMIN_BOOTSTRAP_ADMIN_REF: z.string().optional().default('platform:internal_root'),
+  NPCINK_CLOUD_ADMIN_BOOTSTRAP_PRINCIPAL_ID: z.string().optional().default('platform:internal_root'),
   NPCINK_CLOUD_DEV_PORTAL_EMAIL: z.string().optional().default('portal-demo@example.com'),
   NPCINK_CLOUD_DEV_PORTAL_SITE_ID: z.string().optional().default('site_smoke'),
 });
@@ -90,7 +90,7 @@ export function validateEnv(): Env {
     CLOUD_PUBLIC_BASE_URL: rawPublicBaseUrl,
     NPCINK_CLOUD_INTERNAL_AUTH_TOKEN: process.env.NPCINK_CLOUD_INTERNAL_AUTH_TOKEN,
     NPCINK_CLOUD_ADMIN_BOOTSTRAP_TOKEN: process.env.NPCINK_CLOUD_ADMIN_BOOTSTRAP_TOKEN,
-    NPCINK_CLOUD_ADMIN_BOOTSTRAP_ADMIN_REF: process.env.NPCINK_CLOUD_ADMIN_BOOTSTRAP_ADMIN_REF,
+    NPCINK_CLOUD_ADMIN_BOOTSTRAP_PRINCIPAL_ID: process.env.NPCINK_CLOUD_ADMIN_BOOTSTRAP_PRINCIPAL_ID,
     NPCINK_CLOUD_DEV_PORTAL_EMAIL: process.env.NPCINK_CLOUD_DEV_PORTAL_EMAIL,
     NPCINK_CLOUD_DEV_PORTAL_SITE_ID: process.env.NPCINK_CLOUD_DEV_PORTAL_SITE_ID,
   });
@@ -214,7 +214,7 @@ export function getAdminBootstrapToken(): string {
 }
 
 export function getAdminBootstrapAdminRef(): string {
-  return getEnv().NPCINK_CLOUD_ADMIN_BOOTSTRAP_ADMIN_REF.trim() || 'platform:internal_root';
+  return getEnv().NPCINK_CLOUD_ADMIN_BOOTSTRAP_PRINCIPAL_ID.trim() || 'platform:internal_root';
 }
 
 export function getDevPortalEmail(): string {

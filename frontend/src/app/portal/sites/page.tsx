@@ -78,6 +78,11 @@ function PortalSitesContent() {
   const selectedSiteId = session?.site_id || sites[0]?.site_id || '';
   const selectedSite = sites.find((site) => site.site_id === selectedSiteId) || sites[0] || null;
   const selectedSiteWordPressUrl = getPortalSiteWordPressUrl(selectedSite);
+  const addonConnectMode = searchParams?.get('connect') === 'wordpress-addon';
+  const addonWordPressUrl = searchParams?.get('site_url') || '';
+  const addonSiteName = searchParams?.get('site_name') || '';
+  const addonReturnUrl = searchParams?.get('return_url') || '';
+  const addonState = searchParams?.get('state') || '';
   const canArchiveSites = Boolean(session?.allowed_actions?.includes('archive_sites'));
   const getSiteSummary = useCallback((siteId: string) => siteSummaryCache[siteId] || null, [siteSummaryCache]);
   const getSiteCoverage = useCallback((site: PortalSiteListItem) => getSiteSummary(site.site_id)?.coverage || null, [getSiteSummary]);
@@ -191,6 +196,12 @@ function PortalSitesContent() {
     );
     setSiteSort((searchParams?.get('sort') as 'current' | 'recent' | 'name') || 'current');
   }, [searchParams]);
+
+  useEffect(() => {
+    if (addonConnectMode && isAuthenticated) {
+      setShowConnectModal(true);
+    }
+  }, [addonConnectMode, isAuthenticated]);
 
   useEffect(() => {
     const params = new URLSearchParams(searchParams?.toString() || '');
@@ -1076,6 +1087,10 @@ function PortalSitesContent() {
             onSiteCreated={(siteId) => handleSiteCreated(siteId)}
             mode="modal"
             onClose={() => setShowConnectModal(false)}
+            initialWordPressUrl={addonWordPressUrl}
+            initialSiteName={addonSiteName}
+            addonReturnUrl={addonReturnUrl}
+            addonState={addonState}
           />
         ) : (
           <PortalEmptyState

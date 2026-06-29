@@ -201,29 +201,47 @@ class SmtpPortalEmailSender(PortalEmailSender):
         return "en" if value == "en" else "zh-CN"
 
 
-def build_portal_email_sender(settings: Settings) -> PortalEmailSender | None:
-    host = (settings.portal_email_smtp_host or "").strip()
-    from_email = (settings.portal_email_from_email or "").strip()
+def build_portal_email_sender_from_config(config: dict[str, object]) -> PortalEmailSender | None:
+    host = str(config.get("smtp_host") or "").strip()
+    from_email = str(config.get("from_email") or "").strip()
     if not host:
         return None
     if not from_email:
-        raise ValueError("NPCINK_CLOUD_PORTAL_EMAIL_FROM_EMAIL is required when SMTP is set.")
-    if settings.portal_email_smtp_use_ssl and settings.portal_email_smtp_use_starttls:
+        raise ValueError("portal email from_email is required when SMTP is set.")
+    use_ssl = bool(config.get("smtp_use_ssl", True))
+    use_starttls = bool(config.get("smtp_use_starttls", False))
+    if use_ssl and use_starttls:
         raise ValueError("Portal SMTP cannot enable both SSL and STARTTLS.")
-    username = (settings.portal_email_smtp_username or "").strip()
-    password = settings.portal_email_smtp_password or ""
+    username = str(config.get("smtp_username") or "").strip()
+    password = str(config.get("smtp_password") or "")
     if bool(username) != bool(password):
         raise ValueError("Portal SMTP username and password must be configured together.")
 
     return SmtpPortalEmailSender(
         host=host,
-        port=settings.portal_email_smtp_port,
+        port=int(str(config.get("smtp_port") or 465)),
         username=username,
         password=password,
-        use_ssl=settings.portal_email_smtp_use_ssl,
-        use_starttls=settings.portal_email_smtp_use_starttls,
-        timeout_seconds=settings.portal_email_smtp_timeout_seconds,
+        use_ssl=use_ssl,
+        use_starttls=use_starttls,
+        timeout_seconds=float(str(config.get("smtp_timeout_seconds") or 20.0)),
         from_email=from_email,
-        from_name=(settings.portal_email_from_name or "").strip(),
-        reply_to=(settings.portal_email_reply_to or "").strip(),
+        from_name=str(config.get("from_name") or "").strip(),
+        reply_to=str(config.get("reply_to") or "").strip(),
     )
+
+
+def build_portal_email_sender(
+    settings: Settings,
+    *,
+    database_url: str | None = None,
+) -> PortalEmailSender | None:
+    resolved_database_url = str(database_url or settings.database_url or "").strip()
+    if not resolved_database_url:
+        return None
+    from app.domain.service_settings import resolve_portal_email_runtime_config
+
+    config = resolve_portal_email_runtime_config(resolved_database_url, settings)
+    if not config.get("configured"):
+        return None
+    return build_portal_email_sender_from_config(config)

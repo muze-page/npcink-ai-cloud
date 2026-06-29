@@ -4,14 +4,15 @@ import json
 import secrets
 from datetime import datetime
 from typing import Any
-from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+from urllib.parse import parse_qsl, urlencode
 
 import httpx
 from fastapi import APIRouter, Query, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, RedirectResponse, Response
 from pydantic import BaseModel, Field
 
 from app.adapters.notifications.base import PortalEmailDeliveryError
+from app.adapters.notifications.smtp import build_portal_email_sender
 from app.api.auth import (
     AUTHORIZATION_HEADER,
     PortalBearerTokenError,
@@ -23,7 +24,6 @@ from app.api.browser_security import enforce_browser_same_origin
 from app.api.envelope import build_envelope
 from app.api.portal_locale import resolve_portal_email_locale
 from app.api.portal_session import (
-    COOKIE_SITE_ID,
     build_new_portal_session_metadata,
     clear_portal_session_cookies,
     portal_cookie_secure,
@@ -60,6 +60,9 @@ from app.domain.hosted_model_defaults import FREE_GPT55_MODEL_ID
 from app.domain.media_derivatives.metrics import MediaDerivativeObservabilityService
 from app.domain.observability.plugin_events import PluginObservabilityService
 from app.domain.observability.site_monitoring_overview import SiteMonitoringOverviewService
+from app.domain.service_settings import (
+    resolve_portal_qq_runtime_config,
+)
 from app.domain.site_knowledge.metrics import SiteKnowledgeObservabilityService
 from app.domain.usage.service import UsageService
 
@@ -84,12 +87,38 @@ class PortalCreateSitePayload(BaseModel):
     wordpress_url: str = ""
 
 
+class PortalAddonConnectionPayload(BaseModel):
+    account_id: str = ""
+    site_name: str = ""
+    wordpress_url: str = ""
+    return_url: str = ""
+    state: str = ""
+
+
+class PortalAddonConnectionExchangePayload(BaseModel):
+    code: str = ""
+    state: str = ""
+
+
 class PortalLoginCodeRequestPayload(BaseModel):
     email: str = ""
     locale: str = ""
 
 
 class PortalLoginCodeVerifyPayload(BaseModel):
+    email: str = ""
+    code: str = ""
+
+
+class PortalRegistrationCodeRequestPayload(BaseModel):
+    email: str = ""
+    site_url: str = ""
+    site_name: str = ""
+    use_case: str = ""
+    locale: str = ""
+
+
+class PortalRegistrationVerifyPayload(BaseModel):
     email: str = ""
     code: str = ""
 
@@ -187,22 +216,22 @@ def _portal_session_cleared_response() -> JSONResponse:
 
 
 def _portal_qq_config_error(request: Request) -> JSONResponse | None:
-    settings = get_cloud_services(request).settings
-    if not str(settings.portal_qq_client_id or "").strip():
+    config = _portal_qq_config(request)
+    if not str(config.get("client_id") or "").strip():
         return portal_json_error(
             request,
             status_code=503,
             error_code="portal.qq_login_not_configured",
             message="QQ login is not configured",
         )
-    if not str(settings.portal_qq_client_secret or "").strip():
+    if not str(config.get("client_secret") or "").strip():
         return portal_json_error(
             request,
             status_code=503,
             error_code="portal.qq_login_not_configured",
             message="QQ login is not configured",
         )
-    if not _portal_qq_redirect_uri(request):
+    if not str(config.get("redirect_uri") or "").strip():
         return portal_json_error(
             request,
             status_code=503,
@@ -212,39 +241,13 @@ def _portal_qq_config_error(request: Request) -> JSONResponse | None:
     return None
 
 
+def _portal_qq_config(request: Request) -> dict[str, Any]:
+    settings = get_cloud_services(request).settings
+    return resolve_portal_qq_runtime_config(settings.database_url, settings)
+
+
 def _portal_qq_redirect_uri(request: Request) -> str:
-    settings = get_cloud_services(request).settings
-    configured = str(settings.portal_qq_redirect_uri or "").strip()
-    if configured:
-        return configured if _portal_qq_redirect_uri_allowed(request, configured) else ""
-    base_url = str(settings.portal_public_base_url or "").strip()
-    if not base_url:
-        return ""
-    parsed = urlsplit(base_url)
-    if not parsed.scheme or not parsed.netloc:
-        return ""
-    redirect_uri = urlunsplit(
-        (parsed.scheme, parsed.netloc, "/portal/v1/auth/qq/callback", "", "")
-    )
-    return redirect_uri if _portal_qq_redirect_uri_allowed(request, redirect_uri) else ""
-
-
-def _portal_qq_redirect_uri_allowed(request: Request, value: str) -> bool:
-    parsed = urlsplit(str(value or "").strip())
-    if parsed.path != "/portal/v1/auth/qq/callback":
-        return False
-    if parsed.scheme not in {"https", "http"} or not parsed.netloc:
-        return False
-    settings = get_cloud_services(request).settings
-    environment = str(settings.environment or "").strip().lower()
-    if parsed.scheme != "https" and environment not in {"development", "test"}:
-        return False
-    allowed_hosts = {
-        str(urlsplit(str(settings.portal_public_base_url or "")).netloc or "").lower(),
-    }
-    if environment in {"development", "test"}:
-        allowed_hosts.add(str(urlsplit(str(request.base_url)).netloc or "").lower())
-    return parsed.netloc.lower() in {host for host in allowed_hosts if host}
+    return str(_portal_qq_config(request).get("redirect_uri") or "").strip()
 
 
 def _portal_qq_oauth_nonce(request: Request, payload_nonce: str = "") -> str:
@@ -269,22 +272,40 @@ def _set_portal_qq_oauth_nonce_cookie(
     )
 
 
-def _clear_portal_qq_oauth_nonce_cookie(response: JSONResponse) -> None:
+def _clear_portal_qq_oauth_nonce_cookie(response: Response) -> None:
     response.delete_cookie(COOKIE_PORTAL_QQ_OAUTH_NONCE, path="/portal/v1/auth/qq")
 
 
 def _build_qq_authorization_url(request: Request, *, state: str) -> str:
-    settings = get_cloud_services(request).settings
+    config = _portal_qq_config(request)
     query = urlencode(
         {
             "response_type": "code",
-            "client_id": str(settings.portal_qq_client_id or "").strip(),
-            "redirect_uri": _portal_qq_redirect_uri(request),
+            "client_id": str(config.get("client_id") or "").strip(),
+            "redirect_uri": str(config.get("redirect_uri") or "").strip(),
             "state": state,
-            "scope": str(settings.portal_qq_scope or "get_user_info").strip(),
+            "scope": str(config.get("scope") or "get_user_info").strip(),
         }
     )
     return f"https://graph.qq.com/oauth2.0/authorize?{query}"
+
+
+def _portal_prefers_html(request: Request) -> bool:
+    accept = str(request.headers.get("accept") or "").lower()
+    return "text/html" in accept and "application/json" not in accept
+
+
+def _portal_oauth_return_response(
+    request: Request,
+    *,
+    return_to: str,
+    status: str,
+) -> RedirectResponse | None:
+    if not _portal_prefers_html(request):
+        return None
+    safe_return_to = return_to if return_to.startswith("/portal") else "/portal"
+    separator = "&" if "?" in safe_return_to else "?"
+    return RedirectResponse(f"{safe_return_to}{separator}qq={status}", status_code=303)
 
 
 def _parse_qq_query_response(value: str) -> dict[str, str]:
@@ -300,16 +321,16 @@ def _parse_qq_me_response(value: str) -> dict[str, object]:
 
 
 def _exchange_qq_code(request: Request, *, code: str) -> dict[str, str]:
-    settings = get_cloud_services(request).settings
-    with httpx.Client(timeout=float(settings.portal_qq_timeout_seconds or 10.0)) as client:
+    config = _portal_qq_config(request)
+    with httpx.Client(timeout=float(config.get("timeout_seconds") or 10.0)) as client:
         response = client.get(
             "https://graph.qq.com/oauth2.0/token",
             params={
                 "grant_type": "authorization_code",
-                "client_id": str(settings.portal_qq_client_id or "").strip(),
-                "client_secret": str(settings.portal_qq_client_secret or "").strip(),
+                "client_id": str(config.get("client_id") or "").strip(),
+                "client_secret": str(config.get("client_secret") or "").strip(),
                 "code": code,
-                "redirect_uri": _portal_qq_redirect_uri(request),
+                "redirect_uri": str(config.get("redirect_uri") or "").strip(),
                 "fmt": "xhtml",
             },
         )
@@ -325,8 +346,8 @@ def _exchange_qq_code(request: Request, *, code: str) -> dict[str, str]:
 
 
 def _fetch_qq_openid(request: Request, *, access_token: str) -> dict[str, str]:
-    settings = get_cloud_services(request).settings
-    with httpx.Client(timeout=float(settings.portal_qq_timeout_seconds or 10.0)) as client:
+    config = _portal_qq_config(request)
+    with httpx.Client(timeout=float(config.get("timeout_seconds") or 10.0)) as client:
         response = client.get(
             "https://graph.qq.com/oauth2.0/me",
             params={
@@ -394,6 +415,15 @@ def _csv_set(value: str) -> set[str]:
     return {item.strip() for item in str(value or "").split(",") if item.strip()}
 
 
+def _allow_development_login_code(request: Request) -> bool:
+    services = get_cloud_services(request)
+    environment = str(services.settings.environment or "").strip().lower()
+    return environment in {"development", "test"} and (
+        str(request.headers.get("x-npcink-dev-login-code") or "").strip() == "1"
+        or str(request.headers.get("x-npcink-debug-portal-link") or "").strip() == "1"
+    )
+
+
 def _get_portal_advisor_service(request: Request) -> InternalAIAdvisorService:
     services = get_cloud_services(request)
     return InternalAIAdvisorService(
@@ -419,6 +449,7 @@ def _resolve_portal_ai_provider_id(request: Request) -> str:
 async def start_portal_qq_login(
     request: Request,
     return_to: str = Query(default="/portal"),
+    intent: str = Query(default="login"),
 ) -> Any:
     same_origin = _portal_same_origin_guard(request, always=True)
     if same_origin is not None:
@@ -433,6 +464,7 @@ async def start_portal_qq_login(
         client_scope_id=str(request.client.host if request.client else ""),
         ttl_seconds=int(get_cloud_services(request).settings.portal_oauth_state_ttl_seconds or 0),
         nonce=nonce,
+        intent=intent,
     )
     authorization_url = _build_qq_authorization_url(
         request,
@@ -450,6 +482,7 @@ async def start_portal_qq_login(
                 "state": str(issued.get("state") or ""),
                 "expires_in_seconds": expires_in_seconds,
                 "return_to": str(issued.get("return_to") or "/portal"),
+                "intent": str(issued.get("intent") or "login"),
             },
         ),
     )
@@ -489,19 +522,65 @@ async def finish_portal_qq_login(
             request,
             access_token=str(token.get("access_token") or ""),
         )
+        return_to = str(consumed_state.get("return_to") or "/portal")
+        if str(consumed_state.get("intent") or "") == "bind":
+            auth = await resolve_portal_request_context(
+                request,
+                require_idempotency=False,
+                allow_session_cookies=True,
+            )
+            if isinstance(auth, JSONResponse):
+                return auth
+            binding = _get_commercial_service(request).bind_portal_identity_provider(
+                principal_id=auth.principal_id,
+                provider="qq",
+                external_subject=str(subject.get("openid") or ""),
+                unionid=str(subject.get("unionid") or ""),
+                metadata_json={"source": "portal_qq_callback_bind"},
+            )
+            redirect = _portal_oauth_return_response(
+                request,
+                return_to=return_to,
+                status="bound",
+            )
+            if redirect is not None:
+                _clear_portal_qq_oauth_nonce_cookie(redirect)
+                return redirect
+            response = JSONResponse(
+                status_code=200,
+                content=_portal_route_envelope(
+                    message="portal QQ login bound",
+                    data={
+                        "status": "bound",
+                        "provider": "qq",
+                        "return_to": return_to,
+                        "binding": binding,
+                    },
+                ),
+            )
+            _clear_portal_qq_oauth_nonce_cookie(response)
+            return response
         login = _get_commercial_service(request).resolve_portal_identity_provider_login(
             provider="qq",
             external_subject=str(subject.get("openid") or ""),
             unionid=str(subject.get("unionid") or ""),
         )
         if str(login.get("status") or "") == "binding_required":
+            redirect = _portal_oauth_return_response(
+                request,
+                return_to=return_to,
+                status="binding_required",
+            )
+            if redirect is not None:
+                _clear_portal_qq_oauth_nonce_cookie(redirect)
+                return redirect
             response = JSONResponse(
                 status_code=200,
                 content=_portal_route_envelope(
                     message="portal QQ binding required",
                     data={
                         **login,
-                        "return_to": str(consumed_state.get("return_to") or "/portal"),
+                        "return_to": return_to,
                     },
                 ),
             )
@@ -516,7 +595,7 @@ async def finish_portal_qq_login(
             session_metadata=build_new_portal_session_metadata(request),
         )
         data["auth_provider"] = "qq"
-        data["return_to"] = str(consumed_state.get("return_to") or "/portal")
+        data["return_to"] = return_to
     except CommercialServiceError as error:
         return _service_error_response(error, request=request)
     except httpx.HTTPError as error:
@@ -538,10 +617,60 @@ async def finish_portal_qq_login(
         request,
         response,
         principal_id=principal_id,
-        site_id="",
+        site_id=str(data.get("site_id") or ""),
     )
     _clear_portal_qq_oauth_nonce_cookie(response)
     return response
+
+
+@router.get("/auth/identity-providers")
+async def list_portal_identity_providers(request: Request) -> Any:
+    auth = await resolve_portal_request_context(
+        request,
+        require_idempotency=False,
+        allow_session_cookies=True,
+    )
+    if isinstance(auth, JSONResponse):
+        return auth
+    try:
+        result = _get_commercial_service(request).list_portal_identity_provider_bindings(
+            principal_id=auth.principal_id,
+        )
+    except CommercialServiceError as error:
+        return _service_error_response(error, request=request)
+    raw_items = result.get("items", [])
+    items = (
+        [item for item in raw_items if isinstance(item, dict)]
+        if isinstance(raw_items, list)
+        else []
+    )
+    qq_binding = next(
+        (item for item in items if str(item.get("provider") or "") == "qq"),
+        None,
+    )
+    qq_config = _portal_qq_config(request)
+    qq_configured = all(
+        str(qq_config.get(key) or "").strip()
+        for key in ("client_id", "client_secret", "redirect_uri")
+    )
+    return _portal_route_envelope(
+        message="portal identity providers listed",
+        data={
+            "principal_id": auth.principal_id,
+            "providers": [
+                {
+                    "provider": "qq",
+                    "display_name": "QQ",
+                    "configured": qq_configured,
+                    "bound": qq_binding is not None,
+                    "binding": qq_binding,
+                    "bind_start_path": (
+                        "/portal/v1/auth/qq/start?intent=bind&return_to=/portal/account"
+                    ),
+                }
+            ],
+        },
+    )
 
 
 @router.post("/auth/qq/bind")
@@ -841,13 +970,13 @@ async def request_portal_login_code(
             error_code=error.error_code,
             message=error.message,
         )
-    ttl_seconds = resolve_portal_login_code_ttl_seconds(get_cloud_services(request).settings)
-    email_sender = get_cloud_services(request).portal_email_sender
-    environment = str(get_cloud_services(request).settings.environment or "").strip().lower()
-    allow_development_code = environment in {"development", "test"} and (
-        str(request.headers.get("x-npcink-dev-login-code") or "").strip() == "1"
-        or str(request.headers.get("x-npcink-debug-portal-link") or "").strip() == "1"
+    services = get_cloud_services(request)
+    ttl_seconds = resolve_portal_login_code_ttl_seconds(services.settings)
+    email_sender = services.portal_email_sender or build_portal_email_sender(
+        services.settings,
+        database_url=services.settings.database_url,
     )
+    allow_development_code = _allow_development_login_code(request)
     try:
         issued = _get_commercial_service(request).issue_portal_login_code(
             email=email,
@@ -875,7 +1004,7 @@ async def request_portal_login_code(
                 principal_id=str(issued.get("principal_id") or ""),
                 code=str(issued.get("code") or ""),
                 expires_in_seconds=ttl_seconds,
-                project_name=get_cloud_services(request).settings.project_name,
+                project_name=services.settings.project_name,
                 locale=locale,
             )
         except PortalEmailDeliveryError as error:
@@ -951,7 +1080,158 @@ async def verify_portal_login_code(
         request,
         response,
         principal_id=principal_id,
-        site_id="",
+        site_id=str(data.get("site_id") or ""),
+    )
+    return response
+
+
+@router.post("/register/code/request")
+async def request_portal_registration_code(
+    request: Request,
+    payload: PortalRegistrationCodeRequestPayload,
+) -> Any:
+    same_origin = _portal_same_origin_guard(request, always=True)
+    if same_origin is not None:
+        return same_origin
+    email = payload.email.strip()
+    site_url = payload.site_url.strip()
+    locale = resolve_portal_email_locale(request, payload.locale)
+    if not email or not site_url:
+        return portal_json_error(
+            request,
+            status_code=400,
+            error_code="portal.registration_required",
+            message="email and wordpress site url are required",
+        )
+    try:
+        enforce_portal_login_code_request_rate_limit(request, email=email)
+    except PortalBearerTokenError as error:
+        return portal_json_error(
+            request,
+            status_code=error.status_code,
+            error_code=error.error_code,
+            message=error.message,
+        )
+    services = get_cloud_services(request)
+    ttl_seconds = resolve_portal_login_code_ttl_seconds(services.settings)
+    allow_development_code = _allow_development_login_code(request)
+    email_sender = services.portal_email_sender or build_portal_email_sender(
+        services.settings,
+        database_url=services.settings.database_url,
+    )
+    if email_sender is None and not allow_development_code:
+        return portal_json_error(
+            request,
+            status_code=503,
+            error_code="portal.email_not_configured",
+            message="Portal email delivery is not configured",
+        )
+    try:
+        issued = _get_commercial_service(request).issue_portal_registration_code(
+            email=email,
+            wordpress_url=site_url,
+            site_name=payload.site_name,
+            use_case=payload.use_case,
+            ttl_seconds=ttl_seconds,
+        )
+    except CommercialServiceError as error:
+        return _service_error_response(error, request=request)
+    if email_sender is not None:
+        try:
+            email_sender.send_login_code(
+                recipient_email=str(issued.get("email") or ""),
+                principal_id=str(issued.get("principal_id") or ""),
+                code=str(issued.get("code") or ""),
+                expires_in_seconds=ttl_seconds,
+                project_name=services.settings.project_name,
+                locale=locale,
+            )
+        except PortalEmailDeliveryError as error:
+            return portal_json_error(
+                request,
+                status_code=502,
+                error_code="portal.email_delivery_failed",
+                message=str(error),
+            )
+    return _portal_route_envelope(
+        message="portal registration code issued",
+        data={
+            "email": str(issued.get("email") or ""),
+            "delivery": ("development_code" if allow_development_code else "email"),
+            "expires_in_seconds": ttl_seconds,
+            "code": (str(issued.get("code") or "") if allow_development_code else ""),
+            "site": {
+                "site_id": str(issued.get("site_id") or ""),
+                "site_name": str(issued.get("site_name") or ""),
+                "wordpress_url": str(issued.get("wordpress_url") or ""),
+            },
+        },
+    )
+
+
+@router.post("/register/verify")
+async def verify_portal_registration_code(
+    request: Request,
+    payload: PortalRegistrationVerifyPayload,
+) -> Any:
+    same_origin = _portal_same_origin_guard(request, always=True)
+    if same_origin is not None:
+        return same_origin
+    email = payload.email.strip()
+    code = payload.code.strip()
+    if not email or not code:
+        return portal_json_error(
+            request,
+            status_code=400,
+            error_code="auth.portal_registration_code_required",
+            message="portal registration code and email are required",
+        )
+    try:
+        registration = _get_commercial_service(request).verify_portal_registration_code(
+            email=email,
+            code=code,
+            max_attempts=max(
+                1,
+                int(get_cloud_services(request).settings.portal_login_code_max_attempts or 0),
+            ),
+            audit_context=_build_portal_audit_context(request, "portal_registration"),
+        )
+        principal_id = str(registration.get("principal_id") or "")
+        site_id = str(registration.get("site_id") or "")
+        session_data = serialize_portal_session(
+            request,
+            principal_id=principal_id,
+            site_id=site_id,
+            strict_site=False,
+            session_metadata=build_new_portal_session_metadata(request),
+        )
+        data = {
+            **registration,
+            "session": session_data.get("session"),
+            "sites": session_data.get("sites") or [],
+            "accounts": session_data.get("accounts") or [],
+        }
+    except CommercialServiceError as error:
+        if error.error_code == "service.portal_registration_code_invalid":
+            return portal_json_error(
+                request,
+                status_code=401,
+                error_code="auth.portal_registration_code_invalid",
+                message="portal registration code is invalid or expired",
+            )
+        return _service_error_response(error, request=request)
+    response = JSONResponse(
+        status_code=200,
+        content=_portal_route_envelope(
+            message="portal registration completed",
+            data=data,
+        ),
+    )
+    set_portal_session_cookies(
+        request,
+        response,
+        principal_id=principal_id,
+        site_id=site_id,
     )
     return response
 
@@ -965,7 +1245,7 @@ async def get_portal_session(request: Request) -> Any:
     )
     if isinstance(auth, JSONResponse):
         return auth
-    selected_site_id = request.cookies.get(COOKIE_SITE_ID, "").strip()
+    selected_site_id = str(auth.site_id or "").strip()
     try:
         data = serialize_portal_session(
             request,
@@ -1020,12 +1300,11 @@ async def select_portal_session_site(
             data=data,
         ),
     )
-    response.set_cookie(
-        COOKIE_SITE_ID,
-        site_id,
-        httponly=True,
-        secure=portal_cookie_secure(request),
-        samesite="lax",
+    set_portal_session_cookies(
+        request,
+        response,
+        principal_id=auth.principal_id,
+        site_id=site_id,
     )
     return response
 
@@ -1101,6 +1380,65 @@ async def create_portal_site(
 
     return _portal_route_envelope(
         message="portal site created",
+        data=result,
+    )
+
+
+@router.post("/addon-connections")
+async def create_portal_addon_connection(
+    request: Request,
+    payload: PortalAddonConnectionPayload,
+) -> Any:
+    same_origin = _portal_same_origin_guard(request)
+    if same_origin is not None:
+        return same_origin
+    write_guard = _portal_write_guard(request)
+    if write_guard is not None:
+        return write_guard
+    auth = await resolve_portal_request_context(
+        request,
+        require_idempotency=True,
+        allow_session_cookies=True,
+    )
+    if isinstance(auth, JSONResponse):
+        return auth
+
+    service = _get_commercial_service(request)
+    audit_context = _build_portal_audit_context(request, auth.principal_id)
+    try:
+        result = service.create_wordpress_addon_connection(
+            account_id=payload.account_id,
+            principal_id=auth.principal_id,
+            wordpress_url=payload.wordpress_url,
+            site_name=payload.site_name,
+            return_url=payload.return_url,
+            addon_state=payload.state,
+            audit_context=audit_context,
+        )
+    except CommercialServiceError as error:
+        return _service_error_response(error, request=request)
+
+    return _portal_route_envelope(
+        message="wordpress addon connection issued",
+        data=result,
+    )
+
+
+@router.post("/addon-connections/exchange")
+async def exchange_portal_addon_connection(
+    request: Request,
+    payload: PortalAddonConnectionExchangePayload,
+) -> Any:
+    try:
+        result = _get_commercial_service(request).consume_wordpress_addon_connection(
+            code=payload.code,
+            addon_state=payload.state,
+        )
+    except CommercialServiceError as error:
+        return _service_error_response(error, request=request)
+
+    return _portal_route_envelope(
+        message="wordpress addon connection exchanged",
         data=result,
     )
 

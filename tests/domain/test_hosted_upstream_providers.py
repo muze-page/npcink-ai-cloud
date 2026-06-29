@@ -268,9 +268,8 @@ def test_provider_registry_omits_default_openai_without_credentials_outside_dev_
         admin_bootstrap_token="npcink-cloud-admin-bootstrap-token-32b",
         admin_session_secret="npcink-cloud-ops-session-secret-prod-32b",
         portal_jwt_secret="npcink-cloud-portal-jwt-secret-prod-32b",
-        portal_public_base_url="https://cloud.example.com",
-        portal_email_smtp_host="smtp.example.com",
-        portal_email_from_email="no-reply@example.com",
+        browser_origin_allowlist="https://cloud.example.com",
+        trusted_host_allowlist="cloud.example.com",
     )
 
     providers = build_provider_adapters(production_settings)

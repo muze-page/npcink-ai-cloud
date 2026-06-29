@@ -49,6 +49,7 @@ PORTAL_LOGIN_CODE_MAX_REQUESTS_PER_CLIENT_WINDOW = 10
 @dataclass(slots=True)
 class PortalAuthContext:
     principal_id: str
+    site_id: str = ""
 
 
 class PortalBearerTokenError(ValueError):
@@ -127,6 +128,7 @@ def build_portal_session_token(
     settings: Settings,
     *,
     principal_id: str,
+    site_id: str = "",
     session_version: int = 1,
     expires_at: datetime | None = None,
 ) -> str:
@@ -145,6 +147,8 @@ def build_portal_session_token(
         payload["iss"] = settings.portal_jwt_issuer
     if settings.portal_jwt_audience:
         payload["aud"] = settings.portal_jwt_audience
+    if site_id:
+        payload["site_id"] = site_id
     return jwt.encode(
         payload,
         _resolve_portal_link_signing_secret(settings),

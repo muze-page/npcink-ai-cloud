@@ -15,6 +15,7 @@ export type ProductIdentityType = 'platform_admin' | 'site_admin';
 // ============================================
 
 export interface PortalSession {
+  principal_id?: string;
   site_admin_ref: string;
   site_id: string;
   account_id?: string;
@@ -112,10 +113,86 @@ export interface PortalLoginCodeVerifyRequest {
   code: string;
 }
 
+export interface PortalRegistrationCodeRequest {
+  email: string;
+  site_url: string;
+  site_name?: string;
+  use_case?: string;
+  locale?: 'en' | 'zh-CN';
+}
+
+export interface PortalRegistrationVerifyRequest {
+  email: string;
+  code: string;
+}
+
+export interface PortalRegistrationResult {
+  status: 'registered' | 'existing_user';
+  email: string;
+  principal_id: string;
+  account_id?: string;
+  site_id?: string;
+  site?: Site;
+  subscription?: PortalSession['current_subscription'];
+  next?: Record<string, string>;
+}
+
+export interface PortalIdentityProviderBinding {
+  binding_id: string;
+  provider: string;
+  principal_id: string;
+  identity_type: ProductIdentityType | 'user';
+  role: string;
+  status: string;
+  has_unionid: boolean;
+  last_login_at: string;
+}
+
+export interface PortalIdentityProviderStatus {
+  provider: string;
+  display_name: string;
+  configured: boolean;
+  bound: boolean;
+  binding?: PortalIdentityProviderBinding | null;
+  bind_start_path?: string;
+}
+
+export interface PortalIdentityProvidersResponse {
+  principal_id: string;
+  providers: PortalIdentityProviderStatus[];
+}
+
+export interface PortalQqStartResponse {
+  provider: 'qq';
+  authorization_url: string;
+  state: string;
+  expires_in_seconds: number;
+  return_to: string;
+  intent?: 'login' | 'bind';
+}
+
 export interface CreateSiteRequest {
   account_id: string;
   site_name?: string;
   wordpress_url: string;
+}
+
+export interface CreateAddonConnectionRequest {
+  account_id: string;
+  site_name?: string;
+  wordpress_url: string;
+  return_url: string;
+  state: string;
+}
+
+export interface AddonConnectionResult {
+  site_id: string;
+  key_id: string;
+  site_created: boolean;
+  redirect_url: string;
+  return_url: string;
+  expires_at: string;
+  expires_in_seconds: number;
 }
 
 export interface CreateKeyRequest {
@@ -1508,6 +1585,57 @@ export class PortalClient {
     return this.request('POST', '/auth/code/verify', payload);
   }
 
+  /**
+   * 请求注册验证码
+   * POST /portal/v1/register/code/request
+   */
+  async requestRegistrationCode(payload: PortalRegistrationCodeRequest): Promise<PortalEnvelope<{
+    email: string;
+    delivery: 'email' | 'development_code';
+    expires_in_seconds: number;
+    code: string;
+    site?: {
+      site_id: string;
+      site_name: string;
+      wordpress_url: string;
+    };
+  }>> {
+    return this.request('POST', '/register/code/request', payload);
+  }
+
+  /**
+   * 验证注册验证码并创建 Free 账号
+   * POST /portal/v1/register/verify
+   */
+  async verifyRegistration(payload: PortalRegistrationVerifyRequest): Promise<PortalEnvelope<PortalRegistrationResult>> {
+    return this.request('POST', '/register/verify', payload);
+  }
+
+  /**
+   * 获取当前账号的第三方登录绑定状态
+   * GET /portal/v1/auth/identity-providers
+   */
+  async getIdentityProviders(): Promise<PortalEnvelope<PortalIdentityProvidersResponse>> {
+    return this.request('GET', '/auth/identity-providers', undefined, { requireAuth: true });
+  }
+
+  /**
+   * 发起 QQ 绑定授权
+   * GET /portal/v1/auth/qq/start?intent=bind
+   */
+  async startQqBind(returnTo = '/portal/account'): Promise<PortalEnvelope<PortalQqStartResponse>> {
+    const params = new URLSearchParams({ intent: 'bind', return_to: returnTo });
+    return this.request('GET', `/auth/qq/start?${params.toString()}`, undefined, { requireAuth: true });
+  }
+
+  /**
+   * 解绑 QQ 快捷登录
+   * POST /portal/v1/auth/qq/unbind
+   */
+  async unbindQqLogin(): Promise<PortalEnvelope<{ provider: string; principal_id: string; revoked: number }>> {
+    return this.request('POST', '/auth/qq/unbind', { provider: 'qq' }, { requireAuth: true });
+  }
+
   // ========================================
   // Session 管理
   // ========================================
@@ -1558,6 +1686,10 @@ export class PortalClient {
 
   async createSite(payload: CreateSiteRequest): Promise<PortalEnvelope<PortalProvisionedSite>> {
     return this.request('POST', '/sites', payload, { requireAuth: true });
+  }
+
+  async createAddonConnection(payload: CreateAddonConnectionRequest): Promise<PortalEnvelope<AddonConnectionResult>> {
+    return this.request('POST', '/addon-connections', payload, { requireAuth: true });
   }
 
   async activateSite(siteId: string): Promise<PortalEnvelope<PortalActivatedSite>> {

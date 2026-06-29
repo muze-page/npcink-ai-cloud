@@ -7,7 +7,6 @@ from redis.asyncio import Redis
 from app.adapters.callbacks.base import RuntimeCallbackDispatcher
 from app.adapters.callbacks.http import HttpRuntimeCallbackDispatcher
 from app.adapters.notifications.base import PortalEmailSender
-from app.adapters.notifications.smtp import build_portal_email_sender
 from app.adapters.providers.base import ProviderAdapter
 from app.adapters.providers.registry import build_provider_adapters
 from app.adapters.queue.base import RuntimeQueue
@@ -82,5 +81,5 @@ def create_default_services(settings: Settings) -> CloudServices:
         callback_dispatcher=HttpRuntimeCallbackDispatcher(
             timeout_seconds=settings.runtime_callback_timeout_seconds,
         ),
-        portal_email_sender=build_portal_email_sender(settings),
+        portal_email_sender=None,
     )

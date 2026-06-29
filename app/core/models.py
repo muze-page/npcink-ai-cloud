@@ -862,6 +862,98 @@ class CatalogInstance(Base):
     )
 
 
+class ModelReferenceSource(Base):
+    __tablename__ = "model_reference_sources"
+
+    source_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    display_name: Mapped[str] = mapped_column(String(128))
+    source_url: Mapped[str] = mapped_column(String(500), default="")
+    status: Mapped[str] = mapped_column(String(32), default="active", index=True)
+    last_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_error_code: Mapped[str | None] = mapped_column(String(64))
+    last_error_message: Mapped[str | None] = mapped_column(Text)
+    metadata_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+
+class ModelReferenceModel(Base):
+    __tablename__ = "model_reference_models"
+    __table_args__ = (
+        UniqueConstraint(
+            "source_id",
+            "provider_id",
+            "model_id",
+            name="uq_model_reference_models_source_provider_model",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    source_id: Mapped[str] = mapped_column(
+        ForeignKey("model_reference_sources.source_id"),
+        index=True,
+    )
+    provider_id: Mapped[str] = mapped_column(String(64), index=True)
+    model_id: Mapped[str] = mapped_column(String(191), index=True)
+    display_name: Mapped[str] = mapped_column(String(191), default="")
+    family: Mapped[str] = mapped_column(String(96), default="")
+    feature: Mapped[str] = mapped_column(String(32), default="text", index=True)
+    modalities_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    capability_flags_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    context_window: Mapped[int | None] = mapped_column(Integer)
+    output_limit: Mapped[int | None] = mapped_column(Integer)
+    price_input: Mapped[float | None] = mapped_column(Float)
+    price_output: Mapped[float | None] = mapped_column(Float)
+    price_cache_read: Mapped[float | None] = mapped_column(Float)
+    price_cache_write: Mapped[float | None] = mapped_column(Float)
+    price_unit: Mapped[str] = mapped_column(String(64), default="usd_per_1m_tokens")
+    release_date: Mapped[str] = mapped_column(String(32), default="")
+    source_updated_at: Mapped[str] = mapped_column(String(32), default="")
+    is_deprecated: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    raw_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    synced_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+
+class ModelReferenceOverride(Base):
+    __tablename__ = "model_reference_overrides"
+    __table_args__ = (
+        UniqueConstraint(
+            "provider_id",
+            "model_id",
+            name="uq_model_reference_overrides_provider_model",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    provider_id: Mapped[str] = mapped_column(String(64), index=True)
+    model_id: Mapped[str] = mapped_column(String(191), index=True)
+    feature_override: Mapped[str | None] = mapped_column(String(32))
+    status_override: Mapped[str | None] = mapped_column(String(32))
+    price_input_override: Mapped[float | None] = mapped_column(Float)
+    price_output_override: Mapped[float | None] = mapped_column(Float)
+    price_cache_read_override: Mapped[float | None] = mapped_column(Float)
+    price_cache_write_override: Mapped[float | None] = mapped_column(Float)
+    note: Mapped[str | None] = mapped_column(Text)
+    metadata_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+
 class RoutingProfile(Base):
     __tablename__ = "routing_profiles"
 
@@ -907,6 +999,30 @@ class ProviderConnection(Base):
     )
     last_tested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_sync_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_error_code: Mapped[str | None] = mapped_column(String(64))
+    last_error_message: Mapped[str | None] = mapped_column(Text)
+    metadata_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+
+class ServiceSetting(Base):
+    __tablename__ = "service_settings"
+
+    setting_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    setting_kind: Mapped[str] = mapped_column(String(64), index=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    config_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    secret_ciphertext_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    status: Mapped[str] = mapped_column(String(32), default="missing_config", index=True)
+    last_tested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_error_code: Mapped[str | None] = mapped_column(String(64))
     last_error_message: Mapped[str | None] = mapped_column(Text)
     metadata_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)

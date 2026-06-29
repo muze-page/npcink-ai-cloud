@@ -59,6 +59,16 @@ class TestBuildPortalSessionToken:
         assert payload["sub"] == "principal:xyz@example.com"
         assert payload["purpose"] == "portal_session"
 
+    def test_decoded_token_can_contain_selected_site_id(self) -> None:
+        settings = _test_settings()
+        token = build_portal_session_token(
+            settings,
+            principal_id="principal:xyz@example.com",
+            site_id="site_portal_session",
+        )
+        payload = decode_portal_session_cookie_claims(settings, token)
+        assert payload["site_id"] == "site_portal_session"
+
     def test_includes_issuer_when_configured(self) -> None:
         settings = _test_settings(portal_jwt_issuer="https://cloud.example.com")
         token = build_portal_session_token(settings, principal_id="principal:iss@example.com")

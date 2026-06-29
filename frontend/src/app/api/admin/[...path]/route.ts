@@ -65,6 +65,9 @@ function buildAdminBackendPath(pathSegments: string[], method: string): string {
   if (/^accounts\/[^/]+\/(?:suspend|restore)$/.test(normalized)) {
     return `/internal/service/admin/${normalized}`;
   }
+  if (upperMethod === 'POST' && /^portal-users\/[^/]+\/disable$/.test(normalized)) {
+    return `/internal/service/admin/${normalized}`;
+  }
   if (/^accounts\/[^/]+\/subscription(?:\/(?:suspend|cancel))?$/.test(normalized)) {
     return `/internal/service/admin/${normalized}`;
   }
@@ -99,10 +102,22 @@ function buildAdminBackendPath(pathSegments: string[], method: string): string {
     return '/internal/service/admin/provider-connections';
   }
   if (
+    (upperMethod === 'PATCH' || upperMethod === 'POST') &&
+    /^service-settings(?:\/.+)?$/.test(normalized)
+  ) {
+    return `/internal/service/admin/${normalized}`;
+  }
+  if (
     upperMethod === 'POST' &&
     normalized === 'provider-connections/preview-catalog'
   ) {
     return '/internal/service/admin/provider-connections/preview-catalog';
+  }
+  if (
+    upperMethod === 'POST' &&
+    normalized === 'model-references/sync'
+  ) {
+    return '/internal/service/admin/model-references/sync';
   }
   if (
     upperMethod === 'POST' &&

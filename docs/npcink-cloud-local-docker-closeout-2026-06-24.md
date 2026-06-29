@@ -77,12 +77,13 @@ Portal login code request uses same-origin protection before issuing a code.
 The local `portal/dev-entry` helper sends the debug header, but the backend
 still needs local development origin configuration.
 
-The missing local settings were:
+The missing local setting was:
 
 ```text
-NPCINK_CLOUD_PORTAL_PUBLIC_BASE_URL=http://127.0.0.1:8010
 NPCINK_CLOUD_DEBUG_LOCAL_ORIGIN_ALLOWLIST=http://127.0.0.1:8010,http://localhost:8010
 ```
+
+Portal public URL is now stored in `/admin/service-settings`, not `.env`.
 
 ### Portal User Was Not Bound In The Fresh Database
 
@@ -304,4 +305,3 @@ If local portal access is needed after resetting the database, run:
 pnpm run seed:smoke
 pnpm run portal:bind:dev -- --site-id site_smoke --member-email portal-demo@example.com --skip-billing-rebuild
 ```
-

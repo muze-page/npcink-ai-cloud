@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from datetime import UTC, datetime, timedelta
 
 from fastapi import Request
@@ -30,6 +31,7 @@ COOKIE_PORTAL_SESSION_TOKEN = "magick_portal_session_token"
 COOKIE_BEARER_TOKEN = COOKIE_PORTAL_SESSION_TOKEN
 COOKIE_SESSION_ISSUED_AT = "magick_portal_session_issued_at"
 COOKIE_SESSION_EXPIRES_AT = "magick_portal_session_expires_at"
+COOKIE_SITE_ID_PATTERN = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")
 
 
 def _dict_value(value: object) -> dict[str, object]:
@@ -42,6 +44,11 @@ def _dict_list(value: object) -> list[dict[str, object]]:
 
 def _object_list(value: object) -> list[object]:
     return value if isinstance(value, list) else []
+
+
+def _cookie_safe_site_id(value: str) -> str:
+    site_id = value.strip()
+    return site_id if COOKIE_SITE_ID_PATTERN.fullmatch(site_id) else ""
 
 
 def get_commercial_service(request: Request) -> CommercialService:
@@ -147,6 +154,7 @@ def current_portal_browser_session(
             )
         return {
             "principal_id": principal_id,
+            "site_id": _cookie_safe_site_id(str(claims.get("site_id") or "")),
             "auth_mode": "jwt",
             "issued_at": issued_at,
             "expires_at": token_expires_at or expires_at,
@@ -172,7 +180,9 @@ def current_portal_site_session(
         session_required_error_code=session_required_error_code,
         session_required_message=session_required_message,
     )
-    site_id = request.cookies.get(COOKIE_SITE_ID, "").strip()
+    site_id = _cookie_safe_site_id(str(session.get("site_id") or ""))
+    if not site_id:
+        site_id = _cookie_safe_site_id(request.cookies.get(COOKIE_SITE_ID, ""))
     if not site_id:
         raise PortalBearerTokenError(
             401,
@@ -313,22 +323,14 @@ def set_portal_session_cookies(
     secure = portal_cookie_secure(request)
     issued_at = now.isoformat().replace("+00:00", "Z")
     expires_at = (now + timedelta(seconds=ttl_seconds)).isoformat().replace("+00:00", "Z")
-    if site_id:
-        response.set_cookie(
-            COOKIE_SITE_ID,
-            site_id,
-            httponly=True,
-            secure=secure,
-            samesite="lax",
-            max_age=ttl_seconds,
-        )
-    else:
-        response.delete_cookie(COOKIE_SITE_ID)
+    token_site_id = _cookie_safe_site_id(site_id)
+    response.delete_cookie(COOKIE_SITE_ID)
     response.set_cookie(
         COOKIE_PORTAL_SESSION_TOKEN,
         build_portal_session_token(
             settings,
             principal_id=principal_id,
+            site_id=token_site_id,
             session_version=session_version
             or _resolve_portal_principal_session_version(request, principal_id=principal_id),
             expires_at=now + timedelta(seconds=ttl_seconds),
@@ -460,7 +462,10 @@ async def resolve_portal_request_context(
                 error_code=error.error_code,
                 message=error.message,
             )
-        return PortalAuthContext(principal_id=session["principal_id"])
+        return PortalAuthContext(
+            principal_id=session["principal_id"],
+            site_id=str(session.get("site_id") or ""),
+        )
 
     return await authorize_portal_request(
         request,

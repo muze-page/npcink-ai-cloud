@@ -25,20 +25,28 @@ from app.api.main import create_app
 from app.core.config import Settings
 from app.core.db import dispose_engine, get_session, init_schema
 from app.core.models import (
+    ACCOUNT_USER_MEMBERSHIP_STATUS_REVOKED,
+    PRINCIPAL_STATUS_DISABLED,
+    SITE_USER_GRANT_STATUS_REVOKED,
     SUBSCRIPTION_STATUS_PAST_DUE,
     AccountEntitlementSnapshot,
     AccountSubscription,
+    AccountUserMembership,
     BillingSnapshot,
+    ModelReferenceModel,
     PluginObservabilityEvent,
+    Principal,
     ProviderCallRecord,
     ProviderConnection,
     ReplayReceipt,
     RunRecord,
     RuntimeGuardEvent,
     ServiceAuditEvent,
+    ServiceSetting,
+    SiteUserGrant,
     UsageMeterEvent,
 )
-from app.core.secrets import decrypt_provider_connection_secret
+from app.core.secrets import decrypt_provider_connection_secret, decrypt_service_setting_secret
 from app.core.security import REPLAY_SCOPE_PUBLIC_POST_SITE
 from app.core.services import CloudServices
 from app.domain.catalog.service import CatalogService
@@ -141,6 +149,50 @@ def _runtime_service_settings(database_url: str) -> Settings:
         siliconflow_api_key="",
         site_knowledge_embedding_provider="deterministic",
     )
+
+
+def _request_portal_registration_code(
+    client: TestClient,
+    *,
+    email: str,
+    site_url: str,
+    site_name: str = "",
+) -> dict[str, object]:
+    response = client.post(
+        "/portal/v1/register/code/request",
+        json={
+            "email": email,
+            "site_url": site_url,
+            "site_name": site_name,
+            "use_case": "content generation",
+        },
+        headers={
+            "origin": "http://testserver",
+            "referer": "http://testserver/",
+            "x-npcink-debug-portal-link": "1",
+            "x-npcink-dev-login-code": "1",
+        },
+    )
+    assert response.status_code == 200, response.text
+    return response.json()["data"]
+
+
+def _verify_portal_registration_code(
+    client: TestClient,
+    *,
+    email: str,
+    code: str,
+) -> dict[str, object]:
+    response = client.post(
+        "/portal/v1/register/verify",
+        json={"email": email, "code": code},
+        headers={
+            "origin": "http://testserver",
+            "referer": "http://testserver/",
+        },
+    )
+    assert response.status_code == 200, response.text
+    return response.json()["data"]
 
 
 class FixedAudioSummaryScriptProvider:
@@ -255,6 +307,92 @@ class EmptyAudioSummaryScriptProvider(FixedAudioSummaryScriptProvider):
         )
 
 
+def test_admin_portal_users_lists_self_registered_users_and_disables_access(
+    tmp_path: Path,
+) -> None:
+    database_url, client = _build_client(
+        tmp_path,
+        settings_overrides={
+            "portal_jwt_secret": TEST_PORTAL_JWT_SECRET,
+            "portal_login_code_ttl_seconds": 300,
+            "debug_local_origin_allowlist": "http://testserver",
+        },
+    )
+
+    email = "admin-portal-user@example.com"
+    request_data = _request_portal_registration_code(
+        client,
+        email=email,
+        site_url="https://admin-portal-user.example.com",
+        site_name="Admin Portal User",
+    )
+    registration_data = _verify_portal_registration_code(
+        client,
+        email=email,
+        code=str(request_data["code"]),
+    )
+    principal_id = str(registration_data["principal_id"])
+
+    list_response = client.get(
+        "/internal/service/admin/portal-users?q=admin-portal-user",
+        headers=build_internal_headers(),
+    )
+    assert list_response.status_code == 200, list_response.text
+    list_data = list_response.json()["data"]
+    items = list_data["items"]
+    assert list_data["total"] == 1
+    assert items[0]["principal_id"] == principal_id
+    assert items[0]["email"] == email
+    assert items[0]["source"] == "portal_self_registration"
+    assert items[0]["package_alias"] == "Free"
+    assert items[0]["plan_id"] == "plan_free"
+    assert items[0]["qq_bound"] is False
+    assert items[0]["site_id"] == "site_admin-portal-user-example-com"
+
+    disable_response = client.post(
+        f"/internal/service/admin/portal-users/{principal_id}/disable",
+        json={"reason": "operator test disable"},
+        headers=build_internal_headers(idempotency_key="admin-portal-user-disable-001"),
+    )
+    assert disable_response.status_code == 200, disable_response.text
+    disable_data = disable_response.json()["data"]
+    assert disable_data["status"] == PRINCIPAL_STATUS_DISABLED
+    assert disable_data["revoked_site_grants"] == 1
+    assert disable_data["revoked_account_memberships"] == 1
+
+    disabled_list_response = client.get(
+        "/internal/service/admin/portal-users?status=disabled&q=admin-portal-user",
+        headers=build_internal_headers(),
+    )
+    assert disabled_list_response.status_code == 200, disabled_list_response.text
+    disabled_item = disabled_list_response.json()["data"]["items"][0]
+    assert disabled_item["status"] == PRINCIPAL_STATUS_DISABLED
+    assert disabled_item["membership_status"] == ACCOUNT_USER_MEMBERSHIP_STATUS_REVOKED
+    assert disabled_item["grant_status"] == SITE_USER_GRANT_STATUS_REVOKED
+
+    with get_session(database_url) as session:
+        identity = session.scalar(
+            select(Principal).where(Principal.principal_id == principal_id)
+        )
+        assert identity is not None
+        assert identity.status == PRINCIPAL_STATUS_DISABLED
+        assert int(identity.session_version or 0) > 1
+        membership = session.scalar(
+            select(AccountUserMembership).where(
+                AccountUserMembership.principal_id == principal_id
+            )
+        )
+        assert membership is not None
+        assert membership.status == ACCOUNT_USER_MEMBERSHIP_STATUS_REVOKED
+        grant = session.scalar(
+            select(SiteUserGrant).where(SiteUserGrant.principal_id == principal_id)
+        )
+        assert grant is not None
+        assert grant.status == SITE_USER_GRANT_STATUS_REVOKED
+
+    dispose_engine(database_url)
+
+
 def test_admin_web_search_provider_env_settings_route_is_retired(
     tmp_path: Path,
 ) -> None:
@@ -300,6 +438,152 @@ def test_admin_agent_workflow_metadata_projection_is_read_only(tmp_path: Path) -
 
     unauthorized = client.get("/internal/service/admin/agent-workflow-metadata")
     assert unauthorized.status_code in (401, 403)
+
+
+def test_admin_service_settings_store_masked_cloud_runtime_config(tmp_path: Path) -> None:
+    database_url, client = _build_client(tmp_path)
+
+    initial_response = client.get(
+        "/internal/service/admin/service-settings",
+        headers=build_internal_headers(),
+    )
+    assert initial_response.status_code == 200
+    assert initial_response.json()["data"]["env_fallback"] == "disabled"
+    assert (
+        initial_response.json()["data"]["settings"]["portal_email"]["status"]
+        == "missing_config"
+    )
+
+    public_response = client.patch(
+        "/internal/service/admin/service-settings/portal-public",
+        json={"public_base_url": "https://cloud.example.com"},
+        headers=build_internal_headers(idempotency_key="service-settings-public-001"),
+    )
+    assert public_response.status_code == 200, public_response.text
+    assert public_response.json()["data"]["config"]["public_base_url"] == (
+        "https://cloud.example.com"
+    )
+
+    qq_response = client.patch(
+        "/internal/service/admin/service-settings/qq-login",
+        json={
+            "client_id": "qq-client-id",
+            "client_secret": "qq-client-secret",
+            "redirect_uri": "https://cloud.example.com/portal/v1/auth/qq/callback",
+            "scope": "get_user_info",
+            "timeout_seconds": 10,
+        },
+        headers=build_internal_headers(idempotency_key="service-settings-qq-001"),
+    )
+    assert qq_response.status_code == 200, qq_response.text
+    assert qq_response.json()["data"]["status"] == "ready"
+    assert qq_response.json()["data"]["secrets"]["client_secret"]["configured"] is True
+    assert "qq-client-secret" not in json.dumps(qq_response.json())
+
+    email_response = client.patch(
+        "/internal/service/admin/service-settings/email",
+        json={
+            "smtp_host": "smtp.example.com",
+            "smtp_port": 465,
+            "smtp_username": "smtp-user",
+            "smtp_password": "smtp-password",
+            "smtp_use_ssl": True,
+            "smtp_use_starttls": False,
+            "smtp_timeout_seconds": 20,
+            "from_email": "noreply@example.com",
+            "from_name": "Npcink AI Cloud",
+            "reply_to": "support@example.com",
+        },
+        headers=build_internal_headers(idempotency_key="service-settings-email-001"),
+    )
+    assert email_response.status_code == 200, email_response.text
+    assert email_response.json()["data"]["secrets"]["smtp_password"]["display"] == (
+        "configured"
+    )
+    assert "smtp-password" not in json.dumps(email_response.json())
+
+    with get_session(database_url) as session:
+        qq_row = session.get(ServiceSetting, "portal_qq_login")
+        email_row = session.get(ServiceSetting, "portal_email")
+        assert qq_row is not None
+        assert email_row is not None
+        assert decrypt_service_setting_secret(
+            str((qq_row.secret_ciphertext_json or {})["client_secret"]),
+            settings=_runtime_service_settings(database_url),
+        ) == "qq-client-secret"
+        assert decrypt_service_setting_secret(
+            str((email_row.secret_ciphertext_json or {})["smtp_password"]),
+            settings=_runtime_service_settings(database_url),
+        ) == "smtp-password"
+
+    list_response = client.get(
+        "/internal/service/admin/service-settings",
+        headers=build_internal_headers(),
+    )
+    assert list_response.status_code == 200
+    data = list_response.json()["data"]
+    assert data["settings"]["qq_login"]["configured"] is True
+    assert data["settings"]["portal_email"]["configured"] is True
+    assert data["boundary"]["wordpress_control_plane"] is False
+    assert "smtp-password" not in json.dumps(data)
+
+    dispose_engine(database_url)
+
+
+def test_admin_service_settings_reject_qq_redirect_outside_public_base(
+    tmp_path: Path,
+) -> None:
+    database_url, client = _build_client(tmp_path)
+    public_response = client.patch(
+        "/internal/service/admin/service-settings/portal-public",
+        json={"public_base_url": "https://cloud.example.com"},
+        headers=build_internal_headers(idempotency_key="service-settings-bad-public-001"),
+    )
+    assert public_response.status_code == 200
+
+    response = client.patch(
+        "/internal/service/admin/service-settings/qq-login",
+        json={
+            "client_id": "qq-client-id",
+            "client_secret": "qq-client-secret",
+            "redirect_uri": "https://evil.example.com/portal/v1/auth/qq/callback",
+            "scope": "get_user_info",
+            "timeout_seconds": 10,
+        },
+        headers=build_internal_headers(idempotency_key="service-settings-bad-qq-001"),
+    )
+    assert response.status_code == 400
+    assert response.json()["error_code"] == "service_settings.qq_redirect_uri_invalid"
+
+    dispose_engine(database_url)
+
+
+def test_admin_service_settings_reject_email_ssl_and_starttls(
+    tmp_path: Path,
+) -> None:
+    database_url, client = _build_client(tmp_path)
+
+    response = client.patch(
+        "/internal/service/admin/service-settings/email",
+        json={
+            "smtp_host": "smtp.example.com",
+            "smtp_port": 465,
+            "smtp_username": "smtp-user",
+            "smtp_password": "smtp-password",
+            "smtp_use_ssl": True,
+            "smtp_use_starttls": True,
+            "smtp_timeout_seconds": 20,
+            "from_email": "noreply@example.com",
+            "from_name": "Npcink AI Cloud",
+            "reply_to": "support@example.com",
+        },
+        headers=build_internal_headers(idempotency_key="service-settings-bad-email-tls-001"),
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error_code"] == "service_settings.email_tls_mode_invalid"
+
+    dispose_engine(database_url)
 
 
 def test_admin_image_source_provider_env_settings_route_is_retired(
@@ -713,6 +997,89 @@ def test_admin_provider_connection_catalog_preview_uses_saved_secret_without_exp
     assert "saved-preview-secret" not in json.dumps(response.json())
     with get_session(database_url) as session:
         assert session.get(ProviderConnection, "mqzj_saved") is not None
+
+
+def test_admin_model_references_syncs_models_dev_payload_as_reference_only(
+    tmp_path: Path,
+) -> None:
+    database_url, client = _build_client(tmp_path)
+    response = client.post(
+        "/internal/service/admin/model-references/sync",
+        headers=build_internal_headers(idempotency_key="model-references-sync"),
+        json={
+            "payload": {
+                "providers": {
+                    "openai": {
+                        "id": "openai",
+                        "name": "OpenAI",
+                        "doc": "https://platform.openai.com/docs",
+                        "models": {
+                            "gpt-5.5": {
+                                "id": "gpt-5.5",
+                                "name": "GPT-5.5",
+                                "family": "gpt",
+                                "reasoning": True,
+                                "tool_call": True,
+                                "structured_output": True,
+                                "release_date": "2026-06-01",
+                                "last_updated": "2026-06-18",
+                                "modalities": {
+                                    "input": ["text", "image"],
+                                    "output": ["text"],
+                                },
+                                "limit": {"context": 256000, "output": 64000},
+                                "cost": {
+                                    "input": 1.25,
+                                    "output": 10.0,
+                                    "cache_read": 0.125,
+                                },
+                            }
+                        },
+                    }
+                }
+            }
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    sync_data = response.json()["data"]
+    assert sync_data["surface"] == "admin_model_reference_sync"
+    assert sync_data["source_id"] == "models.dev"
+    assert sync_data["model_count"] == 1
+    assert sync_data["price_unit"] == "usd_per_1m_tokens"
+    assert sync_data["billing_truth"] is False
+    assert sync_data["boundary"]["reference_only"] is True
+    assert sync_data["boundary"]["routing_truth"] is False
+
+    list_response = client.get(
+        "/internal/service/admin/model-references?provider_id=openai",
+        headers=build_internal_headers(),
+    )
+    assert list_response.status_code == 200, list_response.text
+    data = list_response.json()["data"]
+    assert data["surface"] == "admin_model_references"
+    assert data["boundary"]["billing_truth"] is False
+    assert data["items"][0]["model_id"] == "gpt-5.5"
+    assert data["items"][0]["feature"] == "text"
+    assert data["items"][0]["capability_flags"]["reasoning"] is True
+    assert data["items"][0]["price"] == {
+        "input": 1.25,
+        "output": 10.0,
+        "cache_read": 0.125,
+        "cache_write": None,
+        "unit": "usd_per_1m_tokens",
+        "billing_truth": False,
+    }
+    assert "OpenAI" in json.dumps(data)
+    with get_session(database_url) as session:
+        row = session.scalar(
+            select(ModelReferenceModel).where(
+                ModelReferenceModel.provider_id == "openai",
+                ModelReferenceModel.model_id == "gpt-5.5",
+            )
+        )
+        assert row is not None
+        assert row.context_window == 256000
 
 
 def test_admin_ai_resources_lists_only_added_capability_provider_connections(

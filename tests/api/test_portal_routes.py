@@ -5,6 +5,7 @@ import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
+from urllib.parse import parse_qs, urlsplit
 
 from fastapi.testclient import TestClient
 from sqlalchemy import select
@@ -30,6 +31,7 @@ from app.core.models import (
     IdentityProviderBinding,
     PluginObservabilityEvent,
     Principal,
+    Site,
     SiteUserGrant,
 )
 from app.core.services import CloudServices
@@ -265,6 +267,50 @@ def _verify_portal_login_code(
     return data
 
 
+def _request_portal_registration_code(
+    client: TestClient,
+    *,
+    email: str,
+    site_url: str,
+    site_name: str = "",
+    headers: dict[str, str] | None = None,
+) -> dict[str, object]:
+    request_headers = dict(headers or {})
+    if (
+        str(request_headers.get("x-npcink-debug-portal-link") or "").strip() == "1"
+        and "x-npcink-dev-login-code" not in request_headers
+    ):
+        request_headers["x-npcink-dev-login-code"] = "1"
+    response = client.post(
+        "/portal/v1/register/code/request",
+        json={
+            "email": email,
+            "site_url": site_url,
+            "site_name": site_name,
+            "use_case": "content generation",
+        },
+        headers=request_headers,
+    )
+    assert response.status_code == 200, response.text
+    return response.json()["data"]
+
+
+def _verify_portal_registration_code(
+    client: TestClient,
+    *,
+    email: str,
+    code: str,
+) -> dict[str, object]:
+    response = client.post(
+        "/portal/v1/register/verify",
+        json={"email": email, "code": code},
+    )
+    assert response.status_code == 200, response.text
+    data = response.json()["data"]
+    _GRANTS_BY_EMAIL[_normalize_test_email(email)] = data
+    return data
+
+
 def _grant_principal_access(
     client: TestClient,
     *,
@@ -304,6 +350,48 @@ def _portal_bearer_headers_for_grant(
         session_version=int(grant.get("session_version") or 1),
         **kwargs,
     )
+
+
+def _configure_portal_public_settings(
+    client: TestClient,
+    *,
+    public_base_url: str = "https://cloud.example.com",
+    idempotency_prefix: str = "portal-service-settings",
+) -> None:
+    response = client.patch(
+        "/internal/service/admin/service-settings/portal-public",
+        json={"public_base_url": public_base_url},
+        headers=build_internal_headers(idempotency_key=f"{idempotency_prefix}-public"),
+    )
+    assert response.status_code == 200, response.text
+
+
+def _configure_portal_qq_settings(
+    client: TestClient,
+    *,
+    public_base_url: str = "https://cloud.example.com",
+    redirect_uri: str | None = None,
+    idempotency_prefix: str = "portal-service-settings",
+) -> None:
+    _configure_portal_public_settings(
+        client,
+        public_base_url=public_base_url,
+        idempotency_prefix=idempotency_prefix,
+    )
+    response = client.patch(
+        "/internal/service/admin/service-settings/qq-login",
+        json={
+            "client_id": "qq-client-id",
+            "client_secret": "qq-client-secret",
+            "redirect_uri": redirect_uri
+            if redirect_uri is not None
+            else f"{public_base_url}/portal/v1/auth/qq/callback",
+            "scope": "get_user_info",
+            "timeout_seconds": 10,
+        },
+        headers=build_internal_headers(idempotency_key=f"{idempotency_prefix}-qq"),
+    )
+    assert response.status_code == 200, response.text
 
 
 def test_portal_issue_rotate_list_and_revoke_site_key(tmp_path: Path) -> None:
@@ -424,6 +512,93 @@ def test_portal_issue_rotate_list_and_revoke_site_key(tmp_path: Path) -> None:
     assert portal_issue_audit["actor_ref"] == _GRANTS_BY_EMAIL["portal-admin@example.com"][
         "principal_id"
     ]
+
+    dispose_engine(database_url)
+
+
+def test_portal_wordpress_addon_connection_issues_one_time_exchange_code(
+    tmp_path: Path,
+) -> None:
+    database_url, client = _build_client(tmp_path)
+
+    registration_request = _request_portal_registration_code(
+        client,
+        email="addon-connect@example.com",
+        site_url="https://primary.example.com",
+        site_name="Primary Site",
+        headers={
+            "x-npcink-debug-portal-link": "1",
+            "x-npcink-dev-login-code": "1",
+        },
+    )
+    registration = _verify_portal_registration_code(
+        client,
+        email="addon-connect@example.com",
+        code=str(registration_request["code"]),
+    )
+
+    return_url = (
+        "https://wp.example.com/wp-admin/admin-post.php"
+        "?action=npcink_cloud_addon_complete_auth&state=addon-state-001"
+    )
+    create_response = client.post(
+        "/portal/v1/addon-connections",
+        json={
+            "account_id": registration["account_id"],
+            "wordpress_url": "https://primary.example.com",
+            "site_name": "Primary Site",
+            "return_url": return_url,
+            "state": "addon-state-001",
+        },
+        headers={"Idempotency-Key": "portal-addon-connect-001"},
+    )
+    assert create_response.status_code == 200, create_response.text
+    create_data = create_response.json()["data"]
+    assert create_data["site_id"] == "site_primary-example-com"
+    assert create_data["site_created"] is False
+    assert create_data["redirect_url"].startswith(
+        "https://wp.example.com/wp-admin/admin-post.php?"
+    )
+    assert "mak1_" not in create_data["redirect_url"]
+    assert "sk_" not in create_data["redirect_url"]
+
+    redirect_query = parse_qs(urlsplit(str(create_data["redirect_url"])).query)
+    code = redirect_query["code"][0]
+    assert redirect_query["state"][0] == "addon-state-001"
+    assert code
+
+    exchange_response = client.post(
+        "/portal/v1/addon-connections/exchange",
+        json={"code": code, "state": "addon-state-001"},
+    )
+    assert exchange_response.status_code == 200, exchange_response.text
+    exchange_data = exchange_response.json()["data"]
+    assert exchange_data["site_id"] == "site_primary-example-com"
+    assert exchange_data["key_id"] == create_data["key_id"]
+    assert exchange_data["cloud_api_key"].startswith("mak1_")
+    decoded_key = _decode_customer_key(exchange_data["cloud_api_key"])
+    assert decoded_key["site_id"] == "site_primary-example-com"
+    assert decoded_key["key_id"] == create_data["key_id"]
+    assert decoded_key["secret"].startswith("sk_")
+
+    replay_response = client.post(
+        "/portal/v1/addon-connections/exchange",
+        json={"code": code, "state": "addon-state-001"},
+    )
+    assert replay_response.status_code != 200
+
+    with get_session(database_url) as session:
+        site = session.get(Site, "site_primary-example-com")
+        assert site is not None
+        assert site.status == "active"
+
+    audit_response = client.get(
+        "/internal/service/audit-events?site_id=site_primary-example-com&limit=20",
+        headers=build_internal_headers(),
+    )
+    assert audit_response.status_code == 200
+    audit_items = audit_response.json()["data"]["items"]
+    assert any(item["event_kind"] == "wordpress_addon_connection.issue" for item in audit_items)
 
     dispose_engine(database_url)
 
@@ -1261,12 +1436,9 @@ def test_portal_qq_bind_and_callback_login_reuse_user_session(
         tmp_path,
         settings_overrides={
             "portal_jwt_secret": TEST_PORTAL_JWT_SECRET,
-            "portal_public_base_url": "https://cloud.example.com",
-            "portal_qq_client_id": "qq-client-id",
-            "portal_qq_client_secret": "qq-client-secret",
-            "portal_qq_redirect_uri": "https://cloud.example.com/portal/v1/auth/qq/callback",
         },
     )
+    _configure_portal_qq_settings(client, idempotency_prefix="portal-qq-settings")
 
     def fake_exchange_qq_code(request: object, *, code: str) -> dict[str, str]:
         return {"access_token": f"token-{code}"}
@@ -1312,6 +1484,12 @@ def test_portal_qq_bind_and_callback_login_reuse_user_session(
         email="portal-qq@example.com",
         code=str(request_data["code"]),
     )
+    initial_provider_response = client.get("/portal/v1/auth/identity-providers")
+    assert initial_provider_response.status_code == 200, initial_provider_response.text
+    initial_provider_data = initial_provider_response.json()["data"]["providers"][0]
+    assert initial_provider_data["provider"] == "qq"
+    assert initial_provider_data["configured"] is True
+    assert initial_provider_data["bound"] is False
 
     start_response = client.get("/portal/v1/auth/qq/start?return_to=/portal/sites")
     assert start_response.status_code == 200
@@ -1326,6 +1504,12 @@ def test_portal_qq_bind_and_callback_login_reuse_user_session(
     assert bind_response.status_code == 200, bind_response.text
     assert bind_response.json()["data"]["binding"]["identity_type"] == "user"
     assert bind_response.json()["data"]["binding"]["role"] == "user"
+    bound_provider_response = client.get("/portal/v1/auth/identity-providers")
+    assert bound_provider_response.status_code == 200, bound_provider_response.text
+    bound_provider_data = bound_provider_response.json()["data"]["providers"][0]
+    assert bound_provider_data["bound"] is True
+    assert bound_provider_data["binding"]["provider"] == "qq"
+    assert bound_provider_data["binding"]["status"] == "active"
 
     with get_session(database_url) as session:
         binding = session.scalar(select(IdentityProviderBinding))
@@ -1358,16 +1542,110 @@ def test_portal_qq_bind_and_callback_login_reuse_user_session(
     dispose_engine(database_url)
 
 
-def test_portal_qq_start_rejects_redirect_uri_outside_allowlist(tmp_path: Path) -> None:
+def test_portal_qq_callback_bind_intent_binds_current_session(
+    tmp_path: Path,
+    monkeypatch: Any,
+) -> None:
     database_url, client = _build_client(
         tmp_path,
         settings_overrides={
-            "portal_public_base_url": "https://cloud.example.com",
-            "portal_qq_client_id": "qq-client-id",
-            "portal_qq_client_secret": "qq-client-secret",
-            "portal_qq_redirect_uri": "https://evil.example.com/portal/v1/auth/qq/callback",
+            "portal_jwt_secret": TEST_PORTAL_JWT_SECRET,
         },
     )
+    _configure_portal_qq_settings(client, idempotency_prefix="portal-qq-callback-bind")
+
+    monkeypatch.setattr(
+        portal_routes,
+        "_exchange_qq_code",
+        lambda request, *, code: {"access_token": f"token-{code}"},
+    )
+    monkeypatch.setattr(
+        portal_routes,
+        "_fetch_qq_openid",
+        lambda request, *, access_token: {
+            "openid": "qq-openid-callback-bind",
+            "unionid": "qq-union-callback-bind",
+        },
+    )
+
+    client.post(
+        "/internal/service/accounts",
+        json={"account_id": "acct_portal_qq_callback_bind", "name": "Portal QQ Bind"},
+        headers=build_internal_headers(idempotency_key="portal-qq-callback-bind-account-001"),
+    )
+    client.post(
+        "/internal/service/sites",
+        json={
+            "site_id": "site_portal_qq_callback_bind",
+            "account_id": "acct_portal_qq_callback_bind",
+            "name": "Portal QQ Bind Site",
+            "status": "provisioning",
+        },
+        headers=build_internal_headers(idempotency_key="portal-qq-callback-bind-site-001"),
+    )
+    _grant_principal_access(
+        client,
+        site_id="site_portal_qq_callback_bind",
+        email="portal-qq-callback-bind@example.com",
+        idempotency_key="portal-qq-callback-bind-user-grants-001",
+    )
+    request_data = _request_portal_login_code(
+        client,
+        email="portal-qq-callback-bind@example.com",
+        headers={"x-npcink-debug-portal-link": "1"},
+    )
+    _verify_portal_login_code(
+        client,
+        email="portal-qq-callback-bind@example.com",
+        code=str(request_data["code"]),
+    )
+
+    start_response = client.get(
+        "/portal/v1/auth/qq/start?intent=bind&return_to=/portal/account"
+    )
+    assert start_response.status_code == 200
+    start_data = start_response.json()["data"]
+    assert start_data["intent"] == "bind"
+
+    callback_response = client.get(
+        f"/portal/v1/auth/qq/callback?code=bind-code&state={start_data['state']}",
+    )
+    assert callback_response.status_code == 200, callback_response.text
+    callback_data = callback_response.json()["data"]
+    assert callback_data["status"] == "bound"
+    assert callback_data["return_to"] == "/portal/account"
+    assert callback_data["binding"]["provider"] == "qq"
+
+    provider_response = client.get("/portal/v1/auth/identity-providers")
+    assert provider_response.status_code == 200, provider_response.text
+    provider_data = provider_response.json()["data"]["providers"][0]
+    assert provider_data["bound"] is True
+    assert provider_data["binding"]["has_unionid"] is True
+
+    dispose_engine(database_url)
+
+
+def test_portal_qq_start_rejects_redirect_uri_outside_allowlist(tmp_path: Path) -> None:
+    database_url, client = _build_client(
+        tmp_path,
+    )
+    _configure_portal_public_settings(
+        client,
+        public_base_url="https://cloud.example.com",
+        idempotency_prefix="portal-qq-bad-redirect-settings",
+    )
+    bad_redirect_response = client.patch(
+        "/internal/service/admin/service-settings/qq-login",
+        json={
+            "client_id": "qq-client-id",
+            "client_secret": "qq-client-secret",
+            "redirect_uri": "https://evil.example.com/portal/v1/auth/qq/callback",
+            "scope": "get_user_info",
+            "timeout_seconds": 10,
+        },
+        headers=build_internal_headers(idempotency_key="portal-qq-bad-redirect-settings-qq"),
+    )
+    assert bad_redirect_response.status_code == 400
 
     start_response = client.get("/portal/v1/auth/qq/start")
     assert start_response.status_code == 503
@@ -1384,12 +1662,9 @@ def test_portal_qq_bind_rejects_nonce_mismatch(
         tmp_path,
         settings_overrides={
             "portal_jwt_secret": TEST_PORTAL_JWT_SECRET,
-            "portal_public_base_url": "https://cloud.example.com",
-            "portal_qq_client_id": "qq-client-id",
-            "portal_qq_client_secret": "qq-client-secret",
-            "portal_qq_redirect_uri": "https://cloud.example.com/portal/v1/auth/qq/callback",
         },
     )
+    _configure_portal_qq_settings(client, idempotency_prefix="portal-qq-nonce-settings")
 
     monkeypatch.setattr(
         portal_routes,
@@ -1458,12 +1733,9 @@ def test_portal_qq_bind_rejects_account_bound_to_other_principal(
         tmp_path,
         settings_overrides={
             "portal_jwt_secret": TEST_PORTAL_JWT_SECRET,
-            "portal_public_base_url": "https://cloud.example.com",
-            "portal_qq_client_id": "qq-client-id",
-            "portal_qq_client_secret": "qq-client-secret",
-            "portal_qq_redirect_uri": "https://cloud.example.com/portal/v1/auth/qq/callback",
         },
     )
+    _configure_portal_qq_settings(client, idempotency_prefix="portal-qq-conflict-settings")
 
     monkeypatch.setattr(
         portal_routes,
@@ -1567,12 +1839,9 @@ def test_portal_qq_unbind_revokes_current_session(
         tmp_path,
         settings_overrides={
             "portal_jwt_secret": TEST_PORTAL_JWT_SECRET,
-            "portal_public_base_url": "https://cloud.example.com",
-            "portal_qq_client_id": "qq-client-id",
-            "portal_qq_client_secret": "qq-client-secret",
-            "portal_qq_redirect_uri": "https://cloud.example.com/portal/v1/auth/qq/callback",
         },
     )
+    _configure_portal_qq_settings(client, idempotency_prefix="portal-qq-unbind-settings")
 
     monkeypatch.setattr(
         portal_routes,
@@ -1643,11 +1912,9 @@ def test_portal_qq_callback_requires_existing_binding(
         tmp_path,
         settings_overrides={
             "portal_jwt_secret": TEST_PORTAL_JWT_SECRET,
-            "portal_public_base_url": "https://cloud.example.com",
-            "portal_qq_client_id": "qq-client-id",
-            "portal_qq_client_secret": "qq-client-secret",
         },
     )
+    _configure_portal_qq_settings(client, idempotency_prefix="portal-qq-unbound-settings")
 
     monkeypatch.setattr(
         portal_routes,
@@ -1717,7 +1984,6 @@ def test_portal_login_code_request_uses_real_sender_when_configured(
         tmp_path,
         settings_overrides={
             "portal_jwt_secret": TEST_PORTAL_JWT_SECRET,
-            "portal_public_base_url": "https://cloud.example.com",
         },
         portal_email_sender=fake_sender,
     )
@@ -1786,6 +2052,111 @@ def test_portal_login_code_request_masks_missing_principal_access(
     dispose_engine(database_url)
 
 
+def test_portal_self_registration_opens_free_account_and_session(
+    tmp_path: Path,
+) -> None:
+    database_url, client = _build_client(
+        tmp_path,
+        settings_overrides={
+            "portal_jwt_secret": TEST_PORTAL_JWT_SECRET,
+            "portal_login_code_ttl_seconds": 300,
+        },
+    )
+
+    request_data = _request_portal_registration_code(
+        client,
+        email="new-portal-user@example.com",
+        site_url="https://example.com",
+        site_name="Example Site",
+        headers={"x-npcink-debug-portal-link": "1"},
+    )
+
+    assert request_data["delivery"] == "development_code"
+    assert request_data["expires_in_seconds"] == 300
+    assert request_data["code"] != ""
+    assert request_data["site"]["site_id"] == "site_example-com"
+
+    registration_data = _verify_portal_registration_code(
+        client,
+        email="new-portal-user@example.com",
+        code=str(request_data["code"]),
+    )
+
+    assert registration_data["status"] == "registered"
+    assert str(registration_data["principal_id"]).startswith("prn_")
+    assert str(registration_data["account_id"]).startswith("acct_")
+    assert registration_data["site_id"] == "site_example-com"
+    assert registration_data["site"]["status"] == "active"
+    assert registration_data["site"]["wordpress_url"] == "https://example.com"
+    assert registration_data["subscription"]["plan_id"] == "plan_free"
+    assert registration_data["subscription"]["package_alias"] == "Free"
+    assert registration_data["session"]["state"] == "active"
+    assert registration_data["session"]["transport"] == "cookie"
+
+    session_response = client.get("/portal/v1/session")
+    assert session_response.status_code == 200
+    assert session_response.json()["data"]["principal_id"] == registration_data["principal_id"]
+    assert session_response.json()["data"]["site_id"] == "site_example-com"
+
+    with get_session(database_url) as session:
+        identity = session.scalar(
+            select(Principal).where(
+                Principal.principal_id == str(registration_data["principal_id"])
+            )
+        )
+        assert identity is not None
+        assert identity.status == PRINCIPAL_STATUS_ACTIVE
+        assert identity.email == "new-portal-user@example.com"
+        account_membership = session.scalar(
+            select(AccountUserMembership).where(
+                AccountUserMembership.principal_id == identity.principal_id
+            )
+        )
+        assert account_membership is not None
+        assert account_membership.status == "active"
+        site = session.scalar(select(Site).where(Site.site_id == "site_example-com"))
+        assert site is not None
+        assert site.account_id == registration_data["account_id"]
+        site_grant = session.scalar(
+            select(SiteUserGrant).where(
+                SiteUserGrant.principal_id == identity.principal_id,
+                SiteUserGrant.site_id == "site_example-com",
+            )
+        )
+        assert site_grant is not None
+        assert site_grant.status == "active"
+        subscription = session.scalar(
+            select(AccountSubscription).where(
+                AccountSubscription.account_id == str(registration_data["account_id"])
+            )
+        )
+        assert subscription is not None
+        assert subscription.plan_id == "plan_free"
+
+    second_request_data = _request_portal_registration_code(
+        client,
+        email="new-portal-user@example.com",
+        site_url="https://second.example.com",
+        site_name="Second Site",
+        headers={"x-npcink-debug-portal-link": "1"},
+    )
+    second_registration_data = _verify_portal_registration_code(
+        client,
+        email="new-portal-user@example.com",
+        code=str(second_request_data["code"]),
+    )
+    assert second_registration_data["status"] == "existing_user"
+    assert second_registration_data["principal_id"] == registration_data["principal_id"]
+    assert second_registration_data["site_id"] == "site_example-com"
+    with get_session(database_url) as session:
+        site_count = len(list(session.scalars(select(Site))))
+        subscription_count = len(list(session.scalars(select(AccountSubscription))))
+    assert site_count == 1
+    assert subscription_count == 1
+
+    dispose_engine(database_url)
+
+
 def test_portal_login_code_request_accepts_forwarded_host_with_port(
     tmp_path: Path,
 ) -> None:
@@ -1796,7 +2167,6 @@ def test_portal_login_code_request_accepts_forwarded_host_with_port(
             "portal_jwt_issuer": "npcink-cloud-portal",
             "portal_jwt_audience": "npcink-cloud-customers",
             "portal_login_code_ttl_seconds": 300,
-            "portal_public_base_url": None,
         },
     )
 
@@ -1857,7 +2227,6 @@ def test_portal_login_code_request_accepts_localhost_loopback_alias(
             "portal_jwt_issuer": "npcink-cloud-portal",
             "portal_jwt_audience": "npcink-cloud-customers",
             "portal_login_code_ttl_seconds": 300,
-            "portal_public_base_url": "http://127.0.0.1:8010",
             "environment": "development",
         },
     )
@@ -1919,7 +2288,6 @@ def test_portal_login_code_request_skips_rate_limit_for_local_debug_loopback(
             "portal_jwt_issuer": "npcink-cloud-portal",
             "portal_jwt_audience": "npcink-cloud-customers",
             "portal_login_code_ttl_seconds": 300,
-            "portal_public_base_url": "http://127.0.0.1:8010",
             "environment": "development",
         },
     )
@@ -2196,10 +2564,8 @@ def test_portal_debug_bypass_is_disabled_in_production_even_with_allowlist(
         tmp_path,
         settings_overrides={
             "environment": "production",
-            "portal_public_base_url": "https://cloud.example.com",
-            "portal_email_smtp_host": "smtp.example.com",
-            "portal_email_from_email": "noreply@example.com",
             "admin_bootstrap_token": "b" * 32,
+            "browser_origin_allowlist": "https://cloud.example.com",
             "trusted_host_allowlist": "testserver,cloud.example.com",
             "debug_local_origin_allowlist": "http://127.0.0.1:8010",
         },

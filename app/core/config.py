@@ -124,22 +124,6 @@ class Settings(BaseSettings):
     portal_login_code_ttl_seconds: int = Field(default=10 * 60)
     portal_login_code_max_attempts: int = Field(default=5)
     portal_oauth_state_ttl_seconds: int = Field(default=10 * 60)
-    portal_qq_client_id: str | None = Field(default=None)
-    portal_qq_client_secret: str | None = Field(default=None)
-    portal_qq_redirect_uri: str | None = Field(default=None)
-    portal_qq_scope: str = Field(default="get_user_info")
-    portal_qq_timeout_seconds: float = Field(default=10.0)
-    portal_public_base_url: str | None = Field(default=None)
-    portal_email_smtp_host: str | None = Field(default=None)
-    portal_email_smtp_port: int = Field(default=465)
-    portal_email_smtp_username: str | None = Field(default=None)
-    portal_email_smtp_password: str | None = Field(default=None)
-    portal_email_smtp_use_ssl: bool = Field(default=True)
-    portal_email_smtp_use_starttls: bool = Field(default=False)
-    portal_email_smtp_timeout_seconds: float = Field(default=20.0)
-    portal_email_from_email: str | None = Field(default=None)
-    portal_email_from_name: str | None = Field(default=None)
-    portal_email_reply_to: str | None = Field(default=None)
     otel_service_name: str = Field(default="npcink-ai-cloud")
     otel_exporter_otlp_endpoint: str | None = Field(default=None)
     otel_trace_sink_otlp_endpoint: str | None = Field(default=None)
@@ -359,20 +343,14 @@ class Settings(BaseSettings):
     def explicit_browser_origins(self) -> set[str]:
         origins = {
             self._normalize_origin(item)
-            for item in (
-                *str(self.browser_origin_allowlist or "").split(","),
-                str(self.portal_public_base_url or ""),
-            )
+            for item in str(self.browser_origin_allowlist or "").split(",")
         }
         return {origin for origin in origins if origin}
 
     def trusted_hosts(self) -> set[str]:
         hosts = {
             self._normalize_host(item)
-            for item in (
-                *str(self.trusted_host_allowlist or "").split(","),
-                str(self.portal_public_base_url or ""),
-            )
+            for item in str(self.trusted_host_allowlist or "").split(",")
         }
         hosts = {host for host in hosts if host}
         environment = str(self.environment or "").strip().lower()
@@ -442,34 +420,18 @@ class Settings(BaseSettings):
                 "admin_bootstrap_token must differ from internal_auth_token outside "
                 "development/test environments"
             )
-        if production_like and not str(self.portal_public_base_url or "").strip():
-            raise ValueError(
-                "portal_public_base_url is required outside development/test environments"
-            )
         if production_like and not str(self.portal_jwt_secret or "").strip():
             raise ValueError("portal_jwt_secret is required outside development/test environments")
-        if production_like and not str(self.portal_email_smtp_host or "").strip():
-            raise ValueError(
-                "portal_email_smtp_host is required outside development/test environments"
-            )
-        if production_like and not str(self.portal_email_from_email or "").strip():
-            raise ValueError(
-                "portal_email_from_email is required outside development/test environments"
-            )
         if production_like and not self.explicit_browser_origins():
             raise ValueError(
-                "browser_origin_allowlist or portal_public_base_url is required outside "
-                "development/test environments"
+                "browser_origin_allowlist is required outside development/test environments"
             )
         if production_like and not self.trusted_hosts():
             raise ValueError(
-                "trusted_host_allowlist or portal_public_base_url is required outside "
-                "development/test environments"
+                "trusted_host_allowlist is required outside development/test environments"
             )
         if self.portal_oauth_state_ttl_seconds < 60:
             raise ValueError("portal_oauth_state_ttl_seconds must be at least 60")
-        if self.portal_qq_timeout_seconds <= 0:
-            raise ValueError("portal_qq_timeout_seconds must be greater than 0")
         if self.ops_cadence_poll_seconds < 5:
             raise ValueError("ops_cadence_poll_seconds must be at least 5")
         if self.runtime_callback_worker_poll_seconds < 1:

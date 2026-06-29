@@ -528,6 +528,30 @@ assert.doesNotMatch(
 
 assert.match(
   pageSource,
+  /model-references\?provider_id/,
+  'Provider channel form must load model reference intelligence by provider'
+);
+
+assert.match(
+  pageSource,
+  /model-references\/sync/,
+  'Provider channel form must expose a bounded reference intelligence sync action'
+);
+
+assert.match(
+  pageSource,
+  /model_reference_desc[\s\S]*It is not billing truth or routing truth/,
+  'Provider channel model reference copy must prevent billing or routing truth drift'
+);
+
+assert.match(
+  pageSource,
+  /price_unit_per_1m/,
+  'Provider channel reference table must label price units explicitly'
+);
+
+assert.match(
+  pageSource,
   /PROVIDER_PRESETS/,
   'AI resources provider form must expose provider presets instead of requiring raw identifiers first'
 );

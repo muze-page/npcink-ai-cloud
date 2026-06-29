@@ -57,6 +57,10 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
     { href: '/admin', label: t('nav.overview', {}, 'Overview') },
     { href: '/admin/accounts', label: t('common.accounts', {}, 'Customers') },
     {
+      href: '/admin/portal-users',
+      label: t('admin.nav_portal_users', {}, 'Portal Users'),
+    },
+    {
       href: '/admin/coverage',
       label: t('admin.nav_packages_coverage', {}, 'Packages / Coverage'),
       activePrefixes: ['/admin/coverage', '/admin/subscriptions', '/admin/plans'],
@@ -68,6 +72,10 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
     {
       href: '/admin/ability-models',
       label: t('admin.nav_ability_models', {}, 'Ability Models'),
+    },
+    {
+      href: '/admin/service-settings',
+      label: t('admin.nav_service_settings', {}, 'Service Settings'),
     },
     {
       href: '/admin/troubleshooting',

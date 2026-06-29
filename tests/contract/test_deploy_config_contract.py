@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import pytest
 
@@ -12,16 +13,31 @@ def _cloud_root() -> Path:
     return Path(__file__).resolve().parents[2]
 
 
+def _documented_env_value(text: str, key: str) -> str:
+    prefix = f"{key}="
+    for token in text.replace("`", " ").split():
+        if token.startswith(prefix):
+            return token.removeprefix(prefix).rstrip(".,;")
+    return ""
+
+
+def _documented_https_host(text: str, key: str) -> str:
+    parsed = urlsplit(_documented_env_value(text, key))
+    return parsed.netloc if parsed.scheme == "https" else ""
+
+
 def test_prod_env_files_use_canonical_admin_names_and_do_not_expose_ai_provider_env() -> None:
     cloud_root = _cloud_root()
     compose_text = (cloud_root / "docker-compose.prod.yml").read_text()
     env_example_text = (cloud_root / ".env.example").read_text()
     readme_text = (cloud_root / "README.md").read_text()
     checklist_text = (cloud_root / "deploy" / "RELEASE_CHECKLIST.md").read_text()
+    playbook_text = (cloud_root / "deploy" / "OPS_PLAYBOOK.md").read_text()
 
     for text in (compose_text, env_example_text, readme_text, checklist_text):
         assert "NPCINK_CLOUD_ADMIN_SESSION_SECRET" in text
         assert "NPCINK_CLOUD_ADMIN_BOOTSTRAP_TOKEN" in text
+        assert "NPCINK_CLOUD_BASE_URL" in text or text is readme_text
         assert "NPCINK_CLOUD_OPS_CADENCE_POLL_SECONDS" in text
         assert "NPCINK_CLOUD_RUNTIME_CALLBACK_WORKER_POLL_SECONDS" in text or text is checklist_text
         assert "NPCINK_CLOUD_WORKER_HEARTBEAT_INTERVAL_SECONDS" in text or text is checklist_text
@@ -33,11 +49,19 @@ def test_prod_env_files_use_canonical_admin_names_and_do_not_expose_ai_provider_
     assert "callback-worker:" in compose_text
     assert "otel-collector:" in compose_text
     assert "jaeger:" in compose_text
+    assert "NPCINK_CLOUD_ADMIN_BOOTSTRAP_PRINCIPAL_ID" in compose_text
+    assert "NPCINK_CLOUD_ADMIN_BOOTSTRAP_PRINCIPAL_ID" in env_example_text
+    assert "NPCINK_CLOUD_ADMIN_BOOTSTRAP_PLATFORM_ADMIN_ROLE" in compose_text
+    assert "NPCINK_CLOUD_ADMIN_BOOTSTRAP_PLATFORM_ADMIN_ROLE" in env_example_text
 
     assert "NPCINK_CLOUD_OPS_SESSION_SECRET" not in compose_text
     assert "NPCINK_CLOUD_OPS_SESSION_SECRET" not in env_example_text
     assert "NPCINK_CLOUD_OPS_SESSION_SECRET" not in readme_text
     assert "NPCINK_CLOUD_OPS_SESSION_SECRET" not in checklist_text
+    assert "NPCINK_CLOUD_ADMIN_BOOTSTRAP_ADMIN_REF" not in compose_text
+    assert "NPCINK_CLOUD_ADMIN_BOOTSTRAP_ADMIN_REF" not in env_example_text
+    assert "NPCINK_CLOUD_ADMIN_BOOTSTRAP_ADMIN_ROLE" not in compose_text
+    assert "NPCINK_CLOUD_ADMIN_BOOTSTRAP_ADMIN_ROLE" not in env_example_text
     assert "NPCINK_CLOUD_OPENAI_COMPATIBLE_" not in compose_text
     assert "NPCINK_CLOUD_OPENAI_COMPATIBLE_" not in env_example_text
     assert "NPCINK_CLOUD_OPENAI_COMPATIBLE_" not in readme_text
@@ -54,6 +78,17 @@ def test_prod_env_files_use_canonical_admin_names_and_do_not_expose_ai_provider_
     assert "AI provider channels are managed in Cloud runtime storage" in env_example_text
     assert "NPCINK_CLOUD_FEATURE_FLAGS_JSON" in env_example_text
     assert "NPCINK_CLOUD_FEATURE_FLAGS_JSON" in readme_text
+    assert "http://127.0.0.1:8010" in env_example_text
+    assert _documented_https_host(checklist_text, "NPCINK_CLOUD_BASE_URL") == "cloud.npc.ink"
+    assert (
+        _documented_env_value(checklist_text, "NPCINK_CLOUD_TRUSTED_HOST_ALLOWLIST")
+        == "cloud.npc.ink"
+    )
+    assert _documented_https_host(playbook_text, "NPCINK_CLOUD_BASE_URL") == "cloud.npc.ink"
+    assert "Resource Tuning Baseline" in playbook_text
+    assert "NPCINK_CLOUD_API_WORKERS" in playbook_text
+    assert "NPCINK_CLOUD_RUNTIME_WORKER_POLL_SECONDS" in playbook_text
+    assert "NPCINK_CLOUD_RUNTIME_CALLBACK_WORKER_POLL_SECONDS" in playbook_text
 
 
 def test_env_example_production_payload_validates_with_canonical_names(
@@ -74,14 +109,11 @@ def test_env_example_production_payload_validates_with_canonical_names(
         "NPCINK_CLOUD_ADMIN_BOOTSTRAP_TOKEN=": "NPCINK_CLOUD_ADMIN_BOOTSTRAP_TOKEN=" + ("b" * 32),
         "NPCINK_CLOUD_ADMIN_SESSION_SECRET=": "NPCINK_CLOUD_ADMIN_SESSION_SECRET=" + ("a" * 32),
         "NPCINK_CLOUD_PORTAL_JWT_SECRET=": "NPCINK_CLOUD_PORTAL_JWT_SECRET=" + ("j" * 32),
-        "NPCINK_CLOUD_PORTAL_PUBLIC_BASE_URL=": (
-            "NPCINK_CLOUD_PORTAL_PUBLIC_BASE_URL=https://cloud.example.com"
+        "NPCINK_CLOUD_BROWSER_ORIGIN_ALLOWLIST=": (
+            "NPCINK_CLOUD_BROWSER_ORIGIN_ALLOWLIST=https://cloud.example.com"
         ),
-        "NPCINK_CLOUD_PORTAL_EMAIL_SMTP_HOST=": (
-            "NPCINK_CLOUD_PORTAL_EMAIL_SMTP_HOST=smtp.example.com"
-        ),
-        "NPCINK_CLOUD_PORTAL_EMAIL_FROM_EMAIL=": (
-            "NPCINK_CLOUD_PORTAL_EMAIL_FROM_EMAIL=noreply@example.com"
+        "NPCINK_CLOUD_TRUSTED_HOST_ALLOWLIST=": (
+            "NPCINK_CLOUD_TRUSTED_HOST_ALLOWLIST=cloud.example.com"
         ),
     }
     for original, updated in replacements.items():
@@ -111,9 +143,8 @@ def test_settings_accept_legacy_admin_aliases_without_requiring_openai_env(monke
     monkeypatch.setenv("NPCINK_CLOUD_ADMIN_SESSION_SECRET", "a" * 32)
     monkeypatch.setenv("NPCINK_CLOUD_OPS_SESSION_SECRET", "a" * 32)
     monkeypatch.setenv("NPCINK_CLOUD_PORTAL_JWT_SECRET", "j" * 32)
-    monkeypatch.setenv("NPCINK_CLOUD_PORTAL_PUBLIC_BASE_URL", "https://cloud.example.com")
-    monkeypatch.setenv("NPCINK_CLOUD_PORTAL_EMAIL_SMTP_HOST", "smtp.example.com")
-    monkeypatch.setenv("NPCINK_CLOUD_PORTAL_EMAIL_FROM_EMAIL", "noreply@example.com")
+    monkeypatch.setenv("NPCINK_CLOUD_BROWSER_ORIGIN_ALLOWLIST", "https://cloud.example.com")
+    monkeypatch.setenv("NPCINK_CLOUD_TRUSTED_HOST_ALLOWLIST", "cloud.example.com")
 
     settings = Settings(_env_file=None)
 

@@ -249,9 +249,8 @@ def test_web_rejects_untrusted_forwarded_host_in_production(tmp_path: Path) -> N
         tmp_path,
         settings_overrides={
             "environment": "production",
-            "portal_public_base_url": "https://cloud.example.com",
-            "portal_email_smtp_host": "smtp.example.com",
-            "portal_email_from_email": "noreply@example.com",
+            "browser_origin_allowlist": "https://cloud.example.com",
+            "trusted_host_allowlist": "cloud.example.com",
         },
     )
 
@@ -278,7 +277,6 @@ def test_web_allows_untrusted_forwarded_host_in_development_when_browser_origin_
         tmp_path,
         settings_overrides={
             "environment": "development",
-            "portal_public_base_url": "http://100.102.170.79:8010",
             "browser_origin_allowlist": "http://100.102.170.79:8010",
         },
     )
@@ -305,9 +303,8 @@ def test_web_rejects_untrusted_forwarded_origin_in_production(tmp_path: Path) ->
         tmp_path,
         settings_overrides={
             "environment": "production",
-            "portal_public_base_url": "https://cloud.example.com",
-            "portal_email_smtp_host": "smtp.example.com",
-            "portal_email_from_email": "noreply@example.com",
+            "browser_origin_allowlist": "https://cloud.example.com",
+            "trusted_host_allowlist": "cloud.example.com",
         },
     )
 

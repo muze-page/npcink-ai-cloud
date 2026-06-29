@@ -34,9 +34,8 @@ def _settings(database_url: str) -> Settings:
         admin_bootstrap_token="npcink-cloud-admin-bootstrap-token-32b",
         admin_session_secret=TEST_ADMIN_SESSION_SECRET,
         portal_jwt_secret=TEST_PORTAL_JWT_SECRET,
-        portal_public_base_url="https://cloud.example.com",
-        portal_email_smtp_host="smtp.example.com",
-        portal_email_from_email="no-reply@example.com",
+        browser_origin_allowlist="https://cloud.example.com",
+        trusted_host_allowlist="cloud.example.com",
         openai_api_key="env-openai-key",
         openai_base_url="https://env-openai.example/v1",
     )

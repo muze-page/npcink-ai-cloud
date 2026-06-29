@@ -42,9 +42,8 @@ def test_settings_accept_hardened_production_auth_settings() -> None:
         admin_bootstrap_token="npcink-cloud-admin-bootstrap-prod-token",
         admin_session_secret="npcink-cloud-ops-session-secret-prod-32b",
         portal_jwt_secret="npcink-cloud-portal-jwt-secret-prod-32b",
-        portal_public_base_url="https://cloud.example.com",
-        portal_email_smtp_host="smtp.example.com",
-        portal_email_from_email="no-reply@example.com",
+        browser_origin_allowlist="https://cloud.example.com",
+        trusted_host_allowlist="cloud.example.com",
     )
 
     assert settings.environment == "production"
@@ -77,9 +76,8 @@ def test_settings_reject_openai_sample_catalog_profile_outside_dev_and_test() ->
             internal_auth_token="npcink-cloud-internal-prod-token-32b",
             admin_session_secret="npcink-cloud-ops-session-secret-prod-32b",
             portal_jwt_secret="npcink-cloud-portal-jwt-secret-prod-32b",
-            portal_public_base_url="https://cloud.example.com",
-            portal_email_smtp_host="smtp.example.com",
-            portal_email_from_email="no-reply@example.com",
+            browser_origin_allowlist="https://cloud.example.com",
+            trusted_host_allowlist="cloud.example.com",
             openai_sample_catalog_profile="legacy_dev_sample",
         )
 
@@ -104,20 +102,16 @@ def test_settings_reject_openai_sample_catalog_profile_outside_dev_and_test() ->
             "admin_bootstrap_token must differ from internal_auth_token outside development/test environments",
         ),
         (
-            {"portal_public_base_url": ""},
-            "portal_public_base_url is required outside development/test environments",
-        ),
-        (
             {"portal_jwt_secret": ""},
             "portal_jwt_secret is required outside development/test environments",
         ),
         (
-            {"portal_email_smtp_host": ""},
-            "portal_email_smtp_host is required outside development/test environments",
+            {"browser_origin_allowlist": ""},
+            "browser_origin_allowlist is required outside development/test environments",
         ),
         (
-            {"portal_email_from_email": ""},
-            "portal_email_from_email is required outside development/test environments",
+            {"trusted_host_allowlist": ""},
+            "trusted_host_allowlist is required outside development/test environments",
         ),
     ],
 )
@@ -133,9 +127,8 @@ def test_settings_require_production_portal_and_secret_fields(
         "admin_bootstrap_token": "npcink-cloud-admin-bootstrap-prod-token",
         "admin_session_secret": "npcink-cloud-ops-session-secret-prod-32b",
         "portal_jwt_secret": "npcink-cloud-portal-jwt-secret-prod-32b",
-        "portal_public_base_url": "https://cloud.example.com",
-        "portal_email_smtp_host": "smtp.example.com",
-        "portal_email_from_email": "no-reply@example.com",
+        "browser_origin_allowlist": "https://cloud.example.com",
+        "trusted_host_allowlist": "cloud.example.com",
     }
     payload.update(overrides)
     with pytest.raises(ValidationError) as error:

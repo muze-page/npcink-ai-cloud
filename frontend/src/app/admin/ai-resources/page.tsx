@@ -135,6 +135,43 @@ type ProviderCatalogPreviewModel = {
   capability_tags: string[];
 };
 
+type ModelReferenceEntry = {
+  source_id: string;
+  source_label: string;
+  provider_id: string;
+  provider_label: string;
+  model_id: string;
+  display_name: string;
+  family: string;
+  feature: string;
+  status: string;
+  modalities: {
+    input?: string[];
+    output?: string[];
+  };
+  capability_flags: {
+    reasoning?: boolean;
+    tool_call?: boolean;
+    structured_output?: boolean;
+    attachment?: boolean;
+    open_weights?: boolean;
+  };
+  context_window?: number | null;
+  output_limit?: number | null;
+  price: {
+    input?: number | null;
+    output?: number | null;
+    cache_read?: number | null;
+    cache_write?: number | null;
+    unit: string;
+    billing_truth: boolean;
+  };
+  source_updated_at: string;
+  synced_at: string;
+  is_deprecated: boolean;
+  override_present: boolean;
+};
+
 type RuntimeInstance = {
   instance_id: string;
   provider_id: string;
@@ -822,6 +859,21 @@ function formatRate(value: number | undefined): string {
   return `${Math.round(value * 100)}%`;
 }
 
+function formatReferencePrice(reference: ModelReferenceEntry): string {
+  const input = typeof reference.price.input === 'number' ? `$${reference.price.input}` : '-';
+  const output = typeof reference.price.output === 'number' ? `$${reference.price.output}` : '-';
+  return `${input} / ${output}`;
+}
+
+function modelReferenceCapabilitySummary(reference: ModelReferenceEntry): string {
+  const flags = [
+    reference.capability_flags.reasoning ? 'reasoning' : '',
+    reference.capability_flags.tool_call ? 'tool' : '',
+    reference.capability_flags.structured_output ? 'json' : '',
+  ].filter(Boolean);
+  return flags.length ? flags.join(' · ') : reference.feature;
+}
+
 function routingIdempotencyKey(): string {
   return generateIdempotencyKey('ai_resources_routing');
 }
@@ -886,6 +938,9 @@ function AiResourcesContent() {
   const [, setTestingConnectionId] = useState('');
   const [fetchingProviderCatalog, setFetchingProviderCatalog] = useState(false);
   const [providerCatalogPreview, setProviderCatalogPreview] = useState<ProviderCatalogPreview | null>(null);
+  const [loadingModelReferences, setLoadingModelReferences] = useState(false);
+  const [syncingModelReferences, setSyncingModelReferences] = useState(false);
+  const [modelReferences, setModelReferences] = useState<ModelReferenceEntry[]>([]);
   const [connectionTestResults, setConnectionTestResults] = useState<Record<string, ProviderConnectionTestResult>>({});
   const [providerFormOpen, setProviderFormOpen] = useState(false);
   const [providerFormMode, setProviderFormMode] = useState<'create' | 'edit'>('create');
@@ -936,9 +991,39 @@ function AiResourcesContent() {
     }
   }, [aiText]);
 
+  const loadModelReferences = useCallback(async (providerId: string) => {
+    const normalizedProviderId = providerId.trim().toLowerCase();
+    if (!normalizedProviderId || normalizedProviderId === 'custom') {
+      setModelReferences([]);
+      return;
+    }
+    setLoadingModelReferences(true);
+    try {
+      const response = await fetch(`/api/admin/model-references?provider_id=${encodeURIComponent(normalizedProviderId)}&limit=200`, {
+        credentials: 'include',
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(resolveUiErrorMessage(payload, aiText('error_load_model_references', 'Failed to load model reference data.')));
+      }
+      setModelReferences(Array.isArray(payload.data?.items) ? payload.data.items : []);
+    } catch (referenceError) {
+      setModelReferences([]);
+      setError(referenceError instanceof Error ? referenceError.message : aiText('error_load_model_references', 'Failed to load model reference data.'));
+    } finally {
+      setLoadingModelReferences(false);
+    }
+  }, [aiText]);
+
   useEffect(() => {
     void loadResources();
   }, [loadResources]);
+
+  useEffect(() => {
+    if (!providerFormOpen) return;
+    const providerId = providerConnectionForm.providerId || providerPresetById(providerConnectionForm.providerPreset).providerId;
+    void loadModelReferences(providerId);
+  }, [loadModelReferences, providerConnectionForm.providerId, providerConnectionForm.providerPreset, providerFormOpen]);
 
   useEffect(() => {
     const requestedView = searchParams.get('view');
@@ -1122,6 +1207,34 @@ function AiResourcesContent() {
       setError(catalogError instanceof Error ? catalogError.message : aiText('error_fetch_catalog', 'Failed to fetch upstream models.'));
     } finally {
       setFetchingProviderCatalog(false);
+    }
+  }
+
+  async function syncModelReferences() {
+    const providerId = providerConnectionForm.providerId || providerPresetById(providerConnectionForm.providerPreset).providerId;
+    setSyncingModelReferences(true);
+    setError('');
+    setMessage('');
+    try {
+      const response = await fetch('/api/admin/model-references/sync', {
+        method: 'POST',
+        credentials: 'include',
+        headers: {
+          'Content-Type': 'application/json',
+          'Idempotency-Key': generateIdempotencyKey('model_references_sync'),
+        },
+        body: JSON.stringify({}),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(resolveUiErrorMessage(payload, aiText('error_sync_model_references', 'Failed to sync model reference data.')));
+      }
+      await loadModelReferences(providerId);
+      setMessage(aiText('message_model_references_synced', 'Model reference data synced. It is reference-only and does not change billing or routing.'));
+    } catch (syncError) {
+      setError(syncError instanceof Error ? syncError.message : aiText('error_sync_model_references', 'Failed to sync model reference data.'));
+    } finally {
+      setSyncingModelReferences(false);
     }
   }
 
@@ -1986,6 +2099,16 @@ function AiResourcesContent() {
                             ? aiText('action_fetching_upstream_models', 'Fetching...')
                             : aiText('action_fetch_upstream_models', 'Sync model catalog')}
                         </button>
+                        <button
+                          type="button"
+                          className="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-semibold text-slate-700 transition hover:border-slate-300 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-200 dark:hover:border-slate-700"
+                          disabled={syncingModelReferences || loadingModelReferences || savingConnection}
+                          onClick={() => void syncModelReferences()}
+                        >
+                          {syncingModelReferences
+                            ? aiText('action_syncing_model_references', 'Syncing...')
+                            : aiText('action_sync_model_references', 'Sync reference data')}
+                        </button>
                       </div>
                     </div>
                     {providerCatalogPreview ? (
@@ -2064,6 +2187,93 @@ function AiResourcesContent() {
                         {aiText('model_catalog_empty', 'No catalog loaded yet. Sync the model catalog when you need to inspect provider-visible models.')}
                       </div>
                     )}
+                    <div className="grid gap-2 rounded-lg border border-slate-200 bg-white p-3 dark:border-slate-800 dark:bg-slate-950">
+                      <div className="flex flex-wrap items-start justify-between gap-2">
+                        <div>
+                          <h4 className="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
+                            {aiText('model_reference_title', 'Reference intelligence')}
+                          </h4>
+                          <p className="mt-1 text-xs leading-5 text-slate-500 dark:text-slate-400">
+                            {aiText('model_reference_desc', 'Reference capability and price metadata from external sources. It is not billing truth or routing truth.')}
+                          </p>
+                        </div>
+                        <BackofficeStatusBadge
+                          label={aiText('model_reference_badge', 'reference only')}
+                          status="info"
+                        />
+                      </div>
+                      {loadingModelReferences ? (
+                        <div className="text-xs text-slate-500 dark:text-slate-400">
+                          {aiText('loading_model_references', 'Loading model reference data...')}
+                        </div>
+                      ) : modelReferences.length ? (
+                        <div className="max-h-64 overflow-auto rounded-lg border border-slate-200 dark:border-slate-800">
+                          <table className="w-full min-w-[48rem] text-left text-xs">
+                            <thead className="bg-slate-50 text-slate-500 dark:bg-slate-900/60 dark:text-slate-400">
+                              <tr>
+                                <th className="px-3 py-2 font-semibold">{aiText('catalog_model_header_model', 'Model')}</th>
+                                <th className="px-3 py-2 font-semibold">{aiText('catalog_model_header_feature', 'Feature')}</th>
+                                <th className="px-3 py-2 font-semibold">{aiText('column_context_output', 'Context / output')}</th>
+                                <th className="px-3 py-2 font-semibold">{aiText('column_reference_price', 'Reference price')}</th>
+                                <th className="px-3 py-2 font-semibold">{aiText('column_source_updated', 'Source updated')}</th>
+                                <th className="px-3 py-2 font-semibold">{aiText('catalog_model_header_action', 'Action')}</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                              {modelReferences.slice(0, 100).map((reference) => {
+                                const selected = splitList(providerConnectionForm.modelIds).includes(reference.model_id);
+                                return (
+                                  <tr key={`${reference.provider_id}:${reference.model_id}`} className="bg-white dark:bg-slate-950">
+                                    <td className="px-3 py-2">
+                                      <div className="font-semibold text-slate-900 dark:text-white">{reference.model_id}</div>
+                                      <div className="text-slate-500 dark:text-slate-400">
+                                        {reference.family || reference.source_label}
+                                        {reference.override_present ? ` · ${aiText('model_reference_override', 'manual override')}` : ''}
+                                      </div>
+                                    </td>
+                                    <td className="px-3 py-2 text-slate-600 dark:text-slate-300">
+                                      {abilityModelFeatureLabel(reference.feature)}
+                                      <div className="mt-1 text-slate-500 dark:text-slate-400">{modelReferenceCapabilitySummary(reference)}</div>
+                                    </td>
+                                    <td className="px-3 py-2 text-slate-600 dark:text-slate-300">
+                                      {reference.context_window || '-'} / {reference.output_limit || '-'}
+                                    </td>
+                                    <td className="px-3 py-2 text-slate-600 dark:text-slate-300">
+                                      {formatReferencePrice(reference)}
+                                      <div className="mt-1 text-slate-500 dark:text-slate-400">{aiText('price_unit_per_1m', 'per 1M tokens')}</div>
+                                    </td>
+                                    <td className="px-3 py-2 text-slate-600 dark:text-slate-300">
+                                      {reference.source_updated_at || reference.synced_at || '-'}
+                                    </td>
+                                    <td className="px-3 py-2">
+                                      <button
+                                        type="button"
+                                        className="rounded-full border border-slate-200 bg-white px-3 py-1 font-semibold text-slate-700 transition hover:border-slate-300 hover:bg-slate-50 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-200 dark:hover:border-slate-700"
+                                        onClick={() => {
+                                          if (selected) {
+                                            removeProviderModelId(reference.model_id);
+                                          } else {
+                                            setProviderModelIds([...splitList(providerConnectionForm.modelIds), reference.model_id]);
+                                          }
+                                        }}
+                                      >
+                                        {selected
+                                          ? aiText('action_disable_catalog_model', 'Disable')
+                                          : aiText('action_enable_catalog_model', 'Enable')}
+                                      </button>
+                                    </td>
+                                  </tr>
+                                );
+                              })}
+                            </tbody>
+                          </table>
+                        </div>
+                      ) : (
+                        <div className="rounded-lg border border-dashed border-slate-300 p-3 text-xs text-slate-500 dark:border-slate-700 dark:text-slate-400">
+                          {aiText('model_reference_empty', 'No reference data for this provider yet. Sync reference data to inspect capabilities and prices.')}
+                        </div>
+                      )}
+                    </div>
                   </div>
                   <div className="flex flex-col gap-2 border-t border-slate-200 pt-4 dark:border-slate-800 sm:flex-row">
                     <input

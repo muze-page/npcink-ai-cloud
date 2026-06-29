@@ -2,7 +2,7 @@
 
 > Status: active
 >
-> Updated: 2026-04-15
+> Updated: 2026-06-29
 >
 > Scope: standalone `npcink-ai-cloud` production operations, cadence recovery, addon projection-first runbook, release-time troubleshooting
 
@@ -22,6 +22,29 @@ Primary internal checkpoints:
 - `GET /internal/service/runtime/diagnostics/backlog`
 - signed `GET /v1/addon/dashboard`
 - signed `GET /v1/addon/providers/release-summary`
+
+## Environment Entry Points
+
+Cloud has two operator-known public entry points in the current deployment
+model:
+
+- local development: `http://127.0.0.1:8010/`
+- production: `https://cloud.npc.ink/`
+
+Configuration ownership:
+
+- local compose may use the loopback origin for development and smoke testing.
+- production must set `NPCINK_CLOUD_BASE_URL=https://cloud.npc.ink` in
+  `.env.deploy` or the deploy secret store.
+- production must set
+  `NPCINK_CLOUD_BROWSER_ORIGIN_ALLOWLIST=https://cloud.npc.ink` and
+  `NPCINK_CLOUD_TRUSTED_HOST_ALLOWLIST=cloud.npc.ink`.
+- `/admin/service-settings` owns Portal public URL, QQ login, and SMTP sender
+  settings. Do not move those service settings back into `.env`.
+
+Loopback origins are a development convenience only. If a production frontend
+requires `http://127.0.0.1:8010` or `localhost` as a public URL, treat that as a
+release-blocking environment configuration error.
 
 ## Addon Projection Semantics
 
@@ -87,6 +110,44 @@ Then verify:
 - `GET /health/operational-ready` returns `200`
 - `GET /internal/service/observability/summary` shows fresh worker heartbeats
 - `GET /internal/service/ops/cadence` shows non-fresh tasks recovering toward fresh
+
+## Resource Tuning Baseline
+
+Tune resources through environment variables and service restarts, not by
+editing production application code on the server. Server-side changes remain
+limited to `.env.deploy` secrets/config and must be backported if they become
+durable release requirements.
+
+Primary knobs:
+
+- `NPCINK_CLOUD_API_WORKERS`: gunicorn API worker count. Keep it within the
+  release host CPU and memory budget.
+- `NPCINK_CLOUD_RUNTIME_WORKER_POLL_SECONDS`: runtime queue polling cadence.
+- `NPCINK_CLOUD_RUNTIME_CALLBACK_WORKER_POLL_SECONDS`: callback dispatch polling
+  cadence.
+- `NPCINK_CLOUD_WORKER_HEARTBEAT_INTERVAL_SECONDS`: heartbeat freshness window
+  for worker health checks.
+- `NPCINK_CLOUD_OPS_CADENCE_POLL_SECONDS`: ops cadence loop frequency.
+- `NPCINK_CLOUD_RETENTION_CLEANUP_INTERVAL_SECONDS`: retention cleanup cadence.
+- `NPCINK_CLOUD_USAGE_ROLLUP_INTERVAL_SECONDS`: usage rollup cadence.
+- `NPCINK_CLOUD_ROUTER_DIAGNOSTICS_INTERVAL_SECONDS`: router diagnostics cadence.
+- `NPCINK_CLOUD_LATENCY_PROBE_INTERVAL_SECONDS`: latency probe cadence.
+- `NPCINK_CLOUD_ALERT_PROVIDER_DEGRADATION_INTERVAL_SECONDS`: provider
+  degradation alert cadence.
+- `NPCINK_CLOUD_HOSTED_MODEL_GOVERNANCE_INTERVAL_SECONDS`: hosted model
+  governance cadence.
+- `NPCINK_CLOUD_PROVIDER_HEALTH_SCAN_INTERVAL_SECONDS`: provider health scan
+  cadence.
+
+After any resource or cadence change:
+
+1. Restart only the affected services when possible: `api`, `worker`,
+   `callback-worker`, or `ops-worker`.
+2. Verify `GET /health/operational-ready`.
+3. Verify `GET /internal/service/observability/summary` shows fresh heartbeats.
+4. Verify `GET /internal/service/ops/cadence` has no unexpected stale tasks.
+5. Run one signed runtime smoke when worker or provider cadence changed.
+6. Record the changed variables and rollback values in operator notes.
 
 ### Callback backlog recovery
 
