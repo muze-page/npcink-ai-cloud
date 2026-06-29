@@ -7,6 +7,20 @@ const COMMERCIAL_COPY_KEYS: Record<string, string> = {
     'admin.commercial_follow_up.subscription_snapshot_reconciliation',
   'Open site detail for runtime and entitlement impact, or customer detail for support scope.':
     'admin.commercial_follow_up.subscription_next_step',
+  'Current-period billing snapshots need rebuild to match the latest subscription posture.':
+    'admin.commercial_follow_up.snapshot_needs_rebuild',
+  'Current-period billing snapshots are still missing for at least one covered site.':
+    'admin.commercial_follow_up.snapshot_missing',
+  'Current-period billing snapshots are fresh for every covered site.':
+    'admin.commercial_follow_up.snapshot_fresh',
+  'Current-period billing snapshots were rebuilt for every covered site.':
+    'admin.commercial_follow_up.snapshot_rebuilt',
+  'No covered sites are currently attached to this subscription, so there were no billing snapshots to rebuild.':
+    'admin.commercial_follow_up.snapshot_no_sites',
+  'Rebuild current-period billing snapshots':
+    'admin.subscription_detail.snapshot_refresh_action',
+  'Refresh current-period billing snapshots for every covered site before treating billing posture as reconciled.':
+    'admin.subscription_detail.snapshot_refresh_detail',
   'Use the linked plan and version snapshot as the current commercial entitlement boundary for this site.':
     'admin.commercial_follow_up.site_entitlement_summary',
   'Budget headroom should be read before widening runtime troubleshooting, because over-limit posture can be the real blocker.':

@@ -19,6 +19,41 @@ async function replaceScopedTextInput(scope: Locator, index: number, value: stri
   await input.pressSequentially(value);
 }
 
+test('admin coverage page separates service status and packages with tabs', async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await installAdminMocks(page);
+
+  await page.goto('/admin/coverage');
+  await expect(page.getByRole('heading', { name: /^Customer service status$|^客户服务状态$|^客戶服務狀態$/i })).toBeVisible();
+  await expect(page.getByRole('button', { name: /Service status|服务状态|服務狀態/i })).toBeVisible();
+  await expect(page.getByRole('button', { name: /^Packages|^套餐|^方案/i })).toBeVisible();
+  await expect(page.getByText(/Customers needing service follow-up|需要服务跟进的客户|需要服務跟進的客戶/i).first()).toBeVisible();
+  await expect(page.getByRole('link', { name: /Inspect subscription|查看订阅|檢查訂閱/i }).first()).toBeVisible();
+
+  await page.getByRole('button', { name: /^Packages|^套餐|^方案/i }).click();
+  await expect(page.getByRole('heading', { name: /Package catalog|套餐目录|方案目錄/i })).toBeVisible();
+  await expect(page.getByText(/Free/i).first()).toBeVisible();
+  await expect(page.getByText(/Pro/i).first()).toBeVisible();
+  await expect(page.getByText(/Agency/i).first()).toBeVisible();
+  await expect(page.getByText(/Site limit|站点上限|站點上限/i).first()).toBeVisible();
+  await expect(page.getByRole('link', { name: /Open package catalog|打开套餐目录|打開方案目錄/i })).toHaveCount(1);
+
+  await page.getByRole('button', { name: /Service status|服务状态|服務狀態/i }).click();
+  await expect(page.getByText(/Customers needing service follow-up|需要服务跟进的客户|需要服務跟進的客戶/i).first()).toBeVisible();
+});
+
+test('admin subscription detail keeps localized operator layout', async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await installAdminMocks(page);
+
+  await page.goto('/admin/subscriptions/sub_mvp');
+  await expect(page.getByRole('heading', { name: /Subscription service status: sub_mvp|订阅服务状态：sub_mvp|訂閱服務狀態：sub_mvp/i })).toBeVisible();
+  await expect(page.getByText(/Package and billing state|套餐与账单状态|方案與帳單狀態/i).first()).toBeVisible();
+  await expect(page.getByText(/What needs action|需要处理什么|需要處理什麼/i).first()).toBeVisible();
+  await expect(page.getByText(/Related evidence|关联证据|關聯證據/i).first()).toBeVisible();
+  await expect(page.getByText(/Coverage checks/i)).toHaveCount(0);
+});
+
 test('admin operator path smoke: queue and inspector routes stay connected', async ({ page }) => {
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await installAdminMocks(page);
@@ -44,11 +79,20 @@ test('admin operator path smoke: queue and inspector routes stay connected', asy
 
   await page.goto('/admin/coverage');
   await expect(page.getByRole('heading', { name: /^Customer service status$|^客户服务状态$|^客戶服務狀態$/i })).toBeVisible();
+  await expect(page.getByRole('button', { name: /Service status|服务状态|服務狀態/i })).toBeVisible();
+  await expect(page.getByRole('button', { name: /^Packages|^套餐|^方案/i })).toBeVisible();
   await expect(page.getByText(/Customers needing service follow-up|需要服务跟进的客户|需要服務跟進的客戶/i).first()).toBeVisible();
   await expect(page.getByRole('link', { name: /Open package actions|打开套餐操作|打開方案操作/i }).first()).toBeVisible();
   await expect(page.getByRole('link', { name: /Inspect subscription|查看订阅|檢查訂閱/i }).first()).toBeVisible();
+  await page.getByRole('button', { name: /^Packages|^套餐|^方案/i }).click();
+  await expect(page.getByRole('heading', { name: /Package catalog|套餐目录|方案目錄/i })).toBeVisible();
+  await expect(page.getByText(/Free/i).first()).toBeVisible();
+  await expect(page.getByText(/Pro/i).first()).toBeVisible();
+  await expect(page.getByText(/Agency/i).first()).toBeVisible();
+  await expect(page.getByText(/Site limit|站点上限|站點上限/i).first()).toBeVisible();
   await expect(page.getByRole('link', { name: /Open package catalog|打开套餐目录|打開方案目錄/i })).toHaveCount(1);
-  await expect(page.getByRole('button', { name: /Open package catalog|打开套餐目录|打開方案目錄/i })).toHaveCount(0);
+  await page.getByRole('button', { name: /Service status|服务状态|服務狀態/i }).click();
+  await expect(page.getByText(/Customers needing service follow-up|需要服务跟进的客户|需要服務跟進的客戶/i).first()).toBeVisible();
 
   await page.goto('/admin/subscriptions');
   await expect(page.getByRole('heading', { name: /Risk-prioritized subscription queue|按风险排序的订阅队列/i })).toBeVisible();
@@ -57,7 +101,7 @@ test('admin operator path smoke: queue and inspector routes stay connected', asy
   await expect(page.getByText(/Billing snapshot fresh|账单快照最新|账单快照新鲜/i).first()).toBeVisible();
 
   await page.goto('/admin/subscriptions/sub_mvp');
-  await expect(page.getByRole('heading', { name: /Coverage detail: sub_mvp|覆盖详情：sub_mvp|覆蓋詳情：sub_mvp/i })).toBeVisible();
+  await expect(page.getByRole('heading', { name: /Subscription service status: sub_mvp|订阅服务状态：sub_mvp|訂閱服務狀態：sub_mvp/i })).toBeVisible();
   await expect(page.getByRole('link', { name: /Open customer subscription|打开客户订阅/i })).toHaveCount(0);
   await expect(page.locator(`a[href="/admin/accounts/${LONG_ACCOUNT_ID}#coverage-actions"]`)).toBeVisible();
   await expect(page.getByRole('link', { name: /Inspect customer detail|检查客户详情|檢查客戶詳情/i })).toBeVisible();

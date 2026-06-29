@@ -19,6 +19,7 @@ import { cn, formatDate, formatNumber as formatInteger } from '@/lib/utils';
 
 type QueueSeverity = 'error' | 'warning' | 'ok' | 'inactive';
 type QueueView = 'needs_action' | 'all' | QueueSeverity;
+type CoverageTab = 'service_status' | 'packages';
 
 type CoverageQueueItem = {
   account: {
@@ -74,6 +75,41 @@ type CoverageWorkQueue = {
     reason_counts?: Record<string, number>;
   };
   items?: CoverageQueueItem[];
+};
+
+type TierSummary = {
+  tier_id: string;
+  label?: string;
+  package_alias?: string;
+  usage_band?: string;
+  monthly_included_points?: number;
+  site_limit?: number;
+  budgets_template?: Record<string, unknown>;
+  concurrency_template?: Record<string, unknown>;
+  max_batch_items?: number;
+};
+
+type PlanListItem = {
+  plan?: {
+    plan_id?: string;
+    name?: string;
+    status?: string;
+    metadata?: Record<string, unknown>;
+  };
+  latest_version?: {
+    status?: string;
+    budgets?: Record<string, unknown>;
+    concurrency?: Record<string, unknown>;
+  } | null;
+  tier_summary?: TierSummary;
+  subscription_counts?: {
+    active?: number;
+  };
+};
+
+type PlanCatalog = {
+  items?: PlanListItem[];
+  tier_templates?: TierSummary[];
 };
 
 const INTERNAL_TEST_TEXT_RE = /Fatal error|Stack trace|Command line code|Uncaught ValueError|Path must not be empty|(^|[_-])smoke([_-]|$)|codex_image_smoke|site_knowledge_smoke/i;
@@ -151,11 +187,41 @@ function CoverageStatusBadge({
   );
 }
 
+function numericValue(value: unknown): number {
+  const numeric = Number(value ?? 0);
+  return Number.isFinite(numeric) ? numeric : 0;
+}
+
+function normalizeTierId(value: string): string {
+  return value === 'starter' ? 'free' : value;
+}
+
+function findPlanForTier(plans: PlanListItem[], tierId: string): PlanListItem | undefined {
+  const expectedTierId = normalizeTierId(tierId);
+  return plans.find((item) => {
+    const planId = normalizeTierId(String(item.plan?.plan_id || ''));
+    const metadataTierId = normalizeTierId(String(item.plan?.metadata?.tier_id || ''));
+    const summaryTierId = normalizeTierId(String(item.tier_summary?.tier_id || ''));
+    return (
+      planId === expectedTierId ||
+      metadataTierId === expectedTierId ||
+      summaryTierId === expectedTierId ||
+      (expectedTierId === 'free' && item.plan?.metadata?.plan_kind === 'default_free')
+    );
+  });
+}
+
+function resolvePackageName(shell: TierSummary, item?: PlanListItem): string {
+  return String(item?.tier_summary?.package_alias || item?.plan?.name || shell.package_alias || shell.label || shell.tier_id);
+}
+
 function AdminCoverageContent() {
   const { t } = useLocale();
   const [queue, setQueue] = useState<CoverageWorkQueue | null>(null);
+  const [planCatalog, setPlanCatalog] = useState<PlanCatalog | null>(null);
   const [error, setError] = useState('');
   const [view, setView] = useState<QueueView>('needs_action');
+  const [activeTab, setActiveTab] = useState<CoverageTab>('service_status');
 
   useEffect(() => {
     let alive = true;
@@ -163,9 +229,13 @@ function AdminCoverageContent() {
     const loadCoverage = async () => {
       setError('');
       try {
-        const payload = await readJsonData<CoverageWorkQueue>('/api/admin/coverage-work-queue');
+        const [coveragePayload, plansPayload] = await Promise.all([
+          readJsonData<CoverageWorkQueue>('/api/admin/coverage-work-queue'),
+          readJsonData<PlanCatalog>('/api/admin/plans'),
+        ]);
         if (!alive) return;
-        setQueue(payload);
+        setQueue(coveragePayload);
+        setPlanCatalog(plansPayload);
       } catch (err) {
         if (!alive) return;
         setError(resolveUiErrorMessage(err instanceof Error ? err.message : null, t('error.failed_load')));
@@ -203,7 +273,7 @@ function AdminCoverageContent() {
     );
   }
 
-  if (!queue) {
+  if (!queue || !planCatalog) {
     return <LoadingFallback />;
   }
 
@@ -226,6 +296,42 @@ function AdminCoverageContent() {
   const reasonEntries = Object.entries(summary.reason_counts || {})
     .sort((left, right) => Number(right[1] || 0) - Number(left[1] || 0))
     .slice(0, 6);
+  const packageShells = (planCatalog.tier_templates || []).filter((shell) =>
+    ['starter', 'free', 'pro', 'agency'].includes(normalizeTierId(String(shell.tier_id || '')))
+  );
+  const packageRows = packageShells.map((shell) => {
+    const item = findPlanForTier(planCatalog.items || [], shell.tier_id);
+    const latestVersion = item?.latest_version || null;
+    const budgets = (latestVersion?.budgets || item?.tier_summary?.budgets_template || shell.budgets_template || {}) as Record<string, unknown>;
+    const concurrency = (latestVersion?.concurrency || item?.tier_summary?.concurrency_template || shell.concurrency_template || {}) as Record<string, unknown>;
+    const sourceTier = item?.tier_summary || shell;
+    return {
+      shell,
+      item,
+      budgets,
+      concurrency,
+      sourceTier,
+      planId: item?.plan?.plan_id,
+      name: resolvePackageName(shell, item),
+    };
+  });
+  const activePackageSubscriptions = packageRows.reduce(
+    (total, row) => total + Number(row.item?.subscription_counts?.active || 0),
+    0
+  );
+  const readyPackages = packageRows.filter((row) => row.item?.plan?.status === 'active').length;
+  const tabs: Array<{ value: CoverageTab; label: string; detail: string }> = [
+    {
+      value: 'service_status',
+      label: t('admin.coverage.tab_service_status', {}, 'Service status'),
+      detail: t('admin.coverage.tab_service_status_desc', {}, 'Customer follow-up queue'),
+    },
+    {
+      value: 'packages',
+      label: t('admin.coverage.tab_packages', {}, 'Packages'),
+      detail: t('admin.coverage.tab_packages_desc', {}, 'Free, Pro, and Agency'),
+    },
+  ];
 
   return (
     <BackofficePageStack>
@@ -237,11 +343,6 @@ function AdminCoverageContent() {
           {},
           'Work from the highest-impact customer first. Each row shows the current blocker, evidence, and the next operator action.'
         )}
-        actions={
-          <Link href="/admin/plans" className="text-sm font-medium text-blue-600 hover:text-blue-700 dark:text-blue-300 dark:hover:text-blue-200">
-            {t('admin.coverage_open_package_catalog_action', {}, 'Open package catalog')} →
-          </Link>
-        }
         aside={
           <div className="w-full xl:w-[44rem]">
             <BackofficeMetricStrip
@@ -279,6 +380,26 @@ function AdminCoverageContent() {
         </p>
       </BackofficePrimaryPanel>
 
+      <div className="grid gap-3 rounded-2xl border border-slate-200 bg-white p-2 shadow-sm dark:border-slate-800 dark:bg-slate-950 md:grid-cols-2">
+        {tabs.map((tab) => (
+          <button
+            key={tab.value}
+            type="button"
+            onClick={() => setActiveTab(tab.value)}
+            className={cn(
+              'cursor-pointer rounded-xl border px-4 py-3 text-left transition',
+              activeTab === tab.value
+                ? 'border-blue-300 bg-blue-50 text-blue-800 shadow-sm dark:border-blue-800 dark:bg-blue-950/35 dark:text-blue-100'
+                : 'border-transparent text-slate-600 hover:border-slate-200 hover:bg-slate-50 hover:text-slate-950 dark:text-slate-300 dark:hover:border-slate-800 dark:hover:bg-slate-900 dark:hover:text-white'
+            )}
+          >
+            <span className="block text-sm font-semibold">{tab.label}</span>
+            <span className="mt-1 block text-xs text-slate-500 dark:text-slate-400">{tab.detail}</span>
+          </button>
+        ))}
+      </div>
+
+      {activeTab === 'service_status' ? (
       <div className="grid gap-5 xl:grid-cols-[minmax(0,1.55fr)_minmax(22rem,0.85fr)]">
         <BackofficeSectionPanel className="overflow-hidden p-0">
           <div className="border-b border-slate-200/80 px-6 py-5 dark:border-slate-800">
@@ -460,6 +581,117 @@ function AdminCoverageContent() {
           </BackofficeSectionPanel>
         </div>
       </div>
+      ) : (
+        <div className="space-y-5">
+          <BackofficeSectionPanel className="space-y-5">
+            <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-gray-500 dark:text-gray-400">
+                  {t('admin.coverage.package_tab_eyebrow', {}, 'Package catalog')}
+                </p>
+                <h2 className="mt-2 text-xl font-semibold text-gray-950 dark:text-white">
+                  {t('admin.coverage_package_catalog_title', {}, 'Package catalog')}
+                </h2>
+                <p className="mt-2 max-w-3xl text-sm text-slate-600 dark:text-slate-300">
+                  {t(
+                    'admin.coverage.package_tab_desc',
+                    {},
+                    'Use this tab to compare package posture. Package maintenance stays in the dedicated package catalog page.'
+                  )}
+                </p>
+              </div>
+              <Link href="/admin/plans" className="btn btn-secondary btn-sm">
+                {t('admin.coverage_open_package_catalog_action', {}, 'Open package catalog')}
+              </Link>
+            </div>
+            <BackofficeMetricStrip
+              columnsClassName="md:grid-cols-3"
+              items={[
+                {
+                  label: t('admin.managed_packages', {}, 'Managed packages'),
+                  value: formatInteger(packageRows.length),
+                  size: 'compact',
+                },
+                {
+                  label: t('admin.ready_packages', {}, 'Ready packages'),
+                  value: formatInteger(readyPackages),
+                  size: 'compact',
+                },
+                {
+                  label: t('admin.active_subscriptions', {}, 'Active subscriptions'),
+                  value: formatInteger(activePackageSubscriptions),
+                  size: 'compact',
+                },
+              ]}
+            />
+          </BackofficeSectionPanel>
+
+          <div className="grid gap-4 xl:grid-cols-3">
+            {packageRows.map((row) => (
+              <BackofficeStackCard key={row.shell.tier_id} className="flex flex-col">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <p className="text-xs font-medium uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
+                      {row.sourceTier.label || row.shell.label || row.shell.tier_id}
+                    </p>
+                    <h3 className="mt-2 text-xl font-semibold text-slate-950 dark:text-white">{row.name}</h3>
+                  </div>
+                  <BackofficeStatusBadge
+                    status={row.item?.plan?.status === 'active' ? 'published' : 'draft'}
+                    label={row.item?.plan?.status === 'active' ? t('status.published', {}, 'published') : t('status.draft', {}, 'missing')}
+                  />
+                </div>
+                <dl className="mt-5 space-y-2 text-sm text-slate-600 dark:text-slate-300">
+                  <div className="flex justify-between gap-4 border-b border-slate-200/70 pb-2 dark:border-slate-800">
+                    <dt>{t('admin.site_limit', {}, 'Site limit')}</dt>
+                    <dd className="font-semibold tabular-nums text-slate-950 dark:text-white">
+                      {formatInteger(numericValue(row.sourceTier.site_limit))}
+                    </dd>
+                  </div>
+                  <div className="flex justify-between gap-4 border-b border-slate-200/70 pb-2 dark:border-slate-800">
+                    <dt>{t('billing.runs', {}, 'Runs')}</dt>
+                    <dd className="font-semibold tabular-nums text-slate-950 dark:text-white">
+                      {formatInteger(numericValue(row.budgets.max_runs_per_period))}
+                    </dd>
+                  </div>
+                  <div className="flex justify-between gap-4 border-b border-slate-200/70 pb-2 dark:border-slate-800">
+                    <dt>{t('admin.concurrency', {}, 'Concurrency')}</dt>
+                    <dd className="font-semibold tabular-nums text-slate-950 dark:text-white">
+                      {formatInteger(numericValue(row.concurrency.max_active_runs))}
+                    </dd>
+                  </div>
+                  <div className="flex justify-between gap-4 border-b border-slate-200/70 pb-2 dark:border-slate-800">
+                    <dt>{t('admin.batch_ceiling', {}, 'Batch ceiling')}</dt>
+                    <dd className="font-semibold tabular-nums text-slate-950 dark:text-white">
+                      {formatInteger(numericValue(row.sourceTier.max_batch_items))}
+                    </dd>
+                  </div>
+                  <div className="flex justify-between gap-4 pb-2">
+                    <dt>{t('admin.active_subscriptions', {}, 'Active subscriptions')}</dt>
+                    <dd className="font-semibold tabular-nums text-slate-950 dark:text-white">
+                      {formatInteger(Number(row.item?.subscription_counts?.active || 0))}
+                    </dd>
+                  </div>
+                </dl>
+                <p className="mt-3 flex-1 text-sm leading-6 text-slate-500 dark:text-slate-400">
+                  {row.sourceTier.usage_band || t('admin.package_usage_band_empty', {}, 'No usage band summary is attached.')}
+                </p>
+                <div className="mt-5">
+                  {row.planId ? (
+                    <Link href={`/admin/plans/${row.planId}`} className="btn btn-secondary btn-sm">
+                      {t('common.manage', {}, 'Manage')}
+                    </Link>
+                  ) : (
+                    <Link href="/admin/plans" className="btn btn-secondary btn-sm">
+                      {t('admin.create_package_shell', {}, 'Create package')}
+                    </Link>
+                  )}
+                </div>
+              </BackofficeStackCard>
+            ))}
+          </div>
+        </div>
+      )}
     </BackofficePageStack>
   );
 }
