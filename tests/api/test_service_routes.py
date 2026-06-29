@@ -360,6 +360,16 @@ def test_admin_portal_users_lists_self_registered_users_and_disables_access(
     assert disable_data["revoked_site_grants"] == 1
     assert disable_data["revoked_account_memberships"] == 1
 
+    revoked_session_response = client.get("/portal/v1/session")
+    assert revoked_session_response.status_code == 401
+    assert revoked_session_response.json()["error_code"] == "auth.portal_session_revoked"
+
+    revoked_site_response = client.get(
+        f"/portal/v1/sites/{registration_data['site_id']}/summary"
+    )
+    assert revoked_site_response.status_code == 401
+    assert revoked_site_response.json()["error_code"] == "auth.portal_session_revoked"
+
     audit_response = client.get(
         f"/internal/service/admin/portal-users/{principal_id}/audit",
         headers=build_internal_headers(),

@@ -25,6 +25,7 @@ from app.core.models import (
     ACCOUNT_USER_MEMBERSHIP_STATUS_REVOKED,
     PRINCIPAL_STATUS_ACTIVE,
     SITE_USER_GRANT_STATUS_REVOKED,
+    AccountEntitlementSnapshot,
     AccountSubscription,
     AccountUserMembership,
     CreditLedgerEntry,
@@ -2458,6 +2459,43 @@ def test_portal_self_registration_opens_free_account_and_session(
         )
         assert subscription is not None
         assert subscription.plan_id == "plan_free"
+        assert subscription.plan_version_id == "plan_free_v1"
+        assert subscription.status == "active"
+        assert (subscription.metadata_json or {})["source"] == "production_default_free_bind_v1"
+        entitlement_snapshot = session.scalar(
+            select(AccountEntitlementSnapshot).where(
+                AccountEntitlementSnapshot.account_id == str(registration_data["account_id"]),
+                AccountEntitlementSnapshot.status == "active",
+            )
+        )
+        assert entitlement_snapshot is not None
+        assert entitlement_snapshot.subscription_id == subscription.subscription_id
+        assert entitlement_snapshot.plan_version_id == "plan_free_v1"
+        assert entitlement_snapshot.site_limit == 1
+        assert entitlement_snapshot.budgets_json["max_ai_credits_per_period"] == 300
+        assert entitlement_snapshot.concurrency_json["max_active_runs"] == 1
+
+    entitlements_response = client.get("/portal/v1/sites/site_example-com/entitlements")
+    assert entitlements_response.status_code == 200, entitlements_response.text
+    entitlements_data = entitlements_response.json()["data"]
+    assert entitlements_data["subscription"]["plan_id"] == "plan_free"
+    assert entitlements_data["entitlement_snapshot"]["site_limit"] == 1
+    assert (
+        entitlements_data["entitlement_snapshot"]["budgets"]["max_ai_credits_per_period"]
+        == 300.0
+    )
+    quota_summary = entitlements_data["quota_summary"]
+    assert quota_summary["credit"]["key"] == "ai_credits"
+    assert quota_summary["credit"]["limit"] == 300.0
+    assert quota_summary["credit"]["estimated"] is True
+    assert quota_summary["credit_policy"]["renewal_policy"] == (
+        "monthly_plan_grant_resets_each_period"
+    )
+    bound_sites_limit = next(
+        item for item in quota_summary["resource_limits"] if item["key"] == "bound_sites"
+    )
+    assert bound_sites_limit["used"] == 1.0
+    assert bound_sites_limit["limit"] == 1.0
 
     second_request_data = _request_portal_registration_code(
         client,
@@ -2479,6 +2517,57 @@ def test_portal_self_registration_opens_free_account_and_session(
         subscription_count = len(list(session.scalars(select(AccountSubscription))))
     assert site_count == 1
     assert subscription_count == 1
+
+    dispose_engine(database_url)
+
+
+def test_portal_registration_code_request_is_rate_limited(
+    tmp_path: Path,
+) -> None:
+    database_url, client = _build_client(
+        tmp_path,
+        settings_overrides={
+            "portal_jwt_secret": TEST_PORTAL_JWT_SECRET,
+            "portal_login_code_ttl_seconds": 300,
+        },
+        portal_email_sender=FakePortalEmailSender(),
+    )
+
+    for index in range(3):
+        response = client.post(
+            "/portal/v1/register/code/request",
+            json={
+                "email": "limited-register@example.com",
+                "site_url": f"https://limited-{index}.example.com",
+                "site_name": f"Limited {index}",
+                "use_case": "content generation",
+            },
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["data"]["delivery"] == "email"
+        assert response.json()["data"]["code"] == ""
+
+    limited_response = client.post(
+        "/portal/v1/register/code/request",
+        json={
+            "email": "limited-register@example.com",
+            "site_url": "https://limited-4.example.com",
+            "site_name": "Limited 4",
+            "use_case": "content generation",
+        },
+    )
+    assert limited_response.status_code == 429
+    assert limited_response.json()["error_code"] == "portal.login_code_rate_limited"
+
+    missing_payload_response = client.post(
+        "/portal/v1/register/verify",
+        json={"email": "limited-register@example.com", "code": ""},
+    )
+    assert missing_payload_response.status_code == 400
+    assert (
+        missing_payload_response.json()["error_code"]
+        == "auth.portal_registration_code_required"
+    )
 
     dispose_engine(database_url)
 
