@@ -62,7 +62,7 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
     },
     {
       href: '/admin/coverage',
-      label: t('admin.nav_packages_coverage', {}, 'Packages / Coverage'),
+      label: t('admin.nav_packages_coverage', {}, 'Packages / Service Status'),
       activePrefixes: ['/admin/coverage', '/admin/subscriptions', '/admin/plans'],
     },
     {

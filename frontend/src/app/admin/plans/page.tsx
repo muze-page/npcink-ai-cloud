@@ -391,7 +391,7 @@ function PlansContent() {
         }
       >
         <div className="mb-4 flex flex-wrap gap-2">
-          <Link href="/admin/subscriptions" className="btn btn-secondary btn-sm">
+          <Link href="/admin/coverage" className="btn btn-secondary btn-sm">
             {t('admin.back_to_coverage', {}, 'Back to coverage')}
           </Link>
         </div>
@@ -513,19 +513,9 @@ function PlansContent() {
         </div>
       </BackofficeSectionPanel>
 
-      <BackofficeLayer
-        eyebrow={t('admin.nav_coverage', {}, 'Coverage')}
-        title={t('admin.default_production_plans', {}, 'Default production plans')}
-        description={t(
-          'admin.default_production_plans_desc',
-          {},
-          'Treat plan_free as a formal production package object. Keep it distinct from tier templates and from the dev-only baseline.'
-        )}
-      />
-
       <details className="rounded-2xl border border-dashed border-slate-200 px-4 py-4 dark:border-slate-800">
         <summary className="cursor-pointer list-none text-sm font-medium text-slate-700 dark:text-slate-300">
-          {t('admin.package_shell_maintenance_toggle_label', {}, 'Default plan maintenance')}
+          {t('admin.package_shell_maintenance_toggle_label', {}, 'Advanced package maintenance')}
         </summary>
       <BackofficeLayer
         className="mt-4"

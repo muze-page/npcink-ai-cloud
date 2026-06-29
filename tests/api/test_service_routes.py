@@ -3391,6 +3391,10 @@ def test_service_routes_admin_read_facade(tmp_path: Path) -> None:
         "/internal/service/admin/overview",
         headers=build_internal_headers(),
     )
+    coverage_work_queue_response = client.get(
+        "/internal/service/admin/coverage-work-queue",
+        headers=build_internal_headers(),
+    )
     accounts_response = client.get(
         "/internal/service/admin/accounts",
         headers=build_internal_headers(),
@@ -3476,6 +3480,22 @@ def test_service_routes_admin_read_facade(tmp_path: Path) -> None:
     )
     assert overview["expiring_subscriptions"]["within_30_days_expires_before"]
     assert overview["attention_subscriptions"] == []
+
+    assert coverage_work_queue_response.status_code == 200
+    coverage_queue = coverage_work_queue_response.json()["data"]
+    assert coverage_queue["summary"]["total"] == 1
+    assert coverage_queue["summary"]["needs_action"] == 1
+    coverage_item = coverage_queue["items"][0]
+    assert coverage_item["account"]["account_id"] == "acct_admin"
+    assert coverage_item["primary_subscription"]["subscription_id"] == "sub_admin"
+    assert coverage_item["package"]["display_package_label"] == "Pro"
+    assert coverage_item["severity"] == "warning"
+    assert coverage_item["reason_code"] == "subscription_expiring_soon"
+    assert coverage_item["recommended_action"] == "review_renewal"
+    assert coverage_item["action_href"] == "/admin/subscriptions/sub_admin"
+    assert coverage_item["evidence"]["site_count"] == 1
+    assert coverage_item["evidence"]["active_key_site_count"] == 1
+    assert coverage_item["evidence"]["billing_snapshot_status"]["status"] == "fresh"
 
     assert accounts_response.status_code == 200
     accounts = accounts_response.json()["data"]["items"]

@@ -626,6 +626,97 @@ export async function installAdminMocks(page: Page) {
       return;
     }
 
+    if (pathname === '/api/admin/coverage-work-queue') {
+      const items = accountItems.map((item) => {
+        const isPrimary = item.account.account_id === LONG_ACCOUNT_ID;
+        const hasSubscription = Boolean(item.primary_subscription_id);
+        const isUncovered = !hasSubscription && item.coverage_state === 'uncovered' && item.site_count > 0;
+        const reasonCode = isUncovered
+          ? 'missing_package_coverage'
+          : isPrimary
+            ? 'subscription_lifecycle_risk'
+            : 'service_coverage_aligned';
+        const severity = isUncovered || isPrimary ? 'error' : 'ok';
+        const subscriptionId = item.primary_subscription_id || '';
+        return {
+          account: item.account,
+          primary_subscription: subscriptionId
+            ? {
+                subscription_id: subscriptionId,
+                status: isPrimary ? primaryAccountSubscription.status : 'active',
+                current_period_end_at: item.nearest_expiry_at || '2026-05-01T00:00:00Z',
+              }
+            : null,
+          package: {
+            display_package_label: item.display_package_label,
+            package_kind: item.package_kind,
+            coverage_state: item.coverage_state,
+          },
+          severity,
+          priority: severity === 'error' ? 0 : 90,
+          reason_code: reasonCode,
+          reason_label:
+            reasonCode === 'missing_package_coverage'
+              ? 'Customer has sites but no active package coverage.'
+              : reasonCode === 'subscription_lifecycle_risk'
+                ? 'Subscription status can block service continuity.'
+                : 'Package, subscription, site, key, and billing evidence are aligned.',
+          recommended_action:
+            reasonCode === 'missing_package_coverage'
+              ? 'change_customer_package'
+              : reasonCode === 'subscription_lifecycle_risk'
+                ? 'repair_subscription_lifecycle'
+                : 'inspect_when_needed',
+          action_label:
+            reasonCode === 'missing_package_coverage'
+              ? 'Open package actions'
+              : reasonCode === 'subscription_lifecycle_risk'
+                ? 'Inspect subscription'
+                : 'Open customer',
+          action_href:
+            reasonCode === 'subscription_lifecycle_risk' && subscriptionId
+              ? `/admin/subscriptions/${subscriptionId}`
+              : `/admin/accounts/${item.account.account_id}#coverage-actions`,
+          evidence: {
+            site_count: item.site_count,
+            active_site_count: item.site_count,
+            active_key_site_count: isUncovered ? 0 : item.site_count,
+            missing_key_site_count: isUncovered ? item.site_count : 0,
+            subscription_status: isPrimary ? primaryAccountSubscription.status : subscriptionId ? 'active' : 'missing',
+            current_period_end_at: item.nearest_expiry_at || '',
+            days_until_end: isPrimary ? 6 : null,
+            billing_snapshot_status: {
+              status: isUncovered ? 'missing' : 'fresh',
+              summary: isUncovered
+                ? 'Current-period billing snapshots are still missing for at least one covered site.'
+                : 'Current-period billing snapshots are fresh for every covered site.',
+              fresh_site_count: isUncovered ? 0 : item.site_count,
+              stale_site_count: 0,
+              missing_site_count: isUncovered ? item.site_count : 0,
+            },
+          },
+        };
+      });
+      await fulfillJson(route, {
+        generated_at: '2026-04-06T10:00:00Z',
+        summary: {
+          total: items.length,
+          visible: items.length,
+          needs_action: items.filter((item) => item.severity === 'error' || item.severity === 'warning').length,
+          error: items.filter((item) => item.severity === 'error').length,
+          warning: items.filter((item) => item.severity === 'warning').length,
+          ok: items.filter((item) => item.severity === 'ok').length,
+          inactive: 0,
+          reason_counts: items.reduce<Record<string, number>>((counts, item) => {
+            counts[item.reason_code] = (counts[item.reason_code] || 0) + 1;
+            return counts;
+          }, {}),
+        },
+        items,
+      });
+      return;
+    }
+
     if (pathname === '/api/admin/subscriptions') {
       await fulfillJson(route, {
         total: 1,

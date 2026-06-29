@@ -1323,6 +1323,253 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
             "total": len(items),
         }
 
+    def get_admin_coverage_work_queue(
+        self,
+        *,
+        limit: int = 100,
+    ) -> dict[str, object]:
+        with get_session(self.database_url) as session:
+            repository = CommercialRepository(session)
+            accounts = repository.list_accounts(limit=None)
+            account_ids = [account.account_id for account in accounts]
+            subscriptions = repository.list_subscriptions(account_ids=account_ids, limit=None)
+            sites = repository.list_sites(account_ids=account_ids, limit=None)
+            site_ids = [site.site_id for site in sites]
+            active_key_counts = repository.count_site_keys_by_site(
+                site_ids=site_ids,
+                statuses=[SITE_API_KEY_STATUS_ACTIVE],
+            )
+            latest_billing_by_site = repository.get_latest_billing_snapshots_by_site(
+                site_ids=site_ids,
+            )
+
+        service = cast(Any, self)
+        subscriptions_by_account: dict[str, list[AccountSubscription]] = defaultdict(list)
+        for subscription in subscriptions:
+            subscriptions_by_account[subscription.account_id].append(subscription)
+
+        sites_by_account: dict[str, list[Any]] = defaultdict(list)
+        for site in sites:
+            if site.account_id:
+                sites_by_account[site.account_id].append(site)
+
+        now = self.now_factory()
+        items: list[dict[str, object]] = []
+        for account in accounts:
+            account_sites = sites_by_account.get(account.account_id, [])
+            account_subscriptions = subscriptions_by_account.get(account.account_id, [])
+            primary_subscription = service._select_primary_subscription(account_subscriptions)
+            package_summary = service._build_subscription_package_summary(
+                primary_subscription,
+                site_count=len(account_sites),
+            )
+            site_count = len(account_sites)
+            active_site_count = sum(
+                1
+                for site in account_sites
+                if str(getattr(site, "status", "") or "") == SITE_STATUS_ACTIVE
+            )
+            active_key_site_count = sum(
+                1
+                for site in account_sites
+                if int(active_key_counts.get(str(getattr(site, "site_id", "") or ""), 0) or 0)
+                > 0
+            )
+            missing_key_site_count = max(0, site_count - active_key_site_count)
+            subscription_status = str(getattr(primary_subscription, "status", "") or "")
+            coverage_state = str(package_summary.get("coverage_state") or "")
+            period_end_at = self._normalize_datetime(
+                getattr(primary_subscription, "current_period_end_at", None)
+            )
+            days_until_end: int | None = None
+            if period_end_at is not None:
+                days_until_end = int((period_end_at - now).total_seconds() // 86400)
+                if (period_end_at - now).total_seconds() % 86400:
+                    days_until_end += 1
+            billing_status: dict[str, object] = {
+                "status": "missing" if site_count > 0 else "not_applicable",
+                "summary": "",
+                "fresh_site_count": 0,
+                "stale_site_count": 0,
+                "missing_site_count": site_count,
+            }
+            if primary_subscription is not None:
+                period_start_at, resolved_period_end_at = service._resolve_period(
+                    primary_subscription,
+                    now,
+                )
+                billing_status = service._build_subscription_billing_snapshot_status(
+                    subscription=primary_subscription,
+                    sites=account_sites,
+                    latest_billing_snapshots=latest_billing_by_site,
+                    period_start_at=period_start_at,
+                    period_end_at=resolved_period_end_at,
+                )
+
+            reason_code = ""
+            reason_label = ""
+            recommended_action = ""
+            action_label = ""
+            action_href = ""
+            severity = "ok"
+
+            if primary_subscription is None and coverage_state == "uncovered" and site_count > 0:
+                severity = "error"
+                reason_code = "missing_package_coverage"
+                reason_label = "Customer has sites but no active package coverage."
+                recommended_action = "change_customer_package"
+                action_label = "Open package actions"
+                action_href = f"/admin/accounts/{account.account_id}#coverage-actions"
+            elif subscription_status and subscription_status not in {"active", "trialing"}:
+                severity = "error"
+                reason_code = "subscription_lifecycle_risk"
+                reason_label = "Subscription status can block service continuity."
+                recommended_action = "repair_subscription_lifecycle"
+                action_label = "Inspect subscription"
+                action_href = (
+                    f"/admin/subscriptions/{primary_subscription.subscription_id}"
+                    if primary_subscription is not None
+                    else f"/admin/accounts/{account.account_id}#coverage-actions"
+                )
+            elif str(billing_status.get("status") or "") in {"missing", "stale"} and site_count > 0:
+                severity = "warning"
+                reason_code = "billing_snapshot_follow_up"
+                reason_label = "Current-period billing snapshot needs follow-up."
+                recommended_action = "inspect_billing_snapshot"
+                action_label = "Inspect subscription"
+                action_href = (
+                    f"/admin/subscriptions/{primary_subscription.subscription_id}"
+                    if primary_subscription is not None
+                    else f"/admin/accounts/{account.account_id}#coverage-actions"
+                )
+            elif days_until_end is not None and 0 <= days_until_end <= 14:
+                severity = "warning"
+                reason_code = "subscription_expiring_soon"
+                reason_label = "Current period ends soon."
+                recommended_action = "review_renewal"
+                action_label = "Inspect subscription"
+                action_href = (
+                    f"/admin/subscriptions/{primary_subscription.subscription_id}"
+                    if primary_subscription is not None
+                    else f"/admin/accounts/{account.account_id}#coverage-actions"
+                )
+            elif active_site_count < site_count:
+                severity = "warning"
+                reason_code = "site_status_follow_up"
+                reason_label = "One or more sites are not active."
+                recommended_action = "inspect_site_footprint"
+                action_label = "Open site footprint"
+                action_href = f"/admin/accounts/{account.account_id}#site-footprint"
+            elif missing_key_site_count > 0:
+                severity = "warning"
+                reason_code = "site_key_missing"
+                reason_label = "One or more sites lack active Cloud API key coverage."
+                recommended_action = "inspect_site_key_coverage"
+                action_label = "Open site footprint"
+                action_href = f"/admin/accounts/{account.account_id}#site-footprint"
+            elif site_count > 0:
+                severity = "ok"
+                reason_code = "service_coverage_aligned"
+                reason_label = "Package, subscription, site, key, and billing evidence are aligned."
+                recommended_action = "inspect_when_needed"
+                action_label = "Open customer"
+                action_href = f"/admin/accounts/{account.account_id}"
+            else:
+                severity = "inactive"
+                reason_code = "no_site_footprint"
+                reason_label = "Customer has no site footprint yet."
+                recommended_action = "wait_for_site_onboarding"
+                action_label = "Open customer"
+                action_href = f"/admin/accounts/{account.account_id}"
+
+            if severity == "ok" and reason_code == "service_coverage_aligned":
+                priority = 90
+            elif severity == "inactive":
+                priority = 100
+            elif severity == "error":
+                priority = 0
+            else:
+                priority = 10
+            if reason_code == "missing_package_coverage":
+                priority = 0
+            elif reason_code == "subscription_lifecycle_risk":
+                priority = 1
+            elif reason_code == "billing_snapshot_follow_up":
+                priority = 2
+            elif reason_code == "subscription_expiring_soon":
+                priority = 3
+            elif reason_code == "site_status_follow_up":
+                priority = 4
+            elif reason_code == "site_key_missing":
+                priority = 5
+
+            items.append(
+                {
+                    "account": service._serialize_account(account),
+                    "primary_subscription": (
+                        service._serialize_subscription(primary_subscription)
+                        if primary_subscription is not None
+                        else None
+                    ),
+                    "package": package_summary,
+                    "severity": severity,
+                    "priority": priority,
+                    "reason_code": reason_code,
+                    "reason_label": reason_label,
+                    "recommended_action": recommended_action,
+                    "action_label": action_label,
+                    "action_href": action_href,
+                    "evidence": {
+                        "site_count": site_count,
+                        "active_site_count": active_site_count,
+                        "active_key_site_count": active_key_site_count,
+                        "missing_key_site_count": missing_key_site_count,
+                        "subscription_status": subscription_status or "missing",
+                        "billing_snapshot_status": billing_status,
+                        "current_period_end_at": self._serialize_datetime(period_end_at),
+                        "days_until_end": days_until_end,
+                    },
+                }
+            )
+
+        items.sort(
+            key=lambda item: (
+                int(item.get("priority") or 100),
+                str(
+                    (item.get("account") if isinstance(item.get("account"), dict) else {}).get(
+                        "name"
+                    )
+                    or ""
+                ),
+                str(
+                    (item.get("account") if isinstance(item.get("account"), dict) else {}).get(
+                        "account_id"
+                    )
+                    or ""
+                ),
+            )
+        )
+        visible_items = items[:limit] if limit > 0 else items
+        reason_counts = Counter(str(item.get("reason_code") or "") for item in items)
+        severity_counts = Counter(str(item.get("severity") or "") for item in items)
+        return {
+            "generated_at": self._serialize_datetime(now),
+            "filters": {"limit": limit},
+            "summary": {
+                "total": len(items),
+                "visible": len(visible_items),
+                "needs_action": sum(
+                    1 for item in items if str(item.get("severity") or "") in {"error", "warning"}
+                ),
+                "error": severity_counts.get("error", 0),
+                "warning": severity_counts.get("warning", 0),
+                "ok": severity_counts.get("ok", 0),
+                "inactive": severity_counts.get("inactive", 0),
+                "reason_counts": dict(reason_counts),
+            },
+            "items": visible_items,
+        }
+
     def get_admin_account(self, account_id: str) -> dict[str, object]:
         with get_session(self.database_url) as session:
             repository = CommercialRepository(session)

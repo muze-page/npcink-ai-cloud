@@ -589,13 +589,13 @@ function AdminOverviewContent() {
       : firstOperatorWatchScope.startsWith('runtime.') || firstOperatorWatchScope.startsWith('request.')
         ? '/admin/accounts'
         : statusTone === 'error' || commercialItems.length > 0 || overview.expiringSubscriptions.in7Days > 0
-          ? '/admin/subscriptions'
+          ? '/admin/coverage'
           : '/admin/accounts';
   const primaryActionLabel =
     primaryActionHref === '/admin/hosted-models'
       ? t('admin.home_primary_action_hosted_models', {}, 'Inspect hosted models')
-      : primaryActionHref === '/admin/subscriptions'
-      ? t('admin.home_primary_action_coverage', {}, 'Review coverage')
+      : primaryActionHref === '/admin/coverage'
+      ? t('admin.home_primary_action_coverage', {}, 'Review service status')
       : t('admin.home_primary_action_accounts', {}, 'Review customers');
   const secondaryActionHref =
     '/admin/accounts';
@@ -988,11 +988,11 @@ function AdminOverviewContent() {
                 {t('admin.home_section_commercial', {}, 'Commercial attention')}
               </p>
               <h2 className="mt-2 text-xl font-semibold text-gray-950 dark:text-white">
-                {t('admin.home_section_commercial_title', {}, 'Which customers need coverage follow-up next?')}
+                {t('admin.home_section_commercial_title', {}, 'Which customers need service follow-up next?')}
               </h2>
             </div>
-            <Link href="/admin/subscriptions" className="text-sm font-medium text-blue-600 hover:text-blue-700 dark:text-blue-300 dark:hover:text-blue-200">
-              {t('admin.nav_coverage', {}, 'Coverage')} →
+            <Link href="/admin/coverage" className="text-sm font-medium text-blue-600 hover:text-blue-700 dark:text-blue-300 dark:hover:text-blue-200">
+              {t('admin.nav_coverage', {}, 'Service status')} →
             </Link>
           </div>
           <BackofficeMetricStrip items={commercialPanelMetrics} columnsClassName="xl:grid-cols-1" />
@@ -1015,7 +1015,7 @@ function AdminOverviewContent() {
                         href={item.href}
                         className="text-xs font-medium text-blue-600 hover:text-blue-700 dark:text-blue-300 dark:hover:text-blue-200"
                       >
-                        {t('admin.home_open_customer_coverage_action', {}, 'Open customer coverage')} →
+                        {t('admin.home_open_customer_coverage_action', {}, 'Open customer service status')} →
                       </Link>
                     </div>
                   </div>
