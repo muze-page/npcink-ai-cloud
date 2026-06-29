@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import pytest
 
@@ -10,6 +11,19 @@ from app.core.config import Settings
 
 def _cloud_root() -> Path:
     return Path(__file__).resolve().parents[2]
+
+
+def _documented_env_value(text: str, key: str) -> str:
+    prefix = f"{key}="
+    for token in text.replace("`", " ").split():
+        if token.startswith(prefix):
+            return token.removeprefix(prefix).rstrip(".,;")
+    return ""
+
+
+def _documented_https_host(text: str, key: str) -> str:
+    parsed = urlsplit(_documented_env_value(text, key))
+    return parsed.netloc if parsed.scheme == "https" else ""
 
 
 def test_prod_env_files_use_canonical_admin_names_and_do_not_expose_ai_provider_env() -> None:
@@ -65,9 +79,12 @@ def test_prod_env_files_use_canonical_admin_names_and_do_not_expose_ai_provider_
     assert "NPCINK_CLOUD_FEATURE_FLAGS_JSON" in env_example_text
     assert "NPCINK_CLOUD_FEATURE_FLAGS_JSON" in readme_text
     assert "http://127.0.0.1:8010" in env_example_text
-    assert "https://cloud.npc.ink" in checklist_text
-    assert "cloud.npc.ink" in checklist_text
-    assert "https://cloud.npc.ink" in playbook_text
+    assert _documented_https_host(checklist_text, "NPCINK_CLOUD_BASE_URL") == "cloud.npc.ink"
+    assert (
+        _documented_env_value(checklist_text, "NPCINK_CLOUD_TRUSTED_HOST_ALLOWLIST")
+        == "cloud.npc.ink"
+    )
+    assert _documented_https_host(playbook_text, "NPCINK_CLOUD_BASE_URL") == "cloud.npc.ink"
     assert "Resource Tuning Baseline" in playbook_text
     assert "NPCINK_CLOUD_API_WORKERS" in playbook_text
     assert "NPCINK_CLOUD_RUNTIME_WORKER_POLL_SECONDS" in playbook_text
