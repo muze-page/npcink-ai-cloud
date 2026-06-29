@@ -50,8 +50,8 @@ from app.domain.commercial.customer_api_keys import (
 )
 from app.domain.commercial.errors import CommercialServiceError
 from app.domain.commercial.identity import (
-    USER_ALLOWED_ACTION_ARCHIVE_SITES,
     USER_ALLOWED_ACTION_MANAGE_SITE_KEYS,
+    USER_ALLOWED_ACTION_REMOVE_SITES,
     USER_ALLOWED_ACTION_VIEW_AUDIT,
     USER_ALLOWED_ACTION_VIEW_BILLING,
     USER_ALLOWED_ACTION_VIEW_USAGE,
@@ -1463,7 +1463,7 @@ async def activate_portal_site(request: Request, site_id: str) -> Any:
         request,
         site_id=site_id,
         principal_id=auth.principal_id,
-        required_action=USER_ALLOWED_ACTION_ARCHIVE_SITES,
+        required_action=USER_ALLOWED_ACTION_REMOVE_SITES,
     )
     if isinstance(access, JSONResponse):
         return access
@@ -1499,7 +1499,7 @@ async def deactivate_portal_site(request: Request, site_id: str) -> Any:
         request,
         site_id=site_id,
         principal_id=auth.principal_id,
-        required_action=USER_ALLOWED_ACTION_ARCHIVE_SITES,
+        required_action=USER_ALLOWED_ACTION_REMOVE_SITES,
     )
     if isinstance(access, JSONResponse):
         return access
@@ -1516,8 +1516,8 @@ async def deactivate_portal_site(request: Request, site_id: str) -> Any:
     )
 
 
-@router.post("/sites/{site_id}/archive")
-async def archive_portal_site(request: Request, site_id: str) -> Any:
+@router.post("/sites/{site_id}/remove")
+async def remove_portal_site(request: Request, site_id: str) -> Any:
     same_origin = _portal_same_origin_guard(request)
     if same_origin is not None:
         return same_origin
@@ -1535,56 +1535,20 @@ async def archive_portal_site(request: Request, site_id: str) -> Any:
         request,
         site_id=site_id,
         principal_id=auth.principal_id,
-        required_action=USER_ALLOWED_ACTION_ARCHIVE_SITES,
+        required_action=USER_ALLOWED_ACTION_REMOVE_SITES,
     )
     if isinstance(access, JSONResponse):
         return access
     try:
-        site = _get_commercial_service(request).archive_site(
+        result = _get_commercial_service(request).remove_portal_site(
             site_id,
             audit_context=_build_portal_audit_context(request, auth.principal_id),
         )
     except CommercialServiceError as error:
         return _service_error_response(error, request=request)
     return _portal_route_envelope(
-        message="portal site archived",
-        data={"site": site},
-    )
-
-
-@router.post("/sites/{site_id}/restore")
-async def restore_portal_site(request: Request, site_id: str) -> Any:
-    same_origin = _portal_same_origin_guard(request)
-    if same_origin is not None:
-        return same_origin
-    write_guard = _portal_write_guard(request)
-    if write_guard is not None:
-        return write_guard
-    auth = await resolve_portal_request_context(
-        request,
-        require_idempotency=True,
-        allow_session_cookies=True,
-    )
-    if isinstance(auth, JSONResponse):
-        return auth
-    access = _authorize_portal_site_access(
-        request,
-        site_id=site_id,
-        principal_id=auth.principal_id,
-        required_action=USER_ALLOWED_ACTION_ARCHIVE_SITES,
-    )
-    if isinstance(access, JSONResponse):
-        return access
-    try:
-        site = _get_commercial_service(request).restore_site(
-            site_id,
-            audit_context=_build_portal_audit_context(request, auth.principal_id),
-        )
-    except CommercialServiceError as error:
-        return _service_error_response(error, request=request)
-    return _portal_route_envelope(
-        message="portal site restored",
-        data={"site": site},
+        message="portal site removed",
+        data=result,
     )
 
 

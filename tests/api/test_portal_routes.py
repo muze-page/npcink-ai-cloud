@@ -32,6 +32,7 @@ from app.core.models import (
     PluginObservabilityEvent,
     Principal,
     Site,
+    SiteApiKey,
     SiteUserGrant,
 )
 from app.core.services import CloudServices
@@ -580,106 +581,128 @@ def test_portal_activate_site_deactivates_other_active_sites_for_account(
     dispose_engine(database_url)
 
 
-def test_portal_restore_active_site_deactivates_other_active_sites_for_account(
+def test_portal_remove_site_soft_removes_record_and_revokes_active_keys(
     tmp_path: Path,
 ) -> None:
     database_url, client = _build_client(tmp_path)
 
     client.post(
         "/internal/service/accounts",
-        json={"account_id": "acct_portal_restore_active", "name": "Portal Account"},
-        headers=build_internal_headers(idempotency_key="portal-restore-active-account"),
-    )
-    for site_id in ("site_restore_active_a", "site_restore_active_b"):
-        response = client.post(
-            "/internal/service/sites",
-            json={
-                "site_id": site_id,
-                "account_id": "acct_portal_restore_active",
-                "name": site_id,
-                "status": "active",
-            },
-            headers=build_internal_headers(idempotency_key=f"{site_id}-provision"),
-        )
-        assert response.status_code == 200, response.text
-        _grant_principal_access(
-            client,
-            site_id=site_id,
-            email="portal-admin@example.com",
-            idempotency_key=f"{site_id}-grant",
-        )
-
-    archive_response = client.post(
-        "/portal/v1/sites/site_restore_active_a/archive",
-        headers=build_portal_headers(idempotency_key="portal-archive-restore-active-a"),
-    )
-    assert archive_response.status_code == 200, archive_response.text
-
-    restore_response = client.post(
-        "/portal/v1/sites/site_restore_active_a/restore",
-        headers=build_portal_headers(idempotency_key="portal-restore-active-a"),
-    )
-    assert restore_response.status_code == 200, restore_response.text
-    assert restore_response.json()["data"]["site"]["status"] == "active"
-
-    with get_session(database_url) as session:
-        site_a = session.get(Site, "site_restore_active_a")
-        site_b = session.get(Site, "site_restore_active_b")
-        assert site_a is not None
-        assert site_b is not None
-        assert site_a.status == "active"
-        assert site_b.status == "inactive"
-
-    dispose_engine(database_url)
-
-
-def test_portal_restore_inactive_site_keeps_site_inactive(tmp_path: Path) -> None:
-    database_url, client = _build_client(tmp_path)
-
-    client.post(
-        "/internal/service/accounts",
-        json={"account_id": "acct_portal_restore_inactive", "name": "Portal Account"},
-        headers=build_internal_headers(idempotency_key="portal-restore-inactive-account"),
+        json={"account_id": "acct_portal_remove", "name": "Portal Account"},
+        headers=build_internal_headers(idempotency_key="portal-remove-account"),
     )
     response = client.post(
         "/internal/service/sites",
         json={
-            "site_id": "site_restore_inactive",
-            "account_id": "acct_portal_restore_inactive",
-            "name": "Restore Inactive",
+            "site_id": "site_portal_remove",
+            "account_id": "acct_portal_remove",
+            "name": "Remove Site",
             "status": "active",
         },
-        headers=build_internal_headers(idempotency_key="site-restore-inactive-provision"),
+        headers=build_internal_headers(idempotency_key="site-portal-remove-provision"),
     )
     assert response.status_code == 200, response.text
     _grant_principal_access(
         client,
-        site_id="site_restore_inactive",
+        site_id="site_portal_remove",
         email="portal-admin@example.com",
-        idempotency_key="site-restore-inactive-grant",
+        idempotency_key="site-portal-remove-grant",
     )
+    issue_response = client.post(
+        "/portal/v1/sites/site_portal_remove/api-keys",
+        json={
+            "label": "Remove Key",
+            "scopes": ["runtime:execute", "runtime:read", "runtime:resolve", "stats:read"],
+        },
+        headers=build_portal_headers(idempotency_key="portal-remove-issue-key"),
+    )
+    assert issue_response.status_code == 200, issue_response.text
+    key_id = issue_response.json()["data"]["key_id"]
 
-    deactivate_response = client.post(
-        "/portal/v1/sites/site_restore_inactive/deactivate",
-        headers=build_portal_headers(idempotency_key="portal-deactivate-restore-inactive"),
+    remove_response = client.post(
+        "/portal/v1/sites/site_portal_remove/remove",
+        headers=build_portal_headers(idempotency_key="portal-remove-site"),
     )
-    assert deactivate_response.status_code == 200, deactivate_response.text
-    archive_response = client.post(
-        "/portal/v1/sites/site_restore_inactive/archive",
-        headers=build_portal_headers(idempotency_key="portal-archive-restore-inactive"),
-    )
-    assert archive_response.status_code == 200, archive_response.text
-    restore_response = client.post(
-        "/portal/v1/sites/site_restore_inactive/restore",
-        headers=build_portal_headers(idempotency_key="portal-restore-inactive"),
-    )
-    assert restore_response.status_code == 200, restore_response.text
-    assert restore_response.json()["data"]["site"]["status"] == "inactive"
+    assert remove_response.status_code == 200, remove_response.text
+    remove_data = remove_response.json()["data"]
+    assert remove_data["site"]["status"] == "archived"
+    assert remove_data["revoked_key_ids"] == [key_id]
 
     with get_session(database_url) as session:
-        site = session.get(Site, "site_restore_inactive")
+        site = session.get(Site, "site_portal_remove")
         assert site is not None
-        assert site.status == "inactive"
+        assert site.status == "archived"
+        key = session.get(SiteApiKey, key_id)
+        assert key is not None
+        assert key.status == "revoked"
+        assert key.revoked_at is not None
+
+    audit_response = client.get(
+        "/internal/service/audit-events?site_id=site_portal_remove&limit=20",
+        headers=build_internal_headers(),
+    )
+    assert audit_response.status_code == 200
+    audit_items = audit_response.json()["data"]["items"]
+    assert any(item["event_kind"] == "site.remove" for item in audit_items)
+    assert any(item["event_kind"] == "site_key.revoke" for item in audit_items)
+
+    issue_removed_response = client.post(
+        "/portal/v1/sites/site_portal_remove/api-keys",
+        json={
+            "label": "Removed Site Key",
+            "scopes": ["runtime:execute", "runtime:read", "runtime:resolve", "stats:read"],
+        },
+        headers=build_portal_headers(idempotency_key="portal-remove-issue-after-remove"),
+    )
+    assert issue_removed_response.status_code == 403
+
+    idempotent_response = client.post(
+        "/portal/v1/sites/site_portal_remove/remove",
+        headers=build_portal_headers(idempotency_key="portal-remove-site-again"),
+    )
+    assert idempotent_response.status_code == 200, idempotent_response.text
+    assert idempotent_response.json()["data"]["site"]["status"] == "archived"
+    assert idempotent_response.json()["data"]["revoked_key_ids"] == []
+
+    dispose_engine(database_url)
+
+
+def test_portal_remove_suspended_site_is_denied(tmp_path: Path) -> None:
+    database_url, client = _build_client(tmp_path)
+
+    client.post(
+        "/internal/service/accounts",
+        json={"account_id": "acct_portal_remove_suspended", "name": "Portal Account"},
+        headers=build_internal_headers(idempotency_key="portal-remove-suspended-account"),
+    )
+    response = client.post(
+        "/internal/service/sites",
+        json={
+            "site_id": "site_remove_suspended",
+            "account_id": "acct_portal_remove_suspended",
+            "name": "Remove Suspended",
+            "status": "suspended",
+        },
+        headers=build_internal_headers(idempotency_key="site-remove-suspended-provision"),
+    )
+    assert response.status_code == 200, response.text
+    _grant_principal_access(
+        client,
+        site_id="site_remove_suspended",
+        email="portal-admin@example.com",
+        idempotency_key="site-remove-suspended-grant",
+    )
+
+    remove_response = client.post(
+        "/portal/v1/sites/site_remove_suspended/remove",
+        headers=build_portal_headers(idempotency_key="portal-remove-suspended"),
+    )
+    assert remove_response.status_code == 403
+
+    with get_session(database_url) as session:
+        site = session.get(Site, "site_remove_suspended")
+        assert site is not None
+        assert site.status == "suspended"
 
     dispose_engine(database_url)
 

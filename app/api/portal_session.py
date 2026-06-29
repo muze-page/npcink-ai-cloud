@@ -245,8 +245,8 @@ def serialize_portal_session(
                 if strict_site:
                     raise CommercialServiceError(
                         403,
-                        "service.portal_site_archived",
-                        "archived portal sites cannot be selected as the current site",
+                        "service.portal_site_removed",
+                        "removed portal sites cannot be selected as the current site",
                     )
                 selected_site = None
                 selected_role = ""
