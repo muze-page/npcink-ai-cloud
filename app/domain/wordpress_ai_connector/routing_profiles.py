@@ -20,6 +20,7 @@ WP_AI_CONNECTOR_PROFILE_IDS = (
 class WordPressAIConnectorProfileSpec:
     profile_id: str
     group_id: str
+    routing_intent: str
     label: str
     execution_kind: str
     tasks: tuple[str, ...]
@@ -35,6 +36,7 @@ WP_AI_CONNECTOR_PROFILE_SPECS: tuple[WordPressAIConnectorProfileSpec, ...] = (
     WordPressAIConnectorProfileSpec(
         profile_id=WP_AI_CONNECTOR_SHORT_TEXT_PROFILE_ID,
         group_id="short_text",
+        routing_intent="content.short_text",
         label="Short text",
         execution_kind="text",
         tasks=(
@@ -56,6 +58,7 @@ WP_AI_CONNECTOR_PROFILE_SPECS: tuple[WordPressAIConnectorProfileSpec, ...] = (
     WordPressAIConnectorProfileSpec(
         profile_id=WP_AI_CONNECTOR_EDITORIAL_PROFILE_ID,
         group_id="editorial_text",
+        routing_intent="content.editorial",
         label="Editorial text",
         execution_kind="text",
         tasks=(
@@ -76,6 +79,7 @@ WP_AI_CONNECTOR_PROFILE_SPECS: tuple[WordPressAIConnectorProfileSpec, ...] = (
     WordPressAIConnectorProfileSpec(
         profile_id=WP_AI_CONNECTOR_CLASSIFICATION_PROFILE_ID,
         group_id="classification",
+        routing_intent="content.classification",
         label="Classification",
         execution_kind="text",
         tasks=(
@@ -92,6 +96,7 @@ WP_AI_CONNECTOR_PROFILE_SPECS: tuple[WordPressAIConnectorProfileSpec, ...] = (
     WordPressAIConnectorProfileSpec(
         profile_id=WP_AI_CONNECTOR_IMAGE_GENERATION_PROFILE_ID,
         group_id="image_generation",
+        routing_intent="media.image_generation",
         label="Image generation",
         execution_kind="image_generation",
         tasks=("image_generation",),

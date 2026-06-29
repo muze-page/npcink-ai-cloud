@@ -979,13 +979,13 @@ function AiResourcesContent() {
       const response = await fetch('/api/admin/wordpress-ai-routing', { credentials: 'include' });
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) {
-        throw new Error(resolveUiErrorMessage(payload, aiText('error_load_ability_models', 'Failed to load ability model routing.')));
+        throw new Error(resolveUiErrorMessage(payload, aiText('error_load_ability_models', 'Failed to load ability-model routing.')));
       }
       const normalized = normalizeRoutingData(payload.data);
       setRoutingData(normalized);
       setRoutingDrafts(normalized.profiles.map((profile) => ({ ...profile, note: '' })));
     } catch (loadError) {
-      setError(loadError instanceof Error ? loadError.message : aiText('error_load_ability_models', 'Failed to load ability model routing.'));
+      setError(loadError instanceof Error ? loadError.message : aiText('error_load_ability_models', 'Failed to load ability-model routing.'));
     } finally {
       setLoadingRouting(false);
     }
@@ -1306,7 +1306,7 @@ function AiResourcesContent() {
   async function saveAbilityModelProfile(profileId: string) {
     const profile = routingDrafts.find((item) => item.profile_id === profileId);
     if (!profile) {
-      setAbilityModelDialogError(aiText('error_save_ability_models', 'Failed to save ability model routing.'));
+      setAbilityModelDialogError(aiText('error_save_ability_models', 'Failed to save ability-model routing.'));
       return;
     }
     setSavingRouting(true);
@@ -1340,7 +1340,7 @@ function AiResourcesContent() {
         throw new Error(
           resolveAdminApiPayloadMessage(
             payload,
-            aiText('error_save_ability_models', 'Failed to save ability model routing.')
+            aiText('error_save_ability_models', 'Failed to save ability-model routing.')
           )
         );
       }
@@ -1350,7 +1350,7 @@ function AiResourcesContent() {
       setAbilityModelDialogMessage(aiText('message_ability_models_saved', 'Ability model routing saved.'));
     } catch (saveError) {
       setAbilityModelDialogError(
-        saveError instanceof Error ? saveError.message : aiText('error_save_ability_models', 'Failed to save ability model routing.')
+        saveError instanceof Error ? saveError.message : aiText('error_save_ability_models', 'Failed to save ability-model routing.')
       );
     } finally {
       setSavingRouting(false);
@@ -2073,7 +2073,7 @@ function AiResourcesContent() {
                     <div className="flex flex-wrap items-center justify-between gap-3">
                       <div>
                         <h3 className="text-sm font-semibold text-slate-950 dark:text-white">{aiText('model_visibility_title', 'Model visibility')}</h3>
-                        <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">{aiText('model_visibility_desc', 'These models only define what this channel exposes to Cloud runtime. Configure which capability uses which model on the ability models page.')}</p>
+                        <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">{aiText('model_visibility_desc', 'These models only define what this channel exposes to Cloud runtime. Configure which capability uses which model on the ability-model routing page.')}</p>
                         <p className="mt-1 text-xs font-normal text-slate-500 dark:text-slate-400">
                           {aiText('enabled_model_summary', 'Enabled {{enabled}} models.', {
                             enabled: String(splitList(providerConnectionForm.modelIds).length),
@@ -2766,7 +2766,7 @@ function AiResourcesContent() {
           <BackofficeSectionPanel>
             <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
               <div>
-                <h2 className="text-lg font-semibold text-slate-950 dark:text-white">{aiText('profile_preferences_title', 'Audio ability models')}</h2>
+                <h2 className="text-lg font-semibold text-slate-950 dark:text-white">{aiText('profile_preferences_title', 'Audio ability-model routes')}</h2>
                 <p className="mt-1 text-sm leading-6 text-slate-600 dark:text-slate-300">
                   {aiText('profile_preferences_desc', 'Runtime profile selection for audio summary, narration, and playback. This does not edit prompts, router rules, or WordPress write policy.')}
                 </p>
@@ -2835,7 +2835,7 @@ function AiResourcesContent() {
           <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
             <div>
               <h2 className="text-lg font-semibold text-slate-950 dark:text-white">
-                {aiText('ability_models_title', 'Ability models')}
+                {aiText('ability_models_title', 'Ability-model routing')}
               </h2>
               <p className="mt-1 text-sm leading-6 text-slate-600 dark:text-slate-300">
                 {aiText('ability_models_desc', 'WordPress AI connector abilities mapped to Cloud runtime profiles and model instances. Local plugin enablement and WordPress writes stay outside this page.')}
@@ -2945,7 +2945,7 @@ function AiResourcesContent() {
             {abilityModelRows.length ? null : (
               <div className="px-4 py-6 text-sm text-slate-500 dark:text-slate-400">
                 {loadingRouting
-                  ? aiText('ability_models_loading', 'Loading ability model routing...')
+                  ? aiText('ability_models_loading', 'Loading ability-model routing...')
                   : aiText('ability_models_empty', 'No WordPress AI connector abilities are available.')}
               </div>
             )}
@@ -3333,7 +3333,7 @@ function AiResourcesContent() {
             <div className="flex flex-col gap-3 border-b border-slate-200 pb-4 dark:border-slate-800 sm:flex-row sm:items-start sm:justify-between">
               <div>
                 <h2 id="ability-model-dialog-title" className="text-xl font-semibold text-slate-950 dark:text-white">
-                  {aiText('ability_model_dialog_title', 'Configure ability model')}
+                  {aiText('ability_model_dialog_title', 'Configure ability-model route')}
                 </h2>
                 <p className="mt-1 text-sm leading-6 text-slate-600 dark:text-slate-300">
                   {aiText('ability_model_dialog_desc', 'This updates one shared Cloud runtime profile. WordPress plugin feature switches and final writes are not changed.')}
@@ -3458,7 +3458,7 @@ function AiResourcesContent() {
                     }
                     rows={3}
                     className="mt-2 w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
-                    placeholder={aiText('placeholder_ability_model_note', 'Why this ability model binding is being changed')}
+                    placeholder={aiText('placeholder_ability_model_note', 'Why this ability-model route is being changed')}
                   />
                 </label>
               </div>
@@ -3501,7 +3501,7 @@ function AiResourcesContent() {
                   disabled={savingRouting || !activeAbilityModelProfile.candidate_instance_ids.length}
                   onClick={() => void saveAbilityModelProfile(activeAbilityModelProfile.profile_id)}
                 >
-                  {savingRouting ? aiText('saving', 'Saving...') : aiText('action_save_ability_model', 'Save ability model')}
+                  {savingRouting ? aiText('saving', 'Saving...') : aiText('action_save_ability_model', 'Save route')}
                 </button>
               </div>
             </div>

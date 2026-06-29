@@ -45,6 +45,7 @@ type RuntimeInstance = {
 type RoutingProfile = {
   profile_id: string;
   groupId: string;
+  routing_intent: string;
   label: string;
   description: string;
   execution_kind: string;
@@ -132,6 +133,7 @@ function normalizeRoutingData(raw: any): RoutingData {
       ? data.profiles.map((profile: any) => ({
           profile_id: String(profile?.profile_id ?? ''),
           groupId: String(profile?.[routingGroupKey] ?? ''),
+          routing_intent: String(profile?.routing_intent ?? ''),
           label: String(profile?.label ?? ''),
           description: String(profile?.description ?? ''),
           execution_kind: String(profile?.execution_kind ?? 'text'),
@@ -235,11 +237,11 @@ export default function AbilityModelsPage() {
       const response = await fetch('/api/admin/ai-resources', { credentials: 'include' });
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) {
-        throw new Error(resolveUiErrorMessage(payload, text('error_load_audio_models', 'Failed to load audio ability models.')));
+        throw new Error(resolveUiErrorMessage(payload, text('error_load_audio_models', 'Failed to load audio ability-model routes.')));
       }
       setPreferences(normalizeProfilePreferences(payload.data?.profile_preferences));
     } catch (error) {
-      setPageError(error instanceof Error ? error.message : text('error_load_audio_models', 'Failed to load audio ability models.'));
+      setPageError(error instanceof Error ? error.message : text('error_load_audio_models', 'Failed to load audio ability-model routes.'));
     } finally {
       setLoading(false);
     }
@@ -252,13 +254,13 @@ export default function AbilityModelsPage() {
       const response = await fetch('/api/admin/wordpress-ai-routing', { credentials: 'include' });
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) {
-        throw new Error(resolveUiErrorMessage(payload, aiText('error_load_ability_models', 'Failed to load ability model routing.')));
+        throw new Error(resolveUiErrorMessage(payload, aiText('error_load_ability_models', 'Failed to load ability-model routing.')));
       }
       const normalized = normalizeRoutingData(payload.data);
       setRoutingData(normalized);
       setRoutingDrafts(normalized.profiles.map((profile) => ({ ...profile, note: '' })));
     } catch (error) {
-      setPageError(error instanceof Error ? error.message : aiText('error_load_ability_models', 'Failed to load ability model routing.'));
+      setPageError(error instanceof Error ? error.message : aiText('error_load_ability_models', 'Failed to load ability-model routing.'));
     } finally {
       setLoadingRouting(false);
     }
@@ -524,7 +526,7 @@ export default function AbilityModelsPage() {
   async function saveAbilityModelProfile(profileId: string) {
     const profile = routingDrafts.find((item) => item.profile_id === profileId);
     if (!profile) {
-      setDialogError(aiText('error_save_ability_models', 'Failed to save ability model routing.'));
+      setDialogError(aiText('error_save_ability_models', 'Failed to save ability-model routing.'));
       return;
     }
     setSavingRouting(true);
@@ -555,14 +557,14 @@ export default function AbilityModelsPage() {
       });
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) {
-        throw new Error(resolveAdminApiPayloadMessage(payload, aiText('error_save_ability_models', 'Failed to save ability model routing.')));
+        throw new Error(resolveAdminApiPayloadMessage(payload, aiText('error_save_ability_models', 'Failed to save ability-model routing.')));
       }
       const normalized = normalizeRoutingData(payload.data);
       setRoutingData(normalized);
       setRoutingDrafts(normalized.profiles.map((item) => ({ ...item, note: '' })));
-      setDialogMessage(aiText('message_ability_models_saved', 'Ability model routing saved.'));
+      setDialogMessage(aiText('message_ability_models_saved', 'Ability-model routing saved.'));
     } catch (error) {
-      setDialogError(error instanceof Error ? error.message : aiText('error_save_ability_models', 'Failed to save ability model routing.'));
+      setDialogError(error instanceof Error ? error.message : aiText('error_save_ability_models', 'Failed to save ability-model routing.'));
     } finally {
       setSavingRouting(false);
     }
@@ -621,8 +623,8 @@ export default function AbilityModelsPage() {
     <BackofficePageStack>
       <BackofficePrimaryPanel
         eyebrow={text('eyebrow', 'Runtime model routing')}
-        title={text('title', 'Ability models')}
-        description={text('description', 'Configure shared plugin ability defaults and Cloud-native runtime ability model bindings.')}
+        title={text('title', 'Ability-model routing')}
+        description={text('description', 'Configure shared plugin ability-to-model routing and Cloud-native runtime model bindings.')}
         aside={<BackofficeStatusBadge label={text('badge_runtime_binding', 'Runtime binding')} status="success" />}
         contentClassName="py-5 md:py-5"
         summary={<BackofficeSummaryStrip items={metrics} />}
@@ -645,7 +647,7 @@ export default function AbilityModelsPage() {
           active={activeAbilityTab === 'wordpress'}
           onClick={() => setActiveAbilityTab('wordpress')}
         >
-          {text('tab_wordpress', 'Plugin ability models')}
+          {text('tab_wordpress', 'Plugin ability routing')}
         </BackofficeFilterPill>
         <BackofficeFilterPill
           active={activeAbilityTab === 'cloud'}
@@ -660,10 +662,10 @@ export default function AbilityModelsPage() {
         <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
           <div>
             <h2 className="text-lg font-semibold text-slate-950 dark:text-white">
-              {text('wordpress_title', 'Plugin ability defaults')}
+              {text('wordpress_title', 'Plugin ability-model routes')}
             </h2>
             <p className="mt-1 text-sm leading-6 text-slate-600 dark:text-slate-300">
-              {aiText('ability_models_desc', 'Plugin abilities mapped to shared Cloud runtime profiles and model instances. Plugin-specific overrides can be added later when a plugin needs a different model.')}
+              {aiText('ability_models_desc', 'Plugin ability tasks mapped to shared Cloud runtime profiles and model instances. Plugin-specific overrides can be added later when a plugin needs a different model.')}
             </p>
           </div>
           <button
@@ -679,7 +681,7 @@ export default function AbilityModelsPage() {
           <div className="grid grid-cols-[8rem_1.4fr_1fr_1.4fr_8rem_8rem] gap-3 border-b border-slate-200 bg-slate-50 px-4 py-3 text-xs font-semibold uppercase tracking-[0.16em] text-slate-500 dark:border-slate-800 dark:bg-slate-900/70 dark:text-slate-400">
             <span>{aiText('column_status', 'Status')}</span>
             <span>{aiText('column_ability', 'Ability')}</span>
-            <span>{aiText('column_profile', 'Profile')}</span>
+            <span>{aiText('column_profile', 'Route / profile')}</span>
             <span>{aiText('column_provider_model', 'Provider / model')}</span>
             <span>{aiText('column_fallback', 'Fallback')}</span>
             <span className="text-right">{aiText('column_actions', 'Actions')}</span>
@@ -698,7 +700,7 @@ export default function AbilityModelsPage() {
                 <div className="mt-1 text-xs leading-5 text-slate-500 dark:text-slate-400">{row.description}</div>
               </div>
               <div className="text-slate-600 dark:text-slate-300">
-                <div>{row.profile.label}</div>
+                <div>{row.profile.routing_intent || row.profile.label}</div>
                 <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">{row.profile.profile_id}</div>
               </div>
               <div className="text-slate-600 dark:text-slate-300">
@@ -726,8 +728,8 @@ export default function AbilityModelsPage() {
           {abilityModelRows.length ? null : (
             <div className="px-4 py-6 text-sm text-slate-500 dark:text-slate-400">
               {loadingRouting
-                ? aiText('ability_models_loading', 'Loading ability model routing...')
-                : aiText('ability_models_empty', 'No plugin ability model routing is available.')}
+                ? aiText('ability_models_loading', 'Loading ability-model routing...')
+                : aiText('ability_models_empty', 'No plugin ability-model routing is available.')}
             </div>
           )}
         </div>
@@ -745,7 +747,7 @@ export default function AbilityModelsPage() {
           <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
             <div>
               <h2 className="text-lg font-semibold text-slate-950 dark:text-white">
-                {text('cloud_native_title', 'Cloud-native ability models')}
+                {text('cloud_native_title', 'Cloud-native runtime abilities')}
               </h2>
               <p className="mt-1 text-sm leading-6 text-slate-600 dark:text-slate-300">
                 {text('cloud_native_desc', 'Cloud-owned runtime abilities are grouped by text, image, audio, and video. Existing rows are read-only runtime projections; future rows stay planned until a routing projection exists.')}
@@ -885,7 +887,7 @@ export default function AbilityModelsPage() {
           {activeCloudMediaTab === 'audio' && !preferences ? (
             <div className="mt-4">
               <BackofficeEmptyState
-                title={text('audio_empty_title', 'Audio ability models unavailable')}
+                title={text('audio_empty_title', 'Audio ability-model routes unavailable')}
                 description={text('audio_empty_desc', 'Audio runtime profile preferences are not available from the provider management projection.')}
               />
             </div>
@@ -909,10 +911,10 @@ export default function AbilityModelsPage() {
             <div className="flex flex-col gap-3 border-b border-slate-200 pb-4 dark:border-slate-800 sm:flex-row sm:items-start sm:justify-between">
               <div>
                 <h2 id="ability-model-dialog-title" className="text-xl font-semibold text-slate-950 dark:text-white">
-                  {aiText('ability_model_dialog_title', 'Configure ability model')}
+                  {aiText('ability_model_dialog_title', 'Configure ability-model route')}
                 </h2>
                 <p className="mt-1 text-sm leading-6 text-slate-600 dark:text-slate-300">
-                  {aiText('ability_model_dialog_desc', 'This updates one shared Cloud runtime profile. Plugin switches, prompts, approvals, and final writes are not changed.')}
+                  {aiText('ability_model_dialog_desc', 'This updates one shared Cloud runtime route. Plugin switches, prompts, approvals, and final writes are not changed.')}
                 </p>
               </div>
               <button type="button" className="btn btn-secondary" onClick={closeAbilityModelDialog}>
@@ -1030,14 +1032,14 @@ export default function AbilityModelsPage() {
                     onChange={(event) => updateRoutingDraft(activeProfile.profile_id, { note: event.target.value })}
                     rows={3}
                     className="mt-2 w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
-                    placeholder={aiText('placeholder_ability_model_note', 'Why this ability model binding is being changed')}
+                    placeholder={aiText('placeholder_ability_model_note', 'Why this ability-model route is being changed')}
                   />
                 </label>
               </div>
             </div>
             <div className="mt-5 grid gap-3 border-t border-slate-200 pt-4 text-sm text-slate-600 dark:border-slate-800 dark:text-slate-300">
               <div className="grid gap-2">
-                <span>{aiText('ability_model_save_notice', 'Saving updates the Cloud runtime routing profile used by this ability group.')}</span>
+                <span>{aiText('ability_model_save_notice', 'Saving updates the Cloud runtime profile binding used by this ability route.')}</span>
                 {dialogMessage ? (
                   <span
                     className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950/25 dark:text-emerald-200"
@@ -1071,7 +1073,7 @@ export default function AbilityModelsPage() {
                   disabled={savingRouting || !activeProfile.candidate_instance_ids.length}
                   onClick={() => void saveAbilityModelProfile(activeProfile.profile_id)}
                 >
-                  {savingRouting ? aiText('saving', 'Saving...') : aiText('action_save_ability_model', 'Save ability model')}
+                  {savingRouting ? aiText('saving', 'Saving...') : aiText('action_save_ability_model', 'Save route')}
                 </button>
               </div>
             </div>

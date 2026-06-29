@@ -518,8 +518,12 @@ def test_admin_wordpress_ai_routing_updates_platform_managed_candidates(
 
     assert get_response.status_code == 200
     data = get_response.json()["data"]
+    assert data["contract_version"] == "cloud-ability-model-routing.v1"
+    assert data["projection_kind"] == "runtime_profile_binding"
     assert data["customer_model_selection"] is False
     assert data["direct_wordpress_write"] is False
+    assert data["boundary"]["cloud_ability_registry"] is False
+    assert data["boundary"]["wordpress_ability_truth"] == "local_plugin"
     assert data["available_text_instances"][0]["instance_id"] == (
         "openai-wp-ai-connector-test"
     )
@@ -535,12 +539,14 @@ def test_admin_wordpress_ai_routing_updates_platform_managed_candidates(
         "meta_description",
         "title_generation",
     ]
+    assert short_text["routing_intent"] == "content.short_text"
     image_generation = next(
         profile
         for profile in data["profiles"]
         if profile["profile_id"] == WP_AI_CONNECTOR_IMAGE_GENERATION_PROFILE_ID
     )
     assert image_generation["execution_kind"] == "image_generation"
+    assert image_generation["routing_intent"] == "media.image_generation"
     assert image_generation["tasks"] == ["image_generation"]
     assert image_generation["candidate_instance_ids"] == ["openai-wp-ai-image-test"]
     assert image_generation["timeout_ms"] == 90000
@@ -606,6 +612,7 @@ def test_admin_wordpress_ai_routing_updates_platform_managed_candidates(
         assert run.profile_id == WP_AI_CONNECTOR_SHORT_TEXT_PROFILE_ID
         assert run.policy_json["timeout_ms"] == 12000
         assert run.policy_json["max_retries"] == 1
+        assert run.policy_json["routing_intent"] == "content.short_text"
 
 
 def test_admin_wordpress_ai_routing_rejects_unknown_profile(tmp_path: Path) -> None:
@@ -631,3 +638,34 @@ def test_admin_wordpress_ai_routing_rejects_unknown_profile(tmp_path: Path) -> N
 
     assert response.status_code == 400
     assert response.json()["error_code"] == "wordpress_ai_routing.invalid_profile"
+
+
+def test_admin_wordpress_ai_routing_rejects_execution_kind_mismatch(
+    tmp_path: Path,
+) -> None:
+    _, client, _ = _build_client(tmp_path)
+
+    response = client.post(
+        "/internal/service/admin/wordpress-ai-routing",
+        headers=merge_json_headers(
+            build_internal_headers(
+                idempotency_key="wp-ai-routing-admin-save-kind-mismatch"
+            )
+        ),
+        json={
+            "profiles": [
+                {
+                    "profile_id": WP_AI_CONNECTOR_SHORT_TEXT_PROFILE_ID,
+                    "candidate_instance_ids": ["openai-wp-ai-image-test"],
+                    "timeout_ms": 12000,
+                    "allow_fallback": True,
+                    "max_retries": 0,
+                }
+            ]
+        },
+    )
+
+    assert response.status_code == 400
+    payload = response.json()
+    assert payload["error_code"] == "wordpress_ai_routing.invalid_profile"
+    assert "may only use available text instances" in payload["message"]

@@ -71,7 +71,7 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
     },
     {
       href: '/admin/ability-models',
-      label: t('admin.nav_ability_models', {}, 'Ability Models'),
+      label: t('admin.nav_ability_models', {}, 'Ability-Model Routing'),
     },
     {
       href: '/admin/service-settings',

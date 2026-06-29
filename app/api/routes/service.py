@@ -703,6 +703,7 @@ def _build_wordpress_ai_routing_projection(database_url: str) -> dict[str, Any]:
                 {
                     "profile_id": spec.profile_id,
                     "group_id": spec.group_id,
+                    "routing_intent": spec.routing_intent,
                     "label": spec.label,
                     "description": spec.description,
                     "tasks": list(spec.tasks),
@@ -727,7 +728,9 @@ def _build_wordpress_ai_routing_projection(database_url: str) -> dict[str, Any]:
             )
 
     return {
+        "contract_version": "cloud-ability-model-routing.v1",
         "surface": "wordpress_ai_connector_routing",
+        "projection_kind": "runtime_profile_binding",
         "owner": "cloud_runtime",
         "local_control_plane": "wordpress_plugin",
         "customer_model_selection": False,
@@ -740,6 +743,8 @@ def _build_wordpress_ai_routing_projection(database_url: str) -> dict[str, Any]:
             "public_runtime_accepts_raw_model_instance": False,
             "results_write_posture": "suggestion_only",
             "admin_surface": "platform_admin_only",
+            "cloud_ability_registry": False,
+            "wordpress_ability_truth": "local_plugin",
         },
     }
 
@@ -3692,6 +3697,7 @@ async def update_admin_wordpress_ai_routing(
                     "timeout_ms": profile_payload.timeout_ms,
                     "managed_surface": "wordpress_ai_connector",
                     "task_group": spec.group_id,
+                    "routing_intent": spec.routing_intent,
                     "tasks": list(spec.tasks),
                     "operator_note": profile_payload.note.strip(),
                 },
@@ -3703,6 +3709,7 @@ async def update_admin_wordpress_ai_routing(
                     "strategy": "ordered",
                     "managed_surface": "wordpress_ai_connector",
                     "task_group": spec.group_id,
+                    "routing_intent": spec.routing_intent,
                     "operator_note": profile_payload.note.strip(),
                 },
                 revision=revision,

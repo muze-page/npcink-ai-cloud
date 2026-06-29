@@ -33,7 +33,7 @@ assert.ok(
 
 assert.ok(
   abilityModelsNavIndex >= 0,
-  'Ability models must have a top-level admin navigation entry'
+  'Ability-model routing must have a top-level admin navigation entry'
 );
 
 assert.ok(
@@ -43,13 +43,13 @@ assert.ok(
 
 assert.ok(
   aiResourcesNavIndex < abilityModelsNavIndex && abilityModelsNavIndex < troubleshootingNavIndex,
-  'Ability models must sit beside Provider Management before Advanced Troubleshooting'
+  'Ability-model routing must sit beside Provider Management before Advanced Troubleshooting'
 );
 
 assert.doesNotMatch(
   troubleshootingNavBlock,
   /\/admin\/ai-resources|\/admin\/ability-models/,
-  'Advanced Troubleshooting must not own the provider management or ability model active paths'
+  'Advanced Troubleshooting must not own the provider management or ability-model routing active paths'
 );
 
 assert.match(
@@ -90,8 +90,8 @@ assert.match(
 
 assert.match(
   i18nSource,
-  /'admin\.nav_ability_models': '能力模型'/,
-  'Top-level admin navigation must expose Ability Models in Simplified Chinese'
+  /'admin\.nav_ability_models': '能力-模型路由'/,
+  'Top-level admin navigation must expose Ability-Model Routing in Simplified Chinese'
 );
 
 assert.match(
@@ -145,43 +145,43 @@ assert.match(
 assert.match(
   abilityModelsSource,
   /fetch\('\/api\/admin\/ai-resources\/profile-preferences'/,
-  'Ability models page must save only bounded profile preferences through the admin projection'
+  'Ability-model routing page must save only bounded profile preferences through the admin projection'
 );
 
 assert.match(
   abilityModelsSource,
   /type AbilityModelTab = 'wordpress' \| 'cloud'/,
-  'Ability models page must keep only WordPress and Cloud-native top-level tabs explicitly'
+  'Ability-model routing page must keep only WordPress and Cloud-native top-level tabs explicitly'
 );
 
 assert.match(
   abilityModelsSource,
   /type CloudAbilityMediaTab = 'text' \| 'image' \| 'audio' \| 'video'/,
-  'Cloud-native ability models must be grouped by text, image, audio, and video media tabs'
+  'Cloud-native runtime abilities must be grouped by text, image, audio, and video media tabs'
 );
 
 assert.match(
   abilityModelsSource,
   /useState<AbilityModelTab>\('wordpress'\)/,
-  'Ability models page must default to the plugin ability defaults tab'
+  'Ability-model routing page must default to the plugin ability defaults tab'
 );
 
 assert.match(
   abilityModelsSource,
   /tab_wordpress[\s\S]*tab_cloud/,
-  'Ability models page must expose plugin ability and Cloud-native top-level tabs'
+  'Ability-model routing page must expose plugin ability and Cloud-native top-level tabs'
 );
 
 assert.doesNotMatch(
   abilityModelsSource,
   /activeAbilityTab === 'audio'|tab_audio/,
-  'Audio ability models must not remain a top-level ability tab'
+  'Audio ability-model routes must not remain a top-level ability tab'
 );
 
 assert.match(
   abilityModelsSource,
   /\(\['text', 'image', 'audio', 'video'\] as CloudAbilityMediaTab\[\]\)\.map[\s\S]*cloud_media_tab_\$\{tab\}/,
-  'Cloud-native ability models must expose text, image, audio, and video media tabs'
+  'Cloud-native runtime abilities must expose text, image, audio, and video media tabs'
 );
 
 assert.match(
@@ -193,25 +193,25 @@ assert.match(
 assert.match(
   abilityModelsSource,
   /audioPreferenceRows[\s\S]*column_audio_ability[\s\S]*column_current_profile[\s\S]*column_configure_profile/,
-  'Audio ability models must render as a scannable list with ability, current profile, and configuration columns'
+  'Audio ability-model routes must render as a scannable list with ability, current profile, and configuration columns'
 );
 
 assert.match(
   abilityModelsSource,
   /audioPreferenceRows\.map[\s\S]*row\.label[\s\S]*row\.description[\s\S]*row\.value[\s\S]*row\.update/,
-  'Audio ability model rows must keep label, description, current value, and profile selector together'
+  'Audio ability-model route rows must keep label, description, current value, and profile selector together'
 );
 
 assert.doesNotMatch(
   abilityModelsSource,
   /mt-4 grid gap-4 lg:grid-cols-3[\s\S]*audio_summary_text_profile_id/,
-  'Audio ability models must not use the old three-column field layout'
+  'Audio ability-model routes must not use the old three-column field layout'
 );
 
 assert.match(
   abilityModelsSource,
   /audioPreferenceRows/,
-  'Audio profile preferences must live on the ability models page'
+  'Audio profile preferences must live on the ability-model routing page'
 );
 
 assert.match(
@@ -229,7 +229,7 @@ assert.doesNotMatch(
 assert.doesNotMatch(
   pageSource,
   /tab_ability_models/,
-  'Provider Management must not expose Ability Models as an internal tab'
+  'Provider Management must not expose Ability-Model Routing as an internal tab'
 );
 
 assert.match(
@@ -247,7 +247,19 @@ assert.match(
 assert.match(
   abilityModelsSource,
   /fetch\('\/api\/admin\/wordpress-ai-routing'/,
-  'Ability models page must load and save Cloud runtime ability model routing through the bounded admin endpoint'
+  'Ability-model routing page must load and save Cloud runtime ability-model routing through the bounded admin endpoint'
+);
+
+assert.match(
+  abilityModelsSource,
+  /routing_intent: string[\s\S]*routing_intent: String\(profile\?\.routing_intent/,
+  'Ability-model routing page must consume backend routing_intent metadata'
+);
+
+assert.match(
+  abilityModelsSource,
+  /row\.profile\.routing_intent \|\| row\.profile\.label/,
+  'Ability-model routing rows must display the routing intent when available'
 );
 
 assert.match(
@@ -259,19 +271,19 @@ assert.match(
 assert.match(
   abilityModelsSource,
   /BackofficeSummaryStrip/,
-  'Ability models page must use a compact summary strip instead of oversized metric cards'
+  'Ability-model routing page must use a compact summary strip instead of oversized metric cards'
 );
 
 assert.match(
   abilityModelsSource,
   /activeAbilityTab === 'wordpress'[\s\S]*wordpress_title/,
-  'Plugin ability model routing must render only under the plugin ability child tab'
+  'Plugin ability-model routing must render only under the plugin ability child tab'
 );
 
 assert.match(
   abilityModelsSource,
   /activeAbilityTab === 'cloud'[\s\S]*cloud_native_title/,
-  'Ability models page must reserve a Cloud-native child tab without creating a second control plane'
+  'Ability-model routing page must reserve a Cloud-native child tab without creating a second control plane'
 );
 
 assert.match(
@@ -355,13 +367,13 @@ assert.doesNotMatch(
 assert.match(
   abilityModelsSource,
   /abilityModelRows/,
-  'Ability models page must render WordPress AI connector tasks as ability model rows'
+  'Ability-model routing page must render WordPress AI connector tasks as ability-model route rows'
 );
 
 assert.match(
   abilityModelsSource,
   /saveAbilityModelProfile/,
-  'Ability models configuration must save the selected shared runtime profile'
+  'Ability-model routing configuration must save the selected shared runtime profile'
 );
 
 assert.match(
@@ -462,8 +474,8 @@ assert.match(
 
 assert.match(
   pageSource,
-  /model_visibility_desc[\s\S]*Configure which capability uses which model on the ability models page/,
-  'Provider channel model visibility copy must point capability-model binding to the ability models page'
+  /model_visibility_desc[\s\S]*Configure which capability uses which model on the ability-model routing page/,
+  'Provider channel model visibility copy must point capability-model binding to the ability-model routing page'
 );
 
 assert.match(
