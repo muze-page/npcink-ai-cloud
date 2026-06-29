@@ -70,6 +70,11 @@ def _sanitize_portal_return_to(value: str) -> str:
     return raw[:255]
 
 
+def _normalize_portal_oauth_intent(value: str) -> str:
+    normalized = str(value or "").strip().lower()
+    return normalized if normalized in {"login", "bind"} else "login"
+
+
 def _hash_provider_subject(provider: str, value: str) -> str:
     normalized_value = str(value or "").strip()
     if not normalized_value:
@@ -151,14 +156,19 @@ class CommercialServicePortalMixin(CommercialServiceAuditMixin):
         client_scope_id: str,
         ttl_seconds: int,
         nonce: str = "",
+        intent: str = "login",
     ) -> dict[str, object]:
         normalized_provider = _normalize_identity_provider(provider)
         safe_return_to = _sanitize_portal_return_to(return_to)
+        normalized_intent = _normalize_portal_oauth_intent(intent)
         normalized_nonce = str(nonce or "").strip()
         state = secrets.token_urlsafe(32)
         now = self.now_factory()
         expires_at = now + timedelta(seconds=max(60, int(ttl_seconds or 0)))
-        metadata_json: dict[str, object] = {"source": "portal_oauth_start"}
+        metadata_json: dict[str, object] = {
+            "source": "portal_oauth_start",
+            "intent": normalized_intent,
+        }
         if normalized_nonce:
             metadata_json["nonce_hash"] = _hash_provider_subject(
                 normalized_provider,
@@ -180,6 +190,7 @@ class CommercialServicePortalMixin(CommercialServiceAuditMixin):
             "provider": normalized_provider,
             "state": state,
             "return_to": safe_return_to,
+            "intent": normalized_intent,
             "expires_at": self._serialize_datetime(expires_at),
             "expires_in_seconds": max(60, int(ttl_seconds or 0)),
         }
@@ -241,9 +252,41 @@ class CommercialServicePortalMixin(CommercialServiceAuditMixin):
                 "provider": row.provider,
                 "return_to": row.return_to or "/portal",
                 "client_scope_id": row.client_scope_id or "",
+                "intent": _normalize_portal_oauth_intent(str(metadata.get("intent") or "")),
             }
             session.commit()
             return payload
+
+    def list_portal_identity_provider_bindings(
+        self,
+        *,
+        principal_id: str,
+    ) -> dict[str, object]:
+        with get_session(self.database_url) as session:
+            repository = CommercialRepository(session)
+            identity = repository.get_principal_identity_by_ref(principal_id=principal_id)
+            if identity is None or identity.status != PRINCIPAL_STATUS_ACTIVE:
+                raise CommercialPermissionError(
+                    "service.principal_access_required",
+                    f"principal '{principal_id}' is not active",
+                )
+            bindings = repository.list_identity_provider_bindings_for_principal(
+                principal_id=identity.principal_id,
+                status=IDENTITY_PROVIDER_BINDING_STATUS_ACTIVE,
+            )
+            items = [
+                _serialize_identity_provider_binding(
+                    binding,
+                    principal_id=identity.principal_id,
+                )
+                for binding in bindings
+            ]
+        return {
+            "principal_id": principal_id,
+            "identity_type": IDENTITY_TYPE_USER,
+            "role": USER_ROLE_USER,
+            "items": items,
+        }
 
     def bind_portal_identity_provider(
         self,

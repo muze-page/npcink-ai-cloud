@@ -31,6 +31,7 @@ export function PortalNavbar() {
       { href: '/portal/usage', label: t('nav.usage') },
       { href: '/portal/billing', label: t('portal.nav_package', {}, 'Package') },
       { href: '/portal/sites', label: t('portal.nav_sites', {}, 'Sites') },
+      { href: '/portal/account', label: t('portal.nav_account', {}, 'Account') },
     ],
     [t]
   );

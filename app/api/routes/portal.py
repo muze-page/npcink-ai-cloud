@@ -8,7 +8,7 @@ from urllib.parse import parse_qsl, urlencode
 
 import httpx
 from fastapi import APIRouter, Query, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from pydantic import BaseModel, Field
 
 from app.adapters.notifications.base import PortalEmailDeliveryError
@@ -278,6 +278,24 @@ def _build_qq_authorization_url(request: Request, *, state: str) -> str:
     return f"https://graph.qq.com/oauth2.0/authorize?{query}"
 
 
+def _portal_prefers_html(request: Request) -> bool:
+    accept = str(request.headers.get("accept") or "").lower()
+    return "text/html" in accept and "application/json" not in accept
+
+
+def _portal_oauth_return_response(
+    request: Request,
+    *,
+    return_to: str,
+    status: str,
+) -> RedirectResponse | None:
+    if not _portal_prefers_html(request):
+        return None
+    safe_return_to = return_to if return_to.startswith("/portal") else "/portal"
+    separator = "&" if "?" in safe_return_to else "?"
+    return RedirectResponse(f"{safe_return_to}{separator}qq={status}", status_code=303)
+
+
 def _parse_qq_query_response(value: str) -> dict[str, str]:
     return {key: item for key, item in parse_qsl(str(value or ""), keep_blank_values=True)}
 
@@ -419,6 +437,7 @@ def _resolve_portal_ai_provider_id(request: Request) -> str:
 async def start_portal_qq_login(
     request: Request,
     return_to: str = Query(default="/portal"),
+    intent: str = Query(default="login"),
 ) -> Any:
     same_origin = _portal_same_origin_guard(request, always=True)
     if same_origin is not None:
@@ -433,6 +452,7 @@ async def start_portal_qq_login(
         client_scope_id=str(request.client.host if request.client else ""),
         ttl_seconds=int(get_cloud_services(request).settings.portal_oauth_state_ttl_seconds or 0),
         nonce=nonce,
+        intent=intent,
     )
     authorization_url = _build_qq_authorization_url(
         request,
@@ -450,6 +470,7 @@ async def start_portal_qq_login(
                 "state": str(issued.get("state") or ""),
                 "expires_in_seconds": expires_in_seconds,
                 "return_to": str(issued.get("return_to") or "/portal"),
+                "intent": str(issued.get("intent") or "login"),
             },
         ),
     )
@@ -489,19 +510,65 @@ async def finish_portal_qq_login(
             request,
             access_token=str(token.get("access_token") or ""),
         )
+        return_to = str(consumed_state.get("return_to") or "/portal")
+        if str(consumed_state.get("intent") or "") == "bind":
+            auth = await resolve_portal_request_context(
+                request,
+                require_idempotency=False,
+                allow_session_cookies=True,
+            )
+            if isinstance(auth, JSONResponse):
+                return auth
+            binding = _get_commercial_service(request).bind_portal_identity_provider(
+                principal_id=auth.principal_id,
+                provider="qq",
+                external_subject=str(subject.get("openid") or ""),
+                unionid=str(subject.get("unionid") or ""),
+                metadata_json={"source": "portal_qq_callback_bind"},
+            )
+            redirect = _portal_oauth_return_response(
+                request,
+                return_to=return_to,
+                status="bound",
+            )
+            if redirect is not None:
+                _clear_portal_qq_oauth_nonce_cookie(redirect)
+                return redirect
+            response = JSONResponse(
+                status_code=200,
+                content=_portal_route_envelope(
+                    message="portal QQ login bound",
+                    data={
+                        "status": "bound",
+                        "provider": "qq",
+                        "return_to": return_to,
+                        "binding": binding,
+                    },
+                ),
+            )
+            _clear_portal_qq_oauth_nonce_cookie(response)
+            return response
         login = _get_commercial_service(request).resolve_portal_identity_provider_login(
             provider="qq",
             external_subject=str(subject.get("openid") or ""),
             unionid=str(subject.get("unionid") or ""),
         )
         if str(login.get("status") or "") == "binding_required":
+            redirect = _portal_oauth_return_response(
+                request,
+                return_to=return_to,
+                status="binding_required",
+            )
+            if redirect is not None:
+                _clear_portal_qq_oauth_nonce_cookie(redirect)
+                return redirect
             response = JSONResponse(
                 status_code=200,
                 content=_portal_route_envelope(
                     message="portal QQ binding required",
                     data={
                         **login,
-                        "return_to": str(consumed_state.get("return_to") or "/portal"),
+                        "return_to": return_to,
                     },
                 ),
             )
@@ -516,7 +583,7 @@ async def finish_portal_qq_login(
             session_metadata=build_new_portal_session_metadata(request),
         )
         data["auth_provider"] = "qq"
-        data["return_to"] = str(consumed_state.get("return_to") or "/portal")
+        data["return_to"] = return_to
     except CommercialServiceError as error:
         return _service_error_response(error, request=request)
     except httpx.HTTPError as error:
@@ -542,6 +609,53 @@ async def finish_portal_qq_login(
     )
     _clear_portal_qq_oauth_nonce_cookie(response)
     return response
+
+
+@router.get("/auth/identity-providers")
+async def list_portal_identity_providers(request: Request) -> Any:
+    auth = await resolve_portal_request_context(
+        request,
+        require_idempotency=False,
+        allow_session_cookies=True,
+    )
+    if isinstance(auth, JSONResponse):
+        return auth
+    try:
+        result = _get_commercial_service(request).list_portal_identity_provider_bindings(
+            principal_id=auth.principal_id,
+        )
+    except CommercialServiceError as error:
+        return _service_error_response(error, request=request)
+    items = [
+        item for item in result.get("items", []) if isinstance(item, dict)
+    ]
+    qq_binding = next(
+        (item for item in items if str(item.get("provider") or "") == "qq"),
+        None,
+    )
+    qq_config = _portal_qq_config(request)
+    qq_configured = all(
+        str(qq_config.get(key) or "").strip()
+        for key in ("client_id", "client_secret", "redirect_uri")
+    )
+    return _portal_route_envelope(
+        message="portal identity providers listed",
+        data={
+            "principal_id": auth.principal_id,
+            "providers": [
+                {
+                    "provider": "qq",
+                    "display_name": "QQ",
+                    "configured": qq_configured,
+                    "bound": qq_binding is not None,
+                    "binding": qq_binding,
+                    "bind_start_path": (
+                        "/portal/v1/auth/qq/start?intent=bind&return_to=/portal/account"
+                    ),
+                }
+            ],
+        },
+    )
 
 
 @router.post("/auth/qq/bind")

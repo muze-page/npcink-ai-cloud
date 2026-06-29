@@ -1396,6 +1396,12 @@ def test_portal_qq_bind_and_callback_login_reuse_user_session(
         email="portal-qq@example.com",
         code=str(request_data["code"]),
     )
+    initial_provider_response = client.get("/portal/v1/auth/identity-providers")
+    assert initial_provider_response.status_code == 200, initial_provider_response.text
+    initial_provider_data = initial_provider_response.json()["data"]["providers"][0]
+    assert initial_provider_data["provider"] == "qq"
+    assert initial_provider_data["configured"] is True
+    assert initial_provider_data["bound"] is False
 
     start_response = client.get("/portal/v1/auth/qq/start?return_to=/portal/sites")
     assert start_response.status_code == 200
@@ -1410,6 +1416,12 @@ def test_portal_qq_bind_and_callback_login_reuse_user_session(
     assert bind_response.status_code == 200, bind_response.text
     assert bind_response.json()["data"]["binding"]["identity_type"] == "user"
     assert bind_response.json()["data"]["binding"]["role"] == "user"
+    bound_provider_response = client.get("/portal/v1/auth/identity-providers")
+    assert bound_provider_response.status_code == 200, bound_provider_response.text
+    bound_provider_data = bound_provider_response.json()["data"]["providers"][0]
+    assert bound_provider_data["bound"] is True
+    assert bound_provider_data["binding"]["provider"] == "qq"
+    assert bound_provider_data["binding"]["status"] == "active"
 
     with get_session(database_url) as session:
         binding = session.scalar(select(IdentityProviderBinding))
@@ -1438,6 +1450,89 @@ def test_portal_qq_bind_and_callback_login_reuse_user_session(
     assert callback_data["auth_provider"] == "qq"
     assert callback_data["return_to"] == "/portal/usage"
     assert callback_data["session"]["transport"] == "cookie"
+
+    dispose_engine(database_url)
+
+
+def test_portal_qq_callback_bind_intent_binds_current_session(
+    tmp_path: Path,
+    monkeypatch: Any,
+) -> None:
+    database_url, client = _build_client(
+        tmp_path,
+        settings_overrides={
+            "portal_jwt_secret": TEST_PORTAL_JWT_SECRET,
+        },
+    )
+    _configure_portal_qq_settings(client, idempotency_prefix="portal-qq-callback-bind")
+
+    monkeypatch.setattr(
+        portal_routes,
+        "_exchange_qq_code",
+        lambda request, *, code: {"access_token": f"token-{code}"},
+    )
+    monkeypatch.setattr(
+        portal_routes,
+        "_fetch_qq_openid",
+        lambda request, *, access_token: {
+            "openid": "qq-openid-callback-bind",
+            "unionid": "qq-union-callback-bind",
+        },
+    )
+
+    client.post(
+        "/internal/service/accounts",
+        json={"account_id": "acct_portal_qq_callback_bind", "name": "Portal QQ Bind"},
+        headers=build_internal_headers(idempotency_key="portal-qq-callback-bind-account-001"),
+    )
+    client.post(
+        "/internal/service/sites",
+        json={
+            "site_id": "site_portal_qq_callback_bind",
+            "account_id": "acct_portal_qq_callback_bind",
+            "name": "Portal QQ Bind Site",
+            "status": "provisioning",
+        },
+        headers=build_internal_headers(idempotency_key="portal-qq-callback-bind-site-001"),
+    )
+    _grant_principal_access(
+        client,
+        site_id="site_portal_qq_callback_bind",
+        email="portal-qq-callback-bind@example.com",
+        idempotency_key="portal-qq-callback-bind-user-grants-001",
+    )
+    request_data = _request_portal_login_code(
+        client,
+        email="portal-qq-callback-bind@example.com",
+        headers={"x-npcink-debug-portal-link": "1"},
+    )
+    _verify_portal_login_code(
+        client,
+        email="portal-qq-callback-bind@example.com",
+        code=str(request_data["code"]),
+    )
+
+    start_response = client.get(
+        "/portal/v1/auth/qq/start?intent=bind&return_to=/portal/account"
+    )
+    assert start_response.status_code == 200
+    start_data = start_response.json()["data"]
+    assert start_data["intent"] == "bind"
+
+    callback_response = client.get(
+        f"/portal/v1/auth/qq/callback?code=bind-code&state={start_data['state']}",
+    )
+    assert callback_response.status_code == 200, callback_response.text
+    callback_data = callback_response.json()["data"]
+    assert callback_data["status"] == "bound"
+    assert callback_data["return_to"] == "/portal/account"
+    assert callback_data["binding"]["provider"] == "qq"
+
+    provider_response = client.get("/portal/v1/auth/identity-providers")
+    assert provider_response.status_code == 200, provider_response.text
+    provider_data = provider_response.json()["data"]["providers"][0]
+    assert provider_data["bound"] is True
+    assert provider_data["binding"]["has_unionid"] is True
 
     dispose_engine(database_url)
 

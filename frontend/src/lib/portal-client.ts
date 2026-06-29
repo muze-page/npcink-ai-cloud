@@ -15,6 +15,7 @@ export type ProductIdentityType = 'platform_admin' | 'site_admin';
 // ============================================
 
 export interface PortalSession {
+  principal_id?: string;
   site_admin_ref: string;
   site_id: string;
   account_id?: string;
@@ -134,6 +135,40 @@ export interface PortalRegistrationResult {
   site?: Site;
   subscription?: PortalSession['current_subscription'];
   next?: Record<string, string>;
+}
+
+export interface PortalIdentityProviderBinding {
+  binding_id: string;
+  provider: string;
+  principal_id: string;
+  identity_type: ProductIdentityType | 'user';
+  role: string;
+  status: string;
+  has_unionid: boolean;
+  last_login_at: string;
+}
+
+export interface PortalIdentityProviderStatus {
+  provider: string;
+  display_name: string;
+  configured: boolean;
+  bound: boolean;
+  binding?: PortalIdentityProviderBinding | null;
+  bind_start_path?: string;
+}
+
+export interface PortalIdentityProvidersResponse {
+  principal_id: string;
+  providers: PortalIdentityProviderStatus[];
+}
+
+export interface PortalQqStartResponse {
+  provider: 'qq';
+  authorization_url: string;
+  state: string;
+  expires_in_seconds: number;
+  return_to: string;
+  intent?: 'login' | 'bind';
 }
 
 export interface CreateSiteRequest {
@@ -1556,6 +1591,31 @@ export class PortalClient {
    */
   async verifyRegistration(payload: PortalRegistrationVerifyRequest): Promise<PortalEnvelope<PortalRegistrationResult>> {
     return this.request('POST', '/register/verify', payload);
+  }
+
+  /**
+   * 获取当前账号的第三方登录绑定状态
+   * GET /portal/v1/auth/identity-providers
+   */
+  async getIdentityProviders(): Promise<PortalEnvelope<PortalIdentityProvidersResponse>> {
+    return this.request('GET', '/auth/identity-providers', undefined, { requireAuth: true });
+  }
+
+  /**
+   * 发起 QQ 绑定授权
+   * GET /portal/v1/auth/qq/start?intent=bind
+   */
+  async startQqBind(returnTo = '/portal/account'): Promise<PortalEnvelope<PortalQqStartResponse>> {
+    const params = new URLSearchParams({ intent: 'bind', return_to: returnTo });
+    return this.request('GET', `/auth/qq/start?${params.toString()}`, undefined, { requireAuth: true });
+  }
+
+  /**
+   * 解绑 QQ 快捷登录
+   * POST /portal/v1/auth/qq/unbind
+   */
+  async unbindQqLogin(): Promise<PortalEnvelope<{ provider: string; principal_id: string; revoked: number }>> {
+    return this.request('POST', '/auth/qq/unbind', { provider: 'qq' }, { requireAuth: true });
   }
 
   // ========================================

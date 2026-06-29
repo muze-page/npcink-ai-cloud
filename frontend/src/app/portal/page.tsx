@@ -13,6 +13,7 @@ import {
 import { cn, formatDate } from '@/lib/utils';
 import {
   portalClient,
+  type PortalIdentityProviderStatus,
   type PortalPluginObservabilitySummary,
   type PortalSiteSummaryRecord,
   type Site,
@@ -111,6 +112,7 @@ export default function PortalPage() {
   const [currentSiteActiveKeyCount, setCurrentSiteActiveKeyCount] = useState<number | null>(null);
   const [currentSiteSummary, setCurrentSiteSummary] = useState<PortalSiteSummaryRecord | null>(null);
   const [currentSiteMonitoring, setCurrentSiteMonitoring] = useState<PortalPluginObservabilitySummary | null>(null);
+  const [identityProviders, setIdentityProviders] = useState<PortalIdentityProviderStatus[]>([]);
   const [isMonitoringLoading, setIsMonitoringLoading] = useState(false);
   const [monitoringError, setMonitoringError] = useState('');
   const [monitoringRefreshNonce, setMonitoringRefreshNonce] = useState(0);
@@ -307,6 +309,33 @@ export default function PortalPage() {
     };
   }, [isAuthenticated, session?.sites, sessionSiteIdsKey]);
 
+  useEffect(() => {
+    if (!isAuthenticated) {
+      setIdentityProviders([]);
+      return;
+    }
+
+    let isCancelled = false;
+
+    void portalClient
+      .getIdentityProviders()
+      .then((response) => {
+        if (!isCancelled) {
+          setIdentityProviders(response.data?.providers || []);
+        }
+      })
+      .catch((error) => {
+        if (!isCancelled) {
+          console.error('Failed to load identity provider status:', error);
+          setIdentityProviders([]);
+        }
+      });
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [isAuthenticated]);
+
   if (isLoading) {
     return (
       <div className="flex min-h-[60vh] items-center justify-center">
@@ -475,6 +504,53 @@ export default function PortalPage() {
     activeKeyCount: currentSiteActiveKeyCount,
   });
   const shouldShowStatusPanel = currentRiskLevel !== 'normal';
+  const qqProvider = identityProviders.find((provider) => provider.provider === 'qq') || null;
+  const setupChecklistItems = [
+    {
+      key: 'site',
+      done: selectedSite.status === 'active' && Boolean(selectedSiteWordPressUrl),
+      title: t('portal.home.onboarding_site_title', {}, '确认站点'),
+      detail: selectedSiteWordPressUrl
+        ? t('portal.home.onboarding_site_ready', {}, '站点地址已记录，当前站点可用于 Portal 工作区。')
+        : t('portal.home.onboarding_site_needed', {}, '补齐 WordPress 站点地址，后续 Key 和用量才容易核对。'),
+      href: `/portal/sites/${selectedSite.site_id}`,
+      action: t('portal.home.onboarding_site_action', {}, '查看站点'),
+    },
+    {
+      key: 'key',
+      done: currentSiteActiveKeyCount !== null && currentSiteActiveKeyCount > 0,
+      title: t('portal.home.onboarding_key_title', {}, '创建 API Key'),
+      detail:
+        currentSiteActiveKeyCount !== null && currentSiteActiveKeyCount > 0
+          ? t('portal.home.onboarding_key_ready', {}, '当前站点已有可用 Key。')
+          : t('portal.home.onboarding_key_needed', {}, '创建第一个 Key，WordPress 站点才能调用 Cloud 服务。'),
+      href: `/portal/keys?site=${selectedSite.site_id}`,
+      action: t('portal.home.onboarding_key_action', {}, '打开 Key'),
+    },
+    {
+      key: 'package',
+      done: Boolean(currentSubscription?.status === 'active'),
+      title: t('portal.home.onboarding_package_title', {}, '查看 Free 套餐'),
+      detail:
+        currentSubscription?.status === 'active'
+          ? t('portal.home.onboarding_package_ready', {}, '当前套餐处于可用状态。')
+          : t('portal.home.onboarding_package_needed', {}, '查看当前套餐和额度，确认本周期可用范围。'),
+      href: `/portal/billing?site=${selectedSite.site_id}`,
+      action: t('portal.home.onboarding_package_action', {}, '查看套餐'),
+    },
+    {
+      key: 'qq',
+      done: Boolean(qqProvider?.bound),
+      title: t('portal.home.onboarding_qq_title', {}, '绑定 QQ 快捷登录'),
+      detail: qqProvider?.bound
+        ? t('portal.home.onboarding_qq_ready', {}, 'QQ 快捷登录已绑定，后续可直接使用 QQ 登录。')
+        : t('portal.home.onboarding_qq_needed', {}, '邮箱仍是主账号，绑定 QQ 后登录更方便。'),
+      href: '/portal/account',
+      action: t('portal.home.onboarding_qq_action', {}, '账号中心'),
+    },
+  ];
+  const completedSetupCount = setupChecklistItems.filter((item) => item.done).length;
+  const shouldShowOnboardingChecklist = completedSetupCount < setupChecklistItems.length;
 
   return (
     <BackofficePageStack>
@@ -616,6 +692,67 @@ export default function PortalPage() {
                 </span>
               </div>
             </BackofficeStackCard>
+          </BackofficeSectionPanel>
+        ) : null}
+
+        {shouldShowOnboardingChecklist ? (
+          <BackofficeSectionPanel className="space-y-4">
+            <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+              <div>
+                <p className="text-[0.68rem] font-semibold uppercase tracking-[0.18em] text-gray-500 dark:text-gray-400">
+                  {t('portal.home.onboarding_label', {}, 'Getting started')}
+                </p>
+                <h2 className="mt-2 text-xl font-semibold text-gray-950 dark:text-white">
+                  {t('portal.home.onboarding_title', {}, '首次使用清单')}
+                </h2>
+                <p className="mt-2 text-sm leading-6 text-gray-600 dark:text-gray-300">
+                  {t(
+                    'portal.home.onboarding_desc',
+                    {},
+                    '按顺序完成这些动作，Free 账号就能进入可用状态。'
+                  )}
+                </p>
+              </div>
+              <BackofficeTag tone={completedSetupCount === setupChecklistItems.length ? 'success' : 'info'}>
+                {completedSetupCount} / {setupChecklistItems.length}
+              </BackofficeTag>
+            </div>
+            <div className="grid gap-3 lg:grid-cols-2">
+              {setupChecklistItems.map((item, index) => (
+                <Link
+                  key={item.key}
+                  href={item.href}
+                  className={cn(
+                    'group flex min-h-32 gap-4 rounded-[1.1rem] border px-4 py-4 transition hover:-translate-y-0.5 hover:shadow-sm',
+                    item.done
+                      ? 'border-emerald-200 bg-emerald-50/65 dark:border-emerald-900/60 dark:bg-emerald-950/20'
+                      : 'border-slate-200/80 bg-white/85 hover:bg-slate-50 dark:border-slate-800 dark:bg-slate-950/45 dark:hover:bg-slate-900/60'
+                  )}
+                >
+                  <span
+                    className={cn(
+                      'mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full border text-sm font-semibold',
+                      item.done
+                        ? 'border-emerald-500 bg-emerald-500 text-white'
+                        : 'border-slate-300 bg-white text-slate-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300'
+                    )}
+                  >
+                    {item.done ? 'OK' : String(index + 1)}
+                  </span>
+                  <span className="min-w-0">
+                    <span className="block text-base font-semibold text-slate-950 dark:text-white">
+                      {item.title}
+                    </span>
+                    <span className="mt-2 block text-sm leading-6 text-slate-600 dark:text-slate-300">
+                      {item.detail}
+                    </span>
+                    <span className="mt-3 inline-flex text-sm font-semibold text-blue-700 group-hover:text-blue-800 dark:text-blue-300 dark:group-hover:text-blue-200">
+                      {item.action}
+                    </span>
+                  </span>
+                </Link>
+              ))}
+            </div>
           </BackofficeSectionPanel>
         ) : null}
       </section>
