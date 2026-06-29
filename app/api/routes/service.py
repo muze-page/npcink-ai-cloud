@@ -102,6 +102,11 @@ class PortalUserDisablePayload(BaseModel):
     reason: str = ""
 
 
+class PortalUsersBatchDisablePayload(BaseModel):
+    principal_ids: list[str] = Field(default_factory=list)
+    reason: str = ""
+
+
 class SiteProvisionPayload(BaseModel):
     site_id: str
     account_id: str
@@ -2470,6 +2475,53 @@ async def get_admin_portal_user_audit(
         status="ok",
         message="admin portal user audit loaded",
         data=result,
+        revision="m6",
+    )
+
+
+@router.post("/admin/portal-users/batch-disable")
+async def batch_disable_admin_portal_users(
+    request: Request,
+    payload: PortalUsersBatchDisablePayload,
+) -> Any:
+    auth = await authorize_internal_request(request, require_idempotency=True)
+    if auth is not None:
+        return auth
+    service = _get_commercial_service(request)
+    audit_context = _build_audit_context(request)
+    try:
+        result = service.batch_disable_admin_portal_users(
+            principal_ids=payload.principal_ids,
+            reason=payload.reason,
+            audit_context=audit_context,
+        )
+    except CommercialServiceError as error:
+        _record_service_failure(
+            request,
+            event_kind="portal_user.batch_disable",
+            error=error,
+            scope_kind="portal_user_batch",
+            scope_id=str(_build_audit_context(request).idempotency_key or ""),
+            payload_json=_build_audit_payload(payload),
+        )
+        return _service_error_response(error, request=request)
+    totals = _dict_value(result.get("totals")) if isinstance(result, dict) else {}
+    return build_envelope(
+        status="ok",
+        message="admin portal users batch disabled",
+        data=_merge_receipt(
+            result,
+            _build_operator_receipt(
+                event_kind="portal_user.batch_disable",
+                scope_kind="portal_user_batch",
+                scope_id=str(audit_context.idempotency_key or ""),
+                outcome="succeeded" if int(totals.get("failed") or 0) == 0 else "partial",
+                effective_summary=(
+                    f"Batch disable processed {int(totals.get('attempted') or 0)} "
+                    f"portal users with {int(totals.get('failed') or 0)} failures."
+                ),
+            ),
+        ),
         revision="m6",
     )
 

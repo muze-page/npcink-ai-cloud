@@ -65,6 +65,9 @@ function buildAdminBackendPath(pathSegments: string[], method: string): string {
   if (/^accounts\/[^/]+\/(?:suspend|restore)$/.test(normalized)) {
     return `/internal/service/admin/${normalized}`;
   }
+  if (upperMethod === 'POST' && normalized === 'portal-users/batch-disable') {
+    return '/internal/service/admin/portal-users/batch-disable';
+  }
   if (upperMethod === 'POST' && /^portal-users\/[^/]+\/disable$/.test(normalized)) {
     return `/internal/service/admin/${normalized}`;
   }

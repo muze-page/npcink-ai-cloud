@@ -410,6 +410,101 @@ def test_admin_portal_users_lists_self_registered_users_and_disables_access(
     dispose_engine(database_url)
 
 
+def test_admin_portal_users_batch_disable_processes_each_principal(
+    tmp_path: Path,
+) -> None:
+    database_url, client = _build_client(
+        tmp_path,
+        settings_overrides={
+            "portal_jwt_secret": TEST_PORTAL_JWT_SECRET,
+            "portal_login_code_ttl_seconds": 300,
+            "debug_local_origin_allowlist": "http://testserver",
+        },
+    )
+
+    principal_ids: list[str] = []
+    for email, site_url in (
+        ("batch-one@example.com", "https://batch-one.example.com"),
+        ("batch-two@example.com", "https://batch-two.example.com"),
+    ):
+        request_data = _request_portal_registration_code(
+            client,
+            email=email,
+            site_url=site_url,
+            site_name=email.split("@")[0],
+        )
+        registration_data = _verify_portal_registration_code(
+            client,
+            email=email,
+            code=str(request_data["code"]),
+        )
+        principal_ids.append(str(registration_data["principal_id"]))
+
+    missing_principal_id = "prn_missing_batch_disable"
+    blank_reason_response = client.post(
+        "/internal/service/admin/portal-users/batch-disable",
+        json={"principal_ids": [principal_ids[0]], "reason": ""},
+        headers=build_internal_headers(idempotency_key="admin-portal-batch-disable-blank"),
+    )
+    assert blank_reason_response.status_code == 400
+    assert (
+        blank_reason_response.json()["error_code"]
+        == "service.portal_user_batch_disable_reason_required"
+    )
+
+    batch_response = client.post(
+        "/internal/service/admin/portal-users/batch-disable",
+        json={
+            "principal_ids": [*principal_ids, missing_principal_id],
+            "reason": "abuse risk review",
+        },
+        headers=build_internal_headers(idempotency_key="admin-portal-batch-disable-001"),
+    )
+    assert batch_response.status_code == 200, batch_response.text
+    batch_data = batch_response.json()["data"]
+    assert batch_data["totals"]["attempted"] == 3
+    assert batch_data["totals"]["disabled"] == 2
+    assert batch_data["totals"]["failed"] == 1
+    failed_items = [item for item in batch_data["items"] if item["outcome"] == "failed"]
+    assert failed_items[0]["principal_id"] == missing_principal_id
+    assert failed_items[0]["error_code"] == "service.principal_not_found"
+
+    with get_session(database_url) as session:
+        identities = list(
+            session.scalars(
+                select(Principal).where(Principal.principal_id.in_(principal_ids))
+            )
+        )
+        assert {identity.status for identity in identities} == {PRINCIPAL_STATUS_DISABLED}
+        memberships = list(
+            session.scalars(
+                select(AccountUserMembership).where(
+                    AccountUserMembership.principal_id.in_(principal_ids)
+                )
+            )
+        )
+        assert {membership.status for membership in memberships} == {
+            ACCOUNT_USER_MEMBERSHIP_STATUS_REVOKED
+        }
+        grants = list(
+            session.scalars(
+                select(SiteUserGrant).where(SiteUserGrant.principal_id.in_(principal_ids))
+            )
+        )
+        assert {grant.status for grant in grants} == {SITE_USER_GRANT_STATUS_REVOKED}
+
+    audit_response = client.get(
+        f"/internal/service/admin/portal-users/{principal_ids[0]}/audit",
+        headers=build_internal_headers(),
+    )
+    assert audit_response.status_code == 200, audit_response.text
+    audit_data = audit_response.json()["data"]
+    assert audit_data["summary"]["disable_events"] == 1
+    assert audit_data["summary"]["latest_disable_reason"] == "abuse risk review"
+
+    dispose_engine(database_url)
+
+
 def test_admin_web_search_provider_env_settings_route_is_retired(
     tmp_path: Path,
 ) -> None:

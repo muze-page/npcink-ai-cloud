@@ -97,6 +97,23 @@ type PortalUserAuditDetail = {
   };
 };
 
+type BatchDisableResult = {
+  totals?: {
+    attempted?: number;
+    disabled?: number;
+    already_disabled?: number;
+    failed?: number;
+  };
+  items?: Array<{
+    principal_id?: string;
+    outcome?: string;
+    status?: string;
+    session_version?: number;
+    error_code?: string;
+    message?: string;
+  }>;
+};
+
 type Filters = {
   q: string;
   status: string;
@@ -188,6 +205,10 @@ export default function AdminPortalUsersPage() {
   const [auditDetail, setAuditDetail] = useState<PortalUserAuditDetail | null>(null);
   const [auditLoading, setAuditLoading] = useState(false);
   const [auditError, setAuditError] = useState<string | null>(null);
+  const [selectedPrincipalIds, setSelectedPrincipalIds] = useState<string[]>([]);
+  const [batchDisableOpen, setBatchDisableOpen] = useState(false);
+  const [batchDisableReason, setBatchDisableReason] = useState('');
+  const [batchSaving, setBatchSaving] = useState(false);
 
   const loadUsers = useCallback(async () => {
     setLoading(true);
@@ -204,6 +225,10 @@ export default function AdminPortalUsersPage() {
       setUsers(Array.isArray(data.items) ? data.items : []);
       setSummary(data.summary || {});
       setTotal(Number(data.total || 0));
+      setSelectedPrincipalIds((current) => {
+        const nextIds = new Set((data.items || []).map((item) => item.principal_id));
+        return current.filter((principalId) => nextIds.has(principalId));
+      });
     } catch (err) {
       setError(resolveUiErrorMessage(err instanceof Error ? err.message : null, '加载自助注册用户失败'));
     } finally {
@@ -236,6 +261,27 @@ export default function AdminPortalUsersPage() {
       package_alias: '',
       qq_bound: '',
     });
+  };
+
+  const activeUsers = users.filter((user) => user.status !== 'disabled');
+  const selectedActiveUsers = users.filter((user) => selectedPrincipalIds.includes(user.principal_id));
+  const allActiveSelected =
+    activeUsers.length > 0 && activeUsers.every((user) => selectedPrincipalIds.includes(user.principal_id));
+
+  const toggleUserSelection = (principalId: string) => {
+    setSelectedPrincipalIds((current) =>
+      current.includes(principalId)
+        ? current.filter((item) => item !== principalId)
+        : [...current, principalId]
+    );
+  };
+
+  const toggleAllActiveUsers = () => {
+    if (allActiveSelected) {
+      setSelectedPrincipalIds([]);
+      return;
+    }
+    setSelectedPrincipalIds(activeUsers.map((user) => user.principal_id));
   };
 
   const disableUser = async (user: PortalUserItem) => {
@@ -303,6 +349,69 @@ export default function AdminPortalUsersPage() {
     }
   };
 
+  const batchDisableUsers = async () => {
+    const principalIds = selectedActiveUsers.map((user) => user.principal_id);
+    const reason = batchDisableReason.trim();
+    if (!reason) {
+      setActionError('批量禁用需要填写原因。');
+      return;
+    }
+    if (principalIds.length === 0) {
+      setActionError('请选择至少一个正常用户。');
+      return;
+    }
+    setBatchSaving(true);
+    setNotice(null);
+    setActionError(null);
+    try {
+      const response = await fetch('/api/admin/portal-users/batch-disable', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          principal_ids: principalIds,
+          reason,
+        }),
+      });
+      const payload = await response.json();
+      if (!response.ok) {
+        throw new Error(payload.message || '批量禁用失败');
+      }
+      const data = (payload.data || {}) as BatchDisableResult;
+      const disabledIds = new Set(
+        (data.items || [])
+          .filter((item) => item.outcome === 'disabled' || item.outcome === 'already_disabled')
+          .map((item) => String(item.principal_id || ''))
+          .filter(Boolean)
+      );
+      setUsers((current) =>
+        current.map((item) =>
+          disabledIds.has(item.principal_id)
+            ? {
+                ...item,
+                status: 'disabled',
+                membership_status: 'revoked',
+                grant_status: 'revoked',
+                qq_bound: false,
+                qq_binding_count: 0,
+              }
+            : item
+        )
+      );
+      setSelectedPrincipalIds([]);
+      setBatchDisableOpen(false);
+      setBatchDisableReason('');
+      const attempted = Number(data.totals?.attempted || principalIds.length);
+      const failed = Number(data.totals?.failed || 0);
+      setNotice(`批量禁用已处理 ${attempted} 个用户，失败 ${failed} 个。`);
+      void loadUsers();
+    } catch (err) {
+      setActionError(resolveUiErrorMessage(err instanceof Error ? err.message : null, '批量禁用失败'));
+    } finally {
+      setBatchSaving(false);
+    }
+  };
+
   return (
     <BackofficePageStack>
       <BackofficePrimaryPanel
@@ -362,6 +471,20 @@ export default function AdminPortalUsersPage() {
         </div>
       ) : null}
 
+      <div className="flex flex-col gap-3 rounded-2xl border border-slate-200 bg-white/80 px-4 py-3 text-sm text-slate-700 dark:border-slate-800 dark:bg-slate-950/45 dark:text-slate-200 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          已选择 <span className="font-semibold text-slate-950 dark:text-white">{selectedPrincipalIds.length}</span> 个正常用户
+        </div>
+        <button
+          type="button"
+          className="btn btn-secondary self-start sm:self-auto"
+          disabled={selectedPrincipalIds.length === 0}
+          onClick={() => setBatchDisableOpen(true)}
+        >
+          批量禁用
+        </button>
+      </div>
+
       <BackofficeSectionPanel className="overflow-hidden p-0">
         {loading ? (
           <div className="p-8">
@@ -379,6 +502,15 @@ export default function AdminPortalUsersPage() {
             <table className="min-w-full divide-y divide-slate-200 text-sm dark:divide-slate-800">
               <thead className="bg-slate-50/80 dark:bg-slate-950/40">
                 <tr>
+                  <th className="w-12 px-5 py-3 text-left">
+                    <input
+                      type="checkbox"
+                      checked={allActiveSelected}
+                      disabled={activeUsers.length === 0}
+                      onChange={toggleAllActiveUsers}
+                      aria-label="选择全部正常用户"
+                    />
+                  </th>
                   {['用户', '账号 / 站点', '套餐', 'QQ', '时间', '操作'].map((heading) => (
                     <th
                       key={heading}
@@ -392,6 +524,15 @@ export default function AdminPortalUsersPage() {
               <tbody className="divide-y divide-slate-200 bg-white/75 dark:divide-slate-800 dark:bg-slate-950/25">
                 {users.map((user) => (
                   <tr key={user.principal_id} className="align-top">
+                    <td className="px-5 py-4">
+                      <input
+                        type="checkbox"
+                        checked={selectedPrincipalIds.includes(user.principal_id)}
+                        disabled={user.status === 'disabled'}
+                        onChange={() => toggleUserSelection(user.principal_id)}
+                        aria-label={`选择 ${user.email || user.principal_id}`}
+                      />
+                    </td>
                     <td className="px-5 py-4">
                       <div className="space-y-2">
                         <div className="font-semibold text-slate-950 dark:text-white">
@@ -516,6 +657,58 @@ export default function AdminPortalUsersPage() {
             placeholder="原因，可选"
           />
         </ConfirmModal>
+      ) : null}
+
+      {batchDisableOpen ? (
+        <Modal
+          isOpen={batchDisableOpen}
+          title="批量禁用用户"
+          description={`将禁用 ${selectedPrincipalIds.length} 个用户。`}
+          size="md"
+          onClose={() => {
+            if (!batchSaving) {
+              setBatchDisableOpen(false);
+              setBatchDisableReason('');
+            }
+          }}
+          footer={
+            <>
+              <button
+                type="button"
+                className="btn btn-secondary"
+                disabled={batchSaving}
+                onClick={() => {
+                  setBatchDisableOpen(false);
+                  setBatchDisableReason('');
+                }}
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                className="btn btn-danger"
+                disabled={batchSaving || !batchDisableReason.trim() || selectedPrincipalIds.length === 0}
+                onClick={() => {
+                  void batchDisableUsers();
+                }}
+              >
+                {batchSaving ? '处理中' : '确认禁用'}
+              </button>
+            </>
+          }
+        >
+          <div className="space-y-4">
+            <p className="text-sm leading-6 text-slate-600 dark:text-slate-300">
+              批量禁用会让选中用户的 Portal 会话失效，并撤销站点授权、账号成员关系和 QQ 快捷登录绑定。
+            </p>
+            <textarea
+              value={batchDisableReason}
+              onChange={(event) => setBatchDisableReason(event.target.value)}
+              className="input min-h-[5.5rem]"
+              placeholder="原因，必填"
+            />
+          </div>
+        </Modal>
       ) : null}
 
       {auditUser ? (

@@ -30,6 +30,18 @@ assert.match(
 
 assert.match(
   pageSource,
+  /\/api\/admin\/portal-users\/batch-disable/,
+  'portal users page must expose the lightweight batch disable endpoint'
+);
+
+assert.match(
+  pageSource,
+  /批量禁用需要填写原因/,
+  'batch disable must require an operator reason'
+);
+
+assert.match(
+  pageSource,
   /\/api\/admin\/portal-users\/\$\{encodeURIComponent\(user\.principal_id\)\}\/audit\?limit=50/,
   'portal users page must load principal-scoped audit details'
 );
@@ -70,6 +82,12 @@ assert.match(
   'admin proxy must route portal user disable writes to the admin backend namespace'
 );
 
+assert.match(
+  proxySource,
+  /normalized === 'portal-users\/batch-disable'/,
+  'admin proxy must route portal user batch disable writes to the admin backend namespace'
+);
+
 assert.doesNotMatch(
   pageSource,
   /\/admin\/accounts\?/,
@@ -78,8 +96,8 @@ assert.doesNotMatch(
 
 assert.doesNotMatch(
   pageSource,
-  /batch|批量|restore|恢复/,
-  'portal users page must not introduce batch or restore controls in the audit-detail change'
+  /restore|恢复/,
+  'portal users page must not introduce restore controls'
 );
 
 console.log('admin_portal_users_ui_contract: ok');

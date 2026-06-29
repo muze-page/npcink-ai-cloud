@@ -1075,6 +1075,147 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
             session.commit()
             return payload
 
+    def batch_disable_admin_portal_users(
+        self,
+        *,
+        principal_ids: Sequence[str],
+        reason: str,
+        audit_context: ServiceAuditContext | None = None,
+    ) -> dict[str, object]:
+        normalized_reason = str(reason or "").strip()[:500]
+        if not normalized_reason:
+            raise CommercialValidationError(
+                "service.portal_user_batch_disable_reason_required",
+                "batch disable reason is required",
+            )
+        normalized_principal_ids: list[str] = []
+        seen_principal_ids: set[str] = set()
+        for principal_id in principal_ids:
+            normalized_principal_id = str(principal_id or "").strip()
+            if not normalized_principal_id or normalized_principal_id in seen_principal_ids:
+                continue
+            normalized_principal_ids.append(normalized_principal_id)
+            seen_principal_ids.add(normalized_principal_id)
+        if not normalized_principal_ids:
+            raise CommercialValidationError(
+                "service.portal_user_batch_disable_empty",
+                "at least one principal id is required",
+            )
+        if len(normalized_principal_ids) > 100:
+            raise CommercialValidationError(
+                "service.portal_user_batch_disable_too_many",
+                "batch disable accepts at most 100 principal ids",
+            )
+
+        items: list[dict[str, object]] = []
+        totals = {
+            "attempted": len(normalized_principal_ids),
+            "disabled": 0,
+            "already_disabled": 0,
+            "failed": 0,
+            "revoked_site_grants": 0,
+            "revoked_account_memberships": 0,
+            "revoked_identity_provider_bindings": 0,
+        }
+        with get_session(self.database_url) as session:
+            repository = CommercialRepository(session)
+            for normalized_principal_id in normalized_principal_ids:
+                identity = repository.get_principal_identity_by_ref(
+                    principal_id=normalized_principal_id,
+                )
+                if identity is None:
+                    totals["failed"] += 1
+                    items.append(
+                        {
+                            "principal_id": normalized_principal_id,
+                            "outcome": "failed",
+                            "error_code": "service.principal_not_found",
+                            "message": f"principal '{normalized_principal_id}' was not found",
+                        }
+                    )
+                    continue
+
+                was_disabled = (
+                    str(getattr(identity, "status", "") or "") == PRINCIPAL_STATUS_DISABLED
+                )
+                identity.status = PRINCIPAL_STATUS_DISABLED
+                if not was_disabled:
+                    identity = (
+                        repository.increment_principal_session_version(
+                            principal_id=normalized_principal_id,
+                        )
+                        or identity
+                    )
+                revoked_grants = repository.revoke_site_user_grants(
+                    principal_id=normalized_principal_id,
+                )
+                revoked_memberships = repository.revoke_account_user_memberships(
+                    principal_id=normalized_principal_id,
+                )
+                revoked_bindings = repository.revoke_identity_provider_bindings(
+                    principal_id=normalized_principal_id,
+                    provider="qq",
+                )
+                totals["revoked_site_grants"] += revoked_grants
+                totals["revoked_account_memberships"] += revoked_memberships
+                totals["revoked_identity_provider_bindings"] += revoked_bindings
+                outcome = "already_disabled" if was_disabled else "disabled"
+                totals[outcome] += 1
+                item_payload: dict[str, object] = {
+                    "principal_id": normalized_principal_id,
+                    "email": str(getattr(identity, "email", "") or ""),
+                    "status": str(getattr(identity, "status", "") or ""),
+                    "session_version": int(getattr(identity, "session_version", 1) or 1),
+                    "outcome": outcome,
+                    "revoked_site_grants": revoked_grants,
+                    "revoked_account_memberships": revoked_memberships,
+                    "revoked_identity_provider_bindings": revoked_bindings,
+                    "reason": normalized_reason,
+                }
+                items.append(item_payload)
+                self._record_service_audit_in_session(
+                    repository=repository,
+                    audit_context=audit_context,
+                    event_kind="portal_user.disable",
+                    outcome="succeeded",
+                    scope_kind="principal",
+                    scope_id=normalized_principal_id,
+                    payload_json={
+                        **item_payload,
+                        "batch": True,
+                        "batch_id": (
+                            audit_context.idempotency_key
+                            if audit_context is not None
+                            else ""
+                        ),
+                    },
+                )
+
+            batch_payload: dict[str, object] = {
+                "reason": normalized_reason,
+                "totals": totals,
+                "principal_ids": normalized_principal_ids,
+            }
+            self._record_service_audit_in_session(
+                repository=repository,
+                audit_context=audit_context,
+                event_kind="portal_user.batch_disable",
+                outcome="succeeded" if totals["failed"] == 0 else "partial",
+                scope_kind="portal_user_batch",
+                scope_id=(
+                    audit_context.idempotency_key if audit_context is not None else ""
+                ),
+                payload_json=batch_payload,
+            )
+            session.commit()
+
+        return {
+            "reason": normalized_reason,
+            "items": items,
+            "totals": totals,
+            "total": len(items),
+        }
+
     def list_admin_accounts(
         self,
         *,
