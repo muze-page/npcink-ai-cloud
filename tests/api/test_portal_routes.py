@@ -516,6 +516,174 @@ def test_portal_issue_rotate_list_and_revoke_site_key(tmp_path: Path) -> None:
     dispose_engine(database_url)
 
 
+def test_portal_activate_site_deactivates_other_active_sites_for_account(
+    tmp_path: Path,
+) -> None:
+    database_url, client = _build_client(tmp_path)
+
+    client.post(
+        "/internal/service/accounts",
+        json={"account_id": "acct_portal_single_active", "name": "Portal Account"},
+        headers=build_internal_headers(idempotency_key="portal-single-active-account"),
+    )
+    for site_id in ("site_single_active_a", "site_single_active_b"):
+        response = client.post(
+            "/internal/service/sites",
+            json={
+                "site_id": site_id,
+                "account_id": "acct_portal_single_active",
+                "name": site_id,
+                "status": "active",
+            },
+            headers=build_internal_headers(idempotency_key=f"{site_id}-provision"),
+        )
+        assert response.status_code == 200, response.text
+        _grant_principal_access(
+            client,
+            site_id=site_id,
+            email="portal-admin@example.com",
+            idempotency_key=f"{site_id}-grant",
+        )
+
+    activate_response = client.post(
+        "/portal/v1/sites/site_single_active_b/activate",
+        headers=build_portal_headers(idempotency_key="portal-activate-single-active-b"),
+    )
+    assert activate_response.status_code == 200, activate_response.text
+    activate_data = activate_response.json()["data"]
+    assert activate_data["site"]["site_id"] == "site_single_active_b"
+    assert activate_data["site"]["status"] == "active"
+    assert [item["site_id"] for item in activate_data["deactivated_sites"]] == [
+        "site_single_active_a"
+    ]
+
+    with get_session(database_url) as session:
+        site_a = session.get(Site, "site_single_active_a")
+        site_b = session.get(Site, "site_single_active_b")
+        assert site_a is not None
+        assert site_b is not None
+        assert site_a.status == "inactive"
+        assert site_b.status == "active"
+
+    deactivate_response = client.post(
+        "/portal/v1/sites/site_single_active_b/deactivate",
+        headers=build_portal_headers(idempotency_key="portal-deactivate-single-active-b"),
+    )
+    assert deactivate_response.status_code == 200, deactivate_response.text
+    assert deactivate_response.json()["data"]["site"]["status"] == "inactive"
+
+    with get_session(database_url) as session:
+        site_b = session.get(Site, "site_single_active_b")
+        assert site_b is not None
+        assert site_b.status == "inactive"
+
+    dispose_engine(database_url)
+
+
+def test_portal_restore_active_site_deactivates_other_active_sites_for_account(
+    tmp_path: Path,
+) -> None:
+    database_url, client = _build_client(tmp_path)
+
+    client.post(
+        "/internal/service/accounts",
+        json={"account_id": "acct_portal_restore_active", "name": "Portal Account"},
+        headers=build_internal_headers(idempotency_key="portal-restore-active-account"),
+    )
+    for site_id in ("site_restore_active_a", "site_restore_active_b"):
+        response = client.post(
+            "/internal/service/sites",
+            json={
+                "site_id": site_id,
+                "account_id": "acct_portal_restore_active",
+                "name": site_id,
+                "status": "active",
+            },
+            headers=build_internal_headers(idempotency_key=f"{site_id}-provision"),
+        )
+        assert response.status_code == 200, response.text
+        _grant_principal_access(
+            client,
+            site_id=site_id,
+            email="portal-admin@example.com",
+            idempotency_key=f"{site_id}-grant",
+        )
+
+    archive_response = client.post(
+        "/portal/v1/sites/site_restore_active_a/archive",
+        headers=build_portal_headers(idempotency_key="portal-archive-restore-active-a"),
+    )
+    assert archive_response.status_code == 200, archive_response.text
+
+    restore_response = client.post(
+        "/portal/v1/sites/site_restore_active_a/restore",
+        headers=build_portal_headers(idempotency_key="portal-restore-active-a"),
+    )
+    assert restore_response.status_code == 200, restore_response.text
+    assert restore_response.json()["data"]["site"]["status"] == "active"
+
+    with get_session(database_url) as session:
+        site_a = session.get(Site, "site_restore_active_a")
+        site_b = session.get(Site, "site_restore_active_b")
+        assert site_a is not None
+        assert site_b is not None
+        assert site_a.status == "active"
+        assert site_b.status == "inactive"
+
+    dispose_engine(database_url)
+
+
+def test_portal_restore_inactive_site_keeps_site_inactive(tmp_path: Path) -> None:
+    database_url, client = _build_client(tmp_path)
+
+    client.post(
+        "/internal/service/accounts",
+        json={"account_id": "acct_portal_restore_inactive", "name": "Portal Account"},
+        headers=build_internal_headers(idempotency_key="portal-restore-inactive-account"),
+    )
+    response = client.post(
+        "/internal/service/sites",
+        json={
+            "site_id": "site_restore_inactive",
+            "account_id": "acct_portal_restore_inactive",
+            "name": "Restore Inactive",
+            "status": "active",
+        },
+        headers=build_internal_headers(idempotency_key="site-restore-inactive-provision"),
+    )
+    assert response.status_code == 200, response.text
+    _grant_principal_access(
+        client,
+        site_id="site_restore_inactive",
+        email="portal-admin@example.com",
+        idempotency_key="site-restore-inactive-grant",
+    )
+
+    deactivate_response = client.post(
+        "/portal/v1/sites/site_restore_inactive/deactivate",
+        headers=build_portal_headers(idempotency_key="portal-deactivate-restore-inactive"),
+    )
+    assert deactivate_response.status_code == 200, deactivate_response.text
+    archive_response = client.post(
+        "/portal/v1/sites/site_restore_inactive/archive",
+        headers=build_portal_headers(idempotency_key="portal-archive-restore-inactive"),
+    )
+    assert archive_response.status_code == 200, archive_response.text
+    restore_response = client.post(
+        "/portal/v1/sites/site_restore_inactive/restore",
+        headers=build_portal_headers(idempotency_key="portal-restore-inactive"),
+    )
+    assert restore_response.status_code == 200, restore_response.text
+    assert restore_response.json()["data"]["site"]["status"] == "inactive"
+
+    with get_session(database_url) as session:
+        site = session.get(Site, "site_restore_inactive")
+        assert site is not None
+        assert site.status == "inactive"
+
+    dispose_engine(database_url)
+
+
 def test_portal_wordpress_addon_connection_issues_one_time_exchange_code(
     tmp_path: Path,
 ) -> None:
@@ -599,6 +767,118 @@ def test_portal_wordpress_addon_connection_issues_one_time_exchange_code(
     assert audit_response.status_code == 200
     audit_items = audit_response.json()["data"]["items"]
     assert any(item["event_kind"] == "wordpress_addon_connection.issue" for item in audit_items)
+
+    dispose_engine(database_url)
+
+
+def test_portal_addon_connection_allows_new_site_after_inactive_site_releases_capacity(
+    tmp_path: Path,
+) -> None:
+    database_url, client = _build_client(tmp_path)
+
+    registration_request = _request_portal_registration_code(
+        client,
+        email="addon-capacity@example.com",
+        site_url="https://primary.example.com",
+        site_name="Primary Site",
+        headers={
+            "x-npcink-debug-portal-link": "1",
+            "x-npcink-dev-login-code": "1",
+        },
+    )
+    registration = _verify_portal_registration_code(
+        client,
+        email="addon-capacity@example.com",
+        code=str(registration_request["code"]),
+    )
+
+    with get_session(database_url) as session:
+        primary_site = session.get(Site, "site_primary-example-com")
+        assert primary_site is not None
+        primary_site.status = "inactive"
+        session.commit()
+
+    return_url = (
+        "https://wp.example.com/wp-admin/admin-post.php"
+        "?action=npcink_cloud_addon_complete_auth&state=addon-state-capacity"
+    )
+    create_response = client.post(
+        "/portal/v1/addon-connections",
+        json={
+            "account_id": registration["account_id"],
+            "wordpress_url": "https://secondary.example.com",
+            "site_name": "Secondary Site",
+            "return_url": return_url,
+            "state": "addon-state-capacity",
+        },
+        headers={"Idempotency-Key": "portal-addon-capacity-connect"},
+    )
+    assert create_response.status_code == 200, create_response.text
+    create_data = create_response.json()["data"]
+    assert create_data["site_id"] == "site_secondary-example-com"
+    assert create_data["site_created"] is True
+
+    with get_session(database_url) as session:
+        primary_site = session.get(Site, "site_primary-example-com")
+        secondary_site = session.get(Site, "site_secondary-example-com")
+        assert primary_site is not None
+        assert secondary_site is not None
+        assert primary_site.status == "inactive"
+        assert secondary_site.status == "active"
+
+    dispose_engine(database_url)
+
+
+def test_portal_addon_connection_reactivates_existing_inactive_site(
+    tmp_path: Path,
+) -> None:
+    database_url, client = _build_client(tmp_path)
+
+    registration_request = _request_portal_registration_code(
+        client,
+        email="addon-reactivate@example.com",
+        site_url="https://primary.example.com",
+        site_name="Primary Site",
+        headers={
+            "x-npcink-debug-portal-link": "1",
+            "x-npcink-dev-login-code": "1",
+        },
+    )
+    registration = _verify_portal_registration_code(
+        client,
+        email="addon-reactivate@example.com",
+        code=str(registration_request["code"]),
+    )
+    with get_session(database_url) as session:
+        site = session.get(Site, "site_primary-example-com")
+        assert site is not None
+        site.status = "inactive"
+        session.commit()
+
+    return_url = (
+        "https://wp.example.com/wp-admin/admin-post.php"
+        "?action=npcink_cloud_addon_complete_auth&state=addon-state-reactivate"
+    )
+    create_response = client.post(
+        "/portal/v1/addon-connections",
+        json={
+            "account_id": registration["account_id"],
+            "wordpress_url": "https://primary.example.com",
+            "site_name": "Primary Site",
+            "return_url": return_url,
+            "state": "addon-state-reactivate",
+        },
+        headers={"Idempotency-Key": "portal-addon-reactivate-connect"},
+    )
+    assert create_response.status_code == 200, create_response.text
+    create_data = create_response.json()["data"]
+    assert create_data["site_id"] == "site_primary-example-com"
+    assert create_data["site_created"] is False
+
+    with get_session(database_url) as session:
+        site = session.get(Site, "site_primary-example-com")
+        assert site is not None
+        assert site.status == "active"
 
     dispose_engine(database_url)
 

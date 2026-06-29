@@ -21,7 +21,7 @@ from app.api.auth import (
 )
 from app.api.envelope import build_envelope
 from app.core.db import get_session
-from app.core.models import SITE_STATUS_ARCHIVED
+from app.core.models import SITE_STATUS_ACTIVE, SITE_STATUS_ARCHIVED
 from app.core.security import extract_trace_id
 from app.domain.commercial.errors import CommercialServiceError
 from app.domain.commercial.service import CommercialService
@@ -212,6 +212,11 @@ def serialize_portal_session(
         for item in site_items
         if str(_dict_value(item.get("site")).get("status") or "").strip() != SITE_STATUS_ARCHIVED
     ]
+    active_site_items = [
+        item
+        for item in visible_site_items
+        if str(_dict_value(item.get("site")).get("status") or "").strip() == SITE_STATUS_ACTIVE
+    ]
     selected_site: dict[str, object] | None = None
     selected_role = ""
     selected_account_id = ""
@@ -235,7 +240,8 @@ def serialize_portal_session(
             selected_site = _dict_value(access.get("site")) or None
             selected_role = str(access.get("role") or "")
             selected_account_id = str(access.get("account_id") or "")
-            if str(_dict_value(selected_site).get("status") or "").strip() == SITE_STATUS_ARCHIVED:
+            selected_status = str(_dict_value(selected_site).get("status") or "").strip()
+            if selected_status == SITE_STATUS_ARCHIVED:
                 if strict_site:
                     raise CommercialServiceError(
                         403,
@@ -246,8 +252,19 @@ def serialize_portal_session(
                 selected_role = ""
                 selected_account_id = ""
                 resolved_site_id = ""
-    if not resolved_site_id and visible_site_items:
-        fallback_item = visible_site_items[0]
+            elif selected_status != SITE_STATUS_ACTIVE:
+                if strict_site:
+                    raise CommercialServiceError(
+                        403,
+                        "service.portal_site_inactive",
+                        "inactive portal sites cannot be selected as the current site",
+                    )
+                selected_site = None
+                selected_role = ""
+                selected_account_id = ""
+                resolved_site_id = ""
+    if not resolved_site_id and active_site_items:
+        fallback_item = active_site_items[0]
         fallback_site = fallback_item.get("site") if isinstance(fallback_item, dict) else {}
         if isinstance(fallback_site, dict):
             selected_site = fallback_site

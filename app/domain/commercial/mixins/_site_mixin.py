@@ -27,6 +27,7 @@ from app.core.models import (
     SITE_API_KEY_STATUS_REVOKED,
     SITE_STATUS_ACTIVE,
     SITE_STATUS_ARCHIVED,
+    SITE_STATUS_INACTIVE,
     SITE_STATUS_PROVISIONING,
     SITE_STATUS_SUSPENDED,
     SITE_USER_GRANT_STATUS_ACTIVE,
@@ -110,6 +111,38 @@ def _append_addon_return_query(return_url: str, *, code: str, state: str) -> str
 
 
 class CommercialServiceSiteMixin(CommercialServiceAuditMixin):
+    def _deactivate_account_active_sibling_sites(
+        self,
+        *,
+        repository: CommercialRepository,
+        account_id: str,
+        activated_site_id: str,
+        audit_context: ServiceAuditContext | None,
+    ) -> list[dict[str, object]]:
+        deactivated_sites: list[dict[str, object]] = []
+        for sibling in repository.list_sites(account_id=account_id):
+            if sibling.site_id == activated_site_id or sibling.status != SITE_STATUS_ACTIVE:
+                continue
+            sibling.status = SITE_STATUS_INACTIVE
+            payload = self._serialize_site(sibling)
+            deactivated_sites.append(payload)
+            self._record_service_audit_in_session(
+                repository=repository,
+                audit_context=audit_context,
+                event_kind="site.deactivate",
+                outcome="succeeded",
+                account_id=sibling.account_id,
+                site_id=sibling.site_id,
+                scope_kind="site",
+                scope_id=sibling.site_id,
+                payload_json={
+                    **payload,
+                    "reason": "portal_single_active_site_switch",
+                    "activated_site_id": activated_site_id,
+                },
+            )
+        return deactivated_sites
+
     def provision_site(
         self,
         *,
@@ -373,6 +406,99 @@ class CommercialServiceSiteMixin(CommercialServiceAuditMixin):
             session.commit()
             return payload
 
+    def activate_portal_site(
+        self,
+        site_id: str,
+        *,
+        audit_context: ServiceAuditContext | None = None,
+    ) -> dict[str, object]:
+        now = self.now_factory()
+        with get_session(self.database_url) as session:
+            repository = CommercialRepository(session)
+            site = repository.get_site(site_id)
+            if site is None:
+                raise CommercialNotFoundError(
+                    "service.site_not_found",
+                    f"site '{site_id}' was not found",
+                )
+            if str(site.status or "") in {SITE_STATUS_ARCHIVED, SITE_STATUS_SUSPENDED}:
+                raise CommercialPermissionError(
+                    "service.portal_site_not_activatable",
+                    f"site '{site_id}' cannot be activated from the portal",
+                )
+            deactivated_sites = self._deactivate_account_active_sibling_sites(
+                repository=repository,
+                account_id=site.account_id or "",
+                activated_site_id=site.site_id,
+                audit_context=audit_context,
+            )
+            site.status = SITE_STATUS_ACTIVE
+            if site.provisioned_at is None:
+                site.provisioned_at = now
+            site.activated_at = now
+            site.suspended_at = None
+            site.suspension_reason = None
+            payload = self._serialize_site(site)
+            self._record_service_audit_in_session(
+                repository=repository,
+                audit_context=audit_context,
+                event_kind="site.activate",
+                outcome="succeeded",
+                account_id=site.account_id,
+                site_id=site.site_id,
+                scope_kind="site",
+                scope_id=site.site_id,
+                payload_json={
+                    **payload,
+                    "deactivated_site_ids": [
+                        str(item.get("site_id") or "") for item in deactivated_sites
+                    ],
+                },
+            )
+            session.commit()
+            return {
+                "site": payload,
+                "deactivated_sites": deactivated_sites,
+            }
+
+    def deactivate_portal_site(
+        self,
+        site_id: str,
+        *,
+        audit_context: ServiceAuditContext | None = None,
+    ) -> dict[str, object]:
+        with get_session(self.database_url) as session:
+            repository = CommercialRepository(session)
+            site = repository.get_site(site_id)
+            if site is None:
+                raise CommercialNotFoundError(
+                    "service.site_not_found",
+                    f"site '{site_id}' was not found",
+                )
+            if str(site.status or "") in {SITE_STATUS_ARCHIVED, SITE_STATUS_SUSPENDED}:
+                raise CommercialPermissionError(
+                    "service.portal_site_not_deactivatable",
+                    f"site '{site_id}' cannot be deactivated from the portal",
+                )
+            site.status = SITE_STATUS_INACTIVE
+            payload = self._serialize_site(site)
+            self._record_service_audit_in_session(
+                repository=repository,
+                audit_context=audit_context,
+                event_kind="site.deactivate",
+                outcome="succeeded",
+                account_id=site.account_id,
+                site_id=site.site_id,
+                scope_kind="site",
+                scope_id=site.site_id,
+                payload_json={
+                    **payload,
+                    "reason": "portal_user_deactivated_site",
+                },
+            )
+            session.commit()
+            return payload
+
     def suspend_site(
         self,
         site_id: str,
@@ -468,6 +594,7 @@ class CommercialServiceSiteMixin(CommercialServiceAuditMixin):
             previous_status = str(lifecycle.get("previous_status") or "").strip()
             if previous_status not in {
                 SITE_STATUS_ACTIVE,
+                SITE_STATUS_INACTIVE,
                 SITE_STATUS_PROVISIONING,
                 SITE_STATUS_SUSPENDED,
             }:
@@ -476,6 +603,17 @@ class CommercialServiceSiteMixin(CommercialServiceAuditMixin):
                     if site.activated_at is not None
                     else SITE_STATUS_PROVISIONING
                 )
+            deactivated_site_ids: list[str] = []
+            if previous_status == SITE_STATUS_ACTIVE:
+                deactivated_site_ids = [
+                    str(item.get("site_id") or "")
+                    for item in self._deactivate_account_active_sibling_sites(
+                        repository=repository,
+                        account_id=site.account_id or "",
+                        activated_site_id=site.site_id,
+                        audit_context=audit_context,
+                    )
+                ]
             lifecycle["archived"] = False
             lifecycle["restored_at"] = self._serialize_datetime(now)
             metadata["portal_lifecycle"] = lifecycle
@@ -491,7 +629,10 @@ class CommercialServiceSiteMixin(CommercialServiceAuditMixin):
                 site_id=site.site_id,
                 scope_kind="site",
                 scope_id=site.site_id,
-                payload_json=payload,
+                payload_json={
+                    **payload,
+                    "deactivated_site_ids": deactivated_site_ids,
+                },
             )
             session.commit()
             return payload
@@ -638,6 +779,15 @@ class CommercialServiceSiteMixin(CommercialServiceAuditMixin):
                 payload_json=payload,
             )
             if activate_site_on_issue and site.status == SITE_STATUS_PROVISIONING:
+                deactivated_site_ids = [
+                    str(item.get("site_id") or "")
+                    for item in self._deactivate_account_active_sibling_sites(
+                        repository=repository,
+                        account_id=site.account_id or "",
+                        activated_site_id=site.site_id,
+                        audit_context=audit_context,
+                    )
+                ]
                 site.status = SITE_STATUS_ACTIVE
                 if site.provisioned_at is None:
                     site.provisioned_at = now
@@ -646,6 +796,7 @@ class CommercialServiceSiteMixin(CommercialServiceAuditMixin):
                 site.suspension_reason = None
                 payload["site_status"] = site.status
                 payload["site_activated"] = True
+                payload["deactivated_site_ids"] = deactivated_site_ids
                 self._record_service_audit_in_session(
                     repository=repository,
                     audit_context=audit_context,
@@ -656,7 +807,10 @@ class CommercialServiceSiteMixin(CommercialServiceAuditMixin):
                     key_id=api_key.key_id,
                     scope_kind="site",
                     scope_id=site.site_id,
-                    payload_json=self._serialize_site(site),
+                    payload_json={
+                        **self._serialize_site(site),
+                        "deactivated_site_ids": deactivated_site_ids,
+                    },
                 )
             else:
                 payload["site_status"] = str(site.status or "")
@@ -834,7 +988,16 @@ class CommercialServiceSiteMixin(CommercialServiceAuditMixin):
                 expires_at=None,
                 revoked_at=None,
             )
-            if site.status == SITE_STATUS_PROVISIONING:
+            if site.status in {SITE_STATUS_PROVISIONING, SITE_STATUS_INACTIVE}:
+                deactivated_site_ids = [
+                    str(item.get("site_id") or "")
+                    for item in self._deactivate_account_active_sibling_sites(
+                        repository=repository,
+                        account_id=site.account_id or "",
+                        activated_site_id=site.site_id,
+                        audit_context=audit_context,
+                    )
+                ]
                 site.status = SITE_STATUS_ACTIVE
                 if site.provisioned_at is None:
                     site.provisioned_at = now
@@ -851,7 +1014,10 @@ class CommercialServiceSiteMixin(CommercialServiceAuditMixin):
                     key_id=api_key.key_id,
                     scope_kind="site",
                     scope_id=site.site_id,
-                    payload_json=self._serialize_site(site),
+                    payload_json={
+                        **self._serialize_site(site),
+                        "deactivated_site_ids": deactivated_site_ids,
+                    },
                 )
 
             cloud_api_key = build_customer_api_key(
