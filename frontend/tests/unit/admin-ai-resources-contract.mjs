@@ -124,10 +124,16 @@ assert.match(
   'AI resources page must default to the supplier list workflow'
 );
 
+assert.doesNotMatch(
+  pageSource,
+  /active=\{activeView === 'connections' && activeSupplierTab === 'model'\}[\s\S]*active=\{activeView === 'diagnostics'\}/,
+  'AI resources must not render a second supplier/diagnostics top-level tab row above the supplier settings panel'
+);
+
 assert.match(
   pageSource,
-  /supplier_tab_model[\s\S]*supplier_tab_capability[\s\S]*tab_diagnostics/,
-  'AI resources top-level tabs must stay focused on model suppliers, capability suppliers, and diagnostics'
+  /setActiveView\('diagnostics'\)[\s\S]*action_view_diagnostics/,
+  'Provider management diagnostics must be a secondary action, not a duplicate supplier tab'
 );
 
 assert.doesNotMatch(
@@ -230,6 +236,24 @@ assert.doesNotMatch(
   pageSource,
   /tab_ability_models/,
   'Provider Management must not expose Ability-Model Routing as an internal tab'
+);
+
+assert.match(
+  pageSource,
+  /status_filter_label[\s\S]*filter_ready[\s\S]*filter_missing_secret[\s\S]*filter_disabled/,
+  'Provider channel status choices must render as a lightweight filter group'
+);
+
+assert.match(
+  pageSource,
+  /activeSupplierTab === 'model' \|\| providerFormOpen/,
+  'Provider channel form must render when opened from capability suppliers as well as model suppliers'
+);
+
+assert.match(
+  pageSource,
+  /activeCapabilityConnections\.map[\s\S]*onClick=\{\(\) => \{[\s\S]*editProviderConnection\(connection\)/,
+  'Capability supplier Configure action must open the shared provider connection form'
 );
 
 assert.match(
@@ -468,8 +492,38 @@ assert.match(
 
 assert.match(
   pageSource,
-  /connection_section_title[\s\S]*model_visibility_title[\s\S]*usage_scope_title[\s\S]*advanced_settings_title/,
-  'Provider channel form must separate connection, model visibility, usage scope, and advanced runtime settings'
+  /connection_section_title[\s\S]*model_visibility_title[\s\S]*usage_scope_title/,
+  'Provider channel form must separate connection, model visibility, and usage scope'
+);
+
+assert.match(
+  pageSource,
+  /isCapabilityProviderDescriptor[\s\S]*const isCapabilityProviderForm/,
+  'Provider channel form must classify capability suppliers before rendering provider-specific fields'
+);
+
+assert.match(
+  pageSource,
+  /capability_channel_form_edit_title[\s\S]*Edit capability supplier/,
+  'Capability supplier edit dialog must not reuse the model provider channel title'
+);
+
+assert.match(
+  pageSource,
+  /isCapabilityProviderForm \? null : \([\s\S]*model_visibility_title/,
+  'Capability supplier dialog must not render model visibility, model catalog sync, or model reference controls'
+);
+
+assert.match(
+  pageSource,
+  /field_capability_supplier_type[\s\S]*PROVIDER_PRESETS\.map/,
+  'Capability supplier dialog must show a capability supplier type instead of exposing model provider presets'
+);
+
+assert.match(
+  i18nSource,
+  /'admin\.ai_resources\.capability_channel_form_edit_title': '编辑能力供应商'/,
+  'Capability supplier dialog must provide Simplified Chinese copy distinct from model provider channels'
 );
 
 assert.match(
@@ -484,10 +538,16 @@ assert.match(
   'Provider channel usage scope copy must preserve Cloud runtime boundaries'
 );
 
-assert.ok(
-  pageSource.indexOf("usage_scope_title") < pageSource.indexOf("field_capabilities', 'Capabilities'") &&
-    pageSource.indexOf("field_capabilities', 'Capabilities'") < pageSource.indexOf("advanced_settings_title"),
-  'Provider channel capabilities/profiles must be visible usage scope fields, not buried in advanced runtime settings'
+assert.match(
+  pageSource,
+  /usage_scope_capability_summary[\s\S]*usage_scope_profile_summary[\s\S]*action_edit_usage_scope_advanced[\s\S]*field_capabilities[\s\S]*field_profiles/,
+  'Provider channel capabilities/profiles must default to readable summaries with advanced edit controls'
+);
+
+assert.match(
+  pageSource,
+  /providerUsesCustomRuntimeFields \? \([\s\S]*advanced_settings_title[\s\S]*field_connection_id[\s\S]*field_provider_id[\s\S]*field_kind[\s\S]*field_source_role/,
+  'Provider channel runtime identity fields must stay hidden unless the operator is configuring a custom channel'
 );
 
 assert.match(
@@ -498,8 +558,8 @@ assert.match(
 
 assert.match(
   pageSource,
-  /catalog_model_header_feature[\s\S]*catalog_model_status_catalog_only/,
-  'Provider channel model preview must expose model feature and catalog-only status'
+  /catalog_model_header_feature[\s\S]*catalog_model_status_verified/,
+  'Provider channel merged model list must expose model feature and upstream verification status'
 );
 
 assert.match(
@@ -540,7 +600,7 @@ assert.doesNotMatch(
 
 assert.match(
   pageSource,
-  /model-references\?provider_id/,
+  /model-references\?\$\{params\.toString\(\)\}/,
   'Provider channel form must load model reference intelligence by provider'
 );
 
@@ -552,7 +612,7 @@ assert.match(
 
 assert.match(
   pageSource,
-  /model_reference_desc[\s\S]*It is not billing truth or routing truth/,
+  /model_visibility_list_desc[\s\S]*Reference prices are not billing truth or routing truth/,
   'Provider channel model reference copy must prevent billing or routing truth drift'
 );
 
@@ -560,6 +620,30 @@ assert.match(
   pageSource,
   /price_unit_per_1m/,
   'Provider channel reference table must label price units explicitly'
+);
+
+assert.match(
+  pageSource,
+  /modelVisibilityRows/,
+  'Provider channel form must merge upstream catalog and reference intelligence into one model list'
+);
+
+assert.match(
+  pageSource,
+  /field_reference_provider/,
+  'Provider channel form must allow choosing a reference provider for compatible or custom channels'
+);
+
+assert.match(
+  pageSource,
+  /canChooseReferenceProvider[\s\S]*openai_compatible[\s\S]*newapi[\s\S]*custom[\s\S]*referenceProviderCanBeChanged \? \([\s\S]*<details/,
+  'Provider channel form must hide reference provider selection by default and expose it only as advanced detail for compatible or custom channels'
+);
+
+assert.match(
+  pageSource,
+  /field_search_models[\s\S]*model_visibility_result_count[\s\S]*field_feature_filter[\s\S]*field_visibility_filter/,
+  'Provider channel model list must prioritize search and result count before secondary filters'
 );
 
 assert.match(

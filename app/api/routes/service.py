@@ -3529,6 +3529,8 @@ async def list_admin_model_references(
     request: Request,
     provider_id: str = "",
     model_ids: str = "",
+    feature: str = "",
+    include_deprecated: bool = True,
     search: str = "",
     limit: int = Query(default=200, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
@@ -3540,6 +3542,8 @@ async def list_admin_model_references(
     result = ModelReferenceService(services.settings.database_url).list_references(
         provider_id=provider_id,
         model_ids=[item.strip() for item in model_ids.split(",") if item.strip()],
+        feature=feature,
+        include_deprecated=include_deprecated,
         search=search,
         limit=limit,
         offset=offset,

@@ -1184,6 +1184,21 @@ def test_admin_model_references_syncs_models_dev_payload_as_reference_only(
                                     "output": 10.0,
                                     "cache_read": 0.125,
                                 },
+                            },
+                            "gpt-image-2": {
+                                "id": "gpt-image-2",
+                                "name": "GPT Image 2",
+                                "family": "gpt-image",
+                                "deprecated": True,
+                                "modalities": {
+                                    "input": ["text", "image"],
+                                    "output": ["image"],
+                                },
+                                "limit": {"context": 32000, "output": 1},
+                                "cost": {
+                                    "input": 2.0,
+                                    "output": 12.0,
+                                },
                             }
                         },
                     }
@@ -1196,7 +1211,7 @@ def test_admin_model_references_syncs_models_dev_payload_as_reference_only(
     sync_data = response.json()["data"]
     assert sync_data["surface"] == "admin_model_reference_sync"
     assert sync_data["source_id"] == "models.dev"
-    assert sync_data["model_count"] == 1
+    assert sync_data["model_count"] == 2
     assert sync_data["price_unit"] == "usd_per_1m_tokens"
     assert sync_data["billing_truth"] is False
     assert sync_data["boundary"]["reference_only"] is True
@@ -1210,6 +1225,7 @@ def test_admin_model_references_syncs_models_dev_payload_as_reference_only(
     data = list_response.json()["data"]
     assert data["surface"] == "admin_model_references"
     assert data["boundary"]["billing_truth"] is False
+    assert data["total"] == 2
     assert data["items"][0]["model_id"] == "gpt-5.5"
     assert data["items"][0]["feature"] == "text"
     assert data["items"][0]["capability_flags"]["reasoning"] is True
@@ -1222,6 +1238,26 @@ def test_admin_model_references_syncs_models_dev_payload_as_reference_only(
         "billing_truth": False,
     }
     assert "OpenAI" in json.dumps(data)
+
+    image_response = client.get(
+        "/internal/service/admin/model-references?provider_id=openai&feature=image",
+        headers=build_internal_headers(),
+    )
+    assert image_response.status_code == 200, image_response.text
+    image_data = image_response.json()["data"]
+    assert image_data["total"] == 1
+    assert image_data["items"][0]["model_id"] == "gpt-image-2"
+    assert image_data["items"][0]["feature"] == "image"
+    assert image_data["items"][0]["is_deprecated"] is True
+
+    active_response = client.get(
+        "/internal/service/admin/model-references?provider_id=openai&include_deprecated=false&search=image",
+        headers=build_internal_headers(),
+    )
+    assert active_response.status_code == 200, active_response.text
+    active_data = active_response.json()["data"]
+    assert active_data["total"] == 0
+
     with get_session(database_url) as session:
         row = session.scalar(
             select(ModelReferenceModel).where(

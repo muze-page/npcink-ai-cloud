@@ -35,6 +35,16 @@ The Admin provider-channel form may display reference capability and price
 metadata beside the provider-visible model catalog. Operators may use the data
 to decide which model IDs to expose on a provider channel.
 
+The provider-channel form should keep this lightweight:
+
+- merge provider-visible catalog rows and reference metadata into one model list;
+- keep enabled models visible first;
+- allow local search and simple feature / enabled-state filtering;
+- allow the operator to choose a reference provider id when an OpenAI-compatible
+  or custom channel maps to a different upstream provider;
+- keep manual model entry as the fallback for models not present in either
+  source.
+
 ## Boundaries
 
 This layer is allowed to be:
@@ -86,6 +96,7 @@ This price unit is explicit display metadata only.
 - no customer-facing price guarantee;
 - no replacement of platform `catalog_models`;
 - no replacement of provider connection model visibility.
+- no heavyweight model operations console.
 
 ## Verification
 

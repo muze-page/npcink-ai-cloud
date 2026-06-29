@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 import httpx
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 
 from app.core.db import get_session
 from app.core.models import (
@@ -36,6 +36,8 @@ class ModelReferenceService:
         *,
         provider_id: str = "",
         model_ids: list[str] | None = None,
+        feature: str = "",
+        include_deprecated: bool = True,
         search: str = "",
         limit: int = 200,
         offset: int = 0,
@@ -61,9 +63,21 @@ class ModelReferenceService:
                 )
             if normalized_model_ids:
                 statement = statement.where(ModelReferenceModel.model_id.in_(normalized_model_ids))
+            normalized_feature = _string(feature).lower()
+            if normalized_feature and normalized_feature != "all":
+                statement = statement.where(ModelReferenceModel.feature == normalized_feature)
+            if not include_deprecated:
+                statement = statement.where(ModelReferenceModel.is_deprecated.is_(False))
             if normalized_search:
                 like = f"%{normalized_search}%"
-                statement = statement.where(func.lower(ModelReferenceModel.model_id).like(like))
+                statement = statement.where(
+                    or_(
+                        func.lower(ModelReferenceModel.model_id).like(like),
+                        func.lower(ModelReferenceModel.display_name).like(like),
+                        func.lower(ModelReferenceModel.family).like(like),
+                        func.lower(ModelReferenceModel.provider_id).like(like),
+                    )
+                )
 
             total = int(session.scalar(select(func.count()).select_from(statement.subquery())) or 0)
             rows = list(
@@ -432,6 +446,8 @@ def _feature_from_modalities(modalities: dict[str, Any]) -> str:
         return "audio"
     if "image" in outputs:
         return "image"
+    if "video" in outputs:
+        return "video"
     if "embedding" in outputs or "embedding" in inputs:
         return "embedding"
     return "text"
