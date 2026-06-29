@@ -250,12 +250,7 @@ test('admin support and detail pages keep bounded operator hierarchy', async ({ 
   await page.goto('/admin/accounts');
   await expect(page.getByText(/Updated detail note/i)).toBeVisible();
   await page.goto(`/admin/accounts/${LONG_ACCOUNT_ID}`);
-  const trialReadinessSummary = page.locator('[data-ui="trial-readiness-summary"]');
-  await expect(trialReadinessSummary.getByText(/Trial readiness|试用准备|試用準備/i).first()).toBeVisible();
-  await expect(trialReadinessSummary).toHaveJSProperty('open', false);
-  await expect(trialReadinessSummary.getByText(/Cloud API key/i).first()).toBeHidden();
-  await trialReadinessSummary.getByText(/Trial readiness|试用准备|試用準備/i).first().click();
-  await expect(trialReadinessSummary.getByText(/Cloud API key/i).first()).toBeVisible();
+  await expect(page.locator('[data-ui="trial-readiness-summary"]')).toHaveCount(0);
   await expect(page.getByText(/^(Top-up packs|加量包)$/i)).toBeVisible();
   await expect(page.getByRole('button', { name: /Small top-up|小加量包/i })).toBeVisible();
   await page.getByRole('button', { name: /Small top-up|小加量包/i }).click();

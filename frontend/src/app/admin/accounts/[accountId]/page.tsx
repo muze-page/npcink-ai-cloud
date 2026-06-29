@@ -59,32 +59,6 @@ interface AccountDetail {
     status?: string;
     name?: string;
   }>;
-  trial_readiness?: TrialReadinessSummary;
-}
-
-interface TrialReadinessCheck {
-  code: string;
-  label: string;
-  ok: boolean;
-  detail: string;
-}
-
-interface TrialReadinessSummary {
-  status: 'ready' | 'action_required' | 'blocked' | string;
-  next_action: string;
-  next_action_label: string;
-  blocking_codes: string[];
-  summary: {
-    site_count: number;
-    active_site_count: number;
-    active_key_site_count: number;
-    sites_without_active_key: string[];
-    subscription_status?: string;
-    display_package_label?: string;
-    package_kind?: PackageKind | string;
-    coverage_state?: CoverageState | string;
-  };
-  checks: TrialReadinessCheck[];
 }
 
 interface PackagePlanListItem {
@@ -708,8 +682,6 @@ function AccountDetailContent() {
       const accountStatusUpdatedAt = String(accountMetadata.account_status_updated_at || '').trim();
       const sites = Array.isArray(payload.sites) ? payload.sites : [];
       const subscriptions = Array.isArray(payload.subscriptions) ? payload.subscriptions : [];
-      const readiness = payload.trial_readiness || {};
-      const readinessSummary = readiness.summary || {};
       const nextAccount: AccountDetail = {
         account_id: String(accountData.account_id || accountId),
         name: String(accountData.name || accountData.account_id || accountId),
@@ -754,36 +726,6 @@ function AccountDetailContent() {
             coverage_state: packageDisplay.coverage_state,
           };
         }),
-        trial_readiness: readiness.status
-          ? {
-              status: String(readiness.status || 'action_required'),
-              next_action: String(readiness.next_action || ''),
-              next_action_label: String(readiness.next_action_label || ''),
-              blocking_codes: Array.isArray(readiness.blocking_codes)
-                ? readiness.blocking_codes.map((item: unknown) => String(item))
-                : [],
-              summary: {
-                site_count: Number(readinessSummary.site_count || 0),
-                active_site_count: Number(readinessSummary.active_site_count || 0),
-                active_key_site_count: Number(readinessSummary.active_key_site_count || 0),
-                sites_without_active_key: Array.isArray(readinessSummary.sites_without_active_key)
-                  ? readinessSummary.sites_without_active_key.map((item: unknown) => String(item))
-                  : [],
-                subscription_status: String(readinessSummary.subscription_status || ''),
-                display_package_label: String(readinessSummary.display_package_label || ''),
-                package_kind: String(readinessSummary.package_kind || ''),
-                coverage_state: String(readinessSummary.coverage_state || ''),
-              },
-              checks: Array.isArray(readiness.checks)
-                ? readiness.checks.map((item: Record<string, unknown>) => ({
-                    code: String(item.code || ''),
-                    label: String(item.label || ''),
-                    ok: Boolean(item.ok),
-                    detail: String(item.detail || ''),
-                  }))
-                : [],
-            }
-          : undefined,
       };
       setAccount(nextAccount);
       setAccountMetaForm({
@@ -1229,9 +1171,7 @@ function AccountDetailContent() {
   const resourceMetricByKey = new Map((quotaSummary?.resource_limits || []).map((item) => [item.key, item]));
   const creditMetric = quotaSummary?.credit || null;
   const runBudgetSummary = creditMetric ? metricToBudgetSummary(creditMetric) : summarizeBudget(siteRuntimeData, 'runs');
-  const activeKeySiteCount =
-    account.trial_readiness?.summary?.active_key_site_count ??
-    siteRuntimeItems.filter((item) => item.activeKeyCount > 0).length;
+  const activeKeySiteCount = siteRuntimeItems.filter((item) => item.activeKeyCount > 0).length;
   const boundSitesMetric = resourceMetricByKey.get('bound_sites') || null;
   const vectorDocumentsMetric = resourceMetricByKey.get('vector_documents') || null;
   const concurrentRunsMetric = resourceMetricByKey.get('concurrent_runs') || null;
@@ -1283,64 +1223,6 @@ function AccountDetailContent() {
     primaryPackage.package_kind === 'tier_package' && primaryPackage.coverage_state === 'covered';
   const hasFormalFreeCoverage =
     primaryPackage.package_kind === 'formal_free' && primaryPackage.coverage_state === 'covered';
-  const trialReadiness = account.trial_readiness || null;
-  const trialReadinessTone =
-    trialReadiness?.status === 'ready'
-      ? 'ok'
-      : trialReadiness?.status === 'blocked'
-        ? 'error'
-        : 'warning';
-  const trialReadinessTitle =
-    trialReadiness?.status === 'ready'
-      ? t('admin.account_detail.trial_readiness_ready_title', undefined, 'Ready for controlled trial')
-      : trialReadiness?.status === 'blocked'
-        ? t('admin.account_detail.trial_readiness_blocked_title', undefined, 'Blocked before trial')
-        : t('admin.account_detail.trial_readiness_action_title', undefined, 'Action required before trial');
-  const trialReadinessDescription =
-    trialReadiness?.status === 'ready'
-      ? t(
-          'admin.account_detail.trial_readiness_ready_desc',
-          undefined,
-          'Package coverage, active site posture, Cloud API key coverage, and site admin workspace access are ready for a controlled trial.'
-        )
-      : t(
-          'admin.account_detail.trial_readiness_action_desc',
-          undefined,
-          'Use this checklist as the operator path for internal testing: fix the first failed item, then rerun smoke or bind the approved site administrator.'
-        );
-  const trialSummary = trialReadiness?.summary;
-  const trialMetricItems = [
-    {
-      label: t('admin.account_detail.trial_sites_metric', undefined, 'Sites active'),
-      value: `${formatInteger(trialSummary?.active_site_count || 0)}/${formatInteger(trialSummary?.site_count || 0)}`,
-      detail: t('admin.account_detail.trial_sites_metric_desc', undefined, 'Approved WordPress sites attached to this customer.'),
-      toneClassName:
-        trialSummary && trialSummary.site_count > 0 && trialSummary.active_site_count === trialSummary.site_count
-          ? undefined
-          : 'text-red-600 dark:text-red-400',
-      size: 'compact' as const,
-    },
-    {
-      label: t('admin.account_detail.trial_keys_metric', undefined, 'API keys'),
-      value: `${formatInteger(trialSummary?.active_key_site_count || 0)}/${formatInteger(trialSummary?.site_count || 0)}`,
-      detail: t('admin.account_detail.trial_keys_metric_desc', undefined, 'Sites with active Cloud API key coverage.'),
-      toneClassName:
-        trialSummary && trialSummary.site_count > 0 && trialSummary.active_key_site_count === trialSummary.site_count
-          ? undefined
-          : 'text-red-600 dark:text-red-400',
-      size: 'compact' as const,
-    },
-    {
-      label: t('common.package', undefined, 'Package'),
-      value: trialSummary?.display_package_label || primaryPackage.display_package_label,
-      detail: translateCoverageStateLabel(t, (trialSummary?.coverage_state as CoverageState) || primaryPackage.coverage_state),
-      toneClassName:
-        (trialSummary?.coverage_state || primaryPackage.coverage_state) === 'covered'
-          ? undefined
-          : 'text-red-600 dark:text-red-400',
-      size: 'compact' as const,
-    },
-  ];
   const postureTone =
     account.status === 'suspended' || riskySubscriptions.length > 0 || hasUncoveredCommercialPosture || hasDevBaselineOnly
       ? 'error'
@@ -2191,55 +2073,6 @@ function AccountDetailContent() {
           </BackofficeStackCard>
         </div>
       </BackofficePrimaryPanel>
-
-      {trialReadiness ? (
-        <BackofficeSectionPanel>
-          <details data-ui="trial-readiness-summary" className="group">
-            <summary className="flex cursor-pointer list-none items-center justify-between gap-4">
-              <div>
-                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-gray-500 dark:text-gray-400">
-                  {t('admin.account_detail.advanced_checks_eyebrow', undefined, 'Advanced checks')}
-                </p>
-                <h2 className="mt-2 text-xl font-semibold text-gray-950 dark:text-white">
-                  {t('admin.account_detail.trial_readiness_eyebrow', undefined, 'Trial readiness')}
-                </h2>
-                <p className="mt-1 text-sm text-gray-600 dark:text-gray-400">
-                  {trialReadinessTitle}
-                </p>
-              </div>
-              <BackofficeStatusBadge status={trialReadinessTone} label={translateStatusLabel(trialReadinessTone, t)} />
-            </summary>
-            <div className="mt-5 space-y-4">
-              <p className="max-w-3xl text-sm leading-6 text-gray-600 dark:text-gray-300">
-                {trialReadinessDescription}
-              </p>
-              <BackofficeMetricStrip items={trialMetricItems} columnsClassName="md:grid-cols-2 xl:grid-cols-4" />
-              <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
-                {trialReadiness.checks.map((check) => (
-                  <div
-                    key={check.code}
-                    className={cn(
-                      'rounded-[1rem] border px-3 py-3 text-sm',
-                      check.ok
-                        ? 'border-emerald-200 bg-emerald-50/70 text-emerald-800 dark:border-emerald-900/50 dark:bg-emerald-950/20 dark:text-emerald-200'
-                        : 'border-amber-200 bg-amber-50/75 text-amber-900 dark:border-amber-900/50 dark:bg-amber-950/20 dark:text-amber-100'
-                    )}
-                  >
-                    <div className="flex items-start justify-between gap-3">
-                      <p className="font-semibold">{check.label}</p>
-                      <BackofficeStatusBadge
-                        status={check.ok ? 'ok' : 'warning'}
-                        label={check.ok ? translateStatusLabel('ok', t) : translateStatusLabel('warning', t)}
-                      />
-                    </div>
-                    <p className="mt-2 text-xs leading-5 opacity-85">{check.detail}</p>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </details>
-        </BackofficeSectionPanel>
-      ) : null}
 
       <BackofficeSectionPanel className="space-y-5">
         <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
