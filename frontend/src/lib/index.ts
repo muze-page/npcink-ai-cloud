@@ -96,6 +96,9 @@ export {
   type RotateKeyResponse,
   type PortalLoginCodeRequest,
   type PortalLoginCodeVerifyRequest,
+  type PortalRegistrationCodeRequest,
+  type PortalRegistrationVerifyRequest,
+  type PortalRegistrationResult,
   type CreateKeyRequest,
   type RotateKeyRequest,
 } from './portal-client';

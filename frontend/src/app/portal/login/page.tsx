@@ -1,5 +1,6 @@
 'use client';
 
+import Link from 'next/link';
 import React, { Suspense, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { LoadingFallback } from '@/components/ui/LoadingFallback';
@@ -138,7 +139,7 @@ function LoginFormContent() {
           description={t(
             'auth.sign_in_desc',
             undefined,
-            'Use your approved site admin email address to receive a one-time verification code.'
+            'Use your Portal email address to receive a one-time verification code.'
           )}
           summary={(
             <div className="grid gap-4 lg:grid-cols-2">
@@ -158,7 +159,7 @@ function LoginFormContent() {
                   {t(
                     'auth.email_verification_desc',
                     undefined,
-                    'Platform admins approve site admin access first. Only approved email addresses can request a verification code.'
+                    'Existing users can sign in with email verification. New users can create a Free account first.'
                   )}
                 </p>
               </BackofficeStackCard>
@@ -173,7 +174,7 @@ function LoginFormContent() {
               {t(
                 'portal.login.notice',
                 undefined,
-                'Enter your approved site admin email address, receive a verification code, then continue into the portal workspace.'
+                'Enter your Portal email address, receive a verification code, then continue into the portal workspace.'
               )}
             </p>
           </BackofficeStackCard>
@@ -190,7 +191,7 @@ function LoginFormContent() {
             form.step === 'request' ? 'auth.request_code_desc' : 'auth.verify_code_desc',
             undefined,
             form.step === 'request'
-              ? 'We will send a short-lived code to your approved site admin email address.'
+              ? 'We will send a short-lived code to your Portal email address.'
               : 'Enter the code you received to create your portal session.'
           )}
         />
@@ -292,8 +293,13 @@ function LoginFormContent() {
               {t(
                 'auth.no_password',
                 undefined,
-                'Portal sign-in is passwordless. Platform admins approve site admin access first, then you verify with a one-time code.'
+                'Portal sign-in is passwordless. New users can create a Free account and bind QQ quick login after signing in.'
               )}
+            </p>
+            <p className="mt-3 text-center text-sm text-gray-600 dark:text-gray-400">
+              <Link href="/portal/register" className="font-medium text-blue-600 hover:text-blue-700 dark:text-blue-300">
+                {t('auth.create_free_account', undefined, 'Create a Free account')}
+              </Link>
             </p>
           </div>
         </BackofficeSectionPanel>

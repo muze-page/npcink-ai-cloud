@@ -30,6 +30,7 @@ from app.core.models import (
     IdentityProviderBinding,
     PluginObservabilityEvent,
     Principal,
+    Site,
     SiteUserGrant,
 )
 from app.core.services import CloudServices
@@ -257,6 +258,50 @@ def _verify_portal_login_code(
 ) -> dict[str, object]:
     response = client.post(
         "/portal/v1/auth/code/verify",
+        json={"email": email, "code": code},
+    )
+    assert response.status_code == 200, response.text
+    data = response.json()["data"]
+    _GRANTS_BY_EMAIL[_normalize_test_email(email)] = data
+    return data
+
+
+def _request_portal_registration_code(
+    client: TestClient,
+    *,
+    email: str,
+    site_url: str,
+    site_name: str = "",
+    headers: dict[str, str] | None = None,
+) -> dict[str, object]:
+    request_headers = dict(headers or {})
+    if (
+        str(request_headers.get("x-npcink-debug-portal-link") or "").strip() == "1"
+        and "x-npcink-dev-login-code" not in request_headers
+    ):
+        request_headers["x-npcink-dev-login-code"] = "1"
+    response = client.post(
+        "/portal/v1/register/code/request",
+        json={
+            "email": email,
+            "site_url": site_url,
+            "site_name": site_name,
+            "use_case": "content generation",
+        },
+        headers=request_headers,
+    )
+    assert response.status_code == 200, response.text
+    return response.json()["data"]
+
+
+def _verify_portal_registration_code(
+    client: TestClient,
+    *,
+    email: str,
+    code: str,
+) -> dict[str, object]:
+    response = client.post(
+        "/portal/v1/register/verify",
         json={"email": email, "code": code},
     )
     assert response.status_code == 200, response.text
@@ -1820,6 +1865,111 @@ def test_portal_login_code_request_masks_missing_principal_access(
     assert response.status_code == 200
     assert response.json()["data"]["delivery"] == "email"
     assert response.json()["data"]["code"] == ""
+
+    dispose_engine(database_url)
+
+
+def test_portal_self_registration_opens_free_account_and_session(
+    tmp_path: Path,
+) -> None:
+    database_url, client = _build_client(
+        tmp_path,
+        settings_overrides={
+            "portal_jwt_secret": TEST_PORTAL_JWT_SECRET,
+            "portal_login_code_ttl_seconds": 300,
+        },
+    )
+
+    request_data = _request_portal_registration_code(
+        client,
+        email="new-portal-user@example.com",
+        site_url="https://example.com",
+        site_name="Example Site",
+        headers={"x-npcink-debug-portal-link": "1"},
+    )
+
+    assert request_data["delivery"] == "development_code"
+    assert request_data["expires_in_seconds"] == 300
+    assert request_data["code"] != ""
+    assert request_data["site"]["site_id"] == "site_example-com"
+
+    registration_data = _verify_portal_registration_code(
+        client,
+        email="new-portal-user@example.com",
+        code=str(request_data["code"]),
+    )
+
+    assert registration_data["status"] == "registered"
+    assert str(registration_data["principal_id"]).startswith("prn_")
+    assert str(registration_data["account_id"]).startswith("acct_")
+    assert registration_data["site_id"] == "site_example-com"
+    assert registration_data["site"]["status"] == "active"
+    assert registration_data["site"]["wordpress_url"] == "https://example.com"
+    assert registration_data["subscription"]["plan_id"] == "plan_free"
+    assert registration_data["subscription"]["package_alias"] == "Free"
+    assert registration_data["session"]["state"] == "active"
+    assert registration_data["session"]["transport"] == "cookie"
+
+    session_response = client.get("/portal/v1/session")
+    assert session_response.status_code == 200
+    assert session_response.json()["data"]["principal_id"] == registration_data["principal_id"]
+    assert session_response.json()["data"]["site_id"] == "site_example-com"
+
+    with get_session(database_url) as session:
+        identity = session.scalar(
+            select(Principal).where(
+                Principal.principal_id == str(registration_data["principal_id"])
+            )
+        )
+        assert identity is not None
+        assert identity.status == PRINCIPAL_STATUS_ACTIVE
+        assert identity.email == "new-portal-user@example.com"
+        account_membership = session.scalar(
+            select(AccountUserMembership).where(
+                AccountUserMembership.principal_id == identity.principal_id
+            )
+        )
+        assert account_membership is not None
+        assert account_membership.status == "active"
+        site = session.scalar(select(Site).where(Site.site_id == "site_example-com"))
+        assert site is not None
+        assert site.account_id == registration_data["account_id"]
+        site_grant = session.scalar(
+            select(SiteUserGrant).where(
+                SiteUserGrant.principal_id == identity.principal_id,
+                SiteUserGrant.site_id == "site_example-com",
+            )
+        )
+        assert site_grant is not None
+        assert site_grant.status == "active"
+        subscription = session.scalar(
+            select(AccountSubscription).where(
+                AccountSubscription.account_id == str(registration_data["account_id"])
+            )
+        )
+        assert subscription is not None
+        assert subscription.plan_id == "plan_free"
+
+    second_request_data = _request_portal_registration_code(
+        client,
+        email="new-portal-user@example.com",
+        site_url="https://second.example.com",
+        site_name="Second Site",
+        headers={"x-npcink-debug-portal-link": "1"},
+    )
+    second_registration_data = _verify_portal_registration_code(
+        client,
+        email="new-portal-user@example.com",
+        code=str(second_request_data["code"]),
+    )
+    assert second_registration_data["status"] == "existing_user"
+    assert second_registration_data["principal_id"] == registration_data["principal_id"]
+    assert second_registration_data["site_id"] == "site_example-com"
+    with get_session(database_url) as session:
+        site_count = len(list(session.scalars(select(Site))))
+        subscription_count = len(list(session.scalars(select(AccountSubscription))))
+    assert site_count == 1
+    assert subscription_count == 1
 
     dispose_engine(database_url)
 

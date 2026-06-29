@@ -6,11 +6,13 @@ import secrets
 from collections import defaultdict
 from datetime import UTC, datetime, timedelta
 from typing import Any, cast
+from urllib.parse import urlsplit
 from uuid import uuid4
 
 from app.adapters.repositories.commercial_repository import CommercialRepository
 from app.core.db import get_session
 from app.core.models import (
+    ACCOUNT_STATUS_ACTIVE,
     ACCOUNT_USER_MEMBERSHIP_STATUS_ACTIVE,
     ACCOUNT_USER_MEMBERSHIP_STATUS_REVOKED,
     IDENTITY_PROVIDER_BINDING_STATUS_ACTIVE,
@@ -23,6 +25,7 @@ from app.core.models import (
     PORTAL_OAUTH_STATE_STATUS_PENDING,
     PRINCIPAL_STATUS_ACTIVE,
     PRINCIPAL_STATUS_DISABLED,
+    SITE_STATUS_ACTIVE,
     SITE_USER_GRANT_STATUS_ACTIVE,
     SITE_USER_GRANT_STATUS_REVOKED,
     Site,
@@ -37,7 +40,9 @@ from app.domain.commercial.identity import (
     IDENTITY_TYPE_USER,
     USER_ROLE_USER,
     _new_principal_id,
+    _normalize_portal_site_url,
     _normalize_principal_email,
+    _slugify_portal_site_segment,
     normalize_user_role,
     resolve_principal_allowed_actions,
 )
@@ -118,6 +123,23 @@ def _resolve_membership_allowed_actions(value: object) -> list[str]:
         if actions:
             return actions
     return resolve_principal_allowed_actions()
+
+
+def _portal_registration_code_metadata(value: object) -> dict[str, object]:
+    metadata = value if isinstance(value, dict) else {}
+    if str(metadata.get("purpose") or "").strip() != "portal_registration":
+        return {}
+    return metadata
+
+
+def _first_accessible_site_id(
+    grants: list[tuple[Site, object, object]],
+) -> str:
+    for site, _identity, _grant in grants:
+        site_id = str(getattr(site, "site_id", "") or "").strip()
+        if site_id:
+            return site_id
+    return ""
 
 
 class CommercialServicePortalMixin(CommercialServiceAuditMixin):
@@ -514,6 +536,288 @@ class CommercialServicePortalMixin(CommercialServiceAuditMixin):
                 for site, _identity, grant in grants
             ],
         }
+
+    def issue_portal_registration_code(
+        self,
+        *,
+        email: str,
+        wordpress_url: str,
+        site_name: str = "",
+        use_case: str = "",
+        ttl_seconds: int,
+    ) -> dict[str, object]:
+        normalized_email = _normalize_principal_email(email)
+        canonical_wordpress_url, site_source = _normalize_portal_site_url(wordpress_url)
+        site_slug = _slugify_portal_site_segment(site_source)
+        if not site_slug:
+            raise CommercialPermissionError(
+                "service.portal_site_slug_invalid",
+                "wordpress site url could not be converted into a stable site id",
+            )
+        principal_id = _new_principal_id()
+        account_id = f"acct_{principal_id.removeprefix('prn_')}"
+        site_id = f"site_{site_slug}"
+        resolved_site_name = (
+            str(site_name or "").strip()
+            or urlsplit(canonical_wordpress_url).hostname
+            or site_id
+        )
+        normalized_use_case = str(use_case or "").strip()[:500]
+        now = self.now_factory()
+        expires_at = now + timedelta(seconds=max(60, int(ttl_seconds or 0)))
+        code = f"{secrets.randbelow(1_000_000):06d}"
+        code_hash = build_secret_hash(code)
+
+        with get_session(self.database_url) as session:
+            repository = CommercialRepository(session)
+            existing_identity = repository.get_principal_identity_by_email(
+                email=normalized_email
+            )
+            if existing_identity is not None:
+                principal_id = str(existing_identity.principal_id or "").strip() or principal_id
+                account_id = f"acct_{principal_id.removeprefix('prn_')}"
+            existing_codes = repository.list_portal_login_codes(
+                email=normalized_email,
+                active_only=True,
+                now=now,
+                limit=None,
+            )
+            for existing in existing_codes:
+                metadata = (
+                    existing.metadata_json
+                    if isinstance(existing.metadata_json, dict)
+                    else {}
+                )
+                if str(metadata.get("purpose") or "").strip() == "portal_registration":
+                    existing.status = PORTAL_LOGIN_CODE_STATUS_EXPIRED
+                    existing.consumed_at = now
+            repository.create_portal_login_code(
+                code_id=f"plc_{uuid4().hex}",
+                email=normalized_email,
+                principal_id=principal_id,
+                code_hash=code_hash,
+                expires_at=expires_at,
+                metadata_json={
+                    "purpose": "portal_registration",
+                    "source": "portal_self_registration",
+                    "account_id": account_id,
+                    "site_id": site_id,
+                    "site_name": resolved_site_name,
+                    "wordpress_url": canonical_wordpress_url,
+                    "use_case": normalized_use_case,
+                },
+            )
+            session.commit()
+        return {
+            "email": normalized_email,
+            "principal_id": principal_id,
+            "account_id": account_id,
+            "site_id": site_id,
+            "site_name": resolved_site_name,
+            "wordpress_url": canonical_wordpress_url,
+            "code": code,
+            "expires_at": self._serialize_datetime(expires_at),
+            "expires_in_seconds": max(60, int(ttl_seconds or 0)),
+        }
+
+    def verify_portal_registration_code(
+        self,
+        *,
+        email: str,
+        code: str,
+        max_attempts: int,
+        audit_context: ServiceAuditContext | None = None,
+        verified_at: datetime | None = None,
+    ) -> dict[str, object]:
+        normalized_email = _normalize_principal_email(email)
+        normalized_code = str(code or "").strip()
+        if not normalized_code or not normalized_code.isdigit():
+            raise CommercialPermissionError(
+                "service.portal_registration_code_invalid",
+                "portal registration code is invalid",
+            )
+        now = verified_at or self.now_factory()
+        bounded_attempts = max(1, int(max_attempts or 0))
+        with get_session(self.database_url) as session:
+            repository = CommercialRepository(session)
+            active_codes = repository.list_portal_login_codes(
+                email=normalized_email,
+                active_only=True,
+                now=now,
+                limit=None,
+            )
+            active_code = None
+            registration_metadata: dict[str, object] = {}
+            for candidate in active_codes:
+                registration_metadata = _portal_registration_code_metadata(
+                    candidate.metadata_json
+                )
+                if registration_metadata:
+                    active_code = candidate
+                    break
+            if active_code is None:
+                raise CommercialPermissionError(
+                    "service.portal_registration_code_invalid",
+                    "portal registration code is invalid",
+                )
+            if not verify_secret_hash(normalized_code, str(active_code.code_hash or "")):
+                active_code.attempt_count = int(active_code.attempt_count or 0) + 1
+                if active_code.attempt_count >= bounded_attempts:
+                    active_code.status = PORTAL_LOGIN_CODE_STATUS_LOCKED
+                    active_code.consumed_at = now
+                session.commit()
+                raise CommercialPermissionError(
+                    "service.portal_registration_code_invalid",
+                    "portal registration code is invalid",
+                )
+            active_code.status = PORTAL_LOGIN_CODE_STATUS_CONSUMED
+            active_code.consumed_at = now
+            principal_id = str(active_code.principal_id or "").strip()
+            identity = repository.get_principal_identity_by_email(email=normalized_email)
+            if identity is not None:
+                principal_id = str(identity.principal_id or "").strip()
+                grants = repository.list_sites_for_principal(
+                    principal_id=principal_id,
+                    grant_statuses=[SITE_USER_GRANT_STATUS_ACTIVE],
+                )
+                memberships = repository.list_accounts_for_principal(
+                    principal_id=principal_id,
+                    membership_statuses=[ACCOUNT_USER_MEMBERSHIP_STATUS_ACTIVE],
+                )
+                if grants or memberships:
+                    identity.last_login_at = now
+                    session.commit()
+                    return {
+                        "status": "existing_user",
+                        "email": normalized_email,
+                        "principal_id": principal_id,
+                        "session_version": int(getattr(identity, "session_version", 1) or 1),
+                        "site_id": _first_accessible_site_id(grants),
+                        "last_login_at": self._serialize_datetime(now),
+                        "next": {"portal_path": "/portal"},
+                    }
+
+            account_id = str(registration_metadata.get("account_id") or "").strip()
+            site_id = str(registration_metadata.get("site_id") or "").strip()
+            wordpress_url = str(registration_metadata.get("wordpress_url") or "").strip()
+            site_name = str(registration_metadata.get("site_name") or "").strip() or site_id
+            if not principal_id:
+                principal_id = _new_principal_id()
+            if not account_id:
+                account_id = f"acct_{principal_id.removeprefix('prn_')}"
+            if not site_id or not wordpress_url:
+                raise CommercialPermissionError(
+                    "service.portal_registration_payload_invalid",
+                    "portal registration request is incomplete",
+                )
+            existing_site = repository.get_site(site_id)
+            if existing_site is not None:
+                raise CommercialPermissionError(
+                    "service.portal_site_conflict",
+                    f"site id '{site_id}' is already registered",
+                )
+            account = repository.upsert_account(
+                account_id=account_id,
+                name=f"{site_name} Free",
+                status=ACCOUNT_STATUS_ACTIVE,
+                metadata_json={
+                    "source": "portal_self_registration",
+                    "registration_email": normalized_email,
+                    "created_via": "portal_register",
+                },
+            )
+            subscription_payload = cast(
+                Any,
+                self,
+            )._bind_default_free_subscription_for_account_in_session(
+                repository=repository,
+                account_id=account.account_id,
+                audit_context=audit_context,
+            )
+            identity = repository.upsert_principal_identity(
+                principal_id=principal_id,
+                email=normalized_email,
+                status=PRINCIPAL_STATUS_ACTIVE,
+                metadata_json={
+                    "source": "portal_self_registration",
+                    "identity_type": IDENTITY_TYPE_USER,
+                },
+                last_login_at=now,
+            )
+            site = repository.upsert_site(
+                site_id=site_id,
+                account_id=account.account_id,
+                name=site_name,
+                status=SITE_STATUS_ACTIVE,
+                metadata_json={
+                    "source": "portal_self_registration",
+                    "wordpress_url": wordpress_url,
+                    "created_via": "portal_register",
+                    "use_case": str(registration_metadata.get("use_case") or ""),
+                },
+                provisioned_at=now,
+            )
+            repository.upsert_principal_site_grant(
+                grant_id=f"sadmg_{uuid4().hex}",
+                principal_id=identity.principal_id,
+                site_id=site.site_id,
+                status=SITE_USER_GRANT_STATUS_ACTIVE,
+                metadata_json={"source": "portal_self_registration"},
+            )
+            repository.upsert_account_user_membership(
+                membership_id=f"aum_{uuid4().hex}",
+                principal_id=identity.principal_id,
+                account_id=account.account_id,
+                role=normalize_user_role(USER_ROLE_USER),
+                status=ACCOUNT_USER_MEMBERSHIP_STATUS_ACTIVE,
+                allowed_actions_json=resolve_principal_allowed_actions(),
+                metadata_json={"source": "portal_self_registration"},
+            )
+            subscription = repository.get_runtime_subscription(account.account_id)
+            service = cast(Any, self)
+            payload: dict[str, object] = {
+                "status": "registered",
+                "email": normalized_email,
+                "principal_id": identity.principal_id,
+                "session_version": int(identity.session_version or 1),
+                "account": service._serialize_account(account),
+                "account_id": account.account_id,
+                "site": service._serialize_site(site),
+                "site_id": site.site_id,
+                "subscription": (
+                    subscription_payload.get("subscription")
+                    if isinstance(subscription_payload, dict)
+                    else service._serialize_subscription(subscription)
+                    if subscription is not None
+                    else None
+                ),
+                "identity_type": IDENTITY_TYPE_USER,
+                "role": USER_ROLE_USER,
+                "allowed_actions": resolve_principal_allowed_actions(),
+                "next": {
+                    "portal_path": "/portal",
+                    "qq_bind_path": "/portal/account",
+                    "keys_path": f"/portal/keys?site={site.site_id}",
+                    "sites_path": f"/portal/sites?site={site.site_id}",
+                },
+            }
+            self._record_service_audit_in_session(
+                repository=repository,
+                audit_context=audit_context,
+                event_kind="portal.registration",
+                outcome="succeeded",
+                account_id=account.account_id,
+                site_id=site.site_id,
+                scope_kind="principal_access",
+                scope_id=f"{site.site_id}:{identity.principal_id}",
+                payload_json={
+                    **payload,
+                    "email": normalized_email,
+                    "registration_code_id": str(active_code.code_id or ""),
+                },
+            )
+            session.commit()
+        return payload
 
     def list_portal_accounts(
         self,

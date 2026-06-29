@@ -98,6 +98,19 @@ class PortalLoginCodeVerifyPayload(BaseModel):
     code: str = ""
 
 
+class PortalRegistrationCodeRequestPayload(BaseModel):
+    email: str = ""
+    site_url: str = ""
+    site_name: str = ""
+    use_case: str = ""
+    locale: str = ""
+
+
+class PortalRegistrationVerifyPayload(BaseModel):
+    email: str = ""
+    code: str = ""
+
+
 class PortalQQBindPayload(BaseModel):
     code: str = ""
     state: str = ""
@@ -370,6 +383,15 @@ def _portal_same_origin_guard(
 
 def _csv_set(value: str) -> set[str]:
     return {item.strip() for item in str(value or "").split(",") if item.strip()}
+
+
+def _allow_development_login_code(request: Request) -> bool:
+    services = get_cloud_services(request)
+    environment = str(services.settings.environment or "").strip().lower()
+    return environment in {"development", "test"} and (
+        str(request.headers.get("x-npcink-dev-login-code") or "").strip() == "1"
+        or str(request.headers.get("x-npcink-debug-portal-link") or "").strip() == "1"
+    )
 
 
 def _get_portal_advisor_service(request: Request) -> InternalAIAdvisorService:
@@ -825,11 +847,7 @@ async def request_portal_login_code(
         services.settings,
         database_url=services.settings.database_url,
     )
-    environment = str(services.settings.environment or "").strip().lower()
-    allow_development_code = environment in {"development", "test"} and (
-        str(request.headers.get("x-npcink-dev-login-code") or "").strip() == "1"
-        or str(request.headers.get("x-npcink-debug-portal-link") or "").strip() == "1"
-    )
+    allow_development_code = _allow_development_login_code(request)
     try:
         issued = _get_commercial_service(request).issue_portal_login_code(
             email=email,
@@ -934,6 +952,157 @@ async def verify_portal_login_code(
         response,
         principal_id=principal_id,
         site_id="",
+    )
+    return response
+
+
+@router.post("/register/code/request")
+async def request_portal_registration_code(
+    request: Request,
+    payload: PortalRegistrationCodeRequestPayload,
+) -> Any:
+    same_origin = _portal_same_origin_guard(request, always=True)
+    if same_origin is not None:
+        return same_origin
+    email = payload.email.strip()
+    site_url = payload.site_url.strip()
+    locale = resolve_portal_email_locale(request, payload.locale)
+    if not email or not site_url:
+        return portal_json_error(
+            request,
+            status_code=400,
+            error_code="portal.registration_required",
+            message="email and wordpress site url are required",
+        )
+    try:
+        enforce_portal_login_code_request_rate_limit(request, email=email)
+    except PortalBearerTokenError as error:
+        return portal_json_error(
+            request,
+            status_code=error.status_code,
+            error_code=error.error_code,
+            message=error.message,
+        )
+    services = get_cloud_services(request)
+    ttl_seconds = resolve_portal_login_code_ttl_seconds(services.settings)
+    allow_development_code = _allow_development_login_code(request)
+    email_sender = services.portal_email_sender or build_portal_email_sender(
+        services.settings,
+        database_url=services.settings.database_url,
+    )
+    if email_sender is None and not allow_development_code:
+        return portal_json_error(
+            request,
+            status_code=503,
+            error_code="portal.email_not_configured",
+            message="Portal email delivery is not configured",
+        )
+    try:
+        issued = _get_commercial_service(request).issue_portal_registration_code(
+            email=email,
+            wordpress_url=site_url,
+            site_name=payload.site_name,
+            use_case=payload.use_case,
+            ttl_seconds=ttl_seconds,
+        )
+    except CommercialServiceError as error:
+        return _service_error_response(error, request=request)
+    if email_sender is not None:
+        try:
+            email_sender.send_login_code(
+                recipient_email=str(issued.get("email") or ""),
+                principal_id=str(issued.get("principal_id") or ""),
+                code=str(issued.get("code") or ""),
+                expires_in_seconds=ttl_seconds,
+                project_name=services.settings.project_name,
+                locale=locale,
+            )
+        except PortalEmailDeliveryError as error:
+            return portal_json_error(
+                request,
+                status_code=502,
+                error_code="portal.email_delivery_failed",
+                message=str(error),
+            )
+    return _portal_route_envelope(
+        message="portal registration code issued",
+        data={
+            "email": str(issued.get("email") or ""),
+            "delivery": ("development_code" if allow_development_code else "email"),
+            "expires_in_seconds": ttl_seconds,
+            "code": (str(issued.get("code") or "") if allow_development_code else ""),
+            "site": {
+                "site_id": str(issued.get("site_id") or ""),
+                "site_name": str(issued.get("site_name") or ""),
+                "wordpress_url": str(issued.get("wordpress_url") or ""),
+            },
+        },
+    )
+
+
+@router.post("/register/verify")
+async def verify_portal_registration_code(
+    request: Request,
+    payload: PortalRegistrationVerifyPayload,
+) -> Any:
+    same_origin = _portal_same_origin_guard(request, always=True)
+    if same_origin is not None:
+        return same_origin
+    email = payload.email.strip()
+    code = payload.code.strip()
+    if not email or not code:
+        return portal_json_error(
+            request,
+            status_code=400,
+            error_code="auth.portal_registration_code_required",
+            message="portal registration code and email are required",
+        )
+    try:
+        registration = _get_commercial_service(request).verify_portal_registration_code(
+            email=email,
+            code=code,
+            max_attempts=max(
+                1,
+                int(get_cloud_services(request).settings.portal_login_code_max_attempts or 0),
+            ),
+            audit_context=_build_portal_audit_context(request, "portal_registration"),
+        )
+        principal_id = str(registration.get("principal_id") or "")
+        site_id = str(registration.get("site_id") or "")
+        session_data = serialize_portal_session(
+            request,
+            principal_id=principal_id,
+            site_id=site_id,
+            strict_site=False,
+            session_metadata=build_new_portal_session_metadata(request),
+        )
+        data = {
+            **registration,
+            "session": session_data.get("session"),
+            "sites": session_data.get("sites") or [],
+            "accounts": session_data.get("accounts") or [],
+        }
+    except CommercialServiceError as error:
+        if error.error_code == "service.portal_registration_code_invalid":
+            return portal_json_error(
+                request,
+                status_code=401,
+                error_code="auth.portal_registration_code_invalid",
+                message="portal registration code is invalid or expired",
+            )
+        return _service_error_response(error, request=request)
+    response = JSONResponse(
+        status_code=200,
+        content=_portal_route_envelope(
+            message="portal registration completed",
+            data=data,
+        ),
+    )
+    set_portal_session_cookies(
+        request,
+        response,
+        principal_id=principal_id,
+        site_id=site_id,
     )
     return response
 

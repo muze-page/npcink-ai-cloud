@@ -112,6 +112,30 @@ export interface PortalLoginCodeVerifyRequest {
   code: string;
 }
 
+export interface PortalRegistrationCodeRequest {
+  email: string;
+  site_url: string;
+  site_name?: string;
+  use_case?: string;
+  locale?: 'en' | 'zh-CN';
+}
+
+export interface PortalRegistrationVerifyRequest {
+  email: string;
+  code: string;
+}
+
+export interface PortalRegistrationResult {
+  status: 'registered' | 'existing_user';
+  email: string;
+  principal_id: string;
+  account_id?: string;
+  site_id?: string;
+  site?: Site;
+  subscription?: PortalSession['current_subscription'];
+  next?: Record<string, string>;
+}
+
 export interface CreateSiteRequest {
   account_id: string;
   site_name?: string;
@@ -1506,6 +1530,32 @@ export class PortalClient {
    */
   async verifyLoginCode(payload: PortalLoginCodeVerifyRequest): Promise<PortalEnvelope<PortalSession>> {
     return this.request('POST', '/auth/code/verify', payload);
+  }
+
+  /**
+   * 请求注册验证码
+   * POST /portal/v1/register/code/request
+   */
+  async requestRegistrationCode(payload: PortalRegistrationCodeRequest): Promise<PortalEnvelope<{
+    email: string;
+    delivery: 'email' | 'development_code';
+    expires_in_seconds: number;
+    code: string;
+    site?: {
+      site_id: string;
+      site_name: string;
+      wordpress_url: string;
+    };
+  }>> {
+    return this.request('POST', '/register/code/request', payload);
+  }
+
+  /**
+   * 验证注册验证码并创建 Free 账号
+   * POST /portal/v1/register/verify
+   */
+  async verifyRegistration(payload: PortalRegistrationVerifyRequest): Promise<PortalEnvelope<PortalRegistrationResult>> {
+    return this.request('POST', '/register/verify', payload);
   }
 
   // ========================================
