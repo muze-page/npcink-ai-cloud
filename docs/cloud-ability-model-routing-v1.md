@@ -117,3 +117,9 @@ standard fast gate:
 ```bash
 pnpm run check:fast
 ```
+
+For production Cloud smoke verification after deploy, use:
+
+```text
+docs/production-wordpress-ai-connector-smoke-runbook-v1.md
+```
