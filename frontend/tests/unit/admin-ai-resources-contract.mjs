@@ -676,6 +676,24 @@ assert.match(
   'Capability supplier templates must include Apify as a built-in search supplier'
 );
 
+assert.match(
+  pageSource,
+  /id: 'zhihu'/,
+  'Capability supplier templates must include Zhihu as a built-in search supplier'
+);
+
+assert.match(
+  pageSource,
+  /label: 'TEI Embedding'/,
+  'Capability supplier templates must include TEI as a built-in embedding supplier'
+);
+
+assert.match(
+  pageSource,
+  /label: 'OpenAI Embedding'/,
+  'Capability supplier templates must include OpenAI embedding as a built-in embedding supplier'
+);
+
 assert.doesNotMatch(
   openCapabilityTemplateSource,
   /fetch|provider-connections/,

@@ -59,6 +59,21 @@ image-source, embedding, rerank, or vector-store values in `.env.local` should
 import or recreate those providers through `/admin/ai-resources`, then remove
 the old environment keys.
 
+The supported one-time local import path is:
+
+```bash
+python -m app.dev.import_provider_connections_from_env --env-file .env.local
+python -m app.dev.import_provider_connections_from_env --env-file .env.local --apply
+python -m app.dev.import_provider_connections_from_env --env-file .env.local --apply --remove-env-keys
+pnpm run check:anti-drift
+pnpm run smoke:provider-env-retirement
+```
+
+The first command is a dry run and does not write provider connections. The
+final command removes only imported provider keys from the selected env file.
+Workload guardrails such as Site Knowledge document/chunk limits, quotas,
+retention, and runtime worker intervals remain environment configuration.
+
 For local verification, check that:
 
 - `.env.local` has no `NPCINK_CLOUD_OPENAI_*` provider key values.
@@ -72,6 +87,13 @@ For local verification, check that:
 - `/admin/audio-providers` is no longer a provider configuration entry.
 - `/admin/web-search` and `/admin/image-sources` are no longer provider
   configuration entries.
+- `bash deploy/remote-provider-status.sh` reports provider connections and
+  registered adapters from DB-managed provider connection state without
+  printing secrets.
+- `pnpm run check:anti-drift` fails if provider env assignments are reintroduced
+  into env examples or deployment guidance. Runtime guardrails remain allowed.
+- `pnpm run smoke:provider-env-retirement` checks local DB provider readiness and
+  runtime projection without calling external supplier APIs.
 
 ## Rationale
 

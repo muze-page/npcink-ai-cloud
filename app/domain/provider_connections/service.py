@@ -22,7 +22,6 @@ _SECRET_CONFIG_KEY_PARTS = (
     "password",
     "api_key",
     "apikey",
-    "group_id",
 )
 _RUNTIME_CONFIG_CONNECTION_KINDS = frozenset(
     {
@@ -550,7 +549,13 @@ def _normalize_id_list(value: object) -> list[str]:
 
 
 def _public_config(config: dict[str, Any]) -> dict[str, Any]:
-    hidden_keys = {"provider_id", "kind", "capability_ids", "runtime_profile_ids"}
+    hidden_keys = {
+        "provider_id",
+        "kind",
+        "capability_ids",
+        "runtime_profile_ids",
+        "group_id",
+    }
     return {
         key: value
         for key, value in _sanitize_config(config).items()
@@ -577,6 +582,8 @@ def _sanitize_config(config: dict[str, Any]) -> dict[str, Any]:
 
 def _is_secret_key(key: str) -> bool:
     normalized = key.lower().replace("-", "_")
+    if normalized in {"api_key_label", "api_key_labels", "key_label", "key_labels"}:
+        return False
     return any(part in normalized for part in _SECRET_CONFIG_KEY_PARTS)
 
 

@@ -1193,9 +1193,10 @@ export NPCINK_CLOUD_PIP_TRUSTED_HOST=pypi.tuna.tsinghua.edu.cn
 With a real API key, `POST /internal/catalog/refresh` plus a valid
 `X-Npcink-Internal-Token`, and
 `python -m app.workers.catalog_refresh` fetch `/models` from the configured
-provider instead of using the built-in sample catalog. Anthropic is only added
-to the runtime registry when `NPCINK_CLOUD_ANTHROPIC_API_KEY` is configured, so
-an unconfigured sample adapter does not silently alter default routing.
+provider instead of using the built-in sample catalog. Provider credentials and
+provider-specific runtime configuration are managed as DB provider connections
+through `/admin/ai-resources`; unconfigured sample adapters do not silently alter
+default routing.
 
 For router-performance offload staging, `python -m app.workers.router_performance_snapshot`
 now acts as a one-shot cadence worker. It enumerates active sites, builds the
