@@ -676,6 +676,21 @@ def _compact_dict(value: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _redact_report(value: object) -> object:
+    if isinstance(value, dict):
+        redacted: dict[str, object] = {}
+        for key, item in value.items():
+            key_text = str(key).lower().replace("-", "_")
+            if any(part in key_text for part in ("secret", "credential", "token", "password")):
+                redacted[str(key)] = bool(str(item or ""))
+            else:
+                redacted[str(key)] = _redact_report(item)
+        return redacted
+    if isinstance(value, list):
+        return [_redact_report(item) for item in value]
+    return value
+
+
 def main() -> None:
     args = parse_args()
     selected_env_files = args.env_file or list(DEFAULT_ENV_FILES)
@@ -697,7 +712,7 @@ def main() -> None:
                 env_files=selected_env_files,
                 keys=set(result["env_keys_consumed"]),
             )
-    print(json.dumps(result, ensure_ascii=True, sort_keys=True))
+    print(json.dumps(_redact_report(result), ensure_ascii=True, sort_keys=True))
 
 
 if __name__ == "__main__":

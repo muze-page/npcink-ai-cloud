@@ -3428,7 +3428,7 @@ async def preview_admin_provider_connection_catalog(
             content=build_envelope(
                 status="error",
                 error_code=error.error_code,
-                message=error.message,
+                message="provider connection catalog preview failed",
                 revision="m6",
             ),
         )
