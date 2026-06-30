@@ -22,9 +22,13 @@ from app.core.models import RunRecord
 from app.core.services import CloudServices
 from app.domain.catalog.service import CatalogService
 from app.domain.wordpress_ai_connector.routing_profiles import (
+    WP_AI_CONNECTOR_ARTICLE_NARRATION_PROFILE_ID,
+    WP_AI_CONNECTOR_AUDIO_SUMMARY_PLAYBACK_PROFILE_ID,
+    WP_AI_CONNECTOR_AUDIO_SUMMARY_TEXT_PROFILE_ID,
     WP_AI_CONNECTOR_CLASSIFICATION_PROFILE_ID,
     WP_AI_CONNECTOR_EDITORIAL_PROFILE_ID,
     WP_AI_CONNECTOR_IMAGE_GENERATION_PROFILE_ID,
+    WP_AI_CONNECTOR_PROFILE_SPECS_BY_ID,
     WP_AI_CONNECTOR_SHORT_TEXT_PROFILE_ID,
 )
 from tests.conftest import (
@@ -37,6 +41,18 @@ from tests.conftest import (
     merge_json_headers,
     seed_site_auth,
 )
+
+
+def test_wordpress_ai_connector_text_profiles_prefer_balanced_defaults() -> None:
+    short_text_spec = WP_AI_CONNECTOR_PROFILE_SPECS_BY_ID[
+        WP_AI_CONNECTOR_SHORT_TEXT_PROFILE_ID
+    ]
+    classification_spec = WP_AI_CONNECTOR_PROFILE_SPECS_BY_ID[
+        WP_AI_CONNECTOR_CLASSIFICATION_PROFILE_ID
+    ]
+
+    assert short_text_spec.ordered_tiers[0] == "balanced"
+    assert classification_spec.ordered_tiers[0] == "balanced"
 
 
 class WordPressAIConnectorTextProvider:
@@ -92,6 +108,31 @@ class WordPressAIConnectorTextProvider:
                                 "z-image",
                                 "quality",
                                 "default",
+                            ],
+                            is_default=True,
+                            weight=100,
+                        )
+                    ],
+                ),
+                CatalogModelSeed(
+                    model_id="speech-wp-ai-connector-test",
+                    family="speech-test",
+                    feature="audio_generation",
+                    status="available",
+                    context_window=0,
+                    price_input=0.0,
+                    price_output=0.0,
+                    raw_json={"surface": "wordpress_ai_connector_audio_test"},
+                    instances=[
+                        CatalogInstanceSeed(
+                            instance_id="openai-wp-ai-audio-test",
+                            endpoint_variant="audio_generation",
+                            region="global",
+                            capability_tags=[
+                                "audio_generation",
+                                "default",
+                                "balanced",
+                                "narration",
                             ],
                             is_default=True,
                             weight=100,
@@ -539,6 +580,7 @@ def test_admin_wordpress_ai_routing_updates_platform_managed_candidates(
         "openai-wp-ai-connector-test"
     )
     assert data["available_image_instances"][0]["instance_id"] == "openai-wp-ai-image-test"
+    assert data["available_audio_instances"][0]["instance_id"] == "openai-wp-ai-audio-test"
     short_text = next(
         profile
         for profile in data["profiles"]
@@ -561,6 +603,33 @@ def test_admin_wordpress_ai_routing_updates_platform_managed_candidates(
     assert image_generation["tasks"] == ["image_generation"]
     assert image_generation["candidate_instance_ids"] == ["openai-wp-ai-image-test"]
     assert image_generation["timeout_ms"] == 90000
+    audio_summary_text = next(
+        profile
+        for profile in data["profiles"]
+        if profile["profile_id"] == WP_AI_CONNECTOR_AUDIO_SUMMARY_TEXT_PROFILE_ID
+    )
+    assert audio_summary_text["execution_kind"] == "text"
+    assert audio_summary_text["routing_intent"] == "audio.summary_text"
+    assert audio_summary_text["tasks"] == ["audio_summary_script"]
+    assert audio_summary_text["candidate_instance_ids"] == ["openai-wp-ai-connector-test"]
+    article_narration = next(
+        profile
+        for profile in data["profiles"]
+        if profile["profile_id"] == WP_AI_CONNECTOR_ARTICLE_NARRATION_PROFILE_ID
+    )
+    assert article_narration["execution_kind"] == "audio_generation"
+    assert article_narration["routing_intent"] == "audio.article_narration"
+    assert article_narration["tasks"] == ["article_narration"]
+    assert article_narration["candidate_instance_ids"] == ["openai-wp-ai-audio-test"]
+    audio_summary_playback = next(
+        profile
+        for profile in data["profiles"]
+        if profile["profile_id"] == WP_AI_CONNECTOR_AUDIO_SUMMARY_PLAYBACK_PROFILE_ID
+    )
+    assert audio_summary_playback["execution_kind"] == "audio_generation"
+    assert audio_summary_playback["routing_intent"] == "audio.summary_playback"
+    assert audio_summary_playback["tasks"] == ["article_audio_summary"]
+    assert audio_summary_playback["candidate_instance_ids"] == ["openai-wp-ai-audio-test"]
 
     response = client.post(
         "/internal/service/admin/wordpress-ai-routing",

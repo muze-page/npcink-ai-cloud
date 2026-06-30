@@ -21,6 +21,7 @@ from app.adapters.providers.base import (
     ProviderExecutionResult,
 )
 from app.adapters.providers.minimax import MiniMaxProviderAdapter
+from app.adapters.repositories.catalog_repository import CatalogRepository
 from app.adapters.repositories.commercial_repository import CommercialRepository
 from app.api.main import create_app
 from app.core.config import Settings
@@ -63,6 +64,10 @@ from app.domain.web_search.service import (
     TavilyWebSearchProvider,
     WebSearchExecutionResult,
     WebSearchProviderUsage,
+)
+from app.domain.wordpress_ai_connector.routing_profiles import (
+    WP_AI_CONNECTOR_ARTICLE_NARRATION_PROFILE_ID,
+    WP_AI_CONNECTOR_AUDIO_SUMMARY_TEXT_PROFILE_ID,
 )
 from app.workers.ops_cadence import run_due_tasks
 from tests.conftest import (
@@ -1510,9 +1515,48 @@ def test_admin_model_references_syncs_models_dev_payload_as_reference_only(
                                     "input": 2.0,
                                     "output": 12.0,
                                 },
-                            }
+                            },
                         },
-                    }
+                    },
+                    "deepseek": {
+                        "id": "deepseek",
+                        "name": "DeepSeek",
+                        "doc": "https://api-docs.deepseek.com",
+                        "models": {
+                            "deepseek-v4-flash": {
+                                "id": "deepseek-v4-flash",
+                                "name": "DeepSeek V4 Flash",
+                                "family": "deepseek",
+                                "reasoning": True,
+                                "modalities": {
+                                    "input": ["text"],
+                                    "output": ["text"],
+                                },
+                                "limit": {"context": 128000, "output": 8000},
+                                "cost": {
+                                    "input": 0.14,
+                                    "output": 0.28,
+                                    "cache_read": 0.0028,
+                                },
+                            },
+                            "deepseek-v4-pro": {
+                                "id": "deepseek-v4-pro",
+                                "name": "DeepSeek V4 Pro",
+                                "family": "deepseek",
+                                "reasoning": True,
+                                "modalities": {
+                                    "input": ["text"],
+                                    "output": ["text"],
+                                },
+                                "limit": {"context": 128000, "output": 8000},
+                                "cost": {
+                                    "input": 0.435,
+                                    "output": 0.87,
+                                    "cache_read": 0.003625,
+                                },
+                            },
+                        },
+                    },
                 }
             }
         },
@@ -1522,7 +1566,7 @@ def test_admin_model_references_syncs_models_dev_payload_as_reference_only(
     sync_data = response.json()["data"]
     assert sync_data["surface"] == "admin_model_reference_sync"
     assert sync_data["source_id"] == "models.dev"
-    assert sync_data["model_count"] == 2
+    assert sync_data["model_count"] == 4
     assert sync_data["price_unit"] == "usd_per_1m_tokens"
     assert sync_data["billing_truth"] is False
     assert sync_data["boundary"]["reference_only"] is True
@@ -1560,6 +1604,19 @@ def test_admin_model_references_syncs_models_dev_payload_as_reference_only(
     assert image_data["items"][0]["model_id"] == "gpt-image-2"
     assert image_data["items"][0]["feature"] == "image"
     assert image_data["items"][0]["is_deprecated"] is True
+
+    deepseek_response = client.get(
+        "/internal/service/admin/model-references?provider_id=deepseek",
+        headers=build_internal_headers(),
+    )
+    assert deepseek_response.status_code == 200, deepseek_response.text
+    deepseek_data = deepseek_response.json()["data"]
+    assert deepseek_data["total"] == 2
+    assert deepseek_data["items"][0]["model_id"] == "deepseek-v4-flash"
+    assert deepseek_data["items"][0]["feature"] == "text"
+    assert deepseek_data["items"][0]["context_window"] == 128000
+    assert deepseek_data["items"][0]["price"]["cache_read"] == 0.0028
+    assert deepseek_data["items"][1]["model_id"] == "deepseek-v4-pro"
 
     active_response = client.get(
         "/internal/service/admin/model-references?provider_id=openai&include_deprecated=false&search=image",
@@ -2258,6 +2315,17 @@ def test_admin_audio_workbench_creates_narration_job_and_exposes_result(
         site_id="site_audio_admin",
         scopes=["runtime:execute", "runtime:read", "runtime:resolve"],
     )
+    with get_session(database_url) as session:
+        CatalogRepository(session).upsert_routing_binding(
+            profile_id=WP_AI_CONNECTOR_AUDIO_SUMMARY_TEXT_PROFILE_ID,
+            candidate_instance_ids=["openai-global-hosted-free-next"],
+            selection_policy_json={
+                "strategy": "ordered",
+                "test_override": "fixed_audio_summary_script",
+            },
+            revision="audio-summary-script-test",
+        )
+        session.commit()
 
     response = client.post(
         "/internal/service/admin/audio-jobs",
@@ -2392,7 +2460,9 @@ def test_admin_audio_workbench_builds_summary_script_before_audio_job(
     assert data["script"]["generation"]["mode"] == "hosted_ai_content_support"
     assert data["script"]["generation"]["ability_name"] == "npcink-toolbox/ai-content-support"
     assert data["script"]["generation"]["contract_version"] == "hosted_ai_content_support.v1"
-    assert data["script"]["generation"]["profile_id"] == TEXT_AI_PROFILE_ID
+    assert data["script"]["generation"]["profile_id"] == (
+        WP_AI_CONNECTOR_AUDIO_SUMMARY_TEXT_PROFILE_ID
+    )
     assert data["script"]["output_json"]["opening"] == "这是一段适合收听的长文摘要。"
     assert "适合收听的长文摘要" in data["script"]["text"]
     assert data["script"]["characters"] <= 4800
@@ -2506,7 +2576,7 @@ def test_admin_audio_workbench_returns_friendly_empty_summary_script_error(
     dispose_engine(database_url)
 
 
-def test_admin_audio_workbench_uses_selected_audio_profile(
+def test_admin_audio_workbench_uses_wordpress_audio_routing_profile(
     tmp_path: Path,
 ) -> None:
     provider = MiniMaxProviderAdapter(
@@ -2535,15 +2605,17 @@ def test_admin_audio_workbench_uses_selected_audio_profile(
             "site_id": "site_audio_admin",
             "intent": "article_narration",
             "title": "Audio quality test",
-            "body": "这是一段文章正文，用于验证音频 profile 偏好。",
+            "body": "这是一段文章正文，用于验证音频模型路由。",
             "format": "mp3",
         },
     )
 
     assert response.status_code == 200, response.text
     data = response.json()["data"]
-    assert data["profile_id"] == AUDIO_NARRATION_QUALITY_PROFILE_ID
-    assert data["script"]["generation"]["audio_profile_id"] == AUDIO_NARRATION_QUALITY_PROFILE_ID
+    assert data["profile_id"] == WP_AI_CONNECTOR_ARTICLE_NARRATION_PROFILE_ID
+    assert data["script"]["generation"]["audio_profile_id"] == (
+        WP_AI_CONNECTOR_ARTICLE_NARRATION_PROFILE_ID
+    )
 
     dispose_engine(database_url)
 

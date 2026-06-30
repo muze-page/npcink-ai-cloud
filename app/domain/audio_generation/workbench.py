@@ -22,12 +22,6 @@ from app.domain.audio_generation.contracts import (
     AUDIO_GENERATION_CONTRACT,
     AUDIO_GENERATION_EXECUTION_KIND,
 )
-from app.domain.hosted_model_defaults import (
-    AUDIO_NARRATION_PROFILE_ID,
-    AUDIO_NARRATION_QUALITY_PROFILE_ID,
-    FREE_GPT55_TEXT_PROFILE_ID,
-    TEXT_AI_PROFILE_ID,
-)
 from app.domain.routing.errors import RoutingError
 from app.domain.runtime.errors import RuntimeErrorBase
 from app.domain.runtime.models import RUNTIME_STORAGE_MODE_RESULT_ONLY, RuntimeRequest
@@ -35,6 +29,11 @@ from app.domain.runtime.service import (
     RuntimeResultExpiredError,
     RuntimeResultNotReadyError,
     RuntimeService,
+)
+from app.domain.wordpress_ai_connector.routing_profiles import (
+    WP_AI_CONNECTOR_ARTICLE_NARRATION_PROFILE_ID,
+    WP_AI_CONNECTOR_AUDIO_SUMMARY_PLAYBACK_PROFILE_ID,
+    WP_AI_CONNECTOR_AUDIO_SUMMARY_TEXT_PROFILE_ID,
 )
 
 ALLOWED_AUDIO_WORKBENCH_INTENTS = frozenset({"article_narration", "article_audio_summary"})
@@ -44,10 +43,6 @@ HOSTED_AI_CONTENT_SUPPORT_CONTRACT = "hosted_ai_content_support.v1"
 AUDIO_SUMMARY_SCRIPT_INTENT = "audio_summary_script"
 MAX_AUDIO_SCRIPT_CHARS = 4800
 MAX_AUDIO_SOURCE_CHARS = 20000
-ALLOWED_AUDIO_TEXT_PROFILE_IDS = frozenset({TEXT_AI_PROFILE_ID, FREE_GPT55_TEXT_PROFILE_ID})
-ALLOWED_AUDIO_OUTPUT_PROFILE_IDS = frozenset(
-    {AUDIO_NARRATION_PROFILE_ID, AUDIO_NARRATION_QUALITY_PROFILE_ID}
-)
 AUDIO_SUMMARY_SCRIPT_MAX_ATTEMPTS = 2
 AUDIO_SUMMARY_SCRIPT_TRANSIENT_ERROR_CODES = frozenset(
     {
@@ -417,15 +412,12 @@ class AudioWorkbenchService:
         )
 
     def _audio_summary_text_profile_id(self) -> str:
-        value = str(self.settings.audio_summary_text_profile_id or "").strip()
-        return value if value in ALLOWED_AUDIO_TEXT_PROFILE_IDS else TEXT_AI_PROFILE_ID
+        return WP_AI_CONNECTOR_AUDIO_SUMMARY_TEXT_PROFILE_ID
 
     def _audio_profile_id_for_intent(self, intent: str) -> str:
         if intent == "article_audio_summary":
-            value = str(self.settings.audio_summary_audio_profile_id or "").strip()
-        else:
-            value = str(self.settings.audio_narration_profile_id or "").strip()
-        return value if value in ALLOWED_AUDIO_OUTPUT_PROFILE_IDS else AUDIO_NARRATION_PROFILE_ID
+            return WP_AI_CONNECTOR_AUDIO_SUMMARY_PLAYBACK_PROFILE_ID
+        return WP_AI_CONNECTOR_ARTICLE_NARRATION_PROFILE_ID
 
     def _job_payload(
         self,

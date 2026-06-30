@@ -273,6 +273,8 @@ class ProviderConnectionPayload(BaseModel):
     display_name: str = Field(default="", max_length=191)
     enabled: bool = True
     base_url: str = Field(default="", max_length=500)
+    note: str = Field(default="", max_length=512)
+    priority: int = Field(default=100, ge=0, le=999)
     source_role: str = Field(default="execution_source", max_length=32)
     capability_ids: list[str] = Field(default_factory=list)
     runtime_profile_ids: list[str] = Field(default_factory=list)
@@ -686,6 +688,7 @@ def _build_wordpress_ai_routing_projection(database_url: str) -> dict[str, Any]:
         available_instances_by_kind: dict[str, list[dict[str, Any]]] = {
             "text": [],
             "image_generation": [],
+            "audio_generation": [],
             "embedding": [],
         }
         for instance in instances:
@@ -770,6 +773,7 @@ def _build_wordpress_ai_routing_projection(database_url: str) -> dict[str, Any]:
         "prompt_or_preset_editor": False,
         "available_text_instances": available_instances_by_kind["text"],
         "available_image_instances": available_instances_by_kind["image_generation"],
+        "available_audio_instances": available_instances_by_kind["audio_generation"],
         "available_embedding_instances": available_instances_by_kind["embedding"],
         "profiles": profiles,
         "boundary": {

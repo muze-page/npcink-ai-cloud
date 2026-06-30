@@ -67,9 +67,19 @@ class ProviderConnectionAdminService:
                     )
                 )
             )
+        connections = [self._serialize(row) for row in rows]
+        connections.sort(
+            key=lambda item: (
+                not bool(item.get("enabled")),
+                str(item.get("provider_type") or ""),
+                str(item.get("provider_id") or ""),
+                int(item.get("priority") or 100),
+                str(item.get("connection_id") or ""),
+            )
+        )
         return {
             "surface": "admin_provider_connections",
-            "connections": [self._serialize(row) for row in rows],
+            "connections": connections,
             "boundary": _boundary(),
         }
 
@@ -542,7 +552,16 @@ class ProviderConnectionAdminService:
         config = _sanitize_config(config)
         capability_ids = _normalize_id_list(payload.get("capability_ids"))
         runtime_profile_ids = _normalize_id_list(payload.get("runtime_profile_ids"))
-        metadata = _dict(payload.get("metadata"))
+        metadata = _sanitize_config(_dict(payload.get("metadata")))
+        note = _string(payload.get("note") or metadata.get("note") or metadata.get("operator_note"))
+        if len(note) > 512:
+            raise ProviderConnectionAdminError(
+                "provider_connection.note_invalid",
+                "note must be 512 characters or less",
+            )
+        priority = _priority_value(payload.get("priority", metadata.get("priority", 100)))
+        metadata["note"] = note
+        metadata["priority"] = priority
         secretless = bool(payload.get("secretless") or config.get("secretless"))
         if (
             normalized_provider_type == "web_search_provider"
@@ -570,7 +589,7 @@ class ProviderConnectionAdminService:
             "base_url": base_url,
             "source_role": source_role,
             "config_json": config_json,
-            "metadata_json": _sanitize_config(metadata),
+            "metadata_json": metadata,
             "credential": normalized_credential,
         }
 
@@ -579,6 +598,8 @@ class ProviderConnectionAdminService:
         capability_ids = _normalize_id_list(config.get("capability_ids"))
         runtime_profile_ids = _normalize_id_list(config.get("runtime_profile_ids"))
         metadata = _dict(row.metadata_json)
+        priority = _priority_value(metadata.get("priority", 100))
+        note = _string(metadata.get("note") or metadata.get("operator_note"))
         model_ids = _normalize_id_list(config.get("model_ids"))
         if not model_ids:
             model_ids = _normalize_id_list(metadata.get("model_ids"))
@@ -597,6 +618,8 @@ class ProviderConnectionAdminService:
             "status": _connection_status(enabled=bool(row.enabled), configured=configured),
             "source_role": row.source_role,
             "base_url": row.base_url or "",
+            "note": note,
+            "priority": priority,
             "capability_ids": capability_ids,
             "runtime_profile_ids": runtime_profile_ids,
             "model_ids": model_ids,
@@ -742,6 +765,14 @@ def _normalize_id_list(value: object) -> list[str]:
             continue
         normalized.append(item[:128])
     return normalized
+
+
+def _priority_value(value: object) -> int:
+    try:
+        priority = int(str(value).strip())
+    except (TypeError, ValueError):
+        priority = 100
+    return min(999, max(0, priority))
 
 
 def _public_config(config: dict[str, Any]) -> dict[str, Any]:

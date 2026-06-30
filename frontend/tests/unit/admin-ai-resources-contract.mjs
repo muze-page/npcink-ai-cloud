@@ -208,8 +208,14 @@ assert.match(
 
 assert.match(
   abilityModelsSource,
-  /fetch\('\/api\/admin\/ai-resources\/profile-preferences'/,
-  'Ability-model routing page must save only bounded profile preferences through the admin projection'
+  /fetch\('\/api\/admin\/wordpress-ai-routing'/,
+  'Ability-model routing page must save bounded plugin ability routes through the WordPress AI routing projection'
+);
+
+assert.doesNotMatch(
+  abilityModelsSource,
+  /profile-preferences|saveProfilePreferences/,
+  'Ability-model routing page must not keep a separate profile-preferences write path after audio routes move into routing profiles'
 );
 
 assert.match(
@@ -250,14 +256,14 @@ assert.match(
 
 assert.match(
   abilityModelsSource,
-  /wordpress_title[\s\S]*abilityModelRows\.map[\s\S]*audioPreferenceRows\.map/,
-  'Audio profile preferences must render as rows inside the unified WordPress plugin AI ability-model routing table'
+  /wordpress_title[\s\S]*abilityModelRows\.map/,
+  'Plugin ability-model routing table must render unified routing profile rows'
 );
 
 assert.match(
   abilityModelsSource,
-  /type AudioAbilityModelRouteRow[\s\S]*routeTypeLabel: string/,
-  'Audio ability-model routes must be modeled as first-class route rows with a visible route type'
+  /available_audio_instances[\s\S]*execution_kind === 'audio_generation'[\s\S]*available_audio_instances/,
+  'Audio ability-model routes must use the shared WordPress AI routing projection and audio runtime candidates'
 );
 
 assert.doesNotMatch(
@@ -268,8 +274,8 @@ assert.doesNotMatch(
 
 assert.doesNotMatch(
   abilityModelsSource,
-  /<option key=\{`\$\{row\.id\}-\$\{profileId\}`\} value=\{profileId\}>\{profileId\}<\/option>/,
-  'Audio ability-model route selectors must not show internal profile ids as option labels'
+  /type AudioAbilityModelRouteRow|audioPreferenceRows/,
+  'Audio ability-model routes must not keep a separate page-local preference row model'
 );
 
 assert.doesNotMatch(
@@ -280,8 +286,14 @@ assert.doesNotMatch(
 
 assert.match(
   abilityModelsSource,
-  /audioPreferenceRows\.map[\s\S]*row\.label[\s\S]*row\.description[\s\S]*row\.value[\s\S]*row\.update[\s\S]*saveProfilePreferences/,
-  'Audio ability-model route rows must keep label, description, current value, profile selector, and save action together'
+  /audio_summary_script[\s\S]*article_narration[\s\S]*article_audio_summary/,
+  'Unified plugin ability route rows must include the audio summary, narration, and summary playback scenarios'
+);
+
+assert.doesNotMatch(
+  abilityModelsSource,
+  /audioPreferenceRows\.map[\s\S]*<select[\s\S]*saveProfilePreferences|openAudioRouteDialog|activeAudioRoute/,
+  'Audio ability-model route rows must not place selectors and save buttons inside the narrow table action column'
 );
 
 assert.doesNotMatch(
@@ -290,16 +302,10 @@ assert.doesNotMatch(
   'Audio ability-model routes must not use the old three-column field layout'
 );
 
-assert.match(
+assert.doesNotMatch(
   abilityModelsSource,
-  /audioPreferenceRows/,
-  'Audio profile preferences must live on the ability-model routing page'
-);
-
-assert.match(
-  abilityModelsSource,
-  /audioPreferenceRows[\s\S]*audio_summary_text_profile_id/,
-  'Audio profile preference rows must include the audio summary text profile binding'
+  /audio_summary_text_profile_id|audio_narration_profile_id|audio_summary_audio_profile_id/,
+  'Audio ability-model routes must not expose legacy profile preference keys after moving into routing profiles'
 );
 
 assert.doesNotMatch(
@@ -346,6 +352,24 @@ assert.match(
 
 assert.match(
   pageSource,
+  /field_channel_priority[\s\S]*field_channel_note[\s\S]*placeholder_channel_note/,
+  'Provider channel form must expose simple priority and note fields for multiple credential channels'
+);
+
+assert.match(
+  pageSource,
+  /note: providerConnectionForm\.note[\s\S]*priority: Number\(providerConnectionForm\.priority\)/,
+  'Provider channel save payload must persist channel note and priority metadata'
+);
+
+assert.match(
+  pageSource,
+  /duplicateProviderConnectionChannel[\s\S]*credential: ''[\s\S]*action_create_backup_channel/,
+  'Provider channel form must let operators create a backup channel without copying the secret'
+);
+
+assert.match(
+  pageSource,
   /activeCapabilityConnections\.map[\s\S]*onClick=\{\(\) => \{[\s\S]*editProviderConnection\(connection\)/,
   'Capability supplier Configure action must open the shared provider connection form'
 );
@@ -362,10 +386,22 @@ assert.doesNotMatch(
   'Capability supplier list must not expose profile id or verbose enabled/configured columns'
 );
 
+assert.doesNotMatch(
+  capabilitySupplierTableSource,
+  /connectionHost\(connection\.base_url\)|connection\.base_url/,
+  'Capability supplier list must keep endpoint/base URL details out of the main table'
+);
+
 assert.match(
   capabilitySupplierTableSource,
-  /connectionHost\(connection\.base_url\)[\s\S]*capabilityCategoryLabel\(category\)[\s\S]*status_configured_label/,
-  'Capability supplier list must show a domain summary, category column, and compact configured state'
+  /capabilityProviderPurposeLabel\(connection\)[\s\S]*capabilityCategoryLabel\(category\)[\s\S]*status_configured_label/,
+  'Capability supplier list must show supplier purpose, category column, and compact configured state'
+);
+
+assert.match(
+  pageSource,
+  /connectionSearch[\s\S]*connection\.base_url/,
+  'Capability supplier endpoints must remain searchable even when hidden from the main table'
 );
 
 assert.doesNotMatch(
@@ -514,6 +550,30 @@ assert.match(
 
 assert.match(
   abilityModelsSource,
+  /status_unconfigured[\s\S]*status_needs_config[\s\S]*status_ok/,
+  'Ability-model routing table status must describe exceptions while normal rows stay quiet'
+);
+
+assert.match(
+  abilityModelsSource,
+  /function renderRouteStatus[\s\S]*routeStatus\.status === 'success'[\s\S]*text-slate-500[\s\S]*BackofficeStatusBadge/,
+  'Ability-model routing table must render normal status as quiet text and reserve badges for exceptions'
+);
+
+assert.match(
+  abilityModelsSource,
+  /abilityRoutePolicySummary[\s\S]*policy_auto_fallback_enabled[\s\S]*policy_auto_fallback_disabled/,
+  'Ability-model routing table policy summary must describe the visible fallback setting'
+);
+
+assert.doesNotMatch(
+  abilityModelsSource,
+  /abilityRoutePolicySummary[\s\S]*fallbackCount/,
+  'Ability-model routing table policy summary must not expose internal candidate counts as fallback counts'
+);
+
+assert.match(
+  abilityModelsSource,
   /type AbilityModelRouteRow[\s\S]*taskLabels: string\[\]/,
   'Ability-model routing page must model shared route groups instead of treating each task as a separate configuration object'
 );
@@ -628,8 +688,8 @@ assert.doesNotMatch(
 
 assert.match(
   abilityModelsSource,
-  /audioPreferenceRows\.map[\s\S]*saveProfilePreferences/,
-  'Audio runtime profile preferences must be configurable from the unified plugin AI ability routing table'
+  /abilityModelRows\.map[\s\S]*openAbilityModelDialog\(row\.profile\.profile_id\)[\s\S]*activeProfile[\s\S]*saveAbilityModelProfile/,
+  'Audio runtime model routes must be configurable through the same plugin ability routing dialog as other route profiles'
 );
 
 assert.doesNotMatch(
@@ -1070,9 +1130,39 @@ assert.match(
 );
 
 assert.match(
+  pageSource,
+  /inferReferenceProviderFromModelIds[\s\S]*modelProviderPrefix[\s\S]*referenceProviderForConnection[\s\S]*setModelReferenceProviderId\(referenceProviderForConnection\(connection\)\)/,
+  'Provider channel must infer models.dev reference provider from provider-prefixed model ids such as deepseek/model-name'
+);
+
+assert.match(
+  pageSource,
+  /modelReferenceStatusText[\s\S]*model_reference_status_loaded[\s\S]*model_reference_status_not_synced[\s\S]*modelReferenceStatusText/,
+  'Provider channel must show models.dev reference intelligence sync status beside model visibility'
+);
+
+assert.match(
+  pageSource,
+  /autoSyncedReferenceProviders[\s\S]*modelReferenceSourceNeedsSync[\s\S]*autoSyncModelReferences/,
+  'Provider channel must automatically sync missing models.dev reference intelligence once per provider'
+);
+
+assert.match(
+  pageSource,
+  /disabled=\{syncingModelReferences \|\| autoSyncingModelReferences \|\| loadingModelReferences \|\| savingConnection\}/,
+  'Provider channel reference sync action must be disabled while automatic models.dev sync is running'
+);
+
+assert.match(
   i18nSource,
   /'admin\.ai_resources\.model_metadata_gap_hint': '[^']*只有已保存 ID[^']*'/,
   'Provider channel metadata gap hint must be localized in Simplified Chinese'
+);
+
+assert.match(
+  i18nSource,
+  /'admin\.ai_resources\.model_reference_status_auto_syncing': '[^']*自动同步 models\.dev[^']*'[\s\S]*'admin\.ai_resources\.model_reference_status_loaded': '[^']*models\.dev[^']*'[\s\S]*'admin\.ai_resources\.model_reference_status_not_synced': '[^']*尚未同步[^']*'/,
+  'Provider channel models.dev reference status copy must be localized in Simplified Chinese'
 );
 
 assert.doesNotMatch(
@@ -1391,6 +1481,18 @@ assert.match(
   i18nSource,
   /'admin\.ai_resources\.capability_category_vector': '向量'/,
   'Capability supplier vector category must provide Simplified Chinese copy'
+);
+
+assert.match(
+  i18nSource,
+  /capability_provider_purpose_search[\s\S]*capability_provider_purpose_image[\s\S]*capability_provider_purpose_embedding[\s\S]*capability_provider_purpose_rerank[\s\S]*capability_provider_purpose_vector_store/,
+  'Capability supplier purpose labels must provide Simplified Chinese copy instead of exposing endpoints in the list'
+);
+
+assert.match(
+  i18nSource,
+  /action_create_backup_channel[\s\S]*message_creating_backup_channel[\s\S]*field_channel_priority[\s\S]*field_channel_note/,
+  'Provider channel note and priority controls must provide Simplified Chinese copy'
 );
 
 assert.match(

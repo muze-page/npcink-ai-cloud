@@ -46,15 +46,22 @@ def apply_provider_connection_runtime_settings(
                     .order_by(ProviderConnection.connection_id.asc())
                 )
             )
+            rows.sort(key=lambda row: (_connection_priority(row), row.connection_id))
     except SQLAlchemyError:
         return projection
 
     web_search_primary_seen = False
     image_source_seen = False
+    applied_provider_channels: set[tuple[str, str]] = set()
     for row in rows:
         config = _dict(row.config_json)
         kind = _string(config.get("kind") or row.provider_type).lower()
         provider_id = _string(config.get("provider_id") or row.connection_id).lower()
+        provider_channel_key = (kind, provider_id)
+        if provider_channel_key in applied_provider_channels:
+            continue
+        if not _connection_configured(row, config, provider_id):
+            continue
         capability_ids = _string_list(config.get("capability_ids"))
         runtime_profile_ids = _string_list(config.get("runtime_profile_ids"))
         credential = _decrypt_connection_credential(settings, row)
@@ -70,6 +77,7 @@ def apply_provider_connection_runtime_settings(
             if applied:
                 projection.web_search_count += 1
                 projection.applied_count += 1
+                applied_provider_channels.add(provider_channel_key)
                 if provider_id in {"tavily", "bocha", "apify"}:
                     web_search_primary_seen = True
             continue
@@ -85,6 +93,7 @@ def apply_provider_connection_runtime_settings(
             if applied:
                 projection.image_source_count += 1
                 projection.applied_count += 1
+                applied_provider_channels.add(provider_channel_key)
                 image_source_seen = True
             continue
         if kind == "embedding_provider" or (
@@ -101,6 +110,7 @@ def apply_provider_connection_runtime_settings(
             ):
                 projection.embedding_count += 1
                 projection.applied_count += 1
+                applied_provider_channels.add(provider_channel_key)
             continue
         if kind == "rerank_provider":
             if _apply_rerank_connection(
@@ -112,6 +122,7 @@ def apply_provider_connection_runtime_settings(
             ):
                 projection.rerank_count += 1
                 projection.applied_count += 1
+                applied_provider_channels.add(provider_channel_key)
             continue
         if kind == "vector_store_provider":
             if _apply_vector_store_connection(
@@ -123,6 +134,7 @@ def apply_provider_connection_runtime_settings(
             ):
                 projection.vector_store_count += 1
                 projection.applied_count += 1
+                applied_provider_channels.add(provider_channel_key)
     return projection
 
 
@@ -375,6 +387,25 @@ def _decrypt_connection_credential(settings: Settings, row: ProviderConnection) 
         return decrypt_provider_connection_secret(ciphertext, settings=settings)
     except RuntimeError:
         return ""
+
+
+def _connection_configured(
+    row: ProviderConnection,
+    config: dict[str, Any],
+    provider_id: str,
+) -> bool:
+    if provider_id == "jina_reader":
+        return True
+    return bool(_string(row.secret_ciphertext)) or bool(config.get("secretless"))
+
+
+def _connection_priority(row: ProviderConnection) -> int:
+    metadata = _dict(row.metadata_json)
+    try:
+        priority = int(str(metadata.get("priority", 100)).strip())
+    except (TypeError, ValueError):
+        priority = 100
+    return min(999, max(0, priority))
 
 
 def _dict(value: object) -> dict[str, Any]:
