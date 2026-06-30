@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
 
-from app.adapters.providers.base import ProviderAdapter
+from app.adapters.providers.base import ProviderAdapter, ProviderCatalogSnapshot
 from app.adapters.providers.registry import build_provider_adapters
 from app.adapters.repositories.catalog_repository import CatalogRepository
 from app.core.config import Settings, get_settings
@@ -231,6 +231,33 @@ class CatalogService:
             "revision": revision,
             "providers": refreshed,
             "refreshed_count": len(refreshed),
+        }
+
+    def store_provider_snapshot(
+        self,
+        snapshot: ProviderCatalogSnapshot,
+        *,
+        source: str = "provider_connection_test",
+        notes: str | None = None,
+    ) -> dict[str, Any]:
+        revision = self._build_catalog_revision()
+        provider_id = str(snapshot.provider_id or "").strip()
+        with get_session(self.database_url) as session:
+            repository = CatalogRepository(session)
+            repository.upsert_provider_snapshot(snapshot, revision)
+            repository.create_revision(
+                revision,
+                provider_id,
+                source=source,
+                notes=notes or f"providers={provider_id}",
+            )
+            self._sync_default_routing(repository, revision)
+            session.commit()
+
+        return {
+            "revision": revision,
+            "providers": [provider_id] if provider_id else [],
+            "refreshed_count": 1 if provider_id else 0,
         }
 
     def _build_catalog_revision(self) -> str:

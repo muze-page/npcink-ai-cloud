@@ -46,15 +46,24 @@ def apply_provider_connection_runtime_settings(
                     .order_by(ProviderConnection.connection_id.asc())
                 )
             )
+            rows.sort(key=lambda row: (_connection_priority(row), row.connection_id))
     except SQLAlchemyError:
         return projection
 
     web_search_primary_seen = False
     image_source_seen = False
+    applied_provider_channels: set[tuple[str, str]] = set()
     for row in rows:
         config = _dict(row.config_json)
         kind = _string(config.get("kind") or row.provider_type).lower()
         provider_id = _string(config.get("provider_id") or row.connection_id).lower()
+        provider_channel_key = (kind, provider_id)
+        if provider_channel_key in applied_provider_channels:
+            continue
+        if not _connection_configured(row, config, provider_id):
+            continue
+        capability_ids = _string_list(config.get("capability_ids"))
+        runtime_profile_ids = _string_list(config.get("runtime_profile_ids"))
         credential = _decrypt_connection_credential(settings, row)
         if kind == "web_search_provider":
             applied = _apply_web_search_connection(
@@ -68,6 +77,7 @@ def apply_provider_connection_runtime_settings(
             if applied:
                 projection.web_search_count += 1
                 projection.applied_count += 1
+                applied_provider_channels.add(provider_channel_key)
                 if provider_id in {"tavily", "bocha", "apify"}:
                     web_search_primary_seen = True
             continue
@@ -83,9 +93,14 @@ def apply_provider_connection_runtime_settings(
             if applied:
                 projection.image_source_count += 1
                 projection.applied_count += 1
+                applied_provider_channels.add(provider_channel_key)
                 image_source_seen = True
             continue
-        if kind == "embedding_provider":
+        if kind == "embedding_provider" or (
+            provider_id in {"siliconflow", "openai", "tei"}
+            and "embedding" in capability_ids
+            and "embed.default" in runtime_profile_ids
+        ):
             if _apply_embedding_connection(
                 settings,
                 row=row,
@@ -95,6 +110,7 @@ def apply_provider_connection_runtime_settings(
             ):
                 projection.embedding_count += 1
                 projection.applied_count += 1
+                applied_provider_channels.add(provider_channel_key)
             continue
         if kind == "rerank_provider":
             if _apply_rerank_connection(
@@ -106,6 +122,7 @@ def apply_provider_connection_runtime_settings(
             ):
                 projection.rerank_count += 1
                 projection.applied_count += 1
+                applied_provider_channels.add(provider_channel_key)
             continue
         if kind == "vector_store_provider":
             if _apply_vector_store_connection(
@@ -117,6 +134,7 @@ def apply_provider_connection_runtime_settings(
             ):
                 projection.vector_store_count += 1
                 projection.applied_count += 1
+                applied_provider_channels.add(provider_channel_key)
     return projection
 
 
@@ -371,12 +389,46 @@ def _decrypt_connection_credential(settings: Settings, row: ProviderConnection) 
         return ""
 
 
+def _connection_configured(
+    row: ProviderConnection,
+    config: dict[str, Any],
+    provider_id: str,
+) -> bool:
+    if provider_id == "jina_reader":
+        return True
+    return bool(_string(row.secret_ciphertext)) or bool(config.get("secretless"))
+
+
+def _connection_priority(row: ProviderConnection) -> int:
+    metadata = _dict(row.metadata_json)
+    try:
+        priority = int(str(metadata.get("priority", 100)).strip())
+    except (TypeError, ValueError):
+        priority = 100
+    return min(999, max(0, priority))
+
+
 def _dict(value: object) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
 def _string(value: object) -> str:
     return str(value or "").strip()
+
+
+def _string_list(value: object) -> list[str]:
+    if isinstance(value, list):
+        raw_items = value
+    elif isinstance(value, str):
+        raw_items = value.split(",")
+    else:
+        raw_items = []
+    normalized: list[str] = []
+    for item in raw_items:
+        text = str(item or "").strip()
+        if text and text not in normalized:
+            normalized.append(text)
+    return normalized
 
 
 def _positive_float(value: object, default: object) -> float:

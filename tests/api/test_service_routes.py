@@ -21,6 +21,7 @@ from app.adapters.providers.base import (
     ProviderExecutionResult,
 )
 from app.adapters.providers.minimax import MiniMaxProviderAdapter
+from app.adapters.repositories.catalog_repository import CatalogRepository
 from app.adapters.repositories.commercial_repository import CommercialRepository
 from app.api.main import create_app
 from app.core.config import Settings
@@ -28,6 +29,7 @@ from app.core.db import dispose_engine, get_session, init_schema
 from app.core.models import (
     ACCOUNT_USER_MEMBERSHIP_STATUS_REVOKED,
     PRINCIPAL_STATUS_DISABLED,
+    SITE_STATUS_ARCHIVED,
     SITE_USER_GRANT_STATUS_REVOKED,
     SUBSCRIPTION_STATUS_PAST_DUE,
     AccountEntitlementSnapshot,
@@ -35,6 +37,7 @@ from app.core.models import (
     AccountUserMembership,
     BillingSnapshot,
     ModelReferenceModel,
+    ModelReferenceSource,
     PluginObservabilityEvent,
     Principal,
     ProviderCallRecord,
@@ -52,17 +55,16 @@ from app.core.security import REPLAY_SCOPE_PUBLIC_POST_SITE
 from app.core.services import CloudServices
 from app.domain.catalog.service import CatalogService
 from app.domain.commercial.service import CommercialService, ServiceAuditContext
-from app.domain.hosted_model_defaults import (
-    AUDIO_NARRATION_QUALITY_PROFILE_ID,
-    FREE_GPT55_TEXT_PROFILE_ID,
-    TEXT_AI_PROFILE_ID,
-)
+from app.domain.hosted_model_defaults import TEXT_AI_PROFILE_ID
 from app.domain.runtime.service import RuntimeService
-from app.domain.usage.rollup import UsageRollupService
 from app.domain.web_search.service import (
     TavilyWebSearchProvider,
     WebSearchExecutionResult,
     WebSearchProviderUsage,
+)
+from app.domain.wordpress_ai_connector.routing_profiles import (
+    WP_AI_CONNECTOR_AUDIO_GENERATION_PROFILE_ID,
+    WP_AI_CONNECTOR_SHORT_TEXT_PROFILE_ID,
 )
 from app.workers.ops_cadence import run_due_tasks
 from tests.conftest import (
@@ -264,6 +266,20 @@ class FixedAudioSummaryScriptProvider:
             tokens_out=60,
             cost=0.0,
         )
+
+
+def _bind_audio_summary_script_profile(database_url: str, *, revision: str) -> None:
+    with get_session(database_url) as session:
+        CatalogRepository(session).upsert_routing_binding(
+            profile_id=WP_AI_CONNECTOR_SHORT_TEXT_PROFILE_ID,
+            candidate_instance_ids=["openai-global-hosted-free-next"],
+            selection_policy_json={
+                "strategy": "ordered",
+                "test_override": revision,
+            },
+            revision=revision,
+        )
+        session.commit()
 
 
 class FlakyAudioSummaryScriptProvider(FixedAudioSummaryScriptProvider):
@@ -863,7 +879,7 @@ def test_admin_ai_resources_projects_connections_capabilities_and_profiles(
     assert "group-test-secret" not in serialized
 
 
-def test_admin_ability_model_runtime_projection_is_read_only_and_feature_backed(
+def test_admin_ability_model_runtime_projection_is_bounded_and_feature_backed(
     tmp_path: Path,
 ) -> None:
     _, client = _build_client(
@@ -887,7 +903,9 @@ def test_admin_ability_model_runtime_projection_is_read_only_and_feature_backed(
     assert data["surface"] == "admin_ability_model_runtime_projection"
     assert data["projection_version"] == "admin-ability-model-runtime-projection.v1"
     assert data["source_surface"] == "admin_ai_resources"
-    assert data["boundary"]["read_only"] is True
+    assert data["boundary"]["read_only"] is False
+    assert data["boundary"]["runtime_binding_only"] is True
+    assert data["boundary"]["configurable_runtime_bindings"] == ["site_knowledge_embedding"]
     assert data["boundary"]["direct_wordpress_write"] is False
     assert data["boundary"]["not_a_control_plane"] is True
     assert "plugin_specific_overrides" in data["boundary"]["does_not_own"]
@@ -910,12 +928,17 @@ def test_admin_ability_model_runtime_projection_is_read_only_and_feature_backed(
     assert rows["content_support"]["boundary"]["direct_wordpress_write"] is False
     assert rows["article_narration"]["media"] == "audio"
     assert rows["generated_image_candidates"]["media"] == "image"
+    assert rows["site_knowledge_embedding"]["media"] == "vector"
     assert rows["site_knowledge_embedding"]["model_kind"] == "embedding_model"
+    assert rows["site_knowledge_embedding"]["can_configure"] is True
+    assert rows["site_knowledge_embedding"]["action"] == "configure_runtime_model"
+    assert rows["site_knowledge_embedding"]["boundary"]["runtime_binding_only"] is True
     assert rows["evidence_preflight"]["model_kind"] == "search_text_model"
 
     media_groups = {item["media"]: item for item in data["media_groups"]}
-    assert {"text", "image", "audio", "video"}.issubset(media_groups)
-    assert media_groups["text"]["count"] >= 3
+    assert {"text", "image", "vector", "audio", "video"}.issubset(media_groups)
+    assert media_groups["text"]["count"] >= 2
+    assert media_groups["vector"]["count"] >= 1
     assert media_groups["audio"]["count"] >= 3
     assert media_groups["video"]["count"] == 0
 
@@ -926,6 +949,108 @@ def test_admin_ability_model_runtime_projection_is_read_only_and_feature_backed(
 
     unauthorized = client.get("/internal/service/admin/ability-models/runtime-projection")
     assert unauthorized.status_code == 401
+
+
+class FixedSiliconFlowEmbeddingProvider:
+    provider_id = "siliconflow"
+    display_name = "SiliconFlow"
+    adapter_type = "siliconflow"
+
+    def fetch_catalog(self) -> ProviderCatalogSnapshot:
+        return ProviderCatalogSnapshot(
+            provider_id=self.provider_id,
+            display_name=self.display_name,
+            adapter_type=self.adapter_type,
+            models=[
+                CatalogModelSeed(
+                    model_id="siliconflow/BAAI/bge-m3",
+                    family="bge",
+                    feature="embedding",
+                    status="available",
+                    context_window=8192,
+                    price_input=0.0,
+                    price_output=0.0,
+                    raw_json={"dimensions": 1024},
+                    instances=[
+                        CatalogInstanceSeed(
+                            instance_id="siliconflow-bge-m3-embed",
+                            endpoint_variant="embeddings",
+                            region="global",
+                            capability_tags=["embedding", "site-knowledge"],
+                            is_default=True,
+                            weight=100,
+                        )
+                    ],
+                )
+            ],
+        )
+
+    def execute(self, request: ProviderExecutionRequest) -> ProviderExecutionResult:
+        raise ProviderExecutionError("provider.not_executed", "not used by this test")
+
+
+def test_admin_ability_model_runtime_binding_updates_site_knowledge_embedding(
+    tmp_path: Path,
+) -> None:
+    database_url, client = _build_client(
+        tmp_path,
+        providers={"siliconflow": FixedSiliconFlowEmbeddingProvider()},
+    )
+    with get_session(database_url) as session:
+        session.add(
+            ProviderConnection(
+                connection_id="model_siliconflow",
+                provider_type="siliconflow",
+                display_name="SiliconFlow",
+                enabled=True,
+                base_url="https://api.siliconflow.cn/v1",
+                config_json={
+                    "provider_id": "siliconflow",
+                    "kind": "siliconflow",
+                    "capability_ids": ["text_generation", "embedding"],
+                    "runtime_profile_ids": ["text.ai", "embed.default"],
+                    "model_id": "siliconflow/Qwen/Qwen3-8B",
+                },
+                secret_ciphertext="configured-in-test",
+                status="configured",
+                source_role="execution_source",
+                metadata_json={},
+            )
+        )
+        session.commit()
+
+    response = client.post(
+        "/internal/service/admin/ability-models/runtime-binding",
+        headers=build_internal_headers(idempotency_key="ability-binding-save"),
+        json={
+            "ability_id": "site_knowledge_embedding",
+            "instance_id": "siliconflow-bge-m3-embed",
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    data = response.json()["data"]
+    row = {item["ability_id"]: item for item in data["rows"]}["site_knowledge_embedding"]
+    assert row["media"] == "vector"
+    assert row["can_configure"] is True
+    assert row["provider_id"] == "siliconflow"
+    assert row["model_id"] == "siliconflow/BAAI/bge-m3"
+    assert data["boundary"]["runtime_binding_only"] is True
+    assert data["boundary"]["direct_wordpress_write"] is False
+    assert data["receipt"]["event_kind"] == "ability_model_runtime_binding.update"
+
+    with get_session(database_url) as session:
+        connection = session.get(ProviderConnection, "model_siliconflow")
+        assert connection is not None
+        config = connection.config_json or {}
+        assert config["provider_id"] == "siliconflow"
+        assert config["model_id"] == "siliconflow/BAAI/bge-m3"
+        assert "embedding" in config["capability_ids"]
+        assert "embed.default" in config["runtime_profile_ids"]
+        assert config["dimensions"] == 1024
+
+    serialized = json.dumps(data)
+    assert "configured-in-test" not in serialized
 
 
 def test_admin_provider_connections_store_encrypted_credentials_and_project_to_ai_resources(
@@ -1087,6 +1212,94 @@ def test_admin_provider_connection_catalog_preview_fetches_models_without_persis
     assert "preview-secret-value" not in json.dumps(response.json())
     with get_session(database_url) as session:
         assert session.get(ProviderConnection, "mqzj_preview") is None
+
+
+def test_admin_provider_connection_test_syncs_catalog_for_openai_compatible_supplier(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _, client = _build_client(tmp_path)
+
+    def fake_fetch_catalog(self: Any) -> ProviderCatalogSnapshot:
+        provider_id = str(getattr(self, "provider_id", "") or "")
+        display_name = str(getattr(self, "display_name", "") or "")
+        return ProviderCatalogSnapshot(
+            provider_id=provider_id,
+            display_name=display_name,
+            adapter_type="openai",
+            models=[
+                CatalogModelSeed(
+                    model_id="deepseek-chat",
+                    family="deepseek",
+                    feature="text",
+                    status="available",
+                    instances=[
+                        CatalogInstanceSeed(
+                            instance_id=f"{provider_id}-global-deepseek-chat",
+                            endpoint_variant="chat_completions",
+                            region="global",
+                            capability_tags=["text", "balanced"],
+                            is_default=True,
+                            weight=100,
+                        )
+                    ],
+                )
+            ],
+        )
+
+    monkeypatch.setattr(
+        "app.adapters.providers.openai.OpenAIProviderAdapter.fetch_catalog",
+        fake_fetch_catalog,
+    )
+
+    create_response = client.post(
+        "/internal/service/admin/provider-connections",
+        headers=build_internal_headers(idempotency_key="provider-connection-deepseek-save"),
+        json={
+            "connection_id": "deepseek",
+            "provider_id": "deepseek",
+            "provider_type": "openai_compatible",
+            "kind": "openai_compatible",
+            "display_name": "DeepSeek",
+            "enabled": True,
+            "base_url": "https://api.deepseek.com/v1",
+            "capability_ids": ["text_generation"],
+            "runtime_profile_ids": [TEXT_AI_PROFILE_ID],
+            "config": {"model_ids": ["deepseek-chat"], "model_id": "deepseek-chat"},
+            "credential": "deepseek-secret-value",
+        },
+    )
+    assert create_response.status_code == 200, create_response.text
+
+    test_response = client.post(
+        "/internal/service/admin/provider-connections/deepseek/test",
+        headers=build_internal_headers(idempotency_key="provider-connection-deepseek-test"),
+    )
+
+    assert test_response.status_code == 200, test_response.text
+    test_data = test_response.json()["data"]
+    assert test_data["catalog"]["provider_id"] == "deepseek"
+    assert test_data["catalog"]["display_name"] == "DeepSeek"
+    assert test_data["catalog"]["adapter_type"] == "openai"
+    assert test_data["catalog"]["sync"]["status"] == "synced"
+    assert "deepseek-secret-value" not in json.dumps(test_response.json())
+
+    routing_response = client.get(
+        "/internal/service/admin/wordpress-ai-routing",
+        headers=build_internal_headers(),
+    )
+
+    assert routing_response.status_code == 200, routing_response.text
+    routing_data = routing_response.json()["data"]
+    deepseek_instances = [
+        item
+        for item in routing_data["available_text_instances"]
+        if item["provider_id"] == "deepseek"
+    ]
+    assert deepseek_instances
+    assert deepseek_instances[0]["provider_display_name"] == "DeepSeek"
+    assert deepseek_instances[0]["adapter_type"] == "openai"
+    assert deepseek_instances[0]["model_id"] == "deepseek-chat"
 
 
 def test_admin_provider_connection_catalog_preview_returns_all_upstream_models(
@@ -1313,9 +1526,48 @@ def test_admin_model_references_syncs_models_dev_payload_as_reference_only(
                                     "input": 2.0,
                                     "output": 12.0,
                                 },
-                            }
+                            },
                         },
-                    }
+                    },
+                    "deepseek": {
+                        "id": "deepseek",
+                        "name": "DeepSeek",
+                        "doc": "https://api-docs.deepseek.com",
+                        "models": {
+                            "deepseek-v4-flash": {
+                                "id": "deepseek-v4-flash",
+                                "name": "DeepSeek V4 Flash",
+                                "family": "deepseek",
+                                "reasoning": True,
+                                "modalities": {
+                                    "input": ["text"],
+                                    "output": ["text"],
+                                },
+                                "limit": {"context": 128000, "output": 8000},
+                                "cost": {
+                                    "input": 0.14,
+                                    "output": 0.28,
+                                    "cache_read": 0.0028,
+                                },
+                            },
+                            "deepseek-v4-pro": {
+                                "id": "deepseek-v4-pro",
+                                "name": "DeepSeek V4 Pro",
+                                "family": "deepseek",
+                                "reasoning": True,
+                                "modalities": {
+                                    "input": ["text"],
+                                    "output": ["text"],
+                                },
+                                "limit": {"context": 128000, "output": 8000},
+                                "cost": {
+                                    "input": 0.435,
+                                    "output": 0.87,
+                                    "cache_read": 0.003625,
+                                },
+                            },
+                        },
+                    },
                 }
             }
         },
@@ -1325,11 +1577,16 @@ def test_admin_model_references_syncs_models_dev_payload_as_reference_only(
     sync_data = response.json()["data"]
     assert sync_data["surface"] == "admin_model_reference_sync"
     assert sync_data["source_id"] == "models.dev"
-    assert sync_data["model_count"] == 2
+    assert sync_data["model_count"] == 4
     assert sync_data["price_unit"] == "usd_per_1m_tokens"
     assert sync_data["billing_truth"] is False
     assert sync_data["boundary"]["reference_only"] is True
     assert sync_data["boundary"]["routing_truth"] is False
+
+    with get_session(database_url) as session:
+        source = session.get(ModelReferenceSource, "models.dev")
+        assert source is not None
+        assert source.status == "active"
 
     list_response = client.get(
         "/internal/service/admin/model-references?provider_id=openai",
@@ -1363,6 +1620,19 @@ def test_admin_model_references_syncs_models_dev_payload_as_reference_only(
     assert image_data["items"][0]["model_id"] == "gpt-image-2"
     assert image_data["items"][0]["feature"] == "image"
     assert image_data["items"][0]["is_deprecated"] is True
+
+    deepseek_response = client.get(
+        "/internal/service/admin/model-references?provider_id=deepseek",
+        headers=build_internal_headers(),
+    )
+    assert deepseek_response.status_code == 200, deepseek_response.text
+    deepseek_data = deepseek_response.json()["data"]
+    assert deepseek_data["total"] == 2
+    assert deepseek_data["items"][0]["model_id"] == "deepseek-v4-flash"
+    assert deepseek_data["items"][0]["feature"] == "text"
+    assert deepseek_data["items"][0]["context_window"] == 128000
+    assert deepseek_data["items"][0]["price"]["cache_read"] == 0.0028
+    assert deepseek_data["items"][1]["model_id"] == "deepseek-v4-pro"
 
     active_response = client.get(
         "/internal/service/admin/model-references?provider_id=openai&include_deprecated=false&search=image",
@@ -1992,56 +2262,153 @@ def test_admin_ai_resources_exposes_recent_runtime_evidence_without_content(
     assert "generated text should not appear" not in serialized
 
 
-def test_admin_ai_resources_saves_profile_preferences_without_secrets(
+def test_admin_audio_workbench_creates_narration_job_and_exposes_result(
     tmp_path: Path,
 ) -> None:
-    env_path = tmp_path / ".env.local"
-    _, client = _build_client(
+    provider = MiniMaxProviderAdapter(
+        allow_sample_catalog=True,
+        allow_sample_execution=True,
+    )
+    database_url, client = _build_client(
         tmp_path,
+        providers={"minimax": provider},
         settings_overrides={
-            "ai_resources_admin_env_path": str(env_path),
-            "openai_api_key": "openai-test-secret",
             "minimax_provider_enabled": True,
             "minimax_api_key": "minimax-test-secret",
         },
     )
-
+    seed_site_auth(
+        database_url,
+        site_id="site_audio_admin",
+        scopes=["runtime:execute", "runtime:read", "runtime:resolve"],
+    )
     response = client.post(
-        "/internal/service/admin/ai-resources/profile-preferences",
-        headers=build_internal_headers(idempotency_key="ai-resource-profile-save"),
+        "/internal/service/admin/audio-jobs",
+        headers=build_internal_headers(idempotency_key="audio-workbench-narration"),
         json={
-            "audio_summary_text_profile_id": FREE_GPT55_TEXT_PROFILE_ID,
-            "audio_narration_profile_id": AUDIO_NARRATION_QUALITY_PROFILE_ID,
-            "audio_summary_audio_profile_id": AUDIO_NARRATION_QUALITY_PROFILE_ID,
+            "site_id": "site_audio_admin",
+            "intent": "article_narration",
+            "title": "Audio test",
+            "body": "这是一段文章正文，用于生成旁白音频。",
+            "format": "mp3",
+            "preview_instance_id": "minimax-global-speech-28-turbo",
         },
     )
 
     assert response.status_code == 200, response.text
     data = response.json()["data"]
-    preferences = data["profile_preferences"]
-    assert preferences["audio_summary_text_profile_id"] == FREE_GPT55_TEXT_PROFILE_ID
-    assert preferences["audio_narration_profile_id"] == AUDIO_NARRATION_QUALITY_PROFILE_ID
-    assert preferences["audio_summary_audio_profile_id"] == AUDIO_NARRATION_QUALITY_PROFILE_ID
-    assert preferences["boundary"]["direct_wordpress_write"] is False
-    serialized = json.dumps(data)
-    assert "openai-test-secret" not in serialized
-    assert "minimax-test-secret" not in serialized
-    env_text = env_path.read_text(encoding="utf-8")
-    assert f"NPCINK_CLOUD_AUDIO_SUMMARY_TEXT_PROFILE_ID={FREE_GPT55_TEXT_PROFILE_ID}" in env_text
-    assert (
-        f"NPCINK_CLOUD_AUDIO_NARRATION_PROFILE_ID={AUDIO_NARRATION_QUALITY_PROFILE_ID}"
-        in env_text
+    assert data["status"] == "queued"
+    assert data["instance_id"] == "minimax-global-speech-28-turbo"
+    assert data["script"]["source"] == "full_article"
+    assert data["boundary"]["direct_wordpress_write"] is False
+
+    status_response = client.get(
+        f"/internal/service/admin/audio-jobs/{data['run_id']}",
+        headers=build_internal_headers(),
     )
-    assert (
-        f"NPCINK_CLOUD_AUDIO_SUMMARY_AUDIO_PROFILE_ID={AUDIO_NARRATION_QUALITY_PROFILE_ID}"
-        in env_text
-    )
-    services = client.app.state.services
-    assert services.settings.audio_summary_text_profile_id == FREE_GPT55_TEXT_PROFILE_ID
-    assert services.settings.audio_narration_profile_id == AUDIO_NARRATION_QUALITY_PROFILE_ID
+
+    assert status_response.status_code == 200, status_response.text
+    status_data = status_response.json()["data"]
+    assert status_data["status"] == "succeeded"
+    assert status_data["result_ready"] is True
+    assert status_data["result"]["artifact_type"] == "audio_generation_candidates"
+    assert status_data["result"]["direct_wordpress_write"] is False
+    assert status_data["result"]["audios"][0]["mime_type"] == "audio/mpeg"
+
+    dispose_engine(database_url)
 
 
-def test_admin_audio_workbench_creates_narration_job_and_exposes_result(
+def test_admin_audio_workbench_without_site_uses_active_preview_site(
+    tmp_path: Path,
+) -> None:
+    provider = MiniMaxProviderAdapter(
+        allow_sample_catalog=True,
+        allow_sample_execution=True,
+    )
+    database_url, client = _build_client(
+        tmp_path,
+        providers={"minimax": provider},
+        settings_overrides={
+            "minimax_provider_enabled": True,
+            "minimax_api_key": "minimax-test-secret",
+        },
+    )
+    seed_site_auth(
+        database_url,
+        site_id="site_smoke",
+        scopes=["runtime:execute", "runtime:read", "runtime:resolve"],
+        site_status=SITE_STATUS_ARCHIVED,
+    )
+    seed_site_auth(
+        database_url,
+        site_id="site_audio_admin",
+        scopes=["runtime:execute", "runtime:read", "runtime:resolve"],
+    )
+
+    response = client.post(
+        "/internal/service/admin/audio-jobs",
+        headers=build_internal_headers(idempotency_key="audio-workbench-default-site"),
+        json={
+            "intent": "article_narration",
+            "title": "Audio test",
+            "body": "这是一段文章正文，用于验证管理员试听自动选择可用站点。",
+            "format": "mp3",
+            "preview_instance_id": "minimax-global-speech-28-turbo",
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    data = response.json()["data"]
+    assert data["site_id"] == "site_audio_admin"
+    assert data["status"] == "queued"
+
+    dispose_engine(database_url)
+
+
+def test_admin_audio_workbench_without_active_site_returns_friendly_error(
+    tmp_path: Path,
+) -> None:
+    provider = MiniMaxProviderAdapter(
+        allow_sample_catalog=True,
+        allow_sample_execution=True,
+    )
+    database_url, client = _build_client(
+        tmp_path,
+        providers={"minimax": provider},
+        settings_overrides={
+            "minimax_provider_enabled": True,
+            "minimax_api_key": "minimax-test-secret",
+        },
+    )
+    seed_site_auth(
+        database_url,
+        site_id="site_smoke",
+        scopes=["runtime:execute", "runtime:read", "runtime:resolve"],
+        site_status=SITE_STATUS_ARCHIVED,
+    )
+
+    response = client.post(
+        "/internal/service/admin/audio-jobs",
+        headers=build_internal_headers(idempotency_key="audio-workbench-no-active-site"),
+        json={
+            "intent": "article_narration",
+            "title": "Audio test",
+            "body": "这是一段文章正文，用于验证没有可用站点时的错误提示。",
+            "format": "mp3",
+            "preview_instance_id": "minimax-global-speech-28-turbo",
+        },
+    )
+
+    assert response.status_code == 400
+    payload = response.json()
+    assert payload["error_code"] == "audio_workbench.preview_site_unavailable"
+    assert payload["data"]["site_status"] == "none_active"
+    assert payload["data"]["action"] == "connect_or_activate_site"
+
+    dispose_engine(database_url)
+
+
+def test_admin_audio_workbench_rejects_unknown_preview_instance(
     tmp_path: Path,
 ) -> None:
     provider = MiniMaxProviderAdapter(
@@ -2064,34 +2431,20 @@ def test_admin_audio_workbench_creates_narration_job_and_exposes_result(
 
     response = client.post(
         "/internal/service/admin/audio-jobs",
-        headers=build_internal_headers(idempotency_key="audio-workbench-narration"),
+        headers=build_internal_headers(idempotency_key="audio-workbench-preview-invalid"),
         json={
             "site_id": "site_audio_admin",
             "intent": "article_narration",
             "title": "Audio test",
             "body": "这是一段文章正文，用于生成旁白音频。",
             "format": "mp3",
+            "preview_instance_id": "not-an-audio-candidate",
         },
     )
 
-    assert response.status_code == 200, response.text
-    data = response.json()["data"]
-    assert data["status"] == "queued"
-    assert data["script"]["source"] == "full_article"
-    assert data["boundary"]["direct_wordpress_write"] is False
-
-    status_response = client.get(
-        f"/internal/service/admin/audio-jobs/{data['run_id']}",
-        headers=build_internal_headers(),
-    )
-
-    assert status_response.status_code == 200, status_response.text
-    status_data = status_response.json()["data"]
-    assert status_data["status"] == "succeeded"
-    assert status_data["result_ready"] is True
-    assert status_data["result"]["artifact_type"] == "audio_generation_candidates"
-    assert status_data["result"]["direct_wordpress_write"] is False
-    assert status_data["result"]["audios"][0]["mime_type"] == "audio/mpeg"
+    assert response.status_code == 400
+    payload = response.json()
+    assert payload["error_code"] == "audio_workbench.preview_instance_invalid"
 
     dispose_engine(database_url)
 
@@ -2175,6 +2528,10 @@ def test_admin_audio_workbench_builds_summary_script_before_audio_job(
         site_id="site_audio_admin",
         scopes=["runtime:execute", "runtime:read", "runtime:resolve"],
     )
+    _bind_audio_summary_script_profile(
+        database_url,
+        revision="audio-summary-script-test",
+    )
 
     response = client.post(
         "/internal/service/admin/audio-jobs",
@@ -2195,7 +2552,9 @@ def test_admin_audio_workbench_builds_summary_script_before_audio_job(
     assert data["script"]["generation"]["mode"] == "hosted_ai_content_support"
     assert data["script"]["generation"]["ability_name"] == "npcink-toolbox/ai-content-support"
     assert data["script"]["generation"]["contract_version"] == "hosted_ai_content_support.v1"
-    assert data["script"]["generation"]["profile_id"] == TEXT_AI_PROFILE_ID
+    assert data["script"]["generation"]["profile_id"] == (
+        WP_AI_CONNECTOR_SHORT_TEXT_PROFILE_ID
+    )
     assert data["script"]["output_json"]["opening"] == "这是一段适合收听的长文摘要。"
     assert "适合收听的长文摘要" in data["script"]["text"]
     assert data["script"]["characters"] <= 4800
@@ -2235,6 +2594,10 @@ def test_admin_audio_workbench_retries_transient_summary_script_failure(
         database_url,
         site_id="site_audio_admin",
         scopes=["runtime:execute", "runtime:read", "runtime:resolve"],
+    )
+    _bind_audio_summary_script_profile(
+        database_url,
+        revision="audio-summary-script-retry-test",
     )
 
     response = client.post(
@@ -2282,6 +2645,10 @@ def test_admin_audio_workbench_returns_friendly_empty_summary_script_error(
         site_id="site_audio_admin",
         scopes=["runtime:execute", "runtime:read", "runtime:resolve"],
     )
+    _bind_audio_summary_script_profile(
+        database_url,
+        revision="audio-summary-script-empty-test",
+    )
 
     response = client.post(
         "/internal/service/admin/audio-jobs",
@@ -2309,7 +2676,7 @@ def test_admin_audio_workbench_returns_friendly_empty_summary_script_error(
     dispose_engine(database_url)
 
 
-def test_admin_audio_workbench_uses_selected_audio_profile(
+def test_admin_audio_workbench_uses_wordpress_audio_routing_profile(
     tmp_path: Path,
 ) -> None:
     provider = MiniMaxProviderAdapter(
@@ -2322,7 +2689,6 @@ def test_admin_audio_workbench_uses_selected_audio_profile(
         settings_overrides={
             "minimax_provider_enabled": True,
             "minimax_api_key": "minimax-test-secret",
-            "audio_narration_profile_id": AUDIO_NARRATION_QUALITY_PROFILE_ID,
         },
     )
     seed_site_auth(
@@ -2338,15 +2704,17 @@ def test_admin_audio_workbench_uses_selected_audio_profile(
             "site_id": "site_audio_admin",
             "intent": "article_narration",
             "title": "Audio quality test",
-            "body": "这是一段文章正文，用于验证音频 profile 偏好。",
+            "body": "这是一段文章正文，用于验证音频模型路由。",
             "format": "mp3",
         },
     )
 
     assert response.status_code == 200, response.text
     data = response.json()["data"]
-    assert data["profile_id"] == AUDIO_NARRATION_QUALITY_PROFILE_ID
-    assert data["script"]["generation"]["audio_profile_id"] == AUDIO_NARRATION_QUALITY_PROFILE_ID
+    assert data["profile_id"] == WP_AI_CONNECTOR_AUDIO_GENERATION_PROFILE_ID
+    assert data["script"]["generation"]["audio_profile_id"] == (
+        WP_AI_CONNECTOR_AUDIO_GENERATION_PROFILE_ID
+    )
 
     dispose_engine(database_url)
 
@@ -2690,28 +3058,8 @@ def test_hosted_model_governance_diagnostics_summarizes_runtime_families(
         f"?site_id={site_id}&recent_minutes=10080&limit=10",
         headers=build_internal_headers(),
     )
-    empty_cadence_response = client.get(
-        "/internal/service/admin/hosted-model-governance-cadence?recent_minutes=60",
-        headers=build_internal_headers(),
-    )
-    UsageRollupService(database_url).store_hosted_model_governance_batch(
-        window_minutes=60,
-        limit=10,
-    )
-    cadence_response = client.get(
-        "/internal/service/admin/hosted-model-governance-cadence?recent_minutes=60",
-        headers=build_internal_headers(),
-    )
-
     assert response.status_code == 200
     assert admin_alias_response.status_code == 200
-    assert empty_cadence_response.status_code == 200
-    assert empty_cadence_response.json()["data"]["available"] is False
-    assert cadence_response.status_code == 200
-    cadence_payload = cadence_response.json()["data"]
-    assert cadence_payload["available"] is True
-    assert cadence_payload["source"] == "cloud_hosted_model_governance"
-    assert cadence_payload["delivery"]["owner"] == "internal_admin_readonly"
     data = response.json()["data"]
     assert admin_alias_response.json()["data"]["totals"]["runs"] == 3
     assert admin_alias_response.json()["data"]["filters"]["recent_minutes"] == 10080
@@ -4852,7 +5200,6 @@ def test_service_routes_expose_ops_cadence_summary(tmp_path: Path) -> None:
             "router_diagnostics_interval_seconds": 60,
             "latency_probe_interval_seconds": 60,
             "alert_provider_degradation_interval_seconds": 60,
-            "hosted_model_governance_interval_seconds": 60,
             "provider_health_scan_interval_seconds": 60,
         },
     )
@@ -4883,9 +5230,9 @@ def test_service_routes_expose_ops_cadence_summary(tmp_path: Path) -> None:
 
     assert response.status_code == 200
     payload = response.json()["data"]
-    assert payload["totals"]["tasks_total"] == 9
+    assert payload["totals"]["tasks_total"] == 8
     assert any(item["task_id"] == "retention_cleanup" for item in payload["items"])
-    assert any(item["task_id"] == "hosted_model_governance" for item in payload["items"])
+    assert all(item["task_id"] != "hosted_model_governance" for item in payload["items"])
     retention_item = next(
         item for item in payload["items"] if item["task_id"] == "retention_cleanup"
     )
@@ -4943,7 +5290,7 @@ def test_service_routes_expose_observability_summary(tmp_path: Path) -> None:
     )
     assert payload["workers"]["totals"]["workers_total"] == 3
     assert any(item["worker_id"] == "runtime_queue" for item in payload["workers"]["items"])
-    assert payload["cadence"]["totals"]["tasks_total"] == 9
+    assert payload["cadence"]["totals"]["tasks_total"] == 8
     assert "status_counts" in payload["providers"]
     assert "summary" in payload["runtime"]
     assert "backlog" in payload["runtime"]

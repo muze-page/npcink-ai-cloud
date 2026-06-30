@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { CustomerAdminTabs } from '@/components/admin/CustomerAdminTabs';
 import { LoadingFallback } from '@/components/ui/LoadingFallback';
 import { useLocale } from '@/contexts/LocaleContext';
+import { translateCoverageStateLabel, type CoverageState } from '@/lib/customer-package-display';
 import {
   BackofficeMetricStrip,
   BackofficePageStack,
@@ -169,6 +170,13 @@ function translateReasonShortLabel(
   return t(`admin.coverage.reason_short.${reasonCode}`, {}, fallback);
 }
 
+function normalizeCoverageState(value?: string): CoverageState | null {
+  if (value === 'covered' || value === 'uncovered') {
+    return value;
+  }
+  return null;
+}
+
 function CoverageStatusBadge({
   severity,
   label,
@@ -216,6 +224,31 @@ function resolvePackageName(shell: TierSummary, item?: PlanListItem): string {
   return String(item?.tier_summary?.package_alias || item?.plan?.name || shell.package_alias || shell.label || shell.tier_id);
 }
 
+function buildQueueSummary(items: CoverageQueueItem[]): Required<NonNullable<CoverageWorkQueue['summary']>> {
+  const reasonCounts: Record<string, number> = {};
+  const summary = {
+    total: items.length,
+    visible: items.length,
+    needs_action: 0,
+    error: 0,
+    warning: 0,
+    ok: 0,
+    inactive: 0,
+    reason_counts: reasonCounts,
+  };
+
+  for (const item of items) {
+    if (item.severity === 'error') summary.error += 1;
+    if (item.severity === 'warning') summary.warning += 1;
+    if (item.severity === 'ok') summary.ok += 1;
+    if (item.severity === 'inactive') summary.inactive += 1;
+    if (item.severity === 'error' || item.severity === 'warning') summary.needs_action += 1;
+    reasonCounts[item.reason_code] = (reasonCounts[item.reason_code] || 0) + 1;
+  }
+
+  return summary;
+}
+
 function AdminCoverageContent() {
   const { t } = useLocale();
   const [queue, setQueue] = useState<CoverageWorkQueue | null>(null);
@@ -249,16 +282,21 @@ function AdminCoverageContent() {
     };
   }, [t]);
 
-  const visibleItems = useMemo(() => {
-    const rawItems = (queue?.items || []).filter(
+  const visibleQueueItems = useMemo(
+    () =>
+      (queue?.items || []).filter(
       (item) => !isInternalCoverageRecord(item.account.account_id, item.account.name)
-    );
-    return rawItems.filter((item) => {
+      ),
+    [queue?.items]
+  );
+  const visibleSummary = useMemo(() => buildQueueSummary(visibleQueueItems), [visibleQueueItems]);
+  const visibleItems = useMemo(() => {
+    return visibleQueueItems.filter((item) => {
       if (view === 'all') return true;
       if (view === 'needs_action') return item.severity === 'error' || item.severity === 'warning';
       return item.severity === view;
     });
-  }, [queue?.items, view]);
+  }, [visibleQueueItems, view]);
 
   if (error) {
     return (
@@ -278,23 +316,22 @@ function AdminCoverageContent() {
     return <LoadingFallback />;
   }
 
-  const summary = queue.summary || {};
   const filters: Array<{ value: QueueView; label: string; count: number }> = [
     {
       value: 'needs_action',
       label: t('admin.coverage.filter_needs_action', {}, 'Needs action'),
-      count: Number(summary.needs_action || 0),
+      count: visibleSummary.needs_action,
     },
-    { value: 'error', label: translateStatusLabel('error', t), count: Number(summary.error || 0) },
-    { value: 'warning', label: translateStatusLabel('warning', t), count: Number(summary.warning || 0) },
-    { value: 'ok', label: translateStatusLabel('ok', t), count: Number(summary.ok || 0) },
+    { value: 'error', label: translateStatusLabel('error', t), count: visibleSummary.error },
+    { value: 'warning', label: translateStatusLabel('warning', t), count: visibleSummary.warning },
+    { value: 'ok', label: translateStatusLabel('ok', t), count: visibleSummary.ok },
     {
       value: 'all',
       label: t('common.all', {}, 'All'),
-      count: Number(summary.total || queue.items?.length || 0),
+      count: visibleSummary.total,
     },
   ];
-  const reasonEntries = Object.entries(summary.reason_counts || {})
+  const reasonEntries = Object.entries(visibleSummary.reason_counts || {})
     .sort((left, right) => Number(right[1] || 0) - Number(left[1] || 0))
     .slice(0, 6);
   const packageShells = (planCatalog.tier_templates || []).filter((shell) =>
@@ -352,22 +389,22 @@ function AdminCoverageContent() {
               items={[
                 {
                   label: t('admin.coverage.metric_needs_action', {}, 'Needs action'),
-                  value: formatInteger(Number(summary.needs_action || 0)),
+                  value: formatInteger(visibleSummary.needs_action),
                   size: 'compact',
                 },
                 {
                   label: translateStatusLabel('error', t),
-                  value: formatInteger(Number(summary.error || 0)),
+                  value: formatInteger(visibleSummary.error),
                   size: 'compact',
                 },
                 {
                   label: translateStatusLabel('warning', t),
-                  value: formatInteger(Number(summary.warning || 0)),
+                  value: formatInteger(visibleSummary.warning),
                   size: 'compact',
                 },
                 {
                   label: t('admin.coverage.metric_aligned', {}, 'Aligned'),
-                  value: formatInteger(Number(summary.ok || 0)),
+                  value: formatInteger(visibleSummary.ok),
                   size: 'compact',
                 },
               ]}
@@ -382,21 +419,24 @@ function AdminCoverageContent() {
         </p>
       </BackofficePrimaryPanel>
 
-      <div className="grid gap-3 rounded-2xl border border-slate-200 bg-white p-2 shadow-sm dark:border-slate-800 dark:bg-slate-950 md:grid-cols-2">
+      <div className="inline-grid max-w-xl grid-cols-2 gap-1 rounded-full border border-slate-200 bg-white p-1 shadow-sm dark:border-slate-800 dark:bg-slate-950">
         {tabs.map((tab) => (
           <button
             key={tab.value}
             type="button"
             onClick={() => setActiveTab(tab.value)}
             className={cn(
-              'cursor-pointer rounded-xl border px-4 py-3 text-left transition',
+              'cursor-pointer rounded-full px-4 py-2 text-center transition',
               activeTab === tab.value
-                ? 'border-blue-300 bg-blue-50 text-blue-800 shadow-sm dark:border-blue-800 dark:bg-blue-950/35 dark:text-blue-100'
-                : 'border-transparent text-slate-600 hover:border-slate-200 hover:bg-slate-50 hover:text-slate-950 dark:text-slate-300 dark:hover:border-slate-800 dark:hover:bg-slate-900 dark:hover:text-white'
+                ? 'bg-blue-600 text-white shadow-sm dark:bg-blue-500'
+                : 'text-slate-600 hover:bg-slate-50 hover:text-slate-950 dark:text-slate-300 dark:hover:bg-slate-900 dark:hover:text-white'
             )}
           >
             <span className="block text-sm font-semibold">{tab.label}</span>
-            <span className="mt-1 block text-xs text-slate-500 dark:text-slate-400">{tab.detail}</span>
+            <span className={cn(
+              'mt-0.5 block text-xs',
+              activeTab === tab.value ? 'text-blue-50' : 'text-slate-500 dark:text-slate-400'
+            )}>{tab.detail}</span>
           </button>
         ))}
       </div>
@@ -456,6 +496,7 @@ function AdminCoverageContent() {
                 <tbody className="divide-y divide-slate-200/80 dark:divide-slate-800">
                   {visibleItems.map((item) => {
                     const billingStatus = item.evidence.billing_snapshot_status?.status || 'unknown';
+                    const coverageState = normalizeCoverageState(item.package?.coverage_state);
                     return (
                       <tr key={`${item.account.account_id}-${item.reason_code}`} className="align-top hover:bg-slate-50/70 dark:hover:bg-slate-950/35">
                         <td className="px-6 py-4">
@@ -470,7 +511,9 @@ function AdminCoverageContent() {
                             {item.package?.display_package_label || t('common.not_available', {}, 'N/A')}
                           </p>
                           <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                            {item.package?.coverage_state || t('common.unknown', {}, 'Unknown')}
+                            {coverageState
+                              ? translateCoverageStateLabel(t, coverageState)
+                              : t('common.unknown', {}, 'Unknown')}
                           </p>
                         </td>
                         <td className="px-4 py-4">
@@ -527,9 +570,11 @@ function AdminCoverageContent() {
                   <span>{t('admin.coverage_customers_empty', {}, 'No customer service follow-up is visible in this operator snapshot.')}</span>
                   <BackofficeStatusBadge status="ok" label={translateStatusLabel('ok', t)} />
                 </div>
-                <Link href="/admin/accounts" className="btn btn-secondary btn-sm">
-                  {t('admin.coverage_open_customer_register_action', {}, 'Open customer register')}
-                </Link>
+                {visibleQueueItems.length === 0 ? (
+                  <Link href="/admin/accounts" className="btn btn-secondary btn-sm">
+                    {t('admin.coverage_open_customer_register_action', {}, 'Open customer register')}
+                  </Link>
+                ) : null}
               </BackofficeStackCard>
             </div>
           )}
@@ -560,25 +605,6 @@ function AdminCoverageContent() {
                   {t('admin.coverage.reason_summary_empty', {}, 'No reason codes are visible in this snapshot.')}
                 </BackofficeStackCard>
               )}
-            </div>
-          </BackofficeSectionPanel>
-
-          <BackofficeSectionPanel className="space-y-4">
-            <div>
-              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-gray-500 dark:text-gray-400">
-                {t('admin.secondary_detail', {}, 'Secondary detail')}
-              </p>
-              <h2 className="mt-2 text-xl font-semibold text-gray-950 dark:text-white">
-                {t('admin.coverage.related_surfaces_title', {}, 'Related surfaces')}
-              </h2>
-            </div>
-            <div className="grid gap-2">
-              <Link href="/admin/accounts" className="btn btn-secondary btn-sm justify-center">
-                {t('admin.coverage_open_customer_register_action', {}, 'Open customer register')}
-              </Link>
-              <Link href="/admin/subscriptions" className="btn btn-secondary btn-sm justify-center">
-                {t('admin.coverage_open_subscription_queue_action', {}, 'Open subscription queue')}
-              </Link>
             </div>
           </BackofficeSectionPanel>
         </div>

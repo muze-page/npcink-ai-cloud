@@ -295,7 +295,9 @@ function normalizeOverview(raw: any): AdminOverview {
       status: String(hostedAlertSummary.status ?? 'inactive'),
       summary: String(hostedAlertSummary.summary ?? ''),
       alertCount: Number(hostedAlertSummary.alert_count ?? 0),
-      href: String(hostedAlertSummary.href ?? '/admin/hosted-models'),
+      href: String(hostedAlertSummary.href ?? '').startsWith('/admin/hosted-models')
+        ? '/admin/ai-resources?view=diagnostics'
+        : String(hostedAlertSummary.href ?? '/admin/ai-resources?view=diagnostics'),
       dailyDigest: {
         runs: Number(hostedDailyDigest.runs ?? 0),
         providerCalls: Number(hostedDailyDigest.provider_calls ?? 0),
@@ -475,11 +477,11 @@ function AdminOverviewContent() {
       expiryReason: t('admin.watch_expiry_reason'),
       attentionTitle: t('admin.watch_attention_title'),
       attentionFallbackReason: t('admin.watch_attention_reason'),
-      hostedTitle: t('admin.watch_hosted_governance_title', {}, 'Hosted model governance needs review'),
+      hostedTitle: t('admin.watch_hosted_governance_title', {}, 'Runtime telemetry needs review'),
       hostedReason: t(
         'admin.watch_hosted_governance_reason',
         {},
-        'Hosted model telemetry or metering coverage needs review before traffic expands.'
+        'Runtime telemetry coverage needs review before traffic expands.'
       ),
     },
   });
@@ -584,16 +586,16 @@ function AdminOverviewContent() {
   const firstOperatorWatchScope = firstOperatorWatchItem?.scope || '';
   const attentionNotes = operatorWatchItems.slice(0, 2);
   const primaryActionHref =
-    firstOperatorWatchScope.startsWith('hosted.')
-      ? '/admin/hosted-models'
+    firstOperatorWatchScope.startsWith('runtime.telemetry')
+      ? '/admin/ai-resources?view=diagnostics'
       : firstOperatorWatchScope.startsWith('runtime.') || firstOperatorWatchScope.startsWith('request.')
         ? '/admin/accounts'
         : statusTone === 'error' || commercialItems.length > 0 || overview.expiringSubscriptions.in7Days > 0
           ? '/admin/coverage'
           : '/admin/accounts';
   const primaryActionLabel =
-    primaryActionHref === '/admin/hosted-models'
-      ? t('admin.home_primary_action_hosted_models', {}, 'Inspect hosted models')
+    primaryActionHref === '/admin/ai-resources?view=diagnostics'
+      ? t('admin.home_primary_action_runtime_telemetry', {}, 'Inspect runtime telemetry')
       : primaryActionHref === '/admin/coverage'
       ? t('admin.home_primary_action_coverage', {}, 'Review service status')
       : t('admin.home_primary_action_accounts', {}, 'Review customers');
@@ -623,21 +625,21 @@ function AdminOverviewContent() {
     },
   ];
   const recentAuditItems = overview.recentAuditSummary.slice(0, 4);
-  const hostedGovernanceMetrics = [
+  const runtimeTelemetryMetrics = [
     {
-      label: t('admin.home_hosted_runs', {}, 'Hosted runs'),
+      label: t('admin.home_hosted_runs', {}, 'Runtime runs'),
       value: formatInteger(overview.hostedModelGovernance.dailyDigest.runs),
-      detail: t('admin.home_hosted_runs_detail', {}, 'Runs observed in the hosted model governance window.'),
+      detail: t('admin.home_hosted_runs_detail', {}, 'Runs observed in the runtime telemetry window.'),
     },
     {
       label: t('admin.home_hosted_meter', {}, 'Meter coverage'),
       value: formatPercent(overview.hostedModelGovernance.dailyDigest.meteredRunCoverageRate),
-      detail: t('admin.home_hosted_meter_detail', {}, 'Share of hosted runs represented in usage metering.'),
+      detail: t('admin.home_hosted_meter_detail', {}, 'Share of runtime runs represented in usage metering.'),
     },
     {
       label: t('admin.home_hosted_provider', {}, 'Provider coverage'),
       value: formatPercent(overview.hostedModelGovernance.dailyDigest.providerCallRunCoverageRate),
-      detail: t('admin.home_hosted_provider_detail', {}, 'Share of hosted runs with provider call telemetry.'),
+      detail: t('admin.home_hosted_provider_detail', {}, 'Share of runtime runs with provider call telemetry.'),
     },
   ];
   const platformCredit = overview.platformCreditSummary;
@@ -1050,11 +1052,11 @@ function AdminOverviewContent() {
               {t('admin.home_section_runtime_title', {}, 'Which runtime signals need follow-up?')}
             </h2>
           </div>
-          <Link href="/admin/hosted-models" className="text-sm font-medium text-blue-600 hover:text-blue-700 dark:text-blue-300 dark:hover:text-blue-200">
+          <Link href="/admin/ai-resources?view=diagnostics" className="text-sm font-medium text-blue-600 hover:text-blue-700 dark:text-blue-300 dark:hover:text-blue-200">
             {t('admin.home_secondary_action_runtime', {}, 'Inspect runtime sources')} →
           </Link>
         </div>
-        <BackofficeMetricStrip items={hostedGovernanceMetrics} columnsClassName="md:grid-cols-3" />
+        <BackofficeMetricStrip items={runtimeTelemetryMetrics} columnsClassName="md:grid-cols-3" />
         {overview.hostedModelGovernance.alerts.length > 0 ? (
           <div className="grid gap-3 xl:grid-cols-2">
             {overview.hostedModelGovernance.alerts.slice(0, 2).map((alert) => (
@@ -1090,7 +1092,7 @@ function AdminOverviewContent() {
         ) : (
           <BackofficeStackCard className="text-sm text-slate-600 dark:text-slate-300">
             {overview.hostedModelGovernance.summary ||
-              t('admin.home_hosted_empty', {}, 'No hosted model governance alerts are active today.')}
+              t('admin.home_hosted_empty', {}, 'No runtime telemetry alerts are active today.')}
           </BackofficeStackCard>
         )}
       </BackofficeSectionPanel>

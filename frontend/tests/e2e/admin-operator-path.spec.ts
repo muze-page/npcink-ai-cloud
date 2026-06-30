@@ -25,20 +25,20 @@ test('admin coverage page separates service status and packages with tabs', asyn
 
   await page.goto('/admin/coverage');
   await expect(page.getByRole('heading', { name: /^Customer service status$|^客户服务状态$|^客戶服務狀態$/i })).toBeVisible();
-  await expect(page.getByRole('button', { name: /Service status|服务状态|服務狀態/i })).toBeVisible();
-  await expect(page.getByRole('button', { name: /^Packages|^套餐|^方案/i })).toBeVisible();
+  await expect(page.getByRole('button', { name: /Service status|Follow-up queue|服务状态|跟进队列|服務狀態|跟進隊列/i })).toBeVisible();
+  await expect(page.getByRole('button', { name: /^Packages|^Package overview|^套餐|^方案/i })).toBeVisible();
   await expect(page.getByText(/Customers needing service follow-up|需要服务跟进的客户|需要服務跟進的客戶/i).first()).toBeVisible();
   await expect(page.getByRole('link', { name: /Inspect subscription|查看订阅|檢查訂閱/i }).first()).toBeVisible();
 
-  await page.getByRole('button', { name: /^Packages|^套餐|^方案/i }).click();
-  await expect(page.getByRole('heading', { name: /Package catalog|套餐目录|方案目錄/i })).toBeVisible();
+  await page.getByRole('button', { name: /^Packages|^Package overview|^套餐|^方案/i }).click();
+  await expect(page.getByRole('heading', { name: /Package catalog|Package overview|套餐目录|套餐概览|方案目錄|方案概覽/i })).toBeVisible();
   await expect(page.getByText(/Free/i).first()).toBeVisible();
   await expect(page.getByText(/Pro/i).first()).toBeVisible();
   await expect(page.getByText(/Agency/i).first()).toBeVisible();
   await expect(page.getByText(/Site limit|站点上限|站點上限/i).first()).toBeVisible();
   await expect(page.getByRole('link', { name: /Open package catalog|打开套餐目录|打開方案目錄/i })).toHaveCount(1);
 
-  await page.getByRole('button', { name: /Service status|服务状态|服務狀態/i }).click();
+  await page.getByRole('button', { name: /Service status|Follow-up queue|服务状态|跟进队列|服務狀態|跟進隊列/i }).click();
   await expect(page.getByText(/Customers needing service follow-up|需要服务跟进的客户|需要服務跟進的客戶/i).first()).toBeVisible();
 });
 
@@ -66,32 +66,32 @@ test('admin operator path smoke: queue and inspector routes stay connected', asy
   await expect(page.getByRole('heading', { name: /Which runtime signals need follow-up\?|哪些运行时状态需要继续跟进|哪些執行時狀態需要繼續跟進/i })).toBeVisible();
   await expect(
     page
-      .getByText(/Hosted model provider call coverage gap|托管模型提供方调用覆盖缺口|託管模型提供方呼叫覆蓋缺口/i)
+      .getByText(/Provider call coverage gap|提供方调用遥测覆盖缺口|提供方呼叫遙測覆蓋缺口/i)
       .first()
   ).toBeVisible();
   await expect(
     page.locator('p', {
       hasText:
-        /Hosted model provider call coverage gap|托管模型提供方调用覆盖缺口|託管模型提供方呼叫覆蓋缺口/i,
+        /Provider call coverage gap|提供方调用遥测覆盖缺口|提供方呼叫遙測覆蓋缺口/i,
     })
   ).toHaveCount(2);
-  await expect(page.locator('a[href="/admin/hosted-models"]').first()).toBeVisible();
+  await expect(page.locator('a[href="/admin/ai-resources?view=diagnostics"]').first()).toBeVisible();
 
   await page.goto('/admin/coverage');
   await expect(page.getByRole('heading', { name: /^Customer service status$|^客户服务状态$|^客戶服務狀態$/i })).toBeVisible();
-  await expect(page.getByRole('button', { name: /Service status|服务状态|服務狀態/i })).toBeVisible();
-  await expect(page.getByRole('button', { name: /^Packages|^套餐|^方案/i })).toBeVisible();
+  await expect(page.getByRole('button', { name: /Service status|Follow-up queue|服务状态|跟进队列|服務狀態|跟進隊列/i })).toBeVisible();
+  await expect(page.getByRole('button', { name: /^Packages|^Package overview|^套餐|^方案/i })).toBeVisible();
   await expect(page.getByText(/Customers needing service follow-up|需要服务跟进的客户|需要服務跟進的客戶/i).first()).toBeVisible();
   await expect(page.getByRole('link', { name: /Open package actions|打开套餐操作|打開方案操作/i }).first()).toBeVisible();
   await expect(page.getByRole('link', { name: /Inspect subscription|查看订阅|檢查訂閱/i }).first()).toBeVisible();
-  await page.getByRole('button', { name: /^Packages|^套餐|^方案/i }).click();
-  await expect(page.getByRole('heading', { name: /Package catalog|套餐目录|方案目錄/i })).toBeVisible();
+  await page.getByRole('button', { name: /^Packages|^Package overview|^套餐|^方案/i }).click();
+  await expect(page.getByRole('heading', { name: /Package catalog|Package overview|套餐目录|套餐概览|方案目錄|方案概覽/i })).toBeVisible();
   await expect(page.getByText(/Free/i).first()).toBeVisible();
   await expect(page.getByText(/Pro/i).first()).toBeVisible();
   await expect(page.getByText(/Agency/i).first()).toBeVisible();
   await expect(page.getByText(/Site limit|站点上限|站點上限/i).first()).toBeVisible();
   await expect(page.getByRole('link', { name: /Open package catalog|打开套餐目录|打開方案目錄/i })).toHaveCount(1);
-  await page.getByRole('button', { name: /Service status|服务状态|服務狀態/i }).click();
+  await page.getByRole('button', { name: /Service status|Follow-up queue|服务状态|跟进队列|服務狀態|跟進隊列/i }).click();
   await expect(page.getByText(/Customers needing service follow-up|需要服务跟进的客户|需要服務跟進的客戶/i).first()).toBeVisible();
 
   await page.goto('/admin/subscriptions');
@@ -128,10 +128,10 @@ test('admin operator path smoke: queue and inspector routes stay connected', asy
   await page.goto('/admin/troubleshooting');
   await expect(page.getByRole('heading', { name: /Advanced Troubleshooting|高级排障|進階排障/i })).toBeVisible();
   await expect(page.locator('a[href="/admin/plugin-observability"]')).toBeVisible();
-  await expect(page.locator('a[href="/admin/hosted-models"]')).toBeVisible();
+  await expect(page.locator('a[href="/admin/hosted-models"]')).toHaveCount(0);
 
   await page.goto('/admin/plans', { waitUntil: 'domcontentloaded' });
-  await expect(page.getByRole('heading', { level: 1, name: /Package catalog|套餐目录|方案目錄/i })).toBeVisible();
+  await expect(page.getByRole('heading', { level: 1, name: /Package catalog|Package overview|套餐目录|套餐概览|方案目錄|方案概覽/i })).toBeVisible();
   await expect(page.getByText(/Advanced package maintenance|高级套餐维护|進階方案維護/i).first()).toBeVisible();
   await expect(page.getByText(/Pro/i).first()).toBeVisible();
   await expect(page.getByText(/Agency/i).first()).toBeVisible();
@@ -170,7 +170,7 @@ test('admin queue pages keep one primary header action and shared identifier tre
   await expect(page.getByRole('columnheader', { name: /Sites|站点|站點/i })).toBeVisible();
   await expect(page.locator(`a[href="/admin/subscriptions/sub_mvp"]`)).toHaveCount(0);
   await expect(page.locator(`a[href="/admin/accounts/${LONG_ACCOUNT_ID}#site-footprint"]`)).toHaveCount(0);
-  await expect(page.getByRole('link', { name: /Open customer service status|打开客户服务状态|打開客戶服務狀態/i })).toBeVisible();
+  await expect(page.getByRole('link', { name: /Open customer service status|打开客户服务状态|打開客戶服務狀態/i })).toHaveCount(0);
   await expect(page.getByRole('link', { name: /Details|详情|詳情/i }).first()).toBeVisible();
   await expect(page.getByRole('button', { name: /Suspend account|暂停账户|暫停帳戶/i })).toHaveCount(0);
   await expect(page.getByRole('button', { name: /Restore account|恢复账户|恢復帳戶/i })).toHaveCount(0);
@@ -201,23 +201,19 @@ test('admin queue pages keep one primary header action and shared identifier tre
   await expect(page.getByRole('button', { name: /Reset to latest release|恢复为最新发布记录|恢復為最新發佈記錄/i })).toBeVisible();
   await expect(page.getByText(/已发布|published/i).first()).toBeVisible();
 
-  await page.goto('/admin/hosted-models', { waitUntil: 'domcontentloaded' });
-  await expect(page.getByRole('heading', { name: /Hosted model runtime|托管模型运行时|託管模型執行時/i })).toBeVisible();
-  await expect(page.getByRole('heading', { name: /Latest cadence record|最新节奏记录|最新節奏記錄/i })).toBeVisible();
-  await expect(page.getByText(/internal admin read-only|内部管理员只读|內部管理員唯讀/i).first()).toBeVisible();
-  await expect(page.getByRole('heading', { name: /Signals needing model follow-up|需要跟进的模型信号|需要跟進的模型訊號/i })).toBeVisible();
+  await page.goto('/admin/ai-resources?view=diagnostics', { waitUntil: 'domcontentloaded' });
+  await expect(page.getByRole('heading', { name: /Provider Management|供应商管理|供應商管理/i })).toBeVisible();
+  await expect(page.getByRole('heading', { name: /Diagnostics|诊断|診斷/i })).toBeVisible();
+  await expect(page.getByText(/Runtime telemetry|运行时遥测|執行時遙測/i).first()).toBeVisible();
   await expect(
     page
-      .getByText(/Hosted model provider call coverage gap|托管模型提供方调用覆盖缺口|託管模型提供方呼叫覆蓋缺口/i)
+      .getByText(/Provider call coverage gap|提供方调用遥测覆盖缺口|提供方呼叫遙測覆蓋缺口/i)
       .first()
   ).toBeVisible();
-  await page.getByText(/Advanced model evidence|高级模型证据|進階模型證據/i).click();
-  await expect(page.getByText(/Ability families|能力/i).first()).toBeVisible();
-  await expect(page.getByText(/free-gpt55-general/i).first()).toBeVisible();
-  await expect(page.getByText(/provider gap: knowledge|提供方缺口：knowledge/i).first()).toBeVisible();
-  await expect(page.getByText(/Read-only runtime detail|只读/i).first()).toBeVisible();
-  await expect(page.getByText(/WordPress write|WordPress 写入|WordPress 寫入/i).first()).toBeVisible();
-  await expect(page.getByText(/not allowed|不允许|不允許/i).first()).toBeVisible();
+  await expect(page.getByText(/run_records/i).first()).toBeVisible();
+  await expect(page.getByText(/provider_call_records/i).first()).toBeVisible();
+  await expect(page.getByText(/usage_meter_events/i).first()).toBeVisible();
+  await expect(page.getByText(/WordPress 写入|WordPress write|WordPress 寫入/i).first()).toBeVisible();
   await expect(page.getByRole('button', { name: /Save|Configure|Enable/i })).toHaveCount(0);
 });
 

@@ -134,8 +134,6 @@ Primary knobs:
 - `NPCINK_CLOUD_LATENCY_PROBE_INTERVAL_SECONDS`: latency probe cadence.
 - `NPCINK_CLOUD_ALERT_PROVIDER_DEGRADATION_INTERVAL_SECONDS`: provider
   degradation alert cadence.
-- `NPCINK_CLOUD_HOSTED_MODEL_GOVERNANCE_INTERVAL_SECONDS`: hosted model
-  governance cadence.
 - `NPCINK_CLOUD_PROVIDER_HEALTH_SCAN_INTERVAL_SECONDS`: provider health scan
   cadence.
 

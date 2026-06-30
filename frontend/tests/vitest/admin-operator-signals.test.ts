@@ -30,15 +30,15 @@ function buildInputs(overrides = {}) {
 			expiryReason: 'Subscriptions are expiring.',
 			attentionTitle: 'Coverage attention',
 			attentionFallbackReason: 'Coverage needs attention.',
-			hostedTitle: 'Hosted model governance needs review',
-			hostedReason: 'Hosted model telemetry needs review.',
+			hostedTitle: 'Runtime telemetry needs review',
+			hostedReason: 'Runtime telemetry coverage needs review.',
 		},
 		...overrides,
 	};
 }
 
 describe( 'buildAdminOperatorWatchItems', () => {
-	it( 'places hosted governance errors beside the highest operator risks', () => {
+	it( 'places runtime telemetry errors beside the highest operator risks', () => {
 		const items = buildAdminOperatorWatchItems(
 			buildInputs( {
 				attentionSubscriptionsCount: 1,
@@ -46,46 +46,46 @@ describe( 'buildAdminOperatorWatchItems', () => {
 				hostedModelGovernance: {
 					status: 'error',
 					alertCount: 2,
-					firstAlertTitle: 'Hosted model metering gap',
+					firstAlertTitle: 'Runtime metering gap',
 					firstAlertSummary: 'Image and vector runs are missing metering.',
-					summary: 'Hosted model governance has gaps.',
+					summary: 'Runtime telemetry has gaps.',
 				},
 			} )
 		);
 
 		expect( items.map( ( item ) => item.scope ) ).toEqual( [
-			'hosted.model_governance',
+			'runtime.telemetry_coverage',
 			'commercial.subscription',
 		] );
 		expect( items[0] ).toMatchObject( {
 			severity: 'action-needed',
 			value: '2',
-			title: 'Hosted model metering gap',
+			title: 'Runtime metering gap',
 		} );
 	} );
 
-	it( 'keeps hosted governance warnings in the main queue ahead of expiry-only work', () => {
+	it( 'keeps runtime telemetry warnings in the main queue ahead of expiry-only work', () => {
 		const items = buildAdminOperatorWatchItems(
 			buildInputs( {
 				expiringSubscriptionsIn7Days: 1,
 				hostedModelGovernance: {
 					status: 'warning',
 					alertCount: 1,
-					firstAlertTitle: 'Hosted model provider call coverage gap',
-					firstAlertSummary: 'Some hosted runs do not have provider telemetry.',
-					summary: 'Hosted model governance has telemetry gaps.',
+					firstAlertTitle: 'Provider call coverage gap',
+					firstAlertSummary: 'Some runtime runs do not have provider telemetry.',
+					summary: 'Runtime telemetry has coverage gaps.',
 				},
 			} )
 		);
 
 		expect( items.map( ( item ) => item.scope ) ).toEqual( [
-			'hosted.model_governance',
+			'runtime.telemetry_coverage',
 			'commercial.subscription',
 		] );
 		expect( items[0] ).toMatchObject( {
 			severity: 'warn',
 			value: '1',
-			reason: 'Some hosted runs do not have provider telemetry.',
+			reason: 'Some runtime runs do not have provider telemetry.',
 		} );
 	} );
 } );

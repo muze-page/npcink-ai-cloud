@@ -8,26 +8,26 @@ import { cn } from '@/lib/utils';
 const CUSTOMER_TAB_ITEMS = [
   {
     href: '/admin/accounts',
-    labelKey: 'common.accounts',
-    fallback: 'Customer accounts',
+    labelKey: 'admin.customer_tabs.accounts',
+    fallback: 'Customer register',
     activePrefixes: ['/admin/accounts', '/admin/sites'],
   },
   {
     href: '/admin/portal-users',
-    labelKey: 'admin.nav_portal_users',
-    fallback: 'Portal users',
+    labelKey: 'admin.customer_tabs.portal_users',
+    fallback: 'Registered users',
     activePrefixes: ['/admin/portal-users'],
   },
   {
     href: '/admin/coverage',
-    labelKey: 'admin.nav_coverage',
-    fallback: 'Service status',
+    labelKey: 'admin.customer_tabs.coverage',
+    fallback: 'Service follow-up',
     activePrefixes: ['/admin/coverage', '/admin/plans'],
   },
   {
     href: '/admin/subscriptions',
-    labelKey: 'common.subscriptions',
-    fallback: 'Subscriptions',
+    labelKey: 'admin.customer_tabs.subscriptions',
+    fallback: 'Subscription records',
     activePrefixes: ['/admin/subscriptions'],
   },
 ];

@@ -77,7 +77,7 @@ def test_import_provider_connections_from_env_stores_connections_without_secret_
         "search_jina_reader",
         "search_zhihu",
         "image_unsplash",
-        "embedding_tei",
+        "tei_env",
         "vector_zilliz",
     }
     assert result["credential_value_exposure"] == "none"
@@ -93,12 +93,14 @@ def test_import_provider_connections_from_env_stores_connections_without_secret_
         apify = session.get(ProviderConnection, "search_apify")
         jina_reader = session.get(ProviderConnection, "search_jina_reader")
         image = session.get(ProviderConnection, "image_unsplash")
+        tei = session.get(ProviderConnection, "tei_env")
         vector = session.get(ProviderConnection, "vector_zilliz")
         assert zhihu is not None
         assert bocha is not None
         assert apify is not None
         assert jina_reader is not None
         assert image is not None
+        assert tei is not None
         assert vector is not None
         assert zhihu.config_json["provider_id"] == "zhihu"
         assert zhihu.config_json["provider_mode"] == "zhihu"
@@ -108,6 +110,9 @@ def test_import_provider_connections_from_env_stores_connections_without_secret_
         assert jina_reader.config_json["provider_id"] == "jina_reader"
         assert jina_reader.config_json["secretless"] is True
         assert image.config_json["provider_id"] == "unsplash"
+        assert tei.provider_type == "tei"
+        assert tei.config_json["provider_id"] == "tei"
+        assert tei.config_json["model_ids"] == "BAAI/bge-m3"
         assert vector.config_json["collection"] == "site_chunks"
         assert (
             decrypt_provider_connection_secret(zhihu.secret_ciphertext, settings=settings)
@@ -121,6 +126,42 @@ def test_import_provider_connections_from_env_stores_connections_without_secret_
             decrypt_provider_connection_secret(apify.secret_ciphertext, settings=settings)
             == "apify-token"
         )
+
+    dispose_engine(database_url)
+
+
+def test_import_provider_connections_from_env_imports_siliconflow_as_model_provider(
+    tmp_path,
+) -> None:
+    database_url = _sqlite_url(tmp_path)
+    init_schema(database_url)
+    settings = _settings(database_url)
+    env = {
+        "NPCINK_CLOUD_SILICONFLOW_API_KEY": "siliconflow-secret",
+        "NPCINK_CLOUD_SILICONFLOW_BASE_URL": "https://api.siliconflow.test/v1",
+        "NPCINK_CLOUD_SITE_KNOWLEDGE_EMBEDDING_PROVIDER": "siliconflow",
+        "NPCINK_CLOUD_SITE_KNOWLEDGE_EMBEDDING_MODEL": "BAAI/bge-m3",
+        "NPCINK_CLOUD_SITE_KNOWLEDGE_EMBEDDING_DIMENSIONS": "1024",
+    }
+
+    result = import_provider_connections_from_env(
+        settings=settings,
+        env=env,
+        apply=True,
+    )
+
+    assert result["mode"] == "apply"
+    assert result["imported"] == ["siliconflow_env"]
+    assert "embedding_siliconflow" not in str(result)
+    assert "siliconflow-secret" not in str(result)
+
+    with get_session(database_url) as session:
+        connection = session.get(ProviderConnection, "siliconflow_env")
+        assert connection is not None
+        assert connection.provider_type == "siliconflow"
+        assert connection.config_json["provider_id"] == "siliconflow"
+        assert "embedding" in connection.config_json["capability_ids"]
+        assert "embed.default" in connection.config_json["runtime_profile_ids"]
 
     dispose_engine(database_url)
 

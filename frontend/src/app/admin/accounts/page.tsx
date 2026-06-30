@@ -18,7 +18,6 @@ import {
 import { formatDate, formatNumber as formatInteger } from '@/lib/utils';
 import { resolveUiErrorMessage } from '@/lib/errors';
 import {
-  BackofficeMetricStrip,
   BackofficePageStack,
   BackofficePrimaryPanel,
   BackofficeSectionPanel,
@@ -350,7 +349,6 @@ function AccountsContent() {
     );
   }
 
-  const activeAccounts = visibleAccounts.filter((account) => account.status === 'active').length;
   const suspendedAccounts = visibleAccounts.filter((account) => account.status === 'suspended').length;
   const sitesTotal = visibleAccounts.reduce((sum, account) => sum + account.site_count, 0);
   const subscriptionsTotal = visibleAccounts.reduce((sum, account) => sum + account.subscription_count, 0);
@@ -391,39 +389,41 @@ function AccountsContent() {
         )}
         aside={(
           <div className="w-full xl:w-[46rem]">
-            <BackofficeMetricStrip
-              items={[
-                { label: t('admin.accounts.total_users', {}, 'Users'), value: formatInteger(visibleAccounts.length), size: 'compact' },
-                { label: t('status.active'), value: formatInteger(activeAccounts), size: 'compact' },
-                { label: t('common.sites'), value: formatInteger(sitesTotal), size: 'compact' },
-                {
-                  label: t('common.subscriptions'),
-                  value: formatInteger(subscriptionsTotal),
-                  size: 'compact',
-                },
-                {
-                  label: t('admin.accounts.needs_action', {}, 'Needs action'),
-                  value: (
-                    <Link
-                      href="/admin/coverage"
-                      className="text-blue-700 underline-offset-4 hover:underline dark:text-blue-300"
-                    >
-                      {formatInteger(needsActionCount)}
-                    </Link>
-                  ),
-                  size: 'compact',
-                },
-              ]}
-              columnsClassName="md:grid-cols-3 xl:grid-cols-5"
-            />
+            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+              {[
+                { label: t('admin.accounts.total_users', {}, 'Users'), value: formatInteger(visibleAccounts.length) },
+                { label: t('common.sites'), value: formatInteger(sitesTotal) },
+                { label: t('common.subscriptions'), value: formatInteger(subscriptionsTotal) },
+              ].map((item) => (
+                <div
+                  key={item.label}
+                  className="rounded-[1.1rem] border border-slate-200/80 bg-white/80 px-4 py-3.5 dark:border-slate-800 dark:bg-slate-950/45"
+                >
+                  <p className="text-[0.68rem] font-semibold uppercase tracking-[0.18em] text-gray-500 dark:text-gray-400">
+                    {item.label}
+                  </p>
+                  <p className="mt-2 text-base font-semibold leading-6 text-gray-950 dark:text-white">{item.value}</p>
+                </div>
+              ))}
+              <Link
+                href="/admin/coverage"
+                prefetch={false}
+                className="rounded-[1.1rem] border border-blue-200 bg-blue-50/80 px-4 py-3.5 text-blue-800 transition hover:border-blue-300 hover:bg-blue-100/80 dark:border-blue-900/60 dark:bg-blue-950/35 dark:text-blue-100 dark:hover:border-blue-700 dark:hover:bg-blue-950/55"
+              >
+                <p className="text-[0.68rem] font-semibold uppercase tracking-[0.18em]">
+                  {t('admin.accounts.metric_service_followup', {}, 'Service follow-up')}
+                </p>
+                <p className="mt-2 text-base font-semibold leading-6">{formatInteger(needsActionCount)}</p>
+                <p className="mt-1 text-xs leading-5 text-blue-700 dark:text-blue-200">
+                  {t('admin.accounts.metric_service_followup_detail', {}, 'Open queue')}
+                </p>
+              </Link>
+            </div>
           </div>
         )}
       >
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
           <p className="max-w-3xl text-sm text-slate-600 dark:text-slate-300">{postureConclusion}</p>
-          <Link href="/admin/coverage" className="btn btn-secondary btn-sm shrink-0">
-            {t('admin.home_open_customer_coverage_action', {}, 'Open customer service status')}
-          </Link>
         </div>
       </BackofficePrimaryPanel>
 
@@ -609,7 +609,7 @@ function AccountsContent() {
             </div>
           ) : null}
           <details className="group">
-            <summary className="inline-flex cursor-pointer items-center text-sm font-medium text-slate-600 hover:text-slate-950 dark:text-slate-300 dark:hover:text-white">
+            <summary className="inline-flex cursor-pointer items-center rounded-full border border-slate-200 bg-slate-50 px-3 py-1.5 text-sm font-medium text-slate-600 hover:border-slate-300 hover:text-slate-950 dark:border-slate-800 dark:bg-slate-950/50 dark:text-slate-300 dark:hover:border-slate-700 dark:hover:text-white">
               {t('admin.accounts.more_filters', {}, 'More filters')}
             </summary>
             <div className="mt-3 grid gap-3 md:grid-cols-3">

@@ -326,20 +326,20 @@ export async function installAdminMocks(page: Page) {
           },
           alert_summary: {
             status: 'warning',
-            summary: 'Hosted model governance has telemetry gaps to review before traffic expands.',
+            summary: 'Runtime telemetry has coverage gaps to review before traffic expands.',
             next_action: 'inspect_provider_call_recording_for_hosted_profiles',
-            href: '/admin/hosted-models',
+            href: '/admin/ai-resources?view=diagnostics',
             alert_count: 1,
             alerts: [
               {
                 code: 'hosted_model.provider_call_gap',
                 severity: 'warning',
-                title: 'Hosted model provider call coverage gap',
-                summary: 'Some hosted runs do not have matching provider call telemetry.',
+                title: 'Provider call coverage gap',
+                summary: 'Some runtime runs do not have matching provider call telemetry.',
                 count: 1,
                 capabilities: ['knowledge'],
                 suggested_action: 'inspect_provider_call_recording_for_hosted_profiles',
-                href: '/admin/hosted-models',
+                href: '/admin/ai-resources?view=diagnostics',
               },
             ],
             daily_digest: {
@@ -526,24 +526,24 @@ export async function installAdminMocks(page: Page) {
           missing_provider_call_capabilities: ['knowledge'],
           unmetered_run_count: 0,
           runs_without_provider_call_count: 1,
-          review_guidance: 'Review hosted model families before promoting new providers.',
+          review_guidance: 'Inspect capabilities below full metering coverage before enabling new runtime providers at higher traffic.',
         },
         alert_summary: {
           status: 'warning',
-          summary: 'Hosted model governance has telemetry gaps to review before traffic expands.',
+          summary: 'Runtime telemetry has coverage gaps to review before traffic expands.',
           next_action: 'inspect_provider_call_recording_for_hosted_profiles',
-          href: '/admin/hosted-models',
+          href: '/admin/ai-resources?view=diagnostics',
           alert_count: 1,
           alerts: [
             {
               code: 'hosted_model.provider_call_gap',
               severity: 'warning',
-              title: 'Hosted model provider call coverage gap',
-              summary: 'Some hosted runs do not have matching provider call telemetry.',
+              title: 'Provider call coverage gap',
+              summary: 'Some runtime runs do not have matching provider call telemetry.',
               count: 1,
               capabilities: ['knowledge'],
               suggested_action: 'inspect_provider_call_recording_for_hosted_profiles',
-              href: '/admin/hosted-models',
+              href: '/admin/ai-resources?view=diagnostics',
             },
           ],
           daily_digest: {
@@ -569,58 +569,6 @@ export async function installAdminMocks(page: Page) {
           local_control_plane: 'wordpress_plugin',
           direct_wordpress_write: false,
           contains_prompt_or_result_payloads: false,
-        },
-      });
-      return;
-    }
-
-    if (pathname === '/api/admin/hosted-model-governance-cadence') {
-      await fulfillJson(route, {
-        available: true,
-        source: 'cloud_hosted_model_governance',
-        generated_at: '2026-04-08T10:00:00Z',
-        filters: {
-          site_id: '',
-          recent_minutes: Number(searchParams.get('recent_minutes') || 1440),
-          limit: 25,
-        },
-        alert_summary: {
-          status: 'warning',
-          summary: 'Hosted model governance has telemetry gaps to review before traffic expands.',
-          next_action: 'inspect_provider_call_recording_for_hosted_profiles',
-          href: '/admin/hosted-models',
-          alert_count: 1,
-          alerts: [
-            {
-              code: 'hosted_model.provider_call_gap',
-              severity: 'warning',
-              title: 'Hosted model provider call coverage gap',
-              summary: 'Some hosted runs do not have matching provider call telemetry.',
-              count: 1,
-              capabilities: ['knowledge'],
-              suggested_action: 'inspect_provider_call_recording_for_hosted_profiles',
-            },
-          ],
-          daily_digest: {
-            runs: 6,
-            provider_calls: 5,
-            meter_events: 6,
-            metered_run_coverage_rate: 1,
-            provider_call_run_coverage_rate: 0.8333,
-            unmetered_run_count: 0,
-            runs_without_provider_call_count: 1,
-          },
-        },
-        delivery: {
-          owner: 'internal_admin_readonly',
-          buffer_kind: 'usage_rollup',
-          scope_kind: 'hosted_model_governance_batch',
-        },
-        rollup: {
-          site_scope: '__global__',
-          scope_kind: 'hosted_model_governance_batch',
-          scope_id: '2026-04-08T10:00:00Z__1440m',
-          generated_at: '2026-04-08 10:00:00',
         },
       });
       return;

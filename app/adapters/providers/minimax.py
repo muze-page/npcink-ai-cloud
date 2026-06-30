@@ -14,6 +14,7 @@ from app.adapters.providers.base import (
     ProviderExecutionRequest,
     ProviderExecutionResult,
 )
+from app.adapters.providers.openai import OpenAIProviderAdapter
 from app.domain.audio_generation.contracts import (
     AUDIO_GENERATION_RESULT_CONTRACT,
     resolve_audio_generation_text,
@@ -122,25 +123,19 @@ def _catalog_only_models() -> list[CatalogModelSeed]:
             feature="audio_generation",
             surface="music_generation",
         ),
-        *[
-            _catalog_only_model(
-                model_id,
-                family="MiniMax-M",
-                feature="text_generation",
-                surface="text_generation",
-            )
-            for model_id in (
-                "MiniMax-M2",
-                "MiniMax-M2.1",
-                "MiniMax-M2.1-highspeed",
-                "MiniMax-M2.5",
-                "MiniMax-M2.5-highspeed",
-                "MiniMax-M2.7",
-                "MiniMax-M2.7-highspeed",
-                "MiniMax-M3",
-            )
-        ],
     ]
+
+
+MINIMAX_TEXT_MODEL_IDS = (
+    "MiniMax-M2",
+    "MiniMax-M2.1",
+    "MiniMax-M2.1-highspeed",
+    "MiniMax-M2.5",
+    "MiniMax-M2.5-highspeed",
+    "MiniMax-M2.7",
+    "MiniMax-M2.7-highspeed",
+    "MiniMax-M3",
+)
 
 
 class MiniMaxProviderAdapter:
@@ -237,11 +232,14 @@ class MiniMaxProviderAdapter:
                         )
                     ],
                 ),
+                *self._text_catalog_models(),
                 *_catalog_only_models(),
             ],
         )
 
     def execute(self, request: ProviderExecutionRequest) -> ProviderExecutionResult:
+        if request.endpoint_variant == "chat_completions":
+            return self._execute_text(request)
         if request.endpoint_variant != "t2a_v2":
             raise ProviderExecutionError(
                 "provider.unsupported_operation",
@@ -258,9 +256,63 @@ class MiniMaxProviderAdapter:
             )
         return self._execute_sample(request)
 
+    def _text_catalog_models(self) -> list[CatalogModelSeed]:
+        return [
+            CatalogModelSeed(
+                model_id=model_id,
+                family="MiniMax-M",
+                feature="text",
+                status="available",
+                context_window=200000,
+                price_input=None,
+                price_output=None,
+                fallback_candidate=True,
+                raw_json={
+                    "surface": "text_generation",
+                    "protocol": "openai_compatible",
+                    "tier": "economy" if "highspeed" in model_id.lower() else "balanced",
+                },
+                instances=[
+                    CatalogInstanceSeed(
+                        instance_id=f"minimax-global-{self._slugify(model_id)}",
+                        endpoint_variant="chat_completions",
+                        region="global",
+                        capability_tags=[
+                            "text",
+                            "economy" if "highspeed" in model_id.lower() else "balanced",
+                        ],
+                        is_default=model_id == "MiniMax-M3",
+                        weight=90 if "highspeed" in model_id.lower() else 100,
+                    )
+                ],
+            )
+            for model_id in MINIMAX_TEXT_MODEL_IDS
+        ]
+
+    def _execute_text(self, request: ProviderExecutionRequest) -> ProviderExecutionResult:
+        adapter = OpenAIProviderAdapter(
+            base_url=self._chat_base_url,
+            api_key=self.api_key or None,
+            timeout_seconds=self.timeout_seconds,
+            app_name="npcink-ai-cloud",
+            allow_sample_catalog=self.allow_sample_catalog,
+            allow_sample_execution=self.allow_sample_execution,
+            provider_label=self.display_name,
+            transport=self.transport,
+        )
+        adapter.provider_id = self.provider_id
+        adapter.display_name = self.display_name
+        return adapter.execute(request)
+
     @property
     def _http_enabled(self) -> bool:
         return bool(self.api_key)
+
+    @property
+    def _chat_base_url(self) -> str:
+        if self.base_url.endswith("/v1"):
+            return self.base_url
+        return f"{self.base_url}/v1"
 
     def _execute_http(self, request: ProviderExecutionRequest) -> ProviderExecutionResult:
         started_at = time.monotonic()
@@ -520,3 +572,12 @@ class MiniMaxProviderAdapter:
             return float(value)
         except (TypeError, ValueError):
             return default
+
+    def _slugify(self, value: str) -> str:
+        normalized = "".join(
+            character.lower() if character.isalnum() else "-"
+            for character in value.strip()
+        )
+        while "--" in normalized:
+            normalized = normalized.replace("--", "-")
+        return normalized.strip("-") or "model"

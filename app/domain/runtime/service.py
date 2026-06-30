@@ -355,6 +355,7 @@ class RuntimeService:
             execution_kind=request.execution_kind,
         )
         merged_policy = self._merge_policy(resolution.default_policy, request.policy)
+        resolution = self._prefer_routing_candidate(resolution, merged_policy)
         merged_policy = self._apply_routing_snapshot(merged_policy, resolution)
         trace_id = request.trace_id or uuid4().hex
         run_id = f"run_{uuid4().hex}"
@@ -2219,10 +2220,10 @@ class RuntimeService:
             "runs_without_provider_call_count": max(0, runs_total - len(provider_call_run_ids)),
             "review_guidance": (
                 "Inspect capabilities below full metering coverage before enabling "
-                "new hosted model families at higher traffic."
+                "new runtime providers at higher traffic."
             )
             if unmetered_capabilities or missing_provider_call_capabilities
-            else "Recent hosted model families have runtime meter coverage in this window.",
+            else "Recent runtime providers have meter coverage in this window.",
         }
 
     def _build_hosted_governance_alert_summary(
@@ -2272,7 +2273,7 @@ class RuntimeService:
                     "count": max(0, count),
                     "capabilities": capabilities[:10],
                     "suggested_action": suggested_action,
-                    "href": "/admin/hosted-models",
+                    "href": "/admin/ai-resources?view=diagnostics",
                 }
             )
 
@@ -2285,8 +2286,8 @@ class RuntimeService:
             add_alert(
                 code="hosted_model.unmetered_runs",
                 severity="error",
-                title="Hosted model meter coverage gap",
-                summary="Some hosted model runs are not represented in usage metering.",
+                title="Runtime meter coverage gap",
+                summary="Some runtime runs are not represented in usage metering.",
                 count=unmetered_run_count,
                 capabilities=unmetered_capabilities,
                 suggested_action="inspect_metering_callback_or_usage_event_mapping",
@@ -2304,8 +2305,8 @@ class RuntimeService:
             add_alert(
                 code="hosted_model.provider_call_gap",
                 severity="warning",
-                title="Hosted model provider call coverage gap",
-                summary="Some hosted runs do not have matching provider call telemetry.",
+                title="Provider call coverage gap",
+                summary="Some runtime runs do not have matching provider call telemetry.",
                 count=runs_without_provider_call_count,
                 capabilities=provider_gap_capabilities,
                 suggested_action="inspect_provider_call_recording_for_hosted_profiles",
@@ -2326,8 +2327,8 @@ class RuntimeService:
             add_alert(
                 code="hosted_model.provider_errors",
                 severity="error" if provider_errors >= 5 else "warning",
-                title="Hosted model provider errors",
-                summary="Provider calls are returning errors in the current governance window.",
+                title="Provider call errors",
+                summary="Provider calls are returning errors in the current telemetry window.",
                 count=provider_errors,
                 capabilities=provider_error_groups,
                 suggested_action="inspect_provider_credentials_quota_and_health",
@@ -2347,11 +2348,11 @@ class RuntimeService:
             add_alert(
                 code="hosted_model.failed_runs",
                 severity="warning",
-                title="Hosted model failed runs",
-                summary="Hosted model runs are failing before or during provider execution.",
+                title="Runtime runs failed",
+                summary="Runtime runs are failing before or during provider execution.",
                 count=failed_runs,
                 capabilities=failed_groups,
-                suggested_action="inspect_runtime_failure_detail_for_hosted_models",
+                suggested_action="inspect_runtime_failure_detail",
             )
 
         alerts.sort(
@@ -2371,23 +2372,23 @@ class RuntimeService:
             else "ok"
         )
         if status == "inactive":
-            summary = "No hosted model runs were observed in this governance window."
+            summary = "No runtime runs were observed in this telemetry window."
             next_action = "continue_monitoring"
         elif status == "error":
-            summary = "Hosted model governance has coverage or provider errors that need review."
-            next_action = str(alerts[0].get("suggested_action") or "inspect_hosted_models")
+            summary = "Runtime telemetry has coverage or provider errors that need review."
+            next_action = str(alerts[0].get("suggested_action") or "inspect_runtime_telemetry")
         elif status == "warning":
-            summary = "Hosted model governance has telemetry gaps to review before traffic expands."
-            next_action = str(alerts[0].get("suggested_action") or "inspect_hosted_models")
+            summary = "Runtime telemetry has coverage gaps to review before traffic expands."
+            next_action = str(alerts[0].get("suggested_action") or "inspect_runtime_telemetry")
         else:
-            summary = "Hosted model governance is covered in this window."
+            summary = "Runtime telemetry is covered in this window."
             next_action = "continue_monitoring"
 
         return {
             "status": status,
             "summary": summary,
             "next_action": next_action,
-            "href": "/admin/hosted-models",
+            "href": "/admin/ai-resources?view=diagnostics",
             "alerts": alerts[:8],
             "alert_count": len(alerts),
             "daily_digest": {
@@ -6793,6 +6794,29 @@ class RuntimeService:
             self._serialize_routing_candidate(candidate) for candidate in resolution.candidates
         ]
         return policy
+
+    def _prefer_routing_candidate(
+        self,
+        resolution: RoutingResolution,
+        policy: dict[str, object],
+    ) -> RoutingResolution:
+        preferred_instance_id = str(policy.get("preferred_instance_id") or "").strip()
+        if not preferred_instance_id:
+            return resolution
+        candidates = list(resolution.candidates)
+        preferred = [
+            candidate
+            for candidate in candidates
+            if candidate.instance_id == preferred_instance_id
+        ]
+        if not preferred:
+            return resolution
+        resolution.candidates = preferred + [
+            candidate
+            for candidate in candidates
+            if candidate.instance_id != preferred_instance_id
+        ]
+        return resolution
 
     def _apply_commercial_policy_overrides(
         self,

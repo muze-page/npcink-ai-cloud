@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
 from typing import Any, cast
 
 from sqlalchemy import select
@@ -24,28 +22,11 @@ from app.domain.hosted_model_defaults import (
 )
 from app.domain.provider_connections.service import ProviderConnectionAdminService
 
-AI_RESOURCES_PROFILE_ENV_KEYS = {
-    "audio_summary_text_profile_id": "NPCINK_CLOUD_AUDIO_SUMMARY_TEXT_PROFILE_ID",
-    "audio_narration_profile_id": "NPCINK_CLOUD_AUDIO_NARRATION_PROFILE_ID",
-    "audio_summary_audio_profile_id": "NPCINK_CLOUD_AUDIO_SUMMARY_AUDIO_PROFILE_ID",
-}
-ALLOWED_TEXT_PROFILE_IDS = frozenset({TEXT_AI_PROFILE_ID, FREE_GPT55_TEXT_PROFILE_ID})
-ALLOWED_AUDIO_PROFILE_IDS = frozenset(
-    {AUDIO_NARRATION_PROFILE_ID, AUDIO_NARRATION_QUALITY_PROFILE_ID}
-)
-TEXT_PROFILE_MODEL_IDS = {
-    TEXT_AI_PROFILE_ID: FREE_GPT55_MODEL_ID,
-    FREE_GPT55_TEXT_PROFILE_ID: FREE_GPT55_MODEL_ID,
-}
-AUDIO_PROFILE_MODEL_IDS = {
-    AUDIO_NARRATION_PROFILE_ID: AUDIO_NARRATION_MODEL_ID,
-    AUDIO_NARRATION_QUALITY_PROFILE_ID: AUDIO_NARRATION_QUALITY_MODEL_ID,
-}
 ABILITY_MODEL_RUNTIME_PROJECTION_VERSION = "admin-ability-model-runtime-projection.v1"
 
 _ABILITY_MODEL_MEDIA_BY_FEATURE_ID = {
     "content_support": "text",
-    "site_knowledge_embedding": "text",
+    "site_knowledge_embedding": "vector",
     "evidence_preflight": "text",
     "generated_image_candidates": "image",
     "image_source_candidates": "image",
@@ -85,85 +66,6 @@ _ABILITY_MODEL_KIND_BY_CAPABILITY_ID = {
 }
 
 
-class AIResourceProfilePreferenceError(ValueError):
-    def __init__(self, error_code: str, message: str) -> None:
-        super().__init__(message)
-        self.error_code = error_code
-        self.message = message
-
-
-@dataclass(slots=True)
-class AIResourceProfilePreferenceService:
-    settings: Settings
-
-    def save(self, payload: dict[str, Any]) -> dict[str, Any]:
-        normalized = self._normalize_payload(payload)
-        current_env = _read_env_file(self._env_path())
-        merged = dict(current_env)
-        for field, env_key in AI_RESOURCES_PROFILE_ENV_KEYS.items():
-            merged[env_key] = str(normalized[field])
-        _write_env_values(self._env_path(), merged)
-        self._apply_to_settings(normalized)
-        return build_admin_ai_resource_projection(self.settings)
-
-    def _env_path(self) -> Path:
-        return Path(str(self.settings.ai_resources_admin_env_path or ".env.local"))
-
-    def _normalize_payload(self, payload: dict[str, Any]) -> dict[str, str]:
-        text_profile_id = _value(
-            payload,
-            "audio_summary_text_profile_id",
-            _selected_audio_summary_text_profile_id(self.settings),
-        )
-        audio_narration_profile_id = _value(
-            payload,
-            "audio_narration_profile_id",
-            _selected_audio_narration_profile_id(self.settings),
-        )
-        audio_summary_audio_profile_id = _value(
-            payload,
-            "audio_summary_audio_profile_id",
-            _selected_audio_summary_audio_profile_id(self.settings),
-        )
-        if text_profile_id not in ALLOWED_TEXT_PROFILE_IDS:
-            raise AIResourceProfilePreferenceError(
-                "ai_resources.profile_preference_invalid",
-                "audio_summary_text_profile_id must be text.ai or text.free-gpt55",
-            )
-        if audio_narration_profile_id not in ALLOWED_AUDIO_PROFILE_IDS:
-            raise AIResourceProfilePreferenceError(
-                "ai_resources.profile_preference_invalid",
-                (
-                    "audio_narration_profile_id must be audio.narration.default "
-                    "or audio.narration.quality"
-                ),
-            )
-        if audio_summary_audio_profile_id not in ALLOWED_AUDIO_PROFILE_IDS:
-            raise AIResourceProfilePreferenceError(
-                "ai_resources.profile_preference_invalid",
-                (
-                    "audio_summary_audio_profile_id must be audio.narration.default "
-                    "or audio.narration.quality"
-                ),
-            )
-        return {
-            "audio_summary_text_profile_id": text_profile_id,
-            "audio_narration_profile_id": audio_narration_profile_id,
-            "audio_summary_audio_profile_id": audio_summary_audio_profile_id,
-        }
-
-    def _apply_to_settings(self, normalized: dict[str, str]) -> None:
-        self.settings.audio_summary_text_profile_id = normalized[
-            "audio_summary_text_profile_id"
-        ]
-        self.settings.audio_narration_profile_id = normalized[
-            "audio_narration_profile_id"
-        ]
-        self.settings.audio_summary_audio_profile_id = normalized[
-            "audio_summary_audio_profile_id"
-        ]
-
-
 def build_admin_ai_resource_projection(
     settings: Settings,
     *,
@@ -171,9 +73,9 @@ def build_admin_ai_resource_projection(
     database_url: str | None = None,
 ) -> dict[str, Any]:
     provider_adapters = providers or {}
-    audio_narration_profile_id = _selected_audio_narration_profile_id(settings)
-    audio_summary_text_profile_id = _selected_audio_summary_text_profile_id(settings)
-    audio_summary_audio_profile_id = _selected_audio_summary_audio_profile_id(settings)
+    default_audio_profile_id = AUDIO_NARRATION_PROFILE_ID
+    default_summary_script_profile_id = TEXT_AI_PROFILE_ID
+    default_summary_playback_profile_id = AUDIO_NARRATION_PROFILE_ID
     resolved_database_url = str(database_url or getattr(settings, "database_url", "") or "")
     recent_runs = _recent_runtime_evidence(
         resolved_database_url,
@@ -238,7 +140,7 @@ def build_admin_ai_resource_projection(
             "status": "ready"
             if text_configured or managed_ready_by_capability.get("text_generation")
             else "missing_provider",
-            "default_profile_id": audio_summary_text_profile_id,
+            "default_profile_id": default_summary_script_profile_id,
             "connection_ids": _merge_ids(
                 [text_connection_id] if text_connection_id else [],
                 managed_connection_ids_by_capability.get("text_generation", []),
@@ -252,7 +154,7 @@ def build_admin_ai_resource_projection(
             "status": "ready"
             if audio_status == "ready" or managed_ready_by_capability.get("audio_generation")
             else "missing_provider",
-            "default_profile_id": audio_narration_profile_id,
+            "default_profile_id": default_audio_profile_id,
             "connection_ids": _merge_ids(
                 [audio_connection_id] if audio_connection_id else [],
                 managed_connection_ids_by_capability.get("audio_generation", []),
@@ -314,8 +216,8 @@ def build_admin_ai_resource_projection(
     ]
 
     audio_summary_connection_label = (
-        f"{text_connection_id or audio_summary_text_profile_id} + "
-        f"{audio_connection_id or audio_summary_audio_profile_id}"
+        f"{text_connection_id or default_summary_script_profile_id} + "
+        f"{audio_connection_id or default_summary_playback_profile_id}"
     )
     audio_summary_provider_label = (
         f"{text_provider_id or 'text'} + {audio_provider_id or 'audio'}"
@@ -334,7 +236,7 @@ def build_admin_ai_resource_projection(
             "last_run": recent_runs.get(TEXT_AI_PROFILE_ID, {}),
             "selected_for": (
                 ["audio_summary_script"]
-                if audio_summary_text_profile_id == TEXT_AI_PROFILE_ID
+                if default_summary_script_profile_id == TEXT_AI_PROFILE_ID
                 else []
             ),
         },
@@ -351,7 +253,7 @@ def build_admin_ai_resource_projection(
             "last_run": recent_runs.get(FREE_GPT55_TEXT_PROFILE_ID, {}),
             "selected_for": (
                 ["audio_summary_script"]
-                if audio_summary_text_profile_id == FREE_GPT55_TEXT_PROFILE_ID
+                if default_summary_script_profile_id == FREE_GPT55_TEXT_PROFILE_ID
                 else []
             ),
         },
@@ -368,8 +270,8 @@ def build_admin_ai_resource_projection(
             "last_run": recent_runs.get(AUDIO_NARRATION_PROFILE_ID, {}),
             "selected_for": _audio_selected_for(
                 AUDIO_NARRATION_PROFILE_ID,
-                audio_narration_profile_id=audio_narration_profile_id,
-                audio_summary_audio_profile_id=audio_summary_audio_profile_id,
+                default_audio_profile_id=default_audio_profile_id,
+                default_summary_playback_profile_id=default_summary_playback_profile_id,
             ),
         },
         {
@@ -385,8 +287,8 @@ def build_admin_ai_resource_projection(
             "last_run": recent_runs.get(AUDIO_NARRATION_QUALITY_PROFILE_ID, {}),
             "selected_for": _audio_selected_for(
                 AUDIO_NARRATION_QUALITY_PROFILE_ID,
-                audio_narration_profile_id=audio_narration_profile_id,
-                audio_summary_audio_profile_id=audio_summary_audio_profile_id,
+                default_audio_profile_id=default_audio_profile_id,
+                default_summary_playback_profile_id=default_summary_playback_profile_id,
             ),
         },
         {
@@ -396,8 +298,7 @@ def build_admin_ai_resource_projection(
             "selected_connection_id": audio_summary_connection_label,
             "selected_provider_id": audio_summary_provider_label,
             "selected_model_id": (
-                f"{TEXT_PROFILE_MODEL_IDS[audio_summary_text_profile_id]} + "
-                f"{AUDIO_PROFILE_MODEL_IDS[audio_summary_audio_profile_id]}"
+                f"{FREE_GPT55_MODEL_ID} + {AUDIO_NARRATION_MODEL_ID}"
             ),
             "status": "ready"
             if text_configured and audio_status == "ready"
@@ -406,8 +307,8 @@ def build_admin_ai_resource_projection(
             "used_by": ["Long-form audio summary"],
             "last_run": _pipeline_last_run(
                 recent_runs,
-                text_profile_id=audio_summary_text_profile_id,
-                audio_profile_id=audio_summary_audio_profile_id,
+                text_profile_id=default_summary_script_profile_id,
+                audio_profile_id=default_summary_playback_profile_id,
             ),
             "selected_for": ["article_audio_summary"],
         },
@@ -455,8 +356,8 @@ def build_admin_ai_resource_projection(
         runtime_profiles,
         connections,
         provider_call_evidence,
-        audio_summary_text_profile_id=audio_summary_text_profile_id,
-        audio_narration_profile_id=audio_narration_profile_id,
+        default_summary_script_profile_id=default_summary_script_profile_id,
+        default_audio_profile_id=default_audio_profile_id,
     )
     provider_model_health = _build_provider_model_health(resolved_database_url)
 
@@ -473,22 +374,6 @@ def build_admin_ai_resource_projection(
             "source": "run_records",
             "content_exposed": False,
             "profiles": recent_runs,
-        },
-        "profile_preferences": {
-            "env_path": str(settings.ai_resources_admin_env_path or ".env.local"),
-            "requires_worker_restart_after_save": True,
-            "audio_summary_text_profile_id": audio_summary_text_profile_id,
-            "audio_narration_profile_id": audio_narration_profile_id,
-            "audio_summary_audio_profile_id": audio_summary_audio_profile_id,
-            "allowed": {
-                "text_profile_ids": sorted(ALLOWED_TEXT_PROFILE_IDS),
-                "audio_profile_ids": sorted(ALLOWED_AUDIO_PROFILE_IDS),
-            },
-            "boundary": {
-                "owner": "cloud_runtime_metadata",
-                "direct_wordpress_write": False,
-                "prompt_router_preset_truth": False,
-            },
         },
         "boundary": {
             "owner": "cloud_runtime",
@@ -528,7 +413,7 @@ def build_admin_ability_model_runtime_projection(
         for index, item in enumerate(feature_model_usage)
     ]
     media_groups: list[dict[str, Any]] = []
-    for media in ("text", "image", "audio", "video"):
+    for media in ("text", "image", "vector", "audio", "video"):
         media_rows = [row for row in rows if row["media"] == media]
         media_groups.append(
             {
@@ -547,7 +432,9 @@ def build_admin_ability_model_runtime_projection(
         "rows": rows,
         "media_groups": media_groups,
         "boundary": {
-            "read_only": True,
+            "read_only": False,
+            "runtime_binding_only": True,
+            "configurable_runtime_bindings": ["site_knowledge_embedding"],
             "direct_wordpress_write": False,
             "not_a_control_plane": True,
             "does_not_own": [
@@ -571,6 +458,7 @@ def _build_ability_model_runtime_row(
     capability_id = str(feature_usage.get("capability_id") or "")
     profile_id = str(feature_usage.get("profile_id") or "")
     raw_status = str(feature_usage.get("status") or "")
+    can_configure = feature_id == "site_knowledge_embedding"
     return {
         "ability_id": feature_id,
         "feature_id": feature_id,
@@ -596,15 +484,16 @@ def _build_ability_model_runtime_row(
             feature_usage.get("selection_owner") or "cloud_runtime_metadata"
         ),
         "write_posture": str(feature_usage.get("write_posture") or ""),
-        "can_configure": False,
-        "action": "runtime_managed",
+        "can_configure": can_configure,
+        "action": "configure_runtime_model" if can_configure else "runtime_managed",
         "display_order": index,
         "evidence": {
             "content_exposed": False,
             "source": "feature_model_usage",
         },
         "boundary": {
-            "read_only": True,
+            "read_only": not can_configure,
+            "runtime_binding_only": can_configure,
             "direct_wordpress_write": False,
             "not_a_control_plane": True,
         },
@@ -640,31 +529,16 @@ def _ability_model_runtime_status(raw_status: str) -> str:
     return "unknown" if normalized else "unknown"
 
 
-def _selected_audio_summary_text_profile_id(settings: Settings) -> str:
-    value = str(settings.audio_summary_text_profile_id or "").strip()
-    return value if value in ALLOWED_TEXT_PROFILE_IDS else TEXT_AI_PROFILE_ID
-
-
-def _selected_audio_narration_profile_id(settings: Settings) -> str:
-    value = str(settings.audio_narration_profile_id or "").strip()
-    return value if value in ALLOWED_AUDIO_PROFILE_IDS else AUDIO_NARRATION_PROFILE_ID
-
-
-def _selected_audio_summary_audio_profile_id(settings: Settings) -> str:
-    value = str(settings.audio_summary_audio_profile_id or "").strip()
-    return value if value in ALLOWED_AUDIO_PROFILE_IDS else AUDIO_NARRATION_PROFILE_ID
-
-
 def _audio_selected_for(
     profile_id: str,
     *,
-    audio_narration_profile_id: str,
-    audio_summary_audio_profile_id: str,
+    default_audio_profile_id: str,
+    default_summary_playback_profile_id: str,
 ) -> list[str]:
     selected: list[str] = []
-    if profile_id == audio_narration_profile_id:
+    if profile_id == default_audio_profile_id:
         selected.append("article_narration")
-    if profile_id == audio_summary_audio_profile_id:
+    if profile_id == default_summary_playback_profile_id:
         selected.append("article_audio_summary")
     return selected
 
@@ -739,8 +613,8 @@ def _build_feature_model_usage(
     connections: list[dict[str, Any]],
     provider_call_evidence: dict[str, dict[str, Any]],
     *,
-    audio_summary_text_profile_id: str,
-    audio_narration_profile_id: str,
+    default_summary_script_profile_id: str,
+    default_audio_profile_id: str,
 ) -> list[dict[str, Any]]:
     capabilities_by_id = {str(item.get("capability_id") or ""): item for item in capabilities}
     profiles_by_id = {str(item.get("profile_id") or ""): item for item in runtime_profiles}
@@ -757,14 +631,14 @@ def _build_feature_model_usage(
             "feature_id": "audio_summary_script",
             "label": "Audio summary script",
             "capability_id": "text_generation",
-            "profile_id": audio_summary_text_profile_id,
+            "profile_id": default_summary_script_profile_id,
             "surface": "Audio summary",
         },
         {
             "feature_id": "article_narration",
             "label": "Article narration",
             "capability_id": "audio_generation",
-            "profile_id": audio_narration_profile_id,
+            "profile_id": default_audio_profile_id,
             "surface": "Audio workbench",
         },
         {
@@ -1433,46 +1307,3 @@ def _pipeline_last_run(
 
 def _iso(value: Any) -> str:
     return value.isoformat() if value is not None and hasattr(value, "isoformat") else ""
-
-
-def _read_env_file(path: Path) -> dict[str, str]:
-    if not path.exists():
-        return {}
-    values: dict[str, str] = {}
-    for line in path.read_text(encoding="utf-8").splitlines():
-        if not line or line.lstrip().startswith("#") or "=" not in line:
-            continue
-        key, value = line.split("=", 1)
-        values[key.strip()] = value.strip()
-    return values
-
-
-def _write_env_values(path: Path, values: dict[str, str]) -> None:
-    existing_lines = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
-    updated_keys = set(AI_RESOURCES_PROFILE_ENV_KEYS.values())
-    output: list[str] = []
-    seen: set[str] = set()
-    for line in existing_lines:
-        if "=" not in line or line.lstrip().startswith("#"):
-            output.append(line)
-            continue
-        key = line.split("=", 1)[0].strip()
-        if key in updated_keys:
-            output.append(f"{key}={values.get(key, '')}")
-            seen.add(key)
-        else:
-            output.append(line)
-    missing = [key for key in AI_RESOURCES_PROFILE_ENV_KEYS.values() if key not in seen]
-    if missing:
-        if output and output[-1].strip():
-            output.append("")
-        output.append(
-            "# Cloud-managed AI resource profile preferences. This is runtime metadata only."
-        )
-        for key in missing:
-            output.append(f"{key}={values.get(key, '')}")
-    path.write_text("\n".join(output).rstrip() + "\n", encoding="utf-8")
-
-
-def _value(payload: dict[str, Any], key: str, default: Any) -> str:
-    return str(payload.get(key) if key in payload else default).strip()

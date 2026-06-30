@@ -15,18 +15,12 @@ from app.adapters.providers.registry import resolve_execution_provider_adapters
 from app.adapters.queue.base import RuntimeQueue
 from app.core.config import Settings
 from app.core.db import get_session
-from app.core.models import RunRecord
+from app.core.models import SITE_STATUS_ACTIVE, RunRecord, Site
 from app.domain.audio_generation.contracts import (
     AUDIO_GENERATION_ABILITY_FAMILY,
     AUDIO_GENERATION_CLOUD_ABILITY,
     AUDIO_GENERATION_CONTRACT,
     AUDIO_GENERATION_EXECUTION_KIND,
-)
-from app.domain.hosted_model_defaults import (
-    AUDIO_NARRATION_PROFILE_ID,
-    AUDIO_NARRATION_QUALITY_PROFILE_ID,
-    FREE_GPT55_TEXT_PROFILE_ID,
-    TEXT_AI_PROFILE_ID,
 )
 from app.domain.routing.errors import RoutingError
 from app.domain.runtime.errors import RuntimeErrorBase
@@ -36,18 +30,17 @@ from app.domain.runtime.service import (
     RuntimeResultNotReadyError,
     RuntimeService,
 )
+from app.domain.wordpress_ai_connector.routing_profiles import (
+    WP_AI_CONNECTOR_AUDIO_GENERATION_PROFILE_ID,
+    WP_AI_CONNECTOR_SHORT_TEXT_PROFILE_ID,
+)
 
 ALLOWED_AUDIO_WORKBENCH_INTENTS = frozenset({"article_narration", "article_audio_summary"})
-DEFAULT_AUDIO_WORKBENCH_SITE_ID = "site_smoke"
 HOSTED_AI_CONTENT_SUPPORT_ABILITY = "npcink-toolbox/ai-content-support"
 HOSTED_AI_CONTENT_SUPPORT_CONTRACT = "hosted_ai_content_support.v1"
 AUDIO_SUMMARY_SCRIPT_INTENT = "audio_summary_script"
 MAX_AUDIO_SCRIPT_CHARS = 4800
 MAX_AUDIO_SOURCE_CHARS = 20000
-ALLOWED_AUDIO_TEXT_PROFILE_IDS = frozenset({TEXT_AI_PROFILE_ID, FREE_GPT55_TEXT_PROFILE_ID})
-ALLOWED_AUDIO_OUTPUT_PROFILE_IDS = frozenset(
-    {AUDIO_NARRATION_PROFILE_ID, AUDIO_NARRATION_QUALITY_PROFILE_ID}
-)
 AUDIO_SUMMARY_SCRIPT_MAX_ATTEMPTS = 2
 AUDIO_SUMMARY_SCRIPT_TRANSIENT_ERROR_CODES = frozenset(
     {
@@ -87,10 +80,20 @@ class AudioWorkbenchService:
 
     def create_job(self, payload: dict[str, Any]) -> dict[str, object]:
         request_payload = self._normalize_create_payload(payload)
+        request_payload["site_id"] = self._resolve_preview_site_id(str(request_payload["site_id"]))
         runtime_service = self._runtime_service()
         script_bundle = self._build_script_bundle(request_payload, runtime_service=runtime_service)
         audio_profile_id = self._audio_profile_id_for_intent(str(request_payload["intent"]))
+        preview_instance_id = self._validated_preview_instance_id(
+            request_payload,
+            audio_profile_id=audio_profile_id,
+            runtime_service=runtime_service,
+        )
         script_generation = _dict(script_bundle["generation"])
+        policy: dict[str, object] = {"allow_fallback": False}
+        if preview_instance_id:
+            policy["preferred_instance_id"] = preview_instance_id
+            policy["preview_source"] = "ability_model_dialog"
         runtime_request = RuntimeRequest(
             site_id=str(request_payload["site_id"]),
             ability_name=AUDIO_GENERATION_CLOUD_ABILITY,
@@ -125,13 +128,20 @@ class AudioWorkbenchService:
                     "script_source": script_bundle["source"],
                     "script_generation_present": bool(script_generation.get("run_id")),
                     "audio_profile_id": audio_profile_id,
+                    "preview_instance_id": preview_instance_id,
                 },
             },
-            policy={"allow_fallback": False},
+            policy=policy,
             idempotency_key=f"admin-audio-{uuid4().hex}",
             trace_id=f"admin-audio-{uuid4().hex}",
         )
-        result = runtime_service.execute(runtime_request)
+        try:
+            result = runtime_service.execute(runtime_request)
+        except (RuntimeErrorBase, RoutingError) as error:
+            raise _audio_preview_runtime_error(
+                error,
+                site_id=str(request_payload["site_id"]),
+            ) from error
         return self._job_payload(
             result,
             site_id=str(request_payload["site_id"]),
@@ -217,7 +227,7 @@ class AudioWorkbenchService:
             )
         title = _compact_text(str(payload.get("title") or ""))[:180]
         body = _clean_article_text(str(payload.get("body") or ""))[:MAX_AUDIO_SOURCE_CHARS]
-        site_id = str(payload.get("site_id") or DEFAULT_AUDIO_WORKBENCH_SITE_ID).strip()
+        site_id = str(payload.get("site_id") or "").strip()
         audio_format = str(payload.get("format") or "mp3").strip().lower()
         if audio_format not in {"mp3", "wav", "pcm"}:
             raise AudioWorkbenchError(
@@ -229,21 +239,95 @@ class AudioWorkbenchService:
                 "audio_workbench.body_required",
                 "article text is required",
             )
-        if not site_id:
-            raise AudioWorkbenchError(
-                "audio_workbench.site_required",
-                "site_id is required",
-            )
         return {
             "intent": intent,
             "title": title,
             "body": body,
             "site_id": site_id,
             "format": audio_format,
+            "preview_instance_id": str(payload.get("preview_instance_id") or "").strip(),
             "script_source": (
                 "full_article" if intent == "article_narration" else AUDIO_SUMMARY_SCRIPT_INTENT
             ),
         }
+
+    def _resolve_preview_site_id(self, requested_site_id: str) -> str:
+        requested_site_id = requested_site_id.strip()
+        with get_session(self.database_url) as session:
+            if requested_site_id:
+                site = session.get(Site, requested_site_id)
+                if site is None:
+                    raise AudioWorkbenchError(
+                        "audio_workbench.preview_site_unavailable",
+                        "Audio preview site is not provisioned for Cloud runtime.",
+                        details={
+                            "site_id": requested_site_id,
+                            "site_status": "missing",
+                            "action": "connect_or_activate_site",
+                        },
+                    )
+                if site.status != SITE_STATUS_ACTIVE:
+                    raise AudioWorkbenchError(
+                        "audio_workbench.preview_site_unavailable",
+                        "Audio preview site is not active for Cloud runtime.",
+                        details={
+                            "site_id": requested_site_id,
+                            "site_status": str(site.status or ""),
+                            "action": "connect_or_activate_site",
+                        },
+                    )
+                return requested_site_id
+
+            site_id = session.scalar(
+                select(Site.site_id)
+                .where(Site.status == SITE_STATUS_ACTIVE)
+                .order_by(Site.updated_at.desc(), Site.site_id.asc())
+                .limit(1)
+            )
+            if site_id:
+                return str(site_id)
+
+        raise AudioWorkbenchError(
+            "audio_workbench.preview_site_unavailable",
+            "No active Cloud site is available for audio preview.",
+            details={
+                "site_id": "",
+                "site_status": "none_active",
+                "action": "connect_or_activate_site",
+            },
+        )
+
+    def _validated_preview_instance_id(
+        self,
+        payload: dict[str, object],
+        *,
+        audio_profile_id: str,
+        runtime_service: RuntimeService,
+    ) -> str:
+        preview_instance_id = str(payload.get("preview_instance_id") or "").strip()
+        if not preview_instance_id:
+            return ""
+        try:
+            resolution = runtime_service.routing_service.resolve(
+                profile_id=audio_profile_id,
+                execution_kind=AUDIO_GENERATION_EXECUTION_KIND,
+            )
+        except RoutingError as error:
+            raise AudioWorkbenchError(
+                "audio_workbench.preview_route_unavailable",
+                "audio preview route is not available",
+                details={"profile_id": audio_profile_id},
+            ) from error
+        if any(candidate.instance_id == preview_instance_id for candidate in resolution.candidates):
+            return preview_instance_id
+        raise AudioWorkbenchError(
+            "audio_workbench.preview_instance_invalid",
+            "audio preview model is not available for this route",
+            details={
+                "profile_id": audio_profile_id,
+                "preview_instance_id": preview_instance_id,
+            },
+        )
 
     def _build_script_bundle(
         self,
@@ -378,7 +462,7 @@ class AudioWorkbenchService:
             contract_version=HOSTED_AI_CONTENT_SUPPORT_CONTRACT,
             channel="admin",
             execution_kind="text",
-            profile_id=self._audio_summary_text_profile_id(),
+            profile_id=self._summary_script_profile_id(),
             execution_tier="cloud",
             execution_pattern="inline",
             data_classification="internal",
@@ -416,16 +500,11 @@ class AudioWorkbenchService:
             trace_id=trace_id,
         )
 
-    def _audio_summary_text_profile_id(self) -> str:
-        value = str(self.settings.audio_summary_text_profile_id or "").strip()
-        return value if value in ALLOWED_AUDIO_TEXT_PROFILE_IDS else TEXT_AI_PROFILE_ID
+    def _summary_script_profile_id(self) -> str:
+        return WP_AI_CONNECTOR_SHORT_TEXT_PROFILE_ID
 
     def _audio_profile_id_for_intent(self, intent: str) -> str:
-        if intent == "article_audio_summary":
-            value = str(self.settings.audio_summary_audio_profile_id or "").strip()
-        else:
-            value = str(self.settings.audio_narration_profile_id or "").strip()
-        return value if value in ALLOWED_AUDIO_OUTPUT_PROFILE_IDS else AUDIO_NARRATION_PROFILE_ID
+        return WP_AI_CONNECTOR_AUDIO_GENERATION_PROFILE_ID
 
     def _job_payload(
         self,
@@ -465,6 +544,42 @@ class AudioWorkbenchService:
 def _clean_article_text(value: str) -> str:
     text = re.sub(r"<[^>]+>", " ", unescape(value or ""))
     return _compact_text(text)
+
+
+def _audio_preview_runtime_error(error: Exception, *, site_id: str) -> AudioWorkbenchError:
+    error_code = getattr(error, "error_code", "audio_workbench.runtime_unavailable")
+    message = getattr(error, "message", str(error) or "Audio preview runtime is unavailable.")
+    if error_code in {"runtime.site_not_active", "runtime.site_not_provisioned"}:
+        return AudioWorkbenchError(
+            "audio_workbench.preview_site_unavailable",
+            "Audio preview site is not available for Cloud runtime.",
+            details={
+                "site_id": site_id,
+                "site_status": "unavailable",
+                "runtime_error_code": str(error_code),
+                "runtime_error_message": str(message),
+                "action": "connect_or_activate_site",
+            },
+        )
+    if isinstance(error, RoutingError):
+        return AudioWorkbenchError(
+            "audio_workbench.preview_route_unavailable",
+            "Audio preview route is not available.",
+            details={
+                "site_id": site_id,
+                "runtime_error_code": "routing.unavailable",
+                "runtime_error_message": str(message),
+            },
+        )
+    return AudioWorkbenchError(
+        "audio_workbench.runtime_rejected",
+        "Audio preview runtime rejected the request.",
+        details={
+            "site_id": site_id,
+            "runtime_error_code": str(error_code),
+            "runtime_error_message": str(message),
+        },
+    )
 
 
 def _compact_text(value: str) -> str:

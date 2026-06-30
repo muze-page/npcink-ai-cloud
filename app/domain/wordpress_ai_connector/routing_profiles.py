@@ -7,12 +7,14 @@ WP_AI_CONNECTOR_SHORT_TEXT_PROFILE_ID = "wp-ai.short-text"
 WP_AI_CONNECTOR_EDITORIAL_PROFILE_ID = "wp-ai.editorial"
 WP_AI_CONNECTOR_CLASSIFICATION_PROFILE_ID = "wp-ai.classification"
 WP_AI_CONNECTOR_IMAGE_GENERATION_PROFILE_ID = "wp-ai.image-generation"
+WP_AI_CONNECTOR_AUDIO_GENERATION_PROFILE_ID = "wp-ai.audio-generation"
 
 WP_AI_CONNECTOR_PROFILE_IDS = (
     WP_AI_CONNECTOR_SHORT_TEXT_PROFILE_ID,
     WP_AI_CONNECTOR_EDITORIAL_PROFILE_ID,
     WP_AI_CONNECTOR_CLASSIFICATION_PROFILE_ID,
     WP_AI_CONNECTOR_IMAGE_GENERATION_PROFILE_ID,
+    WP_AI_CONNECTOR_AUDIO_GENERATION_PROFILE_ID,
 )
 
 
@@ -44,15 +46,16 @@ WP_AI_CONNECTOR_PROFILE_SPECS: tuple[WordPressAIConnectorProfileSpec, ...] = (
             "excerpt_generation",
             "meta_description",
             "title_generation",
+            "audio_summary_script",
         ),
-        ordered_tiers=("economy", "hosted-free", "balanced", "free-gpt55"),
-        timeout_ms=20_000,
+        ordered_tiers=("balanced", "economy", "hosted-free", "free-gpt55"),
+        timeout_ms=45_000,
         max_timeout_ms=60_000,
         allow_fallback=True,
         max_retries=0,
         description=(
             "Low-latency WordPress AI suggestions for titles, SEO text, excerpts, "
-            "and alt text."
+            "alt text, and audio summary scripts."
         ),
     ),
     WordPressAIConnectorProfileSpec(
@@ -86,7 +89,7 @@ WP_AI_CONNECTOR_PROFILE_SPECS: tuple[WordPressAIConnectorProfileSpec, ...] = (
             "comment_moderation",
             "content_classification",
         ),
-        ordered_tiers=("economy", "balanced", "hosted-free", "free-gpt55"),
+        ordered_tiers=("balanced", "economy", "hosted-free", "free-gpt55"),
         timeout_ms=25_000,
         max_timeout_ms=60_000,
         allow_fallback=True,
@@ -108,6 +111,26 @@ WP_AI_CONNECTOR_PROFILE_SPECS: tuple[WordPressAIConnectorProfileSpec, ...] = (
         description=(
             "Cloud-managed text-to-image generation for the WordPress AI media "
             "library feature."
+        ),
+    ),
+    WordPressAIConnectorProfileSpec(
+        profile_id=WP_AI_CONNECTOR_AUDIO_GENERATION_PROFILE_ID,
+        group_id="audio_generation",
+        routing_intent="audio.generation",
+        label="Audio generation",
+        execution_kind="audio_generation",
+        tasks=(
+            "article_narration",
+            "article_audio_summary",
+        ),
+        ordered_tiers=("default", "balanced", "narration", "quality"),
+        timeout_ms=90_000,
+        max_timeout_ms=120_000,
+        allow_fallback=True,
+        max_retries=0,
+        description=(
+            "Audio model used to generate WordPress article narration and audio "
+            "summary playback."
         ),
     ),
 )

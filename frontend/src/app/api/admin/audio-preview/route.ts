@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import {
+  buildBackendUrl,
   buildErrorResponse,
   requireAdminSessionData,
 } from '../_shared';
@@ -8,20 +9,56 @@ const ALLOWED_MINIMAX_AUDIO_HOSTS = new Set([
   'minimax-algeng-chat-tts.oss-cn-wulanchabu.aliyuncs.com',
 ]);
 
-function parseAudioUrl(request: NextRequest): URL | null {
+type ParsedAudioUrl = {
+  url: URL;
+  source: 'cloud_artifact' | 'external';
+};
+
+function parseAudioUrl(request: NextRequest): ParsedAudioUrl | null {
   const rawUrl = request.nextUrl.searchParams.get('url') || '';
   if (!rawUrl) {
     return null;
   }
   try {
-    return new URL(rawUrl);
+    if (rawUrl.startsWith('/')) {
+      return {
+        url: new URL(rawUrl, 'http://cloud-runtime.local'),
+        source: 'cloud_artifact',
+      };
+    }
+    return {
+      url: new URL(rawUrl),
+      source: 'external',
+    };
   } catch {
     return null;
   }
 }
 
-function isAllowedAudioUrl(url: URL): boolean {
+function isAllowedCloudArtifactUrl(url: URL): boolean {
+  return (
+    url.pathname.match(/^\/v1\/runtime\/artifacts\/art_[A-Za-z0-9]+\/public-download$/) !== null &&
+    Boolean(url.searchParams.get('token')) &&
+    Array.from(url.searchParams.keys()).every((key) => key === 'token')
+  );
+}
+
+function isAllowedExternalAudioUrl(url: URL): boolean {
   return url.protocol === 'https:' && ALLOWED_MINIMAX_AUDIO_HOSTS.has(url.hostname);
+}
+
+function isAllowedAudioUrl(parsed: ParsedAudioUrl): boolean {
+  if (parsed.source === 'cloud_artifact') {
+    return isAllowedCloudArtifactUrl(parsed.url);
+  }
+  return isAllowedExternalAudioUrl(parsed.url);
+}
+
+function audioFetchUrl(parsed: ParsedAudioUrl): string | URL {
+  if (parsed.source === 'cloud_artifact') {
+    return buildBackendUrl(`${parsed.url.pathname}${parsed.url.search}`);
+  }
+  return parsed.url;
 }
 
 function copyAudioResponseHeaders(source: Response): Headers {
@@ -74,7 +111,7 @@ async function proxyAudioPreview(request: NextRequest, method: 'GET' | 'HEAD'): 
 
   let response: Response;
   try {
-    response = await fetch(audioUrl, {
+    response = await fetch(audioFetchUrl(audioUrl), {
       method: 'GET',
       headers,
       cache: 'no-store',

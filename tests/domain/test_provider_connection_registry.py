@@ -295,3 +295,65 @@ def test_runtime_settings_project_capability_provider_connections(
     assert "zilliz-token" not in serialized_text
 
     dispose_engine(database_url)
+
+
+def test_provider_connection_priority_selects_primary_capability_channel(
+    tmp_path: Path,
+) -> None:
+    database_url = _sqlite_url(tmp_path)
+    init_schema(database_url)
+    settings = _settings(database_url)
+    service = ProviderConnectionAdminService(database_url, settings)
+
+    service.save_connection(
+        {
+            "connection_id": "image_pexels_backup",
+            "provider_id": "pexels",
+            "provider_type": "image_source_provider",
+            "kind": "image_source_provider",
+            "display_name": "Pexels backup",
+            "enabled": True,
+            "base_url": "https://api.pexels.com/v1",
+            "capability_ids": ["image_source"],
+            "runtime_profile_ids": ["image-source.managed"],
+            "credential": "pexels-backup-key",
+            "note": "Backup key",
+            "priority": 200,
+        }
+    )
+    service.save_connection(
+        {
+            "connection_id": "image_pexels_primary",
+            "provider_id": "pexels",
+            "provider_type": "image_source_provider",
+            "kind": "image_source_provider",
+            "display_name": "Pexels primary",
+            "enabled": True,
+            "base_url": "https://api.pexels.com/v1",
+            "capability_ids": ["image_source"],
+            "runtime_profile_ids": ["image-source.managed"],
+            "credential": "pexels-primary-key",
+            "note": "Primary key",
+            "priority": 10,
+        }
+    )
+
+    connections = [
+        item
+        for item in service.list_connections()["connections"]
+        if item["provider_id"] == "pexels"
+    ]
+    assert [item["connection_id"] for item in connections] == [
+        "image_pexels_primary",
+        "image_pexels_backup",
+    ]
+    assert connections[0]["note"] == "Primary key"
+    assert connections[0]["priority"] == 10
+    assert connections[1]["priority"] == 200
+
+    projection = apply_provider_connection_runtime_settings(settings)
+
+    assert projection.image_source_count == 1
+    assert settings.image_source_pexels_api_key == "pexels-primary-key"
+
+    dispose_engine(database_url)

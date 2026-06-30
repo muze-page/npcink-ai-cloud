@@ -100,7 +100,9 @@ def test_prod_env_files_use_canonical_admin_names_and_do_not_expose_ai_provider_
     assert "`search_jina_reader`" in provider_runbook_text
     assert "optional URL reader enhancement" in provider_runbook_text
     assert "`image_unsplash`" in provider_runbook_text
-    assert "`embedding_siliconflow`" in provider_runbook_text
+    assert "`siliconflow_env`" in provider_runbook_text
+    assert "`tei_env`" in provider_runbook_text
+    assert "`embedding_siliconflow`" not in provider_runbook_text
     assert "`vector_zilliz`" in provider_runbook_text
     assert "Do not put provider credentials back into `.env.deploy`" in provider_runbook_text
     assert "NPCINK_CLOUD_WEB_SEARCH_ZHIHU_ACCESS_SECRET=" not in provider_runbook_text

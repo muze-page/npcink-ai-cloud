@@ -19,7 +19,6 @@ STRICT_CADENCE_TASK_IDS = (
     "router_diagnostics_summary",
     "latency_probe_summary",
     "alert_provider_degradation",
-    "hosted_model_governance",
     "provider_health_scan",
 )
 

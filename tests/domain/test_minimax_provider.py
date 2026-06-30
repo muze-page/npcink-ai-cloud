@@ -57,8 +57,64 @@ def test_minimax_adapter_fetches_audio_catalog() -> None:
     assert models["speech-2.8-turbo"].feature == "audio_generation"
     assert models["speech-2.8-turbo"].status == "available"
     assert models["speech-2.8-turbo"].instances[0].endpoint_variant == "t2a_v2"
+    assert models["MiniMax-M3"].feature == "text"
+    assert models["MiniMax-M3"].status == "available"
+    assert models["MiniMax-M3"].instances[0].endpoint_variant == "chat_completions"
     assert models["speech-2.6-turbo"].status == "catalog_only"
     assert models["speech-2.6-turbo"].instances == []
+
+
+def test_minimax_adapter_executes_text_over_openai_compatible_chat() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path.endswith("/v1/chat/completions")
+        assert request.headers["Authorization"] == "Bearer test-api-key"
+        payload = json.loads(request.content.decode("utf-8"))
+        assert payload["model"] == "MiniMax-M3"
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": "MiniMax text result",
+                        },
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {
+                    "prompt_tokens": 8,
+                    "completion_tokens": 4,
+                    "total_tokens": 12,
+                },
+            },
+        )
+
+    adapter = MiniMaxProviderAdapter(
+        api_key="test-api-key",
+        transport=httpx.MockTransport(handler),
+    )
+
+    result = adapter.execute(
+        ProviderExecutionRequest(
+            run_id="run_minimax_text_provider_test",
+            site_id="site_alpha",
+            ability_name="npcink-cloud/wp-ai-connector",
+            profile_id="wp-ai.short-text",
+            execution_kind="text",
+            model_id="MiniMax-M3",
+            instance_id="minimax-global-minimax-m3",
+            endpoint_variant="chat_completions",
+            trace_id="trace-minimax-text-provider",
+            input_payload={"messages": [{"role": "user", "content": "Say hi"}]},
+            policy={"allow_fallback": False},
+            timeout_ms=30000,
+        )
+    )
+
+    assert result.output["output_text"] == "MiniMax text result"
+    assert result.tokens_in == 8
+    assert result.tokens_out == 4
 
 
 def test_minimax_adapter_executes_t2a_over_http() -> None:

@@ -6,12 +6,14 @@ from typing import Any
 from fastapi import APIRouter, BackgroundTasks, Query, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
+from sqlalchemy import select
 
 from app.adapters.providers.registry import resolve_live_provider_adapters
 from app.adapters.repositories.catalog_repository import CatalogRepository
 from app.api.auth import authorize_internal_request, get_cloud_services
 from app.api.envelope import build_envelope
 from app.core.db import get_session
+from app.core.models import ProviderConnection
 from app.core.security import extract_trace_id
 from app.domain.advisor.service import InternalAIAdvisorService
 from app.domain.agent_feedback.service import AgentFeedbackService
@@ -33,13 +35,14 @@ from app.domain.media_derivatives.metrics import MediaDerivativeObservabilitySer
 from app.domain.model_references import ModelReferenceError, ModelReferenceService
 from app.domain.observability.plugin_events import PluginObservabilityService
 from app.domain.observability.service import ObservabilityService
+from app.domain.provider_connections.runtime_settings import (
+    apply_provider_connection_runtime_settings,
+)
 from app.domain.provider_connections.service import (
     ProviderConnectionAdminError,
     ProviderConnectionAdminService,
 )
 from app.domain.provider_resources import (
-    AIResourceProfilePreferenceError,
-    AIResourceProfilePreferenceService,
     build_admin_ability_model_runtime_projection,
     build_admin_ai_resource_projection,
 )
@@ -53,7 +56,6 @@ from app.domain.service_settings import (
     ServiceSettingsAdminService,
 )
 from app.domain.site_knowledge.metrics import SiteKnowledgeObservabilityService
-from app.domain.usage.rollup import UsageRollupService
 from app.domain.wordpress_ai_connector.routing_profiles import (
     WP_AI_CONNECTOR_PROFILE_SPECS,
     WP_AI_CONNECTOR_PROFILE_SPECS_BY_ID,
@@ -242,22 +244,11 @@ class PluginAttentionStatePayload(BaseModel):
 
 class AudioWorkbenchCreatePayload(BaseModel):
     intent: str = Field(default="article_narration", max_length=64)
-    site_id: str = Field(default="site_smoke", max_length=191)
+    site_id: str = Field(default="", max_length=191)
     title: str = Field(default="", max_length=240)
     body: str = Field(min_length=1, max_length=25000)
     format: str = Field(default="mp3", max_length=16)
-
-
-class AIResourceProfilePreferencePayload(BaseModel):
-    audio_summary_text_profile_id: str = Field(default="text.ai", max_length=64)
-    audio_narration_profile_id: str = Field(
-        default="audio.narration.default",
-        max_length=64,
-    )
-    audio_summary_audio_profile_id: str = Field(
-        default="audio.narration.default",
-        max_length=64,
-    )
+    preview_instance_id: str = Field(default="", max_length=191)
 
 
 class ProviderConnectionPayload(BaseModel):
@@ -268,6 +259,8 @@ class ProviderConnectionPayload(BaseModel):
     display_name: str = Field(default="", max_length=191)
     enabled: bool = True
     base_url: str = Field(default="", max_length=500)
+    note: str = Field(default="", max_length=512)
+    priority: int = Field(default=100, ge=0, le=999)
     source_role: str = Field(default="execution_source", max_length=32)
     capability_ids: list[str] = Field(default_factory=list)
     runtime_profile_ids: list[str] = Field(default_factory=list)
@@ -326,6 +319,12 @@ class WordPressAIRoutingProfilePayload(BaseModel):
 
 class WordPressAIRoutingSettingsPayload(BaseModel):
     profiles: list[WordPressAIRoutingProfilePayload] = Field(default_factory=list)
+
+
+class AbilityModelRuntimeBindingPayload(BaseModel):
+    ability_id: str = Field(max_length=64)
+    instance_id: str = Field(max_length=191)
+    note: str = Field(default="", max_length=512)
 
 
 class OpsSummaryDisclosureReviewPayload(BaseModel):
@@ -637,10 +636,16 @@ def _merge_receipt(data: Any, receipt: dict[str, Any]) -> Any:
     return {"value": data, "receipt": receipt}
 
 
-def _serialize_wordpress_ai_instance(instance: Any, model: Any) -> dict[str, Any]:
+def _serialize_wordpress_ai_instance(
+    instance: Any,
+    model: Any,
+    provider: Any | None = None,
+) -> dict[str, Any]:
     return {
         "instance_id": str(instance.instance_id or ""),
         "provider_id": str(instance.provider_id or ""),
+        "provider_display_name": str(getattr(provider, "display_name", "") or ""),
+        "adapter_type": str(getattr(provider, "adapter_type", "") or ""),
         "model_id": str(instance.model_id or ""),
         "endpoint_variant": str(instance.endpoint_variant or ""),
         "region": str(instance.region or ""),
@@ -660,11 +665,17 @@ def _build_wordpress_ai_routing_projection(database_url: str) -> dict[str, Any]:
         instances = repository.list_instances_for_provider()
         models = repository.list_models_by_ids([instance.model_id for instance in instances])
         models_by_id = {model.model_id: model for model in models}
+        providers = repository.list_providers_by_ids(
+            [instance.provider_id for instance in instances]
+        )
+        providers_by_id = {provider.provider_id: provider for provider in providers}
         instances_by_id = {instance.instance_id: instance for instance in instances}
 
         available_instances_by_kind: dict[str, list[dict[str, Any]]] = {
             "text": [],
             "image_generation": [],
+            "audio_generation": [],
+            "embedding": [],
         }
         for instance in instances:
             model = models_by_id.get(instance.model_id)
@@ -673,7 +684,11 @@ def _build_wordpress_ai_routing_projection(database_url: str) -> dict[str, Any]:
             if model.feature not in available_instances_by_kind:
                 continue
             available_instances_by_kind[model.feature].append(
-                _serialize_wordpress_ai_instance(instance, model)
+                _serialize_wordpress_ai_instance(
+                    instance,
+                    model,
+                    providers_by_id.get(instance.provider_id),
+                )
             )
 
         profiles: list[dict[str, Any]] = []
@@ -697,7 +712,13 @@ def _build_wordpress_ai_routing_projection(database_url: str) -> dict[str, Any]:
                 model = models_by_id.get(instance.model_id)
                 if model is None:
                     continue
-                candidate_items.append(_serialize_wordpress_ai_instance(instance, model))
+                candidate_items.append(
+                    _serialize_wordpress_ai_instance(
+                        instance,
+                        model,
+                        providers_by_id.get(instance.provider_id),
+                    )
+                )
 
             profiles.append(
                 {
@@ -738,6 +759,8 @@ def _build_wordpress_ai_routing_projection(database_url: str) -> dict[str, Any]:
         "prompt_or_preset_editor": False,
         "available_text_instances": available_instances_by_kind["text"],
         "available_image_instances": available_instances_by_kind["image_generation"],
+        "available_audio_instances": available_instances_by_kind["audio_generation"],
+        "available_embedding_instances": available_instances_by_kind["embedding"],
         "profiles": profiles,
         "boundary": {
             "public_runtime_accepts_raw_model_instance": False,
@@ -808,6 +831,69 @@ def _validate_wordpress_ai_routing_payload(
                     )
 
     return payload.profiles, ""
+
+
+def _normalize_runtime_id_list(value: object) -> list[str]:
+    if isinstance(value, str):
+        raw_items: tuple[object, ...] = tuple(value.split(","))
+    elif isinstance(value, list):
+        raw_items = tuple(value)
+    else:
+        raw_items = ()
+    normalized: list[str] = []
+    for item in raw_items:
+        text = str(item or "").strip()
+        if text and text not in normalized:
+            normalized.append(text)
+    return normalized
+
+
+def _merge_runtime_id_list(value: object, required_ids: list[str]) -> list[str]:
+    merged = _normalize_runtime_id_list(value)
+    for required_id in required_ids:
+        if required_id and required_id not in merged:
+            merged.append(required_id)
+    return merged
+
+
+def _provider_connection_supports_embedding(
+    row: ProviderConnection,
+    *,
+    provider_id: str,
+) -> bool:
+    config = _dict_value(row.config_json)
+    configured = bool(row.secret_ciphertext) or bool(config.get("secretless"))
+    if not row.enabled or not configured:
+        return False
+    row_provider_id = str(config.get("provider_id") or row.connection_id or "").strip().lower()
+    kind = str(config.get("kind") or row.provider_type or "").strip().lower()
+    capability_ids = _normalize_runtime_id_list(config.get("capability_ids"))
+    runtime_profile_ids = _normalize_runtime_id_list(config.get("runtime_profile_ids"))
+    if row_provider_id != provider_id.lower():
+        return False
+    if kind == "embedding_provider":
+        return True
+    return "embedding" in capability_ids and "embed.default" in runtime_profile_ids
+
+
+def _embedding_dimensions_for_model(model_id: str, config: dict[str, Any], default: int) -> int:
+    configured = config.get("dimensions")
+    if isinstance(configured, int) and configured > 0:
+        return configured
+    try:
+        parsed = int(str(configured))
+        if parsed > 0:
+            return parsed
+    except (TypeError, ValueError):
+        pass
+    normalized_model_id = model_id.lower()
+    if "bge-m3" in normalized_model_id:
+        return 1024
+    if "text-embedding-3-large" in normalized_model_id:
+        return 3072
+    if "text-embedding-3-small" in normalized_model_id:
+        return 1536
+    return default
 
 
 def _build_runtime_explanations(
@@ -3638,33 +3724,170 @@ async def get_admin_ability_model_runtime_projection(request: Request) -> Any:
     )
 
 
-@router.post("/admin/ai-resources/profile-preferences")
-async def update_admin_ai_resource_profile_preferences(
+@router.post("/admin/ability-models/runtime-binding")
+async def update_admin_ability_model_runtime_binding(
     request: Request,
-    payload: AIResourceProfilePreferencePayload,
+    payload: AbilityModelRuntimeBindingPayload,
 ) -> Any:
     auth = await authorize_internal_request(request, require_idempotency=True)
     if auth is not None:
         return auth
     services = get_cloud_services(request)
-    try:
-        result = AIResourceProfilePreferenceService(services.settings).save(
-            payload.model_dump(mode="json")
-        )
-    except AIResourceProfilePreferenceError as error:
+    ability_id = payload.ability_id.strip()
+    instance_id = payload.instance_id.strip()
+    if ability_id != "site_knowledge_embedding":
         return JSONResponse(
             status_code=400,
             content=build_envelope(
                 status="error",
-                error_code=error.error_code,
-                message=error.message,
+                error_code="ability_model_runtime_binding.unsupported_ability",
+                message="Only Site Knowledge embedding runtime binding is supported.",
                 revision="m6",
             ),
         )
+    if not instance_id:
+        return JSONResponse(
+            status_code=400,
+            content=build_envelope(
+                status="error",
+                error_code="ability_model_runtime_binding.invalid_instance",
+                message="A runtime model instance is required.",
+                revision="m6",
+            ),
+        )
+
+    connection_id = ""
+    provider_id = ""
+    model_id = ""
+    with get_session(services.settings.database_url) as session:
+        repository = CatalogRepository(session)
+        instances = repository.list_instances_by_ids([instance_id])
+        instance = instances[0] if instances else None
+        if instance is None:
+            return JSONResponse(
+                status_code=400,
+                content=build_envelope(
+                    status="error",
+                    error_code="ability_model_runtime_binding.unknown_instance",
+                    message="The selected runtime model instance does not exist.",
+                    revision="m6",
+                ),
+            )
+        model = repository.get_model(instance.model_id)
+        if model is None or model.status != "available" or model.feature != "embedding":
+            return JSONResponse(
+                status_code=400,
+                content=build_envelope(
+                    status="error",
+                    error_code="ability_model_runtime_binding.invalid_model",
+                    message="Site Knowledge can only use available embedding model instances.",
+                    revision="m6",
+                ),
+            )
+
+        provider_id = str(instance.provider_id or "").strip()
+        model_id = str(instance.model_id or "").strip()
+        connections = list(
+            session.scalars(
+                select(ProviderConnection)
+                .where(ProviderConnection.enabled.is_(True))
+                .order_by(ProviderConnection.connection_id.asc())
+            )
+        )
+        connection = next(
+            (
+                row
+                for row in connections
+                if _provider_connection_supports_embedding(row, provider_id=provider_id)
+            ),
+            None,
+        )
+        if connection is None:
+            return JSONResponse(
+                status_code=400,
+                content=build_envelope(
+                    status="error",
+                    error_code="ability_model_runtime_binding.missing_provider_connection",
+                    message=(
+                        "The selected embedding model requires an enabled provider "
+                        "connection with embedding capability."
+                    ),
+                    revision="m6",
+                ),
+            )
+
+        config = dict(_dict_value(connection.config_json))
+        config["provider_id"] = provider_id
+        config["kind"] = str(config.get("kind") or connection.provider_type or provider_id)
+        config["model_id"] = model_id
+        config["capability_ids"] = _merge_runtime_id_list(
+            config.get("capability_ids"),
+            ["embedding"],
+        )
+        config["runtime_profile_ids"] = _merge_runtime_id_list(
+            config.get("runtime_profile_ids"),
+            ["embed.default"],
+        )
+        config["dimensions"] = _embedding_dimensions_for_model(
+            model_id,
+            config,
+            services.settings.site_knowledge_embedding_dimensions,
+        )
+        config["managed_surface"] = "admin_ability_model_runtime_binding"
+        if payload.note.strip():
+            config["operator_note"] = payload.note.strip()
+        connection.config_json = config
+        connection.status = "configured"
+        connection.updated_at = datetime.now(UTC)
+        connection_id = str(connection.connection_id or "").strip()
+        session.commit()
+
+    apply_provider_connection_runtime_settings(services.settings)
+    audit_event = None
+    try:
+        audit_event = _get_commercial_service(request).record_service_audit_event(
+            audit_context=_build_audit_context(request),
+            event_kind="ability_model_runtime_binding.update",
+            outcome="succeeded",
+            scope_kind="runtime_profile",
+            scope_id="embed.default",
+            payload_json={
+                "surface": "admin_ability_model_runtime_projection",
+                "ability_id": ability_id,
+                "provider_id": provider_id,
+                "model_id": model_id,
+                "instance_id": instance_id,
+                "connection_id": connection_id,
+                "credential_value_exposure": "none",
+                "content_exposed": False,
+            },
+        )
+    except Exception:
+        audit_event = None
+
+    result = build_admin_ability_model_runtime_projection(
+        services.settings,
+        providers=resolve_live_provider_adapters(
+            services.settings,
+            base_providers=services.providers,
+            include_enabled_connections=True,
+        ),
+        database_url=services.settings.database_url,
+    )
     return build_envelope(
         status="ok",
-        message="AI resource profile preferences saved",
-        data=result,
+        message="Ability model runtime binding saved",
+        data=_merge_receipt(
+            result,
+            _build_operator_receipt(
+                event_kind="ability_model_runtime_binding.update",
+                scope_kind="runtime_profile",
+                scope_id="embed.default",
+                outcome="succeeded",
+                effective_summary="Site Knowledge embedding runtime model was updated.",
+                audit_event=audit_event,
+            ),
+        ),
         revision="m6",
     )
 
@@ -4136,66 +4359,7 @@ async def get_hosted_model_governance_diagnostics(
     )
     return build_envelope(
         status="ok",
-        message="hosted model governance diagnostics loaded",
-        data=result,
-        revision="m1",
-    )
-
-
-@router.get("/admin/hosted-model-governance-cadence")
-async def get_hosted_model_governance_cadence(
-    request: Request,
-    recent_minutes: int = Query(default=1440, ge=1, le=10080),
-) -> Any:
-    auth = await authorize_internal_request(request, require_idempotency=False)
-    if auth is not None:
-        return auth
-    services = get_cloud_services(request)
-    result = UsageRollupService(services.settings.database_url).get_hosted_model_governance_batch(
-        window_minutes=recent_minutes,
-    )
-    if result is None:
-        result = {
-            "available": False,
-            "source": "cloud_hosted_model_governance_empty",
-            "filters": {
-                "site_id": "",
-                "recent_minutes": recent_minutes,
-            },
-            "generated_at": "",
-            "alert_summary": {
-                "status": "inactive",
-                "summary": "No hosted model governance cadence record is available yet.",
-                "alert_count": 0,
-                "alerts": [],
-                "daily_digest": {
-                    "runs": 0,
-                    "provider_calls": 0,
-                    "meter_events": 0,
-                    "metered_run_coverage_rate": 0,
-                    "provider_call_run_coverage_rate": 0,
-                    "unmetered_run_count": 0,
-                    "runs_without_provider_call_count": 0,
-                },
-            },
-            "delivery": {
-                "owner": "internal_admin_readonly",
-                "buffer_kind": "usage_rollup",
-                "scope_kind": "hosted_model_governance_batch",
-            },
-            "boundary": {
-                "surface": "internal_admin_summary",
-                "cloud_role": "hosted_runtime_detail",
-                "local_control_plane": "wordpress_plugin",
-                "direct_wordpress_write": False,
-                "contains_prompt_or_result_payloads": False,
-            },
-        }
-    else:
-        result = {**result, "available": True}
-    return build_envelope(
-        status="ok",
-        message="hosted model governance cadence loaded",
+        message="runtime telemetry diagnostics loaded",
         data=result,
         revision="m1",
     )

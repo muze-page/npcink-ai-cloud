@@ -961,11 +961,15 @@ def test_execute_route_defaults_audio_generation_to_minimax_narration(
     )
     assert download_response.status_code == 200
     assert download_response.headers["content-type"].startswith("audio/mpeg")
+    assert int(download_response.headers["content-length"]) == len(download_response.content)
     assert download_response.content.startswith(b"ID3")
 
     public_download_response = client.get(audio_url)
     assert public_download_response.status_code == 200
     assert public_download_response.headers["content-type"].startswith("audio/mpeg")
+    assert int(public_download_response.headers["content-length"]) == len(
+        public_download_response.content
+    )
     assert public_download_response.content.startswith(b"ID3")
 
     invalid_public_download_response = client.get(

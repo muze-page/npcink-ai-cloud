@@ -174,11 +174,12 @@ def _add_model_provider_specs(
                 or "OpenAI compatible",
                 base_url=_env_first(env, "OPENAI_BASE_URL", "OPENAI_COMPATIBLE_BASE_URL")
                 or "https://api.openai.com/v1",
-                capability_ids=["text_generation", "image_generation"],
+                capability_ids=["text_generation", "image_generation", "embedding"],
                 runtime_profile_ids=[
                     "text.ai",
                     "text.free-gpt55",
                     "grok-imagine-image-quality",
+                    "embed.default",
                 ],
                 credential=openai_key,
                 config={
@@ -197,6 +198,54 @@ def _add_model_provider_specs(
                         "OPENAI_SAMPLE_CATALOG_PROFILE",
                         "OPENAI_COMPATIBLE_SAMPLE_CATALOG_PROFILE",
                     ),
+                },
+            )
+        )
+
+    siliconflow_key = _env_value(env, "SILICONFLOW_API_KEY")
+    if siliconflow_key:
+        specs.append(
+            ProviderConnectionImportSpec(
+                connection_id="siliconflow_env",
+                provider_id="siliconflow",
+                provider_type="siliconflow",
+                display_name="SiliconFlow",
+                base_url=_env_value(env, "SILICONFLOW_BASE_URL")
+                or "https://api.siliconflow.cn/v1",
+                capability_ids=["text_generation", "embedding"],
+                runtime_profile_ids=["text.ai", "embed.default"],
+                credential=siliconflow_key,
+                config={
+                    "model_id": _env_value(env, "SITE_KNOWLEDGE_EMBEDDING_MODEL"),
+                    "dimensions": _env_value(env, "SITE_KNOWLEDGE_EMBEDDING_DIMENSIONS"),
+                    "timeout_seconds": _env_value(env, "SILICONFLOW_TIMEOUT_SECONDS"),
+                    "pricing_url": _env_value(env, "SILICONFLOW_PRICING_URL"),
+                },
+            )
+        )
+
+    tei_base_url = _env_value(env, "TEI_BASE_URL")
+    if tei_base_url:
+        tei_key = _env_value(env, "TEI_API_KEY")
+        embedding_model = _env_value(env, "SITE_KNOWLEDGE_EMBEDDING_MODEL") or "BAAI/bge-m3"
+        specs.append(
+            ProviderConnectionImportSpec(
+                connection_id="tei_env",
+                provider_id="tei",
+                provider_type="tei",
+                display_name="TEI",
+                base_url=tei_base_url,
+                capability_ids=["embedding"],
+                runtime_profile_ids=["embed.default"],
+                credential=tei_key,
+                secretless=not bool(tei_key),
+                config={
+                    "model_id": embedding_model,
+                    "model_ids": _env_value(env, "TEI_MODEL_IDS") or embedding_model,
+                    "dimensions": _env_value(env, "SITE_KNOWLEDGE_EMBEDDING_DIMENSIONS") or "1024",
+                    "timeout_seconds": _env_value(env, "TEI_TIMEOUT_SECONDS"),
+                    "region": _env_value(env, "TEI_REGION"),
+                    "context_window": _env_value(env, "TEI_CONTEXT_WINDOW"),
                 },
             )
         )
@@ -442,68 +491,6 @@ def _add_vector_specs(
     specs: list[ProviderConnectionImportSpec],
     env: dict[str, str],
 ) -> None:
-    embedding_provider = _env_value(env, "SITE_KNOWLEDGE_EMBEDDING_PROVIDER").lower()
-    embedding_model = _env_value(env, "SITE_KNOWLEDGE_EMBEDDING_MODEL") or "BAAI/bge-m3"
-    embedding_dimensions = _env_value(env, "SITE_KNOWLEDGE_EMBEDDING_DIMENSIONS") or "1024"
-
-    if embedding_provider == "tei" or _env_value(env, "TEI_BASE_URL"):
-        tei_key = _env_value(env, "TEI_API_KEY")
-        specs.append(
-            ProviderConnectionImportSpec(
-                connection_id="embedding_tei",
-                provider_id="tei",
-                provider_type="embedding_provider",
-                display_name="TEI Embedding",
-                base_url=_env_value(env, "TEI_BASE_URL"),
-                capability_ids=["embedding"],
-                runtime_profile_ids=["embed.default"],
-                credential=tei_key,
-                secretless=not bool(tei_key),
-                config={
-                    "model_id": embedding_model,
-                    "model_ids": _env_value(env, "TEI_MODEL_IDS") or embedding_model,
-                    "dimensions": embedding_dimensions,
-                    "timeout_seconds": _env_value(env, "TEI_TIMEOUT_SECONDS"),
-                    "region": _env_value(env, "TEI_REGION"),
-                    "context_window": _env_value(env, "TEI_CONTEXT_WINDOW"),
-                },
-            )
-        )
-
-    openai_embedding_key = _env_first(env, "OPENAI_API_KEY", "OPENAI_COMPATIBLE_API_KEY")
-    if embedding_provider == "openai" and openai_embedding_key:
-        specs.append(
-            ProviderConnectionImportSpec(
-                connection_id="embedding_openai",
-                provider_id="openai",
-                provider_type="embedding_provider",
-                display_name="OpenAI Embedding",
-                base_url=_env_first(env, "OPENAI_BASE_URL", "OPENAI_COMPATIBLE_BASE_URL")
-                or "https://api.openai.com/v1",
-                capability_ids=["embedding"],
-                runtime_profile_ids=["embed.default"],
-                credential=openai_embedding_key,
-                config={"model_id": embedding_model, "dimensions": embedding_dimensions},
-            )
-        )
-
-    siliconflow_key = _env_value(env, "SILICONFLOW_API_KEY")
-    if embedding_provider == "siliconflow" or siliconflow_key:
-        specs.append(
-            ProviderConnectionImportSpec(
-                connection_id="embedding_siliconflow",
-                provider_id="siliconflow",
-                provider_type="embedding_provider",
-                display_name="SiliconFlow Embedding",
-                base_url=_env_value(env, "SILICONFLOW_BASE_URL")
-                or "https://api.siliconflow.cn/v1",
-                capability_ids=["embedding"],
-                runtime_profile_ids=["embed.default"],
-                credential=siliconflow_key,
-                config={"model_id": embedding_model, "dimensions": embedding_dimensions},
-            )
-        )
-
     jina_key = _env_first(env, "SITE_KNOWLEDGE_JINA_API_KEY", "JINA_API_KEY")
     if _env_value(env, "SITE_KNOWLEDGE_RERANK_PROVIDER").lower() == "jina" or jina_key:
         specs.append(

@@ -176,6 +176,8 @@ class ModelReferenceService:
                 source.last_error_message = None
                 source.metadata_json = {"price_unit": MODEL_REFERENCE_PRICE_UNIT}
 
+            session.flush()
+
             for row in rows:
                 existing = session.scalar(
                     select(ModelReferenceModel).where(

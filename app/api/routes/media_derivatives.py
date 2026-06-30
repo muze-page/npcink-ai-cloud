@@ -89,12 +89,15 @@ def _stream_artifact_response(artifact: Any, *, cache_control: str) -> Streaming
     format_ext = artifact.format
     if format_ext == "jpeg":
         format_ext = "jpg"
+    blob_data = artifact.blob_data or b""
+    content_length = int(artifact.filesize_bytes or len(blob_data))
 
     return StreamingResponse(
-        iter([artifact.blob_data or b""]),
+        iter([blob_data]),
         media_type=artifact.mime_type,
         headers={
             "Content-Disposition": f'inline; filename="{artifact.artifact_id}.{format_ext}"',
+            "Content-Length": str(content_length),
             "X-Content-Type-Options": "nosniff",
             "Cache-Control": cache_control,
         },

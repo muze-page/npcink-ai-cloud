@@ -236,7 +236,7 @@ export function buildAdminOperatorWatchItems(
     const severity = inputs.hostedModelGovernance.status === 'error' ? 'action-needed' : 'warn';
     items.push({
       title: inputs.hostedModelGovernance.firstAlertTitle || inputs.copy.hostedTitle,
-      scope: 'hosted.model_governance',
+      scope: 'runtime.telemetry_coverage',
       severity,
       reason:
         inputs.hostedModelGovernance.firstAlertSummary ||

@@ -57,9 +57,9 @@ Minimum field mapping:
 | Zhihu search | `search_zhihu` | `zhihu` | `web_search_provider` | `https://developer.zhihu.com` | `web-search.managed` |
 | URL reader enhancement | `search_jina_reader` | `jina_reader` | `web_search_provider` | `https://r.jina.ai` | `web-search.reader` |
 | Image source | `image_unsplash` | `unsplash` | `image_source_provider` | `https://api.unsplash.com` | `image-source.managed` |
-| Embedding, API-hosted | `embedding_siliconflow` | `siliconflow` | `embedding_provider` | `https://api.siliconflow.cn/v1` | `embed.default` |
-| Embedding, OpenAI-compatible | `embedding_openai` | `openai` | `embedding_provider` | upstream `/v1` URL | `embed.default` |
-| Embedding, self-hosted TEI | `embedding_tei` | `tei` | `embedding_provider` | TEI base URL | `embed.default` |
+| Model provider with embeddings | `siliconflow_env` | `siliconflow` | `siliconflow` | `https://api.siliconflow.cn/v1` | `text.ai`, `embed.default` |
+| Model provider with embeddings | `openai_env` | `openai` | `openai_compatible` | upstream `/v1` URL | `text.ai`, `embed.default` |
+| Self-hosted embedding model provider | `tei_env` | `tei` | `tei` | TEI base URL | `embed.default` |
 | Vector store | `vector_zilliz` | `zilliz` | `vector_store_provider` | Zilliz URI | `site-knowledge.vector-store` |
 
 Use at least one configured provider for each required capability. For search,

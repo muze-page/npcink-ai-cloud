@@ -8,7 +8,6 @@ import {
   BackofficePrimaryPanel,
   BackofficeSectionPanel,
   BackofficeStackCard,
-  BackofficeSummaryStrip,
 } from '@/components/backoffice/BackofficeScaffold';
 import { BackofficeFilterPill } from '@/components/backoffice/BackofficeFilterPill';
 import { BackofficeStatusBadge } from '@/components/backoffice/BackofficeStatusBadge';
@@ -17,21 +16,21 @@ import { useLocale } from '@/contexts/LocaleContext';
 import { resolveUiErrorMessage } from '@/lib/errors';
 import { generateIdempotencyKey } from '@/lib/idempotency';
 
-type ProfilePreferences = {
-  env_path: string;
-  requires_worker_restart_after_save: boolean;
-  audio_summary_text_profile_id: string;
-  audio_narration_profile_id: string;
-  audio_summary_audio_profile_id: string;
-  allowed: {
-    text_profile_ids: string[];
-    audio_profile_ids: string[];
-  };
+type ProviderConnectionProjection = {
+  provider_id: string;
+  display_name: string;
+  kind: string;
+  capability_ids: string[];
+  enabled: boolean;
+  configured: boolean;
+  status: string;
 };
 
 type RuntimeInstance = {
   instance_id: string;
   provider_id: string;
+  provider_display_name: string;
+  adapter_type: string;
   model_id: string;
   endpoint_variant: string;
   region: string;
@@ -63,6 +62,8 @@ type RoutingProfile = {
 type RoutingData = {
   available_text_instances: RuntimeInstance[];
   available_image_instances: RuntimeInstance[];
+  available_audio_instances: RuntimeInstance[];
+  available_embedding_instances: RuntimeInstance[];
   profiles: RoutingProfile[];
 };
 
@@ -71,7 +72,7 @@ type EditableRoutingProfile = RoutingProfile & {
 };
 
 type AbilityModelTab = 'wordpress' | 'cloud';
-type CloudAbilityMediaTab = 'text' | 'image' | 'audio' | 'video';
+type CloudAbilityMediaTab = 'text' | 'image' | 'vector' | 'audio' | 'video';
 type CloudAbilityRuntimeStatus = 'connected' | 'missing_provider' | 'planned' | 'unknown';
 
 type CloudAbilityRuntimeRow = {
@@ -91,20 +92,96 @@ type CloudAbilityRuntimeRow = {
   action: string;
 };
 
-function normalizeProfilePreferences(raw: any): ProfilePreferences | null {
-  if (!raw || typeof raw !== 'object') return null;
-  const allowed = raw.allowed && typeof raw.allowed === 'object' ? raw.allowed : {};
-  return {
-    env_path: String(raw.env_path ?? ''),
-    requires_worker_restart_after_save: Boolean(raw.requires_worker_restart_after_save),
-    audio_summary_text_profile_id: String(raw.audio_summary_text_profile_id ?? ''),
-    audio_narration_profile_id: String(raw.audio_narration_profile_id ?? ''),
-    audio_summary_audio_profile_id: String(raw.audio_summary_audio_profile_id ?? ''),
-    allowed: {
-      text_profile_ids: Array.isArray(allowed.text_profile_ids) ? allowed.text_profile_ids.map(String) : [],
-      audio_profile_ids: Array.isArray(allowed.audio_profile_ids) ? allowed.audio_profile_ids.map(String) : [],
-    },
+type AbilityModelRouteRow = {
+  profile: EditableRoutingProfile;
+  primaryInstance?: RuntimeInstance;
+  taskLabels: string[];
+  routeTypeLabel: string;
+};
+
+type AudioPreviewJob = {
+  run_id: string;
+  status: string;
+  trace_id?: string;
+  provider_id?: string;
+  model_id?: string;
+  instance_id?: string;
+  profile_id?: string;
+  error_code?: string;
+  error_message?: string;
+  result_ready?: boolean;
+  result?: {
+    audios?: Array<{
+      url?: string;
+      b64_json?: string;
+      mime_type?: string;
+      duration_seconds?: number;
+    }>;
   };
+};
+
+type AudioPreviewErrorState = {
+  message: string;
+  errorCode?: string;
+  siteId?: string;
+  siteStatus?: string;
+  runtimeErrorCode?: string;
+  providerId?: string;
+  modelId?: string;
+  instanceId?: string;
+  profileId?: string;
+  traceId?: string;
+  runId?: string;
+};
+
+type AbilityModelInspectorTab = 'policy' | 'preview';
+
+const MAX_DIALOG_CANDIDATE_OPTIONS = 24;
+
+function isModelProviderConnection(connection: ProviderConnectionProjection): boolean {
+  const capabilityProviderKinds = new Set([
+    'web_search_provider',
+    'image_source_provider',
+    'embedding_provider',
+    'rerank_provider',
+    'vector_store_provider',
+  ]);
+  if (capabilityProviderKinds.has(connection.kind)) return false;
+  return !connection.capability_ids.some((capabilityId) => (
+    capabilityId === 'web_search' ||
+    capabilityId === 'image_source' ||
+    capabilityId === 'embedding' ||
+    capabilityId === 'rerank' ||
+    capabilityId === 'vector_store'
+  ));
+}
+
+function normalizeProviderDisplayNames(raw: any): Record<string, string> {
+  const rows = Array.isArray(raw?.connections) ? raw.connections : [];
+  const ranked: Record<string, { label: string; score: number }> = {};
+  rows.forEach((item: any) => {
+    const connection: ProviderConnectionProjection = {
+      provider_id: String(item?.provider_id ?? ''),
+      display_name: String(item?.display_name ?? ''),
+      kind: String(item?.kind ?? ''),
+      capability_ids: Array.isArray(item?.capability_ids) ? item.capability_ids.map(String) : [],
+      enabled: Boolean(item?.enabled),
+      configured: Boolean(item?.configured),
+      status: String(item?.status ?? ''),
+    };
+    if (!isModelProviderConnection(connection)) return;
+    const providerId = connection.provider_id.trim();
+    const label = connection.display_name.trim();
+    if (!providerId || !label) return;
+    const score =
+      (connection.enabled ? 4 : 0) +
+      (connection.configured ? 2 : 0) +
+      (connection.status === 'ready' ? 1 : 0);
+    if (!ranked[providerId] || score > ranked[providerId].score) {
+      ranked[providerId] = { label, score };
+    }
+  });
+  return Object.fromEntries(Object.entries(ranked).map(([providerId, entry]) => [providerId, entry.label]));
 }
 
 function normalizeRoutingData(raw: any): RoutingData {
@@ -113,6 +190,8 @@ function normalizeRoutingData(raw: any): RoutingData {
   const normalizeInstance = (item: any): RuntimeInstance => ({
     instance_id: String(item?.instance_id ?? ''),
     provider_id: String(item?.provider_id ?? ''),
+    provider_display_name: String(item?.provider_display_name ?? ''),
+    adapter_type: String(item?.adapter_type ?? ''),
     model_id: String(item?.model_id ?? ''),
     endpoint_variant: String(item?.endpoint_variant ?? ''),
     region: String(item?.region ?? ''),
@@ -128,6 +207,12 @@ function normalizeRoutingData(raw: any): RoutingData {
       : [],
     available_image_instances: Array.isArray(data.available_image_instances)
       ? data.available_image_instances.map(normalizeInstance)
+      : [],
+    available_audio_instances: Array.isArray(data.available_audio_instances)
+      ? data.available_audio_instances.map(normalizeInstance)
+      : [],
+    available_embedding_instances: Array.isArray(data.available_embedding_instances)
+      ? data.available_embedding_instances.map(normalizeInstance)
       : [],
     profiles: Array.isArray(data.profiles)
       ? data.profiles.map((profile: any) => ({
@@ -155,7 +240,7 @@ function normalizeRoutingData(raw: any): RoutingData {
 
 function normalizeCloudAbilityRuntimeRows(raw: any): CloudAbilityRuntimeRow[] {
   const rows = Array.isArray(raw?.rows) ? raw.rows : [];
-  const mediaValues = new Set(['text', 'image', 'audio', 'video']);
+  const mediaValues = new Set(['text', 'image', 'vector', 'audio', 'video']);
   const statusValues = new Set(['connected', 'missing_provider', 'planned', 'unknown']);
   return rows.map((row: any): CloudAbilityRuntimeRow => {
     const media = String(row?.media ?? 'text');
@@ -203,6 +288,47 @@ function resolveAdminApiPayloadMessage(payload: any, fallback: string): string {
   return resolveUiErrorMessage(payload, fallback);
 }
 
+function normalizeAudioPreviewError(payload: any, fallback: string): AudioPreviewErrorState {
+  const data = payload && typeof payload === 'object' && payload.data && typeof payload.data === 'object'
+    ? payload.data
+    : {};
+  return {
+    message: resolveAdminApiPayloadMessage(payload, fallback),
+    errorCode: typeof payload?.error_code === 'string' ? payload.error_code : undefined,
+    siteId: typeof data.site_id === 'string' ? data.site_id : undefined,
+    siteStatus: typeof data.site_status === 'string' ? data.site_status : undefined,
+    runtimeErrorCode: typeof data.runtime_error_code === 'string' ? data.runtime_error_code : undefined,
+    providerId: typeof data.provider_id === 'string' ? data.provider_id : undefined,
+    modelId: typeof data.model_id === 'string' ? data.model_id : undefined,
+    instanceId: typeof data.instance_id === 'string' ? data.instance_id : undefined,
+    profileId: typeof data.profile_id === 'string' ? data.profile_id : undefined,
+    traceId: typeof data.trace_id === 'string' ? data.trace_id : undefined,
+    runId: typeof data.run_id === 'string' ? data.run_id : undefined,
+  };
+}
+
+function audioPreviewErrorFromJob(job: AudioPreviewJob | null, fallback: string): AudioPreviewErrorState | null {
+  if (!job || job.status !== 'failed') return null;
+  return {
+    message: job.error_message || fallback,
+    errorCode: job.error_code,
+    providerId: job.provider_id,
+    modelId: job.model_id,
+    instanceId: job.instance_id,
+    profileId: job.profile_id,
+    traceId: job.trace_id,
+    runId: job.run_id,
+  };
+}
+
+function audioPreviewSource(job: AudioPreviewJob | null): string {
+  const audio = job?.result?.audios?.[0];
+  if (!audio) return '';
+  if (audio.url) return `/api/admin/audio-preview?url=${encodeURIComponent(audio.url)}`;
+  if (audio.b64_json) return `data:${audio.mime_type || 'audio/mpeg'};base64,${audio.b64_json}`;
+  return '';
+}
+
 export default function AbilityModelsPage() {
   const { t } = useLocale();
   const text = useCallback(
@@ -214,7 +340,7 @@ export default function AbilityModelsPage() {
     [t]
   );
 
-  const [preferences, setPreferences] = useState<ProfilePreferences | null>(null);
+  const [providerDisplayNames, setProviderDisplayNames] = useState<Record<string, string>>({});
   const [routingData, setRoutingData] = useState<RoutingData | null>(null);
   const [routingDrafts, setRoutingDrafts] = useState<EditableRoutingProfile[]>([]);
   const [cloudAbilityRows, setCloudAbilityRows] = useState<CloudAbilityRuntimeRow[]>([]);
@@ -223,25 +349,36 @@ export default function AbilityModelsPage() {
   const [activeProfileId, setActiveProfileId] = useState('');
   const [loading, setLoading] = useState(true);
   const [loadingRouting, setLoadingRouting] = useState(true);
-  const [savingPreferences, setSavingPreferences] = useState(false);
   const [savingRouting, setSavingRouting] = useState(false);
   const [pageError, setPageError] = useState('');
   const [pageMessage, setPageMessage] = useState('');
   const [dialogError, setDialogError] = useState('');
   const [dialogMessage, setDialogMessage] = useState('');
+  const [modelProviderFilter, setModelProviderFilter] = useState('');
+  const [modelSearchQuery, setModelSearchQuery] = useState('');
+  const [cloudBindingDialogRow, setCloudBindingDialogRow] = useState<CloudAbilityRuntimeRow | null>(null);
+  const [cloudBindingProviderFilter, setCloudBindingProviderFilter] = useState('');
+  const [cloudBindingModelSearchQuery, setCloudBindingModelSearchQuery] = useState('');
+  const [savingCloudBinding, setSavingCloudBinding] = useState(false);
+  const [advancedRuntimePolicyOpen, setAdvancedRuntimePolicyOpen] = useState(false);
+  const [abilityModelInspectorTab, setAbilityModelInspectorTab] = useState<AbilityModelInspectorTab>('policy');
+  const [audioPreviewCreating, setAudioPreviewCreating] = useState(false);
+  const [audioPreviewJob, setAudioPreviewJob] = useState<AudioPreviewJob | null>(null);
+  const [audioPreviewError, setAudioPreviewError] = useState<AudioPreviewErrorState | null>(null);
+  const [audioPreviewText, setAudioPreviewText] = useState(() => text('audio_preview_sample_text', 'This is a short audio sample for checking the selected voice model.'));
 
-  const loadPreferences = useCallback(async () => {
+  const loadProviderDisplayNames = useCallback(async () => {
     setLoading(true);
     setPageError('');
     try {
       const response = await fetch('/api/admin/ai-resources', { credentials: 'include' });
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) {
-        throw new Error(resolveUiErrorMessage(payload, text('error_load_audio_models', 'Failed to load audio ability-model routes.')));
+        throw new Error(resolveUiErrorMessage(payload, text('error_load_provider_labels', 'Failed to load provider labels.')));
       }
-      setPreferences(normalizeProfilePreferences(payload.data?.profile_preferences));
+      setProviderDisplayNames(normalizeProviderDisplayNames(payload.data));
     } catch (error) {
-      setPageError(error instanceof Error ? error.message : text('error_load_audio_models', 'Failed to load audio ability-model routes.'));
+      setPageError(error instanceof Error ? error.message : text('error_load_provider_labels', 'Failed to load provider labels.'));
     } finally {
       setLoading(false);
     }
@@ -281,15 +418,17 @@ export default function AbilityModelsPage() {
   }, [text]);
 
   useEffect(() => {
-    void loadPreferences();
+    void loadProviderDisplayNames();
     void loadRouting();
     void loadCloudAbilityRuntimeProjection();
-  }, [loadCloudAbilityRuntimeProjection, loadPreferences, loadRouting]);
+  }, [loadCloudAbilityRuntimeProjection, loadProviderDisplayNames, loadRouting]);
 
   const runtimeInstancesById = useMemo(() => {
     const instances = [
       ...(routingData?.available_text_instances || []),
       ...(routingData?.available_image_instances || []),
+      ...(routingData?.available_audio_instances || []),
+      ...(routingData?.available_embedding_instances || []),
     ];
     return new Map(instances.map((instance) => [instance.instance_id, instance]));
   }, [routingData]);
@@ -297,7 +436,24 @@ export default function AbilityModelsPage() {
   const routingCandidateInstancesFor = useCallback((profile: RoutingProfile): RuntimeInstance[] => (
     profile.execution_kind === 'image_generation'
       ? routingData?.available_image_instances || []
-      : routingData?.available_text_instances || []
+      : profile.execution_kind === 'audio_generation'
+        ? routingData?.available_audio_instances || []
+        : (routingData?.available_text_instances || []).filter((instance) => {
+          const modelId = instance.model_id.toLowerCase();
+          if (/(speech|audio|voice|tts|ocr|vision|image|embed)/i.test(modelId)) {
+            return false;
+          }
+          const featureTokens = [
+            instance.model_feature,
+            instance.endpoint_variant,
+            ...instance.capability_tags,
+          ].join(' ').toLowerCase();
+          if (featureTokens.includes('text')) return true;
+          if (featureTokens.includes('image') || featureTokens.includes('audio') || featureTokens.includes('video')) {
+            return false;
+          }
+          return true;
+        })
   ), [routingData]);
 
   const abilityTaskLabel = useCallback((taskId: string): string => {
@@ -312,9 +468,12 @@ export default function AbilityModelsPage() {
       comment_moderation: aiText('ability_task_comment_moderation', 'Comment moderation'),
       content_classification: aiText('ability_task_content_classification', 'Content classification'),
       image_generation: aiText('ability_task_image_generation', 'Image generation'),
+      audio_summary_script: text('cloud_ability_audio_summary_script', 'Audio summary script'),
+      article_narration: text('route_article_narration_audio', 'Article narration audio'),
+      article_audio_summary: text('route_audio_summary_playback', 'Audio summary playback'),
     };
     return labels[taskId] || taskId;
-  }, [aiText]);
+  }, [aiText, text]);
 
   const abilityTaskDescription = useCallback((taskId: string): string => {
     const descriptions: Record<string, string> = {
@@ -328,9 +487,12 @@ export default function AbilityModelsPage() {
       comment_moderation: aiText('ability_task_comment_moderation_desc', 'Classify comments for moderation assistance.'),
       content_classification: aiText('ability_task_content_classification_desc', 'Suggest tags and categories from content context.'),
       image_generation: aiText('ability_task_image_generation_desc', 'Generate image candidates for review before WordPress use.'),
+      audio_summary_script: text('audio_summary_text_desc', 'Text model configuration used before generating audio summaries.'),
+      article_narration: text('audio_narration_desc', 'Audio model configuration used for article narration.'),
+      article_audio_summary: text('audio_summary_playback_desc', 'Audio model configuration used for summary playback.'),
     };
     return descriptions[taskId] || aiText('ability_task_default_desc', 'Cloud runtime task from the WordPress AI connector.');
-  }, [aiText]);
+  }, [aiText, text]);
 
   const abilityModelFeatureLabel = useCallback((feature: string): string => {
     const normalized = feature.trim();
@@ -340,8 +502,14 @@ export default function AbilityModelsPage() {
     if (normalized === 'text_generation' || normalized === 'text_generations' || normalized === 'text') {
       return aiText('ability_model_feature_text_generation', 'Text generation');
     }
+    if (normalized === 'audio_generation' || normalized === 'audio_generations' || normalized === 'audio') {
+      return text('route_type_audio', 'Audio');
+    }
+    if (normalized === 'embedding' || normalized === 'embeddings') {
+      return text('cloud_model_kind_embedding', 'Embedding model');
+    }
     return normalized || aiText('ability_model_feature_unknown', 'Unknown');
-  }, [aiText]);
+  }, [aiText, text]);
 
   const abilityModelRegionLabel = useCallback((region: string): string => {
     const normalized = region.trim();
@@ -356,6 +524,26 @@ export default function AbilityModelsPage() {
     if (normalized === 'warning') return aiText('status_warning_label', 'Warning');
     return normalized || aiText('status_not_observed', 'not observed');
   }, [aiText]);
+
+  const providerDisplayName = useCallback((providerId: string): string => {
+    const normalized = providerId.trim();
+    return providerDisplayNames[normalized] || normalized;
+  }, [providerDisplayNames]);
+
+  const modelRouteLabel = useCallback((providerId?: string, modelId?: string, providerLabelOverride?: string): string => {
+    const providerLabel = providerLabelOverride?.trim() || (providerId ? providerDisplayName(providerId) : '');
+    const normalizedModelId = String(modelId || '').trim();
+    if (!providerLabel && !normalizedModelId) return '-';
+    if (!providerLabel) return normalizedModelId;
+    if (!normalizedModelId) return providerLabel;
+    return `${providerLabel} / ${normalizedModelId}`;
+  }, [providerDisplayName]);
+
+  const runtimeModelRouteLabel = useCallback((instance?: RuntimeInstance): string => (
+    instance
+      ? modelRouteLabel(instance.provider_id, instance.model_id, instance.provider_display_name)
+      : '-'
+  ), [modelRouteLabel]);
 
   const abilityModelInstanceDetail = useCallback((instance: RuntimeInstance): string => (
     aiText('ability_model_instance_detail', 'Instance: {{instance}} · Capability: {{feature}} · Region: {{region}} · Status: {{status}}', {
@@ -387,9 +575,9 @@ export default function AbilityModelsPage() {
       evidence_preflight: text('cloud_ability_external_evidence_desc', 'Prepare evidence grounding before handing control back to the local WordPress path.'),
       generated_image_candidates: text('cloud_ability_generated_image_candidates_desc', 'Generate reviewable image candidates while WordPress keeps approval and final media use.'),
       image_source_candidates: text('cloud_ability_image_source_candidates_desc', 'Search external image sources and return reviewable media candidates.'),
-      audio_summary_script: text('cloud_ability_audio_summary_script_desc', 'Text profile used before generating audio summaries.'),
-      article_narration: text('cloud_ability_article_narration_desc', 'Audio profile used for article narration.'),
-      article_audio_summary: text('cloud_ability_article_audio_summary_desc', 'Audio profile used for long-form summary playback.'),
+      audio_summary_script: text('cloud_ability_audio_summary_script_desc', 'Text model configuration used before generating audio summaries.'),
+      article_narration: text('cloud_ability_article_narration_desc', 'Audio model configuration used for article narration.'),
+      article_audio_summary: text('cloud_ability_article_audio_summary_desc', 'Audio model configuration used for long-form summary playback.'),
     };
     return descriptions[row.ability_id] || row.description;
   }, [text]);
@@ -407,6 +595,22 @@ export default function AbilityModelsPage() {
     return labels[modelKind] || modelKind || text('cloud_model_kind_runtime', 'Runtime model');
   }, [text]);
 
+  const cloudAbilityRuntimeLabel = useCallback((row: CloudAbilityRuntimeRow): string => {
+    if (row.provider_id.trim() || row.model_id.trim()) {
+      return modelRouteLabel(row.provider_id, row.model_id);
+    }
+    if (row.model_kind === 'search_text_model') {
+      return text('cloud_runtime_managed_search_text', 'Cloud-managed search service');
+    }
+    if (row.model_kind === 'image_source_provider') {
+      return text('cloud_runtime_managed_image_source', 'Cloud-managed image source');
+    }
+    if (row.profile_id.trim()) {
+      return text('cloud_runtime_managed_projection', 'Cloud-managed runtime');
+    }
+    return text('cloud_native_runtime_unassigned', 'Not connected');
+  }, [modelRouteLabel, text]);
+
   const cloudAbilityStatusLabel = useCallback((status: CloudAbilityRuntimeStatus): string => {
     if (status === 'connected') return text('cloud_native_status_connected', 'Connected');
     if (status === 'missing_provider') return text('cloud_native_status_missing_provider', 'Missing provider');
@@ -414,18 +618,104 @@ export default function AbilityModelsPage() {
     return text('cloud_native_status_unknown', 'Unknown');
   }, [text]);
 
-  const abilityModelRows = useMemo(() => routingDrafts.flatMap((profile) => {
+  const cloudAbilityStatusClassName = useCallback((status: CloudAbilityRuntimeStatus): string => {
+    if (status === 'missing_provider') return 'text-amber-700 dark:text-amber-300';
+    if (status === 'planned') return 'text-slate-500 dark:text-slate-400';
+    if (status === 'unknown') return 'text-rose-700 dark:text-rose-300';
+    return 'text-slate-600 dark:text-slate-300';
+  }, []);
+
+  const abilityRouteTitle = useCallback((profile: RoutingProfile): string => {
+    const labels: Record<string, string> = {
+      'content.short_text': text('route_content_short_text', 'Short text suggestions'),
+      'content.editorial': text('route_content_editorial', 'Editorial assistance'),
+      'content.classification': text('route_content_classification', 'Content classification'),
+      'media.image_generation': text('route_media_image_generation', 'Image generation candidates'),
+      'audio.generation': text('route_audio_generation', 'Audio generation'),
+    };
+    if (profile.routing_intent && labels[profile.routing_intent]) return labels[profile.routing_intent];
+    if (profile.tasks.length === 1) return abilityTaskLabel(profile.tasks[0]);
+    if (profile.tasks.length > 1) {
+      return aiText('ability_model_group_title', '{{name}} 等 {{count}} 个能力', {
+        name: abilityTaskLabel(profile.tasks[0]),
+        count: String(profile.tasks.length),
+      });
+    }
+    return profile.label || profile.profile_id;
+  }, [abilityTaskLabel, aiText, text]);
+
+  const abilityRouteTypeLabel = useCallback((profile: RoutingProfile): string => {
+    if (profile.routing_intent === 'media.image_generation' || profile.execution_kind === 'image_generation') {
+      return text('route_type_image', 'Image');
+    }
+    if (profile.routing_intent.startsWith('audio.') || profile.execution_kind === 'audio_generation') {
+      return text('route_type_audio', 'Audio');
+    }
+    if (profile.routing_intent === 'content.classification') {
+      return text('route_type_classification', 'Classification');
+    }
+    if (profile.routing_intent === 'content.editorial') {
+      return text('route_type_editorial', 'Editorial');
+    }
+    return text('route_type_text', 'Text');
+  }, [text]);
+
+  const abilityRouteStatus = useCallback((profile: RoutingProfile, primaryInstance?: RuntimeInstance): {
+    label: string;
+    status: string;
+  } => {
+    if (!primaryInstance) {
+      return { label: text('status_unconfigured', 'Not configured'), status: 'warning' };
+    }
+    const normalizedHealth = primaryInstance.health_status.trim().toLowerCase();
+    if (normalizedHealth === 'error') {
+      return { label: abilityModelHealthLabel(primaryInstance.health_status), status: 'error' };
+    }
+    if (normalizedHealth === 'degraded' || normalizedHealth === 'warning') {
+      return { label: abilityModelHealthLabel(primaryInstance.health_status), status: 'warning' };
+    }
+    const normalizedProfileStatus = profile.status.trim().toLowerCase();
+    if (normalizedProfileStatus && !['active', 'ready', 'configured', 'ok'].includes(normalizedProfileStatus)) {
+      return { label: text('status_needs_config', 'Needs config'), status: 'pending' };
+    }
+    return { label: text('status_ok', 'Normal'), status: 'success' };
+  }, [abilityModelHealthLabel, text]);
+
+  function renderRouteStatus(routeStatus: { label: string; status: string }) {
+    if (routeStatus.status === 'success') {
+      return (
+        <span className="text-xs font-medium text-slate-500 dark:text-slate-400">
+          {routeStatus.label}
+        </span>
+      );
+    }
+    return <BackofficeStatusBadge label={routeStatus.label} status={routeStatus.status} />;
+  }
+
+  const abilityRoutePolicySummary = useCallback((profile: RoutingProfile): string => {
+    const timeoutSeconds = Math.round(profile.timeout_ms / 1000);
+    const fallbackLabel = profile.allow_fallback
+      ? text('policy_auto_fallback_enabled', 'Auto fallback enabled')
+      : text('policy_auto_fallback_disabled', 'Fallback disabled');
+    const retryLabel = profile.max_retries > 0
+      ? text('policy_retry_suffix', ' · retry {{retries}}', { retries: String(profile.max_retries) })
+      : '';
+    return text('runtime_policy_summary', '{{timeout}}s · {{fallback}}{{retry}}', {
+      fallback: fallbackLabel,
+      timeout: String(timeoutSeconds),
+      retry: retryLabel,
+    });
+  }, [text]);
+
+  const abilityModelRows: AbilityModelRouteRow[] = useMemo(() => routingDrafts.map((profile) => {
     const primaryInstance = runtimeInstancesById.get(profile.candidate_instance_ids[0] || '');
-    const fallbackCount = Math.max(0, profile.candidate_instance_ids.length - 1);
-    return profile.tasks.map((taskId) => ({
-      taskId,
-      label: abilityTaskLabel(taskId),
-      description: abilityTaskDescription(taskId),
+    return {
       profile,
       primaryInstance,
-      fallbackCount,
-    }));
-  }), [abilityTaskDescription, abilityTaskLabel, routingDrafts, runtimeInstancesById]);
+      taskLabels: profile.tasks.map(abilityTaskLabel),
+      routeTypeLabel: abilityRouteTypeLabel(profile),
+    };
+  }), [abilityRouteTypeLabel, abilityTaskLabel, routingDrafts, runtimeInstancesById]);
 
   const activeProfile = useMemo(
     () => routingDrafts.find((profile) => profile.profile_id === activeProfileId) || null,
@@ -434,42 +724,188 @@ export default function AbilityModelsPage() {
 
   const activeProfileTitle = useMemo(() => {
     if (!activeProfile) return '';
-    if (activeProfile.tasks.length === 1) return abilityTaskLabel(activeProfile.tasks[0]);
-    if (activeProfile.tasks.length > 1) {
-      return aiText('ability_model_group_title', '{{name}} 等 {{count}} 个能力', {
-        name: abilityTaskLabel(activeProfile.tasks[0]),
-        count: String(activeProfile.tasks.length),
+    return abilityRouteTitle(activeProfile);
+  }, [abilityRouteTitle, activeProfile]);
+
+  const activeDialogModelData = useMemo(() => {
+    if (!activeProfile) return null;
+    const selectedIds = [activeProfile.candidate_instance_ids[0] || '', activeProfile.candidate_instance_ids[1] || ''];
+    const selectedInstances = selectedIds
+      .map((instanceId) => runtimeInstancesById.get(instanceId))
+      .filter((instance): instance is RuntimeInstance => Boolean(instance));
+    const candidates = routingCandidateInstancesFor(activeProfile);
+    const allCandidates = [
+      ...selectedInstances.filter((selected) => !candidates.some((candidate) => candidate.instance_id === selected.instance_id)),
+      ...candidates,
+    ].sort((left, right) => {
+      if (selectedIds.includes(left.instance_id) && !selectedIds.includes(right.instance_id)) return -1;
+      if (!selectedIds.includes(left.instance_id) && selectedIds.includes(right.instance_id)) return 1;
+      const leftHealthy = left.health_status === 'healthy' ? 0 : 1;
+      const rightHealthy = right.health_status === 'healthy' ? 0 : 1;
+      if (leftHealthy !== rightHealthy) return leftHealthy - rightHealthy;
+      return runtimeModelRouteLabel(left).localeCompare(runtimeModelRouteLabel(right));
+    });
+    const candidateCountsByProvider = allCandidates.reduce((counts, instance) => {
+      counts.set(instance.provider_id, (counts.get(instance.provider_id) || 0) + 1);
+      return counts;
+    }, new Map<string, number>());
+    const providerOptionsById = new Map<string, { providerId: string; label: string; candidateCount: number }>();
+    Object.entries(providerDisplayNames).forEach(([providerId, label]) => {
+      providerOptionsById.set(providerId, {
+        providerId,
+        label,
+        candidateCount: candidateCountsByProvider.get(providerId) || 0,
       });
-    }
-    return activeProfile.label;
-  }, [abilityTaskLabel, activeProfile, aiText]);
+    });
+    allCandidates.forEach((instance) => {
+      if (providerOptionsById.has(instance.provider_id)) return;
+      providerOptionsById.set(instance.provider_id, {
+        providerId: instance.provider_id,
+        label: instance.provider_display_name.trim() || providerDisplayName(instance.provider_id),
+        candidateCount: candidateCountsByProvider.get(instance.provider_id) || 0,
+      });
+    });
+    const providerOptions = Array.from(providerOptionsById.values())
+      .sort((left, right) => left.label.localeCompare(right.label));
+    const normalizedSearch = modelSearchQuery.trim().toLowerCase();
+    const filteredCandidates = allCandidates.filter((instance) => {
+      if (modelProviderFilter && instance.provider_id !== modelProviderFilter) return false;
+      if (!normalizedSearch) return true;
+      const haystack = [
+        instance.provider_display_name || providerDisplayName(instance.provider_id),
+        instance.provider_id,
+        instance.adapter_type,
+        instance.model_id,
+        instance.instance_id,
+        instance.endpoint_variant,
+        instance.model_feature,
+        instance.health_status,
+        ...instance.capability_tags,
+      ].join(' ').toLowerCase();
+      return haystack.includes(normalizedSearch);
+    }).slice(0, MAX_DIALOG_CANDIDATE_OPTIONS);
+    return {
+      selectedIds,
+      selectedInstances,
+      allCandidates,
+      filteredCandidates,
+      providerOptions,
+    };
+  }, [
+    activeProfile,
+    modelProviderFilter,
+    modelSearchQuery,
+    providerDisplayName,
+    providerDisplayNames,
+    routingCandidateInstancesFor,
+    runtimeInstancesById,
+    runtimeModelRouteLabel,
+  ]);
 
-  const metrics = useMemo(() => [
-    {
-      label: text('metric_audio_profiles', 'Audio profiles'),
-      value: preferences ? 3 : 0,
-      detail: text('metric_audio_profiles_detail', 'Summary, narration, and playback'),
-    },
-    {
-      label: aiText('ability_models_metric_abilities', 'Abilities'),
-      value: abilityModelRows.length,
-      detail: aiText('ability_models_metric_abilities_detail', 'WordPress AI connector tasks'),
-    },
-    {
-      label: aiText('ability_models_metric_text_instances', 'Text models'),
-      value: routingData?.available_text_instances.length || 0,
-      detail: aiText('ability_models_metric_text_instances_detail', 'Available text runtime instances'),
-    },
-    {
-      label: aiText('ability_models_metric_image_instances', 'Image models'),
-      value: routingData?.available_image_instances.length || 0,
-      detail: aiText('ability_models_metric_image_instances_detail', 'Available image runtime instances'),
-    },
-  ], [abilityModelRows.length, aiText, preferences, routingData, text]);
+  const activeProfileIsAudioGeneration = Boolean(
+    activeProfile && (
+      activeProfile.execution_kind === 'audio_generation' ||
+      activeProfile.routing_intent.startsWith('audio.')
+    )
+  );
+  const activeInspectorTab: AbilityModelInspectorTab = activeProfileIsAudioGeneration ? abilityModelInspectorTab : 'policy';
+  const activeAudioPreviewSource = audioPreviewSource(audioPreviewJob);
+  const activeAudioPreviewError = audioPreviewError ?? audioPreviewErrorFromJob(
+    audioPreviewJob,
+    text('audio_preview_error_failed_job', 'Audio preview generation failed.')
+  );
+  const activeAudioPreviewEvidence = activeAudioPreviewError
+    ? [
+      [text('audio_preview_error_code', 'Error code'), activeAudioPreviewError.errorCode],
+      [text('audio_preview_site', 'Site'), activeAudioPreviewError.siteId],
+      [text('audio_preview_site_status', 'Site status'), activeAudioPreviewError.siteStatus],
+      [text('audio_preview_runtime_error_code', 'Runtime error'), activeAudioPreviewError.runtimeErrorCode],
+      [text('audio_preview_model', 'Preview model'), [activeAudioPreviewError.providerId, activeAudioPreviewError.modelId].filter(Boolean).join(' / ')],
+      [text('audio_preview_instance', 'Instance'), activeAudioPreviewError.instanceId],
+      [text('audio_preview_profile', 'Route'), activeAudioPreviewError.profileId],
+      [text('audio_preview_trace', 'Trace'), activeAudioPreviewError.traceId],
+      [text('audio_preview_run', 'Run'), activeAudioPreviewError.runId],
+    ].filter((item): item is [string, string] => Boolean(item[1]))
+    : [];
+  const activeAudioPreviewStatusLabel = audioPreviewJob?.status === 'succeeded'
+    ? text('audio_preview_status_succeeded', 'Preview ready')
+    : audioPreviewJob?.status === 'failed'
+      ? text('audio_preview_status_failed', 'Preview failed')
+      : audioPreviewJob?.status
+        ? text('audio_preview_status_running', 'Generating')
+        : '';
+  const audioPreviewTextLength = audioPreviewText.trim().length;
 
-  function updatePreferences(patch: Partial<ProfilePreferences>) {
-    setPreferences((current) => current ? { ...current, ...patch } : current);
-  }
+  const activeCloudBindingModelData = useMemo(() => {
+    if (!cloudBindingDialogRow) return null;
+    const candidates = [...(routingData?.available_embedding_instances || [])].sort((left, right) => {
+      const leftSelected = left.provider_id === cloudBindingDialogRow.provider_id && left.model_id === cloudBindingDialogRow.model_id;
+      const rightSelected = right.provider_id === cloudBindingDialogRow.provider_id && right.model_id === cloudBindingDialogRow.model_id;
+      if (leftSelected && !rightSelected) return -1;
+      if (!leftSelected && rightSelected) return 1;
+      const leftHealthy = left.health_status === 'healthy' ? 0 : 1;
+      const rightHealthy = right.health_status === 'healthy' ? 0 : 1;
+      if (leftHealthy !== rightHealthy) return leftHealthy - rightHealthy;
+      return runtimeModelRouteLabel(left).localeCompare(runtimeModelRouteLabel(right));
+    });
+    const candidateCountsByProvider = candidates.reduce((counts, instance) => {
+      counts.set(instance.provider_id, (counts.get(instance.provider_id) || 0) + 1);
+      return counts;
+    }, new Map<string, number>());
+    const providerOptions = Array.from(candidateCountsByProvider.entries())
+      .map(([providerId, candidateCount]) => ({
+        providerId,
+        label: candidates.find((instance) => instance.provider_id === providerId)?.provider_display_name.trim()
+          || providerDisplayName(providerId),
+        candidateCount,
+      }))
+      .sort((left, right) => left.label.localeCompare(right.label));
+    const normalizedSearch = cloudBindingModelSearchQuery.trim().toLowerCase();
+    const filteredCandidates = candidates.filter((instance) => {
+      if (cloudBindingProviderFilter && instance.provider_id !== cloudBindingProviderFilter) return false;
+      if (!normalizedSearch) return true;
+      const haystack = [
+        instance.provider_display_name || providerDisplayName(instance.provider_id),
+        instance.provider_id,
+        instance.adapter_type,
+        instance.model_id,
+        instance.instance_id,
+        instance.endpoint_variant,
+        instance.model_feature,
+        instance.health_status,
+        ...instance.capability_tags,
+      ].join(' ').toLowerCase();
+      return haystack.includes(normalizedSearch);
+    }).slice(0, MAX_DIALOG_CANDIDATE_OPTIONS);
+    return {
+      candidates,
+      filteredCandidates,
+      providerOptions,
+    };
+  }, [
+    cloudBindingDialogRow,
+    cloudBindingModelSearchQuery,
+    cloudBindingProviderFilter,
+    providerDisplayName,
+    routingData,
+    runtimeModelRouteLabel,
+  ]);
+
+  const abilityScenarioCount = useMemo(
+    () => routingDrafts.reduce((count, profile) => count + profile.tasks.length, 0),
+    [routingDrafts]
+  );
+  const routeCount = routingDrafts.length;
+  const modelCandidateCount =
+    (routingData?.available_text_instances.length || 0) +
+    (routingData?.available_image_instances.length || 0) +
+    (routingData?.available_audio_instances.length || 0) +
+    (routingData?.available_embedding_instances.length || 0);
+  const headerSummary = text('header_summary', '{{abilities}} ability scenarios / {{routes}} routes / {{models}} model candidates', {
+    abilities: String(abilityScenarioCount),
+    routes: String(routeCount),
+    models: String(modelCandidateCount),
+  });
 
   function updateRoutingDraft(profileId: string, patch: Partial<EditableRoutingProfile>) {
     setRoutingDrafts((current) =>
@@ -492,35 +928,6 @@ export default function AbilityModelsPage() {
         };
       })
     );
-  }
-
-  async function saveProfilePreferences() {
-    if (!preferences) return;
-    setSavingPreferences(true);
-    setPageError('');
-    setPageMessage('');
-    try {
-      const response = await fetch('/api/admin/ai-resources/profile-preferences', {
-        method: 'POST',
-        credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          audio_summary_text_profile_id: preferences.audio_summary_text_profile_id,
-          audio_narration_profile_id: preferences.audio_narration_profile_id,
-          audio_summary_audio_profile_id: preferences.audio_summary_audio_profile_id,
-        }),
-      });
-      const payload = await response.json().catch(() => ({}));
-      if (!response.ok) {
-        throw new Error(resolveUiErrorMessage(payload, aiText('error_save_preferences', 'Failed to save profile preferences.')));
-      }
-      setPreferences(normalizeProfilePreferences(payload.data?.profile_preferences));
-      setPageMessage(aiText('message_preferences_saved', 'Profile preferences saved. Restart worker processes for queued runs to pick up the same values.'));
-    } catch (error) {
-      setPageError(error instanceof Error ? error.message : aiText('error_save_preferences', 'Failed to save profile preferences.'));
-    } finally {
-      setSavingPreferences(false);
-    }
   }
 
   async function saveAbilityModelProfile(profileId: string) {
@@ -570,8 +977,143 @@ export default function AbilityModelsPage() {
     }
   }
 
+  async function saveCloudAbilityRuntimeBinding(instanceId: string) {
+    if (!cloudBindingDialogRow) return;
+    setSavingCloudBinding(true);
+    setDialogError('');
+    setDialogMessage('');
+    setPageError('');
+    setPageMessage('');
+    try {
+      const response = await fetch('/api/admin/ability-models/runtime-binding', {
+        method: 'POST',
+        credentials: 'include',
+        headers: {
+          'Content-Type': 'application/json',
+          'Idempotency-Key': generateIdempotencyKey('ability_models_runtime_binding'),
+        },
+        body: JSON.stringify({
+          ability_id: cloudBindingDialogRow.ability_id,
+          instance_id: instanceId,
+        }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(resolveAdminApiPayloadMessage(payload, text('error_save_cloud_binding', 'Failed to save runtime model binding.')));
+      }
+      const updatedRows = normalizeCloudAbilityRuntimeRows(payload.data);
+      setCloudAbilityRows(updatedRows);
+      setCloudBindingDialogRow(
+        updatedRows.find((row) => row.ability_id === cloudBindingDialogRow.ability_id) || cloudBindingDialogRow
+      );
+      setDialogMessage(text('message_cloud_binding_saved', 'Runtime model binding saved.'));
+    } catch (error) {
+      setDialogError(error instanceof Error ? error.message : text('error_save_cloud_binding', 'Failed to save runtime model binding.'));
+    } finally {
+      setSavingCloudBinding(false);
+    }
+  }
+
+  const loadAudioPreviewJob = useCallback(async (runId: string) => {
+    try {
+      const response = await fetch(`/api/admin/audio-jobs/${encodeURIComponent(runId)}`, {
+        credentials: 'include',
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        setAudioPreviewError(normalizeAudioPreviewError(payload, text('audio_preview_error_load', 'Failed to load audio preview.')));
+        return;
+      }
+      setAudioPreviewJob(payload.data as AudioPreviewJob);
+    } catch (error) {
+      setAudioPreviewError({
+        message: error instanceof Error ? error.message : text('audio_preview_error_load', 'Failed to load audio preview.'),
+      });
+    }
+  }, [text]);
+
+  async function createAudioPreview() {
+    if (!activeProfile || !activeProfileIsAudioGeneration) return;
+    const previewInstanceId = activeProfile.candidate_instance_ids[0] || '';
+    if (!previewInstanceId) {
+      setAudioPreviewError({ message: text('audio_preview_error_no_model', 'Select a primary audio model before previewing.') });
+      return;
+    }
+    const previewText = audioPreviewText.trim();
+    if (previewText.length < 10) {
+      setAudioPreviewError({ message: text('audio_preview_error_text_required', 'Enter at least 10 characters for the audio preview.') });
+      return;
+    }
+    setAudioPreviewCreating(true);
+    setAudioPreviewError(null);
+    setAudioPreviewJob(null);
+    try {
+      const response = await fetch('/api/admin/audio-jobs', {
+        method: 'POST',
+        credentials: 'include',
+        headers: {
+          'Content-Type': 'application/json',
+          'Idempotency-Key': generateIdempotencyKey('ability_audio_preview'),
+        },
+        body: JSON.stringify({
+          intent: 'article_narration',
+          title: text('audio_preview_title', 'Audio model preview'),
+          body: previewText,
+          format: 'mp3',
+          preview_instance_id: previewInstanceId,
+        }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        setAudioPreviewError(normalizeAudioPreviewError(payload, text('audio_preview_error_create', 'Failed to create audio preview.')));
+        return;
+      }
+      setAudioPreviewJob(payload.data as AudioPreviewJob);
+    } catch (error) {
+      setAudioPreviewError({
+        message: error instanceof Error ? error.message : text('audio_preview_error_create', 'Failed to create audio preview.'),
+      });
+    } finally {
+      setAudioPreviewCreating(false);
+    }
+  }
+
+  useEffect(() => {
+    if (!audioPreviewJob?.run_id || ['succeeded', 'failed', 'canceled'].includes(audioPreviewJob.status)) {
+      return;
+    }
+    const timer = window.setInterval(() => {
+      void loadAudioPreviewJob(audioPreviewJob.run_id);
+    }, 2000);
+    return () => window.clearInterval(timer);
+  }, [audioPreviewJob?.run_id, audioPreviewJob?.status, loadAudioPreviewJob]);
+
   function openAbilityModelDialog(profileId: string) {
+    const profile = routingDrafts.find((item) => item.profile_id === profileId);
     setActiveProfileId(profileId);
+    setModelProviderFilter('');
+    setModelSearchQuery('');
+    setAdvancedRuntimePolicyOpen(false);
+    setAbilityModelInspectorTab(
+      profile && (profile.execution_kind === 'audio_generation' || profile.routing_intent.startsWith('audio.'))
+        ? 'preview'
+        : 'policy'
+    );
+    setDialogError('');
+    setDialogMessage('');
+    setPageError('');
+    setPageMessage('');
+    setAudioPreviewJob(null);
+    setAudioPreviewError(null);
+    setAudioPreviewText(text('audio_preview_sample_text', 'This is a short audio sample for checking the selected voice model.'));
+    setAudioPreviewCreating(false);
+  }
+
+  function openCloudBindingDialog(row: CloudAbilityRuntimeRow) {
+    if (!row.can_configure) return;
+    setCloudBindingDialogRow(row);
+    setCloudBindingProviderFilter('');
+    setCloudBindingModelSearchQuery('');
     setDialogError('');
     setDialogMessage('');
     setPageError('');
@@ -580,38 +1122,25 @@ export default function AbilityModelsPage() {
 
   function closeAbilityModelDialog() {
     setActiveProfileId('');
+    setModelProviderFilter('');
+    setModelSearchQuery('');
+    setAdvancedRuntimePolicyOpen(false);
+    setAbilityModelInspectorTab('policy');
+    setDialogError('');
+    setDialogMessage('');
+    setAudioPreviewJob(null);
+    setAudioPreviewError(null);
+    setAudioPreviewText(text('audio_preview_sample_text', 'This is a short audio sample for checking the selected voice model.'));
+    setAudioPreviewCreating(false);
+  }
+
+  function closeCloudBindingDialog() {
+    setCloudBindingDialogRow(null);
+    setCloudBindingProviderFilter('');
+    setCloudBindingModelSearchQuery('');
     setDialogError('');
     setDialogMessage('');
   }
-
-  const audioPreferenceRows = preferences
-    ? [
-        {
-          id: 'audio_summary_text',
-          label: aiText('field_audio_summary_text_profile', 'Audio summary text profile'),
-          description: text('audio_summary_text_desc', 'Text model profile used before generating audio summaries.'),
-          value: preferences.audio_summary_text_profile_id,
-          options: preferences.allowed.text_profile_ids,
-          update: (value: string) => updatePreferences({ audio_summary_text_profile_id: value }),
-        },
-        {
-          id: 'audio_narration',
-          label: aiText('field_article_narration_audio_profile', 'Article narration audio profile'),
-          description: text('audio_narration_desc', 'Audio model profile used for article narration.'),
-          value: preferences.audio_narration_profile_id,
-          options: preferences.allowed.audio_profile_ids,
-          update: (value: string) => updatePreferences({ audio_narration_profile_id: value }),
-        },
-        {
-          id: 'audio_summary_playback',
-          label: aiText('field_audio_summary_playback_profile', 'Audio summary playback profile'),
-          description: text('audio_summary_playback_desc', 'Audio model profile used for summary playback.'),
-          value: preferences.audio_summary_audio_profile_id,
-          options: preferences.allowed.audio_profile_ids,
-          update: (value: string) => updatePreferences({ audio_summary_audio_profile_id: value }),
-        },
-      ]
-    : [];
 
   const activeCloudNativeAbilityRows = cloudAbilityRows.filter((row) => row.media === activeCloudMediaTab);
 
@@ -625,10 +1154,15 @@ export default function AbilityModelsPage() {
         eyebrow={text('eyebrow', 'Runtime model routing')}
         title={text('title', 'Ability-model routing')}
         description={text('description', 'Configure shared plugin ability-to-model routing and Cloud-native runtime model bindings.')}
-        aside={<BackofficeStatusBadge label={text('badge_runtime_binding', 'Runtime binding')} status="success" />}
+        aside={(
+          <div className="flex flex-col items-start gap-2 xl:items-end">
+            <BackofficeStatusBadge label={text('badge_runtime_binding', 'Runtime binding')} status="success" />
+            <p className="text-sm font-medium text-slate-600 dark:text-slate-300">
+              {headerSummary}
+            </p>
+          </div>
+        )}
         contentClassName="py-5 md:py-5"
-        summary={<BackofficeSummaryStrip items={metrics} />}
-        summaryClassName="px-5 py-3 md:px-7 md:py-3"
       >
         {pageMessage ? (
           <BackofficeStackCard className="border-emerald-200 bg-emerald-50 text-sm text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950/25 dark:text-emerald-200">
@@ -662,10 +1196,10 @@ export default function AbilityModelsPage() {
         <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
           <div>
             <h2 className="text-lg font-semibold text-slate-950 dark:text-white">
-              {text('wordpress_title', 'Plugin ability-model routes')}
+              {text('wordpress_title', 'WordPress plugin AI ability-model routes')}
             </h2>
             <p className="mt-1 text-sm leading-6 text-slate-600 dark:text-slate-300">
-              {aiText('ability_models_desc', 'Plugin ability tasks mapped to shared Cloud runtime profiles and model instances. Plugin-specific overrides can be added later when a plugin needs a different model.')}
+              {aiText('ability_models_desc', 'WordPress plugin AI ability scenarios mapped to Cloud runtime model configurations. Plugin-specific overrides can be added later when a plugin needs a different model.')}
             </p>
           </div>
           <button
@@ -678,46 +1212,62 @@ export default function AbilityModelsPage() {
           </button>
         </div>
         <div className="mt-4 overflow-hidden rounded-lg border border-slate-200 dark:border-slate-800">
-          <div className="grid grid-cols-[8rem_1.4fr_1fr_1.4fr_8rem_8rem] gap-3 border-b border-slate-200 bg-slate-50 px-4 py-3 text-xs font-semibold uppercase tracking-[0.16em] text-slate-500 dark:border-slate-800 dark:bg-slate-900/70 dark:text-slate-400">
+          <div className="hidden grid-cols-[7rem_1.7fr_6rem_1.45fr_1.15fr_7rem] gap-3 border-b border-slate-200 bg-slate-50 px-4 py-3 text-xs font-semibold uppercase tracking-[0.16em] text-slate-500 dark:border-slate-800 dark:bg-slate-900/70 dark:text-slate-400 md:grid">
             <span>{aiText('column_status', 'Status')}</span>
-            <span>{aiText('column_ability', 'Ability')}</span>
-            <span>{aiText('column_profile', 'Route / profile')}</span>
-            <span>{aiText('column_provider_model', 'Provider / model')}</span>
-            <span>{aiText('column_fallback', 'Fallback')}</span>
+            <span>{text('column_route_group', 'Ability scenario')}</span>
+            <span>{text('column_route_type', 'Type')}</span>
+            <span>{text('column_current_model', 'Current model')}</span>
+            <span>{text('column_runtime_policy', 'Runtime policy')}</span>
             <span className="text-right">{aiText('column_actions', 'Actions')}</span>
           </div>
           {abilityModelRows.map((row) => (
             <div
-              key={`${row.profile.profile_id}-${row.taskId}`}
-              className="grid grid-cols-[8rem_1.4fr_1fr_1.4fr_8rem_8rem] gap-3 border-b border-slate-200 px-4 py-3 text-sm last:border-b-0 dark:border-slate-800"
+              key={row.profile.profile_id}
+              className="grid gap-3 border-b border-slate-200 px-4 py-4 text-sm last:border-b-0 dark:border-slate-800 md:grid-cols-[7rem_1.7fr_6rem_1.45fr_1.15fr_7rem] md:items-center"
             >
-              <BackofficeStatusBadge
-                label={row.primaryInstance ? aiText('status_ready', 'Ready') : aiText('status_missing', 'Missing')}
-                status={row.primaryInstance ? 'success' : 'warning'}
-              />
+              {(() => {
+                const routeStatus = abilityRouteStatus(row.profile, row.primaryInstance);
+                return renderRouteStatus(routeStatus);
+              })()}
               <div>
-                <div className="font-medium text-slate-950 dark:text-white">{row.label}</div>
-                <div className="mt-1 text-xs leading-5 text-slate-500 dark:text-slate-400">{row.description}</div>
+                <div className="font-medium text-slate-950 dark:text-white">{abilityRouteTitle(row.profile)}</div>
+                <div className="mt-2 flex flex-wrap gap-1.5">
+                  {row.taskLabels.map((label) => (
+                    <span
+                      key={`${row.profile.profile_id}-${label}`}
+                      className="rounded-full border border-slate-200 px-2 py-0.5 text-xs text-slate-600 dark:border-slate-800 dark:text-slate-300"
+                    >
+                      {label}
+                    </span>
+                  ))}
+                </div>
+              </div>
+              <div>
+                <div className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500 dark:text-slate-400 md:hidden">
+                  {text('column_route_type', 'Type')}
+                </div>
+                <span className="mt-1 inline-flex rounded-full border border-slate-200 px-2 py-0.5 text-xs text-slate-600 dark:border-slate-800 dark:text-slate-300 md:mt-0">
+                  {row.routeTypeLabel}
+                </span>
               </div>
               <div className="text-slate-600 dark:text-slate-300">
-                <div>{row.profile.routing_intent || row.profile.label}</div>
-                <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">{row.profile.profile_id}</div>
-              </div>
-              <div className="text-slate-600 dark:text-slate-300">
-                <div>{row.primaryInstance?.provider_id || '-'}</div>
-                <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                  {row.primaryInstance?.model_id || '-'}
+                <div className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500 dark:text-slate-400 md:hidden">
+                  {text('column_current_model', 'Current model')}
+                </div>
+                <div className="mt-1 text-sm font-medium text-slate-800 dark:text-slate-100 md:mt-0">
+                  {runtimeModelRouteLabel(row.primaryInstance)}
                 </div>
               </div>
               <div className="text-slate-600 dark:text-slate-300">
-                {row.fallbackCount
-                  ? aiText('fallback_count', '{{count}} fallback', { count: String(row.fallbackCount) })
-                  : aiText('fallback_none', 'None')}
+                <div className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500 dark:text-slate-400 md:hidden">
+                  {text('column_runtime_policy', 'Runtime policy')}
+                </div>
+                <div className="mt-1 md:mt-0">{abilityRoutePolicySummary(row.profile)}</div>
               </div>
-              <div className="text-right">
+              <div className="md:text-right">
                 <button
                   type="button"
-                  className="btn btn-secondary justify-center"
+                  className="btn btn-secondary w-full justify-center md:w-auto"
                   onClick={() => openAbilityModelDialog(row.profile.profile_id)}
                 >
                   {aiText('action_configure', 'Configure')}
@@ -733,9 +1283,9 @@ export default function AbilityModelsPage() {
             </div>
           )}
         </div>
-        <div className="mt-3 text-xs leading-5 text-slate-500 dark:text-slate-400">
-          {aiText('ability_models_boundary_notice', 'This changes Cloud runtime profile bindings only. It does not enable plugin abilities, edit prompts, or write to WordPress.')}
-        </div>
+          <div className="mt-3 text-xs leading-5 text-slate-500 dark:text-slate-400">
+            {aiText('ability_models_boundary_notice', 'This changes Cloud runtime model routing only. It does not enable plugin abilities, edit prompts, or write to WordPress.')}
+          </div>
         <div className="mt-2 text-xs leading-5 text-slate-500 dark:text-slate-400">
           {text('plugin_default_notice', 'These are common defaults for plugin abilities. Plugin switches, prompts, approvals, and final WordPress writes stay in the local plugin path.')}
         </div>
@@ -747,17 +1297,17 @@ export default function AbilityModelsPage() {
           <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
             <div>
               <h2 className="text-lg font-semibold text-slate-950 dark:text-white">
-                {text('cloud_native_title', 'Cloud-native runtime abilities')}
+                {text('cloud_native_title', 'Cloud internal runtime abilities')}
               </h2>
               <p className="mt-1 text-sm leading-6 text-slate-600 dark:text-slate-300">
-                {text('cloud_native_desc', 'Cloud-owned runtime abilities are grouped by text, image, audio, and video. Existing rows are read-only runtime projections; future rows stay planned until a routing projection exists.')}
+                {text('cloud_native_desc', 'Read-only projection for Cloud-owned services. It shows runtime dependencies and only exposes bounded model binding where Cloud supports it.')}
               </p>
             </div>
-            <BackofficeStatusBadge label={text('cloud_native_badge_readonly', 'Read-only list')} status="success" />
+            <BackofficeStatusBadge label={text('cloud_native_badge_runtime_binding', 'Runtime binding')} status="success" />
           </div>
 
           <div className="mt-4 flex flex-wrap gap-2">
-            {(['text', 'image', 'audio', 'video'] as CloudAbilityMediaTab[]).map((tab) => (
+            {(['text', 'image', 'vector', 'audio', 'video'] as CloudAbilityMediaTab[]).map((tab) => (
               <BackofficeFilterPill
                 key={tab}
                 active={activeCloudMediaTab === tab}
@@ -770,48 +1320,84 @@ export default function AbilityModelsPage() {
 
           {activeCloudNativeAbilityRows.length > 0 ? (
             <div className="mt-4 overflow-hidden rounded-lg border border-slate-200 dark:border-slate-800">
-              <div className="hidden grid-cols-[8rem_1.4fr_1fr_1.1fr_1.2fr_9rem] gap-3 border-b border-slate-200 bg-slate-50 px-4 py-3 text-xs font-semibold uppercase tracking-[0.16em] text-slate-500 dark:border-slate-800 dark:bg-slate-900/70 dark:text-slate-400 md:grid">
+              <div className="hidden grid-cols-[7rem_1.7fr_1.05fr_1.35fr_8rem] gap-3 border-b border-slate-200 bg-slate-50 px-4 py-3 text-xs font-semibold uppercase tracking-[0.16em] text-slate-500 dark:border-slate-800 dark:bg-slate-900/70 dark:text-slate-400 md:grid">
                 <span>{aiText('column_status', 'Status')}</span>
                 <span>{aiText('column_ability', 'Ability')}</span>
-                <span>{text('column_model_kind', 'Model kind')}</span>
-                <span>{aiText('column_profile', 'Profile')}</span>
-                <span>{aiText('column_provider_model', 'Provider / model')}</span>
+                <span>{text('column_runtime_dependency', 'Runtime dependency')}</span>
+                <span>{text('column_current_runtime', 'Current runtime')}</span>
                 <span className="text-right">{aiText('column_actions', 'Actions')}</span>
               </div>
               {activeCloudNativeAbilityRows.map((row) => (
                 <div
                   key={row.ability_id}
-                  className="grid gap-3 border-b border-slate-200 px-4 py-4 text-sm last:border-b-0 dark:border-slate-800 md:grid-cols-[8rem_1.4fr_1fr_1.1fr_1.2fr_9rem] md:items-center"
+                  className="grid gap-3 border-b border-slate-200 px-4 py-4 text-sm last:border-b-0 dark:border-slate-800 md:grid-cols-[7rem_1.7fr_1.05fr_1.35fr_8rem] md:items-center"
                 >
-                  <BackofficeStatusBadge
-                    label={cloudAbilityStatusLabel(row.status)}
-                    status={row.status === 'connected' ? 'success' : row.status === 'missing_provider' ? 'warning' : 'inactive'}
-                  />
+                  <div>
+                    <div className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500 dark:text-slate-400 md:hidden">
+                      {aiText('column_status', 'Status')}
+                    </div>
+                    <div className={`mt-1 text-sm font-medium md:mt-0 ${cloudAbilityStatusClassName(row.status)}`}>
+                      {cloudAbilityStatusLabel(row.status)}
+                    </div>
+                  </div>
                   <div>
                     <div className="font-medium text-slate-950 dark:text-white">{cloudAbilityLabel(row)}</div>
                     <div className="mt-1 text-xs leading-5 text-slate-500 dark:text-slate-400">{cloudAbilityDescription(row)}</div>
+                    <details className="mt-2 text-xs text-slate-500 dark:text-slate-400">
+                      <summary className="cursor-pointer select-none font-medium text-slate-600 hover:text-slate-900 dark:text-slate-300 dark:hover:text-white">
+                        {text('cloud_native_internal_details', 'Internal details')}
+                      </summary>
+                      <dl className="mt-2 grid gap-1 rounded-lg bg-slate-50 p-2 dark:bg-slate-900/45">
+                        <div className="grid gap-1 sm:grid-cols-[6rem_1fr]">
+                          <dt>{text('cloud_native_internal_config_id', 'Config ID')}</dt>
+                          <dd className="font-mono text-slate-700 dark:text-slate-200">
+                            {row.profile_id || text('cloud_native_internal_none', 'None')}
+                          </dd>
+                        </div>
+                        <div className="grid gap-1 sm:grid-cols-[6rem_1fr]">
+                          <dt>{text('cloud_native_internal_supplier', 'Supplier')}</dt>
+                          <dd>{row.provider_id ? providerDisplayName(row.provider_id) : text('cloud_native_internal_managed', 'Cloud managed')}</dd>
+                        </div>
+                        <div className="grid gap-1 sm:grid-cols-[6rem_1fr]">
+                          <dt>{text('cloud_native_internal_model', 'Model')}</dt>
+                          <dd>{row.model_id || text('cloud_native_internal_no_model', 'No model binding required')}</dd>
+                        </div>
+                      </dl>
+                    </details>
                   </div>
                   <div className="text-slate-600 dark:text-slate-300">
                     <div className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500 dark:text-slate-400 md:hidden">
-                      {text('column_model_kind', 'Model kind')}
+                      {text('column_runtime_dependency', 'Runtime dependency')}
                     </div>
                     <div className="mt-1 md:mt-0">{cloudAbilityModelKindLabel(row.model_kind)}</div>
                   </div>
-                  <div className="font-mono text-sm text-slate-500 dark:text-slate-400">
-                    {row.profile_id || text('cloud_native_profile_pending', 'Not connected')}
-                  </div>
                   <div className="text-slate-600 dark:text-slate-300">
-                    <div>{row.provider_id || '-'}</div>
-                    <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">{row.model_id || '-'}</div>
+                    <div className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500 dark:text-slate-400 md:hidden">
+                      {text('column_current_runtime', 'Current runtime')}
+                    </div>
+                    <div className="mt-1 font-medium text-slate-800 dark:text-slate-100 md:mt-0">
+                      {cloudAbilityRuntimeLabel(row)}
+                    </div>
+                    {!row.provider_id && !row.model_id ? (
+                      <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                        {text('cloud_native_no_model_note', 'No separate provider/model choice is required for this row.')}
+                      </div>
+                    ) : null}
                   </div>
                   <div className="text-right">
-                    <button
-                      type="button"
-                      className="btn btn-secondary justify-center disabled:cursor-not-allowed disabled:opacity-50"
-                      disabled={!row.can_configure}
-                    >
-                      {row.can_configure ? aiText('action_configure', 'Configure') : text('cloud_native_action_readonly', 'Runtime managed')}
-                    </button>
+                    {row.can_configure ? (
+                      <button
+                        type="button"
+                        className="btn btn-secondary justify-center"
+                        onClick={() => openCloudBindingDialog(row)}
+                      >
+                        {text('cloud_native_action_configure_model', 'Configure model')}
+                      </button>
+                    ) : (
+                      <span className="inline-flex rounded-full border border-slate-200 px-3 py-1.5 text-xs font-medium text-slate-500 dark:border-slate-800 dark:text-slate-400">
+                        {text('cloud_native_action_readonly', 'Cloud managed')}
+                      </span>
+                    )}
                   </div>
                 </div>
               ))}
@@ -827,74 +1413,8 @@ export default function AbilityModelsPage() {
             </div>
           ) : null}
 
-          {activeCloudMediaTab === 'audio' && preferences ? (
-            <>
-              <div className="mt-5 overflow-hidden rounded-lg border border-slate-200 dark:border-slate-800">
-                <div className="hidden grid-cols-[1.4fr_1fr_1.2fr] gap-3 border-b border-slate-200 bg-slate-50 px-4 py-3 text-xs font-semibold uppercase tracking-[0.16em] text-slate-500 dark:border-slate-800 dark:bg-slate-900/70 dark:text-slate-400 md:grid">
-                  <span>{text('column_audio_ability', 'Audio ability')}</span>
-                  <span>{text('column_current_profile', 'Current profile')}</span>
-                  <span>{text('column_configure_profile', 'Configure profile')}</span>
-                </div>
-                {audioPreferenceRows.map((row) => {
-                  const options = row.options.length ? row.options : row.value ? [row.value] : [];
-                  return (
-                    <div
-                      key={row.id}
-                      className="grid gap-3 border-b border-slate-200 px-4 py-4 text-sm last:border-b-0 dark:border-slate-800 md:grid-cols-[1.4fr_1fr_1.2fr] md:items-center"
-                    >
-                      <div>
-                        <div className="font-medium text-slate-950 dark:text-white">{row.label}</div>
-                        <div className="mt-1 text-xs leading-5 text-slate-500 dark:text-slate-400">{row.description}</div>
-                      </div>
-                      <div>
-                        <div className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500 dark:text-slate-400 md:hidden">
-                          {text('column_current_profile', 'Current profile')}
-                        </div>
-                        <div className="mt-1 font-mono text-sm text-slate-700 dark:text-slate-200 md:mt-0">{row.value || '-'}</div>
-                      </div>
-                      <label className="grid gap-1 text-sm font-medium text-slate-700 dark:text-slate-200">
-                        <span className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500 dark:text-slate-400 md:hidden">
-                          {text('column_configure_profile', 'Configure profile')}
-                        </span>
-                        <select
-                          className="h-11 rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-white"
-                          value={row.value}
-                          onChange={(event) => row.update(event.target.value)}
-                        >
-                          {options.map((profileId) => (
-                            <option key={`${row.id}-${profileId}`} value={profileId}>{profileId}</option>
-                          ))}
-                        </select>
-                      </label>
-                    </div>
-                  );
-                })}
-              </div>
-              <div className="mt-4 flex flex-col gap-3 text-sm text-slate-600 dark:text-slate-300 sm:flex-row sm:items-center sm:justify-between">
-                <span>{text('audio_save_notice', 'Only Cloud runtime profile preferences are changed here.')}</span>
-                <button
-                  type="button"
-                  onClick={saveProfilePreferences}
-                  disabled={savingPreferences}
-                  className="btn btn-primary justify-center disabled:cursor-not-allowed disabled:opacity-60"
-                >
-                  {savingPreferences ? aiText('saving', 'Saving...') : aiText('action_save_preferences', 'Save profile preferences')}
-                </button>
-              </div>
-            </>
-          ) : null}
-
-          {activeCloudMediaTab === 'audio' && !preferences ? (
-            <div className="mt-4">
-              <BackofficeEmptyState
-                title={text('audio_empty_title', 'Audio ability-model routes unavailable')}
-                description={text('audio_empty_desc', 'Audio runtime profile preferences are not available from the provider management projection.')}
-              />
-            </div>
-          ) : null}
-
           <div className="mt-3 text-xs leading-5 text-slate-500 dark:text-slate-400">
-            {text('cloud_native_boundary_notice', 'This is a read-only runtime ability list. It does not define abilities, edit prompts or routers, or write to WordPress.')}
+            {text('cloud_native_boundary_notice', 'This surface only binds supported Cloud runtime models. It does not define abilities, edit prompts or routers, or write to WordPress.')}
           </div>
         </BackofficeSectionPanel>
       ) : null}
@@ -907,7 +1427,7 @@ export default function AbilityModelsPage() {
           aria-labelledby="ability-model-dialog-title"
         >
           <div className="absolute inset-0 bg-slate-950/55" />
-          <div className="relative z-10 max-h-[90vh] w-full max-w-4xl overflow-y-auto rounded-2xl bg-white p-6 shadow-2xl dark:bg-slate-950">
+          <div className="relative z-10 max-h-[90vh] w-full max-w-6xl overflow-y-auto rounded-2xl bg-white p-6 shadow-2xl dark:bg-slate-950">
             <div className="flex flex-col gap-3 border-b border-slate-200 pb-4 dark:border-slate-800 sm:flex-row sm:items-start sm:justify-between">
               <div>
                 <h2 id="ability-model-dialog-title" className="text-xl font-semibold text-slate-950 dark:text-white">
@@ -921,123 +1441,377 @@ export default function AbilityModelsPage() {
                 {aiText('action_close_dialog', 'Close')}
               </button>
             </div>
-            <div className="mt-4 grid gap-4 lg:grid-cols-[1.2fr_0.8fr]">
+            <div className="mt-4 grid gap-4 lg:grid-cols-[minmax(0,1fr)_360px]">
               <div className="space-y-3">
-                <div>
-                  <div className="text-base font-semibold text-slate-950 dark:text-white">{activeProfileTitle}</div>
-                  <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">{activeProfile.profile_id}</div>
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <div className="text-base font-semibold text-slate-950 dark:text-white">{activeProfileTitle}</div>
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      {activeProfile.tasks.map((taskId) => (
+                        <span
+                          key={taskId}
+                          className="rounded-full border border-slate-200 px-2.5 py-1 text-xs text-slate-600 dark:border-slate-800 dark:text-slate-300"
+                        >
+                          {abilityTaskLabel(taskId)}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
                 </div>
-                <div className="flex flex-wrap gap-2">
-                  {activeProfile.tasks.map((taskId) => (
-                    <span
-                      key={taskId}
-                      className="rounded-full border border-slate-200 px-2.5 py-1 text-xs text-slate-600 dark:border-slate-800 dark:text-slate-300"
-                    >
-                      {abilityTaskLabel(taskId)}
-                    </span>
-                  ))}
-                </div>
-                {[0, 1].map((index) => {
-                  const selectedId = activeProfile.candidate_instance_ids[index] || '';
-                  const selected = runtimeInstancesById.get(selectedId);
-                  const candidates = routingCandidateInstancesFor(activeProfile);
-                  return (
-                    <label
-                      key={`${activeProfile.profile_id}-${index}`}
-                      className="block rounded-xl border border-slate-200 bg-white/70 p-3 dark:border-slate-800 dark:bg-slate-950/40"
-                    >
-                      <span className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">
-                        {index === 0 ? aiText('ability_model_primary_model', 'Primary model') : aiText('ability_model_fallback_model', 'Fallback model')}
-                      </span>
-                      <select
-                        value={selectedId}
-                        onChange={(event) => updateRoutingCandidate(activeProfile.profile_id, index, event.target.value)}
-                        className="mt-2 w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+                <div className="grid gap-2 md:grid-cols-2">
+                  {[0, 1].map((index) => {
+                    const selectedId = activeDialogModelData?.selectedIds[index] || '';
+                    const selected = selectedId ? runtimeInstancesById.get(selectedId) : undefined;
+                    return (
+                      <div
+                        key={`${activeProfile.profile_id}-selected-${index}`}
+                        className="rounded-xl border border-slate-200 bg-slate-50/70 p-3 dark:border-slate-800 dark:bg-slate-900/30"
                       >
-                        <option value="">{aiText('ability_model_unassigned', 'Unassigned')}</option>
-                        {candidates.map((instance) => (
-                          <option
-                            key={`${activeProfile.profile_id}-${index}-${instance.instance_id}`}
-                            value={instance.instance_id}
+                        <div className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">
+                          {index === 0 ? aiText('ability_model_primary_model', 'Primary model') : aiText('ability_model_fallback_model', 'Fallback model')}
+                        </div>
+                        <div className="mt-2 truncate text-sm font-semibold text-slate-950 dark:text-white">
+                          {selected
+                            ? runtimeModelRouteLabel(selected)
+                            : aiText('ability_model_unassigned', 'Unassigned')}
+                        </div>
+                        {selected ? (
+                          <p className="mt-1 text-xs leading-5 text-slate-500 dark:text-slate-400">
+                            {abilityModelInstanceDetail(selected)}
+                          </p>
+                        ) : null}
+                        {index === 1 && selected ? (
+                          <button
+                            type="button"
+                            className="mt-2 text-xs font-semibold text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white"
+                            onClick={() => updateRoutingCandidate(activeProfile.profile_id, 1, '')}
                           >
-                            {instance.provider_id} · {instance.model_id}
+                            {text('action_clear_fallback_model', 'Clear fallback')}
+                          </button>
+                        ) : null}
+                      </div>
+                    );
+                  })}
+                </div>
+                <div className="overflow-hidden rounded-xl border border-slate-200 dark:border-slate-800">
+                  <div className="grid gap-3 border-b border-slate-200 bg-slate-50/80 px-3 py-3 dark:border-slate-800 dark:bg-slate-900/35 lg:grid-cols-[minmax(0,1fr)_180px_220px] lg:items-end">
+                    <div>
+                      <div className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">
+                        {text('available_models_title', 'Available models')}
+                      </div>
+                      <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                        {text('ability_model_candidate_count', '{{count}} matching runtime candidates shown', {
+                          count: String(activeDialogModelData?.filteredCandidates.length || 0),
+                        })}
+                      </div>
+                    </div>
+                    <label className="block">
+                      <span className="sr-only">{text('field_model_provider_filter', 'Supplier')}</span>
+                      <select
+                        value={modelProviderFilter}
+                        onChange={(event) => setModelProviderFilter(event.target.value)}
+                        className="h-9 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+                        aria-label={text('field_model_provider_filter', 'Supplier')}
+                      >
+                        <option value="">{text('filter_provider_all', 'All suppliers')}</option>
+                        {(activeDialogModelData?.providerOptions || []).map((option) => (
+                          <option
+                            key={option.providerId}
+                            value={option.providerId}
+                            disabled={option.candidateCount === 0}
+                          >
+                            {option.label} ({option.candidateCount})
                           </option>
                         ))}
                       </select>
-                      {selected ? (
-                        <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
-                          {abilityModelInstanceDetail(selected)}
-                        </p>
-                      ) : null}
                     </label>
-                  );
-                })}
+                    <label className="block">
+                      <span className="sr-only">{text('field_model_search', 'Search models')}</span>
+                      <input
+                        type="search"
+                        value={modelSearchQuery}
+                        onChange={(event) => setModelSearchQuery(event.target.value)}
+                        placeholder={text('placeholder_model_search', 'Search by supplier or model name')}
+                        className="h-9 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+                        aria-label={text('field_model_search', 'Search models')}
+                      />
+                    </label>
+                  </div>
+                  <div className="max-h-[360px] overflow-y-auto">
+                    {(activeDialogModelData?.filteredCandidates.length || 0) > 0 ? (
+                      activeDialogModelData?.filteredCandidates.map((instance) => {
+                        const isPrimary = activeDialogModelData.selectedIds[0] === instance.instance_id;
+                        const isFallback = activeDialogModelData.selectedIds[1] === instance.instance_id;
+                        const statusLabel = abilityModelHealthLabel(instance.health_status);
+                        return (
+                          <div
+                            key={`${activeProfile.profile_id}-candidate-${instance.instance_id}`}
+                            className="grid gap-3 border-b border-slate-200 px-3 py-2.5 last:border-b-0 dark:border-slate-800 md:grid-cols-[minmax(0,1fr)_120px_190px] md:items-center"
+                          >
+                            <div className="min-w-0">
+                              <div className="flex min-w-0 flex-wrap items-center gap-2">
+                                <span className="truncate text-sm font-semibold text-slate-950 dark:text-white">
+                                  {runtimeModelRouteLabel(instance)}
+                                </span>
+                                <span className="rounded-full border border-slate-200 px-2 py-0.5 text-xs text-slate-500 dark:border-slate-800 dark:text-slate-400">
+                                  {statusLabel}
+                                </span>
+                              </div>
+                              <p className="mt-1 text-xs leading-5 text-slate-500 dark:text-slate-400">
+                                {abilityModelInstanceDetail(instance)}
+                              </p>
+                            </div>
+                            <div className="text-xs font-medium text-slate-500 dark:text-slate-400">
+                              {isPrimary
+                                ? aiText('ability_model_primary_model', 'Primary model')
+                                : isFallback
+                                  ? aiText('ability_model_fallback_model', 'Fallback model')
+                                  : text('candidate_role_available', 'Available')}
+                            </div>
+                            <div className="flex flex-wrap gap-2 md:justify-end">
+                              <button
+                                type="button"
+                                className="rounded-full border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-800 dark:text-slate-200 dark:hover:bg-slate-900"
+                                disabled={isPrimary}
+                                onClick={() => updateRoutingCandidate(activeProfile.profile_id, 0, instance.instance_id)}
+                              >
+                                {text('action_set_primary_model', 'Set primary')}
+                              </button>
+                              <button
+                                type="button"
+                                className="rounded-full border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-800 dark:text-slate-200 dark:hover:bg-slate-900"
+                                disabled={isFallback}
+                                onClick={() => updateRoutingCandidate(activeProfile.profile_id, 1, instance.instance_id)}
+                              >
+                                {text('action_set_fallback_model', 'Set fallback')}
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })
+                    ) : (
+                      <div className="px-3 py-5 text-sm text-slate-500 dark:text-slate-400">
+                        {text('model_search_empty', 'No runtime model matches the current filters.')}
+                      </div>
+                    )}
+                  </div>
+                </div>
               </div>
-              <div className="space-y-3">
-                <label className="block">
-                  <span className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">
-                    {aiText('field_timeout_ms', 'Timeout ms')}
-                  </span>
-                  <input
-                    type="number"
-                    min={1000}
-                    max={activeProfile.max_timeout_ms}
-                    step={1000}
-                    value={activeProfile.timeout_ms}
-                    onChange={(event) =>
-                      updateRoutingDraft(activeProfile.profile_id, {
-                        timeout_ms: Number(event.target.value) || 30000,
-                      })
-                    }
-                    className="mt-2 w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
-                  />
-                </label>
-                <label className="flex items-center justify-between rounded-xl border border-slate-200 bg-white/70 px-3 py-2 dark:border-slate-800 dark:bg-slate-950/40">
-                  <span className="text-sm font-medium text-slate-700 dark:text-slate-200">
-                    {aiText('field_allow_fallback', 'Provider fallback')}
-                  </span>
-                  <input
-                    type="checkbox"
-                    checked={activeProfile.allow_fallback}
-                    onChange={(event) =>
-                      updateRoutingDraft(activeProfile.profile_id, {
-                        allow_fallback: event.target.checked,
-                      })
-                    }
-                  />
-                </label>
-                <label className="block">
-                  <span className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">
-                    {aiText('field_retry_max', 'Retry max')}
-                  </span>
-                  <select
-                    value={activeProfile.max_retries}
-                    onChange={(event) =>
-                      updateRoutingDraft(activeProfile.profile_id, {
-                        max_retries: Number(event.target.value) || 0,
-                      })
-                    }
-                    className="mt-2 w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
-                  >
-                    <option value={0}>0</option>
-                    <option value={1}>1</option>
-                  </select>
-                </label>
-                <label className="block">
-                  <span className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">
-                    {aiText('field_operator_note', 'Operator note')}
-                  </span>
-                  <textarea
-                    value={activeProfile.note}
-                    onChange={(event) => updateRoutingDraft(activeProfile.profile_id, { note: event.target.value })}
-                    rows={3}
-                    className="mt-2 w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
-                    placeholder={aiText('placeholder_ability_model_note', 'Why this ability-model route is being changed')}
-                  />
-                </label>
+              <div className="space-y-3 lg:sticky lg:top-0 lg:self-start">
+                <div className="overflow-hidden rounded-xl border border-slate-200 bg-white/70 dark:border-slate-800 dark:bg-slate-950/40">
+                  {activeProfileIsAudioGeneration ? (
+                    <div className="grid grid-cols-2 border-b border-slate-200 bg-slate-50/80 p-1 dark:border-slate-800 dark:bg-slate-900/35">
+                      {(['policy', 'preview'] as AbilityModelInspectorTab[]).map((tab) => (
+                        <button
+                          key={tab}
+                          type="button"
+                          className={`rounded-lg px-3 py-2 text-sm font-semibold transition ${
+                            activeInspectorTab === tab
+                              ? 'bg-white text-slate-950 shadow-sm dark:bg-slate-950 dark:text-white'
+                              : 'text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white'
+                          }`}
+                          onClick={() => setAbilityModelInspectorTab(tab)}
+                        >
+                          {tab === 'policy'
+                            ? text('inspector_tab_policy', 'Policy')
+                            : text('inspector_tab_preview', 'Preview')}
+                        </button>
+                      ))}
+                    </div>
+                  ) : null}
+                  <div className="p-3">
+                    {activeInspectorTab === 'policy' ? (
+                      <div className="space-y-3">
+                        <div className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">
+                          {text('runtime_policy_summary_title', 'Runtime policy')}
+                        </div>
+                        <dl className="grid gap-2 text-sm">
+                          <div className="flex items-center justify-between gap-3">
+                            <dt className="text-slate-500 dark:text-slate-400">{text('field_timeout_seconds', 'Timeout')}</dt>
+                            <dd className="font-medium text-slate-950 dark:text-white">
+                              {text('timeout_seconds_value', '{{seconds}}s', { seconds: String(Math.round(activeProfile.timeout_ms / 1000)) })}
+                            </dd>
+                          </div>
+                          <div className="flex items-center justify-between gap-3">
+                            <dt className="text-slate-500 dark:text-slate-400">{aiText('field_allow_fallback', 'Provider fallback')}</dt>
+                            <dd className="font-medium text-slate-950 dark:text-white">
+                              {activeProfile.allow_fallback ? text('policy_enabled', 'Enabled') : text('policy_disabled', 'Disabled')}
+                            </dd>
+                          </div>
+                          <div className="flex items-center justify-between gap-3">
+                            <dt className="text-slate-500 dark:text-slate-400">{aiText('field_retry_max', 'Retry max')}</dt>
+                            <dd className="font-medium text-slate-950 dark:text-white">{activeProfile.max_retries}</dd>
+                          </div>
+                        </dl>
+                        <button
+                          type="button"
+                          className="flex w-full items-center justify-between rounded-lg border border-slate-200 px-3 py-2 text-left text-sm font-semibold text-slate-800 hover:bg-slate-50 dark:border-slate-800 dark:text-slate-100 dark:hover:bg-slate-900"
+                          aria-expanded={advancedRuntimePolicyOpen}
+                          onClick={() => setAdvancedRuntimePolicyOpen((current) => !current)}
+                        >
+                          <span>{text('advanced_runtime_policy_title', 'Advanced runtime policy')}</span>
+                          <span className="text-slate-500 dark:text-slate-400">{advancedRuntimePolicyOpen ? '-' : '+'}</span>
+                        </button>
+                        {advancedRuntimePolicyOpen ? (
+                          <div className="space-y-3 rounded-lg border border-slate-200 bg-slate-50 p-3 dark:border-slate-800 dark:bg-slate-900/40">
+                            <label className="block">
+                              <span className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">
+                                {aiText('field_timeout_ms', 'Timeout ms')}
+                              </span>
+                              <input
+                                type="number"
+                                min={1000}
+                                max={activeProfile.max_timeout_ms}
+                                step={1000}
+                                value={activeProfile.timeout_ms}
+                                onChange={(event) =>
+                                  updateRoutingDraft(activeProfile.profile_id, {
+                                    timeout_ms: Number(event.target.value) || 30000,
+                                  })
+                                }
+                                className="mt-2 w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+                              />
+                            </label>
+                            <label className="flex items-center justify-between rounded-xl border border-slate-200 bg-white px-3 py-2 dark:border-slate-800 dark:bg-slate-950">
+                              <span className="text-sm font-medium text-slate-700 dark:text-slate-200">
+                                {aiText('field_allow_fallback', 'Provider fallback')}
+                              </span>
+                              <input
+                                type="checkbox"
+                                checked={activeProfile.allow_fallback}
+                                onChange={(event) =>
+                                  updateRoutingDraft(activeProfile.profile_id, {
+                                    allow_fallback: event.target.checked,
+                                  })
+                                }
+                              />
+                            </label>
+                            <label className="block">
+                              <span className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">
+                                {aiText('field_retry_max', 'Retry max')}
+                              </span>
+                              <select
+                                value={activeProfile.max_retries}
+                                onChange={(event) =>
+                                  updateRoutingDraft(activeProfile.profile_id, {
+                                    max_retries: Number(event.target.value) || 0,
+                                  })
+                                }
+                                className="mt-2 w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+                              >
+                                <option value={0}>0</option>
+                                <option value={1}>1</option>
+                              </select>
+                            </label>
+                            <label className="block">
+                              <span className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">
+                                {aiText('field_operator_note', 'Operator note')}
+                              </span>
+                              <textarea
+                                value={activeProfile.note}
+                                onChange={(event) => updateRoutingDraft(activeProfile.profile_id, { note: event.target.value })}
+                                rows={3}
+                                className="mt-2 w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+                                placeholder={aiText('placeholder_ability_model_note', 'Why this ability-model route is being changed')}
+                              />
+                            </label>
+                          </div>
+                        ) : null}
+                      </div>
+                    ) : (
+                      <div className="space-y-3">
+                        <div className="flex items-start justify-between gap-3">
+                          <div>
+                            <div className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">
+                              {text('audio_preview_title_panel', 'Audio preview')}
+                            </div>
+                            <p className="mt-2 text-xs leading-5 text-slate-500 dark:text-slate-400">
+                              {text('audio_preview_desc', 'Generate a short sample with the selected primary model. This does not save the route or write to WordPress.')}
+                            </p>
+                          </div>
+                          {activeAudioPreviewStatusLabel ? (
+                            <span
+                              className={`rounded-full px-2.5 py-1 text-xs font-semibold ${
+                                audioPreviewJob?.status === 'failed'
+                                  ? 'bg-rose-50 text-rose-700 dark:bg-rose-950/35 dark:text-rose-200'
+                                  : audioPreviewJob?.status === 'succeeded'
+                                    ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/35 dark:text-emerald-200'
+                                    : 'bg-blue-50 text-blue-700 dark:bg-blue-950/35 dark:text-blue-200'
+                              }`}
+                            >
+                              {activeAudioPreviewStatusLabel}
+                            </span>
+                          ) : null}
+                        </div>
+                        {activeAudioPreviewSource ? (
+                          <audio className="w-full" controls src={activeAudioPreviewSource}>
+                            {text('audio_preview_unsupported', 'Your browser does not support audio playback.')}
+                          </audio>
+                        ) : audioPreviewJob && !['failed', 'canceled'].includes(audioPreviewJob.status) ? (
+                          <div className="rounded-lg border border-dashed border-slate-300 px-3 py-2 text-xs text-slate-500 dark:border-slate-700 dark:text-slate-400">
+                            {text('audio_preview_waiting', 'Waiting for a playable preview artifact.')}
+                          </div>
+                        ) : null}
+                        <label className={`grid gap-2 text-xs font-semibold text-slate-600 dark:text-slate-300 ${activeAudioPreviewSource ? 'rounded-lg border border-slate-200 p-2 dark:border-slate-800' : ''}`}>
+                          {activeAudioPreviewSource ? text('audio_preview_edit_text', 'Preview text') : text('audio_preview_text_label', 'Preview text')}
+                          <textarea
+                            className="min-h-20 rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm font-normal leading-6 text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+                            value={audioPreviewText}
+                            maxLength={500}
+                            onChange={(event) => {
+                              setAudioPreviewText(event.target.value);
+                              setAudioPreviewError(null);
+                            }}
+                            placeholder={text('audio_preview_text_placeholder', 'Enter the text to read in the selected audio model.')}
+                          />
+                          <span className="font-normal text-slate-500 dark:text-slate-400">
+                            {text('audio_preview_text_help', '{{count}}/500 characters. Use a short sentence or paragraph for model audition.', {
+                              count: String(audioPreviewTextLength),
+                            })}
+                          </span>
+                        </label>
+                        <button
+                          type="button"
+                          className="btn btn-secondary w-full justify-center disabled:cursor-not-allowed disabled:opacity-60"
+                          disabled={audioPreviewCreating || !activeProfile.candidate_instance_ids[0]}
+                          onClick={() => void createAudioPreview()}
+                        >
+                          {audioPreviewCreating ? text('audio_preview_creating', 'Creating preview...') : text('audio_preview_action', 'Preview audio')}
+                        </button>
+                        {activeAudioPreviewError ? (
+                          <div className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs leading-5 text-rose-800 dark:border-rose-900 dark:bg-rose-950/25 dark:text-rose-200">
+                            <div className="font-semibold">{activeAudioPreviewError.message}</div>
+                            {activeAudioPreviewEvidence.length ? (
+                              <div className="mt-2 grid gap-1 text-rose-700 dark:text-rose-200/80">
+                                {activeAudioPreviewEvidence.map(([label, value]) => (
+                                  <div key={label}>
+                                    {label}: {value}
+                                  </div>
+                                ))}
+                              </div>
+                            ) : null}
+                          </div>
+                        ) : null}
+                        {audioPreviewJob ? (
+                          <details className="rounded-lg border border-slate-200 px-3 py-2 text-xs leading-5 text-slate-500 dark:border-slate-800 dark:text-slate-400">
+                            <summary className="cursor-pointer font-semibold text-slate-600 dark:text-slate-300">
+                              {text('audio_preview_run_detail', 'Run detail')}
+                            </summary>
+                            <div className="mt-2 break-all">
+                              {text('audio_preview_model', 'Preview model')}: {audioPreviewJob.provider_id || '-'} / {audioPreviewJob.model_id || '-'}
+                            </div>
+                            <div className="mt-1 break-all">
+                              {text('audio_preview_run', 'Run')}: {audioPreviewJob.run_id}
+                            </div>
+                          </details>
+                        ) : null}
+                      </div>
+                    )}
+                  </div>
+                </div>
               </div>
             </div>
-            <div className="mt-5 grid gap-3 border-t border-slate-200 pt-4 text-sm text-slate-600 dark:border-slate-800 dark:text-slate-300">
+            <div className="sticky bottom-0 z-10 -mx-6 mt-5 grid gap-3 border-t border-slate-200 bg-white/95 px-6 py-4 text-sm text-slate-600 shadow-[0_-12px_24px_rgba(15,23,42,0.04)] backdrop-blur dark:border-slate-800 dark:bg-slate-950/95 dark:text-slate-300">
               <div className="grid gap-2">
                 <span>{aiText('ability_model_save_notice', 'Saving updates the Cloud runtime profile binding used by this ability route.')}</span>
                 {dialogMessage ? (
@@ -1074,6 +1848,183 @@ export default function AbilityModelsPage() {
                   onClick={() => void saveAbilityModelProfile(activeProfile.profile_id)}
                 >
                   {savingRouting ? aiText('saving', 'Saving...') : aiText('action_save_ability_model', 'Save route')}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      ), document.body) : null}
+
+      {cloudBindingDialogRow && typeof document !== 'undefined' ? createPortal((
+        <div
+          className="fixed inset-0 z-[2147483647] flex items-center justify-center p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="cloud-binding-dialog-title"
+        >
+          <div className="absolute inset-0 bg-slate-950/55" />
+          <div className="relative z-10 max-h-[90vh] w-full max-w-3xl overflow-y-auto rounded-2xl bg-white p-6 shadow-2xl dark:bg-slate-950">
+            <div className="flex flex-col gap-3 border-b border-slate-200 pb-4 dark:border-slate-800 sm:flex-row sm:items-start sm:justify-between">
+              <div>
+                <h2 id="cloud-binding-dialog-title" className="text-xl font-semibold text-slate-950 dark:text-white">
+                  {text('cloud_binding_dialog_title', 'Configure runtime model')}
+                </h2>
+                <p className="mt-1 text-sm leading-6 text-slate-600 dark:text-slate-300">
+                  {text('cloud_binding_dialog_desc', 'Select the embedding model used by Site Knowledge retrieval. WordPress abilities, prompts, routers, and writes are not changed.')}
+                </p>
+              </div>
+              <button type="button" className="btn btn-secondary" onClick={closeCloudBindingDialog}>
+                {aiText('action_close_dialog', 'Close')}
+              </button>
+            </div>
+
+            <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50 p-3 dark:border-slate-800 dark:bg-slate-900/40">
+              <div className="text-base font-semibold text-slate-950 dark:text-white">
+                {cloudAbilityLabel(cloudBindingDialogRow)}
+              </div>
+              <div className="mt-1 text-sm leading-6 text-slate-600 dark:text-slate-300">
+                {cloudAbilityDescription(cloudBindingDialogRow)}
+              </div>
+              <dl className="mt-3 grid gap-2 text-sm sm:grid-cols-2">
+                <div>
+                  <dt className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">
+                    {text('cloud_binding_current_model', 'Current model')}
+                  </dt>
+                  <dd className="mt-1 font-medium text-slate-900 dark:text-slate-100">
+                    {modelRouteLabel(cloudBindingDialogRow.provider_id, cloudBindingDialogRow.model_id)}
+                  </dd>
+                </div>
+                <div>
+                  <dt className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">
+                    {aiText('column_profile', 'Profile')}
+                  </dt>
+                  <dd className="mt-1 font-mono text-slate-600 dark:text-slate-300">
+                    {cloudBindingDialogRow.profile_id || 'embed.default'}
+                  </dd>
+                </div>
+              </dl>
+            </div>
+
+            <div className="mt-4 grid gap-3 rounded-xl border border-slate-200 bg-white p-3 dark:border-slate-800 dark:bg-slate-950 md:grid-cols-[0.85fr_1.15fr]">
+              <label className="block">
+                <span className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">
+                  {text('field_model_provider_filter', 'Supplier')}
+                </span>
+                <select
+                  value={cloudBindingProviderFilter}
+                  onChange={(event) => setCloudBindingProviderFilter(event.target.value)}
+                  className="mt-2 h-10 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+                >
+                  <option value="">{text('filter_provider_all', 'All suppliers')}</option>
+                  {(activeCloudBindingModelData?.providerOptions || []).map((option) => (
+                    <option key={option.providerId} value={option.providerId}>
+                      {option.label} ({option.candidateCount})
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="block">
+                <span className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">
+                  {text('field_model_search', 'Search models')}
+                </span>
+                <input
+                  type="search"
+                  value={cloudBindingModelSearchQuery}
+                  onChange={(event) => setCloudBindingModelSearchQuery(event.target.value)}
+                  placeholder={text('placeholder_embedding_model_search', 'Search embedding models')}
+                  className="mt-2 h-10 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+                />
+              </label>
+            </div>
+
+            <div className="mt-4 overflow-hidden rounded-xl border border-slate-200 dark:border-slate-800">
+              <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 bg-slate-50 px-3 py-2 dark:border-slate-800 dark:bg-slate-900/60">
+                <div className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">
+                  {text('available_embedding_models_title', 'Available embedding models')}
+                </div>
+                <div className="text-xs text-slate-500 dark:text-slate-400">
+                  {text('ability_model_candidate_count', '{{count}} matching runtime candidates shown', {
+                    count: String(activeCloudBindingModelData?.filteredCandidates.length || 0),
+                  })}
+                </div>
+              </div>
+              <div className="max-h-[380px] overflow-y-auto">
+                {(activeCloudBindingModelData?.filteredCandidates.length || 0) > 0 ? (
+                  activeCloudBindingModelData?.filteredCandidates.map((instance) => {
+                    const isSelected =
+                      instance.provider_id === cloudBindingDialogRow.provider_id &&
+                      instance.model_id === cloudBindingDialogRow.model_id;
+                    return (
+                      <div
+                        key={`cloud-binding-${instance.instance_id}`}
+                        className="grid gap-3 border-b border-slate-200 px-3 py-3 last:border-b-0 dark:border-slate-800 md:grid-cols-[1fr_auto] md:items-center"
+                      >
+                        <div>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="text-sm font-semibold text-slate-950 dark:text-white">
+                              {runtimeModelRouteLabel(instance)}
+                            </span>
+                            <span className="rounded-full border border-slate-200 px-2 py-0.5 text-xs text-slate-500 dark:border-slate-800 dark:text-slate-400">
+                              {abilityModelHealthLabel(instance.health_status)}
+                            </span>
+                            {isSelected ? (
+                              <span className="rounded-full bg-blue-50 px-2 py-0.5 text-xs font-medium text-blue-700 dark:bg-blue-950/35 dark:text-blue-200">
+                                {text('cloud_binding_selected', 'Current')}
+                              </span>
+                            ) : null}
+                          </div>
+                          <p className="mt-1 text-xs leading-5 text-slate-500 dark:text-slate-400">
+                            {abilityModelInstanceDetail(instance)}
+                          </p>
+                        </div>
+                        <div className="md:text-right">
+                          <button
+                            type="button"
+                            className="btn btn-secondary justify-center text-xs disabled:cursor-not-allowed disabled:opacity-60"
+                            disabled={savingCloudBinding || isSelected}
+                            onClick={() => void saveCloudAbilityRuntimeBinding(instance.instance_id)}
+                          >
+                            {savingCloudBinding ? aiText('saving', 'Saving...') : text('action_use_runtime_model', 'Use model')}
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })
+                ) : (
+                  <div className="px-3 py-5 text-sm text-slate-500 dark:text-slate-400">
+                    {text('embedding_model_search_empty', 'No embedding runtime model matches the current filters.')}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div className="mt-5 grid gap-3 border-t border-slate-200 pt-4 text-sm text-slate-600 dark:border-slate-800 dark:text-slate-300">
+              <span>{text('cloud_binding_save_notice', 'Saving updates the Cloud Site Knowledge embedding runtime binding only.')}</span>
+              {dialogMessage ? (
+                <span
+                  className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950/25 dark:text-emerald-200"
+                  role="status"
+                  aria-live="polite"
+                >
+                  {dialogMessage}
+                </span>
+              ) : null}
+              {dialogError ? (
+                <span
+                  className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-rose-800 dark:border-rose-900 dark:bg-rose-950/25 dark:text-rose-200"
+                  role="alert"
+                >
+                  {dialogError}
+                </span>
+              ) : null}
+              <div className="flex justify-end">
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  disabled={savingCloudBinding}
+                  onClick={closeCloudBindingDialog}
+                >
+                  {aiText('action_close_dialog', 'Close')}
                 </button>
               </div>
             </div>

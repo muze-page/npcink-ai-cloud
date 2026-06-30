@@ -142,7 +142,6 @@ def test_operational_ready_endpoint_requires_fresh_workers_and_cadence(tmp_path)
                 redis_url="redis://localhost:6379/0",
                 internal_auth_token=TEST_INTERNAL_AUTH_TOKEN,
                 worker_heartbeat_interval_seconds=60,
-                hosted_model_governance_interval_seconds=60,
                 provider_health_scan_interval_seconds=60,
             )
 
@@ -175,7 +174,6 @@ def test_operational_ready_endpoint_requires_fresh_workers_and_cadence(tmp_path)
         ("router_diagnostics_summary", "router.diagnostics_summary_cadence"),
         ("latency_probe_summary", "latency.probe_summary_cadence"),
         ("alert_provider_degradation", "alert.provider_degradation_cadence"),
-        ("hosted_model_governance", "hosted_model.governance_cadence"),
         ("provider_health_scan", "provider.health_scan_cadence"),
     ):
         commercial.record_service_audit_event(

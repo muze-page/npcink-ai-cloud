@@ -9,11 +9,13 @@ from typing import Any
 import httpx
 from sqlalchemy import select
 
+from app.adapters.providers.base import ProviderCatalogSnapshot
 from app.adapters.providers.registry import build_provider_adapter_from_connection
 from app.core.config import Settings
 from app.core.db import get_session
 from app.core.models import ProviderConnection
 from app.core.secrets import encrypt_provider_connection_secret
+from app.domain.catalog.service import CatalogService
 from app.domain.provider_connections.runtime_settings import (
     apply_provider_connection_runtime_settings,
 )
@@ -65,9 +67,19 @@ class ProviderConnectionAdminService:
                     )
                 )
             )
+        connections = [self._serialize(row) for row in rows]
+        connections.sort(
+            key=lambda item: (
+                not bool(item.get("enabled")),
+                str(item.get("provider_type") or ""),
+                str(item.get("provider_id") or ""),
+                int(item.get("priority") or 100),
+                str(item.get("connection_id") or ""),
+            )
+        )
         return {
             "surface": "admin_provider_connections",
-            "connections": [self._serialize(row) for row in rows],
+            "connections": connections,
             "boundary": _boundary(),
         }
 
@@ -310,6 +322,17 @@ class ProviderConnectionAdminService:
                 now=now,
             )
 
+        catalog_sync = self._store_model_provider_catalog(row, snapshot)
+        if catalog_sync.get("status") != "synced":
+            return _test_result(
+                connection=serialized,
+                status="catalog_sync_failed",
+                stage="catalog_sync",
+                error_code="provider_connection.catalog_sync_failed",
+                message=str(catalog_sync.get("message") or "provider catalog sync failed"),
+                now=now,
+            )
+
         return _test_result(
             connection=serialized,
             status="ready",
@@ -323,8 +346,36 @@ class ProviderConnectionAdminService:
                 "adapter_type": str(snapshot.adapter_type or ""),
                 "model_count": len(models),
                 "sample_model_ids": [str(model.model_id) for model in models[:5]],
+                "sync": catalog_sync,
             },
         )
+
+    def _store_model_provider_catalog(
+        self,
+        row: ProviderConnection,
+        snapshot: ProviderCatalogSnapshot,
+    ) -> dict[str, Any]:
+        try:
+            result = CatalogService(
+                self.database_url,
+                providers={},
+                settings=self.settings,
+            ).store_provider_snapshot(
+                snapshot,
+                source="provider_connection_test",
+                notes=f"connection={row.connection_id}",
+            )
+        except Exception as error:
+            return {
+                "status": "error",
+                "message": _truncate_message(str(error) or error.__class__.__name__),
+            }
+        return {
+            "status": "synced",
+            "revision": str(result.get("revision") or ""),
+            "provider_id": str(snapshot.provider_id or ""),
+            "model_count": len(list(snapshot.models or [])),
+        }
 
     def _build_web_search_test_result(
         self,
@@ -501,7 +552,16 @@ class ProviderConnectionAdminService:
         config = _sanitize_config(config)
         capability_ids = _normalize_id_list(payload.get("capability_ids"))
         runtime_profile_ids = _normalize_id_list(payload.get("runtime_profile_ids"))
-        metadata = _dict(payload.get("metadata"))
+        metadata = _sanitize_config(_dict(payload.get("metadata")))
+        note = _string(payload.get("note") or metadata.get("note") or metadata.get("operator_note"))
+        if len(note) > 512:
+            raise ProviderConnectionAdminError(
+                "provider_connection.note_invalid",
+                "note must be 512 characters or less",
+            )
+        priority = _priority_value(payload.get("priority", metadata.get("priority", 100)))
+        metadata["note"] = note
+        metadata["priority"] = priority
         secretless = bool(payload.get("secretless") or config.get("secretless"))
         if (
             normalized_provider_type == "web_search_provider"
@@ -529,7 +589,7 @@ class ProviderConnectionAdminService:
             "base_url": base_url,
             "source_role": source_role,
             "config_json": config_json,
-            "metadata_json": _sanitize_config(metadata),
+            "metadata_json": metadata,
             "credential": normalized_credential,
         }
 
@@ -538,6 +598,8 @@ class ProviderConnectionAdminService:
         capability_ids = _normalize_id_list(config.get("capability_ids"))
         runtime_profile_ids = _normalize_id_list(config.get("runtime_profile_ids"))
         metadata = _dict(row.metadata_json)
+        priority = _priority_value(metadata.get("priority", 100))
+        note = _string(metadata.get("note") or metadata.get("operator_note"))
         model_ids = _normalize_id_list(config.get("model_ids"))
         if not model_ids:
             model_ids = _normalize_id_list(metadata.get("model_ids"))
@@ -556,6 +618,8 @@ class ProviderConnectionAdminService:
             "status": _connection_status(enabled=bool(row.enabled), configured=configured),
             "source_role": row.source_role,
             "base_url": row.base_url or "",
+            "note": note,
+            "priority": priority,
             "capability_ids": capability_ids,
             "runtime_profile_ids": runtime_profile_ids,
             "model_ids": model_ids,
@@ -701,6 +765,14 @@ def _normalize_id_list(value: object) -> list[str]:
             continue
         normalized.append(item[:128])
     return normalized
+
+
+def _priority_value(value: object) -> int:
+    try:
+        priority = int(str(value).strip())
+    except (TypeError, ValueError):
+        priority = 100
+    return min(999, max(0, priority))
 
 
 def _public_config(config: dict[str, Any]) -> dict[str, Any]:

@@ -32,7 +32,6 @@ def test_ops_cadence_worker_records_managed_task_audit_and_respects_intervals(
         router_diagnostics_interval_seconds=60,
         latency_probe_interval_seconds=60,
         alert_provider_degradation_interval_seconds=60,
-        hosted_model_governance_interval_seconds=60,
         provider_health_scan_interval_seconds=60,
         artifact_cleanup_interval_seconds=60,
     )
@@ -47,7 +46,6 @@ def test_ops_cadence_worker_records_managed_task_audit_and_respects_intervals(
         "router_diagnostics_summary",
         "latency_probe_summary",
         "alert_provider_degradation",
-        "hosted_model_governance",
         "provider_health_scan",
         "artifact_cleanup",
     }
@@ -55,7 +53,7 @@ def test_ops_cadence_worker_records_managed_task_audit_and_respects_intervals(
 
     service = CommercialService(database_url, settings=settings)
     first_events = service.list_service_audit_events(limit=20)["items"]
-    assert len(first_events) == 9
+    assert len(first_events) == 8
 
     latest_created_at = datetime.fromisoformat(
         str(first_events[0]["created_at"]).replace("Z", "+00:00")
@@ -64,7 +62,7 @@ def test_ops_cadence_worker_records_managed_task_audit_and_respects_intervals(
     assert second_results == []
 
     third_results = run_due_tasks(settings, now=latest_created_at + timedelta(seconds=61))
-    assert len(third_results) == 9
+    assert len(third_results) == 8
     assert {item["task_id"] for item in third_results} == {
         "retention_cleanup",
         "plugin_observability_cleanup",
@@ -72,7 +70,6 @@ def test_ops_cadence_worker_records_managed_task_audit_and_respects_intervals(
         "router_diagnostics_summary",
         "latency_probe_summary",
         "alert_provider_degradation",
-        "hosted_model_governance",
         "provider_health_scan",
         "artifact_cleanup",
     }
@@ -85,7 +82,6 @@ def test_ops_cadence_worker_records_managed_task_audit_and_respects_intervals(
         "router_diagnostics_summary",
         "latency_probe_summary",
         "alert_provider_degradation",
-        "hosted_model_governance",
         "provider_health_scan",
         "artifact_cleanup",
     }
@@ -98,7 +94,6 @@ def test_ops_cadence_worker_records_managed_task_audit_and_respects_intervals(
         "router_diagnostics_summary",
         "latency_probe_summary",
         "alert_provider_degradation",
-        "hosted_model_governance",
         "provider_health_scan",
         "artifact_cleanup",
     }
