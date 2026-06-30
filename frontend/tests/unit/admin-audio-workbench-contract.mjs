@@ -1,80 +1,60 @@
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import assert from 'node:assert/strict';
 
-const pagePath = resolve(process.cwd(), 'src/app/admin/audio-workbench/page.tsx');
-const pageSource = readFileSync(pagePath, 'utf8');
+const workbenchPagePath = resolve(process.cwd(), 'src/app/admin/audio-workbench/page.tsx');
+const adminProxyPath = resolve(process.cwd(), 'src/app/api/admin/[...path]/route.ts');
+const abilityModelsPagePath = resolve(process.cwd(), 'src/app/admin/ability-models/page.tsx');
+const layoutPath = resolve(process.cwd(), 'src/app/admin/layout.tsx');
+const troubleshootingPath = resolve(process.cwd(), 'src/app/admin/troubleshooting/page.tsx');
+const i18nPath = resolve(process.cwd(), 'src/lib/i18n.ts');
 
-assert.match(
-  pageSource,
-  /type AudioWorkbenchFailureData = \{[\s\S]*?action\?: AudioWorkbenchFailureAction \| string;[\s\S]*?retry_attempted\?: boolean;[\s\S]*?retryable\?: boolean;/,
-  'audio workbench must model backend failure diagnostics instead of displaying only a raw error string'
+const adminProxySource = readFileSync(adminProxyPath, 'utf8');
+const abilityModelsPageSource = readFileSync(abilityModelsPagePath, 'utf8');
+const layoutSource = readFileSync(layoutPath, 'utf8');
+const troubleshootingSource = readFileSync(troubleshootingPath, 'utf8');
+const i18nSource = readFileSync(i18nPath, 'utf8');
+
+assert.equal(
+  existsSync(workbenchPagePath),
+  false,
+  'standalone /admin/audio-workbench page must be removed; audio preview belongs inside ability-model routing'
 );
 
 assert.match(
-  pageSource,
-  /function buildFailureNotice\(payload: unknown, fallback: string\): AudioWorkbenchNotice/,
-  'audio workbench must normalize backend error envelopes before rendering failure copy'
+  adminProxySource,
+  /normalized === 'audio-jobs'[\s\S]*?return '\/internal\/service\/admin\/audio-jobs';/,
+  'audio job creation must remain proxied for the ability-model routing dialog preview'
 );
 
 assert.match(
-  pageSource,
-  /activeNotice\.data\.action === 'retry_or_use_narration'/,
-  'audio workbench must expose the summary fallback path when the backend recommends narration'
+  abilityModelsPageSource,
+  /createAudioPreview[\s\S]*fetch\('\/api\/admin\/audio-jobs'/,
+  'ability-model routing dialog must be the visible place that creates audio preview jobs'
 );
 
 assert.match(
-  pageSource,
-  /href="\/admin\/ai-resources"/,
-  'audio workbench must provide a direct AI resources action for provider or profile configuration failures'
+  abilityModelsPageSource,
+  /audio_preview_title_panel[\s\S]*<audio className="mt-3 w-full" controls/,
+  'ability-model routing dialog must render the in-dialog audio preview player'
 );
 
-assert.match(
-  pageSource,
-  /onClick=\{\(\) => void createJob\(\)\}/,
-  'audio workbench must provide an explicit retry action for retryable failures'
+assert.doesNotMatch(
+  layoutSource,
+  /\/admin\/audio-workbench/,
+  'admin navigation must not expose the retired standalone audio workbench'
 );
 
-assert.match(
-  pageSource,
-  /Script attempts: \{job\.script\.generation\.attempts\}/,
-  'audio workbench must surface summary script retry evidence in the result inspector'
+assert.doesNotMatch(
+  troubleshootingSource,
+  /\/admin\/audio-workbench|action_open_audio_workbench|nav_audio_workbench/,
+  'advanced troubleshooting must not expose the retired standalone audio workbench'
 );
 
-assert.match(
-  pageSource,
-  /Trace: \{activeNotice\.data\.trace_id\}/,
-  'audio workbench failure notices must expose trace evidence for operator debugging'
-);
-
-assert.match(
-  pageSource,
-  /Model: \{activeNotice\.data\.provider_id \|\| 'provider'\} \/ \{activeNotice\.data\.model_id \|\| 'model'\}/,
-  'audio workbench failure notices must expose provider and model evidence'
-);
-
-assert.match(
-  pageSource,
-  /No direct WordPress write\./,
-  'audio workbench must continue to present generated audio as a candidate-only artifact'
-);
-
-assert.match(
-  pageSource,
-  /fetch\('\/api\/admin\/audio-jobs\/recent\?limit=10'/,
-  'audio workbench must load a bounded recent-runs projection instead of creating a separate audio job store'
-);
-
-assert.match(
-  pageSource,
-  /Last 10 Admin audio runtime records/,
-  'audio workbench recent runs copy must present the list as runtime evidence, not a media library'
-);
-
-assert.match(
-  pageSource,
-  /onClick=\{\(\) => void loadJob\(recent\.run_id\)\}/,
-  'audio workbench recent runs must inspect existing run detail instead of exposing direct media management actions'
+assert.doesNotMatch(
+  i18nSource,
+  /nav_audio_workbench|audio_workbench_desc|action_open_audio_workbench/,
+  'i18n copy must not keep visible labels for the retired standalone audio workbench'
 );
 
 console.log('admin_audio_workbench_contract: ok');

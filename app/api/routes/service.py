@@ -43,8 +43,6 @@ from app.domain.provider_connections.service import (
     ProviderConnectionAdminService,
 )
 from app.domain.provider_resources import (
-    AIResourceProfilePreferenceError,
-    AIResourceProfilePreferenceService,
     build_admin_ability_model_runtime_projection,
     build_admin_ai_resource_projection,
 )
@@ -247,23 +245,11 @@ class PluginAttentionStatePayload(BaseModel):
 
 class AudioWorkbenchCreatePayload(BaseModel):
     intent: str = Field(default="article_narration", max_length=64)
-    site_id: str = Field(default="site_smoke", max_length=191)
+    site_id: str = Field(default="", max_length=191)
     title: str = Field(default="", max_length=240)
     body: str = Field(min_length=1, max_length=25000)
     format: str = Field(default="mp3", max_length=16)
     preview_instance_id: str = Field(default="", max_length=191)
-
-
-class AIResourceProfilePreferencePayload(BaseModel):
-    audio_summary_text_profile_id: str = Field(default="text.ai", max_length=64)
-    audio_narration_profile_id: str = Field(
-        default="audio.narration.default",
-        max_length=64,
-    )
-    audio_summary_audio_profile_id: str = Field(
-        default="audio.narration.default",
-        max_length=64,
-    )
 
 
 class ProviderConnectionPayload(BaseModel):
@@ -3903,37 +3889,6 @@ async def update_admin_ability_model_runtime_binding(
                 audit_event=audit_event,
             ),
         ),
-        revision="m6",
-    )
-
-
-@router.post("/admin/ai-resources/profile-preferences")
-async def update_admin_ai_resource_profile_preferences(
-    request: Request,
-    payload: AIResourceProfilePreferencePayload,
-) -> Any:
-    auth = await authorize_internal_request(request, require_idempotency=True)
-    if auth is not None:
-        return auth
-    services = get_cloud_services(request)
-    try:
-        result = AIResourceProfilePreferenceService(services.settings).save(
-            payload.model_dump(mode="json")
-        )
-    except AIResourceProfilePreferenceError as error:
-        return JSONResponse(
-            status_code=400,
-            content=build_envelope(
-                status="error",
-                error_code=error.error_code,
-                message=error.message,
-                revision="m6",
-            ),
-        )
-    return build_envelope(
-        status="ok",
-        message="AI resource profile preferences saved",
-        data=result,
         revision="m6",
     )
 

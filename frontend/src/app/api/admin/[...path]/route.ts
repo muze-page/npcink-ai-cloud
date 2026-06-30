@@ -94,12 +94,6 @@ function buildAdminBackendPath(pathSegments: string[], method: string): string {
   }
   if (
     upperMethod === 'POST' &&
-    normalized === 'ai-resources/profile-preferences'
-  ) {
-    return '/internal/service/admin/ai-resources/profile-preferences';
-  }
-  if (
-    upperMethod === 'POST' &&
     normalized === 'provider-connections'
   ) {
     return '/internal/service/admin/provider-connections';

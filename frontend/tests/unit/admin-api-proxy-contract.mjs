@@ -71,10 +71,10 @@ assert.match(
   'audio workbench job creation must route through the backend admin service namespace'
 );
 
-assert.match(
+assert.doesNotMatch(
   source,
   /normalized === 'ai-resources\/profile-preferences'[\s\S]*?return '\/internal\/service\/admin\/ai-resources\/profile-preferences';/,
-  'AI resource profile preference saves must route through the backend admin service namespace'
+  'admin proxy must not expose retired AI resource profile-preferences route after audio routes moved to ability-model routing'
 );
 
 assert.match(

@@ -2629,12 +2629,12 @@ function AiResourcesContent() {
         actions={null}
         contentClassName="py-4 md:py-4"
       >
-        {message ? (
+        {!providerFormOpen && message ? (
           <BackofficeStackCard className="border-emerald-200 bg-emerald-50 text-sm text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950/25 dark:text-emerald-200">
             {message}
           </BackofficeStackCard>
         ) : null}
-        {error ? (
+        {!providerFormOpen && error ? (
           <BackofficeStackCard className="border-rose-200 bg-rose-50 text-sm text-rose-800 dark:border-rose-900 dark:bg-rose-950/25 dark:text-rose-200">
             {error}
           </BackofficeStackCard>
@@ -2792,6 +2792,20 @@ function AiResourcesContent() {
                   <span aria-hidden="true">X</span>
                 </button>
               </div>
+              {message || error ? (
+                <div className="grid gap-2 border-b border-slate-200 px-5 py-3 dark:border-slate-800">
+                  {message ? (
+                    <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950/25 dark:text-emerald-200">
+                      {message}
+                    </div>
+                  ) : null}
+                  {error ? (
+                    <div className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-800 dark:border-rose-900 dark:bg-rose-950/25 dark:text-rose-200">
+                      {error}
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
               <form
                 className="flex min-h-0 flex-1 flex-col"
                 onSubmit={(event) => {
@@ -2955,7 +2969,7 @@ function AiResourcesContent() {
                       </div>
                     </div>
 
-                    <div className="grid gap-2 xl:grid-cols-[minmax(16rem,1fr)_10rem_auto_auto] xl:items-end">
+                    <div className="grid gap-2">
                       <label className="grid gap-1 text-xs font-semibold text-slate-600 dark:text-slate-300">
                         {aiText('field_search_models', 'Search models')}
                         <input
@@ -2965,32 +2979,6 @@ function AiResourcesContent() {
                           placeholder={aiText('placeholder_search_models', 'model, family, provider')}
                         />
                       </label>
-                      <label className="grid gap-1 text-xs font-semibold text-slate-600 dark:text-slate-300">
-                        {aiText('field_visibility_filter', 'Visibility')}
-                        <select
-                          className="h-10 rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-white"
-                          value={modelReferenceVisibilityFilter}
-                          onChange={(event) => setModelReferenceVisibilityFilter(event.target.value as ModelReferenceVisibilityFilter)}
-                        >
-                          <option value="all">{aiText('filter_all', 'All')}</option>
-                          <option value="enabled">{aiText('filter_enabled_models', 'Enabled')}</option>
-                          <option value="disabled">{aiText('filter_disabled_models', 'Disabled')}</option>
-                        </select>
-                      </label>
-                      <label className="flex min-h-10 items-center gap-2 text-xs font-semibold text-slate-600 dark:text-slate-300">
-                        <input
-                          type="checkbox"
-                          checked={modelReferenceShowDeprecated}
-                          onChange={(event) => setModelReferenceShowDeprecated(event.target.checked)}
-                        />
-                        {aiText('field_show_deprecated_models', 'Show deprecated')}
-                      </label>
-                      <span className="text-xs leading-5 text-slate-500 dark:text-slate-400 xl:text-right">
-                        {aiText('model_visibility_result_count', '{{shown}} shown / {{enabled}} enabled', {
-                          shown: String(modelVisibilityRows.length),
-                          enabled: String(selectedProviderModelIds.length),
-                        })}
-                      </span>
                     </div>
 
                     <details className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600 dark:border-slate-800 dark:bg-slate-900/40 dark:text-slate-300">
@@ -3028,6 +3016,14 @@ function AiResourcesContent() {
                           >
                             {aiText('action_clear_all_models', 'Clear all')}
                           </button>
+                          <label className="flex min-h-9 items-center gap-2 text-xs font-semibold text-slate-600 dark:text-slate-300">
+                            <input
+                              type="checkbox"
+                              checked={modelReferenceShowDeprecated}
+                              onChange={(event) => setModelReferenceShowDeprecated(event.target.checked)}
+                            />
+                            {aiText('field_show_deprecated_models', 'Show deprecated')}
+                          </label>
                         </div>
 
                         {referenceProviderCanBeChanged ? (
@@ -3099,10 +3095,21 @@ function AiResourcesContent() {
                         </div>
                       ) : modelVisibilityRows.length ? (
                         <div className="relative max-h-[22rem] overflow-auto border-t border-slate-200 dark:border-slate-800">
-                          <table className="w-full min-w-[56rem] text-left text-xs">
+                          <table className="w-full min-w-[50rem] text-left text-xs">
                             <thead className="sticky top-0 z-10 bg-slate-50 text-slate-500 shadow-[0_1px_0_rgba(148,163,184,0.25)] dark:bg-slate-900 dark:text-slate-400 dark:shadow-[0_1px_0_rgba(30,41,59,0.9)]">
                               <tr>
-                                <th className="px-3 py-2 font-semibold">{aiText('catalog_model_header_status', 'Status')}</th>
+                                <th className="px-3 py-2 font-semibold">
+                                  <select
+                                    className="h-8 w-full rounded-md border border-slate-200 bg-white px-2 text-xs font-semibold normal-case tracking-normal text-slate-700 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-200"
+                                    value={modelReferenceVisibilityFilter}
+                                    onChange={(event) => setModelReferenceVisibilityFilter(event.target.value as ModelReferenceVisibilityFilter)}
+                                    aria-label={aiText('field_visibility_filter', 'Visibility')}
+                                  >
+                                    <option value="all">{aiText('filter_all', 'All')}</option>
+                                    <option value="enabled">{aiText('filter_enabled_models', 'Enabled')}</option>
+                                    <option value="disabled">{aiText('filter_disabled_models', 'Disabled')}</option>
+                                  </select>
+                                </th>
                                 <th className="px-3 py-2 font-semibold">{aiText('catalog_model_header_model', 'Model')}</th>
                                 <th className="px-3 py-2 font-semibold">
                                   <select
@@ -3121,7 +3128,6 @@ function AiResourcesContent() {
                                 </th>
                                 <th className="px-3 py-2 font-semibold">{aiText('column_context_output', 'Context / output')}</th>
                                 <th className="px-3 py-2 font-semibold">{aiText('column_reference_price', 'Reference price')}</th>
-                                <th className="px-3 py-2 font-semibold">{aiText('catalog_model_header_action', 'Action')}</th>
                               </tr>
                             </thead>
                             <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
@@ -3133,16 +3139,31 @@ function AiResourcesContent() {
                                   <tr key={row.modelId}>
                                     <td className="px-3 py-2">
                                       <div className="flex flex-col gap-1">
-                                        <span className={`inline-flex w-fit rounded-full px-2 py-1 text-[11px] font-semibold ${
+                                        <button
+                                          type="button"
+                                          className={`inline-flex w-fit rounded-full px-2 py-1 text-[11px] font-semibold transition ${
                                           row.selected
                                             ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-200'
                                             : 'bg-slate-100 text-slate-600 dark:bg-slate-900 dark:text-slate-300'
-                                        }`}
+                                        } hover:ring-2 hover:ring-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:hover:ring-slate-700`}
+                                          aria-pressed={row.selected}
+                                          title={
+                                            row.selected
+                                              ? aiText('action_disable_catalog_model', 'Disable')
+                                              : aiText('action_enable_catalog_model', 'Enable')
+                                          }
+                                          onClick={() => {
+                                            if (row.selected) {
+                                              removeProviderModelId(row.modelId);
+                                            } else {
+                                              setProviderModelIds([...selectedProviderModelIds, row.modelId]);
+                                            }
+                                          }}
                                         >
                                           {row.selected
                                             ? aiText('status_model_enabled', 'Enabled')
                                             : aiText('status_model_disabled', 'Not enabled')}
-                                        </span>
+                                        </button>
                                         {row.deprecated ? (
                                           <span className="inline-flex w-fit rounded-full bg-amber-100 px-2 py-1 text-[11px] font-semibold text-amber-800 dark:bg-amber-950 dark:text-amber-200">
                                             {aiText('catalog_model_deprecated', 'deprecated')}
@@ -3189,23 +3210,6 @@ function AiResourcesContent() {
                                       {row.reference && hasReferencePrice(row.reference) ? (
                                         <div className="mt-1 text-slate-500 dark:text-slate-400">{aiText('price_unit_per_1m', 'per 1M tokens')}</div>
                                       ) : null}
-                                    </td>
-                                    <td className="px-3 py-2">
-                                      <button
-                                        type="button"
-                                        className="rounded-full border border-slate-200 bg-white px-3 py-1 font-semibold text-slate-700 transition hover:border-slate-300 hover:bg-slate-50 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-200 dark:hover:border-slate-700"
-                                        onClick={() => {
-                                          if (row.selected) {
-                                            removeProviderModelId(row.modelId);
-                                          } else {
-                                            setProviderModelIds([...selectedProviderModelIds, row.modelId]);
-                                          }
-                                        }}
-                                      >
-                                        {row.selected
-                                          ? aiText('action_disable_catalog_model', 'Disable')
-                                          : aiText('action_enable_catalog_model', 'Enable')}
-                                      </button>
                                     </td>
                                   </tr>
                                 );

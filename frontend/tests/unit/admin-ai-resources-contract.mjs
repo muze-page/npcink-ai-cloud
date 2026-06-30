@@ -919,6 +919,12 @@ assert.match(
 
 assert.match(
   pageSource,
+  /!\s*providerFormOpen && message[\s\S]*!\s*providerFormOpen && error[\s\S]*role="dialog"[\s\S]*\{message \|\| error \? \([\s\S]*border-b border-slate-200 px-5 py-3/,
+  'Provider channel dialog must render operation feedback inside the modal instead of behind the overlay'
+);
+
+assert.match(
+  pageSource,
   /connectionDetailsOpen[\s\S]*setConnectionDetailsOpen\(true\)[\s\S]*setProviderFormMode\('edit'\)[\s\S]*setConnectionDetailsOpen\(false\)[\s\S]*<details[\s\S]*open=\{connectionDetailsOpen\}[\s\S]*onToggle=\{\(event\) => setConnectionDetailsOpen\(event\.currentTarget\.open\)\}/,
   'Provider channel connection fields must be explicitly open for new channels and collapsed by default while editing'
 );
@@ -1141,14 +1147,32 @@ assert.match(
 
 assert.match(
   pageSource,
-  /field_search_models[\s\S]*field_visibility_filter[\s\S]*field_show_deprecated_models[\s\S]*model_visibility_result_count[\s\S]*sticky top-0[\s\S]*field_feature_filter/,
-  'Provider channel model list must keep the feature filter in the sticky feature column header'
+  /field_search_models[\s\S]*model_visibility_more_operations[\s\S]*field_show_deprecated_models[\s\S]*sticky top-0[\s\S]*field_visibility_filter[\s\S]*catalog_model_header_model[\s\S]*field_feature_filter/,
+  'Provider channel model list must keep search above the table and move column filters into sticky headers'
 );
 
 assert.doesNotMatch(
   pageSource,
   /xl:grid-cols-\[minmax\(16rem,1fr\)_10rem_10rem_auto_auto\]/,
   'Provider channel model toolbar must not keep a separate feature filter before the table'
+);
+
+assert.doesNotMatch(
+  pageSource,
+  /model_visibility_result_count/,
+  'Provider channel model list must not duplicate the enabled/available summary as a second result count'
+);
+
+assert.match(
+  pageSource,
+  /field_visibility_filter[\s\S]*catalog_model_header_model[\s\S]*aria-pressed=\{row\.selected\}[\s\S]*status_model_enabled[\s\S]*status_model_disabled/,
+  'Provider channel model rows must combine visibility status and enable-disable action into one visibility control'
+);
+
+assert.doesNotMatch(
+  pageSource,
+  /catalog_model_header_action/,
+  'Provider channel model rows must not keep a separate action column for the same visibility state'
 );
 
 assert.match(

@@ -3,11 +3,9 @@ import { resolve } from 'node:path';
 import assert from 'node:assert/strict';
 
 const routePath = resolve(process.cwd(), 'src/app/api/admin/audio-preview/route.ts');
-const workbenchPagePath = resolve(process.cwd(), 'src/app/admin/audio-workbench/page.tsx');
 const abilityModelsPagePath = resolve(process.cwd(), 'src/app/admin/ability-models/page.tsx');
 
 const routeSource = readFileSync(routePath, 'utf8');
-const workbenchPageSource = readFileSync(workbenchPagePath, 'utf8');
 const abilityModelsPageSource = readFileSync(abilityModelsPagePath, 'utf8');
 
 assert.match(
@@ -35,12 +33,6 @@ assert.match(
 );
 
 assert.match(
-  workbenchPageSource,
-  /\/api\/admin\/audio-preview\?url=\$\{encodeURIComponent\(audio\.url\)\}/,
-  'audio workbench playback must use the same-origin audio preview proxy'
-);
-
-assert.match(
   abilityModelsPageSource,
   /\/api\/admin\/audio-preview\?url=\$\{encodeURIComponent\(audio\.url\)\}/,
   'ability-model audio preview playback must use the same-origin audio preview proxy'
@@ -50,6 +42,30 @@ assert.match(
   abilityModelsPageSource,
   /preview_instance_id: previewInstanceId/,
   'ability-model audio preview must pass the selected route candidate without saving the route'
+);
+
+assert.match(
+  abilityModelsPageSource,
+  /const \[audioPreviewText, setAudioPreviewText\][\s\S]*body: previewText/,
+  'ability-model audio preview must send the operator-entered preview text instead of a fixed sample body'
+);
+
+assert.doesNotMatch(
+  abilityModelsPageSource,
+  /site_id:\s*['"]site_smoke['"]/,
+  'ability-model audio preview must not hard-code the archived smoke-test site'
+);
+
+assert.match(
+  abilityModelsPageSource,
+  /audio_preview_text_label[\s\S]*<textarea[\s\S]*maxLength=\{500\}/,
+  'ability-model audio preview must expose an editable bounded preview text field'
+);
+
+assert.match(
+  abilityModelsPageSource,
+  /normalizeAudioPreviewError[\s\S]*errorCode[\s\S]*siteId[\s\S]*runtimeErrorCode[\s\S]*traceId[\s\S]*activeAudioPreviewEvidence/,
+  'ability-model audio preview must preserve backend error evidence for troubleshooting'
 );
 
 console.log('admin_audio_preview_contract: ok');

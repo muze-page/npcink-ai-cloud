@@ -29,6 +29,7 @@ from app.core.db import dispose_engine, get_session, init_schema
 from app.core.models import (
     ACCOUNT_USER_MEMBERSHIP_STATUS_REVOKED,
     PRINCIPAL_STATUS_DISABLED,
+    SITE_STATUS_ARCHIVED,
     SITE_USER_GRANT_STATUS_REVOKED,
     SUBSCRIPTION_STATUS_PAST_DUE,
     AccountEntitlementSnapshot,
@@ -54,11 +55,7 @@ from app.core.security import REPLAY_SCOPE_PUBLIC_POST_SITE
 from app.core.services import CloudServices
 from app.domain.catalog.service import CatalogService
 from app.domain.commercial.service import CommercialService, ServiceAuditContext
-from app.domain.hosted_model_defaults import (
-    AUDIO_NARRATION_QUALITY_PROFILE_ID,
-    FREE_GPT55_TEXT_PROFILE_ID,
-    TEXT_AI_PROFILE_ID,
-)
+from app.domain.hosted_model_defaults import TEXT_AI_PROFILE_ID
 from app.domain.runtime.service import RuntimeService
 from app.domain.usage.rollup import UsageRollupService
 from app.domain.web_search.service import (
@@ -270,6 +267,20 @@ class FixedAudioSummaryScriptProvider:
             tokens_out=60,
             cost=0.0,
         )
+
+
+def _bind_audio_summary_script_profile(database_url: str, *, revision: str) -> None:
+    with get_session(database_url) as session:
+        CatalogRepository(session).upsert_routing_binding(
+            profile_id=WP_AI_CONNECTOR_SHORT_TEXT_PROFILE_ID,
+            candidate_instance_ids=["openai-global-hosted-free-next"],
+            selection_policy_json={
+                "strategy": "ordered",
+                "test_override": revision,
+            },
+            revision=revision,
+        )
+        session.commit()
 
 
 class FlakyAudioSummaryScriptProvider(FixedAudioSummaryScriptProvider):
@@ -2252,55 +2263,6 @@ def test_admin_ai_resources_exposes_recent_runtime_evidence_without_content(
     assert "generated text should not appear" not in serialized
 
 
-def test_admin_ai_resources_saves_profile_preferences_without_secrets(
-    tmp_path: Path,
-) -> None:
-    env_path = tmp_path / ".env.local"
-    _, client = _build_client(
-        tmp_path,
-        settings_overrides={
-            "ai_resources_admin_env_path": str(env_path),
-            "openai_api_key": "openai-test-secret",
-            "minimax_provider_enabled": True,
-            "minimax_api_key": "minimax-test-secret",
-        },
-    )
-
-    response = client.post(
-        "/internal/service/admin/ai-resources/profile-preferences",
-        headers=build_internal_headers(idempotency_key="ai-resource-profile-save"),
-        json={
-            "audio_summary_text_profile_id": FREE_GPT55_TEXT_PROFILE_ID,
-            "audio_narration_profile_id": AUDIO_NARRATION_QUALITY_PROFILE_ID,
-            "audio_summary_audio_profile_id": AUDIO_NARRATION_QUALITY_PROFILE_ID,
-        },
-    )
-
-    assert response.status_code == 200, response.text
-    data = response.json()["data"]
-    preferences = data["profile_preferences"]
-    assert preferences["audio_summary_text_profile_id"] == FREE_GPT55_TEXT_PROFILE_ID
-    assert preferences["audio_narration_profile_id"] == AUDIO_NARRATION_QUALITY_PROFILE_ID
-    assert preferences["audio_summary_audio_profile_id"] == AUDIO_NARRATION_QUALITY_PROFILE_ID
-    assert preferences["boundary"]["direct_wordpress_write"] is False
-    serialized = json.dumps(data)
-    assert "openai-test-secret" not in serialized
-    assert "minimax-test-secret" not in serialized
-    env_text = env_path.read_text(encoding="utf-8")
-    assert f"NPCINK_CLOUD_AUDIO_SUMMARY_TEXT_PROFILE_ID={FREE_GPT55_TEXT_PROFILE_ID}" in env_text
-    assert (
-        f"NPCINK_CLOUD_AUDIO_NARRATION_PROFILE_ID={AUDIO_NARRATION_QUALITY_PROFILE_ID}"
-        in env_text
-    )
-    assert (
-        f"NPCINK_CLOUD_AUDIO_SUMMARY_AUDIO_PROFILE_ID={AUDIO_NARRATION_QUALITY_PROFILE_ID}"
-        in env_text
-    )
-    services = client.app.state.services
-    assert services.settings.audio_summary_text_profile_id == FREE_GPT55_TEXT_PROFILE_ID
-    assert services.settings.audio_narration_profile_id == AUDIO_NARRATION_QUALITY_PROFILE_ID
-
-
 def test_admin_audio_workbench_creates_narration_job_and_exposes_result(
     tmp_path: Path,
 ) -> None:
@@ -2353,6 +2315,96 @@ def test_admin_audio_workbench_creates_narration_job_and_exposes_result(
     assert status_data["result"]["artifact_type"] == "audio_generation_candidates"
     assert status_data["result"]["direct_wordpress_write"] is False
     assert status_data["result"]["audios"][0]["mime_type"] == "audio/mpeg"
+
+    dispose_engine(database_url)
+
+
+def test_admin_audio_workbench_without_site_uses_active_preview_site(
+    tmp_path: Path,
+) -> None:
+    provider = MiniMaxProviderAdapter(
+        allow_sample_catalog=True,
+        allow_sample_execution=True,
+    )
+    database_url, client = _build_client(
+        tmp_path,
+        providers={"minimax": provider},
+        settings_overrides={
+            "minimax_provider_enabled": True,
+            "minimax_api_key": "minimax-test-secret",
+        },
+    )
+    seed_site_auth(
+        database_url,
+        site_id="site_smoke",
+        scopes=["runtime:execute", "runtime:read", "runtime:resolve"],
+        site_status=SITE_STATUS_ARCHIVED,
+    )
+    seed_site_auth(
+        database_url,
+        site_id="site_audio_admin",
+        scopes=["runtime:execute", "runtime:read", "runtime:resolve"],
+    )
+
+    response = client.post(
+        "/internal/service/admin/audio-jobs",
+        headers=build_internal_headers(idempotency_key="audio-workbench-default-site"),
+        json={
+            "intent": "article_narration",
+            "title": "Audio test",
+            "body": "这是一段文章正文，用于验证管理员试听自动选择可用站点。",
+            "format": "mp3",
+            "preview_instance_id": "minimax-global-speech-28-turbo",
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    data = response.json()["data"]
+    assert data["site_id"] == "site_audio_admin"
+    assert data["status"] == "queued"
+
+    dispose_engine(database_url)
+
+
+def test_admin_audio_workbench_without_active_site_returns_friendly_error(
+    tmp_path: Path,
+) -> None:
+    provider = MiniMaxProviderAdapter(
+        allow_sample_catalog=True,
+        allow_sample_execution=True,
+    )
+    database_url, client = _build_client(
+        tmp_path,
+        providers={"minimax": provider},
+        settings_overrides={
+            "minimax_provider_enabled": True,
+            "minimax_api_key": "minimax-test-secret",
+        },
+    )
+    seed_site_auth(
+        database_url,
+        site_id="site_smoke",
+        scopes=["runtime:execute", "runtime:read", "runtime:resolve"],
+        site_status=SITE_STATUS_ARCHIVED,
+    )
+
+    response = client.post(
+        "/internal/service/admin/audio-jobs",
+        headers=build_internal_headers(idempotency_key="audio-workbench-no-active-site"),
+        json={
+            "intent": "article_narration",
+            "title": "Audio test",
+            "body": "这是一段文章正文，用于验证没有可用站点时的错误提示。",
+            "format": "mp3",
+            "preview_instance_id": "minimax-global-speech-28-turbo",
+        },
+    )
+
+    assert response.status_code == 400
+    payload = response.json()
+    assert payload["error_code"] == "audio_workbench.preview_site_unavailable"
+    assert payload["data"]["site_status"] == "none_active"
+    assert payload["data"]["action"] == "connect_or_activate_site"
 
     dispose_engine(database_url)
 
@@ -2477,17 +2529,10 @@ def test_admin_audio_workbench_builds_summary_script_before_audio_job(
         site_id="site_audio_admin",
         scopes=["runtime:execute", "runtime:read", "runtime:resolve"],
     )
-    with get_session(database_url) as session:
-        CatalogRepository(session).upsert_routing_binding(
-            profile_id=WP_AI_CONNECTOR_SHORT_TEXT_PROFILE_ID,
-            candidate_instance_ids=["openai-global-hosted-free-next"],
-            selection_policy_json={
-                "strategy": "ordered",
-                "test_override": "fixed_audio_summary_script",
-            },
-            revision="audio-summary-script-test",
-        )
-        session.commit()
+    _bind_audio_summary_script_profile(
+        database_url,
+        revision="audio-summary-script-test",
+    )
 
     response = client.post(
         "/internal/service/admin/audio-jobs",
@@ -2551,6 +2596,10 @@ def test_admin_audio_workbench_retries_transient_summary_script_failure(
         site_id="site_audio_admin",
         scopes=["runtime:execute", "runtime:read", "runtime:resolve"],
     )
+    _bind_audio_summary_script_profile(
+        database_url,
+        revision="audio-summary-script-retry-test",
+    )
 
     response = client.post(
         "/internal/service/admin/audio-jobs",
@@ -2597,6 +2646,10 @@ def test_admin_audio_workbench_returns_friendly_empty_summary_script_error(
         site_id="site_audio_admin",
         scopes=["runtime:execute", "runtime:read", "runtime:resolve"],
     )
+    _bind_audio_summary_script_profile(
+        database_url,
+        revision="audio-summary-script-empty-test",
+    )
 
     response = client.post(
         "/internal/service/admin/audio-jobs",
@@ -2637,7 +2690,6 @@ def test_admin_audio_workbench_uses_wordpress_audio_routing_profile(
         settings_overrides={
             "minimax_provider_enabled": True,
             "minimax_api_key": "minimax-test-secret",
-            "audio_narration_profile_id": AUDIO_NARRATION_QUALITY_PROFILE_ID,
         },
     )
     seed_site_auth(
