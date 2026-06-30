@@ -835,11 +835,11 @@ def _validate_wordpress_ai_routing_payload(
 
 def _normalize_runtime_id_list(value: object) -> list[str]:
     if isinstance(value, str):
-        raw_items: list[object] = value.split(",")
+        raw_items: tuple[object, ...] = tuple(value.split(","))
     elif isinstance(value, list):
-        raw_items = value
+        raw_items = tuple(value)
     else:
-        raw_items = []
+        raw_items = ()
     normalized: list[str] = []
     for item in raw_items:
         text = str(item or "").strip()
