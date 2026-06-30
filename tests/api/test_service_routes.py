@@ -1223,6 +1223,47 @@ def test_admin_provider_connection_catalog_preview_uses_saved_secret_without_exp
         assert session.get(ProviderConnection, "mqzj_saved") is not None
 
 
+def test_admin_provider_connection_catalog_preview_error_hides_upstream_detail(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _, client = _build_client(tmp_path)
+
+    def fake_fetch_catalog(self: object) -> ProviderCatalogSnapshot:
+        raise RuntimeError("traceback with preview-secret-value and provider stack frame")
+
+    monkeypatch.setattr(
+        "app.adapters.providers.openai.OpenAIProviderAdapter.fetch_catalog",
+        fake_fetch_catalog,
+    )
+
+    response = client.post(
+        "/internal/service/admin/provider-connections/preview-catalog",
+        headers=build_internal_headers(idempotency_key="provider-connection-preview-error"),
+        json={
+            "connection_id": "mqzj_preview_error",
+            "provider_id": "mqzj",
+            "provider_type": "openai_compatible",
+            "kind": "openai_compatible",
+            "display_name": "MQZJ",
+            "enabled": True,
+            "base_url": "https://api.mqzj.top/v1",
+            "capability_ids": ["text_generation"],
+            "runtime_profile_ids": [TEXT_AI_PROFILE_ID],
+            "credential": "preview-secret-value",
+        },
+    )
+
+    assert response.status_code == 502, response.text
+    payload = response.json()
+    assert payload["error_code"] == "provider_connection.test_failed"
+    assert payload["message"] == "provider connection catalog preview failed"
+    serialized = json.dumps(payload)
+    assert "preview-secret-value" not in serialized
+    assert "traceback" not in serialized
+    assert "provider stack frame" not in serialized
+
+
 def test_admin_model_references_syncs_models_dev_payload_as_reference_only(
     tmp_path: Path,
 ) -> None:

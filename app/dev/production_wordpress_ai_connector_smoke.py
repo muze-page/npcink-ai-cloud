@@ -91,6 +91,21 @@ def _parse_json_body(value: str) -> object:
         return {"raw_body": value[:1000]}
 
 
+def redact_report(value: object) -> object:
+    if isinstance(value, dict):
+        redacted: dict[str, object] = {}
+        for key, item in value.items():
+            key_text = str(key).lower().replace("-", "_")
+            if any(part in key_text for part in ("secret", "signature", "token", "password")):
+                redacted[str(key)] = bool(str(item or ""))
+            else:
+                redacted[str(key)] = redact_report(item)
+        return redacted
+    if isinstance(value, list):
+        return [redact_report(item) for item in value]
+    return value
+
+
 def build_title_execute_payload() -> dict[str, object]:
     return {
         "ability_name": "npcink-cloud/wp-ai-connector",
@@ -419,7 +434,7 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False, indent=2))
         return 2
 
-    print(json.dumps(report, ensure_ascii=False, indent=2))
+    print(json.dumps(redact_report(report), ensure_ascii=False, indent=2))
     return 0 if bool(report.get("ok")) else 1
 
 
