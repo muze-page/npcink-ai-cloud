@@ -56,14 +56,20 @@ assert.match(
 
 assert.match(
   layoutSource,
+  /admin-nav-link flex w-full min-w-0[\s\S]*<span className="min-w-0 truncate">/,
+  'Admin sidebar links must render as one full-width truncated row per item'
+);
+
+assert.match(
+  layoutSource,
   /hidden items-center gap-2 md:flex[\s\S]*<LocaleSwitcher \/>[\s\S]*<ThemeToggle \/>/,
   'Admin desktop top bar must carry compact utility controls'
 );
 
 assert.doesNotMatch(
   layoutSource,
-  /w-72|lg:pl-72|rounded-2xl border border-blue-200\/80 bg-blue-50 px-3 py-2\.5/,
-  'Admin layout must not regress to the wide explanatory sidebar shell'
+  /w-72|lg:pl-72|admin\.layout_boundary_desc|rounded-(?:2xl|lg) border border-blue-200/,
+  'Admin layout must not regress to the wide explanatory sidebar shell or intro card'
 );
 
 assert.match(

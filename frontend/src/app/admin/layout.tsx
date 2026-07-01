@@ -115,7 +115,7 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
         {
           href: '/admin/ai-resources',
           labelKey: 'admin.nav_ai_resources',
-          fallback: 'Provider and Runtime',
+          fallback: 'Runtime Resources',
           activePrefixes: ['/admin/ai-resources', '/admin/wordpress-ai-routing'],
         },
         {
@@ -205,16 +205,16 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
                   href={item.href}
                   prefetch={false}
                   className={cn(
-                    'admin-nav-link flex items-center justify-between rounded-lg px-2.5 py-2 text-sm font-medium transition-colors',
+                    'admin-nav-link flex w-full min-w-0 items-center justify-between gap-2 rounded-lg px-2.5 py-2 text-sm font-medium transition-colors',
                     active
                       ? 'admin-nav-link-active bg-slate-200/85 text-slate-950 dark:bg-slate-800 dark:text-white'
                       : 'text-slate-600 hover:bg-slate-100 hover:text-slate-950 dark:text-slate-300 dark:hover:bg-slate-900 dark:hover:text-white'
                   )}
                   onClick={variant === 'mobile' ? () => setMobileNavOpen(false) : undefined}
                 >
-                  <span>{t(item.labelKey, {}, item.fallback)}</span>
+                  <span className="min-w-0 truncate">{t(item.labelKey, {}, item.fallback)}</span>
                   {active ? (
-                    <span className="h-1.5 w-1.5 rounded-full bg-current opacity-80" aria-hidden="true" />
+                    <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-current opacity-80" aria-hidden="true" />
                   ) : null}
                 </Link>
               );
@@ -280,16 +280,7 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
           </Link>
         </div>
 
-        <div className="mt-3 rounded-lg border border-blue-200/75 bg-blue-50/80 px-2.5 py-2 dark:border-blue-900/70 dark:bg-blue-950/25">
-          <p className="text-[0.62rem] font-bold uppercase tracking-[0.16em] text-blue-700 dark:text-blue-200">
-            {t('admin.internal_only')}
-          </p>
-          <p className="mt-1 line-clamp-2 text-[0.72rem] leading-4 text-blue-900/70 dark:text-blue-100/70">
-            {t('admin.layout_boundary_desc', {}, 'Service-plane operations only. Local WordPress control remains outside Cloud.')}
-          </p>
-        </div>
-
-        <div className="mt-4 min-h-0 flex-1 overflow-y-auto pr-1">
+        <div className="mt-5 min-h-0 flex-1 overflow-y-auto pr-1">
           {renderNavGroups('desktop')}
         </div>
 

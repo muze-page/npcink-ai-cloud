@@ -142,8 +142,12 @@ h4,
 }
 
 .admin-shell .admin-nav-link {
+  display: flex;
+  width: 100%;
   border-radius: 0.55rem;
   padding: 0.48rem 0.65rem;
+  overflow: hidden;
+  white-space: nowrap;
 }
 
 .admin-shell .admin-nav-link-active {

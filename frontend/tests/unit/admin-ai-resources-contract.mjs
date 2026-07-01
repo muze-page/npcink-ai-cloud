@@ -224,8 +224,8 @@ assert.match(
 
 assert.match(
   i18nSource,
-  /'admin\.nav_ai_resources': 'Provider 与运行时'/,
-  'Top-level admin navigation must call the surface Provider and Runtime in Simplified Chinese'
+  /'admin\.nav_ai_resources': '运行时资源'/,
+  'Top-level admin navigation must use compact Simplified Chinese runtime resource copy'
 );
 
 assert.match(
