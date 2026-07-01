@@ -116,7 +116,7 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
           href: '/admin/ai-resources',
           labelKey: 'admin.nav_ai_resources',
           fallback: 'Provider and Runtime',
-          activePrefixes: ['/admin/ai-resources', '/admin/hosted-models', '/admin/wordpress-ai-routing'],
+          activePrefixes: ['/admin/ai-resources', '/admin/wordpress-ai-routing'],
         },
         {
           href: '/admin/ability-models',

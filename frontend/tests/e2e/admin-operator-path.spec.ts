@@ -205,7 +205,7 @@ test('admin queue pages keep one primary header action and shared identifier tre
   await expect(page.getByText(/已发布|published/i).first()).toBeVisible();
 
   await page.goto('/admin/ai-resources?view=diagnostics', { waitUntil: 'domcontentloaded' });
-  await expect(page.getByRole('heading', { name: /Provider Management|供应商管理|供應商管理/i })).toBeVisible();
+  await expect(page.getByRole('heading', { name: /Runtime resource center|运行时资源中心|執行時資源中心/i })).toBeVisible();
   await expect(page.getByRole('heading', { name: /Diagnostics|诊断|診斷/i })).toBeVisible();
   await expect(page.getByText(/Runtime telemetry|运行时遥测|執行時遙測/i).first()).toBeVisible();
   await expect(

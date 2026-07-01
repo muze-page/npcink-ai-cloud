@@ -19,7 +19,7 @@ import { generateIdempotencyKey } from '@/lib/idempotency';
 import { formatDate } from '@/lib/utils';
 
 type ResourceStatus = 'ready' | 'missing_secret' | 'missing_provider' | 'disabled' | string;
-type AIResourceView = 'connections' | 'usage' | 'health' | 'matrix' | 'diagnostics';
+type AIResourceView = 'overview' | 'connections' | 'usage' | 'health' | 'matrix' | 'diagnostics';
 type ConnectionStatusFilter = 'all' | 'ready' | 'missing_secret' | 'disabled';
 type SupplierCategory = 'ai' | 'capability';
 type SupplierSettingsTab = 'model' | 'capability';
@@ -1288,7 +1288,7 @@ function AiResourcesContent() {
     [t]
   );
   const [data, setData] = useState<AiResources | null>(null);
-  const [activeView, setActiveView] = useState<AIResourceView>('connections');
+  const [activeView, setActiveView] = useState<AIResourceView>('overview');
   const [activeSupplierTab, setActiveSupplierTab] = useState<SupplierSettingsTab>('model');
   const [activeDiagnosticsTab, setActiveDiagnosticsTab] = useState<DiagnosticsTab>('matrix');
   const [activeCapabilityCategory, setActiveCapabilityCategory] = useState<CapabilityProviderCategory>('search');
@@ -1432,7 +1432,7 @@ function AiResourcesContent() {
   }, [loadResources]);
 
   useEffect(() => {
-    if (activeView === 'diagnostics') {
+    if (activeView === 'overview' || activeView === 'diagnostics') {
       void loadRuntimeTelemetry();
     }
   }, [activeView, loadRuntimeTelemetry]);
@@ -1453,8 +1453,7 @@ function AiResourcesContent() {
       setActiveView(requestedView);
     }
     if (requestedView === 'overview') {
-      setActiveView('diagnostics');
-      setActiveDiagnosticsTab('matrix');
+      setActiveView('overview');
     }
     if (requestedView === 'matrix' || requestedView === 'usage' || requestedView === 'health') {
       setActiveView('diagnostics');
@@ -2513,8 +2512,8 @@ function AiResourcesContent() {
     return (
       <BackofficePageStack>
         <BackofficePrimaryPanel
-          eyebrow={aiText('eyebrow', 'Provider settings')}
-          title={aiText('title', 'Provider management')}
+          eyebrow={aiText('eyebrow', 'Runtime resources')}
+          title={aiText('title', 'Runtime resource center')}
           description={aiText('unavailable_desc', 'Cloud runtime provider resources are unavailable.')}
         >
           <BackofficeStackCard className="border-rose-200 bg-rose-50 text-sm text-rose-800 dark:border-rose-900 dark:bg-rose-950/25 dark:text-rose-200">
@@ -2525,12 +2524,78 @@ function AiResourcesContent() {
     );
   }
 
+  const readyModelSupplierCount = data.connections.filter(
+    (connection) => supplierCategory(connection) === 'ai' && connection.status === 'ready'
+  ).length;
+  const readyCapabilitySupplierCount = data.connections.filter(
+    (connection) => supplierCategory(connection) === 'capability' && connection.status === 'ready'
+  ).length;
+  const missingConfigCount = data.connections.filter(
+    (connection) => connection.status === 'missing_secret' || !connection.configured
+  ).length;
+  const disabledConnectionCount = data.connections.filter(
+    (connection) => !connection.enabled || connection.status === 'disabled'
+  ).length;
+  const healthAlertCount = activeHealthWindow?.alert_summary?.alert_count
+    ?? activeHealthWindow?.alert_summary?.alerts?.length
+    ?? 0;
+  const runtimeAlertCount = runtimeTelemetry?.alertSummary.alertCount ?? runtimeTelemetry?.alertSummary.alerts.length ?? 0;
+  const overviewAttentionItems = [
+    ...data.connections
+      .filter((connection) => connection.status !== 'ready')
+      .slice(0, 2)
+      .map((connection) => ({
+        key: `connection:${connection.connection_id}`,
+        label: aiText('attention_connection_needs_config', '{{name}} needs configuration', {
+          name: connection.display_name,
+        }),
+        detail: `${resourceStatusLabel(connection.status)} · ${connection.provider_id}`,
+        tone: statusTone(connection.status),
+      })),
+    ...(runtimeAlertCount > 0
+      ? [{
+          key: 'runtime-telemetry',
+          label: aiText('runtime_telemetry_status', 'Runtime telemetry'),
+          detail: translateRuntimeTelemetryText(runtimeTelemetry?.alertSummary.summary),
+          tone: severityTone(runtimeTelemetryStatus),
+        }]
+      : []),
+    ...(healthAlertCount > 0
+      ? [{
+          key: 'model-health',
+          label: aiText('health_title', 'Model health'),
+          detail: aiText('overview_health_alerts_detail', '{{count}} alerts in the selected evidence window', {
+            count: String(healthAlertCount),
+          }),
+          tone: 'warning' as const,
+        }]
+      : []),
+  ].slice(0, 4);
+
+  const workspaceTabs: Array<{ id: AIResourceView; label: string; detail: string }> = [
+    {
+      id: 'overview',
+      label: aiText('tab_overview', 'Overview'),
+      detail: aiText('tab_overview_detail', 'Status and next actions'),
+    },
+    {
+      id: 'connections',
+      label: aiText('tab_connections', 'Suppliers'),
+      detail: aiText('tab_connections_detail', 'Provider channels and credentials'),
+    },
+    {
+      id: 'diagnostics',
+      label: aiText('tab_diagnostics', 'Diagnostics'),
+      detail: aiText('tab_diagnostics_detail', 'Read-only runtime evidence'),
+    },
+  ];
+
   return (
     <BackofficePageStack>
       <BackofficePrimaryPanel
-        eyebrow={aiText('eyebrow', 'Provider settings')}
-        title={aiText('title', 'Provider management')}
-        description={aiText('description', 'Manage Cloud runtime suppliers, credentials, and visibility.')}
+        eyebrow={aiText('eyebrow', 'Runtime resources')}
+        title={aiText('title', 'Runtime resource center')}
+        description={aiText('description', 'Operate Cloud runtime suppliers, model visibility, capability sources, and read-only runtime evidence.')}
         aside={(
           activeView === 'diagnostics' ? (
             <button
@@ -2553,6 +2618,90 @@ function AiResourcesContent() {
         actions={null}
         contentClassName="py-4 md:py-4"
       >
+        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+          <div className="rounded-xl border border-slate-200 bg-white/80 px-4 py-3 dark:border-slate-800 dark:bg-slate-950/45">
+            <p className="text-[0.68rem] font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">
+              {aiText('overview_model_suppliers', 'Model suppliers')}
+            </p>
+            <p className="mt-2 text-lg font-semibold text-slate-950 dark:text-white">
+              {readyModelSupplierCount}/{data.connections.filter((connection) => supplierCategory(connection) === 'ai').length}
+            </p>
+            <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+              {aiText('overview_ready_ratio_detail', 'ready / total')}
+            </p>
+          </div>
+          <div className="rounded-xl border border-slate-200 bg-white/80 px-4 py-3 dark:border-slate-800 dark:bg-slate-950/45">
+            <p className="text-[0.68rem] font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">
+              {aiText('overview_capability_suppliers', 'Capability suppliers')}
+            </p>
+            <p className="mt-2 text-lg font-semibold text-slate-950 dark:text-white">
+              {readyCapabilitySupplierCount}/{data.connections.filter((connection) => supplierCategory(connection) === 'capability').length}
+            </p>
+            <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+              {aiText('overview_ready_ratio_detail', 'ready / total')}
+            </p>
+          </div>
+          <div className="rounded-xl border border-slate-200 bg-white/80 px-4 py-3 dark:border-slate-800 dark:bg-slate-950/45">
+            <p className="text-[0.68rem] font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">
+              {aiText('overview_runtime_profiles', 'Runtime profiles')}
+            </p>
+            <p className="mt-2 text-lg font-semibold text-slate-950 dark:text-white">
+              {data.runtime_profiles.length}
+            </p>
+            <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+              {aiText('overview_runtime_profiles_detail', 'Cloud runtime metadata only')}
+            </p>
+          </div>
+          <div className="rounded-xl border border-slate-200 bg-white/80 px-4 py-3 dark:border-slate-800 dark:bg-slate-950/45">
+            <p className="text-[0.68rem] font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">
+              {aiText('overview_telemetry', 'Telemetry')}
+            </p>
+            <p className={`mt-2 text-lg font-semibold ${
+              runtimeTelemetryStatus === 'error'
+                ? 'text-rose-600 dark:text-rose-400'
+                : runtimeTelemetryStatus === 'warning'
+                  ? 'text-amber-600 dark:text-amber-400'
+                  : runtimeTelemetryStatus === 'ok'
+                    ? 'text-emerald-600 dark:text-emerald-400'
+                    : 'text-slate-950 dark:text-white'
+            }`}>
+              {translateRuntimeTelemetryText(runtimeTelemetryStatus)}
+            </p>
+            <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+              {runtimeTelemetry
+                ? aiText('overview_runtime_runs_detail', '{{count}} runs in 24h', {
+                    count: formatInteger(runtimeTelemetry.totals.runs),
+                  })
+                : aiText('status_not_observed', 'Not observed')}
+            </p>
+          </div>
+        </div>
+        <div className="flex flex-col gap-2 border-t border-slate-200 pt-4 dark:border-slate-800 md:flex-row md:items-center md:justify-between">
+          <div className="flex flex-wrap gap-2" role="tablist" aria-label={aiText('workspace_tabs_label', 'Runtime resource workspace')}>
+            {workspaceTabs.map((tab) => (
+              <button
+                key={tab.id}
+                type="button"
+                role="tab"
+                aria-selected={activeView === tab.id}
+                className={`rounded-lg border px-3 py-2 text-left text-sm transition ${
+                  activeView === tab.id
+                    ? 'border-slate-950 bg-slate-950 text-white dark:border-white dark:bg-white dark:text-slate-950'
+                    : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300 hover:bg-slate-50 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-300 dark:hover:border-slate-700'
+                }`}
+                onClick={() => setActiveView(tab.id)}
+              >
+                <span className="block font-semibold">{tab.label}</span>
+                <span className={`mt-0.5 block text-xs ${activeView === tab.id ? 'text-white/70 dark:text-slate-600' : 'text-slate-500 dark:text-slate-400'}`}>
+                  {tab.detail}
+                </span>
+              </button>
+            ))}
+          </div>
+          <p className="max-w-xl text-xs leading-5 text-slate-500 dark:text-slate-400">
+            {aiText('workspace_boundary_notice', 'This workspace opens Cloud service-plane detail only. Local plugin prompts, routers, approval, and WordPress writes stay outside Cloud.')}
+          </p>
+        </div>
         {!providerFormOpen && message ? (
           <BackofficeStackCard className="border-emerald-200 bg-emerald-50 text-sm text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950/25 dark:text-emerald-200">
             {message}
@@ -2564,6 +2713,134 @@ function AiResourcesContent() {
           </BackofficeStackCard>
         ) : null}
       </BackofficePrimaryPanel>
+
+      {activeView === 'overview' ? (
+        <BackofficeSectionPanel className="space-y-5">
+          <div className="grid gap-5 xl:grid-cols-[minmax(0,1.35fr)_minmax(20rem,0.65fr)]">
+            <div>
+              <div className="flex flex-col gap-2 md:flex-row md:items-end md:justify-between">
+                <div>
+                  <h2 className="text-lg font-semibold text-slate-950 dark:text-white">{aiText('overview_title', 'Operations overview')}</h2>
+                  <p className="mt-1 text-sm leading-6 text-slate-600 dark:text-slate-300">
+                    {aiText('overview_desc', 'Daily provider readiness and diagnostic follow-up. Detailed evidence stays in the workspace tabs.')}
+                  </p>
+                </div>
+                <button type="button" className="btn btn-secondary justify-center" onClick={() => void loadResources({ showLoading: false })}>
+                  {aiText('action_refresh', 'Refresh')}
+                </button>
+              </div>
+              <div className="mt-4 overflow-hidden rounded-xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-950">
+                <div className="grid divide-y divide-slate-200 dark:divide-slate-800 md:grid-cols-3 md:divide-x md:divide-y-0">
+                  <div className="p-4">
+                    <p className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500 dark:text-slate-400">
+                      {aiText('overview_ready_connections', 'Ready connections')}
+                    </p>
+                    <p className="mt-2 text-2xl font-semibold text-slate-950 dark:text-white">
+                      {readyModelSupplierCount + readyCapabilitySupplierCount}
+                    </p>
+                    <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                      {aiText('overview_total_entries', '{{count}} total entries', { count: String(data.connections.length) })}
+                    </p>
+                  </div>
+                  <div className="p-4">
+                    <p className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500 dark:text-slate-400">
+                      {aiText('overview_missing_config', 'Missing configuration')}
+                    </p>
+                    <p className={missingConfigCount ? 'mt-2 text-2xl font-semibold text-amber-600 dark:text-amber-300' : 'mt-2 text-2xl font-semibold text-slate-950 dark:text-white'}>
+                      {missingConfigCount}
+                    </p>
+                    <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                      {aiText('overview_disabled_count', '{{count}} disabled', { count: String(disabledConnectionCount) })}
+                    </p>
+                  </div>
+                  <div className="p-4">
+                    <p className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500 dark:text-slate-400">
+                      {aiText('overview_health_alerts', 'Health alerts')}
+                    </p>
+                    <p className={healthAlertCount + runtimeAlertCount ? 'mt-2 text-2xl font-semibold text-amber-600 dark:text-amber-300' : 'mt-2 text-2xl font-semibold text-slate-950 dark:text-white'}>
+                      {healthAlertCount + runtimeAlertCount}
+                    </p>
+                    <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                      {aiText('overview_runtime_evidence_window', 'runtime evidence window')}
+                    </p>
+                  </div>
+                </div>
+              </div>
+              <div className="mt-4 grid gap-3 lg:grid-cols-3">
+                {[
+                  {
+                    label: aiText('action_manage_connections', 'Manage suppliers'),
+                    detail: aiText('action_manage_connections_detail', 'Configure provider channels and model visibility.'),
+                    onClick: () => setActiveView('connections' as AIResourceView),
+                  },
+                  {
+                    label: aiText('action_inspect_mapping', 'Inspect runtime mapping'),
+                    detail: aiText('action_inspect_mapping_detail', 'Review capability to profile, provider, and model evidence.'),
+                    onClick: () => {
+                      setActiveDiagnosticsTab('matrix');
+                      setActiveView('diagnostics');
+                    },
+                  },
+                  {
+                    label: aiText('action_inspect_health', 'Inspect health'),
+                    detail: aiText('action_inspect_health_detail', 'Review provider/model health from runtime call records.'),
+                    onClick: () => {
+                      setActiveDiagnosticsTab('health');
+                      setActiveView('diagnostics');
+                    },
+                  },
+                ].map((action) => (
+                  <button
+                    key={action.label}
+                    type="button"
+                    className="rounded-xl border border-slate-200 bg-white p-4 text-left transition hover:border-slate-300 hover:bg-slate-50 dark:border-slate-800 dark:bg-slate-950 dark:hover:border-slate-700"
+                    onClick={action.onClick}
+                  >
+                    <span className="text-sm font-semibold text-slate-950 dark:text-white">{action.label}</span>
+                    <span className="mt-2 block text-xs leading-5 text-slate-500 dark:text-slate-400">{action.detail}</span>
+                  </button>
+                ))}
+              </div>
+              <p className="mt-3 text-xs leading-5 text-slate-500 dark:text-slate-400">
+                {aiText('overview_actions_boundary', 'Overview actions only open detail views. They do not change routing, prompts, abilities, or WordPress writes.')}
+              </p>
+            </div>
+            <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-900/35">
+              <div className="flex items-center justify-between gap-3">
+                <h2 className="text-sm font-semibold text-slate-950 dark:text-white">{aiText('attention_title', 'Attention')}</h2>
+                <BackofficeStatusBadge
+                  label={overviewAttentionItems.length ? aiText('status_attention', 'Needs attention') : aiText('status_ready', 'Ready')}
+                  status={overviewAttentionItems.length ? 'warning' : 'success'}
+                />
+              </div>
+              <div className="mt-4 space-y-3">
+                {overviewAttentionItems.length ? (
+                  overviewAttentionItems.map((item) => (
+                    <div key={item.key} className="rounded-lg border border-slate-200 bg-white p-3 dark:border-slate-800 dark:bg-slate-950">
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <p className="text-sm font-semibold text-slate-950 dark:text-white">{item.label}</p>
+                          <p className="mt-1 text-xs leading-5 text-slate-500 dark:text-slate-400">{item.detail}</p>
+                        </div>
+                        <BackofficeStatusBadge label={aiText('status_review', 'Review')} status={item.tone} />
+                      </div>
+                    </div>
+                  ))
+                ) : (
+                  <div className="rounded-lg border border-slate-200 bg-white p-3 dark:border-slate-800 dark:bg-slate-950">
+                    <p className="text-sm font-semibold text-slate-950 dark:text-white">
+                      {aiText('attention_all_clear_label', 'No blocking provider issue in the selected window')}
+                    </p>
+                    <p className="mt-1 text-xs leading-5 text-slate-500 dark:text-slate-400">
+                      {aiText('attention_all_clear_detail', 'Runtime diagnostics still show metadata only.')}
+                    </p>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        </BackofficeSectionPanel>
+      ) : null}
 
       {activeView === 'diagnostics' ? (
         <BackofficeSectionPanel>

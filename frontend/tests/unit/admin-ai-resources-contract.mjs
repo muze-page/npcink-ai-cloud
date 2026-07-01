@@ -212,26 +212,26 @@ assert.match(
 
 assert.match(
   i18nSource,
-  /'admin\.ai_resources\.title': '供应商管理'/,
-  'Provider management page must provide Simplified Chinese translations'
+  /'admin\.ai_resources\.title': '运行时资源中心'/,
+  'AI resources page must provide Simplified Chinese runtime resource center translations'
 );
 
 assert.match(
   i18nSource,
-  /'admin\.ai_resources\.description': '管理 Cloud 运行时供应商、凭据和可见性。'/,
-  'Provider management page description must stay compact and non-duplicative'
+  /'admin\.ai_resources\.description': '运营 Cloud 运行时供应商、模型可见性、能力来源和只读运行证据。'/,
+  'AI resources page description must frame the surface as Cloud runtime operations'
 );
 
 assert.match(
   i18nSource,
-  /'admin\.nav_ai_resources': '供应商管理'/,
-  'Top-level admin navigation must call the surface Provider Management in Simplified Chinese'
+  /'admin\.nav_ai_resources': 'Provider 与运行时'/,
+  'Top-level admin navigation must call the surface Provider and Runtime in Simplified Chinese'
 );
 
 assert.match(
   i18nSource,
-  /'admin\.nav_ability_models': '能力-模型路由'/,
-  'Top-level admin navigation must expose Ability-Model Routing in Simplified Chinese'
+  /'admin\.nav_ability_models': '运行模型绑定'/,
+  'Top-level admin navigation must expose Runtime Model Binding in Simplified Chinese'
 );
 
 assert.match(
@@ -332,8 +332,8 @@ assert.match(
 
 assert.match(
   pageSource,
-  /useState<AIResourceView>\('connections'\)/,
-  'AI resources page must default to the supplier list workflow'
+  /useState<AIResourceView>\('overview'\)/,
+  'AI resources page must default to the runtime resource overview workflow'
 );
 
 assert.doesNotMatch(
@@ -825,13 +825,37 @@ assert.doesNotMatch(
 assert.doesNotMatch(
   aiResourcesPrimaryPanelSource,
   /metrics\.map|badge_runtime_resources|badge_review_boundary|metric_connections|metric_capabilities|metric_profiles|metric_write_posture/,
-  'Provider management primary panel must not show default runtime badges or metric chips'
+  'AI resources primary panel must not regress to the old generic runtime badges or metric chips'
 );
 
 assert.match(
-  aiResourcesPrimaryPanelSource,
-  /setActiveView\('diagnostics'\)[\s\S]*action_view_diagnostics/,
-  'Provider management primary panel must keep diagnostics as the only default header action'
+  pageSource,
+  /const \[activeView, setActiveView\] = useState<AIResourceView>\('overview'\)/,
+  'AI resources page must default to the runtime resource overview workspace'
+);
+
+assert.match(
+  pageSource,
+  /workspaceTabs[\s\S]*tab_overview[\s\S]*tab_connections[\s\S]*tab_diagnostics[\s\S]*workspace_boundary_notice/,
+  'AI resources primary panel must expose overview, supplier, and diagnostics workspace tabs with the Cloud boundary notice'
+);
+
+assert.match(
+  pageSource,
+  /overview_model_suppliers[\s\S]*overview_capability_suppliers[\s\S]*overview_runtime_profiles[\s\S]*overview_telemetry/,
+  'AI resources overview must use a compact runtime resource status strip'
+);
+
+assert.match(
+  pageSource,
+  /overview_actions_boundary[\s\S]*routing, prompts, abilities, or WordPress writes/,
+  'AI resources overview actions must be framed as detail navigation, not control-plane edits'
+);
+
+assert.doesNotMatch(
+  pageSource,
+  /model_marketplace|model_square|wallet|redeem|ranking|playground|prompt_router_editor|savePrompt|saveRouter/,
+  'AI resources must not copy NEW API commercial marketplace or prompt/router control-plane surfaces'
 );
 
 assert.doesNotMatch(
