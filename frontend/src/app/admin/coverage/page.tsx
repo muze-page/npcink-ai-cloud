@@ -500,11 +500,20 @@ function AdminCoverageContent() {
                     return (
                       <tr key={`${item.account.account_id}-${item.reason_code}`} className="align-top hover:bg-slate-50/70 dark:hover:bg-slate-950/35">
                         <td className="px-6 py-4">
-                          <p className="font-semibold text-slate-950 dark:text-white">{item.account.name || item.account.account_id}</p>
-                          <BackofficeIdentifier value={item.account.account_id} className="mt-1 text-xs text-slate-500 dark:text-slate-400" />
-                          {item.primary_subscription?.subscription_id ? (
-                            <BackofficeIdentifier value={item.primary_subscription.subscription_id} className="mt-1 text-xs text-slate-500 dark:text-slate-400" />
-                          ) : null}
+                          <p className="font-semibold text-slate-950 dark:text-white">
+                            {item.account.name || t('admin.subscription_detail.current_customer_label', {}, 'Current customer')}
+                          </p>
+                          <details className="mt-2 text-xs text-slate-500 dark:text-slate-400">
+                            <summary className="cursor-pointer font-medium">
+                              {t('portal.support_information', {}, 'Support information')}
+                            </summary>
+                            <div className="mt-2 space-y-1">
+                              <BackofficeIdentifier value={item.account.account_id} full />
+                              {item.primary_subscription?.subscription_id ? (
+                                <BackofficeIdentifier value={item.primary_subscription.subscription_id} full />
+                              ) : null}
+                            </div>
+                          </details>
                         </td>
                         <td className="px-4 py-4">
                           <p className="font-medium text-slate-900 dark:text-slate-100">

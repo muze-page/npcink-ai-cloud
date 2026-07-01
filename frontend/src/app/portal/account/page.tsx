@@ -10,6 +10,7 @@ import {
   BackofficeSectionPanel,
   BackofficeStackCard,
 } from '@/components/backoffice/BackofficeScaffold';
+import { BackofficeIdentifier } from '@/components/backoffice/BackofficeIdentifier';
 import { BackofficeStatusBadge } from '@/components/backoffice/BackofficeStatusBadge';
 import {
   PortalLoadingState,
@@ -334,8 +335,18 @@ function AccountPageContent() {
               {t('portal.account.account_name_label', undefined, '账户')}
             </p>
             <p className="mt-2 text-base font-semibold text-slate-950 dark:text-white">
-              {primaryAccount?.name || primaryAccount?.account_id || session.account_id || t('common.not_found')}
+              {primaryAccount?.name || t('portal.connect_site_current_customer', undefined, 'Current customer')}
             </p>
+            {(primaryAccount?.account_id || session.account_id) ? (
+              <details className="mt-3 text-xs text-slate-500 dark:text-slate-400">
+                <summary className="cursor-pointer font-medium">
+                  {t('portal.support_information', undefined, 'Support information')}
+                </summary>
+                <div className="mt-2">
+                  <BackofficeIdentifier value={primaryAccount?.account_id || session.account_id || t('common.not_found')} full />
+                </div>
+              </details>
+            ) : null}
           </BackofficeStackCard>
           <BackofficeStackCard>
             <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">

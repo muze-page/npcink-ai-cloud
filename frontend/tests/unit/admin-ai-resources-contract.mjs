@@ -4,14 +4,32 @@ import assert from 'node:assert/strict';
 
 const pagePath = resolve(process.cwd(), 'src/app/admin/ai-resources/page.tsx');
 const abilityModelsPath = resolve(process.cwd(), 'src/app/admin/ability-models/page.tsx');
+const legacyAbilityRoutingPath = resolve(process.cwd(), 'src/app/admin/wordpress-ai-routing/page.tsx');
+const aiAdvisorPath = resolve(process.cwd(), 'src/app/admin/ai-advisor/page.tsx');
 const layoutPath = resolve(process.cwd(), 'src/app/admin/layout.tsx');
 const troubleshootingPath = resolve(process.cwd(), 'src/app/admin/troubleshooting/page.tsx');
 const webSearchPagePath = resolve(process.cwd(), 'src/app/admin/web-search/page.tsx');
 const imageSourcesPagePath = resolve(process.cwd(), 'src/app/admin/image-sources/page.tsx');
+const portalSiteConnectPanelPath = resolve(process.cwd(), 'src/components/portal/PortalSiteConnectPanel.tsx');
+const portalNavbarPath = resolve(process.cwd(), 'src/components/portal/PortalNavbar.tsx');
+const portalAuditPath = resolve(process.cwd(), 'src/app/portal/audit/PortalAuditClient.tsx');
+const adminPortalUsersPath = resolve(process.cwd(), 'src/app/admin/portal-users/page.tsx');
+const adminSubscriptionDetailPath = resolve(process.cwd(), 'src/app/admin/subscriptions/[subscriptionId]/page.tsx');
+const workflowMetadataPanelPath = resolve(process.cwd(), 'src/components/backoffice/CloudWorkflowMetadataPanel.tsx');
+const adminLoginPath = resolve(process.cwd(), 'src/app/admin/login/page.tsx');
 const pageSource = readFileSync(pagePath, 'utf8');
 const abilityModelsSource = readFileSync(abilityModelsPath, 'utf8');
+const legacyAbilityRoutingSource = readFileSync(legacyAbilityRoutingPath, 'utf8');
+const aiAdvisorSource = readFileSync(aiAdvisorPath, 'utf8');
 const layoutSource = readFileSync(layoutPath, 'utf8');
 const troubleshootingSource = readFileSync(troubleshootingPath, 'utf8');
+const portalSiteConnectSource = readFileSync(portalSiteConnectPanelPath, 'utf8');
+const portalNavbarSource = readFileSync(portalNavbarPath, 'utf8');
+const portalAuditSource = readFileSync(portalAuditPath, 'utf8');
+const adminPortalUsersSource = readFileSync(adminPortalUsersPath, 'utf8');
+const adminSubscriptionDetailSource = readFileSync(adminSubscriptionDetailPath, 'utf8');
+const workflowMetadataPanelSource = readFileSync(workflowMetadataPanelPath, 'utf8');
+const adminLoginSource = readFileSync(adminLoginPath, 'utf8');
 const i18nSource = readFileSync(resolve(process.cwd(), 'src/lib/i18n.ts'), 'utf8');
 const openCapabilityTemplateStart = pageSource.indexOf('function openCapabilityProviderTemplate');
 const openCapabilityTemplateSource = openCapabilityTemplateStart >= 0
@@ -73,6 +91,96 @@ assert.doesNotMatch(
 );
 
 assert.doesNotMatch(
+  troubleshootingNavBlock,
+  /\/admin\/wordpress-ai-routing/,
+  'Advanced Troubleshooting must not keep the legacy WordPress AI routing path active'
+);
+
+assert.match(
+  portalSiteConnectSource,
+  /connect_site_current_customer[\s\S]*portal\.support_information[\s\S]*BackofficeIdentifier value=\{accountId/,
+  'Portal site connect must show customer/site defaults first and move account/site IDs into support information'
+);
+
+assert.doesNotMatch(
+  portalSiteConnectSource,
+  /getPortalSiteDisplayName\(currentSite\)/,
+  'Portal site connect must not let the display-name helper fall back to a site ID in the default card'
+);
+
+assert.match(
+  portalNavbarSource,
+  /site\.site_id\.toLowerCase\(\)/,
+  'Portal site switcher must keep site IDs searchable'
+);
+
+assert.match(
+  portalNavbarSource,
+  /visibleSiteLabel[\s\S]*getPortalSiteWordPressUrl/,
+  'Portal site switcher must keep site IDs searchable while avoiding ID fallback in the visible label'
+);
+
+assert.doesNotMatch(
+  portalNavbarSource,
+  /getPortalSiteSecondaryLabel\(site\) \|\| site\.site_id|getPortalSiteSecondaryLabel\(selectedSite\)/,
+  'Portal site switcher must not show site IDs as the default secondary label'
+);
+
+assert.match(
+  portalAuditSource,
+  /portal\.support_information[\s\S]*Event ID[\s\S]*audit\.trace_id/,
+  'Portal audit must keep event and trace identifiers inside support information'
+);
+
+assert.match(
+  adminPortalUsersSource,
+  /请求技术详情[\s\S]*event\.trace_id[\s\S]*event\.idempotency_key/,
+  'Admin portal user audit cards must collapse raw request fields into technical details'
+);
+
+assert.match(
+  adminSubscriptionDetailSource,
+  /resolveAdminPackageLabel[\s\S]*portal\.support_information[\s\S]*BackofficeIdentifier value=\{normalized\.subscriptionId\}/,
+  'Subscription detail must lead with package/customer labels and keep subscription IDs in support information'
+);
+
+assert.doesNotMatch(
+  adminSubscriptionDetailSource,
+  /<BackofficeIdentifier\s+value=\{normalized\.subscriptionId\}\s+className="mt-3 block/,
+  'Subscription detail must not use the subscription ID as the primary title line'
+);
+
+assert.match(
+  workflowMetadataPanelSource,
+  /workflow_metadata\.write_posture[\s\S]*workflow_metadata\.review_posture[\s\S]*workflow_metadata\.technical_metadata[\s\S]*workflow_metadata\.workflow/,
+  'Workflow metadata panel must show governance conclusions first and move raw workflow metadata into technical details'
+);
+
+assert.match(
+  adminLoginSource,
+  /portal\.support_information[\s\S]*Trace: \{traceId\}/,
+  'Admin login must move trace IDs into support information'
+);
+
+assert.doesNotMatch(
+  adminLoginSource,
+  /` · Trace: \$\{traceId\}`/,
+  'Admin login errors must not append trace IDs to the default error line'
+);
+
+assert.match(
+  legacyAbilityRoutingSource,
+  /redirect\('\/admin\/ability-models'\)/,
+  'Legacy WordPress AI routing page must redirect to the unified ability-model routing surface'
+);
+
+assert.doesNotMatch(
+  legacyAbilityRoutingSource,
+  /fetch\('\/api\/admin\/wordpress-ai-routing'|profile_id|candidate_instance_ids|RuntimeInstance/,
+  'Legacy WordPress AI routing page must not keep a second technical routing UI'
+);
+
+assert.doesNotMatch(
   troubleshootingSource,
   /\/admin\/ai-resources|Related operations|action_open_ai_resources/,
   'Advanced Troubleshooting must not expose Provider Management as a related operations entry'
@@ -124,6 +232,42 @@ assert.match(
   i18nSource,
   /'admin\.nav_ability_models': '能力-模型路由'/,
   'Top-level admin navigation must expose Ability-Model Routing in Simplified Chinese'
+);
+
+assert.match(
+  i18nSource,
+  /'admin\.nav_ai_advisor': '运营诊断助手'/,
+  'Advanced troubleshooting navigation must expose AI Advisor as Operations Advisor in Simplified Chinese'
+);
+
+assert.match(
+  aiAdvisorSource,
+  /admin\.ai_advisor\.title[\s\S]*admin\.ai_advisor\.description[\s\S]*admin\.ai_advisor\.action_run_diagnosis/,
+  'AI Advisor page shell must route visible operator copy through admin.ai_advisor translations'
+);
+
+assert.match(
+  aiAdvisorSource,
+  /function OperationsWorkPanel[\s\S]*recommendedActions[\s\S]*actionDisplay/,
+  'AI Advisor default surface must lead with operational recommendations instead of AI evaluation metrics'
+);
+
+assert.match(
+  aiAdvisorSource,
+  /statusLabel\(status, t\)[\s\S]*severityLabel\(severity, t\)[\s\S]*actionDisplay\(item\.action, t\)/,
+  'AI Advisor operational status and action copy must remain locale-aware'
+);
+
+assert.match(
+  aiAdvisorSource,
+  /<OperationsWorkPanel data=\{data\} \/>[\s\S]*<SignalPanel branch=\{data\.ai\} \/>[\s\S]*<AdvisorEvaluationDetails>/,
+  'AI Advisor must show current diagnosis and evidence before the advanced AI evaluation details'
+);
+
+assert.match(
+  i18nSource,
+  /'admin\.ai_advisor\.description': '查看当前 Cloud 运营信号、下一步处理动作和可追溯证据。AI 对比与成本评估放在高级详情里。'/,
+  'AI Advisor Simplified Chinese description must explain the operator problem it solves'
 );
 
 assert.match(
@@ -278,8 +422,8 @@ assert.doesNotMatch(
 
 assert.match(
   abilityModelsSource,
-  /\(\['text', 'image', 'vector', 'audio', 'video'\] as CloudAbilityMediaTab\[\]\)\.map[\s\S]*cloud_media_tab_\$\{tab\}/,
-  'Cloud-native runtime abilities must expose text, image, vector, audio, and video media tabs'
+  /CLOUD_MEDIA_ORDER: CloudAbilityMediaTab\[\] = \['text', 'image', 'vector', 'audio', 'video'\][\s\S]*availableCloudMediaTabs\.map[\s\S]*cloud_media_tab_\$\{tab\}/,
+  'Cloud runtime dependencies must keep a stable media order but only render category filters that exist in current rows'
 );
 
 assert.match(
@@ -408,6 +552,12 @@ assert.match(
   'Capability supplier category filtering must live in the category-column select'
 );
 
+assert.match(
+  capabilitySupplierTableSource,
+  /w-36[\s\S]*filter_all_categories[\s\S]*w-36[\s\S]*filter_all_statuses/,
+  'Capability supplier header filters must use explicit all-category and all-status labels with consistent width'
+);
+
 assert.doesNotMatch(
   connectionsToolbarSource,
   /capability_category_filter|status_filter_label|connectionStatusFilter/,
@@ -422,14 +572,20 @@ assert.match(
 
 assert.match(
   pageSource,
-  /field_channel_priority[\s\S]*field_channel_note[\s\S]*placeholder_channel_note/,
-  'Provider channel form must expose simple priority and note fields for multiple credential channels'
+  /isCapabilityProviderForm \? \([\s\S]*field_channel_priority[\s\S]*field_channel_note[\s\S]*placeholder_channel_note/,
+  'Provider channel form must keep priority scoped to capability suppliers and keep notes available for channels'
 );
 
 assert.match(
   pageSource,
   /note: providerConnectionForm\.note[\s\S]*priority: Number\(providerConnectionForm\.priority\)/,
   'Provider channel save payload must persist channel note and priority metadata'
+);
+
+assert.doesNotMatch(
+  pageSource,
+  /supplierGroup\.connections\.map[\s\S]*channel_priority_summary[\s\S]*model_catalog_enabled_count/,
+  'Model supplier list must not show provider priority because routing priority belongs to model-call configuration'
 );
 
 assert.match(
@@ -752,8 +908,8 @@ assert.match(
 
 assert.match(
   abilityModelsSource,
-  /row\.can_configure \?[\s\S]*openCloudBindingDialog\(row\)[\s\S]*cloud_native_action_configure_model[\s\S]*cloud_native_action_readonly/,
-  'Cloud-native runtime projection rows must expose configure only when supported and render read-only rows as Cloud-managed'
+  /row\.can_configure \?[\s\S]*openCloudBindingDialog\(row\)[\s\S]*cloud_native_action_configure_model[\s\S]*cloudManagedDependencyLabel\(row\)/,
+  'Cloud-native runtime projection rows must expose configure only when supported and explain read-only dependencies as managed by their supplier settings'
 );
 
 assert.match(
@@ -764,14 +920,20 @@ assert.match(
 
 assert.match(
   abilityModelsSource,
-  /activeCloudMediaFilter[\s\S]*'all'[\s\S]*cloudAbilityRows\.filter\(\(row\) => row\.media === activeCloudMediaFilter\)/,
-  'Cloud-native ability category filter must default to all categories and filter by row media only when selected'
+  /availableCloudMediaTabs[\s\S]*CLOUD_MEDIA_ORDER\.filter\(\(media\) => cloudAbilityRows\.some\(\(row\) => row\.media === media\)\)[\s\S]*activeCloudMediaFilter[\s\S]*cloudAbilityRows\.filter\(\(row\) => row\.media === activeCloudMediaFilter\)/,
+  'Cloud runtime dependency category filter must render only categories present in current rows and filter by row media when selected'
+);
+
+assert.doesNotMatch(
+  abilityModelsSource,
+  /\(\['text', 'image', 'vector', 'audio', 'video'\] as CloudAbilityMediaTab\[\]\)\.map/,
+  'Cloud runtime dependency category UI must not expose empty audio or video filters from a hard-coded select list'
 );
 
 assert.match(
   abilityModelsSource,
-  /column_category[\s\S]*value=\{activeCloudMediaFilter\}[\s\S]*filter_category_all[\s\S]*cloud_media_tab_\$\{row\.media\}/,
-  'Cloud-native ability table must render category as a row column with a header dropdown filter'
+  /column_status[\s\S]*<select[\s\S]*field_category_filter[\s\S]*filter_category_all[\s\S]*availableCloudMediaTabs\.map[\s\S]*column_ability[\s\S]*column_category[\s\S]*cloud_media_tab_\$\{row\.media\}/,
+  'Cloud runtime dependency table must keep category filtering inside the category column header'
 );
 
 assert.doesNotMatch(
@@ -840,6 +1002,12 @@ assert.match(
   'Site Knowledge embedding dialog must source candidates from embedding runtime instances'
 );
 
+assert.match(
+  abilityModelsSource,
+  /cloudBindingDialogRow\.media[\s\S]*cloud_native_internal_details[\s\S]*cloudBindingDialogRow\.profile_id/,
+  'Cloud runtime dependency dialog must show category by default and move profile ids into internal details'
+);
+
 assert.doesNotMatch(
   abilityModelsSource,
   /\/api\/admin\/plugin-ability-routing|savePluginAbilityOverride|generateIdempotencyKey\('plugin_ability/,
@@ -898,6 +1066,18 @@ assert.match(
   abilityModelsSource,
   /abilityModelInstanceDetail[\s\S]*ability_model_instance_detail[\s\S]*abilityModelFeatureLabel[\s\S]*abilityModelRegionLabel[\s\S]*abilityModelHealthLabel/,
   'Ability model instance details must localize runtime feature, region, and health labels while preserving technical ids'
+);
+
+assert.match(
+  abilityModelsSource,
+  /abilityModelRuntimeSummary[\s\S]*ability_model_runtime_summary[\s\S]*abilityModelFeatureLabel[\s\S]*abilityModelRegionLabel[\s\S]*abilityModelHealthLabel/,
+  'Ability model dialogs must default-display human runtime summaries without exposing instance ids'
+);
+
+assert.match(
+  abilityModelsSource,
+  /abilityModelRuntimeSummary\(selected\)[\s\S]*<details[\s\S]*abilityModelInstanceDetail\(selected\)[\s\S]*abilityModelRuntimeSummary\(instance\)[\s\S]*<details[\s\S]*abilityModelInstanceDetail\(instance\)/,
+  'Ability model dialogs must move instance-level technical ids behind internal details disclosures'
 );
 
 assert.match(
@@ -1387,13 +1567,19 @@ assert.match(
 
 assert.match(
   pageSource,
-  /model_catalog_enabled_count/,
-  'Model supplier list must prioritize enabled model counts instead of channel-level capability/profile scope'
+  /filter_all_statuses[\s\S]*column_provider[\s\S]*column_enabled_models[\s\S]*model_catalog_enabled_count_short[\s\S]*model_catalog_none_enabled_short/,
+  'Model supplier list must use explicit all-status filtering and compact enabled model counts'
 );
 
 assert.doesNotMatch(
   pageSource,
-  /column_base_url[\s\S]*model_catalog_enabled_count|modelSample/,
+  /column_enabled_models[\s\S]*model_catalog_enabled_count'[\s\S]*model_catalog_none_enabled'/,
+  'Model supplier enabled-model rows must not repeat full enabled-model sentence copy'
+);
+
+assert.doesNotMatch(
+  pageSource,
+  /column_base_url[\s\S]*model_catalog_enabled_count_short|modelSample/,
   'Model supplier list must keep base URL and model-name previews out of the main table'
 );
 
@@ -1646,7 +1832,7 @@ assert.match(
 assert.match(
   i18nSource,
   /action_add_credential_channel[\s\S]*message_creating_credential_channel[\s\S]*field_channel_priority[\s\S]*field_channel_note/,
-  'Provider channel note and priority controls must provide Simplified Chinese copy'
+  'Capability supplier priority and channel note controls must provide Simplified Chinese copy'
 );
 
 assert.match(
@@ -1699,8 +1885,32 @@ assert.match(
 
 assert.match(
   capabilitySupplierTableSource,
-  /connection\.managed_by === 'cloud_provider_connections'[\s\S]*deleteProviderConnection\(connection\)[\s\S]*action_delete/,
-  'Capability supplier rows must expose delete only for DB-managed provider connections'
+  /connection\.managed_by === 'cloud_provider_connections'[\s\S]*setConfirmingDeleteConnectionId\(connection\.connection_id\)[\s\S]*action_delete/,
+  'Capability supplier rows must expose delete only for DB-managed provider connections and enter inline confirmation first'
+);
+
+assert.doesNotMatch(
+  pageSource,
+  /window\.confirm[\s\S]*confirm_delete_connection/,
+  'Provider connection delete must not use browser-native confirmation dialogs'
+);
+
+assert.match(
+  pageSource,
+  /confirmingDeleteConnectionId[\s\S]*isConfirmingDelete[\s\S]*action_confirm_delete[\s\S]*deleteProviderConnection\(connection\)[\s\S]*action_cancel/,
+  'Provider connection delete must require an inline second confirmation with a cancel action'
+);
+
+assert.match(
+  pageSource,
+  /w-44 px-4 py-3 text-center[\s\S]*column_actions[\s\S]*w-44 px-4 py-4 text-center/,
+  'Model supplier action column must center its header and row actions'
+);
+
+assert.match(
+  capabilitySupplierTableSource,
+  /w-52 px-4 py-3 text-center[\s\S]*column_actions[\s\S]*w-52 px-4 py-4 text-center align-middle/,
+  'Capability supplier action column must center its header and row actions'
 );
 
 assert.match(

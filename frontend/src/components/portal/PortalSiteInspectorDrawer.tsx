@@ -7,7 +7,7 @@ import type { PortalSiteSummaryRecord, Site } from '@/lib/portal-client';
 import { resolveCustomerPackageDisplay } from '@/lib/customer-package-display';
 import {
   getPortalSiteDisplayName,
-  getPortalSiteSecondaryLabel,
+  getPortalSiteWordPressUrl,
 } from '@/lib/portal-site-display';
 import { translateAllowedAction, translateExternalCommercialRole } from '@/lib/admin-display';
 import { translateStatusLabel } from '@/lib/status-display';
@@ -115,8 +115,8 @@ export function PortalSiteInspectorDrawer({
     },
     {
       label: t('common.account'),
-      value: summary?.account_id || detailSite.account_id || t('common.not_found'),
-      detail: summary?.site_admin_ref || t('common.not_found'),
+      value: t('portal.connect_site_current_customer', {}, 'Current customer'),
+      detail: summary?.site_admin_ref || t('portal.home.read_only_summary', {}, 'Read-only summary only'),
     },
     {
       label: t('portal.home.access_scope', {}, 'Access scope'),
@@ -187,7 +187,7 @@ export function PortalSiteInspectorDrawer({
               ) : null}
             </div>
             <p className="mt-1 text-sm text-slate-600 dark:text-slate-400">
-              {getPortalSiteSecondaryLabel(detailSite) || t('common.not_found')}
+              {getPortalSiteWordPressUrl(detailSite) || t('portal.site_url_missing_short', {}, 'Site URL not configured')}
             </p>
             <div className="mt-3 flex flex-wrap gap-2">
               <button
@@ -262,7 +262,7 @@ export function PortalSiteInspectorDrawer({
                   <Metric
                     label={t('common.site')}
                     value={getPortalSiteDisplayName(detailSite)}
-                    detail={getPortalSiteSecondaryLabel(detailSite) || undefined}
+                    detail={getPortalSiteWordPressUrl(detailSite) || t('portal.site_url_missing_short', {}, 'Site URL not configured')}
                   />
                   {postureMetrics.map((item) => (
                     <Metric key={`${item.label}-${item.value}`} label={item.label} value={item.value} detail={item.detail} />

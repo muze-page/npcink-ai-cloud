@@ -473,6 +473,15 @@ type CapabilityProviderTemplate = {
 const QUIET_STATUS_BADGE_CLASS =
   'bg-slate-50 px-2 py-0.5 text-xs normal-case tracking-normal text-slate-600 dark:bg-slate-900 dark:text-slate-300';
 
+const TABLE_ACTION_BUTTON_CLASS =
+  'rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:border-slate-300 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-200 dark:hover:border-slate-700';
+
+const TABLE_DELETE_BUTTON_CLASS =
+  'rounded-full border border-rose-200 bg-white px-3 py-1.5 text-xs font-semibold text-rose-700 transition hover:border-rose-300 hover:bg-rose-50 disabled:cursor-not-allowed disabled:opacity-60 dark:border-rose-900 dark:bg-slate-950 dark:text-rose-300 dark:hover:border-rose-800 dark:hover:bg-rose-950/20';
+
+const TABLE_CONFIRM_DELETE_BUTTON_CLASS =
+  'rounded-full border border-rose-300 bg-rose-50 px-3 py-1.5 text-xs font-semibold text-rose-800 transition hover:border-rose-400 hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-60 dark:border-rose-800 dark:bg-rose-950/30 dark:text-rose-200 dark:hover:border-rose-700 dark:hover:bg-rose-950/50';
+
 const PROVIDER_PRESETS: ProviderPreset[] = [
   {
     id: 'openai_compatible',
@@ -1292,6 +1301,7 @@ function AiResourcesContent() {
   const [savingConnection, setSavingConnection] = useState(false);
   const [testingConnectionId, setTestingConnectionId] = useState('');
   const [deletingConnectionId, setDeletingConnectionId] = useState('');
+  const [confirmingDeleteConnectionId, setConfirmingDeleteConnectionId] = useState('');
   const [fetchingProviderCatalog, setFetchingProviderCatalog] = useState(false);
   const [providerCatalogPreview, setProviderCatalogPreview] = useState<ProviderCatalogPreview | null>(null);
   const [loadingModelReferences, setLoadingModelReferences] = useState(false);
@@ -1550,12 +1560,6 @@ function AiResourcesContent() {
 
   async function deleteProviderConnection(connection: Connection) {
     if (connection.managed_by !== 'cloud_provider_connections') return;
-    const confirmed = window.confirm(
-      aiText('confirm_delete_connection', 'Delete {{name}}? Its saved credential will be removed from Cloud provider connections.', {
-        name: connection.display_name,
-      })
-    );
-    if (!confirmed) return;
     setDeletingConnectionId(connection.connection_id);
     setError('');
     setMessage('');
@@ -1577,6 +1581,7 @@ function AiResourcesContent() {
         setProviderConnectionForm(EMPTY_PROVIDER_CONNECTION_FORM);
         setProviderFormMode('create');
       }
+      setConfirmingDeleteConnectionId('');
       await loadResources({ showLoading: false });
     } catch (deleteError) {
       setError(deleteError instanceof Error ? deleteError.message : aiText('error_delete_connection', 'Failed to delete provider connection.'));
@@ -1762,6 +1767,7 @@ function AiResourcesContent() {
   }
 
   function openNewProviderConnection() {
+    setConfirmingDeleteConnectionId('');
     setProviderConnectionForm(EMPTY_PROVIDER_CONNECTION_FORM);
     setProviderFormMode('create');
     setConnectionDetailsOpen(true);
@@ -1778,6 +1784,7 @@ function AiResourcesContent() {
   }
 
   function editProviderConnection(connection: Connection) {
+    setConfirmingDeleteConnectionId('');
     const storedCatalogPreview = catalogPreviewFromConnection(connection);
     setMessage(aiText('message_editing_connection', 'Editing {{name}}. Credential is left blank unless you replace it.', {
       name: connection.display_name,
@@ -1890,6 +1897,7 @@ function AiResourcesContent() {
   }
 
   function openCapabilityProviderTemplate(template: CapabilityProviderTemplate) {
+    setConfirmingDeleteConnectionId('');
     setActiveCapabilityCategory(template.category);
     setCapabilityAddDialogOpen(false);
     setProviderFormMode('create');
@@ -2883,20 +2891,22 @@ function AiResourcesContent() {
                           placeholder={aiText('placeholder_keep_current_credential', 'leave blank to keep current')}
                         />
                       </label>
-                      <label className="grid gap-2 text-sm font-medium text-slate-700 dark:text-slate-200">
-                        {aiText('field_channel_priority', 'Priority')}
-                        <input
-                          className="h-11 rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-white"
-                          type="number"
-                          min={0}
-                          max={999}
-                          value={providerConnectionForm.priority}
-                          onChange={(event) => updateProviderConnectionForm({ priority: event.target.value })}
-                        />
-                        <span className="text-xs font-normal leading-5 text-slate-500 dark:text-slate-400">
-                          {aiText('field_channel_priority_help', 'Lower numbers are used first. Default is 100.')}
-                        </span>
-                      </label>
+                      {isCapabilityProviderForm ? (
+                        <label className="grid gap-2 text-sm font-medium text-slate-700 dark:text-slate-200">
+                          {aiText('field_channel_priority', 'Priority')}
+                          <input
+                            className="h-11 rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-white"
+                            type="number"
+                            min={0}
+                            max={999}
+                            value={providerConnectionForm.priority}
+                            onChange={(event) => updateProviderConnectionForm({ priority: event.target.value })}
+                          />
+                          <span className="text-xs font-normal leading-5 text-slate-500 dark:text-slate-400">
+                            {aiText('field_channel_priority_help', 'Lower numbers are used first. Default is 100.')}
+                          </span>
+                        </label>
+                      ) : null}
                     </div>
 
                     <label className="grid gap-2 text-sm font-medium text-slate-700 dark:text-slate-200">
@@ -3269,7 +3279,7 @@ function AiResourcesContent() {
                       {[
                         [aiText('field_base_url', 'Base URL'), providerConnectionForm.baseUrl],
                         [aiText('field_capabilities', 'Capabilities'), providerConnectionForm.capabilityIds],
-                        [aiText('field_profiles', 'Profiles'), providerConnectionForm.runtimeProfileIds],
+                        [aiText('field_profiles', 'Runtime configurations'), providerConnectionForm.runtimeProfileIds],
                         [aiText('field_connection_id', 'Connection ID'), providerConnectionForm.connectionId],
                         [aiText('field_provider_id', 'Provider ID'), providerConnectionForm.providerId],
                         [aiText('field_kind', 'Kind'), providerConnectionForm.kind],
@@ -3358,7 +3368,7 @@ function AiResourcesContent() {
                         />
                       </label>
                       <label className="grid gap-2 text-sm font-medium text-slate-700 dark:text-slate-200">
-                        {aiText('field_profiles', 'Profiles')}
+                        {aiText('field_profiles', 'Runtime configurations')}
                         <input
                           className="h-11 rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-white"
                           value={providerConnectionForm.runtimeProfileIds}
@@ -3414,7 +3424,7 @@ function AiResourcesContent() {
                           onChange={(event) => setConnectionStatusFilter(event.target.value as ConnectionStatusFilter)}
                           aria-label={aiText('status_filter_label', 'Status')}
                         >
-                          <option value="all">{aiText('filter_all', 'All')}</option>
+                          <option value="all">{aiText('filter_all_statuses', 'All statuses')}</option>
                           <option value="ready">{aiText('filter_ready', 'Ready')}</option>
                           <option value="missing_secret">{aiText('filter_missing_secret', 'Missing secret')}</option>
                           <option value="disabled">{aiText('filter_disabled', 'Disabled')}</option>
@@ -3423,7 +3433,7 @@ function AiResourcesContent() {
                       <th className="px-4 py-3">{aiText('column_provider', 'Provider')}</th>
                       <th className="px-4 py-3">{aiText('column_enabled_models', 'Enabled models')}</th>
                       <th className="px-4 py-3">{aiText('last_test', 'Last test')}</th>
-                      <th className="px-4 py-3 text-right">{aiText('column_actions', 'Actions')}</th>
+                      <th className="w-44 px-4 py-3 text-center">{aiText('column_actions', 'Actions')}</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-200 dark:divide-slate-800">
@@ -3432,6 +3442,7 @@ function AiResourcesContent() {
                       const isAiSupplier = category === 'ai';
                       const testResult = connectionTestResults[connection.connection_id];
                       const isDeleting = deletingConnectionId === connection.connection_id;
+                      const isConfirmingDelete = confirmingDeleteConnectionId === connection.connection_id;
                       const modelIds = connection.model_ids || [];
                       return (
                         <tr key={connection.connection_id} className="align-top">
@@ -3447,19 +3458,16 @@ function AiResourcesContent() {
                             <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">
                               {connection.provider_id} · {providerKindLabel(connection.kind)}
                             </div>
-                            <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                              {aiText('channel_priority_summary', 'Priority {{priority}}', {
-                                priority: String(connection.priority ?? 100),
-                              })}
-                              {connection.note ? ` · ${connection.note}` : ''}
-                            </div>
+                            {connection.note ? (
+                              <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">{connection.note}</div>
+                            ) : null}
                             {renderConnectionIssue(connection)}
                           </td>
                           <td className="px-4 py-4 text-slate-600 dark:text-slate-300">
                             <div className="font-semibold text-slate-900 dark:text-white">
                               {modelIds.length
-                                ? aiText('model_catalog_enabled_count', '{{count}} enabled models', { count: String(modelIds.length) })
-                                : aiText('model_catalog_none_enabled', 'No enabled models')}
+                                ? aiText('model_catalog_enabled_count_short', '{{count}} models', { count: String(modelIds.length) })
+                                : aiText('model_catalog_none_enabled_short', '0 models')}
                             </div>
                           </td>
                           <td className="max-w-[18rem] px-4 py-4 text-slate-600 dark:text-slate-300">
@@ -3491,38 +3499,61 @@ function AiResourcesContent() {
                               <span className="text-slate-400 dark:text-slate-500">-</span>
                             )}
                           </td>
-                          <td className="px-4 py-4">
-                            <div className="flex flex-wrap justify-end gap-2">
-                              {isAiSupplier ? (
-                                <button
-                                  type="button"
-                                  className="btn btn-secondary"
-                                  disabled={isDeleting}
-                                  onClick={() => editProviderConnection(connection)}
-                                >
-                                  {aiText('action_configure', 'Configure')}
-                                </button>
-                              ) : null}
-                              {connection.managed_by === 'cloud_provider_connections' ? (
-                                <button
-                                  type="button"
-                                  className="rounded-full border border-rose-200 bg-white px-3 py-1.5 text-xs font-semibold text-rose-700 transition hover:border-rose-300 hover:bg-rose-50 disabled:cursor-not-allowed disabled:opacity-60 dark:border-rose-900 dark:bg-slate-950 dark:text-rose-300 dark:hover:border-rose-800 dark:hover:bg-rose-950/20"
-                                  disabled={isDeleting}
-                                  onClick={() => {
-                                    void deleteProviderConnection(connection);
-                                  }}
-                                >
-                                  {isDeleting ? aiText('deleting', 'Deleting...') : aiText('action_delete', 'Delete')}
-                                </button>
-                              ) : null}
-                              {!isAiSupplier && connection.detail_href ? (
-                                <Link href={connection.detail_href} className="btn btn-secondary">
-                                  {aiText('action_open_config', 'Open config')}
-                                </Link>
-                              ) : null}
-                              {!isAiSupplier && !connection.detail_href ? (
-                                <span className="text-sm text-slate-400 dark:text-slate-500">-</span>
-                              ) : null}
+                          <td className="w-44 px-4 py-4 text-center">
+                            <div className="flex flex-wrap items-center justify-center gap-3">
+                              {isConfirmingDelete ? (
+                                <>
+                                  <button
+                                    type="button"
+                                    className={TABLE_CONFIRM_DELETE_BUTTON_CLASS}
+                                    disabled={isDeleting}
+                                    onClick={() => {
+                                      void deleteProviderConnection(connection);
+                                    }}
+                                  >
+                                    {isDeleting ? aiText('deleting', 'Deleting...') : aiText('action_confirm_delete', 'Confirm delete')}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className={TABLE_ACTION_BUTTON_CLASS}
+                                    disabled={isDeleting}
+                                    onClick={() => setConfirmingDeleteConnectionId('')}
+                                  >
+                                    {aiText('action_cancel', 'Cancel')}
+                                  </button>
+                                </>
+                              ) : (
+                                <>
+                                  {isAiSupplier ? (
+                                    <button
+                                      type="button"
+                                      className={TABLE_ACTION_BUTTON_CLASS}
+                                      disabled={isDeleting}
+                                      onClick={() => editProviderConnection(connection)}
+                                    >
+                                      {aiText('action_configure', 'Configure')}
+                                    </button>
+                                  ) : null}
+                                  {connection.managed_by === 'cloud_provider_connections' ? (
+                                    <button
+                                      type="button"
+                                      className={TABLE_DELETE_BUTTON_CLASS}
+                                      disabled={isDeleting}
+                                      onClick={() => setConfirmingDeleteConnectionId(connection.connection_id)}
+                                    >
+                                      {aiText('action_delete', 'Delete')}
+                                    </button>
+                                  ) : null}
+                                  {!isAiSupplier && connection.detail_href ? (
+                                    <Link href={connection.detail_href} className={TABLE_ACTION_BUTTON_CLASS}>
+                                      {aiText('action_open_config', 'Open config')}
+                                    </Link>
+                                  ) : null}
+                                  {!isAiSupplier && !connection.detail_href ? (
+                                    <span className="text-sm text-slate-400 dark:text-slate-500">-</span>
+                                  ) : null}
+                                </>
+                              )}
                             </div>
                           </td>
                         </tr>
@@ -3552,12 +3583,12 @@ function AiResourcesContent() {
                       <th className="px-4 py-3">{aiText('column_provider', 'Provider')}</th>
                       <th className="px-4 py-3">
                         <select
-                          className="h-8 rounded-md border border-slate-200 bg-white px-2 text-xs font-semibold normal-case tracking-normal text-slate-700 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-200"
+                          className="h-8 w-36 rounded-md border border-slate-200 bg-white px-2 text-xs font-semibold normal-case tracking-normal text-slate-700 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-200"
                           value={capabilityCategoryFilter}
                           onChange={(event) => setCapabilityCategoryFilter(event.target.value as CapabilityProviderCategoryFilter)}
                           aria-label={aiText('capability_category_filter', 'Capability category')}
                         >
-                          <option value="all">{aiText('filter_all', 'All')}</option>
+                          <option value="all">{aiText('filter_all_categories', 'All categories')}</option>
                           {(['search', 'image', 'vector'] as CapabilityProviderCategory[]).map((category) => (
                             <option key={category} value={category}>
                               {capabilityCategoryLabel(category)} · {capabilityConnectionsByCategory[category].length}
@@ -3567,12 +3598,12 @@ function AiResourcesContent() {
                       </th>
                       <th className="px-4 py-3">
                         <select
-                          className="h-8 rounded-md border border-slate-200 bg-white px-2 text-xs font-semibold normal-case tracking-normal text-slate-700 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-200"
+                          className="h-8 w-36 rounded-md border border-slate-200 bg-white px-2 text-xs font-semibold normal-case tracking-normal text-slate-700 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-200"
                           value={connectionStatusFilter}
                           onChange={(event) => setConnectionStatusFilter(event.target.value as ConnectionStatusFilter)}
                           aria-label={aiText('status_filter_label', 'Status')}
                         >
-                          <option value="all">{aiText('filter_all', 'All')}</option>
+                          <option value="all">{aiText('filter_all_statuses', 'All statuses')}</option>
                           <option value="ready">{aiText('filter_ready', 'Ready')}</option>
                           <option value="missing_secret">{aiText('filter_missing_secret', 'Missing secret')}</option>
                           <option value="disabled">{aiText('filter_disabled', 'Disabled')}</option>
@@ -3580,7 +3611,7 @@ function AiResourcesContent() {
                       </th>
                       <th className="px-4 py-3">{aiText('column_connection', 'Connection')}</th>
                       <th className="px-4 py-3">{aiText('last_test', 'Last test')}</th>
-                      <th className="px-4 py-3 text-right">{aiText('column_actions', 'Actions')}</th>
+                      <th className="w-52 px-4 py-3 text-center">{aiText('column_actions', 'Actions')}</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-200 dark:divide-slate-800">
@@ -3589,6 +3620,7 @@ function AiResourcesContent() {
                       const testResult = connectionTestResults[connection.connection_id];
                       const isTesting = testingConnectionId === connection.connection_id;
                       const isDeleting = deletingConnectionId === connection.connection_id;
+                      const isConfirmingDelete = confirmingDeleteConnectionId === connection.connection_id;
                       const canTestConnection = connection.managed_by === 'cloud_provider_connections';
                       const channelCount = capabilityChannelCounts.get(`${connection.kind}:${connection.provider_id}`) || 0;
                       const showPriority = channelCount > 1 || Number(connection.priority ?? 100) !== 100;
@@ -3677,54 +3709,77 @@ function AiResourcesContent() {
                               <span className="text-slate-400 dark:text-slate-500">-</span>
                             )}
                           </td>
-                          <td className="px-4 py-4 align-middle">
-                            <div className="flex flex-wrap justify-end gap-2">
-                              {canTestConnection ? (
-                                <button
-                                  type="button"
-                                  className="rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:border-slate-300 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-200 dark:hover:border-slate-700"
-                                  disabled={isTesting || isDeleting}
-                                  onClick={() => {
-                                    void runProviderConnectionTest(connection.connection_id);
-                                  }}
-                                >
-                                  {isTesting ? aiText('testing', 'Testing...') : aiText('action_test', 'Test')}
-                                </button>
-                              ) : null}
-                              <button
-                                type="button"
-                                className="rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:border-slate-300 hover:bg-slate-50 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-200 dark:hover:border-slate-700"
-                                disabled={isDeleting}
-                                onClick={() => {
-                                  setActiveCapabilityCategory(category);
-                                  if (connection.managed_by === 'cloud_provider_connections') {
-                                    editProviderConnection(connection);
-                                    return;
-                                  }
-                                  const template = CAPABILITY_PROVIDER_TEMPLATES.find(
-                                    (item) => item.category === category && item.id === connection.provider_id
-                                  );
-                                  if (template) {
-                                    openCapabilityProviderTemplate(template);
-                                    return;
-                                  }
-                                  editProviderConnection(connection);
-                                }}
-                              >
-                                {aiText('action_configure', 'Configure')}
-                              </button>
-                              {connection.managed_by === 'cloud_provider_connections' ? (
-                                <button
-                                  type="button"
-                                  className="rounded-full border border-rose-200 bg-white px-3 py-1.5 text-xs font-semibold text-rose-700 transition hover:border-rose-300 hover:bg-rose-50 disabled:cursor-not-allowed disabled:opacity-60 dark:border-rose-900 dark:bg-slate-950 dark:text-rose-300 dark:hover:border-rose-800 dark:hover:bg-rose-950/20"
-                                  disabled={isDeleting}
-                                  onClick={() => {
-                                    void deleteProviderConnection(connection);
-                                  }}
-                                >
-                                  {isDeleting ? aiText('deleting', 'Deleting...') : aiText('action_delete', 'Delete')}
-                                </button>
-                              ) : null}
+                          <td className="w-52 px-4 py-4 text-center align-middle">
+                            <div className="flex flex-wrap items-center justify-center gap-3">
+                              {isConfirmingDelete ? (
+                                <>
+                                  <button
+                                    type="button"
+                                    className={TABLE_CONFIRM_DELETE_BUTTON_CLASS}
+                                    disabled={isDeleting}
+                                    onClick={() => {
+                                      void deleteProviderConnection(connection);
+                                    }}
+                                  >
+                                    {isDeleting ? aiText('deleting', 'Deleting...') : aiText('action_confirm_delete', 'Confirm delete')}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className={TABLE_ACTION_BUTTON_CLASS}
+                                    disabled={isDeleting}
+                                    onClick={() => setConfirmingDeleteConnectionId('')}
+                                  >
+                                    {aiText('action_cancel', 'Cancel')}
+                                  </button>
+                                </>
+                              ) : (
+                                <>
+                                  {canTestConnection ? (
+                                    <button
+                                      type="button"
+                                      className={TABLE_ACTION_BUTTON_CLASS}
+                                      disabled={isTesting || isDeleting}
+                                      onClick={() => {
+                                        void runProviderConnectionTest(connection.connection_id);
+                                      }}
+                                    >
+                                      {isTesting ? aiText('testing', 'Testing...') : aiText('action_test', 'Test')}
+                                    </button>
+                                  ) : null}
+                                  <button
+                                    type="button"
+                                    className={TABLE_ACTION_BUTTON_CLASS}
+                                    disabled={isDeleting}
+                                    onClick={() => {
+                                      setActiveCapabilityCategory(category);
+                                      if (connection.managed_by === 'cloud_provider_connections') {
+                                        editProviderConnection(connection);
+                                        return;
+                                      }
+                                      const template = CAPABILITY_PROVIDER_TEMPLATES.find(
+                                        (item) => item.category === category && item.id === connection.provider_id
+                                      );
+                                      if (template) {
+                                        openCapabilityProviderTemplate(template);
+                                        return;
+                                      }
+                                      editProviderConnection(connection);
+                                    }}
+                                  >
+                                    {aiText('action_configure', 'Configure')}
+                                  </button>
+                                  {connection.managed_by === 'cloud_provider_connections' ? (
+                                    <button
+                                      type="button"
+                                      className={TABLE_DELETE_BUTTON_CLASS}
+                                      disabled={isDeleting}
+                                      onClick={() => setConfirmingDeleteConnectionId(connection.connection_id)}
+                                    >
+                                      {aiText('action_delete', 'Delete')}
+                                    </button>
+                                  ) : null}
+                                </>
+                              )}
                             </div>
                           </td>
                         </tr>
@@ -3843,7 +3898,7 @@ function AiResourcesContent() {
           <div className="grid grid-cols-[1.1fr_8rem_1fr_1.2fr_1fr_1fr] gap-3 border-b border-slate-200 bg-slate-50 px-4 py-3 text-xs font-semibold uppercase tracking-[0.16em] text-slate-500 dark:border-slate-800 dark:bg-slate-900/70 dark:text-slate-400">
             <span>{aiText('column_feature', 'Feature')}</span>
             <span>{aiText('column_status', 'Status')}</span>
-            <span>{aiText('column_profile', 'Profile')}</span>
+            <span>{aiText('column_selection', 'Selection')}</span>
             <span>{aiText('column_provider_model', 'Provider / model')}</span>
             <span>{aiText('column_last_run', 'Last run')}</span>
             <span>{aiText('column_cost_latency', 'Cost / latency')}</span>
@@ -3861,8 +3916,13 @@ function AiResourcesContent() {
               </div>
               <BackofficeStatusBadge label={row.status} status={statusTone(row.status)} />
               <div className="text-slate-600 dark:text-slate-300">
-                <div>{row.profile_id || '-'}</div>
-                <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">{row.selection_owner}</div>
+                <div>{row.selection_owner || aiText('status_not_observed', 'not observed')}</div>
+                <details className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                  <summary className="cursor-pointer font-medium hover:text-slate-900 dark:hover:text-white">
+                    {aiText('technical_details', 'Technical details')}
+                  </summary>
+                  <div className="mt-1 break-all font-mono">{row.profile_id || '-'}</div>
+                </details>
               </div>
               <div className="text-slate-600 dark:text-slate-300">
                 <div>{row.provider_id || '-'} / {row.model_id || '-'}</div>
@@ -3872,9 +3932,14 @@ function AiResourcesContent() {
               </div>
               <div className="text-slate-600 dark:text-slate-300">
                 <div>{row.last_run?.status || aiText('status_not_observed', 'not observed')}</div>
-                <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                  {row.last_run?.run_id || '-'}
-                </div>
+                {row.last_run?.run_id ? (
+                  <details className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                    <summary className="cursor-pointer font-medium hover:text-slate-900 dark:hover:text-white">
+                      {aiText('technical_details', 'Technical details')}
+                    </summary>
+                    <div className="mt-1 break-all font-mono">{row.last_run.run_id}</div>
+                  </details>
+                ) : null}
               </div>
               <div className="text-slate-600 dark:text-slate-300">
                 <div>{aiText('credits_value', '{{value}} credits', { value: formatCost(row.last_provider_call?.cost) })}</div>
@@ -4054,7 +4119,7 @@ function AiResourcesContent() {
           <div className="grid grid-cols-[1fr_8rem_1fr_1.2fr_1fr] gap-3 border-b border-slate-200 bg-slate-50 px-4 py-3 text-xs font-semibold uppercase tracking-[0.16em] text-slate-500 dark:border-slate-800 dark:bg-slate-900/70 dark:text-slate-400">
             <span>{aiText('column_capability', 'Capability')}</span>
             <span>{aiText('column_status', 'Status')}</span>
-            <span>{aiText('column_profile', 'Profile')}</span>
+            <span>{aiText('column_selection', 'Selection')}</span>
             <span>{aiText('column_provider_model', 'Provider / model')}</span>
             <span>{aiText('column_connections', 'Connections')}</span>
           </div>
@@ -4071,8 +4136,13 @@ function AiResourcesContent() {
               </div>
               <BackofficeStatusBadge label={row.status} status={statusTone(row.status)} />
               <div className="text-slate-600 dark:text-slate-300">
-                <div>{row.selected_profile_id || '-'}</div>
-                <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">{row.selection_owner}</div>
+                <div>{row.selection_owner || aiText('status_not_observed', 'not observed')}</div>
+                <details className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                  <summary className="cursor-pointer font-medium hover:text-slate-900 dark:hover:text-white">
+                    {aiText('technical_details', 'Technical details')}
+                  </summary>
+                  <div className="mt-1 break-all font-mono">{row.selected_profile_id || '-'}</div>
+                </details>
               </div>
               <div className="text-slate-600 dark:text-slate-300">
                 <div>{row.selected_provider_id || '-'} / {row.selected_model_id || '-'}</div>
@@ -4102,7 +4172,7 @@ function AiResourcesContent() {
           <div className="grid grid-cols-[1fr_8rem_1.1fr_1.2fr_1fr] gap-3 border-b border-slate-200 bg-slate-50 px-4 py-3 text-xs font-semibold uppercase tracking-[0.16em] text-slate-500 dark:border-slate-800 dark:bg-slate-900/70 dark:text-slate-400">
             <span>{aiText('column_capability', 'Capability')}</span>
             <span>{aiText('column_status', 'Status')}</span>
-            <span>{aiText('column_profiles', 'Profiles')}</span>
+            <span>{aiText('column_selection', 'Selection')}</span>
             <span>{aiText('column_provider_model', 'Provider / model')}</span>
             <span>{aiText('column_write_posture', 'Write posture')}</span>
           </div>
@@ -4119,8 +4189,16 @@ function AiResourcesContent() {
               </div>
               <BackofficeStatusBadge label={row.status} status={statusTone(row.status)} />
               <div className="text-slate-600 dark:text-slate-300">
-                <div>{row.default_profile_id}</div>
-                <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">{profileIds(row.profiles)}</div>
+                <div>{row.selection_owner || aiText('status_not_observed', 'not observed')}</div>
+                <details className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                  <summary className="cursor-pointer font-medium hover:text-slate-900 dark:hover:text-white">
+                    {aiText('technical_details', 'Technical details')}
+                  </summary>
+                  <div className="mt-1 break-all font-mono">
+                    {row.default_profile_id}
+                    {row.profiles.length ? ` · ${profileIds(row.profiles)}` : ''}
+                  </div>
+                </details>
               </div>
               <div className="text-slate-600 dark:text-slate-300">{profileModelSummary(row.profiles)}</div>
               <div className="text-slate-600 dark:text-slate-300">
@@ -4133,16 +4211,24 @@ function AiResourcesContent() {
           </BackofficeSectionPanel>
 
           <BackofficeSectionPanel>
-        <h2 className="text-lg font-semibold text-slate-950 dark:text-white">{aiText('runtime_profiles_title', 'Runtime profiles')}</h2>
+        <h2 className="text-lg font-semibold text-slate-950 dark:text-white">{aiText('runtime_profiles_title', 'Runtime configurations')}</h2>
         <div className="mt-4 grid gap-3">
           {data.runtime_profiles.map((profile) => (
             <BackofficeStackCard key={profile.profile_id} className="grid gap-3 lg:grid-cols-[1fr_9rem_1.2fr_1fr] lg:items-center">
               <div>
-                <div className="font-semibold text-slate-950 dark:text-white">{profile.profile_id}</div>
+                <div className="font-semibold text-slate-950 dark:text-white">
+                  {profile.selected_provider_id || '-'} / {profile.selected_model_id || '-'}
+                </div>
                 <div className="mt-1 text-sm text-slate-500 dark:text-slate-400">
                   {profile.kind} · {labelList(profile.used_by)}
                   {profile.selected_for?.length ? ` · ${aiText('selected_for', 'selected for {{values}}', { values: labelList(profile.selected_for) })}` : ''}
                 </div>
+                <details className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                  <summary className="cursor-pointer font-medium hover:text-slate-900 dark:hover:text-white">
+                    {aiText('technical_details', 'Technical details')}
+                  </summary>
+                  <div className="mt-1 break-all font-mono">{profile.profile_id}</div>
+                </details>
               </div>
               <BackofficeStatusBadge label={profile.status} status={statusTone(profile.status)} />
               <div className="text-sm leading-6 text-slate-600 dark:text-slate-300">
@@ -4161,7 +4247,7 @@ function AiResourcesContent() {
           <div>
             <h2 className="text-lg font-semibold text-slate-950 dark:text-white">{aiText('recent_evidence_title', 'Recent runtime evidence')}</h2>
             <p className="mt-1 text-sm leading-6 text-slate-600 dark:text-slate-300">
-              {aiText('recent_evidence_desc', 'Last observed run metadata for each profile. Prompt and result content are not exposed here.')}
+              {aiText('recent_evidence_desc', 'Last observed run metadata for each runtime configuration. Prompt and result content are not exposed here.')}
             </p>
           </div>
           <BackofficeStatusBadge
@@ -4175,10 +4261,21 @@ function AiResourcesContent() {
             return (
               <BackofficeStackCard key={`evidence-${profile.profile_id}`} className="grid gap-3 lg:grid-cols-[1fr_8rem_1.2fr_1fr] lg:items-center">
                 <div>
-                  <div className="font-semibold text-slate-950 dark:text-white">{profile.profile_id}</div>
-                  <div className="mt-1 text-sm text-slate-500 dark:text-slate-400">
-                    {evidence?.run_id || aiText('no_recent_run', 'No recent run')}
+                  <div className="font-semibold text-slate-950 dark:text-white">
+                    {evidence?.provider_id || profile.selected_provider_id || '-'} / {evidence?.model_id || profile.selected_model_id || '-'}
                   </div>
+                  <div className="mt-1 text-sm text-slate-500 dark:text-slate-400">
+                    {evidence?.status || aiText('no_recent_run', 'No recent run')}
+                  </div>
+                  <details className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                    <summary className="cursor-pointer font-medium hover:text-slate-900 dark:hover:text-white">
+                      {aiText('technical_details', 'Technical details')}
+                    </summary>
+                    <div className="mt-1 space-y-1 break-all font-mono">
+                      <div>{profile.profile_id}</div>
+                      <div>{evidence?.run_id || '-'}</div>
+                    </div>
+                  </details>
                 </div>
                 <BackofficeStatusBadge
                   label={evidence?.status || aiText('status_not_observed', 'not observed')}
@@ -4188,7 +4285,14 @@ function AiResourcesContent() {
                   {evidence?.provider_id || '-'} / {evidence?.model_id || '-'}
                 </div>
                 <div className="text-sm leading-6 text-slate-600 dark:text-slate-300">
-                  {evidence?.trace_id || '-'}
+                  {evidence?.trace_id ? (
+                    <details className="text-xs text-slate-500 dark:text-slate-400">
+                      <summary className="cursor-pointer font-medium hover:text-slate-900 dark:hover:text-white">
+                        {aiText('technical_details', 'Technical details')}
+                      </summary>
+                      <div className="mt-1 break-all font-mono">{evidence.trace_id}</div>
+                    </details>
+                  ) : '-'}
                 </div>
               </BackofficeStackCard>
             );

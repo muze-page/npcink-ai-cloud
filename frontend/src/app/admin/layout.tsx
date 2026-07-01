@@ -89,7 +89,6 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
         '/admin/agent-feedback',
         '/admin/ai-advisor',
         '/admin/vector-observability',
-        '/admin/wordpress-ai-routing',
       ],
     },
   ];

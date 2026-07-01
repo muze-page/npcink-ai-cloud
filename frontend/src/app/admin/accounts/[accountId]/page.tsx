@@ -2398,7 +2398,7 @@ function AccountDetailContent() {
                           )}
                         </p>
                         <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                          {[entry.event_type, entry.site_id, entry.run_id].filter(Boolean).join(' · ') || entry.source_id || '-'}
+                          {entry.event_type || t('portal.usage.credit_ledger_default_event', {}, 'Usage event')}
                         </p>
                       </div>
                       <p className="text-slate-700 dark:text-slate-300">

@@ -3,6 +3,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { CustomerAdminTabs } from '@/components/admin/CustomerAdminTabs';
+import { BackofficeIdentifier } from '@/components/backoffice/BackofficeIdentifier';
 import { BackofficeStatusBadge } from '@/components/backoffice/BackofficeStatusBadge';
 import {
   BackofficeMetricStrip,
@@ -538,10 +539,7 @@ export default function AdminPortalUsersPage() {
                     <td className="px-5 py-4">
                       <div className="space-y-2">
                         <div className="font-semibold text-slate-950 dark:text-white">
-                          {user.email || user.principal_id}
-                        </div>
-                        <div className="text-xs text-slate-500 dark:text-slate-400">
-                          {user.principal_id}
+                          {user.email || '未填写邮箱'}
                         </div>
                         <div className="flex flex-wrap gap-2">
                           <BackofficeStatusBadge
@@ -558,10 +556,10 @@ export default function AdminPortalUsersPage() {
                       <div className="space-y-2">
                         <div>
                           <div className="font-medium text-slate-900 dark:text-slate-100">
-                            {user.account_name || user.account_id || '未绑定账号'}
+                            {user.account_name || '未绑定账号'}
                           </div>
                           <div className="text-xs text-slate-500 dark:text-slate-400">
-                            {user.account_id || '无账号 ID'} · {user.membership_status || '无成员状态'}
+                            {user.membership_status || '无成员状态'}
                           </div>
                         </div>
                         <div>
@@ -570,14 +568,22 @@ export default function AdminPortalUsersPage() {
                               href={`/admin/sites/${encodeURIComponent(user.site_id)}`}
                               className="font-medium text-blue-700 hover:text-blue-600 dark:text-blue-300"
                             >
-                              {user.site_name || user.site_id}
+                              {user.site_name || user.wordpress_url || '打开站点'}
                             </Link>
                           ) : (
                             <span className="font-medium text-slate-700 dark:text-slate-200">未绑定站点</span>
                           )}
                           <div className="max-w-xs truncate text-xs text-slate-500 dark:text-slate-400">
-                            {user.wordpress_url || user.site_id || '无站点 URL'} · {user.grant_status || '无授权状态'}
+                            {user.wordpress_url || '无站点 URL'} · {user.grant_status || '无授权状态'}
                           </div>
+                          <details className="mt-2 text-xs text-slate-500 dark:text-slate-400">
+                            <summary className="cursor-pointer font-medium">支持信息</summary>
+                            <div className="mt-2 space-y-1">
+                              <BackofficeIdentifier value={user.principal_id} full />
+                              {user.account_id ? <BackofficeIdentifier value={user.account_id} full /> : null}
+                              {user.site_id ? <BackofficeIdentifier value={user.site_id} full /> : null}
+                            </div>
+                          </details>
                         </div>
                       </div>
                     </td>
@@ -801,12 +807,17 @@ export default function AdminPortalUsersPage() {
                         {detail ? (
                           <div className="mt-3 text-sm text-slate-700 dark:text-slate-200">{detail}</div>
                         ) : null}
-                        <div className="mt-3 grid gap-2 text-xs text-slate-500 dark:text-slate-400 sm:grid-cols-2">
-                          <div>scope：{event.scope_kind || '-'} / {event.scope_id || '-'}</div>
-                          <div>trace：{event.trace_id || '-'}</div>
-                          <div>path：{event.method || 'GET'} {event.path || '-'}</div>
-                          <div>idempotency：{event.idempotency_key || '-'}</div>
-                        </div>
+                        <details className="mt-3 text-xs text-slate-500 dark:text-slate-400">
+                          <summary className="cursor-pointer font-medium text-slate-600 hover:text-slate-900 dark:text-slate-300 dark:hover:text-white">
+                            请求技术详情
+                          </summary>
+                          <div className="mt-2 grid gap-2 rounded-xl border border-slate-200 bg-slate-50 p-3 dark:border-slate-800 dark:bg-slate-900/45 sm:grid-cols-2">
+                            <div>scope：{event.scope_kind || '-'} / {event.scope_id || '-'}</div>
+                            <div>trace：{event.trace_id || '-'}</div>
+                            <div>path：{event.method || 'GET'} {event.path || '-'}</div>
+                            <div>idempotency：{event.idempotency_key || '-'}</div>
+                          </div>
+                        </details>
                       </div>
                     );
                   })

@@ -76,6 +76,8 @@ type CloudAbilityMediaTab = 'text' | 'image' | 'vector' | 'audio' | 'video';
 type CloudAbilityMediaFilter = 'all' | CloudAbilityMediaTab;
 type CloudAbilityRuntimeStatus = 'connected' | 'missing_provider' | 'planned' | 'unknown';
 
+const CLOUD_MEDIA_ORDER: CloudAbilityMediaTab[] = ['text', 'image', 'vector', 'audio', 'video'];
+
 type CloudAbilityRuntimeRow = {
   ability_id: string;
   label: string;
@@ -555,6 +557,14 @@ export default function AbilityModelsPage() {
     })
   ), [abilityModelFeatureLabel, abilityModelHealthLabel, abilityModelRegionLabel, aiText]);
 
+  const abilityModelRuntimeSummary = useCallback((instance: RuntimeInstance): string => (
+    aiText('ability_model_runtime_summary', '{{feature}} · {{region}} · {{status}}', {
+      feature: abilityModelFeatureLabel(instance.model_feature || instance.endpoint_variant),
+      region: abilityModelRegionLabel(instance.region),
+      status: abilityModelHealthLabel(instance.health_status),
+    })
+  ), [abilityModelFeatureLabel, abilityModelHealthLabel, abilityModelRegionLabel, aiText]);
+
   const cloudAbilityLabel = useCallback((row: CloudAbilityRuntimeRow): string => {
     const labels: Record<string, string> = {
       site_knowledge_embedding: text('cloud_ability_site_knowledge_embedding', 'Site Knowledge embedding'),
@@ -601,6 +611,16 @@ export default function AbilityModelsPage() {
     }
     return text('cloud_native_runtime_unassigned', 'Not connected');
   }, [modelRouteLabel, text]);
+
+  const cloudManagedDependencyLabel = useCallback((row: CloudAbilityRuntimeRow): string => {
+    if (row.model_kind === 'search_text_model') {
+      return text('cloud_native_managed_by_search_supplier', 'Controlled by search supplier settings');
+    }
+    if (row.model_kind === 'image_source_provider') {
+      return text('cloud_native_managed_by_image_supplier', 'Controlled by image supplier settings');
+    }
+    return text('cloud_native_action_readonly', 'Cloud managed');
+  }, [text]);
 
   const cloudAbilityStatusLabel = useCallback((status: CloudAbilityRuntimeStatus): string => {
     if (status === 'connected') return text('cloud_native_status_connected', 'Connected');
@@ -1133,9 +1153,19 @@ export default function AbilityModelsPage() {
     setDialogMessage('');
   }
 
+  const availableCloudMediaTabs = useMemo(
+    () => CLOUD_MEDIA_ORDER.filter((media) => cloudAbilityRows.some((row) => row.media === media)),
+    [cloudAbilityRows]
+  );
   const activeCloudNativeAbilityRows = activeCloudMediaFilter === 'all'
     ? cloudAbilityRows
     : cloudAbilityRows.filter((row) => row.media === activeCloudMediaFilter);
+
+  useEffect(() => {
+    if (activeCloudMediaFilter !== 'all' && !availableCloudMediaTabs.includes(activeCloudMediaFilter)) {
+      setActiveCloudMediaFilter('all');
+    }
+  }, [activeCloudMediaFilter, availableCloudMediaTabs]);
 
   if (loading) {
     return <LoadingFallback />;
@@ -1300,37 +1330,25 @@ export default function AbilityModelsPage() {
           </div>
 
           {cloudAbilityRows.length > 0 ? (
-            <div className="mt-4 overflow-hidden rounded-lg border border-slate-200 dark:border-slate-800">
-              <label className="grid gap-2 border-b border-slate-200 bg-slate-50 px-4 py-3 text-xs font-semibold uppercase tracking-[0.16em] text-slate-500 dark:border-slate-800 dark:bg-slate-900/70 dark:text-slate-400 md:hidden">
-                <span>{text('column_category', 'Category')}</span>
-                <select
-                  value={activeCloudMediaFilter}
-                  onChange={(event) => setActiveCloudMediaFilter(event.target.value as CloudAbilityMediaFilter)}
-                  className="h-10 rounded-lg border border-slate-300 bg-white px-3 text-sm font-medium normal-case tracking-normal text-slate-700 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
-                  aria-label={text('field_category_filter', 'Filter by category')}
-                >
-                  <option value="all">{text('filter_category_all', 'All categories')}</option>
-                  {(['text', 'image', 'vector', 'audio', 'video'] as CloudAbilityMediaTab[]).map((tab) => (
-                    <option key={tab} value={tab}>{text(`cloud_media_tab_${tab}`, tab)}</option>
-                  ))}
-                </select>
-              </label>
-              <div className="hidden grid-cols-[7rem_8rem_1.55fr_1.05fr_1.3fr_8rem] gap-3 border-b border-slate-200 bg-slate-50 px-4 py-3 text-xs font-semibold uppercase tracking-[0.16em] text-slate-500 dark:border-slate-800 dark:bg-slate-900/70 dark:text-slate-400 md:grid md:items-center">
+            <>
+              <div className="mt-4 overflow-hidden rounded-lg border border-slate-200 dark:border-slate-800">
+              <div className="hidden grid-cols-[7rem_8rem_1.55fr_1.05fr_1.3fr_9rem] gap-3 border-b border-slate-200 bg-slate-50 px-4 py-3 text-xs font-semibold uppercase tracking-[0.16em] text-slate-500 dark:border-slate-800 dark:bg-slate-900/70 dark:text-slate-400 md:grid md:items-center">
                 <span>{aiText('column_status', 'Status')}</span>
-                <label className="grid gap-1">
-                  <span>{text('column_category', 'Category')}</span>
+                <span>
                   <select
+                    className="h-8 w-full rounded-md border border-slate-200 bg-white px-2 text-xs font-semibold normal-case tracking-normal text-slate-700 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-200"
                     value={activeCloudMediaFilter}
                     onChange={(event) => setActiveCloudMediaFilter(event.target.value as CloudAbilityMediaFilter)}
-                    className="h-8 rounded-lg border border-slate-300 bg-white px-2 text-xs font-medium normal-case tracking-normal text-slate-700 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
-                    aria-label={text('field_category_filter', 'Filter by category')}
+                    aria-label={text('field_category_filter', 'Category filter')}
                   >
                     <option value="all">{text('filter_category_all', 'All categories')}</option>
-                    {(['text', 'image', 'vector', 'audio', 'video'] as CloudAbilityMediaTab[]).map((tab) => (
-                      <option key={tab} value={tab}>{text(`cloud_media_tab_${tab}`, tab)}</option>
+                    {availableCloudMediaTabs.map((tab) => (
+                      <option key={tab} value={tab}>
+                        {text(`cloud_media_tab_${tab}`, tab)}
+                      </option>
                     ))}
                   </select>
-                </label>
+                </span>
                 <span>{aiText('column_ability', 'Ability')}</span>
                 <span>{text('column_runtime_dependency', 'Runtime dependency')}</span>
                 <span>{text('column_current_runtime', 'Current runtime')}</span>
@@ -1340,7 +1358,7 @@ export default function AbilityModelsPage() {
                 activeCloudNativeAbilityRows.map((row) => (
                   <div
                     key={row.ability_id}
-                    className="grid gap-3 border-b border-slate-200 px-4 py-4 text-sm last:border-b-0 dark:border-slate-800 md:grid-cols-[7rem_8rem_1.55fr_1.05fr_1.3fr_8rem] md:items-center"
+                    className="grid gap-3 border-b border-slate-200 px-4 py-4 text-sm last:border-b-0 dark:border-slate-800 md:grid-cols-[7rem_8rem_1.55fr_1.05fr_1.3fr_9rem] md:items-center"
                   >
                     <div>
                       <div className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500 dark:text-slate-400 md:hidden">
@@ -1412,8 +1430,8 @@ export default function AbilityModelsPage() {
                           {text('cloud_native_action_configure_model', 'Configure model')}
                         </button>
                       ) : (
-                        <span className="inline-flex rounded-full border border-slate-200 px-3 py-1.5 text-xs font-medium text-slate-500 dark:border-slate-800 dark:text-slate-400">
-                          {text('cloud_native_action_readonly', 'Cloud managed')}
+                        <span className="inline-flex max-w-full justify-end text-xs font-medium leading-5 text-slate-500 dark:text-slate-400">
+                          {cloudManagedDependencyLabel(row)}
                         </span>
                       )}
                     </div>
@@ -1424,7 +1442,8 @@ export default function AbilityModelsPage() {
                   {text('cloud_category_filter_empty', 'No Cloud runtime abilities match this category.')}
                 </div>
               )}
-            </div>
+              </div>
+            </>
           ) : null}
 
           {cloudAbilityRows.length === 0 ? (
@@ -1499,9 +1518,19 @@ export default function AbilityModelsPage() {
                             : aiText('ability_model_unassigned', 'Unassigned')}
                         </div>
                         {selected ? (
-                          <p className="mt-1 text-xs leading-5 text-slate-500 dark:text-slate-400">
-                            {abilityModelInstanceDetail(selected)}
-                          </p>
+                          <>
+                            <p className="mt-1 text-xs leading-5 text-slate-500 dark:text-slate-400">
+                              {abilityModelRuntimeSummary(selected)}
+                            </p>
+                            <details className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                              <summary className="cursor-pointer select-none font-medium text-slate-600 hover:text-slate-900 dark:text-slate-300 dark:hover:text-white">
+                                {text('cloud_native_internal_details', 'Internal details')}
+                              </summary>
+                              <div className="mt-1 rounded-lg bg-white p-2 font-mono text-[0.7rem] leading-5 text-slate-600 dark:bg-slate-950/70 dark:text-slate-300">
+                                {abilityModelInstanceDetail(selected)}
+                              </div>
+                            </details>
+                          </>
                         ) : null}
                         {index === 1 && selected ? (
                           <button
@@ -1581,8 +1610,16 @@ export default function AbilityModelsPage() {
                                 </span>
                               </div>
                               <p className="mt-1 text-xs leading-5 text-slate-500 dark:text-slate-400">
-                                {abilityModelInstanceDetail(instance)}
+                                {abilityModelRuntimeSummary(instance)}
                               </p>
+                              <details className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                                <summary className="cursor-pointer select-none font-medium text-slate-600 hover:text-slate-900 dark:text-slate-300 dark:hover:text-white">
+                                  {text('cloud_native_internal_details', 'Internal details')}
+                                </summary>
+                                <div className="mt-1 rounded-lg bg-slate-50 p-2 font-mono text-[0.7rem] leading-5 text-slate-600 dark:bg-slate-900/55 dark:text-slate-300">
+                                  {abilityModelInstanceDetail(instance)}
+                                </div>
+                              </details>
                             </div>
                             <div className="text-xs font-medium text-slate-500 dark:text-slate-400">
                               {isPrimary
@@ -1919,13 +1956,26 @@ export default function AbilityModelsPage() {
                 </div>
                 <div>
                   <dt className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">
-                    {aiText('column_profile', 'Profile')}
+                    {text('column_category', 'Category')}
                   </dt>
-                  <dd className="mt-1 font-mono text-slate-600 dark:text-slate-300">
-                    {cloudBindingDialogRow.profile_id || 'embed.default'}
+                  <dd className="mt-1 font-medium text-slate-900 dark:text-slate-100">
+                    {text(`cloud_media_tab_${cloudBindingDialogRow.media}`, cloudBindingDialogRow.media)}
                   </dd>
                 </div>
               </dl>
+              <details className="mt-3 text-xs text-slate-500 dark:text-slate-400">
+                <summary className="cursor-pointer select-none font-medium text-slate-600 hover:text-slate-900 dark:text-slate-300 dark:hover:text-white">
+                  {text('cloud_native_internal_details', 'Internal details')}
+                </summary>
+                <dl className="mt-2 grid gap-1 rounded-lg bg-white p-2 dark:bg-slate-950/70">
+                  <div className="grid gap-1 sm:grid-cols-[6rem_1fr]">
+                    <dt>{text('cloud_native_internal_config_id', 'Config ID')}</dt>
+                    <dd className="font-mono text-slate-700 dark:text-slate-200">
+                      {cloudBindingDialogRow.profile_id || 'embed.default'}
+                    </dd>
+                  </div>
+                </dl>
+              </details>
             </div>
 
             <div className="mt-4 grid gap-3 rounded-xl border border-slate-200 bg-white p-3 dark:border-slate-800 dark:bg-slate-950 md:grid-cols-[0.85fr_1.15fr]">
@@ -1997,8 +2047,16 @@ export default function AbilityModelsPage() {
                             ) : null}
                           </div>
                           <p className="mt-1 text-xs leading-5 text-slate-500 dark:text-slate-400">
-                            {abilityModelInstanceDetail(instance)}
+                            {abilityModelRuntimeSummary(instance)}
                           </p>
+                          <details className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                            <summary className="cursor-pointer select-none font-medium text-slate-600 hover:text-slate-900 dark:text-slate-300 dark:hover:text-white">
+                              {text('cloud_native_internal_details', 'Internal details')}
+                            </summary>
+                            <div className="mt-1 rounded-lg bg-slate-50 p-2 font-mono text-[0.7rem] leading-5 text-slate-600 dark:bg-slate-900/55 dark:text-slate-300">
+                              {abilityModelInstanceDetail(instance)}
+                            </div>
+                          </details>
                         </div>
                         <div className="md:text-right">
                           <button

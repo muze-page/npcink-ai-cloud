@@ -4,6 +4,7 @@ import React, { Suspense, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import { LoadingFallback } from '@/components/ui/LoadingFallback';
+import { BackofficeIdentifier } from '@/components/backoffice/BackofficeIdentifier';
 import { BackofficeMetricStrip, BackofficePageStack, BackofficeSectionPanel, BackofficeStackCard } from '@/components/backoffice/BackofficeScaffold';
 import { BackofficeStatusBadge } from '@/components/backoffice/BackofficeStatusBadge';
 import { PortalWorkspaceHeader } from '@/components/portal/PortalWorkspaceHeader';
@@ -15,7 +16,6 @@ import { resolveCustomerPackageDisplay } from '@/lib/customer-package-display';
 import { formatPortalErrorMessage } from '@/lib/portal-error';
 import {
   getPortalSiteDisplayName,
-  getPortalSiteSecondaryLabel,
   getPortalSiteWordPressUrl,
 } from '@/lib/portal-site-display';
 import { formatDate, formatNumber as formatInteger } from '@/lib/utils';
@@ -121,7 +121,7 @@ function PortalSiteRecordContent() {
           {
             label: t('common.status', {}, 'Status'),
             value: site.status,
-            detail: getPortalSiteSecondaryLabel(site),
+            detail: getPortalSiteWordPressUrl(site) || t('portal.site_url_missing_short', {}, 'Site URL not configured'),
           },
           {
             label: t('usage.requests_month', {}, 'Requests / month'),
@@ -166,7 +166,9 @@ function PortalSiteRecordContent() {
                   {t('portal.billing.coverage_label', {}, 'Coverage')}
                 </p>
                 <p className="mt-2 text-sm text-slate-600 dark:text-slate-300">
-                  {coverage?.subscription_id || summary.covered_by_subscription_id || t('common.not_found')}
+                  {coverage?.status || summary.subscription_status
+                    ? t(`status.${coverage?.status || summary.subscription_status}`, {}, coverage?.status || summary.subscription_status || '')
+                    : t('common.not_found')}
                 </p>
               </div>
               <BackofficeStatusBadge
@@ -180,7 +182,7 @@ function PortalSiteRecordContent() {
             items={[
               {
                 label: t('common.account', {}, 'Account'),
-                value: site.account_id || summary.account_id || t('common.not_found'),
+                value: t('portal.connect_site_current_customer', {}, 'Current customer'),
               },
               {
                 label: t('common.created_at', {}, 'Created'),
@@ -188,6 +190,25 @@ function PortalSiteRecordContent() {
               },
             ]}
           />
+          <details className="rounded-[1rem] border border-dashed border-slate-200 px-4 py-3 text-xs text-slate-500 dark:border-slate-800 dark:text-slate-400">
+            <summary className="cursor-pointer font-medium text-slate-600 dark:text-slate-300">
+              {t('portal.support_information', {}, 'Support information')}
+            </summary>
+            <div className="mt-3 grid gap-3 sm:grid-cols-3">
+              <div>
+                <p>{t('portal.connect_site_record_id_label', {}, 'Cloud Record ID')}</p>
+                <BackofficeIdentifier value={site.site_id} className="mt-1 block" />
+              </div>
+              <div>
+                <p>{t('common.account', {}, 'Account')}</p>
+                <BackofficeIdentifier value={site.account_id || summary.account_id || t('common.not_found')} className="mt-1 block" />
+              </div>
+              <div>
+                <p>{t('common.subscription', {}, 'Subscription')}</p>
+                <BackofficeIdentifier value={coverage?.subscription_id || summary.covered_by_subscription_id || t('common.not_found')} className="mt-1 block" />
+              </div>
+            </div>
+          </details>
         </BackofficeSectionPanel>
 
         <BackofficeSectionPanel className="space-y-4">

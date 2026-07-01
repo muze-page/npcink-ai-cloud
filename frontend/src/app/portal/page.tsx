@@ -7,7 +7,6 @@ import { useSession } from '@/hooks/useSession';
 import { resolveCustomerPackageDisplay } from '@/lib/customer-package-display';
 import {
   getPortalSiteDisplayName,
-  getPortalSiteSecondaryLabel,
   getPortalSiteWordPressUrl,
 } from '@/lib/portal-site-display';
 import { cn, formatDate } from '@/lib/utils';
@@ -370,7 +369,7 @@ export default function PortalPage() {
   const selectedAccount =
     session.accounts?.find((account) => account.account_id === selectedSite.account_id) || null;
   const currentAccountLabel =
-    selectedAccount?.name || selectedSite.account_id || session.account_id || t('common.not_found');
+    selectedAccount?.name || t('portal.connect_site_current_customer', {}, 'Current customer');
   const currentSubscription = session.current_subscription;
   const currentSubscriptionStatus =
     currentSubscription?.status || t('common.not_found');
@@ -563,7 +562,6 @@ export default function PortalPage() {
                 </div>
                 <p className="mt-1 truncate text-xs text-gray-600 dark:text-gray-400">
                   {selectedSiteWordPressUrl ||
-                    getPortalSiteSecondaryLabel(selectedSite) ||
                     t('portal.site_url_missing', {}, 'WordPress URL not configured')}
                 </p>
               </div>
@@ -824,7 +822,6 @@ export default function PortalPage() {
                       </div>
                       <p className="mt-1 text-sm text-gray-600 dark:text-gray-400">
                         {getPortalSiteWordPressUrl(site) ||
-                          getPortalSiteSecondaryLabel(site) ||
                           t('portal.site_url_missing', {}, 'WordPress URL not configured')}
                       </p>
                       <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-gray-500 dark:text-gray-400 lg:hidden">

@@ -5,6 +5,7 @@ import {
   BackofficeStackCard,
 } from '@/components/backoffice/BackofficeScaffold';
 import { BackofficeStatusBadge } from '@/components/backoffice/BackofficeStatusBadge';
+import { useLocale } from '@/contexts/LocaleContext';
 
 export type CloudWorkflowMetadata = {
   workflowId: string;
@@ -62,6 +63,8 @@ export function CloudWorkflowMetadataPanel({
   metadata,
   className,
 }: CloudWorkflowMetadataPanelProps) {
+  const { t } = useLocale();
+
   if (!metadata.workflowId) {
     return null;
   }
@@ -70,28 +73,39 @@ export function CloudWorkflowMetadataPanel({
     ? metadata.badges
     : [
         {
-          label: metadata.directWordPressWrite ? 'write allowed' : 'write blocked',
+          label: metadata.directWordPressWrite
+            ? t('workflow_metadata.badge_write_allowed', {}, 'write allowed')
+            : t('workflow_metadata.badge_write_blocked', {}, 'write blocked'),
           status: metadata.directWordPressWrite ? 'error' : 'success',
         },
         {
-          label: metadata.requiresOperatorReview ? 'review required' : 'review optional',
+          label: metadata.requiresOperatorReview
+            ? t('workflow_metadata.badge_review_required', {}, 'review required')
+            : t('workflow_metadata.badge_review_optional', {}, 'review optional'),
           status: metadata.requiresOperatorReview ? 'warning' : 'inactive',
         },
       ];
+  const writePosture = metadata.directWordPressWrite
+    ? t('workflow_metadata.write_allowed', {}, 'WordPress write allowed')
+    : t('workflow_metadata.write_blocked', {}, 'WordPress write blocked');
+  const reviewPosture = metadata.requiresOperatorReview
+    ? t('workflow_metadata.operator_review_required', {}, 'Operator review required')
+    : t('workflow_metadata.operator_review_optional', {}, 'Operator review optional');
+  const handoffOwner = translateMetadataValue(t, 'handoff_owner', metadata.handoffOwner || metadata.owner || 'cloud_runtime');
 
   return (
     <BackofficeSectionPanel className={`space-y-5 ${className || ''}`}>
       <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
         <div>
           <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
-            Workflow metadata
+            {t('workflow_metadata.label', {}, 'Workflow metadata')}
           </p>
           <h2 className="mt-2 text-xl font-semibold text-slate-950 dark:text-white">
-            {metadata.title || metadata.workflowId}
+            {translateWorkflowField(t, metadata.workflowId, 'title', metadata.title || metadata.workflowId)}
           </h2>
           {metadata.summary ? (
             <p className="mt-2 text-sm leading-6 text-slate-600 dark:text-slate-300">
-              {metadata.summary}
+              {translateWorkflowField(t, metadata.workflowId, 'summary', metadata.summary)}
             </p>
           ) : null}
         </div>
@@ -99,7 +113,7 @@ export function CloudWorkflowMetadataPanel({
           {badges.map((badge) => (
             <BackofficeStatusBadge
               key={`${badge.label}:${badge.status}`}
-              label={badge.label}
+              label={translateMetadataValue(t, 'badge', badge.label)}
               status={badge.status}
             />
           ))}
@@ -107,19 +121,53 @@ export function CloudWorkflowMetadataPanel({
       </div>
 
       <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-        <MetadataCard label="Workflow" value={metadata.workflowId} />
-        <MetadataCard label="Version" value={metadata.workflowVersion} />
-        <MetadataCard label={metadata.abilityName ? 'Ability' : 'Contract'} value={metadata.abilityName || metadata.contract} />
-        <MetadataCard label="Handoff" value={metadata.handoffOwner || metadata.owner} />
-        <MetadataCard label="Pattern" value={metadata.executionPattern} />
-        <MetadataCard label="Storage" value={metadata.storageMode} />
-        <MetadataCard label="Fail closed" value={metadata.failClosedBehavior} className="md:col-span-2" />
+        <MetadataCard label={t('workflow_metadata.write_posture', {}, 'Write posture')} value={writePosture} />
+        <MetadataCard label={t('workflow_metadata.review_posture', {}, 'Review posture')} value={reviewPosture} />
+        <MetadataCard label={t('workflow_metadata.handoff', {}, 'Handoff')} value={handoffOwner} />
+        <MetadataCard
+          label={t('workflow_metadata.fail_closed', {}, 'Fail closed')}
+          value={
+            metadata.failClosedBehavior
+              ? translateMetadataValue(t, 'fail_closed_behavior', metadata.failClosedBehavior)
+              : t('workflow_metadata.not_declared', {}, 'Not declared')
+          }
+        />
       </div>
 
       <div className="grid gap-4 lg:grid-cols-2">
-        <MetadataList title="Steps" items={metadata.steps} />
-        <MetadataList title="Stop conditions" items={metadata.stopConditions} />
+        <MetadataList
+          title={t('workflow_metadata.steps', {}, 'Steps')}
+          items={metadata.steps.map((item) => translateMetadataValue(t, 'step', item))}
+          emptyLabel={t('workflow_metadata.no_metadata', {}, 'No metadata declared.')}
+        />
+        <MetadataList
+          title={t('workflow_metadata.stop_conditions', {}, 'Stop conditions')}
+          items={metadata.stopConditions.map((item) => translateMetadataValue(t, 'stop_condition', item))}
+          emptyLabel={t('workflow_metadata.no_metadata', {}, 'No metadata declared.')}
+        />
       </div>
+
+      <details className="rounded-2xl border border-slate-200/80 bg-white/70 p-4 text-sm text-slate-600 dark:border-slate-800 dark:bg-slate-950/45 dark:text-slate-300">
+        <summary className="cursor-pointer font-semibold text-slate-700 dark:text-slate-200">
+          {t('workflow_metadata.technical_metadata', {}, 'Technical metadata')}
+        </summary>
+        <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+          <MetadataCard label={t('workflow_metadata.workflow', {}, 'Workflow')} value={metadata.workflowId} />
+          <MetadataCard label={t('workflow_metadata.version', {}, 'Version')} value={metadata.workflowVersion} />
+          <MetadataCard
+            label={metadata.abilityName ? t('workflow_metadata.ability', {}, 'Ability') : t('workflow_metadata.contract', {}, 'Contract')}
+            value={metadata.abilityName || metadata.contract}
+          />
+          <MetadataCard
+            label={t('workflow_metadata.pattern', {}, 'Pattern')}
+            value={translateMetadataValue(t, 'execution_pattern', metadata.executionPattern)}
+          />
+          <MetadataCard
+            label={t('workflow_metadata.storage', {}, 'Storage')}
+            value={translateMetadataValue(t, 'storage_mode', metadata.storageMode)}
+          />
+        </div>
+      </details>
     </BackofficeSectionPanel>
   );
 }
@@ -138,14 +186,22 @@ function MetadataCard({
       <p className="text-[0.68rem] font-semibold uppercase tracking-[0.14em] text-slate-500 dark:text-slate-400">
         {label}
       </p>
-      <p className="mt-1 font-mono text-xs text-slate-700 dark:text-slate-200">
+      <p className="mt-1 text-sm font-semibold text-slate-800 dark:text-slate-100">
         {value || '-'}
       </p>
     </BackofficeStackCard>
   );
 }
 
-function MetadataList({ title, items }: { title: string; items: string[] }) {
+function MetadataList({
+  title,
+  items,
+  emptyLabel,
+}: {
+  title: string;
+  items: string[];
+  emptyLabel: string;
+}) {
   return (
     <BackofficeStackCard>
       <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">
@@ -160,10 +216,35 @@ function MetadataList({ title, items }: { title: string; items: string[] }) {
           ))
         ) : (
           <p className="text-sm leading-6 text-slate-500 dark:text-slate-400">
-            No metadata declared.
+            {emptyLabel}
           </p>
         )}
       </div>
     </BackofficeStackCard>
   );
+}
+
+function metadataKey(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '');
+}
+
+function translateWorkflowField(
+  t: (key: string, params?: Record<string, string>, fallback?: string) => string,
+  workflowId: string,
+  field: 'title' | 'summary',
+  fallback: string
+): string {
+  return t(`workflow_metadata.workflow.${metadataKey(workflowId)}.${field}`, {}, fallback);
+}
+
+function translateMetadataValue(
+  t: (key: string, params?: Record<string, string>, fallback?: string) => string,
+  group: string,
+  value: string
+): string {
+  return t(`workflow_metadata.${group}.${metadataKey(value)}`, {}, value);
 }

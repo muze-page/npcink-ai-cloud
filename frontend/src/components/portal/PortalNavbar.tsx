@@ -5,7 +5,11 @@ import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useLocale } from '@/contexts/LocaleContext';
 import { useSession } from '@/hooks/useSession';
-import { getPortalSiteDisplayName, getPortalSiteSecondaryLabel } from '@/lib/portal-site-display';
+import {
+  getPortalSiteDisplayName,
+  getPortalSiteSecondaryLabel,
+  getPortalSiteWordPressUrl,
+} from '@/lib/portal-site-display';
 import { cn } from '@/lib/utils';
 import { LocaleSwitcher } from '@/components/ui/LocaleSwitcher';
 import { ThemeToggle } from '@/components/ui/ThemeToggle';
@@ -149,6 +153,16 @@ export function PortalNavbar() {
     visibleSites[0]?.site_id ||
     '';
   const selectedSite = visibleSites.find((site) => site.site_id === selectedSiteId) || null;
+  const visibleSiteLabel = useCallback(
+    (site: typeof visibleSites[number]) =>
+      site.site_name || getPortalSiteWordPressUrl(site) || t('portal.current_site', {}, 'Current site'),
+    [t]
+  );
+  const visibleSiteSecondaryLabel = useCallback(
+    (site: typeof visibleSites[number]) =>
+      getPortalSiteWordPressUrl(site) || t('portal.site_url_missing_short', {}, 'Site URL not configured'),
+    [t]
+  );
   return (
     <header className="sticky top-0 z-50 w-full border-b border-slate-200/70 bg-white/78 backdrop-blur-xl dark:border-slate-800 dark:bg-slate-950/78">
       <div className="container mx-auto px-4">
@@ -188,7 +202,7 @@ export function PortalNavbar() {
                 >
                   <span className="truncate">
                     {selectedSite
-                      ? `${getPortalSiteDisplayName(selectedSite)}${getPortalSiteSecondaryLabel(selectedSite) ? ` · ${getPortalSiteSecondaryLabel(selectedSite)}` : ''}`
+                      ? `${visibleSiteLabel(selectedSite)} · ${visibleSiteSecondaryLabel(selectedSite)}`
                       : t('common.not_found')}
                   </span>
                   <svg className="ml-3 h-4 w-4 shrink-0" viewBox="0 0 20 20" fill="none" aria-hidden="true">
@@ -225,7 +239,7 @@ export function PortalNavbar() {
                             onClick={() => void handleSiteChange(site.site_id)}
                           >
                             <p className="truncate text-sm font-semibold">
-                              {getPortalSiteDisplayName(site)}
+                              {visibleSiteLabel(site)}
                             </p>
                             <p
                               className={cn(
@@ -235,7 +249,7 @@ export function PortalNavbar() {
                                   : 'text-slate-500 dark:text-slate-400'
                               )}
                             >
-                              {getPortalSiteSecondaryLabel(site) || site.site_id}
+                              {visibleSiteSecondaryLabel(site)}
                             </p>
                           </button>
                         ))
@@ -369,8 +383,9 @@ export function PortalNavbar() {
               >
                 {visibleSites.map((site) => (
                   <option key={site.site_id} value={site.site_id}>
-                    {getPortalSiteDisplayName(site)}
-                    {getPortalSiteSecondaryLabel(site) ? ` · ${getPortalSiteSecondaryLabel(site)}` : ''}
+                    {visibleSiteLabel(site)}
+                    {' · '}
+                    {visibleSiteSecondaryLabel(site)}
                   </option>
                 ))}
               </select>

@@ -408,11 +408,10 @@ function PortalUsageContent() {
   const primarySummaryItems = [
     {
       label: t('common.site'),
-      value: getPortalSiteDisplayName(selectedSite) || selectedSiteId || t('common.not_found'),
+      value: getPortalSiteDisplayName(selectedSite) || t('portal.current_site', {}, 'Current site'),
       detail:
         getPortalSiteWordPressUrl(selectedSite) ||
-        getPortalSiteSecondaryLabel(selectedSite) ||
-        selectedSiteId,
+        t('portal.site_url_missing', {}, 'WordPress URL not configured'),
     },
     {
       label: t('portal.usage.context_generated'),
@@ -803,9 +802,8 @@ function PortalUsageContent() {
                         </p>
                         <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
                           {entry.explanation ||
-                            [entry.event_type, entry.site_id, entry.run_id].filter(Boolean).join(' · ') ||
-                            entry.source_id ||
-                            '-'}
+                            entry.event_type ||
+                            t('portal.usage.credit_ledger_default_event', {}, 'Usage event')}
                         </p>
                       </div>
                       <p className="text-slate-700 dark:text-slate-300">
@@ -1015,7 +1013,8 @@ function PortalUsageContent() {
                     />
                   </div>
                   <p className="mt-1 truncate text-sm text-gray-600 dark:text-gray-400">
-                    {getPortalSiteSecondaryLabel(selectedSite) || entitlements.site_id}
+                    {getPortalSiteWordPressUrl(selectedSite) ||
+                      t('portal.site_url_missing', {}, 'WordPress URL not configured')}
                   </p>
                 </div>
                 <div className="grid gap-2 text-sm text-slate-700 dark:text-slate-200 sm:grid-cols-3 lg:min-w-[34rem]">

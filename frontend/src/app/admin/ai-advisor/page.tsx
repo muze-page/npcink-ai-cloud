@@ -1,5 +1,6 @@
 'use client';
 
+import Link from 'next/link';
 import React, { Suspense, useCallback, useEffect, useMemo, useState } from 'react';
 import {
   BackofficeMetricStrip,
@@ -60,8 +61,13 @@ type SummaryBranch = {
   source_context: {
     advisor: {
       scope: string;
+      status: string;
+      severity: string;
+      summary: string;
+      confidence: string;
       agent_handoff: AgentHandoff;
       evidence: Array<{ kind: string; ref: string; label: string }>;
+      recommendedActions: Array<{ action: string; requiresOperator: boolean }>;
       signals: Array<Record<string, string | number | boolean | null>>;
       drilldown: Record<string, DrilldownValue>;
     };
@@ -238,10 +244,10 @@ type ScenarioCheck = {
 };
 
 const SCOPE_OPTIONS = [
-  { label: '运营总览', value: 'operations' },
-  { label: '运行时', value: 'runtime' },
-  { label: '商业状态', value: 'commercial' },
-  { label: '路由建议', value: 'routing' },
+  { labelKey: 'admin.ai_advisor.scope_operations', fallback: 'Operations', value: 'operations' },
+  { labelKey: 'admin.ai_advisor.scope_runtime', fallback: 'Runtime', value: 'runtime' },
+  { labelKey: 'admin.ai_advisor.scope_commercial', fallback: 'Commercial', value: 'commercial' },
+  { labelKey: 'admin.ai_advisor.scope_routing', fallback: 'Routing recommendations', value: 'routing' },
 ];
 
 function normalizeBranch(raw: any): SummaryBranch {
@@ -295,12 +301,22 @@ function normalizeBranch(raw: any): SummaryBranch {
     source_context: {
       advisor: {
         scope: String(raw?.source_context?.advisor?.scope ?? ''),
+        status: String(raw?.source_context?.advisor?.status ?? raw?.status ?? ''),
+        severity: String(raw?.source_context?.advisor?.severity ?? raw?.severity ?? ''),
+        summary: String(raw?.source_context?.advisor?.summary ?? ''),
+        confidence: String(raw?.source_context?.advisor?.confidence ?? ''),
         agent_handoff: normalizeAgentHandoff(handoff),
         evidence: Array.isArray(raw?.source_context?.advisor?.evidence)
           ? raw.source_context.advisor.evidence.map((item: any) => ({
               kind: String(item?.kind ?? ''),
               ref: String(item?.ref ?? ''),
               label: String(item?.label ?? ''),
+            }))
+          : [],
+        recommendedActions: Array.isArray(raw?.source_context?.advisor?.recommended_actions)
+          ? raw.source_context.advisor.recommended_actions.map((item: any) => ({
+              action: String(item?.action ?? ''),
+              requiresOperator: Boolean(item?.requires_operator),
             }))
           : [],
         signals: Array.isArray(raw?.source_context?.advisor?.signals)
@@ -858,6 +874,246 @@ function HistoryRow({ item }: { item: AdvisorHistoryItem }) {
       </div>
     </div>
   );
+}
+
+function OperationsWorkPanel({ data }: { data: AdvisorPreviewData }) {
+  const { t } = useLocale();
+  const branch = data.ai;
+  const advisor = branch.source_context.advisor;
+  const runtime = getSignal(branch, 'ops.runtime_quality');
+  const provider = getSignal(branch, 'ops.provider_quality');
+  const knowledge = getSignal(branch, 'ops.knowledge_quality');
+  const usage = getSignal(branch, 'ops.usage_cost');
+  const actions = advisor.recommendedActions.length
+    ? advisor.recommendedActions
+    : [{ action: branch.operator_next_step || 'continue_operations_monitoring', requiresOperator: true }];
+  const status = advisor.status || branch.status || 'ok';
+  const severity = advisor.severity || branch.severity || 'info';
+
+  return (
+    <BackofficeSectionPanel className="space-y-5">
+      <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
+            {t('admin.ai_advisor.current_diagnosis', {}, 'Current diagnosis')}
+          </p>
+          <h2 className="mt-2 text-xl font-semibold text-slate-950 dark:text-white">
+            {branch.headline || t('admin.ai_advisor.no_active_issue', {}, 'No active operator issue')}
+          </h2>
+          <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-600 dark:text-slate-300">
+            {advisor.summary || branch.operator_summary || t('admin.ai_advisor.no_summary', {}, 'Review the linked operational evidence.')}
+          </p>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <BackofficeStatusBadge label={statusLabel(status, t)} status={statusBadge(status, severity)} />
+          <BackofficeStatusBadge label={severityLabel(severity, t)} status={statusBadge(status, severity)} />
+        </div>
+      </div>
+
+      <BackofficeMetricStrip
+        columnsClassName="md:grid-cols-2 xl:grid-cols-4"
+        items={[
+          {
+            label: t('admin.ai_advisor.metric_failed_runs', {}, 'Failed runs'),
+            value: formatNumber(Number(runtime.failed_runs || 0)),
+            detail: t(
+              'admin.ai_advisor.detail_total_runs',
+              { total: formatNumber(Number(runtime.total_runs || 0)) },
+              '{{total}} total runs'
+            ),
+            toneClassName: Number(runtime.failed_runs || 0) > 0 ? 'text-amber-600 dark:text-amber-300' : undefined,
+          },
+          {
+            label: t('admin.ai_advisor.metric_provider_errors', {}, 'Provider errors'),
+            value: formatNumber(Number(provider.provider_errors || 0)),
+            detail: t(
+              'admin.ai_advisor.detail_provider_calls',
+              { rate: formatRatio(provider.provider_error_rate), calls: formatNumber(Number(provider.provider_calls || 0)) },
+              '{{rate}} · {{calls}} calls'
+            ),
+            toneClassName: Number(provider.provider_errors || 0) > 0 ? 'text-amber-600 dark:text-amber-300' : undefined,
+          },
+          {
+            label: t('admin.ai_advisor.metric_knowledge_no_hits', {}, 'Knowledge no-hits'),
+            value: formatNumber(Number(knowledge.knowledge_no_hits || 0)),
+            detail: t(
+              'admin.ai_advisor.detail_knowledge_searches',
+              { rate: formatRatio(knowledge.knowledge_no_hit_rate), searches: formatNumber(Number(knowledge.knowledge_searches || 0)) },
+              '{{rate}} · {{searches}} searches'
+            ),
+            toneClassName: Number(knowledge.knowledge_no_hits || 0) > 0 ? 'text-amber-600 dark:text-amber-300' : undefined,
+          },
+          {
+            label: t('admin.ai_advisor.metric_usage_cost', {}, 'Usage cost'),
+            value: formatCost(Number(usage.provider_cost || 0)),
+            detail: t(
+              'admin.ai_advisor.detail_usage_events',
+              { events: formatNumber(Number(usage.usage_events || 0)) },
+              '{{events}} usage events'
+            ),
+            size: 'compact',
+          },
+        ]}
+      />
+
+      <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(18rem,0.7fr)]">
+        <div className="rounded-xl border border-slate-200/80 bg-white/75 px-4 py-3 dark:border-slate-800 dark:bg-slate-950/35">
+          <div className="flex items-center justify-between gap-3">
+            <p className="text-sm font-semibold text-slate-950 dark:text-white">
+              {t('admin.ai_advisor.recommended_actions', {}, 'Recommended actions')}
+            </p>
+            <BackofficeStatusBadge
+              label={advisor.confidence || t('admin.ai_advisor.confidence_unknown', {}, 'confidence unknown')}
+              status={advisor.confidence === 'high' ? 'success' : 'inactive'}
+            />
+          </div>
+          <div className="mt-3 space-y-3">
+            {actions.map((item, index) => {
+              const action = actionDisplay(item.action, t);
+              return (
+                <div key={`${item.action}-${index}`} className="flex items-start gap-3 rounded-lg border border-slate-200/80 bg-slate-50/80 px-3 py-2 dark:border-slate-800 dark:bg-slate-900/45">
+                  <span className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-slate-950 text-xs font-semibold text-white dark:bg-blue-500 dark:text-slate-950">
+                    {index + 1}
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-medium text-slate-900 dark:text-slate-100">{action.label}</p>
+                    <p className="mt-1 text-xs leading-5 text-slate-600 dark:text-slate-300">{action.detail}</p>
+                    {action.href ? (
+                      <Link href={action.href} className="mt-2 inline-flex text-xs font-semibold text-blue-700 underline-offset-4 hover:underline dark:text-blue-300">
+                        {t('admin.ai_advisor.open_evidence', {}, 'Open evidence')}
+                      </Link>
+                    ) : null}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        <div className="rounded-xl border border-slate-200/80 bg-white/75 px-4 py-3 dark:border-slate-800 dark:bg-slate-950/35">
+          <p className="text-sm font-semibold text-slate-950 dark:text-white">
+            {t('admin.ai_advisor.evidence_entry', {}, 'Evidence entry')}
+          </p>
+          <div className="mt-3 space-y-2">
+            {advisor.evidence.length ? (
+              advisor.evidence.slice(0, 5).map((item) => (
+                <div key={`${item.kind}-${item.ref}`} className="rounded-lg border border-slate-200/80 bg-slate-50/80 px-3 py-2 dark:border-slate-800 dark:bg-slate-900/45">
+                  <p className="text-sm font-medium text-slate-900 dark:text-slate-100">{item.label || humanizeKey(item.kind)}</p>
+                  <p className="mt-1 truncate font-mono text-[0.7rem] text-slate-500 dark:text-slate-400">{item.ref || item.kind}</p>
+                </div>
+              ))
+            ) : (
+              <p className="text-sm text-slate-500 dark:text-slate-400">
+                {t('admin.ai_advisor.no_evidence', {}, 'No evidence references returned.')}
+              </p>
+            )}
+          </div>
+        </div>
+      </div>
+    </BackofficeSectionPanel>
+  );
+}
+
+function AdvisorEvaluationDetails({ children }: { children: React.ReactNode }) {
+  const { t } = useLocale();
+  return (
+    <details className="rounded-xl border border-slate-200/80 bg-white/65 dark:border-slate-800 dark:bg-slate-950/30">
+      <summary className="cursor-pointer px-4 py-3 text-sm font-semibold text-slate-800 hover:bg-slate-50 dark:text-slate-100 dark:hover:bg-slate-900/60">
+        {t('admin.ai_advisor.evaluation_details', {}, 'AI evaluation details')}
+      </summary>
+      <div className="space-y-5 border-t border-slate-200/80 p-4 dark:border-slate-800">
+        {children}
+      </div>
+    </details>
+  );
+}
+
+function statusBadge(status: string, severity = ''): string {
+  if (severity === 'error' || status === 'error') return 'error';
+  if (status === 'attention' || status === 'warning' || severity === 'warning') return 'warning';
+  if (status === 'ok' || status === 'ready') return 'success';
+  return 'inactive';
+}
+
+type Translate = (key: string, params?: Record<string, string>, fallback?: string) => string;
+
+function statusLabel(status: string, t: Translate): string {
+  switch (status) {
+    case 'attention':
+      return t('admin.ai_advisor.status_attention', {}, 'Needs attention');
+    case 'ready':
+      return t('admin.ai_advisor.status_ready', {}, 'Ready');
+    case 'ok':
+      return t('admin.ai_advisor.status_ok', {}, 'Stable');
+    case 'error':
+      return t('admin.ai_advisor.status_error', {}, 'Error');
+    default:
+      return status || t('admin.ai_advisor.status_unknown', {}, 'Unknown status');
+  }
+}
+
+function severityLabel(severity: string, t: Translate): string {
+  switch (severity) {
+    case 'warning':
+      return t('admin.ai_advisor.severity_warning', {}, 'Warning');
+    case 'error':
+      return t('admin.ai_advisor.severity_error', {}, 'Error');
+    case 'info':
+      return t('admin.ai_advisor.severity_info', {}, 'Info');
+    default:
+      return severity || t('admin.ai_advisor.severity_unknown', {}, 'Unknown severity');
+  }
+}
+
+function actionDisplay(action: string, t: Translate): { label: string; detail: string; href?: string } {
+  switch (action) {
+    case 'inspect_failed_runs_by_site_and_ability':
+      return {
+        label: t('admin.ai_advisor.action_inspect_failed_runs', {}, 'Inspect failed runs'),
+        detail: t('admin.ai_advisor.action_inspect_failed_runs_detail', {}, 'Locate failed runs by site, ability, and error code, then decide whether the issue is runtime, provider, or contract related.'),
+        href: '/admin/ai-resources',
+      };
+    case 'inspect_provider_errors_latency_and_fallbacks':
+      return {
+        label: t('admin.ai_advisor.action_inspect_provider_errors', {}, 'Inspect provider errors and latency'),
+        detail: t('admin.ai_advisor.action_inspect_provider_errors_detail', {}, 'Check provider error rate, fallback behavior, latency, and recent model-call evidence.'),
+        href: '/admin/ai-resources',
+      };
+    case 'review_site_knowledge_no_hit_queries_and_index_coverage':
+      return {
+        label: t('admin.ai_advisor.action_review_knowledge_no_hits', {}, 'Review Site Knowledge no-hits'),
+        detail: t('admin.ai_advisor.action_review_knowledge_no_hits_detail', {}, 'Review no-hit queries, index coverage, and intent distribution before deciding whether indexing or local content coverage needs work.'),
+        href: '/admin/vector-observability',
+      };
+    case 'review_subscription_attention_and_expiry_coverage':
+      return {
+        label: t('admin.ai_advisor.action_review_subscription_risk', {}, 'Review subscription and coverage risk'),
+        detail: t('admin.ai_advisor.action_review_subscription_risk_detail', {}, 'Check customers needing follow-up, expiring subscriptions, and service coverage state.'),
+        href: '/admin/coverage',
+      };
+    case 'inspect_queue_worker_and_callback_delivery':
+      return {
+        label: t('admin.ai_advisor.action_inspect_queue_callbacks', {}, 'Inspect queue and callback delivery'),
+        detail: t('admin.ai_advisor.action_inspect_queue_callbacks_detail', {}, 'Confirm whether queued/running pressure, worker handling, or callback failures need operator intervention.'),
+        href: '/admin/ai-resources',
+      };
+    case 'inspect_commercial_entitlement_and_runtime_guard':
+      return {
+        label: t('admin.ai_advisor.action_inspect_entitlement_guard', {}, 'Inspect entitlement and runtime guard'),
+        detail: t('admin.ai_advisor.action_inspect_entitlement_guard_detail', {}, 'Check commercial coverage, runtime denials, and guard events to confirm whether a plan or rate limit triggered the issue.'),
+        href: '/admin/coverage',
+      };
+    case 'continue_operations_monitoring':
+      return {
+        label: t('admin.ai_advisor.action_continue_monitoring', {}, 'Continue monitoring'),
+        detail: t('admin.ai_advisor.action_continue_monitoring_detail', {}, 'No high-priority blocker is visible in the current window. Keep watching for new failure, cost, or coverage signals.'),
+      };
+    default:
+      return {
+        label: humanizeKey(action || 'continue_operations_monitoring'),
+        detail: t('admin.ai_advisor.action_unknown_detail', {}, 'This is a read-only recommendation. An operator still needs to judge it against the evidence.'),
+      };
+  }
 }
 
 function EffectComparisonPanel({ data }: { data: AdvisorPreviewData }) {
@@ -1561,20 +1817,20 @@ function AdminAiAdvisorContent() {
       try {
         const text = buildDisclosureClipboardText(value, disclosure);
         await navigator.clipboard.writeText(text);
-        setCopyMessage('已复制，并附带 AI 标识');
+        setCopyMessage(t('admin.ai_advisor.message_copied_with_disclosure', {}, 'Copied with AI disclosure'));
         window.setTimeout(() => setCopyMessage(''), 2200);
       } catch (err) {
-        setError(resolveUiErrorMessage(err, '复制带 AI 标识的文本失败。'));
+        setError(resolveUiErrorMessage(err, t('admin.ai_advisor.error_copy_disclosure', {}, 'Failed to copy text with AI disclosure.')));
       }
     },
-    []
+    [t]
   );
 
   const reviewDisclosure = useCallback(
     async (reviewStatus: 'human_confirmed' | 'edited_after_ai') => {
       const cacheKey = data?.ai.generation.cache_key || '';
       if (!cacheKey) {
-        setError('缺少 AI 诊断缓存键。请重新运行诊断后再确认。');
+        setError(t('admin.ai_advisor.error_missing_cache_key', {}, 'Missing AI diagnosis cache key. Run diagnosis again before confirming.'));
         return;
       }
       setReviewingDisclosure(true);
@@ -1623,33 +1879,47 @@ function AdminAiAdvisorContent() {
     const comparison = data?.comparison;
     return [
       {
-        label: 'AI 参与',
-        value: comparison?.aiUsed ? '是' : '否',
-        detail: comparison?.cacheHit ? '来自缓存' : comparison?.aiCalled ? '实时调用提供方' : valueCheckLabel(comparison?.valueCheck || ''),
+        label: t('admin.ai_advisor.metric_ai_participation', {}, 'AI participation'),
+        value: comparison?.aiUsed ? t('common.yes', {}, 'Yes') : t('common.no', {}, 'No'),
+        detail: comparison?.cacheHit
+          ? t('admin.ai_advisor.detail_from_cache', {}, 'From cache')
+          : comparison?.aiCalled
+            ? t('admin.ai_advisor.detail_live_provider_call', {}, 'Live provider call')
+            : valueCheckLabel(comparison?.valueCheck || ''),
         toneClassName: comparison?.aiUsed ? 'text-emerald-600 dark:text-emerald-300' : 'text-slate-600 dark:text-slate-300',
       },
       {
-        label: '缓存',
-        value: comparison?.cacheHit ? '命中' : comparison?.cacheStatus === 'miss' ? '未命中' : '-',
-        detail: forceRefresh ? '强制刷新已开启' : '默认缓存 30 分钟',
+        label: t('admin.ai_advisor.metric_cache', {}, 'Cache'),
+        value: comparison?.cacheHit
+          ? t('admin.ai_advisor.cache_hit', {}, 'Hit')
+          : comparison?.cacheStatus === 'miss'
+            ? t('admin.ai_advisor.cache_miss', {}, 'Miss')
+            : '-',
+        detail: forceRefresh
+          ? t('admin.ai_advisor.detail_force_refresh_on', {}, 'Force refresh is on')
+          : t('admin.ai_advisor.detail_default_cache', {}, 'Default cache: 30 minutes'),
       },
       {
-        label: 'Token',
+        label: t('admin.ai_advisor.metric_tokens', {}, 'Tokens'),
         value: formatNumber((comparison?.tokensIn || 0) + (comparison?.tokensOut || 0)),
-        detail: `${formatNumber(comparison?.tokensIn || 0)} 输入 / ${formatNumber(comparison?.tokensOut || 0)} 输出`,
+        detail: t(
+          'admin.ai_advisor.detail_tokens_io',
+          { input: formatNumber(comparison?.tokensIn || 0), output: formatNumber(comparison?.tokensOut || 0) },
+          '{{input}} in / {{output}} out'
+        ),
       },
       {
-        label: '请求成本',
+        label: t('admin.ai_advisor.metric_request_cost', {}, 'Request cost'),
         value: formatCost(comparison?.requestCost || 0),
         detail: comparison?.cacheHit
-          ? `缓存结果，原始成本 ${formatCost(comparison?.cost || 0)}`
+          ? t('admin.ai_advisor.detail_cached_original_cost', { cost: formatCost(comparison?.cost || 0) }, 'Cached result, original cost {{cost}}')
           : comparison?.errorCode
-            ? `错误：${comparison.errorCode}`
-            : '本次页面加载',
+            ? t('admin.ai_advisor.detail_error_code', { code: comparison.errorCode }, 'Error: {{code}}')
+            : t('admin.ai_advisor.detail_this_page_load', {}, 'This page load'),
         size: 'compact' as const,
       },
     ];
-  }, [data, forceRefresh]);
+  }, [data, forceRefresh, t]);
 
   if (loading && !data) {
     return <LoadingFallback />;
@@ -1672,9 +1942,13 @@ function AdminAiAdvisorContent() {
   return (
     <BackofficePageStack>
       <BackofficePrimaryPanel
-        eyebrow="内部运营"
-        title="运营诊断助手"
-        description="用 Cloud 运营证据生成只读诊断摘要，并对比规则基线和 AI 输出。"
+        eyebrow={t('admin.ai_advisor.eyebrow', {}, 'Internal operations')}
+        title={t('admin.ai_advisor.title', {}, 'Operations Advisor')}
+        description={t(
+          'admin.ai_advisor.description',
+          {},
+          'Generate read-only diagnostic summaries from Cloud operational evidence and compare rule baseline output with AI output.'
+        )}
         aside={
           data ? (
             <div className="w-full xl:w-[42rem]">
@@ -1696,7 +1970,7 @@ function AdminAiAdvisorContent() {
                   : 'border-slate-200 bg-white/80 text-slate-700 hover:border-slate-300 dark:border-slate-700 dark:bg-slate-900/60 dark:text-slate-200'
               )}
             >
-              {option.label}
+              {t(option.labelKey, {}, option.fallback)}
             </button>
           ))}
           <span className="mx-1 h-5 w-px bg-slate-200 dark:bg-slate-700" />
@@ -1723,12 +1997,12 @@ function AdminAiAdvisorContent() {
             disabled={loading}
             className="h-8 rounded-full bg-slate-950 px-4 text-xs font-semibold text-white transition hover:bg-slate-800 disabled:opacity-60 dark:bg-blue-500 dark:text-slate-950 dark:hover:bg-blue-400"
           >
-            {loading ? '加载中' : '运行诊断'}
+            {loading ? t('common.loading', {}, 'Loading...') : t('admin.ai_advisor.action_run_diagnosis', {}, 'Run diagnosis')}
           </button>
         </div>
         <details className="mt-4 rounded-xl border border-slate-200/80 bg-white/65 dark:border-slate-800 dark:bg-slate-950/30">
           <summary className="cursor-pointer px-4 py-3 text-sm font-semibold text-slate-800 hover:bg-slate-50 dark:text-slate-100 dark:hover:bg-slate-900/60">
-            高级评估参数
+            {t('admin.ai_advisor.advanced_params', {}, 'Advanced evaluation parameters')}
           </summary>
           <div className="flex flex-wrap items-center gap-3 border-t border-slate-200/80 px-4 py-3 dark:border-slate-800">
             <input
@@ -1752,7 +2026,7 @@ function AdminAiAdvisorContent() {
                 onChange={(event) => setForceRefresh(event.target.checked)}
                 className="h-3.5 w-3.5 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
               />
-              强制刷新
+              {t('admin.ai_advisor.force_refresh', {}, 'Force refresh')}
             </label>
             <button
               type="button"
@@ -1767,10 +2041,14 @@ function AdminAiAdvisorContent() {
               disabled={loading}
               className="h-8 rounded-full border border-blue-200 bg-blue-50 px-4 text-xs font-semibold text-blue-700 transition hover:border-blue-300 hover:bg-blue-100 disabled:opacity-60 dark:border-blue-900/70 dark:bg-blue-950/35 dark:text-blue-300"
             >
-              运行 DeepSeek 对比
+              {t('admin.ai_advisor.action_run_deepseek_comparison', {}, 'Run DeepSeek comparison')}
             </button>
             <p className="basis-full text-xs leading-5 text-slate-500 dark:text-slate-400">
-              这些参数只用于内部评估 AI 摘要质量，不会改变路由、套餐、WordPress 内容或客户状态。
+              {t(
+                'admin.ai_advisor.advanced_params_desc',
+                {},
+                'These parameters are only for internal AI summary evaluation. They do not change routing, packages, WordPress content, or customer state.'
+              )}
             </p>
           </div>
         </details>
@@ -1787,87 +2065,85 @@ function AdminAiAdvisorContent() {
 
       {data ? (
         <>
-          <EffectComparisonPanel data={data} />
-          <AiParticipationPanel data={data} />
-          <ScenarioChecksPanel data={data} />
-          <AgentHandoffPanel handoff={data.ai.agentRegistryMetadata} />
-        </>
-      ) : null}
+          <OperationsWorkPanel data={data} />
+          <SignalPanel branch={data.ai} />
+          <HistoryPanel items={historyItems} />
 
-      <ValueMetricsPanel valueMetrics={valueMetrics} />
+          <AdvisorEvaluationDetails>
+            <ValueMetricsPanel valueMetrics={valueMetrics} />
+            <EffectComparisonPanel data={data} />
+            <AiParticipationPanel data={data} />
+            <ScenarioChecksPanel data={data} />
 
-      {data ? (
-        <>
-          <div className="grid gap-5 xl:grid-cols-2">
-            <BranchPanel title="规则基线" branch={data.baseline} accent="baseline" />
-            <BranchPanel
-              title="AI 输出"
-              branch={data.ai}
-              accent="ai"
-              onReviewDisclosure={reviewDisclosure}
-              onCopyWithDisclosure={copyWithDisclosure}
-              reviewingDisclosure={reviewingDisclosure}
-            />
-          </div>
+            <div className="grid gap-5 xl:grid-cols-2">
+              <BranchPanel title={t('admin.ai_advisor.branch_baseline', {}, 'Rule baseline')} branch={data.baseline} accent="baseline" />
+              <BranchPanel
+                title={t('admin.ai_advisor.branch_ai_output', {}, 'AI output')}
+                branch={data.ai}
+                accent="ai"
+                onReviewDisclosure={reviewDisclosure}
+                onCopyWithDisclosure={copyWithDisclosure}
+                reviewingDisclosure={reviewingDisclosure}
+              />
+            </div>
 
-          <div className="grid gap-5 xl:grid-cols-[1.2fr_0.8fr]">
-            <SignalPanel branch={data.ai} />
+            <div className="grid gap-5 xl:grid-cols-[1.2fr_0.8fr]">
+              <BackofficeSectionPanel className="space-y-4">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
+                      判断
+                    </p>
+                    <h2 className="mt-2 text-xl font-semibold text-slate-950 dark:text-white">
+                      {valueCheckLabel(data.comparison.valueCheck)}
+                    </h2>
+                  </div>
+                  <BackofficeStatusBadge
+                    label={data.comparison.valueCheck}
+                    status={valueCheckStatus(data.comparison.valueCheck)}
+                  />
+                </div>
+                <div className="grid gap-3 md:grid-cols-2">
+                  <BackofficeStackCard>
+                    <MiniMetric label="规则模式" value={data.comparison.baselineMode || '-'} />
+                  </BackofficeStackCard>
+                  <BackofficeStackCard>
+                    <MiniMetric label="AI 模式" value={data.comparison.aiMode || '-'} />
+                  </BackofficeStackCard>
+                  <BackofficeStackCard>
+                    <MiniMetric label="缓存命中" value={data.comparison.cacheHit ? '是' : '否'} />
+                  </BackofficeStackCard>
+                  <BackofficeStackCard>
+                    <MiniMetric label="请求提供方" value={data.comparison.requestedProviderId || '-'} />
+                  </BackofficeStackCard>
+                  <BackofficeStackCard>
+                    <MiniMetric label="模型" value={data.comparison.modelId || '-'} />
+                  </BackofficeStackCard>
+                </div>
+              </BackofficeSectionPanel>
 
-            <BackofficeSectionPanel className="space-y-4">
-              <div className="flex items-start justify-between gap-3">
+              <BackofficeSectionPanel className="space-y-4">
                 <div>
                   <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
-                    判断
+                    安全边界
                   </p>
-                  <h2 className="mt-2 text-xl font-semibold text-slate-950 dark:text-white">
-                    {valueCheckLabel(data.comparison.valueCheck)}
-                  </h2>
+                  <h2 className="mt-2 text-xl font-semibold text-slate-950 dark:text-white">执行边界</h2>
                 </div>
-                <BackofficeStatusBadge
-                  label={data.comparison.valueCheck}
-                  status={valueCheckStatus(data.comparison.valueCheck)}
-                />
-              </div>
-              <div className="grid gap-3 md:grid-cols-2">
-                <BackofficeStackCard>
-                  <MiniMetric label="规则模式" value={data.comparison.baselineMode || '-'} />
-                </BackofficeStackCard>
-                <BackofficeStackCard>
-                  <MiniMetric label="AI 模式" value={data.comparison.aiMode || '-'} />
-                </BackofficeStackCard>
-                <BackofficeStackCard>
-                  <MiniMetric label="缓存命中" value={data.comparison.cacheHit ? '是' : '否'} />
-                </BackofficeStackCard>
-                <BackofficeStackCard>
-                  <MiniMetric label="请求提供方" value={data.comparison.requestedProviderId || '-'} />
-                </BackofficeStackCard>
-                <BackofficeStackCard>
-                  <MiniMetric label="模型" value={data.comparison.modelId || '-'} />
-                </BackofficeStackCard>
-              </div>
-            </BackofficeSectionPanel>
-          </div>
-          <HistoryPanel items={historyItems} />
-          <div className="grid gap-5 xl:grid-cols-[1.2fr_0.8fr]">
-            <BackofficeSectionPanel className="space-y-4">
-              <div>
-                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
-                  安全边界
-                </p>
-                <h2 className="mt-2 text-xl font-semibold text-slate-950 dark:text-white">执行边界</h2>
-              </div>
-              <div className="space-y-3">
-                <SafetyRow label="Prompt 存储已阻断" ok={!data.safety.promptSaved} />
-                <SafetyRow label="输出文本存储已阻断" ok={!data.safety.outputTextSaved} />
-                <SafetyRow label="WordPress 写入已阻断" ok={!data.safety.wordpressWriteAllowed} />
-                <SafetyRow
-                  label="客户文章生成已阻断"
-                  ok={!data.safety.customerArticleGenerationAllowed}
-                />
-                <SafetyRow label="需要运营人员复核" ok={data.safety.requiresOperatorReview} />
-              </div>
-            </BackofficeSectionPanel>
-          </div>
+                <div className="space-y-3">
+                  <SafetyRow label="Prompt 存储已阻断" ok={!data.safety.promptSaved} />
+                  <SafetyRow label="输出文本存储已阻断" ok={!data.safety.outputTextSaved} />
+                  <SafetyRow label="WordPress 写入已阻断" ok={!data.safety.wordpressWriteAllowed} />
+                  <SafetyRow
+                    label="客户文章生成已阻断"
+                    ok={!data.safety.customerArticleGenerationAllowed}
+                  />
+                  <SafetyRow label="需要运营人员复核" ok={data.safety.requiresOperatorReview} />
+                </div>
+              </BackofficeSectionPanel>
+            </div>
+
+            <AgentHandoffPanel handoff={data.ai.agentRegistryMetadata} />
+          </AdvisorEvaluationDetails>
         </>
       ) : null}
     </BackofficePageStack>
