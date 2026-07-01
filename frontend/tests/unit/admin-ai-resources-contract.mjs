@@ -170,7 +170,7 @@ assert.match(
 
 assert.match(
   pageSource,
-  /recent_minutes: '1440'[\s\S]*limit: '25'[\s\S]*fetch\(`\/api\/admin\/hosted-model-governance\?\$\{params\.toString\(\)\}`/,
+  /recent_minutes: '1440'[\s\S]*limit: '25'[\s\S]*fetch\(`\/api\/admin\/runtime-telemetry\?\$\{params\.toString\(\)\}`/,
   'Provider Management diagnostics must read the live runtime telemetry projection'
 );
 
@@ -316,6 +316,12 @@ assert.match(
   abilityModelsSource,
   /audio_summary_script[\s\S]*article_narration[\s\S]*article_audio_summary/,
   'Unified plugin ability route rows must include the audio summary, narration, and summary playback scenarios'
+);
+
+assert.doesNotMatch(
+  abilityModelsSource + i18nSource,
+  /cloud_ability_audio_summary_script|cloud_ability_article_narration|cloud_ability_article_audio_summary/,
+  'Cloud-native internal ability projection must not re-label plugin-owned audio routes as Cloud internal abilities'
 );
 
 assert.doesNotMatch(
@@ -744,16 +750,28 @@ assert.match(
   'Cloud-native ability table must show operator-facing dependency/runtime columns and move internal profile ids into collapsed details'
 );
 
-assert.doesNotMatch(
+assert.match(
   abilityModelsSource,
-  /grid-cols-\[8rem_1\.4fr_1fr_1\.1fr_1\.2fr_9rem\]|column_model_kind[\s\S]*column_profile[\s\S]*column_provider_model/,
-  'Cloud-native ability table must not default-display model-kind/profile/provider technical columns'
+  /activeCloudMediaFilter[\s\S]*'all'[\s\S]*cloudAbilityRows\.filter\(\(row\) => row\.media === activeCloudMediaFilter\)/,
+  'Cloud-native ability category filter must default to all categories and filter by row media only when selected'
 );
 
 assert.match(
   abilityModelsSource,
-  /activeCloudNativeAbilityRows = cloudAbilityRows\.filter/,
-  'Cloud-native ability media tabs must filter backend runtime projection rows'
+  /column_category[\s\S]*value=\{activeCloudMediaFilter\}[\s\S]*filter_category_all[\s\S]*cloud_media_tab_\$\{row\.media\}/,
+  'Cloud-native ability table must render category as a row column with a header dropdown filter'
+);
+
+assert.doesNotMatch(
+  abilityModelsSource,
+  /setActiveCloudMediaTab|activeCloudMediaTab/,
+  'Cloud-native ability categories must not remain as a top-level media tab state'
+);
+
+assert.doesNotMatch(
+  abilityModelsSource,
+  /grid-cols-\[8rem_1\.4fr_1fr_1\.1fr_1\.2fr_9rem\]|column_model_kind[\s\S]*column_profile[\s\S]*column_provider_model/,
+  'Cloud-native ability table must not default-display model-kind/profile/provider technical columns'
 );
 
 assert.doesNotMatch(
@@ -782,8 +800,8 @@ assert.match(
 
 assert.match(
   abilityModelsSource,
-  /cloud_\$\{activeCloudMediaTab\}_empty_title[\s\S]*cloud_\$\{activeCloudMediaTab\}_empty_desc/,
-  'Cloud-native video tab must stay as an explicit empty state until a video runtime contract exists'
+  /cloudAbilityRows\.length === 0[\s\S]*cloud_all_empty_title[\s\S]*cloud_all_empty_desc/,
+  'Cloud-native ability table must keep a clear empty state when the backend projection has no rows'
 );
 
 assert.match(

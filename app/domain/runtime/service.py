@@ -1626,7 +1626,7 @@ class RuntimeService:
             **summary,
         }
 
-    def get_hosted_model_governance_diagnostics(
+    def get_runtime_telemetry_diagnostics(
         self,
         *,
         site_id: str | None = None,
@@ -1850,6 +1850,19 @@ class RuntimeService:
         }
         result["alert_summary"] = self._build_hosted_governance_alert_summary(result)
         return result
+
+    def get_hosted_model_governance_diagnostics(
+        self,
+        *,
+        site_id: str | None = None,
+        recent_minutes: int = 60,
+        limit: int = 20,
+    ) -> dict[str, object]:
+        return self.get_runtime_telemetry_diagnostics(
+            site_id=site_id,
+            recent_minutes=recent_minutes,
+            limit=limit,
+        )
 
     def get_runtime_backlog_diagnostics(
         self,

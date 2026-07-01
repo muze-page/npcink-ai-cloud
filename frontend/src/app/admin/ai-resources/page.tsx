@@ -1486,7 +1486,7 @@ function AiResourcesContent() {
         recent_minutes: '1440',
         limit: '25',
       });
-      const response = await fetch(`/api/admin/hosted-model-governance?${params.toString()}`, {
+      const response = await fetch(`/api/admin/runtime-telemetry?${params.toString()}`, {
         credentials: 'include',
       });
       const payload = await response.json().catch(() => ({}));

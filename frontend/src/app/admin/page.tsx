@@ -123,7 +123,7 @@ interface AdminOverview {
     nextStepKind: string;
     nextStepRef: string;
   }>;
-  hostedModelGovernance: {
+  runtimeTelemetry: {
     status: string;
     summary: string;
     alertCount: number;
@@ -157,9 +157,9 @@ function normalizeOverview(raw: any): AdminOverview {
   const guard = runtimeDiagnostics?.guard ?? {};
   const recentUsage = raw?.recent_usage ?? {};
   const totals = recentUsage?.totals ?? {};
-  const hostedGovernance = raw?.hosted_model_governance ?? {};
-  const hostedAlertSummary = hostedGovernance?.alert_summary ?? {};
-  const hostedDailyDigest = hostedAlertSummary?.daily_digest ?? {};
+  const runtimeTelemetry = raw?.runtime_telemetry ?? raw?.hosted_model_governance ?? {};
+  const runtimeTelemetryAlertSummary = runtimeTelemetry?.alert_summary ?? {};
+  const runtimeTelemetryDailyDigest = runtimeTelemetryAlertSummary?.daily_digest ?? {};
   const platformCredit = raw?.platform_credit_summary ?? {};
   const platformCreditMetric = platformCredit?.credit ?? {};
 
@@ -291,24 +291,24 @@ function normalizeOverview(raw: any): AdminOverview {
           nextStepRef: String(item?.next_step_ref ?? ''),
         }))
       : [],
-    hostedModelGovernance: {
-      status: String(hostedAlertSummary.status ?? 'inactive'),
-      summary: String(hostedAlertSummary.summary ?? ''),
-      alertCount: Number(hostedAlertSummary.alert_count ?? 0),
-      href: String(hostedAlertSummary.href ?? '').startsWith('/admin/hosted-models')
+    runtimeTelemetry: {
+      status: String(runtimeTelemetryAlertSummary.status ?? 'inactive'),
+      summary: String(runtimeTelemetryAlertSummary.summary ?? ''),
+      alertCount: Number(runtimeTelemetryAlertSummary.alert_count ?? 0),
+      href: String(runtimeTelemetryAlertSummary.href ?? '').startsWith('/admin/hosted-models')
         ? '/admin/ai-resources?view=diagnostics'
-        : String(hostedAlertSummary.href ?? '/admin/ai-resources?view=diagnostics'),
+        : String(runtimeTelemetryAlertSummary.href ?? '/admin/ai-resources?view=diagnostics'),
       dailyDigest: {
-        runs: Number(hostedDailyDigest.runs ?? 0),
-        providerCalls: Number(hostedDailyDigest.provider_calls ?? 0),
-        meterEvents: Number(hostedDailyDigest.meter_events ?? 0),
-        meteredRunCoverageRate: Number(hostedDailyDigest.metered_run_coverage_rate ?? 0),
-        providerCallRunCoverageRate: Number(hostedDailyDigest.provider_call_run_coverage_rate ?? 0),
-        unmeteredRunCount: Number(hostedDailyDigest.unmetered_run_count ?? 0),
-        runsWithoutProviderCallCount: Number(hostedDailyDigest.runs_without_provider_call_count ?? 0),
+        runs: Number(runtimeTelemetryDailyDigest.runs ?? 0),
+        providerCalls: Number(runtimeTelemetryDailyDigest.provider_calls ?? 0),
+        meterEvents: Number(runtimeTelemetryDailyDigest.meter_events ?? 0),
+        meteredRunCoverageRate: Number(runtimeTelemetryDailyDigest.metered_run_coverage_rate ?? 0),
+        providerCallRunCoverageRate: Number(runtimeTelemetryDailyDigest.provider_call_run_coverage_rate ?? 0),
+        unmeteredRunCount: Number(runtimeTelemetryDailyDigest.unmetered_run_count ?? 0),
+        runsWithoutProviderCallCount: Number(runtimeTelemetryDailyDigest.runs_without_provider_call_count ?? 0),
       },
-      alerts: Array.isArray(hostedAlertSummary.alerts)
-        ? hostedAlertSummary.alerts.map((item: any) => ({
+      alerts: Array.isArray(runtimeTelemetryAlertSummary.alerts)
+        ? runtimeTelemetryAlertSummary.alerts.map((item: any) => ({
             code: String(item?.code ?? ''),
             severity: String(item?.severity ?? ''),
             title: String(item?.title ?? ''),
@@ -460,12 +460,12 @@ function AdminOverviewContent() {
     expiringSubscriptionsIn7Days: overview.expiringSubscriptions.in7Days,
     attentionSubscriptionsCount: overview.attentionSubscriptions.length,
     firstAttentionReason: overview.attentionSubscriptions[0]?.reason || '',
-    hostedModelGovernance: {
-      status: overview.hostedModelGovernance.status,
-      alertCount: overview.hostedModelGovernance.alertCount,
-      firstAlertTitle: overview.hostedModelGovernance.alerts[0]?.title || '',
-      firstAlertSummary: overview.hostedModelGovernance.alerts[0]?.summary || '',
-      summary: overview.hostedModelGovernance.summary,
+    runtimeTelemetry: {
+      status: overview.runtimeTelemetry.status,
+      alertCount: overview.runtimeTelemetry.alertCount,
+      firstAlertTitle: overview.runtimeTelemetry.alerts[0]?.title || '',
+      firstAlertSummary: overview.runtimeTelemetry.alerts[0]?.summary || '',
+      summary: overview.runtimeTelemetry.summary,
     },
     formatValue: formatInteger,
     copy: {
@@ -477,9 +477,9 @@ function AdminOverviewContent() {
       expiryReason: t('admin.watch_expiry_reason'),
       attentionTitle: t('admin.watch_attention_title'),
       attentionFallbackReason: t('admin.watch_attention_reason'),
-      hostedTitle: t('admin.watch_hosted_governance_title', {}, 'Runtime telemetry needs review'),
-      hostedReason: t(
-        'admin.watch_hosted_governance_reason',
+      runtimeTelemetryTitle: t('admin.watch_runtime_telemetry_title', {}, 'Runtime telemetry needs review'),
+      runtimeTelemetryReason: t(
+        'admin.watch_runtime_telemetry_reason',
         {},
         'Runtime telemetry coverage needs review before traffic expands.'
       ),
@@ -489,10 +489,10 @@ function AdminOverviewContent() {
   const statusTone =
     overview.runtimeSummary.callbackFailed > 0
       ? 'error'
-      : overview.hostedModelGovernance.status === 'error'
+      : overview.runtimeTelemetry.status === 'error'
         ? 'error'
       : overview.attentionSubscriptions.length > 0 ||
-          overview.hostedModelGovernance.status === 'warning' ||
+          overview.runtimeTelemetry.status === 'warning' ||
           overview.expiringSubscriptions.in7Days > 0 ||
           overview.runtimeSummary.guardEvents > 0 ||
           overview.runtimeSummary.callbackPending > 0
@@ -627,19 +627,19 @@ function AdminOverviewContent() {
   const recentAuditItems = overview.recentAuditSummary.slice(0, 4);
   const runtimeTelemetryMetrics = [
     {
-      label: t('admin.home_hosted_runs', {}, 'Runtime runs'),
-      value: formatInteger(overview.hostedModelGovernance.dailyDigest.runs),
-      detail: t('admin.home_hosted_runs_detail', {}, 'Runs observed in the runtime telemetry window.'),
+      label: t('admin.home_runtime_telemetry_runs', {}, 'Runtime runs'),
+      value: formatInteger(overview.runtimeTelemetry.dailyDigest.runs),
+      detail: t('admin.home_runtime_telemetry_runs_detail', {}, 'Runs observed in the runtime telemetry window.'),
     },
     {
-      label: t('admin.home_hosted_meter', {}, 'Meter coverage'),
-      value: formatPercent(overview.hostedModelGovernance.dailyDigest.meteredRunCoverageRate),
-      detail: t('admin.home_hosted_meter_detail', {}, 'Share of runtime runs represented in usage metering.'),
+      label: t('admin.home_runtime_telemetry_meter', {}, 'Meter coverage'),
+      value: formatPercent(overview.runtimeTelemetry.dailyDigest.meteredRunCoverageRate),
+      detail: t('admin.home_runtime_telemetry_meter_detail', {}, 'Share of runtime runs represented in usage metering.'),
     },
     {
-      label: t('admin.home_hosted_provider', {}, 'Provider coverage'),
-      value: formatPercent(overview.hostedModelGovernance.dailyDigest.providerCallRunCoverageRate),
-      detail: t('admin.home_hosted_provider_detail', {}, 'Share of runtime runs with provider call telemetry.'),
+      label: t('admin.home_runtime_telemetry_provider', {}, 'Provider coverage'),
+      value: formatPercent(overview.runtimeTelemetry.dailyDigest.providerCallRunCoverageRate),
+      detail: t('admin.home_runtime_telemetry_provider_detail', {}, 'Share of runtime runs with provider call telemetry.'),
     },
   ];
   const platformCredit = overview.platformCreditSummary;
@@ -1057,9 +1057,9 @@ function AdminOverviewContent() {
           </Link>
         </div>
         <BackofficeMetricStrip items={runtimeTelemetryMetrics} columnsClassName="md:grid-cols-3" />
-        {overview.hostedModelGovernance.alerts.length > 0 ? (
+        {overview.runtimeTelemetry.alerts.length > 0 ? (
           <div className="grid gap-3 xl:grid-cols-2">
-            {overview.hostedModelGovernance.alerts.slice(0, 2).map((alert) => (
+            {overview.runtimeTelemetry.alerts.slice(0, 2).map((alert) => (
               <BackofficeStackCard key={alert.code}>
                 <div className="flex items-start justify-between gap-3">
                   <div>
@@ -1091,8 +1091,8 @@ function AdminOverviewContent() {
           </div>
         ) : (
           <BackofficeStackCard className="text-sm text-slate-600 dark:text-slate-300">
-            {overview.hostedModelGovernance.summary ||
-              t('admin.home_hosted_empty', {}, 'No runtime telemetry alerts are active today.')}
+            {overview.runtimeTelemetry.summary ||
+              t('admin.home_runtime_telemetry_empty', {}, 'No runtime telemetry alerts are active today.')}
           </BackofficeStackCard>
         )}
       </BackofficeSectionPanel>

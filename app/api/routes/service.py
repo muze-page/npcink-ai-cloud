@@ -2058,17 +2058,19 @@ async def get_admin_overview(
     result["runtime_diagnostics"] = runtime_service.get_runtime_diagnostics_summary(
         recent_minutes=runtime_recent_minutes,
     )
-    hosted_model_governance = runtime_service.get_hosted_model_governance_diagnostics(
+    runtime_telemetry = runtime_service.get_runtime_telemetry_diagnostics(
         recent_minutes=hosted_model_recent_minutes,
         limit=10,
     )
-    result["hosted_model_governance"] = {
-        "filters": hosted_model_governance.get("filters", {}),
-        "generated_at": hosted_model_governance.get("generated_at", ""),
-        "totals": hosted_model_governance.get("totals", {}),
-        "alert_summary": hosted_model_governance.get("alert_summary", {}),
-        "boundary": hosted_model_governance.get("boundary", {}),
+    runtime_telemetry_projection = {
+        "filters": runtime_telemetry.get("filters", {}),
+        "generated_at": runtime_telemetry.get("generated_at", ""),
+        "totals": runtime_telemetry.get("totals", {}),
+        "alert_summary": runtime_telemetry.get("alert_summary", {}),
+        "boundary": runtime_telemetry.get("boundary", {}),
     }
+    result["runtime_telemetry"] = runtime_telemetry_projection
+    result["hosted_model_governance"] = runtime_telemetry_projection
     attention_subscriptions = _dict_list(result.get("attention_subscriptions"))
     first_attention = attention_subscriptions[0] if attention_subscriptions else {}
     first_attention_account_id = ""
@@ -4341,8 +4343,10 @@ async def get_nightly_inspection_observability(
 
 
 @router.get("/admin/hosted-model-governance")
+@router.get("/admin/runtime-telemetry")
 @router.get("/runtime/diagnostics/hosted-model-governance")
-async def get_hosted_model_governance_diagnostics(
+@router.get("/runtime/diagnostics/runtime-telemetry")
+async def get_runtime_telemetry_diagnostics(
     request: Request,
     site_id: str | None = Query(default=None),
     recent_minutes: int = Query(default=60, ge=1, le=10080),
@@ -4352,7 +4356,7 @@ async def get_hosted_model_governance_diagnostics(
     if auth is not None:
         return auth
     services = get_cloud_services(request)
-    result = RuntimeService(services.settings.database_url).get_hosted_model_governance_diagnostics(
+    result = RuntimeService(services.settings.database_url).get_runtime_telemetry_diagnostics(
         site_id=site_id,
         recent_minutes=recent_minutes,
         limit=limit,

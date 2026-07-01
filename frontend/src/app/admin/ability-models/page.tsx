@@ -73,6 +73,7 @@ type EditableRoutingProfile = RoutingProfile & {
 
 type AbilityModelTab = 'wordpress' | 'cloud';
 type CloudAbilityMediaTab = 'text' | 'image' | 'vector' | 'audio' | 'video';
+type CloudAbilityMediaFilter = 'all' | CloudAbilityMediaTab;
 type CloudAbilityRuntimeStatus = 'connected' | 'missing_provider' | 'planned' | 'unknown';
 
 type CloudAbilityRuntimeRow = {
@@ -345,7 +346,7 @@ export default function AbilityModelsPage() {
   const [routingDrafts, setRoutingDrafts] = useState<EditableRoutingProfile[]>([]);
   const [cloudAbilityRows, setCloudAbilityRows] = useState<CloudAbilityRuntimeRow[]>([]);
   const [activeAbilityTab, setActiveAbilityTab] = useState<AbilityModelTab>('wordpress');
-  const [activeCloudMediaTab, setActiveCloudMediaTab] = useState<CloudAbilityMediaTab>('text');
+  const [activeCloudMediaFilter, setActiveCloudMediaFilter] = useState<CloudAbilityMediaFilter>('all');
   const [activeProfileId, setActiveProfileId] = useState('');
   const [loading, setLoading] = useState(true);
   const [loadingRouting, setLoadingRouting] = useState(true);
@@ -468,7 +469,7 @@ export default function AbilityModelsPage() {
       comment_moderation: aiText('ability_task_comment_moderation', 'Comment moderation'),
       content_classification: aiText('ability_task_content_classification', 'Content classification'),
       image_generation: aiText('ability_task_image_generation', 'Image generation'),
-      audio_summary_script: text('cloud_ability_audio_summary_script', 'Audio summary script'),
+      audio_summary_script: text('route_audio_summary_text', 'Audio summary text'),
       article_narration: text('route_article_narration_audio', 'Article narration audio'),
       article_audio_summary: text('route_audio_summary_playback', 'Audio summary playback'),
     };
@@ -561,9 +562,6 @@ export default function AbilityModelsPage() {
       evidence_preflight: text('cloud_ability_external_evidence', 'External evidence preflight'),
       generated_image_candidates: text('cloud_ability_generated_image_candidates', 'Generated image candidates'),
       image_source_candidates: text('cloud_ability_image_source_candidates', 'Image source candidates'),
-      audio_summary_script: text('cloud_ability_audio_summary_script', 'Audio summary script'),
-      article_narration: text('cloud_ability_article_narration', 'Article narration'),
-      article_audio_summary: text('cloud_ability_article_audio_summary', 'Long-form audio summary'),
     };
     return labels[row.ability_id] || row.label || row.ability_id;
   }, [text]);
@@ -575,9 +573,6 @@ export default function AbilityModelsPage() {
       evidence_preflight: text('cloud_ability_external_evidence_desc', 'Prepare evidence grounding before handing control back to the local WordPress path.'),
       generated_image_candidates: text('cloud_ability_generated_image_candidates_desc', 'Generate reviewable image candidates while WordPress keeps approval and final media use.'),
       image_source_candidates: text('cloud_ability_image_source_candidates_desc', 'Search external image sources and return reviewable media candidates.'),
-      audio_summary_script: text('cloud_ability_audio_summary_script_desc', 'Text model configuration used before generating audio summaries.'),
-      article_narration: text('cloud_ability_article_narration_desc', 'Audio model configuration used for article narration.'),
-      article_audio_summary: text('cloud_ability_article_audio_summary_desc', 'Audio model configuration used for long-form summary playback.'),
     };
     return descriptions[row.ability_id] || row.description;
   }, [text]);
@@ -1142,7 +1137,9 @@ export default function AbilityModelsPage() {
     setDialogMessage('');
   }
 
-  const activeCloudNativeAbilityRows = cloudAbilityRows.filter((row) => row.media === activeCloudMediaTab);
+  const activeCloudNativeAbilityRows = activeCloudMediaFilter === 'all'
+    ? cloudAbilityRows
+    : cloudAbilityRows.filter((row) => row.media === activeCloudMediaFilter);
 
   if (loading) {
     return <LoadingFallback />;
@@ -1306,109 +1303,139 @@ export default function AbilityModelsPage() {
             <BackofficeStatusBadge label={text('cloud_native_badge_runtime_binding', 'Runtime binding')} status="success" />
           </div>
 
-          <div className="mt-4 flex flex-wrap gap-2">
-            {(['text', 'image', 'vector', 'audio', 'video'] as CloudAbilityMediaTab[]).map((tab) => (
-              <BackofficeFilterPill
-                key={tab}
-                active={activeCloudMediaTab === tab}
-                onClick={() => setActiveCloudMediaTab(tab)}
-              >
-                {text(`cloud_media_tab_${tab}`, tab)}
-              </BackofficeFilterPill>
-            ))}
-          </div>
-
-          {activeCloudNativeAbilityRows.length > 0 ? (
+          {cloudAbilityRows.length > 0 ? (
             <div className="mt-4 overflow-hidden rounded-lg border border-slate-200 dark:border-slate-800">
-              <div className="hidden grid-cols-[7rem_1.7fr_1.05fr_1.35fr_8rem] gap-3 border-b border-slate-200 bg-slate-50 px-4 py-3 text-xs font-semibold uppercase tracking-[0.16em] text-slate-500 dark:border-slate-800 dark:bg-slate-900/70 dark:text-slate-400 md:grid">
+              <label className="grid gap-2 border-b border-slate-200 bg-slate-50 px-4 py-3 text-xs font-semibold uppercase tracking-[0.16em] text-slate-500 dark:border-slate-800 dark:bg-slate-900/70 dark:text-slate-400 md:hidden">
+                <span>{text('column_category', 'Category')}</span>
+                <select
+                  value={activeCloudMediaFilter}
+                  onChange={(event) => setActiveCloudMediaFilter(event.target.value as CloudAbilityMediaFilter)}
+                  className="h-10 rounded-lg border border-slate-300 bg-white px-3 text-sm font-medium normal-case tracking-normal text-slate-700 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+                  aria-label={text('field_category_filter', 'Filter by category')}
+                >
+                  <option value="all">{text('filter_category_all', 'All categories')}</option>
+                  {(['text', 'image', 'vector', 'audio', 'video'] as CloudAbilityMediaTab[]).map((tab) => (
+                    <option key={tab} value={tab}>{text(`cloud_media_tab_${tab}`, tab)}</option>
+                  ))}
+                </select>
+              </label>
+              <div className="hidden grid-cols-[7rem_8rem_1.55fr_1.05fr_1.3fr_8rem] gap-3 border-b border-slate-200 bg-slate-50 px-4 py-3 text-xs font-semibold uppercase tracking-[0.16em] text-slate-500 dark:border-slate-800 dark:bg-slate-900/70 dark:text-slate-400 md:grid md:items-center">
                 <span>{aiText('column_status', 'Status')}</span>
+                <label className="grid gap-1">
+                  <span>{text('column_category', 'Category')}</span>
+                  <select
+                    value={activeCloudMediaFilter}
+                    onChange={(event) => setActiveCloudMediaFilter(event.target.value as CloudAbilityMediaFilter)}
+                    className="h-8 rounded-lg border border-slate-300 bg-white px-2 text-xs font-medium normal-case tracking-normal text-slate-700 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+                    aria-label={text('field_category_filter', 'Filter by category')}
+                  >
+                    <option value="all">{text('filter_category_all', 'All categories')}</option>
+                    {(['text', 'image', 'vector', 'audio', 'video'] as CloudAbilityMediaTab[]).map((tab) => (
+                      <option key={tab} value={tab}>{text(`cloud_media_tab_${tab}`, tab)}</option>
+                    ))}
+                  </select>
+                </label>
                 <span>{aiText('column_ability', 'Ability')}</span>
                 <span>{text('column_runtime_dependency', 'Runtime dependency')}</span>
                 <span>{text('column_current_runtime', 'Current runtime')}</span>
                 <span className="text-right">{aiText('column_actions', 'Actions')}</span>
               </div>
-              {activeCloudNativeAbilityRows.map((row) => (
-                <div
-                  key={row.ability_id}
-                  className="grid gap-3 border-b border-slate-200 px-4 py-4 text-sm last:border-b-0 dark:border-slate-800 md:grid-cols-[7rem_1.7fr_1.05fr_1.35fr_8rem] md:items-center"
-                >
-                  <div>
-                    <div className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500 dark:text-slate-400 md:hidden">
-                      {aiText('column_status', 'Status')}
-                    </div>
-                    <div className={`mt-1 text-sm font-medium md:mt-0 ${cloudAbilityStatusClassName(row.status)}`}>
-                      {cloudAbilityStatusLabel(row.status)}
-                    </div>
-                  </div>
-                  <div>
-                    <div className="font-medium text-slate-950 dark:text-white">{cloudAbilityLabel(row)}</div>
-                    <div className="mt-1 text-xs leading-5 text-slate-500 dark:text-slate-400">{cloudAbilityDescription(row)}</div>
-                    <details className="mt-2 text-xs text-slate-500 dark:text-slate-400">
-                      <summary className="cursor-pointer select-none font-medium text-slate-600 hover:text-slate-900 dark:text-slate-300 dark:hover:text-white">
-                        {text('cloud_native_internal_details', 'Internal details')}
-                      </summary>
-                      <dl className="mt-2 grid gap-1 rounded-lg bg-slate-50 p-2 dark:bg-slate-900/45">
-                        <div className="grid gap-1 sm:grid-cols-[6rem_1fr]">
-                          <dt>{text('cloud_native_internal_config_id', 'Config ID')}</dt>
-                          <dd className="font-mono text-slate-700 dark:text-slate-200">
-                            {row.profile_id || text('cloud_native_internal_none', 'None')}
-                          </dd>
-                        </div>
-                        <div className="grid gap-1 sm:grid-cols-[6rem_1fr]">
-                          <dt>{text('cloud_native_internal_supplier', 'Supplier')}</dt>
-                          <dd>{row.provider_id ? providerDisplayName(row.provider_id) : text('cloud_native_internal_managed', 'Cloud managed')}</dd>
-                        </div>
-                        <div className="grid gap-1 sm:grid-cols-[6rem_1fr]">
-                          <dt>{text('cloud_native_internal_model', 'Model')}</dt>
-                          <dd>{row.model_id || text('cloud_native_internal_no_model', 'No model binding required')}</dd>
-                        </div>
-                      </dl>
-                    </details>
-                  </div>
-                  <div className="text-slate-600 dark:text-slate-300">
-                    <div className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500 dark:text-slate-400 md:hidden">
-                      {text('column_runtime_dependency', 'Runtime dependency')}
-                    </div>
-                    <div className="mt-1 md:mt-0">{cloudAbilityModelKindLabel(row.model_kind)}</div>
-                  </div>
-                  <div className="text-slate-600 dark:text-slate-300">
-                    <div className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500 dark:text-slate-400 md:hidden">
-                      {text('column_current_runtime', 'Current runtime')}
-                    </div>
-                    <div className="mt-1 font-medium text-slate-800 dark:text-slate-100 md:mt-0">
-                      {cloudAbilityRuntimeLabel(row)}
-                    </div>
-                    {!row.provider_id && !row.model_id ? (
-                      <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                        {text('cloud_native_no_model_note', 'No separate provider/model choice is required for this row.')}
+              {activeCloudNativeAbilityRows.length > 0 ? (
+                activeCloudNativeAbilityRows.map((row) => (
+                  <div
+                    key={row.ability_id}
+                    className="grid gap-3 border-b border-slate-200 px-4 py-4 text-sm last:border-b-0 dark:border-slate-800 md:grid-cols-[7rem_8rem_1.55fr_1.05fr_1.3fr_8rem] md:items-center"
+                  >
+                    <div>
+                      <div className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500 dark:text-slate-400 md:hidden">
+                        {aiText('column_status', 'Status')}
                       </div>
-                    ) : null}
-                  </div>
-                  <div className="text-right">
-                    {row.can_configure ? (
-                      <button
-                        type="button"
-                        className="btn btn-secondary justify-center"
-                        onClick={() => openCloudBindingDialog(row)}
-                      >
-                        {text('cloud_native_action_configure_model', 'Configure model')}
-                      </button>
-                    ) : (
-                      <span className="inline-flex rounded-full border border-slate-200 px-3 py-1.5 text-xs font-medium text-slate-500 dark:border-slate-800 dark:text-slate-400">
-                        {text('cloud_native_action_readonly', 'Cloud managed')}
+                      <div className={`mt-1 text-sm font-medium md:mt-0 ${cloudAbilityStatusClassName(row.status)}`}>
+                        {cloudAbilityStatusLabel(row.status)}
+                      </div>
+                    </div>
+                    <div>
+                      <div className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500 dark:text-slate-400 md:hidden">
+                        {text('column_category', 'Category')}
+                      </div>
+                      <span className="mt-1 inline-flex rounded-full border border-slate-200 px-2 py-0.5 text-xs text-slate-600 dark:border-slate-800 dark:text-slate-300 md:mt-0">
+                        {text(`cloud_media_tab_${row.media}`, row.media)}
                       </span>
-                    )}
+                    </div>
+                    <div>
+                      <div className="font-medium text-slate-950 dark:text-white">{cloudAbilityLabel(row)}</div>
+                      <div className="mt-1 text-xs leading-5 text-slate-500 dark:text-slate-400">{cloudAbilityDescription(row)}</div>
+                      <details className="mt-2 text-xs text-slate-500 dark:text-slate-400">
+                        <summary className="cursor-pointer select-none font-medium text-slate-600 hover:text-slate-900 dark:text-slate-300 dark:hover:text-white">
+                          {text('cloud_native_internal_details', 'Internal details')}
+                        </summary>
+                        <dl className="mt-2 grid gap-1 rounded-lg bg-slate-50 p-2 dark:bg-slate-900/45">
+                          <div className="grid gap-1 sm:grid-cols-[6rem_1fr]">
+                            <dt>{text('cloud_native_internal_config_id', 'Config ID')}</dt>
+                            <dd className="font-mono text-slate-700 dark:text-slate-200">
+                              {row.profile_id || text('cloud_native_internal_none', 'None')}
+                            </dd>
+                          </div>
+                          <div className="grid gap-1 sm:grid-cols-[6rem_1fr]">
+                            <dt>{text('cloud_native_internal_supplier', 'Supplier')}</dt>
+                            <dd>{row.provider_id ? providerDisplayName(row.provider_id) : text('cloud_native_internal_managed', 'Cloud managed')}</dd>
+                          </div>
+                          <div className="grid gap-1 sm:grid-cols-[6rem_1fr]">
+                            <dt>{text('cloud_native_internal_model', 'Model')}</dt>
+                            <dd>{row.model_id || text('cloud_native_internal_no_model', 'No model binding required')}</dd>
+                          </div>
+                        </dl>
+                      </details>
+                    </div>
+                    <div className="text-slate-600 dark:text-slate-300">
+                      <div className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500 dark:text-slate-400 md:hidden">
+                        {text('column_runtime_dependency', 'Runtime dependency')}
+                      </div>
+                      <div className="mt-1 md:mt-0">{cloudAbilityModelKindLabel(row.model_kind)}</div>
+                    </div>
+                    <div className="text-slate-600 dark:text-slate-300">
+                      <div className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500 dark:text-slate-400 md:hidden">
+                        {text('column_current_runtime', 'Current runtime')}
+                      </div>
+                      <div className="mt-1 font-medium text-slate-800 dark:text-slate-100 md:mt-0">
+                        {cloudAbilityRuntimeLabel(row)}
+                      </div>
+                      {!row.provider_id && !row.model_id ? (
+                        <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                          {text('cloud_native_no_model_note', 'No separate provider/model choice is required for this row.')}
+                        </div>
+                      ) : null}
+                    </div>
+                    <div className="text-right">
+                      {row.can_configure ? (
+                        <button
+                          type="button"
+                          className="btn btn-secondary justify-center"
+                          onClick={() => openCloudBindingDialog(row)}
+                        >
+                          {text('cloud_native_action_configure_model', 'Configure model')}
+                        </button>
+                      ) : (
+                        <span className="inline-flex rounded-full border border-slate-200 px-3 py-1.5 text-xs font-medium text-slate-500 dark:border-slate-800 dark:text-slate-400">
+                          {text('cloud_native_action_readonly', 'Cloud managed')}
+                        </span>
+                      )}
+                    </div>
                   </div>
+                ))
+              ) : (
+                <div className="px-4 py-6 text-sm text-slate-500 dark:text-slate-400">
+                  {text('cloud_category_filter_empty', 'No Cloud runtime abilities match this category.')}
                 </div>
-              ))}
+              )}
             </div>
           ) : null}
 
-          {activeCloudNativeAbilityRows.length === 0 ? (
+          {cloudAbilityRows.length === 0 ? (
             <div className="mt-4">
               <BackofficeEmptyState
-                title={text(`cloud_${activeCloudMediaTab}_empty_title`, 'No Cloud runtime abilities')}
-                description={text(`cloud_${activeCloudMediaTab}_empty_desc`, 'No read-only runtime projection is available for this media group yet.')}
+                title={text('cloud_all_empty_title', 'No Cloud runtime abilities')}
+                description={text('cloud_all_empty_desc', 'No read-only runtime projection is available yet.')}
               />
             </div>
           ) : null}

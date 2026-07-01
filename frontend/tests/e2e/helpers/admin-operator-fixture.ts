@@ -314,7 +314,7 @@ export async function installAdminMocks(page: Page) {
           window_days: 7,
           totals: { runs: 21, provider_calls: 21, tokens_total: 32000, cost: 18.42 },
         },
-        hosted_model_governance: {
+        runtime_telemetry: {
           generated_at: '2026-04-08T10:00:00Z',
           filters: { site_id: '', recent_minutes: 1440, limit: 10 },
           totals: {
@@ -391,7 +391,7 @@ export async function installAdminMocks(page: Page) {
       return;
     }
 
-    if (pathname === '/api/admin/hosted-model-governance') {
+    if (pathname === '/api/admin/runtime-telemetry' || pathname === '/api/admin/hosted-model-governance') {
       await fulfillJson(route, {
         generated_at: '2026-04-08T10:00:00Z',
         filters: {

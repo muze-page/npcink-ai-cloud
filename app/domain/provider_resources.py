@@ -30,10 +30,15 @@ _ABILITY_MODEL_MEDIA_BY_FEATURE_ID = {
     "evidence_preflight": "text",
     "generated_image_candidates": "image",
     "image_source_candidates": "image",
-    "audio_summary_script": "audio",
-    "article_narration": "audio",
-    "article_audio_summary": "audio",
 }
+
+_PLUGIN_ABILITY_ROUTE_FEATURE_IDS = frozenset(
+    {
+        "audio_summary_script",
+        "article_narration",
+        "article_audio_summary",
+    }
+)
 
 _ABILITY_MODEL_DESCRIPTION_BY_FEATURE_ID = {
     "content_support": (
@@ -51,9 +56,6 @@ _ABILITY_MODEL_DESCRIPTION_BY_FEATURE_ID = {
     "image_source_candidates": (
         "External image source candidates returned for operator review."
     ),
-    "audio_summary_script": "Text profile used before generating audio summaries.",
-    "article_narration": "Audio profile used for article narration.",
-    "article_audio_summary": "Audio profile used for long-form summary playback.",
 }
 
 _ABILITY_MODEL_KIND_BY_CAPABILITY_ID = {
@@ -407,6 +409,7 @@ def build_admin_ability_model_runtime_projection(
         item
         for item in resources.get("feature_model_usage", [])
         if isinstance(item, dict)
+        and str(item.get("feature_id") or "") not in _PLUGIN_ABILITY_ROUTE_FEATURE_IDS
     ]
     rows = [
         _build_ability_model_runtime_row(item, index=index)

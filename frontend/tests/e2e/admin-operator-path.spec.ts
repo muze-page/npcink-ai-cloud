@@ -130,6 +130,9 @@ test('admin operator path smoke: queue and inspector routes stay connected', asy
   await expect(page.locator('a[href="/admin/plugin-observability"]')).toBeVisible();
   await expect(page.locator('a[href="/admin/hosted-models"]')).toHaveCount(0);
 
+  await page.goto('/admin/hosted-models', { waitUntil: 'domcontentloaded' });
+  await expect(page).toHaveURL(/\/admin\/ai-resources\?view=diagnostics/);
+
   await page.goto('/admin/plans', { waitUntil: 'domcontentloaded' });
   await expect(page.getByRole('heading', { level: 1, name: /Package catalog|Package overview|套餐目录|套餐概览|方案目錄|方案概覽/i })).toBeVisible();
   await expect(page.getByText(/Advanced package maintenance|高级套餐维护|進階方案維護/i).first()).toBeVisible();
