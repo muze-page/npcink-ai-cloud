@@ -403,6 +403,16 @@ function platformCreditWatchSeverity(severity: string): 'watch' | 'warn' | 'acti
   return 'watch';
 }
 
+function coverageToneClass(value: number): string {
+  if (value >= 0.95) {
+    return 'text-emerald-700 dark:text-emerald-300';
+  }
+  if (value >= 0.8) {
+    return 'text-amber-700 dark:text-amber-300';
+  }
+  return 'text-red-700 dark:text-red-300';
+}
+
 function AdminOverviewContent() {
   const { t } = useLocale();
   const [overview, setOverview] = useState<AdminOverview | null>(null);
@@ -545,14 +555,14 @@ function AdminOverviewContent() {
       detail: t('admin.home_metric_subscriptions', {}, 'Subscriptions currently contributing to access.'),
     },
     {
-      label: t('admin.running_runs'),
-      value: formatInteger(overview.runtimeSummary.runningRuns),
-      detail: t('admin.home_metric_running', {}, 'Work already in flight across the hosted runtime.'),
+      label: t('admin.platform_credit_total_label', {}, 'AI credits used'),
+      value: formatInteger(Math.round(overview.platformCreditSummary.credit.used)),
+      detail: t('admin.home_metric_credit', {}, 'Current evidence-window AI credit consumption.'),
     },
     {
-      label: t('admin.guard_events'),
-      value: formatInteger(overview.runtimeSummary.guardEvents),
-      detail: t('admin.home_metric_guard', {}, 'Recent guard signals that may need follow-up.'),
+      label: t('admin.home_runtime_runs', {}, 'Runtime runs'),
+      value: formatInteger(overview.recentUsage.runs),
+      detail: t('admin.home_metric_runtime_runs', {}, 'Hosted runtime executions in the current evidence window.'),
     },
   ];
   const commercialItems = overview.attentionSubscriptions.slice(0, 2);
@@ -603,6 +613,84 @@ function AdminOverviewContent() {
     '/admin/accounts';
   const secondaryActionLabel =
     t('admin.home_secondary_action_accounts', {}, 'Inspect accounts');
+  const quickLinks = [
+    {
+      href: '/admin/coverage',
+      label: t('admin.home_quick_service_status', {}, 'Service status'),
+      detail: t('admin.home_quick_service_status_desc', {}, 'Customer coverage, package, and subscription pressure.'),
+    },
+    {
+      href: '/admin/accounts',
+      label: t('admin.home_quick_customers', {}, 'Customers'),
+      detail: t('admin.home_quick_customers_desc', {}, 'Account, site, package, and support context.'),
+    },
+    {
+      href: '/admin/ai-resources?view=diagnostics',
+      label: t('admin.home_quick_runtime_diagnostics', {}, 'Runtime diagnostics'),
+      detail: t('admin.home_quick_runtime_diagnostics_desc', {}, 'Provider telemetry, meter coverage, and runtime evidence.'),
+    },
+    {
+      href: '/admin/troubleshooting',
+      label: t('admin.home_quick_troubleshooting', {}, 'Troubleshooting'),
+      detail: t('admin.home_quick_troubleshooting_desc', {}, 'Read-only advanced evidence for plugin, media, vector, and feedback quality.'),
+    },
+    {
+      href: '/admin/ai-resources',
+      label: t('admin.home_quick_providers', {}, 'Providers'),
+      detail: t('admin.home_quick_providers_desc', {}, 'Cloud runtime suppliers and credential readiness.'),
+    },
+    {
+      href: '/admin/service-settings',
+      label: t('admin.home_quick_service_settings', {}, 'Service settings'),
+      detail: t('admin.home_quick_service_settings_desc', {}, 'Portal login, delivery, and Cloud-owned service configuration.'),
+    },
+  ];
+  const evidenceWindowMetrics = [
+    {
+      label: t('admin.home_evidence_runs', {}, 'Runs'),
+      value: formatInteger(overview.recentUsage.runs),
+      detail: t('admin.home_evidence_runs_desc', {}, 'Hosted executions in the current overview window.'),
+    },
+    {
+      label: t('admin.home_evidence_provider_calls', {}, 'Provider calls'),
+      value: formatInteger(overview.recentUsage.providerCalls),
+      detail: t('admin.home_evidence_provider_calls_desc', {}, 'Observed provider-call records in the same window.'),
+    },
+    {
+      label: t('admin.home_evidence_cost', {}, 'Cost'),
+      value: formatAdminCurrency(overview.recentUsage.cost),
+      detail: t('admin.home_evidence_cost_desc', {}, 'Internal estimated cost, not a customer wallet balance.'),
+      size: 'compact' as const,
+    },
+    {
+      label: t('admin.home_evidence_meter_coverage', {}, 'Meter coverage'),
+      value: formatPercent(overview.runtimeTelemetry.dailyDigest.meteredRunCoverageRate),
+      detail: t('admin.home_evidence_meter_coverage_desc', {}, 'Share of runtime runs represented in usage metering.'),
+      toneClassName: coverageToneClass(overview.runtimeTelemetry.dailyDigest.meteredRunCoverageRate),
+    },
+  ];
+  const runtimeStatusItems = [
+    {
+      label: t('admin.home_runtime_queued', {}, 'Queued'),
+      value: formatInteger(overview.runtimeSummary.queuedRuns),
+      detail: t('admin.home_runtime_queued_detail', {}, 'Runs waiting for hosted execution.'),
+    },
+    {
+      label: t('admin.running_runs', {}, 'Running'),
+      value: formatInteger(overview.runtimeSummary.runningRuns),
+      detail: t('admin.home_metric_running', {}, 'Work already in flight across the hosted runtime.'),
+    },
+    {
+      label: t('admin.home_runtime_pending', {}, 'Callback pending'),
+      value: formatInteger(overview.runtimeSummary.callbackPending),
+      detail: t('admin.home_runtime_pending_detail', {}, 'Terminal callbacks waiting for delivery.'),
+    },
+    {
+      label: t('admin.guard_events', {}, 'Guard events'),
+      value: formatInteger(overview.runtimeSummary.guardEvents),
+      detail: t('admin.home_metric_guard', {}, 'Recent guard signals that may need follow-up.'),
+    },
+  ];
   const commercialPanelMetrics = [
     {
       label: t('admin.home_commercial_attention', {}, 'Attention now'),
@@ -741,6 +829,97 @@ function AdminOverviewContent() {
           )}
         </div>
       </BackofficePrimaryPanel>
+
+      <BackofficeSectionPanel className="overflow-hidden p-0">
+        <div className="grid divide-y divide-slate-200/80 dark:divide-slate-800 xl:grid-cols-[1.15fr_0.85fr] xl:divide-x xl:divide-y-0">
+          <div className="p-5 md:p-6">
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-gray-500 dark:text-gray-400">
+                  {t('admin.home_quick_actions_eyebrow', {}, 'Operator console')}
+                </p>
+                <h2 className="mt-2 text-xl font-semibold text-gray-950 dark:text-white">
+                  {t('admin.home_quick_actions_title', {}, 'Open the right surface first')}
+                </h2>
+                <p className="mt-1 max-w-2xl text-sm leading-6 text-gray-600 dark:text-gray-400">
+                  {t(
+                    'admin.home_quick_actions_desc',
+                    {},
+                    'These entries only open existing Cloud service-plane detail surfaces. They do not edit WordPress, prompts, routers, abilities, or workflows.'
+                  )}
+                </p>
+              </div>
+            </div>
+            <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+              {quickLinks.map((item) => (
+                <Link
+                  key={item.href}
+                  href={item.href}
+                  className="group block rounded-2xl border border-slate-200/80 bg-white/80 px-4 py-3.5 text-sm transition hover:-translate-y-0.5 hover:border-blue-200 hover:bg-blue-50/70 hover:shadow-sm dark:border-slate-800 dark:bg-slate-950/45 dark:hover:border-blue-900/70 dark:hover:bg-blue-950/25"
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="font-semibold text-slate-950 dark:text-white">{item.label}</p>
+                      <p className="mt-1 line-clamp-2 text-xs leading-5 text-slate-500 dark:text-slate-400">
+                        {item.detail}
+                      </p>
+                    </div>
+                    <span className="shrink-0 text-slate-400 transition group-hover:translate-x-0.5 group-hover:text-blue-600 dark:text-slate-500 dark:group-hover:text-blue-300">
+                      →
+                    </span>
+                  </div>
+                </Link>
+              ))}
+            </div>
+          </div>
+
+          <div className="p-5 md:p-6">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-gray-500 dark:text-gray-400">
+                  {t('admin.home_evidence_window_eyebrow', {}, 'Evidence window')}
+                </p>
+                <h2 className="mt-2 text-xl font-semibold text-gray-950 dark:text-white">
+                  {t('admin.home_evidence_window_title', {}, 'Runtime and usage snapshot')}
+                </h2>
+                <p className="mt-1 text-sm leading-6 text-gray-600 dark:text-gray-400">
+                  {t(
+                    'admin.home_evidence_window_desc',
+                    { days: String(overview.recentUsage.windowDays) },
+                    `Current ${overview.recentUsage.windowDays}-day overview signals from existing runtime and metering evidence.`
+                  )}
+                </p>
+              </div>
+              <span
+                className={cn(
+                  'rounded-full border px-2.5 py-1 text-[0.68rem] font-semibold uppercase tracking-[0.18em]',
+                  statusClasses
+                )}
+              >
+                {statusLabel}
+              </span>
+            </div>
+            <BackofficeMetricStrip
+              items={evidenceWindowMetrics}
+              columnsClassName="mt-4 grid-cols-2 md:grid-cols-2 xl:grid-cols-2"
+            />
+            <div className="mt-4 grid gap-2 sm:grid-cols-2">
+              {runtimeStatusItems.map((item) => (
+                <div
+                  key={item.label}
+                  className="rounded-xl border border-slate-200/80 bg-slate-50/70 px-3 py-2.5 dark:border-slate-800 dark:bg-slate-950/35"
+                  title={item.detail}
+                >
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="text-xs font-medium text-slate-500 dark:text-slate-400">{item.label}</span>
+                    <span className="text-sm font-semibold text-slate-950 dark:text-white">{item.value}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      </BackofficeSectionPanel>
 
       <BackofficeSectionPanel className="space-y-5">
         <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
