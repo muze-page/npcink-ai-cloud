@@ -1519,8 +1519,8 @@ async def publish_plan_version(
                 scope_id=payload.plan_version_id,
                 outcome="succeeded",
                 effective_summary=(
-                    f"Plan version {payload.plan_version_id} is now published "
-                    "and ready for subscription binding."
+                    f"Plan version {payload.plan_version_id} is now published. "
+                    "Existing subscriptions on this plan use the latest package values."
                 ),
             ),
         ),
