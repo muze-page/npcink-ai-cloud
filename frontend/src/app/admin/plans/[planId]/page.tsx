@@ -491,6 +491,8 @@ function PlanDetailContent() {
   const primaryPackageFitCue = detail.package_fit_cues?.[0]
     ? localizePackageFitCue(t, detail.package_fit_cues[0])
     : null;
+  const linkedSubscriptionCount = detail.subscriptions.length;
+  const subscriptionQueueHref = `/admin/subscriptions?plan_id=${encodeURIComponent(detail.plan.plan_id)}`;
   const baselineActionLabel = t(
     'admin.apply_tier_baseline',
     { tier: localizedPackageAlias || localizedTierLabel || 'tier' },
@@ -525,8 +527,8 @@ function PlanDetailContent() {
                   size: 'compact',
                 },
                 {
-                  label: t('admin.customer_subscriptions', {}, 'Customer subscriptions'),
-                  value: formatInteger(detail.subscriptions.length),
+                  label: t('admin.linked_subscriptions', {}, 'Subscription impact'),
+                  value: formatInteger(linkedSubscriptionCount),
                   size: 'compact',
                 },
                 {
@@ -551,6 +553,11 @@ function PlanDetailContent() {
           <a href="#package-release-editor" className="btn btn-primary">
             {t('admin.edit_package_release_fields', {}, 'Edit package')}
           </a>
+          {linkedSubscriptionCount ? (
+            <Link href={subscriptionQueueHref} className="btn btn-secondary">
+              {t('admin.open_linked_subscriptions', {}, 'Open subscriptions')}
+            </Link>
+          ) : null}
           <Link href="/admin/plans" className="btn btn-secondary">
             {t('admin.package_management_center_title', {}, 'Package management')}
           </Link>
@@ -929,13 +936,13 @@ function PlanDetailContent() {
           </BackofficeStackCard>
           <details className="rounded-3xl border border-slate-200 bg-white px-5 py-4 dark:border-slate-800 dark:bg-slate-950/60">
             <summary className="cursor-pointer list-none text-sm font-semibold text-slate-950 dark:text-white">
-              {t('admin.package_release_metadata_title', {}, 'Version and publishing options')}
+              {t('admin.package_release_metadata_title', {}, 'Advanced release fields')}
             </summary>
             <p className="mt-3 text-sm text-slate-600 dark:text-slate-300">
               {t(
                 'admin.package_release_metadata_desc',
                 {},
-                'Leave these defaults unchanged for normal package edits. They exist for traceability and staged releases.'
+                'Leave these defaults unchanged for normal package edits. They exist only for traceability and staged releases.'
               )}
             </p>
             <div className="mt-4 grid gap-4 xl:grid-cols-[1fr_1fr_0.8fr_0.8fr]">
@@ -998,64 +1005,9 @@ function PlanDetailContent() {
       </BackofficeSectionPanel>
       </div>
 
-      <details className="rounded-2xl border border-dashed border-slate-200 px-4 py-4 dark:border-slate-800">
-        <summary className="cursor-pointer list-none text-sm font-medium text-slate-700 dark:text-slate-300">
-          {t('admin.linked_subscriptions', {}, 'Customer subscriptions using this package')} · {formatInteger(detail.subscriptions.length)}
-        </summary>
-        <BackofficeLayer
-          className="mt-4"
-          eyebrow={t('admin.secondary_detail', {}, 'Secondary detail')}
-          title={t('admin.linked_subscriptions', {}, 'Customer subscriptions using this package')}
-          description={t(
-            'admin.linked_subscriptions_desc',
-            {},
-            'These subscriptions currently point at this coverage package. Open one only when you need to change the live commercial binding.'
-          )}
-        />
-        <BackofficeSectionPanel className="mt-4 space-y-4">
-          {detail.subscriptions.length ? (
-            detail.subscriptions.map((item) => (
-              <BackofficeStackCard key={item.subscription.subscription_id}>
-                <div className="flex items-start justify-between gap-3">
-                  <div>
-                    <div className="font-medium text-slate-950 dark:text-white">
-                      <BackofficeIdentifier value={item.subscription.subscription_id} />
-                    </div>
-                    <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
-                      {item.account?.name || item.subscription.account_id}
-                    </p>
-                  </div>
-                  <Link
-                    href={`/admin/subscriptions/${item.subscription.subscription_id}`}
-                    className="text-xs font-medium text-slate-500 underline decoration-dotted underline-offset-4 transition hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-200"
-                  >
-                    {t('admin.coverage_open_subscription_detail_action', {}, 'Inspect detail')} →
-                  </Link>
-                </div>
-                <div className="mt-3 flex flex-wrap items-center gap-2 text-sm text-slate-600 dark:text-slate-300">
-                  <span className="text-xs text-slate-500 dark:text-slate-400">
-                    {t('admin.coverage_package_release_ref', {}, 'Package release')}: <BackofficeIdentifier value={item.subscription.plan_version_id} />
-                  </span>
-                  <BackofficeStatusBadge
-                    status={item.subscription.status}
-                    label={translateStatusLabel(item.subscription.status, t)}
-                  />
-                </div>
-              </BackofficeStackCard>
-            ))
-          ) : (
-            <BackofficeStackCard>
-              <p className="text-sm text-slate-600 dark:text-slate-300">
-                {t('admin.no_linked_subscriptions', {}, 'No customer subscriptions are currently bound to this coverage package.')}
-              </p>
-            </BackofficeStackCard>
-          )}
-        </BackofficeSectionPanel>
-      </details>
-
       <details className="rounded-[1.6rem] border border-slate-200/80 bg-white/90 px-5 py-4 shadow-sm dark:border-slate-800 dark:bg-slate-950/70">
         <summary className="cursor-pointer list-none text-sm font-semibold text-slate-950 dark:text-white">
-          {t('admin.published_coverage_package_releases', {}, 'Published package releases')}
+          {t('admin.published_coverage_package_releases', {}, 'Release history')}
         </summary>
         <div className="mt-4 space-y-4">
           {detail.versions.map((version) => (
