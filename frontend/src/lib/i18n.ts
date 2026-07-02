@@ -1599,7 +1599,7 @@ export const translations: Record<Locale, TranslationMap> = {
     'admin.publish_coverage_package_release_desc':
       'Use this form to publish the next package release for budget, feature, entitlement, concurrency, and policy changes. It still stays operator-managed and does not create customer checkout.',
     'admin.coverage_package_editor_flow_desc':
-      'Use the tier baseline as the starting point, tweak only the fields that need operator judgment, then publish a frozen package release.',
+      'Use the default package template as the starting point, tweak only the fields that need operator judgment, then save the package release.',
     'admin.coverage_package_release_id_label': 'Package release ID',
     'admin.coverage_package_release_label_hint':
       'Keep the label short. Normal package maintenance should focus on the structured fields below, not release naming.',
@@ -2248,7 +2248,7 @@ export const translations: Record<Locale, TranslationMap> = {
     'admin.site_limit': 'Site limit',
     'admin.site_limit_label': 'Site limit',
     'admin.site_limit_detail': 'Maximum covered sites on the current customer subscription.',
-    'admin.policy_baseline_missing': 'No downgrade note was attached to this tier baseline.',
+    'admin.policy_baseline_missing': 'No downgrade note was attached to this default template.',
     'admin.latest_plan_version': 'Latest package release',
     'admin.plan_shadow_pricing_title': 'Cost reference',
     'admin.plan_shadow_pricing_desc':
@@ -2264,7 +2264,7 @@ export const translations: Record<Locale, TranslationMap> = {
       'Use this form only to freeze a package release on the existing commercial truth. This page is not a pricing center or self-serve quote builder.',
     'admin.plan_editor_flow_title': 'Template-first editor',
     'admin.plan_editor_flow_desc':
-      'Use the tier baseline as the starting point, tweak only the fields that need operator judgment, then publish a frozen package release.',
+      'Use the default package template as the starting point, tweak only the fields that need operator judgment, then save the package release.',
     'admin.reset_to_latest_version': 'Reset to latest release',
     'admin.plan_version_id_label': 'Package release ID',
     'admin.plan_version_id_hint':
@@ -2347,8 +2347,8 @@ export const translations: Record<Locale, TranslationMap> = {
     'admin.budgets_override': 'Budgets override',
     'admin.concurrency_override': 'Concurrency override',
     'admin.policy_override': 'Policy override',
-    'admin.field_differs_from_tier_baseline': 'Differs from tier baseline ({{baseline}}).',
-    'admin.field_matches_tier_baseline': 'Matches tier baseline ({{baseline}}).',
+    'admin.field_differs_from_tier_baseline': 'Differs from default template ({{baseline}}).',
+    'admin.field_matches_tier_baseline': 'Matches default template ({{baseline}}).',
     'admin.package_shell_present': 'Already present',
     'admin.create_package_shell': 'Create package',
     'admin.package_price_features_title': 'Package catalog',
@@ -6006,7 +6006,7 @@ export const translations: Record<Locale, TranslationMap> = {
     'admin.publish_coverage_package_release_title': '发布套餐价格与功能版本',
     'admin.publish_coverage_package_release_desc':
       '用这个表单发布下一版套餐，用于调整预算、功能、权益、并发和策略。这里仍由运营侧管理，不会创建用户结账流程。',
-    'admin.coverage_package_editor_flow_desc': '先用层级基线作为起点，只调整确实需要运营判断的字段，然后发布冻结后的套餐记录。',
+    'admin.coverage_package_editor_flow_desc': '先用默认套餐模板作为起点，只调整确实需要运营判断的字段，然后保存套餐记录。',
     'admin.coverage_package_release_id_label': '套餐发布 ID',
     'admin.coverage_package_release_label_hint': '标签尽量保持简短。日常套餐维护应聚焦下面的结构化字段，而不是发布命名。',
     'admin.coverage_package_release_saved_notice': '套餐记录已发布，现在可以把它绑定到客户订阅。',
@@ -6584,7 +6584,7 @@ export const translations: Record<Locale, TranslationMap> = {
     'admin.site_limit': '站点上限',
     'admin.site_limit_label': '站点上限',
     'admin.site_limit_detail': '当前客户订阅可覆盖的最大站点数。',
-    'admin.policy_baseline_missing': '这个层级基线还没有关联任何降级说明。',
+    'admin.policy_baseline_missing': '这个默认模板还没有关联任何降级说明。',
     'admin.latest_plan_version': '最新套餐发布记录',
     'admin.plan_shadow_pricing_title': '成本参考',
     'admin.plan_shadow_pricing_desc': '这是一块只读参考，用来辅助判断当前套餐是不是过紧或过宽。',
@@ -6596,7 +6596,7 @@ export const translations: Record<Locale, TranslationMap> = {
     'admin.publish_plan_version_title': '次级写入面',
     'admin.publish_plan_version_desc': '这个表单只负责把套餐发布记录冻结到现有商业数据里。这里不是定价中心，也不是自助报价器。',
     'admin.plan_editor_flow_title': '按模板编辑',
-    'admin.plan_editor_flow_desc': '先用层级基线作为起点，只调整确实需要运营判断的字段，然后发布冻结后的套餐记录。',
+    'admin.plan_editor_flow_desc': '先用默认套餐模板作为起点，只调整确实需要运营判断的字段，然后保存套餐记录。',
     'admin.reset_to_latest_version': '恢复为最新发布记录',
     'admin.plan_version_id_label': '套餐发布 ID',
     'admin.plan_version_id_hint': '除非你确实需要一个便于运营追踪的冻结标签，否则直接使用建议的 ID。',
@@ -6662,8 +6662,8 @@ export const translations: Record<Locale, TranslationMap> = {
     'admin.budgets_override': '预算覆盖项',
     'admin.concurrency_override': '并发覆盖项',
     'admin.policy_override': '策略覆盖项',
-    'admin.field_differs_from_tier_baseline': '与层级基线不同（{{baseline}}）。',
-    'admin.field_matches_tier_baseline': '与层级基线一致（{{baseline}}）。',
+    'admin.field_differs_from_tier_baseline': '与默认模板不同（{{baseline}}）。',
+    'admin.field_matches_tier_baseline': '与默认模板一致（{{baseline}}）。',
     'admin.package_shell_present': '已就位',
     'admin.create_package_shell': '创建套餐',
     'admin.package_price_features_title': '套餐目录',

@@ -668,7 +668,7 @@ function PlanDetailContent() {
             </p>
             <p className="mt-2 text-sm leading-7 text-slate-600 dark:text-slate-300">
               {localizedOperatorNote ||
-                String(policyBaseline.downgrade_policy || t('admin.policy_baseline_missing', {}, 'No downgrade note was attached to this tier baseline.'))}
+                String(policyBaseline.downgrade_policy || t('admin.policy_baseline_missing', {}, 'No downgrade note was attached to this default template.'))}
             </p>
           </BackofficeStackCard>
           <BackofficeStackCard>
@@ -1082,8 +1082,8 @@ function FieldBaselineHint({
   return (
     <span className={`mt-2 block text-xs ${differs ? 'text-amber-600 dark:text-amber-300' : 'text-slate-500 dark:text-slate-400'}`}>
       {differs
-        ? t('admin.field_differs_from_tier_baseline', { baseline: baselineValue }, `Differs from tier baseline (${baselineValue}).`)
-        : t('admin.field_matches_tier_baseline', { baseline: baselineValue }, `Matches tier baseline (${baselineValue}).`)}
+        ? t('admin.field_differs_from_tier_baseline', { baseline: baselineValue }, `Differs from default template (${baselineValue}).`)
+        : t('admin.field_matches_tier_baseline', { baseline: baselineValue }, `Matches default template (${baselineValue}).`)}
     </span>
   );
 }

@@ -6,7 +6,7 @@ from pathlib import Path
 from sqlalchemy import select
 
 from app.core.db import dispose_engine, get_session, init_schema
-from app.core.models import AccountSubscription
+from app.core.models import AccountEntitlementSnapshot, AccountSubscription
 from app.domain.commercial.service import CommercialService
 from tests.conftest import seed_site_auth
 
@@ -84,6 +84,55 @@ def test_authorize_runtime_request_allows_cloud_managed_knowledge_family(
 
     assert decision["decision_code"] == "commercial.allowed"
     assert decision["entitlements"]["ability_families"] == ["*"]
+
+    dispose_engine(database_url)
+
+
+def test_site_capacity_uses_current_plan_version_site_limit(
+    tmp_path: Path,
+) -> None:
+    database_url = _sqlite_url(tmp_path)
+    init_schema(database_url)
+
+    service = CommercialService(database_url)
+    service.upsert_account(
+        account_id="acct_capacity",
+        name="Capacity Account",
+        bind_default_free=True,
+    )
+    service.provision_site(
+        site_id="site_first",
+        account_id="acct_capacity",
+        name="First Site",
+    )
+
+    with get_session(database_url) as session:
+        snapshot = session.scalar(select(AccountEntitlementSnapshot))
+        assert snapshot is not None
+        assert snapshot.plan_version_id == "plan_free_v1"
+        assert snapshot.site_limit == 1
+
+    service.publish_plan_version(
+        plan_id="plan_free",
+        plan_version_id="plan_free_v1",
+        version_label="v1",
+        metadata_json={
+            "tier_id": "free",
+            "package_alias": "Free",
+            "plan_kind": "default_free",
+            "site_limit": 3,
+            "monthly_included_points": 300,
+            "max_batch_items": 5,
+        },
+    )
+
+    second_site = service.provision_site(
+        site_id="site_second",
+        account_id="acct_capacity",
+        name="Second Site",
+    )
+
+    assert second_site["site_id"] == "site_second"
 
     dispose_engine(database_url)
 

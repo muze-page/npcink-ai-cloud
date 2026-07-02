@@ -380,7 +380,18 @@ class CommercialServiceAccountMixin(CommercialServiceAuditMixin):
         account_id: str,
         snapshot: object,
     ) -> None:
-        site_limit = cast(Any, self)._resolve_site_limit(snapshot=snapshot)
+        plan_version = None
+        plan_version_id = str(getattr(snapshot, "plan_version_id", "") or "").strip()
+        if plan_version_id:
+            plan_version = repository.get_plan_version(plan_version_id)
+        plan_version_metadata: dict[str, object] = {}
+        if plan_version is not None:
+            plan_version_metadata = getattr(plan_version, "metadata_json", None) or {}
+        site_limit = (
+            cast(Any, self)._resolve_site_limit(plan_version=plan_version)
+            if plan_version is not None and plan_version_metadata.get("site_limit") is not None
+            else cast(Any, self)._resolve_site_limit(snapshot=snapshot)
+        )
         site_counts = repository.count_sites_by_account(
             account_ids=[account_id],
             statuses=[
