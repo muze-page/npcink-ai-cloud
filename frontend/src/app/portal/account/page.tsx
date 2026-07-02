@@ -61,7 +61,7 @@ function AccountPageContent() {
         formatPortalErrorMessage(
           error,
           t,
-          t('portal.account.identity_provider_load_failed', undefined, '无法读取第三方登录状态')
+          t('portal.account.identity_provider_load_failed', undefined, 'Unable to read third-party login status')
         )
       );
     }
@@ -76,7 +76,7 @@ function AccountPageContent() {
 
   useEffect(() => {
     if (qqStatus === 'bound') {
-      setMessage(t('portal.account.qq_bound', undefined, 'QQ 快捷登录已绑定。'));
+      setMessage(t('portal.account.qq_bound', undefined, 'QQ quick login is bound.'));
       void loadProviders();
       void refresh();
     }
@@ -85,7 +85,7 @@ function AccountPageContent() {
         t(
           'portal.account.qq_binding_required',
           undefined,
-          '当前 QQ 尚未绑定账号，请在登录后从账号中心发起绑定。'
+          'This QQ account is not linked yet. Sign in and start binding from Account Center.'
         )
       );
     }
@@ -98,7 +98,7 @@ function AccountPageContent() {
       const response = await portalClient.startQqBind('/portal/account');
       const authorizationUrl = response.data?.authorization_url || '';
       if (!authorizationUrl) {
-        throw new Error(t('portal.account.qq_authorization_missing', undefined, 'QQ 授权地址为空'));
+        throw new Error(t('portal.account.qq_authorization_missing', undefined, 'QQ authorization URL is empty'));
       }
       window.location.assign(authorizationUrl);
     } catch (error) {
@@ -107,7 +107,7 @@ function AccountPageContent() {
         formatPortalErrorMessage(
           error,
           t,
-          t('portal.account.qq_bind_failed', undefined, '无法发起 QQ 绑定')
+          t('portal.account.qq_bind_failed', undefined, 'Unable to start QQ binding')
         )
       );
     }
@@ -125,7 +125,7 @@ function AccountPageContent() {
             : provider
         )
       );
-      setMessage(t('portal.account.qq_unbound', undefined, 'QQ 快捷登录已解绑，请重新登录。'));
+      setMessage(t('portal.account.qq_unbound', undefined, 'QQ quick login has been unbound. Sign in again.'));
       await refresh();
     } catch (error) {
       setStatus('error');
@@ -133,7 +133,7 @@ function AccountPageContent() {
         formatPortalErrorMessage(
           error,
           t,
-          t('portal.account.qq_unbind_failed', undefined, '无法解绑 QQ 快捷登录')
+          t('portal.account.qq_unbind_failed', undefined, 'Unable to unbind QQ quick login')
         )
       );
     } finally {
@@ -144,7 +144,7 @@ function AccountPageContent() {
   if (isLoading) {
     return (
       <PortalLoadingState
-        message={t('portal.loading_session', undefined, '正在加载 Portal 会话')}
+        message={t('portal.loading_session', undefined, 'Loading Portal session')}
       />
     );
   }
@@ -152,8 +152,8 @@ function AccountPageContent() {
   if (!isAuthenticated || !session) {
     return (
       <PortalSignedOutState
-        title={t('portal.account.signed_out_title', undefined, '需要登录')}
-        description={t('portal.account.signed_out_desc', undefined, '请登录后查看账号中心。')}
+        title={t('portal.account.signed_out_title', undefined, 'Sign-in required')}
+        description={t('portal.account.signed_out_desc', undefined, 'Sign in to view Account Center.')}
         actionLabel={t('nav.sign_in')}
       />
     );
@@ -163,15 +163,15 @@ function AccountPageContent() {
     <BackofficePageStack>
       <BackofficePrimaryPanel
         eyebrow={t('portal.account.eyebrow', undefined, 'Account')}
-        title={t('portal.account.title', undefined, '账号中心')}
+        title={t('portal.account.title', undefined, 'Account Center')}
         description={t(
           'portal.account.description',
           undefined,
-          '邮箱是主账号，QQ 用作快捷登录绑定；Portal 和平台管理入口继续保持独立。'
+          'Email remains the primary identity. QQ is only a quick-login binding, and Portal stays separate from platform admin.'
         )}
         aside={(
           <BackofficeStatusBadge
-            label={qqProvider?.bound ? t('portal.account.qq_bound_label', undefined, 'QQ 已绑定') : t('portal.account.qq_unbound_label', undefined, 'QQ 未绑定')}
+            label={qqProvider?.bound ? t('portal.account.qq_bound_label', undefined, 'QQ bound') : t('portal.account.qq_unbound_label', undefined, 'QQ not bound')}
             status={qqProvider?.bound ? 'active' : 'inactive'}
           />
         )}
@@ -180,21 +180,21 @@ function AccountPageContent() {
             columnsClassName="md:grid-cols-2 xl:grid-cols-4"
             items={[
               {
-                label: t('portal.account.email_label', undefined, '账号'),
+                label: t('portal.account.email_label', undefined, 'Account'),
                 value: accountEmail || t('common.not_found'),
                 size: 'compact',
               },
               {
-                label: t('portal.account.package_label', undefined, '套餐'),
+                label: t('portal.account.package_label', undefined, 'Package'),
                 value: packageLabel,
                 size: 'compact',
               },
               {
-                label: t('portal.account.site_count_label', undefined, '站点'),
+                label: t('portal.account.site_count_label', undefined, 'Sites'),
                 value: String(session.sites?.length || 0),
               },
               {
-                label: t('portal.account.account_count_label', undefined, '账户'),
+                label: t('portal.account.account_count_label', undefined, 'Accounts'),
                 value: String(session.accounts?.length || 0),
               },
             ]}
@@ -223,7 +223,7 @@ function AccountPageContent() {
                 {t('portal.account.identity_label', undefined, 'Identity')}
               </p>
               <h2 className="mt-2 text-xl font-semibold text-slate-950 dark:text-white">
-                {t('portal.account.login_methods_title', undefined, '登录方式')}
+                {t('portal.account.login_methods_title', undefined, 'Login methods')}
               </h2>
             </div>
             <button
@@ -232,7 +232,7 @@ function AccountPageContent() {
               onClick={() => void loadProviders()}
               disabled={status === 'loading'}
             >
-              {t('common.refresh', undefined, '刷新')}
+              {t('common.refresh', undefined, 'Refresh')}
             </button>
           </div>
 
@@ -241,10 +241,10 @@ function AccountPageContent() {
               <div>
                 <div className="flex flex-wrap items-center gap-2">
                   <h3 className="text-base font-semibold text-slate-950 dark:text-white">
-                    {t('portal.account.email_login_title', undefined, '邮箱验证码')}
+                    {t('portal.account.email_login_title', undefined, 'Email verification code')}
                   </h3>
                   <BackofficeStatusBadge
-                    label={t('portal.account.primary_identity', undefined, '主账号')}
+                    label={t('portal.account.primary_identity', undefined, 'Primary identity')}
                     status="active"
                   />
                 </div>
@@ -253,7 +253,7 @@ function AccountPageContent() {
                 </p>
               </div>
               <Link href="/portal/login" className="btn btn-secondary">
-                {t('portal.account.login_page', undefined, '登录页')}
+                {t('portal.account.login_page', undefined, 'Login page')}
               </Link>
             </div>
           </BackofficeStackCard>
@@ -263,31 +263,31 @@ function AccountPageContent() {
               <div>
                 <div className="flex flex-wrap items-center gap-2">
                   <h3 className="text-base font-semibold text-slate-950 dark:text-white">
-                    {t('portal.account.qq_login_title', undefined, 'QQ 快捷登录')}
+                    {t('portal.account.qq_login_title', undefined, 'QQ quick login')}
                   </h3>
                   <BackofficeStatusBadge
                     label={
                       qqProvider?.bound
-                        ? t('portal.account.bound', undefined, '已绑定')
-                        : t('portal.account.unbound', undefined, '未绑定')
+                        ? t('portal.account.bound', undefined, 'Bound')
+                        : t('portal.account.unbound', undefined, 'Unbound')
                     }
                     status={qqProvider?.bound ? 'active' : 'inactive'}
                   />
                   {!qqProvider?.configured ? (
                     <BackofficeStatusBadge
-                      label={t('portal.account.not_configured', undefined, '未配置')}
+                      label={t('portal.account.not_configured', undefined, 'Not configured')}
                       status="warning"
                     />
                   ) : null}
                 </div>
                 <p className="mt-2 text-sm leading-6 text-slate-600 dark:text-slate-300">
                   {qqProvider?.bound
-                    ? t('portal.account.qq_bound_desc', undefined, '可使用已绑定的 QQ 账号快捷登录 Portal。')
-                    : t('portal.account.qq_unbound_desc', undefined, '绑定后可使用 QQ 快捷登录，邮箱仍是主账号。')}
+                    ? t('portal.account.qq_bound_desc', undefined, 'Use the bound QQ account for quick Portal login.')
+                    : t('portal.account.qq_unbound_desc', undefined, 'Bind QQ for quick login. Email remains the primary identity.')}
                 </p>
                 {qqProvider?.binding?.last_login_at ? (
                   <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
-                    {t('portal.account.qq_last_login', undefined, '最近 QQ 登录')}：
+                    {t('portal.account.qq_last_login', undefined, 'Last QQ login')}:
                     {formatDate(qqProvider.binding.last_login_at)}
                   </p>
                 ) : null}
@@ -301,8 +301,8 @@ function AccountPageContent() {
                     disabled={status === 'unbinding'}
                   >
                     {status === 'unbinding'
-                      ? t('portal.account.unbinding', undefined, '解绑中')
-                      : t('portal.account.unbind_qq', undefined, '解绑 QQ')}
+                      ? t('portal.account.unbinding', undefined, 'Unbinding')
+                      : t('portal.account.unbind_qq', undefined, 'Unbind QQ')}
                   </button>
                 ) : (
                   <button
@@ -312,8 +312,8 @@ function AccountPageContent() {
                     disabled={!qqProvider?.configured || status === 'binding'}
                   >
                     {status === 'binding'
-                      ? t('portal.account.binding', undefined, '跳转中')
-                      : t('portal.account.bind_qq', undefined, '绑定 QQ')}
+                      ? t('portal.account.binding', undefined, 'Redirecting')
+                      : t('portal.account.bind_qq', undefined, 'Bind QQ')}
                   </button>
                 )}
               </div>
@@ -327,12 +327,12 @@ function AccountPageContent() {
               {t('portal.account.scope_label', undefined, 'Portal')}
             </p>
             <h2 className="mt-2 text-xl font-semibold text-slate-950 dark:text-white">
-              {t('portal.account.portal_scope_title', undefined, '当前 Portal 权限')}
+              {t('portal.account.portal_scope_title', undefined, 'Current Portal permissions')}
             </h2>
           </div>
           <BackofficeStackCard>
             <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
-              {t('portal.account.account_name_label', undefined, '账户')}
+              {t('portal.account.account_name_label', undefined, 'Account')}
             </p>
             <p className="mt-2 text-base font-semibold text-slate-950 dark:text-white">
               {primaryAccount?.name || t('portal.connect_site_current_customer', undefined, 'Current customer')}
@@ -350,7 +350,7 @@ function AccountPageContent() {
           </BackofficeStackCard>
           <BackofficeStackCard>
             <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
-              {t('portal.account.role_label', undefined, '角色')}
+              {t('portal.account.role_label', undefined, 'Role')}
             </p>
             <p className="mt-2 text-base font-semibold text-slate-950 dark:text-white">
               {session.role || t('common.not_found')}
@@ -372,7 +372,7 @@ function AccountPageContent() {
 
 export default function PortalAccountPage() {
   return (
-    <Suspense fallback={<PortalLoadingState message="正在加载账号中心" />}>
+    <Suspense fallback={<PortalLoadingState message="Loading Account Center" />}>
       <AccountPageContent />
     </Suspense>
   );

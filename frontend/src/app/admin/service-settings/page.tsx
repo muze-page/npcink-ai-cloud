@@ -1,6 +1,6 @@
 'use client';
 
-import React, { FormEvent, useEffect, useMemo, useState } from 'react';
+import React, { FormEvent, useCallback, useEffect, useMemo, useState } from 'react';
 import {
   BackofficeMetricStrip,
   BackofficePageStack,
@@ -14,6 +14,7 @@ import { resolveUiErrorMessage } from '@/lib/errors';
 type SettingStatus = 'ready' | 'disabled' | 'missing_config' | 'error' | string;
 type ServiceSettingsTab = 'login' | 'email';
 type BackendPayload = Record<string, unknown> | string | null;
+type Translator = (key: string, params?: Record<string, string>, fallback?: string) => string;
 
 type ServiceSetting = {
   setting_id: string;
@@ -69,11 +70,11 @@ function boolValue(value: unknown, fallback: boolean): boolean {
   return typeof value === 'boolean' ? value : fallback;
 }
 
-function statusLabel(status: SettingStatus): string {
-  if (status === 'ready') return '已就绪';
-  if (status === 'disabled') return '已停用';
-  if (status === 'error') return '异常';
-  return '未配置';
+function statusLabel(status: SettingStatus, t: Translator): string {
+  if (status === 'ready') return t('admin.service_settings.status_ready', {}, 'Ready');
+  if (status === 'disabled') return t('admin.service_settings.status_disabled', {}, 'Disabled');
+  if (status === 'error') return t('admin.service_settings.status_error', {}, 'Error');
+  return t('admin.service_settings.status_missing_config', {}, 'Not configured');
 }
 
 function statusTone(status: SettingStatus): string {
@@ -126,38 +127,39 @@ function payloadRecord(payload: BackendPayload): Record<string, unknown> | null 
 
 function serviceSettingsErrorMessage(
   record: Record<string, unknown>,
-  fallback: string
+  fallback: string,
+  t: Translator
 ): string {
   const errorCode = String(record.error_code || '').trim();
   const rawMessage = String(record.message || '').trim();
   if (errorCode === 'service_settings.email_delivery_failed') {
     if (/Authentication failure|authentication failed|auth/i.test(rawMessage)) {
-      return 'SMTP 服务器拒绝认证。请检查 SMTP 用户名、密码或授权码是否正确，并确认发件邮箱已开通 SMTP 服务。';
+      return t('admin.service_settings.error_email_auth_failed', {}, 'SMTP authentication was rejected. Check the SMTP username, password, or app password, and confirm SMTP is enabled for the sender mailbox.');
     }
     if (/timed out|timeout/i.test(rawMessage)) {
-      return '连接 SMTP 服务器超时。请检查 SMTP 服务器、端口、SSL/STARTTLS 方式以及网络连通性。';
+      return t('admin.service_settings.error_email_timeout', {}, 'The SMTP connection timed out. Check the SMTP host, port, SSL/STARTTLS mode, and network connectivity.');
     }
     if (/Name or service not known|getaddrinfo|ENOTFOUND/i.test(rawMessage)) {
-      return '无法解析 SMTP 服务器地址。请检查 SMTP 服务器域名是否正确。';
+      return t('admin.service_settings.error_email_host_lookup', {}, 'The SMTP host could not be resolved. Check the SMTP server domain.');
     }
     return rawMessage
-      ? `测试邮件发送失败：${rawMessage}`
-      : '测试邮件发送失败。请检查 SMTP 服务器、端口、认证信息和加密方式。';
+      ? t('admin.service_settings.error_email_delivery_detail', { message: rawMessage }, 'Test email failed: {{message}}')
+      : t('admin.service_settings.error_email_delivery_failed', {}, 'Test email failed. Check the SMTP host, port, authentication, and encryption mode.');
   }
   if (errorCode === 'service_settings.email_tls_mode_invalid') {
-    return 'SMTP 加密方式不能同时启用 SSL 和 STARTTLS。465 端口通常只勾选 SSL；587 端口通常只勾选 STARTTLS。';
+    return t('admin.service_settings.error_tls_mode_invalid', {}, 'SSL and STARTTLS cannot be enabled at the same time. Port 465 usually uses SSL only; port 587 usually uses STARTTLS only.');
   }
   if (errorCode === 'service_settings.email_password_required') {
-    return '已填写 SMTP 用户名时必须填写 SMTP 密码；如果之前已保存密码，密码框可留空。';
+    return t('admin.service_settings.error_email_password_required', {}, 'SMTP password is required when an SMTP username is set. Leave the password field empty only if a password was already saved.');
   }
   if (errorCode === 'service_settings.email_username_required') {
-    return '已填写 SMTP 密码时必须填写 SMTP 用户名。';
+    return t('admin.service_settings.error_email_username_required', {}, 'SMTP username is required when an SMTP password is set.');
   }
   if (errorCode === 'service_settings.email_smtp_host_required') {
-    return '请填写 SMTP 服务器。';
+    return t('admin.service_settings.error_email_smtp_host_required', {}, 'Enter an SMTP server.');
   }
   if (errorCode === 'service_settings.email_from_email_invalid') {
-    return '请填写有效的发件邮箱。';
+    return t('admin.service_settings.error_email_from_invalid', {}, 'Enter a valid sender email address.');
   }
   return resolveUiErrorMessage(rawMessage, fallback);
 }
@@ -178,17 +180,20 @@ async function readBackendPayload(response: Response): Promise<BackendPayload> {
 function requestErrorMessage(
   response: Response,
   payload: BackendPayload,
-  fallback: string
+  fallback: string,
+  t: Translator
 ): string {
   const record = payloadRecord(payload);
   if (record) {
-    const message = serviceSettingsErrorMessage(record, fallback);
+    const message = serviceSettingsErrorMessage(record, fallback, t);
     const errorCode = String(record.error_code || '').trim();
     if (errorCode.startsWith('service_settings.')) {
-      return response.status >= 500 ? `${message}（HTTP ${response.status}）。` : message;
+      return response.status >= 500
+        ? t('admin.service_settings.error_http_suffix', { message, status: String(response.status) }, '{{message}} (HTTP {{status}}).')
+        : message;
     }
     if (response.status >= 500) {
-      return `${message}（HTTP ${response.status}）。请确认数据库迁移已执行，并查看 API 日志。`;
+      return t('admin.service_settings.error_http_migration_hint', { message, status: String(response.status) }, '{{message}} (HTTP {{status}}). Confirm database migrations have run and check API logs.');
     }
     return message;
   }
@@ -196,12 +201,12 @@ function requestErrorMessage(
   const text = typeof payload === 'string' ? payload : '';
   if (response.status >= 500) {
     const detail = text ? `：${text.slice(0, 120)}` : '';
-    return `${fallback}：后端返回 ${response.status}${detail}。请确认数据库迁移已执行，并查看 API 日志。`;
+    return t('admin.service_settings.error_backend_status', { fallback, status: String(response.status), detail }, '{{fallback}}: backend returned {{status}}{{detail}}. Confirm database migrations have run and check API logs.');
   }
   if (text) {
-    return `${fallback}：${text}`;
+    return t('admin.service_settings.error_with_detail', { fallback, detail: text }, '{{fallback}}: {{detail}}');
   }
-  return `${fallback}（HTTP ${response.status}）。`;
+  return t('admin.service_settings.error_http_suffix', { message: fallback, status: String(response.status) }, '{{message}} (HTTP {{status}}).');
 }
 
 function tabButtonClassName(active: boolean): string {
@@ -246,19 +251,19 @@ export default function AdminServiceSettingsPage() {
     reply_to: '',
   });
 
-  async function loadSettings() {
+  const loadSettings = useCallback(async function loadSettings() {
     setLoading(true);
     setError('');
     try {
       const response = await fetch('/api/admin/service-settings', { credentials: 'include' });
       const payload = await readBackendPayload(response);
       if (!response.ok) {
-        throw new Error(requestErrorMessage(response, payload, '加载服务配置失败'));
+        throw new Error(requestErrorMessage(response, payload, t('admin.service_settings.load_failed', {}, 'Failed to load service settings.'), t));
       }
       const record = payloadRecord(payload);
       const nextData = record?.data as ServiceSettingsData | undefined;
       if (!nextData?.settings) {
-        throw new Error('服务配置响应格式不正确。');
+        throw new Error(t('admin.service_settings.invalid_response', {}, 'Service settings response is invalid.'));
       }
       setData(nextData);
       const portalPublic = nextData.settings.portal_public;
@@ -293,39 +298,39 @@ export default function AdminServiceSettingsPage() {
         reply_to: stringValue(email.config.reply_to),
       });
     } catch (loadError) {
-      setError(loadError instanceof Error ? loadError.message : '加载服务配置失败');
+      setError(loadError instanceof Error ? loadError.message : t('admin.service_settings.load_failed', {}, 'Failed to load service settings.'));
     } finally {
       setLoading(false);
     }
-  }
+  }, [t]);
 
   useEffect(() => {
     void loadSettings();
-  }, []);
+  }, [loadSettings]);
 
   const metrics = useMemo(() => {
     const settings = data?.settings;
     return [
       {
-        label: '公开地址',
-        value: statusLabel(settings?.portal_public.status || 'missing_config'),
+        label: t('admin.service_settings.metric_public_url', {}, 'Public URL'),
+        value: statusLabel(settings?.portal_public.status || 'missing_config', t),
         toneClassName: statusTone(settings?.portal_public.status || 'missing_config'),
         size: 'compact' as const,
       },
       {
-        label: 'QQ 登录',
-        value: statusLabel(settings?.qq_login.status || 'missing_config'),
+        label: t('admin.service_settings.metric_qq_login', {}, 'QQ login'),
+        value: statusLabel(settings?.qq_login.status || 'missing_config', t),
         toneClassName: statusTone(settings?.qq_login.status || 'missing_config'),
         size: 'compact' as const,
       },
       {
-        label: '邮件发送',
-        value: statusLabel(settings?.portal_email.status || 'missing_config'),
+        label: t('admin.service_settings.metric_email', {}, 'Email delivery'),
+        value: statusLabel(settings?.portal_email.status || 'missing_config', t),
         toneClassName: statusTone(settings?.portal_email.status || 'missing_config'),
         size: 'compact' as const,
       },
     ];
-  }, [data]);
+  }, [data, t]);
 
   const qqRedirectUri = useMemo(() => {
     return buildQqRedirectUri(portalPublicForm.public_base_url);
@@ -333,16 +338,16 @@ export default function AdminServiceSettingsPage() {
 
   async function copyQqRedirectUri() {
     if (!qqRedirectUri) {
-      setError('请先填写有效的公开基础 URL。');
+      setError(t('admin.service_settings.public_base_url_required', {}, 'Enter a valid public base URL first.'));
       setNotice('');
       return;
     }
     try {
       await navigator.clipboard.writeText(qqRedirectUri);
       setError('');
-      setNotice('QQ 回调地址已复制。');
+      setNotice(t('admin.service_settings.qq_redirect_copied', {}, 'QQ redirect URL copied.'));
     } catch {
-      setError('当前浏览器无法自动复制，请手动复制回调地址。');
+      setError(t('admin.service_settings.copy_failed', {}, 'This browser could not copy automatically. Copy the redirect URL manually.'));
       setNotice('');
     }
   }
@@ -365,12 +370,12 @@ export default function AdminServiceSettingsPage() {
       });
       const payload = await readBackendPayload(response);
       if (!response.ok) {
-        throw new Error(requestErrorMessage(response, payload, '保存服务配置失败'));
+        throw new Error(requestErrorMessage(response, payload, t('admin.service_settings.save_failed', {}, 'Failed to save service settings.'), t));
       }
       setNotice(successMessage);
       await loadSettings();
     } catch (saveError) {
-      setError(saveError instanceof Error ? saveError.message : '保存服务配置失败');
+      setError(saveError instanceof Error ? saveError.message : t('admin.service_settings.save_failed', {}, 'Failed to save service settings.'));
     } finally {
       setSaving('');
     }
@@ -394,12 +399,12 @@ export default function AdminServiceSettingsPage() {
       });
       const payload = await readBackendPayload(response);
       if (!response.ok) {
-        throw new Error(requestErrorMessage(response, payload, '测试服务配置失败'));
+        throw new Error(requestErrorMessage(response, payload, t('admin.service_settings.test_failed', {}, 'Failed to test service settings.'), t));
       }
       setNotice(successMessage);
       await loadSettings();
     } catch (testError) {
-      setError(testError instanceof Error ? testError.message : '测试服务配置失败');
+      setError(testError instanceof Error ? testError.message : t('admin.service_settings.test_failed', {}, 'Failed to test service settings.'));
     } finally {
       setSaving('');
     }
@@ -411,7 +416,7 @@ export default function AdminServiceSettingsPage() {
       '/api/admin/service-settings/portal-public',
       portalPublicForm,
       'portal-public',
-      '公开访问地址已保存。'
+      t('admin.service_settings.public_url_saved', {}, 'Public URL saved.')
     );
   }
 
@@ -419,7 +424,7 @@ export default function AdminServiceSettingsPage() {
     event.preventDefault();
     if (!qqRedirectUri) {
       setNotice('');
-      setError('请先填写有效的公开基础 URL，QQ 回调地址会自动生成。');
+      setError(t('admin.service_settings.qq_redirect_requires_public_url', {}, 'Enter a valid public base URL first. The QQ redirect URL is generated automatically.'));
       return;
     }
     const payload: Record<string, unknown> = {
@@ -432,14 +437,14 @@ export default function AdminServiceSettingsPage() {
     if (qqForm.client_secret) {
       payload.client_secret = qqForm.client_secret;
     }
-    void saveJson('/api/admin/service-settings/qq-login', payload, 'qq-login', 'QQ 登录配置已保存。');
+    void saveJson('/api/admin/service-settings/qq-login', payload, 'qq-login', t('admin.service_settings.qq_saved', {}, 'QQ login settings saved.'));
   }
 
   function submitEmail(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (emailForm.smtp_use_ssl && emailForm.smtp_use_starttls) {
       setNotice('');
-      setError('SMTP 加密方式不能同时启用 SSL 和 STARTTLS。465 端口通常只勾选 SSL；587 端口通常只勾选 STARTTLS。');
+      setError(t('admin.service_settings.error_tls_mode_invalid', {}, 'SSL and STARTTLS cannot be enabled at the same time. Port 465 usually uses SSL only; port 587 usually uses STARTTLS only.'));
       return;
     }
     const payload: Record<string, unknown> = {
@@ -459,7 +464,7 @@ export default function AdminServiceSettingsPage() {
     if (emailForm.smtp_password) {
       payload.smtp_password = emailForm.smtp_password;
     }
-    void saveJson('/api/admin/service-settings/email', payload, 'email', '邮件配置已保存。');
+    void saveJson('/api/admin/service-settings/email', payload, 'email', t('admin.service_settings.email_saved', {}, 'Email settings saved.'));
   }
 
   const secretConfigured = {
@@ -470,25 +475,25 @@ export default function AdminServiceSettingsPage() {
   const tabs: Array<{ id: ServiceSettingsTab; label: string; description: string }> = [
     {
       id: 'login',
-      label: '登录配置',
-      description: '公开地址和 QQ 快捷登录',
+      label: t('admin.service_settings.tab_login', {}, 'Login settings'),
+      description: t('admin.service_settings.tab_login_desc', {}, 'Public URL and QQ quick login'),
     },
     {
       id: 'email',
-      label: '邮件配置',
-      description: 'SMTP 和测试邮件',
+      label: t('admin.service_settings.tab_email', {}, 'Email settings'),
+      description: t('admin.service_settings.tab_email_desc', {}, 'SMTP and test email'),
     },
   ];
 
   return (
     <BackofficePageStack>
       <BackofficePrimaryPanel
-        eyebrow={t('admin.operator_surface', {}, '运营界面')}
-        title={t('admin.service_settings_title', {}, '服务配置')}
+        eyebrow={t('admin.operator_surface', {}, 'Operator surface')}
+        title={t('admin.service_settings_title', {}, 'Service settings')}
         description={t(
           'admin.service_settings_desc',
           {},
-          '配置 Cloud 自有的 Portal 登录、QQ 快捷登录和邮件发送。配置保存在 Cloud 运行时存储中，不再读取 .env 回退。'
+          'Configure Cloud-owned Portal login, QQ quick login, and email delivery. Values are stored in Cloud runtime storage; .env fallback is no longer read.'
         )}
         aside={(
           <div className="w-full xl:w-[34rem]">
@@ -509,7 +514,7 @@ export default function AdminServiceSettingsPage() {
       ) : null}
 
       <BackofficeSectionPanel className="p-2 md:p-2">
-        <div role="tablist" aria-label="服务配置分类" className="grid gap-2 md:grid-cols-2">
+        <div role="tablist" aria-label={t('admin.service_settings.tablist_label', {}, 'Service settings categories')} className="grid gap-2 md:grid-cols-2">
           {tabs.map((tab) => {
             const active = activeTab === tab.id;
             return (
@@ -541,15 +546,15 @@ export default function AdminServiceSettingsPage() {
                 Portal URL
               </p>
               <h2 className="mt-2 text-xl font-semibold text-slate-950 dark:text-white">
-                门户基础地址
+                {t('admin.service_settings.portal_public_title', {}, 'Portal base URL')}
               </h2>
               <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
-                用于生成 QQ、微信登录和支付通知等公开回调地址。
+                {t('admin.service_settings.portal_public_desc', {}, 'Used to generate public callback URLs for QQ login, WeChat login, and payment notifications.')}
               </p>
             </div>
             <form className="grid gap-4 lg:grid-cols-[1fr_auto]" onSubmit={submitPortalPublic}>
               <label className={labelClassName()}>
-                基础 URL
+                {t('admin.service_settings.base_url_label', {}, 'Base URL')}
                 <input
                   className={fieldClassName()}
                   value={portalPublicForm.public_base_url}
@@ -563,7 +568,7 @@ export default function AdminServiceSettingsPage() {
                   <button
                     type="button"
                     role="switch"
-                    aria-label="启用公开访问地址"
+                    aria-label={t('admin.service_settings.public_url_toggle_label', {}, 'Enable public URL')}
                     aria-checked={portalPublicForm.enabled}
                     className={switchButtonClassName(portalPublicForm.enabled)}
                     disabled={loading}
@@ -571,10 +576,12 @@ export default function AdminServiceSettingsPage() {
                   >
                     <span className={switchKnobClassName(portalPublicForm.enabled)} />
                   </button>
-                  门户入口启用
+                  {t('admin.service_settings.portal_enabled_label', {}, 'Portal entry enabled')}
                 </div>
                 <button type="submit" className="btn btn-primary" disabled={saving === 'portal-public'}>
-                  {saving === 'portal-public' ? '保存中' : '保存基础地址'}
+                  {saving === 'portal-public'
+                    ? t('admin.service_settings.saving', {}, 'Saving')
+                    : t('admin.service_settings.save_base_url', {}, 'Save base URL')}
                 </button>
               </div>
             </form>
@@ -585,9 +592,9 @@ export default function AdminServiceSettingsPage() {
               <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
                 QQ OAuth
               </p>
-              <h2 className="mt-2 text-xl font-semibold text-slate-950 dark:text-white">QQ 快捷登录</h2>
+              <h2 className="mt-2 text-xl font-semibold text-slate-950 dark:text-white">{t('admin.service_settings.qq_title', {}, 'QQ quick login')}</h2>
               <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
-                回调地址由门户基础地址自动生成；这里仅保存 QQ App 凭据和登录开关。
+                {t('admin.service_settings.qq_desc', {}, 'The redirect URL is generated from the Portal base URL. This section only stores QQ app credentials and the login switch.')}
               </p>
             </div>
             <form className="grid gap-4 lg:grid-cols-2" onSubmit={submitQq}>
@@ -596,19 +603,21 @@ export default function AdminServiceSettingsPage() {
                 <input className={fieldClassName()} value={qqForm.client_id} disabled={loading} onChange={(event) => setQqForm((current) => ({ ...current, client_id: event.target.value }))} />
               </label>
               <label className={labelClassName()}>
-                App Secret {secretConfigured.qq ? '（已配置）' : '（未配置）'}
-                <input className={fieldClassName()} type="password" value={qqForm.client_secret} disabled={loading} onChange={(event) => setQqForm((current) => ({ ...current, client_secret: event.target.value }))} placeholder={secretConfigured.qq ? '留空则保留当前密钥' : '必填'} />
+                App Secret {secretConfigured.qq
+                  ? t('admin.service_settings.secret_configured_suffix', {}, '(configured)')
+                  : t('admin.service_settings.secret_missing_suffix', {}, '(not configured)')}
+                <input className={fieldClassName()} type="password" value={qqForm.client_secret} disabled={loading} onChange={(event) => setQqForm((current) => ({ ...current, client_secret: event.target.value }))} placeholder={secretConfigured.qq ? t('admin.service_settings.qq_secret_keep_placeholder', {}, 'Leave empty to keep the current secret') : t('admin.service_settings.required_placeholder', {}, 'Required')} />
               </label>
               <div className="lg:col-span-2">
                 <div className={labelClassName()}>
-                  回调地址
+                  {t('admin.service_settings.redirect_uri_label', {}, 'Redirect URL')}
                   <div className="mt-1 grid gap-2 lg:grid-cols-[1fr_auto]">
                     <input
                       className={fieldClassName()}
                       value={qqRedirectUri}
                       readOnly
                       disabled={loading}
-                      placeholder="填写公开基础 URL 后自动生成"
+                      placeholder={t('admin.service_settings.redirect_uri_placeholder', {}, 'Generated after a public base URL is entered')}
                     />
                     <button
                       type="button"
@@ -616,7 +625,7 @@ export default function AdminServiceSettingsPage() {
                       disabled={!qqRedirectUri}
                       onClick={() => void copyQqRedirectUri()}
                     >
-                      复制
+                      {t('common.copy', {}, 'Copy')}
                     </button>
                   </div>
                 </div>
@@ -626,7 +635,7 @@ export default function AdminServiceSettingsPage() {
                   <button
                     type="button"
                     role="switch"
-                    aria-label="启用 QQ 快捷登录"
+                    aria-label={t('admin.service_settings.qq_toggle_label', {}, 'Enable QQ quick login')}
                     aria-checked={qqForm.enabled}
                     className={switchButtonClassName(qqForm.enabled)}
                     disabled={loading}
@@ -634,14 +643,16 @@ export default function AdminServiceSettingsPage() {
                   >
                     <span className={switchKnobClassName(qqForm.enabled)} />
                   </button>
-                  启用 QQ 登录
+                  {t('admin.service_settings.qq_enabled_label', {}, 'Enable QQ login')}
                 </div>
                 <div className="flex gap-2">
-                  <button type="button" className="btn btn-secondary" disabled={saving === 'qq-test'} onClick={() => postJson('/api/admin/service-settings/qq-login/test', {}, 'qq-test', 'QQ 登录配置检查完成。')}>
-                    检查 QQ 配置
+                  <button type="button" className="btn btn-secondary" disabled={saving === 'qq-test'} onClick={() => postJson('/api/admin/service-settings/qq-login/test', {}, 'qq-test', t('admin.service_settings.qq_test_done', {}, 'QQ login configuration check completed.'))}>
+                    {t('admin.service_settings.check_qq', {}, 'Check QQ settings')}
                   </button>
                   <button type="submit" className="btn btn-primary" disabled={saving === 'qq-login'}>
-                    {saving === 'qq-login' ? '保存中' : '保存 QQ 配置'}
+                    {saving === 'qq-login'
+                      ? t('admin.service_settings.saving', {}, 'Saving')
+                      : t('admin.service_settings.save_qq', {}, 'Save QQ settings')}
                   </button>
                 </div>
               </div>
@@ -659,20 +670,20 @@ export default function AdminServiceSettingsPage() {
               <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
                 SMTP
               </p>
-              <h2 className="mt-2 text-xl font-semibold text-slate-950 dark:text-white">邮件发送</h2>
+              <h2 className="mt-2 text-xl font-semibold text-slate-950 dark:text-white">{t('admin.service_settings.email_title', {}, 'Email delivery')}</h2>
             </div>
             <form className="grid gap-4 lg:grid-cols-2" onSubmit={submitEmail}>
               <label className={labelClassName()}>
-                SMTP 服务器
+                {t('admin.service_settings.smtp_host_label', {}, 'SMTP server')}
                 <input className={fieldClassName()} value={emailForm.smtp_host} disabled={loading} onChange={(event) => setEmailForm((current) => ({ ...current, smtp_host: event.target.value }))} />
               </label>
               <label className={labelClassName()}>
-                SMTP 端口
+                {t('admin.service_settings.smtp_port_label', {}, 'SMTP port')}
                 <input className={fieldClassName()} value={emailForm.smtp_port} disabled={loading} onChange={(event) => setEmailForm((current) => ({ ...current, smtp_port: event.target.value }))} />
               </label>
               <label className={labelClassName()}>
                 <span className="flex items-center justify-between gap-3">
-                  <span>SMTP 用户名</span>
+                  <span>{t('admin.service_settings.smtp_username_label', {}, 'SMTP username')}</span>
                   <span className="inline-flex items-center gap-2 text-xs font-normal text-slate-500 dark:text-slate-400">
                     <input
                       type="checkbox"
@@ -689,7 +700,7 @@ export default function AdminServiceSettingsPage() {
                         }))
                       }
                     />
-                    同发件邮箱
+                    {t('admin.service_settings.same_as_from_email', {}, 'Same as sender email')}
                   </span>
                 </span>
                 <input
@@ -708,17 +719,19 @@ export default function AdminServiceSettingsPage() {
                   }
                   placeholder={
                     emailForm.smtp_username_same_as_from_email
-                      ? '自动使用发件邮箱'
-                      : '通常填写完整邮箱地址'
+                      ? t('admin.service_settings.auto_from_email_placeholder', {}, 'Uses the sender email automatically')
+                      : t('admin.service_settings.smtp_username_placeholder', {}, 'Usually the full email address')
                   }
                 />
               </label>
               <label className={labelClassName()}>
-                SMTP 密码 {secretConfigured.email ? '（已配置）' : '（未配置）'}
-                <input className={fieldClassName()} type="password" value={emailForm.smtp_password} disabled={loading} onChange={(event) => setEmailForm((current) => ({ ...current, smtp_password: event.target.value }))} placeholder={secretConfigured.email ? '留空则保留当前密码' : '设置用户名时必填'} />
+                {t('admin.service_settings.smtp_password_label', {}, 'SMTP password')} {secretConfigured.email
+                  ? t('admin.service_settings.secret_configured_suffix', {}, '(configured)')
+                  : t('admin.service_settings.secret_missing_suffix', {}, '(not configured)')}
+                <input className={fieldClassName()} type="password" value={emailForm.smtp_password} disabled={loading} onChange={(event) => setEmailForm((current) => ({ ...current, smtp_password: event.target.value }))} placeholder={secretConfigured.email ? t('admin.service_settings.email_password_keep_placeholder', {}, 'Leave empty to keep the current password') : t('admin.service_settings.email_password_required_placeholder', {}, 'Required when username is set')} />
               </label>
               <label className={labelClassName()}>
-                发件邮箱
+                {t('admin.service_settings.from_email_label', {}, 'Sender email')}
                 <input
                   className={fieldClassName()}
                   value={emailForm.from_email}
@@ -735,15 +748,15 @@ export default function AdminServiceSettingsPage() {
                 />
               </label>
               <label className={labelClassName()}>
-                发件人名称
+                {t('admin.service_settings.from_name_label', {}, 'Sender name')}
                 <input className={fieldClassName()} value={emailForm.from_name} disabled={loading} onChange={(event) => setEmailForm((current) => ({ ...current, from_name: event.target.value }))} />
               </label>
               <label className={labelClassName()}>
-                回复邮箱
+                {t('admin.service_settings.reply_to_label', {}, 'Reply-to email')}
                 <input className={fieldClassName()} value={emailForm.reply_to} disabled={loading} onChange={(event) => setEmailForm((current) => ({ ...current, reply_to: event.target.value }))} />
               </label>
               <label className={labelClassName()}>
-                超时时间（秒）
+                {t('admin.service_settings.timeout_seconds_label', {}, 'Timeout (seconds)')}
                 <input className={fieldClassName()} value={emailForm.smtp_timeout_seconds} disabled={loading} onChange={(event) => setEmailForm((current) => ({ ...current, smtp_timeout_seconds: event.target.value }))} />
               </label>
               <div className="flex flex-wrap items-center gap-5 text-sm text-slate-700 dark:text-slate-200">
@@ -757,12 +770,14 @@ export default function AdminServiceSettingsPage() {
                 </label>
                 <label className="inline-flex items-center gap-2">
                   <input type="checkbox" className={checkboxClassName()} checked={emailForm.enabled} disabled={loading} onChange={(event) => setEmailForm((current) => ({ ...current, enabled: event.target.checked }))} />
-                  启用
+                  {t('admin.service_settings.enabled_label', {}, 'Enabled')}
                 </label>
               </div>
               <div className="flex justify-end">
                 <button type="submit" className="btn btn-primary" disabled={saving === 'email'}>
-                  {saving === 'email' ? '保存中' : '保存'}
+                  {saving === 'email'
+                    ? t('admin.service_settings.saving', {}, 'Saving')
+                    : t('common.save', {}, 'Save')}
                 </button>
               </div>
             </form>
@@ -770,7 +785,7 @@ export default function AdminServiceSettingsPage() {
 
             <section className="grid gap-3 border-t border-slate-200 pt-6 dark:border-slate-800 lg:grid-cols-[1fr_auto]">
             <label className={labelClassName()}>
-              测试收件人
+              {t('admin.service_settings.test_recipient_label', {}, 'Test recipient')}
               <input className={fieldClassName()} value={emailTestRecipient} onChange={(event) => setEmailTestRecipient(event.target.value)} placeholder="operator@example.com" />
             </label>
             <div className="flex items-end justify-end">
@@ -778,9 +793,9 @@ export default function AdminServiceSettingsPage() {
                 type="button"
                 className="btn btn-secondary"
                 disabled={saving === 'email-test' || !emailTestRecipient}
-                onClick={() => postJson('/api/admin/service-settings/email/test', { recipient_email: emailTestRecipient }, 'email-test', '测试邮件已发送。')}
+                onClick={() => postJson('/api/admin/service-settings/email/test', { recipient_email: emailTestRecipient }, 'email-test', t('admin.service_settings.email_test_sent', {}, 'Test email sent.'))}
               >
-                发送测试邮件
+                {t('admin.service_settings.send_test_email', {}, 'Send test email')}
               </button>
             </div>
             </section>

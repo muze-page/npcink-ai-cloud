@@ -494,7 +494,7 @@ function PlanDetailContent() {
     : null;
   const baselineActionLabel = t(
     'admin.apply_tier_baseline',
-    {},
+    { tier: localizedPackageAlias || localizedTierLabel || 'tier' },
     `Apply ${localizedPackageAlias || localizedTierLabel || 'tier'} baseline`
   );
 

@@ -470,44 +470,44 @@ export default function PortalPage() {
     {
       key: 'site',
       done: selectedSite.status === 'active' && Boolean(selectedSiteWordPressUrl),
-      title: t('portal.home.onboarding_site_title', {}, '确认站点'),
+      title: t('portal.home.onboarding_site_title', {}, 'Confirm site'),
       detail: selectedSiteWordPressUrl
-        ? t('portal.home.onboarding_site_ready', {}, '站点地址已记录，当前站点可用于 Portal 工作区。')
-        : t('portal.home.onboarding_site_needed', {}, '补齐 WordPress 站点地址，后续 Key 和用量才容易核对。'),
+        ? t('portal.home.onboarding_site_ready', {}, 'The site URL is recorded and this site can be used in the Portal workspace.')
+        : t('portal.home.onboarding_site_needed', {}, 'Add the WordPress site URL so keys and usage are easier to verify later.'),
       href: `/portal/sites/${selectedSite.site_id}`,
-      action: t('portal.home.onboarding_site_action', {}, '查看站点'),
+      action: t('portal.home.onboarding_site_action', {}, 'View site'),
     },
     {
       key: 'connection',
       done: selectedSite.status === 'active',
-      title: t('portal.home.onboarding_connection_title', {}, '连接 WordPress'),
+      title: t('portal.home.onboarding_connection_title', {}, 'Connect WordPress'),
       detail:
         selectedSite.status === 'active'
-          ? t('portal.home.onboarding_connection_ready', {}, '当前站点已连接，连接凭证由系统自动维护。')
-          : t('portal.home.onboarding_connection_needed', {}, '从 WordPress 插件重新连接站点，系统会自动生成连接凭证。'),
+          ? t('portal.home.onboarding_connection_ready', {}, 'This site is connected, and connection credentials are maintained automatically.')
+          : t('portal.home.onboarding_connection_needed', {}, 'Reconnect the site from the WordPress plugin. The system will generate connection credentials automatically.'),
       href: `/portal/sites/${selectedSite.site_id}`,
-      action: t('portal.home.onboarding_connection_action', {}, '查看站点'),
+      action: t('portal.home.onboarding_connection_action', {}, 'View site'),
     },
     {
       key: 'package',
       done: Boolean(currentSubscription?.status === 'active'),
-      title: t('portal.home.onboarding_package_title', {}, '查看 Free 套餐'),
+      title: t('portal.home.onboarding_package_title', {}, 'Review Free package'),
       detail:
         currentSubscription?.status === 'active'
-          ? t('portal.home.onboarding_package_ready', {}, '当前套餐处于可用状态。')
-          : t('portal.home.onboarding_package_needed', {}, '查看当前套餐和额度，确认本周期可用范围。'),
+          ? t('portal.home.onboarding_package_ready', {}, 'The current package is available.')
+          : t('portal.home.onboarding_package_needed', {}, 'Review the current package and quota to confirm what is available this period.'),
       href: `/portal/billing?site=${selectedSite.site_id}`,
-      action: t('portal.home.onboarding_package_action', {}, '查看套餐'),
+      action: t('portal.home.onboarding_package_action', {}, 'View package'),
     },
     {
       key: 'qq',
       done: Boolean(qqProvider?.bound),
-      title: t('portal.home.onboarding_qq_title', {}, '绑定 QQ 快捷登录'),
+      title: t('portal.home.onboarding_qq_title', {}, 'Bind QQ quick login'),
       detail: qqProvider?.bound
-        ? t('portal.home.onboarding_qq_ready', {}, 'QQ 快捷登录已绑定，后续可直接使用 QQ 登录。')
-        : t('portal.home.onboarding_qq_needed', {}, '邮箱仍是主账号，绑定 QQ 后登录更方便。'),
+        ? t('portal.home.onboarding_qq_ready', {}, 'QQ quick login is bound, so future sign-ins can use QQ directly.')
+        : t('portal.home.onboarding_qq_needed', {}, 'Email remains the primary identity. Bind QQ for easier login.'),
       href: '/portal/account',
-      action: t('portal.home.onboarding_qq_action', {}, '账号中心'),
+      action: t('portal.home.onboarding_qq_action', {}, 'Account center'),
     },
   ];
   const completedSetupCount = setupChecklistItems.filter((item) => item.done).length;
@@ -663,13 +663,13 @@ export default function PortalPage() {
                   {t('portal.home.onboarding_label', {}, 'Getting started')}
                 </p>
                 <h2 className="mt-2 text-xl font-semibold text-gray-950 dark:text-white">
-                  {t('portal.home.onboarding_title', {}, '首次使用清单')}
+                  {t('portal.home.onboarding_title', {}, 'First-use checklist')}
                 </h2>
                 <p className="mt-2 text-sm leading-6 text-gray-600 dark:text-gray-300">
                   {t(
                     'portal.home.onboarding_desc',
                     {},
-                    '按顺序完成这些动作，Free 账号就能进入可用状态。'
+                    'Complete these steps in order to make the Free account ready to use.'
                   )}
                 </p>
               </div>

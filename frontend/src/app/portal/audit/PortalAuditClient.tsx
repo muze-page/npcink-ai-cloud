@@ -291,7 +291,7 @@ export function PortalAuditClient() {
           message={t(
             'portal.site_switching_notice_with_target',
             { site: switchingSiteName || selectedSite?.site_name || selectedSiteId },
-            `正在切换到 ${switchingSiteName || selectedSite?.site_name || selectedSiteId}，页面数据会自动更新。`
+            `Switching to ${switchingSiteName || selectedSite?.site_name || selectedSiteId}. Page data will update automatically.`
           )}
         />
       ) : null}

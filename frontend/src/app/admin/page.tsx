@@ -10,11 +10,11 @@ import { buildAdminOperatorWatchItems, operatorSeverityClasses } from '@/lib/adm
 import { resolveUiErrorMessage } from '@/lib/errors';
 import {
   BackofficeMetricStrip,
-  BackofficePageStack,
   BackofficePrimaryPanel,
   BackofficeSectionPanel,
   BackofficeStackCard,
 } from '@/components/backoffice/BackofficeScaffold';
+import { AdminWorkspacePage, AdminWorkspaceSplit } from '@/components/admin/AdminWorkspace';
 
 interface AdminOverview {
   generatedAt: string;
@@ -765,7 +765,7 @@ function AdminOverviewContent() {
   ];
 
   return (
-    <BackofficePageStack>
+    <AdminWorkspacePage>
       <BackofficePrimaryPanel
         eyebrow={t('admin.operator_surface', {}, 'Operator surface')}
         title={t('admin.home_title', {}, 'Platform state comes first')}
@@ -830,9 +830,9 @@ function AdminOverviewContent() {
         </div>
       </BackofficePrimaryPanel>
 
-      <BackofficeSectionPanel className="overflow-hidden p-0">
-        <div className="grid divide-y divide-slate-200/80 dark:divide-slate-800 xl:grid-cols-[1.15fr_0.85fr] xl:divide-x xl:divide-y-0">
-          <div className="p-5 md:p-6">
+      <AdminWorkspaceSplit
+        primary={(
+          <>
             <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
               <div>
                 <p className="text-xs font-semibold uppercase tracking-[0.18em] text-gray-500 dark:text-gray-400">
@@ -871,9 +871,10 @@ function AdminOverviewContent() {
                 </Link>
               ))}
             </div>
-          </div>
-
-          <div className="p-5 md:p-6">
+          </>
+        )}
+        inspector={(
+          <>
             <div className="flex items-start justify-between gap-3">
               <div>
                 <p className="text-xs font-semibold uppercase tracking-[0.18em] text-gray-500 dark:text-gray-400">
@@ -917,9 +918,9 @@ function AdminOverviewContent() {
                 </div>
               ))}
             </div>
-          </div>
-        </div>
-      </BackofficeSectionPanel>
+          </>
+        )}
+      />
 
       <BackofficeSectionPanel className="space-y-5">
         <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
@@ -1311,7 +1312,7 @@ function AdminOverviewContent() {
           </BackofficeStackCard>
         </div>
       </details>
-    </BackofficePageStack>
+    </AdminWorkspacePage>
   );
 }
 

@@ -44,8 +44,20 @@ assert.match(
 
 assert.match(
   layoutSource,
-  /admin-shell[\s\S]*hidden w-60 flex-col[\s\S]*lg:pl-60/,
-  'Admin layout must keep a compact desktop shell instead of the old wide sidebar'
+  /ADMIN_SIDEBAR_STORAGE_KEY[\s\S]*sidebarCollapsed[\s\S]*w-16[\s\S]*w-60[\s\S]*lg:pl-16[\s\S]*lg:pl-60/,
+  'Admin layout must support a persistent collapsible desktop sidebar'
+);
+
+assert.match(
+  layoutSource,
+  /key === 'b'[\s\S]*setSidebarCollapsed[\s\S]*key === 'k'[\s\S]*setCommandOpen/,
+  'Admin layout must expose keyboard shortcuts for sidebar and quick switching'
+);
+
+assert.match(
+  layoutSource,
+  /admin\.command_open[\s\S]*admin\.command_title[\s\S]*filteredCommandItems/,
+  'Admin layout must expose a bounded quick switcher for existing admin routes'
 );
 
 assert.match(
@@ -56,7 +68,7 @@ assert.match(
 
 assert.match(
   layoutSource,
-  /admin-nav-link flex w-full min-w-0[\s\S]*<span className="min-w-0 truncate">/,
+  /admin-nav-link flex w-full min-w-0[\s\S]*min-w-0 truncate/,
   'Admin sidebar links must render as one full-width truncated row per item'
 );
 

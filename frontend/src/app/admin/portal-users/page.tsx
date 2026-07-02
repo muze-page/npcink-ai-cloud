@@ -123,34 +123,36 @@ type Filters = {
   qq_bound: string;
 };
 
-function sourceLabel(source: string): string {
+type Translator = (key: string, params?: Record<string, string>, fallback?: string) => string;
+
+function sourceLabel(source: string, t: Translator): string {
   if (source === 'portal_self_registration') {
-    return '自助注册';
+    return t('admin.portal_users.source_self_registration', {}, 'Self registration');
   }
   if (source === 'principal_access') {
-    return '后台开通';
+    return t('admin.portal_users.source_admin_provisioned', {}, 'Admin provisioned');
   }
-  return source || '未知';
+  return source || t('common.unknown', {}, 'Unknown');
 }
 
-function dateLabel(value?: string): string {
-  return value ? formatDate(value) : '未记录';
+function dateLabel(value: string | undefined, t: Translator): string {
+  return value ? formatDate(value) : t('admin.portal_users.not_recorded', {}, 'Not recorded');
 }
 
-function auditEventLabel(eventKind: string): string {
+function auditEventLabel(eventKind: string, t: Translator): string {
   if (eventKind === 'portal.registration') {
-    return '自助注册';
+    return t('admin.portal_users.audit_registration', {}, 'Self registration');
   }
   if (eventKind === 'portal_user.disable') {
-    return '禁用用户';
+    return t('admin.portal_users.audit_disable', {}, 'User disabled');
   }
   if (eventKind === 'principal_access.upsert') {
-    return '访问开通';
+    return t('admin.portal_users.audit_principal_access', {}, 'Access provisioned');
   }
-  return eventKind || '未知事件';
+  return eventKind || t('admin.portal_users.audit_unknown', {}, 'Unknown event');
 }
 
-function payloadText(payload?: Record<string, unknown>): string {
+function payloadText(payload: Record<string, unknown> | undefined, t: Translator): string {
   if (!payload) {
     return '';
   }
@@ -160,16 +162,19 @@ function payloadText(payload?: Record<string, unknown>): string {
   const revokedBindings = Number(payload.revoked_identity_provider_bindings || 0);
   if (reason || revokedSiteGrants || revokedMemberships || revokedBindings) {
     return [
-      reason ? `原因：${reason}` : '',
-      revokedSiteGrants ? `站点授权 ${revokedSiteGrants}` : '',
-      revokedMemberships ? `账号成员 ${revokedMemberships}` : '',
-      revokedBindings ? `QQ 绑定 ${revokedBindings}` : '',
+      reason ? t('admin.portal_users.payload_reason', { reason }, 'Reason: {{reason}}') : '',
+      revokedSiteGrants ? t('admin.portal_users.payload_site_grants', { count: String(revokedSiteGrants) }, 'Site grants {{count}}') : '',
+      revokedMemberships ? t('admin.portal_users.payload_account_memberships', { count: String(revokedMemberships) }, 'Account memberships {{count}}') : '',
+      revokedBindings ? t('admin.portal_users.payload_qq_bindings', { count: String(revokedBindings) }, 'QQ bindings {{count}}') : '',
     ].filter(Boolean).join(' · ');
   }
   const email = String(payload.email || '').trim();
   const siteId = String(payload.site_id || '').trim();
   if (email || siteId) {
-    return [email ? `邮箱：${email}` : '', siteId ? `站点：${siteId}` : ''].filter(Boolean).join(' · ');
+    return [
+      email ? t('admin.portal_users.payload_email', { email }, 'Email: {{email}}') : '',
+      siteId ? t('admin.portal_users.payload_site', { site: siteId }, 'Site: {{site}}') : '',
+    ].filter(Boolean).join(' · ');
   }
   return '';
 }
@@ -221,7 +226,7 @@ export default function AdminPortalUsersPage() {
       });
       const payload = await response.json();
       if (!response.ok) {
-        throw new Error(payload.message || '加载自助注册用户失败');
+        throw new Error(payload.message || t('admin.portal_users.load_failed', {}, 'Failed to load Portal users.'));
       }
       const data = (payload.data || {}) as PortalUsersResponse;
       setUsers(Array.isArray(data.items) ? data.items : []);
@@ -232,11 +237,11 @@ export default function AdminPortalUsersPage() {
         return current.filter((principalId) => nextIds.has(principalId));
       });
     } catch (err) {
-      setError(resolveUiErrorMessage(err instanceof Error ? err.message : null, '加载自助注册用户失败'));
+      setError(resolveUiErrorMessage(err instanceof Error ? err.message : null, t('admin.portal_users.load_failed', {}, 'Failed to load Portal users.')));
     } finally {
       setLoading(false);
     }
-  }, [filters]);
+  }, [filters, t]);
 
   useEffect(() => {
     void loadUsers();
@@ -244,12 +249,12 @@ export default function AdminPortalUsersPage() {
 
   const visibleMetricItems = useMemo(
     () => [
-      { label: '筛选结果', value: total },
-      { label: '正常', value: summary.active || 0, toneClassName: 'text-emerald-700 dark:text-emerald-200' },
-      { label: '已禁用', value: summary.disabled || 0, toneClassName: 'text-slate-700 dark:text-slate-200' },
-      { label: '已绑 QQ', value: summary.qq_bound || 0, toneClassName: 'text-blue-700 dark:text-blue-200' },
+      { label: t('admin.portal_users.metric_filtered', {}, 'Filtered'), value: total },
+      { label: t('admin.portal_users.status_active', {}, 'Active'), value: summary.active || 0, toneClassName: 'text-emerald-700 dark:text-emerald-200' },
+      { label: t('admin.portal_users.status_disabled', {}, 'Disabled'), value: summary.disabled || 0, toneClassName: 'text-slate-700 dark:text-slate-200' },
+      { label: t('admin.portal_users.metric_qq_bound', {}, 'QQ bound'), value: summary.qq_bound || 0, toneClassName: 'text-blue-700 dark:text-blue-200' },
     ],
-    [summary.active, summary.disabled, summary.qq_bound, total]
+    [summary.active, summary.disabled, summary.qq_bound, t, total]
   );
 
   const updateFilter = (key: keyof Filters, value: string) => {
@@ -302,7 +307,7 @@ export default function AdminPortalUsersPage() {
       );
       const payload = await response.json();
       if (!response.ok) {
-        throw new Error(payload.message || '禁用用户失败');
+        throw new Error(payload.message || t('admin.portal_users.disable_failed', {}, 'Failed to disable user.'));
       }
       setUsers((current) =>
         current.map((item) =>
@@ -319,11 +324,11 @@ export default function AdminPortalUsersPage() {
             : item
         )
       );
-      setNotice(`${user.email || user.principal_id} 已禁用，现有 Portal 会话和 QQ 绑定已失效。`);
+      setNotice(t('admin.portal_users.disable_notice', { user: user.email || user.principal_id }, '{{user}} was disabled. Existing Portal sessions and QQ bindings were revoked.'));
       setDisableReason('');
       void loadUsers();
     } catch (err) {
-      setActionError(resolveUiErrorMessage(err instanceof Error ? err.message : null, '禁用用户失败'));
+      setActionError(resolveUiErrorMessage(err instanceof Error ? err.message : null, t('admin.portal_users.disable_failed', {}, 'Failed to disable user.')));
     } finally {
       setSavingPrincipalId(null);
     }
@@ -341,11 +346,11 @@ export default function AdminPortalUsersPage() {
       );
       const payload = await response.json();
       if (!response.ok) {
-        throw new Error(payload.message || '加载用户审计失败');
+        throw new Error(payload.message || t('admin.portal_users.audit_load_failed', {}, 'Failed to load user audit.'));
       }
       setAuditDetail((payload.data || {}) as PortalUserAuditDetail);
     } catch (err) {
-      setAuditError(resolveUiErrorMessage(err instanceof Error ? err.message : null, '加载用户审计失败'));
+      setAuditError(resolveUiErrorMessage(err instanceof Error ? err.message : null, t('admin.portal_users.audit_load_failed', {}, 'Failed to load user audit.')));
     } finally {
       setAuditLoading(false);
     }
@@ -355,11 +360,11 @@ export default function AdminPortalUsersPage() {
     const principalIds = selectedActiveUsers.map((user) => user.principal_id);
     const reason = batchDisableReason.trim();
     if (!reason) {
-      setActionError('批量禁用需要填写原因。');
+      setActionError(t('admin.portal_users.batch_reason_required', {}, 'Batch disable requires a reason.'));
       return;
     }
     if (principalIds.length === 0) {
-      setActionError('请选择至少一个正常用户。');
+      setActionError(t('admin.portal_users.batch_select_required', {}, 'Select at least one active user.'));
       return;
     }
     setBatchSaving(true);
@@ -377,7 +382,7 @@ export default function AdminPortalUsersPage() {
       });
       const payload = await response.json();
       if (!response.ok) {
-        throw new Error(payload.message || '批量禁用失败');
+        throw new Error(payload.message || t('admin.portal_users.batch_disable_failed', {}, 'Batch disable failed.'));
       }
       const data = (payload.data || {}) as BatchDisableResult;
       const disabledIds = new Set(
@@ -405,10 +410,10 @@ export default function AdminPortalUsersPage() {
       setBatchDisableReason('');
       const attempted = Number(data.totals?.attempted || principalIds.length);
       const failed = Number(data.totals?.failed || 0);
-      setNotice(`批量禁用已处理 ${attempted} 个用户，失败 ${failed} 个。`);
+      setNotice(t('admin.portal_users.batch_disable_notice', { attempted: String(attempted), failed: String(failed) }, 'Batch disable processed {{attempted}} user(s), failed {{failed}}.'));
       void loadUsers();
     } catch (err) {
-      setActionError(resolveUiErrorMessage(err instanceof Error ? err.message : null, '批量禁用失败'));
+      setActionError(resolveUiErrorMessage(err instanceof Error ? err.message : null, t('admin.portal_users.batch_disable_failed', {}, 'Batch disable failed.')));
     } finally {
       setBatchSaving(false);
     }
@@ -418,45 +423,45 @@ export default function AdminPortalUsersPage() {
     <BackofficePageStack>
       <CustomerAdminTabs />
       <BackofficePrimaryPanel
-        eyebrow="Portal Users"
-        title="自助注册用户"
-        description="查看用户端自助注册后自动开通的免费账号、站点、套餐和 QQ 绑定状态。"
+        eyebrow={t('admin.portal_users.eyebrow', {}, 'Portal Users')}
+        title={t('admin.portal_users.title', {}, 'Self-registered users')}
+        description={t('admin.portal_users.desc', {}, 'Review Free accounts, sites, packages, and QQ binding status created through Portal self-registration.')}
         actions={
           <div className="grid w-full gap-3 md:grid-cols-[minmax(12rem,1.5fr)_minmax(8rem,0.8fr)_minmax(8rem,0.8fr)_minmax(8rem,0.8fr)_auto]">
             <input
               value={filters.q}
               onChange={(event) => updateFilter('q', event.target.value)}
               className="input h-11"
-              placeholder="邮箱、账号、站点或域名"
+              placeholder={t('admin.portal_users.search_placeholder', {}, 'Email, account, site, or domain')}
             />
             <select
               value={filters.status}
               onChange={(event) => updateFilter('status', event.target.value)}
               className="input h-11"
-              aria-label="用户状态"
+              aria-label={t('admin.portal_users.status_filter_label', {}, 'User status')}
             >
-              <option value="">全部状态</option>
-              <option value="active">正常</option>
-              <option value="disabled">已禁用</option>
+              <option value="">{t('admin.portal_users.status_all', {}, 'All statuses')}</option>
+              <option value="active">{t('admin.portal_users.status_active', {}, 'Active')}</option>
+              <option value="disabled">{t('admin.portal_users.status_disabled', {}, 'Disabled')}</option>
             </select>
             <input
               value={filters.package_alias}
               onChange={(event) => updateFilter('package_alias', event.target.value)}
               className="input h-11"
-              placeholder="套餐"
+              placeholder={t('common.package', {}, 'Package')}
             />
             <select
               value={filters.qq_bound}
               onChange={(event) => updateFilter('qq_bound', event.target.value)}
               className="input h-11"
-              aria-label="QQ 绑定状态"
+              aria-label={t('admin.portal_users.qq_filter_label', {}, 'QQ binding status')}
             >
-              <option value="">QQ 全部</option>
-              <option value="true">已绑定</option>
-              <option value="false">未绑定</option>
+              <option value="">{t('admin.portal_users.qq_all', {}, 'All QQ')}</option>
+              <option value="true">{t('admin.portal_users.qq_bound', {}, 'Bound')}</option>
+              <option value="false">{t('admin.portal_users.qq_unbound', {}, 'Not bound')}</option>
             </select>
             <button type="button" onClick={clearFilters} className="btn btn-secondary h-11">
-              清空
+              {t('common.clear', {}, 'Clear')}
             </button>
           </div>
         }
@@ -476,7 +481,9 @@ export default function AdminPortalUsersPage() {
 
       <div className="flex flex-col gap-3 rounded-2xl border border-slate-200 bg-white/80 px-4 py-3 text-sm text-slate-700 dark:border-slate-800 dark:bg-slate-950/45 dark:text-slate-200 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          已选择 <span className="font-semibold text-slate-950 dark:text-white">{selectedPrincipalIds.length}</span> 个正常用户
+          {t('admin.portal_users.selected_count_prefix', {}, 'Selected')}{' '}
+          <span className="font-semibold text-slate-950 dark:text-white">{selectedPrincipalIds.length}</span>{' '}
+          {t('admin.portal_users.selected_count_suffix', {}, 'active user(s)')}
         </div>
         <button
           type="button"
@@ -484,7 +491,7 @@ export default function AdminPortalUsersPage() {
           disabled={selectedPrincipalIds.length === 0}
           onClick={() => setBatchDisableOpen(true)}
         >
-          批量禁用
+          {t('admin.portal_users.batch_disable', {}, 'Batch disable')}
         </button>
       </div>
 
@@ -495,9 +502,9 @@ export default function AdminPortalUsersPage() {
           </div>
         ) : users.length === 0 ? (
           <div className="p-8 text-center">
-            <h2 className="text-lg font-semibold text-slate-950 dark:text-white">暂无自助注册用户</h2>
+            <h2 className="text-lg font-semibold text-slate-950 dark:text-white">{t('admin.portal_users.empty_title', {}, 'No self-registered users')}</h2>
             <p className="mt-2 text-sm text-slate-600 dark:text-slate-300">
-              新用户通过 Portal 注册并开通免费套餐后会出现在这里。
+              {t('admin.portal_users.empty_desc', {}, 'New users will appear here after they register through Portal and open the Free package.')}
             </p>
           </div>
         ) : (
@@ -511,10 +518,17 @@ export default function AdminPortalUsersPage() {
                       checked={allActiveSelected}
                       disabled={activeUsers.length === 0}
                       onChange={toggleAllActiveUsers}
-                      aria-label="选择全部正常用户"
+                      aria-label={t('admin.portal_users.select_all_active', {}, 'Select all active users')}
                     />
                   </th>
-                  {['用户', '账号 / 站点', '套餐', 'QQ', '时间', '操作'].map((heading) => (
+                  {[
+                    t('admin.portal_users.column_user', {}, 'User'),
+                    t('admin.portal_users.column_account_site', {}, 'Account / Site'),
+                    t('common.package', {}, 'Package'),
+                    'QQ',
+                    t('admin.portal_users.column_time', {}, 'Time'),
+                    t('common.actions', {}, 'Actions'),
+                  ].map((heading) => (
                     <th
                       key={heading}
                       className="px-5 py-3 text-left text-xs font-semibold uppercase tracking-[0.14em] text-slate-500 dark:text-slate-400"
@@ -533,21 +547,21 @@ export default function AdminPortalUsersPage() {
                         checked={selectedPrincipalIds.includes(user.principal_id)}
                         disabled={user.status === 'disabled'}
                         onChange={() => toggleUserSelection(user.principal_id)}
-                        aria-label={`选择 ${user.email || user.principal_id}`}
+                        aria-label={t('admin.portal_users.select_user', { user: user.email || user.principal_id }, 'Select {{user}}')}
                       />
                     </td>
                     <td className="px-5 py-4">
                       <div className="space-y-2">
                         <div className="font-semibold text-slate-950 dark:text-white">
-                          {user.email || '未填写邮箱'}
+                          {user.email || t('admin.portal_users.email_missing', {}, 'Email missing')}
                         </div>
                         <div className="flex flex-wrap gap-2">
                           <BackofficeStatusBadge
-                            label={user.status === 'disabled' ? '已禁用' : '正常'}
+                            label={user.status === 'disabled' ? t('admin.portal_users.status_disabled', {}, 'Disabled') : t('admin.portal_users.status_active', {}, 'Active')}
                             status={user.status}
                           />
                           <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-600 dark:bg-slate-900 dark:text-slate-300">
-                            {sourceLabel(user.source)}
+                            {sourceLabel(user.source, t)}
                           </span>
                         </div>
                       </div>
@@ -556,10 +570,10 @@ export default function AdminPortalUsersPage() {
                       <div className="space-y-2">
                         <div>
                           <div className="font-medium text-slate-900 dark:text-slate-100">
-                            {user.account_name || '未绑定账号'}
+                            {user.account_name || t('admin.portal_users.account_unbound', {}, 'No account bound')}
                           </div>
                           <div className="text-xs text-slate-500 dark:text-slate-400">
-                            {user.membership_status || '无成员状态'}
+                            {user.membership_status || t('admin.portal_users.no_membership_status', {}, 'No membership status')}
                           </div>
                         </div>
                         <div>
@@ -568,16 +582,16 @@ export default function AdminPortalUsersPage() {
                               href={`/admin/sites/${encodeURIComponent(user.site_id)}`}
                               className="font-medium text-blue-700 hover:text-blue-600 dark:text-blue-300"
                             >
-                              {user.site_name || user.wordpress_url || '打开站点'}
+                              {user.site_name || user.wordpress_url || t('admin.portal_users.open_site', {}, 'Open site')}
                             </Link>
                           ) : (
-                            <span className="font-medium text-slate-700 dark:text-slate-200">未绑定站点</span>
+                            <span className="font-medium text-slate-700 dark:text-slate-200">{t('admin.portal_users.site_unbound', {}, 'No site bound')}</span>
                           )}
                           <div className="max-w-xs truncate text-xs text-slate-500 dark:text-slate-400">
-                            {user.wordpress_url || '无站点 URL'} · {user.grant_status || '无授权状态'}
+                            {user.wordpress_url || t('admin.portal_users.no_site_url', {}, 'No site URL')} · {user.grant_status || t('admin.portal_users.no_grant_status', {}, 'No grant status')}
                           </div>
                           <details className="mt-2 text-xs text-slate-500 dark:text-slate-400">
-                            <summary className="cursor-pointer font-medium">支持信息</summary>
+                            <summary className="cursor-pointer font-medium">{t('portal.support_information', {}, 'Support information')}</summary>
                             <div className="mt-2 space-y-1">
                               <BackofficeIdentifier value={user.principal_id} full />
                               {user.account_id ? <BackofficeIdentifier value={user.account_id} full /> : null}
@@ -590,10 +604,10 @@ export default function AdminPortalUsersPage() {
                     <td className="px-5 py-4">
                       <div className="space-y-2">
                         <div className="font-medium text-slate-900 dark:text-slate-100">
-                          {user.display_package_label || user.package_alias || user.plan_id || '未覆盖'}
+                          {user.display_package_label || user.package_alias || user.plan_id || t('admin.portal_users.no_coverage', {}, 'No coverage')}
                         </div>
                         <BackofficeStatusBadge
-                          label={user.subscription_status || '无订阅'}
+                          label={user.subscription_status || t('admin.portal_users.no_subscription', {}, 'No subscription')}
                           status={user.subscription_status || 'inactive'}
                         />
                       </div>
@@ -601,17 +615,19 @@ export default function AdminPortalUsersPage() {
                     <td className="px-5 py-4">
                       <div className="space-y-2">
                         <BackofficeStatusBadge
-                          label={user.qq_bound ? '已绑定' : '未绑定'}
+                          label={user.qq_bound ? t('admin.portal_users.qq_bound', {}, 'Bound') : t('admin.portal_users.qq_unbound', {}, 'Not bound')}
                           status={user.qq_bound ? 'active' : 'inactive'}
                         />
                         <div className="text-xs text-slate-500 dark:text-slate-400">
-                          {user.qq_bound ? `绑定数 ${user.qq_binding_count}` : '未启用快捷登录'}
+                          {user.qq_bound
+                            ? t('admin.portal_users.qq_binding_count', { count: String(user.qq_binding_count) }, 'Bindings {{count}}')
+                            : t('admin.portal_users.qq_quick_login_disabled', {}, 'Quick login not enabled')}
                         </div>
                       </div>
                     </td>
                     <td className="px-5 py-4 text-xs text-slate-600 dark:text-slate-300">
-                      <div>注册：{dateLabel(user.created_at)}</div>
-                      <div>登录：{dateLabel(user.last_login_at)}</div>
+                      <div>{t('admin.portal_users.registered_at', {}, 'Registered')}: {dateLabel(user.created_at, t)}</div>
+                      <div>{t('admin.portal_users.logged_in_at', {}, 'Login')}: {dateLabel(user.last_login_at, t)}</div>
                     </td>
                     <td className="px-5 py-4">
                       <div className="flex flex-wrap gap-2">
@@ -622,7 +638,7 @@ export default function AdminPortalUsersPage() {
                             void loadAuditDetail(user);
                           }}
                         >
-                          审计
+                          {t('admin.portal_users.audit_action', {}, 'Audit')}
                         </button>
                         <button
                           type="button"
@@ -630,7 +646,7 @@ export default function AdminPortalUsersPage() {
                           disabled={user.status === 'disabled' || savingPrincipalId === user.principal_id}
                           onClick={() => setPendingUser(user)}
                         >
-                          {savingPrincipalId === user.principal_id ? '处理中' : '禁用'}
+                          {savingPrincipalId === user.principal_id ? t('admin.portal_users.processing', {}, 'Processing') : t('admin.portal_users.disable_action', {}, 'Disable')}
                         </button>
                       </div>
                     </td>
@@ -645,8 +661,12 @@ export default function AdminPortalUsersPage() {
       {pendingUser ? (
         <ConfirmModal
           isOpen={Boolean(pendingUser)}
-          title="确认禁用用户"
-          message={`禁用 ${pendingUser.email || pendingUser.principal_id} 后，现有 Portal 会话、站点授权、账号成员关系和 QQ 快捷登录绑定都会失效。`}
+          title={t('admin.portal_users.confirm_disable_title', {}, 'Confirm disable user')}
+          message={t(
+            'admin.portal_users.confirm_disable_message',
+            { user: pendingUser.email || pendingUser.principal_id },
+            'After disabling {{user}}, existing Portal sessions, site grants, account memberships, and QQ quick-login bindings will be revoked.'
+          )}
           confirmLabel={t('common.confirm', {}, 'Confirm')}
           cancelLabel={t('common.cancel', {}, 'Cancel')}
           variant="danger"
@@ -662,7 +682,7 @@ export default function AdminPortalUsersPage() {
             value={disableReason}
             onChange={(event) => setDisableReason(event.target.value)}
             className="input min-h-[5.5rem]"
-            placeholder="原因，可选"
+            placeholder={t('admin.portal_users.reason_optional', {}, 'Reason, optional')}
           />
         </ConfirmModal>
       ) : null}
@@ -670,8 +690,8 @@ export default function AdminPortalUsersPage() {
       {batchDisableOpen ? (
         <Modal
           isOpen={batchDisableOpen}
-          title="批量禁用用户"
-          description={`将禁用 ${selectedPrincipalIds.length} 个用户。`}
+          title={t('admin.portal_users.batch_disable_title', {}, 'Batch disable users')}
+          description={t('admin.portal_users.batch_disable_desc', { count: String(selectedPrincipalIds.length) }, 'Will disable {{count}} user(s).')}
           size="md"
           onClose={() => {
             if (!batchSaving) {
@@ -690,7 +710,7 @@ export default function AdminPortalUsersPage() {
                   setBatchDisableReason('');
                 }}
               >
-                取消
+                {t('common.cancel', {}, 'Cancel')}
               </button>
               <button
                 type="button"
@@ -700,20 +720,20 @@ export default function AdminPortalUsersPage() {
                   void batchDisableUsers();
                 }}
               >
-                {batchSaving ? '处理中' : '确认禁用'}
+                {batchSaving ? t('admin.portal_users.processing', {}, 'Processing') : t('admin.portal_users.confirm_disable', {}, 'Confirm disable')}
               </button>
             </>
           }
         >
           <div className="space-y-4">
             <p className="text-sm leading-6 text-slate-600 dark:text-slate-300">
-              批量禁用会让选中用户的 Portal 会话失效，并撤销站点授权、账号成员关系和 QQ 快捷登录绑定。
+              {t('admin.portal_users.batch_disable_body', {}, 'Batch disable invalidates selected users Portal sessions and revokes site grants, account memberships, and QQ quick-login bindings.')}
             </p>
             <textarea
               value={batchDisableReason}
               onChange={(event) => setBatchDisableReason(event.target.value)}
               className="input min-h-[5.5rem]"
-              placeholder="原因，必填"
+              placeholder={t('admin.portal_users.reason_required', {}, 'Reason, required')}
             />
           </div>
         </Modal>
@@ -722,7 +742,7 @@ export default function AdminPortalUsersPage() {
       {auditUser ? (
         <Modal
           isOpen={Boolean(auditUser)}
-          title="用户审计详情"
+          title={t('admin.portal_users.audit_modal_title', {}, 'User audit detail')}
           description={auditUser.email || auditUser.principal_id}
           size="xl"
           onClose={() => {
@@ -740,7 +760,7 @@ export default function AdminPortalUsersPage() {
                 setAuditError(null);
               }}
             >
-              关闭
+              {t('common.close', {}, 'Close')}
             </button>
           }
         >
@@ -754,10 +774,10 @@ export default function AdminPortalUsersPage() {
             <div className="space-y-5">
               <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
                 {[
-                  ['事件数', String(auditDetail?.summary?.events || 0)],
-                  ['注册事件', String(auditDetail?.summary?.registration_events || 0)],
-                  ['禁用事件', String(auditDetail?.summary?.disable_events || 0)],
-                  ['成功', String(auditDetail?.summary?.succeeded || 0)],
+                  [t('admin.portal_users.audit_metric_events', {}, 'Events'), String(auditDetail?.summary?.events || 0)],
+                  [t('admin.portal_users.audit_metric_registration', {}, 'Registration events'), String(auditDetail?.summary?.registration_events || 0)],
+                  [t('admin.portal_users.audit_metric_disable', {}, 'Disable events'), String(auditDetail?.summary?.disable_events || 0)],
+                  [t('admin.portal_users.audit_metric_success', {}, 'Succeeded'), String(auditDetail?.summary?.succeeded || 0)],
                 ].map(([label, value]) => (
                   <div
                     key={label}
@@ -773,18 +793,18 @@ export default function AdminPortalUsersPage() {
 
               {auditDetail?.summary?.latest_disable_reason ? (
                 <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-900/50 dark:bg-amber-950/25 dark:text-amber-200">
-                  最近禁用原因：{auditDetail.summary.latest_disable_reason}
+                  {t('admin.portal_users.latest_disable_reason', {}, 'Latest disable reason')}: {auditDetail.summary.latest_disable_reason}
                 </div>
               ) : null}
 
               <div className="space-y-3">
                 {(auditDetail?.items || []).length === 0 ? (
                   <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-6 text-center text-sm text-slate-600 dark:border-slate-800 dark:bg-slate-950/45 dark:text-slate-300">
-                    暂无该用户的服务审计事件。
+                    {t('admin.portal_users.no_audit_events', {}, 'No service audit events for this user.')}
                   </div>
                 ) : (
                   (auditDetail?.items || []).map((event) => {
-                    const detail = payloadText(event.payload);
+                    const detail = payloadText(event.payload, t);
                     return (
                       <div
                         key={event.event_id}
@@ -793,10 +813,10 @@ export default function AdminPortalUsersPage() {
                         <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
                           <div>
                             <div className="font-semibold text-slate-950 dark:text-white">
-                              {auditEventLabel(event.event_kind)}
+                              {auditEventLabel(event.event_kind, t)}
                             </div>
                             <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                              {dateLabel(event.created_at)} · {event.actor_kind || 'unknown'} · {event.actor_ref || '无操作人'}
+                              {dateLabel(event.created_at, t)} · {event.actor_kind || 'unknown'} · {event.actor_ref || t('admin.portal_users.no_actor', {}, 'No actor')}
                             </div>
                           </div>
                           <BackofficeStatusBadge
@@ -809,7 +829,7 @@ export default function AdminPortalUsersPage() {
                         ) : null}
                         <details className="mt-3 text-xs text-slate-500 dark:text-slate-400">
                           <summary className="cursor-pointer font-medium text-slate-600 hover:text-slate-900 dark:text-slate-300 dark:hover:text-white">
-                            请求技术详情
+                            {t('admin.portal_users.request_technical_detail', {}, 'Request technical detail')}
                           </summary>
                           <div className="mt-2 grid gap-2 rounded-xl border border-slate-200 bg-slate-50 p-3 dark:border-slate-800 dark:bg-slate-900/45 sm:grid-cols-2">
                             <div>scope：{event.scope_kind || '-'} / {event.scope_id || '-'}</div>

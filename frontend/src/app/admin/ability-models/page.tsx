@@ -647,7 +647,7 @@ export default function AbilityModelsPage() {
     if (profile.routing_intent && labels[profile.routing_intent]) return labels[profile.routing_intent];
     if (profile.tasks.length === 1) return abilityTaskLabel(profile.tasks[0]);
     if (profile.tasks.length > 1) {
-      return aiText('ability_model_group_title', '{{name}} 等 {{count}} 个能力', {
+      return aiText('ability_model_group_title', '{{name}} and {{count}} abilities', {
         name: abilityTaskLabel(profile.tasks[0]),
         count: String(profile.tasks.length),
       });
