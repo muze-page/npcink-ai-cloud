@@ -76,7 +76,7 @@ jobs:
 
       - name: Setup Docker Buildx
         if: steps.deploy_guard.outputs.should_deploy == 'true'
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: Install SSH key
         if: steps.deploy_guard.outputs.should_deploy == 'true'
