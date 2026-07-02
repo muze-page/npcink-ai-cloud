@@ -205,8 +205,8 @@ test('admin queue pages keep one primary header action and shared identifier tre
   await page.goto(`/admin/plans/${LONG_PLAN_ID}`, { waitUntil: 'domcontentloaded' });
   await expect(page.getByText(/plan_basic_primary/i).first()).toBeVisible();
   await expect(page.getByText(/Package fit is stable|套餐匹配稳定/i)).toBeVisible();
-  await expect(page.getByRole('button', { name: /Apply .* baseline|应用 .* 基线/i })).toBeVisible();
-  await expect(page.getByRole('button', { name: /Reset to latest release|恢复为最新发布记录|恢復為最新發佈記錄/i })).toBeVisible();
+  await expect(page.getByRole('button', { name: /Restore .* suggested values|恢复 .* 建议值/i })).toBeVisible();
+  await expect(page.getByRole('button', { name: /Restore saved values|还原当前已保存值|還原目前已儲存值/i })).toBeVisible();
   await expect(page.getByRole('link', { name: /Open subscriptions|查看订阅|查看訂閱/i })).toHaveAttribute(
     'href',
     `/admin/subscriptions?plan_id=${LONG_PLAN_ID}`
