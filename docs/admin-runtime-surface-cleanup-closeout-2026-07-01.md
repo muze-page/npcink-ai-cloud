@@ -53,11 +53,8 @@ standalone product framing.
 
 ### Hosted Models is no longer a standalone destination
 
-`/admin/hosted-models` is retained only as a compatibility redirect:
-
-```text
-/admin/hosted-models -> /admin/ai-resources?view=diagnostics
-```
+Follow-up cleanup retired the compatibility redirect. `/admin/hosted-models`
+now has no UI route; runtime diagnostics live under `/admin/troubleshooting`.
 
 There should be no default admin navigation entry or troubleshooting card that
 markets Hosted Models as a separate operator area.
@@ -76,15 +73,8 @@ New surfaces should use:
 /api/admin/runtime-telemetry
 ```
 
-Compatibility aliases remain:
-
-```text
-/internal/service/runtime/diagnostics/hosted-model-governance
-/internal/service/admin/hosted-model-governance
-```
-
-Admin overview now exposes `runtime_telemetry` as the preferred field while
-keeping `hosted_model_governance` as a compatibility alias.
+Follow-up cleanup also retired the `hosted-model-governance` route aliases.
+Admin overview now exposes `runtime_telemetry` only.
 
 ### AI Resources owns runtime diagnostics
 
@@ -149,23 +139,19 @@ state, adopt routing profiles, send customer messages, or approve anything.
 Backend runtime service:
 
 - `RuntimeService.get_runtime_telemetry_diagnostics(...)`
-- `RuntimeService.get_hosted_model_governance_diagnostics(...)` remains as a
-  compatibility wrapper.
 
 Internal routes:
 
 - `GET /internal/service/admin/runtime-telemetry`
 - `GET /internal/service/runtime/diagnostics/runtime-telemetry`
-- legacy hosted-model-governance aliases remain.
 
 Admin overview:
 
 - preferred field: `runtime_telemetry`
-- compatibility field: `hosted_model_governance`
 
 Frontend surfaces:
 
-- `/admin/hosted-models` redirects to AI Resources diagnostics;
+- `/admin/hosted-models` no longer exists as a compatibility redirect;
 - `/admin/ai-resources` fetches `/api/admin/runtime-telemetry`;
 - `/admin` overview uses `runtimeTelemetry` naming and runtime telemetry copy;
 - `/admin/ability-models` shows Cloud-native ability categories as a table
@@ -176,8 +162,7 @@ Frontend surfaces:
 Docs:
 
 - `docs/cloud-billing-entitlement-v1.md` now documents runtime telemetry as the
-  preferred diagnostics endpoint and notes the old hosted-model-governance path
-  as a compatibility alias.
+  only diagnostics endpoint.
 
 ## Files Touched
 
@@ -194,7 +179,8 @@ Docs:
 
 Frontend:
 
-- `frontend/src/app/admin/hosted-models/page.tsx`
+- `frontend/src/app/admin/hosted-models/page.tsx` was removed in the follow-up
+  cleanup.
 - `frontend/src/app/admin/ai-resources/page.tsx`
 - `frontend/src/app/admin/page.tsx`
 - `frontend/src/app/admin/ability-models/page.tsx`
@@ -247,7 +233,7 @@ No known red validation remains from this cleanup.
 Future agents should preserve these rules:
 
 - prefer `runtime_telemetry` and `runtime-telemetry` for new code;
-- keep hosted-model-governance only as compatibility language;
+- do not restore hosted-model-governance compatibility aliases;
 - do not re-add a standalone Hosted Models navigation/product surface;
 - do not turn AI Advisor into a control panel;
 - keep provider/model/AI comparison controls behind advanced/internal UI;

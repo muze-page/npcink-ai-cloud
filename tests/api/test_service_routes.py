@@ -3054,6 +3054,8 @@ def test_runtime_telemetry_diagnostics_summarizes_runtime_families(
         f"?site_id={site_id}&recent_minutes=10080&limit=10",
         headers=build_internal_headers(),
     )
+    assert response.status_code == 200
+    assert admin_alias_response.status_code == 200
     legacy_response = client.get(
         "/internal/service/runtime/diagnostics/hosted-model-governance"
         f"?site_id={site_id}&recent_minutes=60&limit=10",
@@ -3064,15 +3066,11 @@ def test_runtime_telemetry_diagnostics_summarizes_runtime_families(
         f"?site_id={site_id}&recent_minutes=10080&limit=10",
         headers=build_internal_headers(),
     )
-    assert response.status_code == 200
-    assert admin_alias_response.status_code == 200
-    assert legacy_response.status_code == 200
-    assert legacy_admin_alias_response.status_code == 200
+    assert legacy_response.status_code == 404
+    assert legacy_admin_alias_response.status_code == 404
     data = response.json()["data"]
     assert admin_alias_response.json()["data"]["totals"]["runs"] == 3
     assert admin_alias_response.json()["data"]["filters"]["recent_minutes"] == 10080
-    assert legacy_response.json()["data"]["totals"] == data["totals"]
-    assert legacy_admin_alias_response.json()["data"]["filters"]["recent_minutes"] == 10080
     assert data["totals"]["runs"] == 3
     assert data["totals"]["provider_calls"] == 2
     assert data["boundary"]["direct_wordpress_write"] is False
@@ -4151,7 +4149,7 @@ def test_service_routes_admin_read_facade(tmp_path: Path) -> None:
         overview["runtime_telemetry"]["alert_summary"]["boundary"]["direct_wordpress_write"]
         is False
     )
-    assert overview["hosted_model_governance"] == overview["runtime_telemetry"]
+    assert "hosted_model_governance" not in overview
     assert overview["runtime_operator_explanations"]
     assert len(overview["expiring_subscriptions"]["items"]) >= 1
     assert any(

@@ -65,7 +65,7 @@
   - `/portal/sites/[siteId]`
 - [x] API Keys member seam
   - `/api/portal/sites/[siteId]/keys`
-  - `/portal/keys`
+  - Portal key management remains scoped under site detail surfaces.
 - [x] Notifications preview
   - `/api/portal/sites/[siteId]/notifications`
   - `/portal/notifications`

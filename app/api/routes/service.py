@@ -2070,7 +2070,6 @@ async def get_admin_overview(
         "boundary": runtime_telemetry.get("boundary", {}),
     }
     result["runtime_telemetry"] = runtime_telemetry_projection
-    result["hosted_model_governance"] = runtime_telemetry_projection
     attention_subscriptions = _dict_list(result.get("attention_subscriptions"))
     first_attention = attention_subscriptions[0] if attention_subscriptions else {}
     first_attention_account_id = ""
@@ -4342,9 +4341,7 @@ async def get_nightly_inspection_observability(
     )
 
 
-@router.get("/admin/hosted-model-governance")
 @router.get("/admin/runtime-telemetry")
-@router.get("/runtime/diagnostics/hosted-model-governance")
 @router.get("/runtime/diagnostics/runtime-telemetry")
 async def get_runtime_telemetry_diagnostics(
     request: Request,

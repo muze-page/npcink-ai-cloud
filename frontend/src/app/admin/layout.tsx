@@ -151,7 +151,7 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
     {
       groupKey: 'admin.nav_group_overview',
       descKey: 'admin.nav_group_overview_desc',
-      fallback: 'Overview',
+      fallback: 'Workspace',
       descFallback: 'Platform posture and next operator actions.',
       items: [
         { href: '/admin', labelKey: 'nav.overview', fallback: 'Overview' },
@@ -160,7 +160,7 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
     {
       groupKey: 'admin.nav_group_customer_service',
       descKey: 'admin.nav_group_customer_service_desc',
-      fallback: 'Customers and service',
+      fallback: 'Customer Ops',
       descFallback: 'Accounts, coverage, subscriptions, and package records.',
       items: [
         {
@@ -194,32 +194,24 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
     {
       groupKey: 'admin.nav_group_runtime_ops',
       descKey: 'admin.nav_group_runtime_ops_desc',
-      fallback: 'Runtime',
+      fallback: 'Runtime Plane',
       descFallback: 'Provider readiness and Cloud runtime model binding.',
       items: [
         {
           href: '/admin/ai-resources',
           labelKey: 'admin.nav_ai_resources',
-          fallback: 'Runtime Resources',
-          activePrefixes: ['/admin/ai-resources', '/admin/wordpress-ai-routing'],
+          fallback: 'Providers',
+          activePrefixes: ['/admin/ai-resources'],
         },
         {
           href: '/admin/ability-models',
           labelKey: 'admin.nav_ability_models',
-          fallback: 'Runtime Model Binding',
+          fallback: 'Model Binding',
         },
-      ],
-    },
-    {
-      groupKey: 'admin.nav_group_diagnostics',
-      descKey: 'admin.nav_group_diagnostics_desc',
-      fallback: 'Advanced diagnostics',
-      descFallback: 'Read-only evidence for runtime, plugin, media, vector, and feedback quality.',
-      items: [
         {
           href: '/admin/troubleshooting',
-          labelKey: 'admin.nav_advanced_troubleshooting',
-          fallback: 'Advanced Troubleshooting',
+          labelKey: 'admin.nav_runtime_diagnostics',
+          fallback: 'Runtime Diagnostics',
           activePrefixes: [
             '/admin/troubleshooting',
             '/admin/plugin-observability',
@@ -413,16 +405,6 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
 
         <div className="mt-5 min-h-0 flex-1 overflow-y-auto pr-1">
           {renderNavGroups('desktop')}
-        </div>
-
-        <div className={cn('mt-3 border-t border-slate-200/70 pt-3 dark:border-slate-800', sidebarCollapsed && 'sr-only')}>
-          <Link
-            href="/portal"
-            className="flex items-center justify-between rounded-lg border border-slate-200 bg-white/80 px-3 py-2 text-sm font-semibold text-slate-700 transition hover:border-slate-300 hover:text-slate-950 dark:border-slate-800 dark:bg-slate-900/55 dark:text-slate-200 dark:hover:border-slate-700 dark:hover:text-white"
-          >
-            <span>{t('nav.portal')}</span>
-            <span aria-hidden="true">→</span>
-          </Link>
         </div>
       </aside>
 

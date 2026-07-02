@@ -47,7 +47,7 @@ test('admin subscription detail keeps localized operator layout', async ({ page 
   await installAdminMocks(page);
 
   await page.goto('/admin/subscriptions/sub_mvp');
-  await expect(page.getByRole('heading', { name: /Subscription service status: sub_mvp|订阅服务状态：sub_mvp|訂閱服務狀態：sub_mvp/i })).toBeVisible();
+  await expect(page.getByRole('heading', { name: /Subscription service status: Pro|订阅服务状态：Pro|訂閱服務狀態：Pro/i })).toBeVisible();
   await expect(page.getByText(/Package and billing state|套餐与账单状态|方案與帳單狀態/i).first()).toBeVisible();
   await expect(page.getByText(/What needs action|需要处理什么|需要處理什麼/i).first()).toBeVisible();
   await expect(page.getByText(/Related evidence|关联证据|關聯證據/i).first()).toBeVisible();
@@ -75,7 +75,7 @@ test('admin operator path smoke: queue and inspector routes stay connected', asy
         /Provider call coverage gap|提供方调用遥测覆盖缺口|提供方呼叫遙測覆蓋缺口/i,
     })
   ).toHaveCount(2);
-  await expect(page.locator('a[href="/admin/ai-resources?view=diagnostics"]').first()).toBeVisible();
+  await expect(page.locator('a[href="/admin/troubleshooting"]').first()).toBeVisible();
 
   await page.goto('/admin/coverage');
   await expect(page.getByRole('heading', { name: /^Customer service workspace$|^客户服务工作区$|^客戶服務工作區$/i })).toBeVisible();
@@ -97,11 +97,11 @@ test('admin operator path smoke: queue and inspector routes stay connected', asy
   await page.goto('/admin/subscriptions');
   await expect(page.getByRole('heading', { name: /Risk-prioritized subscription queue|按风险排序的订阅队列/i })).toBeVisible();
   await expect(page.locator('a[href="/admin/subscriptions/sub_mvp"]')).toBeVisible();
-  await expect(page.getByText(/Snapshot follow-up|快照跟进/i).first()).toBeVisible();
+  await expect(page.getByText(/Snapshot|快照/i).first()).toBeVisible();
   await expect(page.getByText(/Billing snapshot fresh|账单快照最新|账单快照新鲜/i).first()).toBeVisible();
 
   await page.goto('/admin/subscriptions/sub_mvp');
-  await expect(page.getByRole('heading', { name: /Subscription service status: sub_mvp|订阅服务状态：sub_mvp|訂閱服務狀態：sub_mvp/i })).toBeVisible();
+  await expect(page.getByRole('heading', { name: /Subscription service status: Pro|订阅服务状态：Pro|訂閱服務狀態：Pro/i })).toBeVisible();
   await expect(page.getByRole('link', { name: /Open customer subscription|打开客户订阅/i })).toHaveCount(0);
   await expect(page.locator(`a[href="/admin/accounts/${LONG_ACCOUNT_ID}#coverage-actions"]`)).toBeVisible();
   await expect(page.locator(`a[href="/admin/accounts/${LONG_ACCOUNT_ID}"]`).first()).toBeVisible();
@@ -118,8 +118,7 @@ test('admin operator path smoke: queue and inspector routes stay connected', asy
   await expect(page.getByText(/Package and top-up|套餐和加量|方案和加量/i).first()).toBeVisible();
   await expect(page.getByRole('link', { name: /View sites|查看站点|查看站點/i })).toBeVisible();
 
-  await page.goto('/admin/sites', { waitUntil: 'domcontentloaded' });
-  await expect(page).toHaveURL(/\/admin\/accounts/);
+  await page.goto('/admin/accounts', { waitUntil: 'domcontentloaded' });
   await expect(page.getByRole('heading', { name: /Users and current packages|客户与当前套餐|用户与当前套餐|使用者與目前方案/i })).toBeVisible();
 
   await page.goto('/admin/sites/site_mvp');
@@ -127,15 +126,16 @@ test('admin operator path smoke: queue and inspector routes stay connected', asy
 
   await page.goto('/admin/troubleshooting');
   await expect(page.getByRole('heading', { name: /Advanced Troubleshooting|高级排障|進階排障/i })).toBeVisible();
+  const runtimeEvidenceSection = page.locator('#runtime-evidence');
+  await expect(runtimeEvidenceSection.getByRole('heading', { name: /Runtime Resource Evidence|运行时资源证据/i })).toBeVisible();
+  await expect(runtimeEvidenceSection.getByText(/Runtime resolution|运行时解析/i).first()).toBeVisible();
   await expect(page.locator('a[href="/admin/plugin-observability"]')).toBeVisible();
   await expect(page.locator('a[href="/admin/hosted-models"]')).toHaveCount(0);
-
-  await page.goto('/admin/hosted-models', { waitUntil: 'domcontentloaded' });
-  await expect(page).toHaveURL(/\/admin\/ai-resources\?view=diagnostics/);
 
   await page.goto('/admin/plans', { waitUntil: 'domcontentloaded' });
   await expect(page.getByRole('heading', { level: 1, name: /Package catalog|Package overview|套餐目录|套餐概览|方案目錄|方案概覽/i })).toBeVisible();
   await expect(page.getByText(/Advanced package maintenance|高级套餐维护|進階方案維護/i).first()).toBeVisible();
+  await expect(page.getByText(/Historical Free|历史 Free/i)).toHaveCount(0);
   await expect(page.getByText(/Pro/i).first()).toBeVisible();
   await expect(page.getByText(/Agency/i).first()).toBeVisible();
   await expect(page.getByText(/Site limit|站点上限/i).first()).toBeVisible();
@@ -155,14 +155,14 @@ test('admin queue pages keep one primary header action and shared identifier tre
   await installAdminMocks(page);
 
   await page.goto('/admin/subscriptions');
-  await expect(page.getByText('acct_mvp_ent...rimary').first()).toBeVisible();
-
-  await page.goto('/admin/sites');
-  await expect(page).toHaveURL(/\/admin\/accounts/);
-  await expect(page.getByText('acct_mvp_ent...rimary').first()).toBeVisible();
+  await expect(page.locator(`a[href="/admin/accounts/${LONG_ACCOUNT_ID}"]`).first()).toBeVisible();
+  await expect(page.getByRole('heading', { name: /MVP Account/i }).first()).toBeVisible();
 
   await page.goto('/admin/accounts');
-  await expect(page.getByText('acct_mvp_ent...rimary').first()).toBeVisible();
+  await expect(page.locator(`a[href="/admin/accounts/${LONG_ACCOUNT_ID}"]`).first()).toBeVisible();
+
+  await page.goto('/admin/accounts');
+  await expect(page.locator(`a[href="/admin/accounts/${LONG_ACCOUNT_ID}"]`).first()).toBeVisible();
   await expect(page.getByText(/Magick AI Demo/i)).toBeVisible();
   await expect(page.getByText(/Pilot customer\. Confirm package before public release\./i)).toBeVisible();
   await expect(page.getByText(/Free Account|免费客户|免費客戶/i)).toBeVisible();
@@ -186,7 +186,7 @@ test('admin queue pages keep one primary header action and shared identifier tre
   await expect(page.getByText(/Free Account|免费客户|免費客戶/i)).toHaveCount(0);
   await page.getByLabel(/Coverage state|覆盖状态|覆蓋狀態/i).selectOption('');
   await page.getByText(/Add user|Add customer|添加用户|添加客户|新增使用者/i).click();
-  await page.getByLabel(/Account ID|账户 ID|帳戶 ID/i).fill('acct_new_customer_free');
+  await page.getByLabel(/Account ID|账户 ID|账号 ID|帳戶 ID/i).fill('acct_new_customer_free');
   await page.getByLabel(/Name|名称|名稱/i).fill('New Customer');
   await page.getByLabel(/Operator name|运营显示名|營運顯示名/i).fill('New Customer Display');
   await page.getByLabel(/Operator note|运营备注|營運備註/i).fill('Internal launch note');
@@ -200,24 +200,18 @@ test('admin queue pages keep one primary header action and shared identifier tre
   await page.goto(`/admin/plans/${LONG_PLAN_ID}`, { waitUntil: 'domcontentloaded' });
   await expect(page.getByText(/plan_basic_primary/i).first()).toBeVisible();
   await expect(page.getByText(/Package fit is stable|套餐匹配稳定/i)).toBeVisible();
-  await expect(page.getByRole('button', { name: /Apply .* baseline/i })).toBeVisible();
+  await expect(page.getByRole('button', { name: /Apply .* baseline|应用 .* 基线/i })).toBeVisible();
   await expect(page.getByRole('button', { name: /Reset to latest release|恢复为最新发布记录|恢復為最新發佈記錄/i })).toBeVisible();
   await expect(page.getByText(/已发布|published/i).first()).toBeVisible();
 
-  await page.goto('/admin/ai-resources?view=diagnostics', { waitUntil: 'domcontentloaded' });
-  await expect(page.getByRole('heading', { name: /Runtime resource center|运行时资源中心|執行時資源中心/i })).toBeVisible();
-  await expect(page.getByRole('heading', { name: /Diagnostics|诊断|診斷/i })).toBeVisible();
-  await expect(page.getByText(/Runtime telemetry|运行时遥测|執行時遙測/i).first()).toBeVisible();
-  await expect(
-    page
-      .getByText(/Provider call coverage gap|提供方调用遥测覆盖缺口|提供方呼叫遙測覆蓋缺口/i)
-      .first()
-  ).toBeVisible();
-  await expect(page.getByText(/run_records/i).first()).toBeVisible();
-  await expect(page.getByText(/provider_call_records/i).first()).toBeVisible();
-  await expect(page.getByText(/usage_meter_events/i).first()).toBeVisible();
-  await expect(page.getByText(/WordPress 写入|WordPress write|WordPress 寫入/i).first()).toBeVisible();
-  await expect(page.getByRole('button', { name: /Save|Configure|Enable/i })).toHaveCount(0);
+  await page.goto('/admin/ai-resources', { waitUntil: 'domcontentloaded' });
+  await expect(page.getByRole('heading', { name: /^Suppliers$|^供应商$/i })).toBeVisible();
+  await expect(page.getByRole('tab', { name: /Model suppliers|模型供应商|模型供應商/i })).toHaveAttribute('aria-selected', 'true');
+  await expect(page.getByRole('tab', { name: /All suppliers|全部供应商|全部供應商/i })).toHaveCount(0);
+  await expect(page.getByRole('heading', { name: /Diagnostics|诊断|診斷/i })).toHaveCount(0);
+  await expect(page.getByText(/run_records/i).first()).toHaveCount(0);
+  await expect(page.getByRole('link', { name: /View diagnostics|查看诊断|查看診斷/i })).toBeVisible();
+  await expect(page.getByRole('button', { name: /Add model supplier|添加模型供应商|新增模型供應商/i })).toBeVisible();
 });
 
 test('admin support and detail pages keep bounded operator hierarchy', async ({ page }) => {
@@ -292,7 +286,7 @@ test('admin support and detail pages keep bounded operator hierarchy', async ({ 
 
   await page.goto('/admin/sites/site_mvp');
   await expect(page.getByText('site_mvp').first()).toBeVisible();
-  await expect(page.getByRole('link', { name: /Open service status|Open coverage|打开服务状态|打開服務狀態/i }).first()).toBeVisible();
+  await expect(page.getByRole('link', { name: /Open service status|Open coverage|打开服务状态|打开覆盖|打開服務狀態|打開覆蓋/i }).first()).toBeVisible();
   await expect(page.getByRole('link', { name: /Inspect subscription detail|查看订阅详情|檢查訂閱詳情/i }).first()).toBeVisible();
   await expect(page.getByRole('link', { name: /View audit trail|查看审计/i }).first()).toBeVisible();
   await page.getByText(/Inspect audit follow-up|查看审计跟进|查看稽核跟進/i).click();
@@ -300,9 +294,9 @@ test('admin support and detail pages keep bounded operator hierarchy', async ({ 
   await expect(page.getByText(/subscription\.bind|provider_connection\.sync/i).first()).toBeVisible();
 
   await page.goto('/admin/subscriptions/sub_mvp');
-  await expect(page.getByText('sub_mvp').first()).toBeVisible();
+  await expect(page.getByRole('heading', { name: /Subscription service status: Pro|订阅服务状态：Pro|訂閱服務狀態：Pro/i })).toBeVisible();
   await expect(page.getByRole('link', { name: /Customer|客户/i }).first()).toBeVisible();
-  await expect(page.getByText('acct_mvp_ent...rimary').first()).toBeVisible();
+  await expect(page.locator(`a[href="/admin/accounts/${LONG_ACCOUNT_ID}"]`).first()).toBeVisible();
   await expect(page.getByText(/Related sites|关联站点|關聯站點/i).first()).toBeVisible();
   await expect(page.getByText(/Snapshot status|快照状态|快照狀態/i).first()).toBeVisible();
   await expect(page.getByText(/Path discipline|路径纪律|路徑紀律/i).first()).toBeVisible();
@@ -330,19 +324,29 @@ test('admin navigation stays customer-first', async ({ page }) => {
   await expect(primaryLinks.nth(7)).toHaveAttribute('href', '/admin/ability-models');
   await expect(primaryLinks.nth(8)).toHaveAttribute('href', '/admin/troubleshooting');
   await expect(primaryLinks.nth(9)).toHaveAttribute('href', '/admin/service-settings');
-  await expect(adminPrimaryNav.getByText(/^Customers and service$|^客户与服务$/i)).toBeVisible();
-  await expect(adminPrimaryNav.getByText(/^Runtime$|^运行时$/i)).toBeVisible();
-  await expect(adminPrimaryNav.getByText(/^Advanced diagnostics$|^高级诊断$/i)).toBeVisible();
+  await expect(adminPrimaryNav.getByText(/^Workspace$|^工作台$/i)).toBeVisible();
+  await expect(adminPrimaryNav.getByText(/^Customer Ops$|^客户运营$/i)).toBeVisible();
+  await expect(adminPrimaryNav.getByText(/^Runtime Plane$|^运行面$/i)).toBeVisible();
+  await expect(adminPrimaryNav.getByText(/^Diagnostics$|^诊断$/i)).toHaveCount(0);
   await expect(adminNav.getByRole('link', { name: /^Overview$|^概览$|^概覽$/i })).toBeVisible();
   await expect(adminNav.getByRole('link', { name: /^Customers$|^客户$/i })).toBeVisible();
   await expect(adminNav.getByRole('link', { name: /^Sites$|^站点$|^站點$/i })).toHaveCount(0);
   await expect(adminNav.getByRole('link', { name: /^Packages \/ Service Status$|^套餐\/服务状态$|^方案\/服務狀態$/i })).toHaveCount(0);
-  await expect(adminNav.getByRole('link', { name: /^Advanced Troubleshooting$|^高级排障$|^進階排障$/i })).toBeVisible();
+  await expect(adminNav.getByRole('link', { name: /^Providers$|^供应商$/i })).toBeVisible();
+  await expect(adminNav.getByRole('link', { name: /^Runtime Diagnostics$|^运行诊断$/i })).toBeVisible();
   await expect(adminNav.getByRole('link', { name: /^Hosted Models$|^托管模型$|^託管模型$/i })).toHaveCount(0);
   await expect(adminNav.getByRole('link', { name: /^Subscriptions$|^订阅$|^訂閱$/i })).toBeVisible();
   await expect(adminNav.getByRole('link', { name: /^Package Catalog$|^套餐目录$|^方案目錄$/i })).toBeVisible();
   await expect(adminNav.getByRole('link', { name: /^Members$|^成员$|^成員$/i })).toHaveCount(0);
   await expect(adminNav.getByRole('link', { name: /^Plugin Observability$|^插件观测$|^外掛觀測$/i })).toHaveCount(0);
+
+  await page.goto('/admin/subscriptions');
+  const main = page.locator('main');
+  await expect(main.getByRole('link', { name: /^Customer register$|^客户目录$|^客戶目錄$/i })).toHaveCount(0);
+  await expect(main.getByRole('link', { name: /^Registered users$|^注册用户$|^註冊使用者$/i })).toHaveCount(0);
+  await expect(main.getByRole('link', { name: /^Service follow-up$|^服务跟进$|^服務跟進$/i })).toHaveCount(0);
+  await expect(main.getByRole('link', { name: /^Subscription records$|^订阅记录$|^訂閱記錄$/i })).toHaveCount(0);
+  await expect(main.getByRole('button', { name: /^All|^全部|^全部/i }).first()).toBeVisible();
 });
 
 test('admin operator path stays usable on mobile viewport', async ({ page }) => {

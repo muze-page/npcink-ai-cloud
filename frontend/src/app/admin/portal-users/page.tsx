@@ -2,7 +2,6 @@
 
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
-import { CustomerAdminTabs } from '@/components/admin/CustomerAdminTabs';
 import { BackofficeIdentifier } from '@/components/backoffice/BackofficeIdentifier';
 import { BackofficeStatusBadge } from '@/components/backoffice/BackofficeStatusBadge';
 import {
@@ -421,7 +420,6 @@ export default function AdminPortalUsersPage() {
 
   return (
     <BackofficePageStack>
-      <CustomerAdminTabs />
       <BackofficePrimaryPanel
         eyebrow={t('admin.portal_users.eyebrow', {}, 'Portal Users')}
         title={t('admin.portal_users.title', {}, 'Self-registered users')}

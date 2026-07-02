@@ -32,6 +32,17 @@ type AdvancedGroup = {
 
 const advancedEntries: AdvancedEntry[] = [
   {
+    href: '#runtime-evidence',
+    titleKey: 'admin.advanced.runtime_evidence_title',
+    titleFallback: 'Runtime Resource Evidence',
+    descKey: 'admin.advanced.runtime_evidence_desc',
+    descFallback: 'Runtime resolution, capability matrix, runtime configurations, and recent runtime evidence.',
+    actionKey: 'admin.advanced.action_view_runtime_evidence',
+    actionFallback: 'View runtime evidence',
+    groupKey: 'admin.advanced.group_runtime',
+    groupFallback: 'Runtime evidence',
+  },
+  {
     href: '/admin/plugin-observability',
     titleKey: 'admin.nav_plugin_observability',
     titleFallback: 'Plugin Observability',
@@ -100,6 +111,33 @@ const advancedGroups: AdvancedGroup[] = [
     fallback: 'Governance',
     descKey: 'admin.advanced.group_governance_desc',
     descFallback: 'Use advisory diagnostics to explain operational posture without changing approval, routing, or WordPress state.',
+  },
+];
+
+const runtimeEvidenceItems = [
+  {
+    titleKey: 'admin.advanced.runtime_resolution_title',
+    titleFallback: 'Runtime resolution',
+    descKey: 'admin.advanced.runtime_resolution_desc',
+    descFallback: 'Capability to profile, supplier, and model selection evidence. Read-only, not a router editor.',
+  },
+  {
+    titleKey: 'admin.advanced.capability_matrix_title',
+    titleFallback: 'Capability matrix',
+    descKey: 'admin.advanced.capability_matrix_desc',
+    descFallback: 'Current Cloud runtime mapping across capabilities, selected providers, and write posture.',
+  },
+  {
+    titleKey: 'admin.advanced.runtime_profiles_title',
+    titleFallback: 'Runtime configurations',
+    descKey: 'admin.advanced.runtime_profiles_desc',
+    descFallback: 'Cloud runtime profile metadata and selected provider/model references.',
+  },
+  {
+    titleKey: 'admin.advanced.recent_runtime_evidence_title',
+    titleFallback: 'Recent runtime evidence',
+    descKey: 'admin.advanced.recent_runtime_evidence_desc',
+    descFallback: 'Recent run metadata used for diagnostics without exposing prompts, results, or provider secrets.',
   },
 ];
 
@@ -275,6 +313,50 @@ export default function AdminTroubleshootingPage() {
           </p>
         </BackofficeStackCard>
       </BackofficeSectionPanel>
+
+      <div id="runtime-evidence">
+      <BackofficeSectionPanel className="space-y-4">
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-gray-500 dark:text-gray-400">
+              {t('admin.advanced.runtime_evidence_eyebrow', {}, 'Runtime plane')}
+            </p>
+            <h2 className="mt-2 text-xl font-semibold text-gray-950 dark:text-white">
+              {t('admin.advanced.runtime_evidence_title', {}, 'Runtime Resource Evidence')}
+            </h2>
+            <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-600 dark:text-slate-300">
+              {t(
+                'admin.advanced.runtime_evidence_scope',
+                {},
+                'These entries belong with runtime diagnostics, not supplier setup. They explain current Cloud execution metadata and do not edit providers, model binding, routing, prompts, abilities, or WordPress writes.'
+              )}
+            </p>
+          </div>
+          <Link href="/admin/ability-models" className="btn btn-secondary shrink-0">
+            {t('admin.advanced.action_open_model_binding', {}, 'Open model binding')}
+          </Link>
+        </div>
+        <div className="grid gap-3 lg:grid-cols-2">
+          {runtimeEvidenceItems.map((item) => (
+            <BackofficeStackCard key={item.titleKey} className="space-y-2">
+              <h3 className="text-base font-semibold text-slate-950 dark:text-white">
+                {t(item.titleKey, {}, item.titleFallback)}
+              </h3>
+              <p className="text-sm leading-6 text-slate-600 dark:text-slate-300">
+                {t(item.descKey, {}, item.descFallback)}
+              </p>
+            </BackofficeStackCard>
+          ))}
+        </div>
+        <p className="rounded-[1rem] border border-slate-200 bg-slate-50 px-4 py-3 text-xs leading-5 text-slate-500 dark:border-slate-800 dark:bg-slate-900/35 dark:text-slate-400">
+          {t(
+            'admin.advanced.runtime_evidence_boundary',
+            {},
+            'Evidence source remains Cloud runtime metadata such as run records, provider-call records, usage meter events, runtime profiles, and capability projection rows.'
+          )}
+        </p>
+      </BackofficeSectionPanel>
+      </div>
 
     </BackofficePageStack>
   );

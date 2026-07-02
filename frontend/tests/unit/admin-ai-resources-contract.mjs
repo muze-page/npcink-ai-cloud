@@ -4,7 +4,6 @@ import assert from 'node:assert/strict';
 
 const pagePath = resolve(process.cwd(), 'src/app/admin/ai-resources/page.tsx');
 const abilityModelsPath = resolve(process.cwd(), 'src/app/admin/ability-models/page.tsx');
-const legacyAbilityRoutingPath = resolve(process.cwd(), 'src/app/admin/wordpress-ai-routing/page.tsx');
 const aiAdvisorPath = resolve(process.cwd(), 'src/app/admin/ai-advisor/page.tsx');
 const layoutPath = resolve(process.cwd(), 'src/app/admin/layout.tsx');
 const troubleshootingPath = resolve(process.cwd(), 'src/app/admin/troubleshooting/page.tsx');
@@ -19,7 +18,6 @@ const workflowMetadataPanelPath = resolve(process.cwd(), 'src/components/backoff
 const adminLoginPath = resolve(process.cwd(), 'src/app/admin/login/page.tsx');
 const pageSource = readFileSync(pagePath, 'utf8');
 const abilityModelsSource = readFileSync(abilityModelsPath, 'utf8');
-const legacyAbilityRoutingSource = readFileSync(legacyAbilityRoutingPath, 'utf8');
 const aiAdvisorSource = readFileSync(aiAdvisorPath, 'utf8');
 const layoutSource = readFileSync(layoutPath, 'utf8');
 const troubleshootingSource = readFileSync(troubleshootingPath, 'utf8');
@@ -45,7 +43,7 @@ const capabilitySupplierTableSource = capabilitySupplierTableStart >= 0
   : '';
 const connectionsToolbarStart = pageSource.indexOf("activeView === 'connections'");
 const connectionsToolbarSource = connectionsToolbarStart >= 0
-  ? pageSource.slice(connectionsToolbarStart, pageSource.indexOf("{activeSupplierTab === 'model' || providerFormOpen", connectionsToolbarStart))
+  ? pageSource.slice(connectionsToolbarStart, pageSource.indexOf("{supplierTypeFilter === 'model' || providerFormOpen", connectionsToolbarStart))
   : '';
 const aiResourcesPrimaryPanelStart = pageSource.indexOf("description={aiText('description'");
 const aiResourcesPrimaryPanelSource = aiResourcesPrimaryPanelStart >= 0
@@ -76,24 +74,24 @@ assert.ok(
 
 assert.ok(
   aiResourcesNavIndex < troubleshootingNavIndex,
-  'AI resources must appear before Advanced Troubleshooting in primary navigation'
+  'Providers must appear before Runtime Diagnostics in primary navigation'
 );
 
 assert.ok(
   aiResourcesNavIndex < abilityModelsNavIndex && abilityModelsNavIndex < troubleshootingNavIndex,
-  'Ability-model routing must sit beside Provider Management before Advanced Troubleshooting'
+  'Model binding must sit beside Providers before Runtime Diagnostics'
 );
 
 assert.doesNotMatch(
   troubleshootingNavBlock,
   /\/admin\/ai-resources|\/admin\/ability-models/,
-  'Advanced Troubleshooting must not own the provider management or ability-model routing active paths'
+  'Runtime Diagnostics must not own the provider or model binding active paths'
 );
 
 assert.doesNotMatch(
   troubleshootingNavBlock,
   /\/admin\/wordpress-ai-routing/,
-  'Advanced Troubleshooting must not keep the legacy WordPress AI routing path active'
+  'Runtime Diagnostics must not keep the legacy WordPress AI routing path active'
 );
 
 assert.match(
@@ -134,7 +132,7 @@ assert.match(
 
 assert.match(
   adminPortalUsersSource,
-  /请求技术详情[\s\S]*event\.trace_id[\s\S]*event\.idempotency_key/,
+  /admin\.portal_users\.request_technical_detail[\s\S]*event\.trace_id[\s\S]*event\.idempotency_key/,
   'Admin portal user audit cards must collapse raw request fields into technical details'
 );
 
@@ -168,16 +166,16 @@ assert.doesNotMatch(
   'Admin login errors must not append trace IDs to the default error line'
 );
 
-assert.match(
-  legacyAbilityRoutingSource,
-  /redirect\('\/admin\/ability-models'\)/,
-  'Legacy WordPress AI routing page must redirect to the unified ability-model routing surface'
+assert.equal(
+  existsSync(resolve(process.cwd(), 'src/app/admin/wordpress-ai-routing/page.tsx')),
+  false,
+  'Legacy WordPress AI routing UI page must be removed after Model Binding becomes the only UI entry'
 );
 
 assert.doesNotMatch(
-  legacyAbilityRoutingSource,
-  /fetch\('\/api\/admin\/wordpress-ai-routing'|profile_id|candidate_instance_ids|RuntimeInstance/,
-  'Legacy WordPress AI routing page must not keep a second technical routing UI'
+  layoutSource,
+  /activePrefixes: \['\/admin\/ai-resources', '\/admin\/wordpress-ai-routing'\]/,
+  'Provider navigation must not keep the legacy WordPress AI routing UI path active'
 );
 
 assert.doesNotMatch(
@@ -212,26 +210,26 @@ assert.match(
 
 assert.match(
   i18nSource,
-  /'admin\.ai_resources\.title': '运行时资源中心'/,
-  'AI resources page must provide Simplified Chinese runtime resource center translations'
+  /'admin\.ai_resources\.title': '供应商'/,
+  'AI resources page must provide Simplified Chinese supplier translations'
 );
 
 assert.match(
   i18nSource,
-  /'admin\.ai_resources\.description': '运营 Cloud 运行时供应商、模型可见性、能力来源和只读运行证据。'/,
-  'AI resources page description must frame the surface as Cloud runtime operations'
+  /'admin\.ai_resources\.description': '管理 Cloud 运行时 provider 连接、模型可见性和能力来源。运行诊断保留在运行诊断页。'/,
+  'AI resources page description must frame the surface as Cloud runtime provider operations'
 );
 
 assert.match(
   i18nSource,
-  /'admin\.nav_ai_resources': '运行时资源'/,
-  'Top-level admin navigation must use compact Simplified Chinese runtime resource copy'
+  /'admin\.nav_ai_resources': '供应商'/,
+  'Top-level admin navigation must use compact Simplified Chinese provider copy'
 );
 
 assert.match(
   i18nSource,
-  /'admin\.nav_ability_models': '运行模型绑定'/,
-  'Top-level admin navigation must expose Runtime Model Binding in Simplified Chinese'
+  /'admin\.nav_ability_models': '模型绑定'/,
+  'Top-level admin navigation must expose Model Binding in Simplified Chinese'
 );
 
 assert.match(
@@ -318,22 +316,28 @@ assert.match(
   'Provider Management diagnostics must read the live runtime telemetry projection'
 );
 
-assert.match(
+assert.doesNotMatch(
   pageSource,
   /runtime_telemetry_boundary_notice[\s\S]*run_records[\s\S]*provider_call_records[\s\S]*usage_meter_events/,
-  'Runtime telemetry must be framed as read-only evidence inside Provider Management diagnostics'
+  'Provider Management must not keep the full runtime telemetry evidence panel'
 );
 
-assert.match(
+assert.doesNotMatch(
   i18nSource,
-  /'admin\.ai_resources\.runtime_telemetry_status': '遥测状态'[\s\S]*'admin\.ai_resources\.runtime_telemetry_boundary_notice'/,
-  'Runtime telemetry diagnostics must provide Simplified Chinese copy under Provider Management'
+  /'admin\.ai_resources\.runtime_telemetry_boundary_notice'/,
+  'Runtime telemetry evidence copy must move out of the Provider Management namespace'
 );
 
 assert.match(
   pageSource,
-  /useState<AIResourceView>\('overview'\)/,
-  'AI resources page must default to the runtime resource overview workflow'
+  /useState<AIResourceView>\('connections'\)/,
+  'AI resources page must default directly to the supplier workflow'
+);
+
+assert.match(
+  pageSource,
+  /useState<SupplierTypeFilter>\('model'\)/,
+  'AI resources page must default to the shorter model-supplier work surface'
 );
 
 assert.doesNotMatch(
@@ -344,8 +348,32 @@ assert.doesNotMatch(
 
 assert.match(
   pageSource,
-  /setActiveView\('diagnostics'\)[\s\S]*action_view_diagnostics/,
-  'Provider management diagnostics must be a secondary action, not a duplicate supplier tab'
+  /href="\/admin\/troubleshooting"[\s\S]*action_view_diagnostics/,
+  'Provider management diagnostics must route to the Runtime Diagnostics page instead of expanding inside suppliers'
+);
+
+assert.match(
+  pageSource,
+  /role="tablist"[\s\S]*supplier_filter_model[\s\S]*supplier_filter_capability/,
+  'Supplier type switching must be a compact same-object tab row instead of a long dropdown'
+);
+
+assert.doesNotMatch(
+  connectionsToolbarSource,
+  /filter_all_supplier_types/,
+  'Supplier type switching must not include a redundant all-suppliers tab'
+);
+
+assert.doesNotMatch(
+  pageSource,
+  /onClick=\{\(\) => setActiveView\('diagnostics'\)\}/,
+  'AI resources page must not expose an in-page diagnostics switch from the supplier header'
+);
+
+assert.doesNotMatch(
+  pageSource,
+  /activeView === 'diagnostics' && activeDiagnosticView === 'matrix'/,
+  'Runtime resolution, capability matrix, runtime profiles, and recent evidence must not remain as hidden Provider Management diagnostics'
 );
 
 assert.match(
@@ -374,8 +402,8 @@ assert.doesNotMatch(
 
 assert.match(
   pageSource,
-  /requestedView === 'overview'[\s\S]*setActiveView\('diagnostics'\)/,
-  'Legacy overview deep links must land in diagnostics instead of restoring a separate overview page'
+  /requestedView === 'overview'[\s\S]*setActiveView\('connections'\)/,
+  'Legacy overview deep links must land on suppliers instead of restoring a separate overview page'
 );
 
 assert.match(
@@ -566,7 +594,7 @@ assert.doesNotMatch(
 
 assert.match(
   pageSource,
-  /activeSupplierTab === 'model' \|\| providerFormOpen/,
+  /supplierTypeFilter === 'model' \|\| providerFormOpen/,
   'Provider channel form must render when opened from capability suppliers as well as model suppliers'
 );
 
@@ -830,14 +858,14 @@ assert.doesNotMatch(
 
 assert.match(
   pageSource,
-  /const \[activeView, setActiveView\] = useState<AIResourceView>\('overview'\)/,
-  'AI resources page must default to the runtime resource overview workspace'
+  /const \[activeView, setActiveView\] = useState<AIResourceView>\('connections'\)/,
+  'AI resources page must default to the supplier workspace'
 );
 
-assert.match(
+assert.doesNotMatch(
   pageSource,
-  /workspaceTabs[\s\S]*tab_overview[\s\S]*tab_connections[\s\S]*tab_diagnostics[\s\S]*workspace_boundary_notice/,
-  'AI resources primary panel must expose overview, supplier, and diagnostics workspace tabs with the Cloud boundary notice'
+  /workspaceTabs|role="tab"[\s\S]*tab_overview[\s\S]*tab_connections[\s\S]*tab_diagnostics/,
+  'AI resources primary panel must not expose nested overview/supplier/diagnostics workspace tabs'
 );
 
 assert.match(
@@ -846,10 +874,16 @@ assert.match(
   'AI resources overview must use a compact runtime resource status strip'
 );
 
-assert.match(
+assert.doesNotMatch(
   pageSource,
   /overview_actions_boundary[\s\S]*routing, prompts, abilities, or WordPress writes/,
-  'AI resources overview actions must be framed as detail navigation, not control-plane edits'
+  'AI resources page must not keep the old overview action-card boundary copy'
+);
+
+assert.match(
+  pageSource,
+  /href="\/admin\/troubleshooting"[\s\S]*action_view_diagnostics/,
+  'AI resources page must route diagnostics through the Runtime Diagnostics page'
 );
 
 assert.doesNotMatch(
@@ -1549,6 +1583,18 @@ assert.match(
 
 assert.match(
   pageSource,
+  /function closeProviderForm\(\)[\s\S]*setProviderFormOpen\(false\)[\s\S]*setMessage\(''\)[\s\S]*setError\(''\)/,
+  'Closing the provider form must clear transient edit/cancel messages before returning to the supplier page'
+);
+
+assert.equal(
+  (pageSource.match(/onClick=\{closeProviderForm\}/g) || []).length,
+  2,
+  'Provider form close and cancel actions must use the transient-message cleanup path'
+);
+
+assert.match(
+  pageSource,
   /role="dialog"/,
   'AI resources provider form must open as an explicit dialog'
 );
@@ -1567,14 +1613,14 @@ assert.doesNotMatch(
 
 assert.match(
   connectionsToolbarSource,
-  /supplier_tab_model[\s\S]*supplier_tab_capability[\s\S]*field_search_connections[\s\S]*action_add_model_supplier[\s\S]*action_add_capability_supplier/,
-  'Supplier add actions must live in the top supplier toolbar'
+  /field_supplier_type_filter[\s\S]*role="tablist"[\s\S]*supplier_filter_model[\s\S]*supplier_filter_capability[\s\S]*field_search_connections[\s\S]*action_add_model_supplier[\s\S]*action_add_capability_supplier/,
+  'Supplier type tabs and add actions must live in the top supplier toolbar'
 );
 
-assert.match(
+assert.doesNotMatch(
   connectionsToolbarSource,
-  /supplier_tab_model[\s\S]*supplier_tab_capability[\s\S]*field_search_connections/,
-  'AI resources connections view must keep supplier tabs and search in one toolbar'
+  /supplier_tab_model[\s\S]*supplier_tab_capability/,
+  'AI resources connections view must not keep model/capability suppliers as nested tabs'
 );
 
 assert.doesNotMatch(
@@ -1625,10 +1671,16 @@ assert.match(
   'AI resources provider channel list must support status filtering'
 );
 
-assert.match(
+assert.doesNotMatch(
   pageSource,
   /SupplierSettingsTab/,
-  'Provider management must split model suppliers and capability suppliers into operator tabs'
+  'Provider management must use a supplier type filter instead of operator tabs'
+);
+
+assert.match(
+  pageSource,
+  /SupplierTypeFilter[\s\S]*supplierTypeFilter/,
+  'Provider management must keep model and capability suppliers as a single filtered supplier workspace'
 );
 
 assert.match(
@@ -2039,88 +2091,100 @@ assert.doesNotMatch(
   'AI resources page should not place an unrelated audio workbench CTA in the primary supplier management header'
 );
 
-assert.match(
+assert.doesNotMatch(
   pageSource,
   /Recent runtime evidence/,
-  'AI resources page must expose recent runtime evidence for operator debugging'
+  'AI resources page must not expose recent runtime evidence after it moves to Runtime Diagnostics'
 );
 
 assert.match(
-  pageSource,
-  /Capability Matrix/,
-  'AI resources page must expose the capability-to-provider-model matrix'
+  troubleshootingSource,
+  /recent_runtime_evidence_title[\s\S]*Recent run metadata/,
+  'Runtime Diagnostics must expose recent runtime evidence for operator debugging'
 );
 
 assert.match(
-  pageSource,
-  /Runtime resolution/,
-  'AI resources page must expose the current runtime resolution'
+  troubleshootingSource,
+  /capability_matrix_title[\s\S]*capability_matrix_desc/,
+  'Runtime Diagnostics must own the capability-to-provider-model evidence entry'
 );
 
 assert.match(
+  troubleshootingSource,
+  /runtime_resolution_title[\s\S]*Read-only, not a router editor/,
+  'Runtime Diagnostics must own the current runtime resolution entry'
+);
+
+assert.doesNotMatch(
   pageSource,
   /Feature usage/,
-  'AI resources page must expose feature-to-model usage'
+  'AI resources page must not expose feature-to-model usage as an in-page diagnostics panel'
 );
 
-assert.match(
+assert.doesNotMatch(
   pageSource,
   /Model health/,
-  'AI resources page must expose provider-model health diagnostics'
+  'AI resources page must not expose provider-model health diagnostics as an in-page panel'
 );
 
-assert.match(
+assert.doesNotMatch(
   pageSource,
   /Last 24h/,
-  'Model health must expose a short diagnostic window'
+  'AI resources page must not expose model-health diagnostic windows'
 );
 
-assert.match(
+assert.doesNotMatch(
   pageSource,
   /Last 7d/,
-  'Model health must expose a longer diagnostic window'
+  'AI resources page must not expose model-health diagnostic windows'
 );
 
-assert.match(
+assert.doesNotMatch(
   pageSource,
   /Feature-to-model evidence from Cloud runtime metadata/,
-  'Feature usage must be framed as runtime metadata evidence'
+  'AI resources page must not expose feature usage diagnostic detail'
 );
 
-assert.match(
+assert.doesNotMatch(
   pageSource,
   /does not change routing, prompts, abilities, or WordPress writes/,
-  'Feature usage must remain read-only and outside control-plane truth'
+  'AI resources page must not keep copied runtime diagnostics boundary copy'
 );
 
-assert.match(
+assert.doesNotMatch(
   pageSource,
   /Provider\/model health from provider_call_records/,
-  'Model health must be backed by provider call metadata'
+  'AI resources page must not expose provider-model health detail'
 );
 
-assert.match(
+assert.doesNotMatch(
   pageSource,
   /Metadata only: prompts, results, and provider secrets are not exposed/,
-  'Model health must not expose prompt, result, or secret material'
+  'AI resources page must not expose model-health diagnostic copy'
 );
 
-assert.match(
+assert.doesNotMatch(
   pageSource,
   /Health alerts are diagnostic only and do not change routing, prompts, abilities, or WordPress writes/,
-  'Model health must remain diagnostics-only'
+  'AI resources page must not keep model-health diagnostic detail'
 );
 
-assert.match(
+assert.doesNotMatch(
   pageSource,
   /read-only diagnostics/,
-  'Model health alerts must be framed as read-only diagnostics'
+  'AI resources page must not keep diagnostic-window detail copy'
 );
 
 assert.match(
+  troubleshootingSource,
+  /Read-only, not a router editor/,
+  'Runtime Diagnostics runtime resolution must not present itself as a router editor'
+);
+
+assert.doesNotMatch(
   pageSource,
   /read-only operator evidence, not a router editor/,
-  'AI resources runtime resolution must not present itself as a router editor'
+  'AI resources page must not keep runtime-resolution diagnostic copy'
 );
 
 assert.doesNotMatch(
@@ -2135,16 +2199,22 @@ assert.doesNotMatch(
   'AI resources page must not teach operators to manage AI channels through environment fallback'
 );
 
-assert.match(
+assert.doesNotMatch(
   pageSource,
   /Cloud runtime mapping from capability to profile, provider, model, and write posture/,
-  'AI resources matrix must explain the runtime mapping purpose'
+  'AI resources page must not keep the runtime mapping matrix explanation'
 );
 
 assert.match(
+  troubleshootingSource,
+  /Current Cloud runtime mapping across capabilities, selected providers, and write posture/,
+  'Runtime Diagnostics matrix entry must explain the runtime mapping purpose'
+);
+
+assert.doesNotMatch(
   pageSource,
   /not a WordPress ability editor/,
-  'AI resources matrix must not present itself as a local ability editor'
+  'AI resources page must not keep matrix copy that belongs to Runtime Diagnostics'
 );
 
 assert.match(
@@ -2177,10 +2247,16 @@ assert.match(
   'AI resources edit action must explain masked credential behavior'
 );
 
-assert.match(
+assert.doesNotMatch(
   pageSource,
   /Prompt and result content are not exposed here/,
-  'AI resources runtime evidence must be metadata-only'
+  'AI resources page must not keep runtime evidence detail copy'
+);
+
+assert.match(
+  troubleshootingSource,
+  /Recent run metadata used for diagnostics without exposing prompts, results, or provider secrets/,
+  'Runtime Diagnostics runtime evidence must be metadata-only'
 );
 
 assert.doesNotMatch(

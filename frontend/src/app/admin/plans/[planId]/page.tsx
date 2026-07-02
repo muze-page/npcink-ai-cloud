@@ -486,7 +486,6 @@ function PlanDetailContent() {
   );
   const planKind = String(detail.plan.metadata?.plan_kind || latestVersion?.metadata?.plan_kind || '');
   const isFormalProductionPlan = detail.plan.plan_id === 'plan_free' || planKind === 'default_free';
-  const isDevBaseline = detail.plan.plan_id === 'plan_dev_unlimited';
   const baselineFieldPatch = buildBaselineFieldPatch(tierSummary);
   const latestFieldPatch = buildLatestFieldPatch(latestVersion, tierSummary);
   const primaryPackageFitCue = detail.package_fit_cues?.[0]
@@ -539,9 +538,7 @@ function PlanDetailContent() {
                   label: t('admin.plan_posture', {}, 'Plan posture'),
                   value: isFormalProductionPlan
                     ? t('admin.formal_production_plan', {}, 'Formal production plan')
-                    : isDevBaseline
-                      ? t('admin.dev_baseline', {}, 'Dev baseline')
-                      : t('admin.tier_template_binding', {}, 'Tier-bound plan'),
+                    : t('admin.tier_template_binding', {}, 'Tier-bound plan'),
                   size: 'compact',
                 },
               ]}

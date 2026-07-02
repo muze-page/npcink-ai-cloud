@@ -35,6 +35,18 @@ const workspaceKeys = [
   'admin.advanced.inspector_desc',
   'admin.advanced.suggested_first_step',
   'admin.advanced.boundary_note',
+  'admin.advanced.runtime_evidence_eyebrow',
+  'admin.advanced.runtime_evidence_scope',
+  'admin.advanced.runtime_resolution_title',
+  'admin.advanced.runtime_resolution_desc',
+  'admin.advanced.capability_matrix_title',
+  'admin.advanced.capability_matrix_desc',
+  'admin.advanced.runtime_profiles_title',
+  'admin.advanced.runtime_profiles_desc',
+  'admin.advanced.recent_runtime_evidence_title',
+  'admin.advanced.recent_runtime_evidence_desc',
+  'admin.advanced.runtime_evidence_boundary',
+  'admin.advanced.action_open_model_binding',
   'admin.advanced.group_runtime_desc',
   'admin.advanced.group_governance_desc',
 ];
@@ -69,6 +81,12 @@ assert.match(
   pageSource,
   /admin\.advanced\.inspector_title[\s\S]*admin\.advanced\.suggested_first_step[\s\S]*admin\.advanced\.boundary_note/,
   'Advanced troubleshooting should keep a right-side read-only focus inspector'
+);
+
+assert.match(
+  pageSource,
+  /runtimeEvidenceItems[\s\S]*id="runtime-evidence"[\s\S]*admin\.advanced\.runtime_evidence_boundary/,
+  'Runtime resolution, capability matrix, runtime configurations, and recent evidence must live under Runtime Diagnostics'
 );
 
 assert.doesNotMatch(

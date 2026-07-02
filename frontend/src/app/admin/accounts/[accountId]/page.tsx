@@ -1245,21 +1245,17 @@ function AccountDetailContent() {
   const hasCoverageGap = uncoveredSiteCount > 0;
   const hasUncoveredCommercialPosture =
     primaryPackage.coverage_state === 'uncovered' || hasCoverageGap || (account.subscription_count === 0 && account.site_count > 0);
-  const hasDevBaselineOnly = primaryPackage.package_kind === 'dev_baseline';
   const hasPaidCoverage =
     primaryPackage.package_kind === 'tier_package' && primaryPackage.coverage_state === 'covered';
   const hasFormalFreeCoverage =
     primaryPackage.package_kind === 'formal_free' && primaryPackage.coverage_state === 'covered';
   const postureTone =
-    account.status === 'suspended' || riskySubscriptions.length > 0 || hasUncoveredCommercialPosture || hasDevBaselineOnly
+    account.status === 'suspended' || riskySubscriptions.length > 0 || hasUncoveredCommercialPosture
       ? 'error'
       : 'ok';
   const postureTitle = (() => {
     if (account.status === 'suspended') {
       return t('admin.account_detail.suspended_title', undefined, 'Customer access is suspended');
-    }
-    if (hasDevBaselineOnly) {
-      return t('admin.account_detail.dev_baseline_only_title', undefined, 'Dev baseline only');
     }
     if (hasUncoveredCommercialPosture) {
       return t('admin.account_detail.uncovered_posture_title', undefined, 'Uncovered commercial posture');
@@ -1278,9 +1274,6 @@ function AccountDetailContent() {
   const postureDescription = (() => {
     if (account.status === 'suspended') {
       return t('admin.account_detail.suspended_desc', undefined, 'Commercial or support review should happen before any new customer session starts from this customer.');
-    }
-    if (hasDevBaselineOnly) {
-      return t('admin.account_detail.dev_baseline_only_desc', undefined, 'This customer currently resolves to a dev baseline. Do not treat it as production package coverage until an operator rebinds it.');
     }
     if (hasUncoveredCommercialPosture) {
       return t('admin.account_detail.uncovered_posture_desc', undefined, 'This customer has real uncovered posture. Keep it distinct from Free coverage and move directly into subscription/package follow-up.');
@@ -1309,7 +1302,7 @@ function AccountDetailContent() {
       value: primaryPackage.display_package_label,
       detail: `${translatePackageKindLabel(t, primaryPackage.package_kind)} · ${translateCoverageStateLabel(t, primaryPackage.coverage_state)}`,
       toneClassName:
-        primaryPackage.coverage_state === 'uncovered' || primaryPackage.package_kind === 'dev_baseline'
+        primaryPackage.coverage_state === 'uncovered'
           ? 'text-red-600 dark:text-red-400'
           : undefined,
     },

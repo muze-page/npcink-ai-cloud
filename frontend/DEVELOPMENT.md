@@ -32,7 +32,6 @@ GA-style customer billing front-office narrative.
 
 - `/portal`
 - `/portal/login`
-- `/portal/keys`
 - `/portal/usage`
 - `/portal/billing`
 - `/portal/audit`
@@ -42,7 +41,7 @@ GA-style customer billing front-office narrative.
 - `/admin`
 - `/admin/login`
 - `/admin/accounts`
-- `/admin/sites`
+- `/admin/sites/[siteId]`
 - `/admin/subscriptions`
 - `/admin/plans`
 

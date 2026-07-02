@@ -4,7 +4,6 @@ import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import React, { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  BackofficeMetricStrip,
   BackofficePageStack,
   BackofficePrimaryPanel,
   BackofficeSectionPanel,
@@ -19,13 +18,12 @@ import { generateIdempotencyKey } from '@/lib/idempotency';
 import { formatDate } from '@/lib/utils';
 
 type ResourceStatus = 'ready' | 'missing_secret' | 'missing_provider' | 'disabled' | string;
-type AIResourceView = 'overview' | 'connections' | 'usage' | 'health' | 'matrix' | 'diagnostics';
+type AIResourceView = 'connections';
 type ConnectionStatusFilter = 'all' | 'ready' | 'missing_secret' | 'disabled';
 type SupplierCategory = 'ai' | 'capability';
-type SupplierSettingsTab = 'model' | 'capability';
+type SupplierTypeFilter = 'model' | 'capability';
 type CapabilityProviderCategory = 'search' | 'image' | 'vector';
 type CapabilityProviderCategoryFilter = 'all' | CapabilityProviderCategory;
-type DiagnosticsTab = 'matrix' | 'usage' | 'health';
 
 type Connection = {
   connection_id: string;
@@ -696,11 +694,6 @@ const CAPABILITY_PROVIDER_TEMPLATES: CapabilityProviderTemplate[] = [
   },
 ];
 
-const LEGACY_HEALTH_WINDOW_FALLBACKS = [
-  { window_id: 'last_24h', label: 'Last 24h', hours: 24 },
-  { window_id: 'last_7d', label: 'Last 7d', hours: 168 },
-];
-
 const RUNTIME_TELEMETRY_TEXT_KEYS: Record<string, string> = {
   'Hosted model governance has telemetry gaps to review before traffic expands.':
     'runtime_telemetry_text_coverage_gaps',
@@ -766,7 +759,6 @@ const RUNTIME_TELEMETRY_TEXT_KEYS: Record<string, string> = {
   inspect_runtime_failure_detail_for_hosted_models:
     'runtime_telemetry_action_inspect_runtime_failure',
   inspect_runtime_telemetry: 'runtime_telemetry_action_inspect_runtime',
-  inspect_hosted_models: 'runtime_telemetry_action_inspect_runtime',
 };
 
 function statusTone(status: ResourceStatus): 'success' | 'warning' | 'disabled' | 'info' {
@@ -774,21 +766,6 @@ function statusTone(status: ResourceStatus): 'success' | 'warning' | 'disabled' 
   if (status === 'disabled') return 'disabled';
   if (status === 'missing_secret' || status === 'missing_provider') return 'warning';
   return 'info';
-}
-
-function healthTone(status: ResourceStatus): 'success' | 'warning' | 'disabled' | 'info' | 'error' {
-  if (status === 'healthy') return 'success';
-  if (status === 'degraded') return 'warning';
-  if (status === 'error') return 'error';
-  if (status === 'not_observed') return 'disabled';
-  return 'info';
-}
-
-function severityTone(status: ResourceStatus): 'success' | 'warning' | 'disabled' | 'info' | 'error' {
-  if (status === 'error') return 'error';
-  if (status === 'warning') return 'warning';
-  if (status === 'info') return 'info';
-  return 'disabled';
 }
 
 function labelList(values: string[]): string {
@@ -892,30 +869,6 @@ function inferProviderPreset(connection: Connection): string {
   if (kind === 'minimax' || kind === 'audio_provider' || kind === 'minimax_audio') return 'minimax';
   if (kind === 'openai_compatible') return 'openai_compatible';
   return 'custom';
-}
-
-function isRuntimeEvidence(value: RuntimeEvidence | PipelineRuntimeEvidence | undefined): value is RuntimeEvidence {
-  return Boolean(value && 'run_id' in value);
-}
-
-function evidenceSummary(profile: RuntimeProfile): RuntimeEvidence | null {
-  const lastRun = profile.last_run;
-  if (!lastRun) return null;
-  if (isRuntimeEvidence(lastRun)) {
-    return lastRun.run_id ? lastRun : null;
-  }
-  return lastRun.audio?.run_id ? lastRun.audio : lastRun.text?.run_id ? lastRun.text : null;
-}
-
-function profileModelSummary(profiles: RuntimeProfile[]): string {
-  const pairs = profiles
-    .map((profile) => `${profile.selected_provider_id || '-'} / ${profile.selected_model_id || '-'}`)
-    .filter((value, index, values) => values.indexOf(value) === index);
-  return pairs.length ? pairs.join(', ') : '-';
-}
-
-function profileIds(profiles: RuntimeProfile[]): string {
-  return profiles.map((profile) => profile.profile_id).join(', ') || '-';
 }
 
 function formatCost(value: number | undefined): string {
@@ -1288,13 +1241,11 @@ function AiResourcesContent() {
     [t]
   );
   const [data, setData] = useState<AiResources | null>(null);
-  const [activeView, setActiveView] = useState<AIResourceView>('overview');
-  const [activeSupplierTab, setActiveSupplierTab] = useState<SupplierSettingsTab>('model');
-  const [activeDiagnosticsTab, setActiveDiagnosticsTab] = useState<DiagnosticsTab>('matrix');
+  const [activeView, setActiveView] = useState<AIResourceView>('connections');
+  const [supplierTypeFilter, setSupplierTypeFilter] = useState<SupplierTypeFilter>('model');
   const [activeCapabilityCategory, setActiveCapabilityCategory] = useState<CapabilityProviderCategory>('search');
   const [capabilityCategoryFilter, setCapabilityCategoryFilter] = useState<CapabilityProviderCategoryFilter>('all');
   const [capabilityAddDialogOpen, setCapabilityAddDialogOpen] = useState(false);
-  const [activeHealthWindowId, setActiveHealthWindowId] = useState('last_24h');
   const [connectionStatusFilter, setConnectionStatusFilter] = useState<ConnectionStatusFilter>('all');
   const [connectionSearch, setConnectionSearch] = useState('');
   const [loading, setLoading] = useState(true);
@@ -1328,7 +1279,6 @@ function AiResourcesContent() {
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
   const [runtimeTelemetry, setRuntimeTelemetry] = useState<RuntimeTelemetrySummary | null>(null);
-  const [runtimeTelemetryError, setRuntimeTelemetryError] = useState('');
   const autoSyncedReferenceProviders = useRef<Set<string>>(new Set());
   const providerFormCapabilityIds = splitList(providerConnectionForm.capabilityIds);
   const isCapabilityProviderForm = isCapabilityProviderDescriptor(providerConnectionForm.kind, providerFormCapabilityIds);
@@ -1364,7 +1314,6 @@ function AiResourcesContent() {
   }, [aiText]);
 
   const loadRuntimeTelemetry = useCallback(async () => {
-    setRuntimeTelemetryError('');
     try {
       const params = new URLSearchParams({
         recent_minutes: '1440',
@@ -1378,13 +1327,8 @@ function AiResourcesContent() {
         throw new Error(resolveAdminApiPayloadMessage(payload, aiText('runtime_telemetry_error_load', 'Failed to load runtime telemetry.')));
       }
       setRuntimeTelemetry(normalizeRuntimeTelemetry(payload?.data ?? {}));
-    } catch (telemetryError) {
+    } catch {
       setRuntimeTelemetry(null);
-      setRuntimeTelemetryError(
-        telemetryError instanceof Error
-          ? telemetryError.message
-          : aiText('runtime_telemetry_error_load', 'Failed to load runtime telemetry.')
-      );
     }
   }, [aiText]);
 
@@ -1432,10 +1376,8 @@ function AiResourcesContent() {
   }, [loadResources]);
 
   useEffect(() => {
-    if (activeView === 'overview' || activeView === 'diagnostics') {
-      void loadRuntimeTelemetry();
-    }
-  }, [activeView, loadRuntimeTelemetry]);
+    void loadRuntimeTelemetry();
+  }, [loadRuntimeTelemetry]);
 
   useEffect(() => {
     if (!providerFormOpen) return;
@@ -1452,32 +1394,23 @@ function AiResourcesContent() {
     if (requestedView === 'connections') {
       setActiveView(requestedView);
     }
-    if (requestedView === 'overview') {
-      setActiveView('overview');
-    }
-    if (requestedView === 'matrix' || requestedView === 'usage' || requestedView === 'health') {
-      setActiveView('diagnostics');
-      setActiveDiagnosticsTab(requestedView);
-    }
-    if (requestedView === 'diagnostics') {
-      setActiveView('diagnostics');
-      const requestedDiagnostic = searchParams.get('diagnostic');
-      if (
-        requestedDiagnostic === 'matrix' ||
-        requestedDiagnostic === 'usage' ||
-        requestedDiagnostic === 'health'
-      ) {
-        setActiveDiagnosticsTab(requestedDiagnostic);
-      }
+    if (
+      requestedView === 'overview' ||
+      requestedView === 'diagnostics' ||
+      requestedView === 'matrix' ||
+      requestedView === 'usage' ||
+      requestedView === 'health'
+    ) {
+      setActiveView('connections');
     }
     const requestedSupplier = searchParams.get('supplier');
     if (requestedSupplier === 'capability') {
       setActiveView('connections');
-      setActiveSupplierTab('capability');
+      setSupplierTypeFilter('capability');
     }
     if (requestedSupplier === 'model') {
       setActiveView('connections');
-      setActiveSupplierTab('model');
+      setSupplierTypeFilter('model');
     }
     const requestedCategory = searchParams.get('category');
     if (requestedCategory === 'search' || requestedCategory === 'image' || requestedCategory === 'vector') {
@@ -1816,6 +1749,12 @@ function AiResourcesContent() {
     });
     setActiveView('connections');
     setProviderFormOpen(true);
+  }
+
+  function closeProviderForm() {
+    setProviderFormOpen(false);
+    setMessage('');
+    setError('');
   }
 
   function addProviderCredentialChannel() {
@@ -2423,76 +2362,6 @@ function AiResourcesContent() {
     selectedProviderModelIds.length
   );
 
-  const matrixRows = useMemo<CapabilityMatrixRow[]>(() => {
-    if (!data) return [];
-    if (data.capability_matrix?.length) return data.capability_matrix;
-    return data.capabilities.map((capability) => ({
-      capability_id: capability.capability_id,
-      label: capability.label,
-      status: capability.status,
-      used_by: capability.used_by,
-      write_posture: capability.write_posture,
-      default_profile_id: capability.default_profile_id,
-      connection_ids: capability.connection_ids,
-      profiles: data.runtime_profiles.filter((profile) => profile.capability_id === capability.capability_id),
-      selection_owner: 'cloud_runtime_metadata',
-      direct_wordpress_write: false,
-    }));
-  }, [data]);
-
-  const runtimeResolutionRows = useMemo<RuntimeResolutionRow[]>(() => {
-    if (!data) return [];
-    if (data.runtime_resolution?.length) return data.runtime_resolution;
-    return matrixRows.map((row) => ({
-      capability_id: row.capability_id,
-      label: row.label,
-      status: row.status,
-      selected_profile_id: row.default_profile_id,
-      selected_provider_id: row.profiles[0]?.selected_provider_id || '',
-      selected_model_id: row.profiles[0]?.selected_model_id || '',
-      selected_connection_ids: row.connection_ids,
-      ready_connection_ids: row.connection_ids,
-      runtime_provider_available: row.status === 'ready',
-      runtime_provider_ids: [],
-      write_posture: row.write_posture,
-      selection_owner: row.selection_owner,
-      direct_wordpress_write: row.direct_wordpress_write,
-    }));
-  }, [data, matrixRows]);
-
-  const healthWindows = useMemo<ProviderModelHealthWindow[]>(() => {
-    const configured = data?.provider_model_health?.windows || [];
-    if (configured.length) return configured;
-    return LEGACY_HEALTH_WINDOW_FALLBACKS.map((windowItem) => ({
-      ...windowItem,
-      started_at: '',
-      ended_at: '',
-      rows: data?.provider_model_health?.rows || [],
-      alert_summary: data?.provider_model_health?.alert_summary,
-    }));
-  }, [data]);
-
-  const activeHealthWindow = useMemo<ProviderModelHealthWindow | null>(() => {
-    if (!healthWindows.length) return null;
-    return (
-      healthWindows.find((windowItem) => windowItem.window_id === activeHealthWindowId) ||
-      healthWindows.find((windowItem) => windowItem.window_id === data?.provider_model_health?.default_window_id) ||
-      healthWindows[0]
-    );
-  }, [activeHealthWindowId, data, healthWindows]);
-
-  function healthWindowLabel(windowItem: ProviderModelHealthWindow): string {
-    if (windowItem.window_id === 'last_24h') {
-      return aiText('window_last_24h', 'Last 24h');
-    }
-    if (windowItem.window_id === 'last_7d') {
-      return aiText('window_last_7d', 'Last 7d');
-    }
-    return windowItem.label;
-  }
-
-  const activeDiagnosticView: DiagnosticsTab | AIResourceView =
-    activeView === 'diagnostics' ? activeDiagnosticsTab : activeView;
   const translateRuntimeTelemetryText = useCallback(
     (value: string | undefined): string => {
       const text = String(value || '').trim();
@@ -2512,8 +2381,8 @@ function AiResourcesContent() {
     return (
       <BackofficePageStack>
         <BackofficePrimaryPanel
-          eyebrow={aiText('eyebrow', 'Runtime resources')}
-          title={aiText('title', 'Runtime resource center')}
+          eyebrow={aiText('eyebrow', 'Runtime plane')}
+          title={aiText('title', 'Suppliers')}
           description={aiText('unavailable_desc', 'Cloud runtime provider resources are unavailable.')}
         >
           <BackofficeStackCard className="border-rose-200 bg-rose-50 text-sm text-rose-800 dark:border-rose-900 dark:bg-rose-950/25 dark:text-rose-200">
@@ -2530,90 +2399,16 @@ function AiResourcesContent() {
   const readyCapabilitySupplierCount = data.connections.filter(
     (connection) => supplierCategory(connection) === 'capability' && connection.status === 'ready'
   ).length;
-  const missingConfigCount = data.connections.filter(
-    (connection) => connection.status === 'missing_secret' || !connection.configured
-  ).length;
-  const disabledConnectionCount = data.connections.filter(
-    (connection) => !connection.enabled || connection.status === 'disabled'
-  ).length;
-  const healthAlertCount = activeHealthWindow?.alert_summary?.alert_count
-    ?? activeHealthWindow?.alert_summary?.alerts?.length
-    ?? 0;
-  const runtimeAlertCount = runtimeTelemetry?.alertSummary.alertCount ?? runtimeTelemetry?.alertSummary.alerts.length ?? 0;
-  const overviewAttentionItems = [
-    ...data.connections
-      .filter((connection) => connection.status !== 'ready')
-      .slice(0, 2)
-      .map((connection) => ({
-        key: `connection:${connection.connection_id}`,
-        label: aiText('attention_connection_needs_config', '{{name}} needs configuration', {
-          name: connection.display_name,
-        }),
-        detail: `${resourceStatusLabel(connection.status)} · ${connection.provider_id}`,
-        tone: statusTone(connection.status),
-      })),
-    ...(runtimeAlertCount > 0
-      ? [{
-          key: 'runtime-telemetry',
-          label: aiText('runtime_telemetry_status', 'Runtime telemetry'),
-          detail: translateRuntimeTelemetryText(runtimeTelemetry?.alertSummary.summary),
-          tone: severityTone(runtimeTelemetryStatus),
-        }]
-      : []),
-    ...(healthAlertCount > 0
-      ? [{
-          key: 'model-health',
-          label: aiText('health_title', 'Model health'),
-          detail: aiText('overview_health_alerts_detail', '{{count}} alerts in the selected evidence window', {
-            count: String(healthAlertCount),
-          }),
-          tone: 'warning' as const,
-        }]
-      : []),
-  ].slice(0, 4);
-
-  const workspaceTabs: Array<{ id: AIResourceView; label: string; detail: string }> = [
-    {
-      id: 'overview',
-      label: aiText('tab_overview', 'Overview'),
-      detail: aiText('tab_overview_detail', 'Status and next actions'),
-    },
-    {
-      id: 'connections',
-      label: aiText('tab_connections', 'Suppliers'),
-      detail: aiText('tab_connections_detail', 'Provider channels and credentials'),
-    },
-    {
-      id: 'diagnostics',
-      label: aiText('tab_diagnostics', 'Diagnostics'),
-      detail: aiText('tab_diagnostics_detail', 'Read-only runtime evidence'),
-    },
-  ];
-
   return (
     <BackofficePageStack>
       <BackofficePrimaryPanel
-        eyebrow={aiText('eyebrow', 'Runtime resources')}
-        title={aiText('title', 'Runtime resource center')}
-        description={aiText('description', 'Operate Cloud runtime suppliers, model visibility, capability sources, and read-only runtime evidence.')}
+        eyebrow={aiText('eyebrow', 'Runtime plane')}
+        title={aiText('title', 'Suppliers')}
+        description={aiText('description', 'Manage Cloud runtime provider connections, model visibility, and capability sources. Runtime diagnostics stay in the Runtime Diagnostics page.')}
         aside={(
-          activeView === 'diagnostics' ? (
-            <button
-              type="button"
-              className="btn btn-secondary justify-center"
-              onClick={() => setActiveView('connections')}
-            >
-              {aiText('action_back_to_suppliers', 'Back to suppliers')}
-            </button>
-          ) : (
-            <button
-              type="button"
-              className="btn btn-secondary justify-center"
-              onClick={() => setActiveView('diagnostics')}
-            >
-              {aiText('action_view_diagnostics', 'View diagnostics')}
-            </button>
-          )
+          <Link href="/admin/troubleshooting" className="btn btn-secondary justify-center">
+            {aiText('action_view_diagnostics', 'View diagnostics')}
+          </Link>
         )}
         actions={null}
         contentClassName="py-4 md:py-4"
@@ -2676,32 +2471,9 @@ function AiResourcesContent() {
             </p>
           </div>
         </div>
-        <div className="flex flex-col gap-2 border-t border-slate-200 pt-4 dark:border-slate-800 md:flex-row md:items-center md:justify-between">
-          <div className="flex flex-wrap gap-2" role="tablist" aria-label={aiText('workspace_tabs_label', 'Runtime resource workspace')}>
-            {workspaceTabs.map((tab) => (
-              <button
-                key={tab.id}
-                type="button"
-                role="tab"
-                aria-selected={activeView === tab.id}
-                className={`rounded-lg border px-3 py-2 text-left text-sm transition ${
-                  activeView === tab.id
-                    ? 'border-slate-950 bg-slate-950 text-white dark:border-white dark:bg-white dark:text-slate-950'
-                    : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300 hover:bg-slate-50 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-300 dark:hover:border-slate-700'
-                }`}
-                onClick={() => setActiveView(tab.id)}
-              >
-                <span className="block font-semibold">{tab.label}</span>
-                <span className={`mt-0.5 block text-xs ${activeView === tab.id ? 'text-white/70 dark:text-slate-600' : 'text-slate-500 dark:text-slate-400'}`}>
-                  {tab.detail}
-                </span>
-              </button>
-            ))}
-          </div>
-          <p className="max-w-xl text-xs leading-5 text-slate-500 dark:text-slate-400">
-            {aiText('workspace_boundary_notice', 'This workspace opens Cloud service-plane detail only. Local plugin prompts, routers, approval, and WordPress writes stay outside Cloud.')}
-          </p>
-        </div>
+        <p className="border-t border-slate-200 pt-4 text-xs leading-5 text-slate-500 dark:border-slate-800 dark:text-slate-400">
+          {aiText('workspace_boundary_notice', 'This page opens Cloud service-plane detail only. Local plugin prompts, routers, approval, and WordPress writes stay outside Cloud.')}
+        </p>
         {!providerFormOpen && message ? (
           <BackofficeStackCard className="border-emerald-200 bg-emerald-50 text-sm text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950/25 dark:text-emerald-200">
             {message}
@@ -2714,297 +2486,34 @@ function AiResourcesContent() {
         ) : null}
       </BackofficePrimaryPanel>
 
-      {activeView === 'overview' ? (
-        <BackofficeSectionPanel className="space-y-5">
-          <div className="grid gap-5 xl:grid-cols-[minmax(0,1.35fr)_minmax(20rem,0.65fr)]">
-            <div>
-              <div className="flex flex-col gap-2 md:flex-row md:items-end md:justify-between">
-                <div>
-                  <h2 className="text-lg font-semibold text-slate-950 dark:text-white">{aiText('overview_title', 'Operations overview')}</h2>
-                  <p className="mt-1 text-sm leading-6 text-slate-600 dark:text-slate-300">
-                    {aiText('overview_desc', 'Daily provider readiness and diagnostic follow-up. Detailed evidence stays in the workspace tabs.')}
-                  </p>
-                </div>
-                <button type="button" className="btn btn-secondary justify-center" onClick={() => void loadResources({ showLoading: false })}>
-                  {aiText('action_refresh', 'Refresh')}
-                </button>
-              </div>
-              <div className="mt-4 overflow-hidden rounded-xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-950">
-                <div className="grid divide-y divide-slate-200 dark:divide-slate-800 md:grid-cols-3 md:divide-x md:divide-y-0">
-                  <div className="p-4">
-                    <p className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500 dark:text-slate-400">
-                      {aiText('overview_ready_connections', 'Ready connections')}
-                    </p>
-                    <p className="mt-2 text-2xl font-semibold text-slate-950 dark:text-white">
-                      {readyModelSupplierCount + readyCapabilitySupplierCount}
-                    </p>
-                    <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                      {aiText('overview_total_entries', '{{count}} total entries', { count: String(data.connections.length) })}
-                    </p>
-                  </div>
-                  <div className="p-4">
-                    <p className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500 dark:text-slate-400">
-                      {aiText('overview_missing_config', 'Missing configuration')}
-                    </p>
-                    <p className={missingConfigCount ? 'mt-2 text-2xl font-semibold text-amber-600 dark:text-amber-300' : 'mt-2 text-2xl font-semibold text-slate-950 dark:text-white'}>
-                      {missingConfigCount}
-                    </p>
-                    <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                      {aiText('overview_disabled_count', '{{count}} disabled', { count: String(disabledConnectionCount) })}
-                    </p>
-                  </div>
-                  <div className="p-4">
-                    <p className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500 dark:text-slate-400">
-                      {aiText('overview_health_alerts', 'Health alerts')}
-                    </p>
-                    <p className={healthAlertCount + runtimeAlertCount ? 'mt-2 text-2xl font-semibold text-amber-600 dark:text-amber-300' : 'mt-2 text-2xl font-semibold text-slate-950 dark:text-white'}>
-                      {healthAlertCount + runtimeAlertCount}
-                    </p>
-                    <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                      {aiText('overview_runtime_evidence_window', 'runtime evidence window')}
-                    </p>
-                  </div>
-                </div>
-              </div>
-              <div className="mt-4 grid gap-3 lg:grid-cols-3">
-                {[
-                  {
-                    label: aiText('action_manage_connections', 'Manage suppliers'),
-                    detail: aiText('action_manage_connections_detail', 'Configure provider channels and model visibility.'),
-                    onClick: () => setActiveView('connections' as AIResourceView),
-                  },
-                  {
-                    label: aiText('action_inspect_mapping', 'Inspect runtime mapping'),
-                    detail: aiText('action_inspect_mapping_detail', 'Review capability to profile, provider, and model evidence.'),
-                    onClick: () => {
-                      setActiveDiagnosticsTab('matrix');
-                      setActiveView('diagnostics');
-                    },
-                  },
-                  {
-                    label: aiText('action_inspect_health', 'Inspect health'),
-                    detail: aiText('action_inspect_health_detail', 'Review provider/model health from runtime call records.'),
-                    onClick: () => {
-                      setActiveDiagnosticsTab('health');
-                      setActiveView('diagnostics');
-                    },
-                  },
-                ].map((action) => (
-                  <button
-                    key={action.label}
-                    type="button"
-                    className="rounded-xl border border-slate-200 bg-white p-4 text-left transition hover:border-slate-300 hover:bg-slate-50 dark:border-slate-800 dark:bg-slate-950 dark:hover:border-slate-700"
-                    onClick={action.onClick}
-                  >
-                    <span className="text-sm font-semibold text-slate-950 dark:text-white">{action.label}</span>
-                    <span className="mt-2 block text-xs leading-5 text-slate-500 dark:text-slate-400">{action.detail}</span>
-                  </button>
-                ))}
-              </div>
-              <p className="mt-3 text-xs leading-5 text-slate-500 dark:text-slate-400">
-                {aiText('overview_actions_boundary', 'Overview actions only open detail views. They do not change routing, prompts, abilities, or WordPress writes.')}
-              </p>
-            </div>
-            <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-900/35">
-              <div className="flex items-center justify-between gap-3">
-                <h2 className="text-sm font-semibold text-slate-950 dark:text-white">{aiText('attention_title', 'Attention')}</h2>
-                <BackofficeStatusBadge
-                  label={overviewAttentionItems.length ? aiText('status_attention', 'Needs attention') : aiText('status_ready', 'Ready')}
-                  status={overviewAttentionItems.length ? 'warning' : 'success'}
-                />
-              </div>
-              <div className="mt-4 space-y-3">
-                {overviewAttentionItems.length ? (
-                  overviewAttentionItems.map((item) => (
-                    <div key={item.key} className="rounded-lg border border-slate-200 bg-white p-3 dark:border-slate-800 dark:bg-slate-950">
-                      <div className="flex items-start justify-between gap-3">
-                        <div>
-                          <p className="text-sm font-semibold text-slate-950 dark:text-white">{item.label}</p>
-                          <p className="mt-1 text-xs leading-5 text-slate-500 dark:text-slate-400">{item.detail}</p>
-                        </div>
-                        <BackofficeStatusBadge label={aiText('status_review', 'Review')} status={item.tone} />
-                      </div>
-                    </div>
-                  ))
-                ) : (
-                  <div className="rounded-lg border border-slate-200 bg-white p-3 dark:border-slate-800 dark:bg-slate-950">
-                    <p className="text-sm font-semibold text-slate-950 dark:text-white">
-                      {aiText('attention_all_clear_label', 'No blocking provider issue in the selected window')}
-                    </p>
-                    <p className="mt-1 text-xs leading-5 text-slate-500 dark:text-slate-400">
-                      {aiText('attention_all_clear_detail', 'Runtime diagnostics still show metadata only.')}
-                    </p>
-                  </div>
-                )}
-              </div>
-            </div>
-          </div>
-        </BackofficeSectionPanel>
-      ) : null}
-
-      {activeView === 'diagnostics' ? (
-        <BackofficeSectionPanel>
-          <div>
-            <div>
-              <h2 className="text-lg font-semibold text-slate-950 dark:text-white">{aiText('diagnostics_title', 'Diagnostics')}</h2>
-              <p className="mt-1 text-sm leading-6 text-slate-600 dark:text-slate-300">
-                {aiText('diagnostics_desc', 'Read-only runtime evidence for provider troubleshooting. It does not edit suppliers, routing, prompts, abilities, or WordPress writes.')}
-              </p>
-            </div>
-          </div>
-          <div className="mt-4 space-y-3">
-            {runtimeTelemetryError ? (
-              <BackofficeStackCard className="border-amber-200 bg-amber-50 text-sm text-amber-800 dark:border-amber-900 dark:bg-amber-950/25 dark:text-amber-200">
-                {runtimeTelemetryError}
-              </BackofficeStackCard>
-            ) : null}
-            {runtimeTelemetry ? (
-              <>
-                <BackofficeMetricStrip
-                  columnsClassName="md:grid-cols-2 xl:grid-cols-5"
-                  items={[
-                    {
-                      label: aiText('runtime_telemetry_status', 'Runtime telemetry'),
-                      value: translateRuntimeTelemetryText(runtimeTelemetryStatus),
-                      detail: translateRuntimeTelemetryText(runtimeTelemetry.alertSummary.summary),
-                      toneClassName:
-                        runtimeTelemetryStatus === 'error'
-                          ? 'text-rose-600 dark:text-rose-400'
-                          : runtimeTelemetryStatus === 'warning'
-                            ? 'text-amber-600 dark:text-amber-400'
-                            : runtimeTelemetryStatus === 'ok'
-                              ? 'text-emerald-600 dark:text-emerald-400'
-                              : undefined,
-                      size: 'compact',
-                    },
-                    {
-                      label: aiText('runtime_telemetry_runs', 'Runs'),
-                      value: formatInteger(runtimeTelemetry.totals.runs),
-                      detail: aiText('runtime_telemetry_provider_calls_detail', '{{count}} provider calls', {
-                        count: formatInteger(runtimeTelemetry.totals.providerCalls),
-                      }),
-                      size: 'compact',
-                    },
-                    {
-                      label: aiText('runtime_telemetry_meter_coverage', 'Meter coverage'),
-                      value: formatPreciseRate(runtimeTelemetry.totals.meteredRunCoverageRate),
-                      toneClassName:
-                        runtimeTelemetry.totals.meteredRunCoverageRate < 1
-                          ? 'text-amber-600 dark:text-amber-400'
-                          : undefined,
-                      size: 'compact',
-                    },
-                    {
-                      label: aiText('runtime_telemetry_provider_coverage', 'Provider coverage'),
-                      value: formatPreciseRate(runtimeTelemetry.totals.providerCallRunCoverageRate),
-                      toneClassName:
-                        runtimeTelemetry.totals.providerCallRunCoverageRate < 1
-                          ? 'text-amber-600 dark:text-amber-400'
-                          : undefined,
-                      size: 'compact',
-                    },
-                    {
-                      label: aiText('runtime_telemetry_meter_events', 'Meter events'),
-                      value: formatInteger(runtimeTelemetry.totals.usageMeterEvents),
-                      detail: runtimeTelemetry.generatedAt ? formatDate(runtimeTelemetry.generatedAt) : '',
-                      size: 'compact',
-                    },
-                  ]}
-                />
-                {runtimeTelemetry.alertSummary.alerts.length ? (
-                  <div className="grid gap-3 xl:grid-cols-2">
-                    {runtimeTelemetry.alertSummary.alerts.slice(0, 2).map((alert) => (
-                      <BackofficeStackCard key={alert.code} className="space-y-2">
-                        <div className="flex items-start justify-between gap-3">
-                          <div>
-                            <p className="text-sm font-semibold text-slate-950 dark:text-white">
-                              {translateRuntimeTelemetryText(alert.title)}
-                            </p>
-                            <p className="mt-1 text-sm leading-6 text-slate-600 dark:text-slate-300">
-                              {translateRuntimeTelemetryText(alert.summary)}
-                            </p>
-                          </div>
-                          <BackofficeStatusBadge
-                            label={alert.severity || runtimeTelemetryStatus}
-                            status={severityTone(alert.severity || runtimeTelemetryStatus)}
-                          />
-                        </div>
-                        <p className="text-xs text-slate-500 dark:text-slate-400">
-                          {translateRuntimeTelemetryText(alert.suggestedAction)}
-                        </p>
-                      </BackofficeStackCard>
-                    ))}
-                  </div>
-                ) : null}
-                <p className="text-xs leading-5 text-slate-500 dark:text-slate-400">
-                  {aiText(
-                    'runtime_telemetry_boundary_notice',
-                    'Evidence source: run_records, provider_call_records, and usage_meter_events. This summary is read-only and excludes prompts, results, provider secrets, and WordPress write controls.'
-                  )}
-                </p>
-              </>
-            ) : null}
-          </div>
-          <div className="mt-4 flex flex-wrap gap-2">
-            <button
-              type="button"
-              className={`rounded-full border px-3 py-1 text-xs font-semibold transition ${
-                activeDiagnosticsTab === 'matrix'
-                  ? 'border-slate-950 bg-slate-950 text-white dark:border-white dark:bg-white dark:text-slate-950'
-                  : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300 hover:bg-slate-50 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-300 dark:hover:border-slate-700'
-              }`}
-              onClick={() => setActiveDiagnosticsTab('matrix')}
-            >
-              {aiText('tab_matrix', 'Capability Matrix')}
-            </button>
-            <button
-              type="button"
-              className={`rounded-full border px-3 py-1 text-xs font-semibold transition ${
-                activeDiagnosticsTab === 'usage'
-                  ? 'border-slate-950 bg-slate-950 text-white dark:border-white dark:bg-white dark:text-slate-950'
-                  : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300 hover:bg-slate-50 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-300 dark:hover:border-slate-700'
-              }`}
-              onClick={() => setActiveDiagnosticsTab('usage')}
-            >
-              {aiText('tab_usage', 'Feature usage')}
-            </button>
-            <button
-              type="button"
-              className={`rounded-full border px-3 py-1 text-xs font-semibold transition ${
-                activeDiagnosticsTab === 'health'
-                  ? 'border-slate-950 bg-slate-950 text-white dark:border-white dark:bg-white dark:text-slate-950'
-                  : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300 hover:bg-slate-50 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-300 dark:hover:border-slate-700'
-              }`}
-              onClick={() => setActiveDiagnosticsTab('health')}
-            >
-              {aiText('tab_health', 'Model health')}
-            </button>
-          </div>
-        </BackofficeSectionPanel>
-      ) : null}
-
       {activeView === 'connections' ? (
         <>
           <BackofficeSectionPanel>
         <div className="flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
-          <div className="flex flex-wrap gap-2">
-            {[
-              ['model', aiText('supplier_tab_model', 'Model suppliers')],
-              ['capability', aiText('supplier_tab_capability', 'Capability suppliers')],
-            ].map(([tabId, label]) => (
-              <button
-                key={tabId}
-                type="button"
-                className={`rounded-full border px-4 py-2 text-sm font-semibold transition ${
-                  activeSupplierTab === tabId
-                    ? 'border-slate-950 bg-slate-950 text-white dark:border-white dark:bg-white dark:text-slate-950'
-                    : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300 hover:bg-slate-50 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-300 dark:hover:border-slate-700'
-                }`}
-                onClick={() => setActiveSupplierTab(tabId as SupplierSettingsTab)}
-              >
-                {label}
-              </button>
-            ))}
+          <div className="flex flex-col gap-2">
+            <span className="text-xs font-semibold text-slate-600 dark:text-slate-300">
+              {aiText('field_supplier_type_filter', 'Supplier type')}
+            </span>
+            <div
+              className="flex flex-wrap gap-2"
+              role="tablist"
+              aria-label={aiText('supplier_type_tabs_label', 'Supplier type')}
+            >
+              {([
+                ['model', aiText('supplier_filter_model', 'Model suppliers')],
+                ['capability', aiText('supplier_filter_capability', 'Capability suppliers')],
+              ] as Array<[SupplierTypeFilter, string]>).map(([value, label]) => (
+                <BackofficeFilterPill
+                  key={value}
+                  role="tab"
+                  aria-selected={supplierTypeFilter === value}
+                  active={supplierTypeFilter === value}
+                  onClick={() => setSupplierTypeFilter(value)}
+                >
+                  {label}
+                </BackofficeFilterPill>
+              ))}
+            </div>
           </div>
           <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center xl:justify-end">
             <label className="grid min-w-[16rem] gap-1 sm:w-[22rem]">
@@ -3016,19 +2525,16 @@ function AiResourcesContent() {
                 placeholder={aiText('placeholder_search_connections', 'Name, provider, model, capability')}
               />
             </label>
-            {activeSupplierTab === 'model' ? (
-              <button type="button" className="btn btn-primary justify-center" onClick={openNewProviderConnection}>
-                {aiText('action_add_model_supplier', 'Add model supplier')}
-              </button>
-            ) : (
-              <button type="button" className="btn btn-primary justify-center" onClick={() => setCapabilityAddDialogOpen(true)}>
-                {aiText('action_add_capability_supplier', 'Add capability supplier')}
-              </button>
-            )}
+            <button type="button" className="btn btn-primary justify-center" onClick={openNewProviderConnection}>
+              {aiText('action_add_model_supplier', 'Add model supplier')}
+            </button>
+            <button type="button" className="btn btn-secondary justify-center" onClick={() => setCapabilityAddDialogOpen(true)}>
+              {aiText('action_add_capability_supplier', 'Add capability supplier')}
+            </button>
           </div>
         </div>
 
-        {activeSupplierTab === 'model' || providerFormOpen ? (
+        {supplierTypeFilter === 'model' || providerFormOpen ? (
           <>
         {providerFormOpen ? (
           <div
@@ -3068,7 +2574,7 @@ function AiResourcesContent() {
                   type="button"
                   className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-slate-200 bg-white text-sm font-semibold text-slate-500 transition hover:border-slate-300 hover:bg-slate-50 hover:text-slate-900 disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-400 dark:hover:border-slate-700 dark:hover:text-white"
                   disabled={savingConnection}
-                  onClick={() => setProviderFormOpen(false)}
+                  onClick={closeProviderForm}
                   aria-label={aiText('action_close_dialog', 'Close')}
                 >
                   <span aria-hidden="true">X</span>
@@ -3664,7 +3170,7 @@ function AiResourcesContent() {
                       type="button"
                       className="btn btn-secondary"
                       disabled={savingConnection}
-                      onClick={() => setProviderFormOpen(false)}
+                      onClick={closeProviderForm}
                     >
                       {aiText('action_cancel', 'Cancel')}
                     </button>
@@ -3850,7 +3356,9 @@ function AiResourcesContent() {
           ))}
         </div>
           </>
-        ) : (
+        ) : null}
+
+        {supplierTypeFilter === 'capability' ? (
           <div className="mt-4 space-y-4">
             <div className="overflow-hidden rounded-xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-950">
               <div className="overflow-x-auto">
@@ -4160,424 +3668,11 @@ function AiResourcesContent() {
               </div>
             ) : null}
           </div>
-        )}
-          </BackofficeSectionPanel>
-        </>
-      ) : null}
-
-      {activeDiagnosticView === 'usage' ? (
-        <BackofficeSectionPanel>
-        <h2 className="text-lg font-semibold text-slate-950 dark:text-white">{aiText('usage_title', 'Feature usage')}</h2>
-        <p className="mt-1 text-sm leading-6 text-slate-600 dark:text-slate-300">
-          {aiText('usage_desc', 'Feature-to-model evidence from Cloud runtime metadata. Prompt text, result content, and provider secrets are not exposed.')}
-        </p>
-        <div className="mt-4 overflow-hidden rounded-lg border border-slate-200 dark:border-slate-800">
-          <div className="grid grid-cols-[1.1fr_8rem_1fr_1.2fr_1fr_1fr] gap-3 border-b border-slate-200 bg-slate-50 px-4 py-3 text-xs font-semibold uppercase tracking-[0.16em] text-slate-500 dark:border-slate-800 dark:bg-slate-900/70 dark:text-slate-400">
-            <span>{aiText('column_feature', 'Feature')}</span>
-            <span>{aiText('column_status', 'Status')}</span>
-            <span>{aiText('column_selection', 'Selection')}</span>
-            <span>{aiText('column_provider_model', 'Provider / model')}</span>
-            <span>{aiText('column_last_run', 'Last run')}</span>
-            <span>{aiText('column_cost_latency', 'Cost / latency')}</span>
-          </div>
-          {(data.feature_model_usage || []).map((row) => (
-            <div
-              key={row.feature_id}
-              className="grid grid-cols-[1.1fr_8rem_1fr_1.2fr_1fr_1fr] gap-3 border-b border-slate-200 px-4 py-3 text-sm last:border-b-0 dark:border-slate-800"
-            >
-              <div>
-                <div className="font-medium text-slate-950 dark:text-white">{row.label}</div>
-                <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                  {row.surface} · {row.write_posture}
-                </div>
-              </div>
-              <BackofficeStatusBadge label={row.status} status={statusTone(row.status)} />
-              <div className="text-slate-600 dark:text-slate-300">
-                <div>{row.selection_owner || aiText('status_not_observed', 'not observed')}</div>
-                <details className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                  <summary className="cursor-pointer font-medium hover:text-slate-900 dark:hover:text-white">
-                    {aiText('technical_details', 'Technical details')}
-                  </summary>
-                  <div className="mt-1 break-all font-mono">{row.profile_id || '-'}</div>
-                </details>
-              </div>
-              <div className="text-slate-600 dark:text-slate-300">
-                <div>{row.provider_id || '-'} / {row.model_id || '-'}</div>
-                <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                  {labelList(row.connection_ids)} · {labelList(row.connection_sources)}
-                </div>
-              </div>
-              <div className="text-slate-600 dark:text-slate-300">
-                <div>{row.last_run?.status || aiText('status_not_observed', 'not observed')}</div>
-                {row.last_run?.run_id ? (
-                  <details className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                    <summary className="cursor-pointer font-medium hover:text-slate-900 dark:hover:text-white">
-                      {aiText('technical_details', 'Technical details')}
-                    </summary>
-                    <div className="mt-1 break-all font-mono">{row.last_run.run_id}</div>
-                  </details>
-                ) : null}
-              </div>
-              <div className="text-slate-600 dark:text-slate-300">
-                <div>{aiText('credits_value', '{{value}} credits', { value: formatCost(row.last_provider_call?.cost) })}</div>
-                <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                  {row.last_provider_call?.latency_ms ? `${row.last_provider_call.latency_ms}ms` : '-'}
-                  {row.last_provider_call?.error_code ? ` · ${row.last_provider_call.error_code}` : ''}
-                </div>
-              </div>
-            </div>
-          ))}
-        </div>
-        <div className="mt-3 text-xs leading-5 text-slate-500 dark:text-slate-400">
-          {aiText('usage_evidence_notice', 'Evidence source: run_records and provider_call_records. This view is read-only and does not change routing, prompts, abilities, or WordPress writes.')}
-        </div>
-        </BackofficeSectionPanel>
-      ) : null}
-
-      {activeDiagnosticView === 'health' ? (
-        <BackofficeSectionPanel>
-        <h2 className="text-lg font-semibold text-slate-950 dark:text-white">{aiText('health_title', 'Model health')}</h2>
-        <p className="mt-1 text-sm leading-6 text-slate-600 dark:text-slate-300">
-          {aiText('health_desc', 'Provider/model health from provider_call_records. Metadata only: prompts, results, and provider secrets are not exposed.')}
-        </p>
-        <div className="mt-4 flex flex-wrap gap-2">
-          {healthWindows.map((windowItem) => (
-            <BackofficeFilterPill
-              key={windowItem.window_id}
-              active={activeHealthWindow?.window_id === windowItem.window_id}
-              onClick={() => setActiveHealthWindowId(windowItem.window_id)}
-            >
-              {healthWindowLabel(windowItem)}
-            </BackofficeFilterPill>
-          ))}
-        </div>
-        <div className="mt-4 grid gap-3 lg:grid-cols-4">
-          <BackofficeStackCard>
-            <div className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500 dark:text-slate-400">{aiText('health_alerts', 'Alerts')}</div>
-            <div className="mt-2 text-2xl font-semibold text-slate-950 dark:text-white">
-              {activeHealthWindow?.alert_summary?.alert_count || 0}
-            </div>
-            <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">{aiText('health_readonly_diagnostics', 'read-only diagnostics')}</div>
-          </BackofficeStackCard>
-          <BackofficeStackCard>
-            <div className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500 dark:text-slate-400">{aiText('health_errors', 'Errors')}</div>
-            <div className="mt-2 text-2xl font-semibold text-slate-950 dark:text-white">
-              {activeHealthWindow?.alert_summary?.severity_counts?.error || 0}
-            </div>
-            <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">{aiText('health_all_calls_failed', 'all calls failed')}</div>
-          </BackofficeStackCard>
-          <BackofficeStackCard>
-            <div className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500 dark:text-slate-400">{aiText('health_warnings', 'Warnings')}</div>
-            <div className="mt-2 text-2xl font-semibold text-slate-950 dark:text-white">
-              {activeHealthWindow?.alert_summary?.severity_counts?.warning || 0}
-            </div>
-            <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">{aiText('health_warning_detail', 'latency, success, or cost')}</div>
-          </BackofficeStackCard>
-          <BackofficeStackCard>
-            <div className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500 dark:text-slate-400">{aiText('health_window', 'Window')}</div>
-            <div className="mt-2 text-2xl font-semibold text-slate-950 dark:text-white">
-              {activeHealthWindow?.hours || 24}h
-            </div>
-            <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-              {aiText('health_call_limit', 'limit {{count}} calls', { count: String(data.provider_model_health?.recent_call_limit || 200) })}
-            </div>
-          </BackofficeStackCard>
-        </div>
-        {activeHealthWindow?.alert_summary?.alerts?.length ? (
-          <div className="mt-4 overflow-hidden rounded-lg border border-slate-200 dark:border-slate-800">
-            <div className="grid grid-cols-[8rem_1fr_1fr_1fr] gap-3 border-b border-slate-200 bg-slate-50 px-4 py-3 text-xs font-semibold uppercase tracking-[0.16em] text-slate-500 dark:border-slate-800 dark:bg-slate-900/70 dark:text-slate-400">
-              <span>{aiText('column_severity', 'Severity')}</span>
-              <span>{aiText('column_provider_model', 'Provider / model')}</span>
-              <span>{aiText('column_signal', 'Signal')}</span>
-              <span>{aiText('column_evidence', 'Evidence')}</span>
-            </div>
-            {activeHealthWindow.alert_summary.alerts.map((alert, index) => (
-              <div
-                key={`${alert.code}-${alert.provider_id}-${alert.model_id}-${index}`}
-                className="grid grid-cols-[8rem_1fr_1fr_1fr] gap-3 border-b border-slate-200 px-4 py-3 text-sm last:border-b-0 dark:border-slate-800"
-              >
-                <BackofficeStatusBadge label={alert.severity} status={severityTone(alert.severity)} />
-                <div className="text-slate-600 dark:text-slate-300">
-                  <div>{alert.provider_id || '-'}</div>
-                  <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">{alert.model_id || '-'}</div>
-                </div>
-                <div className="text-slate-600 dark:text-slate-300">
-                  <div>{alert.code}</div>
-                  <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">{alert.message}</div>
-                </div>
-                <div className="text-slate-600 dark:text-slate-300">
-                  <div>{aiText('success_rate_value', '{{value}} success', { value: formatRate(alert.evidence?.success_rate) })}</div>
-                  <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                    {alert.evidence?.p95_latency_ms ? `${alert.evidence.p95_latency_ms}ms p95` : '-'} · {aiText('credits_value', '{{value}} credits', { value: formatCost(alert.evidence?.cost) })}
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>
         ) : null}
-        <div className="mt-4 overflow-hidden rounded-lg border border-slate-200 dark:border-slate-800">
-          <div className="grid grid-cols-[1.2fr_8rem_1fr_1fr_1fr_1.2fr] gap-3 border-b border-slate-200 bg-slate-50 px-4 py-3 text-xs font-semibold uppercase tracking-[0.16em] text-slate-500 dark:border-slate-800 dark:bg-slate-900/70 dark:text-slate-400">
-            <span>{aiText('column_provider_model', 'Provider / model')}</span>
-            <span>{aiText('column_status', 'Status')}</span>
-            <span>{aiText('column_calls', 'Calls')}</span>
-            <span>{aiText('column_latency', 'Latency')}</span>
-            <span>{aiText('column_tokens_cost', 'Tokens / cost')}</span>
-            <span>{aiText('column_last_error', 'Last error')}</span>
-          </div>
-          {(activeHealthWindow?.rows || []).map((row) => (
-            <div
-              key={`${row.provider_id}-${row.model_id}`}
-              className="grid grid-cols-[1.2fr_8rem_1fr_1fr_1fr_1.2fr] gap-3 border-b border-slate-200 px-4 py-3 text-sm last:border-b-0 dark:border-slate-800"
-            >
-              <div>
-                <div className="font-medium text-slate-950 dark:text-white">{row.provider_id || '-'}</div>
-                <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">{row.model_id || '-'}</div>
-              </div>
-              <BackofficeStatusBadge label={row.status} status={healthTone(row.status)} />
-              <div className="text-slate-600 dark:text-slate-300">
-                <div>{aiText('calls_rate_value', '{{calls}} calls · {{rate}}', {
-                  calls: String(row.call_count),
-                  rate: formatRate(row.success_rate),
-                })}</div>
-                <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                  {aiText('ok_errors_value', '{{ok}} ok · {{errors}} errors', {
-                    ok: String(row.success_count),
-                    errors: String(row.error_count),
-                  })}
-                </div>
-              </div>
-              <div className="text-slate-600 dark:text-slate-300">
-                <div>{typeof row.avg_latency_ms === 'number' ? `${row.avg_latency_ms}ms avg` : '-'}</div>
-                <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                  {typeof row.p95_latency_ms === 'number' ? `${row.p95_latency_ms}ms p95` : '-'}
-                </div>
-              </div>
-              <div className="text-slate-600 dark:text-slate-300">
-                <div>{aiText('tokens_value', '{{count}} tokens', { count: String(row.tokens_in + row.tokens_out) })}</div>
-                <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                  {aiText('health_cost_retry_fallback', '{{cost}} credits · {{retries}} retries · {{fallback}} fallback', {
-                    cost: formatCost(row.cost),
-                    retries: String(row.retry_count),
-                    fallback: String(row.fallback_count),
-                  })}
-                </div>
-              </div>
-              <div className="text-slate-600 dark:text-slate-300">
-                <div>{row.last_error_code || '-'}</div>
-                <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                  {row.last_observed_at || '-'}
-                </div>
-              </div>
-            </div>
-          ))}
-          {activeHealthWindow?.rows?.length ? null : (
-            <div className="px-4 py-6 text-sm text-slate-500 dark:text-slate-400">
-              {aiText('health_empty', 'No provider call records observed in the current evidence window.')}
-            </div>
-          )}
-        </div>
-        <div className="mt-3 text-xs leading-5 text-slate-500 dark:text-slate-400">
-          {aiText('health_evidence_notice', 'Evidence source: {{source}}; recent call limit {{limit}}. Health alerts are diagnostic only and do not change routing, prompts, abilities, or WordPress writes.', {
-            source: data.provider_model_health?.source || 'provider_call_records',
-            limit: String(data.provider_model_health?.recent_call_limit || 200),
-          })}
-        </div>
-        </BackofficeSectionPanel>
-      ) : null}
-
-      {activeDiagnosticView === 'matrix' ? (
-        <>
-          <BackofficeSectionPanel>
-        <h2 className="text-lg font-semibold text-slate-950 dark:text-white">{aiText('runtime_resolution_title', 'Runtime resolution')}</h2>
-        <p className="mt-1 text-sm leading-6 text-slate-600 dark:text-slate-300">
-          {aiText('runtime_resolution_desc', 'Current Cloud runtime resolution by capability. This is read-only operator evidence, not a router editor.')}
-        </p>
-        <div className="mt-4 overflow-hidden rounded-lg border border-slate-200 dark:border-slate-800">
-          <div className="grid grid-cols-[1fr_8rem_1fr_1.2fr_1fr] gap-3 border-b border-slate-200 bg-slate-50 px-4 py-3 text-xs font-semibold uppercase tracking-[0.16em] text-slate-500 dark:border-slate-800 dark:bg-slate-900/70 dark:text-slate-400">
-            <span>{aiText('column_capability', 'Capability')}</span>
-            <span>{aiText('column_status', 'Status')}</span>
-            <span>{aiText('column_selection', 'Selection')}</span>
-            <span>{aiText('column_provider_model', 'Provider / model')}</span>
-            <span>{aiText('column_connections', 'Connections')}</span>
-          </div>
-          {runtimeResolutionRows.map((row) => (
-            <div
-              key={`runtime-resolution-${row.capability_id}`}
-              className="grid grid-cols-[1fr_8rem_1fr_1.2fr_1fr] gap-3 border-b border-slate-200 px-4 py-3 text-sm last:border-b-0 dark:border-slate-800"
-            >
-              <div>
-                <div className="font-medium text-slate-950 dark:text-white">{row.label}</div>
-                <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                  {row.write_posture}
-                </div>
-              </div>
-              <BackofficeStatusBadge label={row.status} status={statusTone(row.status)} />
-              <div className="text-slate-600 dark:text-slate-300">
-                <div>{row.selection_owner || aiText('status_not_observed', 'not observed')}</div>
-                <details className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                  <summary className="cursor-pointer font-medium hover:text-slate-900 dark:hover:text-white">
-                    {aiText('technical_details', 'Technical details')}
-                  </summary>
-                  <div className="mt-1 break-all font-mono">{row.selected_profile_id || '-'}</div>
-                </details>
-              </div>
-              <div className="text-slate-600 dark:text-slate-300">
-                <div>{row.selected_provider_id || '-'} / {row.selected_model_id || '-'}</div>
-                <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                  {aiText('adapter_status', 'adapter {{status}}', {
-                    status: row.runtime_provider_available ? aiText('status_available', 'available') : aiText('status_not_loaded', 'not loaded'),
-                  })}
-                </div>
-              </div>
-              <div className="text-slate-600 dark:text-slate-300">
-                <div>{labelList(row.ready_connection_ids)}</div>
-                <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                  {aiText('selected_connections', 'selected {{connections}}', { connections: labelList(row.selected_connection_ids) })}
-                </div>
-              </div>
-            </div>
-          ))}
-        </div>
-          </BackofficeSectionPanel>
-
-          <BackofficeSectionPanel>
-        <h2 className="text-lg font-semibold text-slate-950 dark:text-white">{aiText('matrix_title', 'Capability Matrix')}</h2>
-        <p className="mt-1 text-sm leading-6 text-slate-600 dark:text-slate-300">
-          {aiText('matrix_desc', 'Cloud runtime mapping from capability to profile, provider, model, and write posture. This is operator detail, not a WordPress ability editor.')}
-        </p>
-        <div className="mt-4 overflow-hidden rounded-lg border border-slate-200 dark:border-slate-800">
-          <div className="grid grid-cols-[1fr_8rem_1.1fr_1.2fr_1fr] gap-3 border-b border-slate-200 bg-slate-50 px-4 py-3 text-xs font-semibold uppercase tracking-[0.16em] text-slate-500 dark:border-slate-800 dark:bg-slate-900/70 dark:text-slate-400">
-            <span>{aiText('column_capability', 'Capability')}</span>
-            <span>{aiText('column_status', 'Status')}</span>
-            <span>{aiText('column_selection', 'Selection')}</span>
-            <span>{aiText('column_provider_model', 'Provider / model')}</span>
-            <span>{aiText('column_write_posture', 'Write posture')}</span>
-          </div>
-          {matrixRows.map((row) => (
-            <div
-              key={row.capability_id}
-              className="grid grid-cols-[1fr_8rem_1.1fr_1.2fr_1fr] gap-3 border-b border-slate-200 px-4 py-3 text-sm last:border-b-0 dark:border-slate-800"
-            >
-              <div>
-                <div className="font-medium text-slate-950 dark:text-white">{row.label}</div>
-                <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                  {labelList(row.used_by)}
-                </div>
-              </div>
-              <BackofficeStatusBadge label={row.status} status={statusTone(row.status)} />
-              <div className="text-slate-600 dark:text-slate-300">
-                <div>{row.selection_owner || aiText('status_not_observed', 'not observed')}</div>
-                <details className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                  <summary className="cursor-pointer font-medium hover:text-slate-900 dark:hover:text-white">
-                    {aiText('technical_details', 'Technical details')}
-                  </summary>
-                  <div className="mt-1 break-all font-mono">
-                    {row.default_profile_id}
-                    {row.profiles.length ? ` · ${profileIds(row.profiles)}` : ''}
-                  </div>
-                </details>
-              </div>
-              <div className="text-slate-600 dark:text-slate-300">{profileModelSummary(row.profiles)}</div>
-              <div className="text-slate-600 dark:text-slate-300">
-                <div>{row.write_posture}</div>
-                <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">{row.selection_owner}</div>
-              </div>
-            </div>
-          ))}
-        </div>
-          </BackofficeSectionPanel>
-
-          <BackofficeSectionPanel>
-        <h2 className="text-lg font-semibold text-slate-950 dark:text-white">{aiText('runtime_profiles_title', 'Runtime configurations')}</h2>
-        <div className="mt-4 grid gap-3">
-          {data.runtime_profiles.map((profile) => (
-            <BackofficeStackCard key={profile.profile_id} className="grid gap-3 lg:grid-cols-[1fr_9rem_1.2fr_1fr] lg:items-center">
-              <div>
-                <div className="font-semibold text-slate-950 dark:text-white">
-                  {profile.selected_provider_id || '-'} / {profile.selected_model_id || '-'}
-                </div>
-                <div className="mt-1 text-sm text-slate-500 dark:text-slate-400">
-                  {profile.kind} · {labelList(profile.used_by)}
-                  {profile.selected_for?.length ? ` · ${aiText('selected_for', 'selected for {{values}}', { values: labelList(profile.selected_for) })}` : ''}
-                </div>
-                <details className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                  <summary className="cursor-pointer font-medium hover:text-slate-900 dark:hover:text-white">
-                    {aiText('technical_details', 'Technical details')}
-                  </summary>
-                  <div className="mt-1 break-all font-mono">{profile.profile_id}</div>
-                </details>
-              </div>
-              <BackofficeStatusBadge label={profile.status} status={statusTone(profile.status)} />
-              <div className="text-sm leading-6 text-slate-600 dark:text-slate-300">
-                {profile.selected_provider_id} / {profile.selected_model_id}
-              </div>
-              <div className="text-sm leading-6 text-slate-600 dark:text-slate-300">
-                {profile.selection_owner}
-              </div>
-            </BackofficeStackCard>
-          ))}
-        </div>
-          </BackofficeSectionPanel>
-
-          <BackofficeSectionPanel>
-        <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
-          <div>
-            <h2 className="text-lg font-semibold text-slate-950 dark:text-white">{aiText('recent_evidence_title', 'Recent runtime evidence')}</h2>
-            <p className="mt-1 text-sm leading-6 text-slate-600 dark:text-slate-300">
-              {aiText('recent_evidence_desc', 'Last observed run metadata for each runtime configuration. Prompt and result content are not exposed here.')}
-            </p>
-          </div>
-          <BackofficeStatusBadge
-            label={data.recent_runtime_evidence?.content_exposed ? aiText('status_review', 'Review') : aiText('status_metadata_only', 'Metadata only')}
-            status={data.recent_runtime_evidence?.content_exposed ? 'warning' : 'success'}
-          />
-        </div>
-        <div className="mt-4 grid gap-3">
-          {data.runtime_profiles.map((profile) => {
-            const evidence = evidenceSummary(profile);
-            return (
-              <BackofficeStackCard key={`evidence-${profile.profile_id}`} className="grid gap-3 lg:grid-cols-[1fr_8rem_1.2fr_1fr] lg:items-center">
-                <div>
-                  <div className="font-semibold text-slate-950 dark:text-white">
-                    {evidence?.provider_id || profile.selected_provider_id || '-'} / {evidence?.model_id || profile.selected_model_id || '-'}
-                  </div>
-                  <div className="mt-1 text-sm text-slate-500 dark:text-slate-400">
-                    {evidence?.status || aiText('no_recent_run', 'No recent run')}
-                  </div>
-                  <details className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                    <summary className="cursor-pointer font-medium hover:text-slate-900 dark:hover:text-white">
-                      {aiText('technical_details', 'Technical details')}
-                    </summary>
-                    <div className="mt-1 space-y-1 break-all font-mono">
-                      <div>{profile.profile_id}</div>
-                      <div>{evidence?.run_id || '-'}</div>
-                    </div>
-                  </details>
-                </div>
-                <BackofficeStatusBadge
-                  label={evidence?.status || aiText('status_not_observed', 'not observed')}
-                  status={evidence?.status === 'failed' ? 'error' : evidence?.status === 'succeeded' ? 'success' : 'disabled'}
-                />
-                <div className="text-sm leading-6 text-slate-600 dark:text-slate-300">
-                  {evidence?.provider_id || '-'} / {evidence?.model_id || '-'}
-                </div>
-                <div className="text-sm leading-6 text-slate-600 dark:text-slate-300">
-                  {evidence?.trace_id ? (
-                    <details className="text-xs text-slate-500 dark:text-slate-400">
-                      <summary className="cursor-pointer font-medium hover:text-slate-900 dark:hover:text-white">
-                        {aiText('technical_details', 'Technical details')}
-                      </summary>
-                      <div className="mt-1 break-all font-mono">{evidence.trace_id}</div>
-                    </details>
-                  ) : '-'}
-                </div>
-              </BackofficeStackCard>
-            );
-          })}
-        </div>
           </BackofficeSectionPanel>
         </>
       ) : null}
+
       </BackofficePageStack>
   );
 }

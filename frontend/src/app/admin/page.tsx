@@ -157,7 +157,7 @@ function normalizeOverview(raw: any): AdminOverview {
   const guard = runtimeDiagnostics?.guard ?? {};
   const recentUsage = raw?.recent_usage ?? {};
   const totals = recentUsage?.totals ?? {};
-  const runtimeTelemetry = raw?.runtime_telemetry ?? raw?.hosted_model_governance ?? {};
+  const runtimeTelemetry = raw?.runtime_telemetry ?? {};
   const runtimeTelemetryAlertSummary = runtimeTelemetry?.alert_summary ?? {};
   const runtimeTelemetryDailyDigest = runtimeTelemetryAlertSummary?.daily_digest ?? {};
   const platformCredit = raw?.platform_credit_summary ?? {};
@@ -295,9 +295,7 @@ function normalizeOverview(raw: any): AdminOverview {
       status: String(runtimeTelemetryAlertSummary.status ?? 'inactive'),
       summary: String(runtimeTelemetryAlertSummary.summary ?? ''),
       alertCount: Number(runtimeTelemetryAlertSummary.alert_count ?? 0),
-      href: String(runtimeTelemetryAlertSummary.href ?? '').startsWith('/admin/hosted-models')
-        ? '/admin/ai-resources?view=diagnostics'
-        : String(runtimeTelemetryAlertSummary.href ?? '/admin/ai-resources?view=diagnostics'),
+      href: String(runtimeTelemetryAlertSummary.href ?? '/admin/troubleshooting') || '/admin/troubleshooting',
       dailyDigest: {
         runs: Number(runtimeTelemetryDailyDigest.runs ?? 0),
         providerCalls: Number(runtimeTelemetryDailyDigest.provider_calls ?? 0),
@@ -597,14 +595,14 @@ function AdminOverviewContent() {
   const attentionNotes = operatorWatchItems.slice(0, 2);
   const primaryActionHref =
     firstOperatorWatchScope.startsWith('runtime.telemetry')
-      ? '/admin/ai-resources?view=diagnostics'
+      ? '/admin/troubleshooting'
       : firstOperatorWatchScope.startsWith('runtime.') || firstOperatorWatchScope.startsWith('request.')
         ? '/admin/accounts'
         : statusTone === 'error' || commercialItems.length > 0 || overview.expiringSubscriptions.in7Days > 0
           ? '/admin/coverage'
           : '/admin/accounts';
   const primaryActionLabel =
-    primaryActionHref === '/admin/ai-resources?view=diagnostics'
+    primaryActionHref === '/admin/troubleshooting'
       ? t('admin.home_primary_action_runtime_telemetry', {}, 'Inspect runtime telemetry')
       : primaryActionHref === '/admin/coverage'
       ? t('admin.home_primary_action_coverage', {}, 'Review service status')
@@ -625,7 +623,7 @@ function AdminOverviewContent() {
       detail: t('admin.home_quick_customers_desc', {}, 'Account, site, package, and support context.'),
     },
     {
-      href: '/admin/ai-resources?view=diagnostics',
+      href: '/admin/troubleshooting',
       label: t('admin.home_quick_runtime_diagnostics', {}, 'Runtime diagnostics'),
       detail: t('admin.home_quick_runtime_diagnostics_desc', {}, 'Provider telemetry, meter coverage, and runtime evidence.'),
     },
@@ -1232,7 +1230,7 @@ function AdminOverviewContent() {
               {t('admin.home_section_runtime_title', {}, 'Which runtime signals need follow-up?')}
             </h2>
           </div>
-          <Link href="/admin/ai-resources?view=diagnostics" className="text-sm font-medium text-blue-600 hover:text-blue-700 dark:text-blue-300 dark:hover:text-blue-200">
+          <Link href="/admin/troubleshooting" className="text-sm font-medium text-blue-600 hover:text-blue-700 dark:text-blue-300 dark:hover:text-blue-200">
             {t('admin.home_secondary_action_runtime', {}, 'Inspect runtime sources')} →
           </Link>
         </div>

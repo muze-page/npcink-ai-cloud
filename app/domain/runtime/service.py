@@ -1851,19 +1851,6 @@ class RuntimeService:
         result["alert_summary"] = self._build_hosted_governance_alert_summary(result)
         return result
 
-    def get_hosted_model_governance_diagnostics(
-        self,
-        *,
-        site_id: str | None = None,
-        recent_minutes: int = 60,
-        limit: int = 20,
-    ) -> dict[str, object]:
-        return self.get_runtime_telemetry_diagnostics(
-            site_id=site_id,
-            recent_minutes=recent_minutes,
-            limit=limit,
-        )
-
     def get_runtime_backlog_diagnostics(
         self,
         *,
@@ -2286,7 +2273,7 @@ class RuntimeService:
                     "count": max(0, count),
                     "capabilities": capabilities[:10],
                     "suggested_action": suggested_action,
-                    "href": "/admin/ai-resources?view=diagnostics",
+                    "href": "/admin/troubleshooting",
                 }
             )
 
@@ -2401,7 +2388,7 @@ class RuntimeService:
             "status": status,
             "summary": summary,
             "next_action": next_action,
-            "href": "/admin/ai-resources?view=diagnostics",
+            "href": "/admin/troubleshooting",
             "alerts": alerts[:8],
             "alert_count": len(alerts),
             "daily_digest": {

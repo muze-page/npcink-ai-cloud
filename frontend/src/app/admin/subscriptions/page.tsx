@@ -3,7 +3,6 @@
 import React, { Suspense, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
-import { CustomerAdminTabs } from '@/components/admin/CustomerAdminTabs';
 import { BackofficeIdentifier } from '@/components/backoffice/BackofficeIdentifier';
 import { BackofficeStatusBadge } from '@/components/backoffice/BackofficeStatusBadge';
 import { LoadingFallback } from '@/components/ui/LoadingFallback';
@@ -277,7 +276,6 @@ function SubscriptionsContent() {
 
   return (
     <BackofficePageStack>
-      <CustomerAdminTabs />
       <BackofficePrimaryPanel
         eyebrow={t('admin.nav_coverage', {}, 'Coverage')}
         title={t('admin.coverage_workspace_subscriptions_title', {}, 'Coverage queue')}

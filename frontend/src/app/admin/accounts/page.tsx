@@ -5,7 +5,6 @@ import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import { BackofficeIdentifier } from '@/components/backoffice/BackofficeIdentifier';
 import { BackofficeStatusBadge } from '@/components/backoffice/BackofficeStatusBadge';
-import { CustomerAdminTabs } from '@/components/admin/CustomerAdminTabs';
 import { LoadingFallback } from '@/components/ui/LoadingFallback';
 import { useLocale } from '@/contexts/LocaleContext';
 import {
@@ -165,8 +164,7 @@ function accountNeedsAction(account: Account): boolean {
   return (
     account.status === 'suspended' ||
     (remaining !== null && remaining >= 0 && remaining <= EXPIRY_ACTION_WINDOW_DAYS) ||
-    (account.subscription_count === 0 && account.site_count > 0) ||
-    account.package_kind === 'dev_baseline'
+    (account.subscription_count === 0 && account.site_count > 0)
   );
 }
 
@@ -378,7 +376,6 @@ function AccountsContent() {
           );
   return (
     <BackofficePageStack>
-      <CustomerAdminTabs />
       <BackofficePrimaryPanel
         eyebrow={t('admin.nav_group_commercial_ops', {}, 'Commercial Ops')}
         title={t('admin.accounts.list_title', {}, 'Users')}
@@ -577,7 +574,6 @@ function AccountsContent() {
                 <option value="">{t('common.all')}</option>
                 <option value="formal_free">{t('admin.plan_package_alias_free', {}, 'Free')}</option>
                 <option value="tier_package">{t('admin.tier_template_binding', {}, 'Tier-bound plan')}</option>
-                <option value="dev_baseline">{t('admin.dev_baseline', {}, 'Dev baseline')}</option>
               </select>
             </label>
             <button type="button" onClick={clearFilters} className="btn btn-secondary h-11">

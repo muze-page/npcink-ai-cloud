@@ -256,8 +256,9 @@ The frontend contract tests now guard these decisions:
 
 - Provider Management and Ability-Model Routing remain distinct top-level admin
   destinations.
-- Legacy `/admin/wordpress-ai-routing` must redirect to
-  `/admin/ability-models`.
+- Legacy `/admin/wordpress-ai-routing` UI route is removed; `/admin/ability-models`
+  is the only UI destination. The internal API path remains because the model
+  binding page still consumes it.
 - Cloud runtime dependencies must not duplicate plugin task rows.
 - Internal profile IDs and instance IDs must stay behind collapsed internal
   details.

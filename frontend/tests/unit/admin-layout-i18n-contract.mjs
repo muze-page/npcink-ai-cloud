@@ -78,6 +78,21 @@ assert.match(
   'Admin desktop top bar must carry compact utility controls'
 );
 
+const desktopAsideStart = layoutSource.indexOf('<aside');
+const desktopAsideEnd = layoutSource.indexOf('</aside>', desktopAsideStart);
+const desktopAsideSource = layoutSource.slice(desktopAsideStart, desktopAsideEnd);
+
+assert.ok(
+  desktopAsideStart >= 0 && desktopAsideEnd > desktopAsideStart,
+  'Admin layout must keep a desktop sidebar boundary for navigation contracts'
+);
+
+assert.doesNotMatch(
+  desktopAsideSource,
+  /href="\/portal"/,
+  'Admin desktop sidebar must not include a Portal shortcut; cross-surface links belong in the top bar or mobile drawer'
+);
+
 assert.doesNotMatch(
   layoutSource,
   /w-72|lg:pl-72|admin\.layout_boundary_desc|rounded-(?:2xl|lg) border border-blue-200/,

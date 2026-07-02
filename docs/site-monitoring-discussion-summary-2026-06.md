@@ -271,7 +271,7 @@ Routing is owned by the Portal UI and based on `source`:
 - `media`: switch to Media tab;
 - `vector`: switch to Vector tab;
 - `quota` or `runtime`: open `/portal/usage?site={site_id}`;
-- `keys` or `activity`: open `/portal/keys?site={site_id}`;
+- `keys` or `activity`: open `/portal/sites/{site_id}`;
 - unknown source: remain on overview.
 
 This keeps the backend contract simple and makes the Portal more operational:

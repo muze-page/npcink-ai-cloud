@@ -171,10 +171,10 @@ error, and metering-coverage signals, but it must not return prompts, generated
 content, raw runtime inputs/results, provider secrets, WordPress credentials,
 or any local approval/write controls.
 
-`/internal/service/runtime/diagnostics/hosted-model-governance` remains a
-compatibility alias for existing operators and clients. New surfaces should use
-the runtime telemetry name because the evidence covers all hosted runtime
-execution families, not a standalone model governance product area.
+The former `hosted-model-governance` compatibility aliases are retired. Current
+surfaces must use the runtime telemetry name because the evidence covers all
+hosted runtime execution families, not a standalone model governance product
+area.
 
 ## 4. Cloud API Query
 
