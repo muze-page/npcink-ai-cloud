@@ -275,13 +275,6 @@ function buildLatestFieldPatch(
   };
 }
 
-function fieldDiffersFromBaseline(
-  current: string,
-  baseline: string
-): boolean {
-  return String(current || '').trim() !== String(baseline || '').trim();
-}
-
 function resolveCueStatus(severity: string): string {
   switch (severity) {
     case 'ok':
@@ -411,7 +404,11 @@ function PlanDetailContent() {
         throw new Error(resolveUiErrorMessage('message' in data ? data.message : null, t('error.failed_save', {}, 'Failed to save.')));
       }
       setNotice(
-        t('admin.coverage_package_release_saved_notice', {}, 'Coverage package release published. You can now bind it to customer subscriptions.')
+        t(
+          'admin.coverage_package_release_saved_notice',
+          {},
+          'Package changes saved and published. Existing subscriptions on this package use the latest values.'
+        )
       );
       setLastReceipt((('data' in data ? data.data?.receipt : null) ?? null) as AdminMutationReceiptPayload | null);
       await loadDetail();
@@ -493,10 +490,10 @@ function PlanDetailContent() {
     : null;
   const linkedSubscriptionCount = detail.subscriptions.length;
   const subscriptionQueueHref = `/admin/subscriptions?plan_id=${encodeURIComponent(detail.plan.plan_id)}`;
-  const baselineActionLabel = t(
+  const templateActionLabel = t(
     'admin.apply_tier_baseline',
     { tier: localizedPackageAlias || localizedTierLabel || 'tier' },
-    `Apply ${localizedPackageAlias || localizedTierLabel || 'tier'} baseline`
+    `Restore ${localizedPackageAlias || localizedTierLabel || 'tier'} suggested values`
   );
 
   const applyStructuredPatch = (patch: Partial<PlanVersionFormState>) => {
@@ -826,7 +823,7 @@ function PlanDetailContent() {
                   {t(
                     'admin.coverage_package_editor_flow_desc',
                     {},
-                    'Most edits should only touch price, usage limits, sites, concurrency, batch size, or grace days.'
+                    'Edit the current package values here. Saving publishes the latest values for subscriptions already using this package.'
                   )}
                 </p>
               </div>
@@ -836,14 +833,14 @@ function PlanDetailContent() {
                   className="btn btn-secondary"
                   onClick={() => applyStructuredPatch(latestFieldPatch)}
                 >
-                  {t('admin.reset_to_latest_version', {}, 'Reset to latest release')}
+                  {t('admin.reset_to_latest_version', {}, 'Restore saved values')}
                 </button>
                 <button
                   type="button"
-                  className="btn btn-primary"
+                  className="btn btn-secondary"
                   onClick={() => applyStructuredPatch(baselineFieldPatch)}
                 >
-                  {baselineActionLabel}
+                  {templateActionLabel}
                 </button>
               </div>
             </div>
@@ -863,111 +860,37 @@ function PlanDetailContent() {
               <label className="text-sm">
                 <span className="mb-2 block font-medium text-gray-700 dark:text-gray-300">{t('common.cost')}</span>
                 <input value={form.max_cost_per_period} onChange={(e) => setForm((c) => ({ ...c, max_cost_per_period: e.target.value }))} className="input w-full" type="number" min="0" step="0.01" />
-                <FieldBaselineHint
-                  differs={fieldDiffersFromBaseline(form.max_cost_per_period, String(baselineFieldPatch.max_cost_per_period || '0'))}
-                  baselineValue={String(baselineFieldPatch.max_cost_per_period || '0')}
-                  t={t}
-                />
               </label>
               <label className="text-sm">
                 <span className="mb-2 block font-medium text-gray-700 dark:text-gray-300">{t('admin.included_points', {}, 'Included points')}</span>
                 <input value={form.monthly_included_points} onChange={(e) => setForm((c) => ({ ...c, monthly_included_points: e.target.value }))} className="input w-full" type="number" min="0" step="1" />
-                <FieldBaselineHint
-                  differs={fieldDiffersFromBaseline(form.monthly_included_points, String(baselineFieldPatch.monthly_included_points || '0'))}
-                  baselineValue={String(baselineFieldPatch.monthly_included_points || '0')}
-                  t={t}
-                />
               </label>
               <label className="text-sm">
                 <span className="mb-2 block font-medium text-gray-700 dark:text-gray-300">{t('admin.batch_ceiling', {}, 'Batch ceiling')}</span>
                 <input value={form.max_batch_items} onChange={(e) => setForm((c) => ({ ...c, max_batch_items: e.target.value }))} className="input w-full" type="number" min="0" step="1" />
-                <FieldBaselineHint
-                  differs={fieldDiffersFromBaseline(form.max_batch_items, String(baselineFieldPatch.max_batch_items || '0'))}
-                  baselineValue={String(baselineFieldPatch.max_batch_items || '0')}
-                  t={t}
-                />
               </label>
               <label className="text-sm">
                 <span className="mb-2 block font-medium text-gray-700 dark:text-gray-300">{t('admin.site_limit', {}, 'Site limit')}</span>
                 <input value={form.site_limit} onChange={(e) => setForm((c) => ({ ...c, site_limit: e.target.value }))} className="input w-full" type="number" min="1" step="1" />
-                <FieldBaselineHint
-                  differs={fieldDiffersFromBaseline(form.site_limit, String(baselineFieldPatch.site_limit || '0'))}
-                  baselineValue={String(baselineFieldPatch.site_limit || '0')}
-                  t={t}
-                />
               </label>
               <label className="text-sm">
                 <span className="mb-2 block font-medium text-gray-700 dark:text-gray-300">{t('billing.runs', {}, 'Runs')}</span>
                 <input value={form.max_runs_per_period} onChange={(e) => setForm((c) => ({ ...c, max_runs_per_period: e.target.value }))} className="input w-full" type="number" min="0" step="1" />
-                <FieldBaselineHint
-                  differs={fieldDiffersFromBaseline(form.max_runs_per_period, String(baselineFieldPatch.max_runs_per_period || '0'))}
-                  baselineValue={String(baselineFieldPatch.max_runs_per_period || '0')}
-                  t={t}
-                />
               </label>
               <label className="text-sm">
                 <span className="mb-2 block font-medium text-gray-700 dark:text-gray-300">{t('common.tokens')}</span>
                 <input value={form.max_tokens_per_period} onChange={(e) => setForm((c) => ({ ...c, max_tokens_per_period: e.target.value }))} className="input w-full" type="number" min="0" step="1" />
-                <FieldBaselineHint
-                  differs={fieldDiffersFromBaseline(form.max_tokens_per_period, String(baselineFieldPatch.max_tokens_per_period || '0'))}
-                  baselineValue={String(baselineFieldPatch.max_tokens_per_period || '0')}
-                  t={t}
-                />
               </label>
               <label className="text-sm">
                 <span className="mb-2 block font-medium text-gray-700 dark:text-gray-300">{t('admin.concurrency', {}, 'Concurrency')}</span>
                 <input value={form.max_active_runs} onChange={(e) => setForm((c) => ({ ...c, max_active_runs: e.target.value }))} className="input w-full" type="number" min="0" step="1" />
-                <FieldBaselineHint
-                  differs={fieldDiffersFromBaseline(form.max_active_runs, String(baselineFieldPatch.max_active_runs || '0'))}
-                  baselineValue={String(baselineFieldPatch.max_active_runs || '0')}
-                  t={t}
-                />
               </label>
               <label className="text-sm">
                 <span className="mb-2 block font-medium text-gray-700 dark:text-gray-300">{t('admin.grace_period_label', {}, 'Grace period')}</span>
                 <input value={form.grace_period_days} onChange={(e) => setForm((c) => ({ ...c, grace_period_days: e.target.value }))} className="input w-full" type="number" min="0" step="1" />
-                <FieldBaselineHint
-                  differs={fieldDiffersFromBaseline(form.grace_period_days, String(baselineFieldPatch.grace_period_days || '0'))}
-                  baselineValue={String(baselineFieldPatch.grace_period_days || '0')}
-                  t={t}
-                />
               </label>
             </div>
           </BackofficeStackCard>
-          <details className="rounded-3xl border border-slate-200 bg-white px-5 py-4 dark:border-slate-800 dark:bg-slate-950/60">
-            <summary className="cursor-pointer list-none text-sm font-semibold text-slate-950 dark:text-white">
-              {t('admin.package_release_metadata_title', {}, 'Advanced release fields')}
-            </summary>
-            <p className="mt-3 text-sm text-slate-600 dark:text-slate-300">
-              {t(
-                'admin.package_release_metadata_desc',
-                {},
-                'Leave these defaults unchanged for normal package edits. They exist only for traceability and staged releases.'
-              )}
-            </p>
-            <div className="mt-4 grid gap-4 xl:grid-cols-[1fr_1fr_0.8fr_0.8fr]">
-              <label className="text-sm xl:col-span-2">
-                <span className="mb-2 block font-medium text-gray-700 dark:text-gray-300">{t('admin.coverage_package_release_id_label', {}, 'Package release ID')}</span>
-                <input value={form.plan_version_id} onChange={(e) => setForm((c) => ({ ...c, plan_version_id: e.target.value }))} className="input w-full" required />
-              </label>
-              <label className="text-sm">
-                <span className="mb-2 block font-medium text-gray-700 dark:text-gray-300">{t('common.label')}</span>
-                <input value={form.version_label} onChange={(e) => setForm((c) => ({ ...c, version_label: e.target.value }))} className="input w-full" required />
-              </label>
-              <label className="text-sm">
-                <span className="mb-2 block font-medium text-gray-700 dark:text-gray-300">{t('common.status')}</span>
-                <select value={form.status} onChange={(e) => setForm((c) => ({ ...c, status: e.target.value }))} className="input w-full">
-                  <option value="published">{t('status.published', {}, 'published')}</option>
-                  <option value="draft">{t('status.draft', {}, 'draft')}</option>
-                  <option value="archived">{t('status.archived', {}, 'archived')}</option>
-                </select>
-              </label>
-              <label className="text-sm">
-                <span className="mb-2 block font-medium text-gray-700 dark:text-gray-300">{t('common.currency', {}, 'Currency')}</span>
-                <input value={ADMIN_CURRENCY} className="input w-full" readOnly />
-              </label>
-            </div>
-          </details>
           <details className="rounded-3xl border border-slate-200 bg-white px-5 py-4 dark:border-slate-800 dark:bg-slate-950/60">
             <summary className="cursor-pointer list-none text-sm font-semibold text-slate-950 dark:text-white">
               {t('admin.plan_advanced_json_title', {}, 'Advanced JSON overrides')}
@@ -1067,24 +990,6 @@ function JsonField({
         className={`input w-full font-mono text-xs ${minHeightClassName}`}
       />
     </label>
-  );
-}
-
-function FieldBaselineHint({
-  differs,
-  baselineValue,
-  t,
-}: {
-  differs: boolean;
-  baselineValue: string;
-  t: (key: string, vars?: Record<string, string>, fallback?: string) => string;
-}) {
-  return (
-    <span className={`mt-2 block text-xs ${differs ? 'text-amber-600 dark:text-amber-300' : 'text-slate-500 dark:text-slate-400'}`}>
-      {differs
-        ? t('admin.field_differs_from_tier_baseline', { baseline: baselineValue }, `Differs from default template (${baselineValue}).`)
-        : t('admin.field_matches_tier_baseline', { baseline: baselineValue }, `Matches default template (${baselineValue}).`)}
-    </span>
   );
 }
 

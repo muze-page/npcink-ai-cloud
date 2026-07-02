@@ -3958,6 +3958,46 @@ def test_service_routes_bind_subscription_and_rebuild_billing_snapshot(
     dispose_engine(database_url)
 
 
+def test_service_routes_plan_version_label_conflict_is_readable(tmp_path: Path) -> None:
+    database_url, client = _build_client(tmp_path)
+
+    plan_response = client.post(
+        "/internal/service/plans",
+        json={"plan_id": "plan_free_conflict", "name": "Free Conflict"},
+        headers=build_internal_headers(idempotency_key="svc-plan-conflict-001"),
+    )
+    first_version_response = client.post(
+        "/internal/service/plans/plan_free_conflict/versions",
+        json={
+            "plan_version_id": "plan_free_conflict_v1",
+            "version_label": "v1",
+            "budgets": {"max_runs_per_period": 10},
+            "concurrency": {"max_active_runs": 1},
+        },
+        headers=build_internal_headers(idempotency_key="svc-plan-conflict-version-001"),
+    )
+    conflict_response = client.post(
+        "/internal/service/plans/plan_free_conflict/versions",
+        json={
+            "plan_version_id": "free_v1",
+            "version_label": "v1",
+            "budgets": {"max_runs_per_period": 20},
+            "concurrency": {"max_active_runs": 2},
+        },
+        headers=build_internal_headers(idempotency_key="svc-plan-conflict-version-002"),
+    )
+
+    assert plan_response.status_code == 200
+    assert first_version_response.status_code == 200
+    assert conflict_response.status_code == 409
+    conflict_payload = conflict_response.json()
+    assert conflict_payload["error_code"] == "service.plan_version_label_conflict"
+    assert "already has version label 'v1'" in conflict_payload["message"]
+    assert "plan_free_conflict_v1" in conflict_payload["message"]
+
+    dispose_engine(database_url)
+
+
 def test_service_routes_admin_read_facade(tmp_path: Path) -> None:
     database_url, client = _build_client(tmp_path)
 

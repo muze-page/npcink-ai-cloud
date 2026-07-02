@@ -23,6 +23,7 @@ from app.core.models import (
     Site,
 )
 from app.domain.commercial.errors import (
+    CommercialConflictError,
     CommercialNotFoundError,
     CommercialValidationError,
 )
@@ -363,6 +364,23 @@ class CommercialServiceBillingMixin(CommercialServiceAuditMixin):
                 raise CommercialNotFoundError(
                     "service.plan_not_found",
                     f"plan '{plan_id}' was not found",
+                )
+            label_conflict = next(
+                (
+                    version
+                    for version in repository.list_plan_versions(plan_id=plan_id, limit=None)
+                    if version.version_label == version_label
+                    and version.plan_version_id != plan_version_id
+                ),
+                None,
+            )
+            if label_conflict is not None:
+                raise CommercialConflictError(
+                    "service.plan_version_label_conflict",
+                    (
+                        f"plan '{plan_id}' already has version label '{version_label}' "
+                        f"on plan version '{label_conflict.plan_version_id}'"
+                    ),
                 )
             plan_version = repository.upsert_plan_version(
                 plan_version_id=plan_version_id,
