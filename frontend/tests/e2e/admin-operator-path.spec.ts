@@ -47,9 +47,9 @@ test('admin subscription detail keeps localized operator layout', async ({ page 
   await installAdminMocks(page);
 
   await page.goto('/admin/subscriptions/sub_mvp');
-  await expect(page.getByRole('heading', { name: /Subscription service status: Pro|订阅服务状态：Pro|訂閱服務狀態：Pro/i })).toBeVisible();
-  await expect(page.getByText(/Package and billing state|套餐与账单状态|方案與帳單狀態/i).first()).toBeVisible();
-  await expect(page.getByText(/What needs action|需要处理什么|需要處理什麼/i).first()).toBeVisible();
+  await expect(page.getByRole('heading', { name: /Service status detail: Pro|服务状态详情：Pro|服務狀態詳情：Pro/i })).toBeVisible();
+  await expect(page.getByText(/Package, usage, and service coverage|套餐、用量与服务覆盖|方案、用量與服務覆蓋/i).first()).toBeVisible();
+  await expect(page.getByText(/What needs operator action|需要运营处理什么|需要營運處理什麼/i).first()).toBeVisible();
   await expect(page.getByText(/Related evidence|关联证据|關聯證據/i).first()).toBeVisible();
   await expect(page.getByText(/Coverage checks/i)).toHaveCount(0);
 });
@@ -95,20 +95,20 @@ test('admin operator path smoke: queue and inspector routes stay connected', asy
   await expect(page.getByText(/Customers needing service follow-up|需要服务跟进的客户|需要服務跟進的客戶/i).first()).toBeVisible();
 
   await page.goto('/admin/subscriptions');
-  await expect(page.getByRole('heading', { name: /Risk-prioritized subscription queue|按风险排序的订阅队列/i })).toBeVisible();
+  await expect(page.getByRole('heading', { name: /^Service risk queue$|^服务风险队列$|^服務風險隊列$/i })).toBeVisible();
   await expect(page.locator('a[href="/admin/subscriptions/sub_mvp"]')).toBeVisible();
-  await expect(page.getByText(/Snapshot|快照/i).first()).toBeVisible();
-  await expect(page.getByText(/Billing snapshot fresh|账单快照最新|账单快照新鲜/i).first()).toBeVisible();
+  await expect(page.getByText(/Billing stats to refresh|待刷新账单统计|待刷新帳單統計/i).first()).toBeVisible();
+  await expect(page.getByText(/Billing statistics current|账单统计当前|帳單統計當前/i).first()).toBeVisible();
 
   await page.goto('/admin/subscriptions/sub_mvp');
-  await expect(page.getByRole('heading', { name: /Subscription service status: Pro|订阅服务状态：Pro|訂閱服務狀態：Pro/i })).toBeVisible();
+  await expect(page.getByRole('heading', { name: /Service status detail: Pro|服务状态详情：Pro|服務狀態詳情：Pro/i })).toBeVisible();
   await expect(page.getByRole('link', { name: /Open customer subscription|打开客户订阅/i })).toHaveCount(0);
   await expect(page.locator(`a[href="/admin/accounts/${LONG_ACCOUNT_ID}#coverage-actions"]`)).toBeVisible();
   await expect(page.locator(`a[href="/admin/accounts/${LONG_ACCOUNT_ID}"]`).first()).toBeVisible();
   await expect(page.locator('a[href="/admin/sites/site_mvp"]').first()).toBeVisible();
   await expect(page.getByText(/Base budget|基础预算/i).first()).toBeVisible();
   await expect(page.getByText(/Effective budget|有效预算/i).first()).toBeVisible();
-  await expect(page.getByText(/Snapshot freshness|Snapshot status|快照状态|快照新鲜度/i).first()).toBeVisible();
+  await expect(page.getByText(/Billing statistics|账单统计|帳單統計/i).first()).toBeVisible();
   await expect(page.getByRole('button', { name: /Rebuild current-period billing snapshots|重建当前周期账单快照/i })).toHaveCount(0);
   await expect(page.getByText(/checkout|buy points|storefront/i)).toHaveCount(0);
 
@@ -148,6 +148,11 @@ test('admin operator path smoke: queue and inspector routes stay connected', asy
   await expect(page.getByText(/Site limit|站点上限/i).first()).toBeVisible();
   await expect(page.getByText(/Structured package fields|结构化套餐字段/i)).toBeVisible();
   await expect(page.getByText(/Advanced JSON overrides|高级 JSON 覆盖项/i)).toBeVisible();
+  await expect(page.getByRole('link', { name: /Open subscriptions|查看订阅|查看訂閱/i })).toHaveAttribute(
+    'href',
+    `/admin/subscriptions?plan_id=${LONG_PLAN_ID}`
+  );
+  await expect(page.getByRole('link', { name: /Inspect detail|查看详情|查看詳情/i })).toHaveCount(0);
 });
 
 test('admin queue pages keep one primary header action and shared identifier treatment', async ({ page }) => {
@@ -202,6 +207,10 @@ test('admin queue pages keep one primary header action and shared identifier tre
   await expect(page.getByText(/Package fit is stable|套餐匹配稳定/i)).toBeVisible();
   await expect(page.getByRole('button', { name: /Apply .* baseline|应用 .* 基线/i })).toBeVisible();
   await expect(page.getByRole('button', { name: /Reset to latest release|恢复为最新发布记录|恢復為最新發佈記錄/i })).toBeVisible();
+  await expect(page.getByRole('link', { name: /Open subscriptions|查看订阅|查看訂閱/i })).toHaveAttribute(
+    'href',
+    `/admin/subscriptions?plan_id=${LONG_PLAN_ID}`
+  );
   await expect(page.getByText(/已发布|published/i).first()).toBeVisible();
 
   await page.goto('/admin/ai-resources', { waitUntil: 'domcontentloaded' });
@@ -294,12 +303,12 @@ test('admin support and detail pages keep bounded operator hierarchy', async ({ 
   await expect(page.getByText(/subscription\.bind|provider_connection\.sync/i).first()).toBeVisible();
 
   await page.goto('/admin/subscriptions/sub_mvp');
-  await expect(page.getByRole('heading', { name: /Subscription service status: Pro|订阅服务状态：Pro|訂閱服務狀態：Pro/i })).toBeVisible();
+  await expect(page.getByRole('heading', { name: /Service status detail: Pro|服务状态详情：Pro|服務狀態詳情：Pro/i })).toBeVisible();
   await expect(page.getByRole('link', { name: /Customer|客户/i }).first()).toBeVisible();
   await expect(page.locator(`a[href="/admin/accounts/${LONG_ACCOUNT_ID}"]`).first()).toBeVisible();
   await expect(page.getByText(/Related sites|关联站点|關聯站點/i).first()).toBeVisible();
-  await expect(page.getByText(/Snapshot status|快照状态|快照狀態/i).first()).toBeVisible();
-  await expect(page.getByText(/Path discipline|路径纪律|路徑紀律/i).first()).toBeVisible();
+  await expect(page.getByText(/Billing statistics|账单统计|帳單統計/i).first()).toBeVisible();
+  await expect(page.getByText(/Boundary|边界|邊界/i).first()).toBeVisible();
   await expect(page.getByRole('link', { name: /View audit trail|查看审计/i }).first()).toBeVisible();
   await expect(page.getByText(/Recent audit summary for this subscription|此订阅的近期审计摘要/i)).toBeVisible();
 });
@@ -335,7 +344,7 @@ test('admin navigation stays customer-first', async ({ page }) => {
   await expect(adminNav.getByRole('link', { name: /^Providers$|^供应商$/i })).toBeVisible();
   await expect(adminNav.getByRole('link', { name: /^Runtime Diagnostics$|^运行诊断$/i })).toBeVisible();
   await expect(adminNav.getByRole('link', { name: /^Hosted Models$|^托管模型$|^託管模型$/i })).toHaveCount(0);
-  await expect(adminNav.getByRole('link', { name: /^Subscriptions$|^订阅$|^訂閱$/i })).toBeVisible();
+  await expect(adminNav.getByRole('link', { name: /^Service Risks$|^服务风险$|^服務風險$/i })).toBeVisible();
   await expect(adminNav.getByRole('link', { name: /^Package Catalog$|^套餐目录$|^方案目錄$/i })).toBeVisible();
   await expect(adminNav.getByRole('link', { name: /^Members$|^成员$|^成員$/i })).toHaveCount(0);
   await expect(adminNav.getByRole('link', { name: /^Plugin Observability$|^插件观测$|^外掛觀測$/i })).toHaveCount(0);

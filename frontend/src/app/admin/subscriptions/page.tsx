@@ -243,28 +243,46 @@ function SubscriptionsContent() {
     const remaining = daysUntil(item.current_period_end);
     return remaining !== null && remaining >= 0 && remaining <= 14;
   }).length;
-  const projectedRevenue = subscriptions.reduce((sum, item) => sum + (item.billing_summary?.total_cost || 0), 0);
   const subscriptionsNeedingSnapshotFollowUp = subscriptions.filter((item) => {
     const status = item.billing_snapshot_status?.status || 'unknown';
     return status === 'stale' || status === 'missing';
+  }).length;
+  const serviceRiskCount = subscriptions.filter((item) => {
+    const remaining = daysUntil(item.current_period_end);
+    const snapshotStatus = item.billing_snapshot_status?.status || 'unknown';
+    return (
+      item.status === 'past_due' ||
+      item.status === 'expired' ||
+      snapshotStatus === 'stale' ||
+      snapshotStatus === 'missing' ||
+      (remaining !== null && remaining >= 0 && remaining <= 14)
+    );
+  }).length;
+  const stableSubscriptions = subscriptions.filter((item) => {
+    const remaining = daysUntil(item.current_period_end);
+    return (
+      item.status === 'active' &&
+      item.billing_snapshot_status?.status === 'fresh' &&
+      !(remaining !== null && remaining >= 0 && remaining <= 14)
+    );
   }).length;
   const riskConclusion =
     pastDueSubscriptions > 0 || expiredSubscriptions > 0
       ? t(
           'admin.subscriptions.queue_status_error',
-          {},
-          'Commercial risk is already active. Resolve past-due and expired subscriptions first.'
+          { count: String(pastDueSubscriptions + expiredSubscriptions) },
+          `${pastDueSubscriptions + expiredSubscriptions} customers may lose Cloud service. Handle past-due and expired coverage first.`
         )
       : expiringSoon > 0
         ? t(
             'admin.subscriptions.queue_status_warning',
-            {},
-            'No hard failures are visible yet, but near-term expiry items should be reviewed before they turn into support work.'
+            { count: String(expiringSoon) },
+            `${expiringSoon} customers are approaching renewal. Review them before service continuity becomes support work.`
           )
         : t(
             'admin.subscriptions.queue_status_ok',
-            {},
-            'Subscription posture is stable. Use this queue to confirm coverage and clear lower-priority review items.'
+            { count: String(stableSubscriptions) },
+            `${stableSubscriptions} customers look stable in this queue. Keep this page for service coverage checks and lower-priority follow-up.`
           );
   const filterPills = [
     { value: '', label: t('common.all'), count: total },
@@ -277,21 +295,21 @@ function SubscriptionsContent() {
   return (
     <BackofficePageStack>
       <BackofficePrimaryPanel
-        eyebrow={t('admin.nav_coverage', {}, 'Coverage')}
-        title={t('admin.coverage_workspace_subscriptions_title', {}, 'Coverage queue')}
+        eyebrow={t('admin.nav_coverage', {}, 'Service status')}
+        title={t('admin.coverage_workspace_subscriptions_title', {}, 'Service risk queue')}
         description={riskConclusion}
         aside={(
           <div className="w-full xl:w-[44rem]">
             <BackofficeMetricStrip
               items={[
-                { label: t('status.past_due'), value: formatInteger(pastDueSubscriptions + expiredSubscriptions), size: 'compact' },
+                { label: t('admin.subscriptions.needs_action_metric', {}, 'Needs action'), value: formatInteger(serviceRiskCount), size: 'compact' },
                 { label: t('admin.expiring_soon'), value: formatInteger(expiringSoon), size: 'compact' },
                 {
-                  label: t('admin.subscriptions.snapshot_status_metric', {}, 'Snapshot follow-up'),
+                  label: t('admin.subscriptions.snapshot_status_metric', {}, 'Billing stats to refresh'),
                   value: formatInteger(subscriptionsNeedingSnapshotFollowUp),
                   size: 'compact',
                 },
-                { label: t('admin.subscriptions.signal_title'), value: formatAdminCurrency(projectedRevenue), size: 'compact' },
+                { label: t('admin.subscriptions.stable_metric', {}, 'Service normal'), value: formatInteger(stableSubscriptions), size: 'compact' },
               ]}
               columnsClassName="md:grid-cols-2 xl:grid-cols-4"
             />
@@ -299,7 +317,7 @@ function SubscriptionsContent() {
         )}
       >
         <div className="flex flex-wrap gap-2">
-          <Link href="/admin/subscriptions" className="btn btn-secondary btn-sm">
+          <Link href="/admin/coverage" className="btn btn-secondary btn-sm">
             {t('admin.back_to_coverage', {}, 'Back to coverage')}
           </Link>
           {filterPills.map((pill) => (
@@ -327,7 +345,7 @@ function SubscriptionsContent() {
               {t('admin.subscriptions.queue_label', {}, 'Queue filters')}
             </p>
             <h2 className="mt-2 text-xl font-semibold text-gray-950 dark:text-white">
-              {t('admin.subscriptions.queue_title', {}, 'Filter the current commercial queue')}
+              {t('admin.subscriptions.queue_title', {}, 'Filter the current service risk queue')}
             </h2>
           </div>
           <div className="text-sm text-slate-500 dark:text-slate-400">
@@ -373,7 +391,7 @@ function SubscriptionsContent() {
             {t('admin.subscription_register_title')}
           </p>
           <h2 className="mt-2 text-xl font-semibold text-gray-950 dark:text-white">
-            {t('admin.subscriptions.queue_list_title', {}, 'Risk-prioritized subscription queue')}
+            {t('admin.subscriptions.queue_list_title', {}, 'Customers needing service follow-up')}
           </h2>
         </div>
         {queuedSubscriptions.length === 0 ? (
@@ -384,6 +402,7 @@ function SubscriptionsContent() {
           <div className="divide-y divide-gray-200 dark:divide-gray-800">
             {queuedSubscriptions.map((subscription) => {
               const remaining = daysUntil(subscription.current_period_end);
+              const snapshotStatus = subscription.billing_snapshot_status?.status || 'unknown';
               const riskTone =
                 subscription.status === 'past_due' || subscription.status === 'expired'
                   ? 'border-red-200 bg-red-50 text-red-700 dark:border-red-900/50 dark:bg-red-950/20 dark:text-red-200'
@@ -397,9 +416,25 @@ function SubscriptionsContent() {
                     ? t('admin.subscriptions.reason_expired', {}, 'The subscription has ended and needs a renewal or closure decision.')
                     : remaining !== null && remaining >= 0 && remaining <= 14
                       ? t('admin.subscriptions.reason_expiring', {}, 'Current period ends soon, so renewal or follow-up should happen before support load increases.')
-                      : subscription.status === 'trialing'
+                    : subscription.status === 'trialing'
                         ? t('admin.subscriptions.reason_trialing', {}, 'Trial coverage is still active and should be checked before converting or ending.')
-                        : t('admin.subscriptions.reason_active', {}, 'This subscription is currently stable and remains here as lower-priority review context.');
+                        : snapshotStatus === 'stale'
+                          ? t('admin.subscriptions.reason_snapshot_stale', {}, 'This period billing statistics need refresh before the account is treated as reconciled.')
+                          : snapshotStatus === 'missing'
+                            ? t('admin.subscriptions.reason_snapshot_missing', {}, 'This period billing statistics are missing for at least one covered site.')
+                            : t('admin.subscriptions.reason_active', {}, 'Service coverage is currently stable and remains here as lower-priority review context.');
+              const suggestedAction =
+                subscription.status === 'past_due'
+                  ? t('admin.subscriptions.action_past_due', {}, 'Open customer and handle billing follow-up.')
+                  : subscription.status === 'expired'
+                    ? t('admin.subscriptions.action_expired', {}, 'Open customer and decide renewal or service closure.')
+                    : remaining !== null && remaining >= 0 && remaining <= 14
+                      ? t('admin.subscriptions.action_expiring', {}, 'Review renewal before service continuity becomes support work.')
+                      : snapshotStatus === 'stale' || snapshotStatus === 'missing'
+                        ? t('admin.subscriptions.action_snapshot', {}, 'Open service detail and refresh this period billing statistics.')
+                        : subscription.status === 'trialing'
+                          ? t('admin.subscriptions.action_trialing', {}, 'Review trial conversion or end date.')
+                          : t('admin.subscriptions.action_active', {}, 'No immediate action. Keep as service coverage context.');
               const packageLabel = resolveAdminPackageLabel(t, {
                 planId: subscription.plan_id,
                 packageAlias: subscription.package_alias,
@@ -428,6 +463,10 @@ function SubscriptionsContent() {
                         {packageLabel}
                       </p>
                       <p className="mt-1 text-sm text-gray-600 dark:text-gray-300">{riskReason}</p>
+                      <p className="mt-2 text-sm text-gray-700 dark:text-gray-200">
+                        <span className="font-semibold">{t('admin.suggested_action', {}, 'Suggested action')}:</span>{' '}
+                        {suggestedAction}
+                      </p>
                       <div className="mt-3 flex flex-wrap gap-x-5 gap-y-1 text-sm text-gray-600 dark:text-gray-400">
                         <Link href={`/admin/accounts/${subscription.account_id}`} className="text-blue-600 hover:underline dark:text-blue-300">
                           {t('common.account', {}, 'Customer')}
@@ -457,10 +496,10 @@ function SubscriptionsContent() {
                           )}
                         >
                           {subscription.billing_snapshot_status?.status === 'fresh'
-                            ? t('admin.subscriptions.snapshot_fresh_label', {}, 'Billing snapshot fresh')
+                            ? t('admin.subscriptions.snapshot_fresh_label', {}, 'Billing statistics current')
                             : subscription.billing_snapshot_status?.status === 'stale'
-                              ? t('admin.subscriptions.snapshot_stale_label', {}, 'Billing snapshot stale')
-                              : t('admin.subscriptions.snapshot_missing_label', {}, 'Billing snapshot missing')}
+                              ? t('admin.subscriptions.snapshot_stale_label', {}, 'Billing statistics need refresh')
+                              : t('admin.subscriptions.snapshot_missing_label', {}, 'Billing statistics missing')}
                         </span>
                         {subscription.billing_snapshot_status?.status !== 'fresh' ? (
                           <span className="text-gray-500 dark:text-gray-400">
@@ -468,7 +507,7 @@ function SubscriptionsContent() {
                               t(
                                 'admin.subscriptions.snapshot_follow_up_required',
                                 {},
-                                'Current-period billing detail needs operator follow-up.'
+                                'This period billing statistics need operator follow-up.'
                               )}
                           </span>
                         ) : null}

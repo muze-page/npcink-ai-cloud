@@ -247,18 +247,18 @@ function SubscriptionDetailContent() {
     ? t(
         'admin.subscription_detail.next_step_budget',
         {},
-        'Budget pressure is already visible. Read customer subscription posture first, then move to a covered site only if runtime follow-up becomes operational.'
+        'Budget pressure is visible. Confirm the customer coverage first, then inspect a covered site only if runtime service is affected.'
       )
     : normalized.status === 'past_due' || normalized.status === 'expired'
       ? t(
           'admin.subscription_detail.next_step_status',
           {},
-          'Commercial follow-up is the first concern. Open the customer account first, then move to a site only when you need service continuity context.'
+          'Service continuity depends on this customer follow-up. Open the customer account first, then inspect a site only when service impact needs confirmation.'
         )
       : t(
           'admin.subscription_detail.next_step_default',
           {},
-          'This inspector is stable. Use customer detail for access and coverage context, then open a covered site only when runtime continuity needs inspection.'
+          'Service coverage looks stable. Use customer detail for account context and open a covered site only when runtime continuity needs inspection.'
         );
   const statusValue = translateStatusLabel(normalized.status, t);
   const packageLabel = resolveAdminPackageLabel(t, {
@@ -339,16 +339,16 @@ function SubscriptionDetailContent() {
   return (
     <BackofficePageStack>
       <BackofficePrimaryPanel
-        eyebrow={t('admin.nav_group_commercial_ops', {}, 'Commercial Ops')}
+        eyebrow={t('admin.nav_coverage', {}, 'Service status')}
         title={t(
           'admin.subscription_detail.title',
           { subscription: packageLabel },
-          `Subscription service status: ${packageLabel}`
+          `Service status detail: ${packageLabel}`
         )}
         description={t(
           'admin.subscription_detail.primary_desc',
           {},
-          'Check the subscription conclusion first, then handle the billing, package, or customer follow-up shown below.'
+          'Start with the current conclusion, then handle the customer, package, usage, or billing-statistics follow-up shown below.'
         )}
         actions={(
           <>
@@ -375,9 +375,9 @@ function SubscriptionDetailContent() {
             columnsClassName="md:grid-cols-4"
             items={[
               {
-                label: t('status.active', {}, 'Status'),
+                label: t('admin.subscription_detail.service_state_metric', {}, 'Service state'),
                 value: statusValue,
-                detail: t('admin.subscription_detail.status_metric', {}, 'Current operator-visible subscription state.'),
+                detail: t('admin.subscription_detail.status_metric', {}, 'Current operator-visible service coverage state.'),
               },
               {
                 label: t('admin.current_package', {}, 'Current package'),
@@ -385,9 +385,9 @@ function SubscriptionDetailContent() {
                 detail: statusValue,
               },
               {
-                label: t('admin.subscription_detail.snapshot_freshness', {}, 'Snapshot freshness'),
+                label: t('admin.subscription_detail.snapshot_freshness', {}, 'Billing statistics'),
                 value: billingSnapshotStatusLabel,
-                detail: localizedBillingSnapshotSummary || t('admin.subscription_detail.snapshot_freshness_desc', {}, 'Current-period billing evidence.'),
+                detail: localizedBillingSnapshotSummary || t('admin.subscription_detail.snapshot_freshness_desc', {}, 'This period billing statistics.'),
               },
               {
                 label: t('admin.subscription_detail.covered_sites_label', {}, 'Covered sites'),
@@ -413,8 +413,11 @@ function SubscriptionDetailContent() {
               {packageLabel}
             </p>
             <p className="mt-3 max-w-4xl text-sm leading-6 text-slate-600 dark:text-slate-300">
+              <span className="font-semibold text-slate-800 dark:text-slate-100">
+                {t('admin.current_conclusion', {}, 'Current conclusion')}:{' '}
+              </span>
               {hasSnapshotFollowUp
-                ? t('admin.subscription_detail.current_conclusion_snapshot', {}, 'Current-period billing evidence needs follow-up before treating this subscription as reconciled.')
+                ? t('admin.subscription_detail.current_conclusion_snapshot', {}, 'This period billing statistics need follow-up before treating this customer service state as reconciled.')
                 : nextStepCopy}
             </p>
             <details className="mt-3 text-xs text-slate-500 dark:text-slate-400">
@@ -428,17 +431,26 @@ function SubscriptionDetailContent() {
             </details>
           </div>
           {hasSnapshotFollowUp && normalized.billingSnapshotNextAction.action ? (
-            <button
-              type="button"
-              className="btn btn-primary shrink-0"
-              onClick={() => void handleBillingSnapshotRefresh()}
-              disabled={isSnapshotRefreshSaving}
-            >
-              {isSnapshotRefreshSaving
-                ? t('admin.subscription_detail.snapshot_refresh_saving', {}, 'Rebuilding snapshots...')
-                : localizedSnapshotActionLabel ||
-                  t('admin.subscription_detail.snapshot_refresh_action', {}, 'Rebuild current-period billing snapshots')}
-            </button>
+            <div className="shrink-0 space-y-2 lg:max-w-xs">
+              <button
+                type="button"
+                className="btn btn-primary w-full"
+                onClick={() => void handleBillingSnapshotRefresh()}
+                disabled={isSnapshotRefreshSaving}
+              >
+                {isSnapshotRefreshSaving
+                  ? t('admin.subscription_detail.snapshot_refresh_saving', {}, 'Refreshing statistics...')
+                  : localizedSnapshotActionLabel ||
+                    t('admin.subscription_detail.snapshot_refresh_action', {}, 'Refresh this period billing statistics')}
+              </button>
+              <p className="text-xs leading-5 text-slate-500 dark:text-slate-400">
+                {t(
+                  'admin.subscription_detail.snapshot_refresh_boundary',
+                  {},
+                  'Rebuilds billing statistics from usage records only. It does not change the package or WordPress content.'
+                )}
+              </p>
+            </div>
           ) : null}
         </BackofficeStackCard>
       </BackofficePrimaryPanel>
@@ -450,7 +462,7 @@ function SubscriptionDetailContent() {
               {t('admin.subscription_detail.commercial_status_eyebrow', {}, 'Commercial status')}
             </p>
             <h2 className="mt-2 text-xl font-semibold text-gray-950 dark:text-white">
-              {t('admin.subscription_detail.commercial_status_title', {}, 'Package and billing state')}
+              {t('admin.subscription_detail.commercial_status_title', {}, 'Package, usage, and service coverage')}
             </h2>
           </div>
           <div className="grid gap-4 md:grid-cols-2">
@@ -568,14 +580,14 @@ function SubscriptionDetailContent() {
                 {t('admin.subscription_detail.follow_up_eyebrow', {}, 'Follow-up')}
               </p>
               <h2 className="mt-2 text-xl font-semibold text-gray-950 dark:text-white">
-                {t('admin.subscription_detail.follow_up_title', {}, 'What needs action')}
+                {t('admin.subscription_detail.follow_up_title', {}, 'What needs operator action')}
               </h2>
             </div>
             <BackofficeStackCard className="space-y-4">
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div>
                   <p className="text-sm font-semibold text-slate-950 dark:text-white">
-                    {t('admin.subscription_detail.snapshot_freshness', {}, 'Snapshot freshness')}
+                    {t('admin.subscription_detail.snapshot_freshness', {}, 'Billing statistics')}
                   </p>
                   <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
                     {t(
@@ -585,7 +597,7 @@ function SubscriptionDetailContent() {
                         stale: String(normalized.billingSnapshotStaleCount),
                         missing: String(normalized.billingSnapshotMissingCount),
                       },
-                      `Fresh ${normalized.billingSnapshotFreshCount} · Stale ${normalized.billingSnapshotStaleCount} · Missing ${normalized.billingSnapshotMissingCount}`
+                      `Current ${normalized.billingSnapshotFreshCount} · Refresh ${normalized.billingSnapshotStaleCount} · Missing ${normalized.billingSnapshotMissingCount}`
                     )}
                   </p>
                 </div>
@@ -596,14 +608,14 @@ function SubscriptionDetailContent() {
                   t(
                     'admin.subscription_detail.snapshot_freshness_desc',
                     {},
-                    'Billing snapshot freshness stays tied to the current subscription period.'
+                    'Billing statistics stay tied to the current service period.'
                   )}
               </p>
               {normalized.billingSnapshotNextAction.action ? (
                 <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 dark:border-slate-800 dark:bg-slate-900/50">
                   <p className="text-sm leading-6 text-slate-600 dark:text-slate-300">
                     {localizedSnapshotActionDetail ||
-                      t('admin.subscription_detail.snapshot_refresh_detail', {}, 'Refresh current-period billing snapshots for every covered site before treating billing posture as reconciled.')}
+                      t('admin.subscription_detail.snapshot_refresh_detail', {}, 'Refresh this period billing statistics for every covered site before treating the service state as reconciled.')}
                   </p>
                   <button
                     type="button"
@@ -612,9 +624,9 @@ function SubscriptionDetailContent() {
                     disabled={isSnapshotRefreshSaving}
                   >
                     {isSnapshotRefreshSaving
-                      ? t('admin.subscription_detail.snapshot_refresh_saving', {}, 'Rebuilding snapshots...')
+                      ? t('admin.subscription_detail.snapshot_refresh_saving', {}, 'Refreshing statistics...')
                       : localizedSnapshotActionLabel ||
-                        t('admin.subscription_detail.snapshot_refresh_action', {}, 'Rebuild current-period billing snapshots')}
+                        t('admin.subscription_detail.snapshot_refresh_action', {}, 'Refresh this period billing statistics')}
                   </button>
                 </div>
               ) : null}
@@ -626,13 +638,13 @@ function SubscriptionDetailContent() {
             </BackofficeStackCard>
             <BackofficeStackCard>
               <p className="text-sm font-semibold text-slate-950 dark:text-white">
-                {t('admin.subscription_detail.route_hint', {}, 'Route discipline')}
+                {t('admin.subscription_detail.route_hint', {}, 'Boundary')}
               </p>
               <p className="mt-2 text-sm leading-6 text-slate-600 dark:text-slate-300">
                 {t(
                   'admin.subscription_detail.route_hint_desc',
                   {},
-                  'This page stays a commercial inspector. It does not become the customer access authority, site access authority, or runtime control surface.'
+                  'This page explains service coverage and billing evidence. It does not become customer access authority, site access authority, or a runtime control surface.'
                 )}
               </p>
               <div className="mt-3 space-y-2 text-sm text-slate-600 dark:text-slate-300">
@@ -659,7 +671,7 @@ function SubscriptionDetailContent() {
                 {t(
                   'admin.subscription_detail.related_sites_scope_desc',
                   {},
-                  'Sites remain related operating surfaces. They are not the commercial authority for this subscription.'
+                  'Sites remain related operating surfaces. They are not the commercial authority for this service coverage record.'
                 )}
               </p>
             </div>
