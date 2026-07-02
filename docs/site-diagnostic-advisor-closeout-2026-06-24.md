@@ -163,7 +163,7 @@ Clicking a diagnostic item routes to the existing evidence surface:
 - media issues -> `tab=media`
 - vector issues -> `tab=vector`
 - runtime/quota issues -> `/portal/usage`
-- key/activity issues -> `/portal/keys`
+- key/activity issues -> `/portal/sites/{site_id}`
 
 No repair button or apply button was added.
 

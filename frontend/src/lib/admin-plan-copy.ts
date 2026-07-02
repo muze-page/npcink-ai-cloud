@@ -95,9 +95,6 @@ export function localizePlanName(t: TranslateFn, planId: string, name: string): 
   if (planId === 'plan_free' || name === 'Free') {
     return t('admin.plan_name_free', {}, name || 'Free');
   }
-  if (planId === 'plan_dev_unlimited' || name === 'Development Unlimited') {
-    return t('admin.plan_name_development_unlimited', {}, name);
-  }
   if (name === 'Magick Cloud MVP Plan') {
     return t('admin.plan_name_magick_cloud_mvp', {}, name);
   }

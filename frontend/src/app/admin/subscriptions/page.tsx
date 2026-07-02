@@ -3,7 +3,6 @@
 import React, { Suspense, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
-import { CustomerAdminTabs } from '@/components/admin/CustomerAdminTabs';
 import { BackofficeIdentifier } from '@/components/backoffice/BackofficeIdentifier';
 import { BackofficeStatusBadge } from '@/components/backoffice/BackofficeStatusBadge';
 import { LoadingFallback } from '@/components/ui/LoadingFallback';
@@ -277,7 +276,6 @@ function SubscriptionsContent() {
 
   return (
     <BackofficePageStack>
-      <CustomerAdminTabs />
       <BackofficePrimaryPanel
         eyebrow={t('admin.nav_coverage', {}, 'Coverage')}
         title={t('admin.coverage_workspace_subscriptions_title', {}, 'Coverage queue')}
@@ -402,6 +400,11 @@ function SubscriptionsContent() {
                       : subscription.status === 'trialing'
                         ? t('admin.subscriptions.reason_trialing', {}, 'Trial coverage is still active and should be checked before converting or ending.')
                         : t('admin.subscriptions.reason_active', {}, 'This subscription is currently stable and remains here as lower-priority review context.');
+              const packageLabel = resolveAdminPackageLabel(t, {
+                planId: subscription.plan_id,
+                packageAlias: subscription.package_alias,
+                fallback: subscription.package_alias || subscription.plan_id,
+              }) || t('common.unknown');
 
               return (
                 <article key={subscription.subscription_id} className="px-5 py-5 md:px-6">
@@ -409,7 +412,7 @@ function SubscriptionsContent() {
                     <div>
                       <div className="flex flex-wrap items-center gap-2">
                         <h3 className="text-sm font-semibold text-gray-950 dark:text-white">
-                          <BackofficeIdentifier value={subscription.subscription_id} className="text-sm font-semibold text-gray-950 dark:text-white" />
+                          {subscription.account_name || packageLabel}
                         </h3>
                         <BackofficeStatusBadge
                           status={subscription.status}
@@ -422,24 +425,26 @@ function SubscriptionsContent() {
                         </span>
                       </div>
                       <p className="mt-3 text-sm font-semibold text-gray-950 dark:text-white">
-                        {subscription.account_name || subscription.account_id}
+                        {packageLabel}
                       </p>
                       <p className="mt-1 text-sm text-gray-600 dark:text-gray-300">{riskReason}</p>
                       <div className="mt-3 flex flex-wrap gap-x-5 gap-y-1 text-sm text-gray-600 dark:text-gray-400">
                         <Link href={`/admin/accounts/${subscription.account_id}`} className="text-blue-600 hover:underline dark:text-blue-300">
-                          <BackofficeIdentifier value={subscription.account_id} className="text-sm text-blue-600 dark:text-blue-300" />
+                          {t('common.account', {}, 'Customer')}
                         </Link>
                         <span>
                           {t('common.sites', {}, 'Sites')}: {formatInteger(subscription.site_count)}
                         </span>
-                        <span>
-                          {resolveAdminPackageLabel(t, {
-                            planId: subscription.plan_id,
-                            packageAlias: subscription.package_alias,
-                            fallback: subscription.package_alias || subscription.plan_id,
-                          }) || t('common.unknown')}
-                        </span>
                       </div>
+                      <details className="mt-3 text-xs text-gray-500 dark:text-gray-400">
+                        <summary className="cursor-pointer font-medium hover:text-gray-800 dark:hover:text-gray-200">
+                          {t('portal.support_information', {}, 'Support information')}
+                        </summary>
+                        <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1">
+                          <BackofficeIdentifier value={subscription.subscription_id} />
+                          <BackofficeIdentifier value={subscription.account_id} />
+                        </div>
+                      </details>
                       <div className="mt-3 flex flex-wrap gap-2 text-xs">
                         <span
                           className={cn(

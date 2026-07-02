@@ -1626,7 +1626,7 @@ class RuntimeService:
             **summary,
         }
 
-    def get_hosted_model_governance_diagnostics(
+    def get_runtime_telemetry_diagnostics(
         self,
         *,
         site_id: str | None = None,
@@ -2273,7 +2273,7 @@ class RuntimeService:
                     "count": max(0, count),
                     "capabilities": capabilities[:10],
                     "suggested_action": suggested_action,
-                    "href": "/admin/ai-resources?view=diagnostics",
+                    "href": "/admin/troubleshooting",
                 }
             )
 
@@ -2388,7 +2388,7 @@ class RuntimeService:
             "status": status,
             "summary": summary,
             "next_action": next_action,
-            "href": "/admin/ai-resources?view=diagnostics",
+            "href": "/admin/troubleshooting",
             "alerts": alerts[:8],
             "alert_count": len(alerts),
             "daily_digest": {

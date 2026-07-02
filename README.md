@@ -223,7 +223,6 @@ Commercial acceptance freeze:
 - points are presentation, not a ledger
 - operator top-up means current billing period budget headroom only
 - no wallet, no permanent credit, no customer self-serve buy flow in the current phase
-- `plan_dev_unlimited / plan_dev_unlimited_v1` remain dev-only bootstrap/runtime baselines, not production free packaging
 
 ## Validation Ladder
 

@@ -13,7 +13,7 @@ function buildInputs(overrides = {}) {
 		expiringSubscriptionsIn7Days: 0,
 		attentionSubscriptionsCount: 0,
 		firstAttentionReason: '',
-		hostedModelGovernance: {
+		runtimeTelemetry: {
 			status: 'inactive',
 			alertCount: 0,
 			firstAlertTitle: '',
@@ -30,8 +30,8 @@ function buildInputs(overrides = {}) {
 			expiryReason: 'Subscriptions are expiring.',
 			attentionTitle: 'Coverage attention',
 			attentionFallbackReason: 'Coverage needs attention.',
-			hostedTitle: 'Runtime telemetry needs review',
-			hostedReason: 'Runtime telemetry coverage needs review.',
+			runtimeTelemetryTitle: 'Runtime telemetry needs review',
+			runtimeTelemetryReason: 'Runtime telemetry coverage needs review.',
 		},
 		...overrides,
 	};
@@ -43,7 +43,7 @@ describe( 'buildAdminOperatorWatchItems', () => {
 			buildInputs( {
 				attentionSubscriptionsCount: 1,
 				firstAttentionReason: 'Billing follow-up is active.',
-				hostedModelGovernance: {
+				runtimeTelemetry: {
 					status: 'error',
 					alertCount: 2,
 					firstAlertTitle: 'Runtime metering gap',
@@ -68,7 +68,7 @@ describe( 'buildAdminOperatorWatchItems', () => {
 		const items = buildAdminOperatorWatchItems(
 			buildInputs( {
 				expiringSubscriptionsIn7Days: 1,
-				hostedModelGovernance: {
+				runtimeTelemetry: {
 					status: 'warning',
 					alertCount: 1,
 					firstAlertTitle: 'Provider call coverage gap',

@@ -912,22 +912,17 @@ def test_admin_ability_model_runtime_projection_is_bounded_and_feature_backed(
 
     rows = {item["ability_id"]: item for item in data["rows"]}
     assert {
-        "content_support",
-        "audio_summary_script",
-        "article_narration",
-        "article_audio_summary",
-        "generated_image_candidates",
         "site_knowledge_embedding",
         "evidence_preflight",
         "image_source_candidates",
     }.issubset(rows)
-    assert rows["content_support"]["media"] == "text"
-    assert rows["content_support"]["status"] == "connected"
-    assert rows["content_support"]["can_configure"] is False
-    assert rows["content_support"]["action"] == "runtime_managed"
-    assert rows["content_support"]["boundary"]["direct_wordpress_write"] is False
-    assert rows["article_narration"]["media"] == "audio"
-    assert rows["generated_image_candidates"]["media"] == "image"
+    assert {
+        "content_support",
+        "generated_image_candidates",
+        "audio_summary_script",
+        "article_narration",
+        "article_audio_summary",
+    }.isdisjoint(rows)
     assert rows["site_knowledge_embedding"]["media"] == "vector"
     assert rows["site_knowledge_embedding"]["model_kind"] == "embedding_model"
     assert rows["site_knowledge_embedding"]["can_configure"] is True
@@ -937,9 +932,10 @@ def test_admin_ability_model_runtime_projection_is_bounded_and_feature_backed(
 
     media_groups = {item["media"]: item for item in data["media_groups"]}
     assert {"text", "image", "vector", "audio", "video"}.issubset(media_groups)
-    assert media_groups["text"]["count"] >= 2
+    assert media_groups["text"]["count"] >= 1
+    assert media_groups["image"]["count"] >= 1
     assert media_groups["vector"]["count"] >= 1
-    assert media_groups["audio"]["count"] >= 3
+    assert media_groups["audio"]["count"] == 0
     assert media_groups["video"]["count"] == 0
 
     serialized = json.dumps(data)
@@ -2868,7 +2864,7 @@ def test_image_source_readonly_metrics_summarizes_fast_first_runtime(
     assert "sensitive operator query should not appear" not in payload_text
 
 
-def test_hosted_model_governance_diagnostics_summarizes_runtime_families(
+def test_runtime_telemetry_diagnostics_summarizes_runtime_families(
     tmp_path: Path,
 ) -> None:
     database_url, client = _build_client(tmp_path)
@@ -3045,21 +3041,33 @@ def test_hosted_model_governance_diagnostics_summarizes_runtime_families(
             )
         session.commit()
 
-    unauthenticated = client.get("/internal/service/runtime/diagnostics/hosted-model-governance")
+    unauthenticated = client.get("/internal/service/runtime/diagnostics/runtime-telemetry")
     assert unauthenticated.status_code == 401
 
     response = client.get(
-        "/internal/service/runtime/diagnostics/hosted-model-governance"
+        "/internal/service/runtime/diagnostics/runtime-telemetry"
         f"?site_id={site_id}&recent_minutes=60&limit=10",
         headers=build_internal_headers(),
     )
     admin_alias_response = client.get(
-        "/internal/service/admin/hosted-model-governance"
+        "/internal/service/admin/runtime-telemetry"
         f"?site_id={site_id}&recent_minutes=10080&limit=10",
         headers=build_internal_headers(),
     )
     assert response.status_code == 200
     assert admin_alias_response.status_code == 200
+    legacy_response = client.get(
+        "/internal/service/runtime/diagnostics/hosted-model-governance"
+        f"?site_id={site_id}&recent_minutes=60&limit=10",
+        headers=build_internal_headers(),
+    )
+    legacy_admin_alias_response = client.get(
+        "/internal/service/admin/hosted-model-governance"
+        f"?site_id={site_id}&recent_minutes=10080&limit=10",
+        headers=build_internal_headers(),
+    )
+    assert legacy_response.status_code == 404
+    assert legacy_admin_alias_response.status_code == 404
     data = response.json()["data"]
     assert admin_alias_response.json()["data"]["totals"]["runs"] == 3
     assert admin_alias_response.json()["data"]["filters"]["recent_minutes"] == 10080
@@ -4130,17 +4138,18 @@ def test_service_routes_admin_read_facade(tmp_path: Path) -> None:
     assert platform_credit["trend"]["status"] in {"new_activity", "flat", "up", "down"}
     assert isinstance(platform_credit["watch_items"], list)
     assert "runtime_diagnostics" in overview
-    assert overview["hosted_model_governance"]["filters"]["recent_minutes"] == 1440
-    assert overview["hosted_model_governance"]["alert_summary"]["status"] in {
+    assert overview["runtime_telemetry"]["filters"]["recent_minutes"] == 1440
+    assert overview["runtime_telemetry"]["alert_summary"]["status"] in {
         "ok",
         "warning",
         "error",
         "inactive",
     }
     assert (
-        overview["hosted_model_governance"]["alert_summary"]["boundary"]["direct_wordpress_write"]
+        overview["runtime_telemetry"]["alert_summary"]["boundary"]["direct_wordpress_write"]
         is False
     )
+    assert "hosted_model_governance" not in overview
     assert overview["runtime_operator_explanations"]
     assert len(overview["expiring_subscriptions"]["items"]) >= 1
     assert any(

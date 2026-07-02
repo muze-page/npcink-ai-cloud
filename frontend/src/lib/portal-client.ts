@@ -1486,11 +1486,11 @@ export class PortalApiError extends Error {
 // ============================================
 
 export class PortalClient {
-  private baseUrl: string;
+  private baseUrl?: string;
   private token?: string;
 
   constructor(baseUrl?: string, token?: string) {
-    this.baseUrl = baseUrl || getPortalApiBaseUrl();
+    this.baseUrl = baseUrl;
     this.token = token;
   }
 
@@ -1525,7 +1525,8 @@ export class PortalClient {
     body?: unknown,
     options: PortalRequestOptions = {}
   ): Promise<PortalEnvelope<T>> {
-    const url = `${this.baseUrl}${path}`;
+    const baseUrl = this.baseUrl || getPortalApiBaseUrl();
+    const url = `${baseUrl}${path}`;
     const methodName = method.toUpperCase();
     const generatedIdempotencyKey =
       methodName !== 'GET' && methodName !== 'HEAD'

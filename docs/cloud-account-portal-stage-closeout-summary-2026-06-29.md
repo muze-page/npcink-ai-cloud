@@ -221,7 +221,7 @@ Addon stores runtime credentials internally for signed requests.
 
 Implemented Cloud-side outcomes:
 
-- `/portal/keys` redirects to `/portal/sites`;
+- Follow-up cleanup removed the `/portal/keys` compatibility redirect;
 - Portal primary navigation no longer exposes `Keys`;
 - Portal users manage sites, not raw signing credentials;
 - addon connection/reconnection issues a Cloud API Key wrapper automatically;

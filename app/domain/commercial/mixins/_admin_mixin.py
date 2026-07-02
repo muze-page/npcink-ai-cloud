@@ -2943,7 +2943,6 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
         active_key_site_count = site_count - len(sites_without_active_key)
         subscription_status = str(getattr(primary_subscription, "status", "") or "")
         has_coverage = coverage_state == "covered" and package_kind not in {
-            "dev_baseline",
             "unknown",
             "uncovered",
         }

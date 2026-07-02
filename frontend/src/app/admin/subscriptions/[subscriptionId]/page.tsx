@@ -6,6 +6,7 @@ import { useParams } from 'next/navigation';
 import { LoadingFallback } from '@/components/ui/LoadingFallback';
 import { useLocale } from '@/contexts/LocaleContext';
 import { localizeAdminCommercialCopy } from '@/lib/admin-commercial-copy';
+import { resolveAdminPackageLabel } from '@/lib/admin-plan-copy';
 import { resolveUiErrorMessage } from '@/lib/errors';
 import { normalizeStatusToken, translateStatusLabel } from '@/lib/status-display';
 import { readResponsePayload } from '@/lib/safe-response';
@@ -181,7 +182,7 @@ function SubscriptionDetailContent() {
       subscriptionId: String(subscription.subscription_id || subscriptionId),
       status: normalizeStatusToken(String(subscription.status || grace.subscription_status || 'unknown')),
       accountId: String(account.account_id || subscription.account_id || ''),
-      accountName: String(account.name || account.account_id || ''),
+      accountName: String(account.name || ''),
       planId: String(plan.plan_id || subscription.plan_id || ''),
       planName: String(plan.display_name || plan.plan_id || subscription.plan_id || ''),
       planVersionId: String(planVersion.plan_version_id || subscription.plan_version_id || ''),
@@ -218,7 +219,7 @@ function SubscriptionDetailContent() {
       hasBudgetPressure: Boolean(budget.runs?.over_limit || budget.tokens?.over_limit || budget.cost?.over_limit),
       relatedSites: relatedSites.map((site) => ({
         siteId: String(site.site_id || ''),
-        siteName: String(site.name || site.site_id || ''),
+        siteName: String(site.name || ''),
         status: String(site.status || 'unknown'),
       })),
     };
@@ -260,6 +261,10 @@ function SubscriptionDetailContent() {
           'This inspector is stable. Use customer detail for access and coverage context, then open a covered site only when runtime continuity needs inspection.'
         );
   const statusValue = translateStatusLabel(normalized.status, t);
+  const packageLabel = resolveAdminPackageLabel(t, {
+    planId: normalized.planId,
+    fallback: normalized.planName || normalized.planId,
+  }) || t('common.unknown', {}, 'Unknown');
   const lifecyclePosture = localizeAdminCommercialCopy(detail?.commercial_follow_up?.lifecycle_posture, t);
   const snapshotReconciliation = localizeAdminCommercialCopy(
     detail?.commercial_follow_up?.snapshot_reconciliation_summary,
@@ -337,8 +342,8 @@ function SubscriptionDetailContent() {
         eyebrow={t('admin.nav_group_commercial_ops', {}, 'Commercial Ops')}
         title={t(
           'admin.subscription_detail.title',
-          { subscription: normalized.subscriptionId },
-          `Subscription service status: ${normalized.subscriptionId}`
+          { subscription: packageLabel },
+          `Subscription service status: ${packageLabel}`
         )}
         description={t(
           'admin.subscription_detail.primary_desc',
@@ -376,8 +381,8 @@ function SubscriptionDetailContent() {
               },
               {
                 label: t('admin.current_package', {}, 'Current package'),
-                value: normalized.planId || t('common.unknown', {}, 'Unknown'),
-                detail: normalized.planVersionId || t('common.not_available', {}, 'N/A'),
+                value: packageLabel,
+                detail: statusValue,
               },
               {
                 label: t('admin.subscription_detail.snapshot_freshness', {}, 'Snapshot freshness'),
@@ -402,16 +407,25 @@ function SubscriptionDetailContent() {
                 <BackofficeStatusBadge status="warning" label={t('admin.subscription_detail.grace_active', {}, 'Grace active')} />
               ) : null}
             </div>
-            <BackofficeIdentifier
-              value={normalized.subscriptionId}
-              className="mt-3 block text-sm font-semibold text-slate-950 dark:text-white"
-              full
-            />
+            <p className="mt-3 text-sm font-semibold text-slate-950 dark:text-white">
+              {normalized.accountName || t('admin.subscription_detail.current_customer_label', {}, 'Current customer')}
+              {' · '}
+              {packageLabel}
+            </p>
             <p className="mt-3 max-w-4xl text-sm leading-6 text-slate-600 dark:text-slate-300">
               {hasSnapshotFollowUp
                 ? t('admin.subscription_detail.current_conclusion_snapshot', {}, 'Current-period billing evidence needs follow-up before treating this subscription as reconciled.')
                 : nextStepCopy}
             </p>
+            <details className="mt-3 text-xs text-slate-500 dark:text-slate-400">
+              <summary className="cursor-pointer font-medium">
+                {t('portal.support_information', {}, 'Support information')}
+              </summary>
+              <div className="mt-2 space-y-1">
+                <BackofficeIdentifier value={normalized.subscriptionId} full />
+                {normalized.planVersionId ? <BackofficeIdentifier value={normalized.planVersionId} full /> : null}
+              </div>
+            </details>
           </div>
           {hasSnapshotFollowUp && normalized.billingSnapshotNextAction.action ? (
             <button
@@ -443,22 +457,39 @@ function SubscriptionDetailContent() {
             <BackofficeStackCard>
               <p className="text-xs font-semibold text-slate-500 dark:text-slate-400">{t('common.account', {}, 'Customer')}</p>
               <p className="mt-2 text-base font-semibold text-slate-950 dark:text-white">
-                {normalized.accountName || normalized.accountId || t('common.unknown', {}, 'Unknown')}
+                {normalized.accountName || t('admin.subscription_detail.current_customer_label', {}, 'Current customer')}
               </p>
               {normalized.accountId ? (
                 <Link href={`/admin/accounts/${normalized.accountId}`} className="mt-3 inline-flex text-sm font-medium text-blue-600 hover:underline dark:text-blue-300">
-                  <BackofficeIdentifier value={normalized.accountId} />
+                  {t('admin.subscription_detail.open_customer_action', {}, 'Open customer')}
                 </Link>
+              ) : null}
+              {normalized.accountId ? (
+                <details className="mt-3 text-xs text-slate-500 dark:text-slate-400">
+                  <summary className="cursor-pointer font-medium">
+                    {t('portal.support_information', {}, 'Support information')}
+                  </summary>
+                  <div className="mt-2">
+                    <BackofficeIdentifier value={normalized.accountId} full />
+                  </div>
+                </details>
               ) : null}
             </BackofficeStackCard>
             <BackofficeStackCard>
               <p className="text-xs font-semibold text-slate-500 dark:text-slate-400">{t('admin.current_package', {}, 'Current package')}</p>
               <p className="mt-2 text-base font-semibold text-slate-950 dark:text-white">
-                {normalized.planId || t('common.unknown', {}, 'Unknown')}
+                {packageLabel}
               </p>
-              <p className="mt-2 text-sm text-slate-500 dark:text-slate-400">
-                {normalized.planVersionId || t('common.not_available', {}, 'N/A')}
-              </p>
+              <p className="mt-2 text-sm text-slate-500 dark:text-slate-400">{statusValue}</p>
+              <details className="mt-3 text-xs text-slate-500 dark:text-slate-400">
+                <summary className="cursor-pointer font-medium">
+                  {t('portal.support_information', {}, 'Support information')}
+                </summary>
+                <div className="mt-2 space-y-1">
+                  {normalized.planId ? <BackofficeIdentifier value={normalized.planId} full /> : null}
+                  {normalized.planVersionId ? <BackofficeIdentifier value={normalized.planVersionId} full /> : null}
+                </div>
+              </details>
             </BackofficeStackCard>
             <BackofficeStackCard>
               <p className="text-xs font-semibold text-slate-500 dark:text-slate-400">{t('admin.billing_period', {}, 'Billing period')}</p>
@@ -639,10 +670,20 @@ function SubscriptionDetailContent() {
               {normalized.relatedSites.map((site) => (
                 <div key={site.siteId} className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
                   <div>
-                    <p className="font-medium text-slate-950 dark:text-white">{site.siteName || site.siteId}</p>
+                    <p className="font-medium text-slate-950 dark:text-white">
+                      {site.siteName || t('admin.site_detail.current_site_label', {}, 'Current site')}
+                    </p>
                     <Link href={`/admin/sites/${site.siteId}`} className="mt-1 inline-flex text-sm font-medium text-blue-600 hover:underline dark:text-blue-300">
-                      <BackofficeIdentifier value={site.siteId} className="text-sm text-blue-600 dark:text-blue-300" />
+                      {t('admin.site_detail.open_site_action', {}, 'Open site')}
                     </Link>
+                    <details className="mt-2 text-xs text-slate-500 dark:text-slate-400">
+                      <summary className="cursor-pointer font-medium">
+                        {t('portal.support_information', {}, 'Support information')}
+                      </summary>
+                      <div className="mt-2">
+                        <BackofficeIdentifier value={site.siteId} full />
+                      </div>
+                    </details>
                   </div>
                   <BackofficeStatusBadge status={site.status} label={translateStatusLabel(site.status, t)} />
                 </div>

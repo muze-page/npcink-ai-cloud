@@ -879,7 +879,7 @@ function ActionRequiredPanel({
             <p className="text-xs text-slate-500 dark:text-slate-400">
               {t(
                 'portal.monitoring.more_actions_in_tabs',
-                {},
+                { count: String(items.length - visibleItems.length) },
                 `${items.length - visibleItems.length} more item(s) are available in the detail tabs.`
               )}
             </p>

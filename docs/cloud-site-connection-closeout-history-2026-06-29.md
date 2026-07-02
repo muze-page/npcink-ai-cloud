@@ -80,7 +80,8 @@ The Cloud repository landed the Portal/key-management side in:
 
 Important Cloud-side outcomes:
 
-- `/portal/keys` redirects to `/portal/sites`.
+- Follow-up cleanup removed the `/portal/keys` compatibility redirect; users now
+  manage Cloud keys only from site-scoped connection surfaces.
 - Addon connection and reconnection issue a new customer-facing Cloud API Key
   wrapper automatically.
 - Old active runtime keys for the same site are revoked when a new connection is

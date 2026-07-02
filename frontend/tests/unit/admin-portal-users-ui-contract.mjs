@@ -36,7 +36,7 @@ assert.match(
 
 assert.match(
   pageSource,
-  /批量禁用需要填写原因/,
+  /if \(!reason\)[\s\S]*admin\.portal_users\.batch_reason_required/,
   'batch disable must require an operator reason'
 );
 
@@ -48,13 +48,13 @@ assert.match(
 
 assert.match(
   pageSource,
-  /用户审计详情/,
+  /admin\.portal_users\.audit_modal_title/,
   'portal users page must expose a user audit detail inspector'
 );
 
 assert.match(
   pageSource,
-  /最近禁用原因/,
+  /admin\.portal_users\.latest_disable_reason/,
   'portal users audit inspector must expose disable reason evidence'
 );
 
@@ -70,22 +70,16 @@ assert.match(
   'portal users page must display QQ binding state'
 );
 
-assert.match(
+assert.doesNotMatch(
   pageSource,
   /CustomerAdminTabs/,
-  'portal users page must stay reachable through the shared customer tabs'
+  'portal users page must use the shared admin sidebar instead of duplicate customer tabs'
 );
 
 assert.match(
   layoutSource,
-  /activePrefixes: \[[\s\S]*'\/admin\/accounts'[\s\S]*'\/admin\/sites'[\s\S]*'\/admin\/portal-users'[\s\S]*'\/admin\/coverage'[\s\S]*'\/admin\/subscriptions'[\s\S]*'\/admin\/plans'[\s\S]*\]/,
+  /admin\.nav_group_customer_service[\s\S]*href: '\/admin\/accounts'[\s\S]*href: '\/admin\/coverage'[\s\S]*href: '\/admin\/subscriptions'[\s\S]*href: '\/admin\/plans'[\s\S]*href: '\/admin\/portal-users'/,
   'admin customers navigation must cover customer, portal user, service status, subscription, and plan surfaces'
-);
-
-assert.doesNotMatch(
-  layoutSource,
-  /href: '\/admin\/portal-users'/,
-  'portal users must not remain a separate top-level admin navigation item'
 );
 
 assert.match(

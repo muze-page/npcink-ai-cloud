@@ -46,6 +46,7 @@ EXPECTED_PLUGIN_SLUGS = (
     "npcink-abilities-toolkit",
     "npcink-governance-core",
     "npcink-ai-client-adapter",
+    "npcink-cloud-addon",
 )
 ERROR_RATE_HIGH_THRESHOLD = 0.05
 LATENCY_WARNING_MS = 3000

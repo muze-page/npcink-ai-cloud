@@ -97,8 +97,15 @@ function AdminLoginPageContent() {
               <p className="font-medium">{errorMessage}</p>
               <p className="mt-1 text-xs text-red-600/80 dark:text-red-300/80">
                 Error code: {error}
-                {traceId ? ` · Trace: ${traceId}` : ''}
               </p>
+              {traceId ? (
+                <details className="mt-2 text-xs text-red-600/80 dark:text-red-300/80">
+                  <summary className="cursor-pointer font-medium">
+                    {t('portal.support_information', {}, 'Support information')}
+                  </summary>
+                  <p className="mt-1 break-all font-mono">Trace: {traceId}</p>
+                </details>
+              ) : null}
             </div>
           ) : null}
 

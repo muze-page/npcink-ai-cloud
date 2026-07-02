@@ -1,30 +1,22 @@
 from pathlib import Path
 
-import pytest
 
-
-def test_dev_unlimited_plan_is_limited_to_seed_runtime_paths() -> None:
+def test_default_free_plan_is_the_current_bootstrap_posture() -> None:
     root = Path(__file__).resolve().parents[2]
     service_code = (root / "app/domain/commercial/service.py").read_text()
+    account_code = (
+        root / "app/domain/commercial/mixins/_account_mixin.py"
+    ).read_text()
+    billing_code = (
+        root / "app/domain/commercial/mixins/_billing_mixin.py"
+    ).read_text()
     seed_runtime_code = (root / "app/dev/seed_runtime.py").read_text()
-    commercial_core_path = root.parent / "magick-ai/docs/contracts/cloud-commercial-core-v1.md"
-    free_plan_path = root.parent / "magick-ai/docs/contracts/cloud-free-plan-v1.md"
-    if not commercial_core_path.exists() or not free_plan_path.exists():
-        pytest.skip("root contract docs are not mounted in this standalone Cloud test environment")
-    commercial_core_doc = commercial_core_path.read_text()
-    free_plan_doc = free_plan_path.read_text()
 
-    assert "plan_dev_unlimited" in service_code
-    assert '"source": "seed_runtime"' in service_code
-    assert "plan_dev_unlimited" in seed_runtime_code
+    assert "plan_dev_unlimited" not in service_code
+    assert "plan_dev_unlimited" not in seed_runtime_code
+    assert '"dev_baseline"' not in billing_code
     assert 'DEFAULT_FREE_PLAN_ID = "plan_free"' in service_code
     assert 'DEFAULT_FREE_PLAN_VERSION_ID = "plan_free_v1"' in service_code
-    assert "bind_default_free: bool = False" in service_code
-    assert "production/commercial truth 已冻结显式 production free package" in commercial_core_doc
-    assert "plan_dev_unlimited / plan_dev_unlimited_v1" in commercial_core_doc
-    assert "只属于：" in commercial_core_doc
-    assert "plan_id = plan_free" in free_plan_doc
-    assert (
-        "不是 runtime request-time fallback" in free_plan_doc
-        or "不是 runtime request-time fallback" in commercial_core_doc
-    )
+    assert 'plan_id: str = "plan_free"' in seed_runtime_code
+    assert 'plan_version_id: str = "plan_free_v1"' in seed_runtime_code
+    assert "bind_default_free: bool = False" in account_code

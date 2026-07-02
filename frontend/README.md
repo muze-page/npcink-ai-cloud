@@ -69,7 +69,6 @@ Commercial copy freeze for frontend surfaces:
 
 - `/portal`
 - `/portal/login`
-- `/portal/keys`
 - `/portal/usage`
 - `/portal/billing`
 - `/portal/audit`
@@ -84,7 +83,7 @@ Commercial copy freeze for frontend surfaces:
     - `/admin/plans`
     - `/admin/subscriptions`
     - `/admin/accounts`
-    - `/admin/sites`
+    - `/admin/sites/[siteId]`
 
 ### BFF / Route Handlers
 

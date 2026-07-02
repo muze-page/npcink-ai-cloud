@@ -3,7 +3,7 @@
 import React from 'react';
 import { BackofficeMetricStrip } from '@/components/backoffice/BackofficeScaffold';
 import { useLocale } from '@/contexts/LocaleContext';
-import { getPortalSiteSecondaryLabel, getPortalSiteWordPressUrl } from '@/lib/portal-site-display';
+import { getPortalSiteWordPressUrl } from '@/lib/portal-site-display';
 import { cn } from '@/lib/utils';
 
 export type PortalWorkspacePage =
@@ -106,10 +106,9 @@ export function PortalWorkspaceHeader({
         </h1>
         {showSiteContextSummary ? (
           <p className="mt-2 max-w-md truncate text-sm text-gray-600 dark:text-gray-400">
-            {selectedSiteName || selectedSiteId || t('common.not_found')}
+            {selectedSiteName || selectedSiteWordPressUrl || t('portal.current_site', {}, 'Current site')}
             {' · '}
             {selectedSiteWordPressUrl ||
-              getPortalSiteSecondaryLabel(selectedSite) ||
               t('portal.site_url_missing', {}, 'WordPress URL not configured')}
           </p>
         ) : null}

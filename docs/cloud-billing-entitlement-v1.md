@@ -162,7 +162,7 @@ or WordPress write boundaries.
 Internal operators may inspect this posture through:
 
 ```http
-GET /internal/service/runtime/diagnostics/hosted-model-governance
+GET /internal/service/runtime/diagnostics/runtime-telemetry
 ```
 
 This diagnostic endpoint is internal-only and read-only. It may summarize
@@ -170,6 +170,11 @@ ability-family, execution-kind, profile, provider, model, token, cost, latency,
 error, and metering-coverage signals, but it must not return prompts, generated
 content, raw runtime inputs/results, provider secrets, WordPress credentials,
 or any local approval/write controls.
+
+The former `hosted-model-governance` compatibility aliases are retired. Current
+surfaces must use the runtime telemetry name because the evidence covers all
+hosted runtime execution families, not a standalone model governance product
+area.
 
 ## 4. Cloud API Query
 

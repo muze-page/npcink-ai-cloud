@@ -2428,8 +2428,6 @@ class CommercialServiceBillingMixin(CommercialServiceAuditMixin):
         plan_kind = str(metadata.get("plan_kind") or "").strip()
         if plan_id == DEFAULT_FREE_PLAN_ID or plan_kind == DEFAULT_FREE_PLAN_KIND:
             return "formal_free"
-        if plan_id == "plan_dev_unlimited":
-            return "dev_baseline"
         if plan_id:
             return "tier_package"
         return "unknown"
@@ -2452,8 +2450,6 @@ class CommercialServiceBillingMixin(CommercialServiceAuditMixin):
         if package_alias:
             return package_alias
         plan_id = str(getattr(subscription, "plan_id", "") or "").strip()
-        if package_kind == "dev_baseline":
-            return "Dev Unlimited"
         if package_kind == "formal_free":
             return "Free"
         tier_package_alias = str(

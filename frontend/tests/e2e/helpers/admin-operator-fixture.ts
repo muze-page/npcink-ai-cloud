@@ -81,26 +81,6 @@ export async function installAdminMocks(page: Page) {
     },
     {
       account: {
-        account_id: 'acct_dev_baseline',
-        name: 'Dev Baseline Account',
-        status: 'active',
-        created_at: '2026-03-03T00:00:00Z',
-      },
-      member_count: 0,
-      site_count: 1,
-      active_subscription_count: 1,
-      top_plan_id: 'plan_dev_unlimited',
-      package_alias: '',
-      plan_kind: '',
-      display_package_label: 'Development Unlimited',
-      package_kind: 'dev_baseline',
-      coverage_state: 'covered',
-      primary_subscription_id: 'sub_dev_baseline',
-      coverage_follow_up_required: false,
-      nearest_expiry_at: '',
-    },
-    {
-      account: {
         account_id: 'acct_uncovered',
         name: 'Uncovered Account',
         status: 'active',
@@ -314,7 +294,7 @@ export async function installAdminMocks(page: Page) {
           window_days: 7,
           totals: { runs: 21, provider_calls: 21, tokens_total: 32000, cost: 18.42 },
         },
-        hosted_model_governance: {
+        runtime_telemetry: {
           generated_at: '2026-04-08T10:00:00Z',
           filters: { site_id: '', recent_minutes: 1440, limit: 10 },
           totals: {
@@ -328,7 +308,7 @@ export async function installAdminMocks(page: Page) {
             status: 'warning',
             summary: 'Runtime telemetry has coverage gaps to review before traffic expands.',
             next_action: 'inspect_provider_call_recording_for_hosted_profiles',
-            href: '/admin/ai-resources?view=diagnostics',
+            href: '/admin/troubleshooting',
             alert_count: 1,
             alerts: [
               {
@@ -339,7 +319,7 @@ export async function installAdminMocks(page: Page) {
                 count: 1,
                 capabilities: ['knowledge'],
                 suggested_action: 'inspect_provider_call_recording_for_hosted_profiles',
-                href: '/admin/ai-resources?view=diagnostics',
+                href: '/admin/troubleshooting',
               },
             ],
             daily_digest: {
@@ -391,7 +371,7 @@ export async function installAdminMocks(page: Page) {
       return;
     }
 
-    if (pathname === '/api/admin/hosted-model-governance') {
+    if (pathname === '/api/admin/runtime-telemetry') {
       await fulfillJson(route, {
         generated_at: '2026-04-08T10:00:00Z',
         filters: {
@@ -532,7 +512,7 @@ export async function installAdminMocks(page: Page) {
           status: 'warning',
           summary: 'Runtime telemetry has coverage gaps to review before traffic expands.',
           next_action: 'inspect_provider_call_recording_for_hosted_profiles',
-          href: '/admin/ai-resources?view=diagnostics',
+          href: '/admin/troubleshooting',
           alert_count: 1,
           alerts: [
             {
@@ -543,7 +523,7 @@ export async function installAdminMocks(page: Page) {
               count: 1,
               capabilities: ['knowledge'],
               suggested_action: 'inspect_provider_call_recording_for_hosted_profiles',
-              href: '/admin/ai-resources?view=diagnostics',
+              href: '/admin/troubleshooting',
             },
           ],
           daily_digest: {
@@ -971,7 +951,6 @@ export async function installAdminMocks(page: Page) {
           members_needing_coverage_follow_up: 2,
           never_logged_in_members: 1,
           disabled_mapped_members: 1,
-          members_on_dev_baseline: 1,
         },
         items: [
           {
@@ -985,7 +964,6 @@ export async function installAdminMocks(page: Page) {
             accessible_site_count: 1,
             sites_needing_follow_up_count: 1,
             last_login_at: '2026-04-07T00:00:00Z',
-            dev_baseline: true,
             has_coverage_follow_up: true,
             never_logged_in: false,
             disabled_mapped: false,
@@ -1015,7 +993,6 @@ export async function installAdminMocks(page: Page) {
             accessible_site_count: 1,
             sites_needing_follow_up_count: 1,
             last_login_at: '',
-            dev_baseline: false,
             has_coverage_follow_up: true,
             never_logged_in: true,
             disabled_mapped: true,
@@ -1045,7 +1022,6 @@ export async function installAdminMocks(page: Page) {
             accessible_site_count: 1,
             sites_needing_follow_up_count: 0,
             last_login_at: '2026-04-08T00:00:00Z',
-            dev_baseline: false,
             has_coverage_follow_up: false,
             never_logged_in: false,
             disabled_mapped: false,

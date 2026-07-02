@@ -5,7 +5,6 @@ type TranslateFn = (key: string, params?: Record<string, string>, fallback?: str
 export type PackageKind =
   | 'formal_free'
   | 'tier_package'
-  | 'dev_baseline'
   | 'uncovered'
   | 'unknown';
 
@@ -61,13 +60,13 @@ export function resolveCustomerPackageDisplay(
   const packageAlias = String(input.packageAlias || '').trim();
   const formalPlanName = String(input.formalPlanName || '').trim();
   const explicitPlanKind = String(input.planKind || '').trim();
-  const explicitPackageKind = String(input.packageKind || '').trim() as PackageKind;
+  const explicitPackageKind = normalizePackageKind(input.packageKind);
   const coverageState =
     String(input.coverageState || '').trim() === 'covered' ? 'covered' : 'uncovered';
 
   let packageKind: PackageKind = explicitPackageKind || 'unknown';
   if (!explicitPackageKind) {
-    if (planId === 'plan_dev_unlimited' || planId === 'plan_free' || explicitPlanKind === 'default_free') {
+    if (planId === 'plan_free' || explicitPlanKind === 'default_free') {
       packageKind = 'formal_free';
     } else if (planId || planVersionId) {
       packageKind = 'tier_package';
@@ -128,13 +127,21 @@ export function translatePackageKindLabel(
       return t('admin.plan_package_alias_free', {}, 'Free');
     case 'tier_package':
       return t('admin.tier_template_binding', {}, 'Tier-bound plan');
-    case 'dev_baseline':
-      return t('admin.dev_baseline', {}, 'Dev baseline');
     case 'uncovered':
       return t('admin.package_label_uncovered', {}, 'Uncovered');
     default:
       return t('common.unknown', {}, 'Unknown');
   }
+}
+
+function normalizePackageKind(value: unknown): PackageKind {
+  const normalized = String(value || '').trim();
+  return normalized === 'formal_free' ||
+    normalized === 'tier_package' ||
+    normalized === 'uncovered' ||
+    normalized === 'unknown'
+    ? normalized
+    : 'unknown';
 }
 
 export function translateCoverageStateLabel(

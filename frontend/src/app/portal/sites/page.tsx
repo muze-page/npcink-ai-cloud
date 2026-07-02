@@ -805,7 +805,6 @@ function PortalSitesContent() {
                   </div>
                   <p className="mt-1 text-sm text-gray-600 dark:text-gray-400">
                     {getPortalSiteWordPressUrl(site) ||
-                      getPortalSiteSecondaryLabel(site) ||
                       t('portal.site_url_missing_short', {}, 'Site URL not configured')}
                   </p>
                   <BackofficeMetricStrip
@@ -968,8 +967,7 @@ function PortalSitesContent() {
                 </p>
                 <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">
                   {getPortalSiteWordPressUrl(site) ||
-                    getPortalSiteSecondaryLabel(site) ||
-                    site.site_id}
+                    t('portal.site_url_missing_short', {}, 'Site URL not configured')}
                 </p>
               </div>
             ))}
