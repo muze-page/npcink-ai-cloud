@@ -585,27 +585,31 @@ class CommercialServicePortalMixin(CommercialServiceAuditMixin):
         self,
         *,
         email: str,
-        wordpress_url: str,
+        wordpress_url: str = "",
         site_name: str = "",
         use_case: str = "",
         ttl_seconds: int,
     ) -> dict[str, object]:
         normalized_email = _normalize_principal_email(email)
-        canonical_wordpress_url, site_source = _normalize_portal_site_url(wordpress_url)
-        site_slug = _slugify_portal_site_segment(site_source)
-        if not site_slug:
-            raise CommercialPermissionError(
-                "service.portal_site_slug_invalid",
-                "wordpress site url could not be converted into a stable site id",
-            )
         principal_id = _new_principal_id()
         account_id = f"acct_{principal_id.removeprefix('prn_')}"
-        site_id = f"site_{site_slug}"
-        resolved_site_name = (
-            str(site_name or "").strip()
-            or urlsplit(canonical_wordpress_url).hostname
-            or site_id
-        )
+        canonical_wordpress_url = ""
+        site_id = ""
+        resolved_site_name = ""
+        if str(wordpress_url or "").strip():
+            canonical_wordpress_url, site_source = _normalize_portal_site_url(wordpress_url)
+            site_slug = _slugify_portal_site_segment(site_source)
+            if not site_slug:
+                raise CommercialPermissionError(
+                    "service.portal_site_slug_invalid",
+                    "wordpress site url could not be converted into a stable site id",
+                )
+            site_id = f"site_{site_slug}"
+            resolved_site_name = (
+                str(site_name or "").strip()
+                or urlsplit(canonical_wordpress_url).hostname
+                or site_id
+            )
         normalized_use_case = str(use_case or "").strip()[:500]
         now = self.now_factory()
         expires_at = now + timedelta(seconds=max(60, int(ttl_seconds or 0)))
@@ -749,20 +753,21 @@ class CommercialServicePortalMixin(CommercialServiceAuditMixin):
                 principal_id = _new_principal_id()
             if not account_id:
                 account_id = f"acct_{principal_id.removeprefix('prn_')}"
-            if not site_id or not wordpress_url:
+            if (site_id and not wordpress_url) or (wordpress_url and not site_id):
                 raise CommercialPermissionError(
                     "service.portal_registration_payload_invalid",
-                    "portal registration request is incomplete",
+                    "portal registration site request is incomplete",
                 )
-            existing_site = repository.get_site(site_id)
+            existing_site = repository.get_site(site_id) if site_id else None
             if existing_site is not None:
                 raise CommercialPermissionError(
                     "service.portal_site_conflict",
                     f"site id '{site_id}' is already registered",
                 )
+            account_name = f"{site_name} Free" if site_name else f"{normalized_email} Free"
             account = repository.upsert_account(
                 account_id=account_id,
-                name=f"{site_name} Free",
+                name=account_name,
                 status=ACCOUNT_STATUS_ACTIVE,
                 metadata_json={
                     "source": "portal_self_registration",
@@ -788,26 +793,28 @@ class CommercialServicePortalMixin(CommercialServiceAuditMixin):
                 },
                 last_login_at=now,
             )
-            site = repository.upsert_site(
-                site_id=site_id,
-                account_id=account.account_id,
-                name=site_name,
-                status=SITE_STATUS_ACTIVE,
-                metadata_json={
-                    "source": "portal_self_registration",
-                    "wordpress_url": wordpress_url,
-                    "created_via": "portal_register",
-                    "use_case": str(registration_metadata.get("use_case") or ""),
-                },
-                provisioned_at=now,
-            )
-            repository.upsert_principal_site_grant(
-                grant_id=f"sadmg_{uuid4().hex}",
-                principal_id=identity.principal_id,
-                site_id=site.site_id,
-                status=SITE_USER_GRANT_STATUS_ACTIVE,
-                metadata_json={"source": "portal_self_registration"},
-            )
+            site = None
+            if site_id and wordpress_url:
+                site = repository.upsert_site(
+                    site_id=site_id,
+                    account_id=account.account_id,
+                    name=site_name,
+                    status=SITE_STATUS_ACTIVE,
+                    metadata_json={
+                        "source": "portal_self_registration",
+                        "wordpress_url": wordpress_url,
+                        "created_via": "portal_register",
+                        "use_case": str(registration_metadata.get("use_case") or ""),
+                    },
+                    provisioned_at=now,
+                )
+                repository.upsert_principal_site_grant(
+                    grant_id=f"sadmg_{uuid4().hex}",
+                    principal_id=identity.principal_id,
+                    site_id=site.site_id,
+                    status=SITE_USER_GRANT_STATUS_ACTIVE,
+                    metadata_json={"source": "portal_self_registration"},
+                )
             repository.upsert_account_user_membership(
                 membership_id=f"aum_{uuid4().hex}",
                 principal_id=identity.principal_id,
@@ -826,8 +833,8 @@ class CommercialServicePortalMixin(CommercialServiceAuditMixin):
                 "session_version": int(identity.session_version or 1),
                 "account": service._serialize_account(account),
                 "account_id": account.account_id,
-                "site": service._serialize_site(site),
-                "site_id": site.site_id,
+                "site": service._serialize_site(site) if site is not None else None,
+                "site_id": str(getattr(site, "site_id", "") or ""),
                 "subscription": (
                     subscription_payload.get("subscription")
                     if isinstance(subscription_payload, dict)
@@ -841,8 +848,14 @@ class CommercialServicePortalMixin(CommercialServiceAuditMixin):
                 "next": {
                     "portal_path": "/portal",
                     "qq_bind_path": "/portal/account",
-                    "connection_path": f"/portal/sites/{site.site_id}",
-                    "sites_path": f"/portal/sites?site={site.site_id}",
+                    "connection_path": (
+                        f"/portal/sites/{site.site_id}" if site is not None else "/portal/sites"
+                    ),
+                    "sites_path": (
+                        f"/portal/sites?site={site.site_id}"
+                        if site is not None
+                        else "/portal/sites"
+                    ),
                 },
             }
             self._record_service_audit_in_session(
@@ -851,9 +864,13 @@ class CommercialServicePortalMixin(CommercialServiceAuditMixin):
                 event_kind="portal.registration",
                 outcome="succeeded",
                 account_id=account.account_id,
-                site_id=site.site_id,
+                site_id=str(getattr(site, "site_id", "") or ""),
                 scope_kind="principal_access",
-                scope_id=f"{site.site_id}:{identity.principal_id}",
+                scope_id=(
+                    f"{site.site_id}:{identity.principal_id}"
+                    if site is not None
+                    else identity.principal_id
+                ),
                 payload_json={
                     **payload,
                     "email": normalized_email,

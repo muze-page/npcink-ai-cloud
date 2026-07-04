@@ -1,10 +1,8 @@
 'use client';
 
-import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import { BackofficeStatusBadge } from '@/components/backoffice/BackofficeStatusBadge';
 import type { PortalSiteSummaryRecord, Site } from '@/lib/portal-client';
-import { resolveCustomerPackageDisplay } from '@/lib/customer-package-display';
 import {
   getPortalSiteDisplayName,
   getPortalSiteWordPressUrl,
@@ -76,47 +74,15 @@ export function PortalSiteInspectorDrawer({
   }
 
   const detailSite = summary?.site || site;
-  const packageDisplay = resolveCustomerPackageDisplay(t, {
-    planId: summary?.coverage?.plan_id,
-    planVersionId: summary?.coverage?.plan_version_id,
-    packageAlias: summary?.package_alias || summary?.coverage?.package_alias,
-    formalPlanName: detailSite.plan_name,
-    coverageState: summary?.coverage ? 'covered' : 'uncovered',
-  });
-  const planLabel = packageDisplay.display_package_label || t('common.not_found');
-  const subscriptionStatus = summary?.subscription_status || summary?.coverage?.status || 'unknown';
-  const periodStart =
-    summary?.coverage?.current_period_start_at ||
-    summary?.coverage?.current_period_start ||
-    '';
-  const periodEnd =
-    summary?.coverage?.current_period_end_at ||
-    summary?.coverage?.current_period_end ||
-    '';
-  const footerLinks = [
-    { href: `/portal/usage?site=${site.site_id}`, label: t('portal.nav_usage', {}, 'Plan and usage') },
-    { href: `/portal/billing?site=${site.site_id}`, label: t('portal.nav_package', {}, 'Open Package') },
-    { href: `/portal/sites/${site.site_id}`, label: t('portal.site_record', {}, 'Open site') },
-  ];
   const postureMetrics = [
     {
       label: t('common.status'),
       value: translateStatusLabel(detailSite.status, t),
-      detail: translateStatusLabel(subscriptionStatus, t),
-    },
-    {
-      label: t('common.plan'),
-      value: planLabel,
-      detail: t('portal.home.latest_plan_status', {}, 'Plan status'),
+      detail: getPortalSiteWordPressUrl(detailSite) || t('portal.site_url_missing_short', {}, 'Site URL not configured'),
     },
     {
       label: t('common.connected'),
       value: detailSite.created_at ? formatDate(detailSite.created_at) : t('common.not_found'),
-    },
-    {
-      label: t('portal.period_end', {}, 'Period End'),
-      value: periodEnd ? formatDate(periodEnd) : t('common.not_found'),
-      detail: periodStart ? `${t('portal.period_start', {}, 'Period Start')}: ${formatDate(periodStart)}` : undefined,
     },
   ];
 
@@ -219,7 +185,7 @@ export function PortalSiteInspectorDrawer({
                     {t(
                       'portal.home.drawer_posture_desc',
                       {},
-                      'Use this quick view to confirm the current site, package, and status before opening a dedicated page.'
+                      'Use this quick view to confirm the current site and status before opening a dedicated page.'
                     )}
                   </p>
                 </div>
@@ -286,18 +252,6 @@ export function PortalSiteInspectorDrawer({
                 )}
               </section>
 
-              <div className="grid gap-2 sm:grid-cols-2">
-                {footerLinks.map((item, index) => (
-                  <Link
-                    key={item.href}
-                    href={item.href}
-                    className={cn(index === 0 ? 'btn btn-secondary justify-center w-full' : 'btn btn-secondary justify-center w-full')}
-                    onClick={onClose}
-                  >
-                    {item.label}
-                  </Link>
-                ))}
-              </div>
             </div>
           )}
         </div>

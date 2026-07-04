@@ -134,8 +134,11 @@ export function translatePackageKindLabel(
   }
 }
 
-function normalizePackageKind(value: unknown): PackageKind {
+function normalizePackageKind(value: unknown): PackageKind | undefined {
   const normalized = String(value || '').trim();
+  if (!normalized) {
+    return undefined;
+  }
   return normalized === 'formal_free' ||
     normalized === 'tier_package' ||
     normalized === 'uncovered' ||

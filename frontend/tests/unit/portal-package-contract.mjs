@@ -18,8 +18,20 @@ assert.match(
   /inferPlanIdFromPlanVersionId/,
   'customer package display must expose a plan-version fallback resolver'
 );
+assert.match(
+  packageDisplaySource,
+  /function normalizePackageKind\(value: unknown\): PackageKind \| undefined/,
+  'customer package display must let missing package kind fall through to plan inference'
+);
+assert.match(
+  packageDisplaySource,
+  /if \(!normalized\) \{\s*return undefined;\s*\}/,
+  'customer package display must not classify a missing package kind as unknown before plan inference'
+);
 
 const billingPageSource = readFileSync(billingPagePath, 'utf8');
+const entitlementComponentPath = resolve(root, 'src/components/portal/PortalEntitlementUsage.tsx');
+const entitlementComponentSource = readFileSync(entitlementComponentPath, 'utf8');
 const billingMetricStart = billingPageSource.indexOf('<BackofficeMetricStrip');
 const billingMetricStrip = billingPageSource.slice(
   billingMetricStart,
@@ -35,10 +47,15 @@ assert.match(
   /planVersionId: snapshotPlanVersionId/,
   'Portal package page must use planVersionId fallback when resolving the current package label'
 );
-assert.match(
+assert.doesNotMatch(
   billingPageSource,
-  /href=\{`\/portal\/sites\/\$\{selectedSiteId\}`\}/,
-  'Portal package page must link users to the site record to inspect package and allowed actions'
+  /formalPlanName: selectedSite\.plan_name|selectedSite\.plan_name/,
+  'Portal package page must not derive the account package label from the selected site'
+);
+assert.doesNotMatch(
+  billingPageSource,
+  /href=\{`\/portal\/sites\/\$\{selectedSiteId\}`\}|portal\.site_record/,
+  'Portal package page must not send users to a site record to understand the account package'
 );
 assert.match(
   billingPageSource,
@@ -52,8 +69,13 @@ assert.doesNotMatch(
 );
 assert.match(
   billingPageSource,
-  /package_rights_label[\s\S]*package_credit_allowance_label[\s\S]*site_allowance_label/,
-  'Portal package rights must keep credits and site allowance together in one card'
+  /<PortalEntitlementUsage[\s\S]*quotaSummary=\{quotaSummary\}/,
+  'Portal package page must show current package rights through the shared entitlement summary'
+);
+assert.match(
+  entitlementComponentSource,
+  /package_credit_allowance_label[\s\S]*site_allowance_label/,
+  'Shared entitlement summary must keep package points and site allowance visible together'
 );
 assert.match(
   billingPageSource,
@@ -67,10 +89,10 @@ assert.doesNotMatch(
 );
 
 const siteRecordSource = readFileSync(siteRecordPath, 'utf8');
-assert.match(
+assert.doesNotMatch(
   siteRecordSource,
-  /label: t\('common\.package'[\s\S]*value: packageLabel/,
-  'Site record header must keep the package summary visible for ordinary customers'
+  /label: t\('common\.package'[\s\S]*value: packageLabel|resolveCustomerPackageDisplay/,
+  'Site record header must not show account package as a site-owned field'
 );
 assert.doesNotMatch(
   siteRecordSource,

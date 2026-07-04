@@ -1448,25 +1448,24 @@ class CommercialServiceSiteMixin(CommercialServiceAuditMixin):
                 account_id=site.account_id,
             )
             if membership_row is None:
-                raise CommercialPermissionError(
-                    "service.principal_access_required",
-                    f"principal '{principal_id}' is not active for account '{site.account_id}'",
+                role = USER_ROLE_USER
+                allowed_actions = resolve_principal_allowed_actions()
+            else:
+                _account, _membership_identity, membership = membership_row
+                if membership.status != ACCOUNT_USER_MEMBERSHIP_STATUS_ACTIVE:
+                    raise CommercialPermissionError(
+                        "service.principal_access_required",
+                        f"principal '{principal_id}' is not active for account '{site.account_id}'",
+                    )
+                role = normalize_user_role(str(membership.role or USER_ROLE_USER))
+                allowed_actions = (
+                    [
+                        str(action).strip()
+                        for action in (membership.allowed_actions_json or [])
+                        if str(action).strip()
+                    ]
+                    or resolve_principal_allowed_actions()
                 )
-            _account, _membership_identity, membership = membership_row
-            if membership.status != ACCOUNT_USER_MEMBERSHIP_STATUS_ACTIVE:
-                raise CommercialPermissionError(
-                    "service.principal_access_required",
-                    f"principal '{principal_id}' is not active for account '{site.account_id}'",
-                )
-            role = normalize_user_role(str(membership.role or USER_ROLE_USER))
-            allowed_actions = (
-                [
-                    str(action).strip()
-                    for action in (membership.allowed_actions_json or [])
-                    if str(action).strip()
-                ]
-                or resolve_principal_allowed_actions()
-            )
             if required_roles is not None and role not in required_roles:
                 raise CommercialPermissionError(
                     "service.portal_role_forbidden",

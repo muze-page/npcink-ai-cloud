@@ -29,8 +29,9 @@ export function PortalNavbar() {
   const primaryNavItems = useMemo(
     () => [
       { href: '/portal', label: t('portal.workspace_label', {}, 'Overview') },
-      { href: '/portal/usage', label: t('portal.nav_usage', {}, 'Plan and usage') },
-      { href: '/portal/sites', label: t('portal.nav_sites', {}, 'Sites and domain') },
+      { href: '/portal/billing', label: t('portal.nav_package', {}, 'Package') },
+      { href: '/portal/usage', label: t('portal.nav_usage', {}, 'Usage') },
+      { href: '/portal/sites', label: t('portal.nav_sites', {}, 'Sites') },
       { href: '/portal/account', label: t('portal.nav_account', {}, 'Account') },
     ],
     [t]
@@ -135,6 +136,7 @@ export function PortalNavbar() {
     visibleSites[0]?.site_id ||
     '';
   const selectedSite = visibleSites.find((site) => site.site_id === selectedSiteId) || null;
+  const isLoginPage = pathname === '/portal/login';
   const visibleSiteLabel = useCallback(
     (site: typeof visibleSites[number]) =>
       site.site_name || getPortalSiteWordPressUrl(site) || t('portal.current_site', {}, 'Current site'),
@@ -162,9 +164,6 @@ export function PortalNavbar() {
               <span className="text-sm font-semibold text-slate-900 dark:text-slate-100">
                 {t('portal.nav_title', undefined, 'Workspace')}
               </span>
-            </span>
-            <span className="hidden rounded-full border border-slate-200/80 bg-slate-50/85 px-2.5 py-1 text-[0.58rem] font-bold uppercase tracking-[0.22em] text-slate-600 dark:border-slate-800 dark:bg-slate-900/70 dark:text-slate-300 md:inline-flex">
-              {t('portal.site_admin_workspace', undefined, 'Site Admin')}
             </span>
           </Link>
 
@@ -253,14 +252,14 @@ export function PortalNavbar() {
               >
                 {t('portal.logout')}
               </button>
-            ) : (
+            ) : !isLoginPage ? (
               <Link
                 href="/portal/login"
                 className="hidden rounded-full px-3 py-2 text-sm font-medium text-slate-600 transition hover:bg-slate-100 hover:text-slate-900 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-white md:inline-flex"
               >
                 {t('nav.sign_in')}
               </Link>
-            )}
+            ) : null}
             <button
               type="button"
               className="inline-flex h-10 w-10 items-center justify-center rounded-full border border-slate-200/80 bg-white/85 text-slate-600 shadow-sm transition hover:border-slate-300 hover:text-slate-900 dark:border-slate-700 dark:bg-slate-900/80 dark:text-slate-300 dark:hover:border-slate-600 dark:hover:text-white md:hidden"
@@ -282,30 +281,32 @@ export function PortalNavbar() {
           </div>
         </div>
 
-        <div className="hidden border-t border-slate-200/70 py-1.5 dark:border-slate-800 md:block">
-          <div className="flex items-center gap-2 overflow-visible">
-            <div className="max-w-full overflow-x-auto pb-0.5">
-              <nav data-ui="portal-primary-nav" className="flex min-w-max items-center gap-1">
-                {primaryNavItems.map((item) => (
-                  <Link
-                    key={item.href}
-                    href={item.href}
-                    className={cn(
-                      'rounded-full px-3 py-2 text-sm font-medium transition-all',
-                      isActive(item.href)
-                        ? 'bg-slate-900 text-white shadow-sm dark:bg-blue-500 dark:text-slate-950'
-                        : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-white'
-                    )}
-              >
-                <span className="inline-flex items-center gap-2">
-                  {item.label}
-                </span>
-              </Link>
-            ))}
-              </nav>
+        {isAuthenticated ? (
+          <div className="hidden border-t border-slate-200/70 py-1.5 dark:border-slate-800 md:block">
+            <div className="flex items-center gap-2 overflow-visible">
+              <div className="max-w-full overflow-x-auto pb-0.5">
+                <nav data-ui="portal-primary-nav" className="flex min-w-max items-center gap-1">
+                  {primaryNavItems.map((item) => (
+                    <Link
+                      key={item.href}
+                      href={item.href}
+                      className={cn(
+                        'rounded-full px-3 py-2 text-sm font-medium transition-all',
+                        isActive(item.href)
+                          ? 'bg-slate-900 text-white shadow-sm dark:bg-blue-500 dark:text-slate-950'
+                          : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-white'
+                      )}
+                    >
+                      <span className="inline-flex items-center gap-2">
+                        {item.label}
+                      </span>
+                    </Link>
+                  ))}
+                </nav>
+              </div>
             </div>
           </div>
-        </div>
+        ) : null}
       </div>
 
       <div
@@ -337,21 +338,23 @@ export function PortalNavbar() {
               </select>
             </div>
           ) : null}
-          {primaryNavItems.map((item) => (
-            <Link
-              key={item.href}
-              href={item.href}
-              className={cn(
-                'block rounded-2xl px-4 py-3 text-sm font-medium transition-colors',
-                isActive(item.href)
-                  ? 'bg-slate-900 text-white dark:bg-blue-500 dark:text-slate-950'
-                  : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-white'
-              )}
-              onClick={() => setMobileNavOpen(false)}
-            >
-              {item.label}
-            </Link>
-          ))}
+          {isAuthenticated ? (
+            primaryNavItems.map((item) => (
+              <Link
+                key={item.href}
+                href={item.href}
+                className={cn(
+                  'block rounded-2xl px-4 py-3 text-sm font-medium transition-colors',
+                  isActive(item.href)
+                    ? 'bg-slate-900 text-white dark:bg-blue-500 dark:text-slate-950'
+                    : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-white'
+                )}
+                onClick={() => setMobileNavOpen(false)}
+              >
+                {item.label}
+              </Link>
+            ))
+          ) : null}
           <div className="space-y-3 border-t border-slate-200 pt-4 dark:border-slate-800">
             <div className="flex items-center gap-2">
               <LocaleSwitcher />
@@ -368,7 +371,7 @@ export function PortalNavbar() {
               >
                 {t('portal.logout')}
               </button>
-            ) : (
+            ) : !isLoginPage ? (
               <Link
                 href="/portal/login"
                 className="block rounded-2xl px-4 py-3 text-sm font-medium text-slate-600 transition hover:bg-slate-100 hover:text-slate-900 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-white"
@@ -376,7 +379,7 @@ export function PortalNavbar() {
               >
                 {t('nav.sign_in')}
               </Link>
-            )}
+            ) : null}
           </div>
         </div>
       </div>

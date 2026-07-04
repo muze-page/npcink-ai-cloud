@@ -1192,6 +1192,36 @@ assert.match(
   'Provider channel presets must include DeepSeek as an OpenAI-compatible text supplier'
 );
 
+assert.match(
+  pageSource,
+  /id: 'deepseek'[\s\S]*websiteUrl: 'https:\/\/www\.deepseek\.com\/'[\s\S]*statusUrl: 'https:\/\/status\.deepseek\.com\/'[\s\S]*docsUrl: 'https:\/\/api-docs\.deepseek\.com\/'/,
+  'Provider channel DeepSeek preset must expose official website, status, and docs reference links'
+);
+
+assert.match(
+  pageSource,
+  /id: 'openai_compatible'[\s\S]*websiteUrl: 'https:\/\/openai\.com\/'[\s\S]*statusUrl: 'https:\/\/status\.openai\.com\/'[\s\S]*docsUrl: 'https:\/\/developers\.openai\.com\/api\/docs'/,
+  'OpenAI-compatible default preset must expose official OpenAI reference links'
+);
+
+assert.match(
+  pageSource,
+  /id: 'anthropic'[\s\S]*websiteUrl: 'https:\/\/www\.anthropic\.com\/'[\s\S]*statusUrl: 'https:\/\/status\.claude\.com\/'[\s\S]*docsUrl: 'https:\/\/platform\.claude\.com\/docs'/,
+  'Anthropic preset must expose official Anthropic reference links'
+);
+
+assert.match(
+  pageSource,
+  /id: 'openrouter'[\s\S]*websiteUrl: 'https:\/\/openrouter\.ai\/'[\s\S]*statusUrl: 'https:\/\/status\.openrouter\.ai\/'[\s\S]*docsUrl: 'https:\/\/openrouter\.ai\/docs'/,
+  'OpenRouter preset must expose official OpenRouter reference links'
+);
+
+assert.match(
+  pageSource,
+  /id: 'minimax'[\s\S]*websiteUrl: 'https:\/\/www\.minimax\.io\/'[\s\S]*statusUrl: 'https:\/\/status\.minimax\.io\/'[\s\S]*docsUrl: 'https:\/\/platform\.minimax\.io\/docs'/,
+  'MiniMax preset must expose official MiniMax reference links'
+);
+
 const minimaxPresetStart = pageSource.indexOf("id: 'minimax'");
 const minimaxPresetSource = minimaxPresetStart >= 0
   ? pageSource.slice(minimaxPresetStart, pageSource.indexOf("id: 'custom'", minimaxPresetStart))
@@ -1360,6 +1390,12 @@ assert.match(
 );
 
 assert.match(
+  i18nSource,
+  /admin\.ai_resources\.ability_model_feature_text_generation': '文本生成'[\s\S]*admin\.ai_resources\.ability_model_feature_image_generation': '图片生成'[\s\S]*admin\.ai_resources\.ability_model_feature_audio_generation': '音频生成'[\s\S]*admin\.ai_resources\.ability_model_feature_video_generation': '视频生成'[\s\S]*admin\.ai_resources\.ability_model_feature_embedding': '向量嵌入'/,
+  'Provider channel model feature labels must have Chinese translations instead of falling back to English'
+);
+
+assert.match(
   pageSource,
   /modelIds:\s*\(connection\.model_ids \|\| \[\]\)\.join/,
   'Provider channel edit form must restore saved model ids from the backend projection'
@@ -1374,7 +1410,13 @@ assert.doesNotMatch(
 assert.match(
   pageSource,
   /action_fetch_upstream_models[\s\S]*action_sync_model_references[\s\S]*action_clear_all_models/,
-  'Provider channel form must prioritize catalog sync while keeping reference sync and clear-all as secondary header actions'
+  'Provider channel form must make catalog sync the combined primary action while keeping reference-only retry and clear-all secondary'
+);
+
+assert.match(
+  pageSource,
+  /modelReferenceShowDeprecated[\s\S]*useState\(false\)[\s\S]*deprecatedEnableBlocked[\s\S]*action_enable_deprecated_model_blocked/,
+  'Provider channel form must hide deprecated models by default and block newly enabling them'
 );
 
 assert.match(
@@ -1507,6 +1549,36 @@ assert.match(
   pageSource,
   /model_catalog_preview: isCapabilityProviderForm[\s\S]*catalogPreviewForMetadata\(providerCatalogPreview\)[\s\S]*catalogPreviewFromConnection\(connection\)/,
   'Provider channel saves a sanitized upstream catalog preview and restores it when editing the connection'
+);
+
+assert.match(
+  pageSource,
+  /const referenceLinks = providerReferenceLinksForForm\(providerConnectionForm\)[\s\S]*website_url: websiteUrl \|\| undefined[\s\S]*status_url: statusUrl \|\| undefined[\s\S]*docs_url: docsUrl \|\| undefined/,
+  'Provider channel save payload must persist only preset reference links as provider metadata'
+);
+
+assert.match(
+  pageSource,
+  /provider_links_title[\s\S]*providerFormExternalLinkItems\.map[\s\S]*href=\{item\.href\}/,
+  'Provider channel form must render preset reference links as read-only actions'
+);
+
+assert.doesNotMatch(
+  pageSource,
+  /field_provider_website_url|field_provider_status_url|field_provider_docs_url|providerConnectionForm\.websiteUrl|providerConnectionForm\.statusUrl|providerConnectionForm\.docsUrl/,
+  'Provider channel form must not ask operators to type official website, status, or docs URLs'
+);
+
+assert.match(
+  pageSource,
+  /connectionExternalLinkItems\(connection\)[\s\S]*providerLinkItems\.map[\s\S]*href=\{item\.href\}/,
+  'Provider channel list must render provider reference links without mixing them into model rows'
+);
+
+assert.match(
+  i18nSource,
+  /'admin\.ai_resources\.provider_links_title': '参考入口'[\s\S]*'admin\.ai_resources\.provider_link_website': '官网'[\s\S]*'admin\.ai_resources\.provider_link_status': '状态'[\s\S]*'admin\.ai_resources\.provider_link_docs': '文档'/,
+  'Provider channel reference link labels must be localized in Simplified Chinese'
 );
 
 assert.match(

@@ -3,7 +3,6 @@
 import React, { Suspense, useCallback, useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { LoadingFallback } from '@/components/ui/LoadingFallback';
-import { BackofficeStatusBadge } from '@/components/backoffice/BackofficeStatusBadge';
 import { PortalWorkspaceHeader } from '@/components/portal/PortalWorkspaceHeader';
 import {
   PortalEmptyState,
@@ -29,7 +28,7 @@ import {
   formatPortalCurrency,
 } from '@/lib/currency';
 import { formatPortalErrorMessage } from '@/lib/portal-error';
-import { cn, formatCompactNumber, formatDate, formatNumber } from '@/lib/utils';
+import { formatCompactNumber, formatDate, formatNumber } from '@/lib/utils';
 import {
   BackofficePageStack,
   BackofficeSectionPanel,
@@ -163,46 +162,15 @@ function PortalUsageContent() {
   }
 
   const usageWindow = usage?.windows?.rolling_24h || usage?.windows?.today || null;
-  const entitlementSnapshot = (entitlements?.entitlement_snapshot || {}) as {
-    entitlements?: Record<string, unknown>;
-    requests_limit?: number;
-    tokens_limit?: number;
-    budgets?: {
-      max_runs_per_period?: number;
-      max_tokens_per_period?: number;
-      max_cost_per_period?: number;
-    };
-  };
-  const planVersion = (entitlements?.plan_version || {}) as {
-    plan_id?: string;
-    plan_version_id?: string;
-    version_label?: string;
-    budgets?: {
-      max_runs_per_period?: number;
-      max_tokens_per_period?: number;
-      max_cost_per_period?: number;
-    };
-  };
-  const runsLimit = planVersion.budgets?.max_runs_per_period || 0;
-  const tokensLimit = planVersion.budgets?.max_tokens_per_period || 0;
-  const costLimit =
-    planVersion.budgets?.max_cost_per_period ||
-    entitlementSnapshot.budgets?.max_cost_per_period ||
-    0;
   const budgetState = entitlements?.budget_state || {};
-  const runBudgetState = budgetState.runs || {};
-  const tokenBudgetState = budgetState.tokens || {};
-  const costBudgetState = budgetState.cost || {};
   const overBudget = Object.values(budgetState).some((entry) => Boolean(entry?.over_limit));
   const subscription = entitlements?.subscription || null;
   const quotaSummary = entitlements?.quota_summary || null;
-  const quotaCredit = quotaSummary?.credit || null;
   const creditLedgerItems = creditLedger?.items || [];
   const creditLedgerTotal = Number(
     creditLedger?.summary?.net_used_credits ?? creditLedger?.summary?.total_credits ?? 0
   );
   const creditLedgerCount = Number(creditLedger?.pagination?.total ?? creditLedger?.summary?.entry_count ?? 0);
-  const unlimitedLabel = t('common.unlimited', {}, 'Unlimited');
   const formatPreferredCurrency = (value: number) => formatPortalCurrency(value, { to: DEFAULT_PORTAL_CURRENCY });
   const chartTotals = chartData.reduce(
     (totals, item) => ({
@@ -224,10 +192,6 @@ function PortalUsageContent() {
     subscription?.current_period_end ||
     session.current_subscription?.current_period_end ||
     '';
-  const currentPeriodLabel =
-    currentPeriodStart && currentPeriodEnd
-      ? `${t('portal.usage.period_label', {}, 'Period')}: ${formatDate(currentPeriodStart)} - ${formatDate(currentPeriodEnd)}`
-      : '';
   const currentPeriodRange =
     currentPeriodStart && currentPeriodEnd
       ? `${formatDate(currentPeriodStart)} - ${formatDate(currentPeriodEnd)}`
@@ -309,39 +273,6 @@ function PortalUsageContent() {
     }
     return formatCreditPoints(0);
   };
-  const formatCurrentUsageLine = (
-    currentValue: number,
-    limitValue: number,
-    unitLabel: string,
-    formatter: (value: number) => string
-  ) =>
-    `${t('portal.usage.used_label', {}, 'Used')} ${formatter(currentValue)}${unitLabel} / ${t(
-      'portal.usage.included_label',
-      {},
-      'Included'
-    )} ${formatter(limitValue)}${unitLabel}`;
-  const formatOverageLine = (
-    currentValue: number,
-    limitValue: number,
-    unitLabel: string,
-    formatter: (value: number) => string
-  ) =>
-    limitValue > 0 && currentValue > limitValue
-      ? t(
-          'portal.usage.overage_line',
-          { amount: `${formatter(currentValue - limitValue)}${unitLabel}` },
-          'Over by {{amount}}'
-        )
-      : '';
-  const runUtilizationPct = toFinite(runBudgetState.limit || runsLimit) > 0
-    ? Math.min(100, Math.round((toFinite(runBudgetState.current_total) / toFinite(runBudgetState.limit || runsLimit)) * 100))
-    : 0;
-  const tokenUtilizationPct = toFinite(tokenBudgetState.limit || tokensLimit) > 0
-    ? Math.min(100, Math.round((toFinite(tokenBudgetState.current_total) / toFinite(tokenBudgetState.limit || tokensLimit)) * 100))
-    : 0;
-  const costUtilizationPct = toFinite(costBudgetState.limit || costLimit) > 0
-    ? Math.min(100, Math.round((toFinite(costBudgetState.current_total) / toFinite(costBudgetState.limit || costLimit)) * 100))
-    : 0;
 
   const usageStatusLabel = quotaStatusTone(quotaSummary?.status) === 'error' || overBudget
     ? t('portal.home.service_status_attention', {}, 'Needs attention')
@@ -397,147 +328,78 @@ function PortalUsageContent() {
         />
       ) : null}
 
-      {quotaSummary && quotaCredit ? (
-        <div data-portal-usage="plan-summary">
-          <BackofficeSectionPanel className="space-y-5" variant="portal">
-            <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-              <div>
-                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-gray-500 dark:text-gray-400">
-                  {t('portal.usage.summary_label', {}, 'Usage')}
-                </p>
-                <h2 className="mt-2 text-xl font-semibold text-gray-950 dark:text-white">
-                  {t('portal.usage.summary_title', {}, 'Current usage')}
-                </h2>
-                <p className="mt-1 max-w-3xl text-sm leading-6 text-gray-600 dark:text-gray-400">
-                  {t(
-                    'portal.usage.summary_desc',
-                    {},
-                    "Review this period's point use, usage records, and trends for the selected site."
-                  )}
-                </p>
-              </div>
-              <BackofficeStatusBadge
-                status={quotaStatusTone(quotaSummary.status)}
-                label={
-                  quotaStatusTone(quotaSummary.status) === 'ok'
-                    ? t('portal.home.risk_level_normal', {}, 'Normal')
-                    : t('portal.home.filter_attention_only', {}, 'Needs attention')
-                }
-              />
+      {entitlements ? (
+        <BackofficeSectionPanel className="space-y-5" variant="portal" data-portal-usage="usage-records">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-gray-500 dark:text-gray-400">
+                {t('portal.usage.summary_label', {}, 'Usage')}
+              </p>
+              <h2 className="mt-2 text-xl font-semibold text-gray-950 dark:text-white">
+                {t('portal.usage.credit_ledger_title', {}, 'Point record details')}
+              </h2>
+              <p className="mt-1 text-sm leading-6 text-gray-600 dark:text-gray-400">
+                {t(
+                  'portal.usage.credit_ledger_desc',
+                  {},
+                  'Current-period package point records for this account.'
+                )}
+              </p>
             </div>
-
-          <div className="grid gap-4 xl:grid-cols-[1.05fr_0.95fr]">
-            <BackofficeStackCard className="bg-white/70 dark:bg-slate-950/35" variant="portal">
-              <div className="flex items-start justify-between gap-4">
-                <div>
-                  <p className="text-sm font-semibold text-gray-950 dark:text-white">
-                    {t('portal.usage.ai_credits_label', {}, 'Package points')}
-                  </p>
-                  <p className="mt-1 text-sm text-gray-600 dark:text-gray-400">
-                    {quotaCredit.estimated
-                      ? t('portal.usage.ai_credits_estimated_desc', {}, 'Final records are still being prepared, so this is an estimate.')
-                      : t('portal.usage.ai_credits_actual_desc', {}, 'Credits recorded for this package period.')}
-                  </p>
-                </div>
-                <p className="text-right text-lg font-semibold text-gray-950 dark:text-white">
-                  {formatQuotaValue(quotaCredit.used)} / {formatQuotaValue(quotaCredit.limit, Boolean(quotaCredit.unlimited), unlimitedLabel)}
-                </p>
-              </div>
-              {!quotaCredit.unlimited ? (
-                <div className="mt-4">
-                  <div className="h-2 overflow-hidden rounded-full bg-slate-200 dark:bg-slate-800">
-                    <div
-                      className={cn(
-                        'h-full rounded-full',
-                        quotaCredit.status === 'limited'
-                          ? 'bg-red-500'
-                          : quotaCredit.status === 'near_limit'
-                            ? 'bg-amber-500'
-                            : 'bg-emerald-500'
-                      )}
-                      style={{ width: `${Math.min(100, Math.max(0, Number(quotaCredit.usage_ratio || 0) * 100))}%` }}
-                    />
-                  </div>
-                  <p className="mt-2 text-xs text-gray-500 dark:text-gray-400">
-                    {t('portal.usage.remaining_credits', {}, 'Remaining')}: {formatQuotaValue(quotaCredit.remaining)}
-                  </p>
-                </div>
-              ) : null}
-            </BackofficeStackCard>
+            <div className="text-left sm:text-right">
+              <p className="text-lg font-semibold text-gray-950 dark:text-white">
+                {formatQuotaValue(creditLedgerTotal)}
+              </p>
+              <p className="text-xs text-gray-500 dark:text-gray-400">
+                {t(
+                  'portal.usage.credit_ledger_record_count',
+                  { count: formatQuotaValue(creditLedgerCount) },
+                  `${formatQuotaValue(creditLedgerCount)} records`
+                )}
+              </p>
+            </div>
           </div>
-          <details
-            className="overflow-hidden rounded-[1.1rem] border border-slate-200/80 bg-white/80 dark:border-slate-800 dark:bg-slate-950/45"
-            data-portal-usage="ledger-detail"
-          >
-            <summary className="cursor-pointer px-4 py-3 text-sm font-semibold text-gray-950 hover:bg-slate-50 dark:text-white dark:hover:bg-slate-900/60">
-	              {t('portal.usage.credit_ledger_title', {}, 'Point record details')}
-            </summary>
-            <div className="border-t border-slate-200 p-4 dark:border-slate-800">
-              <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
-                <p className="text-sm text-gray-600 dark:text-gray-400">
-                  {t(
-                    'portal.usage.credit_ledger_desc',
-                    {},
-	                    'Current-period package point records for this account.'
-                  )}
-                </p>
-                <div className="text-left sm:text-right">
-                  <p className="text-lg font-semibold text-gray-950 dark:text-white">
-                    {formatQuotaValue(creditLedgerTotal)}
-                  </p>
-                  <p className="text-xs text-gray-500 dark:text-gray-400">
-                    {t(
-                      'portal.usage.credit_ledger_record_count',
-                      { count: formatQuotaValue(creditLedgerCount) },
-                      `${formatQuotaValue(creditLedgerCount)} records`
-                    )}
-                  </p>
-                </div>
+          {creditLedgerItems.length > 0 ? (
+            <div className="overflow-hidden rounded-[1rem] border border-slate-200 dark:border-slate-800">
+              <div className="hidden grid-cols-[1.4fr_0.6fr_0.9fr] gap-3 bg-slate-50 px-4 py-2 text-xs font-semibold uppercase tracking-[0.12em] text-slate-500 dark:bg-slate-950/45 dark:text-slate-400 sm:grid">
+                <span>{t('portal.usage.credit_ledger_source', {}, 'Source')}</span>
+                <span className="text-right">{t('portal.usage.credit_ledger_credits', {}, 'Credits')}</span>
+                <span className="text-right">{t('portal.usage.credit_ledger_time', {}, 'Time')}</span>
               </div>
-              {creditLedgerItems.length > 0 ? (
-                <div className="mt-4 overflow-hidden rounded-[1rem] border border-slate-200 dark:border-slate-800">
-                  <div className="hidden grid-cols-[1.4fr_0.6fr_0.9fr] gap-3 bg-slate-50 px-4 py-2 text-xs font-semibold uppercase tracking-[0.12em] text-slate-500 dark:bg-slate-950/45 dark:text-slate-400 sm:grid">
-                    <span>{t('portal.usage.credit_ledger_source', {}, 'Source')}</span>
-                    <span className="text-right">{t('portal.usage.credit_ledger_credits', {}, 'Credits')}</span>
-                    <span className="text-right">{t('portal.usage.credit_ledger_time', {}, 'Time')}</span>
+              <div className="divide-y divide-slate-200 text-sm dark:divide-slate-800">
+                {creditLedgerItems.map((entry) => (
+                  <div
+                    key={entry.ledger_entry_id || `${entry.source_type}-${entry.created_at}`}
+                    className="grid grid-cols-1 gap-2 px-4 py-3 sm:grid-cols-[1.4fr_0.6fr_0.9fr] sm:gap-3"
+                  >
+                    <div>
+                      <p className="font-medium text-slate-950 dark:text-white">
+                        {formatLedgerTitle(entry)}
+                      </p>
+                      <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                        {formatLedgerDescription(entry)}
+                      </p>
+                    </div>
+                    <p className="font-semibold text-slate-950 dark:text-white sm:text-right">
+                      {formatLedgerCreditDelta(entry)}
+                    </p>
+                    <p className="text-slate-500 dark:text-slate-400 sm:text-right">
+                      {entry.created_at ? formatDate(entry.created_at) : '-'}
+                    </p>
                   </div>
-	                  <div className="divide-y divide-slate-200 text-sm dark:divide-slate-800">
-	                    {creditLedgerItems.map((entry) => (
-	                      <div
-	                        key={entry.ledger_entry_id || `${entry.source_type}-${entry.created_at}`}
-                        className="grid grid-cols-1 gap-2 px-4 py-3 sm:grid-cols-[1.4fr_0.6fr_0.9fr] sm:gap-3"
-	                      >
-	                        <div>
-	                          <p className="font-medium text-slate-950 dark:text-white">
-	                            {formatLedgerTitle(entry)}
-	                          </p>
-	                          <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-	                            {formatLedgerDescription(entry)}
-	                          </p>
-	                        </div>
-	                        <p className="font-semibold text-slate-950 dark:text-white sm:text-right">
-	                          {formatLedgerCreditDelta(entry)}
-	                        </p>
-                        <p className="text-slate-500 dark:text-slate-400 sm:text-right">
-                          {entry.created_at ? formatDate(entry.created_at) : '-'}
-                        </p>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              ) : (
-                <div className="mt-4 rounded-[1rem] border border-dashed border-slate-300 px-4 py-5 text-sm text-slate-500 dark:border-slate-700 dark:text-slate-400">
-                  {t(
-                    'portal.usage.credit_ledger_empty',
-                    {},
-	                    'No package point records are available for the current period.'
-                  )}
-                </div>
+                ))}
+              </div>
+            </div>
+          ) : (
+            <div className="rounded-[1rem] border border-dashed border-slate-300 px-4 py-5 text-sm text-slate-500 dark:border-slate-700 dark:text-slate-400">
+              {t(
+                'portal.usage.credit_ledger_empty',
+                {},
+                'No package point records are available for the current period.'
               )}
             </div>
-            </details>
-          </BackofficeSectionPanel>
-        </div>
+          )}
+        </BackofficeSectionPanel>
       ) : null}
 
       <details
@@ -619,142 +481,6 @@ function PortalUsageContent() {
 	                )}
 	              </div>
 	            </BackofficeStackCard>
-          </div>
-        </BackofficeSectionPanel>
-      ) : null}
-
-      {entitlements ? (
-        <BackofficeSectionPanel className="space-y-5" variant="portal">
-          <div>
-            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-gray-500 dark:text-gray-400">
-              {t('portal.usage.quota_headroom_label', {}, 'Package use')}
-            </p>
-	            <h2 className="mt-2 text-xl font-semibold text-gray-950 dark:text-white">
-	              {t('portal.usage.quota_headroom_title', {}, 'Current usage')}
-	            </h2>
-	            {currentPeriodLabel ? (
-	              <p className="mt-2 text-sm text-gray-600 dark:text-gray-400">{currentPeriodLabel}</p>
-	            ) : null}
-	          </div>
-	          <div className="space-y-4">
-	            <BackofficeStackCard className="bg-white/70 dark:bg-slate-950/35" variant="portal">
-              <div className="space-y-4">
-                <div>
-                  <div className="flex items-center justify-between text-sm">
-	                    <span className="font-medium text-gray-950 dark:text-white">{t('portal.usage.package_service_uses_label', {}, 'Service uses')}</span>
-                    <span className="text-gray-600 dark:text-gray-400">{runUtilizationPct}%</span>
-                  </div>
-                  <div className="mt-2 h-2 w-full overflow-hidden rounded-full bg-slate-200 dark:bg-slate-800">
-                    <div
-                      className={cn(
-                        'h-full rounded-full transition-all',
-                        runUtilizationPct >= 100 ? 'bg-red-500' : runUtilizationPct >= 80 ? 'bg-amber-500' : 'bg-emerald-500'
-                      )}
-                      style={{ width: `${runUtilizationPct}%` }}
-                    />
-                  </div>
-	                  <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
-	                    {formatCurrentUsageLine(
-	                      toFinite(runBudgetState.current_total),
-	                      toFinite(runBudgetState.limit || runsLimit),
-	                      t('portal.usage.unit_times', {}, ' times'),
-	                      formatNumber
-	                    )}
-	                  </p>
-	                  {formatOverageLine(
-	                    toFinite(runBudgetState.current_total),
-	                    toFinite(runBudgetState.limit || runsLimit),
-	                    t('portal.usage.unit_times', {}, ' times'),
-	                    formatNumber
-	                  ) ? (
-	                    <p className="mt-1 text-xs font-semibold text-red-600 dark:text-red-300">
-	                      {formatOverageLine(
-	                        toFinite(runBudgetState.current_total),
-	                        toFinite(runBudgetState.limit || runsLimit),
-	                        t('portal.usage.unit_times', {}, ' times'),
-	                        formatNumber
-	                      )}
-	                    </p>
-	                  ) : null}
-	                </div>
-	                <div>
-                  <div className="flex items-center justify-between text-sm">
-	                    <span className="font-medium text-gray-950 dark:text-white">{t('portal.usage.breakdown_tokens', {}, 'Point usage')}</span>
-                    <span className="text-gray-600 dark:text-gray-400">{tokenUtilizationPct}%</span>
-                  </div>
-                  <div className="mt-2 h-2 w-full overflow-hidden rounded-full bg-slate-200 dark:bg-slate-800">
-                    <div
-                      className={cn(
-                        'h-full rounded-full transition-all',
-                        tokenUtilizationPct >= 100 ? 'bg-red-500' : tokenUtilizationPct >= 80 ? 'bg-amber-500' : 'bg-emerald-500'
-                      )}
-                      style={{ width: `${tokenUtilizationPct}%` }}
-                    />
-                  </div>
-	                  <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
-	                    {formatCurrentUsageLine(
-	                      toFinite(tokenBudgetState.current_total),
-	                      toFinite(tokenBudgetState.limit || tokensLimit),
-	                      t('portal.usage.unit_points', {}, ' points'),
-	                      formatCompactNumber
-	                    )}
-	                  </p>
-	                  {formatOverageLine(
-	                    toFinite(tokenBudgetState.current_total),
-	                    toFinite(tokenBudgetState.limit || tokensLimit),
-	                    t('portal.usage.unit_points', {}, ' points'),
-	                    formatCompactNumber
-	                  ) ? (
-	                    <p className="mt-1 text-xs font-semibold text-red-600 dark:text-red-300">
-	                      {formatOverageLine(
-	                        toFinite(tokenBudgetState.current_total),
-	                        toFinite(tokenBudgetState.limit || tokensLimit),
-	                        t('portal.usage.unit_points', {}, ' points'),
-	                        formatCompactNumber
-	                      )}
-	                    </p>
-	                  ) : null}
-	                </div>
-	                <div>
-                  <div className="flex items-center justify-between text-sm">
-	                    <span className="font-medium text-gray-950 dark:text-white">{t('portal.usage.package_budget_label', {}, 'Budget')}</span>
-                    <span className="text-gray-600 dark:text-gray-400">{costUtilizationPct}%</span>
-                  </div>
-                  <div className="mt-2 h-2 w-full overflow-hidden rounded-full bg-slate-200 dark:bg-slate-800">
-                    <div
-                      className={cn(
-                        'h-full rounded-full transition-all',
-                        costUtilizationPct >= 100 ? 'bg-red-500' : costUtilizationPct >= 80 ? 'bg-amber-500' : 'bg-emerald-500'
-                      )}
-                      style={{ width: `${costUtilizationPct}%` }}
-                    />
-                  </div>
-	                  <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
-	                    {formatCurrentUsageLine(
-	                      toFinite(costBudgetState.current_total),
-	                      toFinite(costBudgetState.limit || costLimit),
-	                      '',
-	                      formatPreferredCurrency
-	                    )}
-	                  </p>
-	                  {formatOverageLine(
-	                    toFinite(costBudgetState.current_total),
-	                    toFinite(costBudgetState.limit || costLimit),
-	                    '',
-	                    formatPreferredCurrency
-	                  ) ? (
-	                    <p className="mt-1 text-xs font-semibold text-red-600 dark:text-red-300">
-	                      {formatOverageLine(
-	                        toFinite(costBudgetState.current_total),
-	                        toFinite(costBudgetState.limit || costLimit),
-	                        '',
-	                        formatPreferredCurrency
-	                      )}
-	                    </p>
-	                  ) : null}
-	                </div>
-              </div>
-            </BackofficeStackCard>
           </div>
         </BackofficeSectionPanel>
       ) : null}

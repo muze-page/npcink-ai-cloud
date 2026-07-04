@@ -118,6 +118,7 @@ class Settings(BaseSettings):
     portal_jwt_issuer: str | None = Field(default=None)
     portal_jwt_audience: str | None = Field(default=None)
     portal_session_ttl_seconds: int = Field(default=8 * 60 * 60)
+    portal_remember_me_session_ttl_seconds: int = Field(default=7 * 24 * 60 * 60)
     portal_login_code_ttl_seconds: int = Field(default=10 * 60)
     portal_login_code_max_attempts: int = Field(default=5)
     portal_oauth_state_ttl_seconds: int = Field(default=10 * 60)

@@ -2134,6 +2134,30 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
                 until=period_end_at,
                 limit=None,
             )
+            run_records_by_id = {
+                str(run.run_id): run
+                for run in repository.list_run_records_by_ids(
+                    [
+                        str(getattr(entry, "run_id", "") or "")
+                        for entry in entries
+                        if str(getattr(entry, "run_id", "") or "").strip()
+                    ]
+                )
+            }
+            feature_by_entry_id = {
+                str(getattr(entry, "ledger_entry_id", "") or ""): (
+                    self._build_portal_credit_ledger_feature(
+                        source_type=str(getattr(entry, "source_type", "") or ""),
+                        run=run_records_by_id.get(str(getattr(entry, "run_id", "") or "")),
+                    )
+                )
+                for entry in entries
+                if self._credit_ledger_entry_category(
+                    event_type=str(getattr(entry, "event_type", "") or ""),
+                    source_type=str(getattr(entry, "source_type", "") or ""),
+                )
+                == "ai_usage"
+            }
 
         service = cast(Any, self)
         breakdown = build_credit_breakdown_from_ledger(summary_entries)
@@ -2166,7 +2190,10 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
                 "breakdown": breakdown,
             },
             "items": [
-                self._serialize_credit_ledger_entry(entry, include_internal=True)
+                {
+                    **self._serialize_credit_ledger_entry(entry, include_internal=True),
+                    **feature_by_entry_id.get(str(getattr(entry, "ledger_entry_id", "") or ""), {}),
+                }
                 for entry in entries
             ],
         }
@@ -2439,6 +2466,87 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
             return f"Refund event added {credits} AI credits back to the account."
         return f"{event_type or 'Credit'} ledger event recorded {credits} AI credits."
 
+    def _build_portal_credit_ledger_feature(
+        self,
+        *,
+        source_type: str,
+        run: object | None,
+    ) -> dict[str, object]:
+        ability_name = str(getattr(run, "ability_name", "") or "").strip().lower()
+        ability_family = str(getattr(run, "ability_family", "") or "").strip().lower()
+        execution_kind = str(getattr(run, "execution_kind", "") or "").strip().lower()
+        normalized_source = str(source_type or "").strip().lower()
+        tokens = " ".join(
+            token
+            for token in (normalized_source, ability_name, ability_family, execution_kind)
+            if token
+        )
+
+        if normalized_source.startswith("zhihu") or "zhihu" in tokens:
+            feature_key = "topic_research"
+        elif normalized_source == "web_search" or "web-search" in tokens:
+            feature_key = "web_search"
+        elif (
+            "site-knowledge" in tokens
+            or "site_knowledge" in tokens
+            or ability_family == "knowledge"
+            or execution_kind in {"embedding", "site_knowledge", "knowledge"}
+            or normalized_source in {"vector_documents", "vector_chunks"}
+        ):
+            feature_key = "site_knowledge"
+        elif (
+            "image" in tokens
+            or ability_family in {"vision", "image"}
+            or normalized_source == "image_recommendation"
+        ):
+            feature_key = "image_assistance"
+        elif "audio" in tokens or normalized_source == "audio_generation":
+            feature_key = "audio_generation"
+        elif (
+            "article" in tokens
+            or "content" in tokens
+            or "writing" in tokens
+            or "wp-ai-connector" in tokens
+            or normalized_source in {"runs", "tokens", "tokens_total", "provider_calls_other"}
+            or ability_family in {"text", "workflow"}
+        ):
+            feature_key = "content_generation"
+        else:
+            feature_key = "content_generation"
+
+        labels = {
+            "content_generation": (
+                "Content writing",
+                "The site used AI to draft, revise, or organize content.",
+            ),
+            "topic_research": (
+                "Topic research",
+                "The site used AI to look up public topics or hot-list information.",
+            ),
+            "web_search": (
+                "Web search",
+                "The site used AI to search public web information.",
+            ),
+            "site_knowledge": (
+                "Site knowledge",
+                "The site used AI to search or update its site knowledge.",
+            ),
+            "image_assistance": (
+                "Image assistance",
+                "The site used AI to recommend, generate, or process images.",
+            ),
+            "audio_generation": (
+                "Audio generation",
+                "The site used AI to generate or process audio.",
+            ),
+        }
+        label, detail = labels[feature_key]
+        return {
+            "feature_key": feature_key,
+            "feature_label": label,
+            "feature_detail": detail,
+        }
+
     def _serialize_credit_ledger_entry(
         self,
         entry: object,
@@ -2489,6 +2597,10 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
                 created_at if isinstance(created_at, datetime | str) else None
             ),
         }
+        if isinstance(entry, dict):
+            for key in ("feature_key", "feature_label", "feature_detail"):
+                if entry.get(key):
+                    payload[key] = str(entry.get(key) or "")
         if include_internal:
             payload.update(
                 {

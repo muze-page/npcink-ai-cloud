@@ -1,8 +1,8 @@
 import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
 import assert from 'node:assert/strict';
+import { fromFrontendRoot } from './_paths.mjs';
 
-const pagePath = resolve(process.cwd(), 'src/app/admin/service-settings/page.tsx');
+const pagePath = fromFrontendRoot('src/app/admin/service-settings/page.tsx');
 const source = readFileSync(pagePath, 'utf8');
 
 assert.match(

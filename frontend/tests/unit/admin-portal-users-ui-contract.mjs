@@ -1,10 +1,10 @@
 import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
 import assert from 'node:assert/strict';
+import { fromFrontendRoot } from './_paths.mjs';
 
-const pagePath = resolve(process.cwd(), 'src/app/admin/portal-users/page.tsx');
-const layoutPath = resolve(process.cwd(), 'src/app/admin/layout.tsx');
-const proxyPath = resolve(process.cwd(), 'src/app/api/admin/[...path]/route.ts');
+const pagePath = fromFrontendRoot('src/app/admin/portal-users/page.tsx');
+const layoutPath = fromFrontendRoot('src/app/admin/layout.tsx');
+const proxyPath = fromFrontendRoot('src/app/api/admin/[...path]/route.ts');
 
 const pageSource = readFileSync(pagePath, 'utf8');
 const layoutSource = readFileSync(layoutPath, 'utf8');

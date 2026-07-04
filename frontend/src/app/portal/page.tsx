@@ -66,7 +66,7 @@ function buildRestrictionItems({
           detail: t(
             'portal.home.restriction_plan_desc',
             {},
-            'Open Package to review the current coverage state for this site.'
+            'Open Package to review the current account package state.'
           ),
         }
       : null,
@@ -92,7 +92,6 @@ export default function PortalPage() {
   const [siteSummaryCache, setSiteSummaryCache] = useState<Record<string, PortalSiteSummaryRecord>>({});
   const [isInspectorLoading, setIsInspectorLoading] = useState(false);
   const [inspectorError, setInspectorError] = useState('');
-  const [currentSiteSummary, setCurrentSiteSummary] = useState<PortalSiteSummaryRecord | null>(null);
   const [currentSiteDiagnostics, setCurrentSiteDiagnostics] = useState<PortalSiteDiagnostics | null>(null);
   const [identityProviders, setIdentityProviders] = useState<PortalIdentityProviderStatus[]>([]);
   const sessionSiteIdsKey = session?.sites?.map((site) => site.site_id).join('|') || '';
@@ -152,34 +151,6 @@ export default function PortalPage() {
   const selectedSiteForContext =
     session?.sites?.find((site) => site.site_id === session.site_id) || session?.sites?.[0] || null;
   const selectedSiteForMonitoringId = selectedSiteForContext?.site_id || '';
-
-  useEffect(() => {
-    if (!selectedSiteForContext?.site_id) {
-      setCurrentSiteSummary(null);
-      return;
-    }
-
-    let isCancelled = false;
-    setCurrentSiteSummary(null);
-
-    void portalClient
-      .getSiteSummary(selectedSiteForContext.site_id)
-      .then((response) => {
-        if (!isCancelled) {
-          setCurrentSiteSummary(response.data as PortalSiteSummaryRecord);
-        }
-      })
-      .catch((error) => {
-        if (!isCancelled) {
-          console.error('Failed to load current site summary:', error);
-          setCurrentSiteSummary(null);
-        }
-      });
-
-    return () => {
-      isCancelled = true;
-    };
-  }, [selectedSiteForContext?.site_id]);
 
   useEffect(() => {
     if (!selectedSiteForMonitoringId) {
@@ -334,30 +305,12 @@ export default function PortalPage() {
   const currentSubscription = session.current_subscription;
   const selectedSiteWordPressUrl = getPortalSiteWordPressUrl(selectedSite);
   const currentPackageDisplay = resolveCustomerPackageDisplay(t, {
-    planId: currentSiteSummary?.coverage?.plan_id || currentSubscription?.plan_id,
-    planVersionId: currentSiteSummary?.coverage?.plan_version_id || currentSubscription?.plan_version_id,
-    packageAlias: currentSiteSummary?.coverage?.package_alias || currentSubscription?.package_alias,
-    formalPlanName: selectedSite.plan_name,
+    planId: currentSubscription?.plan_id,
+    planVersionId: currentSubscription?.plan_version_id,
+    packageAlias: currentSubscription?.package_alias,
     planKind: currentSubscription?.plan_kind,
-    coverageState: currentSiteSummary?.coverage || currentSubscription ? 'covered' : 'uncovered',
+    coverageState: currentSubscription ? 'covered' : 'uncovered',
   });
-  const getCachedSiteSummary = (site: Site) =>
-    site.site_id === selectedSite.site_id ? currentSiteSummary || siteSummaryCache[site.site_id] || null : siteSummaryCache[site.site_id] || null;
-  const getCachedSiteCoverage = (site: Site) => getCachedSiteSummary(site)?.coverage || null;
-  const hasCachedSiteCoverage = (site: Site) => Boolean(getCachedSiteCoverage(site) || site.plan_name);
-  const resolveSitePackageDisplay = (site: Site) => {
-    const summary = getCachedSiteSummary(site);
-    const coverage = summary?.coverage || null;
-    const isCurrent = selectedSite.site_id === site.site_id;
-    return resolveCustomerPackageDisplay(t, {
-      planId: coverage?.plan_id || (isCurrent ? currentSubscription?.plan_id : undefined),
-      planVersionId: coverage?.plan_version_id || (isCurrent ? currentSubscription?.plan_version_id : undefined),
-      packageAlias: coverage?.package_alias || summary?.package_alias || (isCurrent ? currentSubscription?.package_alias : undefined),
-      formalPlanName: summary?.site?.plan_name || site.plan_name,
-      planKind: isCurrent ? currentSubscription?.plan_kind : undefined,
-      coverageState: coverage || site.plan_name || isCurrent ? 'covered' : 'uncovered',
-    });
-  };
   const entitlementFeatureCount = Array.isArray(session.entitlements?.features)
     ? session.entitlements.features.length
     : 0;
@@ -404,16 +357,16 @@ export default function PortalPage() {
     setInspectorError('');
   };
 
-  const restrictedCount = visibleSites.filter((site) => site.status !== 'active' || !hasCachedSiteCoverage(site)).length;
+  const restrictedCount = visibleSites.filter((site) => site.status !== 'active' || !getPortalSiteWordPressUrl(site)).length;
   const clearCount = visibleSites.length - restrictedCount;
   const missingUrlCount = visibleSites.filter((site) => !getPortalSiteWordPressUrl(site)).length;
   const sitePreviewLimit = 3;
   const previewSites = [...visibleSites]
     .sort((left, right) => {
       const leftPriority =
-        left.site_id === selectedSite.site_id ? 0 : left.status !== 'active' || !hasCachedSiteCoverage(left) || !getPortalSiteWordPressUrl(left) ? 1 : 2;
+        left.site_id === selectedSite.site_id ? 0 : left.status !== 'active' || !getPortalSiteWordPressUrl(left) ? 1 : 2;
       const rightPriority =
-        right.site_id === selectedSite.site_id ? 0 : right.status !== 'active' || !hasCachedSiteCoverage(right) || !getPortalSiteWordPressUrl(right) ? 1 : 2;
+        right.site_id === selectedSite.site_id ? 0 : right.status !== 'active' || !getPortalSiteWordPressUrl(right) ? 1 : 2;
       if (leftPriority !== rightPriority) {
         return leftPriority - rightPriority;
       }
@@ -510,20 +463,9 @@ export default function PortalPage() {
       size: 'compact' as const,
     },
   ];
-  const operationFocusItems =
-    restrictionItems.length > 0
-      ? restrictionItems
-      : [
-          {
-            tone: 'info' as const,
-            label: t('portal.home.recent_issues_empty_title', {}, 'No action needed'),
-            detail: t(
-              'portal.home.recent_issues_empty_desc',
-              {},
-              'The current site can use the service normally.'
-            ),
-          },
-        ];
+  const operationFocusItems = restrictionItems;
+  const shouldShowFollowUpSection =
+    operationFocusItems.length > 0 || shouldShowOnboardingChecklist;
 
   return (
     <BackofficePageStack>
@@ -569,93 +511,85 @@ export default function PortalPage() {
 
           <BackofficeMetricStrip items={operationSummaryItems} columnsClassName="md:grid-cols-2 xl:grid-cols-4" variant="portal" />
 
-          <div className="grid items-start gap-4 xl:grid-cols-[1.1fr_0.9fr]">
-            <BackofficeStackCard className="bg-white/70 dark:bg-slate-950/35" variant="portal" data-portal-home="current-focus">
-              <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                <div>
-                  <p className="text-[0.68rem] font-semibold uppercase tracking-[0.18em] text-gray-500 dark:text-gray-400">
-                    {t('common.status')}
-                  </p>
-                  <h2 className="mt-2 text-lg font-semibold text-gray-950 dark:text-white">
-                    {t('portal.home.current_status_title', {}, 'Service status')}
-                  </h2>
-                </div>
-                <BackofficeTag tone={currentServiceStatusToken === 'active' ? 'success' : 'warning'}>
-                  {currentServiceStatusLabel}
-                </BackofficeTag>
-              </div>
-              <div className="mt-4 space-y-3">
-                {operationFocusItems.slice(0, 3).map((item) => (
-                  <div
-                    key={item.label}
-                    className={cn(
-                      'rounded-xl border px-3 py-3',
-                      item.tone === 'warn'
-                        ? 'border-amber-200 bg-amber-50/75 dark:border-amber-900/70 dark:bg-amber-950/25'
-                        : 'border-slate-200/80 bg-slate-50/70 dark:border-slate-800 dark:bg-slate-950/35'
-                    )}
-                  >
-                    <p className="text-sm font-semibold text-gray-950 dark:text-white">{item.label}</p>
-                    <p className="mt-1 text-xs leading-5 text-gray-600 dark:text-gray-300">{item.detail}</p>
+          {shouldShowFollowUpSection ? (
+            <div className="grid items-start gap-4 xl:grid-cols-[1.1fr_0.9fr]">
+              {operationFocusItems.length > 0 ? (
+                <BackofficeStackCard className="bg-white/70 dark:bg-slate-950/35" variant="portal" data-portal-home="current-focus">
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                    <div>
+                      <p className="text-[0.68rem] font-semibold uppercase tracking-[0.18em] text-gray-500 dark:text-gray-400">
+                        {t('common.status')}
+                      </p>
+                      <h2 className="mt-2 text-lg font-semibold text-gray-950 dark:text-white">
+                        {t('portal.home.current_status_title', {}, 'Service status')}
+                      </h2>
+                    </div>
+                    <BackofficeTag tone={currentServiceStatusToken === 'active' ? 'success' : 'warning'}>
+                      {currentServiceStatusLabel}
+                    </BackofficeTag>
                   </div>
-                ))}
-              </div>
-            </BackofficeStackCard>
-
-            {shouldShowOnboardingChecklist ? (
-              <BackofficeStackCard className="bg-white/70 dark:bg-slate-950/35" variant="portal" data-portal-home="setup-checklist">
-                <div className="flex items-start justify-between gap-4">
-                  <div>
-                    <p className="text-[0.68rem] font-semibold uppercase tracking-[0.18em] text-gray-500 dark:text-gray-400">
-                      {t('portal.home.onboarding_label', {}, 'Needs attention')}
-                    </p>
-                    <h2 className="mt-2 text-lg font-semibold text-gray-950 dark:text-white">
-                      {t('portal.home.onboarding_title', {}, 'Before you continue')}
-                    </h2>
-                  </div>
-                  <BackofficeTag tone="warning">
-                    {requiredAttentionItems.length} {t('portal.home.filter_attention_only', {}, 'Needs attention')}
-                  </BackofficeTag>
-                </div>
-                <div className="mt-4 divide-y divide-slate-200/80 dark:divide-slate-800">
-                  {requiredAttentionItems.map((item, index) => (
-                    <Link
-                      key={item.key}
-                      href={item.href}
-                      className="group flex gap-3 py-3 text-sm transition first:pt-0 last:pb-0 hover:text-blue-700 dark:hover:text-blue-300"
-                    >
-                      <span
+                  <div className="mt-4 space-y-3">
+                    {operationFocusItems.slice(0, 3).map((item) => (
+                      <div
+                        key={item.label}
                         className={cn(
-                          'mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full border text-[0.68rem] font-semibold',
-                          'border-amber-300 bg-amber-50 text-amber-700 dark:border-amber-900/70 dark:bg-amber-950/25 dark:text-amber-200'
+                          'rounded-xl border px-3 py-3',
+                          item.tone === 'warn'
+                            ? 'border-amber-200 bg-amber-50/75 dark:border-amber-900/70 dark:bg-amber-950/25'
+                            : 'border-slate-200/80 bg-slate-50/70 dark:border-slate-800 dark:bg-slate-950/35'
                         )}
                       >
-                        {String(index + 1)}
-                      </span>
-                      <span className="min-w-0">
-                        <span className="block font-semibold text-slate-950 dark:text-white">{item.title}</span>
-                        <span className="mt-1 line-clamp-2 block text-xs leading-5 text-slate-500 dark:text-slate-400">
-                          {item.detail}
+                        <p className="text-sm font-semibold text-gray-950 dark:text-white">{item.label}</p>
+                        <p className="mt-1 text-xs leading-5 text-gray-600 dark:text-gray-300">{item.detail}</p>
+                      </div>
+                    ))}
+                  </div>
+                </BackofficeStackCard>
+              ) : null}
+
+              {shouldShowOnboardingChecklist ? (
+                <BackofficeStackCard className="bg-white/70 dark:bg-slate-950/35" variant="portal" data-portal-home="setup-checklist">
+                  <div className="flex items-start justify-between gap-4">
+                    <div>
+                      <p className="text-[0.68rem] font-semibold uppercase tracking-[0.18em] text-gray-500 dark:text-gray-400">
+                        {t('portal.home.onboarding_label', {}, 'Needs attention')}
+                      </p>
+                      <h2 className="mt-2 text-lg font-semibold text-gray-950 dark:text-white">
+                        {t('portal.home.onboarding_title', {}, 'Before you continue')}
+                      </h2>
+                    </div>
+                    <BackofficeTag tone="warning">
+                      {requiredAttentionItems.length} {t('portal.home.filter_attention_only', {}, 'Needs attention')}
+                    </BackofficeTag>
+                  </div>
+                  <div className="mt-4 divide-y divide-slate-200/80 dark:divide-slate-800">
+                    {requiredAttentionItems.map((item, index) => (
+                      <Link
+                        key={item.key}
+                        href={item.href}
+                        className="group flex gap-3 py-3 text-sm transition first:pt-0 last:pb-0 hover:text-blue-700 dark:hover:text-blue-300"
+                      >
+                        <span
+                          className={cn(
+                            'mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full border text-[0.68rem] font-semibold',
+                            'border-amber-300 bg-amber-50 text-amber-700 dark:border-amber-900/70 dark:bg-amber-950/25 dark:text-amber-200'
+                          )}
+                        >
+                          {String(index + 1)}
                         </span>
-                      </span>
-                    </Link>
-                  ))}
-                </div>
-              </BackofficeStackCard>
-            ) : (
-              <BackofficeStackCard className="bg-white/70 dark:bg-slate-950/35" variant="portal" data-portal-home="no-action-summary">
-                <p className="text-[0.68rem] font-semibold uppercase tracking-[0.18em] text-gray-500 dark:text-gray-400">
-                  {t('portal.home.recent_issues_label', {}, 'Current status')}
-                </p>
-                <h2 className="mt-2 text-lg font-semibold text-gray-950 dark:text-white">
-                  {t('portal.home.recent_issues_empty_title', {}, 'No active restrictions')}
-                </h2>
-                <p className="mt-2 text-sm leading-6 text-gray-600 dark:text-gray-300">
-                  {t('portal.home.recent_issues_empty_desc', {}, 'The current site can use the service normally.')}
-                </p>
-              </BackofficeStackCard>
-            )}
-          </div>
+                        <span className="min-w-0">
+                          <span className="block font-semibold text-slate-950 dark:text-white">{item.title}</span>
+                          <span className="mt-1 line-clamp-2 block text-xs leading-5 text-slate-500 dark:text-slate-400">
+                            {item.detail}
+                          </span>
+                        </span>
+                      </Link>
+                    ))}
+                  </div>
+                </BackofficeStackCard>
+              ) : null}
+            </div>
+          ) : null}
         </BackofficeSectionPanel>
       </section>
 
@@ -686,18 +620,16 @@ export default function PortalPage() {
           <div className={cn(
             'overflow-hidden rounded-[1.4rem] border border-slate-200/80 transition-shadow dark:border-slate-800'
           )}>
-            <div className="hidden grid-cols-[minmax(0,1.8fr)_120px_140px_240px] gap-4 border-b border-slate-200/80 bg-slate-50/70 px-4 py-3 text-[0.68rem] font-semibold uppercase tracking-[0.18em] text-gray-500 dark:border-slate-800 dark:bg-slate-950/45 dark:text-gray-400 lg:grid">
+            <div className="hidden grid-cols-[minmax(0,1.8fr)_120px_240px] gap-4 border-b border-slate-200/80 bg-slate-50/70 px-4 py-3 text-[0.68rem] font-semibold uppercase tracking-[0.18em] text-gray-500 dark:border-slate-800 dark:bg-slate-950/45 dark:text-gray-400 lg:grid">
               <span>{t('common.site')}</span>
               <span>{t('portal.home.service_state_label', {}, 'Service status')}</span>
-              <span>{t('portal.home.package_card_label', {}, 'Current package')}</span>
               <span>{t('portal.home.view_label', {}, 'View')}</span>
             </div>
 
             <div className="divide-y divide-slate-200/80 dark:divide-slate-800">
               {previewSites.map((site) => {
                 const isCurrent = session.site_id === site.site_id;
-                const hasAttention = site.status !== 'active' || !hasCachedSiteCoverage(site);
-                const sitePackageDisplay = resolveSitePackageDisplay(site);
+                const hasAttention = site.status !== 'active' || !getPortalSiteWordPressUrl(site);
                 return (
                   <div
                     key={site.site_id}
@@ -712,7 +644,7 @@ export default function PortalPage() {
                       }
                     }}
                     className={cn(
-                      'group grid cursor-pointer gap-3 px-4 py-4 transition-all active:translate-y-px lg:grid-cols-[minmax(0,1.8fr)_120px_140px_240px] lg:items-center',
+                      'group grid cursor-pointer gap-3 px-4 py-4 transition-all active:translate-y-px lg:grid-cols-[minmax(0,1.8fr)_120px_240px] lg:items-center',
                       isCurrent
                         ? 'border-l-4 border-[color:var(--brand-primary)] bg-[color:var(--surface-raised)] ring-1 ring-[color:var(--brand-primary-soft)]'
                         : hasAttention
@@ -741,7 +673,6 @@ export default function PortalPage() {
                       </p>
                       <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-gray-500 dark:text-gray-400 lg:hidden">
                         <span>{t('portal.home.service_state_label', {}, 'Service status')}: {hasAttention ? t('portal.home.service_status_attention', {}, 'Needs attention') : t('portal.home.risk_level_normal', {}, 'Normal')}</span>
-                        <span>{t('portal.home.package_card_label', {}, 'Current package')}: {sitePackageDisplay.display_package_label || t('portal.home.package_pending_label', {}, 'To confirm')}</span>
                         <span>{t('common.connected_on', { date: formatDate(site.created_at) })}</span>
                       </div>
                       <p className="mt-2 hidden text-xs text-gray-500 dark:text-gray-400 lg:block">
@@ -757,9 +688,6 @@ export default function PortalPage() {
                       />
                     </div>
 
-                    <div className="hidden text-sm text-gray-700 dark:text-gray-300 lg:block">
-                      {sitePackageDisplay.display_package_label || t('portal.home.package_pending_label', {}, 'To confirm')}
-                    </div>
                     <div className="flex flex-wrap gap-2 lg:justify-end">
                       <Link
                         href={`/portal/sites/${site.site_id}`}

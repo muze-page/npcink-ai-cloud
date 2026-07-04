@@ -111,11 +111,12 @@ export interface PortalLoginCodeRequest {
 export interface PortalLoginCodeVerifyRequest {
   email: string;
   code: string;
+  remember_me?: boolean;
 }
 
 export interface PortalRegistrationCodeRequest {
   email: string;
-  site_url: string;
+  site_url?: string;
   site_name?: string;
   use_case?: string;
   locale?: 'en' | 'zh-CN';
@@ -1283,6 +1284,9 @@ export interface PortalCreditLedgerEntry {
   source_type: string;
   category?: string;
   category_label?: string;
+  feature_key?: string;
+  feature_label?: string;
+  feature_detail?: string;
   direction?: string;
   explanation?: string;
   source_id?: string;

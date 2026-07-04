@@ -16,6 +16,7 @@ from app.api.auth import (
     decode_portal_bearer_claims,
     decode_portal_session_cookie_claims,
     get_cloud_services,
+    resolve_portal_remember_me_session_ttl_seconds,
     resolve_portal_session_ttl_seconds,
     validate_portal_principal_session,
 )
@@ -281,7 +282,9 @@ def serialize_portal_session(
         except CommercialServiceError:
             account_detail = {}
         subscriptions = _dict_list(account_detail.get("subscriptions"))
-        current_subscription = subscriptions[0] if subscriptions else None
+        if subscriptions:
+            primary_subscription = _dict_value(subscriptions[0].get("subscription"))
+            current_subscription = primary_subscription or subscriptions[0]
     return {
         "site_id": resolved_site_id,
         "principal_id": principal_id,
@@ -313,14 +316,24 @@ def serialize_portal_session(
     }
 
 
-def build_new_portal_session_metadata(request: Request) -> dict[str, object]:
+def build_new_portal_session_metadata(
+    request: Request,
+    *,
+    ttl_seconds: int | None = None,
+) -> dict[str, object]:
     settings = get_cloud_services(request).settings
     now = datetime.now(UTC)
-    ttl_seconds = resolve_portal_session_ttl_seconds(settings)
+    resolved_ttl_seconds = (
+        max(60, int(ttl_seconds or 0))
+        if ttl_seconds is not None
+        else resolve_portal_session_ttl_seconds(settings)
+    )
     return {
         "principal_id": "",
         "issued_at": now.isoformat().replace("+00:00", "Z"),
-        "expires_at": (now + timedelta(seconds=ttl_seconds)).isoformat().replace("+00:00", "Z"),
+        "expires_at": (now + timedelta(seconds=resolved_ttl_seconds))
+        .isoformat()
+        .replace("+00:00", "Z"),
         "transport": "cookie",
         "revocable": True,
     }
@@ -333,13 +346,18 @@ def set_portal_session_cookies(
     principal_id: str,
     site_id: str = "",
     session_version: int | None = None,
+    ttl_seconds: int | None = None,
 ) -> None:
     settings = get_cloud_services(request).settings
     now = datetime.now(UTC)
-    ttl_seconds = resolve_portal_session_ttl_seconds(settings)
+    resolved_ttl_seconds = (
+        max(60, int(ttl_seconds or 0))
+        if ttl_seconds is not None
+        else resolve_portal_session_ttl_seconds(settings)
+    )
     secure = portal_cookie_secure(request)
     issued_at = now.isoformat().replace("+00:00", "Z")
-    expires_at = (now + timedelta(seconds=ttl_seconds)).isoformat().replace("+00:00", "Z")
+    expires_at = (now + timedelta(seconds=resolved_ttl_seconds)).isoformat().replace("+00:00", "Z")
     token_site_id = _cookie_safe_site_id(site_id)
     response.delete_cookie(COOKIE_SITE_ID)
     response.set_cookie(
@@ -350,12 +368,12 @@ def set_portal_session_cookies(
             site_id=token_site_id,
             session_version=session_version
             or _resolve_portal_principal_session_version(request, principal_id=principal_id),
-            expires_at=now + timedelta(seconds=ttl_seconds),
+            expires_at=now + timedelta(seconds=resolved_ttl_seconds),
         ),
         httponly=True,
         secure=secure,
         samesite="lax",
-        max_age=ttl_seconds,
+        max_age=resolved_ttl_seconds,
     )
     response.set_cookie(
         COOKIE_SESSION_ISSUED_AT,
@@ -363,7 +381,7 @@ def set_portal_session_cookies(
         httponly=True,
         secure=secure,
         samesite="lax",
-        max_age=ttl_seconds,
+        max_age=resolved_ttl_seconds,
     )
     response.set_cookie(
         COOKIE_SESSION_EXPIRES_AT,
@@ -371,8 +389,15 @@ def set_portal_session_cookies(
         httponly=True,
         secure=secure,
         samesite="lax",
-        max_age=ttl_seconds,
+        max_age=resolved_ttl_seconds,
     )
+
+
+def resolve_portal_login_session_ttl_seconds(request: Request, *, remember_me: bool) -> int:
+    settings = get_cloud_services(request).settings
+    if remember_me:
+        return resolve_portal_remember_me_session_ttl_seconds(settings)
+    return resolve_portal_session_ttl_seconds(settings)
 
 
 def _resolve_portal_principal_session_version(

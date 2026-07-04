@@ -25,8 +25,13 @@ assert.match(
 
 assert.match(
   source,
-  /data-portal-home="current-focus"/,
-  'portal home must keep the current status and follow-up items in the first surface'
+  /shouldShowFollowUpSection/,
+  'portal home must only render follow-up sections when there is something to handle'
+);
+assert.match(
+  source,
+  /operationFocusItems\.length > 0 \? \(/,
+  'portal home must keep current focus conditional instead of showing normal-state confirmation cards'
 );
 assert.doesNotMatch(
   source,
@@ -39,16 +44,26 @@ assert.match(
   /data-portal-home="setup-checklist"/,
   'portal home may keep onboarding only as a secondary setup checklist'
 );
-assert.match(
+assert.doesNotMatch(
   source,
   /data-portal-home="no-action-summary"/,
-  'portal home must show a plain no-action summary instead of repeated navigation when nothing needs attention'
+  'portal home must hide no-action summary cards when everything is normal'
 );
 assert.doesNotMatch(
   source,
   /data-portal-home="quick-links"|portal\.home\.next_action_label[\s\S]*\/portal\/sites\/\$\{selectedSite\.site_id\}|portal\.home\.usage_action[\s\S]*\/portal\/usage\?site=\$\{selectedSite\.site_id\}/,
   'portal home must not repeat global navigation as local quick links'
 );
+
+const siteRegisterIndex = source.indexOf('portal.site_register');
+assert.ok(siteRegisterIndex >= 0, 'portal home must render a connected-site register section');
+const siteRegisterSource = source.slice(siteRegisterIndex);
+assert.doesNotMatch(
+  siteRegisterSource,
+  /package_card_label|sitePackageDisplay|resolveSitePackageDisplay|hasCachedSiteCoverage/,
+  'portal home site register must not show account package as a per-site field'
+);
+
 assert.doesNotMatch(
   source.slice(source.indexOf('data-portal-home="operation-overview"'), source.indexOf('portal.site_register')),
   /href="\/portal\/sites"|href="\/portal\/billing"/,
@@ -62,8 +77,8 @@ const checklistIndex = source.indexOf('data-portal-home="setup-checklist"');
 
 assert.ok(overviewIndex >= 0, 'operation overview marker must exist');
 assert.ok(summaryIndex > overviewIndex, 'metric summary must render inside the operation overview');
-assert.ok(focusIndex > summaryIndex, 'current focus must follow the metric summary');
-assert.ok(checklistIndex > focusIndex, 'setup checklist must stay secondary to the current focus');
+assert.ok(focusIndex > summaryIndex, 'conditional current focus must follow the metric summary');
+assert.ok(checklistIndex > focusIndex, 'setup checklist must stay in the conditional follow-up area');
 
 assert.doesNotMatch(
   source,

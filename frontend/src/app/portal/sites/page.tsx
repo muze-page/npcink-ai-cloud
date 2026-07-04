@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
-import { Suspense, useCallback, useEffect, useMemo, useState } from 'react';
+import { Suspense, useEffect, useMemo, useState } from 'react';
 import { LoadingFallback } from '@/components/ui/LoadingFallback';
 import {
   BackofficeMetricStrip,
@@ -21,8 +21,6 @@ import { PortalWorkspaceHeader } from '@/components/portal/PortalWorkspaceHeader
 import { Modal } from '@/components/ui/Modal';
 import { useLocale } from '@/contexts/LocaleContext';
 import { useSession } from '@/hooks/useSession';
-import { portalClient, type PortalSiteSummaryRecord } from '@/lib/portal-client';
-import { resolveCustomerPackageDisplay } from '@/lib/customer-package-display';
 import {
   getPortalSiteDisplayName,
   getPortalSiteWordPressUrl,
@@ -47,9 +45,7 @@ function PortalSitesContent() {
   const { session, isLoading, isAuthenticated, selectSite } = useSession();
   const [searchQuery, setSearchQuery] = useState(() => searchParams?.get('q') || '');
   const [showConnectModal, setShowConnectModal] = useState(false);
-  const [siteSummaryCache, setSiteSummaryCache] = useState<Record<string, PortalSiteSummaryRecord>>({});
   const sites = session?.sites ?? EMPTY_SITES;
-  const siteIdsKey = sites.map((site) => site.site_id).join('|');
   const activeSite = sites.find((site) => site.status === 'active') || null;
   const selectedSiteId = session?.site_id || activeSite?.site_id || '';
   const selectedSite = sites.find((site) => site.site_id === selectedSiteId) || activeSite || sites[0] || null;
@@ -59,21 +55,6 @@ function PortalSitesContent() {
   const addonSiteName = searchParams?.get('site_name') || '';
   const addonReturnUrl = searchParams?.get('return_url') || '';
   const addonState = searchParams?.get('state') || '';
-  const getSiteSummary = useCallback((siteId: string) => siteSummaryCache[siteId] || null, [siteSummaryCache]);
-  const getSiteCoverage = useCallback((site: PortalSiteListItem) => getSiteSummary(site.site_id)?.coverage || null, [getSiteSummary]);
-  const hasSiteCoverage = useCallback((site: PortalSiteListItem) => Boolean(getSiteCoverage(site) || site.plan_name), [getSiteCoverage]);
-  const getSitePackageLabel = (site: PortalSiteListItem) => {
-    const coverage = getSiteCoverage(site);
-    return (
-      resolveCustomerPackageDisplay(t, {
-        planId: coverage?.plan_id,
-        planVersionId: coverage?.plan_version_id,
-        packageAlias: coverage?.package_alias,
-        formalPlanName: site.plan_name,
-        coverageState: coverage || site.plan_name ? 'covered' : 'uncovered',
-      }).display_package_label || t('common.not_found')
-    );
-  };
   const filteredSites = useMemo(() => {
     const query = searchQuery.trim().toLowerCase();
     return sites.filter((site) => {
@@ -103,32 +84,6 @@ function PortalSitesContent() {
     });
     return next;
   }, [filteredSites, selectedSiteId]);
-
-  useEffect(() => {
-    if (!isAuthenticated || !siteIdsKey) {
-      setSiteSummaryCache({});
-      return;
-    }
-
-    let isCancelled = false;
-
-    void Promise.allSettled(sites.map((site) => portalClient.getSiteSummary(site.site_id))).then((results) => {
-      if (isCancelled) {
-        return;
-      }
-      const next: Record<string, PortalSiteSummaryRecord> = {};
-      results.forEach((result, index) => {
-        if (result.status === 'fulfilled') {
-          next[sites[index].site_id] = result.value.data as PortalSiteSummaryRecord;
-        }
-      });
-      setSiteSummaryCache(next);
-    });
-
-    return () => {
-      isCancelled = true;
-    };
-  }, [isAuthenticated, siteIdsKey, sites]);
 
   useEffect(() => {
     setSearchQuery(searchParams?.get('q') || '');
@@ -194,7 +149,7 @@ function PortalSitesContent() {
           { label: t('common.sites', {}, 'Sites'), value: session.sites.length },
           {
             label: t('portal.home.filter_attention_only', {}, 'Needs attention'),
-            value: session.sites.filter((site) => site.status !== 'active' || !hasSiteCoverage(site)).length,
+            value: session.sites.filter((site) => site.status !== 'active' || !getPortalSiteWordPressUrl(site)).length,
           },
           {
             label: t('common.current', {}, 'Current'),
@@ -297,13 +252,9 @@ function PortalSitesContent() {
                   </p>
                   <BackofficeMetricStrip
                     items={[
-                      {
-                        label: t('portal.home.package_card_label', {}, 'Current package'),
-                        value: getSitePackageLabel(site),
-                      },
                       { label: t('site_details.connected', {}, 'Connected'), value: formatDate(site.created_at) },
                     ]}
-                    columnsClassName="lg:grid-cols-2"
+                    columnsClassName="lg:grid-cols-1"
                     variant="portal"
                   />
                 </div>

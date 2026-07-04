@@ -16,6 +16,7 @@ from app.api.auth import (
     decode_portal_bearer_token,
     decode_portal_session_cookie_claims,
     resolve_portal_login_code_ttl_seconds,
+    resolve_portal_remember_me_session_ttl_seconds,
     resolve_portal_session_ttl_seconds,
 )
 from app.core.config import Settings
@@ -185,6 +186,19 @@ class TestResolveTtl:
     def test_resolve_session_ttl_honors_configured_value(self) -> None:
         settings = _test_settings(portal_session_ttl_seconds=3600)
         ttl = resolve_portal_session_ttl_seconds(settings)
+        assert ttl == 3600
+
+    def test_resolve_remember_me_ttl_defaults_to_seven_days(self) -> None:
+        settings = _test_settings(portal_session_ttl_seconds=3600)
+        ttl = resolve_portal_remember_me_session_ttl_seconds(settings)
+        assert ttl == 7 * 24 * 60 * 60
+
+    def test_resolve_remember_me_ttl_never_shortens_base_session(self) -> None:
+        settings = _test_settings(
+            portal_session_ttl_seconds=3600,
+            portal_remember_me_session_ttl_seconds=120,
+        )
+        ttl = resolve_portal_remember_me_session_ttl_seconds(settings)
         assert ttl == 3600
 
     def test_resolve_login_code_ttl_returns_minimum_60_seconds(self) -> None:

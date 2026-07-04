@@ -1908,6 +1908,14 @@ class CommercialRepository:
             statement = statement.limit(limit)
         return list(self.session.scalars(statement))
 
+    def list_run_records_by_ids(self, run_ids: list[str]) -> list[RunRecord]:
+        normalized_ids = [str(run_id or "").strip() for run_id in run_ids]
+        normalized_ids = [run_id for run_id in normalized_ids if run_id]
+        if not normalized_ids:
+            return []
+        statement = select(RunRecord).where(RunRecord.run_id.in_(normalized_ids))
+        return list(self.session.scalars(statement))
+
     def list_provider_call_records_for_admin(
         self,
         *,

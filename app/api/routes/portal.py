@@ -28,6 +28,7 @@ from app.api.portal_session import (
     clear_portal_session_cookies,
     portal_cookie_secure,
     portal_json_error,
+    resolve_portal_login_session_ttl_seconds,
     resolve_portal_request_context,
     serialize_portal_session,
     set_portal_session_cookies,
@@ -111,6 +112,7 @@ class PortalLoginCodeRequestPayload(BaseModel):
 class PortalLoginCodeVerifyPayload(BaseModel):
     email: str = ""
     code: str = ""
+    remember_me: bool = False
 
 
 class PortalRegistrationCodeRequestPayload(BaseModel):
@@ -1059,12 +1061,19 @@ async def verify_portal_login_code(
             ),
         )
         principal_id = str(verified.get("principal_id") or "")
+        session_ttl_seconds = resolve_portal_login_session_ttl_seconds(
+            request,
+            remember_me=bool(payload.remember_me),
+        )
         data = serialize_portal_session(
             request,
             principal_id=principal_id,
             site_id="",
             strict_site=False,
-            session_metadata=build_new_portal_session_metadata(request),
+            session_metadata=build_new_portal_session_metadata(
+                request,
+                ttl_seconds=session_ttl_seconds,
+            ),
         )
     except CommercialServiceError as error:
         if error.error_code == "service.portal_login_code_invalid":
@@ -1088,6 +1097,7 @@ async def verify_portal_login_code(
         response,
         principal_id=principal_id,
         site_id=str(data.get("site_id") or ""),
+        ttl_seconds=session_ttl_seconds,
     )
     return response
 
@@ -1103,12 +1113,12 @@ async def request_portal_registration_code(
     email = payload.email.strip()
     site_url = payload.site_url.strip()
     locale = resolve_portal_email_locale(request, payload.locale)
-    if not email or not site_url:
+    if not email:
         return portal_json_error(
             request,
             status_code=400,
             error_code="portal.registration_required",
-            message="email and wordpress site url are required",
+            message="email is required",
         )
     try:
         enforce_portal_login_code_request_rate_limit(request, email=email)

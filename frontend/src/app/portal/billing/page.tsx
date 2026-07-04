@@ -9,6 +9,7 @@ import {
   BackofficeStackCard,
 } from '@/components/backoffice/BackofficeScaffold';
 import { BackofficeStatusBadge } from '@/components/backoffice/BackofficeStatusBadge';
+import { PortalEntitlementUsage } from '@/components/portal/PortalEntitlementUsage';
 import {
   PortalEmptyState,
   PortalErrorState,
@@ -166,17 +167,11 @@ function PortalBillingContent() {
     planId: currentSubscription?.plan_id,
     planVersionId: snapshotPlanVersionId,
     packageAlias: currentSubscription?.package_alias,
-    formalPlanName: selectedSite.plan_name,
     planKind: currentSubscription?.plan_kind,
     coverageState: currentSubscription ? 'covered' : 'uncovered',
   });
   const packageLabel = packageDisplay.display_package_label || t('portal.home.package_pending_label', {}, 'To confirm');
   const quotaSummary = entitlements?.quota_summary || null;
-  const quotaCredit = quotaSummary?.credit || null;
-  const quotaResources = Array.isArray(quotaSummary?.resource_limits)
-    ? quotaSummary.resource_limits
-    : [];
-  const boundSitesResource = quotaResources.find((item) => String(item.key || '') === 'bound_sites');
   const currentPeriodStart =
     entitlements?.period_start_at ||
     currentSubscription?.current_period_start ||
@@ -189,7 +184,6 @@ function PortalBillingContent() {
     currentPeriodStart && currentPeriodEnd
       ? `${formatDate(currentPeriodStart)} - ${formatDate(currentPeriodEnd)}`
       : t('portal.home.package_pending_label', {}, 'To confirm');
-  const unlimitedLabel = t('common.unlimited', {}, 'Unlimited');
   const availableCreditPacks = creditPacks?.items || [];
   const recentPaymentOrders = paymentOrders?.items || [];
   const packageStatus =
@@ -244,52 +238,17 @@ function PortalBillingContent() {
       />
 
       <BackofficeStackCard variant="portal" className="bg-white/70 dark:bg-slate-950/35">
-        <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-          <div>
-            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-gray-500 dark:text-gray-400">
-              {t('portal.billing.package_rights_label', {}, 'Package rights')}
-            </p>
-            <div className="mt-2 flex flex-wrap items-center gap-2">
-              <h2 className="text-lg font-semibold text-gray-950 dark:text-white">
-                {t('portal.billing.package_rights_title', {}, 'Included in this package')}
-              </h2>
-              <BackofficeStatusBadge status={packageStatus} label={packageStatusLabel} />
-            </div>
-            <p className="mt-2 text-sm text-gray-600 dark:text-gray-300">
-              {t(
-                'portal.billing.package_rights_desc',
-                {},
-                'Review the main limits for the selected site. Package changes start from the upgrade entry.'
-              )}
-            </p>
-            <div className="mt-4 grid gap-2 text-sm text-slate-700 dark:text-slate-200 sm:grid-cols-3">
-              <span className="rounded-2xl border border-slate-200/80 px-3 py-2 dark:border-slate-800">
-                {t('portal.usage.package_credit_allowance_label', {}, 'Package credits')}:{' '}
-                <strong>
-                  {quotaCredit
-                    ? `${formatQuotaValue(quotaCredit.used)} / ${formatQuotaValue(quotaCredit.limit, Boolean(quotaCredit.unlimited), unlimitedLabel)}`
-                    : t('common.not_found')}
-                </strong>
-              </span>
-              <span className="rounded-2xl border border-slate-200/80 px-3 py-2 dark:border-slate-800">
-                {t('portal.usage.site_allowance_label', {}, 'Sites')}:{' '}
-                <strong>
-                  {boundSitesResource
-                    ? `${formatQuotaValue(boundSitesResource.used)} / ${formatQuotaValue(boundSitesResource.limit, Boolean(boundSitesResource.unlimited), unlimitedLabel)}`
-                    : t('common.not_found')}
-                </strong>
-              </span>
-              <span className="rounded-2xl border border-slate-200/80 px-3 py-2 dark:border-slate-800">
-                {t('portal.usage.period_label', {}, 'Period')}: <strong>{currentPeriodLabel}</strong>
-              </span>
-            </div>
+        <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
+          <div className="min-w-0 flex-1">
+            <PortalEntitlementUsage
+              quotaSummary={quotaSummary}
+              periodLabel={currentPeriodLabel}
+              t={t}
+            />
           </div>
           <div className="flex flex-col gap-2 sm:flex-row lg:flex-col">
             <Link href={`/portal/account?site=${selectedSiteId}`} className="btn btn-primary">
               {t('portal.billing.upgrade_action', {}, 'Upgrade package')}
-            </Link>
-            <Link href={`/portal/sites/${selectedSiteId}`} className="btn btn-secondary">
-              {t('portal.site_record', {}, 'Site Record')}
             </Link>
           </div>
         </div>
@@ -435,7 +394,7 @@ function PortalBillingContent() {
           {t(
             'portal.billing.help_desc',
             {},
-            'If the package or record status looks wrong, contact support with the selected site name. Technical record IDs are hidden below unless support asks for them.'
+            'If the package or record status looks wrong, contact support with your account email. Technical record IDs are hidden below unless support asks for them.'
           )}
         </p>
       </BackofficeStackCard>

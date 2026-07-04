@@ -10,7 +10,6 @@ import { PortalErrorState, PortalLoadingState, PortalSignedOutState } from '@/co
 import { useLocale } from '@/contexts/LocaleContext';
 import { useSession } from '@/hooks/useSession';
 import { portalClient, type PortalSiteSummaryRecord, type Site } from '@/lib/portal-client';
-import { resolveCustomerPackageDisplay } from '@/lib/customer-package-display';
 import { formatPortalErrorMessage } from '@/lib/portal-error';
 import {
   getPortalSiteDisplayName,
@@ -87,16 +86,6 @@ function PortalSiteRecordContent() {
     status: (summary.site?.status || sessionSite?.status || 'inactive') as Site['status'],
     created_at: summary.site?.created_at || sessionSite?.created_at || '',
   };
-  const coverage = summary.coverage || null;
-  const packageDisplay = resolveCustomerPackageDisplay(t, {
-    planId: coverage?.plan_id || session.current_subscription?.plan_id,
-    planVersionId: coverage?.plan_version_id || session.current_subscription?.plan_version_id,
-    packageAlias: summary.package_alias || coverage?.package_alias || session.current_subscription?.package_alias,
-    formalPlanName: sessionSite?.plan_name || summary.site?.plan_name,
-    planKind: session.current_subscription?.plan_kind,
-    coverageState: coverage || sessionSite?.plan_name ? 'covered' : 'uncovered',
-  });
-  const packageLabel = packageDisplay.display_package_label || t('portal.home.package_pending_label', {}, 'To confirm');
   const siteUrl = getPortalSiteWordPressUrl(site);
   const siteNeedsAttention = site.status !== 'active' || !siteUrl;
   const siteStatusLabel = siteNeedsAttention
@@ -115,11 +104,6 @@ function PortalSiteRecordContent() {
         sites={session.sites}
         showSiteContextSummary
         metrics={[
-          {
-            label: t('common.package', {}, 'Package'),
-            value: packageLabel,
-            detail: t('portal.home.package_card_label', {}, 'Current package'),
-          },
           {
             label: t('common.status', {}, 'Status'),
             value: siteStatusLabel,

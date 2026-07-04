@@ -1,6 +1,5 @@
 'use client';
 
-import Link from 'next/link';
 import {
   BackofficeEmptyState,
   BackofficeMetricStrip,
@@ -113,11 +112,6 @@ export function PortalPluginMonitoringPanel({
             <button type="button" className="btn btn-secondary btn-sm" onClick={onRetry}>
               {t('common.refresh', {}, 'Refresh')}
             </button>
-          ) : null}
-          {compact ? (
-            <Link href={`/portal/monitoring?site=${encodeURIComponent(siteId)}`} className="btn btn-secondary btn-sm">
-              {t('portal.monitoring.open_detail', {}, 'Open detail')}
-            </Link>
           ) : null}
         </div>
       </div>
