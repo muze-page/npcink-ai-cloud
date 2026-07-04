@@ -64,6 +64,7 @@ services:
       NPCINK_CLOUD_DATABASE_URL: postgresql+psycopg://npcink:npcink@postgres:5432/npcink_ai_cloud
       NPCINK_CLOUD_REDIS_URL: redis://redis:6379/0
       NPCINK_CLOUD_PORTAL_JWT_SECRET: ${NPCINK_CLOUD_PORTAL_JWT_SECRET:-dev-portal-preview-token-32-bytes}
+      NPCINK_CLOUD_OTEL_EXPORTER_OTLP_ENDPOINT: ${NPCINK_CLOUD_DEV_OTEL_EXPORTER_OTLP_ENDPOINT:-}
     expose:
       - "8000"
     depends_on:
@@ -92,6 +93,7 @@ services:
       NPCINK_CLOUD_LOG_LEVEL: DEBUG
       NPCINK_CLOUD_DATABASE_URL: postgresql+psycopg://npcink:npcink@postgres:5432/npcink_ai_cloud
       NPCINK_CLOUD_REDIS_URL: redis://redis:6379/0
+      NPCINK_CLOUD_OTEL_EXPORTER_OTLP_ENDPOINT: ${NPCINK_CLOUD_DEV_OTEL_EXPORTER_OTLP_ENDPOINT:-}
     depends_on:
       postgres:
         condition: service_healthy
@@ -117,6 +119,7 @@ services:
       NPCINK_CLOUD_LOG_LEVEL: DEBUG
       NPCINK_CLOUD_DATABASE_URL: postgresql+psycopg://npcink:npcink@postgres:5432/npcink_ai_cloud
       NPCINK_CLOUD_REDIS_URL: redis://redis:6379/0
+      NPCINK_CLOUD_OTEL_EXPORTER_OTLP_ENDPOINT: ${NPCINK_CLOUD_DEV_OTEL_EXPORTER_OTLP_ENDPOINT:-}
     depends_on:
       postgres:
         condition: service_healthy
@@ -143,6 +146,7 @@ services:
       NPCINK_CLOUD_DATABASE_URL: postgresql+psycopg://npcink:npcink@postgres:5432/npcink_ai_cloud
       NPCINK_CLOUD_REDIS_URL: redis://redis:6379/0
       NPCINK_CLOUD_WORKER_HEARTBEAT_INTERVAL_SECONDS: ${NPCINK_CLOUD_WORKER_HEARTBEAT_INTERVAL_SECONDS:-60}
+      NPCINK_CLOUD_OTEL_EXPORTER_OTLP_ENDPOINT: ${NPCINK_CLOUD_DEV_OTEL_EXPORTER_OTLP_ENDPOINT:-}
     depends_on:
       postgres:
         condition: service_healthy
@@ -164,6 +168,7 @@ services:
     environment:
       CLOUD_API_BASE_URL: http://api:8000
       CLOUD_PUBLIC_BASE_URL: ${NPCINK_CLOUD_BASE_URL:-http://127.0.0.1:8010}
+      NPCINK_CLOUD_OTEL_EXPORTER_OTLP_ENDPOINT: ${NPCINK_CLOUD_DEV_OTEL_EXPORTER_OTLP_ENDPOINT:-}
       NODE_OPTIONS: --max-old-space-size=1536
       NEXT_TELEMETRY_DISABLED: "1"
       DISABLE_DEPENDENCY_CHECK: "true"

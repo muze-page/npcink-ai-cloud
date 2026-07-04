@@ -45,6 +45,23 @@ def test_api_dev_reload_ignores_frontend_dependency_churn() -> None:
     assert "--reload-dir node_modules" not in compose_text
 
 
+def test_dev_stack_does_not_enable_missing_otel_collector_by_default() -> None:
+    compose_text = (_repo_root() / "docker-compose.dev.yml").read_text()
+
+    assert "otel-collector:" not in compose_text
+    assert (
+        "NPCINK_CLOUD_OTEL_EXPORTER_OTLP_ENDPOINT: "
+        "${NPCINK_CLOUD_DEV_OTEL_EXPORTER_OTLP_ENDPOINT:-}"
+    ) in compose_text
+    assert (
+        compose_text.count(
+            "NPCINK_CLOUD_OTEL_EXPORTER_OTLP_ENDPOINT: "
+            "${NPCINK_CLOUD_DEV_OTEL_EXPORTER_OTLP_ENDPOINT:-}"
+        )
+        == 5
+    )
+
+
 def test_pnpm_build_script_policy_is_explicit() -> None:
     workspace_text = (_repo_root() / "pnpm-workspace.yaml").read_text()
 

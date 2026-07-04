@@ -486,6 +486,15 @@ Expected results: the required containers are `Up`, the restart policy prints
 entrypoint returns HTTP `200`. A running `proxy` with `502 Bad Gateway` usually
 means `api` or `frontend` is not running yet.
 
+The default dev compose stack does not start `otel-collector`. To keep API
+reloads responsive, it clears `NPCINK_CLOUD_OTEL_EXPORTER_OTLP_ENDPOINT` for
+local containers even if `.env` contains the production-style collector URL.
+Opt in to local trace export only when a collector is actually running:
+
+```bash
+NPCINK_CLOUD_DEV_OTEL_EXPORTER_OTLP_ENDPOINT=http://host.docker.internal:4318/v1/traces pnpm run dev
+```
+
 Keep local-only debug credentials such as `NPCINK_CLOUD_INTERNAL_AUTH_TOKEN`,
 `NPCINK_CLOUD_ADMIN_BOOTSTRAP_TOKEN`, `NPCINK_CLOUD_ADMIN_SESSION_SECRET`, and
 `NPCINK_CLOUD_PORTAL_JWT_SECRET` in `.env.local` for dev Docker runs.
