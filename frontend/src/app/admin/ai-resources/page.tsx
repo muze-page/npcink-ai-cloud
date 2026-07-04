@@ -9,6 +9,7 @@ import {
   BackofficeSectionPanel,
   BackofficeStackCard,
 } from '@/components/backoffice/BackofficeScaffold';
+import { AdminMutationReceipt, type AdminMutationReceiptPayload } from '@/components/admin/AdminMutationReceipt';
 import { BackofficeFilterPill } from '@/components/backoffice/BackofficeFilterPill';
 import { BackofficeStatusBadge } from '@/components/backoffice/BackofficeStatusBadge';
 import { LoadingFallback } from '@/components/ui/LoadingFallback';
@@ -1416,6 +1417,7 @@ function AiResourcesContent() {
   const [customModelInput, setCustomModelInput] = useState('');
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
+  const [lastReceipt, setLastReceipt] = useState<AdminMutationReceiptPayload | null>(null);
   const [runtimeTelemetry, setRuntimeTelemetry] = useState<RuntimeTelemetrySummary | null>(null);
   const autoSyncedReferenceProviders = useRef<Set<string>>(new Set());
   const providerFormCapabilityIds = splitList(providerConnectionForm.capabilityIds);
@@ -1569,6 +1571,7 @@ function AiResourcesContent() {
     setSavingConnection(true);
     setError('');
     setMessage('');
+    setLastReceipt(null);
     try {
       const response = await fetch('/api/admin/provider-connections', {
         method: 'POST',
@@ -1609,6 +1612,7 @@ function AiResourcesContent() {
         throw new Error(resolveUiErrorMessage(payload, aiText('error_save_connection', 'Failed to save provider connection.')));
       }
       const savedConnectionId = String(payload.data?.connection_id || normalizedConnectionId);
+      setLastReceipt((payload.data?.receipt || null) as AdminMutationReceiptPayload | null);
       let testFailed = false;
       setMessage(aiText('message_connection_saved_testing', 'Provider connection saved. Running connection test now.'));
       try {
@@ -1640,6 +1644,7 @@ function AiResourcesContent() {
     setDeletingConnectionId(connection.connection_id);
     setError('');
     setMessage('');
+    setLastReceipt(null);
     try {
       const response = await fetch(`/api/admin/provider-connections/${encodeURIComponent(connection.connection_id)}`, {
         method: 'DELETE',
@@ -1652,6 +1657,7 @@ function AiResourcesContent() {
       if (!response.ok) {
         throw new Error(resolveUiErrorMessage(payload, aiText('error_delete_connection', 'Failed to delete provider connection.')));
       }
+      setLastReceipt((payload.data?.receipt || null) as AdminMutationReceiptPayload | null);
       setMessage(aiText('message_connection_deleted', 'Provider connection deleted.'));
       if (providerConnectionForm.connectionId === connection.connection_id) {
         setProviderFormOpen(false);
@@ -1853,6 +1859,9 @@ function AiResourcesContent() {
     setTestingConnectionId(connectionId);
     setError('');
     if (announce) {
+      setLastReceipt(null);
+    }
+    if (announce) {
       setMessage('');
     }
     try {
@@ -1875,6 +1884,7 @@ function AiResourcesContent() {
         throw new Error(resolveUiErrorMessage(payload, result?.message || aiText('error_test_connection', 'Provider connection test failed.')));
       }
       if (announce) {
+        setLastReceipt((payload.data?.receipt || null) as AdminMutationReceiptPayload | null);
         setMessage(result ? providerTestMessage(result) : aiText('message_connection_tested', 'Provider connection tested.'));
       }
       if (reload) {
@@ -2602,6 +2612,7 @@ function AiResourcesContent() {
         eyebrow={aiText('eyebrow', 'Runtime plane')}
         title={aiText('title', 'Suppliers')}
         description={aiText('description', 'Manage Cloud runtime provider connections, model visibility, and capability sources. Runtime diagnostics stay in the Runtime Diagnostics page.')}
+        descriptionDisplay="hint"
         aside={(
           <Link href="/admin/troubleshooting" className="btn btn-secondary justify-center">
             {aiText('action_view_diagnostics', 'View diagnostics')}
@@ -2681,6 +2692,7 @@ function AiResourcesContent() {
             {error}
           </BackofficeStackCard>
         ) : null}
+        {!providerFormOpen ? <AdminMutationReceipt receipt={lastReceipt} /> : null}
       </BackofficePrimaryPanel>
 
       {activeView === 'connections' ? (

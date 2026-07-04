@@ -25,7 +25,14 @@ import {
 import { formatPortalErrorMessage } from '@/lib/portal-error';
 import { cn, formatDate } from '@/lib/utils';
 
-type AccountActionState = 'idle' | 'loading' | 'binding' | 'unbinding' | 'error';
+type AccountActionState =
+  | 'idle'
+  | 'loading'
+  | 'binding'
+  | 'unbinding'
+  | 'requesting_email_change'
+  | 'verifying_email_change'
+  | 'error';
 
 function normalizePortalContact(value?: string): string {
   const trimmed = String(value || '').trim();
@@ -39,6 +46,7 @@ function normalizePortalContact(value?: string): string {
 function resolvePortalContactEmail(session: PortalSession): string {
   const memberRef = (session as PortalSession & { member_ref?: string }).member_ref;
   const candidates = [
+    session.email,
     session.site_admin_ref,
     memberRef,
     session.accounts?.[0]?.site_admin_ref,
@@ -55,12 +63,15 @@ function resolvePortalContactEmail(session: PortalSession): string {
 }
 
 function AccountPageContent() {
-  const { t } = useLocale();
+  const { locale, t } = useLocale();
   const searchParams = useSearchParams();
   const { session, isLoading, isAuthenticated, refresh } = useSession();
   const [providers, setProviders] = useState<PortalIdentityProviderStatus[]>([]);
   const [status, setStatus] = useState<AccountActionState>('loading');
   const [message, setMessage] = useState('');
+  const [emailChangeNewEmail, setEmailChangeNewEmail] = useState('');
+  const [emailChangeCode, setEmailChangeCode] = useState('');
+  const [emailChangePendingEmail, setEmailChangePendingEmail] = useState('');
 
   const qqProvider = useMemo(
     () => providers.find((provider) => provider.provider === 'qq') || null,
@@ -160,6 +171,83 @@ function AccountPageContent() {
       );
     } finally {
       setStatus('idle');
+    }
+  };
+
+  const handleRequestEmailChange = async () => {
+    const nextEmail = emailChangeNewEmail.trim();
+    if (!nextEmail) {
+      setStatus('error');
+      setMessage(t('portal.account.email_change_required', undefined, 'Enter the new email address.'));
+      return;
+    }
+    setStatus('requesting_email_change');
+    setMessage('');
+    setEmailChangeCode('');
+    try {
+      const response = await portalClient.requestEmailChangeCode({
+        new_email: nextEmail,
+        locale: locale === 'en' ? 'en' : 'zh-CN',
+      });
+      const pendingEmail = response.data?.new_email || nextEmail;
+      setEmailChangePendingEmail(pendingEmail);
+      setMessage(
+        t(
+          'portal.account.email_change_code_sent',
+          { email: pendingEmail },
+          'Verification code sent to {{email}}. The current email remains active until verification.'
+        )
+      );
+      setStatus('idle');
+    } catch (error) {
+      setStatus('error');
+      setMessage(
+        formatPortalErrorMessage(
+          error,
+          t,
+          t('portal.account.email_change_request_failed', undefined, 'Unable to send the email change code')
+        )
+      );
+    }
+  };
+
+  const handleVerifyEmailChange = async () => {
+    const nextEmail = (emailChangePendingEmail || emailChangeNewEmail).trim();
+    const code = emailChangeCode.trim();
+    if (!nextEmail || !code) {
+      setStatus('error');
+      setMessage(t('portal.account.email_change_code_required', undefined, 'Enter the verification code from the new email.'));
+      return;
+    }
+    setStatus('verifying_email_change');
+    setMessage('');
+    try {
+      const response = await portalClient.verifyEmailChangeCode({
+        new_email: nextEmail,
+        code,
+      });
+      const changedEmail = response.data?.new_email || nextEmail;
+      setEmailChangeNewEmail('');
+      setEmailChangePendingEmail('');
+      setEmailChangeCode('');
+      setMessage(
+        t(
+          'portal.account.email_change_done',
+          { email: changedEmail },
+          'Login email changed to {{email}}.'
+        )
+      );
+      await refresh();
+      setStatus('idle');
+    } catch (error) {
+      setStatus('error');
+      setMessage(
+        formatPortalErrorMessage(
+          error,
+          t,
+          t('portal.account.email_change_verify_failed', undefined, 'Unable to verify the email change code')
+        )
+      );
     }
   };
 
@@ -397,9 +485,67 @@ function AccountPageContent() {
                 {t(
                   'portal.account.contact_change_desc',
                   undefined,
-                  'Ask the operator to update the contact email before changing login or service notifications.'
+                  'Enter a new email and verify the code sent there. Your current email remains active until verification succeeds.'
                 )}
               </p>
+              <div className="grid gap-3 pt-2">
+                <label className="grid gap-1 text-sm font-medium text-slate-700 dark:text-slate-200">
+                  {t('portal.account.email_change_new_email', undefined, 'New email')}
+                  <input
+                    type="email"
+                    value={emailChangeNewEmail}
+                    onChange={(event) => setEmailChangeNewEmail(event.target.value)}
+                    placeholder={t('auth.email_placeholder', undefined, 'you@example.com')}
+                    className="input"
+                    autoComplete="email"
+                  />
+                </label>
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    onClick={() => void handleRequestEmailChange()}
+                    disabled={status === 'requesting_email_change'}
+                  >
+                    {status === 'requesting_email_change'
+                      ? t('portal.account.email_change_sending', undefined, 'Sending')
+                      : t('portal.account.email_change_send_code', undefined, 'Send verification code')}
+                  </button>
+                </div>
+                {emailChangePendingEmail ? (
+                  <div className="grid gap-3 rounded-xl border border-slate-200 bg-slate-50 p-3 dark:border-slate-800 dark:bg-slate-900/40">
+                    <p className="text-xs leading-5 text-slate-500 dark:text-slate-400">
+                      {t(
+                        'portal.account.email_change_pending_desc',
+                        { email: emailChangePendingEmail },
+                        'Enter the code sent to {{email}} to switch the login email.'
+                      )}
+                    </p>
+                    <label className="grid gap-1 text-sm font-medium text-slate-700 dark:text-slate-200">
+                      {t('portal.account.email_change_code', undefined, 'Verification code')}
+                      <input
+                        type="text"
+                        inputMode="numeric"
+                        value={emailChangeCode}
+                        onChange={(event) => setEmailChangeCode(event.target.value)}
+                        placeholder="000000"
+                        className="input"
+                        autoComplete="one-time-code"
+                      />
+                    </label>
+                    <button
+                      type="button"
+                      className="btn btn-primary justify-center"
+                      onClick={() => void handleVerifyEmailChange()}
+                      disabled={status === 'verifying_email_change'}
+                    >
+                      {status === 'verifying_email_change'
+                        ? t('portal.account.email_change_verifying', undefined, 'Verifying')
+                        : t('portal.account.email_change_confirm', undefined, 'Confirm email change')}
+                    </button>
+                  </div>
+                ) : null}
+              </div>
             </BackofficeStackCard>
           </BackofficeSectionPanel>
         </div>

@@ -495,6 +495,7 @@ export default function AdminServiceSettingsPage() {
           {},
           'Configure Cloud-owned Portal login, QQ quick login, and email delivery. Values are stored in Cloud runtime storage; .env fallback is no longer read.'
         )}
+        descriptionDisplay="hint"
         aside={(
           <div className="w-full xl:w-[34rem]">
             <BackofficeMetricStrip items={metrics} columnsClassName="md:grid-cols-3 xl:grid-cols-3" />

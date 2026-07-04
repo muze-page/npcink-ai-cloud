@@ -16,6 +16,7 @@ export type ProductIdentityType = 'platform_admin' | 'site_admin';
 
 export interface PortalSession {
   principal_id?: string;
+  email?: string;
   site_admin_ref: string;
   site_id: string;
   account_id?: string;
@@ -112,6 +113,29 @@ export interface PortalLoginCodeVerifyRequest {
   email: string;
   code: string;
   remember_me?: boolean;
+}
+
+export interface PortalEmailChangeCodeRequest {
+  new_email: string;
+  locale?: 'en' | 'zh-CN';
+}
+
+export interface PortalEmailChangeVerifyRequest {
+  new_email: string;
+  code: string;
+}
+
+export interface PortalEmailChangeCodeResponse {
+  old_email: string;
+  new_email: string;
+  delivery: 'email' | 'development_code';
+  expires_in_seconds: number;
+  code: string;
+}
+
+export interface PortalEmailChangeResult extends PortalSession {
+  old_email: string;
+  new_email: string;
 }
 
 export interface PortalRegistrationCodeRequest {
@@ -1349,6 +1373,7 @@ export interface PortalCreditPackPaymentOrder {
   created_at?: string;
   paid_at?: string;
   refunded_at?: string;
+  metadata?: Record<string, unknown>;
 }
 
 export interface PortalCreditPackOrderPayload {
@@ -1358,6 +1383,29 @@ export interface PortalCreditPackOrderPayload {
 }
 
 export type PortalPaymentOrder = PortalCreditPackPaymentOrder;
+
+export interface PortalProTrialPayload {
+  account_id: string;
+  principal_id: string;
+  subscription: NonNullable<PortalSession['current_subscription']>;
+  entitlement_snapshot?: Record<string, unknown>;
+  trial?: {
+    available?: boolean;
+    status?: string;
+    tier_id?: string;
+    trial_days?: number;
+    trial_started_at?: string;
+    trial_ends_at?: string;
+    monthly_price_cny?: number;
+  };
+  session?: PortalSession;
+}
+
+export interface PortalProMonthlyOrderPayload {
+  account_id: string;
+  principal_id: string;
+  order: PortalPaymentOrder;
+}
 
 export interface PortalPaymentOrderListPayload {
   site_id?: string;
@@ -1588,6 +1636,14 @@ export class PortalClient {
    */
   async verifyLoginCode(payload: PortalLoginCodeVerifyRequest): Promise<PortalEnvelope<PortalSession>> {
     return this.request('POST', '/auth/code/verify', payload);
+  }
+
+  async requestEmailChangeCode(payload: PortalEmailChangeCodeRequest): Promise<PortalEnvelope<PortalEmailChangeCodeResponse>> {
+    return this.request('POST', '/account/email-change/request', payload, { requireAuth: true });
+  }
+
+  async verifyEmailChangeCode(payload: PortalEmailChangeVerifyRequest): Promise<PortalEnvelope<PortalEmailChangeResult>> {
+    return this.request('POST', '/account/email-change/verify', payload, { requireAuth: true });
   }
 
   /**
@@ -1889,6 +1945,17 @@ export class PortalClient {
     return this.request('GET', `/sites/${siteId}/payment-orders${query}`, undefined, { requireAuth: true });
   }
 
+  async listAccountPaymentOrders(
+    options?: { limit?: number; offset?: number }
+  ): Promise<PortalEnvelope<PortalPaymentOrderListPayload>> {
+    const params = new URLSearchParams();
+    if (options?.limit) params.set('limit', String(options.limit));
+    if (options?.offset) params.set('offset', String(options.offset));
+
+    const query = params.toString() ? `?${params.toString()}` : '';
+    return this.request('GET', `/account/payment-orders${query}`, undefined, { requireAuth: true });
+  }
+
   async createCreditPackOrder(
     siteId: string,
     packId: string,
@@ -1898,6 +1965,19 @@ export class PortalClient {
       'POST',
       `/sites/${siteId}/credit-pack-orders`,
       { pack_id: packId, provider },
+      { requireAuth: true }
+    );
+  }
+
+  async startProTrial(): Promise<PortalEnvelope<PortalProTrialPayload>> {
+    return this.request('POST', '/account/pro-trial', {}, { requireAuth: true });
+  }
+
+  async createProMonthlyOrder(provider = 'alipay'): Promise<PortalEnvelope<PortalProMonthlyOrderPayload>> {
+    return this.request(
+      'POST',
+      '/account/pro-monthly-order',
+      { provider },
       { requireAuth: true }
     );
   }
@@ -1976,7 +2056,7 @@ export class PortalClient {
       this.getEntitlements(siteId),
       this.getCreditLedger(siteId, { limit: 12 }),
       this.listCreditPacks(siteId),
-      this.listPaymentOrders(siteId, { limit: 8 }),
+      this.listAccountPaymentOrders({ limit: 8 }),
     ]);
     return {
       usage: usageResponse.data,

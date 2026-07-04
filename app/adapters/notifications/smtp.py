@@ -103,6 +103,78 @@ class SmtpPortalEmailSender(PortalEmailSender):
                 f"failed to deliver portal login code to '{recipient_email}': {error}"
             ) from error
 
+    def send_email_change_code(
+        self,
+        *,
+        recipient_email: str,
+        old_email: str,
+        principal_id: str,
+        code: str,
+        expires_in_seconds: int,
+        project_name: str,
+        locale: str = "zh-CN",
+    ) -> None:
+        message = EmailMessage()
+        message["Subject"] = self._build_email_change_code_subject(
+            project_name=project_name, locale=locale
+        )
+        message["From"] = self._format_from_header()
+        message["To"] = recipient_email
+        if self.reply_to:
+            message["Reply-To"] = self.reply_to
+        message.set_content(
+            self._build_email_change_code_text_body(
+                recipient_email=recipient_email,
+                old_email=old_email,
+                principal_id=principal_id,
+                code=code,
+                expires_in_seconds=expires_in_seconds,
+                project_name=project_name,
+                locale=locale,
+            )
+        )
+
+        try:
+            self._deliver(message)
+        except Exception as error:
+            raise PortalEmailDeliveryError(
+                f"failed to deliver portal email change code to '{recipient_email}': {error}"
+            ) from error
+
+    def send_email_changed_notice(
+        self,
+        *,
+        recipient_email: str,
+        new_email: str,
+        principal_id: str,
+        project_name: str,
+        locale: str = "zh-CN",
+    ) -> None:
+        message = EmailMessage()
+        message["Subject"] = self._build_email_changed_notice_subject(
+            project_name=project_name, locale=locale
+        )
+        message["From"] = self._format_from_header()
+        message["To"] = recipient_email
+        if self.reply_to:
+            message["Reply-To"] = self.reply_to
+        message.set_content(
+            self._build_email_changed_notice_text_body(
+                recipient_email=recipient_email,
+                new_email=new_email,
+                principal_id=principal_id,
+                project_name=project_name,
+                locale=locale,
+            )
+        )
+
+        try:
+            self._deliver(message)
+        except Exception as error:
+            raise PortalEmailDeliveryError(
+                f"failed to deliver portal email change notice to '{recipient_email}': {error}"
+            ) from error
+
     def _deliver(self, message: EmailMessage) -> None:
         ssl_context = ssl.create_default_context()
         if self.use_ssl:
@@ -191,6 +263,129 @@ class SmtpPortalEmailSender(PortalEmailSender):
         if normalized_locale == "zh-TW":
             return f"{project_name} 登入驗證碼"
         return f"{project_name} portal sign-in code"
+
+    def _build_email_change_code_text_body(
+        self,
+        *,
+        recipient_email: str,
+        old_email: str,
+        principal_id: str,
+        code: str,
+        expires_in_seconds: int,
+        project_name: str,
+        locale: str,
+    ) -> str:
+        normalized_locale = self._normalize_locale(locale)
+        expires_minutes = max(1, expires_in_seconds // 60)
+        if normalized_locale == "zh-CN":
+            return "\n".join(
+                [
+                    f"{project_name} 更换登录邮箱验证",
+                    "",
+                    f"新邮箱：{recipient_email}",
+                    f"当前邮箱：{old_email}",
+                    "",
+                    f"验证码：{code}",
+                    "",
+                    (
+                        f"该验证码将在 {expires_minutes} 分钟后失效。"
+                        "验证通过后，新邮箱会成为 Portal 登录邮箱。"
+                    ),
+                    "如果这不是你的操作，可以忽略这封邮件。",
+                ]
+            )
+        if normalized_locale == "zh-TW":
+            return "\n".join(
+                [
+                    f"{project_name} 更換登入電子郵件驗證",
+                    "",
+                    f"新電子郵件：{recipient_email}",
+                    f"目前電子郵件：{old_email}",
+                    "",
+                    f"驗證碼：{code}",
+                    "",
+                    (
+                        f"此驗證碼將在 {expires_minutes} 分鐘後失效。"
+                        "驗證通過後，新電子郵件會成為 Portal 登入電子郵件。"
+                    ),
+                    "如果這不是你的操作，可以忽略這封郵件。",
+                ]
+            )
+        return "\n".join(
+            [
+                f"{project_name} portal email change verification",
+                "",
+                f"New email: {recipient_email}",
+                f"Current email: {old_email}",
+                "",
+                f"Verification code: {code}",
+                "",
+                (
+                    f"This code expires in {expires_minutes} minutes. "
+                    "After verification, the new email will become your Portal sign-in email."
+                ),
+                "If you did not request this change, you can ignore this email.",
+            ]
+        )
+
+    def _build_email_changed_notice_text_body(
+        self,
+        *,
+        recipient_email: str,
+        new_email: str,
+        principal_id: str,
+        project_name: str,
+        locale: str,
+    ) -> str:
+        normalized_locale = self._normalize_locale(locale)
+        if normalized_locale == "zh-CN":
+            return "\n".join(
+                [
+                    f"{project_name} 登录邮箱已更换",
+                    "",
+                    f"旧邮箱：{recipient_email}",
+                    f"新邮箱：{new_email}",
+                    "",
+                    "如果这不是你的操作，请尽快联系运营支持。",
+                ]
+            )
+        if normalized_locale == "zh-TW":
+            return "\n".join(
+                [
+                    f"{project_name} 登入電子郵件已更換",
+                    "",
+                    f"舊電子郵件：{recipient_email}",
+                    f"新電子郵件：{new_email}",
+                    "",
+                    "如果這不是你的操作，請盡快聯絡營運支援。",
+                ]
+            )
+        return "\n".join(
+            [
+                f"{project_name} portal email changed",
+                "",
+                f"Previous email: {recipient_email}",
+                f"New email: {new_email}",
+                "",
+                "If you did not make this change, contact support as soon as possible.",
+            ]
+        )
+
+    def _build_email_change_code_subject(self, *, project_name: str, locale: str) -> str:
+        normalized_locale = self._normalize_locale(locale)
+        if normalized_locale == "zh-CN":
+            return f"{project_name} 更换登录邮箱验证码"
+        if normalized_locale == "zh-TW":
+            return f"{project_name} 更換登入電子郵件驗證碼"
+        return f"{project_name} portal email change code"
+
+    def _build_email_changed_notice_subject(self, *, project_name: str, locale: str) -> str:
+        normalized_locale = self._normalize_locale(locale)
+        if normalized_locale == "zh-CN":
+            return f"{project_name} 登录邮箱已更换"
+        if normalized_locale == "zh-TW":
+            return f"{project_name} 登入電子郵件已更換"
+        return f"{project_name} portal email changed"
 
     def _normalize_locale(self, locale: str) -> str:
         value = (locale or "").strip().lower()

@@ -109,6 +109,50 @@ class FakePortalEmailSender(PortalEmailSender):
             }
         )
 
+    def send_email_change_code(
+        self,
+        *,
+        recipient_email: str,
+        old_email: str,
+        principal_id: str,
+        code: str,
+        expires_in_seconds: int,
+        project_name: str,
+        locale: str = "zh-CN",
+    ) -> None:
+        self.messages.append(
+            {
+                "kind": "email_change_code",
+                "recipient_email": recipient_email,
+                "old_email": old_email,
+                "principal_id": principal_id,
+                "code": code,
+                "expires_in_seconds": expires_in_seconds,
+                "project_name": project_name,
+                "locale": locale,
+            }
+        )
+
+    def send_email_changed_notice(
+        self,
+        *,
+        recipient_email: str,
+        new_email: str,
+        principal_id: str,
+        project_name: str,
+        locale: str = "zh-CN",
+    ) -> None:
+        self.messages.append(
+            {
+                "kind": "email_changed_notice",
+                "recipient_email": recipient_email,
+                "new_email": new_email,
+                "principal_id": principal_id,
+                "project_name": project_name,
+                "locale": locale,
+            }
+        )
+
 def _login_platform_admin(
     client: TestClient,
     *,

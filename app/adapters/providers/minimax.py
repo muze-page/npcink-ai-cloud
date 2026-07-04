@@ -387,7 +387,14 @@ class MiniMaxProviderAdapter:
         lowered = normalized.lower()
         if normalized in MINIMAX_VERIFIED_AUDIO_MODELS:
             audio = MINIMAX_VERIFIED_AUDIO_MODELS[normalized]
-            capability_tags = [str(tag) for tag in list(audio["capability_tags"])]
+            raw_capability_tags = audio.get("capability_tags", [])
+            capability_tags = (
+                [str(tag) for tag in raw_capability_tags]
+                if isinstance(raw_capability_tags, list)
+                else []
+            )
+            raw_weight = audio.get("weight", 0)
+            weight = int(raw_weight) if isinstance(raw_weight, int | float | str) else 0
             return {
                 "family": str(audio["family"]),
                 "feature": "audio_generation",
@@ -403,7 +410,7 @@ class MiniMaxProviderAdapter:
                         region="global",
                         capability_tags=capability_tags,
                         is_default=bool(audio["is_default"]),
-                        weight=int(audio["weight"]),
+                        weight=weight,
                     )
                 ],
             }

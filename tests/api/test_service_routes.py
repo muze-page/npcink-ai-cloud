@@ -1125,6 +1125,10 @@ def test_admin_provider_connections_store_encrypted_credentials_and_project_to_a
     assert data["connection_id"] == "openai_primary"
     assert data["status"] == "ready"
     assert data["configured"] is True
+    assert data["receipt"]["event_kind"] == "provider_connection.save"
+    assert data["receipt"]["scope_kind"] == "provider_connection"
+    assert data["receipt"]["scope_id"] == "openai_primary"
+    assert data["receipt"]["audit_filters"]["event_kind"] == "provider_connection.save"
     assert data["model_ids"] == ["gpt-5.5", "gpt-4o-mini"]
     assert data["secrets"]["credential"]["display"] == "configured"
     serialized = json.dumps(response.json())
@@ -1323,6 +1327,9 @@ def test_admin_provider_connection_test_syncs_catalog_for_openai_compatible_supp
     assert test_data["catalog"]["display_name"] == "DeepSeek"
     assert test_data["catalog"]["adapter_type"] == "openai"
     assert test_data["catalog"]["sync"]["status"] == "synced"
+    assert test_data["receipt"]["event_kind"] == "provider_connection.test"
+    assert test_data["receipt"]["scope_id"] == "deepseek"
+    assert test_data["receipt"]["audit_filters"]["event_kind"] == "provider_connection.test"
     assert "deepseek-secret-value" not in json.dumps(test_response.json())
 
     routing_response = client.get(
@@ -2155,7 +2162,11 @@ def test_admin_provider_connections_can_be_deleted(
         headers=build_internal_headers(idempotency_key="provider-connection-delete"),
     )
     assert delete_response.status_code == 200, delete_response.text
-    assert delete_response.json()["data"]["deleted"] is True
+    delete_data = delete_response.json()["data"]
+    assert delete_data["deleted"] is True
+    assert delete_data["receipt"]["event_kind"] == "provider_connection.delete"
+    assert delete_data["receipt"]["scope_id"] == "delete_me_provider"
+    assert delete_data["receipt"]["audit_filters"]["event_kind"] == "provider_connection.delete"
     with get_session(_sqlite_url(tmp_path)) as session:
         audit_event = session.scalar(
             select(ServiceAuditEvent)
@@ -4059,6 +4070,13 @@ def test_service_routes_bind_subscription_and_rebuild_billing_snapshot(
     )
     assert rebuild_subscription_response.status_code == 200
     rebuild_payload = rebuild_subscription_response.json()["data"]
+    assert rebuild_payload["receipt"]["event_kind"] == "subscription.billing_snapshot.rebuild"
+    assert rebuild_payload["receipt"]["scope_kind"] == "subscription"
+    assert rebuild_payload["receipt"]["scope_id"] == "sub_pro_topup"
+    assert (
+        rebuild_payload["receipt"]["audit_filters"]["event_kind"]
+        == "subscription.billing_snapshot.rebuild"
+    )
     assert rebuild_payload["billing_snapshot_refresh"]["status"] == "refreshed"
     assert rebuild_payload["billing_snapshot_refresh"]["site_count"] == 1
     assert rebuild_payload["billing_snapshot_status"]["status"] == "fresh"

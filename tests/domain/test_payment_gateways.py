@@ -1,7 +1,13 @@
 from __future__ import annotations
 
-import pytest
+import base64
+from urllib.parse import parse_qs, urlsplit
 
+import pytest
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import padding, rsa
+
+from app.core.config import Settings
 from app.domain.commercial.errors import CommercialValidationError
 from app.domain.commercial.payment_gateways import (
     PAYMENT_GATEWAY_CONTRACT_VERSION,
@@ -10,6 +16,34 @@ from app.domain.commercial.payment_gateways import (
     get_payment_gateway_provider,
     normalize_payment_gateway_provider,
 )
+
+
+def _alipay_test_keys() -> tuple[object, str, str]:
+    private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    private_pem = private_key.private_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PrivateFormat.PKCS8,
+        encryption_algorithm=serialization.NoEncryption(),
+    ).decode("utf-8")
+    public_pem = private_key.public_key().public_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PublicFormat.SubjectPublicKeyInfo,
+    ).decode("utf-8")
+    return private_key, private_pem, public_pem
+
+
+def _sign_alipay_payload(private_key: object, payload: dict[str, str]) -> str:
+    canonical = "&".join(
+        f"{key}={value}"
+        for key, value in sorted(payload.items())
+        if key not in {"sign", "sign_type"} and value
+    )
+    signature = private_key.sign(  # type: ignore[attr-defined]
+        canonical.encode("utf-8"),
+        padding.PKCS1v15(),
+        hashes.SHA256(),
+    )
+    return base64.b64encode(signature).decode("ascii")
 
 
 def test_payment_gateway_create_order_and_refund_are_provider_normalized() -> None:
@@ -76,6 +110,55 @@ def test_alipay_gateway_verifies_payment_and_refund_callbacks() -> None:
     assert refund.status == "succeeded"
     assert refund.external_refund_no == "ref_alipay_001"
     assert refund.amount == 99.0
+
+
+def test_real_alipay_gateway_signs_order_and_verifies_callback() -> None:
+    private_key, private_pem, public_pem = _alipay_test_keys()
+    settings = Settings(
+        _env_file=None,
+        alipay_payment_enabled=True,
+        alipay_app_id="2026000000000001",
+        alipay_private_key=private_pem,
+        alipay_public_key=public_pem,
+        alipay_notify_url="https://cloud.example.com/open/payments/alipay/notify",
+        alipay_return_url="https://cloud.example.com/portal/billing",
+    )
+    gateway = get_payment_gateway_provider("alipay", settings=settings)
+
+    order = gateway.create_order(
+        PaymentGatewayOrderRequest(
+            provider="alipay",
+            order_id="pay_real_alipay_001",
+            amount=29.0,
+            currency="CNY",
+            subject="Npcink AI Cloud Pro monthly",
+            metadata={"purchase_kind": "subscription_plan"},
+        )
+    )
+    query = parse_qs(urlsplit(order.checkout_url).query)
+    assert query["app_id"] == ["2026000000000001"]
+    assert query["method"] == ["alipay.trade.page.pay"]
+    assert query["sign_type"] == ["RSA2"]
+    assert order.provider_payload["gateway_mode"] == "alipay_page_pay"
+
+    callback = {
+        "app_id": "2026000000000001",
+        "out_trade_no": "pay_real_alipay_001",
+        "trade_no": "202607040000000001",
+        "notify_id": "notify-real-alipay-001",
+        "total_amount": "29.00",
+        "trade_status": "TRADE_SUCCESS",
+        "gmt_payment": "2026-07-04 10:20:30",
+        "sign_type": "RSA2",
+    }
+    callback["sign"] = _sign_alipay_payload(private_key, callback)
+
+    payment = gateway.verify_payment_callback(callback)
+
+    assert payment.status == "succeeded"
+    assert payment.external_order_no == "pay_real_alipay_001"
+    assert payment.provider_trade_no == "202607040000000001"
+    assert payment.amount == 29.0
 
 
 def test_wechat_gateway_verifies_cent_amount_callbacks() -> None:

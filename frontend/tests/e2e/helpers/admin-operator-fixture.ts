@@ -775,6 +775,17 @@ export async function installAdminMocks(page: Page) {
           missing_site_count: 0,
           next_action: null,
         },
+        receipt: {
+          event_kind: 'subscription.billing_snapshot.rebuild',
+          scope_kind: 'subscription',
+          scope_id: 'sub_mvp',
+          outcome: 'succeeded',
+          effective_summary: 'Billing snapshots for subscription sub_mvp were rebuilt from usage records.',
+          audit_filters: {
+            event_kind: 'subscription.billing_snapshot.rebuild',
+            outcome: 'succeeded',
+          },
+        },
       });
       return;
     }

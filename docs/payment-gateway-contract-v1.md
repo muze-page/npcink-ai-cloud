@@ -46,10 +46,16 @@ Supported provider keys are:
 
 ## Current Provider Mode
 
-Providers currently run in simulated mode. They create local payment/refund
-records and expose normalized callback parsing, but they do not call real Alipay
-or WeChat Pay APIs yet.
+Providers run in simulated mode by default.
 
-Real provider integration must replace only the provider implementation behind
-this contract. It must not change the payment order, credit pack, or credit
-ledger state machine.
+Alipay can run in real page-pay mode when `NPCINK_CLOUD_ALIPAY_PAYMENT_ENABLED`
+is true and app id, RSA private key, RSA public key, gateway URL, notify URL,
+and return URL are configured. Real Alipay mode signs `alipay.trade.page.pay`
+orders with RSA2 and verifies asynchronous notify callbacks before any payment
+order is marked paid.
+
+WeChat Pay remains simulated/reserved in this phase.
+
+Real provider integration must stay behind this contract. It must not change
+the payment order, credit pack, subscription, entitlement, or credit ledger
+state machine.

@@ -159,10 +159,12 @@ export function BackofficePrimaryPanel({
                 {eyebrow}
               </p>
             ) : null}
-            <h1 className="flex max-w-3xl items-center gap-2 text-2xl font-semibold tracking-tight text-gray-950 dark:text-white md:text-[2rem]">
-              <span>{title}</span>
+            <div className="flex max-w-3xl items-center gap-2">
+              <h1 className="text-2xl font-semibold tracking-tight text-gray-950 dark:text-white md:text-[2rem]">
+                {title}
+              </h1>
               {descriptionDisplay === 'hint' ? <BackofficeInfoHint detail={description} /> : null}
-            </h1>
+            </div>
             {description && descriptionDisplay !== 'hint' ? (
               <p className="max-w-2xl text-sm leading-6 text-gray-600 dark:text-gray-300">{description}</p>
             ) : null}
@@ -204,10 +206,12 @@ export function BackofficeLayer({
               {eyebrow}
             </p>
           ) : null}
-          <h2 className="mt-2 flex items-center gap-2 text-2xl font-semibold text-gray-950 dark:text-white">
-            <span>{title}</span>
+          <div className="mt-2 flex items-center gap-2">
+            <h2 className="text-2xl font-semibold text-gray-950 dark:text-white">
+              {title}
+            </h2>
             {descriptionDisplay === 'hint' ? <BackofficeInfoHint detail={description} /> : null}
-          </h2>
+          </div>
           {description && descriptionDisplay !== 'hint' ? (
             <p className="mt-2 max-w-3xl text-sm leading-6 text-gray-600 dark:text-gray-300">{description}</p>
           ) : null}

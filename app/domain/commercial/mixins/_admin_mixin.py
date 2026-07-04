@@ -1636,12 +1636,29 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
                     "service.account_not_found",
                     f"account '{account_id}' was not found",
                 )
+            reconciled = cast(Any, self)._reconcile_account_subscription_state_in_session(
+                repository=repository,
+                account_id=account_id,
+                now=self.now_factory(),
+            )
             sites = repository.list_sites(account_id=account_id, limit=None)
             subscriptions = repository.list_subscriptions(account_id=account_id, limit=None)
+            primary_subscription = cast(Any, self)._select_primary_subscription(subscriptions)
+            if primary_subscription is not None:
+                subscriptions = [
+                    primary_subscription,
+                    *[
+                        subscription
+                        for subscription in subscriptions
+                        if subscription.subscription_id != primary_subscription.subscription_id
+                    ],
+                ]
             active_key_counts = repository.count_site_keys_by_site(
                 site_ids=[site.site_id for site in sites],
                 statuses=[SITE_API_KEY_STATUS_ACTIVE],
             )
+            if reconciled is not None:
+                session.commit()
 
         return {
             "account": cast(Any, self)._serialize_account(account),
@@ -1671,9 +1688,16 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
                     "service.account_not_found",
                     f"account '{account_id}' was not found",
                 )
+            reconciled = cast(Any, self)._reconcile_account_subscription_state_in_session(
+                repository=repository,
+                account_id=account_id,
+                now=now,
+            )
             sites = repository.list_sites(account_id=account_id, limit=None)
             site_ids = [str(site.site_id or "") for site in sites if str(site.site_id or "")]
             subscriptions = repository.list_subscriptions(account_id=account_id, limit=None)
+            if reconciled is not None:
+                session.commit()
             primary_subscription = cast(Any, self)._select_primary_subscription(subscriptions)
             plan_version = (
                 repository.get_plan_version(primary_subscription.plan_version_id)

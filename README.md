@@ -44,6 +44,7 @@ Operational references:
 - [docs/internal-alpha-onboarding-smoke-runbook.md](docs/internal-alpha-onboarding-smoke-runbook.md)
 - [docs/external-trial-capability-note-2026-06-10.md](docs/external-trial-capability-note-2026-06-10.md)
 - [docs/external-trial-readiness-checklist-2026-06-10.md](docs/external-trial-readiness-checklist-2026-06-10.md)
+- [docs/small-customer-trial-commercial-readiness-v1.md](docs/small-customer-trial-commercial-readiness-v1.md)
 - [docs/external-trial-operator-runbook-2026-06-11.md](docs/external-trial-operator-runbook-2026-06-11.md)
 - [docs/external-trial-copy-and-log-2026-06-11.md](docs/external-trial-copy-and-log-2026-06-11.md)
 - [docs/external-trial-record-magick-ai-local-2026-06-10.md](docs/external-trial-record-magick-ai-local-2026-06-10.md)
@@ -211,13 +212,14 @@ Still deferred in the current phase:
   worker plus callback dispatch stale-lease reclaim
 - customer-facing commercial front-office remains bounded:
   - seat lifecycle
-  - real external checkout/payment provider integration
+  - real WeChat Pay checkout/payment provider integration
   - invoice/reconciliation
   - dunning-grade customer billing front-office
-  - the current credit-pack catalog, payment-order state, and simulated payment
-    gateway seams are launch service-plane details; real Alipay/WeChat Pay
-    integration remains deferred until provider signature verification,
-    callback replay, and amount/currency matching are implemented
+  - the current credit-pack catalog and payment-order state are launch
+    service-plane details; Alipay page-pay can be enabled only with explicit
+    RSA2 signing/verification configuration, while WeChat Pay remains deferred
+    until provider signature verification, callback replay, and amount/currency
+    matching are implemented
 - richer platform admin directory/session inventory remains deferred
 
 Commercial acceptance freeze:

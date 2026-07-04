@@ -1315,6 +1315,21 @@ class CommercialRepository:
             select(PaymentOrder).where(PaymentOrder.idempotency_key == idempotency_key)
         )
 
+    def get_payment_order_by_provider_external_order(
+        self,
+        *,
+        provider: str,
+        external_order_no: str,
+    ) -> PaymentOrder | None:
+        if not provider or not external_order_no:
+            return None
+        return self.session.scalar(
+            select(PaymentOrder).where(
+                PaymentOrder.provider == provider,
+                PaymentOrder.external_order_no == external_order_no,
+            )
+        )
+
     def list_payment_orders(
         self,
         *,

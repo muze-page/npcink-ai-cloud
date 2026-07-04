@@ -129,7 +129,7 @@ test('admin operator path smoke: queue and inspector routes stay connected', asy
   const runtimeEvidenceSection = page.locator('#runtime-evidence');
   await expect(runtimeEvidenceSection.getByRole('heading', { name: /Runtime Resource Evidence|运行时资源证据/i })).toBeVisible();
   await expect(runtimeEvidenceSection.getByText(/Runtime resolution|运行时解析/i).first()).toBeVisible();
-  await expect(page.locator('a[href="/admin/plugin-observability"]')).toBeVisible();
+  await expect(page.locator('a[href="/admin/plugin-observability"]').first()).toBeVisible();
   await expect(page.locator('a[href="/admin/hosted-models"]')).toHaveCount(0);
 
   await page.goto('/admin/plans', { waitUntil: 'domcontentloaded' });

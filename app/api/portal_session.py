@@ -207,6 +207,7 @@ def serialize_portal_session(
     service = get_commercial_service(request)
     sites = service.list_portal_sites(principal_id=principal_id)
     accounts = service.list_portal_accounts(principal_id=principal_id)
+    principal_profile = service.get_portal_principal_profile(principal_id=principal_id)
     site_items = _dict_list(sites.get("items"))
     visible_site_items = [
         item
@@ -288,6 +289,7 @@ def serialize_portal_session(
     return {
         "site_id": resolved_site_id,
         "principal_id": principal_id,
+        "email": str(principal_profile.get("email") or ""),
         "account_id": selected_account_id,
         "identity_type": (
             str(account_items[0].get("identity_type") or "") if account_items else ""

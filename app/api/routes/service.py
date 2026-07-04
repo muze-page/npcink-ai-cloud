@@ -432,9 +432,9 @@ def _record_provider_connection_audit(
     result: dict[str, Any] | None = None,
     error_code: str = "",
     message: str = "",
-) -> None:
+) -> dict[str, Any] | None:
     try:
-        _get_commercial_service(request).record_service_audit_event(
+        return _get_commercial_service(request).record_service_audit_event(
             audit_context=_build_audit_context(request),
             event_kind=event_kind,
             outcome=outcome,
@@ -448,7 +448,7 @@ def _record_provider_connection_audit(
             ),
         )
     except Exception:
-        return
+        return None
 
 
 def _record_service_setting_audit(
@@ -3002,7 +3002,20 @@ async def rebuild_admin_subscription_billing_snapshots(
     return build_envelope(
         status="ok",
         message="subscription billing snapshots rebuilt",
-        data=result,
+        data=_merge_receipt(
+            result,
+            _build_operator_receipt(
+                event_kind="subscription.billing_snapshot.rebuild",
+                scope_kind="subscription",
+                scope_id=subscription_id,
+                outcome="succeeded",
+                effective_summary=(
+                    f"Billing snapshots for subscription {subscription_id} were rebuilt "
+                    "from usage records."
+                ),
+                account_id=str(_dict_value(result.get("subscription")).get("account_id") or ""),
+            ),
+        ),
         revision="m6",
     )
 
@@ -3462,7 +3475,7 @@ async def create_admin_provider_connection(
                 revision="m6",
             ),
         )
-    _record_provider_connection_audit(
+    audit_event = _record_provider_connection_audit(
         request,
         event_kind="provider_connection.save",
         outcome="succeeded",
@@ -3473,7 +3486,19 @@ async def create_admin_provider_connection(
     return build_envelope(
         status="ok",
         message="provider connection saved",
-        data=result,
+        data=_merge_receipt(
+            result,
+            _build_operator_receipt(
+                event_kind="provider_connection.save",
+                scope_kind="provider_connection",
+                scope_id=str(result.get("connection_id") or ""),
+                outcome="succeeded",
+                effective_summary=(
+                    f"Provider connection {str(result.get('connection_id') or '')} was saved."
+                ),
+                audit_event=audit_event,
+            ),
+        ),
         revision="m6",
     )
 
@@ -3512,7 +3537,7 @@ async def update_admin_provider_connection(
                 revision="m6",
             ),
         )
-    _record_provider_connection_audit(
+    audit_event = _record_provider_connection_audit(
         request,
         event_kind="provider_connection.save",
         outcome="succeeded",
@@ -3523,7 +3548,20 @@ async def update_admin_provider_connection(
     return build_envelope(
         status="ok",
         message="provider connection saved",
-        data=result,
+        data=_merge_receipt(
+            result,
+            _build_operator_receipt(
+                event_kind="provider_connection.save",
+                scope_kind="provider_connection",
+                scope_id=str(result.get("connection_id") or connection_id),
+                outcome="succeeded",
+                effective_summary=(
+                    "Provider connection "
+                    f"{str(result.get('connection_id') or connection_id)} was saved."
+                ),
+                audit_event=audit_event,
+            ),
+        ),
         revision="m6",
     )
 
@@ -3589,7 +3627,7 @@ async def delete_admin_provider_connection(request: Request, connection_id: str)
                 revision="m6",
             ),
         )
-    _record_provider_connection_audit(
+    audit_event = _record_provider_connection_audit(
         request,
         event_kind="provider_connection.delete",
         outcome="succeeded",
@@ -3599,7 +3637,17 @@ async def delete_admin_provider_connection(request: Request, connection_id: str)
     return build_envelope(
         status="ok",
         message="provider connection deleted",
-        data=result,
+        data=_merge_receipt(
+            result,
+            _build_operator_receipt(
+                event_kind="provider_connection.delete",
+                scope_kind="provider_connection",
+                scope_id=connection_id,
+                outcome="succeeded",
+                effective_summary=f"Provider connection {connection_id} was deleted.",
+                audit_event=audit_event,
+            ),
+        ),
         revision="m6",
     )
 
@@ -3633,7 +3681,7 @@ async def test_admin_provider_connection(request: Request, connection_id: str) -
                 revision="m6",
             ),
         )
-    _record_provider_connection_audit(
+    audit_event = _record_provider_connection_audit(
         request,
         event_kind="provider_connection.test",
         outcome="succeeded" if result.get("ok") else "error",
@@ -3645,7 +3693,17 @@ async def test_admin_provider_connection(request: Request, connection_id: str) -
     return build_envelope(
         status="ok" if result.get("ok") else "error",
         message=str(result.get("message") or "provider connection tested"),
-        data=result,
+        data=_merge_receipt(
+            result,
+            _build_operator_receipt(
+                event_kind="provider_connection.test",
+                scope_kind="provider_connection",
+                scope_id=connection_id,
+                outcome="succeeded" if result.get("ok") else "error",
+                effective_summary=str(result.get("message") or "Provider connection was tested."),
+                audit_event=audit_event,
+            ),
+        ),
         revision="m6",
     )
 

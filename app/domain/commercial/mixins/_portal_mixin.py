@@ -138,6 +138,13 @@ def _portal_registration_code_metadata(value: object) -> dict[str, object]:
     return metadata
 
 
+def _portal_email_change_code_metadata(value: object) -> dict[str, object]:
+    metadata = value if isinstance(value, dict) else {}
+    if str(metadata.get("purpose") or "").strip() != "portal_email_change":
+        return {}
+    return metadata
+
+
 def _first_accessible_site_id(
     grants: Sequence[tuple[Site, object, object]],
 ) -> str:
@@ -580,6 +587,185 @@ class CommercialServicePortalMixin(CommercialServiceAuditMixin):
                 for site, _identity, grant in grants
             ],
         }
+
+    def issue_portal_email_change_code(
+        self,
+        *,
+        principal_id: str,
+        new_email: str,
+        ttl_seconds: int,
+    ) -> dict[str, object]:
+        normalized_principal_id = str(principal_id or "").strip()
+        normalized_new_email = _normalize_principal_email(new_email)
+        now = self.now_factory()
+        expires_at = now + timedelta(seconds=max(60, int(ttl_seconds or 0)))
+        code = f"{secrets.randbelow(1_000_000):06d}"
+        code_hash = build_secret_hash(code)
+
+        with get_session(self.database_url) as session:
+            repository = CommercialRepository(session)
+            identity = repository.get_principal_identity_by_ref(
+                principal_id=normalized_principal_id,
+            )
+            if identity is None or identity.status != PRINCIPAL_STATUS_ACTIVE:
+                raise CommercialPermissionError(
+                    "service.principal_access_required",
+                    f"principal '{normalized_principal_id}' is not active",
+                )
+            current_email = _normalize_principal_email(str(identity.email or ""))
+            if normalized_new_email == current_email:
+                raise CommercialValidationError(
+                    "service.portal_email_change_same_email",
+                    "new email is already the current portal email",
+                )
+            existing_identity = repository.get_principal_identity_by_email(
+                email=normalized_new_email,
+            )
+            if (
+                existing_identity is not None
+                and existing_identity.principal_id != normalized_principal_id
+            ):
+                raise CommercialValidationError(
+                    "service.portal_email_change_email_in_use",
+                    "new email is already used by another portal user",
+                )
+            active_codes = repository.list_portal_login_codes(
+                email=normalized_new_email,
+                principal_id=normalized_principal_id,
+                active_only=True,
+                now=now,
+                limit=None,
+            )
+            for active_code in active_codes:
+                metadata = _portal_email_change_code_metadata(active_code.metadata_json)
+                if metadata:
+                    active_code.status = PORTAL_LOGIN_CODE_STATUS_EXPIRED
+                    active_code.consumed_at = now
+            repository.create_portal_login_code(
+                code_id=f"plc_{uuid4().hex}",
+                email=normalized_new_email,
+                principal_id=normalized_principal_id,
+                code_hash=code_hash,
+                expires_at=expires_at,
+                metadata_json={
+                    "purpose": "portal_email_change",
+                    "old_email": current_email,
+                    "new_email": normalized_new_email,
+                },
+            )
+            session.commit()
+        return {
+            "principal_id": normalized_principal_id,
+            "old_email": current_email,
+            "new_email": normalized_new_email,
+            "code": code,
+            "expires_at": self._serialize_datetime(expires_at),
+            "expires_in_seconds": max(60, int(ttl_seconds or 0)),
+        }
+
+    def verify_portal_email_change_code(
+        self,
+        *,
+        principal_id: str,
+        new_email: str,
+        code: str,
+        max_attempts: int,
+        audit_context: ServiceAuditContext | None = None,
+    ) -> dict[str, object]:
+        normalized_principal_id = str(principal_id or "").strip()
+        normalized_new_email = _normalize_principal_email(new_email)
+        normalized_code = str(code or "").strip()
+        if not normalized_code or not normalized_code.isdigit():
+            raise CommercialPermissionError(
+                "service.portal_email_change_code_invalid",
+                "portal email change code is invalid",
+            )
+
+        now = self.now_factory()
+        bounded_attempts = max(1, int(max_attempts or 0))
+        with get_session(self.database_url) as session:
+            repository = CommercialRepository(session)
+            identity = repository.get_principal_identity_by_ref(
+                principal_id=normalized_principal_id,
+            )
+            if identity is None or identity.status != PRINCIPAL_STATUS_ACTIVE:
+                raise CommercialPermissionError(
+                    "service.principal_access_required",
+                    f"principal '{normalized_principal_id}' is not active",
+                )
+            current_email = _normalize_principal_email(str(identity.email or ""))
+            active_codes = repository.list_portal_login_codes(
+                email=normalized_new_email,
+                principal_id=normalized_principal_id,
+                active_only=True,
+                now=now,
+                limit=10,
+            )
+            active_code = None
+            active_metadata: dict[str, object] = {}
+            for candidate in active_codes:
+                metadata = _portal_email_change_code_metadata(candidate.metadata_json)
+                if metadata:
+                    active_code = candidate
+                    active_metadata = metadata
+                    break
+            if active_code is None:
+                raise CommercialPermissionError(
+                    "service.portal_email_change_code_invalid",
+                    "portal email change code is invalid",
+                )
+            old_email = str(active_metadata.get("old_email") or current_email).strip().lower()
+            if old_email != current_email:
+                active_code.status = PORTAL_LOGIN_CODE_STATUS_EXPIRED
+                active_code.consumed_at = now
+                session.commit()
+                raise CommercialPermissionError(
+                    "service.portal_email_change_code_invalid",
+                    "portal email change code is invalid",
+                )
+            if not verify_secret_hash(normalized_code, str(active_code.code_hash or "")):
+                active_code.attempt_count = int(active_code.attempt_count or 0) + 1
+                if active_code.attempt_count >= bounded_attempts:
+                    active_code.status = PORTAL_LOGIN_CODE_STATUS_LOCKED
+                    active_code.consumed_at = now
+                session.commit()
+                raise CommercialPermissionError(
+                    "service.portal_email_change_code_invalid",
+                    "portal email change code is invalid",
+                )
+            existing_identity = repository.get_principal_identity_by_email(
+                email=normalized_new_email,
+            )
+            if (
+                existing_identity is not None
+                and existing_identity.principal_id != normalized_principal_id
+            ):
+                active_code.status = PORTAL_LOGIN_CODE_STATUS_EXPIRED
+                active_code.consumed_at = now
+                session.commit()
+                raise CommercialValidationError(
+                    "service.portal_email_change_email_in_use",
+                    "new email is already used by another portal user",
+                )
+            active_code.status = PORTAL_LOGIN_CODE_STATUS_CONSUMED
+            active_code.consumed_at = now
+            identity.email = normalized_new_email
+            payload: dict[str, object] = {
+                "principal_id": normalized_principal_id,
+                "old_email": current_email,
+                "new_email": normalized_new_email,
+            }
+            self._record_service_audit_in_session(
+                repository=repository,
+                audit_context=audit_context,
+                event_kind="principal.email_change",
+                outcome="succeeded",
+                scope_kind="principal",
+                scope_id=normalized_principal_id,
+                payload_json=payload,
+            )
+            session.commit()
+        return payload
 
     def issue_portal_registration_code(
         self,
@@ -1106,6 +1292,25 @@ class CommercialServicePortalMixin(CommercialServiceAuditMixin):
                 )
             ],
         }
+
+    def get_portal_principal_profile(self, *, principal_id: str) -> dict[str, object]:
+        normalized_principal_id = str(principal_id or "").strip()
+        with get_session(self.database_url) as session:
+            repository = CommercialRepository(session)
+            identity = repository.get_principal_identity_by_ref(
+                principal_id=normalized_principal_id,
+            )
+            if identity is None:
+                raise CommercialPermissionError(
+                    "service.principal_access_required",
+                    f"principal '{normalized_principal_id}' is not active",
+                )
+            return {
+                "principal_id": normalized_principal_id,
+                "email": str(identity.email or "").strip().lower(),
+                "status": str(identity.status or ""),
+                "session_version": int(identity.session_version or 1),
+            }
 
     def _resolve_portal_target_package_tier_id(self, target_package: str) -> str:
         normalized = str(target_package or "").strip().lower()

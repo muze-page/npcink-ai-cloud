@@ -45,6 +45,7 @@ from app.domain.commercial.payment_gateways import (
     get_payment_gateway_provider,
     normalize_payment_gateway_provider,
 )
+from app.domain.commercial.service import PRO_MONTHLY_BILLING_CYCLE, PRO_MONTHLY_PRICE_CNY
 
 
 class CommercialServicePaymentMixin(CommercialServiceAuditMixin):
@@ -169,7 +170,10 @@ class CommercialServicePaymentMixin(CommercialServiceAuditMixin):
                 "target_period_end_at": service._serialize_datetime(period_end_at),
                 "grant_policy": "payment_success_grants_current_period_ai_credits",
             }
-            gateway = get_payment_gateway_provider(normalized_provider)
+            gateway = get_payment_gateway_provider(
+                normalized_provider,
+                settings=getattr(service, "settings", None),
+            )
             gateway_order = gateway.create_order(
                 PaymentGatewayOrderRequest(
                     provider=normalized_provider,
@@ -266,7 +270,10 @@ class CommercialServicePaymentMixin(CommercialServiceAuditMixin):
             metadata = dict(metadata_json or {})
             metadata.setdefault("source", "payment_order")
             metadata.setdefault("refund_policy", "customer_requested_full_refund")
-            gateway = get_payment_gateway_provider(normalized_provider)
+            gateway = get_payment_gateway_provider(
+                normalized_provider,
+                settings=getattr(service, "settings", None),
+            )
             gateway_order = gateway.create_order(
                 PaymentGatewayOrderRequest(
                     provider=normalized_provider,
@@ -304,6 +311,113 @@ class CommercialServicePaymentMixin(CommercialServiceAuditMixin):
                 outcome="succeeded",
                 account_id=order.account_id,
                 site_id=order.site_id,
+                plan_id=order.plan_id,
+                plan_version_id=order.plan_version_id,
+                scope_kind="payment_order",
+                scope_id=order.order_id,
+                payload_json=payload,
+            )
+            session.commit()
+            return payload
+
+    def create_account_pro_monthly_payment_order(
+        self,
+        *,
+        account_id: str,
+        provider: str = "alipay",
+        audit_context: ServiceAuditContext | None = None,
+    ) -> dict[str, object]:
+        service = cast(Any, self)
+        normalized_provider = self._normalize_payment_provider(provider)
+        if normalized_provider != "alipay":
+            raise CommercialValidationError(
+                "service.pro_payment_provider_invalid",
+                "Pro monthly checkout uses Alipay in the current trial phase",
+            )
+        now = service.now_factory()
+        idempotency_key = audit_context.idempotency_key if audit_context is not None else ""
+        with get_session(service.database_url) as session:
+            repository = CommercialRepository(session)
+            if idempotency_key:
+                existing = repository.get_payment_order_by_idempotency_key(idempotency_key)
+                if existing is not None:
+                    return self._serialize_payment_order(existing)
+            if repository.get_account(account_id) is None:
+                raise CommercialNotFoundError(
+                    "service.account_not_found",
+                    f"account '{account_id}' was not found",
+                )
+            service._reconcile_account_subscription_state_in_session(
+                repository=repository,
+                account_id=account_id,
+                now=now,
+                audit_context=audit_context,
+            )
+            plan_id, plan_version_id = service._ensure_plan_tier_version_in_session(
+                repository=repository,
+                tier_id="pro",
+            )
+            current_subscription = service._select_primary_subscription(
+                repository.list_account_subscriptions(account_id)
+            )
+            target_subscription_id = ""
+            if (
+                current_subscription is not None
+                and current_subscription.plan_id == plan_id
+                and current_subscription.status == "trialing"
+            ):
+                target_subscription_id = current_subscription.subscription_id
+            order_id = f"pay_{uuid4().hex[:24]}"
+            metadata: dict[str, object] = {
+                "source": "portal_pro_monthly_checkout",
+                "purchase_kind": "subscription_plan",
+                "target_tier_id": "pro",
+                "billing_cycle": PRO_MONTHLY_BILLING_CYCLE,
+                "monthly_price_cny": PRO_MONTHLY_PRICE_CNY,
+                "trial_conversion": bool(target_subscription_id),
+                "created_at": service._serialize_datetime(now),
+            }
+            gateway = get_payment_gateway_provider(
+                normalized_provider,
+                settings=getattr(service, "settings", None),
+            )
+            gateway_order = gateway.create_order(
+                PaymentGatewayOrderRequest(
+                    provider=normalized_provider,
+                    order_id=order_id,
+                    amount=PRO_MONTHLY_PRICE_CNY,
+                    currency="CNY",
+                    subject="Npcink AI Cloud Pro monthly",
+                    metadata=metadata,
+                )
+            )
+            metadata["payment_gateway"] = gateway_order.provider_payload
+            order = repository.create_payment_order(
+                order_id=order_id,
+                account_id=account_id,
+                site_id=None,
+                subscription_id=target_subscription_id or None,
+                plan_id=plan_id,
+                plan_version_id=plan_version_id,
+                provider=normalized_provider,
+                external_order_no=gateway_order.external_order_no,
+                status=PAYMENT_ORDER_STATUS_PENDING,
+                amount=PRO_MONTHLY_PRICE_CNY,
+                currency="CNY",
+                subject="Npcink AI Cloud Pro monthly",
+                checkout_url=gateway_order.checkout_url or None,
+                refund_window_end_at=now + timedelta(days=14),
+                idempotency_key=idempotency_key or None,
+                metadata_json=metadata,
+            )
+            payload = self._serialize_payment_order(order)
+            service._record_service_audit_in_session(
+                repository=repository,
+                audit_context=audit_context,
+                event_kind="payment.pro_monthly_order.create",
+                outcome="succeeded",
+                account_id=order.account_id,
+                subscription_id=order.subscription_id,
                 plan_id=order.plan_id,
                 plan_version_id=order.plan_version_id,
                 scope_kind="payment_order",
@@ -384,6 +498,14 @@ class CommercialServicePaymentMixin(CommercialServiceAuditMixin):
             )
             order.paid_at = paid_at or now
             subscription_id = order.subscription_id or f"sub_{order.order_id}"
+            service._cancel_covered_subscriptions_for_replacement(
+                repository=repository,
+                account_id=order.account_id,
+                now=order.paid_at,
+                reason="payment_order_paid",
+                except_subscription_id=subscription_id,
+            )
+            metadata = dict(order.metadata_json or {})
             subscription, snapshot = service._bind_subscription_in_session(
                 repository=repository,
                 subscription_id=subscription_id,
@@ -394,9 +516,13 @@ class CommercialServicePaymentMixin(CommercialServiceAuditMixin):
                 current_period_start_at=order.paid_at,
                 current_period_end_at=order.paid_at + timedelta(days=30),
                 metadata_json={
+                    **metadata,
                     "source": "payment_order",
                     "payment_order_id": order.order_id,
                     "payment_provider": order.provider,
+                    "billing_cycle": str(
+                        metadata.get("billing_cycle") or PRO_MONTHLY_BILLING_CYCLE
+                    ),
                     "refund_window_end_at": service._serialize_datetime(
                         order.refund_window_end_at
                     ),
@@ -474,7 +600,10 @@ class CommercialServicePaymentMixin(CommercialServiceAuditMixin):
                 )
             refund_id = f"ref_{uuid4().hex[:24]}"
             refund_metadata = dict(metadata_json or {})
-            gateway = get_payment_gateway_provider(order.provider)
+            gateway = get_payment_gateway_provider(
+                order.provider,
+                settings=getattr(service, "settings", None),
+            )
             gateway_refund = gateway.create_refund(
                 PaymentGatewayRefundRequest(
                     provider=order.provider,
@@ -624,7 +753,10 @@ class CommercialServicePaymentMixin(CommercialServiceAuditMixin):
         raw_event: dict[str, object],
     ) -> dict[str, object]:
         normalized_provider = self._normalize_payment_provider(provider)
-        gateway = get_payment_gateway_provider(normalized_provider)
+        gateway = get_payment_gateway_provider(
+            normalized_provider,
+            settings=getattr(self, "settings", None),
+        )
         return gateway.verify_payment_callback(dict(raw_event or {})).to_payload()
 
     def verify_payment_gateway_refund_callback(
@@ -634,8 +766,58 @@ class CommercialServicePaymentMixin(CommercialServiceAuditMixin):
         raw_event: dict[str, object],
     ) -> dict[str, object]:
         normalized_provider = self._normalize_payment_provider(provider)
-        gateway = get_payment_gateway_provider(normalized_provider)
+        gateway = get_payment_gateway_provider(
+            normalized_provider,
+            settings=getattr(self, "settings", None),
+        )
         return gateway.verify_refund_callback(dict(raw_event or {})).to_payload()
+
+    def process_payment_gateway_callback(
+        self,
+        *,
+        provider: str,
+        raw_event: dict[str, object],
+        audit_context: ServiceAuditContext | None = None,
+    ) -> dict[str, object]:
+        service = cast(Any, self)
+        normalized_provider = self._normalize_payment_provider(provider)
+        gateway = get_payment_gateway_provider(
+            normalized_provider,
+            settings=getattr(service, "settings", None),
+        )
+        callback = gateway.verify_payment_callback(dict(raw_event or {}))
+        if callback.status != "succeeded":
+            return {
+                "status": callback.status,
+                "mutation_applied": False,
+                "callback": callback.to_payload(),
+            }
+        with get_session(service.database_url) as session:
+            repository = CommercialRepository(session)
+            order = repository.get_payment_order_by_provider_external_order(
+                provider=normalized_provider,
+                external_order_no=callback.external_order_no,
+            )
+            if order is None:
+                raise CommercialNotFoundError(
+                    "service.payment_order_not_found",
+                    "payment order for provider callback was not found",
+                )
+        paid = self.mark_payment_order_paid(
+            order_id=order.order_id,
+            provider_trade_no=callback.provider_trade_no,
+            provider_event_id=callback.provider_event_id,
+            paid_at=callback.occurred_at,
+            amount=callback.amount,
+            raw_event=callback.raw_event,
+            audit_context=audit_context,
+        )
+        return {
+            "status": "succeeded",
+            "mutation_applied": True,
+            "callback": callback.to_payload(),
+            "payment": paid,
+        }
 
     def _mark_credit_pack_payment_order_paid_in_session(
         self,

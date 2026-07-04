@@ -3,6 +3,12 @@ import assert from 'node:assert/strict';
 import { fromFrontendRoot } from './_paths.mjs';
 
 const receiptSource = readFileSync(fromFrontendRoot('src/components/admin/AdminMutationReceipt.tsx'), 'utf8');
+const accountDetailSource = readFileSync(fromFrontendRoot('src/app/admin/accounts/[accountId]/page.tsx'), 'utf8');
+const portalUsersSource = readFileSync(fromFrontendRoot('src/app/admin/portal-users/page.tsx'), 'utf8');
+const subscriptionDetailSource = readFileSync(fromFrontendRoot('src/app/admin/subscriptions/[subscriptionId]/page.tsx'), 'utf8');
+const aiResourcesSource = readFileSync(fromFrontendRoot('src/app/admin/ai-resources/page.tsx'), 'utf8');
+const abilityModelsSource = readFileSync(fromFrontendRoot('src/app/admin/ability-models/page.tsx'), 'utf8');
+const serviceSettingsSource = readFileSync(fromFrontendRoot('src/app/admin/service-settings/page.tsx'), 'utf8');
 const i18nSource = readFileSync(fromFrontendRoot('src/lib/i18n.ts'), 'utf8');
 const zhStart = i18nSource.indexOf("'zh-CN': {");
 
@@ -34,6 +40,84 @@ assert.doesNotMatch(
   />View audit trail</,
   'admin mutation receipt must not hard-code English audit link copy'
 );
+
+assert.match(
+  accountDetailSource,
+  /AdminMutationReceipt[\s\S]*AdminMutationReceiptPayload/,
+  'Account detail commercial writes must render the shared admin mutation receipt'
+);
+
+assert.match(
+  accountDetailSource,
+  /setAccountStatusReceipt\(\(payload\.data\?\.receipt \|\| null\) as AdminMutationReceiptPayload \| null\)/,
+  'Account status writes must store the backend receipt instead of only showing a toast'
+);
+
+assert.match(
+  accountDetailSource,
+  /setPackageActionReceipt\(\(payload\.data\?\.receipt \|\| null\) as AdminMutationReceiptPayload \| null\)/,
+  'Account package, top-up, and credit writes must store the backend receipt instead of only showing a toast'
+);
+
+assert.match(
+  portalUsersSource,
+  /AdminMutationReceipt[\s\S]*AdminMutationReceiptPayload/,
+  'Portal user disable writes must render the shared admin mutation receipt'
+);
+
+assert.match(
+  portalUsersSource,
+  /setLastReceipt\(data\.receipt \|\| null\)/,
+  'Portal user disable writes must store the backend receipt instead of only showing a toast'
+);
+
+assert.match(
+  subscriptionDetailSource,
+  /AdminMutationReceipt[\s\S]*AdminMutationReceiptPayload/,
+  'Subscription billing snapshot rebuild must render the shared admin mutation receipt'
+);
+
+assert.match(
+  subscriptionDetailSource,
+  /setLastReceipt\(data\.receipt \|\| null\)/,
+  'Subscription billing snapshot rebuild must store the backend receipt instead of only showing a toast'
+);
+
+assert.match(
+  aiResourcesSource,
+  /AdminMutationReceipt[\s\S]*AdminMutationReceiptPayload/,
+  'AI resources provider writes must render the shared admin mutation receipt'
+);
+
+assert.match(
+  aiResourcesSource,
+  /setLastReceipt\(\(payload\.data\?\.receipt \|\| null\) as AdminMutationReceiptPayload \| null\)/,
+  'AI resources provider writes must store backend receipts for save, delete, and test operations'
+);
+
+assert.match(
+  abilityModelsSource,
+  /AdminMutationReceipt[\s\S]*AdminMutationReceiptPayload/,
+  'Ability-model routing writes must render the shared admin mutation receipt'
+);
+
+assert.match(
+  abilityModelsSource,
+  /setDialogReceipt\(\(payload\.data\?\.receipt \|\| null\) as AdminMutationReceiptPayload \| null\)/,
+  'Ability-model routing writes must store backend receipts in the save dialog'
+);
+
+for (const [source, label] of [
+  [aiResourcesSource, 'AI resources'],
+  [abilityModelsSource, 'Ability-model routing'],
+  [serviceSettingsSource, 'Service settings'],
+]) {
+  assert.match(
+    source,
+    /descriptionDisplay="hint"/,
+    `${label} must collect low-frequency top-level descriptions behind an info hint`
+  );
+}
 
 const requiredKeys = [
   'admin.receipt_latest',

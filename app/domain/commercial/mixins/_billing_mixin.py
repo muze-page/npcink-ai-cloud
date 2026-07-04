@@ -1746,6 +1746,21 @@ class CommercialServiceBillingMixin(CommercialServiceAuditMixin):
             )
             return subscription, snapshot, False
 
+        if subscription.status == SUBSCRIPTION_STATUS_TRIALING:
+            cast(Any, self)._reconcile_account_subscription_state_in_session(
+                repository=repository,
+                account_id=subscription.account_id,
+                now=now,
+            )
+            fallback_subscription = repository.get_runtime_subscription(subscription.account_id)
+            if fallback_subscription is None:
+                return subscription, None, True
+            fallback_snapshot = repository.get_active_entitlement_snapshot(
+                fallback_subscription.account_id,
+                subscription_id=fallback_subscription.subscription_id,
+            )
+            return fallback_subscription, fallback_snapshot, True
+
         plan_version = repository.get_plan_version(subscription.plan_version_id)
         if plan_version is None:
             return subscription, None, False

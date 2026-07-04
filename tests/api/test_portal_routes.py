@@ -7,6 +7,8 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import padding, rsa
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
@@ -30,9 +32,11 @@ from app.core.models import (
     AccountUserMembership,
     CreditLedgerEntry,
     IdentityProviderBinding,
+    PaymentOrder,
     PluginObservabilityEvent,
     Principal,
     RunRecord,
+    ServiceAuditEvent,
     Site,
     SiteApiKey,
     SiteUserGrant,
@@ -54,6 +58,34 @@ from tests.conftest import (
 )
 
 _GRANTS_BY_EMAIL: dict[str, dict[str, object]] = {}
+
+
+def _alipay_test_keys() -> tuple[Any, str, str]:
+    private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    private_pem = private_key.private_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PrivateFormat.PKCS8,
+        encryption_algorithm=serialization.NoEncryption(),
+    ).decode("utf-8")
+    public_pem = private_key.public_key().public_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PublicFormat.SubjectPublicKeyInfo,
+    ).decode("utf-8")
+    return private_key, private_pem, public_pem
+
+
+def _sign_alipay_payload(private_key: Any, payload: dict[str, str]) -> str:
+    canonical = "&".join(
+        f"{key}={value}"
+        for key, value in sorted(payload.items())
+        if key not in {"sign", "sign_type"} and value
+    )
+    signature = private_key.sign(
+        canonical.encode("utf-8"),
+        padding.PKCS1v15(),
+        hashes.SHA256(),
+    )
+    return base64.b64encode(signature).decode("ascii")
 
 
 def _normalize_test_email(value: str) -> str:
@@ -186,6 +218,50 @@ class FakePortalEmailSender(PortalEmailSender):
                 "principal_id": principal_id,
                 "code": code,
                 "expires_in_seconds": expires_in_seconds,
+                "project_name": project_name,
+                "locale": locale,
+            }
+        )
+
+    def send_email_change_code(
+        self,
+        *,
+        recipient_email: str,
+        old_email: str,
+        principal_id: str,
+        code: str,
+        expires_in_seconds: int,
+        project_name: str,
+        locale: str = "zh-CN",
+    ) -> None:
+        self.messages.append(
+            {
+                "kind": "email_change_code",
+                "recipient_email": recipient_email,
+                "old_email": old_email,
+                "principal_id": principal_id,
+                "code": code,
+                "expires_in_seconds": expires_in_seconds,
+                "project_name": project_name,
+                "locale": locale,
+            }
+        )
+
+    def send_email_changed_notice(
+        self,
+        *,
+        recipient_email: str,
+        new_email: str,
+        principal_id: str,
+        project_name: str,
+        locale: str = "zh-CN",
+    ) -> None:
+        self.messages.append(
+            {
+                "kind": "email_changed_notice",
+                "recipient_email": recipient_email,
+                "new_email": new_email,
+                "principal_id": principal_id,
                 "project_name": project_name,
                 "locale": locale,
             }
@@ -1878,6 +1954,128 @@ def test_portal_auth_login_code_request_and_verify_with_jwt(tmp_path: Path) -> N
         assert identity.last_login_at is not None
 
 
+def test_portal_account_email_change_verifies_new_email_before_switching(
+    tmp_path: Path,
+) -> None:
+    fake_sender = FakePortalEmailSender()
+    database_url, client = _build_client(
+        tmp_path,
+        settings_overrides={
+            "portal_jwt_secret": TEST_PORTAL_JWT_SECRET,
+            "portal_login_code_ttl_seconds": 300,
+        },
+        portal_email_sender=fake_sender,
+    )
+    client.post(
+        "/internal/service/accounts",
+        json={"account_id": "acct_email_change", "name": "Email Change Account"},
+        headers=build_internal_headers(idempotency_key="email-change-account"),
+    )
+    client.post(
+        "/internal/service/sites",
+        json={
+            "site_id": "site_email_change",
+            "account_id": "acct_email_change",
+            "name": "Email Change Site",
+            "status": "active",
+        },
+        headers=build_internal_headers(idempotency_key="email-change-site"),
+    )
+    _grant_principal_access(
+        client,
+        site_id="site_email_change",
+        email="old-email@example.com",
+        idempotency_key="email-change-grant",
+    )
+    login_code = _request_portal_login_code(
+        client,
+        email="old-email@example.com",
+        headers={"x-npcink-debug-portal-link": "1"},
+    )
+    _verify_portal_login_code(
+        client,
+        email="old-email@example.com",
+        code=str(login_code["code"]),
+    )
+
+    request_response = client.post(
+        "/portal/v1/account/email-change/request",
+        json={"new_email": "new-email@example.com", "locale": "zh-CN"},
+        headers={
+            "Idempotency-Key": "email-change-request",
+            "x-npcink-dev-login-code": "1",
+        },
+    )
+
+    assert request_response.status_code == 200, request_response.text
+    request_data = request_response.json()["data"]
+    assert request_data["old_email"] == "old-email@example.com"
+    assert request_data["new_email"] == "new-email@example.com"
+    assert request_data["delivery"] == "development_code"
+    assert request_data["code"] != ""
+    assert fake_sender.messages[-1]["kind"] == "email_change_code"
+    assert fake_sender.messages[-1]["recipient_email"] == "new-email@example.com"
+
+    with get_session(database_url) as session:
+        identity = session.scalar(
+            select(Principal).where(Principal.email == "old-email@example.com")
+        )
+        assert identity is not None
+
+    verify_response = client.post(
+        "/portal/v1/account/email-change/verify",
+        json={"new_email": "new-email@example.com", "code": request_data["code"]},
+        headers={"Idempotency-Key": "email-change-verify"},
+    )
+
+    assert verify_response.status_code == 200, verify_response.text
+    verify_data = verify_response.json()["data"]
+    assert verify_data["email"] == "new-email@example.com"
+    assert verify_data["old_email"] == "old-email@example.com"
+    assert verify_data["new_email"] == "new-email@example.com"
+    assert fake_sender.messages[-1]["kind"] == "email_changed_notice"
+    assert fake_sender.messages[-1]["recipient_email"] == "old-email@example.com"
+
+    with get_session(database_url) as session:
+        assert session.scalar(
+            select(Principal).where(Principal.email == "old-email@example.com")
+        ) is None
+        identity = session.scalar(
+            select(Principal).where(Principal.email == "new-email@example.com")
+        )
+        assert identity is not None
+        audit_event = session.scalar(
+            select(ServiceAuditEvent)
+            .where(ServiceAuditEvent.event_kind == "principal.email_change")
+            .order_by(ServiceAuditEvent.id.desc())
+        )
+        assert audit_event is not None
+        assert audit_event.actor_kind == "principal"
+        assert audit_event.actor_ref == identity.principal_id
+        assert audit_event.scope_kind == "principal"
+        assert audit_event.scope_id == identity.principal_id
+        assert audit_event.payload_json == {
+            "principal_id": identity.principal_id,
+            "old_email": "old-email@example.com",
+            "new_email": "new-email@example.com",
+        }
+
+    old_login_response = client.post(
+        "/portal/v1/auth/code/request",
+        json={"email": "old-email@example.com"},
+        headers={"x-npcink-debug-portal-link": "1"},
+    )
+    assert old_login_response.status_code == 200
+    assert old_login_response.json()["data"]["code"] == ""
+
+    new_login_data = _request_portal_login_code(
+        client,
+        email="new-email@example.com",
+        headers={"x-npcink-debug-portal-link": "1"},
+    )
+    assert new_login_data["code"] != ""
+
+
 def test_portal_auth_login_code_remember_me_extends_cookie_session(tmp_path: Path) -> None:
     _database_url, client = _build_client(
         tmp_path,
@@ -2708,6 +2906,260 @@ def test_portal_self_registration_opens_free_account_and_session(
         subscription_count = len(list(session.scalars(select(AccountSubscription))))
     assert site_count == 0
     assert subscription_count == 1
+
+    dispose_engine(database_url)
+
+
+def test_portal_user_can_start_pro_trial_and_create_monthly_order(
+    tmp_path: Path,
+) -> None:
+    database_url, client = _build_client(
+        tmp_path,
+        settings_overrides={
+            "portal_jwt_secret": TEST_PORTAL_JWT_SECRET,
+            "portal_login_code_ttl_seconds": 300,
+        },
+    )
+    request_data = _request_portal_registration_code(
+        client,
+        email="pro-trial-user@example.com",
+        headers={"x-npcink-debug-portal-link": "1"},
+    )
+    registration = _verify_portal_registration_code(
+        client,
+        email="pro-trial-user@example.com",
+        code=str(request_data["code"]),
+    )
+    account_id = str(registration["account_id"])
+
+    trial_response = client.post(
+        "/portal/v1/account/pro-trial",
+        headers=build_portal_headers(
+            principal_id=str(registration["principal_id"]),
+            idempotency_key="portal-pro-trial-start-001",
+        ),
+    )
+    assert trial_response.status_code == 200, trial_response.text
+    trial_data = trial_response.json()["data"]
+    assert trial_data["account_id"] == account_id
+    assert trial_data["subscription"]["plan_id"] == "pro"
+    assert trial_data["subscription"]["status"] == "trialing"
+    assert trial_data["subscription"]["metadata"]["trial_for_tier"] == "pro"
+    assert trial_data["trial"]["trial_days"] == 14
+    assert trial_data["session"]["current_subscription"]["plan_id"] == "pro"
+
+    order_response = client.post(
+        "/portal/v1/account/pro-monthly-order",
+        json={"provider": "alipay"},
+        headers=build_portal_headers(
+            principal_id=str(registration["principal_id"]),
+            idempotency_key="portal-pro-monthly-order-001",
+        ),
+    )
+    assert order_response.status_code == 200, order_response.text
+    order = order_response.json()["data"]["order"]
+    assert order["amount"] == 29.0
+    assert order["currency"] == "CNY"
+    assert order["provider"] == "alipay"
+    assert order["purchase_kind"] == "subscription_plan"
+    assert order["subscription_id"] == trial_data["subscription"]["subscription_id"]
+    assert order["metadata"]["billing_cycle"] == "monthly"
+
+    payment_orders_response = client.get(
+        "/portal/v1/account/payment-orders?limit=10",
+        headers=build_portal_headers(principal_id=str(registration["principal_id"])),
+    )
+    assert payment_orders_response.status_code == 200, payment_orders_response.text
+    payment_orders_data = payment_orders_response.json()["data"]
+    assert payment_orders_data["account_id"] == account_id
+    assert payment_orders_data["pagination"]["total"] == 1
+    listed_order = payment_orders_data["items"][0]
+    assert listed_order["order_id"] == order["order_id"]
+    assert listed_order["amount"] == 29.0
+    assert listed_order["currency"] == "CNY"
+    assert listed_order["purchase_kind"] == "subscription_plan"
+    assert listed_order["site_id"] == ""
+    assert listed_order["status"] == "pending"
+    assert listed_order["metadata"]["billing_cycle"] == "monthly"
+
+    with get_session(database_url) as session:
+        subscriptions = list(
+            session.scalars(
+                select(AccountSubscription).where(
+                    AccountSubscription.account_id == account_id
+                )
+            )
+        )
+        assert {item.plan_id: item.status for item in subscriptions} == {
+            "free": "canceled",
+            "pro": "trialing",
+        }
+        payment_order = session.scalar(
+            select(PaymentOrder).where(PaymentOrder.order_id == order["order_id"])
+        )
+        assert payment_order is not None
+        assert payment_order.amount == 29.0
+        assert payment_order.currency == "CNY"
+
+    dispose_engine(database_url)
+
+
+def test_open_alipay_notify_marks_pro_monthly_order_paid(
+    tmp_path: Path,
+) -> None:
+    private_key, private_pem, public_pem = _alipay_test_keys()
+    database_url, client = _build_client(
+        tmp_path,
+        settings_overrides={
+            "portal_jwt_secret": TEST_PORTAL_JWT_SECRET,
+            "portal_login_code_ttl_seconds": 300,
+            "alipay_payment_enabled": True,
+            "alipay_app_id": "2026000000000099",
+            "alipay_private_key": private_pem,
+            "alipay_public_key": public_pem,
+            "alipay_notify_url": "http://testserver/open/payments/alipay/notify",
+            "alipay_return_url": "http://testserver/portal/billing",
+        },
+    )
+    request_data = _request_portal_registration_code(
+        client,
+        email="alipay-paid-pro-user@example.com",
+        headers={"x-npcink-debug-portal-link": "1"},
+    )
+    registration = _verify_portal_registration_code(
+        client,
+        email="alipay-paid-pro-user@example.com",
+        code=str(request_data["code"]),
+    )
+    principal_id = str(registration["principal_id"])
+    trial_response = client.post(
+        "/portal/v1/account/pro-trial",
+        headers=build_portal_headers(
+            principal_id=principal_id,
+            idempotency_key="portal-real-alipay-pro-trial-001",
+        ),
+    )
+    assert trial_response.status_code == 200, trial_response.text
+    order_response = client.post(
+        "/portal/v1/account/pro-monthly-order",
+        json={"provider": "alipay"},
+        headers=build_portal_headers(
+            principal_id=principal_id,
+            idempotency_key="portal-real-alipay-pro-order-001",
+        ),
+    )
+    assert order_response.status_code == 200, order_response.text
+    order = order_response.json()["data"]["order"]
+    assert order["checkout_url"]
+
+    return_response = client.get(
+        "/open/payments/alipay/return",
+        params={
+            "out_trade_no": str(order["external_order_no"]),
+            "trade_status": "TRADE_SUCCESS",
+        },
+        follow_redirects=False,
+    )
+    assert return_response.status_code == 303
+    assert return_response.headers["location"] == (
+        f"/portal/billing?payment_return=alipay&out_trade_no={order['external_order_no']}"
+        "&trade_status=TRADE_SUCCESS"
+    )
+    with get_session(database_url) as session:
+        payment_order = session.get(PaymentOrder, str(order["order_id"]))
+        assert payment_order is not None
+        assert payment_order.status == "pending"
+
+    callback = {
+        "app_id": "2026000000000099",
+        "out_trade_no": str(order["external_order_no"]),
+        "trade_no": "202607040000000099",
+        "notify_id": "notify-real-alipay-route-001",
+        "total_amount": "29.00",
+        "trade_status": "TRADE_SUCCESS",
+        "gmt_payment": "2026-07-04 10:20:30",
+        "sign_type": "RSA2",
+    }
+    callback["sign"] = _sign_alipay_payload(private_key, callback)
+
+    notify_response = client.post("/open/payments/alipay/notify", data=callback)
+
+    assert notify_response.status_code == 200, notify_response.text
+    assert notify_response.text == "success"
+    with get_session(database_url) as session:
+        payment_order = session.get(PaymentOrder, str(order["order_id"]))
+        assert payment_order is not None
+        assert payment_order.status == "paid"
+        assert payment_order.provider_trade_no == "202607040000000099"
+        subscription = session.get(AccountSubscription, str(order["subscription_id"]))
+        assert subscription is not None
+        assert subscription.status == "active"
+        assert subscription.plan_id == "pro"
+
+    dispose_engine(database_url)
+
+
+def test_portal_session_falls_back_to_free_after_pro_trial_expires(
+    tmp_path: Path,
+) -> None:
+    database_url, client = _build_client(
+        tmp_path,
+        settings_overrides={
+            "portal_jwt_secret": TEST_PORTAL_JWT_SECRET,
+            "portal_login_code_ttl_seconds": 300,
+        },
+    )
+    request_data = _request_portal_registration_code(
+        client,
+        email="expired-pro-trial-user@example.com",
+        headers={"x-npcink-debug-portal-link": "1"},
+    )
+    registration = _verify_portal_registration_code(
+        client,
+        email="expired-pro-trial-user@example.com",
+        code=str(request_data["code"]),
+    )
+    account_id = str(registration["account_id"])
+    principal_id = str(registration["principal_id"])
+
+    trial_response = client.post(
+        "/portal/v1/account/pro-trial",
+        headers=build_portal_headers(
+            principal_id=principal_id,
+            idempotency_key="portal-pro-trial-expiry-start-001",
+        ),
+    )
+    assert trial_response.status_code == 200, trial_response.text
+    trial_subscription_id = str(
+        trial_response.json()["data"]["subscription"]["subscription_id"]
+    )
+    with get_session(database_url) as session:
+        trial_subscription = session.get(AccountSubscription, trial_subscription_id)
+        assert trial_subscription is not None
+        trial_subscription.current_period_end_at = datetime.now(UTC) - timedelta(days=1)
+        session.commit()
+
+    session_response = client.get(
+        "/portal/v1/session",
+        headers=build_portal_headers(principal_id=principal_id),
+    )
+
+    assert session_response.status_code == 200, session_response.text
+    current_subscription = session_response.json()["data"]["current_subscription"]
+    assert current_subscription["plan_id"] == "free"
+    assert current_subscription["status"] == "active"
+    with get_session(database_url) as session:
+        subscriptions = list(
+            session.scalars(
+                select(AccountSubscription).where(
+                    AccountSubscription.account_id == account_id
+                )
+            )
+        )
+        assert {item.plan_id: item.status for item in subscriptions} == {
+            "free": "active",
+            "pro": "canceled",
+        }
 
     dispose_engine(database_url)
 

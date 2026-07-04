@@ -28,6 +28,7 @@ import {
   type PortalBillingSnapshot,
   type PortalCreditPackCatalogPayload,
   type PortalCreditPackPaymentOrder,
+  type PortalPaymentOrder,
   type PortalPaymentOrderListPayload,
 } from '@/lib/portal-client';
 import { resolveCustomerPackageDisplay } from '@/lib/customer-package-display';
@@ -48,7 +49,7 @@ function formatQuotaValue(value: unknown, unlimited = false, unlimitedLabel = 'U
 function PortalBillingContent() {
   const searchParams = useSearchParams();
   const { t } = useLocale();
-  const { session, isLoading: sessionLoading, isAuthenticated, selectSite } = useSession();
+  const { session, isLoading: sessionLoading, isAuthenticated, selectSite, refresh } = useSession();
   const { sites, selectedSiteId, selectedSite, setSelectedSiteId } = usePortalSiteSelection({
     session,
     isAuthenticated,
@@ -63,6 +64,9 @@ function PortalBillingContent() {
   const [creditPackOrder, setCreditPackOrder] = useState<PortalCreditPackPaymentOrder | null>(null);
   const [creditPackPending, setCreditPackPending] = useState<string | null>(null);
   const [creditPackError, setCreditPackError] = useState<string | null>(null);
+  const [packageOrder, setPackageOrder] = useState<PortalPaymentOrder | null>(null);
+  const [packagePending, setPackagePending] = useState<'trial' | 'pro_order' | null>(null);
+  const [packageError, setPackageError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -91,18 +95,68 @@ function PortalBillingContent() {
     }
   }, [t]);
 
+  const loadAccountPaymentOrders = useCallback(async () => {
+    try {
+      const response = await portalClient.listAccountPaymentOrders({ limit: 8 });
+      setPaymentOrders(response.data);
+    } catch {
+      setPaymentOrders(null);
+    }
+  }, []);
+
   useEffect(() => {
     if (!selectedSiteId) {
       setIsLoading(false);
+      if (isAuthenticated && session?.account_id) {
+        void loadAccountPaymentOrders();
+      }
       return;
     }
     void loadBilling(selectedSiteId);
-  }, [loadBilling, selectedSiteId]);
+  }, [isAuthenticated, loadAccountPaymentOrders, loadBilling, selectedSiteId, session?.account_id]);
 
   const handleSiteChange = async (siteId: string) => {
     await setSelectedSiteId(siteId);
     setCreditPackOrder(null);
     setCreditPackError(null);
+  };
+
+  const handleStartProTrial = async () => {
+    setPackagePending('trial');
+    setPackageError(null);
+    setPackageOrder(null);
+    try {
+      await portalClient.startProTrial();
+      await refresh();
+    } catch (err) {
+      setPackageError(formatPortalErrorMessage(err, t, t('error.failed_save')));
+    } finally {
+      setPackagePending(null);
+    }
+  };
+
+  const handleCreateProMonthlyOrder = async () => {
+    setPackagePending('pro_order');
+    setPackageError(null);
+    setPackageOrder(null);
+    try {
+      const response = await portalClient.createProMonthlyOrder('alipay');
+      setPackageOrder(response.data.order);
+      setPaymentOrders((current) => ({
+        ...(current || { items: [] }),
+        items: [
+          response.data.order,
+          ...(current?.items || []).filter((item) => item.order_id !== response.data.order.order_id),
+        ].slice(0, 8),
+      }));
+      if (response.data.order.checkout_url) {
+        window.location.assign(response.data.order.checkout_url);
+      }
+    } catch (err) {
+      setPackageError(formatPortalErrorMessage(err, t, t('error.failed_save')));
+    } finally {
+      setPackagePending(null);
+    }
   };
 
   const handleCreateCreditPackOrder = async (packId: string) => {
@@ -144,12 +198,245 @@ function PortalBillingContent() {
     );
   }
 
+  const currentSubscription = session.current_subscription || null;
+  const currentPlanId = String(currentSubscription?.plan_id || '').toLowerCase();
+  const currentStatus = String(currentSubscription?.status || '').toLowerCase();
+  const isPro = currentPlanId === 'pro';
+  const isProTrialing = isPro && currentStatus === 'trialing';
+  const isProPaid = isPro && currentStatus === 'active';
+  const canStartTrial = !isPro && currentPlanId !== 'agency';
+  const paymentReturnProvider = String(searchParams.get('payment_return') || '').toLowerCase();
+  const paymentReturnOrder = String(searchParams.get('out_trade_no') || '').trim();
+  const paymentReturnStatus = String(searchParams.get('trade_status') || '').trim();
+  const hasAlipayReturn = paymentReturnProvider === 'alipay';
+  const recentPaymentOrders = paymentOrders?.items || [];
+
+  const handleRefreshPaymentReturn = async () => {
+    await refresh();
+    if (selectedSiteId) {
+      await loadBilling(selectedSiteId);
+    }
+  };
+
+  const paymentReturnNotice = hasAlipayReturn ? (
+    <BackofficeStackCard variant="portal" className="border-blue-200 bg-blue-50/70 dark:border-blue-900/60 dark:bg-blue-950/20">
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <p className="text-sm font-semibold text-slate-950 dark:text-white">
+            {t('portal.package.alipay_return_title', {}, 'Payment confirmation is pending')}
+          </p>
+          <p className="mt-2 text-sm leading-6 text-slate-600 dark:text-slate-300">
+            {t(
+              'portal.package.alipay_return_desc',
+              {},
+              'You have returned from Alipay. The final package status is updated after the verified Alipay notification reaches Cloud.'
+            )}
+          </p>
+          {paymentReturnOrder || paymentReturnStatus ? (
+            <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
+              {[
+                paymentReturnOrder
+                  ? t('portal.package.alipay_return_order', { order: paymentReturnOrder }, `Order ${paymentReturnOrder}`)
+                  : '',
+                paymentReturnStatus
+                  ? t('portal.package.alipay_return_status', { status: paymentReturnStatus }, `Alipay status ${paymentReturnStatus}`)
+                  : '',
+              ].filter(Boolean).join(' · ')}
+            </p>
+          ) : null}
+        </div>
+        <button
+          type="button"
+          className="btn btn-secondary shrink-0"
+          onClick={() => void handleRefreshPaymentReturn()}
+        >
+          {t('common.refresh', {}, 'Refresh')}
+        </button>
+      </div>
+    </BackofficeStackCard>
+  ) : null;
+
+  const packageActions = (
+    <BackofficeStackCard variant="portal" className="bg-white/70 dark:bg-slate-950/35">
+      <div className="grid gap-3 lg:grid-cols-3">
+        <div className="rounded-[1rem] border border-slate-200 bg-slate-50/70 p-4 dark:border-slate-800 dark:bg-slate-950/35">
+          <p className="text-sm font-semibold text-slate-950 dark:text-white">
+            {t('portal.package.free_title', {}, 'Free')}
+          </p>
+          <p className="mt-2 text-sm text-slate-500 dark:text-slate-400">
+            {t('portal.package.free_desc', {}, 'Included automatically after registration. No trial or payment required.')}
+          </p>
+          <BackofficeStatusBadge
+            status={currentPlanId === 'free' ? 'ok' : 'neutral'}
+            label={currentPlanId === 'free' ? t('common.current', {}, 'Current') : t('common.available', {}, 'Available')}
+          />
+        </div>
+        <div className="rounded-[1rem] border border-blue-200 bg-blue-50/60 p-4 dark:border-blue-900/60 dark:bg-blue-950/20">
+          <p className="text-sm font-semibold text-slate-950 dark:text-white">
+            {t('portal.package.pro_title', {}, 'Pro')}
+          </p>
+          <p className="mt-2 text-sm text-slate-600 dark:text-slate-300">
+            {t('portal.package.pro_desc', {}, 'Start with a 14-day trial, then continue for CNY 29 per month through Alipay.')}
+          </p>
+          <div className="mt-4 flex flex-col gap-2 sm:flex-row">
+            <button
+              type="button"
+              className="btn btn-secondary"
+              disabled={!canStartTrial || packagePending !== null}
+              onClick={() => void handleStartProTrial()}
+            >
+              {packagePending === 'trial'
+                ? t('common.saving', {}, 'Saving...')
+                : isProTrialing
+                  ? t('portal.package.pro_trial_active', {}, 'Trial active')
+                  : isProPaid
+                    ? t('portal.package.pro_active', {}, 'Pro active')
+                    : t('portal.package.start_pro_trial', {}, 'Start 14-day trial')}
+            </button>
+            <button
+              type="button"
+              className="btn btn-primary"
+              disabled={packagePending !== null}
+              onClick={() => void handleCreateProMonthlyOrder()}
+            >
+              {packagePending === 'pro_order'
+                ? t('common.saving', {}, 'Saving...')
+                : t('portal.package.buy_pro_monthly', {}, 'Buy monthly')}
+            </button>
+          </div>
+        </div>
+        <div className="rounded-[1rem] border border-slate-200 bg-slate-50/70 p-4 dark:border-slate-800 dark:bg-slate-950/35">
+          <p className="text-sm font-semibold text-slate-950 dark:text-white">
+            {t('portal.package.agency_title', {}, 'Agency')}
+          </p>
+          <p className="mt-2 text-sm text-slate-500 dark:text-slate-400">
+            {t('portal.package.agency_desc', {}, 'Custom high-volume coverage. Contact support; self-serve checkout is not available.')}
+          </p>
+          <BackofficeStatusBadge
+            status={currentPlanId === 'agency' ? 'ok' : 'neutral'}
+            label={currentPlanId === 'agency' ? t('common.current', {}, 'Current') : t('portal.package.custom_only', {}, 'Custom')}
+          />
+        </div>
+      </div>
+      {packageOrder ? (
+        <div className="mt-4 rounded-[1rem] border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800 dark:border-emerald-900/60 dark:bg-emerald-950/25 dark:text-emerald-200">
+          {t(
+            'portal.package.pro_order_created',
+            { order: packageOrder.order_id },
+            `Pro monthly payment order ${packageOrder.order_id} has been created.`
+          )}
+        </div>
+      ) : null}
+      {packageError ? (
+        <div className="mt-4 rounded-[1rem] border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-900/60 dark:bg-red-950/25 dark:text-red-200">
+          {packageError}
+        </div>
+      ) : null}
+    </BackofficeStackCard>
+  );
+
+  const paymentOrdersCard = (
+    <BackofficeStackCard variant="portal" className="bg-white/70 dark:bg-slate-950/35">
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <p className="text-sm font-semibold text-gray-950 dark:text-white">
+            {t('portal.usage.payment_orders_title', {}, 'Recent payment orders')}
+          </p>
+          <p className="mt-1 text-sm text-gray-600 dark:text-gray-400">
+            {t(
+              'portal.usage.payment_orders_desc',
+              {},
+              'Payment orders wait for verified Alipay or WeChat Pay confirmation before package changes or credits are granted.'
+            )}
+          </p>
+        </div>
+        <p className="text-xs font-medium uppercase tracking-[0.14em] text-slate-500 dark:text-slate-400">
+          {t('portal.usage.payment_orders_provider_note', {}, 'Alipay / WeChat Pay ready')}
+        </p>
+      </div>
+      {recentPaymentOrders.length > 0 ? (
+        <div className="mt-4 divide-y divide-slate-200 rounded-[1rem] border border-slate-200 text-sm dark:divide-slate-800 dark:border-slate-800">
+          {recentPaymentOrders.map((order) => (
+            <div
+              key={order.order_id}
+              className="grid grid-cols-1 gap-3 px-4 py-3 sm:grid-cols-[1fr_0.7fr_0.8fr]"
+            >
+              <div>
+                <p className="font-medium text-slate-950 dark:text-white">
+                  {order.credit_pack?.label || order.subject || order.order_id}
+                </p>
+                <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                  {order.status_detail?.detail ||
+                    t('portal.usage.payment_order_default_detail', {}, 'Payment status is recorded by Cloud.')}
+                </p>
+              </div>
+              <div>
+                <BackofficeStatusBadge
+                  label={order.status_detail?.label || order.status || 'pending'}
+                  status={order.status || 'pending'}
+                />
+                <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
+                  {order.status_detail?.label || order.status}
+                </p>
+              </div>
+              <div className="sm:text-right">
+                <p className="font-semibold text-slate-950 dark:text-white">
+                  {formatPortalCurrency(Number(order.amount || 0), {
+                    from: normalizePortalCurrency(order.currency),
+                    to: DEFAULT_PORTAL_CURRENCY,
+                  })}
+                </p>
+                <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                  {order.created_at ? formatDate(order.created_at) : order.order_id}
+                </p>
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div className="mt-4 rounded-[1rem] border border-dashed border-slate-300 px-4 py-5 text-sm text-slate-500 dark:border-slate-700 dark:text-slate-400">
+          {t('portal.usage.payment_orders_empty', {}, 'No payment orders yet.')}
+        </div>
+      )}
+    </BackofficeStackCard>
+  );
+
   if (!sites.length || !selectedSiteId || !selectedSite) {
     return (
-      <PortalEmptyState
-        title={t('portal.empty_no_site_title', {}, 'No site available')}
-        description={t('portal.empty_no_site_desc', {}, 'Ask an operator to provision a site before using Cloud billing detail.')}
-      />
+      <BackofficePageStack>
+        <PortalWorkspaceHeader
+          eyebrow={t('portal.workspace_label', {}, 'Portal')}
+          title={t('portal.billing.customer_title', {}, 'Package')}
+          description={t('portal.billing.subtitle', {}, 'Confirm the current package, included rights, and upgrade options.')}
+          currentPage="billing"
+          sites={sites}
+          selectedSiteId={selectedSiteId}
+          onSiteChange={handleSiteChange}
+        />
+        {paymentReturnNotice}
+        <BackofficeMetricStrip
+          items={[
+            {
+              label: t('portal.current_subscription_label', {}, 'Current package'),
+              value: currentSubscription?.package_alias || currentSubscription?.plan_id || 'Free',
+            },
+            {
+              label: t('common.status'),
+              value: currentSubscription?.status || 'active',
+              detail: t('portal.billing.account_package_detail', {}, 'Package actions are account-level and do not require a connected site.'),
+              size: 'compact',
+            },
+          ]}
+          columnsClassName="lg:grid-cols-2"
+          variant="portal"
+        />
+        {packageActions}
+        {paymentOrdersCard}
+        <PortalEmptyState
+          title={t('portal.empty_no_site_title', {}, 'No site available')}
+          description={t('portal.empty_no_site_desc', {}, 'Connect a WordPress site when you are ready to use runtime services.')}
+        />
+      </BackofficePageStack>
     );
   }
 
@@ -160,7 +447,6 @@ function PortalBillingContent() {
   const currency = normalizePortalCurrency(snapshots[0]?.currency || DEFAULT_PORTAL_CURRENCY);
   const latestSnapshot = snapshots[0] || null;
   const syncState = reconciliation?.reconciliation?.in_sync;
-  const currentSubscription = session.current_subscription || null;
   const snapshotPlanVersionId =
     latestSnapshot?.plan_version_id || currentSubscription?.plan_version_id || '';
   const packageDisplay = resolveCustomerPackageDisplay(t, {
@@ -185,7 +471,6 @@ function PortalBillingContent() {
       ? `${formatDate(currentPeriodStart)} - ${formatDate(currentPeriodEnd)}`
       : t('portal.home.package_pending_label', {}, 'To confirm');
   const availableCreditPacks = creditPacks?.items || [];
-  const recentPaymentOrders = paymentOrders?.items || [];
   const packageStatus =
     String(quotaSummary?.status || '') === 'limited'
       ? 'warning'
@@ -208,6 +493,8 @@ function PortalBillingContent() {
         selectedSiteId={selectedSiteId}
         onSiteChange={handleSiteChange}
       />
+
+      {paymentReturnNotice}
 
       {error ? (
         <PortalErrorState
@@ -236,6 +523,8 @@ function PortalBillingContent() {
         columnsClassName="lg:grid-cols-3"
         variant="portal"
       />
+
+      {packageActions}
 
       <BackofficeStackCard variant="portal" className="bg-white/70 dark:bg-slate-950/35">
         <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
@@ -322,69 +611,7 @@ function PortalBillingContent() {
         </BackofficeStackCard>
       ) : null}
 
-      <BackofficeStackCard variant="portal" className="bg-white/70 dark:bg-slate-950/35">
-        <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
-          <div>
-            <p className="text-sm font-semibold text-gray-950 dark:text-white">
-              {t('portal.usage.payment_orders_title', {}, 'Recent payment orders')}
-            </p>
-            <p className="mt-1 text-sm text-gray-600 dark:text-gray-400">
-              {t(
-                'portal.usage.payment_orders_desc',
-                {},
-                'Credit pack orders wait for Alipay or WeChat Pay confirmation before credits are granted.'
-              )}
-            </p>
-          </div>
-          <p className="text-xs font-medium uppercase tracking-[0.14em] text-slate-500 dark:text-slate-400">
-            {t('portal.usage.payment_orders_provider_note', {}, 'Alipay / WeChat Pay ready')}
-          </p>
-        </div>
-        {recentPaymentOrders.length > 0 ? (
-          <div className="mt-4 divide-y divide-slate-200 rounded-[1rem] border border-slate-200 text-sm dark:divide-slate-800 dark:border-slate-800">
-            {recentPaymentOrders.map((order) => (
-              <div
-                key={order.order_id}
-                className="grid grid-cols-1 gap-3 px-4 py-3 sm:grid-cols-[1fr_0.7fr_0.8fr]"
-              >
-                <div>
-                  <p className="font-medium text-slate-950 dark:text-white">
-                    {order.credit_pack?.label || order.subject || order.order_id}
-                  </p>
-                  <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                    {order.status_detail?.detail ||
-                      t('portal.usage.payment_order_default_detail', {}, 'Payment status is recorded by Cloud.')}
-                  </p>
-                </div>
-                <div>
-                  <BackofficeStatusBadge
-                    label={order.status_detail?.label || order.status || 'pending'}
-                    status={order.status || 'pending'}
-                  />
-                  <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
-                    {order.status_detail?.label || order.status}
-                  </p>
-                </div>
-                <div className="sm:text-right">
-                  <p className="font-semibold text-slate-950 dark:text-white">
-                    {formatPortalCurrency(Number(order.amount || 0), {
-                      from: normalizePortalCurrency(order.currency),
-                      to: DEFAULT_PORTAL_CURRENCY,
-                    })}
-                  </p>
-                  <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                    {order.created_at ? formatDate(order.created_at) : order.order_id}
-                  </p>
-                </div>
-              </div>
-            ))}
-          </div>
-        ) : (
-          <div className="mt-4 rounded-[1rem] border border-dashed border-slate-300 px-4 py-5 text-sm text-slate-500 dark:border-slate-700 dark:text-slate-400">
-            {t('portal.usage.payment_orders_empty', {}, 'No payment orders for this site yet.')}
-          </div>
-        )}
-      </BackofficeStackCard>
+      {paymentOrdersCard}
 
       <BackofficeStackCard variant="portal" className="bg-white/70 dark:bg-slate-950/35">
         <p className="text-sm font-semibold text-gray-950 dark:text-white">

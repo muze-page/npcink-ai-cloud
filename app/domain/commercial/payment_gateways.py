@@ -1,9 +1,18 @@
 from __future__ import annotations
 
+import base64
+import json
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Protocol
+from urllib.parse import urlencode
 
+from cryptography.exceptions import InvalidSignature
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import padding, rsa
+
+from app.core.config import Settings
 from app.domain.commercial.errors import CommercialValidationError
 
 PAYMENT_GATEWAY_CONTRACT_VERSION = "payment-gateway-contract-v1"
@@ -130,10 +139,14 @@ def normalize_payment_gateway_provider(provider: str) -> str:
     return normalized
 
 
-def get_payment_gateway_provider(provider: str) -> PaymentGatewayProvider:
+def get_payment_gateway_provider(
+    provider: str,
+    *,
+    settings: Settings | None = None,
+) -> PaymentGatewayProvider:
     normalized = normalize_payment_gateway_provider(provider)
     if normalized == "alipay":
-        return AlipayPaymentGatewayProvider()
+        return AlipayPaymentGatewayProvider(settings=settings)
     if normalized == "wechat_pay":
         return WeChatPayPaymentGatewayProvider()
     return ManualPaymentGatewayProvider()
@@ -253,6 +266,142 @@ class SimulatedPaymentGatewayProvider:
 class AlipayPaymentGatewayProvider(SimulatedPaymentGatewayProvider):
     provider = "alipay"
 
+    def __init__(self, *, settings: Settings | None = None) -> None:
+        self.settings = settings
+
+    def create_order(self, request: PaymentGatewayOrderRequest) -> PaymentGatewayOrderResult:
+        if not self._real_gateway_enabled():
+            return super().create_order(request)
+        self._assert_provider(request.provider)
+        settings = self._require_settings()
+        timestamp = datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S")
+        amount = _format_cny_amount(request.amount)
+        biz_content = {
+            "out_trade_no": request.order_id,
+            "total_amount": amount,
+            "subject": request.subject[:256],
+            "product_code": "FAST_INSTANT_TRADE_PAY",
+        }
+        params: dict[str, str] = {
+            "app_id": settings.alipay_app_id.strip(),
+            "method": "alipay.trade.page.pay",
+            "format": "JSON",
+            "charset": "utf-8",
+            "sign_type": "RSA2",
+            "timestamp": timestamp,
+            "version": "1.0",
+            "biz_content": json.dumps(biz_content, ensure_ascii=False, separators=(",", ":")),
+        }
+        if settings.alipay_notify_url.strip():
+            params["notify_url"] = settings.alipay_notify_url.strip()
+        if settings.alipay_return_url.strip():
+            params["return_url"] = settings.alipay_return_url.strip()
+        params["sign"] = self._sign_params(params)
+        checkout_url = f"{settings.alipay_gateway_url.strip()}?{urlencode(params)}"
+        return PaymentGatewayOrderResult(
+            provider=self.provider,
+            external_order_no=request.order_id,
+            checkout_url=checkout_url,
+            provider_payload={
+                "contract_version": PAYMENT_GATEWAY_CONTRACT_VERSION,
+                "provider": self.provider,
+                "gateway_mode": "alipay_page_pay",
+                "order_status": "created",
+                "method": "alipay.trade.page.pay",
+                "sign_type": "RSA2",
+            },
+        )
+
+    def verify_payment_callback(
+        self,
+        payload: dict[str, object],
+    ) -> PaymentGatewayCallbackResult:
+        if not self._real_gateway_enabled():
+            return super().verify_payment_callback(payload)
+        self._verify_callback_signature(payload)
+        return super().verify_payment_callback(payload)
+
+    def verify_refund_callback(
+        self,
+        payload: dict[str, object],
+    ) -> PaymentGatewayRefundCallbackResult:
+        if not self._real_gateway_enabled():
+            return super().verify_refund_callback(payload)
+        self._verify_callback_signature(payload)
+        return super().verify_refund_callback(payload)
+
+    def _real_gateway_enabled(self) -> bool:
+        settings = self.settings
+        if settings is None or not settings.alipay_payment_enabled:
+            return False
+        return bool(
+            settings.alipay_app_id.strip()
+            and settings.alipay_private_key.strip()
+            and settings.alipay_public_key.strip()
+            and settings.alipay_gateway_url.strip()
+        )
+
+    def _require_settings(self) -> Settings:
+        if self.settings is None:
+            raise CommercialValidationError(
+                "service.alipay_gateway_not_configured",
+                "Alipay payment gateway settings are not configured",
+            )
+        return self.settings
+
+    def _sign_params(self, params: Mapping[str, object]) -> str:
+        settings = self._require_settings()
+        private_key = serialization.load_pem_private_key(
+            _normalize_private_key_pem(settings.alipay_private_key),
+            password=None,
+        )
+        if not isinstance(private_key, rsa.RSAPrivateKey):
+            raise CommercialValidationError(
+                "service.alipay_private_key_invalid",
+                "Alipay private key must be an RSA private key",
+            )
+        signature = private_key.sign(
+            _canonicalize_alipay_params(params).encode("utf-8"),
+            padding.PKCS1v15(),
+            hashes.SHA256(),
+        )
+        return base64.b64encode(signature).decode("ascii")
+
+    def _verify_callback_signature(self, payload: dict[str, object]) -> None:
+        settings = self._require_settings()
+        app_id = _first_text(payload, "app_id")
+        if app_id and app_id != settings.alipay_app_id.strip():
+            raise CommercialValidationError(
+                "service.payment_callback_app_mismatch",
+                "Alipay callback app_id does not match the configured app",
+            )
+        signature = _first_text(payload, "sign")
+        if not signature:
+            raise CommercialValidationError(
+                "service.payment_callback_signature_missing",
+                "Alipay callback is missing its signature",
+            )
+        public_key = serialization.load_pem_public_key(
+            _normalize_public_key_pem(settings.alipay_public_key)
+        )
+        if not isinstance(public_key, rsa.RSAPublicKey):
+            raise CommercialValidationError(
+                "service.alipay_public_key_invalid",
+                "Alipay public key must be an RSA public key",
+            )
+        try:
+            public_key.verify(
+                base64.b64decode(signature),
+                _canonicalize_alipay_params(payload).encode("utf-8"),
+                padding.PKCS1v15(),
+                hashes.SHA256(),
+            )
+        except (InvalidSignature, ValueError) as error:
+            raise CommercialValidationError(
+                "service.payment_callback_signature_invalid",
+                "Alipay callback signature is invalid",
+            ) from error
+
 
 class WeChatPayPaymentGatewayProvider(SimulatedPaymentGatewayProvider):
     provider = "wechat_pay"
@@ -297,6 +446,54 @@ def _first_float(payload: dict[str, object], *keys: str) -> float | None:
             if value is not None and str(value).strip():
                 return _coerce_float(value)
     return None
+
+
+def _format_cny_amount(amount: float) -> str:
+    return f"{float(amount):.2f}"
+
+
+def _canonicalize_alipay_params(params: Mapping[str, object]) -> str:
+    pairs: list[tuple[str, str]] = []
+    for key, value in params.items():
+        if key in {"sign", "sign_type"}:
+            continue
+        if value is None:
+            continue
+        text = str(value)
+        if not text:
+            continue
+        pairs.append((key, text))
+    return "&".join(f"{key}={value}" for key, value in sorted(pairs))
+
+
+def _normalize_private_key_pem(value: str) -> bytes:
+    return _normalize_pem(
+        value,
+        begin_marker=_pem_marker("BEGIN", "PRIVATE KEY"),
+        end_marker=_pem_marker("END", "PRIVATE KEY"),
+    )
+
+
+def _normalize_public_key_pem(value: str) -> bytes:
+    return _normalize_pem(
+        value,
+        begin_marker=_pem_marker("BEGIN", "PUBLIC KEY"),
+        end_marker=_pem_marker("END", "PUBLIC KEY"),
+    )
+
+
+def _pem_marker(edge: str, key_type: str) -> str:
+    return f"-----{edge} {key_type}-----"
+
+
+def _normalize_pem(value: str, *, begin_marker: str, end_marker: str) -> bytes:
+    text = value.strip().replace("\\n", "\n")
+    if begin_marker in text:
+        return text.encode("utf-8")
+    compact = "".join(text.split())
+    lines = [compact[index : index + 64] for index in range(0, len(compact), 64)]
+    body = "\n".join(lines)
+    return f"{begin_marker}\n{body}\n{end_marker}\n".encode()
 
 
 def _coerce_float(value: object) -> float:
