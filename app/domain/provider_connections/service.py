@@ -14,7 +14,7 @@ from app.adapters.providers.registry import build_provider_adapter_from_connecti
 from app.core.config import Settings
 from app.core.db import get_session
 from app.core.models import ProviderConnection
-from app.core.secrets import encrypt_provider_connection_secret
+from app.core.secrets import decrypt_provider_connection_secret, encrypt_provider_connection_secret
 from app.domain.catalog.service import CatalogService
 from app.domain.provider_connections.runtime_settings import (
     apply_provider_connection_runtime_settings,
@@ -131,10 +131,16 @@ class ProviderConnectionAdminService:
                     else None
                 )
 
+            configured, credential_error = _credential_readiness(
+                self.settings,
+                row,
+                config=normalized["config_json"],
+                provider_id=normalized["provider_id"],
+            )
             row.status = _connection_status(
                 enabled=row.enabled,
-                configured=bool(str(row.secret_ciphertext or "").strip())
-                or bool(normalized["config_json"].get("secretless")),
+                configured=configured,
+                credential_error=credential_error,
             )
             session.commit()
             session.refresh(row)
@@ -604,9 +610,17 @@ class ProviderConnectionAdminService:
         if not model_ids:
             model_ids = _normalize_id_list(metadata.get("model_ids"))
         provider_id = _string(config.get("provider_id") or row.connection_id)
-        configured = bool(str(row.secret_ciphertext or "").strip()) or bool(
-            config.get("secretless")
-        ) or provider_id == "jina_reader"
+        configured, credential_error = _credential_readiness(
+            self.settings,
+            row,
+            config=config,
+            provider_id=provider_id,
+        )
+        status = _connection_status(
+            enabled=bool(row.enabled),
+            configured=configured,
+            credential_error=credential_error,
+        )
         return {
             "connection_id": row.connection_id,
             "provider_id": provider_id,
@@ -615,7 +629,7 @@ class ProviderConnectionAdminService:
             "kind": _string(config.get("kind") or row.provider_type),
             "enabled": bool(row.enabled),
             "configured": configured,
-            "status": _connection_status(enabled=bool(row.enabled), configured=configured),
+            "status": status,
             "source_role": row.source_role,
             "base_url": row.base_url or "",
             "note": note,
@@ -626,7 +640,7 @@ class ProviderConnectionAdminService:
             "secrets": {
                 "credential": {
                     "configured": configured,
-                    "display": "configured" if configured else "missing",
+                    "display": _credential_display(configured, credential_error),
                 }
             },
             "config": _public_config(config),
@@ -681,10 +695,43 @@ def _catalog_preview_model(model: Any) -> dict[str, Any]:
     }
 
 
-def _connection_status(*, enabled: bool, configured: bool) -> str:
+def _connection_status(
+    *,
+    enabled: bool,
+    configured: bool,
+    credential_error: str = "",
+) -> str:
     if not enabled:
         return "disabled"
+    if credential_error:
+        return credential_error
     return "ready" if configured else "missing_secret"
+
+
+def _credential_readiness(
+    settings: Settings,
+    row: ProviderConnection,
+    *,
+    config: dict[str, Any],
+    provider_id: str,
+) -> tuple[bool, str]:
+    if bool(config.get("secretless")) or provider_id == "jina_reader":
+        return True, ""
+    ciphertext = str(row.secret_ciphertext or "").strip()
+    if not ciphertext:
+        return False, ""
+    try:
+        return bool(decrypt_provider_connection_secret(ciphertext, settings=settings)), ""
+    except RuntimeError:
+        return False, "saved_credential_unreadable"
+
+
+def _credential_display(configured: bool, credential_error: str) -> str:
+    if configured:
+        return "configured"
+    if credential_error:
+        return "unreadable"
+    return "missing"
 
 
 def _test_result(

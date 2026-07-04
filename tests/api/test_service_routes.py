@@ -50,7 +50,11 @@ from app.core.models import (
     SiteUserGrant,
     UsageMeterEvent,
 )
-from app.core.secrets import decrypt_provider_connection_secret, decrypt_service_setting_secret
+from app.core.secrets import (
+    decrypt_provider_connection_secret,
+    decrypt_service_setting_secret,
+    encrypt_provider_connection_secret,
+)
 from app.core.security import REPLAY_SCOPE_PUBLIC_POST_SITE
 from app.core.services import CloudServices
 from app.domain.catalog.service import CatalogService
@@ -992,6 +996,7 @@ def test_admin_ability_model_runtime_binding_updates_site_knowledge_embedding(
         tmp_path,
         providers={"siliconflow": FixedSiliconFlowEmbeddingProvider()},
     )
+    services = client.app.state.services
     with get_session(database_url) as session:
         session.add(
             ProviderConnection(
@@ -1007,7 +1012,10 @@ def test_admin_ability_model_runtime_binding_updates_site_knowledge_embedding(
                     "runtime_profile_ids": ["text.ai", "embed.default"],
                     "model_id": "siliconflow/Qwen/Qwen3-8B",
                 },
-                secret_ciphertext="configured-in-test",
+                secret_ciphertext=encrypt_provider_connection_secret(
+                    "configured-in-test",
+                    settings=services.settings,
+                ),
                 status="configured",
                 source_role="execution_source",
                 metadata_json={},

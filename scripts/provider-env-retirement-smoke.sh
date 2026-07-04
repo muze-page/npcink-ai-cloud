@@ -29,7 +29,7 @@ required_ids = [
     item.strip()
     for item in os.getenv(
         "NPCINK_CLOUD_PROVIDER_SMOKE_REQUIRED_IDS",
-        "search_tavily,search_apify,search_zhihu,image_unsplash,image_pixabay,image_pexels,embedding_tei,vector_zilliz",
+        "search_tavily,search_apify,search_zhihu,image_unsplash,image_pixabay,image_pexels,tei_env,vector_zilliz",
     ).split(",")
     if item.strip()
 ]

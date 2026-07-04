@@ -60,11 +60,11 @@ def apply_provider_connection_runtime_settings(
         provider_channel_key = (kind, provider_id)
         if provider_channel_key in applied_provider_channels:
             continue
-        if not _connection_configured(row, config, provider_id):
-            continue
         capability_ids = _string_list(config.get("capability_ids"))
         runtime_profile_ids = _string_list(config.get("runtime_profile_ids"))
         credential = _decrypt_connection_credential(settings, row)
+        if not _connection_configured(row, config, provider_id, credential):
+            continue
         if kind == "web_search_provider":
             applied = _apply_web_search_connection(
                 settings,
@@ -393,10 +393,11 @@ def _connection_configured(
     row: ProviderConnection,
     config: dict[str, Any],
     provider_id: str,
+    credential: str,
 ) -> bool:
     if provider_id == "jina_reader":
         return True
-    return bool(_string(row.secret_ciphertext)) or bool(config.get("secretless"))
+    return bool(_string(credential)) or bool(config.get("secretless"))
 
 
 def _connection_priority(row: ProviderConnection) -> int:

@@ -8,7 +8,8 @@ from app.adapters.providers.registry import (
     resolve_execution_provider_adapters,
 )
 from app.core.config import Settings
-from app.core.db import dispose_engine, init_schema
+from app.core.db import dispose_engine, get_session, init_schema
+from app.core.models import ProviderConnection
 from app.domain.provider_connections.runtime_settings import (
     apply_provider_connection_runtime_settings,
 )
@@ -355,5 +356,51 @@ def test_provider_connection_priority_selects_primary_capability_channel(
 
     assert projection.image_source_count == 1
     assert settings.image_source_pexels_api_key == "pexels-primary-key"
+
+    dispose_engine(database_url)
+
+
+def test_runtime_projection_skips_unreadable_provider_connection_secret(
+    tmp_path: Path,
+) -> None:
+    database_url = _sqlite_url(tmp_path)
+    init_schema(database_url)
+    settings = _settings(database_url)
+    settings.web_search_provider = "disabled"
+    service = ProviderConnectionAdminService(database_url, settings)
+
+    service.save_connection(
+        {
+            "connection_id": "search_zhihu",
+            "provider_id": "zhihu",
+            "provider_type": "web_search_provider",
+            "kind": "web_search_provider",
+            "display_name": "Zhihu Search",
+            "enabled": True,
+            "base_url": "https://developer.zhihu.example",
+            "capability_ids": ["web_search"],
+            "runtime_profile_ids": ["web-search.managed"],
+            "credential": "zhihu-secret",
+        }
+    )
+    with get_session(database_url) as session:
+        row = session.get(ProviderConnection, "search_zhihu")
+        assert row is not None
+        row.secret_ciphertext = "not-a-valid-fernet-token"
+        session.commit()
+
+    projection = apply_provider_connection_runtime_settings(settings)
+
+    assert projection.applied_count == 0
+    assert projection.web_search_count == 0
+    assert settings.web_search_provider == "disabled"
+    assert not settings.web_search_zhihu_access_secret
+
+    connections = {
+        item["connection_id"]: item for item in service.list_connections()["connections"]
+    }
+    assert connections["search_zhihu"]["configured"] is False
+    assert connections["search_zhihu"]["status"] == "saved_credential_unreadable"
+    assert connections["search_zhihu"]["secrets"]["credential"]["display"] == "unreadable"
 
     dispose_engine(database_url)
