@@ -78,6 +78,47 @@ def test_routing_service_prefers_balanced_text_instance(tmp_path: Path) -> None:
     dispose_engine(database_url)
 
 
+def test_routing_service_requires_runtime_execution_provider_when_supplied(
+    tmp_path: Path,
+) -> None:
+    database_url = _sqlite_url(tmp_path)
+    init_schema(database_url)
+    CatalogService(database_url).refresh_catalog()
+    with get_session(database_url) as session:
+        session.add(
+            ProviderConnection(
+                connection_id="openai",
+                provider_type="openai_compatible",
+                display_name="OpenAI",
+                enabled=True,
+                base_url="https://api.openai.test/v1",
+                config_json={
+                    "provider_id": "openai",
+                    "kind": "openai_compatible",
+                    "capability_ids": ["text_generation"],
+                    "runtime_profile_ids": ["text.balanced"],
+                    "model_ids": ["gpt-4.1-mini"],
+                },
+                secret_ciphertext="configured-in-test",
+                status="ready",
+                source_role="execution_source",
+                metadata_json={},
+            )
+        )
+        session.commit()
+
+    with pytest.raises(RoutingNoCandidatesError):
+        RoutingService(
+            database_url,
+            execution_provider_ids={"anthropic"},
+        ).resolve(
+            profile_id="text.balanced",
+            execution_kind="text",
+        )
+
+    dispose_engine(database_url)
+
+
 def test_routing_service_rejects_allowlisted_model_without_execution_adapter(
     tmp_path: Path,
 ) -> None:

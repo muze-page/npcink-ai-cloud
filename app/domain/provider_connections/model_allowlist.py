@@ -7,7 +7,6 @@ from sqlalchemy import select
 
 from app.adapters.providers.registry import (
     EXECUTION_PROVIDER_SOURCE_ROLES,
-    build_provider_adapter_from_connection,
 )
 from app.core.config import Settings
 from app.core.db import get_session
@@ -17,10 +16,14 @@ from app.core.models import ProviderConnection
 @dataclass(frozen=True, slots=True)
 class ProviderModelAllowlist:
     allowed_model_ids_by_provider: dict[str, set[str]]
+    fallback_execution_provider_ids: set[str]
+    enforced: bool
 
     def allows(self, *, provider_id: str, model_id: str) -> bool:
         provider_models = self.allowed_model_ids_by_provider.get(provider_id)
-        return bool(provider_models and model_id in provider_models)
+        if provider_models is not None:
+            return model_id in provider_models
+        return provider_id in self.fallback_execution_provider_ids
 
 
 def build_provider_model_allowlist(
@@ -29,8 +32,13 @@ def build_provider_model_allowlist(
     settings: Settings | None = None,
     execution_provider_ids: set[str] | None = None,
 ) -> ProviderModelAllowlist:
+    fallback_execution_provider_ids = execution_provider_ids or set()
     if not database_url:
-        return ProviderModelAllowlist(allowed_model_ids_by_provider={})
+        return ProviderModelAllowlist(
+            allowed_model_ids_by_provider={},
+            fallback_execution_provider_ids=fallback_execution_provider_ids,
+            enforced=False,
+        )
 
     with get_session(database_url) as session:
         rows = list(
@@ -60,6 +68,8 @@ def build_provider_model_allowlist(
 
     return ProviderModelAllowlist(
         allowed_model_ids_by_provider=allowed_model_ids_by_provider,
+        fallback_execution_provider_ids=fallback_execution_provider_ids,
+        enforced=bool(allowed_model_ids_by_provider),
     )
 
 
@@ -82,9 +92,7 @@ def _connection_execution_ready(
     )
     if not configured:
         return False
-    if settings is None:
-        return True
-    return build_provider_adapter_from_connection(settings, row) is not None
+    return True
 
 
 def _dict(value: object) -> dict[str, Any]:

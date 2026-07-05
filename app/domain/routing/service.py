@@ -78,6 +78,7 @@ class RoutingService:
                 provider_id=instance.provider_id,
                 model_id=instance.model_id,
             )
+            and self._provider_is_executable(instance.provider_id)
         ]
 
         if not candidates:
@@ -91,3 +92,8 @@ class RoutingService:
             selection_policy=binding.selection_policy_json or {},
             candidates=candidates,
         )
+
+    def _provider_is_executable(self, provider_id: str) -> bool:
+        if not self.execution_provider_ids:
+            return True
+        return provider_id in self.execution_provider_ids
