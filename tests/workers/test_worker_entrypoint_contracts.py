@@ -14,6 +14,14 @@ def test_runtime_queue_worker_only_processes_execution_backlog() -> None:
     assert "dispatch_pending_callbacks" not in source
 
 
+def test_runtime_queue_worker_refreshes_execution_providers_per_poll() -> None:
+    source = (_workers_root() / "runtime_queue.py").read_text()
+
+    assert "resolve_execution_provider_adapters(settings)" in source
+    assert "service = _build_runtime_service(settings, runtime_queue)" in source
+    assert "runtime queue execution providers resolved" in source
+
+
 def test_callback_dispatch_worker_exists_as_separate_entrypoint() -> None:
     source = (_workers_root() / "callback_dispatch.py").read_text()
 

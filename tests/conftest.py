@@ -53,6 +53,7 @@ from app.core.models import (
     AccountEntitlementSnapshot,
     AccountSubscription,
     PlanVersion,
+    ProviderConnection,
     Site,
     SiteApiKey,
 )
@@ -191,6 +192,74 @@ def seed_site_auth(
             if policy is not None:
                 snapshot.policy_json = policy
 
+        session.commit()
+
+
+def seed_openai_model_allowlist(
+    database_url: str,
+    *,
+    model_ids: list[str] | None = None,
+    connection_id: str = "openai",
+) -> None:
+    seed_provider_model_allowlist(
+        database_url,
+        provider_id="openai",
+        kind="openai_compatible",
+        model_ids=model_ids or ["gpt-4.1-mini"],
+        connection_id=connection_id,
+        display_name="OpenAI",
+        capability_ids=["text_generation"],
+        runtime_profile_ids=["text.balanced"],
+        base_url="https://api.openai.test/v1",
+    )
+
+
+def seed_provider_model_allowlist(
+    database_url: str,
+    *,
+    provider_id: str,
+    kind: str,
+    model_ids: list[str],
+    connection_id: str | None = None,
+    display_name: str | None = None,
+    capability_ids: list[str] | None = None,
+    runtime_profile_ids: list[str] | None = None,
+    base_url: str = "https://api.provider.test",
+) -> None:
+    effective_connection_id = connection_id or provider_id
+    with get_session(database_url) as session:
+        row = session.get(ProviderConnection, effective_connection_id)
+        config_json = {
+            "provider_id": provider_id,
+            "kind": kind,
+            "capability_ids": capability_ids or [],
+            "runtime_profile_ids": runtime_profile_ids or [],
+            "model_ids": model_ids,
+        }
+        if row is None:
+            row = ProviderConnection(
+                connection_id=effective_connection_id,
+                provider_type=kind,
+                display_name=display_name or provider_id,
+                enabled=True,
+                base_url=base_url,
+                config_json=config_json,
+                secret_ciphertext="configured-in-test",
+                status="ready",
+                source_role="execution_source",
+                metadata_json={},
+            )
+            session.add(row)
+        else:
+            row.provider_type = kind
+            row.display_name = row.display_name or display_name or provider_id
+            row.enabled = True
+            row.base_url = row.base_url or base_url
+            row.config_json = config_json
+            row.secret_ciphertext = row.secret_ciphertext or "configured-in-test"
+            row.status = "ready"
+            row.source_role = row.source_role or "execution_source"
+            row.metadata_json = row.metadata_json or {}
         session.commit()
 
 

@@ -7,6 +7,7 @@ import { cn } from '@/lib/utils';
 import { useLocale } from '@/contexts/LocaleContext';
 import { ThemeToggle } from '@/components/ui/ThemeToggle';
 import { LocaleSwitcher } from '@/components/ui/LocaleSwitcher';
+import { AdminRouteTransition } from '@/components/admin/AdminRouteTransition';
 
 interface AdminLayoutProps {
   children: React.ReactNode;
@@ -307,7 +308,6 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
                 <Link
                   key={item.href}
                   href={item.href}
-                  prefetch={false}
                   title={itemLabel}
                   aria-label={itemLabel}
                   className={cn(
@@ -593,7 +593,6 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
                       <Link
                         key={item.href}
                         href={item.href}
-                        prefetch={false}
                         className={cn(
                           'flex items-center justify-between gap-3 rounded-xl px-3 py-2.5 text-left transition hover:bg-slate-100 dark:hover:bg-slate-900',
                           isActive(item) && 'bg-slate-100 dark:bg-slate-900'
@@ -624,9 +623,9 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
 
         {/* Main Content */}
         <main className="flex-1 bg-transparent">
-          <div className="mx-auto w-full max-w-[110rem] px-3 py-4 md:px-5 md:py-5">
+          <AdminRouteTransition>
             {children}
-          </div>
+          </AdminRouteTransition>
         </main>
 
         {/* Admin Footer */}

@@ -19,8 +19,13 @@ assert.match(
 
 assert.match(
   source,
-  /onboarding_site_title[\s\S]*onboarding_key_title[\s\S]*onboarding_package_title[\s\S]*onboarding_qq_title/,
-  'first-use checklist must cover site, API key, package, and QQ binding'
+  /onboarding_site_title[\s\S]*onboarding_package_title[\s\S]*onboarding_qq_title/,
+  'first-use checklist must cover site connection, package, and QQ binding'
+);
+assert.doesNotMatch(
+  source,
+  /key: 'api-key'|onboarding_key_title[\s\S]*href: `\/portal\/sites\/\$\{selectedSite\.site_id\}`/,
+  'site URL and API key readiness must be merged into one site connection checklist item'
 );
 
 assert.match(
@@ -37,7 +42,7 @@ assert.match(
 
 assert.match(
   source,
-  /completedSetupCount < setupChecklistItems\.length/,
+  /requiredAttentionItems = requiredSetupItems\.filter[\s\S]*shouldShowOnboardingChecklist = requiredAttentionItems\.length > 0/,
   'first-use checklist must hide after all setup steps are complete'
 );
 

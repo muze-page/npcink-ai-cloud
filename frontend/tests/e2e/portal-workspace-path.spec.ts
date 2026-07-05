@@ -123,6 +123,23 @@ async function installPortalMocks(page: Page) {
       return;
     }
 
+    if (pathname === '/auth/identity-providers') {
+      await fulfillJson(route, {
+        principal_id: 'prn_8d95fab64fa7487bb31cd81c3adac4a8',
+        providers: [
+          {
+            provider: 'qq',
+            display_name: 'QQ',
+            configured: false,
+            bound: false,
+            binding: null,
+            bind_start_path: '/portal/v1/auth/qq/start',
+          },
+        ],
+      });
+      return;
+    }
+
     if (pathname === '/sites/site_attention/summary') {
       await fulfillJson(route, {
         site_id: 'site_attention',
@@ -743,12 +760,14 @@ test('portal workspace interaction path: attention strip to filtered table to dr
   await page.goto('/portal');
 
   const portalPrimaryNav = page.locator('[data-ui="portal-primary-nav"]');
-  await expect(portalPrimaryNav.locator('> a')).toHaveCount(5);
-  await expect(portalPrimaryNav.getByRole('link', { name: /^Workspace$|^工作区$|^工作區$/i })).toBeVisible();
-  await expect(portalPrimaryNav.getByRole('link', { name: /^Usage$|^用量$/i })).toBeVisible();
-  await expect(portalPrimaryNav.getByRole('link', { name: /^Package$|^套餐$|^方案$/i })).toBeVisible();
-  await expect(portalPrimaryNav.getByRole('link', { name: /^Sites$|^站点$|^站點$/i })).toBeVisible();
-  await expect(portalPrimaryNav.getByRole('link', { name: /^Account$|^账号中心$|^帳號中心$/i })).toBeVisible();
+  await expect(portalPrimaryNav.locator('> a')).toHaveCount(4);
+  await expect(portalPrimaryNav.getByRole('link', { name: /^Overview$|^概览$|^概覽$|^Workspace$|^工作区$|^工作區$/i })).toBeVisible();
+  await expect(portalPrimaryNav.getByRole('link', { name: /^Plan and usage$|^套餐与用量$|^套餐與用量$/i })).toBeVisible();
+  await expect(portalPrimaryNav.getByRole('link', { name: /^Sites and domain$|^站点与域名$|^站點與網域$/i })).toBeVisible();
+  await expect(portalPrimaryNav.getByRole('link', { name: /^Contact$|^联系方式$|^聯絡方式$/i })).toBeVisible();
+  await expect(portalPrimaryNav.getByRole('link', { name: /^Billing$|^账单$|^帳單$/i })).toHaveCount(0);
+  await expect(portalPrimaryNav.getByRole('link', { name: /^Monitoring$|^监控$|^監控$/i })).toHaveCount(0);
+  await expect(portalPrimaryNav.getByRole('link', { name: /^AI Insights$|^AI 分析$/i })).toHaveCount(0);
   await expect(portalPrimaryNav.getByRole('link', { name: /^Keys$|^密钥$|^金鑰$/i })).toHaveCount(0);
   await expect(portalPrimaryNav.getByRole('link', { name: /^Audit$|^审计$|^稽核$/i })).toHaveCount(0);
   await expect(portalPrimaryNav.getByRole('link', { name: /^Preferences$|^个人偏好$|^偏好設定$/i })).toHaveCount(0);
@@ -771,11 +790,11 @@ test('portal workspace interaction path: attention strip to filtered table to dr
   await page.locator('a[href="/portal/usage?site=site_attention"]').first().click();
 
   await expect(page).toHaveURL(/\/portal\/usage\?site=site_attention/);
-  await expect(page.getByRole('heading', { level: 1, name: /usage|用量/i })).toBeVisible();
+  await expect(page.getByRole('heading', { level: 1, name: /Plan and usage|套餐与用量|usage|用量|当前周期用量/i })).toBeVisible();
   await expect(page.getByRole('combobox').first()).toHaveValue('site_attention');
-  await expect(page.getByText(/Requests left|剩余 requests|剩餘 requests/i)).toBeVisible();
+  await expect(page.getByText(/Requests left|剩余请求|剩余 requests|剩餘 requests/i)).toBeVisible();
   await expect(page.getByText(/Tokens left|剩余 tokens|剩餘 tokens/i)).toBeVisible();
-  await expect(page.getByText(/Cost headroom|剩余成本空间|剩餘成本空間/i)).toBeVisible();
+  await expect(page.getByText(/Cost headroom|成本余量|剩余成本空间|剩餘成本空間/i)).toBeVisible();
 });
 
 test('portal workspace keeps one primary action and sites keeps add action secondary', async ({ page }) => {
@@ -788,6 +807,19 @@ test('portal workspace keeps one primary action and sites keeps add action secon
   await expect(page.locator('section').first().locator('.btn.btn-primary')).toHaveCount(0);
   await expect(page.locator('section').first().locator('.btn.btn-secondary')).toHaveCount(1);
   await expect(page.getByRole('button', { name: /add site|添加站点|新增站點/i })).toBeVisible();
+});
+
+test('portal contact page hides internal identifiers by default', async ({ page }) => {
+  await installPortalMocks(page);
+
+  await page.goto('/portal/account');
+  await expect(page.getByRole('heading', { level: 1, name: /Contact|联系方式|聯絡方式/i })).toBeVisible();
+  await expect(page.locator('[data-portal-account="contact-info"]')).toHaveCount(1);
+  await expect(page.locator('[data-portal-account="support-details"]')).toHaveCount(1);
+  await expect(page.locator('[data-portal-account="support-details"]')).not.toHaveAttribute('open', /.+/);
+  await expect(page.getByText(/portal-demo@example\.com/i).first()).toBeVisible();
+  await expect(page.getByText(/prn_8d95fab64fa7487bb31cd81c3adac4a8/i)).toHaveCount(0);
+  await expect(page.getByText(/acct_portal/i)).not.toBeVisible();
 });
 
 test('portal monitoring shows diagnostic advisor and routes to plugin evidence', async ({ page }) => {

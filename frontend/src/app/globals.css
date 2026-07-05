@@ -139,6 +139,121 @@ h4,
     linear-gradient(180deg, rgba(248, 250, 252, 0.98) 0%, rgba(241, 245, 249, 0.98) 100%);
 }
 
+.admin-route-transition {
+  animation: admin-route-enter 180ms ease-out both;
+  transition: opacity 140ms ease-out, filter 140ms ease-out;
+}
+
+.admin-route-transition-pending {
+  opacity: 0.76;
+  filter: saturate(0.94);
+}
+
+.admin-route-transition-settling {
+  animation: admin-route-enter 140ms ease-out both;
+}
+
+.admin-route-pending-indicator {
+  pointer-events: none;
+  position: fixed;
+  inset: 0 0 auto 0;
+  z-index: 80;
+  height: 2px;
+  overflow: hidden;
+  background: transparent;
+  opacity: 0;
+  transform: translateY(-100%);
+  transition: opacity 120ms ease-out, transform 120ms ease-out;
+}
+
+.admin-route-pending-indicator > span {
+  display: block;
+  height: 100%;
+  width: 36%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, rgba(37, 99, 235, 0), rgba(37, 99, 235, 0.95), rgba(14, 165, 233, 0.92));
+  box-shadow: 0 0 18px rgba(37, 99, 235, 0.35);
+  transform-origin: left center;
+  animation: admin-route-progress 900ms ease-in-out infinite;
+}
+
+.admin-route-pending-indicator-visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.backoffice-info-tooltip {
+  z-index: 100;
+  width: max-content;
+  max-width: min(18rem, calc(100vw - 2rem));
+  border: 1px solid rgba(203, 213, 225, 0.9);
+  border-radius: 0.75rem;
+  background: rgba(255, 255, 255, 0.98);
+  box-shadow: 0 16px 38px rgba(15, 23, 42, 0.16);
+  color: rgb(51, 65, 85);
+  font-size: 0.75rem;
+  font-weight: 500;
+  letter-spacing: 0;
+  line-height: 1.35rem;
+  padding: 0.55rem 0.7rem;
+  text-align: left;
+  text-transform: none;
+  white-space: normal;
+}
+
+.dark .backoffice-info-tooltip {
+  border-color: rgba(51, 65, 85, 0.95);
+  background: rgba(15, 23, 42, 0.98);
+  box-shadow: 0 16px 38px rgba(2, 6, 23, 0.35);
+  color: rgb(226, 232, 240);
+}
+
+.admin-route-skeleton {
+  animation: admin-route-enter 160ms ease-out both;
+}
+
+.admin-route-progress {
+  animation: admin-route-progress 950ms ease-in-out infinite;
+  transform-origin: left center;
+}
+
+@keyframes admin-route-enter {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes admin-route-progress {
+  0% {
+    transform: translateX(-120%) scaleX(0.7);
+  }
+  50% {
+    transform: translateX(90%) scaleX(1.25);
+  }
+  100% {
+    transform: translateX(320%) scaleX(0.8);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .admin-route-transition,
+  .admin-route-skeleton,
+  .admin-route-progress,
+  .admin-route-pending-indicator > span {
+    animation: none;
+  }
+
+  .admin-route-transition,
+  .admin-route-pending-indicator {
+    transition: none;
+  }
+}
+
 .dark .admin-shell {
   background:
     linear-gradient(180deg, rgba(2, 6, 23, 0.98) 0%, rgba(15, 23, 42, 0.98) 100%);

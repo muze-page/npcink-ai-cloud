@@ -19,7 +19,7 @@ from app.domain.usage.rollup import (
     ROUTER_PERFORMANCE_BATCH_SCOPE,
     UsageRollupService,
 )
-from tests.conftest import seed_site_auth
+from tests.conftest import seed_openai_model_allowlist, seed_site_auth
 
 
 def _sqlite_url(tmp_path: Path) -> str:
@@ -32,6 +32,7 @@ def test_usage_rollup_service_writes_summary_profile_and_instance_snapshots(
     database_url = _sqlite_url(tmp_path)
     init_schema(database_url)
     CatalogService(database_url).refresh_catalog()
+    seed_openai_model_allowlist(database_url)
     CatalogService(database_url).scan_provider_health()
     seed_site_auth(database_url, site_id="site_alpha")
 
@@ -125,6 +126,7 @@ def test_usage_rollup_service_stores_router_performance_projection_batches(
     database_url = _sqlite_url(tmp_path)
     init_schema(database_url)
     CatalogService(database_url).refresh_catalog()
+    seed_openai_model_allowlist(database_url)
     CatalogService(database_url).scan_provider_health()
     seed_site_auth(database_url, site_id="site_alpha")
 
@@ -203,6 +205,7 @@ def test_usage_rollup_service_stores_router_diagnostics_projection_batches(
     database_url = _sqlite_url(tmp_path)
     init_schema(database_url)
     CatalogService(database_url).refresh_catalog()
+    seed_openai_model_allowlist(database_url)
     CatalogService(database_url).scan_provider_health()
     seed_site_auth(database_url, site_id="site_alpha", scopes=["stats:read"])
 
@@ -268,6 +271,7 @@ def test_usage_rollup_service_stores_latency_probe_projection_batches(
     database_url = _sqlite_url(tmp_path)
     init_schema(database_url)
     CatalogService(database_url).refresh_catalog()
+    seed_openai_model_allowlist(database_url)
     CatalogService(database_url).scan_provider_health()
     seed_site_auth(database_url, site_id="site_alpha", scopes=["stats:read"])
 
@@ -364,6 +368,7 @@ def test_usage_rollup_service_skips_missing_latency_probe_instances(
     database_url = _sqlite_url(tmp_path)
     init_schema(database_url)
     CatalogService(database_url).refresh_catalog()
+    seed_openai_model_allowlist(database_url)
     seed_site_auth(database_url, site_id="site_alpha", scopes=["stats:read"])
 
     fixed_now = datetime(2026, 3, 24, 9, 20, tzinfo=UTC)
@@ -403,6 +408,7 @@ def test_usage_rollup_service_stores_alert_provider_degradation_batches(
     database_url = _sqlite_url(tmp_path)
     init_schema(database_url)
     CatalogService(database_url).refresh_catalog()
+    seed_openai_model_allowlist(database_url)
     CatalogService(database_url).scan_provider_health()
     seed_site_auth(database_url, site_id="site_alpha", scopes=["stats:read"])
 

@@ -15,7 +15,6 @@ export function localizeTierLabel(t: TranslateFn, tierId: string, fallback?: str
 
 export function localizePackageAlias(t: TranslateFn, tierId: string, fallback?: string): string {
   switch (tierId) {
-    case 'plan_free':
     case 'free':
       return t('admin.plan_package_alias_free', {}, fallback || 'Free');
     case 'pro':
@@ -92,7 +91,7 @@ export function localizeFeatureGroup(t: TranslateFn, feature: string): string {
 }
 
 export function localizePlanName(t: TranslateFn, planId: string, name: string): string {
-  if (planId === 'plan_free' || name === 'Free') {
+  if (planId === 'free' || name === 'Free') {
     return t('admin.plan_name_free', {}, name || 'Free');
   }
   if (name === 'Magick Cloud MVP Plan') {
@@ -120,7 +119,7 @@ export function resolveAdminPackageLabel(
   if (raw.includes('pro')) {
     return localizePackageAlias(t, 'pro', fallback || packageAlias || 'Pro');
   }
-  if (raw.includes('free') || raw.includes('free') || raw.includes('plan_free')) {
+  if (raw.includes('free')) {
     return localizePackageAlias(t, 'free', fallback || packageAlias || 'Free');
   }
   return fallback || packageAlias || planId || '';
@@ -155,6 +154,11 @@ export function localizePackageFitCue(
       return {
         title: t('admin.package_fit.shadow_runs_over_budget_title', {}, cue.title),
         detail: t('admin.package_fit.shadow_runs_over_budget_detail', {}, cue.detail),
+      };
+    case 'package_fit.cost_ceiling_missing':
+      return {
+        title: t('admin.package_fit.cost_ceiling_missing_title', {}, cue.title),
+        detail: t('admin.package_fit.cost_ceiling_missing_detail', {}, cue.detail),
       };
     default:
       return cue;

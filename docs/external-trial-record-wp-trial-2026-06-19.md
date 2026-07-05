@@ -24,6 +24,9 @@ entitlement, and billing/detail evidence do not mix with the previous
 This record is local/staging rehearsal evidence. It must not be counted as a
 real external customer trial.
 
+Historical ID note: this document records the old Free package IDs
+`plan_free` / `plan_free_v1`; current package records use `free` / `free_v1`.
+
 ## Preflight Findings
 
 The initial direct candidates `wp.local`, `npcink.local`, and `dbd.local` were

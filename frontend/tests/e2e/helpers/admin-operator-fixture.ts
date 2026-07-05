@@ -6,10 +6,10 @@ export const BASE_URL =
   `http://127.0.0.1:${process.env.NPCINK_CLOUD_FRONTEND_PORT || '3301'}`;
 export const LONG_ACCOUNT_ID = 'acct_mvp_enterprise_primary';
 export const LONG_PROVIDER_ID = 'mini-vllm-demo-execution-primary';
-export const LONG_PLAN_ID = 'plan_basic_primary';
-export const LONG_PLAN_VERSION_ID = 'plan_basic_primary_version_v1';
-export const FREE_PLAN_ID = 'plan_free';
-export const FREE_PLAN_VERSION_ID = 'plan_free_v1';
+export const LONG_PLAN_ID = 'pro';
+export const LONG_PLAN_VERSION_ID = 'pro_v1';
+export const FREE_PLAN_ID = 'free';
+export const FREE_PLAN_VERSION_ID = 'free_v1';
 
 async function fulfillJson(route: Route, data: unknown) {
   await route.fulfill({
@@ -23,8 +23,8 @@ export async function installAdminMocks(page: Page) {
   let primaryAccountSubscription = {
     subscription_id: 'sub_mvp',
     status: 'past_due',
-    plan_id: 'plan_basic',
-    plan_version_id: 'plan_basic_v1',
+    plan_id: 'pro',
+    plan_version_id: 'pro_v1',
     plan_kind: 'tier_paid',
     package_alias: 'Pro',
     package_kind: 'tier_package',
@@ -49,7 +49,7 @@ export async function installAdminMocks(page: Page) {
       member_count: 1,
       site_count: 1,
       active_subscription_count: 1,
-      top_plan_id: 'plan_basic',
+      top_plan_id: 'pro',
       package_alias: 'Pro',
       plan_kind: 'tier_paid',
       display_package_label: 'Pro',
@@ -115,8 +115,7 @@ export async function installAdminMocks(page: Page) {
     if (pathname === `/api/admin/accounts/${LONG_ACCOUNT_ID}/subscription` && route.request().method() === 'POST') {
       const payload = route.request().postDataJSON() as Record<string, unknown>;
       const nextPlanId = String(payload.plan_id || primaryAccountSubscription.plan_id);
-      const nextPackageAlias =
-        nextPlanId === FREE_PLAN_ID ? 'Free' : nextPlanId === 'plan_basic_primary' || nextPlanId === 'plan_basic' ? 'Pro' : 'Pro';
+      const nextPackageAlias = nextPlanId === FREE_PLAN_ID ? 'Free' : 'Pro';
       const nextPlanKind = nextPlanId === FREE_PLAN_ID ? 'default_free' : 'tier_paid';
       const nextPackageKind = nextPlanId === FREE_PLAN_ID ? 'formal_free' : 'tier_package';
       primaryAccountSubscription = {
@@ -347,7 +346,7 @@ export async function installAdminMocks(page: Page) {
             contains_prompt_or_result_payloads: false,
           },
         },
-        plan_distribution: [{ plan_id: 'plan_basic', count: 1 }],
+        plan_distribution: [{ plan_id: 'pro', count: 1 }],
         recent_audit_summary: { items: [] },
       });
       return;
@@ -654,8 +653,8 @@ export async function installAdminMocks(page: Page) {
               subscription_id: 'sub_mvp',
               account_id: LONG_ACCOUNT_ID,
               status: 'past_due',
-              plan_id: 'plan_basic',
-              plan_version_id: 'plan_basic_v1',
+              plan_id: 'pro',
+              plan_version_id: 'pro_v1',
               current_period_start_at: '2026-04-01T00:00:00Z',
               current_period_end_at: '2026-04-12T00:00:00Z',
             },
@@ -682,15 +681,15 @@ export async function installAdminMocks(page: Page) {
           subscription_id: 'sub_mvp',
           account_id: LONG_ACCOUNT_ID,
           status: 'past_due',
-          plan_id: 'plan_basic',
-          plan_version_id: 'plan_basic_v1',
+          plan_id: 'pro',
+          plan_version_id: 'pro_v1',
           current_period_start_at: '2026-04-01T00:00:00Z',
           current_period_end_at: '2026-04-12T00:00:00Z',
         },
         account: { account_id: LONG_ACCOUNT_ID, name: 'MVP Account', status: 'active' },
         covered_sites: [{ site_id: 'site_mvp', name: 'MVP Site', status: 'active' }],
-        plan: { plan_id: 'plan_basic', display_name: 'Pro' },
-        plan_version: { plan_version_id: 'plan_basic_v1' },
+        plan: { plan_id: 'pro', display_name: 'Pro' },
+        plan_version: { plan_version_id: 'pro_v1' },
         commercial_policy: { subscription: { grace_period_days: 3 } },
         budget_headroom: {
           base_budget: { runs: 1000, tokens: 500000, cost: 250 },
@@ -749,8 +748,8 @@ export async function installAdminMocks(page: Page) {
           subscription_id: 'sub_mvp',
           account_id: LONG_ACCOUNT_ID,
           status: 'past_due',
-          plan_id: 'plan_basic',
-          plan_version_id: 'plan_basic_v1',
+          plan_id: 'pro',
+          plan_version_id: 'pro_v1',
           current_period_start_at: '2026-04-01T00:00:00Z',
           current_period_end_at: '2026-04-12T00:00:00Z',
         },
@@ -776,6 +775,17 @@ export async function installAdminMocks(page: Page) {
           missing_site_count: 0,
           next_action: null,
         },
+        receipt: {
+          event_kind: 'subscription.billing_snapshot.rebuild',
+          scope_kind: 'subscription',
+          scope_id: 'sub_mvp',
+          outcome: 'succeeded',
+          effective_summary: 'Billing snapshots for subscription sub_mvp were rebuilt from usage records.',
+          audit_filters: {
+            event_kind: 'subscription.billing_snapshot.rebuild',
+            outcome: 'succeeded',
+          },
+        },
       });
       return;
     }
@@ -799,7 +809,7 @@ export async function installAdminMocks(page: Page) {
             subscription: {
               subscription_id: 'sub_mvp',
               status: 'past_due',
-              plan_id: 'plan_basic',
+              plan_id: 'pro',
               current_period_start_at: '2026-04-01T00:00:00Z',
               current_period_end_at: '2026-04-12T00:00:00Z',
             },
@@ -829,8 +839,8 @@ export async function installAdminMocks(page: Page) {
         subscription: {
           subscription_id: 'sub_mvp',
           status: 'past_due',
-          plan_id: 'plan_basic',
-          plan_version_id: 'plan_basic_v1',
+          plan_id: 'pro',
+          plan_version_id: 'pro_v1',
           current_period_start_at: '2026-04-01T00:00:00Z',
           current_period_end_at: '2026-04-12T00:00:00Z',
         },
@@ -1145,7 +1155,7 @@ export async function installAdminMocks(page: Page) {
       await fulfillJson(route, {
         tier_templates: [
           {
-            tier_id: 'starter',
+            tier_id: 'free',
             label: 'Free',
             package_alias: 'Free',
             usage_band: 'Low-volume single-site hosted usage.',
@@ -1180,7 +1190,7 @@ export async function installAdminMocks(page: Page) {
               concurrency: { max_active_runs: 1 },
               policy: { subscription: { grace_period_days: 0 } },
               metadata: {
-                tier_id: 'starter',
+                tier_id: 'free',
                 package_alias: 'Free',
                 monthly_included_points: 500,
                 site_limit: 1,
@@ -1296,7 +1306,7 @@ export async function installAdminMocks(page: Page) {
               name: 'Free',
               status: 'active',
               description: 'Formal production free package.',
-              metadata: { source: 'production_default_free_shell_v1', tier_id: 'starter', plan_kind: 'default_free' },
+              metadata: { source: 'production_default_free_shell_v1', tier_id: 'free', plan_kind: 'default_free' },
               created_at: '2026-04-01T00:00:00Z',
               updated_at: '2026-04-05T00:00:00Z',
             },
@@ -1312,6 +1322,7 @@ export async function installAdminMocks(page: Page) {
                   max_cost_per_period: 5,
                 },
                 concurrency: { max_active_runs: 1 },
+                metadata: { monthly_included_points: 300, site_limit: 3, max_batch_items: 5 },
                 created_at: '2026-04-05T00:00:00Z',
               },
             ],
@@ -1326,10 +1337,11 @@ export async function installAdminMocks(page: Page) {
                 max_cost_per_period: 5,
               },
               concurrency: { max_active_runs: 1 },
+              metadata: { monthly_included_points: 300, site_limit: 3, max_batch_items: 5 },
               created_at: '2026-04-05T00:00:00Z',
             },
             tier_summary: {
-              tier_id: 'starter',
+              tier_id: 'free',
               label: 'Free',
               package_alias: 'Free',
               usage_band: 'Low-volume single-site hosted usage.',
@@ -1510,6 +1522,79 @@ export async function installAdminMocks(page: Page) {
             account: { account_id: LONG_ACCOUNT_ID, name: 'MVP Account' },
           },
         ],
+      });
+      return;
+    }
+
+    if (pathname === `/api/admin/plans/${FREE_PLAN_ID}`) {
+      await fulfillJson(route, {
+        plan: {
+          plan_id: FREE_PLAN_ID,
+          name: 'Free',
+          status: 'active',
+          description: 'Formal production free package.',
+          metadata: { source: 'production_default_free_shell_v1', tier_id: 'free', plan_kind: 'default_free' },
+          created_at: '2026-04-01T00:00:00Z',
+          updated_at: '2026-04-05T00:00:00Z',
+        },
+        versions: [
+          {
+            plan_version_id: FREE_PLAN_VERSION_ID,
+            version_label: 'Free v1',
+            status: 'published',
+            currency: 'USD',
+            entitlements: { hosted: true },
+            budgets: {
+              max_runs_per_period: 500,
+              max_tokens_per_period: 200000,
+              max_cost_per_period: 5,
+            },
+            concurrency: { max_active_runs: 1 },
+            policy: { grace_period_days: 0 },
+            metadata: { source: 'production_default_free_shell_v1', monthly_included_points: 300, site_limit: 3, max_batch_items: 5 },
+            created_at: '2026-04-05T00:00:00Z',
+          },
+        ],
+        latest_version: {
+          plan_version_id: FREE_PLAN_VERSION_ID,
+          version_label: 'Free v1',
+          status: 'published',
+          currency: 'USD',
+          entitlements: { hosted: true },
+          budgets: {
+            max_runs_per_period: 500,
+            max_tokens_per_period: 200000,
+            max_cost_per_period: 5,
+          },
+          concurrency: { max_active_runs: 1 },
+          policy: { grace_period_days: 0 },
+          metadata: { source: 'production_default_free_shell_v1', monthly_included_points: 300, site_limit: 3, max_batch_items: 5 },
+          created_at: '2026-04-05T00:00:00Z',
+        },
+        tier_summary: {
+          tier_id: 'free',
+          label: 'Free',
+          package_alias: 'Free',
+          usage_band: 'Low-volume single-site hosted usage.',
+          positioning: 'Baseline package for conservative hosted runs, lighter workflow usage, and operator-managed growth.',
+          monthly_included_points: 500,
+          site_limit: 1,
+          budgets_template: {
+            max_runs_per_period: 500,
+            max_tokens_per_period: 200000,
+            max_cost_per_period: 5,
+          },
+          concurrency_template: { max_active_runs: 1 },
+          max_batch_items: 0,
+          automation_enabled: true,
+          api_enabled: true,
+          openclaw_enabled: true,
+          package_operator_note: 'Free remains the most conservative on points, concurrency, batch headroom, and over-limit handling.',
+          policy_baseline: { grace_period_days: 0 },
+          feature_groups: ['shared_core_surface'],
+        },
+        package_fit_cues: [],
+        subscriptions: [],
       });
       return;
     }

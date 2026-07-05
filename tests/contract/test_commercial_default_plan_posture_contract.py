@@ -15,8 +15,8 @@ def test_default_free_plan_is_the_current_bootstrap_posture() -> None:
     assert "plan_dev_unlimited" not in service_code
     assert "plan_dev_unlimited" not in seed_runtime_code
     assert '"dev_baseline"' not in billing_code
-    assert 'DEFAULT_FREE_PLAN_ID = "plan_free"' in service_code
-    assert 'DEFAULT_FREE_PLAN_VERSION_ID = "plan_free_v1"' in service_code
-    assert 'plan_id: str = "plan_free"' in seed_runtime_code
-    assert 'plan_version_id: str = "plan_free_v1"' in seed_runtime_code
+    assert 'DEFAULT_FREE_PLAN_ID = "free"' in service_code
+    assert 'DEFAULT_FREE_PLAN_VERSION_ID = "free_v1"' in service_code
+    assert 'plan_id: str = "free"' in seed_runtime_code
+    assert 'plan_version_id: str = "free_v1"' in seed_runtime_code
     assert "bind_default_free: bool = False" in account_code

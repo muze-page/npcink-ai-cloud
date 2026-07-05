@@ -30,3 +30,29 @@ class PortalEmailSender(ABC):
         locale: str = "zh-CN",
     ) -> None:
         raise NotImplementedError
+
+    @abstractmethod
+    def send_email_change_code(
+        self,
+        *,
+        recipient_email: str,
+        old_email: str,
+        principal_id: str,
+        code: str,
+        expires_in_seconds: int,
+        project_name: str,
+        locale: str = "zh-CN",
+    ) -> None:
+        raise NotImplementedError
+
+    @abstractmethod
+    def send_email_changed_notice(
+        self,
+        *,
+        recipient_email: str,
+        new_email: str,
+        principal_id: str,
+        project_name: str,
+        locale: str = "zh-CN",
+    ) -> None:
+        raise NotImplementedError

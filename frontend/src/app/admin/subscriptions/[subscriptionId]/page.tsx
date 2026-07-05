@@ -17,6 +17,7 @@ import {
   BackofficeSectionPanel,
   BackofficeStackCard,
 } from '@/components/backoffice/BackofficeScaffold';
+import { AdminMutationReceipt, type AdminMutationReceiptPayload } from '@/components/admin/AdminMutationReceipt';
 import { BackofficeIdentifier } from '@/components/backoffice/BackofficeIdentifier';
 import { BackofficeStatusBadge } from '@/components/backoffice/BackofficeStatusBadge';
 import { AdminAuditSummaryPanel } from '@/components/admin/AdminAuditSummaryPanel';
@@ -116,6 +117,10 @@ type SubscriptionDetailPayload = {
   };
 };
 
+type SubscriptionBillingSnapshotRebuildResult = {
+  receipt?: AdminMutationReceiptPayload;
+};
+
 function SubscriptionDetailContent() {
   const params = useParams();
   const { t } = useLocale();
@@ -124,6 +129,7 @@ function SubscriptionDetailContent() {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [mutationNotice, setMutationNotice] = useState<string | null>(null);
+  const [lastReceipt, setLastReceipt] = useState<AdminMutationReceiptPayload | null>(null);
   const [isSnapshotRefreshSaving, setIsSnapshotRefreshSaving] = useState(false);
 
   useEffect(() => {
@@ -305,6 +311,7 @@ function SubscriptionDetailContent() {
 
   const handleBillingSnapshotRefresh = async () => {
     setMutationNotice(null);
+    setLastReceipt(null);
     setError(null);
     setIsSnapshotRefreshSaving(true);
     try {
@@ -321,6 +328,8 @@ function SubscriptionDetailContent() {
       if (!response.ok) {
         throw new Error(resolveUiErrorMessage(payload?.message ?? null, t('error.failed_save', {}, 'Failed to save.')));
       }
+      const data = (payload?.data || {}) as SubscriptionBillingSnapshotRebuildResult;
+      setLastReceipt(data.receipt || null);
       setMutationNotice(
         t(
           'admin.subscription_detail.snapshot_refresh_notice',
@@ -635,6 +644,7 @@ function SubscriptionDetailContent() {
                   {mutationNotice}
                 </div>
               ) : null}
+              <AdminMutationReceipt receipt={lastReceipt} />
             </BackofficeStackCard>
             <BackofficeStackCard>
               <p className="text-sm font-semibold text-slate-950 dark:text-white">

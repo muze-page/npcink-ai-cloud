@@ -27,12 +27,11 @@ import {
   localizePlanName,
   localizePositioning,
   localizeTierLabel,
-  localizeUsageBand,
 } from '@/lib/admin-plan-copy';
 import { translateStatusLabel } from '@/lib/status-display';
-import { ADMIN_CURRENCY, formatAdminCurrency } from '@/lib/currency';
+import { ADMIN_CURRENCY } from '@/lib/currency';
 import { readResponsePayload } from '@/lib/safe-response';
-import { formatDate, formatNumber as formatInteger } from '@/lib/utils';
+import { formatCurrency, formatDate, formatNumber as formatInteger } from '@/lib/utils';
 import { resolveUiErrorMessage } from '@/lib/errors';
 
 type PlanRecord = {
@@ -192,7 +191,7 @@ function numericValue(value: unknown): number {
 }
 
 function formatBudgetCurrency(value: unknown): string {
-  return formatAdminCurrency(numericValue(value));
+  return formatCurrency(numericValue(value), ADMIN_CURRENCY);
 }
 
 function buildInitialForm(detail: PlanDetailPayload | null): PlanVersionFormState {
@@ -297,10 +296,15 @@ function PlanDetailContent() {
   const [notice, setNotice] = useState<string | null>(null);
   const [lastReceipt, setLastReceipt] = useState<AdminMutationReceiptPayload | null>(null);
   const [isSaving, setIsSaving] = useState(false);
+  const [isEditorOpen, setIsEditorOpen] = useState(false);
+  const [advancedInfoTab, setAdvancedInfoTab] = useState<'diagnostics' | 'history'>('diagnostics');
   const [form, setForm] = useState<PlanVersionFormState>(() => buildInitialForm(null));
 
-  const loadDetail = useCallback(async () => {
-    setIsLoading(true);
+  const loadDetail = useCallback(async (options: { showLoading?: boolean } = {}) => {
+    const showLoading = options.showLoading ?? true;
+    if (showLoading) {
+      setIsLoading(true);
+    }
     setError(null);
     try {
       const response = await fetch(`/api/admin/plans/${encodeURIComponent(planId)}`, {
@@ -319,7 +323,9 @@ function PlanDetailContent() {
     } catch (err) {
       setError(resolveUiErrorMessage(err instanceof Error ? err.message : null, t('error.failed_load')));
     } finally {
-      setIsLoading(false);
+      if (showLoading) {
+        setIsLoading(false);
+      }
     }
   }, [planId, t]);
 
@@ -411,7 +417,8 @@ function PlanDetailContent() {
         )
       );
       setLastReceipt((('data' in data ? data.data?.receipt : null) ?? null) as AdminMutationReceiptPayload | null);
-      await loadDetail();
+      await loadDetail({ showLoading: false });
+      setIsEditorOpen(false);
     } catch (err) {
       setError(
         resolveUiErrorMessage(err instanceof Error ? err.message : null, t('error.failed_save', {}, 'Failed to save.'))
@@ -470,7 +477,6 @@ function PlanDetailContent() {
     tierSummary?.package_alias || tierSummary?.label || detail.plan.name
   );
   const localizedTierLabel = localizeTierLabel(t, tierSummary?.tier_id || detail.plan.plan_id, tierSummary?.label);
-  const localizedUsageBand = localizeUsageBand(t, tierSummary?.tier_id || detail.plan.plan_id, tierSummary?.usage_band);
   const localizedPositioning = localizePositioning(
     t,
     tierSummary?.tier_id || detail.plan.plan_id,
@@ -481,8 +487,6 @@ function PlanDetailContent() {
     tierSummary?.tier_id || detail.plan.plan_id,
     tierSummary?.package_operator_note || String(policyBaseline.downgrade_policy || '')
   );
-  const planKind = String(detail.plan.metadata?.plan_kind || latestVersion?.metadata?.plan_kind || '');
-  const isFormalProductionPlan = detail.plan.plan_id === 'plan_free' || planKind === 'default_free';
   const baselineFieldPatch = buildBaselineFieldPatch(tierSummary);
   const latestFieldPatch = buildLatestFieldPatch(latestVersion, tierSummary);
   const primaryPackageFitCue = detail.package_fit_cues?.[0]
@@ -490,6 +494,8 @@ function PlanDetailContent() {
     : null;
   const linkedSubscriptionCount = detail.subscriptions.length;
   const subscriptionQueueHref = `/admin/subscriptions?plan_id=${encodeURIComponent(detail.plan.plan_id)}`;
+  const latestMetadata = (latestVersion?.metadata || {}) as Record<string, unknown>;
+  const effectiveSiteLimit = numericValue(latestMetadata.site_limit ?? tierSummary?.site_limit);
   const templateActionLabel = t(
     'admin.apply_tier_baseline',
     { tier: localizedPackageAlias || localizedTierLabel || 'tier' },
@@ -501,6 +507,18 @@ function PlanDetailContent() {
       ...current,
       ...patch,
     }));
+  };
+
+  const openEditor = () => {
+    setForm(buildInitialForm(detail));
+    setError(null);
+    setIsEditorOpen(true);
+  };
+
+  const closeEditor = () => {
+    if (!isSaving) {
+      setIsEditorOpen(false);
+    }
   };
 
   return (
@@ -516,13 +534,6 @@ function PlanDetailContent() {
           <div className="w-full xl:w-[46rem]">
             <BackofficeMetricStrip
               items={[
-                { label: t('common.package', {}, 'Package'), value: localizedPackageAlias || t('common.not_found'), size: 'compact' },
-                { label: t('admin.coverage_package_id', {}, 'Coverage package ID'), value: <BackofficeIdentifier value={detail.plan.plan_id} />, size: 'compact' },
-                {
-                  label: t('admin.coverage_package_releases', {}, 'Package releases'),
-                  value: formatInteger(detail.versions.length),
-                  size: 'compact',
-                },
                 {
                   label: t('admin.linked_subscriptions', {}, 'Subscription impact'),
                   value: formatInteger(linkedSubscriptionCount),
@@ -530,26 +541,31 @@ function PlanDetailContent() {
                 },
                 {
                   label: t('admin.site_limit', {}, 'Site limit'),
-                  value: formatInteger(Number(tierSummary?.site_limit || 0)),
+                  value: formatInteger(effectiveSiteLimit),
                   size: 'compact',
                 },
                 {
-                  label: t('admin.plan_posture', {}, 'Plan posture'),
-                  value: isFormalProductionPlan
-                    ? t('admin.formal_production_plan', {}, 'Formal production plan')
-                    : t('admin.tier_template_binding', {}, 'Tier-bound plan'),
+                  label: t('common.status'),
+                  value: latestVersion ? (
+                    <BackofficeStatusBadge
+                      status={latestVersion.status}
+                      label={translateStatusLabel(latestVersion.status, t)}
+                    />
+                  ) : (
+                    t('common.not_found')
+                  ),
                   size: 'compact',
                 },
               ]}
-              columnsClassName="md:grid-cols-3 xl:grid-cols-6"
+              columnsClassName="md:grid-cols-3"
             />
           </div>
         }
       >
         <div className="flex flex-wrap gap-2">
-          <a href="#package-release-editor" className="btn btn-primary">
+          <button type="button" onClick={openEditor} className="btn btn-primary">
             {t('admin.edit_package_release_fields', {}, 'Edit package')}
-          </a>
+          </button>
           {linkedSubscriptionCount ? (
             <Link href={subscriptionQueueHref} className="btn btn-secondary">
               {t('admin.open_linked_subscriptions', {}, 'Open subscriptions')}
@@ -559,147 +575,23 @@ function PlanDetailContent() {
             {t('admin.package_management_center_title', {}, 'Package management')}
           </Link>
         </div>
-        {latestVersion ? (
-          <div className="mt-4 flex flex-wrap items-center gap-2">
-            <BackofficeStatusBadge
-              status={latestVersion.status}
-              label={translateStatusLabel(latestVersion.status, t)}
-            />
-            <span className="text-sm text-slate-600 dark:text-slate-300">
-              {t('admin.latest_coverage_package_release', {}, 'Latest package release')}: {latestVersion.version_label}
-            </span>
-          </div>
-        ) : null}
-        {primaryPackageFitCue ? (
-          <BackofficeStackCard className="mt-4 bg-white/80 dark:bg-slate-950/55">
-            <p className="text-sm font-semibold text-slate-950 dark:text-white">
-              {primaryPackageFitCue.title}
-            </p>
-            <p className="mt-2 text-sm leading-6 text-slate-600 dark:text-slate-300">
-              {primaryPackageFitCue.detail}
-            </p>
-          </BackofficeStackCard>
-        ) : null}
       </BackofficePrimaryPanel>
 
-      <details className="rounded-2xl border border-dashed border-slate-200 px-4 py-4 dark:border-slate-800">
-        <summary className="cursor-pointer list-none text-sm font-medium text-slate-700 dark:text-slate-300">
-          {t('admin.package_detail_diagnostics_toggle', {}, 'Inspect package fit, budget template, and cost evidence')}
-        </summary>
-      <BackofficeLayer
-        className="mt-4"
-        eyebrow={t('admin.package_tiers', {}, 'Package tiers')}
-        title={t('admin.coverage_package_workspace_title', {}, 'Coverage package posture and fit')}
-        description={t(
-          'admin.coverage_package_workspace_desc',
-          {},
-          'Keep this page focused on coverage package quality. Package releases freeze entitlements, budgets, concurrency, and policy on the existing commercial truth plane.'
-        )}
-      />
-      <div className="grid gap-6 xl:grid-cols-[0.95fr_1.05fr]">
+      {notice || lastReceipt ? (
         <BackofficeSectionPanel className="space-y-4">
-          <div>
-            <p className="text-xs font-medium uppercase tracking-[0.18em] text-gray-500 dark:text-gray-400">
-              {t('common.summary')}
-            </p>
-            <h2 className="mt-2 text-xl font-semibold text-gray-950 dark:text-white">
-              {t('admin.plan_budget_template', {}, 'Budget and policy template')}
-            </h2>
-          </div>
-          <BackofficeMetricStrip
-            items={[
-          {
-            label: t('admin.included_points', {}, 'Included points'),
-            value: formatInteger(Number(tierSummary?.monthly_included_points || 0)),
-            detail: t('admin.included_points_detail', {}, 'Presentation-layer monthly included points for package explanation only.'),
-          },
-          {
-            label: t('admin.site_limit', {}, 'Site limit'),
-            value: formatInteger(Number(tierSummary?.site_limit || 0)),
-            detail: t('admin.site_limit_detail', {}, 'Maximum covered sites on the current customer subscription.'),
-          },
-          {
-            label: t('billing.runs', {}, 'Runs'),
-            value: formatInteger(Number(templateBudgets.max_runs_per_period || 0)),
-                detail: t('admin.plan_template_runs_detail', {}, 'Tier baseline run ceiling per period.'),
-              },
-              {
-                label: t('common.tokens'),
-                value: formatInteger(Number(templateBudgets.max_tokens_per_period || 0)),
-                detail: t('admin.plan_template_tokens_detail', {}, 'Tier baseline token ceiling per period.'),
-              },
-              {
-                label: t('common.cost'),
-                value: String(Number(templateBudgets.max_cost_per_period || 0)),
-                detail: t('admin.plan_template_cost_detail', {}, 'Tier baseline cost ceiling per period.'),
-              },
-              {
-                label: t('admin.concurrency', {}, 'Concurrency'),
-                value: formatInteger(Number(templateConcurrency.max_active_runs || 0)),
-                detail: t('admin.plan_template_concurrency_detail', {}, 'Tier baseline active run ceiling.'),
-              },
-              {
-                label: t('admin.batch_ceiling', {}, 'Batch ceiling'),
-                value: formatInteger(Number(tierSummary?.max_batch_items || 0)),
-                detail: t('admin.batch_ceiling_detail', {}, 'Operator-facing batch headroom for this package.'),
-              },
-            ]}
-            columnsClassName="md:grid-cols-3"
-          />
-          <BackofficeStackCard>
-            <p className="text-sm font-semibold text-slate-950 dark:text-white">
-              {t('admin.package_posture', {}, 'Package posture')}
-            </p>
-            <p className="mt-2 text-sm text-slate-600 dark:text-slate-300">
-              {t(
-                'admin.package_core_surface_shared',
-                {},
-                'Core capability entry stays shared across packages; commercial differentiation comes from current-period headroom, site limit, concurrency, batch ceiling, and policy headroom.'
-              )}
-            </p>
-            <p className="mt-2 text-sm text-slate-600 dark:text-slate-300">
-              {t('admin.site_limit_label', {}, 'Site limit')}: {formatInteger(Number(tierSummary?.site_limit || 0))}
-            </p>
-            <p className="mt-2 text-sm text-slate-600 dark:text-slate-300">
-              {t('admin.grace_period_label', {}, 'Grace period')}: {formatInteger(Number(policyBaseline.grace_period_days || 0))} {t('common.days', {}, 'days')}
-            </p>
-            <p className="mt-2 text-sm leading-7 text-slate-600 dark:text-slate-300">
-              {localizedOperatorNote ||
-                String(policyBaseline.downgrade_policy || t('admin.policy_baseline_missing', {}, 'No downgrade note was attached to this default template.'))}
-            </p>
-          </BackofficeStackCard>
-          <BackofficeStackCard>
-            <p className="text-sm font-semibold text-slate-950 dark:text-white">
-              {t('admin.latest_coverage_package_release', {}, 'Latest package release')}
-            </p>
-            {latestVersion ? (
-              <div className="mt-3 grid gap-3 md:grid-cols-2">
-                <Metric label={t('common.label')} value={latestVersion.version_label} />
-                <Metric
-                  label={t('common.status')}
-                  value={
-                    <BackofficeStatusBadge
-                      status={latestVersion.status}
-                      label={translateStatusLabel(latestVersion.status, t)}
-                    />
-                  }
-                />
-                <Metric label={t('billing.runs', {}, 'Runs')} value={formatInteger(Number(latestBudgets.max_runs_per_period || 0))} />
-                <Metric label={t('common.tokens')} value={formatInteger(Number(latestBudgets.max_tokens_per_period || 0))} />
-                <Metric label={t('common.cost')} value={String(Number(latestBudgets.max_cost_per_period || 0))} />
-                <Metric label={t('admin.site_limit', {}, 'Site limit')} value={formatInteger(Number((latestVersion.metadata || {}).site_limit || tierSummary?.site_limit || 0))} />
-                <Metric label={t('admin.concurrency', {}, 'Concurrency')} value={formatInteger(Number(latestConcurrency.max_active_runs || 0))} />
-              </div>
-            ) : (
-              <p className="mt-3 text-sm text-slate-600 dark:text-slate-300">
-                {t('admin.coverage_package_releases_empty', {}, 'No package release has been published yet.')}
-              </p>
-            )}
-          </BackofficeStackCard>
+          {notice ? (
+            <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700 dark:border-emerald-900/60 dark:bg-emerald-950/30 dark:text-emerald-300">
+              {notice}
+            </div>
+          ) : null}
+          {lastReceipt ? (
+            <AdminMutationReceipt
+              receipt={lastReceipt}
+              title={t('admin.latest_receipt', {}, 'Latest receipt')}
+            />
+          ) : null}
         </BackofficeSectionPanel>
-
-      </div>
-      </details>
+      ) : null}
 
       <BackofficeLayer
         eyebrow={t('admin.package_tiers', {}, 'Package tiers')}
@@ -707,26 +599,26 @@ function PlanDetailContent() {
         description={t(
           'admin.package_price_features_detail_desc',
           {},
-          'Adjust the visible package limits here. Advanced release IDs and raw JSON stay collapsed unless you need an exceptional override.'
+          'These are the values current subscriptions read from this package.'
         )}
       />
       <BackofficeSectionPanel className="space-y-4">
         <BackofficeMetricStrip
           items={[
             {
-              label: t('admin.period_cost_budget', {}, 'Period cost budget'),
+              label: t('admin.period_cost_budget', {}, 'Package fee'),
               value: formatBudgetCurrency(latestBudgets.max_cost_per_period),
-              detail: t('admin.period_cost_budget_detail', {}, 'Stored budget ceiling for this package period.'),
+              detail: t('admin.period_cost_budget_detail', {}, 'Saved package fee for this billing period.'),
             },
             {
               label: t('billing.runs', {}, 'Runs'),
               value: formatInteger(numericValue(latestBudgets.max_runs_per_period ?? templateBudgets.max_runs_per_period)),
-              detail: t('admin.plan_template_runs_detail', {}, 'Tier baseline run ceiling per period.'),
+              detail: t('admin.plan_template_runs_detail', {}, 'Run ceiling stored for this package period.'),
             },
             {
               label: t('common.tokens'),
               value: formatInteger(numericValue(latestBudgets.max_tokens_per_period ?? templateBudgets.max_tokens_per_period)),
-              detail: t('admin.plan_template_tokens_detail', {}, 'Tier baseline token ceiling per period.'),
+              detail: t('admin.plan_template_tokens_detail', {}, 'Token ceiling stored for this package period.'),
             },
             {
               label: t('admin.site_limit', {}, 'Site limit'),
@@ -736,7 +628,7 @@ function PlanDetailContent() {
             {
               label: t('admin.concurrency', {}, 'Concurrency'),
               value: formatInteger(numericValue(latestConcurrency.max_active_runs ?? templateConcurrency.max_active_runs)),
-              detail: t('admin.plan_template_concurrency_detail', {}, 'Tier baseline active run ceiling.'),
+              detail: t('admin.plan_template_concurrency_detail', {}, 'Active run ceiling stored for this package.'),
             },
             {
               label: t('admin.batch_ceiling', {}, 'Batch ceiling'),
@@ -776,187 +668,320 @@ function PlanDetailContent() {
                 )}
               </div>
             </div>
-            <a href="#package-release-editor" className="btn btn-secondary">
-              {t('admin.edit_package_release_fields', {}, 'Edit package')}
-            </a>
           </div>
         </BackofficeStackCard>
       </BackofficeSectionPanel>
 
-      <BackofficeLayer
-        eyebrow={t('admin.quick_actions')}
-        title={t('admin.publish_coverage_package_release_title', {}, 'Edit package limits')}
-        description={t(
-          'admin.publish_coverage_package_release_desc',
-          {},
-          'Change the common limits first. Saving creates the next internal package version, but operators do not need to manage version fields for normal updates.'
-        )}
-      />
-      <div id="package-release-editor">
-      <BackofficeSectionPanel>
-        {notice ? (
-          <div className="mb-4 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700 dark:border-emerald-900/60 dark:bg-emerald-950/30 dark:text-emerald-300">
-            {notice}
+      <details className="rounded-2xl border border-dashed border-slate-200 px-4 py-4 dark:border-slate-800">
+        <summary className="cursor-pointer list-none text-sm font-medium text-slate-700 dark:text-slate-300">
+          {t('admin.package_advanced_info', {}, 'Advanced information')}
+        </summary>
+        <div className="mt-4 space-y-4">
+          <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+            <p className="text-sm text-slate-600 dark:text-slate-300">
+              {t(
+                'admin.package_advanced_info_desc',
+                {},
+                'Use this only for diagnostics, audit, or release history review.'
+              )}
+            </p>
+            <div className="inline-flex w-full rounded-xl border border-slate-200 bg-white p-1 dark:border-slate-800 dark:bg-slate-950 md:w-auto">
+              <button
+                type="button"
+                className={`flex-1 rounded-lg px-3 py-2 text-sm font-medium transition md:flex-none ${
+                  advancedInfoTab === 'diagnostics'
+                    ? 'bg-slate-900 text-white dark:bg-white dark:text-slate-950'
+                    : 'text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-900'
+                }`}
+                aria-pressed={advancedInfoTab === 'diagnostics'}
+                onClick={() => setAdvancedInfoTab('diagnostics')}
+              >
+                {t('admin.package_advanced_info_diagnostics', {}, 'Diagnostics')}
+              </button>
+              <button
+                type="button"
+                className={`flex-1 rounded-lg px-3 py-2 text-sm font-medium transition md:flex-none ${
+                  advancedInfoTab === 'history'
+                    ? 'bg-slate-900 text-white dark:bg-white dark:text-slate-950'
+                    : 'text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-900'
+                }`}
+                aria-pressed={advancedInfoTab === 'history'}
+                onClick={() => setAdvancedInfoTab('history')}
+              >
+                {t('admin.package_advanced_info_history', {}, 'Release history')}
+              </button>
+            </div>
           </div>
-        ) : null}
-        {lastReceipt ? (
-          <div className="mb-4">
-            <AdminMutationReceipt
-              receipt={lastReceipt}
-              title={t('admin.latest_receipt', {}, 'Latest receipt')}
-            />
-          </div>
-        ) : null}
-        {error ? (
-          <div className="mb-4 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-900/60 dark:bg-red-950/30 dark:text-red-300">
-            {error}
-          </div>
-        ) : null}
-        <form className="space-y-5" onSubmit={handlePublishVersion}>
-          <BackofficeStackCard>
-            <div className="flex flex-wrap items-start justify-between gap-4">
-              <div>
+
+          {advancedInfoTab === 'diagnostics' ? (
+            <BackofficeSectionPanel className="space-y-4">
+              {primaryPackageFitCue ? (
+                <BackofficeStackCard className="bg-white/80 dark:bg-slate-950/55">
+                  <p className="text-sm font-semibold text-slate-950 dark:text-white">
+                    {primaryPackageFitCue.title}
+                  </p>
+                  <p className="mt-2 text-sm leading-6 text-slate-600 dark:text-slate-300">
+                    {primaryPackageFitCue.detail}
+                  </p>
+                </BackofficeStackCard>
+              ) : null}
+              <BackofficeMetricStrip
+                items={[
+                  {
+                    label: t('admin.included_points', {}, 'Included points'),
+                    value: formatInteger(Number(tierSummary?.monthly_included_points || 0)),
+                    detail: t('admin.included_points_detail', {}, 'Presentation-layer monthly included points for package explanation only.'),
+                  },
+                  {
+                    label: t('admin.site_limit', {}, 'Site limit'),
+                    value: formatInteger(Number(tierSummary?.site_limit || 0)),
+                    detail: t('admin.site_limit_detail', {}, 'Maximum covered sites on the current customer subscription.'),
+                  },
+                  {
+                    label: t('billing.runs', {}, 'Runs'),
+                    value: formatInteger(Number(templateBudgets.max_runs_per_period || 0)),
+                    detail: t('admin.plan_template_runs_detail', {}, 'Run ceiling stored for this package period.'),
+                  },
+                  {
+                    label: t('common.tokens'),
+                    value: formatInteger(Number(templateBudgets.max_tokens_per_period || 0)),
+                    detail: t('admin.plan_template_tokens_detail', {}, 'Token ceiling stored for this package period.'),
+                  },
+                  {
+                    label: t('common.cost'),
+                    value: formatBudgetCurrency(templateBudgets.max_cost_per_period),
+                    detail: t('admin.plan_template_cost_detail', {}, 'Cost ceiling stored for this package period.'),
+                  },
+                  {
+                    label: t('admin.concurrency', {}, 'Concurrency'),
+                    value: formatInteger(Number(templateConcurrency.max_active_runs || 0)),
+                    detail: t('admin.plan_template_concurrency_detail', {}, 'Active run ceiling stored for this package.'),
+                  },
+                ]}
+                columnsClassName="md:grid-cols-3"
+              />
+              <BackofficeStackCard>
                 <p className="text-sm font-semibold text-slate-950 dark:text-white">
-                  {t('admin.plan_editor_flow_title', {}, 'Package values')}
+                  {t('admin.package_posture', {}, 'Package posture')}
                 </p>
                 <p className="mt-2 text-sm text-slate-600 dark:text-slate-300">
                   {t(
-                    'admin.coverage_package_editor_flow_desc',
+                    'admin.package_core_surface_shared',
                     {},
-                    'Edit the current package values here. Saving publishes the latest values for subscriptions already using this package.'
+                    'Core capability entry stays shared across packages; commercial differentiation comes from current-period headroom, site limit, concurrency, batch ceiling, and policy headroom.'
+                  )}
+                </p>
+                <p className="mt-2 text-sm text-slate-600 dark:text-slate-300">
+                  {t('admin.site_limit_label', {}, 'Site limit')}: {formatInteger(Number(tierSummary?.site_limit || 0))}
+                </p>
+                <p className="mt-2 text-sm text-slate-600 dark:text-slate-300">
+                  {t('admin.grace_period_label', {}, 'Grace period')}: {formatInteger(Number(policyBaseline.grace_period_days || 0))} {t('common.days', {}, 'days')}
+                </p>
+                <p className="mt-2 text-sm leading-7 text-slate-600 dark:text-slate-300">
+                  {localizedOperatorNote ||
+                    String(policyBaseline.downgrade_policy || t('admin.policy_baseline_missing', {}, 'No downgrade note was attached to this package.'))}
+                </p>
+              </BackofficeStackCard>
+            </BackofficeSectionPanel>
+          ) : (
+            <BackofficeSectionPanel className="space-y-4">
+              {detail.versions.map((version) => (
+                <BackofficeStackCard key={version.plan_version_id}>
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <h2 className="text-lg font-semibold text-slate-950 dark:text-white">{version.version_label}</h2>
+                      <div className="mt-1">
+                        <BackofficeIdentifier value={version.plan_version_id} />
+                      </div>
+                    </div>
+                    <BackofficeStatusBadge
+                      status={version.status}
+                      label={translateStatusLabel(version.status, t)}
+                    />
+                  </div>
+                  <div className="mt-4 grid gap-3 md:grid-cols-2">
+                    <Metric label={t('common.created')} value={formatDate(version.created_at)} />
+                    <Metric label={t('common.currency', {}, 'Currency')} value={version.currency} />
+                    <Metric label={t('admin.entitlements', {}, 'Entitlements')} value={Object.keys(version.entitlements || {}).length} />
+                    <Metric label={t('admin.budgets', {}, 'Budgets')} value={Object.keys(version.budgets || {}).length} />
+                  </div>
+                </BackofficeStackCard>
+              ))}
+            </BackofficeSectionPanel>
+          )}
+        </div>
+      </details>
+
+      {isEditorOpen ? (
+        <div className="fixed inset-0 z-50">
+          <button
+            type="button"
+            className="absolute inset-0 bg-slate-950/45 backdrop-blur-sm"
+            onClick={closeEditor}
+            aria-label={t('common.close')}
+          />
+          <aside
+            className="absolute right-0 top-0 flex h-full w-full max-w-3xl flex-col border-l border-slate-200 bg-white shadow-2xl dark:border-slate-800 dark:bg-slate-950"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="package-editor-title"
+          >
+            <div className="flex items-start justify-between gap-4 border-b border-slate-200 px-4 py-4 dark:border-slate-800 sm:px-6">
+              <div className="min-w-0">
+                <p className="text-[0.68rem] font-semibold uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
+                  {t('admin.quick_actions')}
+                </p>
+                <h2 id="package-editor-title" className="mt-2 text-xl font-semibold text-slate-950 dark:text-white">
+                  {t('admin.publish_coverage_package_release_title', {}, 'Edit current package values')}
+                </h2>
+                <p className="mt-1 text-sm leading-6 text-slate-600 dark:text-slate-300">
+                  {t(
+                    'admin.publish_coverage_package_release_desc',
+                    {},
+                    'Change the common limits here. Existing subscriptions on this package read the latest saved values.'
                   )}
                 </p>
               </div>
-              <div className="flex flex-wrap gap-3">
-                <button
-                  type="button"
-                  className="btn btn-secondary"
-                  onClick={() => applyStructuredPatch(latestFieldPatch)}
-                >
-                  {t('admin.reset_to_latest_version', {}, 'Restore saved values')}
-                </button>
-                <button
-                  type="button"
-                  className="btn btn-secondary"
-                  onClick={() => applyStructuredPatch(baselineFieldPatch)}
-                >
-                  {templateActionLabel}
-                </button>
-              </div>
+              <button
+                type="button"
+                onClick={closeEditor}
+                disabled={isSaving}
+                className="rounded-lg p-2 text-slate-500 transition hover:bg-slate-100 hover:text-slate-700 disabled:cursor-not-allowed disabled:opacity-50 dark:hover:bg-slate-900 dark:hover:text-slate-200"
+                aria-label={t('common.close')}
+              >
+                <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
             </div>
-          </BackofficeStackCard>
-          <BackofficeStackCard>
-            <p className="text-sm font-semibold text-slate-950 dark:text-white">
-              {t('admin.plan_package_fields_title', {}, 'Common package fields')}
-            </p>
-            <p className="mt-2 text-sm text-slate-600 dark:text-slate-300">
-              {t(
-                'admin.plan_package_fields_desc',
-                {},
-                'These are the fields operators normally need. Currency is fixed to CNY for the platform admin.'
-              )}
-            </p>
-            <div className="mt-4 grid gap-4 xl:grid-cols-3">
-              <label className="text-sm">
-                <span className="mb-2 block font-medium text-gray-700 dark:text-gray-300">{t('common.cost')}</span>
-                <input value={form.max_cost_per_period} onChange={(e) => setForm((c) => ({ ...c, max_cost_per_period: e.target.value }))} className="input w-full" type="number" min="0" step="0.01" />
-              </label>
-              <label className="text-sm">
-                <span className="mb-2 block font-medium text-gray-700 dark:text-gray-300">{t('admin.included_points', {}, 'Included points')}</span>
-                <input value={form.monthly_included_points} onChange={(e) => setForm((c) => ({ ...c, monthly_included_points: e.target.value }))} className="input w-full" type="number" min="0" step="1" />
-              </label>
-              <label className="text-sm">
-                <span className="mb-2 block font-medium text-gray-700 dark:text-gray-300">{t('admin.batch_ceiling', {}, 'Batch ceiling')}</span>
-                <input value={form.max_batch_items} onChange={(e) => setForm((c) => ({ ...c, max_batch_items: e.target.value }))} className="input w-full" type="number" min="0" step="1" />
-              </label>
-              <label className="text-sm">
-                <span className="mb-2 block font-medium text-gray-700 dark:text-gray-300">{t('admin.site_limit', {}, 'Site limit')}</span>
-                <input value={form.site_limit} onChange={(e) => setForm((c) => ({ ...c, site_limit: e.target.value }))} className="input w-full" type="number" min="1" step="1" />
-              </label>
-              <label className="text-sm">
-                <span className="mb-2 block font-medium text-gray-700 dark:text-gray-300">{t('billing.runs', {}, 'Runs')}</span>
-                <input value={form.max_runs_per_period} onChange={(e) => setForm((c) => ({ ...c, max_runs_per_period: e.target.value }))} className="input w-full" type="number" min="0" step="1" />
-              </label>
-              <label className="text-sm">
-                <span className="mb-2 block font-medium text-gray-700 dark:text-gray-300">{t('common.tokens')}</span>
-                <input value={form.max_tokens_per_period} onChange={(e) => setForm((c) => ({ ...c, max_tokens_per_period: e.target.value }))} className="input w-full" type="number" min="0" step="1" />
-              </label>
-              <label className="text-sm">
-                <span className="mb-2 block font-medium text-gray-700 dark:text-gray-300">{t('admin.concurrency', {}, 'Concurrency')}</span>
-                <input value={form.max_active_runs} onChange={(e) => setForm((c) => ({ ...c, max_active_runs: e.target.value }))} className="input w-full" type="number" min="0" step="1" />
-              </label>
-              <label className="text-sm">
-                <span className="mb-2 block font-medium text-gray-700 dark:text-gray-300">{t('admin.grace_period_label', {}, 'Grace period')}</span>
-                <input value={form.grace_period_days} onChange={(e) => setForm((c) => ({ ...c, grace_period_days: e.target.value }))} className="input w-full" type="number" min="0" step="1" />
-              </label>
-            </div>
-          </BackofficeStackCard>
-          <details className="rounded-3xl border border-slate-200 bg-white px-5 py-4 dark:border-slate-800 dark:bg-slate-950/60">
-            <summary className="cursor-pointer list-none text-sm font-semibold text-slate-950 dark:text-white">
-              {t('admin.plan_advanced_json_title', {}, 'Advanced JSON overrides')}
-            </summary>
-            <p className="mt-3 text-sm text-slate-600 dark:text-slate-300">
-              {t(
-                'admin.plan_advanced_json_desc',
-                {},
-                'Keep raw JSON here as an escape hatch. Structured fields still drive the default package maintenance path.'
-              )}
-            </p>
-            <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
-              {t(
-                'admin.plan_advanced_json_rare',
-                {},
-                'Rare override only. Normal package maintenance should not require editing entitlements or raw budgets/concurrency/policy JSON.'
-              )}
-            </p>
-            <div className="mt-4 grid gap-4 xl:grid-cols-2">
-              <JsonField label={t('admin.entitlements', {}, 'Entitlements')} value={form.entitlements_json} onChange={(value) => setForm((c) => ({ ...c, entitlements_json: value }))} />
-              <JsonField label={t('admin.metadata_override', {}, 'Metadata override')} value={form.metadata_override_json} onChange={(value) => setForm((c) => ({ ...c, metadata_override_json: value }))} minHeightClassName="min-h-28" />
-              <JsonField label={t('admin.budgets_override', {}, 'Budgets override')} value={form.budgets_override_json} onChange={(value) => setForm((c) => ({ ...c, budgets_override_json: value }))} minHeightClassName="min-h-28" />
-              <JsonField label={t('admin.concurrency_override', {}, 'Concurrency override')} value={form.concurrency_override_json} onChange={(value) => setForm((c) => ({ ...c, concurrency_override_json: value }))} minHeightClassName="min-h-28" />
-              <div className="xl:col-span-2">
-                <JsonField label={t('admin.policy_override', {}, 'Policy override')} value={form.policy_override_json} onChange={(value) => setForm((c) => ({ ...c, policy_override_json: value }))} minHeightClassName="min-h-28" />
-              </div>
-            </div>
-          </details>
-          <div className="flex justify-end">
-            <button type="submit" className="btn btn-primary" disabled={isSaving}>
-              {isSaving ? t('common.saving', {}, 'Saving…') : t('admin.save_package_changes', {}, 'Save package changes')}
-            </button>
-          </div>
-        </form>
-      </BackofficeSectionPanel>
-      </div>
 
-      <details className="rounded-[1.6rem] border border-slate-200/80 bg-white/90 px-5 py-4 shadow-sm dark:border-slate-800 dark:bg-slate-950/70">
-        <summary className="cursor-pointer list-none text-sm font-semibold text-slate-950 dark:text-white">
-          {t('admin.published_coverage_package_releases', {}, 'Release history')}
-        </summary>
-        <div className="mt-4 space-y-4">
-          {detail.versions.map((version) => (
-            <BackofficeStackCard key={version.plan_version_id}>
-              <div className="flex items-start justify-between gap-3">
-                <div>
-                  <h2 className="text-lg font-semibold text-slate-950 dark:text-white">{version.version_label}</h2>
-                  <div className="mt-1">
-                    <BackofficeIdentifier value={version.plan_version_id} />
+            <form className="flex min-h-0 flex-1 flex-col" onSubmit={handlePublishVersion}>
+              <div className="flex-1 space-y-5 overflow-y-auto px-4 py-5 sm:px-6">
+                {error ? (
+                  <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-900/60 dark:bg-red-950/30 dark:text-red-300">
+                    {error}
                   </div>
-                </div>
-                <BackofficeStatusBadge
-                  status={version.status}
-                  label={translateStatusLabel(version.status, t)}
-                />
+                ) : null}
+                <BackofficeStackCard>
+                  <div className="flex flex-wrap items-start justify-between gap-4">
+                    <div>
+                      <p className="text-sm font-semibold text-slate-950 dark:text-white">
+                        {t('admin.plan_editor_flow_title', {}, 'Package values')}
+                      </p>
+                      <p className="mt-2 text-sm text-slate-600 dark:text-slate-300">
+                        {t(
+                          'admin.coverage_package_editor_flow_desc',
+                          {},
+                          'Edit the current package values here. Saving publishes the latest values for subscriptions already using this package.'
+                        )}
+                      </p>
+                    </div>
+                    <div className="flex flex-wrap gap-3">
+                      <button
+                        type="button"
+                        className="btn btn-secondary"
+                        onClick={() => applyStructuredPatch(latestFieldPatch)}
+                      >
+                        {t('admin.reset_to_latest_version', {}, 'Restore saved values')}
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn-secondary"
+                        onClick={() => applyStructuredPatch(baselineFieldPatch)}
+                      >
+                        {templateActionLabel}
+                      </button>
+                    </div>
+                  </div>
+                </BackofficeStackCard>
+
+                <BackofficeStackCard>
+                  <p className="text-sm font-semibold text-slate-950 dark:text-white">
+                    {t('admin.plan_package_fields_title', {}, 'Common package fields')}
+                  </p>
+                  <p className="mt-2 text-sm text-slate-600 dark:text-slate-300">
+                    {t(
+                      'admin.plan_package_fields_desc',
+                      {},
+                      'These are the fields operators normally need. Currency is fixed to CNY for the platform admin.'
+                    )}
+                  </p>
+                  <div className="mt-4 grid gap-4 md:grid-cols-2">
+                    <label className="text-sm">
+                      <span className="mb-2 block font-medium text-gray-700 dark:text-gray-300">{t('common.cost')}</span>
+                      <input value={form.max_cost_per_period} onChange={(e) => setForm((c) => ({ ...c, max_cost_per_period: e.target.value }))} className="input w-full" type="number" min="0" step="0.01" />
+                    </label>
+                    <label className="text-sm">
+                      <span className="mb-2 block font-medium text-gray-700 dark:text-gray-300">{t('admin.included_points', {}, 'Included points')}</span>
+                      <input value={form.monthly_included_points} onChange={(e) => setForm((c) => ({ ...c, monthly_included_points: e.target.value }))} className="input w-full" type="number" min="0" step="1" />
+                    </label>
+                    <label className="text-sm">
+                      <span className="mb-2 block font-medium text-gray-700 dark:text-gray-300">{t('admin.batch_ceiling', {}, 'Batch ceiling')}</span>
+                      <input value={form.max_batch_items} onChange={(e) => setForm((c) => ({ ...c, max_batch_items: e.target.value }))} className="input w-full" type="number" min="0" step="1" />
+                    </label>
+                    <label className="text-sm">
+                      <span className="mb-2 block font-medium text-gray-700 dark:text-gray-300">{t('admin.site_limit', {}, 'Site limit')}</span>
+                      <input value={form.site_limit} onChange={(e) => setForm((c) => ({ ...c, site_limit: e.target.value }))} className="input w-full" type="number" min="1" step="1" />
+                    </label>
+                    <label className="text-sm">
+                      <span className="mb-2 block font-medium text-gray-700 dark:text-gray-300">{t('billing.runs', {}, 'Runs')}</span>
+                      <input value={form.max_runs_per_period} onChange={(e) => setForm((c) => ({ ...c, max_runs_per_period: e.target.value }))} className="input w-full" type="number" min="0" step="1" />
+                    </label>
+                    <label className="text-sm">
+                      <span className="mb-2 block font-medium text-gray-700 dark:text-gray-300">{t('common.tokens')}</span>
+                      <input value={form.max_tokens_per_period} onChange={(e) => setForm((c) => ({ ...c, max_tokens_per_period: e.target.value }))} className="input w-full" type="number" min="0" step="1" />
+                    </label>
+                    <label className="text-sm">
+                      <span className="mb-2 block font-medium text-gray-700 dark:text-gray-300">{t('admin.concurrency', {}, 'Concurrency')}</span>
+                      <input value={form.max_active_runs} onChange={(e) => setForm((c) => ({ ...c, max_active_runs: e.target.value }))} className="input w-full" type="number" min="0" step="1" />
+                    </label>
+                    <label className="text-sm">
+                      <span className="mb-2 block font-medium text-gray-700 dark:text-gray-300">{t('admin.grace_period_label', {}, 'Grace period')}</span>
+                      <input value={form.grace_period_days} onChange={(e) => setForm((c) => ({ ...c, grace_period_days: e.target.value }))} className="input w-full" type="number" min="0" step="1" />
+                    </label>
+                  </div>
+                </BackofficeStackCard>
+
+                <details className="rounded-3xl border border-slate-200 bg-white px-5 py-4 dark:border-slate-800 dark:bg-slate-950/60">
+                  <summary className="cursor-pointer list-none text-sm font-semibold text-slate-950 dark:text-white">
+                    {t('admin.plan_advanced_json_title', {}, 'Advanced JSON overrides')}
+                  </summary>
+                  <p className="mt-3 text-sm text-slate-600 dark:text-slate-300">
+                    {t(
+                      'admin.plan_advanced_json_desc',
+                      {},
+                      'Keep raw JSON here as an escape hatch. Structured fields still drive the default package maintenance path.'
+                    )}
+                  </p>
+                  <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
+                    {t(
+                      'admin.plan_advanced_json_rare',
+                      {},
+                      'Rare override only. Normal package maintenance should not require editing entitlements or raw budgets/concurrency/policy JSON.'
+                    )}
+                  </p>
+                  <div className="mt-4 grid gap-4">
+                    <JsonField label={t('admin.entitlements', {}, 'Entitlements')} value={form.entitlements_json} onChange={(value) => setForm((c) => ({ ...c, entitlements_json: value }))} minHeightClassName="min-h-32" />
+                    <JsonField label={t('admin.metadata_override', {}, 'Metadata override')} value={form.metadata_override_json} onChange={(value) => setForm((c) => ({ ...c, metadata_override_json: value }))} minHeightClassName="min-h-28" />
+                    <JsonField label={t('admin.budgets_override', {}, 'Budgets override')} value={form.budgets_override_json} onChange={(value) => setForm((c) => ({ ...c, budgets_override_json: value }))} minHeightClassName="min-h-28" />
+                    <JsonField label={t('admin.concurrency_override', {}, 'Concurrency override')} value={form.concurrency_override_json} onChange={(value) => setForm((c) => ({ ...c, concurrency_override_json: value }))} minHeightClassName="min-h-28" />
+                    <JsonField label={t('admin.policy_override', {}, 'Policy override')} value={form.policy_override_json} onChange={(value) => setForm((c) => ({ ...c, policy_override_json: value }))} minHeightClassName="min-h-28" />
+                  </div>
+                </details>
               </div>
-              <div className="mt-4 grid gap-3 md:grid-cols-2">
-                <Metric label={t('common.created')} value={formatDate(version.created_at)} />
-                <Metric label={t('common.currency', {}, 'Currency')} value={version.currency} />
-                <Metric label={t('admin.entitlements', {}, 'Entitlements')} value={Object.keys(version.entitlements || {}).length} />
-                <Metric label={t('admin.budgets', {}, 'Budgets')} value={Object.keys(version.budgets || {}).length} />
+
+              <div className="flex flex-col-reverse gap-2 border-t border-slate-200 px-4 py-4 dark:border-slate-800 sm:flex-row sm:justify-end sm:px-6">
+                <button type="button" className="btn btn-secondary" onClick={closeEditor} disabled={isSaving}>
+                  {t('common.cancel', {}, 'Cancel')}
+                </button>
+                <button type="submit" className="btn btn-primary" disabled={isSaving}>
+                  {isSaving ? t('common.saving', {}, 'Saving...') : t('admin.save_package_changes', {}, 'Save package changes')}
+                </button>
               </div>
-            </BackofficeStackCard>
-          ))}
+            </form>
+          </aside>
         </div>
-      </details>
+      ) : null}
     </BackofficePageStack>
   );
 }

@@ -9,6 +9,7 @@ import {
   BackofficeSectionPanel,
   BackofficeStackCard,
 } from '@/components/backoffice/BackofficeScaffold';
+import { AdminMutationReceipt, type AdminMutationReceiptPayload } from '@/components/admin/AdminMutationReceipt';
 import { BackofficeFilterPill } from '@/components/backoffice/BackofficeFilterPill';
 import { BackofficeStatusBadge } from '@/components/backoffice/BackofficeStatusBadge';
 import { LoadingFallback } from '@/components/ui/LoadingFallback';
@@ -357,6 +358,7 @@ export default function AbilityModelsPage() {
   const [pageMessage, setPageMessage] = useState('');
   const [dialogError, setDialogError] = useState('');
   const [dialogMessage, setDialogMessage] = useState('');
+  const [dialogReceipt, setDialogReceipt] = useState<AdminMutationReceiptPayload | null>(null);
   const [modelProviderFilter, setModelProviderFilter] = useState('');
   const [modelSearchQuery, setModelSearchQuery] = useState('');
   const [cloudBindingDialogRow, setCloudBindingDialogRow] = useState<CloudAbilityRuntimeRow | null>(null);
@@ -547,6 +549,14 @@ export default function AbilityModelsPage() {
       ? modelRouteLabel(instance.provider_id, instance.model_id, instance.provider_display_name)
       : '-'
   ), [modelRouteLabel]);
+
+  const runtimeModelCandidateLabel = useCallback((instance: RuntimeInstance): string => {
+    const filteredProviderId = modelProviderFilter.trim();
+    if (filteredProviderId && filteredProviderId === instance.provider_id.trim()) {
+      return instance.model_id.trim() || runtimeModelRouteLabel(instance);
+    }
+    return runtimeModelRouteLabel(instance);
+  }, [modelProviderFilter, runtimeModelRouteLabel]);
 
   const abilityModelInstanceDetail = useCallback((instance: RuntimeInstance): string => (
     aiText('ability_model_instance_detail', 'Instance: {{instance}} · Capability: {{feature}} · Region: {{region}} · Status: {{status}}', {
@@ -950,6 +960,7 @@ export default function AbilityModelsPage() {
     setSavingRouting(true);
     setDialogError('');
     setDialogMessage('');
+    setDialogReceipt(null);
     setPageError('');
     setPageMessage('');
     try {
@@ -980,6 +991,7 @@ export default function AbilityModelsPage() {
       const normalized = normalizeRoutingData(payload.data);
       setRoutingData(normalized);
       setRoutingDrafts(normalized.profiles.map((item) => ({ ...item, note: '' })));
+      setDialogReceipt((payload.data?.receipt || null) as AdminMutationReceiptPayload | null);
       setDialogMessage(aiText('message_ability_models_saved', 'Ability-model routing saved.'));
     } catch (error) {
       setDialogError(error instanceof Error ? error.message : aiText('error_save_ability_models', 'Failed to save ability-model routing.'));
@@ -993,6 +1005,7 @@ export default function AbilityModelsPage() {
     setSavingCloudBinding(true);
     setDialogError('');
     setDialogMessage('');
+    setDialogReceipt(null);
     setPageError('');
     setPageMessage('');
     try {
@@ -1017,6 +1030,7 @@ export default function AbilityModelsPage() {
       setCloudBindingDialogRow(
         updatedRows.find((row) => row.ability_id === cloudBindingDialogRow.ability_id) || cloudBindingDialogRow
       );
+      setDialogReceipt((payload.data?.receipt || null) as AdminMutationReceiptPayload | null);
       setDialogMessage(text('message_cloud_binding_saved', 'Runtime model binding saved.'));
     } catch (error) {
       setDialogError(error instanceof Error ? error.message : text('error_save_cloud_binding', 'Failed to save runtime model binding.'));
@@ -1112,6 +1126,7 @@ export default function AbilityModelsPage() {
     );
     setDialogError('');
     setDialogMessage('');
+    setDialogReceipt(null);
     setPageError('');
     setPageMessage('');
     setAudioPreviewJob(null);
@@ -1127,6 +1142,7 @@ export default function AbilityModelsPage() {
     setCloudBindingModelSearchQuery('');
     setDialogError('');
     setDialogMessage('');
+    setDialogReceipt(null);
     setPageError('');
     setPageMessage('');
   }
@@ -1139,6 +1155,7 @@ export default function AbilityModelsPage() {
     setAbilityModelInspectorTab('policy');
     setDialogError('');
     setDialogMessage('');
+    setDialogReceipt(null);
     setAudioPreviewJob(null);
     setAudioPreviewError(null);
     setAudioPreviewText(text('audio_preview_sample_text', 'This is a short audio sample for checking the selected voice model.'));
@@ -1151,6 +1168,7 @@ export default function AbilityModelsPage() {
     setCloudBindingModelSearchQuery('');
     setDialogError('');
     setDialogMessage('');
+    setDialogReceipt(null);
   }
 
   const availableCloudMediaTabs = useMemo(
@@ -1177,6 +1195,7 @@ export default function AbilityModelsPage() {
         eyebrow={text('eyebrow', 'Runtime model routing')}
         title={text('title', 'Ability-model routing')}
         description={text('description', 'Configure shared plugin ability-to-model routing and Cloud-native runtime model bindings.')}
+        descriptionDisplay="hint"
         aside={(
           <div className="flex flex-col items-start gap-2 xl:items-end">
             <BackofficeStatusBadge label={text('badge_runtime_binding', 'Runtime binding')} status="success" />
@@ -1603,7 +1622,7 @@ export default function AbilityModelsPage() {
                             <div className="min-w-0">
                               <div className="flex min-w-0 flex-wrap items-center gap-2">
                                 <span className="truncate text-sm font-semibold text-slate-950 dark:text-white">
-                                  {runtimeModelRouteLabel(instance)}
+                                  {runtimeModelCandidateLabel(instance)}
                                 </span>
                                 <span className="rounded-full border border-slate-200 px-2 py-0.5 text-xs text-slate-500 dark:border-slate-800 dark:text-slate-400">
                                   {statusLabel}
@@ -1650,8 +1669,13 @@ export default function AbilityModelsPage() {
                         );
                       })
                     ) : (
-                      <div className="px-3 py-5 text-sm text-slate-500 dark:text-slate-400">
-                        {text('model_search_empty', 'No runtime model matches the current filters.')}
+                      <div className="grid gap-1 px-3 py-5 text-sm text-slate-500 dark:text-slate-400">
+                        <div className="font-semibold text-slate-700 dark:text-slate-200">
+                          {text('model_search_empty', 'No enabled runtime model matches the current filters.')}
+                        </div>
+                        <div className="text-xs leading-5">
+                          {text('model_search_empty_hint', 'Enable models in Model suppliers first. Ability routes can only use models listed in the supplier model allowlist.')}
+                        </div>
                       </div>
                     )}
                   </div>
@@ -1891,6 +1915,7 @@ export default function AbilityModelsPage() {
                     {dialogError}
                   </span>
                 ) : null}
+                <AdminMutationReceipt receipt={dialogReceipt} />
               </div>
               <div className="flex flex-wrap justify-end gap-2">
                 <button
@@ -2098,6 +2123,7 @@ export default function AbilityModelsPage() {
                   {dialogError}
                 </span>
               ) : null}
+              <AdminMutationReceipt receipt={dialogReceipt} />
               <div className="flex justify-end">
                 <button
                   type="button"

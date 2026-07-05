@@ -167,6 +167,14 @@ def resolve_portal_session_ttl_seconds(settings: Settings) -> int:
     return max(60, int(settings.portal_session_ttl_seconds or 0))
 
 
+def resolve_portal_remember_me_session_ttl_seconds(settings: Settings) -> int:
+    return max(
+        resolve_portal_session_ttl_seconds(settings),
+        int(settings.portal_remember_me_session_ttl_seconds or 0),
+        60,
+    )
+
+
 def resolve_portal_login_code_ttl_seconds(settings: Settings) -> int:
     return max(60, int(settings.portal_login_code_ttl_seconds or 0))
 

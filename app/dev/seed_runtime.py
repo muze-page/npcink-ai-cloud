@@ -45,8 +45,8 @@ def seed_site_auth(
     site_name: str,
     scopes: list[str],
     account_id: str | None = None,
-    plan_id: str = "plan_free",
-    plan_version_id: str = "plan_free_v1",
+    plan_id: str = "free",
+    plan_version_id: str = "free_v1",
     subscription_id: str | None = None,
 ) -> dict[str, object]:
     result = CommercialService(settings.database_url, settings=settings).provision_runtime_baseline(

@@ -1,19 +1,19 @@
 import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
 import assert from 'node:assert/strict';
+import { fromFrontendRoot } from './_paths.mjs';
 
-const pagePath = resolve(process.cwd(), 'src/app/admin/service-settings/page.tsx');
+const pagePath = fromFrontendRoot('src/app/admin/service-settings/page.tsx');
 const source = readFileSync(pagePath, 'utf8');
 
 assert.match(
   source,
-  /type ServiceSettingsTab = 'login' \| 'email';/,
-  'service settings page must split content into login and email tabs'
+  /type ServiceSettingsTab = 'login' \| 'email' \| 'payment';/,
+  'service settings page must split content into login, email, and payment tabs'
 );
 
 assert.match(
   source,
-  /label: t\('admin\.service_settings\.tab_login', \{\}, '登录配置'\)[\s\S]*label: t\('admin\.service_settings\.tab_email', \{\}, '邮件配置'\)/,
+  /label: t\('admin\.service_settings\.tab_login', \{\}, '登录配置'\)[\s\S]*label: t\('admin\.service_settings\.tab_email', \{\}, '邮件配置'\)[\s\S]*label: t\('admin\.service_settings\.tab_payment', \{\}, '支付配置'\)/,
   'service settings tabs must use Chinese operator label fallbacks'
 );
 
@@ -93,6 +93,42 @@ assert.match(
   source,
   /SMTP 加密方式不能同时启用 SSL 和 STARTTLS/,
   'service settings page must explain mutually exclusive SMTP TLS modes in Chinese'
+);
+
+assert.match(
+  source,
+  /function buildAlipayNotifyUrl\(publicBaseUrl: string\)[\s\S]*\/open\/payments\/alipay\/notify/,
+  'Alipay notify URL must be generated from the public base URL'
+);
+
+assert.match(
+  source,
+  /function buildAlipayReturnUrl\(publicBaseUrl: string\)[\s\S]*\/open\/payments\/alipay\/return/,
+  'Alipay return URL must be generated from the public base URL'
+);
+
+assert.match(
+  source,
+  /\/api\/admin\/service-settings\/alipay-payment/,
+  'service settings page must save Alipay payment settings through the admin service-settings API'
+);
+
+assert.match(
+  source,
+  /\/api\/admin\/service-settings\/alipay-payment\/test/,
+  'service settings page must expose an Alipay configuration check action'
+);
+
+assert.match(
+  source,
+  /alipayPrivateKey:[\s\S]*secrets\.private_key\?\.configured[\s\S]*alipayPublicKey:[\s\S]*secrets\.public_key\?\.configured/,
+  'Alipay key state must be displayed as configured or missing instead of echoing key values'
+);
+
+assert.doesNotMatch(
+  source,
+  /value=\{stringValue\(alipay\.secrets|value=\{data\?\.settings\.alipay_payment\.secrets/,
+  'Alipay secret values must never be echoed into the form'
 );
 
 assert.match(

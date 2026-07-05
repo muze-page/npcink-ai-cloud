@@ -109,12 +109,12 @@ def test_site_capacity_uses_current_plan_version_site_limit(
     with get_session(database_url) as session:
         snapshot = session.scalar(select(AccountEntitlementSnapshot))
         assert snapshot is not None
-        assert snapshot.plan_version_id == "plan_free_v1"
+        assert snapshot.plan_version_id == "free_v1"
         assert snapshot.site_limit == 1
 
     service.publish_plan_version(
-        plan_id="plan_free",
-        plan_version_id="plan_free_v1",
+        plan_id="free",
+        plan_version_id="free_v1",
         version_label="v1",
         metadata_json={
             "tier_id": "free",

@@ -1,17 +1,14 @@
 'use client';
 
-import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import { BackofficeStatusBadge } from '@/components/backoffice/BackofficeStatusBadge';
 import type { PortalSiteSummaryRecord, Site } from '@/lib/portal-client';
-import { resolveCustomerPackageDisplay } from '@/lib/customer-package-display';
 import {
   getPortalSiteDisplayName,
   getPortalSiteWordPressUrl,
 } from '@/lib/portal-site-display';
-import { translateAllowedAction, translateExternalCommercialRole } from '@/lib/admin-display';
 import { translateStatusLabel } from '@/lib/status-display';
-import { cn, formatCompactNumber, formatDate, formatNumber } from '@/lib/utils';
+import { cn, formatDate } from '@/lib/utils';
 
 type RestrictionItem = {
   tone: 'warn' | 'info';
@@ -77,80 +74,15 @@ export function PortalSiteInspectorDrawer({
   }
 
   const detailSite = summary?.site || site;
-  const packageDisplay = resolveCustomerPackageDisplay(t, {
-    planId: summary?.coverage?.plan_id,
-    planVersionId: summary?.coverage?.plan_version_id,
-    packageAlias: summary?.package_alias || summary?.coverage?.package_alias,
-    formalPlanName: detailSite.plan_name,
-    coverageState: summary?.coverage ? 'covered' : 'uncovered',
-  });
-  const planLabel = packageDisplay.display_package_label || t('common.not_found');
-  const subscriptionStatus = summary?.subscription_status || summary?.coverage?.status || 'unknown';
-  const featureCount = summary?.entitlement_snapshot?.features?.length || 0;
-  const requestLimit = summary?.entitlement_snapshot?.requests_limit || 0;
-  const tokenLimit = summary?.entitlement_snapshot?.tokens_limit || 0;
-  const periodStart =
-    summary?.coverage?.current_period_start_at ||
-    summary?.coverage?.current_period_start ||
-    '';
-  const periodEnd =
-    summary?.coverage?.current_period_end_at ||
-    summary?.coverage?.current_period_end ||
-    '';
-  const footerLinks = [
-    { href: `/portal/usage?site=${site.site_id}`, label: t('usage.title', {}, 'Open Usage') },
-    { href: `/portal/billing?site=${site.site_id}`, label: t('portal.nav_package', {}, 'Open Package') },
-    { href: `/portal/sites/${site.site_id}`, label: t('portal.site_record', {}, 'Open site record') },
-  ];
   const postureMetrics = [
     {
       label: t('common.status'),
       value: translateStatusLabel(detailSite.status, t),
-      detail: translateStatusLabel(subscriptionStatus, t),
-    },
-    {
-      label: t('common.plan'),
-      value: planLabel,
-      detail: t('portal.home.latest_plan_status', {}, 'Plan status'),
-    },
-    {
-      label: t('common.account'),
-      value: t('portal.connect_site_current_customer', {}, 'Current customer'),
-      detail: summary?.site_admin_ref || t('portal.home.read_only_summary', {}, 'Read-only summary only'),
-    },
-    {
-      label: t('portal.home.access_scope', {}, 'Access scope'),
-      value: summary?.identity_type
-        ? translateExternalCommercialRole(summary.identity_type, t)
-        : t('common.not_found'),
-      detail:
-        summary?.allowed_actions?.length
-          ? summary.allowed_actions.map((action) => translateAllowedAction(action, t)).join(' · ')
-          : t('portal.home.read_only_summary', {}, 'Read-only summary only'),
+      detail: getPortalSiteWordPressUrl(detailSite) || t('portal.site_url_missing_short', {}, 'Site URL not configured'),
     },
     {
       label: t('common.connected'),
       value: detailSite.created_at ? formatDate(detailSite.created_at) : t('common.not_found'),
-    },
-    {
-      label: t('portal.period_end', {}, 'Period End'),
-      value: periodEnd ? formatDate(periodEnd) : t('common.not_found'),
-      detail: periodStart ? `${t('portal.period_start', {}, 'Period Start')}: ${formatDate(periodStart)}` : undefined,
-    },
-  ];
-  const limitMetrics = [
-    {
-      label: t('site_details.entitlements', {}, 'Entitlements'),
-      value: String(featureCount),
-      detail: t('common.features', {}, 'Features'),
-    },
-    {
-      label: t('usage.requests_month', {}, 'Requests / Month'),
-      value: requestLimit > 0 ? formatNumber(requestLimit) : t('common.not_found'),
-    },
-    {
-      label: t('usage.tokens_month', {}, 'Tokens / Month'),
-      value: tokenLimit > 0 ? formatCompactNumber(tokenLimit) : t('common.not_found'),
     },
   ];
 
@@ -253,7 +185,7 @@ export function PortalSiteInspectorDrawer({
                     {t(
                       'portal.home.drawer_posture_desc',
                       {},
-                      'Use this quick view to confirm the current site, package, and status before opening a dedicated page.'
+                      'Use this quick view to confirm the current site and status before opening a dedicated page.'
                     )}
                   </p>
                 </div>
@@ -273,27 +205,22 @@ export function PortalSiteInspectorDrawer({
               <section className="rounded-[1.4rem] border border-slate-200/80 bg-white/90 px-4 py-4 dark:border-slate-800 dark:bg-slate-950/30">
                 <div className="flex items-center justify-between gap-3">
                   <div>
-                    <p className="text-[0.68rem] font-semibold uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
-                      {t('portal.home.drawer_limits_label', {}, 'Details')}
-                    </p>
-                    <h3 className="mt-2 text-lg font-semibold text-slate-950 dark:text-white">
-                      {t('portal.home.drawer_attention_title', {}, 'Restrictions and access details')}
-                    </h3>
+	                    <p className="text-[0.68rem] font-semibold uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
+	                      {t('portal.home.drawer_limits_label', {}, 'Review')}
+	                    </p>
+	                    <h3 className="mt-2 text-lg font-semibold text-slate-950 dark:text-white">
+	                      {t('portal.home.drawer_attention_title', {}, 'Things to check')}
+	                    </h3>
                   </div>
                   <button type="button" onClick={() => setShowDetail((current) => !current)} className="btn btn-secondary btn-sm">
                     {showDetail ? t('common.hide', {}, 'Hide') : t('common.view_details', {}, 'View details')}
                   </button>
                 </div>
 
-                {showDetail ? (
-                  <div className="mt-4 space-y-4">
-                    <div className="grid gap-3 sm:grid-cols-3">
-                      {limitMetrics.map((item) => (
-                        <Metric key={`${item.label}-${item.value}`} label={item.label} value={item.value} detail={item.detail} />
-                      ))}
-                    </div>
-                    <div className="space-y-3">
-                      {restrictions.length ? (
+	                {showDetail ? (
+	                  <div className="mt-4 space-y-4">
+	                    <div className="space-y-3">
+	                      {restrictions.length ? (
                         restrictions.map((item, index) => (
                           <div
                             key={`${item.label}-${index}`}
@@ -325,18 +252,6 @@ export function PortalSiteInspectorDrawer({
                 )}
               </section>
 
-              <div className="grid gap-2 sm:grid-cols-2">
-                {footerLinks.map((item, index) => (
-                  <Link
-                    key={item.href}
-                    href={item.href}
-                    className={cn(index === 0 ? 'btn btn-secondary justify-center w-full' : 'btn btn-secondary justify-center w-full')}
-                    onClick={onClose}
-                  >
-                    {item.label}
-                  </Link>
-                ))}
-              </div>
             </div>
           )}
         </div>

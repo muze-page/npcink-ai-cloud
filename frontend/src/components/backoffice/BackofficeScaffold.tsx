@@ -1,18 +1,33 @@
 'use client';
 
 import React from 'react';
+import {
+  autoUpdate,
+  flip,
+  FloatingPortal,
+  offset,
+  shift,
+  useDismiss,
+  useFloating,
+  useFocus,
+  useHover,
+  useInteractions,
+  useRole,
+} from '@floating-ui/react';
 import { useLocale } from '@/contexts/LocaleContext';
 import { cn } from '@/lib/utils';
 
 type BackofficeFrameProps = React.HTMLAttributes<HTMLDivElement> & {
   children: React.ReactNode;
   className?: string;
+  variant?: 'default' | 'portal';
 };
 
 type BackofficeHeaderProps = {
   eyebrow?: string;
   title: string;
   description?: string;
+  descriptionDisplay?: 'visible' | 'hint';
   aside?: React.ReactNode;
   actions?: React.ReactNode;
   className?: string;
@@ -29,6 +44,7 @@ type BackofficeMetricItem = {
   label: string;
   value: React.ReactNode;
   detail?: string;
+  detailDisplay?: 'visible' | 'hint';
   toneClassName?: string;
   size?: 'default' | 'compact';
 };
@@ -36,6 +52,7 @@ type BackofficeMetricItem = {
 type BackofficeMetricStripProps = {
   items: BackofficeMetricItem[];
   columnsClassName?: string;
+  variant?: 'default' | 'portal';
 };
 
 type BackofficeSummaryStripProps = {
@@ -55,10 +72,75 @@ export function BackofficePageStack({ children, className }: BackofficeFrameProp
   return <div className={cn('space-y-6', className)}>{children}</div>;
 }
 
+type BackofficeInfoHintProps = {
+  detail?: string;
+  label?: string;
+  className?: string;
+};
+
+export function BackofficeInfoHint({ detail, label, className }: BackofficeInfoHintProps) {
+  const { t } = useLocale();
+  const [open, setOpen] = React.useState(false);
+  const tooltipId = React.useId();
+  const {
+    refs: { setReference, setFloating },
+    floatingStyles,
+    context,
+  } = useFloating({
+    open,
+    onOpenChange: setOpen,
+    placement: 'bottom',
+    strategy: 'fixed',
+    whileElementsMounted: autoUpdate,
+    middleware: [offset(8), flip({ padding: 12 }), shift({ padding: 12 })],
+  });
+  const hover = useHover(context, { move: false, restMs: 80 });
+  const focus = useFocus(context);
+  const dismiss = useDismiss(context);
+  const role = useRole(context, { role: 'tooltip' });
+  const { getReferenceProps, getFloatingProps } = useInteractions([hover, focus, dismiss, role]);
+
+  if (!detail) {
+    return null;
+  }
+
+  return (
+    <>
+      <span
+        ref={setReference}
+        tabIndex={0}
+        aria-describedby={open ? tooltipId : undefined}
+        aria-label={`${label || t('common.more_info', {}, 'More info')}: ${detail}`}
+        className={cn(
+          'backoffice-info-hint inline-flex h-5 w-5 shrink-0 cursor-help items-center justify-center rounded-full border border-slate-300 bg-white/80 text-[0.68rem] font-bold normal-case leading-none tracking-normal text-slate-500 transition hover:border-blue-300 hover:text-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500/30 dark:border-slate-700 dark:bg-slate-950/70 dark:text-slate-300 dark:hover:border-blue-500 dark:hover:text-blue-300',
+          className
+        )}
+        {...getReferenceProps()}
+      >
+        i
+      </span>
+      {open ? (
+        <FloatingPortal>
+          <div
+            ref={setFloating}
+            id={tooltipId}
+            className="backoffice-info-tooltip"
+            style={floatingStyles}
+            {...getFloatingProps()}
+          >
+            {detail}
+          </div>
+        </FloatingPortal>
+      ) : null}
+    </>
+  );
+}
+
 export function BackofficePrimaryPanel({
   eyebrow,
   title,
   description,
+  descriptionDisplay = 'visible',
   aside,
   actions,
   className,
@@ -77,10 +159,13 @@ export function BackofficePrimaryPanel({
                 {eyebrow}
               </p>
             ) : null}
-            <h1 className="max-w-3xl text-2xl font-semibold tracking-tight text-gray-950 dark:text-white md:text-[2rem]">
-              {title}
-            </h1>
-            {description ? (
+            <div className="flex max-w-3xl items-center gap-2">
+              <h1 className="text-2xl font-semibold tracking-tight text-gray-950 dark:text-white md:text-[2rem]">
+                {title}
+              </h1>
+              {descriptionDisplay === 'hint' ? <BackofficeInfoHint detail={description} /> : null}
+            </div>
+            {description && descriptionDisplay !== 'hint' ? (
               <p className="max-w-2xl text-sm leading-6 text-gray-600 dark:text-gray-300">{description}</p>
             ) : null}
           </div>
@@ -107,6 +192,7 @@ export function BackofficeLayer({
   eyebrow,
   title,
   description,
+  descriptionDisplay = 'visible',
   aside,
   actions,
   className,
@@ -120,8 +206,13 @@ export function BackofficeLayer({
               {eyebrow}
             </p>
           ) : null}
-          <h2 className="mt-2 text-2xl font-semibold text-gray-950 dark:text-white">{title}</h2>
-          {description ? (
+          <div className="mt-2 flex items-center gap-2">
+            <h2 className="text-2xl font-semibold text-gray-950 dark:text-white">
+              {title}
+            </h2>
+            {descriptionDisplay === 'hint' ? <BackofficeInfoHint detail={description} /> : null}
+          </div>
+          {description && descriptionDisplay !== 'hint' ? (
             <p className="mt-2 max-w-3xl text-sm leading-6 text-gray-600 dark:text-gray-300">{description}</p>
           ) : null}
         </div>
@@ -131,11 +222,23 @@ export function BackofficeLayer({
   );
 }
 
-export function BackofficeSectionPanel({ children, className }: BackofficeFrameProps) {
-  return <div className={cn('surface-panel rounded-[1.35rem] p-5 md:p-6', className)}>{children}</div>;
+export function BackofficeSectionPanel({ children, className, variant = 'default', ...rest }: BackofficeFrameProps) {
+  return (
+    <div
+      className={cn(
+        variant === 'portal'
+          ? 'rounded-[1.1rem] border border-slate-200/80 bg-white/78 p-4 shadow-none dark:border-slate-800 dark:bg-slate-950/45 md:p-5'
+          : 'surface-panel rounded-[1.35rem] p-5 md:p-6',
+        className
+      )}
+      {...rest}
+    >
+      {children}
+    </div>
+  );
 }
 
-export function BackofficeMetricStrip({ items, columnsClassName }: BackofficeMetricStripProps) {
+export function BackofficeMetricStrip({ items, columnsClassName, variant = 'default' }: BackofficeMetricStripProps) {
   return (
     <div className={cn('grid gap-3 md:grid-cols-2 xl:grid-cols-4', columnsClassName)}>
       {items.map((item) => {
@@ -149,10 +252,24 @@ export function BackofficeMetricStrip({ items, columnsClassName }: BackofficeMet
         return (
           <div
             key={item.label}
-            className="rounded-[1.1rem] border border-slate-200/80 bg-white/80 px-4 py-3.5 dark:border-slate-800 dark:bg-slate-950/45"
+            className={cn(
+              variant === 'portal'
+                ? 'rounded-xl border border-slate-200/75 bg-white/65 px-4 py-3 dark:border-slate-800 dark:bg-slate-950/30'
+                : 'rounded-[1.1rem] border border-slate-200/80 bg-white/80 px-4 py-3.5 dark:border-slate-800 dark:bg-slate-950/45'
+            )}
           >
-            <p className="text-[0.68rem] font-semibold uppercase tracking-[0.18em] text-gray-500 dark:text-gray-400">
-              {item.label}
+            <p
+              className={cn(
+                'flex items-center gap-1.5 text-gray-500 dark:text-gray-400',
+                variant === 'portal'
+                  ? 'text-xs font-medium'
+                  : 'text-[0.68rem] font-semibold uppercase tracking-[0.18em]'
+              )}
+            >
+              <span>{item.label}</span>
+              {item.detail && item.detailDisplay === 'hint' ? (
+                <BackofficeInfoHint detail={item.detail} className="h-4 w-4 text-[0.6rem]" />
+              ) : null}
             </p>
             <p className={cn(
               'mt-2 font-semibold text-gray-950 dark:text-white',
@@ -161,7 +278,7 @@ export function BackofficeMetricStrip({ items, columnsClassName }: BackofficeMet
             )}>
               {item.value}
             </p>
-            {item.detail ? (
+            {item.detail && item.detailDisplay !== 'hint' ? (
               <p className="mt-2 text-xs leading-5 text-gray-500 dark:text-gray-400">{item.detail}</p>
             ) : null}
           </div>
@@ -193,11 +310,17 @@ export function BackofficeSummaryStrip({ items, className }: BackofficeSummarySt
 export function BackofficeStackCard({
   children,
   className,
+  variant = 'default',
   ...rest
 }: BackofficeFrameProps) {
   return (
     <div
-      className={cn('rounded-[1.1rem] border border-slate-200/80 bg-slate-50/75 px-4 py-3.5 dark:border-slate-800 dark:bg-slate-950/45', className)}
+      className={cn(
+        variant === 'portal'
+          ? 'rounded-xl border border-slate-200/75 bg-slate-50/60 px-4 py-3.5 dark:border-slate-800 dark:bg-slate-950/30'
+          : 'rounded-[1.1rem] border border-slate-200/80 bg-slate-50/75 px-4 py-3.5 dark:border-slate-800 dark:bg-slate-950/45',
+        className
+      )}
       {...rest}
     >
       {children}

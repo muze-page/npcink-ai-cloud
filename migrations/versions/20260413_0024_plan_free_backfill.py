@@ -12,8 +12,8 @@ down_revision = "20260410_0022"
 branch_labels = None
 depends_on = None
 
-DEFAULT_FREE_PLAN_ID = "plan_free"
-DEFAULT_FREE_PLAN_VERSION_ID = "plan_free_v1"
+DEFAULT_FREE_PLAN_ID = "free"
+DEFAULT_FREE_PLAN_VERSION_ID = "free_v1"
 DEFAULT_FREE_PLAN_KIND = "default_free"
 DEFAULT_FREE_PLAN_SOURCE = "production_default_free_shell_v1"
 LEGACY_DEFAULT_FREE_SOURCES = {
@@ -75,7 +75,7 @@ def upgrade() -> None:
     )
 
     plan_metadata = {
-        "tier_id": "starter",
+        "tier_id": "free",
         "package_alias": "Free",
         "plan_kind": DEFAULT_FREE_PLAN_KIND,
         "source": DEFAULT_FREE_PLAN_SOURCE,
@@ -219,7 +219,7 @@ def upgrade() -> None:
                 metadata_json=_merge_metadata(
                     metadata_json,
                     source="migration_backfill_default_free_v1",
-                    tier_id="starter",
+                    tier_id="free",
                     package_alias="Free",
                     plan_kind=DEFAULT_FREE_PLAN_KIND,
                     site_limit=1,
@@ -250,7 +250,7 @@ def upgrade() -> None:
                     metadata_json=_merge_metadata(
                         snapshot_row["metadata_json"],
                         source="migration_backfill_default_free_v1",
-                        tier_id="starter",
+                        tier_id="free",
                         package_alias="Free",
                         plan_kind=DEFAULT_FREE_PLAN_KIND,
                         site_limit=1,

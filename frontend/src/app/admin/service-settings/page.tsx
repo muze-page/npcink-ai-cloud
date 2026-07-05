@@ -12,7 +12,7 @@ import { useLocale } from '@/contexts/LocaleContext';
 import { resolveUiErrorMessage } from '@/lib/errors';
 
 type SettingStatus = 'ready' | 'disabled' | 'missing_config' | 'error' | string;
-type ServiceSettingsTab = 'login' | 'email';
+type ServiceSettingsTab = 'login' | 'email' | 'payment';
 type BackendPayload = Record<string, unknown> | string | null;
 type Translator = (key: string, params?: Record<string, string>, fallback?: string) => string;
 
@@ -33,6 +33,7 @@ type ServiceSettingsData = {
     portal_public: ServiceSetting;
     qq_login: ServiceSetting;
     portal_email: ServiceSetting;
+    alipay_payment: ServiceSetting;
   };
 };
 
@@ -60,6 +61,16 @@ type EmailForm = {
   from_email: string;
   from_name: string;
   reply_to: string;
+};
+
+type AlipayForm = {
+  enabled: boolean;
+  app_id: string;
+  gateway_url: string;
+  notify_url: string;
+  return_url: string;
+  private_key: string;
+  public_key: string;
 };
 
 function stringValue(value: unknown): string {
@@ -121,6 +132,28 @@ function buildQqRedirectUri(publicBaseUrl: string): string {
   }
 }
 
+function buildAlipayNotifyUrl(publicBaseUrl: string): string {
+  const raw = publicBaseUrl.trim();
+  if (!raw) return '';
+  try {
+    const parsed = new URL(raw);
+    return `${parsed.protocol}//${parsed.host}/open/payments/alipay/notify`;
+  } catch {
+    return '';
+  }
+}
+
+function buildAlipayReturnUrl(publicBaseUrl: string): string {
+  const raw = publicBaseUrl.trim();
+  if (!raw) return '';
+  try {
+    const parsed = new URL(raw);
+    return `${parsed.protocol}//${parsed.host}/open/payments/alipay/return`;
+  } catch {
+    return '';
+  }
+}
+
 function payloadRecord(payload: BackendPayload): Record<string, unknown> | null {
   return payload && typeof payload === 'object' ? payload : null;
 }
@@ -160,6 +193,23 @@ function serviceSettingsErrorMessage(
   }
   if (errorCode === 'service_settings.email_from_email_invalid') {
     return t('admin.service_settings.error_email_from_invalid', {}, 'Enter a valid sender email address.');
+  }
+  if (errorCode === 'service_settings.alipay_private_key_required') {
+    return t('admin.service_settings.error_alipay_private_key_required', {}, '请输入支付宝应用私钥。');
+  }
+  if (errorCode === 'service_settings.alipay_public_key_required') {
+    return t('admin.service_settings.error_alipay_public_key_required', {}, '请输入支付宝公钥。');
+  }
+  if (errorCode === 'service_settings.alipay_notify_url_invalid') {
+    return t('admin.service_settings.error_alipay_notify_url_invalid', {}, '支付宝异步通知地址必须来自门户基础地址，并使用 /open/payments/alipay/notify。');
+  }
+  if (errorCode === 'service_settings.alipay_return_url_invalid') {
+    return t('admin.service_settings.error_alipay_return_url_invalid', {}, '支付宝同步返回地址必须来自门户基础地址，并使用 /open/payments/alipay/return。');
+  }
+  if (errorCode === 'service_settings.alipay_config_invalid') {
+    return rawMessage
+      ? t('admin.service_settings.error_alipay_config_detail', { message: rawMessage }, '支付宝配置检查失败：{{message}}')
+      : t('admin.service_settings.error_alipay_config_invalid', {}, '支付宝配置检查失败。请检查 App ID、应用私钥、支付宝公钥。');
   }
   return resolveUiErrorMessage(rawMessage, fallback);
 }
@@ -250,6 +300,15 @@ export default function AdminServiceSettingsPage() {
     from_name: '',
     reply_to: '',
   });
+  const [alipayForm, setAlipayForm] = useState<AlipayForm>({
+    enabled: false,
+    app_id: '',
+    gateway_url: 'https://openapi.alipay.com/gateway.do',
+    notify_url: '',
+    return_url: '',
+    private_key: '',
+    public_key: '',
+  });
 
   const loadSettings = useCallback(async function loadSettings() {
     setLoading(true);
@@ -269,6 +328,7 @@ export default function AdminServiceSettingsPage() {
       const portalPublic = nextData.settings.portal_public;
       const qq = nextData.settings.qq_login;
       const email = nextData.settings.portal_email;
+      const alipay = nextData.settings.alipay_payment;
       const emailSmtpUsername = stringValue(email.config.smtp_username);
       const emailFromAddress = stringValue(email.config.from_email);
       const emailUsernameSameAsFromEmail =
@@ -296,6 +356,15 @@ export default function AdminServiceSettingsPage() {
         from_email: stringValue(email.config.from_email),
         from_name: stringValue(email.config.from_name),
         reply_to: stringValue(email.config.reply_to),
+      });
+      setAlipayForm({
+        enabled: alipay.enabled,
+        app_id: stringValue(alipay.config.app_id),
+        gateway_url: stringValue(alipay.config.gateway_url) || 'https://openapi.alipay.com/gateway.do',
+        notify_url: stringValue(alipay.config.notify_url),
+        return_url: stringValue(alipay.config.return_url),
+        private_key: '',
+        public_key: '',
       });
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : t('admin.service_settings.load_failed', {}, 'Failed to load service settings.'));
@@ -329,12 +398,29 @@ export default function AdminServiceSettingsPage() {
         toneClassName: statusTone(settings?.portal_email.status || 'missing_config'),
         size: 'compact' as const,
       },
+      {
+        label: t('admin.service_settings.metric_payment', {}, 'Payment'),
+        value: statusLabel(settings?.alipay_payment.status || 'missing_config', t),
+        toneClassName: statusTone(settings?.alipay_payment.status || 'missing_config'),
+        size: 'compact' as const,
+      },
     ];
   }, [data, t]);
 
   const qqRedirectUri = useMemo(() => {
     return buildQqRedirectUri(portalPublicForm.public_base_url);
   }, [portalPublicForm.public_base_url]);
+
+  const defaultAlipayNotifyUrl = useMemo(() => {
+    return buildAlipayNotifyUrl(portalPublicForm.public_base_url);
+  }, [portalPublicForm.public_base_url]);
+
+  const defaultAlipayReturnUrl = useMemo(() => {
+    return buildAlipayReturnUrl(portalPublicForm.public_base_url);
+  }, [portalPublicForm.public_base_url]);
+
+  const resolvedAlipayNotifyUrl = alipayForm.notify_url || defaultAlipayNotifyUrl;
+  const resolvedAlipayReturnUrl = alipayForm.return_url || defaultAlipayReturnUrl;
 
   async function copyQqRedirectUri() {
     if (!qqRedirectUri) {
@@ -348,6 +434,22 @@ export default function AdminServiceSettingsPage() {
       setNotice(t('admin.service_settings.qq_redirect_copied', {}, 'QQ 回调地址已复制。'));
     } catch {
       setError(t('admin.service_settings.copy_failed', {}, 'This browser could not copy automatically. Copy the redirect URL manually.'));
+      setNotice('');
+    }
+  }
+
+  async function copyText(value: string, successMessage: string) {
+    if (!value) {
+      setError(t('admin.service_settings.copy_empty', {}, 'Nothing to copy yet.'));
+      setNotice('');
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(value);
+      setError('');
+      setNotice(successMessage);
+    } catch {
+      setError(t('admin.service_settings.copy_failed', {}, 'This browser could not copy automatically. Copy the value manually.'));
       setNotice('');
     }
   }
@@ -467,9 +569,34 @@ export default function AdminServiceSettingsPage() {
     void saveJson('/api/admin/service-settings/email', payload, 'email', t('admin.service_settings.email_saved', {}, 'Email settings saved.'));
   }
 
+  function submitAlipay(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (alipayForm.enabled && (!resolvedAlipayNotifyUrl || !resolvedAlipayReturnUrl)) {
+      setNotice('');
+      setError(t('admin.service_settings.alipay_requires_public_url', {}, '先保存门户基础地址，再保存支付宝配置。notify_url 和 return_url 会自动生成。'));
+      return;
+    }
+    const payload: Record<string, unknown> = {
+      enabled: alipayForm.enabled,
+      app_id: alipayForm.app_id,
+      gateway_url: alipayForm.gateway_url,
+      notify_url: resolvedAlipayNotifyUrl,
+      return_url: resolvedAlipayReturnUrl,
+    };
+    if (alipayForm.private_key) {
+      payload.private_key = alipayForm.private_key;
+    }
+    if (alipayForm.public_key) {
+      payload.public_key = alipayForm.public_key;
+    }
+    void saveJson('/api/admin/service-settings/alipay-payment', payload, 'alipay-payment', t('admin.service_settings.alipay_saved', {}, '支付宝支付配置已保存。'));
+  }
+
   const secretConfigured = {
     qq: Boolean(data?.settings.qq_login.secrets.client_secret?.configured),
     email: Boolean(data?.settings.portal_email.secrets.smtp_password?.configured),
+    alipayPrivateKey: Boolean(data?.settings.alipay_payment.secrets.private_key?.configured),
+    alipayPublicKey: Boolean(data?.settings.alipay_payment.secrets.public_key?.configured),
   };
 
   const tabs: Array<{ id: ServiceSettingsTab; label: string; description: string }> = [
@@ -483,6 +610,11 @@ export default function AdminServiceSettingsPage() {
       label: t('admin.service_settings.tab_email', {}, '邮件配置'),
       description: t('admin.service_settings.tab_email_desc', {}, 'SMTP and test email'),
     },
+    {
+      id: 'payment',
+      label: t('admin.service_settings.tab_payment', {}, '支付配置'),
+      description: t('admin.service_settings.tab_payment_desc', {}, 'Alipay checkout callbacks'),
+    },
   ];
 
   return (
@@ -493,11 +625,12 @@ export default function AdminServiceSettingsPage() {
         description={t(
           'admin.service_settings_desc',
           {},
-          'Configure Cloud-owned Portal login, QQ quick login, and email delivery. Values are stored in Cloud runtime storage; .env fallback is no longer read.'
+          'Configure Cloud-owned Portal login, QQ quick login, email delivery, and payment. Values are stored in Cloud runtime storage; .env fallback is no longer read.'
         )}
+        descriptionDisplay="hint"
         aside={(
           <div className="w-full xl:w-[34rem]">
-            <BackofficeMetricStrip items={metrics} columnsClassName="md:grid-cols-3 xl:grid-cols-3" />
+            <BackofficeMetricStrip items={metrics} columnsClassName="md:grid-cols-4 xl:grid-cols-4" />
           </div>
         )}
       />
@@ -514,7 +647,7 @@ export default function AdminServiceSettingsPage() {
       ) : null}
 
       <BackofficeSectionPanel className="p-2 md:p-2">
-        <div role="tablist" aria-label={t('admin.service_settings.tablist_label', {}, 'Service settings categories')} className="grid gap-2 md:grid-cols-2">
+        <div role="tablist" aria-label={t('admin.service_settings.tablist_label', {}, 'Service settings categories')} className="grid gap-2 md:grid-cols-3">
           {tabs.map((tab) => {
             const active = activeTab === tab.id;
             return (
@@ -798,6 +931,153 @@ export default function AdminServiceSettingsPage() {
                 {t('admin.service_settings.send_test_email', {}, 'Send test email')}
               </button>
             </div>
+            </section>
+          </div>
+        </BackofficeSectionPanel>
+      ) : null}
+
+      {activeTab === 'payment' ? (
+        <BackofficeSectionPanel>
+          <div id="service-settings-payment" className="space-y-8" role="tabpanel">
+            <section className="space-y-4">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
+                  Alipay
+                </p>
+                <h2 className="mt-2 text-xl font-semibold text-slate-950 dark:text-white">
+                  {t('admin.service_settings.alipay_title', {}, '支付宝支付')}
+                </h2>
+                <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
+                  {t('admin.service_settings.alipay_desc', {}, '保存支付宝网页支付所需凭证。密钥加密存储，不会在页面回显。')}
+                </p>
+              </div>
+
+              <form className="grid gap-4 lg:grid-cols-2" onSubmit={submitAlipay}>
+                <label className={labelClassName()}>
+                  App ID
+                  <input
+                    className={fieldClassName()}
+                    value={alipayForm.app_id}
+                    disabled={loading}
+                    onChange={(event) => setAlipayForm((current) => ({ ...current, app_id: event.target.value }))}
+                  />
+                </label>
+                <label className={labelClassName()}>
+                  {t('admin.service_settings.alipay_gateway_url_label', {}, '支付宝网关')}
+                  <input
+                    className={fieldClassName()}
+                    value={alipayForm.gateway_url}
+                    disabled={loading}
+                    onChange={(event) => setAlipayForm((current) => ({ ...current, gateway_url: event.target.value }))}
+                    placeholder="https://openapi.alipay.com/gateway.do"
+                  />
+                </label>
+
+                <div className="lg:col-span-2">
+                  <div className={labelClassName()}>
+                    {t('admin.service_settings.alipay_notify_url_label', {}, '异步通知地址')}
+                    <div className="mt-1 grid gap-2 lg:grid-cols-[1fr_auto]">
+                      <input
+                        className={fieldClassName()}
+                        value={resolvedAlipayNotifyUrl}
+                        readOnly
+                        disabled={loading}
+                        placeholder={t('admin.service_settings.alipay_url_placeholder', {}, '保存门户基础地址后自动生成')}
+                      />
+                      <button
+                        type="button"
+                        className="btn btn-secondary"
+                        disabled={!resolvedAlipayNotifyUrl}
+                        onClick={() => void copyText(resolvedAlipayNotifyUrl, t('admin.service_settings.alipay_notify_copied', {}, '支付宝异步通知地址已复制。'))}
+                      >
+                        {t('common.copy', {}, 'Copy')}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="lg:col-span-2">
+                  <div className={labelClassName()}>
+                    {t('admin.service_settings.alipay_return_url_label', {}, '同步返回地址')}
+                    <div className="mt-1 grid gap-2 lg:grid-cols-[1fr_auto]">
+                      <input
+                        className={fieldClassName()}
+                        value={resolvedAlipayReturnUrl}
+                        readOnly
+                        disabled={loading}
+                        placeholder={t('admin.service_settings.alipay_url_placeholder', {}, '保存门户基础地址后自动生成')}
+                      />
+                      <button
+                        type="button"
+                        className="btn btn-secondary"
+                        disabled={!resolvedAlipayReturnUrl}
+                        onClick={() => void copyText(resolvedAlipayReturnUrl, t('admin.service_settings.alipay_return_copied', {}, '支付宝同步返回地址已复制。'))}
+                      >
+                        {t('common.copy', {}, 'Copy')}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                <label className={labelClassName()}>
+                  {t('admin.service_settings.alipay_private_key_label', {}, '应用私钥')} {secretConfigured.alipayPrivateKey
+                    ? t('admin.service_settings.secret_configured_suffix', {}, '(configured)')
+                    : t('admin.service_settings.secret_missing_suffix', {}, '(not configured)')}
+                  <textarea
+                    className={`${fieldClassName()} min-h-32 font-mono`}
+                    value={alipayForm.private_key}
+                    disabled={loading}
+                    onChange={(event) => setAlipayForm((current) => ({ ...current, private_key: event.target.value }))}
+                    placeholder={secretConfigured.alipayPrivateKey ? t('admin.service_settings.secret_keep_placeholder', {}, '留空则保留当前密钥') : t('admin.service_settings.alipay_private_key_placeholder', {}, '粘贴 PEM 格式应用私钥')}
+                  />
+                </label>
+                <label className={labelClassName()}>
+                  {t('admin.service_settings.alipay_public_key_label', {}, '支付宝公钥')} {secretConfigured.alipayPublicKey
+                    ? t('admin.service_settings.secret_configured_suffix', {}, '(configured)')
+                    : t('admin.service_settings.secret_missing_suffix', {}, '(not configured)')}
+                  <textarea
+                    className={`${fieldClassName()} min-h-32 font-mono`}
+                    value={alipayForm.public_key}
+                    disabled={loading}
+                    onChange={(event) => setAlipayForm((current) => ({ ...current, public_key: event.target.value }))}
+                    placeholder={secretConfigured.alipayPublicKey ? t('admin.service_settings.secret_keep_placeholder', {}, '留空则保留当前密钥') : t('admin.service_settings.alipay_public_key_placeholder', {}, '粘贴 PEM 格式支付宝公钥')}
+                  />
+                </label>
+
+                <div className="flex flex-col gap-3 border-t border-slate-200 pt-4 dark:border-slate-800 lg:col-span-2 lg:flex-row lg:items-center lg:justify-between">
+                  <div className="inline-flex items-center gap-2 text-sm text-slate-700 dark:text-slate-200">
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-label={t('admin.service_settings.alipay_toggle_label', {}, '启用支付宝支付')}
+                      aria-checked={alipayForm.enabled}
+                      className={switchButtonClassName(alipayForm.enabled)}
+                      disabled={loading}
+                      onClick={() => setAlipayForm((current) => ({ ...current, enabled: !current.enabled }))}
+                    >
+                      <span className={switchKnobClassName(alipayForm.enabled)} />
+                    </button>
+                    {t('admin.service_settings.alipay_enabled_label', {}, '启用支付宝支付')}
+                  </div>
+                  <div className="flex flex-wrap justify-end gap-2">
+                    <button
+                      type="button"
+                      className="btn btn-secondary"
+                      disabled={saving === 'alipay-test'}
+                      onClick={() => postJson('/api/admin/service-settings/alipay-payment/test', {}, 'alipay-test', t('admin.service_settings.alipay_test_done', {}, '支付宝配置检查完成。'))}
+                    >
+                      {saving === 'alipay-test'
+                        ? t('admin.service_settings.checking', {}, 'Checking')
+                        : t('admin.service_settings.check_alipay', {}, '检查支付宝配置')}
+                    </button>
+                    <button type="submit" className="btn btn-primary" disabled={saving === 'alipay-payment'}>
+                      {saving === 'alipay-payment'
+                        ? t('admin.service_settings.saving', {}, 'Saving')
+                        : t('admin.service_settings.save_alipay', {}, '保存支付宝配置')}
+                    </button>
+                  </div>
+                </div>
+              </form>
             </section>
           </div>
         </BackofficeSectionPanel>

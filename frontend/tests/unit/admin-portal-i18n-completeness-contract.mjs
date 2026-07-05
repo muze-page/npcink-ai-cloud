@@ -1,8 +1,9 @@
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { extname, join, resolve } from 'node:path';
 import assert from 'node:assert/strict';
+import { frontendRoot } from './_paths.mjs';
 
-const root = process.cwd();
+const root = frontendRoot;
 const i18nPath = resolve(root, 'src/lib/i18n.ts');
 const source = readFileSync(i18nPath, 'utf8');
 
@@ -78,12 +79,12 @@ const translationLockedFiles = [
   resolve(root, 'src/app/admin/plans/[planId]/page.tsx'),
   resolve(root, 'src/app/admin/coverage/page.tsx'),
   resolve(root, 'src/components/admin/AdminAuditSummaryPanel.tsx'),
+  resolve(root, 'src/components/admin/AdminMutationReceipt.tsx'),
   resolve(root, 'src/app/page.tsx'),
   resolve(root, 'src/app/portal/page.tsx'),
   resolve(root, 'src/app/portal/login/page.tsx'),
   resolve(root, 'src/app/portal/sites/[siteId]/page.tsx'),
   resolve(root, 'src/app/portal/monitoring/page.tsx'),
-  resolve(root, 'src/app/portal/ai-insights/page.tsx'),
   resolve(root, 'src/app/portal/audit/PortalAuditClient.tsx'),
   resolve(root, 'src/components/portal/PortalNavbar.tsx'),
   resolve(root, 'src/components/portal/PortalPluginMonitoringPanel.tsx'),

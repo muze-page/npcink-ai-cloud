@@ -3,8 +3,9 @@ from __future__ import annotations
 from typing import Any, cast
 
 from app.adapters.providers.registry import resolve_execution_provider_adapters
+from app.adapters.queue.base import RuntimeQueue
 from app.adapters.queue.redis_runtime_queue import RedisRuntimeQueue
-from app.core.config import get_settings
+from app.core.config import Settings, get_settings
 from app.core.db import require_database_connection
 from app.core.logging import configure_logging, get_logger
 from app.domain.runtime.service import RuntimeService
@@ -34,28 +35,31 @@ def _dict_items(value: object) -> list[dict[str, object]]:
     ]
 
 
+def _build_runtime_service(settings: Settings, runtime_queue: RuntimeQueue) -> RuntimeService:
+    return RuntimeService(
+        settings.database_url,
+        settings=settings,
+        providers=resolve_execution_provider_adapters(settings),
+        runtime_queue=runtime_queue,
+    )
+
+
 def main() -> None:
     settings = get_settings()
     configure_logging(settings.log_level)
     require_database_connection(settings.database_url)
 
     logger = get_logger("npcink_ai_cloud.runtime_queue")
-    providers = resolve_execution_provider_adapters(settings)
     runtime_queue = RedisRuntimeQueue(
         settings.redis_url,
         settings.runtime_queue_key,
-    )
-    service = RuntimeService(
-        settings.database_url,
-        settings=settings,
-        providers=providers,
-        runtime_queue=runtime_queue,
     )
     heartbeat = WorkerHeartbeat(
         settings=settings,
         worker_id="runtime_queue",
         interval_seconds=settings.worker_heartbeat_interval_seconds,
     )
+    last_provider_ids: tuple[str, ...] = ()
 
     logger.info(
         "runtime queue worker started (poll=%ss, batch=%s, queue=%s)",
@@ -74,6 +78,14 @@ def main() -> None:
 
     try:
         while True:
+            service = _build_runtime_service(settings, runtime_queue)
+            provider_ids = tuple(sorted(service.providers))
+            if provider_ids != last_provider_ids:
+                logger.info(
+                    "runtime queue execution providers resolved: provider_ids=%s",
+                    list(provider_ids),
+                )
+                last_provider_ids = provider_ids
             auto_repair = service.run_bounded_auto_repairs(
                 worker_id="runtime_queue",
                 max_stale_queued=settings.runtime_worker_batch_size,
@@ -98,6 +110,7 @@ def main() -> None:
                 status=heartbeat_status,
                 payload={
                     "processed_runs": len(results),
+                    "execution_provider_ids": list(provider_ids),
                     "requeued_stale_queued_total": _coerce_int(
                         auto_repair.get("requeued_stale_queued_total")
                     ),

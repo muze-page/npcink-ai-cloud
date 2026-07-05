@@ -18,10 +18,13 @@ from app.core.secrets import (
 SERVICE_SETTING_PORTAL_PUBLIC = "portal_public"
 SERVICE_SETTING_QQ_LOGIN = "portal_qq_login"
 SERVICE_SETTING_PORTAL_EMAIL = "portal_email"
+SERVICE_SETTING_PAYMENT_ALIPAY = "payment_alipay"
 
 SERVICE_SETTING_KIND_PORTAL = "portal"
 SERVICE_SETTING_QQ_OPEN_CALLBACK_PATH = "/open/auth/qq/callback"
 SERVICE_SETTING_QQ_LEGACY_CALLBACK_PATH = "/portal/v1/auth/qq/callback"
+SERVICE_SETTING_ALIPAY_NOTIFY_PATH = "/open/payments/alipay/notify"
+SERVICE_SETTING_ALIPAY_RETURN_PATH = "/open/payments/alipay/return"
 SERVICE_SETTING_QQ_ALLOWED_CALLBACK_PATHS = {
     SERVICE_SETTING_QQ_OPEN_CALLBACK_PATH,
     SERVICE_SETTING_QQ_LEGACY_CALLBACK_PATH,
@@ -57,6 +60,7 @@ class ServiceSettingsAdminService:
                                 SERVICE_SETTING_PORTAL_PUBLIC,
                                 SERVICE_SETTING_QQ_LOGIN,
                                 SERVICE_SETTING_PORTAL_EMAIL,
+                                SERVICE_SETTING_PAYMENT_ALIPAY,
                             ]
                         )
                     )
@@ -76,6 +80,10 @@ class ServiceSettingsAdminService:
                 "portal_email": self._serialize(
                     rows.get(SERVICE_SETTING_PORTAL_EMAIL),
                     setting_id=SERVICE_SETTING_PORTAL_EMAIL,
+                ),
+                "alipay_payment": self._serialize(
+                    rows.get(SERVICE_SETTING_PAYMENT_ALIPAY),
+                    setting_id=SERVICE_SETTING_PAYMENT_ALIPAY,
                 ),
             },
             "env_fallback": "disabled",
@@ -191,6 +199,82 @@ class ServiceSettingsAdminService:
         )
         return self._serialize(row)
 
+    def save_alipay_payment(self, payload: dict[str, Any]) -> dict[str, Any]:
+        enabled = bool(payload.get("enabled", True))
+        public_base_url = resolve_portal_public_base_url(self.database_url, self.settings)
+        app_id = _string(payload.get("app_id"))
+        gateway_url = _normalize_url(
+            _string(payload.get("gateway_url")) or "https://openapi.alipay.com/gateway.do"
+        )
+        notify_url = _string(payload.get("notify_url")) or _default_alipay_notify_url(
+            public_base_url
+        )
+        return_url = _string(payload.get("return_url")) or _default_alipay_return_url(
+            public_base_url
+        )
+        if enabled:
+            if not app_id:
+                raise ServiceSettingsAdminError(
+                    "service_settings.alipay_app_id_required",
+                    "Alipay app id is required",
+                )
+            if not gateway_url:
+                raise ServiceSettingsAdminError(
+                    "service_settings.alipay_gateway_url_invalid",
+                    "Alipay gateway URL is invalid",
+                )
+            if not _callback_url_allowed(
+                notify_url,
+                public_base_url=public_base_url,
+                expected_path=SERVICE_SETTING_ALIPAY_NOTIFY_PATH,
+                environment=self.settings.environment,
+            ):
+                raise ServiceSettingsAdminError(
+                    "service_settings.alipay_notify_url_invalid",
+                    "Alipay notify URL must match the configured portal public base URL",
+                )
+            if not _callback_url_allowed(
+                return_url,
+                public_base_url=public_base_url,
+                expected_path=SERVICE_SETTING_ALIPAY_RETURN_PATH,
+                environment=self.settings.environment,
+            ):
+                raise ServiceSettingsAdminError(
+                    "service_settings.alipay_return_url_invalid",
+                    "Alipay return URL must match the configured portal public base URL",
+                )
+        existing = _load_service_setting(self.database_url, SERVICE_SETTING_PAYMENT_ALIPAY)
+        existing_private_key = _decrypt_secret(existing, "private_key", settings=self.settings)
+        existing_public_key = _decrypt_secret(existing, "public_key", settings=self.settings)
+        if enabled and payload.get("private_key") is None and not existing_private_key:
+            raise ServiceSettingsAdminError(
+                "service_settings.alipay_private_key_required",
+                "Alipay application private key is required",
+            )
+        if enabled and payload.get("public_key") is None and not existing_public_key:
+            raise ServiceSettingsAdminError(
+                "service_settings.alipay_public_key_required",
+                "Alipay public key is required",
+            )
+        row = self._save(
+            setting_id=SERVICE_SETTING_PAYMENT_ALIPAY,
+            config={
+                "app_id": app_id,
+                "gateway_url": gateway_url,
+                "notify_url": notify_url,
+                "return_url": return_url,
+                "sign_type": "RSA2",
+                "payment_product_code": "FAST_INSTANT_TRADE_PAY",
+            },
+            secrets={
+                "private_key": payload.get("private_key"),
+                "public_key": payload.get("public_key"),
+            },
+            enabled=enabled,
+            required_secret_keys=["private_key", "public_key"] if enabled else [],
+        )
+        return self._serialize(row)
+
     def test_qq_login(self) -> dict[str, Any]:
         row = _load_service_setting(self.database_url, SERVICE_SETTING_QQ_LOGIN)
         config = resolve_portal_qq_runtime_config(self.database_url, self.settings)
@@ -212,6 +296,54 @@ class ServiceSettingsAdminService:
             "status": status,
             "message": message,
             "redirect_uri": _string(config.get("redirect_uri")),
+            "credential_value_exposure": "none",
+        }
+
+    def test_alipay_payment(self) -> dict[str, Any]:
+        row = _load_service_setting(self.database_url, SERVICE_SETTING_PAYMENT_ALIPAY)
+        config = resolve_alipay_payment_runtime_config(self.database_url, self.settings)
+        if not config.get("configured"):
+            message = "Alipay payment configuration is incomplete"
+            self._record_test_result(
+                row,
+                status=STATUS_MISSING_CONFIG,
+                error_code="service_settings.alipay_not_configured",
+                message=message,
+            )
+            return {
+                "surface": "admin_service_settings_test",
+                "setting_id": SERVICE_SETTING_PAYMENT_ALIPAY,
+                "status": STATUS_MISSING_CONFIG,
+                "message": message,
+                "notify_url": _string(config.get("notify_url")),
+                "return_url": _string(config.get("return_url")),
+                "credential_value_exposure": "none",
+            }
+        try:
+            from app.domain.commercial.payment_gateways import validate_alipay_gateway_config
+
+            validate_alipay_gateway_config(config)
+        except Exception as error:
+            message = str(error) or error.__class__.__name__
+            self._record_test_result(
+                row,
+                status=STATUS_ERROR,
+                error_code="service_settings.alipay_config_invalid",
+                message=message,
+            )
+            raise ServiceSettingsAdminError(
+                "service_settings.alipay_config_invalid",
+                message,
+                status_code=400,
+            ) from error
+        self._record_test_result(row, status=STATUS_READY, error_code="", message="")
+        return {
+            "surface": "admin_service_settings_test",
+            "setting_id": SERVICE_SETTING_PAYMENT_ALIPAY,
+            "status": STATUS_READY,
+            "message": "Alipay payment configuration is ready",
+            "notify_url": _string(config.get("notify_url")),
+            "return_url": _string(config.get("return_url")),
             "credential_value_exposure": "none",
         }
 
@@ -450,6 +582,36 @@ def resolve_portal_email_runtime_config(database_url: str, settings: Settings) -
     }
 
 
+def resolve_alipay_payment_runtime_config(database_url: str, settings: Settings) -> dict[str, Any]:
+    row = _load_service_setting(database_url, SERVICE_SETTING_PAYMENT_ALIPAY)
+    if row is None or not bool(row.enabled):
+        return {"configured": False, "enabled": False}
+    config = _dict(row.config_json)
+    private_key = _decrypt_secret(row, "private_key", settings=settings)
+    public_key = _decrypt_secret(row, "public_key", settings=settings)
+    configured = bool(
+        _string(config.get("app_id"))
+        and _string(config.get("gateway_url"))
+        and _string(config.get("notify_url"))
+        and _string(config.get("return_url"))
+        and private_key
+        and public_key
+    )
+    return {
+        "configured": configured,
+        "enabled": bool(row.enabled),
+        "app_id": _string(config.get("app_id")),
+        "gateway_url": _string(config.get("gateway_url")),
+        "notify_url": _string(config.get("notify_url")),
+        "return_url": _string(config.get("return_url")),
+        "private_key": private_key,
+        "public_key": public_key,
+        "sign_type": _string(config.get("sign_type")) or "RSA2",
+        "payment_product_code": _string(config.get("payment_product_code"))
+        or "FAST_INSTANT_TRADE_PAY",
+    }
+
+
 def _load_service_setting(database_url: str, setting_id: str) -> ServiceSetting | None:
     with get_session(database_url) as session:
         return session.get(ServiceSetting, setting_id)
@@ -491,7 +653,11 @@ def _public_config(config: dict[str, Any]) -> dict[str, Any]:
 def _boundary() -> dict[str, Any]:
     return {
         "surface": "cloud_service_settings",
-        "cloud_owns": ["portal_login_provider_config", "portal_email_delivery_config"],
+        "cloud_owns": [
+            "portal_login_provider_config",
+            "portal_email_delivery_config",
+            "payment_gateway_config",
+        ],
         "wordpress_control_plane": False,
         "ability_registry_truth": "wordpress_local",
         "workflow_registry_truth": "wordpress_local",
@@ -505,6 +671,20 @@ def _default_qq_redirect_uri(public_base_url: str) -> str:
     if not parsed.scheme or not parsed.netloc:
         return ""
     return urlunsplit((parsed.scheme, parsed.netloc, SERVICE_SETTING_QQ_OPEN_CALLBACK_PATH, "", ""))
+
+
+def _default_alipay_notify_url(public_base_url: str) -> str:
+    parsed = urlsplit(public_base_url)
+    if not parsed.scheme or not parsed.netloc:
+        return ""
+    return urlunsplit((parsed.scheme, parsed.netloc, SERVICE_SETTING_ALIPAY_NOTIFY_PATH, "", ""))
+
+
+def _default_alipay_return_url(public_base_url: str) -> str:
+    parsed = urlsplit(public_base_url)
+    if not parsed.scheme or not parsed.netloc:
+        return ""
+    return urlunsplit((parsed.scheme, parsed.netloc, SERVICE_SETTING_ALIPAY_RETURN_PATH, "", ""))
 
 
 def _qq_redirect_uri_allowed(
@@ -524,6 +704,24 @@ def _qq_redirect_uri_allowed(
     return bool(public_parsed.netloc and parsed.netloc.lower() == public_parsed.netloc.lower())
 
 
+def _callback_url_allowed(
+    value: str,
+    *,
+    public_base_url: str,
+    expected_path: str,
+    environment: str,
+) -> bool:
+    parsed = urlsplit(_string(value))
+    public_parsed = urlsplit(_string(public_base_url))
+    if parsed.path != expected_path:
+        return False
+    if parsed.scheme not in {"https", "http"} or not parsed.netloc:
+        return False
+    if parsed.scheme != "https" and _string(environment).lower() not in {"development", "test"}:
+        return False
+    return bool(public_parsed.netloc and parsed.netloc.lower() == public_parsed.netloc.lower())
+
+
 def _normalize_public_base_url(value: str) -> str:
     raw = _string(value).rstrip("/")
     if not raw:
@@ -532,6 +730,16 @@ def _normalize_public_base_url(value: str) -> str:
     if parsed.scheme not in {"https", "http"} or not parsed.netloc:
         return ""
     return urlunsplit((parsed.scheme.lower(), parsed.netloc.lower(), "", "", ""))
+
+
+def _normalize_url(value: str) -> str:
+    raw = _string(value)
+    if not raw:
+        return ""
+    parsed = urlsplit(raw)
+    if parsed.scheme not in {"https", "http"} or not parsed.netloc:
+        return ""
+    return urlunsplit((parsed.scheme.lower(), parsed.netloc.lower(), parsed.path or "", "", ""))
 
 
 def _dict(value: object) -> dict[str, Any]:

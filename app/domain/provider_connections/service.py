@@ -203,6 +203,17 @@ class ProviderConnectionAdminService:
                 existing = session.get(ProviderConnection, normalized["connection_id"])
                 if existing is not None:
                     secret_ciphertext = _string(existing.secret_ciphertext)
+        if secret_ciphertext and not normalized["credential"]:
+            try:
+                decrypt_provider_connection_secret(secret_ciphertext, settings=self.settings)
+            except RuntimeError as error:
+                raise ProviderConnectionAdminError(
+                    "provider_connection.saved_credential_unreadable",
+                    (
+                        "saved provider credential cannot be decrypted; "
+                        "enter the API key again and save"
+                    ),
+                ) from error
         if not secret_ciphertext and not bool(normalized["config_json"].get("secretless")):
             raise ProviderConnectionAdminError(
                 "provider_connection.preview_credential_required",

@@ -1315,6 +1315,21 @@ class CommercialRepository:
             select(PaymentOrder).where(PaymentOrder.idempotency_key == idempotency_key)
         )
 
+    def get_payment_order_by_provider_external_order(
+        self,
+        *,
+        provider: str,
+        external_order_no: str,
+    ) -> PaymentOrder | None:
+        if not provider or not external_order_no:
+            return None
+        return self.session.scalar(
+            select(PaymentOrder).where(
+                PaymentOrder.provider == provider,
+                PaymentOrder.external_order_no == external_order_no,
+            )
+        )
+
     def list_payment_orders(
         self,
         *,
@@ -1906,6 +1921,14 @@ class CommercialRepository:
         statement = statement.order_by(RunRecord.started_at.desc(), RunRecord.run_id.desc())
         if limit is not None and limit > 0:
             statement = statement.limit(limit)
+        return list(self.session.scalars(statement))
+
+    def list_run_records_by_ids(self, run_ids: list[str]) -> list[RunRecord]:
+        normalized_ids = [str(run_id or "").strip() for run_id in run_ids]
+        normalized_ids = [run_id for run_id in normalized_ids if run_id]
+        if not normalized_ids:
+            return []
+        statement = select(RunRecord).where(RunRecord.run_id.in_(normalized_ids))
         return list(self.session.scalars(statement))
 
     def list_provider_call_records_for_admin(

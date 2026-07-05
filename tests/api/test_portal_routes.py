@@ -7,6 +7,8 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import padding, rsa
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
@@ -30,8 +32,11 @@ from app.core.models import (
     AccountUserMembership,
     CreditLedgerEntry,
     IdentityProviderBinding,
+    PaymentOrder,
     PluginObservabilityEvent,
     Principal,
+    RunRecord,
+    ServiceAuditEvent,
     Site,
     SiteApiKey,
     SiteUserGrant,
@@ -53,6 +58,34 @@ from tests.conftest import (
 )
 
 _GRANTS_BY_EMAIL: dict[str, dict[str, object]] = {}
+
+
+def _alipay_test_keys() -> tuple[Any, str, str]:
+    private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    private_pem = private_key.private_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PrivateFormat.PKCS8,
+        encryption_algorithm=serialization.NoEncryption(),
+    ).decode("utf-8")
+    public_pem = private_key.public_key().public_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PublicFormat.SubjectPublicKeyInfo,
+    ).decode("utf-8")
+    return private_key, private_pem, public_pem
+
+
+def _sign_alipay_payload(private_key: Any, payload: dict[str, str]) -> str:
+    canonical = "&".join(
+        f"{key}={value}"
+        for key, value in sorted(payload.items())
+        if key not in {"sign", "sign_type"} and value
+    )
+    signature = private_key.sign(
+        canonical.encode("utf-8"),
+        padding.PKCS1v15(),
+        hashes.SHA256(),
+    )
+    return base64.b64encode(signature).decode("ascii")
 
 
 def _normalize_test_email(value: str) -> str:
@@ -190,6 +223,50 @@ class FakePortalEmailSender(PortalEmailSender):
             }
         )
 
+    def send_email_change_code(
+        self,
+        *,
+        recipient_email: str,
+        old_email: str,
+        principal_id: str,
+        code: str,
+        expires_in_seconds: int,
+        project_name: str,
+        locale: str = "zh-CN",
+    ) -> None:
+        self.messages.append(
+            {
+                "kind": "email_change_code",
+                "recipient_email": recipient_email,
+                "old_email": old_email,
+                "principal_id": principal_id,
+                "code": code,
+                "expires_in_seconds": expires_in_seconds,
+                "project_name": project_name,
+                "locale": locale,
+            }
+        )
+
+    def send_email_changed_notice(
+        self,
+        *,
+        recipient_email: str,
+        new_email: str,
+        principal_id: str,
+        project_name: str,
+        locale: str = "zh-CN",
+    ) -> None:
+        self.messages.append(
+            {
+                "kind": "email_changed_notice",
+                "recipient_email": recipient_email,
+                "new_email": new_email,
+                "principal_id": principal_id,
+                "project_name": project_name,
+                "locale": locale,
+            }
+        )
+
 
 class _PortalDraftProvider:
     provider_id = "fake_llm"
@@ -258,10 +335,14 @@ def _verify_portal_login_code(
     *,
     email: str,
     code: str,
+    remember_me: bool | None = None,
 ) -> dict[str, object]:
+    payload: dict[str, object] = {"email": email, "code": code}
+    if remember_me is not None:
+        payload["remember_me"] = remember_me
     response = client.post(
         "/portal/v1/auth/code/verify",
-        json={"email": email, "code": code},
+        json=payload,
     )
     assert response.status_code == 200, response.text
     data = response.json()["data"]
@@ -273,7 +354,7 @@ def _request_portal_registration_code(
     client: TestClient,
     *,
     email: str,
-    site_url: str,
+    site_url: str = "",
     site_name: str = "",
     headers: dict[str, str] | None = None,
 ) -> dict[str, object]:
@@ -283,14 +364,14 @@ def _request_portal_registration_code(
         and "x-npcink-dev-login-code" not in request_headers
     ):
         request_headers["x-npcink-dev-login-code"] = "1"
+    payload: dict[str, object] = {"email": email}
+    if site_url:
+        payload["site_url"] = site_url
+    if site_name:
+        payload["site_name"] = site_name
     response = client.post(
         "/portal/v1/register/code/request",
-        json={
-            "email": email,
-            "site_url": site_url,
-            "site_name": site_name,
-            "use_case": "content generation",
-        },
+        json=payload,
         headers=request_headers,
     )
     assert response.status_code == 200, response.text
@@ -979,6 +1060,56 @@ def test_portal_site_key_write_requires_manage_site_keys_action(tmp_path: Path) 
     dispose_engine(database_url)
 
 
+def test_portal_site_access_allows_legacy_site_grant_without_account_membership(
+    tmp_path: Path,
+) -> None:
+    database_url, client = _build_client(tmp_path)
+
+    client.post(
+        "/internal/service/accounts",
+        json={"account_id": "acct_portal_legacy_grant", "name": "Portal Legacy Account"},
+        headers=build_internal_headers(idempotency_key="portal-legacy-grant-account-001"),
+    )
+    client.post(
+        "/internal/service/sites",
+        json={
+            "site_id": "site_portal_legacy_grant",
+            "account_id": "acct_portal_legacy_grant",
+            "name": "Portal Legacy Site",
+            "status": "active",
+        },
+        headers=build_internal_headers(idempotency_key="portal-legacy-grant-site-001"),
+    )
+    grant = _grant_principal_access(
+        client,
+        site_id="site_portal_legacy_grant",
+        email="portal-legacy-grant@example.com",
+        idempotency_key="portal-legacy-grant-user-grants-001",
+    )
+    with get_session(database_url) as session:
+        membership = session.scalar(
+            select(AccountUserMembership).where(
+                AccountUserMembership.principal_id == str(grant["principal_id"]),
+                AccountUserMembership.account_id == "acct_portal_legacy_grant",
+            )
+        )
+        assert membership is not None
+        session.delete(membership)
+        session.commit()
+
+    response = client.get(
+        "/portal/v1/sites/site_portal_legacy_grant/summary",
+        headers=_portal_headers_for_grant(grant),
+    )
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["site"]["site_id"] == "site_portal_legacy_grant"
+    assert data["role"] == "user"
+    assert "view_usage" in data["allowed_actions"]
+
+    dispose_engine(database_url)
+
+
 def test_portal_revoked_account_membership_blocks_site_access(tmp_path: Path) -> None:
     database_url, client = _build_client(tmp_path)
 
@@ -1477,6 +1608,74 @@ def test_portal_site_diagnostic_advisor_is_scoped_and_read_only(tmp_path: Path) 
     dispose_engine(database_url)
 
 
+def test_portal_site_diagnostics_is_scoped_and_available(tmp_path: Path) -> None:
+    database_url, client = _build_client(tmp_path)
+
+    client.post(
+        "/internal/service/accounts",
+        json={"account_id": "acct_portal_diag_read", "name": "Portal Diagnostics Read"},
+        headers=build_internal_headers(idempotency_key="portal-diag-read-account-001"),
+    )
+    client.post(
+        "/internal/service/sites",
+        json={
+            "site_id": "site_portal_diag_read",
+            "account_id": "acct_portal_diag_read",
+            "name": "Portal Diagnostics Read Site",
+            "status": "active",
+            "metadata": {"wordpress_url": "https://diag-read.example.test"},
+        },
+        headers=build_internal_headers(idempotency_key="portal-diag-read-site-001"),
+    )
+    _grant_principal_access(
+        client,
+        site_id="site_portal_diag_read",
+        email="portal-diag-read@example.com",
+        idempotency_key="portal-diag-read-user-grants-001",
+    )
+    key_response = client.post(
+        "/portal/v1/sites/site_portal_diag_read/api-keys",
+        json={"label": "Portal Diagnostics Read Key"},
+        headers=build_portal_headers(
+            principal_id="principal:portal-diag-read@example.com",
+            idempotency_key="portal-diag-read-key-001",
+        ),
+    )
+    assert key_response.status_code == 200, key_response.text
+
+    response = client.get(
+        "/portal/v1/sites/site_portal_diag_read/diagnostics",
+        headers=build_portal_headers(principal_id="principal:portal-diag-read@example.com"),
+    )
+    outsider = client.get(
+        "/portal/v1/sites/site_portal_diag_read/diagnostics",
+        headers=build_portal_headers(principal_id="principal:outsider@example.com"),
+    )
+
+    assert response.status_code == 200, response.text
+    data = response.json()["data"]
+    assert data["site_id"] == "site_portal_diag_read"
+    assert data["account_id"] == "acct_portal_diag_read"
+    assert data["identity_type"] == "user"
+    assert data["role"] == "user"
+    assert data["site_status"] == "active"
+    assert data["wordpress_url"] == "https://diag-read.example.test"
+    assert data["active_key_count"] == 1
+    assert data["key_summary"]["active"] == 1
+    assert data["recent_failures"] == []
+    assert {item["code"] for item in data["checks"]} == {
+        "site_status",
+        "active_key",
+        "wordpress_url",
+        "recent_failures",
+    }
+    assert all(item["ok"] for item in data["checks"])
+    assert outsider.status_code == 401
+    assert outsider.json()["error_code"] == "auth.portal_session_revoked"
+
+    dispose_engine(database_url)
+
+
 def test_portal_unknown_principal_cannot_access_site_keys(tmp_path: Path) -> None:
     database_url, client = _build_client(tmp_path)
 
@@ -1753,6 +1952,184 @@ def test_portal_auth_login_code_request_and_verify_with_jwt(tmp_path: Path) -> N
         assert identity is not None
         assert identity.status == PRINCIPAL_STATUS_ACTIVE
         assert identity.last_login_at is not None
+
+
+def test_portal_account_email_change_verifies_new_email_before_switching(
+    tmp_path: Path,
+) -> None:
+    fake_sender = FakePortalEmailSender()
+    database_url, client = _build_client(
+        tmp_path,
+        settings_overrides={
+            "portal_jwt_secret": TEST_PORTAL_JWT_SECRET,
+            "portal_login_code_ttl_seconds": 300,
+        },
+        portal_email_sender=fake_sender,
+    )
+    client.post(
+        "/internal/service/accounts",
+        json={"account_id": "acct_email_change", "name": "Email Change Account"},
+        headers=build_internal_headers(idempotency_key="email-change-account"),
+    )
+    client.post(
+        "/internal/service/sites",
+        json={
+            "site_id": "site_email_change",
+            "account_id": "acct_email_change",
+            "name": "Email Change Site",
+            "status": "active",
+        },
+        headers=build_internal_headers(idempotency_key="email-change-site"),
+    )
+    _grant_principal_access(
+        client,
+        site_id="site_email_change",
+        email="old-email@example.com",
+        idempotency_key="email-change-grant",
+    )
+    login_code = _request_portal_login_code(
+        client,
+        email="old-email@example.com",
+        headers={"x-npcink-debug-portal-link": "1"},
+    )
+    _verify_portal_login_code(
+        client,
+        email="old-email@example.com",
+        code=str(login_code["code"]),
+    )
+
+    request_response = client.post(
+        "/portal/v1/account/email-change/request",
+        json={"new_email": "new-email@example.com", "locale": "zh-CN"},
+        headers={
+            "Idempotency-Key": "email-change-request",
+            "x-npcink-dev-login-code": "1",
+        },
+    )
+
+    assert request_response.status_code == 200, request_response.text
+    request_data = request_response.json()["data"]
+    assert request_data["old_email"] == "old-email@example.com"
+    assert request_data["new_email"] == "new-email@example.com"
+    assert request_data["delivery"] == "development_code"
+    assert request_data["code"] != ""
+    assert fake_sender.messages[-1]["kind"] == "email_change_code"
+    assert fake_sender.messages[-1]["recipient_email"] == "new-email@example.com"
+
+    with get_session(database_url) as session:
+        identity = session.scalar(
+            select(Principal).where(Principal.email == "old-email@example.com")
+        )
+        assert identity is not None
+
+    verify_response = client.post(
+        "/portal/v1/account/email-change/verify",
+        json={"new_email": "new-email@example.com", "code": request_data["code"]},
+        headers={"Idempotency-Key": "email-change-verify"},
+    )
+
+    assert verify_response.status_code == 200, verify_response.text
+    verify_data = verify_response.json()["data"]
+    assert verify_data["email"] == "new-email@example.com"
+    assert verify_data["old_email"] == "old-email@example.com"
+    assert verify_data["new_email"] == "new-email@example.com"
+    assert fake_sender.messages[-1]["kind"] == "email_changed_notice"
+    assert fake_sender.messages[-1]["recipient_email"] == "old-email@example.com"
+
+    with get_session(database_url) as session:
+        assert session.scalar(
+            select(Principal).where(Principal.email == "old-email@example.com")
+        ) is None
+        identity = session.scalar(
+            select(Principal).where(Principal.email == "new-email@example.com")
+        )
+        assert identity is not None
+        audit_event = session.scalar(
+            select(ServiceAuditEvent)
+            .where(ServiceAuditEvent.event_kind == "principal.email_change")
+            .order_by(ServiceAuditEvent.id.desc())
+        )
+        assert audit_event is not None
+        assert audit_event.actor_kind == "principal"
+        assert audit_event.actor_ref == identity.principal_id
+        assert audit_event.scope_kind == "principal"
+        assert audit_event.scope_id == identity.principal_id
+        assert audit_event.payload_json == {
+            "principal_id": identity.principal_id,
+            "old_email": "old-email@example.com",
+            "new_email": "new-email@example.com",
+        }
+
+    old_login_response = client.post(
+        "/portal/v1/auth/code/request",
+        json={"email": "old-email@example.com"},
+        headers={"x-npcink-debug-portal-link": "1"},
+    )
+    assert old_login_response.status_code == 200
+    assert old_login_response.json()["data"]["code"] == ""
+
+    new_login_data = _request_portal_login_code(
+        client,
+        email="new-email@example.com",
+        headers={"x-npcink-debug-portal-link": "1"},
+    )
+    assert new_login_data["code"] != ""
+
+
+def test_portal_auth_login_code_remember_me_extends_cookie_session(tmp_path: Path) -> None:
+    _database_url, client = _build_client(
+        tmp_path,
+        settings_overrides={
+            "portal_jwt_secret": TEST_PORTAL_JWT_SECRET,
+            "portal_jwt_issuer": "npcink-cloud-portal",
+            "portal_jwt_audience": "npcink-cloud-customers",
+            "portal_session_ttl_seconds": 900,
+            "portal_remember_me_session_ttl_seconds": 7 * 24 * 60 * 60,
+            "portal_login_code_ttl_seconds": 300,
+        },
+    )
+
+    client.post(
+        "/internal/service/accounts",
+        json={"account_id": "acct_portal_remember", "name": "Portal Remember Account"},
+        headers=build_internal_headers(idempotency_key="portal-remember-account-001"),
+    )
+    client.post(
+        "/internal/service/sites",
+        json={
+            "site_id": "site_portal_remember",
+            "account_id": "acct_portal_remember",
+            "name": "Portal Remember Site",
+            "status": "active",
+        },
+        headers=build_internal_headers(idempotency_key="portal-remember-site-001"),
+    )
+    client.post(
+        "/internal/service/sites/site_portal_remember/user-grants",
+        json={"email": "portal-remember@example.com"},
+        headers=build_internal_headers(idempotency_key="portal-remember-user-grants-001"),
+    )
+
+    request_data = _request_portal_login_code(
+        client,
+        email="portal-remember@example.com",
+        headers={"x-npcink-debug-portal-link": "1"},
+    )
+    verified_at = datetime.now(UTC)
+    consume_data = _verify_portal_login_code(
+        client,
+        email="portal-remember@example.com",
+        code=str(request_data["code"]),
+        remember_me=True,
+    )
+
+    expires_at = datetime.fromisoformat(
+        str(consume_data["session"]["expires_at"]).replace("Z", "+00:00")
+    )
+    assert timedelta(days=6, hours=23) <= expires_at - verified_at <= timedelta(
+        days=7,
+        minutes=1,
+    )
 
 
 def test_portal_qq_bind_and_callback_login_reuse_user_session(
@@ -2427,15 +2804,14 @@ def test_portal_self_registration_opens_free_account_and_session(
     request_data = _request_portal_registration_code(
         client,
         email="new-portal-user@example.com",
-        site_url="https://example.com",
-        site_name="Example Site",
         headers={"x-npcink-debug-portal-link": "1"},
     )
 
     assert request_data["delivery"] == "development_code"
     assert request_data["expires_in_seconds"] == 300
     assert request_data["code"] != ""
-    assert request_data["site"]["site_id"] == "site_example-com"
+    assert request_data["site"]["site_id"] == ""
+    assert request_data["site"]["wordpress_url"] == ""
 
     registration_data = _verify_portal_registration_code(
         client,
@@ -2446,18 +2822,24 @@ def test_portal_self_registration_opens_free_account_and_session(
     assert registration_data["status"] == "registered"
     assert str(registration_data["principal_id"]).startswith("prn_")
     assert str(registration_data["account_id"]).startswith("acct_")
-    assert registration_data["site_id"] == "site_example-com"
-    assert registration_data["site"]["status"] == "active"
-    assert registration_data["site"]["wordpress_url"] == "https://example.com"
-    assert registration_data["subscription"]["plan_id"] == "plan_free"
+    assert registration_data["site_id"] == ""
+    assert registration_data["site"] is None
+    assert registration_data["subscription"]["plan_id"] == "free"
     assert registration_data["subscription"]["package_alias"] == "Free"
     assert registration_data["session"]["state"] == "active"
     assert registration_data["session"]["transport"] == "cookie"
 
     session_response = client.get("/portal/v1/session")
     assert session_response.status_code == 200
-    assert session_response.json()["data"]["principal_id"] == registration_data["principal_id"]
-    assert session_response.json()["data"]["site_id"] == "site_example-com"
+    session_data = session_response.json()["data"]
+    assert session_data["principal_id"] == registration_data["principal_id"]
+    assert session_data["site_id"] == ""
+    assert session_data["sites"] == []
+    assert session_data["accounts"][0]["site_count"] == 0
+    assert session_data["current_subscription"]["plan_id"] == "free"
+    assert session_data["current_subscription"]["plan_version_id"] == "free_v1"
+    assert session_data["current_subscription"]["package_alias"] == "Free"
+    assert "subscription" not in session_data["current_subscription"]
 
     with get_session(database_url) as session:
         identity = session.scalar(
@@ -2475,25 +2857,22 @@ def test_portal_self_registration_opens_free_account_and_session(
         )
         assert account_membership is not None
         assert account_membership.status == "active"
-        site = session.scalar(select(Site).where(Site.site_id == "site_example-com"))
-        assert site is not None
-        assert site.account_id == registration_data["account_id"]
+        site_count = len(list(session.scalars(select(Site))))
+        assert site_count == 0
         site_grant = session.scalar(
             select(SiteUserGrant).where(
                 SiteUserGrant.principal_id == identity.principal_id,
-                SiteUserGrant.site_id == "site_example-com",
             )
         )
-        assert site_grant is not None
-        assert site_grant.status == "active"
+        assert site_grant is None
         subscription = session.scalar(
             select(AccountSubscription).where(
                 AccountSubscription.account_id == str(registration_data["account_id"])
             )
         )
         assert subscription is not None
-        assert subscription.plan_id == "plan_free"
-        assert subscription.plan_version_id == "plan_free_v1"
+        assert subscription.plan_id == "free"
+        assert subscription.plan_version_id == "free_v1"
         assert subscription.status == "active"
         assert (subscription.metadata_json or {})["source"] == "production_default_free_bind_v1"
         entitlement_snapshot = session.scalar(
@@ -2504,38 +2883,14 @@ def test_portal_self_registration_opens_free_account_and_session(
         )
         assert entitlement_snapshot is not None
         assert entitlement_snapshot.subscription_id == subscription.subscription_id
-        assert entitlement_snapshot.plan_version_id == "plan_free_v1"
+        assert entitlement_snapshot.plan_version_id == "free_v1"
         assert entitlement_snapshot.site_limit == 1
         assert entitlement_snapshot.budgets_json["max_ai_credits_per_period"] == 300
         assert entitlement_snapshot.concurrency_json["max_active_runs"] == 1
 
-    entitlements_response = client.get("/portal/v1/sites/site_example-com/entitlements")
-    assert entitlements_response.status_code == 200, entitlements_response.text
-    entitlements_data = entitlements_response.json()["data"]
-    assert entitlements_data["subscription"]["plan_id"] == "plan_free"
-    assert entitlements_data["entitlement_snapshot"]["site_limit"] == 1
-    assert (
-        entitlements_data["entitlement_snapshot"]["budgets"]["max_ai_credits_per_period"]
-        == 300.0
-    )
-    quota_summary = entitlements_data["quota_summary"]
-    assert quota_summary["credit"]["key"] == "ai_credits"
-    assert quota_summary["credit"]["limit"] == 300.0
-    assert quota_summary["credit"]["estimated"] is True
-    assert quota_summary["credit_policy"]["renewal_policy"] == (
-        "monthly_plan_grant_resets_each_period"
-    )
-    bound_sites_limit = next(
-        item for item in quota_summary["resource_limits"] if item["key"] == "bound_sites"
-    )
-    assert bound_sites_limit["used"] == 1.0
-    assert bound_sites_limit["limit"] == 1.0
-
     second_request_data = _request_portal_registration_code(
         client,
         email="new-portal-user@example.com",
-        site_url="https://second.example.com",
-        site_name="Second Site",
         headers={"x-npcink-debug-portal-link": "1"},
     )
     second_registration_data = _verify_portal_registration_code(
@@ -2545,12 +2900,280 @@ def test_portal_self_registration_opens_free_account_and_session(
     )
     assert second_registration_data["status"] == "existing_user"
     assert second_registration_data["principal_id"] == registration_data["principal_id"]
-    assert second_registration_data["site_id"] == "site_example-com"
+    assert second_registration_data["site_id"] == ""
     with get_session(database_url) as session:
         site_count = len(list(session.scalars(select(Site))))
         subscription_count = len(list(session.scalars(select(AccountSubscription))))
-    assert site_count == 1
+    assert site_count == 0
     assert subscription_count == 1
+
+    dispose_engine(database_url)
+
+
+def test_portal_user_can_start_pro_trial_and_create_monthly_order(
+    tmp_path: Path,
+) -> None:
+    database_url, client = _build_client(
+        tmp_path,
+        settings_overrides={
+            "portal_jwt_secret": TEST_PORTAL_JWT_SECRET,
+            "portal_login_code_ttl_seconds": 300,
+        },
+    )
+    request_data = _request_portal_registration_code(
+        client,
+        email="pro-trial-user@example.com",
+        headers={"x-npcink-debug-portal-link": "1"},
+    )
+    registration = _verify_portal_registration_code(
+        client,
+        email="pro-trial-user@example.com",
+        code=str(request_data["code"]),
+    )
+    account_id = str(registration["account_id"])
+
+    trial_response = client.post(
+        "/portal/v1/account/pro-trial",
+        headers=build_portal_headers(
+            principal_id=str(registration["principal_id"]),
+            idempotency_key="portal-pro-trial-start-001",
+        ),
+    )
+    assert trial_response.status_code == 200, trial_response.text
+    trial_data = trial_response.json()["data"]
+    assert trial_data["account_id"] == account_id
+    assert trial_data["subscription"]["plan_id"] == "pro"
+    assert trial_data["subscription"]["status"] == "trialing"
+    assert trial_data["subscription"]["metadata"]["trial_for_tier"] == "pro"
+    assert trial_data["trial"]["trial_days"] == 14
+    assert trial_data["session"]["current_subscription"]["plan_id"] == "pro"
+
+    order_response = client.post(
+        "/portal/v1/account/pro-monthly-order",
+        json={"provider": "alipay"},
+        headers=build_portal_headers(
+            principal_id=str(registration["principal_id"]),
+            idempotency_key="portal-pro-monthly-order-001",
+        ),
+    )
+    assert order_response.status_code == 200, order_response.text
+    order = order_response.json()["data"]["order"]
+    assert order["amount"] == 29.0
+    assert order["currency"] == "CNY"
+    assert order["provider"] == "alipay"
+    assert order["purchase_kind"] == "subscription_plan"
+    assert order["subscription_id"] == trial_data["subscription"]["subscription_id"]
+    assert order["metadata"]["billing_cycle"] == "monthly"
+
+    payment_orders_response = client.get(
+        "/portal/v1/account/payment-orders?limit=10",
+        headers=build_portal_headers(principal_id=str(registration["principal_id"])),
+    )
+    assert payment_orders_response.status_code == 200, payment_orders_response.text
+    payment_orders_data = payment_orders_response.json()["data"]
+    assert payment_orders_data["account_id"] == account_id
+    assert payment_orders_data["pagination"]["total"] == 1
+    listed_order = payment_orders_data["items"][0]
+    assert listed_order["order_id"] == order["order_id"]
+    assert listed_order["amount"] == 29.0
+    assert listed_order["currency"] == "CNY"
+    assert listed_order["purchase_kind"] == "subscription_plan"
+    assert listed_order["site_id"] == ""
+    assert listed_order["status"] == "pending"
+    assert listed_order["metadata"]["billing_cycle"] == "monthly"
+
+    with get_session(database_url) as session:
+        subscriptions = list(
+            session.scalars(
+                select(AccountSubscription).where(
+                    AccountSubscription.account_id == account_id
+                )
+            )
+        )
+        assert {item.plan_id: item.status for item in subscriptions} == {
+            "free": "canceled",
+            "pro": "trialing",
+        }
+        payment_order = session.scalar(
+            select(PaymentOrder).where(PaymentOrder.order_id == order["order_id"])
+        )
+        assert payment_order is not None
+        assert payment_order.amount == 29.0
+        assert payment_order.currency == "CNY"
+
+    dispose_engine(database_url)
+
+
+def test_open_alipay_notify_marks_pro_monthly_order_paid(
+    tmp_path: Path,
+) -> None:
+    private_key, private_pem, public_pem = _alipay_test_keys()
+    database_url, client = _build_client(
+        tmp_path,
+        settings_overrides={
+            "portal_jwt_secret": TEST_PORTAL_JWT_SECRET,
+            "portal_login_code_ttl_seconds": 300,
+        },
+    )
+    public_settings_response = client.patch(
+        "/internal/service/admin/service-settings/portal-public",
+        json={"public_base_url": "http://testserver"},
+        headers=build_internal_headers(idempotency_key="portal-real-alipay-public-001"),
+    )
+    assert public_settings_response.status_code == 200, public_settings_response.text
+    alipay_settings_response = client.patch(
+        "/internal/service/admin/service-settings/alipay-payment",
+        json={
+            "enabled": True,
+            "app_id": "2026000000000099",
+            "gateway_url": "https://openapi.alipay.com/gateway.do",
+            "notify_url": "http://testserver/open/payments/alipay/notify",
+            "return_url": "http://testserver/open/payments/alipay/return",
+            "private_key": private_pem,
+            "public_key": public_pem,
+        },
+        headers=build_internal_headers(idempotency_key="portal-real-alipay-settings-001"),
+    )
+    assert alipay_settings_response.status_code == 200, alipay_settings_response.text
+    request_data = _request_portal_registration_code(
+        client,
+        email="alipay-paid-pro-user@example.com",
+        headers={"x-npcink-debug-portal-link": "1"},
+    )
+    registration = _verify_portal_registration_code(
+        client,
+        email="alipay-paid-pro-user@example.com",
+        code=str(request_data["code"]),
+    )
+    principal_id = str(registration["principal_id"])
+    trial_response = client.post(
+        "/portal/v1/account/pro-trial",
+        headers=build_portal_headers(
+            principal_id=principal_id,
+            idempotency_key="portal-real-alipay-pro-trial-001",
+        ),
+    )
+    assert trial_response.status_code == 200, trial_response.text
+    order_response = client.post(
+        "/portal/v1/account/pro-monthly-order",
+        json={"provider": "alipay"},
+        headers=build_portal_headers(
+            principal_id=principal_id,
+            idempotency_key="portal-real-alipay-pro-order-001",
+        ),
+    )
+    assert order_response.status_code == 200, order_response.text
+    order = order_response.json()["data"]["order"]
+    assert order["checkout_url"]
+
+    return_response = client.get(
+        "/open/payments/alipay/return",
+        params={
+            "out_trade_no": str(order["external_order_no"]),
+            "trade_status": "TRADE_SUCCESS",
+        },
+        follow_redirects=False,
+    )
+    assert return_response.status_code == 303
+    assert return_response.headers["location"] == (
+        f"/portal/billing?payment_return=alipay&out_trade_no={order['external_order_no']}"
+        "&trade_status=TRADE_SUCCESS"
+    )
+    with get_session(database_url) as session:
+        payment_order = session.get(PaymentOrder, str(order["order_id"]))
+        assert payment_order is not None
+        assert payment_order.status == "pending"
+
+    callback = {
+        "app_id": "2026000000000099",
+        "out_trade_no": str(order["external_order_no"]),
+        "trade_no": "202607040000000099",
+        "notify_id": "notify-real-alipay-route-001",
+        "total_amount": "29.00",
+        "trade_status": "TRADE_SUCCESS",
+        "gmt_payment": "2026-07-04 10:20:30",
+        "sign_type": "RSA2",
+    }
+    callback["sign"] = _sign_alipay_payload(private_key, callback)
+
+    notify_response = client.post("/open/payments/alipay/notify", data=callback)
+
+    assert notify_response.status_code == 200, notify_response.text
+    assert notify_response.text == "success"
+    with get_session(database_url) as session:
+        payment_order = session.get(PaymentOrder, str(order["order_id"]))
+        assert payment_order is not None
+        assert payment_order.status == "paid"
+        assert payment_order.provider_trade_no == "202607040000000099"
+        subscription = session.get(AccountSubscription, str(order["subscription_id"]))
+        assert subscription is not None
+        assert subscription.status == "active"
+        assert subscription.plan_id == "pro"
+
+    dispose_engine(database_url)
+
+
+def test_portal_session_falls_back_to_free_after_pro_trial_expires(
+    tmp_path: Path,
+) -> None:
+    database_url, client = _build_client(
+        tmp_path,
+        settings_overrides={
+            "portal_jwt_secret": TEST_PORTAL_JWT_SECRET,
+            "portal_login_code_ttl_seconds": 300,
+        },
+    )
+    request_data = _request_portal_registration_code(
+        client,
+        email="expired-pro-trial-user@example.com",
+        headers={"x-npcink-debug-portal-link": "1"},
+    )
+    registration = _verify_portal_registration_code(
+        client,
+        email="expired-pro-trial-user@example.com",
+        code=str(request_data["code"]),
+    )
+    account_id = str(registration["account_id"])
+    principal_id = str(registration["principal_id"])
+
+    trial_response = client.post(
+        "/portal/v1/account/pro-trial",
+        headers=build_portal_headers(
+            principal_id=principal_id,
+            idempotency_key="portal-pro-trial-expiry-start-001",
+        ),
+    )
+    assert trial_response.status_code == 200, trial_response.text
+    trial_subscription_id = str(
+        trial_response.json()["data"]["subscription"]["subscription_id"]
+    )
+    with get_session(database_url) as session:
+        trial_subscription = session.get(AccountSubscription, trial_subscription_id)
+        assert trial_subscription is not None
+        trial_subscription.current_period_end_at = datetime.now(UTC) - timedelta(days=1)
+        session.commit()
+
+    session_response = client.get(
+        "/portal/v1/session",
+        headers=build_portal_headers(principal_id=principal_id),
+    )
+
+    assert session_response.status_code == 200, session_response.text
+    current_subscription = session_response.json()["data"]["current_subscription"]
+    assert current_subscription["plan_id"] == "free"
+    assert current_subscription["status"] == "active"
+    with get_session(database_url) as session:
+        subscriptions = list(
+            session.scalars(
+                select(AccountSubscription).where(
+                    AccountSubscription.account_id == account_id
+                )
+            )
+        )
+        assert {item.plan_id: item.status for item in subscriptions} == {
+            "free": "active",
+            "pro": "canceled",
+        }
 
     dispose_engine(database_url)
 
@@ -2567,14 +3190,11 @@ def test_portal_registration_code_request_is_rate_limited(
         portal_email_sender=FakePortalEmailSender(),
     )
 
-    for index in range(3):
+    for _index in range(3):
         response = client.post(
             "/portal/v1/register/code/request",
             json={
                 "email": "limited-register@example.com",
-                "site_url": f"https://limited-{index}.example.com",
-                "site_name": f"Limited {index}",
-                "use_case": "content generation",
             },
         )
         assert response.status_code == 200, response.text
@@ -2585,9 +3205,6 @@ def test_portal_registration_code_request_is_rate_limited(
         "/portal/v1/register/code/request",
         json={
             "email": "limited-register@example.com",
-            "site_url": "https://limited-4.example.com",
-            "site_name": "Limited 4",
-            "use_case": "content generation",
         },
     )
     assert limited_response.status_code == 429
@@ -3217,6 +3834,68 @@ def test_portal_summary_usage_entitlements_and_audit_routes(tmp_path: Path) -> N
         )
         assert subscription is not None
         repository = CommercialRepository(session)
+        session.add_all(
+            [
+                RunRecord(
+                    run_id="run-portal-ledger-1",
+                    site_id="site_portal_reads",
+                    account_id="acct_portal_reads",
+                    subscription_id=subscription.subscription_id,
+                    plan_version_id=subscription.plan_version_id,
+                    ability_name="npcink-abilities-toolkit/build-article-block-plan",
+                    ability_family="workflow",
+                    skill_id="",
+                    workflow_id="",
+                    contract_version="hosted_ai_content_support.v1",
+                    channel="wordpress",
+                    execution_kind="text",
+                    execution_tier="cloud",
+                    execution_pattern="step_offload",
+                    data_classification="public_site_content",
+                    profile_id="text.default",
+                    canonical_run_id=None,
+                    status="succeeded",
+                    idempotency_key="portal-ledger-run-content-001",
+                    request_fingerprint="portal-ledger-run-content",
+                    trace_id="trace-portal-ledger-run-content",
+                    cancel_requested_at=None,
+                    canceled_at=None,
+                    input_json={},
+                    policy_json={},
+                    result_ref=None,
+                    result_json={},
+                ),
+                RunRecord(
+                    run_id="run-portal-ledger-zhihu-hot",
+                    site_id="site_portal_reads",
+                    account_id="acct_portal_reads",
+                    subscription_id=subscription.subscription_id,
+                    plan_version_id=subscription.plan_version_id,
+                    ability_name="npcink-cloud/web-search",
+                    ability_family="web_search",
+                    skill_id="",
+                    workflow_id="",
+                    contract_version="web_search.v1",
+                    channel="wordpress",
+                    execution_kind="web_search",
+                    execution_tier="cloud",
+                    execution_pattern="step_offload",
+                    data_classification="public_web",
+                    profile_id="web-search.default",
+                    canonical_run_id=None,
+                    status="succeeded",
+                    idempotency_key="portal-ledger-run-zhihu-001",
+                    request_fingerprint="portal-ledger-run-zhihu",
+                    trace_id="trace-portal-ledger-run-zhihu",
+                    cancel_requested_at=None,
+                    canceled_at=None,
+                    input_json={},
+                    policy_json={},
+                    result_ref=None,
+                    result_json={},
+                ),
+            ]
+        )
         repository.record_credit_ledger_entry(
             account_id="acct_portal_reads",
             site_id="site_portal_reads",
@@ -3255,6 +3934,23 @@ def test_portal_summary_usage_entitlements_and_audit_routes(tmp_path: Path) -> N
                 "intent": "zhihu_hot_topics",
                 "managed_source": "zhihu_hot_topics",
             },
+        )
+        repository.record_credit_ledger_entry(
+            account_id="acct_portal_reads",
+            site_id="site_portal_reads",
+            subscription_id=subscription.subscription_id,
+            plan_version_id=subscription.plan_version_id,
+            run_id="run-portal-ledger-component-only",
+            provider_call_id=None,
+            source_type="runs",
+            source_id="run-portal-ledger-component-only:run",
+            credit_delta=-1,
+            quantity=1,
+            unit="run",
+            rate=1,
+            rate_unit=None,
+            rate_version="ai-credit-ledger-v2",
+            idempotency_key="portal-credit-ledger-component-only-001",
         )
         session.commit()
     client.post(
@@ -3347,25 +4043,45 @@ def test_portal_summary_usage_entitlements_and_audit_routes(tmp_path: Path) -> N
     credit_ledger_data = credit_ledger_response.json()["data"]
     assert credit_ledger_data["site_id"] == "site_portal_reads"
     assert credit_ledger_data["account_id"] == "acct_portal_reads"
-    assert credit_ledger_data["summary"]["total_credits"] == 3.0
-    assert credit_ledger_data["pagination"]["total"] == 2
+    assert credit_ledger_data["summary"]["total_credits"] == 4.0
+    assert credit_ledger_data["pagination"]["total"] == 3
     assert {item["source_type"] for item in credit_ledger_data["items"]} == {
+        "runs",
         "tokens_total",
         "zhihu_hot_topics",
     }
     assert {item["category"] for item in credit_ledger_data["items"]} == {"ai_usage"}
+    credit_ledger_items_by_source = {
+        item["source_type"]: item for item in credit_ledger_data["items"]
+    }
+    assert credit_ledger_items_by_source["tokens_total"]["feature_key"] == (
+        "content_generation"
+    )
+    assert credit_ledger_items_by_source["tokens_total"]["feature_label"] == (
+        "Content writing"
+    )
+    assert credit_ledger_items_by_source["runs"]["feature_key"] == "content_generation"
+    assert credit_ledger_items_by_source["runs"]["feature_label"] == "Content writing"
+    assert credit_ledger_items_by_source["zhihu_hot_topics"]["feature_key"] == "topic_research"
+    assert credit_ledger_items_by_source["zhihu_hot_topics"]["feature_label"] == (
+        "Topic research"
+    )
+    assert "ai_assistance" not in {
+        str(item.get("feature_key") or "") for item in credit_ledger_data["items"]
+    }
     assert credit_ledger_data["summary"]["category_totals"]["ai_usage"][
         "net_credit_delta"
-    ] == -3.0
+    ] == -4.0
     assert credit_ledger_data["usage_detail"]["surface"] == "portal_personal_credit_usage"
     assert {
         item["category"] for item in credit_ledger_data["usage_detail"]["legend"]
     } >= {"ai_usage", "credit_pack_purchase", "refund_adjustment", "operator_adjustment"}
     assert {item["key"] for item in credit_ledger_data["usage_detail"]["breakdown"]} >= {
+        "runs",
         "tokens_total",
         "zhihu_hot_topics",
     }
-    assert len(credit_ledger_data["usage_detail"]["recent_items"]) == 2
+    assert len(credit_ledger_data["usage_detail"]["recent_items"]) == 3
 
     credit_packs_response = client.get(
         "/portal/v1/sites/site_portal_reads/credit-packs",
@@ -3446,6 +4162,12 @@ def test_portal_summary_usage_entitlements_and_audit_routes(tmp_path: Path) -> N
     assert "credit_pack_purchase" in {
         item["source_type"] for item in refreshed_ledger["items"]
     }
+    credit_pack_ledger_item = next(
+        item
+        for item in refreshed_ledger["items"]
+        if item["source_type"] == "credit_pack_purchase"
+    )
+    assert "feature_key" not in credit_pack_ledger_item
     with get_session(database_url) as session:
         credit_pack_entries = list(
             session.scalars(

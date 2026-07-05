@@ -4,9 +4,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import React, { Suspense, useState } from 'react';
 import {
-  BackofficeLayer,
   BackofficePageStack,
-  BackofficePrimaryPanel,
   BackofficeSectionPanel,
   BackofficeStackCard,
 } from '@/components/backoffice/BackofficeScaffold';
@@ -18,9 +16,6 @@ import { cn } from '@/lib/utils';
 
 interface RegisterFormState {
   email: string;
-  siteUrl: string;
-  siteName: string;
-  useCase: string;
   code: string;
   step: 'request' | 'verify';
   status: 'idle' | 'submitting' | 'verifying' | 'error';
@@ -32,9 +27,6 @@ function RegisterFormContent() {
   const { t } = useLocale();
   const [form, setForm] = useState<RegisterFormState>({
     email: '',
-    siteUrl: '',
-    siteName: '',
-    useCase: '',
     code: '',
     step: 'request',
     status: 'idle',
@@ -48,27 +40,23 @@ function RegisterFormContent() {
   const handleRequestCode = async (event: React.FormEvent) => {
     event.preventDefault();
     const email = form.email.trim().toLowerCase();
-    const siteUrl = form.siteUrl.trim();
-    if (!email || !siteUrl) {
+    if (!email) {
       setForm((prev) => ({
         ...prev,
         status: 'error',
         message: t(
           'portal.register.required',
           undefined,
-          'Please enter your email address and WordPress site URL.'
+          'Please enter your email address.'
         ),
       }));
       return;
     }
 
-    setForm((prev) => ({ ...prev, status: 'submitting', email, siteUrl, message: '' }));
+    setForm((prev) => ({ ...prev, status: 'submitting', email, message: '' }));
     try {
       const response = await portalClient.requestRegistrationCode({
         email,
-        site_url: siteUrl,
-        site_name: form.siteName.trim(),
-        use_case: form.useCase.trim(),
       });
       setForm((prev) => ({
         ...prev,
@@ -142,192 +130,138 @@ function RegisterFormContent() {
   };
 
   return (
-    <div className="mx-auto min-h-[80vh] w-full max-w-5xl px-4 py-10">
+    <div className="mx-auto flex min-h-[72vh] w-full max-w-5xl items-center px-4 py-10">
       <BackofficePageStack>
-        <BackofficePrimaryPanel
-          eyebrow={t('portal.register.chip', undefined, 'Free signup')}
-          title={t('portal.register.title', undefined, 'Create your Portal account')}
-          description={t(
-            'portal.register.desc',
-            undefined,
-            'Use email verification to open a Free account for one WordPress site. QQ quick login can be bound after you sign in.'
-          )}
-          summary={(
-            <div className="grid gap-4 lg:grid-cols-2">
-              <BackofficeStackCard>
+        <BackofficeSectionPanel className="w-full overflow-hidden p-0" variant="portal">
+          <div className="grid gap-0 lg:grid-cols-[minmax(0,1.05fr)_minmax(18rem,0.75fr)]">
+            <div className="space-y-6 p-5 md:p-7">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-[0.22em] text-blue-700 dark:text-blue-300">
+                  {t('portal.register.chip', undefined, 'Free signup')}
+                </p>
+                <h1 className="mt-3 text-2xl font-semibold tracking-tight text-gray-950 dark:text-white md:text-[2rem]">
+                  {t('portal.register.title', undefined, 'Create your Portal account')}
+                </h1>
+                <p className="mt-3 max-w-xl text-sm leading-6 text-gray-600 dark:text-gray-300">
+                  {t(
+                    form.step === 'request' ? 'portal.register.request_desc' : 'portal.register.verify_desc',
+                    undefined,
+                    form.step === 'request'
+                      ? 'Enter your email address to create a Free account.'
+                      : 'Enter the code from your email to finish registration.'
+                  )}
+                </p>
+              </div>
+
+              <form
+                onSubmit={form.step === 'request' ? handleRequestCode : handleVerifyCode}
+                className="space-y-5"
+              >
+                <div>
+                  <label htmlFor="email" className="mb-2 block text-sm font-medium">
+                    {t('auth.email')}
+                  </label>
+                  <input
+                    id="email"
+                    type="email"
+                    value={form.email}
+                    onChange={(event) => setField('email', event.target.value)}
+                    placeholder={t('auth.email_placeholder')}
+                    className={cn('input', form.status === 'error' && 'border-red-500 focus:ring-red-500')}
+                    disabled={form.status === 'submitting' || form.status === 'verifying' || form.step === 'verify'}
+                  />
+                </div>
+
+                {form.step === 'request' ? (
+                  null
+                ) : (
+                  <div>
+                    <label htmlFor="code" className="mb-2 block text-sm font-medium">
+                      {t('auth.verification_code', undefined, 'Verification code')}
+                    </label>
+                    <input
+                      id="code"
+                      type="text"
+                      inputMode="numeric"
+                      value={form.code}
+                      onChange={(event) => setField('code', event.target.value)}
+                      placeholder={t('auth.verification_code_placeholder', undefined, 'Enter the 6-digit code')}
+                      className={cn('input', form.status === 'error' && 'border-red-500 focus:ring-red-500')}
+                      disabled={form.status === 'verifying'}
+                    />
+                  </div>
+                )}
+
+                {form.message ? (
+                  <div
+                    className={cn(
+                      'rounded-2xl px-3 py-2 text-sm',
+                      form.status === 'error'
+                        ? 'bg-red-50 text-red-700 dark:bg-red-950/30 dark:text-red-300'
+                        : 'bg-blue-50 text-blue-700 dark:bg-blue-950/30 dark:text-blue-200'
+                    )}
+                  >
+                    {form.message}
+                  </div>
+                ) : null}
+
+                <div className="flex flex-col gap-3 sm:flex-row">
+                  <button
+                    type="submit"
+                    disabled={form.status === 'submitting' || form.status === 'verifying'}
+                    className="btn btn-primary flex-1 justify-center"
+                  >
+                    {form.step === 'request'
+                      ? form.status === 'submitting'
+                        ? t('auth.sending')
+                        : t('portal.register.send_code', undefined, 'Send verification code')
+                      : form.status === 'verifying'
+                        ? t('portal.register.opening', undefined, 'Opening...')
+                        : t('portal.register.verify_continue', undefined, 'Verify and continue')}
+                  </button>
+
+                  {form.step === 'verify' ? (
+                    <button
+                      type="button"
+                      className="btn btn-secondary justify-center"
+                      onClick={resetFlow}
+                    >
+                      {t('auth.try_another_email')}
+                    </button>
+                  ) : null}
+                </div>
+              </form>
+            </div>
+
+            <aside className="border-t border-slate-200/80 bg-slate-50/70 p-5 dark:border-slate-800 dark:bg-slate-950/35 md:p-7 lg:border-l lg:border-t-0">
+              <BackofficeStackCard className="bg-white/70 dark:bg-slate-950/35" variant="portal">
                 <p className="text-[0.68rem] font-bold uppercase tracking-[0.24em] text-blue-600 dark:text-blue-300">
                   {t('portal.register.free_label', undefined, 'Free')}
                 </p>
+                <h2 className="mt-3 text-lg font-semibold text-slate-950 dark:text-white">
+                  {t('portal.register.free_title', undefined, 'Start with one WordPress site')}
+                </h2>
                 <p className="mt-2 text-sm leading-6 text-slate-600 dark:text-slate-300">
                   {t(
-                    'portal.register.free_desc',
+                    'portal.register.desc',
                     undefined,
-                    'The Free package is opened automatically after your email code is verified.'
+                    'Use email verification to open a Free account for one WordPress site. QQ quick login can be bound after you sign in.'
                   )}
                 </p>
               </BackofficeStackCard>
-              <BackofficeStackCard>
-                <p className="text-[0.68rem] font-bold uppercase tracking-[0.24em] text-blue-600 dark:text-blue-300">
-                  {t('portal.register.qq_label', undefined, 'QQ')}
+
+              <BackofficeStackCard className="mt-4 bg-white/70 dark:bg-slate-950/35" variant="portal">
+                <p className="text-sm font-semibold text-slate-950 dark:text-white">
+                  {t('portal.register.already_title', undefined, 'Already have an account?')}
                 </p>
                 <p className="mt-2 text-sm leading-6 text-slate-600 dark:text-slate-300">
-                  {t(
-                    'portal.register.qq_desc',
-                    undefined,
-                    'Bind QQ quick login from your account page after the email account is active.'
-                  )}
+                  {t('portal.register.already_desc', undefined, 'Use your email verification code to log in.')}
                 </p>
+                <Link href="/portal/login" className="btn btn-secondary mt-4 w-full justify-center">
+                  {t('nav.sign_in')}
+                </Link>
               </BackofficeStackCard>
-            </div>
-          )}
-        />
-
-        <BackofficeLayer
-          eyebrow={t('portal.register.form_label', undefined, 'Signup')}
-          title={t(
-            form.step === 'request'
-              ? 'portal.register.request_title'
-              : 'portal.register.verify_title',
-            undefined,
-            form.step === 'request' ? 'Request verification code' : 'Verify and open Free'
-          )}
-          description={t(
-            form.step === 'request'
-              ? 'portal.register.request_desc'
-              : 'portal.register.verify_desc',
-            undefined,
-            form.step === 'request'
-              ? 'Enter the email and WordPress site that will own this Free account.'
-              : 'Enter the code from your email to finish registration.'
-          )}
-        />
-
-        <BackofficeSectionPanel className="mx-auto w-full max-w-2xl space-y-6">
-          <form
-            onSubmit={form.step === 'request' ? handleRequestCode : handleVerifyCode}
-            className="space-y-6"
-          >
-            <div>
-              <label htmlFor="email" className="mb-2 block text-sm font-medium">
-                {t('auth.email')}
-              </label>
-              <input
-                id="email"
-                type="email"
-                value={form.email}
-                onChange={(event) => setField('email', event.target.value)}
-                placeholder={t('auth.email_placeholder')}
-                className={cn('input', form.status === 'error' && 'border-red-500 focus:ring-red-500')}
-                disabled={form.status === 'submitting' || form.status === 'verifying' || form.step === 'verify'}
-              />
-            </div>
-
-            {form.step === 'request' ? (
-              <>
-                <div>
-                  <label htmlFor="siteUrl" className="mb-2 block text-sm font-medium">
-                    {t('portal.register.site_url', undefined, 'WordPress site URL')}
-                  </label>
-                  <input
-                    id="siteUrl"
-                    type="url"
-                    value={form.siteUrl}
-                    onChange={(event) => setField('siteUrl', event.target.value)}
-                    placeholder="https://example.com"
-                    className={cn('input', form.status === 'error' && 'border-red-500 focus:ring-red-500')}
-                    disabled={form.status === 'submitting'}
-                  />
-                </div>
-                <div>
-                  <label htmlFor="siteName" className="mb-2 block text-sm font-medium">
-                    {t('portal.register.site_name', undefined, 'Site name')}
-                  </label>
-                  <input
-                    id="siteName"
-                    type="text"
-                    value={form.siteName}
-                    onChange={(event) => setField('siteName', event.target.value)}
-                    placeholder={t('portal.register.site_name_placeholder', undefined, 'My WordPress site')}
-                    className="input"
-                    disabled={form.status === 'submitting'}
-                  />
-                </div>
-                <div>
-                  <label htmlFor="useCase" className="mb-2 block text-sm font-medium">
-                    {t('portal.register.use_case', undefined, 'Use case')}
-                  </label>
-                  <textarea
-                    id="useCase"
-                    value={form.useCase}
-                    onChange={(event) => setField('useCase', event.target.value)}
-                    placeholder={t('portal.register.use_case_placeholder', undefined, 'Content generation, site knowledge, automation...')}
-                    className="input min-h-24 resize-y"
-                    disabled={form.status === 'submitting'}
-                  />
-                </div>
-              </>
-            ) : (
-              <div>
-                <label htmlFor="code" className="mb-2 block text-sm font-medium">
-                  {t('auth.verification_code', undefined, 'Verification code')}
-                </label>
-                <input
-                  id="code"
-                  type="text"
-                  inputMode="numeric"
-                  value={form.code}
-                  onChange={(event) => setField('code', event.target.value)}
-                  placeholder={t('auth.verification_code_placeholder', undefined, 'Enter the 6-digit code')}
-                  className={cn('input', form.status === 'error' && 'border-red-500 focus:ring-red-500')}
-                  disabled={form.status === 'verifying'}
-                />
-              </div>
-            )}
-
-            {form.message ? (
-              <div
-                className={cn(
-                  'text-sm',
-                  form.status === 'error'
-                    ? 'text-red-600 dark:text-red-400'
-                    : 'text-slate-600 dark:text-slate-300'
-                )}
-              >
-                {form.message}
-              </div>
-            ) : null}
-
-            <div className="flex flex-col gap-3 sm:flex-row">
-              <button
-                type="submit"
-                disabled={form.status === 'submitting' || form.status === 'verifying'}
-                className="btn btn-primary flex-1 justify-center"
-              >
-                {form.step === 'request'
-                  ? form.status === 'submitting'
-                    ? t('auth.sending')
-                    : t('portal.register.send_code', undefined, 'Send verification code')
-                  : form.status === 'verifying'
-                    ? t('portal.register.opening', undefined, 'Opening...')
-                    : t('portal.register.verify_continue', undefined, 'Verify and continue')}
-              </button>
-
-              {form.step === 'verify' ? (
-                <button
-                  type="button"
-                  className="btn btn-secondary justify-center"
-                  onClick={resetFlow}
-                >
-                  {t('auth.try_another_email')}
-                </button>
-              ) : null}
-            </div>
-          </form>
-
-          <div className="border-t border-gray-200 pt-6 text-center text-sm text-gray-600 dark:border-gray-700 dark:text-gray-400">
-            <Link href="/portal/login" className="font-medium text-blue-600 hover:text-blue-700 dark:text-blue-300">
-              {t('portal.register.login_link', undefined, 'Already have an account? Sign in')}
-            </Link>
+            </aside>
           </div>
         </BackofficeSectionPanel>
       </BackofficePageStack>

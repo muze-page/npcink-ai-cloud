@@ -10,6 +10,7 @@ from app.adapters.providers.registry import (
 from app.core.config import Settings
 from app.core.db import dispose_engine, get_session, init_schema
 from app.core.models import ProviderConnection
+from app.domain.provider_connections.model_allowlist import build_provider_model_allowlist
 from app.domain.provider_connections.runtime_settings import (
     apply_provider_connection_runtime_settings,
 )
@@ -40,6 +41,108 @@ def _settings(database_url: str) -> Settings:
         openai_api_key="env-openai-key",
         openai_base_url="https://env-openai.example/v1",
     )
+
+
+def test_provider_model_allowlist_does_not_block_catalog_when_no_execution_connections(
+    tmp_path: Path,
+) -> None:
+    database_url = _sqlite_url(tmp_path)
+    init_schema(database_url)
+
+    allowlist = build_provider_model_allowlist(database_url, settings=_settings(database_url))
+
+    assert allowlist.enforced is False
+    assert allowlist.allows(provider_id="openai", model_id="gpt-4.1-mini") is False
+
+    dispose_engine(database_url)
+
+
+def test_provider_model_allowlist_allows_runtime_execution_provider_fallback(
+    tmp_path: Path,
+) -> None:
+    database_url = _sqlite_url(tmp_path)
+    init_schema(database_url)
+
+    allowlist = build_provider_model_allowlist(
+        database_url,
+        settings=_settings(database_url),
+        execution_provider_ids={"openai"},
+    )
+
+    assert allowlist.enforced is False
+    assert allowlist.allows(provider_id="openai", model_id="gpt-4.1-mini") is True
+    assert allowlist.allows(provider_id="anthropic", model_id="claude-3-5-sonnet") is False
+
+    dispose_engine(database_url)
+
+
+def test_provider_model_allowlist_enforces_enabled_execution_connection_models(
+    tmp_path: Path,
+) -> None:
+    database_url = _sqlite_url(tmp_path)
+    init_schema(database_url)
+    settings = _settings(database_url)
+    ProviderConnectionAdminService(database_url, settings).save_connection(
+        {
+            "connection_id": "openai_primary",
+            "provider_id": "openai",
+            "provider_type": "openai_compatible",
+            "kind": "openai_compatible",
+            "display_name": "OpenAI primary",
+            "enabled": True,
+            "base_url": "https://db-openai.example/v1",
+            "capability_ids": ["text_generation"],
+            "runtime_profile_ids": ["text.balanced"],
+            "config": {"model_ids": ["gpt-4.1-mini"]},
+            "credential": "db-openai-key",
+        }
+    )
+
+    allowlist = build_provider_model_allowlist(database_url, settings=settings)
+
+    assert allowlist.enforced is True
+    assert allowlist.allows(provider_id="openai", model_id="gpt-4.1-mini") is True
+    assert allowlist.allows(provider_id="openai", model_id="gpt-4o") is False
+
+    dispose_engine(database_url)
+
+
+def test_provider_model_allowlist_uses_declared_models_without_decrypting_secret(
+    tmp_path: Path,
+) -> None:
+    database_url = _sqlite_url(tmp_path)
+    init_schema(database_url)
+    with get_session(database_url) as session:
+        session.add(
+            ProviderConnection(
+                connection_id="openai",
+                provider_type="openai_compatible",
+                display_name="OpenAI",
+                enabled=True,
+                base_url="https://api.openai.test/v1",
+                config_json={
+                    "provider_id": "openai",
+                    "kind": "openai_compatible",
+                    "model_ids": ["gpt-wp-ai-connector-test"],
+                },
+                secret_ciphertext="configured-in-test",
+                status="ready",
+                source_role="execution_source",
+                metadata_json={},
+            )
+        )
+        session.commit()
+
+    allowlist = build_provider_model_allowlist(database_url, settings=_settings(database_url))
+
+    assert allowlist.enforced is True
+    assert allowlist.allows(
+        provider_id="openai",
+        model_id="gpt-wp-ai-connector-test",
+    ) is True
+    assert allowlist.allows(provider_id="openai", model_id="gpt-4o") is False
+
+    dispose_engine(database_url)
 
 
 def test_provider_registry_uses_enabled_provider_connections_instead_of_env_fallback(

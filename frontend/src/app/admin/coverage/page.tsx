@@ -200,16 +200,12 @@ function numericValue(value: unknown): number {
   return Number.isFinite(numeric) ? numeric : 0;
 }
 
-function normalizeTierId(value: string): string {
-  return value === 'starter' ? 'free' : value;
-}
-
 function findPlanForTier(plans: PlanListItem[], tierId: string): PlanListItem | undefined {
-  const expectedTierId = normalizeTierId(tierId);
+  const expectedTierId = tierId;
   return plans.find((item) => {
-    const planId = normalizeTierId(String(item.plan?.plan_id || ''));
-    const metadataTierId = normalizeTierId(String(item.plan?.metadata?.tier_id || ''));
-    const summaryTierId = normalizeTierId(String(item.tier_summary?.tier_id || ''));
+    const planId = String(item.plan?.plan_id || '');
+    const metadataTierId = String(item.plan?.metadata?.tier_id || '');
+    const summaryTierId = String(item.tier_summary?.tier_id || '');
     return (
       planId === expectedTierId ||
       metadataTierId === expectedTierId ||
@@ -335,7 +331,7 @@ function AdminCoverageContent() {
     .sort((left, right) => Number(right[1] || 0) - Number(left[1] || 0))
     .slice(0, 6);
   const packageShells = (planCatalog.tier_templates || []).filter((shell) =>
-    ['starter', 'free', 'pro', 'agency'].includes(normalizeTierId(String(shell.tier_id || '')))
+    ['free', 'pro', 'agency'].includes(String(shell.tier_id || ''))
   );
   const packageRows = packageShells.map((shell) => {
     const item = findPlanForTier(planCatalog.items || [], shell.tier_id);

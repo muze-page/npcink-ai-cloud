@@ -1,12 +1,12 @@
 import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
 import assert from 'node:assert/strict';
+import { fromFrontendRoot } from './_paths.mjs';
 
 const pageSource = readFileSync(
-  resolve(process.cwd(), 'src/app/admin/troubleshooting/page.tsx'),
+  fromFrontendRoot('src/app/admin/troubleshooting/page.tsx'),
   'utf8'
 );
-const i18nSource = readFileSync(resolve(process.cwd(), 'src/lib/i18n.ts'), 'utf8');
+const i18nSource = readFileSync(fromFrontendRoot('src/lib/i18n.ts'), 'utf8');
 const zhStart = i18nSource.indexOf("'zh-CN': {");
 
 assert.ok(zhStart > 0, 'i18n dictionary must contain a Simplified Chinese section');

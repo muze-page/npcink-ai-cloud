@@ -136,7 +136,7 @@ def _post_execute(
 
 def _set_plan_metadata(database_url: str, metadata: dict[str, Any]) -> None:
     with get_session(database_url) as session:
-        plan_version = session.get(PlanVersion, "plan_free_v1")
+        plan_version = session.get(PlanVersion, "free_v1")
         assert plan_version is not None
         existing = (
             plan_version.metadata_json if isinstance(plan_version.metadata_json, dict) else {}

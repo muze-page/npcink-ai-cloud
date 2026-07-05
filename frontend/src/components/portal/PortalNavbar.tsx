@@ -22,31 +22,20 @@ export function PortalNavbar() {
   const { session, isAuthenticated, selectSite, logout } = useSession();
   const [isSwitchingSite, setIsSwitchingSite] = useState(false);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
-  const [isMoreMenuOpen, setIsMoreMenuOpen] = useState(false);
   const [isSiteMenuOpen, setIsSiteMenuOpen] = useState(false);
   const [siteSearchQuery, setSiteSearchQuery] = useState('');
-  const moreMenuRef = useRef<HTMLDivElement>(null);
   const siteMenuRef = useRef<HTMLDivElement>(null);
 
   const primaryNavItems = useMemo(
     () => [
-      { href: '/portal', label: t('portal.workspace_label', {}, 'Workspace') },
-      { href: '/portal/usage', label: t('nav.usage') },
+      { href: '/portal', label: t('portal.workspace_label', {}, 'Overview') },
       { href: '/portal/billing', label: t('portal.nav_package', {}, 'Package') },
+      { href: '/portal/usage', label: t('portal.nav_usage', {}, 'Usage') },
       { href: '/portal/sites', label: t('portal.nav_sites', {}, 'Sites') },
       { href: '/portal/account', label: t('portal.nav_account', {}, 'Account') },
     ],
     [t]
   );
-  const secondaryNavItems = useMemo(
-    () => [
-      { href: '/portal/ai-insights', label: t('portal.ai_insights.nav_label', {}, 'AI Insights') },
-      { href: '/portal/monitoring', label: t('portal.monitoring.nav_label', {}, 'Monitoring') },
-      { href: '/portal/audit', label: t('nav.audit') },
-    ],
-    [t]
-  );
-
   const isActive = useCallback(
     (href: string) => {
       const baseHref = href.split('?')[0] || href;
@@ -92,20 +81,16 @@ export function PortalNavbar() {
   }, [logout, router]);
 
   useEffect(() => {
-    setIsMoreMenuOpen(false);
     setIsSiteMenuOpen(false);
     setSiteSearchQuery('');
   }, [pathname]);
 
   useEffect(() => {
-    if (!isMoreMenuOpen && !isSiteMenuOpen) {
+    if (!isSiteMenuOpen) {
       return;
     }
 
     const handlePointerDown = (event: MouseEvent) => {
-      if (moreMenuRef.current && !moreMenuRef.current.contains(event.target as Node)) {
-        setIsMoreMenuOpen(false);
-      }
       if (siteMenuRef.current && !siteMenuRef.current.contains(event.target as Node)) {
         setIsSiteMenuOpen(false);
       }
@@ -113,7 +98,6 @@ export function PortalNavbar() {
 
     const handleEscape = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
-        setIsMoreMenuOpen(false);
         setIsSiteMenuOpen(false);
       }
     };
@@ -125,7 +109,7 @@ export function PortalNavbar() {
       document.removeEventListener('mousedown', handlePointerDown);
       document.removeEventListener('keydown', handleEscape);
     };
-  }, [isMoreMenuOpen, isSiteMenuOpen]);
+  }, [isSiteMenuOpen]);
 
   const visibleSites = useMemo(
     () => (session?.sites || []).filter((site) => site.status !== 'archived'),
@@ -139,10 +123,11 @@ export function PortalNavbar() {
     return visibleSites.filter((site) => {
       const displayName = getPortalSiteDisplayName(site).toLowerCase();
       const secondary = (getPortalSiteSecondaryLabel(site) || '').toLowerCase();
+      const siteId = site.site_id.toLowerCase();
       return (
         displayName.includes(query) ||
         secondary.includes(query) ||
-        site.site_id.toLowerCase().includes(query)
+        siteId.includes(query)
       );
     });
   }, [siteSearchQuery, visibleSites]);
@@ -153,6 +138,7 @@ export function PortalNavbar() {
     visibleSites[0]?.site_id ||
     '';
   const selectedSite = visibleSites.find((site) => site.site_id === selectedSiteId) || null;
+  const isLoginPage = pathname === '/portal/login';
   const visibleSiteLabel = useCallback(
     (site: typeof visibleSites[number]) =>
       site.site_name || getPortalSiteWordPressUrl(site) || t('portal.current_site', {}, 'Current site'),
@@ -181,9 +167,6 @@ export function PortalNavbar() {
                 {t('portal.nav_title', undefined, 'Workspace')}
               </span>
             </span>
-            <span className="hidden rounded-full border border-slate-200/80 bg-slate-50/85 px-2.5 py-1 text-[0.58rem] font-bold uppercase tracking-[0.22em] text-slate-600 dark:border-slate-800 dark:bg-slate-900/70 dark:text-slate-300 md:inline-flex">
-              {t('portal.site_admin_workspace', undefined, 'Site Admin')}
-            </span>
           </Link>
 
           <div className="flex items-center gap-2">
@@ -196,14 +179,14 @@ export function PortalNavbar() {
                   type="button"
                   aria-haspopup="listbox"
                   aria-expanded={isSiteMenuOpen}
-                  className="flex min-w-[20rem] items-center justify-between rounded-full border border-slate-200/80 bg-white/90 px-4 py-2 text-left text-sm text-slate-700 outline-none transition hover:border-slate-300 focus:border-blue-400 dark:border-slate-700 dark:bg-slate-900/80 dark:text-slate-200 dark:hover:border-slate-600"
+                  className="flex w-[min(22rem,40vw)] min-w-0 items-center justify-between rounded-full border border-slate-200/80 bg-white/90 px-4 py-2 text-left text-sm text-slate-700 outline-none transition hover:border-slate-300 focus:border-blue-400 dark:border-slate-700 dark:bg-slate-900/80 dark:text-slate-200 dark:hover:border-slate-600"
                   onClick={() => setIsSiteMenuOpen((current) => !current)}
                   disabled={isSwitchingSite}
                 >
                   <span className="truncate">
                     {selectedSite
                       ? `${visibleSiteLabel(selectedSite)} · ${visibleSiteSecondaryLabel(selectedSite)}`
-                      : t('common.not_found')}
+                      : t('portal.no_site_selected', {}, 'No site selected')}
                   </span>
                   <svg className="ml-3 h-4 w-4 shrink-0" viewBox="0 0 20 20" fill="none" aria-hidden="true">
                     <path d="m5 7.5 5 5 5-5" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.8" />
@@ -271,14 +254,14 @@ export function PortalNavbar() {
               >
                 {t('portal.logout')}
               </button>
-            ) : (
+            ) : !isLoginPage ? (
               <Link
                 href="/portal/login"
                 className="hidden rounded-full px-3 py-2 text-sm font-medium text-slate-600 transition hover:bg-slate-100 hover:text-slate-900 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-white md:inline-flex"
               >
                 {t('nav.sign_in')}
               </Link>
-            )}
+            ) : null}
             <button
               type="button"
               className="inline-flex h-10 w-10 items-center justify-center rounded-full border border-slate-200/80 bg-white/85 text-slate-600 shadow-sm transition hover:border-slate-300 hover:text-slate-900 dark:border-slate-700 dark:bg-slate-900/80 dark:text-slate-300 dark:hover:border-slate-600 dark:hover:text-white md:hidden"
@@ -300,53 +283,19 @@ export function PortalNavbar() {
           </div>
         </div>
 
-        <div className="hidden border-t border-slate-200/70 py-1.5 dark:border-slate-800 md:block">
-          <div className="flex items-center gap-2 overflow-visible">
-            <div className="max-w-full overflow-x-auto pb-0.5">
-              <nav data-ui="portal-primary-nav" className="flex min-w-max items-center gap-1">
-                {primaryNavItems.map((item) => (
-                  <Link
-                    key={item.href}
-                    href={item.href}
-                    className={cn(
-                      'rounded-full px-3 py-2 text-sm font-medium transition-all',
-                      isActive(item.href)
-                        ? 'bg-slate-900 text-white shadow-sm dark:bg-blue-500 dark:text-slate-950'
-                        : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-white'
-                    )}
-              >
-                <span className="inline-flex items-center gap-2">
-                  {item.label}
-                </span>
-              </Link>
-            ))}
-              </nav>
-            </div>
-            <div ref={moreMenuRef} className="relative shrink-0">
-              <button
-                type="button"
-                aria-haspopup="menu"
-                aria-expanded={isMoreMenuOpen}
-                className="relative rounded-full px-3 py-2 text-sm font-medium text-slate-600 transition-all hover:bg-slate-100 hover:text-slate-900 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-white"
-                onClick={() => setIsMoreMenuOpen((current) => !current)}
-              >
-                {t('portal.nav_more', {}, 'More')}
-              </button>
-              {isMoreMenuOpen ? (
-                <div
-                  className="absolute right-0 top-full z-10 mt-2 min-w-48 rounded-2xl border border-slate-200/80 bg-white p-2 shadow-xl dark:border-slate-800 dark:bg-slate-950"
-                  role="menu"
-                >
-                  {secondaryNavItems.map((item) => (
+        {isAuthenticated ? (
+          <div className="hidden border-t border-slate-200/70 py-1.5 dark:border-slate-800 md:block">
+            <div className="flex items-center gap-2 overflow-visible">
+              <div className="max-w-full overflow-x-auto pb-0.5">
+                <nav data-ui="portal-primary-nav" className="flex min-w-max items-center gap-1">
+                  {primaryNavItems.map((item) => (
                     <Link
                       key={item.href}
                       href={item.href}
-                      role="menuitem"
-                      onClick={() => setIsMoreMenuOpen(false)}
                       className={cn(
-                        'block rounded-xl px-3 py-2 text-sm font-medium transition-colors',
+                        'rounded-full px-3 py-2 text-sm font-medium transition-all',
                         isActive(item.href)
-                          ? 'bg-slate-900 text-white dark:bg-blue-500 dark:text-slate-950'
+                          ? 'bg-slate-900 text-white shadow-sm dark:bg-blue-500 dark:text-slate-950'
                           : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-white'
                       )}
                     >
@@ -355,11 +304,11 @@ export function PortalNavbar() {
                       </span>
                     </Link>
                   ))}
-                </div>
-              ) : null}
+                </nav>
+              </div>
             </div>
           </div>
-        </div>
+        ) : null}
       </div>
 
       <div
@@ -391,26 +340,8 @@ export function PortalNavbar() {
               </select>
             </div>
           ) : null}
-          {primaryNavItems.map((item) => (
-            <Link
-              key={item.href}
-              href={item.href}
-              className={cn(
-                'block rounded-2xl px-4 py-3 text-sm font-medium transition-colors',
-                isActive(item.href)
-                  ? 'bg-slate-900 text-white dark:bg-blue-500 dark:text-slate-950'
-                  : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-white'
-              )}
-              onClick={() => setMobileNavOpen(false)}
-            >
-              {item.label}
-            </Link>
-          ))}
-          <div className="space-y-2 border-t border-slate-200 pt-4 dark:border-slate-800">
-            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
-              {t('portal.nav_more', {}, 'More')}
-            </p>
-            {secondaryNavItems.map((item) => (
+          {isAuthenticated ? (
+            primaryNavItems.map((item) => (
               <Link
                 key={item.href}
                 href={item.href}
@@ -422,12 +353,10 @@ export function PortalNavbar() {
                 )}
                 onClick={() => setMobileNavOpen(false)}
               >
-                <span className="inline-flex items-center gap-2">
-                  {item.label}
-                </span>
+                {item.label}
               </Link>
-            ))}
-          </div>
+            ))
+          ) : null}
           <div className="space-y-3 border-t border-slate-200 pt-4 dark:border-slate-800">
             <div className="flex items-center gap-2">
               <LocaleSwitcher />
@@ -444,7 +373,7 @@ export function PortalNavbar() {
               >
                 {t('portal.logout')}
               </button>
-            ) : (
+            ) : !isLoginPage ? (
               <Link
                 href="/portal/login"
                 className="block rounded-2xl px-4 py-3 text-sm font-medium text-slate-600 transition hover:bg-slate-100 hover:text-slate-900 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-white"
@@ -452,7 +381,7 @@ export function PortalNavbar() {
               >
                 {t('nav.sign_in')}
               </Link>
-            )}
+            ) : null}
           </div>
         </div>
       </div>

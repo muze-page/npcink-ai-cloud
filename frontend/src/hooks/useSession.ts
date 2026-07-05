@@ -12,7 +12,7 @@ export interface SessionState {
 
 export interface UseSessionReturn extends SessionState {
   requestLoginCode: (email: string) => Promise<{ code?: string }>;
-  verifyLoginCode: (email: string, code: string) => Promise<void>;
+  verifyLoginCode: (email: string, code: string, options?: { rememberMe?: boolean }) => Promise<void>;
   logout: () => Promise<void>;
   selectSite: (siteId: string) => Promise<void>;
   refresh: () => Promise<void>;
@@ -139,9 +139,13 @@ function useSessionController(): UseSessionReturn {
   /**
    * 验证邮箱验证码
    */
-  const verifyLoginCode = useCallback(async (email: string, code: string): Promise<void> => {
+  const verifyLoginCode = useCallback(async (
+    email: string,
+    code: string,
+    options: { rememberMe?: boolean } = {}
+  ): Promise<void> => {
     try {
-      await portalClient.verifyLoginCode({ email, code });
+      await portalClient.verifyLoginCode({ email, code, remember_me: Boolean(options.rememberMe) });
       await loadSession();
     } catch (error) {
       throw error instanceof Error ? error : new Error('Failed to verify login code');

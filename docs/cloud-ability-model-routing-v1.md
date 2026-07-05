@@ -66,6 +66,16 @@ WordPress/plugin side continues to own:
 - Ability-model routing rows must remain shared routing groups by default.
   Plugin-specific or site-specific overrides require a separate boundary
   review before persistence is added.
+- Candidate model instances must come from enabled, configured provider
+  connections whose `model_ids` allowlist includes the candidate `model_id`.
+  A model that exists only in the hosted catalog but is not enabled on the
+  provider connection must not appear as selectable, must not be persisted by
+  the admin routing endpoint, and must not be used by runtime resolution.
+- Provider catalog sync should treat the supplier's authenticated model-list
+  endpoint as the source of callable `model_id` truth. Local metadata,
+  `models.dev`, and provider-specific rules may enrich official IDs with
+  feature, price, context, type, and runtime-instance hints, but they must not
+  invent callable model candidates that the supplier account did not return.
 - New plugin tasks should first map into an existing routing intent. Create a
   new routing intent only when real runtime evidence shows materially different
   latency, cost, output shape, storage, or execution-kind needs.

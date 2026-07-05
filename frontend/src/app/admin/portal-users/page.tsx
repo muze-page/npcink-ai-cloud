@@ -2,6 +2,7 @@
 
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
+import { AdminMutationReceipt, type AdminMutationReceiptPayload } from '@/components/admin/AdminMutationReceipt';
 import { BackofficeIdentifier } from '@/components/backoffice/BackofficeIdentifier';
 import { BackofficeStatusBadge } from '@/components/backoffice/BackofficeStatusBadge';
 import {
@@ -99,6 +100,7 @@ type PortalUserAuditDetail = {
 };
 
 type BatchDisableResult = {
+  receipt?: AdminMutationReceiptPayload;
   totals?: {
     attempted?: number;
     disabled?: number;
@@ -113,6 +115,11 @@ type BatchDisableResult = {
     error_code?: string;
     message?: string;
   }>;
+};
+
+type PortalUserDisableResult = {
+  receipt?: AdminMutationReceiptPayload;
+  session_version?: number;
 };
 
 type Filters = {
@@ -204,6 +211,7 @@ export default function AdminPortalUsersPage() {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [lastReceipt, setLastReceipt] = useState<AdminMutationReceiptPayload | null>(null);
   const [pendingUser, setPendingUser] = useState<PortalUserItem | null>(null);
   const [disableReason, setDisableReason] = useState('');
   const [savingPrincipalId, setSavingPrincipalId] = useState<string | null>(null);
@@ -294,6 +302,7 @@ export default function AdminPortalUsersPage() {
     setSavingPrincipalId(user.principal_id);
     setNotice(null);
     setActionError(null);
+    setLastReceipt(null);
     try {
       const response = await fetch(
         `/api/admin/portal-users/${encodeURIComponent(user.principal_id)}/disable`,
@@ -308,6 +317,7 @@ export default function AdminPortalUsersPage() {
       if (!response.ok) {
         throw new Error(payload.message || t('admin.portal_users.disable_failed', {}, 'Failed to disable user.'));
       }
+      const data = (payload.data || {}) as PortalUserDisableResult;
       setUsers((current) =>
         current.map((item) =>
           item.principal_id === user.principal_id
@@ -318,11 +328,12 @@ export default function AdminPortalUsersPage() {
                 grant_status: 'revoked',
                 qq_bound: false,
                 qq_binding_count: 0,
-                session_version: Number(payload.data?.session_version || item.session_version),
+                session_version: Number(data.session_version || item.session_version),
               }
             : item
         )
       );
+      setLastReceipt(data.receipt || null);
       setNotice(t('admin.portal_users.disable_notice', { user: user.email || user.principal_id }, '{{user}} was disabled. Existing Portal sessions and QQ bindings were revoked.'));
       setDisableReason('');
       void loadUsers();
@@ -369,6 +380,7 @@ export default function AdminPortalUsersPage() {
     setBatchSaving(true);
     setNotice(null);
     setActionError(null);
+    setLastReceipt(null);
     try {
       const response = await fetch('/api/admin/portal-users/batch-disable', {
         method: 'POST',
@@ -409,6 +421,7 @@ export default function AdminPortalUsersPage() {
       setBatchDisableReason('');
       const attempted = Number(data.totals?.attempted || principalIds.length);
       const failed = Number(data.totals?.failed || 0);
+      setLastReceipt(data.receipt || null);
       setNotice(t('admin.portal_users.batch_disable_notice', { attempted: String(attempted), failed: String(failed) }, 'Batch disable processed {{attempted}} user(s), failed {{failed}}.'));
       void loadUsers();
     } catch (err) {
@@ -476,6 +489,7 @@ export default function AdminPortalUsersPage() {
           {actionError || error}
         </div>
       ) : null}
+      <AdminMutationReceipt receipt={lastReceipt} />
 
       <div className="flex flex-col gap-3 rounded-2xl border border-slate-200 bg-white/80 px-4 py-3 text-sm text-slate-700 dark:border-slate-800 dark:bg-slate-950/45 dark:text-slate-200 sm:flex-row sm:items-center sm:justify-between">
         <div>

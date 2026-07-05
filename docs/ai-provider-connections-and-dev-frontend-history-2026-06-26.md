@@ -113,6 +113,16 @@
     - `--reload-dir app`
     - `--reload-dir migrations`
   - 避免 `.git`、`node_modules`、frontend 依赖变化触发 API 反复 reload。
+  - API reload 增加 `--timeout-graceful-shutdown 5`，避免开发期
+    FastAPI/uvicorn reload 因 in-process background task 长时间等待而拖住
+    `/admin/*` 页面首屏接口。
+  - API reload 排除 `app/workers/*`。worker-only 代码改动不应该触发 API
+    reload；否则 `/api/admin/ability-models/runtime-projection`、
+    `/api/admin/ai-resources`、`/api/admin/wordpress-ai-routing` 会一起等待，
+    页面看起来像一直加载中。
+  - runtime queue worker 每轮 poll 前重新解析 DB-managed execution providers，
+    避免供应商页新增或更新 MiniMax 等 provider 后，长跑 worker 继续使用旧
+    adapter 集合并把 queued run 标成 `runtime.provider_not_configured`。
 - `scripts/dev-frontend-doctor.sh`
   - 检查 frontend 容器依赖、Next loader、API health、首页和 admin 路由。
   - 失败时提示恢复命令。
@@ -156,6 +166,53 @@ bash scripts/dev-frontend-doctor.sh
 - `http://127.0.0.1:8010/` 是否渲染 Cloud 首页。
 - `http://127.0.0.1:8010/admin/ai-resources` 是否能进入前端路由或登录重定向。
 
+### 前端新增依赖的强制规范
+
+当修改 `frontend/package.json` 的 `dependencies` 或 `devDependencies` 时，
+必须同时维护两个 lockfile：
+
+- 根目录 `pnpm-lock.yaml`，用于仓库级工具和生产构建上下文。
+- `frontend/pnpm-lock.yaml`，用于 `frontend/Dockerfile.dev` 的本地 Docker
+  dev 构建上下文。
+
+后续 AI 或开发者不得只在宿主机执行一次依赖安装后就认为 Docker 开发环境已同步。
+Docker dev 的 `/app/node_modules` 是 named volume，可能继续保留旧依赖视图；
+如果 `frontend/pnpm-lock.yaml` 没同步，重建容器也可能仍然缺包。
+
+推荐流程：
+
+```bash
+pnpm install --lockfile-only --no-frozen-lockfile
+pnpm --dir frontend install --lockfile-only --ignore-workspace --no-frozen-lockfile
+pnpm run check:frontend-locks
+bash scripts/dev-frontend-doctor.sh
+```
+
+如果 `frontend` 容器已经启动，并且浏览器或日志出现
+`Module not found: Can't resolve '<package>'`，不要只在宿主机重复安装依赖。
+先确认 lockfile 一致，再恢复 Docker 依赖卷：
+
+```bash
+pnpm run check:frontend-locks
+bash scripts/dev-frontend-recover.sh
+```
+
+`pnpm run check:frontend-locks` 会检查 `frontend/package.json` 中声明的前端依赖
+是否同时出现在根 `pnpm-lock.yaml` 的 `frontend` importer 和
+`frontend/pnpm-lock.yaml` 的 `.` importer 中。该检查已接入
+`scripts/dev-frontend-doctor.sh`，因此本地 Docker 诊断会先阻止 lockfile 不一致
+的问题继续扩散。
+
+给后续 AI 的执行规则：
+
+- 新增前端依赖时，必须更新两个 lockfile，并运行 `pnpm run check:frontend-locks`。
+- 如果错误只出现在 Docker 中，优先怀疑 Docker named volume 中的
+  `/app/node_modules` 仍是旧视图。
+- 不要删除无关本地状态；需要恢复前端依赖时使用 `bash scripts/dev-frontend-recover.sh`。
+- 不要把 `frontend/.pnpm-store/`、`node_modules/`、`.next/` 等本地缓存加入提交。
+- 如果新增依赖是为了一个轻量 UI 行为库，必须同时确认前端 type-check、lint、
+  Docker doctor 通过。
+
 ### 恢复本地 frontend 依赖和容器
 
 ```bash
@@ -197,6 +254,7 @@ uv run --extra dev pytest \
 dev frontend guard 相关：
 
 ```bash
+pnpm run check:frontend-locks
 bash scripts/dev-frontend-doctor.sh
 bash scripts/dev-frontend-recover.sh
 docker compose -f docker-compose.dev.yml config -q
@@ -217,6 +275,69 @@ bash scripts/dev-frontend-recover.sh
 
 - provider connection 现在解决的是 admin storage/projection 问题；后续如果要让所有 runtime adapter 都完全 DB-first，需要继续逐项改 provider adapter/registry 的读取路径。
 - `.env.local` 仍应保留 deployment/runtime 基础 secret，例如数据库 URL、internal token、session secret、加密根 secret 等；AI provider credential 可以逐步从表单迁移。
+
+## 2026-07-04 模型目录、路由候选和试听排障记录
+
+本轮问题集中在一个认知差：供应商页没有启用的模型，为什么还能在
+能力-模型路由里被选中，甚至试听时才报错。最终决定把 Cloud runtime
+候选收紧到“供应商连接的 `model_ids` 必须包含该模型”。这更符合 operator
+直觉：供应商页是 Cloud runtime 白名单入口，能力-模型路由只能从这个白名单里选。
+
+### 模型目录同步规则
+
+- 对支持官方模型列表接口的 provider，`同步模型和情报` 应先通过已保存凭据调用官方
+  model list，拿到当前账号真实可调用的 `model_id`。
+- 本地 metadata、`models.dev`、provider-specific 规则只负责补充能力、类型、价格、
+  上下文、实例和端点信息，不再反向发明可调用模型。
+- MiniMax 不能再保留误导性的手工 native list。文本模型以官方 `/v1/models`
+  返回为准；语音、图片、视频模型如果官方模型列表漏报，则从官方 API schema 的
+  `model` enum 提取候选作为官方文档证据，而不是从页面人工抄一份静态清单。
+- `同步模型和情报` 合并目录同步与模型情报刷新，避免 operator 必须点两次；失败时应
+  区分“模型目录已保存但情报刷新失败”和“目录同步失败”。
+- 历史/废弃模型默认不作为新候选启用。它们只在已保存路由或调试需要时可见，用于解释
+  旧配置，不应该鼓励新选择。
+
+### 路由候选规则
+
+- `/admin/ability-models` 的可选候选必须来自 enabled/configured provider
+  connection，并且 provider connection 的 `model_ids` 必须包含候选 `model_id`。
+- 如果供应商过滤器已经选中某个供应商，候选行标题只显示模型 ID，避免重复展示
+  `供应商 / 模型`。未筛选时仍保留完整 `供应商 / 模型`，防止不同供应商同名模型
+  产生歧义。
+- 主模型和兜底模型摘要继续保留完整 provider/model 标签，因为那是已选路由结果，
+  需要可审计来源。
+- 英文运行时标签需要有中文落地，例如 `Text generation` -> `文本生成`，
+  `Video generation` -> `视频生成`，`Image generation` -> `图片生成`。
+
+### 供应商参考链接
+
+- 官网、状态页、API 文档应由 Cloud 预置模板补全，不要求 operator 手填。
+- UI 只展示已知链接；如果只查到官网，就只展示官网。不要显示空输入框或
+  `example.com` 占位来暗示用户必须维护这些参考信息。
+- 这些链接只是 operator 参考入口，不参与 provider credential、runtime routing
+  或 WordPress 控制面决策。
+
+### 试听和 worker 排障规则
+
+- `provider adapter is not configured for minimax` 的根因不是模型本身，而是长跑
+  runtime worker 没有刷新 DB-managed execution provider 集合。供应商页已经保存
+  并测试通过，不代表旧 worker 进程已经看到新的 adapter。
+- runtime queue worker 应在每轮 poll 前重新解析 execution providers；这样新增或
+  更新 provider connection 后，queued run 不需要等 worker 重启才可用。
+- 如果本地页面又出现无错误长时间加载，先看 dev API reload，而不是直接怀疑业务接口。
+  `uvicorn --reload` 等待 background task 时会让多个 `/api/admin/*` 同时卡住。
+  dev compose 已排除 `app/workers/*` reload，并设置 graceful shutdown 上限。
+
+### 后续 AI 执行规则
+
+- 修改 provider/model 逻辑前，先检查 `docs/cloud-ability-model-routing-v1.md` 的边界：
+  Cloud 只拥有 runtime model binding，不拥有 plugin prompt、ability 开关、审批或
+  WordPress 最终写入。
+- 不要为了“看起来模型更多”添加静态 provider native list。没有官方模型列表或官方
+  schema 证据的模型，只能作为文档情报，不应进入可调用候选。
+- 新增 UI 文案时补齐中英文 key，并增加窄 contract test，避免后续页面再次漏出英文。
+- 本地卡住问题先区分 browser/frontend/API/worker 四层：页面加载慢、API reload 卡住、
+  worker adapter 过期、provider runtime 报错是四类问题，不应混为一谈。
 
 ## 后续建议
 

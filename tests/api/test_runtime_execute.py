@@ -66,6 +66,7 @@ from app.domain.web_search.service import (
 from tests.conftest import (
     build_auth_headers,
     merge_json_headers,
+    seed_provider_model_allowlist,
     seed_site_auth,
 )
 
@@ -892,6 +893,15 @@ def test_execute_route_defaults_audio_generation_to_minimax_narration(
             "audio_asset_playback_token_secret": "test-audio-playback-secret-00000000"
         },
     )
+    seed_provider_model_allowlist(
+        database_url,
+        provider_id="minimax",
+        kind="minimax",
+        model_ids=[AUDIO_NARRATION_MODEL_ID],
+        capability_ids=["audio_generation"],
+        runtime_profile_ids=["audio.narration.default"],
+        base_url="https://api.minimaxi.com",
+    )
     payload = {
         "site_id": "site_alpha",
         "ability_name": "npcink-cloud/generate-audio",
@@ -1064,6 +1074,8 @@ def test_execute_route_fails_audio_generation_when_provider_url_cannot_materiali
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/v1/models"):
+            return httpx.Response(200, json={"data": [{"id": AUDIO_NARRATION_MODEL_ID}]})
         return httpx.Response(
             200,
             json={
@@ -1085,6 +1097,15 @@ def test_execute_route_fails_audio_generation_when_provider_url_cannot_materiali
         transport=httpx.MockTransport(handler),
     )
     database_url, client = _build_client(tmp_path, providers={"minimax": provider})
+    seed_provider_model_allowlist(
+        database_url,
+        provider_id="minimax",
+        kind="minimax",
+        model_ids=[AUDIO_NARRATION_MODEL_ID],
+        capability_ids=["audio_generation"],
+        runtime_profile_ids=["audio.narration.default"],
+        base_url="https://api.minimaxi.com",
+    )
 
     from app.domain.audio_generation import artifacts as audio_artifacts
 

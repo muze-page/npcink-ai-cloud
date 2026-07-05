@@ -35,6 +35,18 @@ assert.match(
 );
 
 assert.match(
+  clientSource,
+  /requestEmailChangeCode[\s\S]*'\/account\/email-change\/request'/,
+  'portal client must expose the authenticated email-change request endpoint'
+);
+
+assert.match(
+  clientSource,
+  /verifyEmailChangeCode[\s\S]*'\/account\/email-change\/verify'/,
+  'portal client must expose the authenticated email-change verification endpoint'
+);
+
+assert.match(
   navbarSource,
   /href: '\/portal\/account'/,
   'portal navigation must include the account center'
@@ -42,8 +54,50 @@ assert.match(
 
 assert.match(
   accountSource,
-  /邮箱是主账号，QQ 用作快捷登录绑定/,
-  'account center must keep email as the primary account and QQ as quick login'
+  /resolvePortalContactEmail/,
+  'account center must resolve a customer-readable contact instead of showing principal IDs as the account'
+);
+
+assert.match(
+  accountSource,
+  /session\.email/,
+  'account center must prefer the explicit session email before falling back to legacy contact refs'
+);
+
+assert.match(
+  accountSource,
+  /data-portal-account="contact-info"/,
+  'account center must make contact information the primary customer-facing account surface'
+);
+
+assert.match(
+  accountSource,
+  /portalClient\.requestEmailChangeCode[\s\S]*portalClient\.verifyEmailChangeCode/,
+  'account center must support self-service verified email changes'
+);
+
+assert.doesNotMatch(
+  accountSource,
+  /Ask the operator to update the contact email|请先让操作员更新联系人信息/,
+  'account center must not tell users to ask an operator for normal email changes'
+);
+
+assert.doesNotMatch(
+  accountSource,
+  /data-portal-account="support-details"/,
+  'customer account page must not render an internal support details disclosure'
+);
+
+assert.doesNotMatch(
+  accountSource,
+  /session\.(account_id|role|principal_id)|BackofficeIdentifier|maskSupportIdentifier/,
+  'customer account page must not expose internal account, role, or principal identifiers'
+);
+
+assert.doesNotMatch(
+  accountSource,
+  /label:\s*t\('portal\.account\.email_label'[\s\S]*value:\s*accountEmail/,
+  'top account summary must not show the raw principal-derived account value'
 );
 
 assert.match(

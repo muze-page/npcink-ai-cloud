@@ -1,8 +1,8 @@
 'use client';
 
 import { useState, type FormEvent } from 'react';
-import { BackofficeIdentifier } from '@/components/backoffice/BackofficeIdentifier';
 import { BackofficeStackCard } from '@/components/backoffice/BackofficeScaffold';
+import { BackofficeIdentifier } from '@/components/backoffice/BackofficeIdentifier';
 import { useLocale } from '@/contexts/LocaleContext';
 import { portalClient, type Site } from '@/lib/portal-client';
 import { formatPortalErrorMessage } from '@/lib/portal-error';
@@ -44,6 +44,7 @@ export function PortalSiteConnectPanel({
   const currentSiteLabel = currentSite
     ? currentSite.site_name || getPortalSiteWordPressUrl(currentSite) || t('portal.current_site', undefined, 'Current site')
     : t('portal.connect_site_new_site', undefined, 'New site');
+  const supportSiteId = currentSite?.site_id || currentSiteId;
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -90,32 +91,32 @@ export function PortalSiteConnectPanel({
     <BackofficeStackCard className="space-y-4">
       <div>
         <p className="text-xs font-semibold uppercase tracking-[0.18em] text-gray-500 dark:text-gray-400">
-          {t('portal.connect_site_title', undefined, 'Site provisioning')}
+          {t('portal.connect_site_title', undefined, 'Site connection')}
         </p>
         <h2 className="mt-2 text-lg font-semibold text-gray-950 dark:text-white">
           {isAddonConnection
-            ? t('portal.connect_site_addon_title', undefined, 'Authorize WordPress addon')
+            ? t('portal.connect_site_addon_title', undefined, 'Finish WordPress connection')
             : t('portal.connect_site_heading', undefined, 'Add another WordPress site')}
         </h2>
         <p className="mt-2 text-sm leading-6 text-gray-600 dark:text-gray-300">
           {isAddonConnection
             ? t(
-                'portal.connect_site_addon_desc',
-                undefined,
-                'Create or activate this Cloud site connection, then return to WordPress with a one-time authorization code.'
-              )
-            : t(
-                'portal.connect_site_desc',
-                undefined,
-                'Create the Cloud-side site record for the current customer, then issue a site key and finish the addon binding inside WordPress.'
-              )}
+	                'portal.connect_site_addon_desc',
+	                undefined,
+                'Confirm this site, then return to WordPress to finish setup.'
+	              )
+	            : t(
+	                'portal.connect_site_desc',
+	                undefined,
+	                'Add a WordPress site to this account, then follow the setup steps in WordPress.'
+	              )}
         </p>
       </div>
       <div className="grid gap-3 sm:grid-cols-2">
         <div className="rounded-[1rem] border border-gray-200 bg-white px-3 py-3 dark:border-gray-800 dark:bg-gray-950">
           <p className="text-xs text-gray-500 dark:text-gray-400">{t('common.account', undefined, 'Account')}</p>
           <p className="mt-1 text-sm font-semibold text-gray-950 dark:text-white">
-            {t('portal.connect_site_current_customer', undefined, 'Current customer')}
+            {t('portal.connect_site_current_customer', undefined, 'Current account')}
           </p>
         </div>
         <div className="rounded-[1rem] border border-gray-200 bg-white px-3 py-3 dark:border-gray-800 dark:bg-gray-950">
@@ -130,19 +131,21 @@ export function PortalSiteConnectPanel({
           ) : null}
         </div>
       </div>
-      <details className="rounded-[1rem] border border-dashed border-gray-200 px-3 py-3 text-xs text-gray-500 dark:border-gray-800 dark:text-gray-400">
-        <summary className="cursor-pointer font-medium text-gray-600 dark:text-gray-300">
+      <details className="rounded-[1rem] border border-gray-200 bg-white px-3 py-3 text-sm dark:border-gray-800 dark:bg-gray-950">
+        <summary className="cursor-pointer font-medium text-gray-700 dark:text-gray-200">
           {t('portal.support_information', undefined, 'Support information')}
         </summary>
-        <div className="mt-3 grid gap-2 sm:grid-cols-2">
+        <div className="mt-3 grid gap-2 text-xs text-gray-500 dark:text-gray-400 sm:grid-cols-2">
           <div>
-            <p>{t('common.account', undefined, 'Account')}</p>
-            <BackofficeIdentifier value={accountId || t('common.not_found', undefined, 'Not found')} className="mt-1 block" />
+            <span className="block font-medium text-gray-600 dark:text-gray-300">{t('common.account', undefined, 'Account')}</span>
+            <BackofficeIdentifier value={accountId} full />
           </div>
-          <div>
-            <p>{t('common.site', undefined, 'Site')}</p>
-            <BackofficeIdentifier value={currentSiteId || currentSite?.site_id || t('common.not_found', undefined, 'Not found')} className="mt-1 block" />
-          </div>
+          {supportSiteId ? (
+            <div>
+              <span className="block font-medium text-gray-600 dark:text-gray-300">{t('common.site', undefined, 'Site')}</span>
+              <BackofficeIdentifier value={supportSiteId} full />
+            </div>
+          ) : null}
         </div>
       </details>
       <form className="space-y-4" onSubmit={(event) => void handleSubmit(event)}>
@@ -181,7 +184,7 @@ export function PortalSiteConnectPanel({
             {isSubmitting
               ? t('common.saving')
               : isAddonConnection
-                ? t('portal.connect_site_authorize_addon', undefined, 'Authorize addon')
+                ? t('portal.connect_site_authorize_addon', undefined, 'Finish connection')
                 : t('portal.connect_site_action', undefined, 'Add site')}
           </button>
           {onClose ? (

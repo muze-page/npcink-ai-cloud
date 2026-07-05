@@ -46,9 +46,19 @@ Payment callbacks use provider-specific paths under `/open/payments`.
 
 - Payment notify callbacks are server-to-server provider notifications.
 - Payment return callbacks are browser return surfaces and are not payment truth.
-- Until provider signature verification and order-state reconciliation are
-  implemented, payment callback paths must fail closed and must not mark orders
-  paid, issue credits, or update subscriptions.
+- Alipay browser return may redirect back to Portal billing with redacted order
+  hints for user experience, but it must not mark orders paid, issue credits,
+  or update subscriptions.
+- Payment callback paths must fail closed unless provider signature
+  verification and order-state reconciliation are enabled for that provider.
+- Alipay notify may mark orders paid only when real Alipay mode is configured,
+  RSA2 signature verification succeeds, and order amount/currency/identity
+  checks pass.
+- Real Alipay mode is configured only through the Cloud Admin
+  `payment_alipay` service setting. Deployment environment variables are not a
+  payment callback enablement source.
+- WeChat Pay notify remains reserved and must fail closed until its provider
+  signature verification and reconciliation path are implemented.
 
 Payment truth remains Cloud commercial runtime storage. Payment callbacks must
 verify provider signatures, enforce idempotency, compare amount/currency/order

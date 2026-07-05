@@ -66,7 +66,7 @@ export function resolveCustomerPackageDisplay(
 
   let packageKind: PackageKind = explicitPackageKind || 'unknown';
   if (!explicitPackageKind) {
-    if (planId === 'plan_free' || explicitPlanKind === 'default_free') {
+    if (planId === 'free' || explicitPlanKind === 'default_free') {
       packageKind = 'formal_free';
     } else if (planId || planVersionId) {
       packageKind = 'tier_package';
@@ -85,7 +85,7 @@ export function resolveCustomerPackageDisplay(
   if (packageKind === 'formal_free') {
     return {
       display_package_label:
-        packageAlias || localizePackageAlias(t, 'plan_free', localizePlanName(t, 'plan_free', 'Free')),
+        packageAlias || localizePackageAlias(t, 'free', localizePlanName(t, 'free', 'Free')),
       package_kind: packageKind,
       coverage_state: coverageState,
     };
@@ -126,7 +126,7 @@ export function translatePackageKindLabel(
     case 'formal_free':
       return t('admin.plan_package_alias_free', {}, 'Free');
     case 'tier_package':
-      return t('admin.tier_template_binding', {}, 'Tier-bound plan');
+      return t('admin.tier_template_binding', {}, 'Standard package');
     case 'uncovered':
       return t('admin.package_label_uncovered', {}, 'Uncovered');
     default:
@@ -134,8 +134,11 @@ export function translatePackageKindLabel(
   }
 }
 
-function normalizePackageKind(value: unknown): PackageKind {
+function normalizePackageKind(value: unknown): PackageKind | undefined {
   const normalized = String(value || '').trim();
+  if (!normalized) {
+    return undefined;
+  }
   return normalized === 'formal_free' ||
     normalized === 'tier_package' ||
     normalized === 'uncovered' ||

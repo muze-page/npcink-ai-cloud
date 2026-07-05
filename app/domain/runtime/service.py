@@ -236,10 +236,14 @@ class RuntimeService:
     ) -> None:
         self.database_url = database_url
         self.settings = settings or get_settings()
-        self.routing_service = RoutingService(database_url)
         self.commercial_service = CommercialService(database_url, settings=self.settings)
         self.providers = (
             providers if providers is not None else build_provider_adapters(self.settings)
+        )
+        self.routing_service = RoutingService(
+            database_url,
+            settings=self.settings,
+            execution_provider_ids=set(self.providers),
         )
         self.runtime_queue = runtime_queue
         self.callback_dispatcher = callback_dispatcher

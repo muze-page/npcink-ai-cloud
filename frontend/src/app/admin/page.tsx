@@ -2,6 +2,7 @@
 
 import React, { Suspense, useEffect, useState } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { LoadingFallback } from '@/components/ui/LoadingFallback';
 import { useLocale } from '@/contexts/LocaleContext';
 import { formatAdminCurrency } from '@/lib/currency';
@@ -411,11 +412,22 @@ function coverageToneClass(value: number): string {
   return 'text-red-700 dark:text-red-300';
 }
 
+function buildAdminLookupHref(path: string, query: string): string {
+  const trimmed = query.trim();
+  if (!trimmed) {
+    return path;
+  }
+  const params = new URLSearchParams({ q: trimmed });
+  return `${path}?${params.toString()}`;
+}
+
 function AdminOverviewContent() {
   const { t } = useLocale();
+  const router = useRouter();
   const [overview, setOverview] = useState<AdminOverview | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [supportQuery, setSupportQuery] = useState('');
 
   useEffect(() => {
     const loadOverview = async () => {
@@ -611,6 +623,8 @@ function AdminOverviewContent() {
     '/admin/accounts';
   const secondaryActionLabel =
     t('admin.home_secondary_action_accounts', {}, 'Inspect accounts');
+  const supportLookupAccountHref = buildAdminLookupHref('/admin/accounts', supportQuery);
+  const supportLookupPortalUserHref = buildAdminLookupHref('/admin/portal-users', supportQuery);
   const quickLinks = [
     {
       href: '/admin/coverage',
@@ -625,12 +639,11 @@ function AdminOverviewContent() {
     {
       href: '/admin/troubleshooting',
       label: t('admin.home_quick_runtime_diagnostics', {}, 'Runtime diagnostics'),
-      detail: t('admin.home_quick_runtime_diagnostics_desc', {}, 'Provider telemetry, meter coverage, and runtime evidence.'),
-    },
-    {
-      href: '/admin/troubleshooting',
-      label: t('admin.home_quick_troubleshooting', {}, 'Troubleshooting'),
-      detail: t('admin.home_quick_troubleshooting_desc', {}, 'Read-only advanced evidence for plugin, media, vector, and feedback quality.'),
+      detail: t(
+        'admin.home_quick_runtime_diagnostics_desc',
+        {},
+        'Runtime, plugin, media, vector, and feedback evidence.'
+      ),
     },
     {
       href: '/admin/ai-resources',
@@ -768,6 +781,8 @@ function AdminOverviewContent() {
         eyebrow={t('admin.operator_surface', {}, 'Operator surface')}
         title={t('admin.home_title', {}, 'Platform state comes first')}
         description={platformConclusion}
+        className="rounded-[1.2rem] shadow-none"
+        contentClassName="px-5 py-5 md:px-6 md:py-5"
         actions={(
           <>
             <Link href={primaryActionHref} className="btn btn-primary">
@@ -869,6 +884,66 @@ function AdminOverviewContent() {
                 </Link>
               ))}
             </div>
+            <BackofficeStackCard className="mt-4 bg-white/80 dark:bg-slate-950/45" data-admin-support-lookup>
+              <div className="grid gap-4">
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-[0.18em] text-gray-500 dark:text-gray-400">
+                    {t('admin.home_support_lookup_eyebrow', {}, 'Support lookup')}
+                  </p>
+                  <h3 className="mt-2 text-base font-semibold text-slate-950 dark:text-white">
+                    {t('admin.home_support_lookup_title', {}, 'Find the customer record first')}
+                  </h3>
+                  <p className="mt-1 text-sm leading-6 text-slate-600 dark:text-slate-300">
+                    {t(
+                      'admin.home_support_lookup_desc',
+                      {},
+                      'Search by email, customer, site, or domain. Start from the customer or Portal user record, then open service status only when coverage needs follow-up.'
+                    )}
+                  </p>
+                </div>
+                <form
+                  className="flex w-full flex-col gap-2 sm:flex-row"
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    router.push(supportLookupAccountHref);
+                  }}
+                >
+                  <label className="sr-only" htmlFor="admin-support-lookup-query">
+                    {t('admin.home_support_lookup_label', {}, 'Support lookup query')}
+                  </label>
+                  <input
+                    id="admin-support-lookup-query"
+                    type="search"
+                    value={supportQuery}
+                    onChange={(event) => setSupportQuery(event.target.value)}
+                    placeholder={t('admin.home_support_lookup_placeholder', {}, 'Email, customer, site, or domain')}
+                    className="min-h-11 min-w-0 flex-1 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-blue-400 focus:ring-2 focus:ring-blue-100 dark:border-slate-700 dark:bg-slate-950 dark:text-white dark:focus:border-blue-500 dark:focus:ring-blue-950"
+                  />
+                  <div className="flex shrink-0 gap-2">
+                    <Link href={supportLookupAccountHref} className="btn btn-primary btn-sm whitespace-nowrap">
+                      {t('admin.home_support_lookup_accounts', {}, 'Find customer')}
+                    </Link>
+                    <Link href={supportLookupPortalUserHref} className="btn btn-secondary btn-sm whitespace-nowrap">
+                      {t('admin.home_support_lookup_portal_users', {}, 'Find user')}
+                    </Link>
+                  </div>
+                </form>
+              </div>
+              <div className="mt-4 flex flex-wrap gap-2 text-xs">
+                <Link
+                  href="/admin/coverage"
+                  className="rounded-full border border-slate-200 px-3 py-1.5 font-medium text-slate-600 transition hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700 dark:border-slate-800 dark:text-slate-300 dark:hover:border-blue-900 dark:hover:bg-blue-950/30 dark:hover:text-blue-300"
+                >
+                  {t('admin.home_support_lookup_coverage', {}, 'Open service status')}
+                </Link>
+                <Link
+                  href="/admin/troubleshooting"
+                  className="rounded-full border border-slate-200 px-3 py-1.5 font-medium text-slate-600 transition hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700 dark:border-slate-800 dark:text-slate-300 dark:hover:border-blue-900 dark:hover:bg-blue-950/30 dark:hover:text-blue-300"
+                >
+                  {t('admin.home_support_lookup_diagnostics', {}, 'Open diagnostics')}
+                </Link>
+              </div>
+            </BackofficeStackCard>
           </>
         )}
         inspector={(

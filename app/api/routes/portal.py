@@ -28,6 +28,7 @@ from app.api.portal_session import (
     clear_portal_session_cookies,
     portal_cookie_secure,
     portal_json_error,
+    resolve_portal_login_session_ttl_seconds,
     resolve_portal_request_context,
     serialize_portal_session,
     set_portal_session_cookies,
@@ -111,6 +112,17 @@ class PortalLoginCodeRequestPayload(BaseModel):
 class PortalLoginCodeVerifyPayload(BaseModel):
     email: str = ""
     code: str = ""
+    remember_me: bool = False
+
+
+class PortalEmailChangeRequestPayload(BaseModel):
+    new_email: str = ""
+    locale: str = ""
+
+
+class PortalEmailChangeVerifyPayload(BaseModel):
+    new_email: str = ""
+    code: str = ""
 
 
 class PortalRegistrationCodeRequestPayload(BaseModel):
@@ -142,6 +154,10 @@ class PortalAIInsightAnalyzePayload(BaseModel):
 
 class PortalCreditPackOrderPayload(BaseModel):
     pack_id: str = ""
+    provider: str = "alipay"
+
+
+class PortalProMonthlyOrderPayload(BaseModel):
     provider: str = "alipay"
 
 
@@ -907,6 +923,30 @@ def _portal_ai_safety_contract() -> dict[str, bool]:
     }
 
 
+def _resolve_primary_portal_account_id(
+    request: Request,
+    *,
+    principal_id: str,
+) -> str | JSONResponse:
+    try:
+        accounts = _get_commercial_service(request).list_portal_accounts(
+            principal_id=principal_id
+        )
+    except CommercialServiceError as error:
+        return _service_error_response(error, request=request)
+    for item in _object_list(accounts.get("items")):
+        account = item if isinstance(item, dict) else {}
+        account_id = str(account.get("account_id") or "").strip()
+        if account_id:
+            return account_id
+    return portal_json_error(
+        request,
+        status_code=403,
+        error_code="portal.account_required",
+        message="portal account access is required",
+    )
+
+
 def _resolve_portal_site_summary(
     request: Request,
     *,
@@ -1059,12 +1099,19 @@ async def verify_portal_login_code(
             ),
         )
         principal_id = str(verified.get("principal_id") or "")
+        session_ttl_seconds = resolve_portal_login_session_ttl_seconds(
+            request,
+            remember_me=bool(payload.remember_me),
+        )
         data = serialize_portal_session(
             request,
             principal_id=principal_id,
             site_id="",
             strict_site=False,
-            session_metadata=build_new_portal_session_metadata(request),
+            session_metadata=build_new_portal_session_metadata(
+                request,
+                ttl_seconds=session_ttl_seconds,
+            ),
         )
     except CommercialServiceError as error:
         if error.error_code == "service.portal_login_code_invalid":
@@ -1088,8 +1135,162 @@ async def verify_portal_login_code(
         response,
         principal_id=principal_id,
         site_id=str(data.get("site_id") or ""),
+        ttl_seconds=session_ttl_seconds,
     )
     return response
+
+
+@router.post("/account/email-change/request")
+async def request_portal_email_change_code(
+    request: Request,
+    payload: PortalEmailChangeRequestPayload,
+) -> Any:
+    same_origin = _portal_same_origin_guard(request, always=True)
+    if same_origin is not None:
+        return same_origin
+    auth = await resolve_portal_request_context(
+        request,
+        require_idempotency=True,
+        allow_session_cookies=True,
+    )
+    if isinstance(auth, JSONResponse):
+        return auth
+    new_email = payload.new_email.strip()
+    locale = resolve_portal_email_locale(request, payload.locale)
+    if not new_email:
+        return portal_json_error(
+            request,
+            status_code=400,
+            error_code="portal.email_change_invalid",
+            message="new email is required",
+        )
+    services = get_cloud_services(request)
+    ttl_seconds = resolve_portal_login_code_ttl_seconds(services.settings)
+    email_sender = services.portal_email_sender or build_portal_email_sender(
+        services.settings,
+        database_url=services.settings.database_url,
+    )
+    allow_development_code = _allow_development_login_code(request)
+    if email_sender is None and not allow_development_code:
+        return portal_json_error(
+            request,
+            status_code=503,
+            error_code="portal.email_not_configured",
+            message="Portal email delivery is not configured",
+        )
+    try:
+        issued = _get_commercial_service(request).issue_portal_email_change_code(
+            principal_id=auth.principal_id,
+            new_email=new_email,
+            ttl_seconds=ttl_seconds,
+        )
+    except CommercialServiceError as error:
+        return _service_error_response(error, request=request)
+    if email_sender is not None:
+        try:
+            email_sender.send_email_change_code(
+                recipient_email=str(issued.get("new_email") or ""),
+                old_email=str(issued.get("old_email") or ""),
+                principal_id=str(issued.get("principal_id") or ""),
+                code=str(issued.get("code") or ""),
+                expires_in_seconds=ttl_seconds,
+                project_name=services.settings.project_name,
+                locale=locale,
+            )
+        except PortalEmailDeliveryError as error:
+            return portal_json_error(
+                request,
+                status_code=502,
+                error_code="portal.email_delivery_failed",
+                message=str(error),
+            )
+    return _portal_route_envelope(
+        message="portal email change code issued",
+        data={
+            "old_email": str(issued.get("old_email") or ""),
+            "new_email": str(issued.get("new_email") or ""),
+            "delivery": ("development_code" if allow_development_code else "email"),
+            "expires_in_seconds": ttl_seconds,
+            "code": (str(issued.get("code") or "") if allow_development_code else ""),
+        },
+    )
+
+
+@router.post("/account/email-change/verify")
+async def verify_portal_email_change_code(
+    request: Request,
+    payload: PortalEmailChangeVerifyPayload,
+) -> Any:
+    same_origin = _portal_same_origin_guard(request, always=True)
+    if same_origin is not None:
+        return same_origin
+    auth = await resolve_portal_request_context(
+        request,
+        require_idempotency=True,
+        allow_session_cookies=True,
+    )
+    if isinstance(auth, JSONResponse):
+        return auth
+    new_email = payload.new_email.strip()
+    code = payload.code.strip()
+    if not new_email or not code:
+        return portal_json_error(
+            request,
+            status_code=400,
+            error_code="auth.portal_email_change_code_required",
+            message="portal email change code and new email are required",
+        )
+    services = get_cloud_services(request)
+    try:
+        changed = _get_commercial_service(request).verify_portal_email_change_code(
+            principal_id=auth.principal_id,
+            new_email=new_email,
+            code=code,
+            max_attempts=max(
+                1,
+                int(services.settings.portal_login_code_max_attempts or 0),
+            ),
+            audit_context=_build_portal_audit_context(request, auth.principal_id),
+        )
+        data = serialize_portal_session(
+            request,
+            principal_id=auth.principal_id,
+            site_id=auth.site_id,
+            strict_site=False,
+        )
+    except CommercialServiceError as error:
+        if error.error_code == "service.portal_email_change_code_invalid":
+            return portal_json_error(
+                request,
+                status_code=401,
+                error_code="auth.portal_email_change_code_invalid",
+                message="portal email change code is invalid or expired",
+            )
+        return _service_error_response(error, request=request)
+
+    email_sender = services.portal_email_sender or build_portal_email_sender(
+        services.settings,
+        database_url=services.settings.database_url,
+    )
+    if email_sender is not None:
+        try:
+            email_sender.send_email_changed_notice(
+                recipient_email=str(changed.get("old_email") or ""),
+                new_email=str(changed.get("new_email") or ""),
+                principal_id=auth.principal_id,
+                project_name=services.settings.project_name,
+                locale=resolve_portal_email_locale(request, ""),
+            )
+        except PortalEmailDeliveryError:
+            pass
+    return _portal_route_envelope(
+        message="portal email changed",
+        data={
+            **data,
+            "old_email": str(changed.get("old_email") or ""),
+            "new_email": str(changed.get("new_email") or ""),
+        },
+    )
 
 
 @router.post("/register/code/request")
@@ -1103,12 +1304,12 @@ async def request_portal_registration_code(
     email = payload.email.strip()
     site_url = payload.site_url.strip()
     locale = resolve_portal_email_locale(request, payload.locale)
-    if not email or not site_url:
+    if not email:
         return portal_json_error(
             request,
             status_code=400,
             error_code="portal.registration_required",
-            message="email and wordpress site url are required",
+            message="email is required",
         )
     try:
         enforce_portal_login_code_request_rate_limit(request, email=email)
@@ -1330,6 +1531,130 @@ async def revoke_portal_session(request: Request) -> Any:
     if same_origin is not None:
         return same_origin
     return _portal_session_cleared_response()
+
+
+@router.post("/account/pro-trial")
+async def start_portal_account_pro_trial(request: Request) -> Any:
+    same_origin = _portal_same_origin_guard(request, always=True)
+    if same_origin is not None:
+        return same_origin
+    write_guard = _portal_write_guard(request)
+    if write_guard is not None:
+        return write_guard
+    auth = await resolve_portal_request_context(
+        request,
+        require_idempotency=True,
+        allow_session_cookies=True,
+    )
+    if isinstance(auth, JSONResponse):
+        return auth
+    account_id = _resolve_primary_portal_account_id(
+        request,
+        principal_id=auth.principal_id,
+    )
+    if isinstance(account_id, JSONResponse):
+        return account_id
+    try:
+        result = _get_commercial_service(request).start_account_pro_trial(
+            account_id=account_id,
+            audit_context=_build_portal_audit_context(request, auth.principal_id),
+        )
+        session_data = serialize_portal_session(
+            request,
+            principal_id=auth.principal_id,
+            site_id=auth.site_id,
+            strict_site=False,
+        )
+    except CommercialServiceError as error:
+        return _service_error_response(error, request=request)
+    return _portal_route_envelope(
+        message="portal Pro trial started",
+        data={
+            "account_id": account_id,
+            "principal_id": auth.principal_id,
+            **result,
+            "session": session_data,
+        },
+    )
+
+
+@router.post("/account/pro-monthly-order")
+async def create_portal_account_pro_monthly_order(
+    request: Request,
+    payload: PortalProMonthlyOrderPayload,
+) -> Any:
+    same_origin = _portal_same_origin_guard(request, always=True)
+    if same_origin is not None:
+        return same_origin
+    write_guard = _portal_write_guard(request)
+    if write_guard is not None:
+        return write_guard
+    auth = await resolve_portal_request_context(
+        request,
+        require_idempotency=True,
+        allow_session_cookies=True,
+    )
+    if isinstance(auth, JSONResponse):
+        return auth
+    account_id = _resolve_primary_portal_account_id(
+        request,
+        principal_id=auth.principal_id,
+    )
+    if isinstance(account_id, JSONResponse):
+        return account_id
+    try:
+        order = _get_commercial_service(request).create_account_pro_monthly_payment_order(
+            account_id=account_id,
+            provider=payload.provider,
+            audit_context=_build_portal_audit_context(request, auth.principal_id),
+        )
+    except CommercialServiceError as error:
+        return _service_error_response(error, request=request)
+    return _portal_route_envelope(
+        message="portal Pro monthly payment order created",
+        data={
+            "account_id": account_id,
+            "principal_id": auth.principal_id,
+            "order": order,
+        },
+    )
+
+
+@router.get("/account/payment-orders")
+async def list_portal_account_payment_orders(
+    request: Request,
+    limit: int = Query(default=10, ge=1, le=50),
+    offset: int = Query(default=0, ge=0),
+) -> Any:
+    auth = await resolve_portal_request_context(
+        request,
+        require_idempotency=False,
+        allow_session_cookies=True,
+    )
+    if isinstance(auth, JSONResponse):
+        return auth
+    account_id = _resolve_primary_portal_account_id(
+        request,
+        principal_id=auth.principal_id,
+    )
+    if isinstance(account_id, JSONResponse):
+        return account_id
+    try:
+        result = _get_commercial_service(request).list_account_payment_orders(
+            account_id,
+            limit=limit,
+            offset=offset,
+        )
+    except CommercialServiceError as error:
+        return _service_error_response(error, request=request)
+    return _portal_route_envelope(
+        message="portal account payment orders loaded",
+        data={
+            **result,
+            "account_id": account_id,
+            "principal_id": auth.principal_id,
+        },
+    )
 
 
 @router.get("/sites")
@@ -1695,6 +2020,42 @@ async def get_portal_site_diagnostic_advisor(
     result["role"] = str(access.get("role") or "")
     return _portal_route_envelope(
         message="portal diagnostic advisor loaded",
+        data=result,
+    )
+
+
+@router.get("/sites/{site_id}/diagnostics")
+async def get_portal_site_diagnostics(
+    request: Request,
+    site_id: str,
+) -> Any:
+    auth = await resolve_portal_request_context(
+        request,
+        require_idempotency=False,
+        allow_session_cookies=True,
+    )
+    if isinstance(auth, JSONResponse):
+        return auth
+    access = _authorize_portal_site_access(
+        request,
+        site_id=site_id,
+        principal_id=auth.principal_id,
+    )
+    if isinstance(access, JSONResponse):
+        return access
+    try:
+        result = _get_commercial_service(request).get_portal_site_diagnostics(site_id)
+    except CommercialServiceError as error:
+        return _service_error_response(error, request=request)
+    result["account_id"] = str(access.get("account_id") or "")
+    result["principal_id"] = auth.principal_id
+    result["identity_type"] = str(access.get("identity_type") or "")
+    result["allowed_actions"] = [
+        str(action) for action in _object_list(access.get("allowed_actions")) if str(action).strip()
+    ]
+    result["role"] = str(access.get("role") or "")
+    return _portal_route_envelope(
+        message="portal site diagnostics loaded",
         data=result,
     )
 

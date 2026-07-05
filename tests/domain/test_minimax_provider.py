@@ -5,8 +5,58 @@ import json
 import httpx
 
 from app.adapters.providers.base import ProviderExecutionRequest
-from app.adapters.providers.minimax import MiniMaxProviderAdapter
+from app.adapters.providers.minimax import (
+    MINIMAX_OFFICIAL_SCHEMA_SOURCES,
+    MiniMaxProviderAdapter,
+)
 from app.domain.hosted_model_defaults import AUDIO_NARRATION_MODEL_ID
+
+
+def _schema_payload(model_ids: list[str]) -> dict[str, object]:
+    return {
+        "openapi": "3.1.0",
+        "components": {
+            "schemas": {
+                "Request": {
+                    "properties": {
+                        "model": {
+                            "type": "string",
+                            "enum": model_ids,
+                        }
+                    }
+                }
+            }
+        },
+    }
+
+
+def _build_catalog_transport(
+    *,
+    official_models: list[dict[str, object]],
+    schema_models: dict[str, list[str]],
+    assert_auth: bool = True,
+) -> httpx.MockTransport:
+    source_by_url = {source.url: source for source in MINIMAX_OFFICIAL_SCHEMA_SOURCES}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        request_url = str(request.url)
+        if request.url.path.endswith("/v1/models"):
+            if assert_auth:
+                assert request.headers["Authorization"] == "Bearer test-api-key"
+            return httpx.Response(
+                200,
+                json={
+                    "object": "list",
+                    "data": official_models,
+                },
+            )
+        source = source_by_url.get(request_url)
+        if source is not None:
+            assert "Authorization" not in request.headers
+            return httpx.Response(200, json=_schema_payload(schema_models.get(source.name, [])))
+        return httpx.Response(404, json={"message": f"unexpected URL: {request_url}"})
+
+    return httpx.MockTransport(handler)
 
 
 def _build_request(
@@ -37,10 +87,28 @@ def _build_request(
     )
 
 
-def test_minimax_adapter_fetches_audio_catalog() -> None:
+def test_minimax_adapter_fetches_official_model_catalog_and_enriches_metadata() -> None:
     adapter = MiniMaxProviderAdapter(
         api_key="test-api-key",
         group_id="test-group",
+        transport=_build_catalog_transport(
+            official_models=[
+                {"id": "speech-2.8-turbo", "object": "model", "owned_by": "minimax"},
+                {"id": "MiniMax-M3", "object": "model", "owned_by": "minimax"},
+                {"id": "image-01", "object": "model", "owned_by": "minimax"},
+            ],
+            schema_models={
+                "speech_t2a_asyncapi": ["speech-2.8-turbo", "speech-2.8-hd"],
+                "image_text_to_image_openapi": ["image-01"],
+                "image_image_to_image_openapi": ["image-01", "image-01-live"],
+                "video_text_to_video_openapi": ["MiniMax-Hailuo-2.3", "T2V-01"],
+                "video_image_to_video_openapi": [
+                    "MiniMax-Hailuo-2.3",
+                    "MiniMax-Hailuo-2.3-Fast",
+                    "I2V-01",
+                ],
+            },
+        ),
     )
 
     snapshot = adapter.fetch_catalog()
@@ -48,20 +116,101 @@ def test_minimax_adapter_fetches_audio_catalog() -> None:
     assert snapshot.provider_id == "minimax"
     assert snapshot.display_name == "MiniMax"
     models = {model.model_id: model for model in snapshot.models}
+    assert list(models) == [
+        "speech-2.8-turbo",
+        "MiniMax-M3",
+        "image-01",
+        "speech-2.8-hd",
+        "image-01-live",
+        "MiniMax-Hailuo-2.3",
+        "T2V-01",
+        "MiniMax-Hailuo-2.3-Fast",
+        "I2V-01",
+    ]
     assert "speech-2.8-turbo" in models
     assert "speech-2.8-hd" in models
-    assert "speech-2.6-turbo" in models
     assert "image-01" in models
-    assert "MiniMax-Hailuo-02" in models
+    assert "image-01-live" in models
     assert "MiniMax-M3" in models
+    assert "MiniMax-Hailuo-2.3" in models
+    assert "MiniMax-Hailuo-2.3-Fast" in models
+    assert "T2V-01" in models
+    assert "I2V-01" in models
     assert models["speech-2.8-turbo"].feature == "audio_generation"
     assert models["speech-2.8-turbo"].status == "available"
     assert models["speech-2.8-turbo"].instances[0].endpoint_variant == "t2a_v2"
+    assert models["speech-2.8-turbo"].raw_json["source"] == "official_models_endpoint"
+    assert models["speech-2.8-hd"].feature == "audio_generation"
+    assert models["speech-2.8-hd"].instances[0].endpoint_variant == "t2a_v2"
+    assert models["speech-2.8-hd"].raw_json["source"] == "official_schema_model_enum"
+    assert models["speech-2.8-hd"].raw_json["official_schema_source_names"] == [
+        "speech_t2a_asyncapi"
+    ]
     assert models["MiniMax-M3"].feature == "text"
     assert models["MiniMax-M3"].status == "available"
     assert models["MiniMax-M3"].instances[0].endpoint_variant == "chat_completions"
-    assert models["speech-2.6-turbo"].status == "catalog_only"
-    assert models["speech-2.6-turbo"].instances == []
+    assert models["image-01"].feature == "image_generation"
+    assert models["image-01"].instances == []
+    assert models["image-01-live"].feature == "image_generation"
+    assert models["image-01-live"].raw_json["source"] == "official_schema_model_enum"
+    assert models["MiniMax-Hailuo-2.3"].feature == "video_generation"
+    assert models["MiniMax-Hailuo-2.3"].raw_json["source"] == "official_schema_model_enum"
+    assert models["MiniMax-Hailuo-2.3"].raw_json["official_schema_source_names"] == [
+        "video_text_to_video_openapi",
+        "video_image_to_video_openapi",
+    ]
+    assert models["T2V-01"].feature == "video_generation"
+    assert models["I2V-01"].feature == "video_generation"
+
+
+def test_minimax_adapter_adds_schema_models_without_inventing_text_models() -> None:
+    adapter = MiniMaxProviderAdapter(
+        api_key="test-api-key",
+        transport=_build_catalog_transport(
+            official_models=[{"id": "MiniMax-M2"}],
+            schema_models={
+                "speech_t2a_asyncapi": ["speech-2.8-turbo", "speech-2.8-hd"],
+                "image_image_to_image_openapi": ["image-01", "image-01-live"],
+                "video_image_to_video_openapi": [
+                    "MiniMax-Hailuo-2.3",
+                    "MiniMax-Hailuo-2.3-Fast",
+                ],
+            },
+        ),
+    )
+
+    snapshot = adapter.fetch_catalog()
+
+    model_ids = [model.model_id for model in snapshot.models]
+    assert model_ids == [
+        "MiniMax-M2",
+        "speech-2.8-turbo",
+        "speech-2.8-hd",
+        "image-01",
+        "image-01-live",
+        "MiniMax-Hailuo-2.3",
+        "MiniMax-Hailuo-2.3-Fast",
+    ]
+    assert "MiniMax-M3" not in model_ids
+    models = {model.model_id: model for model in snapshot.models}
+    assert models["MiniMax-M2"].raw_json["source"] == "official_models_endpoint"
+    assert models["image-01-live"].raw_json["source"] == "official_schema_model_enum"
+
+
+def test_minimax_adapter_sample_catalog_is_only_for_unconfigured_dev_fallback() -> None:
+    adapter = MiniMaxProviderAdapter(allow_sample_catalog=True)
+
+    snapshot = adapter.fetch_catalog()
+
+    assert {model.model_id for model in snapshot.models} >= {
+        "speech-2.8-turbo",
+        "speech-2.8-hd",
+        "MiniMax-M3",
+    }
+    assert all(
+        model.raw_json and model.raw_json["source"] == "official_models_endpoint"
+        for model in snapshot.models
+    )
 
 
 def test_minimax_adapter_executes_text_over_openai_compatible_chat() -> None:

@@ -12,7 +12,6 @@ export type PortalWorkspacePage =
   | 'billing'
   | 'audit'
   | 'monitoring'
-  | 'ai-insights'
   | 'record'
   | 'sites';
 
@@ -80,11 +79,11 @@ export function PortalWorkspaceHeader({
   const selectedSiteWordPressUrl = getPortalSiteWordPressUrl(selectedSite);
   const shouldShowEyebrow = eyebrow.trim().toLowerCase() !== title.trim().toLowerCase();
   const summary = (
-    <div className="grid gap-5 xl:grid-cols-[minmax(18rem,0.9fr)_minmax(0,1.85fr)_auto] xl:items-center">
+    <div className="grid gap-4 xl:grid-cols-[minmax(16rem,0.8fr)_minmax(0,1.9fr)_auto] xl:items-center">
       <div className="min-w-0">
         {shouldShowEyebrow ? (
           <div className="flex items-center gap-2">
-            <p className="text-xs font-semibold tracking-[0.08em] text-gray-500 dark:text-gray-400">
+            <p className="text-xs font-medium text-gray-500 dark:text-gray-400">
               {eyebrow}
             </p>
             {eyebrowInfo ? (
@@ -99,8 +98,8 @@ export function PortalWorkspaceHeader({
           </div>
         ) : null}
         <h1 className={cn(
-          'text-3xl font-semibold leading-tight text-gray-950 dark:text-white',
-          shouldShowEyebrow ? 'mt-2' : ''
+          'text-2xl font-semibold leading-tight text-gray-950 dark:text-white md:text-[1.75rem]',
+          shouldShowEyebrow ? 'mt-1.5' : ''
         )}>
           {title}
         </h1>
@@ -112,20 +111,18 @@ export function PortalWorkspaceHeader({
               t('portal.site_url_missing', {}, 'WordPress URL not configured')}
           </p>
         ) : null}
-        {description ? <p className="mt-3 max-w-md text-sm leading-6 text-gray-600 dark:text-gray-300">{description}</p> : null}
+        {description ? <p className="mt-2 max-w-2xl text-sm leading-6 text-gray-600 dark:text-gray-300">{description}</p> : null}
       </div>
       {metrics.length ? (
-        <BackofficeMetricStrip items={metrics} columnsClassName={metricsColumnsClassName} />
+        <BackofficeMetricStrip items={metrics} columnsClassName={metricsColumnsClassName} variant="portal" />
       ) : null}
       {resolvedActions ? <div className="flex flex-wrap gap-2 xl:justify-end">{resolvedActions}</div> : null}
     </div>
   );
 
   return (
-    <section className="space-y-4">
-      <div className="rounded-[1.5rem] border border-slate-200/80 bg-white/85 px-5 py-5 shadow-sm dark:border-slate-800 dark:bg-slate-950/55">
-        {summary}
-      </div>
+    <section className="space-y-4 border-b border-slate-200/75 pb-5 dark:border-slate-800">
+      {summary}
       {children}
     </section>
   );

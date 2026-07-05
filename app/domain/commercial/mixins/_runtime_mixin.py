@@ -82,7 +82,7 @@ class CommercialServiceRuntimeMixin(CommercialServiceAuditMixin):
                 metadata_json={"source": "seed_runtime"},
             )
             if plan_id == DEFAULT_FREE_PLAN_ID and plan_version_id == DEFAULT_FREE_PLAN_VERSION_ID:
-                service._ensure_plan_free_version_in_session(repository=repository)
+                service._ensure_free_version_in_session(repository=repository)
             else:
                 repository.upsert_plan(
                     plan_id=plan_id,

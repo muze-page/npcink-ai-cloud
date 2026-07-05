@@ -26,6 +26,9 @@ This setup remains a local clone/staging rehearsal. It is not a live customer
 trial and does not authorize any write to `npcink.local`, `dbd.local`,
 `wp.local`, or another live site.
 
+Historical ID note: this document records the old Free package IDs
+`plan_free` / `plan_free_v1`; current package records use `free` / `free_v1`.
+
 ## Rollback Preparation
 
 Before changing the addon option, a local addon option snapshot was saved:

@@ -4,6 +4,7 @@ import React, { Suspense, useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { BackofficeStatusBadge } from '@/components/backoffice/BackofficeStatusBadge';
 import {
+  BackofficeInfoHint,
   BackofficeLayer,
   BackofficeMetricStrip,
   BackofficePageStack,
@@ -21,9 +22,9 @@ import {
   localizeTierLabel,
   localizeUsageBand,
 } from '@/lib/admin-plan-copy';
-import { ADMIN_CURRENCY, formatAdminCurrency } from '@/lib/currency';
+import { ADMIN_CURRENCY } from '@/lib/currency';
 import { readResponsePayload } from '@/lib/safe-response';
-import { formatNumber as formatInteger } from '@/lib/utils';
+import { formatCurrency, formatNumber as formatInteger } from '@/lib/utils';
 import { resolveUiErrorMessage } from '@/lib/errors';
 
 type PlanVersionRecord = {
@@ -33,6 +34,7 @@ type PlanVersionRecord = {
   currency: string;
   budgets: Record<string, unknown>;
   concurrency: Record<string, unknown>;
+  metadata?: Record<string, unknown>;
   created_at: string;
 };
 
@@ -91,7 +93,16 @@ function numericValue(value: unknown): number {
 }
 
 function formatBudgetCurrency(value: unknown): string {
-  return formatAdminCurrency(numericValue(value));
+  return formatCurrency(numericValue(value), ADMIN_CURRENCY);
+}
+
+function latestMetadataValue(
+  latestVersion: PlanVersionRecord | null | undefined,
+  fallback: unknown,
+  key: string
+): number {
+  const metadata = latestVersion?.metadata || {};
+  return numericValue(metadata[key] ?? fallback);
 }
 
 async function fetchPlanCatalog(): Promise<Response> {
@@ -107,20 +118,13 @@ async function fetchPlanCatalog(): Promise<Response> {
   }
 }
 
-function normalizeTierId(value: string): string {
-  return value === 'starter' ? 'free' : value;
-}
-
 function findCanonicalShellPlan(plans: PlanListItem[], tierId: string): PlanListItem | undefined {
-  const expectedTierId = normalizeTierId(tierId);
+  const expectedTierId = tierId;
   return plans.find((item) => {
     const planId = item.plan.plan_id;
-    const metadataTierId = normalizeTierId(String(item.plan.metadata?.tier_id || ''));
-    const summaryTierId = normalizeTierId(String(item.tier_summary?.tier_id || ''));
+    const metadataTierId = String(item.plan.metadata?.tier_id || '');
+    const summaryTierId = String(item.tier_summary?.tier_id || '');
     if (planId === tierId || planId === expectedTierId) {
-      return true;
-    }
-    if (expectedTierId === 'free' && (planId === 'plan_free' || item.plan.metadata?.plan_kind === 'default_free')) {
       return true;
     }
     return (
@@ -279,7 +283,7 @@ function PlansContent() {
         t(
           'admin.package_shell_bootstrap_notice',
           {},
-          `${localizedAlias} shell is now available as a canonical ${shell.tier_id} plan.`
+          `${localizedAlias} package is now available for customer assignment.`
         )
       );
       await loadPlans();
@@ -354,6 +358,7 @@ function PlansContent() {
           {},
           'Read the active Free, Pro, and Agency package posture first. Open detail only when price, limits, or release state needs maintenance.'
         )}
+        descriptionDisplay="hint"
         aside={
           <div className="w-full xl:w-[44rem]">
             <BackofficeMetricStrip
@@ -362,6 +367,7 @@ function PlansContent() {
                   label: t('admin.managed_packages', {}, 'Managed packages'),
                   value: formatInteger(tierTemplates.length),
                   detail: t('admin.managed_packages_detail', {}, 'Free / Pro / Agency are the main packages exposed to account coverage.'),
+                  detailDisplay: 'hint',
                   size: 'compact',
                 },
                 {
@@ -370,6 +376,7 @@ function PlansContent() {
                   detail: missingShellCount > 0
                     ? t('admin.plans.missing_packages_detail', {}, 'Some packages need advanced setup.')
                     : t('admin.plans.ready_packages_detail', {}, 'All public packages have a published record.'),
+                  detailDisplay: 'hint',
                   size: 'compact',
                 },
                 { label: t('admin.active_subscriptions'), value: formatInteger(activeSubscriptions), size: 'compact' },
@@ -379,11 +386,7 @@ function PlansContent() {
           </div>
         }
       >
-        <div className="mb-4 flex flex-wrap gap-2">
-          <Link href="/admin/coverage" className="btn btn-secondary btn-sm">
-            {t('admin.back_to_coverage', {}, 'Back to coverage')}
-          </Link>
-        </div>
+        {null}
       </BackofficePrimaryPanel>
 
       <BackofficeLayer
@@ -394,6 +397,7 @@ function PlansContent() {
           {},
           'Compare the public package limits. Maintenance and migration controls stay under Advanced maintenance.'
         )}
+        descriptionDisplay="hint"
       />
       <BackofficeSectionPanel className="space-y-4">
         {error ? (
@@ -407,17 +411,34 @@ function PlansContent() {
             const budgets = (latestVersion?.budgets || shell.budgets_template || {}) as Record<string, unknown>;
             const concurrency = (latestVersion?.concurrency || shell.concurrency_template || {}) as Record<string, unknown>;
             const sourceTier = item?.tier_summary || shell;
+            const monthlyIncludedPoints = latestMetadataValue(
+              latestVersion,
+              sourceTier.monthly_included_points,
+              'monthly_included_points'
+            );
+            const siteLimit = latestMetadataValue(latestVersion, sourceTier.site_limit, 'site_limit');
+            const batchCeiling = latestMetadataValue(latestVersion, sourceTier.max_batch_items, 'max_batch_items');
             const features = sourceTier.feature_groups || [];
             const activeSubscriptionCount = Number(item?.subscription_counts?.active || 0);
+            const packageAlias = localizePackageAlias(t, shell.tier_id, sourceTier.package_alias);
             return (
-              <BackofficeStackCard key={`price-features-${shell.tier_id}`} className="flex flex-col">
+              <BackofficeStackCard
+                key={`price-features-${shell.tier_id}`}
+                className="flex flex-col"
+                role="group"
+                aria-label={t(
+                  'admin.package_card_label',
+                  { package: packageAlias },
+                  `${packageAlias} package`
+                )}
+              >
                 <div className="flex items-start justify-between gap-3">
                   <div>
                     <p className="text-xs font-medium uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
                       {localizeTierLabel(t, shell.tier_id, sourceTier.label)}
                     </p>
                     <h2 className="mt-2 text-xl font-semibold text-slate-950 dark:text-white">
-                      {localizePackageAlias(t, shell.tier_id, sourceTier.package_alias)}
+                      {packageAlias}
                     </h2>
                   </div>
                   <BackofficeStatusBadge
@@ -430,15 +451,15 @@ function PlansContent() {
                   items={[
                     {
                       label: t('admin.included_points', {}, 'Included points'),
-                      value: formatInteger(numericValue(sourceTier.monthly_included_points)),
+                      value: formatInteger(monthlyIncludedPoints),
                     },
                     {
-                      label: t('admin.period_cost_budget', {}, 'Period cost budget'),
+                      label: t('admin.period_cost_budget', {}, 'Package fee'),
                       value: formatBudgetCurrency(budgets.max_cost_per_period),
                     },
                     {
                       label: t('admin.site_limit', {}, 'Site limit'),
-                      value: formatInteger(numericValue(sourceTier.site_limit)),
+                      value: formatInteger(siteLimit),
                     },
                     {
                       label: t('admin.concurrency', {}, 'Concurrency'),
@@ -446,7 +467,7 @@ function PlansContent() {
                     },
                     {
                       label: t('admin.batch_ceiling', {}, 'Batch ceiling'),
-                      value: formatInteger(numericValue(sourceTier.max_batch_items)),
+                      value: formatInteger(batchCeiling),
                     },
                     {
                       label: t('admin.active_subscriptions'),
@@ -508,15 +529,15 @@ function PlansContent() {
         <summary className="cursor-pointer list-none">
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div>
-              <p className="text-sm font-semibold text-slate-950 dark:text-white">
-                {t('admin.package_shell_maintenance_toggle_label', {}, 'Advanced package maintenance')}
-              </p>
-              <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
-                {t(
-                  'admin.plans.advanced_maintenance_desc',
-                  {},
-                  'Standard package bootstrap and manual shell creation for missing package records.'
-                )}
+              <p className="flex items-center gap-2 text-sm font-semibold text-slate-950 dark:text-white">
+                <span>{t('admin.package_shell_maintenance_toggle_label', {}, 'Package initialization')}</span>
+                <BackofficeInfoHint
+                  detail={t(
+                    'admin.plans.advanced_maintenance_desc',
+                    {},
+                    'Initialize missing standard packages or create an exceptional package record.'
+                  )}
+                />
               </p>
             </div>
             <span className="inline-flex w-fit items-center rounded-full border border-slate-200 px-3 py-1 text-xs font-semibold text-slate-600 dark:border-slate-800 dark:text-slate-300">
@@ -540,12 +561,13 @@ function PlansContent() {
       <div className="mt-4 rounded-2xl border border-dashed border-slate-200 px-4 py-4 dark:border-slate-800">
         <BackofficeLayer
           eyebrow={t('admin.quick_actions')}
-          title={t('admin.package_shell_bootstrap_title', {}, 'Canonical coverage package shells')}
+          title={t('admin.package_shell_bootstrap_title', {}, 'Create missing standard packages')}
           description={t(
             'admin.package_shell_bootstrap_desc',
             {},
             'Use these shortcuts to create any missing Free / Pro / Agency package entries before assigning them to customers.'
           )}
+          descriptionDisplay="hint"
         />
         <BackofficeSectionPanel className="mt-4 space-y-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
@@ -564,7 +586,7 @@ function PlansContent() {
             onClick={() => void handleBootstrapMissingShells()}
             disabled={isBootstrapping || missingShellCount === 0}
           >
-            {t('admin.bootstrap_missing_shells', {}, 'Bootstrap missing package shells')}
+            {t('admin.bootstrap_missing_shells', {}, 'Create missing packages')}
           </button>
         </div>
         <div className="grid gap-4 xl:grid-cols-3">
@@ -611,14 +633,14 @@ function PlansContent() {
                 >
                   {isPresent
                     ? t('admin.package_shell_present', {}, 'Already present')
-                    : t('admin.create_package_shell', {}, `Create ${localizePackageAlias(t, shell.tier_id, shell.package_alias)} shell`)}
+                    : t('admin.create_package_shell', {}, `Create ${localizePackageAlias(t, shell.tier_id, shell.package_alias)} package`)}
                 </button>
                 {item?.plan?.plan_id ? (
                   <p className="mt-3 text-xs text-slate-500 dark:text-slate-400">
                     {t(
                       'admin.package_shell_binding',
                       { planId: item.plan.plan_id },
-                      `Canonical shell currently binds to ${item.plan.plan_id}.`
+                      `This standard package uses ID ${item.plan.plan_id}.`
                     )}
                   </p>
                 ) : null}
@@ -632,22 +654,23 @@ function PlansContent() {
       <div className="mt-4 rounded-2xl border border-dashed border-slate-200 px-4 py-4 dark:border-slate-800">
         <BackofficeLayer
           eyebrow={t('admin.quick_actions')}
-          title={t('admin.create_plan_title', {}, 'Create coverage package shell')}
+          title={t('admin.create_plan_title', {}, 'Create package record')}
           description={t(
             'admin.create_plan_form_desc_v2',
             {},
             'Create package objects here only when the customer coverage queue genuinely needs a new package. This is a deep inspection workflow, not a default operator path.'
           )}
+          descriptionDisplay="hint"
         />
         <BackofficeSectionPanel className="mt-4">
         <form className="grid gap-4 md:grid-cols-2 xl:grid-cols-[0.9fr_1fr_0.7fr]" onSubmit={handleCreatePlan}>
           <label className="text-sm">
-            <span className="mb-2 block font-medium text-gray-700 dark:text-gray-300">Plan ID</span>
+            <span className="mb-2 block font-medium text-gray-700 dark:text-gray-300">{t('admin.plan_id', {}, 'Package ID')}</span>
             <input
               value={form.plan_id}
               onChange={(event) => setForm((current) => ({ ...current, plan_id: event.target.value }))}
               className="input w-full"
-              placeholder="plan_free"
+              placeholder="free"
               required
             />
           </label>
@@ -682,7 +705,7 @@ function PlansContent() {
               placeholder={t(
                 'admin.plan_description_placeholder',
                 {},
-                'Describe the intended tier posture, operating band, and any operator-only package notes.'
+                'Describe the intended package posture, operating band, and any operator-only notes.'
               )}
             />
           </label>
@@ -711,7 +734,11 @@ function PackageStatRows({
     <div className={className}>
       <dl className="grid gap-x-5 gap-y-3 md:grid-cols-2">
         {items.map((item) => (
-          <div key={item.label} className="flex items-baseline justify-between gap-4 border-b border-slate-200/70 pb-2 last:border-b-0 dark:border-slate-800">
+          <div
+            key={item.label}
+            className="flex items-baseline justify-between gap-4 border-b border-slate-200/70 pb-2 last:border-b-0 dark:border-slate-800"
+            aria-label={`${item.label}: ${item.value}`}
+          >
             <dt className="min-w-0 text-sm text-slate-500 dark:text-slate-400">{item.label}</dt>
             <dd className="shrink-0 text-lg font-semibold tabular-nums text-slate-950 dark:text-white">{item.value}</dd>
           </div>

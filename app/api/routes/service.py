@@ -35,6 +35,9 @@ from app.domain.media_derivatives.metrics import MediaDerivativeObservabilitySer
 from app.domain.model_references import ModelReferenceError, ModelReferenceService
 from app.domain.observability.plugin_events import PluginObservabilityService
 from app.domain.observability.service import ObservabilityService
+from app.domain.provider_connections.model_allowlist import (
+    build_provider_model_allowlist,
+)
 from app.domain.provider_connections.runtime_settings import (
     apply_provider_connection_runtime_settings,
 )
@@ -299,6 +302,16 @@ class PortalEmailServiceSettingsPayload(BaseModel):
     reply_to: str = Field(default="", max_length=320)
 
 
+class AlipayPaymentServiceSettingsPayload(BaseModel):
+    enabled: bool = True
+    app_id: str = Field(default="", max_length=191)
+    gateway_url: str = Field(default="https://openapi.alipay.com/gateway.do", max_length=500)
+    notify_url: str = Field(default="", max_length=500)
+    return_url: str = Field(default="", max_length=500)
+    private_key: str | None = Field(default=None, max_length=20000)
+    public_key: str | None = Field(default=None, max_length=20000)
+
+
 class ServiceSettingsEmailTestPayload(BaseModel):
     recipient_email: str = Field(min_length=3, max_length=320)
 
@@ -429,9 +442,9 @@ def _record_provider_connection_audit(
     result: dict[str, Any] | None = None,
     error_code: str = "",
     message: str = "",
-) -> None:
+) -> dict[str, Any] | None:
     try:
-        _get_commercial_service(request).record_service_audit_event(
+        return _get_commercial_service(request).record_service_audit_event(
             audit_context=_build_audit_context(request),
             event_kind=event_kind,
             outcome=outcome,
@@ -445,7 +458,7 @@ def _record_provider_connection_audit(
             ),
         )
     except Exception:
-        return
+        return None
 
 
 def _record_service_setting_audit(
@@ -659,7 +672,12 @@ def _serialize_wordpress_ai_instance(
     }
 
 
-def _build_wordpress_ai_routing_projection(database_url: str) -> dict[str, Any]:
+def _build_wordpress_ai_routing_projection(
+    database_url: str,
+    *,
+    settings: Any | None = None,
+) -> dict[str, Any]:
+    provider_model_allowlist = build_provider_model_allowlist(database_url, settings=settings)
     with get_session(database_url) as session:
         repository = CatalogRepository(session)
         instances = repository.list_instances_for_provider()
@@ -680,6 +698,11 @@ def _build_wordpress_ai_routing_projection(database_url: str) -> dict[str, Any]:
         for instance in instances:
             model = models_by_id.get(instance.model_id)
             if model is None or model.status != "available":
+                continue
+            if not provider_model_allowlist.allows(
+                provider_id=instance.provider_id,
+                model_id=instance.model_id,
+            ):
                 continue
             if model.feature not in available_instances_by_kind:
                 continue
@@ -705,6 +728,7 @@ def _build_wordpress_ai_routing_projection(database_url: str) -> dict[str, Any]:
                 list(binding.candidate_instance_ids or []) if binding is not None else []
             )
             candidate_items = []
+            effective_candidate_instance_ids = []
             for instance_id in candidate_instance_ids:
                 if instance_id not in instances_by_id:
                     continue
@@ -712,6 +736,12 @@ def _build_wordpress_ai_routing_projection(database_url: str) -> dict[str, Any]:
                 model = models_by_id.get(instance.model_id)
                 if model is None:
                     continue
+                if not provider_model_allowlist.allows(
+                    provider_id=instance.provider_id,
+                    model_id=instance.model_id,
+                ):
+                    continue
+                effective_candidate_instance_ids.append(instance_id)
                 candidate_items.append(
                     _serialize_wordpress_ai_instance(
                         instance,
@@ -731,7 +761,7 @@ def _build_wordpress_ai_routing_projection(database_url: str) -> dict[str, Any]:
                     "execution_kind": (
                         profile.execution_kind if profile is not None else spec.execution_kind
                     ),
-                    "candidate_instance_ids": candidate_instance_ids,
+                    "candidate_instance_ids": effective_candidate_instance_ids,
                     "candidates": candidate_items,
                     "timeout_ms": int(policy.get("timeout_ms") or spec.timeout_ms),
                     "max_timeout_ms": spec.max_timeout_ms,
@@ -744,7 +774,9 @@ def _build_wordpress_ai_routing_projection(database_url: str) -> dict[str, Any]:
                         else ""
                     ),
                     "selection_policy": selection_policy,
-                    "status": "configured" if candidate_instance_ids else "needs_candidates",
+                    "status": (
+                        "configured" if effective_candidate_instance_ids else "needs_candidates"
+                    ),
                 }
             )
 
@@ -775,12 +807,15 @@ def _build_wordpress_ai_routing_projection(database_url: str) -> dict[str, Any]:
 def _validate_wordpress_ai_routing_payload(
     database_url: str,
     payload: WordPressAIRoutingSettingsPayload,
+    *,
+    settings: Any | None = None,
 ) -> tuple[list[WordPressAIRoutingProfilePayload], str]:
     if not payload.profiles:
         return [], "at least one WordPress AI routing profile is required"
 
     known_profile_ids = set(WP_AI_CONNECTOR_PROFILE_SPECS_BY_ID)
     seen_profile_ids: set[str] = set()
+    provider_model_allowlist = build_provider_model_allowlist(database_url, settings=settings)
     with get_session(database_url) as session:
         repository = CatalogRepository(session)
         for profile_payload in payload.profiles:
@@ -828,6 +863,14 @@ def _validate_wordpress_ai_routing_payload(
                     return [], (
                         f"profile {profile_id} may only use available "
                         f"{spec.execution_kind} instances"
+                    )
+                if not provider_model_allowlist.allows(
+                    provider_id=instance.provider_id,
+                    model_id=instance.model_id,
+                ):
+                    return [], (
+                        f"profile {profile_id} may only use models enabled "
+                        f"for provider {instance.provider_id}: {instance.model_id}"
                     )
 
     return payload.profiles, ""
@@ -2969,7 +3012,20 @@ async def rebuild_admin_subscription_billing_snapshots(
     return build_envelope(
         status="ok",
         message="subscription billing snapshots rebuilt",
-        data=result,
+        data=_merge_receipt(
+            result,
+            _build_operator_receipt(
+                event_kind="subscription.billing_snapshot.rebuild",
+                scope_kind="subscription",
+                scope_id=subscription_id,
+                outcome="succeeded",
+                effective_summary=(
+                    f"Billing snapshots for subscription {subscription_id} were rebuilt "
+                    "from usage records."
+                ),
+                account_id=str(_dict_value(result.get("subscription")).get("account_id") or ""),
+            ),
+        ),
         revision="m6",
     )
 
@@ -3378,6 +3434,99 @@ async def test_admin_portal_email_settings(
     )
 
 
+@router.patch("/admin/service-settings/alipay-payment")
+async def update_admin_alipay_payment_settings(
+    request: Request,
+    payload: AlipayPaymentServiceSettingsPayload,
+) -> Any:
+    auth = await authorize_internal_request(request, require_idempotency=True)
+    if auth is not None:
+        return auth
+    services = get_cloud_services(request)
+    try:
+        result = ServiceSettingsAdminService(
+            services.settings.database_url,
+            services.settings,
+        ).save_alipay_payment(payload.model_dump(mode="json"))
+    except ServiceSettingsAdminError as error:
+        _record_service_setting_audit(
+            request,
+            event_kind="service_setting.save",
+            outcome="error",
+            setting_id="payment_alipay",
+            error_code=error.error_code,
+            message=error.message,
+        )
+        return JSONResponse(
+            status_code=error.status_code,
+            content=build_envelope(
+                status="error",
+                error_code=error.error_code,
+                message=error.message,
+                revision="m6",
+            ),
+        )
+    _record_service_setting_audit(
+        request,
+        event_kind="service_setting.save",
+        outcome="succeeded",
+        setting_id="payment_alipay",
+        result=result,
+    )
+    return build_envelope(
+        status="ok",
+        message="Alipay payment settings saved",
+        data=result,
+        revision="m6",
+    )
+
+
+@router.post("/admin/service-settings/alipay-payment/test")
+async def test_admin_alipay_payment_settings(request: Request) -> Any:
+    auth = await authorize_internal_request(request, require_idempotency=True)
+    if auth is not None:
+        return auth
+    services = get_cloud_services(request)
+    try:
+        result = ServiceSettingsAdminService(
+            services.settings.database_url,
+            services.settings,
+        ).test_alipay_payment()
+    except ServiceSettingsAdminError as error:
+        _record_service_setting_audit(
+            request,
+            event_kind="service_setting.test",
+            outcome="error",
+            setting_id="payment_alipay",
+            error_code=error.error_code,
+            message=error.message,
+        )
+        return JSONResponse(
+            status_code=error.status_code,
+            content=build_envelope(
+                status="error",
+                error_code=error.error_code,
+                message=error.message,
+                revision="m6",
+            ),
+        )
+    _record_service_setting_audit(
+        request,
+        event_kind="service_setting.test",
+        outcome="succeeded" if result.get("status") == "ready" else "error",
+        setting_id="payment_alipay",
+        result=result,
+        error_code="" if result.get("status") == "ready" else "service_settings.alipay_not_ready",
+        message=str(result.get("message") or ""),
+    )
+    return build_envelope(
+        status="ok",
+        message="Alipay payment settings tested",
+        data=result,
+        revision="m6",
+    )
+
+
 @router.get("/admin/provider-connections")
 async def list_admin_provider_connections(request: Request) -> Any:
     auth = await authorize_internal_request(request, require_idempotency=False)
@@ -3429,7 +3578,7 @@ async def create_admin_provider_connection(
                 revision="m6",
             ),
         )
-    _record_provider_connection_audit(
+    audit_event = _record_provider_connection_audit(
         request,
         event_kind="provider_connection.save",
         outcome="succeeded",
@@ -3440,7 +3589,19 @@ async def create_admin_provider_connection(
     return build_envelope(
         status="ok",
         message="provider connection saved",
-        data=result,
+        data=_merge_receipt(
+            result,
+            _build_operator_receipt(
+                event_kind="provider_connection.save",
+                scope_kind="provider_connection",
+                scope_id=str(result.get("connection_id") or ""),
+                outcome="succeeded",
+                effective_summary=(
+                    f"Provider connection {str(result.get('connection_id') or '')} was saved."
+                ),
+                audit_event=audit_event,
+            ),
+        ),
         revision="m6",
     )
 
@@ -3479,7 +3640,7 @@ async def update_admin_provider_connection(
                 revision="m6",
             ),
         )
-    _record_provider_connection_audit(
+    audit_event = _record_provider_connection_audit(
         request,
         event_kind="provider_connection.save",
         outcome="succeeded",
@@ -3490,7 +3651,20 @@ async def update_admin_provider_connection(
     return build_envelope(
         status="ok",
         message="provider connection saved",
-        data=result,
+        data=_merge_receipt(
+            result,
+            _build_operator_receipt(
+                event_kind="provider_connection.save",
+                scope_kind="provider_connection",
+                scope_id=str(result.get("connection_id") or connection_id),
+                outcome="succeeded",
+                effective_summary=(
+                    "Provider connection "
+                    f"{str(result.get('connection_id') or connection_id)} was saved."
+                ),
+                audit_event=audit_event,
+            ),
+        ),
         revision="m6",
     )
 
@@ -3515,7 +3689,7 @@ async def preview_admin_provider_connection_catalog(
             content=build_envelope(
                 status="error",
                 error_code=error.error_code,
-                message="provider connection catalog preview failed",
+                message=error.message,
                 revision="m6",
             ),
         )
@@ -3556,7 +3730,7 @@ async def delete_admin_provider_connection(request: Request, connection_id: str)
                 revision="m6",
             ),
         )
-    _record_provider_connection_audit(
+    audit_event = _record_provider_connection_audit(
         request,
         event_kind="provider_connection.delete",
         outcome="succeeded",
@@ -3566,7 +3740,17 @@ async def delete_admin_provider_connection(request: Request, connection_id: str)
     return build_envelope(
         status="ok",
         message="provider connection deleted",
-        data=result,
+        data=_merge_receipt(
+            result,
+            _build_operator_receipt(
+                event_kind="provider_connection.delete",
+                scope_kind="provider_connection",
+                scope_id=connection_id,
+                outcome="succeeded",
+                effective_summary=f"Provider connection {connection_id} was deleted.",
+                audit_event=audit_event,
+            ),
+        ),
         revision="m6",
     )
 
@@ -3600,7 +3784,7 @@ async def test_admin_provider_connection(request: Request, connection_id: str) -
                 revision="m6",
             ),
         )
-    _record_provider_connection_audit(
+    audit_event = _record_provider_connection_audit(
         request,
         event_kind="provider_connection.test",
         outcome="succeeded" if result.get("ok") else "error",
@@ -3612,7 +3796,17 @@ async def test_admin_provider_connection(request: Request, connection_id: str) -
     return build_envelope(
         status="ok" if result.get("ok") else "error",
         message=str(result.get("message") or "provider connection tested"),
-        data=result,
+        data=_merge_receipt(
+            result,
+            _build_operator_receipt(
+                event_kind="provider_connection.test",
+                scope_kind="provider_connection",
+                scope_id=connection_id,
+                outcome="succeeded" if result.get("ok") else "error",
+                effective_summary=str(result.get("message") or "Provider connection was tested."),
+                audit_event=audit_event,
+            ),
+        ),
         revision="m6",
     )
 
@@ -3902,7 +4096,10 @@ async def get_admin_wordpress_ai_routing(request: Request) -> Any:
     return build_envelope(
         status="ok",
         message="WordPress AI connector routing loaded",
-        data=_build_wordpress_ai_routing_projection(services.settings.database_url),
+        data=_build_wordpress_ai_routing_projection(
+            services.settings.database_url,
+            settings=services.settings,
+        ),
         revision="m6",
     )
 
@@ -3919,6 +4116,7 @@ async def update_admin_wordpress_ai_routing(
     profiles, error_message = _validate_wordpress_ai_routing_payload(
         services.settings.database_url,
         payload,
+        settings=services.settings,
     )
     if error_message:
         return JSONResponse(
@@ -3986,7 +4184,10 @@ async def update_admin_wordpress_ai_routing(
     except Exception:
         audit_event = None
 
-    result = _build_wordpress_ai_routing_projection(services.settings.database_url)
+    result = _build_wordpress_ai_routing_projection(
+        services.settings.database_url,
+        settings=services.settings,
+    )
     return build_envelope(
         status="ok",
         message="WordPress AI connector routing saved",

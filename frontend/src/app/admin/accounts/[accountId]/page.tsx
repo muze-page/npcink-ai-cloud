@@ -2,6 +2,7 @@
 
 import React, { useCallback, useEffect, useState, Suspense } from 'react';
 import Link from 'next/link';
+import { AdminMutationReceipt, type AdminMutationReceiptPayload } from '@/components/admin/AdminMutationReceipt';
 import { LoadingFallback } from '@/components/ui/LoadingFallback';
 import { useParams } from 'next/navigation';
 import { BackofficeIdentifier } from '@/components/backoffice/BackofficeIdentifier';
@@ -474,6 +475,7 @@ function AccountDetailContent() {
   const [isSavingAccountMeta, setIsSavingAccountMeta] = useState(false);
   const [accountStatusNotice, setAccountStatusNotice] = useState<string | null>(null);
   const [accountStatusError, setAccountStatusError] = useState<string | null>(null);
+  const [accountStatusReceipt, setAccountStatusReceipt] = useState<AdminMutationReceiptPayload | null>(null);
   const [accountStatusPending, setAccountStatusPending] = useState<'suspend' | 'restore' | null>(null);
   const [suspendReason, setSuspendReason] = useState('');
   const [packageForm, setPackageForm] = useState({
@@ -486,6 +488,7 @@ function AccountDetailContent() {
   });
   const [packageActionNotice, setPackageActionNotice] = useState<string | null>(null);
   const [packageActionError, setPackageActionError] = useState<string | null>(null);
+  const [packageActionReceipt, setPackageActionReceipt] = useState<AdminMutationReceiptPayload | null>(null);
   const [packageActionPending, setPackageActionPending] = useState<'change' | 'suspend' | 'cancel' | null>(null);
   const [topUpActionPending, setTopUpActionPending] = useState<string | null>(null);
   const [creditAdjustmentForm, setCreditAdjustmentForm] = useState({
@@ -855,12 +858,14 @@ function AccountDetailContent() {
           'A coverage package option and package version are required before changing coverage.'
         )
       );
+      setPackageActionReceipt(null);
       return;
     }
 
     setPackageActionPending('change');
     setPackageActionError(null);
     setPackageActionNotice(null);
+    setPackageActionReceipt(null);
     try {
       const response = await fetch(`/api/admin/accounts/${encodeURIComponent(accountId)}/subscription`, {
         method: 'POST',
@@ -890,6 +895,7 @@ function AccountDetailContent() {
       if (!response.ok) {
         throw new Error(payload.message || t('error.failed_save', {}, 'Failed to save.'));
       }
+      setPackageActionReceipt((payload.data?.receipt || null) as AdminMutationReceiptPayload | null);
       setPackageActionNotice(
         t(
           'admin.account_detail.package_changed_notice',
@@ -913,6 +919,7 @@ function AccountDetailContent() {
     setPackageActionPending(action);
     setPackageActionError(null);
     setPackageActionNotice(null);
+    setPackageActionReceipt(null);
     try {
       const response = await fetch(
         `/api/admin/accounts/${encodeURIComponent(accountId)}/subscription/${action}`,
@@ -927,6 +934,7 @@ function AccountDetailContent() {
       if (!response.ok) {
         throw new Error(payload.message || t('error.failed_save', {}, 'Failed to save.'));
       }
+      setPackageActionReceipt((payload.data?.receipt || null) as AdminMutationReceiptPayload | null);
       setPackageActionNotice(
         action === 'suspend'
           ? t(
@@ -957,6 +965,7 @@ function AccountDetailContent() {
     setAccountStatusPending(action);
     setAccountStatusNotice(null);
     setAccountStatusError(null);
+    setAccountStatusReceipt(null);
     try {
       const response = await fetch(`/api/admin/accounts/${encodeURIComponent(account.account_id)}/${action}`, {
         method: 'POST',
@@ -970,6 +979,7 @@ function AccountDetailContent() {
       if (!response.ok) {
         throw new Error(payload.message || t('error.failed_save', {}, 'Failed to save.'));
       }
+      setAccountStatusReceipt((payload.data?.receipt || null) as AdminMutationReceiptPayload | null);
       const nextStatus = String(payload.data?.status || (action === 'restore' ? 'active' : 'suspended'));
       const metadata = payload.data?.metadata && typeof payload.data.metadata === 'object'
         ? payload.data.metadata
@@ -1008,12 +1018,14 @@ function AccountDetailContent() {
           'A current subscription is required before applying a top-up pack.'
         )
       );
+      setPackageActionReceipt(null);
       return;
     }
 
     setTopUpActionPending(pack.pack_id);
     setPackageActionError(null);
     setPackageActionNotice(null);
+    setPackageActionReceipt(null);
     try {
       const response = await fetch(`/api/admin/subscriptions/${encodeURIComponent(subscriptionId)}/topup`, {
         method: 'POST',
@@ -1034,6 +1046,7 @@ function AccountDetailContent() {
       if (!response.ok) {
         throw new Error(payload.message || t('error.failed_save', {}, 'Failed to save.'));
       }
+      setPackageActionReceipt((payload.data?.receipt || null) as AdminMutationReceiptPayload | null);
       setPackageActionNotice(
         t(
           'admin.account_detail.topup_pack_applied_notice',
@@ -1061,6 +1074,7 @@ function AccountDetailContent() {
           'Enter a non-zero AI credit delta.'
         )
       );
+      setPackageActionReceipt(null);
       return;
     }
     if (!creditAdjustmentForm.reason.trim()) {
@@ -1071,12 +1085,14 @@ function AccountDetailContent() {
           'Enter an operator reason before applying the credit adjustment.'
         )
       );
+      setPackageActionReceipt(null);
       return;
     }
 
     setCreditAdjustmentPending(true);
     setPackageActionError(null);
     setPackageActionNotice(null);
+    setPackageActionReceipt(null);
     try {
       const response = await fetch(
         `/api/admin/accounts/${encodeURIComponent(accountId)}/credit-ledger/adjustments`,
@@ -1099,6 +1115,7 @@ function AccountDetailContent() {
       if (!response.ok) {
         throw new Error(payload.message || t('error.failed_save', {}, 'Failed to save.'));
       }
+      setPackageActionReceipt((payload.data?.receipt || null) as AdminMutationReceiptPayload | null);
       setPackageActionNotice(
         t(
           'admin.account_detail.credit_adjustment_applied_notice',
@@ -1595,6 +1612,7 @@ function AccountDetailContent() {
         {accountStatusError ? (
           <p className="text-sm text-red-600 dark:text-red-300">{accountStatusError}</p>
         ) : null}
+        <AdminMutationReceipt receipt={accountStatusReceipt} />
         {account.account_status_note ? (
           <p className="text-sm text-amber-700 dark:text-amber-300">
             {t('admin.accounts.suspend_reason_label', {}, 'Suspension reason')}: {account.account_status_note}
@@ -1974,6 +1992,7 @@ function AccountDetailContent() {
                 {packageActionError}
               </BackofficeStackCard>
             ) : null}
+            <AdminMutationReceipt receipt={packageActionReceipt} />
             <div className="mt-4 flex flex-wrap gap-3">
               <a href="#site-footprint" className="btn btn-secondary" onClick={() => setActiveDetailTab('sites')}>
                 {t('admin.account_detail.view_sites_action', undefined, 'View sites')}

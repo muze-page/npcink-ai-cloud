@@ -54,6 +54,30 @@ class FakePortalEmailSender(PortalEmailSender):
     ) -> None:
         return None
 
+    def send_email_change_code(
+        self,
+        *,
+        recipient_email: str,
+        old_email: str,
+        principal_id: str,
+        code: str,
+        expires_in_seconds: int,
+        project_name: str,
+        locale: str = "zh-CN",
+    ) -> None:
+        return None
+
+    def send_email_changed_notice(
+        self,
+        *,
+        recipient_email: str,
+        new_email: str,
+        principal_id: str,
+        project_name: str,
+        locale: str = "zh-CN",
+    ) -> None:
+        return None
+
 def test_catalog_routes_return_seeded_models(tmp_path: Path) -> None:
     database_url = _sqlite_url(tmp_path)
     init_schema(database_url)

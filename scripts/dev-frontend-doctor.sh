@@ -59,6 +59,8 @@ wait_for_admin_route() {
 }
 
 command -v docker >/dev/null 2>&1 || fail "docker is not installed or not on PATH"
+node scripts/check-frontend-lock-sync.js >/dev/null \
+	|| fail "frontend dependency lockfiles are not in sync"
 docker compose -f "${COMPOSE_FILE}" ps >/dev/null 2>&1 || fail "dev compose stack is unavailable"
 
 frontend_status="$(

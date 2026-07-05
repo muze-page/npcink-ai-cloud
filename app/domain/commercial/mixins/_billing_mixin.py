@@ -239,8 +239,8 @@ PLAN_TIER_REGISTRY: dict[str, dict[str, object]] = {
     },
 }
 DEFAULT_PLAN_TIER_ID = "pro"
-DEFAULT_FREE_PLAN_ID = "plan_free"
-DEFAULT_FREE_PLAN_VERSION_ID = "plan_free_v1"
+DEFAULT_FREE_PLAN_ID = "free"
+DEFAULT_FREE_PLAN_VERSION_ID = "free_v1"
 DEFAULT_FREE_PLAN_KIND = "default_free"
 DEFAULT_FREE_PLAN_SOURCE = "production_default_free_shell_v1"
 DEFAULT_FREE_SUBSCRIPTION_SOURCE = "production_default_free_bind_v1"
@@ -1124,7 +1124,7 @@ class CommercialServiceBillingMixin(CommercialServiceAuditMixin):
                 "items": [self._serialize_meter_event(event) for event in events],
             }
 
-    def _ensure_plan_free_version_in_session(
+    def _ensure_free_version_in_session(
         self,
         *,
         repository: CommercialRepository,
@@ -1201,7 +1201,7 @@ class CommercialServiceBillingMixin(CommercialServiceAuditMixin):
         tier_id: str,
     ) -> tuple[str, str]:
         if tier_id == "free":
-            return self._ensure_plan_free_version_in_session(repository=repository)
+            return self._ensure_free_version_in_session(repository=repository)
 
         baseline = PLAN_TIER_REGISTRY.get(tier_id)
         if baseline is None:
@@ -1745,6 +1745,21 @@ class CommercialServiceBillingMixin(CommercialServiceAuditMixin):
                 subscription_id=subscription.subscription_id,
             )
             return subscription, snapshot, False
+
+        if subscription.status == SUBSCRIPTION_STATUS_TRIALING:
+            cast(Any, self)._reconcile_account_subscription_state_in_session(
+                repository=repository,
+                account_id=subscription.account_id,
+                now=now,
+            )
+            fallback_subscription = repository.get_runtime_subscription(subscription.account_id)
+            if fallback_subscription is None:
+                return subscription, None, True
+            fallback_snapshot = repository.get_active_entitlement_snapshot(
+                fallback_subscription.account_id,
+                subscription_id=fallback_subscription.subscription_id,
+            )
+            return fallback_subscription, fallback_snapshot, True
 
         plan_version = repository.get_plan_version(subscription.plan_version_id)
         if plan_version is None:

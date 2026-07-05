@@ -13,7 +13,7 @@ from app.domain.catalog.service import CatalogService
 from app.domain.runtime.models import RuntimeRequest
 from app.domain.runtime.service import RuntimeService
 from app.domain.usage.service import UsageService
-from tests.conftest import seed_site_auth
+from tests.conftest import seed_openai_model_allowlist, seed_site_auth
 
 
 def _sqlite_url(tmp_path: Path) -> str:
@@ -24,6 +24,7 @@ def _seed_runtime_activity(database_url: str, now: datetime) -> None:
     providers = {"openai": OpenAIProviderAdapter()}
     catalog_service = CatalogService(database_url, providers=providers)
     catalog_service.refresh_catalog()
+    seed_openai_model_allowlist(database_url)
     catalog_service.scan_provider_health()
     seed_site_auth(database_url, site_id="site_alpha")
 

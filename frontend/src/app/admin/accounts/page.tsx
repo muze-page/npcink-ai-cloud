@@ -624,7 +624,7 @@ function AccountsContent() {
                   type="text"
                   value={filters.top_plan_id}
                   onChange={(event) => handleFilterChange('top_plan_id', event.target.value)}
-                  placeholder="plan_free"
+                  placeholder="free"
                   className="input"
                 />
               </label>

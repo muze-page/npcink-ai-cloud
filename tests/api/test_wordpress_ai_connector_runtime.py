@@ -18,7 +18,7 @@ from app.adapters.providers.base import (
 from app.api.main import create_app
 from app.core.config import Settings
 from app.core.db import get_session, init_schema
-from app.core.models import RunRecord
+from app.core.models import ProviderConnection, RunRecord
 from app.core.services import CloudServices
 from app.domain.catalog.service import CatalogService
 from app.domain.wordpress_ai_connector.routing_profiles import (
@@ -211,6 +211,40 @@ def _build_client(tmp_path: Path) -> tuple[str, TestClient, WordPressAIConnector
     )
     provider = WordPressAIConnectorTextProvider()
     CatalogService(database_url, providers={"openai": provider}).refresh_catalog()
+    with get_session(database_url) as session:
+        session.add(
+            ProviderConnection(
+                connection_id="openai",
+                provider_type="openai_compatible",
+                display_name="OpenAI",
+                enabled=True,
+                base_url="https://api.openai.test/v1",
+                config_json={
+                    "provider_id": "openai",
+                    "kind": "openai_compatible",
+                    "capability_ids": [
+                        "text_generation",
+                        "image_generation",
+                        "audio_generation",
+                    ],
+                    "runtime_profile_ids": [
+                        WP_AI_CONNECTOR_SHORT_TEXT_PROFILE_ID,
+                        WP_AI_CONNECTOR_IMAGE_GENERATION_PROFILE_ID,
+                        WP_AI_CONNECTOR_AUDIO_GENERATION_PROFILE_ID,
+                    ],
+                    "model_ids": [
+                        "gpt-wp-ai-connector-test",
+                        "grok-imagine-wp-ai-test",
+                        "speech-wp-ai-connector-test",
+                    ],
+                },
+                secret_ciphertext="configured-in-test",
+                status="ready",
+                source_role="execution_source",
+                metadata_json={},
+            )
+        )
+        session.commit()
     settings = Settings(
         _env_file=None,
         project_name="Npcink AI Cloud WordPress AI Connector Test",
@@ -734,3 +768,60 @@ def test_admin_wordpress_ai_routing_rejects_execution_kind_mismatch(
     payload = response.json()
     assert payload["error_code"] == "wordpress_ai_routing.invalid_profile"
     assert "may only use available text instances" in payload["message"]
+
+
+def test_admin_wordpress_ai_routing_requires_enabled_provider_model(
+    tmp_path: Path,
+) -> None:
+    database_url, client, _ = _build_client(tmp_path)
+    with get_session(database_url) as session:
+        row = session.get(ProviderConnection, "openai")
+        assert row is not None
+        config = dict(row.config_json or {})
+        config["model_ids"] = [
+            "gpt-wp-ai-connector-test",
+            "grok-imagine-wp-ai-test",
+        ]
+        row.config_json = config
+        session.commit()
+
+    get_response = client.get(
+        "/internal/service/admin/wordpress-ai-routing",
+        headers=build_internal_headers(),
+    )
+
+    assert get_response.status_code == 200
+    data = get_response.json()["data"]
+    assert data["available_audio_instances"] == []
+    audio_generation = next(
+        profile
+        for profile in data["profiles"]
+        if profile["profile_id"] == WP_AI_CONNECTOR_AUDIO_GENERATION_PROFILE_ID
+    )
+    assert audio_generation["candidate_instance_ids"] == []
+    assert audio_generation["status"] == "needs_candidates"
+
+    response = client.post(
+        "/internal/service/admin/wordpress-ai-routing",
+        headers=merge_json_headers(
+            build_internal_headers(
+                idempotency_key="wp-ai-routing-admin-save-model-allowlist"
+            )
+        ),
+        json={
+            "profiles": [
+                {
+                    "profile_id": WP_AI_CONNECTOR_AUDIO_GENERATION_PROFILE_ID,
+                    "candidate_instance_ids": ["openai-wp-ai-audio-test"],
+                    "timeout_ms": 90000,
+                    "allow_fallback": True,
+                    "max_retries": 0,
+                }
+            ]
+        },
+    )
+
+    assert response.status_code == 400
+    payload = response.json()
+    assert payload["error_code"] == "wordpress_ai_routing.invalid_profile"
+    assert "may only use models enabled for provider openai" in payload["message"]
