@@ -910,11 +910,19 @@ function providerReferenceLinksForConnection(connection: Connection): {
   if (
     preset.id === 'openai_compatible' &&
     connection.provider_id.toLowerCase() !== 'openai' &&
-    !connection.base_url.toLowerCase().includes('api.openai.com')
+    !isExactOpenAIBaseUrl(connection.base_url)
   ) {
     return {};
   }
   return preset;
+}
+
+function isExactOpenAIBaseUrl(baseUrl: string): boolean {
+  try {
+    return new URL(baseUrl).hostname.toLowerCase() === 'api.openai.com';
+  } catch {
+    return false;
+  }
 }
 
 function connectionExternalLinkItems(connection: Connection): ProviderExternalLinkItem[] {
