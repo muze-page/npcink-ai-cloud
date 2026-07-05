@@ -2,6 +2,7 @@
 
 import { useState, type FormEvent } from 'react';
 import { BackofficeStackCard } from '@/components/backoffice/BackofficeScaffold';
+import { BackofficeIdentifier } from '@/components/backoffice/BackofficeIdentifier';
 import { useLocale } from '@/contexts/LocaleContext';
 import { portalClient, type Site } from '@/lib/portal-client';
 import { formatPortalErrorMessage } from '@/lib/portal-error';
@@ -43,6 +44,7 @@ export function PortalSiteConnectPanel({
   const currentSiteLabel = currentSite
     ? currentSite.site_name || getPortalSiteWordPressUrl(currentSite) || t('portal.current_site', undefined, 'Current site')
     : t('portal.connect_site_new_site', undefined, 'New site');
+  const supportSiteId = currentSite?.site_id || currentSiteId;
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -129,6 +131,23 @@ export function PortalSiteConnectPanel({
           ) : null}
         </div>
       </div>
+      <details className="rounded-[1rem] border border-gray-200 bg-white px-3 py-3 text-sm dark:border-gray-800 dark:bg-gray-950">
+        <summary className="cursor-pointer font-medium text-gray-700 dark:text-gray-200">
+          {t('portal.support_information', undefined, 'Support information')}
+        </summary>
+        <div className="mt-3 grid gap-2 text-xs text-gray-500 dark:text-gray-400 sm:grid-cols-2">
+          <div>
+            <span className="block font-medium text-gray-600 dark:text-gray-300">{t('common.account', undefined, 'Account')}</span>
+            <BackofficeIdentifier value={accountId} full />
+          </div>
+          {supportSiteId ? (
+            <div>
+              <span className="block font-medium text-gray-600 dark:text-gray-300">{t('common.site', undefined, 'Site')}</span>
+              <BackofficeIdentifier value={supportSiteId} full />
+            </div>
+          ) : null}
+        </div>
+      </details>
       <form className="space-y-4" onSubmit={(event) => void handleSubmit(event)}>
         <label className="block">
           <span className="text-sm font-medium text-gray-700 dark:text-gray-200">

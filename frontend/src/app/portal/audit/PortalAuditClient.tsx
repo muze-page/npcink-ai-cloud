@@ -7,6 +7,7 @@ import {
   BackofficeSectionPanel,
   BackofficeStackCard,
 } from '@/components/backoffice/BackofficeScaffold';
+import { BackofficeIdentifier } from '@/components/backoffice/BackofficeIdentifier';
 import { BackofficeStatusBadge } from '@/components/backoffice/BackofficeStatusBadge';
 import { PortalWorkspaceHeader } from '@/components/portal/PortalWorkspaceHeader';
 import {
@@ -40,6 +41,11 @@ const AUDIT_EVENT_KIND_LABELS: Record<string, string> = {
   'subscription.updated': 'audit.kind.subscription.updated',
   'subscription.canceled': 'audit.kind.subscription.canceled',
 };
+
+function getAuditTraceId(event: PortalAuditEvent): string {
+  const traceId = event.metadata?.trace_id;
+  return typeof traceId === 'string' ? traceId : '';
+}
 
 export function PortalAuditClient() {
   const searchParams = useSearchParams();
@@ -212,6 +218,25 @@ export function PortalAuditClient() {
                       <BackofficeStatusBadge status={event.outcome} label={translateOutcome(event.outcome)} />
                     </div>
                     <p className="text-sm text-gray-500">{formatDate(event.created_at)}</p>
+                    <div className="mt-3 rounded-xl bg-slate-50 px-3 py-2 text-xs text-gray-500 dark:bg-slate-900/60 dark:text-gray-400">
+                      <p className="font-medium text-gray-600 dark:text-gray-300">
+                        {t('portal.support_information', {}, 'Support information')}
+                      </p>
+                      <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                        <div>
+                          <span className="block font-medium text-gray-600 dark:text-gray-300">Event ID</span>
+                          <BackofficeIdentifier value={event.event_id} full />
+                        </div>
+                        {getAuditTraceId(event) ? (
+                          <div>
+                            <span className="block font-medium text-gray-600 dark:text-gray-300">
+                              {t('audit.trace_id', {}, 'Trace ID')}
+                            </span>
+                            <BackofficeIdentifier value={getAuditTraceId(event)} full />
+                          </div>
+                        ) : null}
+                      </div>
+                    </div>
                   </div>
                   {event.outcome !== 'success' ? (
                     <BackofficeStackCard className="max-w-md border-amber-200 bg-amber-50/70 text-sm text-amber-800 dark:border-amber-900/60 dark:bg-amber-950/20 dark:text-amber-200">

@@ -123,9 +123,11 @@ export function PortalNavbar() {
     return visibleSites.filter((site) => {
       const displayName = getPortalSiteDisplayName(site).toLowerCase();
       const secondary = (getPortalSiteSecondaryLabel(site) || '').toLowerCase();
+      const siteId = site.site_id.toLowerCase();
       return (
         displayName.includes(query) ||
-        secondary.includes(query)
+        secondary.includes(query) ||
+        siteId.includes(query)
       );
     });
   }, [siteSearchQuery, visibleSites]);
