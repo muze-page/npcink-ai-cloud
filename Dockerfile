@@ -23,6 +23,7 @@ COPY pyproject.toml README.md alembic.ini ./
 COPY app ./app
 COPY migrations ./migrations
 COPY deploy ./deploy
+COPY scripts ./scripts
 
 ARG PACKAGE_EXTRAS=
 ARG PIP_INDEX_URL=
@@ -53,6 +54,7 @@ COPY pyproject.toml README.md alembic.ini ./
 COPY app ./app
 COPY migrations ./migrations
 COPY deploy ./deploy
+COPY scripts ./scripts
 
 ARG PACKAGE_EXTRAS=
 ARG PIP_INDEX_URL=
