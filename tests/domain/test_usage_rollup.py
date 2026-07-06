@@ -14,13 +14,12 @@ from app.domain.runtime.service import RuntimeService
 from app.domain.usage.rollup import (
     ALERT_EVALUATE_BATCH_SCOPE,
     GLOBAL_SITE_SCOPE,
-    HOSTED_MODEL_GOVERNANCE_BATCH_SCOPE,
     LATENCY_PROBE_BATCH_SCOPE,
     ROUTER_DIAGNOSTICS_BATCH_SCOPE,
     ROUTER_PERFORMANCE_BATCH_SCOPE,
     UsageRollupService,
 )
-from tests.conftest import seed_site_auth
+from tests.conftest import seed_openai_model_allowlist, seed_site_auth
 
 
 def _sqlite_url(tmp_path: Path) -> str:
@@ -33,6 +32,7 @@ def test_usage_rollup_service_writes_summary_profile_and_instance_snapshots(
     database_url = _sqlite_url(tmp_path)
     init_schema(database_url)
     CatalogService(database_url).refresh_catalog()
+    seed_openai_model_allowlist(database_url)
     CatalogService(database_url).scan_provider_health()
     seed_site_auth(database_url, site_id="site_alpha")
 
@@ -126,6 +126,7 @@ def test_usage_rollup_service_stores_router_performance_projection_batches(
     database_url = _sqlite_url(tmp_path)
     init_schema(database_url)
     CatalogService(database_url).refresh_catalog()
+    seed_openai_model_allowlist(database_url)
     CatalogService(database_url).scan_provider_health()
     seed_site_auth(database_url, site_id="site_alpha")
 
@@ -204,6 +205,7 @@ def test_usage_rollup_service_stores_router_diagnostics_projection_batches(
     database_url = _sqlite_url(tmp_path)
     init_schema(database_url)
     CatalogService(database_url).refresh_catalog()
+    seed_openai_model_allowlist(database_url)
     CatalogService(database_url).scan_provider_health()
     seed_site_auth(database_url, site_id="site_alpha", scopes=["stats:read"])
 
@@ -269,6 +271,7 @@ def test_usage_rollup_service_stores_latency_probe_projection_batches(
     database_url = _sqlite_url(tmp_path)
     init_schema(database_url)
     CatalogService(database_url).refresh_catalog()
+    seed_openai_model_allowlist(database_url)
     CatalogService(database_url).scan_provider_health()
     seed_site_auth(database_url, site_id="site_alpha", scopes=["stats:read"])
 
@@ -365,6 +368,7 @@ def test_usage_rollup_service_skips_missing_latency_probe_instances(
     database_url = _sqlite_url(tmp_path)
     init_schema(database_url)
     CatalogService(database_url).refresh_catalog()
+    seed_openai_model_allowlist(database_url)
     seed_site_auth(database_url, site_id="site_alpha", scopes=["stats:read"])
 
     fixed_now = datetime(2026, 3, 24, 9, 20, tzinfo=UTC)
@@ -404,6 +408,7 @@ def test_usage_rollup_service_stores_alert_provider_degradation_batches(
     database_url = _sqlite_url(tmp_path)
     init_schema(database_url)
     CatalogService(database_url).refresh_catalog()
+    seed_openai_model_allowlist(database_url)
     CatalogService(database_url).scan_provider_health()
     seed_site_auth(database_url, site_id="site_alpha", scopes=["stats:read"])
 
@@ -471,62 +476,5 @@ def test_usage_rollup_service_stores_alert_provider_degradation_batches(
     event = stored_batch.payload_json["events"][0]
     assert event["rule_type"] == "provider_degradation"
     assert event["summary"]["provider"] == provider_id
-
-    dispose_engine(database_url)
-
-
-def test_usage_rollup_service_stores_hosted_model_governance_batch(
-    tmp_path: Path,
-) -> None:
-    database_url = _sqlite_url(tmp_path)
-    init_schema(database_url)
-    CatalogService(database_url).refresh_catalog()
-    seed_site_auth(database_url, site_id="site_alpha")
-
-    RuntimeService(database_url).execute(
-        RuntimeRequest(
-            site_id="site_alpha",
-            ability_name="npcink-abilities-toolkit/build-article-block-plan",
-            channel="openapi",
-            execution_kind="text",
-            profile_id="text.balanced",
-            idempotency_key="hosted-governance-rollup-001",
-            trace_id="hosted-governance-rollup-001",
-            input_payload={"messages": [{"role": "user", "content": "rollup governance"}]},
-        )
-    )
-
-    fixed_now = datetime(2026, 3, 24, 9, 20, tzinfo=UTC)
-    service = UsageRollupService(database_url, now_factory=lambda: fixed_now)
-    result = service.store_hosted_model_governance_batch(
-        window_minutes=1440,
-        limit=25,
-    )
-    latest = service.get_hosted_model_governance_batch(window_minutes=1440)
-
-    assert result["scope_kind"] == HOSTED_MODEL_GOVERNANCE_BATCH_SCOPE
-    assert result["stored_batches_total"] == 1
-    assert result["delivery_owner"] == "internal_admin_readonly"
-    assert latest is not None
-    assert latest["source"] == "cloud_hosted_model_governance"
-    assert latest["delivery"]["owner"] == "internal_admin_readonly"
-
-    with get_session(database_url) as session:
-        repository = StatsRepository(session)
-        stored_batch = next(
-            rollup
-            for rollup in repository.list_usage_rollups(
-                site_scope=GLOBAL_SITE_SCOPE,
-                scope_kind=HOSTED_MODEL_GOVERNANCE_BATCH_SCOPE,
-            )
-            if rollup.scope_id == "2026-03-24T09:20:00Z__1440m"
-        )
-
-    assert stored_batch.payload_json["source"] == "cloud_hosted_model_governance"
-    assert stored_batch.payload_json["delivery"]["owner"] == "internal_admin_readonly"
-    assert stored_batch.payload_json["delivery"]["scope_kind"] == (
-        HOSTED_MODEL_GOVERNANCE_BATCH_SCOPE
-    )
-    assert stored_batch.payload_json["alert_summary"]["boundary"]["direct_wordpress_write"] is False
 
     dispose_engine(database_url)

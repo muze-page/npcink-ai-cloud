@@ -86,9 +86,7 @@ def test_current_entitlement_returns_site_scoped_public_contract(tmp_path: Path)
     assert "task_packs" not in data["entitlement"]
     assert data["entitlement"]["usage_limits"] == {
         "period": "month",
-        "max_runs": 0.0,
-        "max_tokens": 0.0,
-        "max_cost_usd": 0.0,
+        "max_ai_credits": 10000.0,
         "max_sites": 5,
     }
     assert data["entitlement"]["analytics_retention"] == {"days": 45}
@@ -101,11 +99,11 @@ def test_current_entitlement_returns_site_scoped_public_contract(tmp_path: Path)
         "contract_version": "pro-cloud-runtime-entitlement-v1",
         "feature_id": "nightly_site_inspection",
         "execution_pattern": "whole_run_offload",
-        "meter_key": "nightly_site_inspection_runs",
-        "limit_enforced": True,
-        "max_nightly_inspection_runs_per_period": 30,
+        "meter_key": "ai_credits",
+        "limit_enforced": False,
+        "max_nightly_inspection_runs_per_period": 0,
         "used_nightly_inspection_runs": 0,
-        "remaining_nightly_inspection_runs": 30,
+        "remaining_nightly_inspection_runs": 0,
         "quota_exhausted": False,
         "max_batch_items": 25,
         "result_retention_days": 14,
@@ -187,10 +185,11 @@ def test_current_entitlement_returns_pro_cloud_runtime_usage_detail(
 
     assert response.status_code == 200
     pro_runtime = response.json()["data"]["entitlement"]["pro_cloud_runtime"]
-    assert pro_runtime["limit_enforced"] is True
+    assert pro_runtime["meter_key"] == "ai_credits"
+    assert pro_runtime["limit_enforced"] is False
     assert pro_runtime["max_nightly_inspection_runs_per_period"] == 3
     assert pro_runtime["used_nightly_inspection_runs"] == 1
-    assert pro_runtime["remaining_nightly_inspection_runs"] == 2
+    assert pro_runtime["remaining_nightly_inspection_runs"] == 0
     assert pro_runtime["quota_exhausted"] is False
     assert pro_runtime["max_batch_items"] == 25
     assert pro_runtime["result_retention_days"] == 21

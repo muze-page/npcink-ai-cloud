@@ -5,7 +5,30 @@ on:
     branches: [master, main, production]
   pull_request:
 
+permissions:
+  contents: read
+
+concurrency:
+  group: cloud-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
+  secret-scan:
+    name: Secret scan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Run gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        with:
+          args: detect --source . --baseline-path .gitleaks-baseline.json --redact
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
   classify:
     runs-on: ubuntu-latest
     outputs:
@@ -109,14 +132,8 @@ jobs:
       - name: Type Check
         run: pnpm run type-check
 
-      - name: i18n Contract
-        run: pnpm run test:i18n-contract
-
-      - name: Portal Proxy Contract
-        run: pnpm run test:portal-proxy-contract
-
-      - name: Admin Dev Autologin Contract
-        run: pnpm run test:admin-dev-autologin-contract
+      - name: Frontend Contracts
+        run: pnpm run test:contracts
 
   deploy-production:
     name: Deploy to cloud.npc.ink

@@ -29,6 +29,9 @@ This remains a local clone/staging rehearsal. It is not a live customer trial
 and does not authorize writes to `npcink.local`, `dbd.local`, `wp.local`, or
 another live site.
 
+Historical ID note: this document records the old Free package ID
+`plan_free_v1`; current package records use `free` / `free_v1`.
+
 ## Pre-Smoke Baseline
 
 Before the runtime smoke, the dedicated `site_npcink_trial` evidence baseline

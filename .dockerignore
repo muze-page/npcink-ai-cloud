@@ -4,6 +4,9 @@
 .ruff_cache
 .tmp
 .venv
+__pycache__
+*.py[cod]
+*$py.class
 dist
 node_modules
 frontend/node_modules

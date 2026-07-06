@@ -57,7 +57,7 @@ type BuildWatchItemInputs = {
   expiringSubscriptionsIn7Days: number;
   attentionSubscriptionsCount: number;
   firstAttentionReason: string;
-  hostedModelGovernance: {
+  runtimeTelemetry: {
     status: string;
     alertCount: number;
     firstAlertTitle: string;
@@ -74,8 +74,8 @@ type BuildWatchItemInputs = {
     expiryReason: string;
     attentionTitle: string;
     attentionFallbackReason: string;
-    hostedTitle: string;
-    hostedReason: string;
+    runtimeTelemetryTitle: string;
+    runtimeTelemetryReason: string;
   };
 };
 
@@ -232,17 +232,17 @@ export function buildAdminOperatorWatchItems(
     });
   }
 
-  if (inputs.hostedModelGovernance.status === 'error' || inputs.hostedModelGovernance.status === 'warning') {
-    const severity = inputs.hostedModelGovernance.status === 'error' ? 'action-needed' : 'warn';
+  if (inputs.runtimeTelemetry.status === 'error' || inputs.runtimeTelemetry.status === 'warning') {
+    const severity = inputs.runtimeTelemetry.status === 'error' ? 'action-needed' : 'warn';
     items.push({
-      title: inputs.hostedModelGovernance.firstAlertTitle || inputs.copy.hostedTitle,
-      scope: 'hosted.model_governance',
+      title: inputs.runtimeTelemetry.firstAlertTitle || inputs.copy.runtimeTelemetryTitle,
+      scope: 'runtime.telemetry_coverage',
       severity,
       reason:
-        inputs.hostedModelGovernance.firstAlertSummary ||
-        inputs.hostedModelGovernance.summary ||
-        inputs.copy.hostedReason,
-      value: inputs.formatValue(Math.max(inputs.hostedModelGovernance.alertCount, 1)),
+        inputs.runtimeTelemetry.firstAlertSummary ||
+        inputs.runtimeTelemetry.summary ||
+        inputs.copy.runtimeTelemetryReason,
+      value: inputs.formatValue(Math.max(inputs.runtimeTelemetry.alertCount, 1)),
       priority: severity === 'action-needed' ? 15 : 35,
     });
   }

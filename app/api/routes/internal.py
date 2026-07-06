@@ -7,11 +7,13 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from app.adapters.notifications.base import PortalEmailDeliveryError
+from app.adapters.notifications.smtp import build_portal_email_sender
 from app.adapters.providers.registry import resolve_live_provider_adapters
 from app.api.auth import authorize_internal_request
 from app.api.envelope import build_envelope
 from app.core.services import CloudServices
 from app.domain.catalog.service import CatalogService
+from app.domain.service_settings import resolve_portal_public_base_url
 
 router = APIRouter(prefix="/internal", tags=["internal"])
 
@@ -129,7 +131,10 @@ async def send_portal_email_test(
         return auth
 
     services = _get_cloud_services(request)
-    email_sender = services.portal_email_sender
+    email_sender = services.portal_email_sender or build_portal_email_sender(
+        services.settings,
+        database_url=services.settings.database_url,
+    )
     if email_sender is None:
         return JSONResponse(
             status_code=503,
@@ -143,7 +148,10 @@ async def send_portal_email_test(
         )
 
     recipient_email = payload.recipient_email.strip().lower()
-    portal_base_url = str(services.settings.portal_public_base_url or "").strip().rstrip("/")
+    portal_base_url = resolve_portal_public_base_url(
+        services.settings.database_url,
+        services.settings,
+    ).rstrip("/")
     portal_url = portal_base_url or str(request.base_url).rstrip("/")
     if portal_url:
         portal_url = f"{portal_url}/portal/login"

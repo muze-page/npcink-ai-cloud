@@ -5,6 +5,7 @@ from pathlib import Path
 
 from sqlalchemy import select
 
+from app.adapters.providers.openai import OpenAIProviderAdapter
 from app.adapters.repositories.stats_repository import StatsRepository
 from app.core.db import dispose_engine, get_session, init_schema
 from app.core.models import HealthSnapshot, ProviderCallRecord, RunRecord
@@ -12,7 +13,7 @@ from app.domain.catalog.service import CatalogService
 from app.domain.runtime.models import RuntimeRequest
 from app.domain.runtime.service import RuntimeService
 from app.domain.usage.service import UsageService
-from tests.conftest import seed_site_auth
+from tests.conftest import seed_openai_model_allowlist, seed_site_auth
 
 
 def _sqlite_url(tmp_path: Path) -> str:
@@ -20,12 +21,14 @@ def _sqlite_url(tmp_path: Path) -> str:
 
 
 def _seed_runtime_activity(database_url: str, now: datetime) -> None:
-    catalog_service = CatalogService(database_url)
+    providers = {"openai": OpenAIProviderAdapter()}
+    catalog_service = CatalogService(database_url, providers=providers)
     catalog_service.refresh_catalog()
+    seed_openai_model_allowlist(database_url)
     catalog_service.scan_provider_health()
     seed_site_auth(database_url, site_id="site_alpha")
 
-    runtime_service = RuntimeService(database_url)
+    runtime_service = RuntimeService(database_url, providers=providers)
     run_a = runtime_service.execute(
         RuntimeRequest(
             site_id="site_alpha",

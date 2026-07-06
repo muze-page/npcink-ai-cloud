@@ -9,6 +9,9 @@ site.
 This record is intentionally local-only. It must not be counted as the first
 real external site.
 
+Historical ID note: this document records the old Free package ID
+`plan_free_v1`; current package records use `free` / `free_v1`.
+
 Read first:
 
 - `docs/external-trial-handoff-summary-2026-06-15.md`

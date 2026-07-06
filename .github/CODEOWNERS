@@ -1,0 +1,15 @@
+# Keep Cloud runtime and deployment changes reviewable through the repository owner.
+* @muze-page
+
+# Hosted runtime, perimeter, and production deployment surfaces.
+/app/ @muze-page
+/frontend/ @muze-page
+/tests/ @muze-page
+/scripts/ @muze-page
+/deploy/ @muze-page
+/docs/ @muze-page
+/docker-compose*.yml @muze-page
+/pyproject.toml @muze-page
+/package.json @muze-page
+/pnpm-lock.yaml @muze-page
+/.github/ @muze-page

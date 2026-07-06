@@ -22,9 +22,26 @@ import { getInternalAuthToken } from '@/lib/env';
 
 const COPIED_REQUEST_HEADERS = [
   'accept-language',
-  'idempotency-key',
   'x-npcink-debug-portal-link',
 ] as const;
+
+const ADMIN_IDEMPOTENCY_KEY_PATTERN = /^[A-Za-z0-9._:-]{1,128}$/;
+
+function createAdminIdempotencyKey(): string {
+  const random =
+    typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+      ? crypto.randomUUID().replace(/-/g, '')
+      : Math.random().toString(36).slice(2);
+  return `admin_write_${Date.now()}_${random}`.slice(0, 128);
+}
+
+function resolveAdminIdempotencyKey(request: NextRequest): string {
+  const requested = String(request.headers.get('idempotency-key') || '').trim();
+  if (ADMIN_IDEMPOTENCY_KEY_PATTERN.test(requested)) {
+    return requested;
+  }
+  return createAdminIdempotencyKey();
+}
 
 function buildAdminBackendPath(pathSegments: string[], method: string): string {
   const normalized = pathSegments
@@ -48,6 +65,12 @@ function buildAdminBackendPath(pathSegments: string[], method: string): string {
   if (/^accounts\/[^/]+\/(?:suspend|restore)$/.test(normalized)) {
     return `/internal/service/admin/${normalized}`;
   }
+  if (upperMethod === 'POST' && normalized === 'portal-users/batch-disable') {
+    return '/internal/service/admin/portal-users/batch-disable';
+  }
+  if (upperMethod === 'POST' && /^portal-users\/[^/]+\/disable$/.test(normalized)) {
+    return `/internal/service/admin/${normalized}`;
+  }
   if (/^accounts\/[^/]+\/subscription(?:\/(?:suspend|cancel))?$/.test(normalized)) {
     return `/internal/service/admin/${normalized}`;
   }
@@ -65,15 +88,51 @@ function buildAdminBackendPath(pathSegments: string[], method: string): string {
   }
   if (
     upperMethod === 'POST' &&
-    normalized === 'web-search-providers'
+    normalized === 'audio-jobs'
   ) {
-    return '/internal/service/admin/web-search-providers';
+    return '/internal/service/admin/audio-jobs';
   }
   if (
     upperMethod === 'POST' &&
-    normalized === 'image-source-providers'
+    normalized === 'provider-connections'
   ) {
-    return '/internal/service/admin/image-source-providers';
+    return '/internal/service/admin/provider-connections';
+  }
+  if (
+    (upperMethod === 'PATCH' || upperMethod === 'POST') &&
+    /^service-settings(?:\/.+)?$/.test(normalized)
+  ) {
+    return `/internal/service/admin/${normalized}`;
+  }
+  if (
+    upperMethod === 'POST' &&
+    normalized === 'provider-connections/preview-catalog'
+  ) {
+    return '/internal/service/admin/provider-connections/preview-catalog';
+  }
+  if (
+    upperMethod === 'POST' &&
+    normalized === 'model-references/sync'
+  ) {
+    return '/internal/service/admin/model-references/sync';
+  }
+  if (
+    upperMethod === 'POST' &&
+    /^provider-connections\/[^/]+\/test$/.test(normalized)
+  ) {
+    return `/internal/service/admin/${normalized}`;
+  }
+  if (
+    (upperMethod === 'PATCH' || upperMethod === 'DELETE') &&
+    /^provider-connections\/[^/]+$/.test(normalized)
+  ) {
+    return `/internal/service/admin/${normalized}`;
+  }
+  if (
+    upperMethod === 'POST' &&
+    normalized === 'wordpress-ai-routing'
+  ) {
+    return '/internal/service/admin/wordpress-ai-routing';
   }
 
   return normalized ? `/internal/service/${normalized}` : '/internal/service';
@@ -124,7 +183,7 @@ async function proxyAdminRequest(
 
   // Add idempotency key for write requests
   if (method !== 'GET' && method !== 'HEAD') {
-    headers['Idempotency-Key'] = request.headers.get('idempotency-key') || crypto.randomUUID();
+    headers['Idempotency-Key'] = resolveAdminIdempotencyKey(request);
   }
 
   let body: string | undefined;

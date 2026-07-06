@@ -6,7 +6,6 @@ import { useSearchParams } from 'next/navigation';
 import { BackofficeIdentifier } from '@/components/backoffice/BackofficeIdentifier';
 import { BackofficeStatusBadge } from '@/components/backoffice/BackofficeStatusBadge';
 import { LoadingFallback } from '@/components/ui/LoadingFallback';
-import { ConfirmModal } from '@/components/ui/Modal';
 import { useLocale } from '@/contexts/LocaleContext';
 import {
   resolveCustomerPackageDisplay,
@@ -15,10 +14,9 @@ import {
   type PackageKind,
   type CoverageState,
 } from '@/lib/customer-package-display';
-import { cn, formatDate, formatNumber as formatInteger } from '@/lib/utils';
+import { formatDate, formatNumber as formatInteger } from '@/lib/utils';
 import { resolveUiErrorMessage } from '@/lib/errors';
 import {
-  BackofficeMetricStrip,
   BackofficePageStack,
   BackofficePrimaryPanel,
   BackofficeSectionPanel,
@@ -60,15 +58,6 @@ interface AccountsApiItem {
   plan_kind?: string;
   nearest_expiry_at?: string | null;
 }
-
-type PendingConfirmation = {
-  title: string;
-  message: string;
-  confirmLabel: string;
-  showSuspendReason?: boolean;
-  variant?: 'default' | 'danger';
-  onConfirm: () => void;
-};
 
 const MALFORMED_ACCOUNT_TEXT_RE = /Fatal error|Stack trace|Command line code|Uncaught ValueError|Path must not be empty/i;
 const INTERNAL_TEST_ACCOUNT_RE = /(^|[_-])(smoke)([_-]|$)|codex_image_smoke|site_knowledge_smoke/i;
@@ -170,82 +159,13 @@ function daysUntil(raw?: string): number | null {
 
 const EXPIRY_ACTION_WINDOW_DAYS = 14;
 
-function getAccountPriority(account: Account): number {
-  const remaining = daysUntil(account.nearest_expiry);
-  if (account.status === 'suspended') {
-    return 0;
-  }
-  if (remaining !== null && remaining >= 0 && remaining <= EXPIRY_ACTION_WINDOW_DAYS) {
-    return 1;
-  }
-  if (account.subscription_count === 0 && account.site_count > 0) {
-    return 2;
-  }
-  return 4;
-}
-
 function accountNeedsAction(account: Account): boolean {
   const remaining = daysUntil(account.nearest_expiry);
   return (
     account.status === 'suspended' ||
     (remaining !== null && remaining >= 0 && remaining <= EXPIRY_ACTION_WINDOW_DAYS) ||
-    (account.subscription_count === 0 && account.site_count > 0) ||
-    account.package_kind === 'dev_baseline'
+    (account.subscription_count === 0 && account.site_count > 0)
   );
-}
-
-function getAccountNextStep(
-  account: Account,
-  t: (key: string, params?: Record<string, string>, fallback?: string) => string
-): { label: string; tone: 'error' | 'warning' | 'muted' | 'ok'; isAction: boolean } {
-  const remaining = daysUntil(account.nearest_expiry);
-  if (account.status === 'suspended') {
-    return {
-      label: t('admin.accounts.next_review_status', {}, 'Review status'),
-      tone: 'error',
-      isAction: true,
-    };
-  }
-  if (remaining !== null && remaining >= 0 && remaining <= EXPIRY_ACTION_WINDOW_DAYS) {
-    return {
-      label: t('admin.accounts.next_review_package', {}, 'Review package'),
-      tone: 'warning',
-      isAction: true,
-    };
-  }
-  if (account.subscription_count === 0 && account.site_count > 0) {
-    return {
-      label: t('admin.accounts.next_assign_package', {}, 'Assign package'),
-      tone: 'warning',
-      isAction: true,
-    };
-  }
-  if (account.package_kind === 'dev_baseline') {
-    return {
-      label: t('admin.accounts.next_confirm_package', {}, 'Confirm package'),
-      tone: 'muted',
-      isAction: true,
-    };
-  }
-  return {
-    label: t('admin.accounts.next_ok', {}, 'OK'),
-    tone: 'ok',
-    isAction: false,
-  };
-}
-
-function nextStepClassName(tone: 'error' | 'warning' | 'muted' | 'ok'): string {
-  switch (tone) {
-    case 'error':
-      return 'border-red-200 bg-red-50 text-red-700 dark:border-red-900/50 dark:bg-red-950/20 dark:text-red-200';
-    case 'warning':
-      return 'border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-900/50 dark:bg-amber-950/20 dark:text-amber-200';
-    case 'muted':
-      return 'border-slate-200 bg-slate-100 text-slate-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200';
-    case 'ok':
-    default:
-      return 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900/50 dark:bg-emerald-950/20 dark:text-emerald-200';
-  }
 }
 
 function AccountsContent() {
@@ -255,11 +175,7 @@ function AccountsContent() {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  const [actionError, setActionError] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
-  const [accountActionId, setAccountActionId] = useState<string | null>(null);
-  const [pendingConfirmation, setPendingConfirmation] = useState<PendingConfirmation | null>(null);
-  const [suspendReason, setSuspendReason] = useState('');
   const [filters, setFilters] = useState({
     q: searchParams.get('q') || '',
     status: searchParams.get('status') || '',
@@ -276,7 +192,6 @@ function AccountsContent() {
     bind_default_free: true,
   });
   const [isCreateOpen, setIsCreateOpen] = useState(false);
-  const [needsActionOnly, setNeedsActionOnly] = useState(false);
   const [showInternalAccounts, setShowInternalAccounts] = useState(false);
 
   useEffect(() => {
@@ -286,11 +201,13 @@ function AccountsContent() {
 
       try {
         const params = new URLSearchParams();
+        if (filters.q.trim()) params.set('q', filters.q.trim());
         if (filters.status) params.set('status', filters.status);
         if (filters.expires_before) params.set('expires_before', filters.expires_before);
         if (filters.coverage_state) params.set('coverage_state', filters.coverage_state);
         if (filters.package_kind) params.set('package_kind', filters.package_kind);
         if (filters.top_plan_id) params.set('top_plan_id', filters.top_plan_id);
+        params.set('sort', 'display_name');
 
         const response = await fetch(`/api/admin/accounts?${params.toString()}`, {
           credentials: 'include',
@@ -328,7 +245,6 @@ function AccountsContent() {
       package_kind: '',
       top_plan_id: '',
     });
-    setNeedsActionOnly(false);
   };
 
   const handleCreateAccount = async (event: React.FormEvent<HTMLFormElement>) => {
@@ -381,11 +297,13 @@ function AccountsContent() {
       });
       setIsCreateOpen(false);
       const params = new URLSearchParams();
+      if (filters.q.trim()) params.set('q', filters.q.trim());
       if (filters.status) params.set('status', filters.status);
       if (filters.expires_before) params.set('expires_before', filters.expires_before);
       if (filters.coverage_state) params.set('coverage_state', filters.coverage_state);
       if (filters.package_kind) params.set('package_kind', filters.package_kind);
       if (filters.top_plan_id) params.set('top_plan_id', filters.top_plan_id);
+      params.set('sort', 'display_name');
       const refresh = await fetch(`/api/admin/accounts?${params.toString()}`, { credentials: 'include' });
       if (refresh.ok) {
         const data = await refresh.json();
@@ -401,118 +319,15 @@ function AccountsContent() {
     }
   };
 
-  const handleAccountStatusMutation = async (account: Account, action: 'suspend' | 'restore') => {
-    setAccountActionId(account.account_id);
-    setNotice(null);
-    setActionError(null);
-    try {
-      const response = await fetch(`/api/admin/accounts/${encodeURIComponent(account.account_id)}/${action}`, {
-        method: 'POST',
-        credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          reason: action === 'suspend' ? suspendReason.trim() : '',
-        }),
-      });
-      const payload = await response.json();
-      if (!response.ok) {
-        throw new Error(payload.message || t('error.failed_save', {}, 'Failed to save.'));
-      }
-      const nextStatus = String(payload.data?.status || (action === 'restore' ? 'active' : 'suspended'));
-      const metadata = payload.data?.metadata && typeof payload.data.metadata === 'object'
-        ? payload.data.metadata
-        : {};
-      setAccounts((current) =>
-        current.map((item) =>
-          item.account_id === account.account_id
-            ? {
-                ...item,
-                status: nextStatus,
-                account_status_note: String(metadata.account_status_note || item.account_status_note || ''),
-                account_status_updated_at: String(metadata.account_status_updated_at || item.account_status_updated_at || ''),
-              }
-            : item
-        )
-      );
-      setNotice(
-        action === 'restore'
-          ? t('admin.accounts.account_restored_notice', { account: account.display_name }, `${account.display_name} has been restored.`)
-          : t('admin.accounts.account_suspended_notice', { account: account.display_name }, `${account.display_name} has been suspended.`)
-      );
-    } catch (err) {
-      setActionError(resolveUiErrorMessage(err instanceof Error ? err.message : null, t('error.failed_save')));
-    } finally {
-      setAccountActionId(null);
-      setSuspendReason('');
-    }
-  };
-
-  const requestAccountStatusMutation = (account: Account) => {
-    const action = account.status === 'suspended' ? 'restore' : 'suspend';
-    setSuspendReason('');
-    setPendingConfirmation({
-      title:
-        action === 'restore'
-          ? t('admin.accounts.confirm_restore_title', {}, 'Confirm account restore')
-          : t('admin.accounts.confirm_suspend_title', {}, 'Confirm account suspension'),
-      message:
-        action === 'restore'
-          ? t(
-              'admin.accounts.confirm_restore_desc',
-              { account: account.display_name },
-              `Restore ${account.display_name} to active access?`
-            )
-          : t(
-              'admin.accounts.confirm_suspend_desc',
-              { account: account.display_name },
-              `Suspend ${account.display_name}? Customer portal access and site actions will be blocked by account status.`
-            ),
-      confirmLabel:
-        action === 'restore'
-          ? t('admin.accounts.restore_account_action', {}, 'Restore account')
-          : t('admin.accounts.suspend_account_action', {}, 'Suspend account'),
-      showSuspendReason: action === 'suspend',
-      variant: action === 'suspend' ? 'danger' : 'default',
-      onConfirm: () => void handleAccountStatusMutation(account, action),
-    });
-  };
-
   const hiddenAccounts = useMemo(() => accounts.filter(isHiddenByDefaultAccount), [accounts]);
   const visibleAccounts = useMemo(
     () => (showInternalAccounts ? accounts : accounts.filter((account) => !isHiddenByDefaultAccount(account))),
     [accounts, showInternalAccounts]
   );
-  const searchedAccounts = useMemo(() => {
-    const query = filters.q.trim().toLowerCase();
-    if (!query) {
-      return visibleAccounts;
-    }
-    return visibleAccounts.filter((account) =>
-      [
-        account.display_name,
-        account.name,
-        account.account_id,
-        account.operator_note,
-        account.display_package_label,
-        account.top_plan || '',
-      ]
-        .join(' ')
-        .toLowerCase()
-        .includes(query)
-    );
-  }, [filters.q, visibleAccounts]);
-  const queuedAccounts = useMemo(() => {
-    const scopedAccounts = needsActionOnly ? searchedAccounts.filter(accountNeedsAction) : searchedAccounts;
-    return [...scopedAccounts].sort((left, right) => {
-      const priorityDiff = getAccountPriority(left) - getAccountPriority(right);
-      if (priorityDiff !== 0) {
-        return priorityDiff;
-      }
-      const leftDays = daysUntil(left.nearest_expiry) ?? Number.POSITIVE_INFINITY;
-      const rightDays = daysUntil(right.nearest_expiry) ?? Number.POSITIVE_INFINITY;
-      return leftDays - rightDays;
-    });
-  }, [searchedAccounts, needsActionOnly]);
+  const listedAccounts = useMemo(
+    () => [...visibleAccounts].sort((left, right) => left.display_name.localeCompare(right.display_name)),
+    [visibleAccounts]
+  );
 
   if (isLoading) {
     return <LoadingFallback />;
@@ -532,7 +347,6 @@ function AccountsContent() {
     );
   }
 
-  const activeAccounts = visibleAccounts.filter((account) => account.status === 'active').length;
   const suspendedAccounts = visibleAccounts.filter((account) => account.status === 'suspended').length;
   const sitesTotal = visibleAccounts.reduce((sum, account) => sum + account.site_count, 0);
   const subscriptionsTotal = visibleAccounts.reduce((sum, account) => sum + account.subscription_count, 0);
@@ -568,32 +382,46 @@ function AccountsContent() {
         description={t(
           'admin.accounts.list_desc',
           {},
-          'Review users, current packages, site count, and the next required action.'
+          'Review customers, current packages, and site footprint before opening details.'
         )}
         aside={(
           <div className="w-full xl:w-[46rem]">
-            <BackofficeMetricStrip
-              items={[
-                { label: t('admin.accounts.total_users', {}, 'Users'), value: formatInteger(visibleAccounts.length), size: 'compact' },
-                { label: t('status.active'), value: formatInteger(activeAccounts), size: 'compact' },
-                { label: t('common.sites'), value: formatInteger(sitesTotal), size: 'compact' },
-                {
-                  label: t('common.subscriptions'),
-                  value: formatInteger(subscriptionsTotal),
-                  size: 'compact',
-                },
-                {
-                  label: t('admin.accounts.needs_action', {}, 'Needs action'),
-                  value: formatInteger(needsActionCount),
-                  size: 'compact',
-                },
-              ]}
-              columnsClassName="md:grid-cols-3 xl:grid-cols-5"
-            />
+            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+              {[
+                { label: t('admin.accounts.total_users', {}, 'Users'), value: formatInteger(visibleAccounts.length) },
+                { label: t('common.sites'), value: formatInteger(sitesTotal) },
+                { label: t('common.subscriptions'), value: formatInteger(subscriptionsTotal) },
+              ].map((item) => (
+                <div
+                  key={item.label}
+                  className="rounded-[1.1rem] border border-slate-200/80 bg-white/80 px-4 py-3.5 dark:border-slate-800 dark:bg-slate-950/45"
+                >
+                  <p className="text-[0.68rem] font-semibold uppercase tracking-[0.18em] text-gray-500 dark:text-gray-400">
+                    {item.label}
+                  </p>
+                  <p className="mt-2 text-base font-semibold leading-6 text-gray-950 dark:text-white">{item.value}</p>
+                </div>
+              ))}
+              <Link
+                href="/admin/coverage"
+                prefetch={false}
+                className="rounded-[1.1rem] border border-blue-200 bg-blue-50/80 px-4 py-3.5 text-blue-800 transition hover:border-blue-300 hover:bg-blue-100/80 dark:border-blue-900/60 dark:bg-blue-950/35 dark:text-blue-100 dark:hover:border-blue-700 dark:hover:bg-blue-950/55"
+              >
+                <p className="text-[0.68rem] font-semibold uppercase tracking-[0.18em]">
+                  {t('admin.accounts.metric_service_followup', {}, 'Service follow-up')}
+                </p>
+                <p className="mt-2 text-base font-semibold leading-6">{formatInteger(needsActionCount)}</p>
+                <p className="mt-1 text-xs leading-5 text-blue-700 dark:text-blue-200">
+                  {t('admin.accounts.metric_service_followup_detail', {}, 'Open queue')}
+                </p>
+              </Link>
+            </div>
           </div>
         )}
       >
-        <p className="max-w-3xl text-sm text-slate-600 dark:text-slate-300">{postureConclusion}</p>
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+          <p className="max-w-3xl text-sm text-slate-600 dark:text-slate-300">{postureConclusion}</p>
+        </div>
       </BackofficePrimaryPanel>
 
       <BackofficeSectionPanel className="overflow-hidden p-0">
@@ -606,7 +434,7 @@ function AccountsContent() {
               {t('admin.accounts.table_title', {}, 'Users and current packages')}
             </h2>
             <p className="mt-2 text-sm text-slate-500 dark:text-slate-400">
-              {formatInteger(queuedAccounts.length)} / {formatInteger(visibleAccounts.length)}
+              {formatInteger(listedAccounts.length)} / {formatInteger(visibleAccounts.length)}
             </p>
           </div>
           <button type="button" onClick={() => setIsCreateOpen((value) => !value)} className="btn btn-primary self-start">
@@ -687,16 +515,14 @@ function AccountsContent() {
               <span>{t('admin.accounts.bind_default_free_label', {}, 'Bind formal Free package on create')}</span>
             </label>
             {notice ? <p className="text-sm text-emerald-700 dark:text-emerald-300 md:col-span-3">{notice}</p> : null}
-            {actionError ? <p className="text-sm text-red-600 dark:text-red-300 md:col-span-3">{actionError}</p> : null}
           </form>
-        ) : notice || actionError ? (
+        ) : notice ? (
           <div className="border-b border-slate-200/80 px-6 py-3 text-sm dark:border-slate-800">
-            {notice ? <p className="text-emerald-700 dark:text-emerald-300">{notice}</p> : null}
-            {actionError ? <p className="text-red-600 dark:text-red-300">{actionError}</p> : null}
+            <p className="text-emerald-700 dark:text-emerald-300">{notice}</p>
           </div>
         ) : null}
         <div className="space-y-3 border-b border-slate-200/80 bg-white px-6 py-4 dark:border-slate-800 dark:bg-slate-950/20">
-          <div className="grid gap-3 md:grid-cols-[minmax(12rem,1.2fr)_minmax(10rem,0.8fr)_minmax(10rem,0.8fr)_minmax(10rem,0.8fr)_auto_auto] md:items-end">
+          <div className="grid gap-3 md:grid-cols-[minmax(12rem,1.2fr)_minmax(10rem,0.8fr)_minmax(10rem,0.8fr)_minmax(10rem,0.8fr)_auto] md:items-end">
             <label className="text-sm">
               <span className="mb-2 block font-medium text-gray-700 dark:text-gray-300">
                 {t('admin.accounts.search_label', {}, 'Search')}
@@ -748,21 +574,8 @@ function AccountsContent() {
                 <option value="">{t('common.all')}</option>
                 <option value="formal_free">{t('admin.plan_package_alias_free', {}, 'Free')}</option>
                 <option value="tier_package">{t('admin.tier_template_binding', {}, 'Tier-bound plan')}</option>
-                <option value="dev_baseline">{t('admin.dev_baseline', {}, 'Dev baseline')}</option>
               </select>
             </label>
-            <button
-              type="button"
-              onClick={() => setNeedsActionOnly((value) => !value)}
-              className={cn(
-                'h-11 rounded-xl border px-4 text-sm font-semibold transition',
-                needsActionOnly
-                  ? 'border-amber-300 bg-amber-50 text-amber-700 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-200'
-                  : 'border-slate-200 bg-white text-slate-700 hover:border-slate-300 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200'
-              )}
-            >
-              {t('admin.accounts.needs_action_filter', { count: formatInteger(needsActionCount) }, `Needs action (${formatInteger(needsActionCount)})`)}
-            </button>
             <button type="button" onClick={clearFilters} className="btn btn-secondary h-11">
               {t('common.clear_filters', {}, 'Clear filters')}
             </button>
@@ -792,7 +605,7 @@ function AccountsContent() {
             </div>
           ) : null}
           <details className="group">
-            <summary className="inline-flex cursor-pointer items-center text-sm font-medium text-slate-600 hover:text-slate-950 dark:text-slate-300 dark:hover:text-white">
+            <summary className="inline-flex cursor-pointer items-center rounded-full border border-slate-200 bg-slate-50 px-3 py-1.5 text-sm font-medium text-slate-600 hover:border-slate-300 hover:text-slate-950 dark:border-slate-800 dark:bg-slate-950/50 dark:text-slate-300 dark:hover:border-slate-700 dark:hover:text-white">
               {t('admin.accounts.more_filters', {}, 'More filters')}
             </summary>
             <div className="mt-3 grid gap-3 md:grid-cols-3">
@@ -811,14 +624,14 @@ function AccountsContent() {
                   type="text"
                   value={filters.top_plan_id}
                   onChange={(event) => handleFilterChange('top_plan_id', event.target.value)}
-                  placeholder="plan_free"
+                  placeholder="free"
                   className="input"
                 />
               </label>
             </div>
           </details>
         </div>
-        {queuedAccounts.length === 0 ? (
+        {listedAccounts.length === 0 ? (
           <div className="px-6 py-12 text-center text-sm text-gray-600 dark:text-gray-400">
             {t('common.accounts')} {t('common.not_found')}
           </div>
@@ -831,14 +644,12 @@ function AccountsContent() {
                   <th scope="col" className="w-[20%] px-4 py-3 font-semibold">{t('common.package', {}, 'Package')}</th>
                   <th scope="col" className="w-[15%] px-4 py-3 font-semibold">{t('admin.accounts.footprint_column', {}, 'Sites')}</th>
                   <th scope="col" className="w-[15%] px-4 py-3 font-semibold">{t('admin.nearest_expiry')}</th>
-                  <th scope="col" className="w-[12%] px-4 py-3 font-semibold">{t('admin.next_step', {}, 'Next step')}</th>
                   <th scope="col" className="w-[8rem] px-6 py-3 text-right font-semibold">{t('common.actions', {}, 'Actions')}</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-200/80 dark:divide-slate-800">
-            {queuedAccounts.map((account) => {
+            {listedAccounts.map((account) => {
               const remaining = daysUntil(account.nearest_expiry);
-              const nextStep = getAccountNextStep(account, t);
 
               return (
                 <tr key={account.account_id} className="align-top hover:bg-slate-50/70 dark:hover:bg-slate-950/35">
@@ -907,32 +718,8 @@ function AccountsContent() {
                       ) : null}
                     </div>
                   </td>
-                  <td className="px-4 py-4">
-                    {nextStep.isAction ? (
-                      <span className={cn('inline-flex whitespace-nowrap rounded-full border px-2.5 py-1 text-xs font-semibold', nextStepClassName(nextStep.tone))}>
-                        {nextStep.label}
-                      </span>
-                    ) : (
-                      <span className="text-sm text-slate-400 dark:text-slate-500">{nextStep.label}</span>
-                    )}
-                  </td>
                   <td className="px-6 py-4">
                     <div className="flex flex-wrap justify-end gap-2">
-                      <button
-                        type="button"
-                        onClick={() => requestAccountStatusMutation(account)}
-                        className={cn(
-                          'btn btn-secondary btn-sm whitespace-nowrap',
-                          account.status === 'suspended' ? '' : 'border-amber-200 text-amber-700 hover:border-amber-300 dark:border-amber-900/60 dark:text-amber-200'
-                        )}
-                        disabled={accountActionId === account.account_id}
-                      >
-                        {accountActionId === account.account_id
-                          ? t('common.saving', {}, 'Saving...')
-                          : account.status === 'suspended'
-                            ? t('admin.accounts.restore_account_action', {}, 'Restore account')
-                            : t('admin.accounts.suspend_account_action', {}, 'Suspend account')}
-                      </button>
                       <Link href={`/admin/accounts/${account.account_id}`} className="btn btn-primary btn-sm whitespace-nowrap">
                         {t('common.details', {}, 'Details')}
                       </Link>
@@ -946,34 +733,6 @@ function AccountsContent() {
           </div>
         )}
       </BackofficeSectionPanel>
-      <ConfirmModal
-        isOpen={Boolean(pendingConfirmation)}
-        title={pendingConfirmation?.title}
-        message={pendingConfirmation?.message || ''}
-        confirmLabel={pendingConfirmation?.confirmLabel || t('common.confirm', {}, 'Confirm')}
-        cancelLabel={t('common.cancel', {}, 'Cancel')}
-        variant={pendingConfirmation?.variant || 'default'}
-        onClose={() => setPendingConfirmation(null)}
-        onConfirm={() => {
-          pendingConfirmation?.onConfirm();
-        }}
-      >
-        {pendingConfirmation?.showSuspendReason ? (
-          <label className="block text-sm">
-            <span className="mb-2 block font-medium text-gray-700 dark:text-gray-300">
-              {t('admin.accounts.suspend_reason_label', {}, 'Suspension reason')}
-            </span>
-            <input
-              type="text"
-              value={suspendReason}
-              onChange={(event) => setSuspendReason(event.target.value)}
-              maxLength={200}
-              placeholder={t('admin.accounts.suspend_reason_placeholder', {}, 'Optional short note for internal follow-up')}
-              className="input"
-            />
-          </label>
-        ) : null}
-      </ConfirmModal>
     </BackofficePageStack>
   );
 }

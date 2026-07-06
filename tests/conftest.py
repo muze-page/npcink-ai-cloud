@@ -52,7 +52,9 @@ from app.core.models import (
     SUBSCRIPTION_STATUS_ACTIVE,
     AccountEntitlementSnapshot,
     AccountSubscription,
+    Plan,
     PlanVersion,
+    ProviderConnection,
     Site,
     SiteApiKey,
 )
@@ -170,8 +172,52 @@ def seed_site_auth(
         if subscription is not None:
             subscription.status = subscription_status
             plan_version = session.get(PlanVersion, subscription.plan_version_id)
-            if plan_version is not None and policy is not None:
-                plan_version.policy_json = policy
+            has_custom_commercial_policy = any(
+                item is not None for item in (entitlements, budgets, concurrency, policy)
+            )
+            if plan_version is not None and has_custom_commercial_policy:
+                custom_plan_id = f"{subscription.plan_id}_{site_id}"[:191]
+                custom_plan = session.get(Plan, custom_plan_id)
+                if custom_plan is None:
+                    custom_plan = Plan(
+                        plan_id=custom_plan_id,
+                        name=custom_plan_id,
+                        status="published",
+                        description=None,
+                        metadata_json={"source": "seed_site_auth"},
+                    )
+                    session.add(custom_plan)
+                    session.flush()
+                subscription.plan_id = custom_plan_id
+                custom_plan_version_id = f"{subscription.plan_version_id}_{site_id}"[:191]
+                custom_version_label = f"test_{site_id}"[:64]
+                custom_plan_version = session.get(PlanVersion, custom_plan_version_id)
+                if custom_plan_version is None:
+                    custom_plan_version = PlanVersion(
+                        plan_version_id=custom_plan_version_id,
+                        plan_id=custom_plan_id,
+                        version_label=custom_version_label,
+                        status=plan_version.status,
+                        currency=plan_version.currency,
+                        entitlements_json=dict(plan_version.entitlements_json or {}),
+                        budgets_json=dict(plan_version.budgets_json or {}),
+                        concurrency_json=dict(plan_version.concurrency_json or {}),
+                        policy_json=dict(plan_version.policy_json or {}),
+                        metadata_json=dict(plan_version.metadata_json or {}),
+                    )
+                    session.add(custom_plan_version)
+                    session.flush()
+                subscription.plan_version_id = custom_plan_version_id
+                plan_version = custom_plan_version
+            if plan_version is not None:
+                if entitlements is not None:
+                    plan_version.entitlements_json = entitlements
+                if budgets is not None:
+                    plan_version.budgets_json = budgets
+                if concurrency is not None:
+                    plan_version.concurrency_json = concurrency
+                if policy is not None:
+                    plan_version.policy_json = policy
 
         snapshot = session.scalar(
             select(AccountEntitlementSnapshot)
@@ -182,6 +228,8 @@ def seed_site_auth(
             )
         )
         if snapshot is not None:
+            if subscription is not None:
+                snapshot.plan_version_id = subscription.plan_version_id
             if entitlements is not None:
                 snapshot.entitlements_json = entitlements
             if budgets is not None:
@@ -191,6 +239,74 @@ def seed_site_auth(
             if policy is not None:
                 snapshot.policy_json = policy
 
+        session.commit()
+
+
+def seed_openai_model_allowlist(
+    database_url: str,
+    *,
+    model_ids: list[str] | None = None,
+    connection_id: str = "openai",
+) -> None:
+    seed_provider_model_allowlist(
+        database_url,
+        provider_id="openai",
+        kind="openai_compatible",
+        model_ids=model_ids or ["gpt-4.1-mini"],
+        connection_id=connection_id,
+        display_name="OpenAI",
+        capability_ids=["text_generation"],
+        runtime_profile_ids=["text.balanced"],
+        base_url="https://api.openai.test/v1",
+    )
+
+
+def seed_provider_model_allowlist(
+    database_url: str,
+    *,
+    provider_id: str,
+    kind: str,
+    model_ids: list[str],
+    connection_id: str | None = None,
+    display_name: str | None = None,
+    capability_ids: list[str] | None = None,
+    runtime_profile_ids: list[str] | None = None,
+    base_url: str = "https://api.provider.test",
+) -> None:
+    effective_connection_id = connection_id or provider_id
+    with get_session(database_url) as session:
+        row = session.get(ProviderConnection, effective_connection_id)
+        config_json = {
+            "provider_id": provider_id,
+            "kind": kind,
+            "capability_ids": capability_ids or [],
+            "runtime_profile_ids": runtime_profile_ids or [],
+            "model_ids": model_ids,
+        }
+        if row is None:
+            row = ProviderConnection(
+                connection_id=effective_connection_id,
+                provider_type=kind,
+                display_name=display_name or provider_id,
+                enabled=True,
+                base_url=base_url,
+                config_json=config_json,
+                secret_ciphertext="configured-in-test",
+                status="ready",
+                source_role="execution_source",
+                metadata_json={},
+            )
+            session.add(row)
+        else:
+            row.provider_type = kind
+            row.display_name = row.display_name or display_name or provider_id
+            row.enabled = True
+            row.base_url = row.base_url or base_url
+            row.config_json = config_json
+            row.secret_ciphertext = row.secret_ciphertext or "configured-in-test"
+            row.status = "ready"
+            row.source_role = row.source_role or "execution_source"
+            row.metadata_json = row.metadata_json or {}
         session.commit()
 
 
@@ -278,7 +394,8 @@ def build_internal_headers(
 
 def build_portal_headers(
     *,
-    site_admin_ref: str = "site_admin:portal-admin@example.com",
+    principal_id: str = "principal:portal-admin@example.com",
+    session_version: int = 1,
     secret: str = TEST_PORTAL_JWT_SECRET,
     issuer: str | None = None,
     audience: str | None = None,
@@ -287,7 +404,8 @@ def build_portal_headers(
     trace_id: str = "00112233445566778899aabbccddeeff",
 ) -> dict[str, str]:
     headers = build_portal_bearer_headers(
-        site_admin_ref=site_admin_ref,
+        principal_id=principal_id,
+        session_version=session_version,
         secret=secret,
         issuer=issuer,
         audience=audience,
@@ -302,7 +420,8 @@ def build_portal_headers(
 
 def build_portal_bearer_headers(
     *,
-    site_admin_ref: str = "site_admin:portal-admin@example.com",
+    principal_id: str = "principal:portal-admin@example.com",
+    session_version: int = 1,
     secret: str = TEST_PORTAL_JWT_SECRET,
     issuer: str | None = None,
     audience: str | None = None,
@@ -310,7 +429,10 @@ def build_portal_bearer_headers(
     idempotency_key: str = "",
     trace_id: str = "00112233445566778899aabbccddeeff",
 ) -> dict[str, str]:
-    payload: dict[str, object] = {"sub": site_admin_ref}
+    payload: dict[str, object] = {
+        "sub": principal_id,
+        "session_version": int(session_version or 1),
+    }
     if issuer:
         payload["iss"] = issuer
     if audience:

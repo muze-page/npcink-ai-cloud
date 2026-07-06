@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
 
-from app.adapters.providers.base import ProviderAdapter
+from app.adapters.providers.base import ProviderAdapter, ProviderCatalogSnapshot
 from app.adapters.providers.registry import build_provider_adapters
 from app.adapters.repositories.catalog_repository import CatalogRepository
 from app.core.config import Settings, get_settings
@@ -12,11 +12,19 @@ from app.core.db import get_session
 from app.core.models import ProviderCallRecord
 from app.domain.health.scoring import assess_instance_health
 from app.domain.hosted_model_defaults import (
+    AUDIO_NARRATION_MODEL_ID,
+    AUDIO_NARRATION_PROFILE_ID,
+    AUDIO_NARRATION_QUALITY_MODEL_ID,
+    AUDIO_NARRATION_QUALITY_PROFILE_ID,
     FREE_GPT55_TEXT_PROFILE_ID,
     GROK_IMAGINE_IMAGE_MODEL_ID,
     GROK_IMAGINE_IMAGE_PROFILE_ID,
     TEXT_AI_PROFILE_ID,
     VISION_AI_PROFILE_ID,
+)
+from app.domain.wordpress_ai_connector.routing_profiles import (
+    WP_AI_CONNECTOR_IMAGE_GENERATION_PROFILE_ID,
+    WP_AI_CONNECTOR_PROFILE_SPECS,
 )
 
 DEFAULT_RECOMMENDED_PROFILE_IDS = (
@@ -27,6 +35,8 @@ DEFAULT_RECOMMENDED_PROFILE_IDS = (
     "text.quality",
     VISION_AI_PROFILE_ID,
     "vision.default",
+    AUDIO_NARRATION_PROFILE_ID,
+    AUDIO_NARRATION_QUALITY_PROFILE_ID,
     GROK_IMAGINE_IMAGE_PROFILE_ID,
     "embed.default",
 )
@@ -221,6 +231,33 @@ class CatalogService:
             "revision": revision,
             "providers": refreshed,
             "refreshed_count": len(refreshed),
+        }
+
+    def store_provider_snapshot(
+        self,
+        snapshot: ProviderCatalogSnapshot,
+        *,
+        source: str = "provider_connection_test",
+        notes: str | None = None,
+    ) -> dict[str, Any]:
+        revision = self._build_catalog_revision()
+        provider_id = str(snapshot.provider_id or "").strip()
+        with get_session(self.database_url) as session:
+            repository = CatalogRepository(session)
+            repository.upsert_provider_snapshot(snapshot, revision)
+            repository.create_revision(
+                revision,
+                provider_id,
+                source=source,
+                notes=notes or f"providers={provider_id}",
+            )
+            self._sync_default_routing(repository, revision)
+            session.commit()
+
+        return {
+            "revision": revision,
+            "providers": [provider_id] if provider_id else [],
+            "refreshed_count": 1 if provider_id else 0,
         }
 
     def _build_catalog_revision(self) -> str:
@@ -472,31 +509,71 @@ class CatalogService:
             "text.quality": ("text", ["quality", "balanced"]),
             VISION_AI_PROFILE_ID: ("vision", ["default", "quality"]),
             "vision.default": ("vision", ["default", "quality"]),
+            AUDIO_NARRATION_PROFILE_ID: (
+                "audio_generation",
+                ["default", "balanced", "narration"],
+            ),
+            AUDIO_NARRATION_QUALITY_PROFILE_ID: (
+                "audio_generation",
+                ["quality", "narration"],
+            ),
             GROK_IMAGINE_IMAGE_PROFILE_ID: (
                 "image_generation",
                 ["z-image", "quality", "default"],
             ),
             "embed.default": ("embedding", ["default", "embedding"]),
         }
+        profile_specs.update(
+            {
+                spec.profile_id: (spec.execution_kind, list(spec.ordered_tiers))
+                for spec in WP_AI_CONNECTOR_PROFILE_SPECS
+            }
+        )
 
         for profile_id, (execution_kind, ordered_tiers) in profile_specs.items():
+            wp_ai_spec = next(
+                (
+                    spec
+                    for spec in WP_AI_CONNECTOR_PROFILE_SPECS
+                    if spec.profile_id == profile_id
+                ),
+                None,
+            )
             candidate_instance_ids = select_candidates(
                 execution_kind,
                 ordered_tiers,
                 exact_model_id=(
                     GROK_IMAGINE_IMAGE_MODEL_ID
-                    if profile_id == GROK_IMAGINE_IMAGE_PROFILE_ID
+                    if profile_id
+                    in {
+                        GROK_IMAGINE_IMAGE_PROFILE_ID,
+                        WP_AI_CONNECTOR_IMAGE_GENERATION_PROFILE_ID,
+                    }
+                    else AUDIO_NARRATION_MODEL_ID
+                    if profile_id == AUDIO_NARRATION_PROFILE_ID
+                    else AUDIO_NARRATION_QUALITY_MODEL_ID
+                    if profile_id == AUDIO_NARRATION_QUALITY_PROFILE_ID
                     else None
                 ),
             )
+            default_policy_json: dict[str, object] = {
+                "allow_fallback": True,
+                "max_retries": 0,
+                "timeout_ms": 30000,
+            }
+            if wp_ai_spec is not None:
+                default_policy_json = {
+                    "allow_fallback": wp_ai_spec.allow_fallback,
+                    "max_retries": wp_ai_spec.max_retries,
+                    "timeout_ms": wp_ai_spec.timeout_ms,
+                    "managed_surface": "wordpress_ai_connector",
+                    "task_group": wp_ai_spec.group_id,
+                    "tasks": list(wp_ai_spec.tasks),
+                }
             repository.upsert_routing_profile(
                 profile_id=profile_id,
                 execution_kind=execution_kind,
-                default_policy_json={
-                    "allow_fallback": True,
-                    "max_retries": 0,
-                    "timeout_ms": 30000,
-                },
+                default_policy_json=default_policy_json,
             )
             repository.upsert_routing_binding(
                 profile_id=profile_id,
@@ -504,6 +581,14 @@ class CatalogService:
                 selection_policy_json={
                     "strategy": "ordered",
                     "ordered_tiers": ordered_tiers,
+                    **(
+                        {
+                            "managed_surface": "wordpress_ai_connector",
+                            "task_group": wp_ai_spec.group_id,
+                        }
+                        if wp_ai_spec is not None
+                        else {}
+                    ),
                 },
                 revision=revision,
             )

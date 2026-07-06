@@ -43,8 +43,8 @@ export function Footer() {
                 </Link>
               </li>
               <li>
-                <Link href="/portal/keys" className="text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-gray-100">
-                  {t('footer.api_keys')}
+                <Link href="/portal/sites" className="text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-gray-100">
+                  {t('portal.nav_sites', {}, 'Sites')}
                 </Link>
               </li>
             </ul>

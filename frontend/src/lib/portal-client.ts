@@ -15,6 +15,8 @@ export type ProductIdentityType = 'platform_admin' | 'site_admin';
 // ============================================
 
 export interface PortalSession {
+  principal_id?: string;
+  email?: string;
   site_admin_ref: string;
   site_id: string;
   account_id?: string;
@@ -104,18 +106,118 @@ export interface RotateKeyResponse {
 
 export interface PortalLoginCodeRequest {
   email: string;
-  locale?: 'en' | 'zh-CN' | 'zh-TW';
+  locale?: 'en' | 'zh-CN';
 }
 
 export interface PortalLoginCodeVerifyRequest {
   email: string;
   code: string;
+  remember_me?: boolean;
+}
+
+export interface PortalEmailChangeCodeRequest {
+  new_email: string;
+  locale?: 'en' | 'zh-CN';
+}
+
+export interface PortalEmailChangeVerifyRequest {
+  new_email: string;
+  code: string;
+}
+
+export interface PortalEmailChangeCodeResponse {
+  old_email: string;
+  new_email: string;
+  delivery: 'email' | 'development_code';
+  expires_in_seconds: number;
+  code: string;
+}
+
+export interface PortalEmailChangeResult extends PortalSession {
+  old_email: string;
+  new_email: string;
+}
+
+export interface PortalRegistrationCodeRequest {
+  email: string;
+  site_url?: string;
+  site_name?: string;
+  use_case?: string;
+  locale?: 'en' | 'zh-CN';
+}
+
+export interface PortalRegistrationVerifyRequest {
+  email: string;
+  code: string;
+}
+
+export interface PortalRegistrationResult {
+  status: 'registered' | 'existing_user';
+  email: string;
+  principal_id: string;
+  account_id?: string;
+  site_id?: string;
+  site?: Site;
+  subscription?: PortalSession['current_subscription'];
+  next?: Record<string, string>;
+}
+
+export interface PortalIdentityProviderBinding {
+  binding_id: string;
+  provider: string;
+  principal_id: string;
+  identity_type: ProductIdentityType | 'user';
+  role: string;
+  status: string;
+  has_unionid: boolean;
+  last_login_at: string;
+}
+
+export interface PortalIdentityProviderStatus {
+  provider: string;
+  display_name: string;
+  configured: boolean;
+  bound: boolean;
+  binding?: PortalIdentityProviderBinding | null;
+  bind_start_path?: string;
+}
+
+export interface PortalIdentityProvidersResponse {
+  principal_id: string;
+  providers: PortalIdentityProviderStatus[];
+}
+
+export interface PortalQqStartResponse {
+  provider: 'qq';
+  authorization_url: string;
+  state: string;
+  expires_in_seconds: number;
+  return_to: string;
+  intent?: 'login' | 'bind';
 }
 
 export interface CreateSiteRequest {
   account_id: string;
   site_name?: string;
   wordpress_url: string;
+}
+
+export interface CreateAddonConnectionRequest {
+  account_id: string;
+  site_name?: string;
+  wordpress_url: string;
+  return_url: string;
+  state: string;
+}
+
+export interface AddonConnectionResult {
+  site_id: string;
+  key_id: string;
+  site_created: boolean;
+  redirect_url: string;
+  return_url: string;
+  expires_at: string;
+  expires_in_seconds: number;
 }
 
 export interface CreateKeyRequest {
@@ -182,6 +284,7 @@ export interface Entitlements {
     version_label?: string;
     status?: string;
     budgets?: {
+      max_ai_credits_per_period?: number;
       max_runs_per_period?: number;
       max_tokens_per_period?: number;
       max_cost_per_period?: number;
@@ -192,6 +295,7 @@ export interface Entitlements {
     tokens_limit?: number;
     features?: string[];
     budgets?: {
+      max_ai_credits_per_period?: number;
       max_runs_per_period?: number;
       max_tokens_per_period?: number;
       max_cost_per_period?: number;
@@ -299,6 +403,7 @@ export interface PortalSiteSummaryRecord {
   };
   entitlement_snapshot?: {
     budgets?: {
+      max_ai_credits_per_period?: number;
       max_runs_per_period?: number;
       max_tokens_per_period?: number;
       max_cost_per_period?: number;
@@ -525,7 +630,33 @@ export interface PortalDiagnosticAdvisorSafety {
   raw_payload_exposed: boolean;
 }
 
+export interface PortalDiagnosticEvidenceWindow {
+  hours: number;
+  start_at: string;
+  end_at: string;
+}
+
+export interface PortalDiagnosticStatusDetail {
+  workflow_status: string;
+  status_source: string;
+  allowed_statuses: string[];
+  muted_until: string;
+  operator_note: string;
+  updated_at: string;
+}
+
+export interface PortalDiagnosticWorkflowSummary {
+  new: number;
+  acknowledged: number;
+  muted: number;
+  resolved: number;
+  total: number;
+  needs_attention: number;
+  allowed_statuses: string[];
+}
+
 export interface PortalDiagnosticItem {
+  diagnostic_key: string;
   code: string;
   severity: 'warning' | 'error' | 'info' | string;
   source: string;
@@ -534,6 +665,10 @@ export interface PortalDiagnosticItem {
   likely_cause: string;
   next_step: string;
   recommended_action_id: string;
+  workflow_status: 'new' | 'acknowledged' | 'muted' | 'resolved' | string;
+  status_detail: PortalDiagnosticStatusDetail;
+  evidence_window: PortalDiagnosticEvidenceWindow;
+  last_updated_at: string;
   operator_review_required: boolean;
   direct_wordpress_write: boolean;
 }
@@ -555,6 +690,8 @@ export interface PortalDiagnosticAdvisorSummary {
   };
   signals: Array<Record<string, unknown>>;
   diagnostic_items: PortalDiagnosticItem[];
+  diagnostic_workflow?: PortalDiagnosticWorkflowSummary;
+  evidence_window?: PortalDiagnosticEvidenceWindow;
   safety: PortalDiagnosticAdvisorSafety;
   generated_at: string;
   site_id?: string;
@@ -1146,8 +1283,8 @@ export interface PortalProvisionedSite {
     package_alias: string;
   } | null;
   next: {
-    keys_path: string;
-    settings_path: string;
+    connection_path: string;
+    sites_path: string;
   };
 }
 
@@ -1174,6 +1311,9 @@ export interface PortalCreditLedgerEntry {
   source_type: string;
   category?: string;
   category_label?: string;
+  feature_key?: string;
+  feature_label?: string;
+  feature_detail?: string;
   direction?: string;
   explanation?: string;
   source_id?: string;
@@ -1236,6 +1376,7 @@ export interface PortalCreditPackPaymentOrder {
   created_at?: string;
   paid_at?: string;
   refunded_at?: string;
+  metadata?: Record<string, unknown>;
 }
 
 export interface PortalCreditPackOrderPayload {
@@ -1245,6 +1386,29 @@ export interface PortalCreditPackOrderPayload {
 }
 
 export type PortalPaymentOrder = PortalCreditPackPaymentOrder;
+
+export interface PortalProTrialPayload {
+  account_id: string;
+  principal_id: string;
+  subscription: NonNullable<PortalSession['current_subscription']>;
+  entitlement_snapshot?: Record<string, unknown>;
+  trial?: {
+    available?: boolean;
+    status?: string;
+    tier_id?: string;
+    trial_days?: number;
+    trial_started_at?: string;
+    trial_ends_at?: string;
+    monthly_price_cny?: number;
+  };
+  session?: PortalSession;
+}
+
+export interface PortalProMonthlyOrderPayload {
+  account_id: string;
+  principal_id: string;
+  order: PortalPaymentOrder;
+}
 
 export interface PortalPaymentOrderListPayload {
   site_id?: string;
@@ -1377,11 +1541,11 @@ export class PortalApiError extends Error {
 // ============================================
 
 export class PortalClient {
-  private baseUrl: string;
+  private baseUrl?: string;
   private token?: string;
 
   constructor(baseUrl?: string, token?: string) {
-    this.baseUrl = baseUrl || getPortalApiBaseUrl();
+    this.baseUrl = baseUrl;
     this.token = token;
   }
 
@@ -1416,7 +1580,8 @@ export class PortalClient {
     body?: unknown,
     options: PortalRequestOptions = {}
   ): Promise<PortalEnvelope<T>> {
-    const url = `${this.baseUrl}${path}`;
+    const baseUrl = this.baseUrl || getPortalApiBaseUrl();
+    const url = `${baseUrl}${path}`;
     const methodName = method.toUpperCase();
     const generatedIdempotencyKey =
       methodName !== 'GET' && methodName !== 'HEAD'
@@ -1476,6 +1641,65 @@ export class PortalClient {
     return this.request('POST', '/auth/code/verify', payload);
   }
 
+  async requestEmailChangeCode(payload: PortalEmailChangeCodeRequest): Promise<PortalEnvelope<PortalEmailChangeCodeResponse>> {
+    return this.request('POST', '/account/email-change/request', payload, { requireAuth: true });
+  }
+
+  async verifyEmailChangeCode(payload: PortalEmailChangeVerifyRequest): Promise<PortalEnvelope<PortalEmailChangeResult>> {
+    return this.request('POST', '/account/email-change/verify', payload, { requireAuth: true });
+  }
+
+  /**
+   * 请求注册验证码
+   * POST /portal/v1/register/code/request
+   */
+  async requestRegistrationCode(payload: PortalRegistrationCodeRequest): Promise<PortalEnvelope<{
+    email: string;
+    delivery: 'email' | 'development_code';
+    expires_in_seconds: number;
+    code: string;
+    site?: {
+      site_id: string;
+      site_name: string;
+      wordpress_url: string;
+    };
+  }>> {
+    return this.request('POST', '/register/code/request', payload);
+  }
+
+  /**
+   * 验证注册验证码并创建 Free 账号
+   * POST /portal/v1/register/verify
+   */
+  async verifyRegistration(payload: PortalRegistrationVerifyRequest): Promise<PortalEnvelope<PortalRegistrationResult>> {
+    return this.request('POST', '/register/verify', payload);
+  }
+
+  /**
+   * 获取当前账号的第三方登录绑定状态
+   * GET /portal/v1/auth/identity-providers
+   */
+  async getIdentityProviders(): Promise<PortalEnvelope<PortalIdentityProvidersResponse>> {
+    return this.request('GET', '/auth/identity-providers', undefined, { requireAuth: true });
+  }
+
+  /**
+   * 发起 QQ 绑定授权
+   * GET /portal/v1/auth/qq/start?intent=bind
+   */
+  async startQqBind(returnTo = '/portal/account'): Promise<PortalEnvelope<PortalQqStartResponse>> {
+    const params = new URLSearchParams({ intent: 'bind', return_to: returnTo });
+    return this.request('GET', `/auth/qq/start?${params.toString()}`, undefined, { requireAuth: true });
+  }
+
+  /**
+   * 解绑 QQ 快捷登录
+   * POST /portal/v1/auth/qq/unbind
+   */
+  async unbindQqLogin(): Promise<PortalEnvelope<{ provider: string; principal_id: string; revoked: number }>> {
+    return this.request('POST', '/auth/qq/unbind', { provider: 'qq' }, { requireAuth: true });
+  }
+
   // ========================================
   // Session 管理
   // ========================================
@@ -1528,16 +1752,20 @@ export class PortalClient {
     return this.request('POST', '/sites', payload, { requireAuth: true });
   }
 
+  async createAddonConnection(payload: CreateAddonConnectionRequest): Promise<PortalEnvelope<AddonConnectionResult>> {
+    return this.request('POST', '/addon-connections', payload, { requireAuth: true });
+  }
+
   async activateSite(siteId: string): Promise<PortalEnvelope<PortalActivatedSite>> {
     return this.request('POST', `/sites/${siteId}/activate`, {}, { requireAuth: true });
   }
 
-  async archiveSite(siteId: string): Promise<PortalEnvelope<PortalActivatedSite>> {
-    return this.request('POST', `/sites/${siteId}/archive`, {}, { requireAuth: true });
+  async deactivateSite(siteId: string): Promise<PortalEnvelope<{ site: Site }>> {
+    return this.request('POST', `/sites/${siteId}/deactivate`, {}, { requireAuth: true });
   }
 
-  async restoreSite(siteId: string): Promise<PortalEnvelope<PortalActivatedSite>> {
-    return this.request('POST', `/sites/${siteId}/restore`, {}, { requireAuth: true });
+  async removeSite(siteId: string): Promise<PortalEnvelope<{ site: Site; revoked_key_ids: string[] }>> {
+    return this.request('POST', `/sites/${siteId}/remove`, {}, { requireAuth: true });
   }
 
   /**
@@ -1720,6 +1948,17 @@ export class PortalClient {
     return this.request('GET', `/sites/${siteId}/payment-orders${query}`, undefined, { requireAuth: true });
   }
 
+  async listAccountPaymentOrders(
+    options?: { limit?: number; offset?: number }
+  ): Promise<PortalEnvelope<PortalPaymentOrderListPayload>> {
+    const params = new URLSearchParams();
+    if (options?.limit) params.set('limit', String(options.limit));
+    if (options?.offset) params.set('offset', String(options.offset));
+
+    const query = params.toString() ? `?${params.toString()}` : '';
+    return this.request('GET', `/account/payment-orders${query}`, undefined, { requireAuth: true });
+  }
+
   async createCreditPackOrder(
     siteId: string,
     packId: string,
@@ -1729,6 +1968,19 @@ export class PortalClient {
       'POST',
       `/sites/${siteId}/credit-pack-orders`,
       { pack_id: packId, provider },
+      { requireAuth: true }
+    );
+  }
+
+  async startProTrial(): Promise<PortalEnvelope<PortalProTrialPayload>> {
+    return this.request('POST', '/account/pro-trial', {}, { requireAuth: true });
+  }
+
+  async createProMonthlyOrder(provider = 'alipay'): Promise<PortalEnvelope<PortalProMonthlyOrderPayload>> {
+    return this.request(
+      'POST',
+      '/account/pro-monthly-order',
+      { provider },
       { requireAuth: true }
     );
   }
@@ -1807,7 +2059,7 @@ export class PortalClient {
       this.getEntitlements(siteId),
       this.getCreditLedger(siteId, { limit: 12 }),
       this.listCreditPacks(siteId),
-      this.listPaymentOrders(siteId, { limit: 8 }),
+      this.listAccountPaymentOrders({ limit: 8 }),
     ]);
     return {
       usage: usageResponse.data,

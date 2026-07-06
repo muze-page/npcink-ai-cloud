@@ -91,8 +91,8 @@ export function proxy(request: NextRequest) {
     return response;
   }
 
-  // Skip auth check for login page
-  if (pathname === '/portal/login' || pathname === '/portal/dev-entry') {
+  // Skip auth check for public portal entry pages.
+  if (pathname === '/portal/login' || pathname === '/portal/register' || pathname === '/portal/dev-entry') {
     return response;
   }
 

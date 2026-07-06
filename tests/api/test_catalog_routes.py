@@ -46,9 +46,33 @@ class FakePortalEmailSender(PortalEmailSender):
         self,
         *,
         recipient_email: str,
-        site_admin_ref: str,
+        principal_id: str,
         code: str,
         expires_in_seconds: int,
+        project_name: str,
+        locale: str = "zh-CN",
+    ) -> None:
+        return None
+
+    def send_email_change_code(
+        self,
+        *,
+        recipient_email: str,
+        old_email: str,
+        principal_id: str,
+        code: str,
+        expires_in_seconds: int,
+        project_name: str,
+        locale: str = "zh-CN",
+    ) -> None:
+        return None
+
+    def send_email_changed_notice(
+        self,
+        *,
+        recipient_email: str,
+        new_email: str,
+        principal_id: str,
         project_name: str,
         locale: str = "zh-CN",
     ) -> None:
@@ -382,7 +406,6 @@ def test_internal_portal_email_test_sends_message(tmp_path: Path) -> None:
         database_url=database_url,
         redis_url="redis://localhost:6379/0",
         internal_auth_token=TEST_INTERNAL_AUTH_TOKEN,
-        portal_public_base_url="https://cloud.example.com",
     )
     client = TestClient(
         create_app(
@@ -392,6 +415,15 @@ def test_internal_portal_email_test_sends_message(tmp_path: Path) -> None:
             )
         )
     )
+    public_response = client.patch(
+        "/internal/service/admin/service-settings/portal-public",
+        json={"public_base_url": "https://cloud.example.com"},
+        headers=build_internal_headers(
+            internal_token=TEST_INTERNAL_AUTH_TOKEN,
+            idempotency_key="portal-email-public-settings-001",
+        ),
+    )
+    assert public_response.status_code == 200, public_response.text
 
     response = client.post(
         "/internal/portal/email/test",

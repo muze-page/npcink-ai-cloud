@@ -33,11 +33,31 @@ export function formatPortalErrorMessage(
         );
       case 'auth.portal_login_code_invalid':
       case 'auth.portal_login_code_required':
+      case 'auth.portal_email_change_code_invalid':
+      case 'auth.portal_email_change_code_required':
         return appendErrorCode(
           t(
             'error.portal_login_code_invalid',
             undefined,
             'The verification code is invalid or expired. Request a new code and try again.'
+          ),
+          error.errorCode
+        );
+      case 'service.portal_email_change_same_email':
+        return appendErrorCode(
+          t(
+            'portal.account.email_change_same_email',
+            undefined,
+            'This email is already your current login email.'
+          ),
+          error.errorCode
+        );
+      case 'service.portal_email_change_email_in_use':
+        return appendErrorCode(
+          t(
+            'portal.account.email_change_email_in_use',
+            undefined,
+            'This email is already used by another Portal user.'
           ),
           error.errorCode
         );

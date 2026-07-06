@@ -452,17 +452,6 @@ assert_status "${HTTP_STATUS}" "200" "catalog/models should succeed"
 assert_json_non_empty "${HTTP_BODY}" "data.items" "catalog/models should return models"
 CATALOG_MODELS_BODY="${HTTP_BODY}"
 
-if [ -n "${NPCINK_CLOUD_OPENAI_PROVIDER_LABEL:-}" ]; then
-	ok "DeepSeek Provider Label Smoke"
-	CATALOG_LABEL=$(json_read_path "$CATALOG_MODELS_BODY" "data.items.0.provider_display_name" 2>/dev/null || echo "")
-	if [ -z "$CATALOG_LABEL" ]; then
-		echo "  SKIP: catalog provider label not available (may need catalog refresh)"
-	else
-		assert_body_contains "$CATALOG_LABEL" "DeepSeek" "catalog shows DeepSeek provider label"
-		ok "DeepSeek provider label visible in catalog"
-	fi
-fi
-
 PROMPT_TEXT_JSON="$(json_quote "${PROMPT_TEXT}")"
 EXECUTE_BODY="$(cat <<JSON
 {"site_id":"${SITE_ID}","ability_name":"${ABILITY_NAME}","channel":"${CHANNEL}","execution_kind":"${EXECUTION_KIND}","profile_id":"${PROFILE_ID}","input":{"messages":[{"role":"user","content":${PROMPT_TEXT_JSON}}]},"policy":{"allow_fallback":true}}

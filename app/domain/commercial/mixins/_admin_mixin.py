@@ -12,15 +12,19 @@ from app.adapters.repositories.commercial_repository import CommercialRepository
 from app.core.db import get_session
 from app.core.models import (
     ACCOUNT_STATUS_ACTIVE,
+    ACCOUNT_USER_MEMBERSHIP_STATUS_ACTIVE,
     CREDIT_LEDGER_EVENT_ADJUSTMENT,
     CREDIT_LEDGER_EVENT_CONSUME,
     CREDIT_LEDGER_EVENT_GRANT,
     CREDIT_LEDGER_EVENT_REFUND,
+    IDENTITY_PROVIDER_BINDING_STATUS_ACTIVE,
     PLATFORM_ADMIN_ROLE_PLATFORM_ADMIN,
     PLATFORM_ADMIN_STATUS_ACTIVE,
-    SITE_ADMIN_STATUS_ACTIVE,
+    PRINCIPAL_STATUS_ACTIVE,
+    PRINCIPAL_STATUS_DISABLED,
     SITE_API_KEY_STATUS_ACTIVE,
     SITE_STATUS_ACTIVE,
+    SITE_USER_GRANT_STATUS_ACTIVE,
     SUBSCRIPTION_STATUS_ACTIVE,
     SUBSCRIPTION_STATUS_PAST_DUE,
     SUBSCRIPTION_STATUS_SUSPENDED,
@@ -70,10 +74,35 @@ AI_CREDIT_LEDGER_CATEGORY_LABELS = {
 
 
 class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
-    def upsert_platform_admin_identity(
+    def _serialize_platform_admin_grant(
+        self,
+        identity: Any,
+        *,
+        principal: Any | None = None,
+    ) -> dict[str, object]:
+        metadata = getattr(identity, "metadata_json", None)
+        return {
+            "grant_id": str(getattr(identity, "grant_id", "") or ""),
+            "principal_id": str(getattr(identity, "principal_id", "") or ""),
+            "identity_type": IDENTITY_TYPE_PLATFORM_ADMIN,
+            "role": str(getattr(identity, "role", "") or PLATFORM_ADMIN_ROLE_PLATFORM_ADMIN),
+            "capabilities": _platform_capability_flags(
+                str(getattr(identity, "role", "") or PLATFORM_ADMIN_ROLE_PLATFORM_ADMIN)
+            ),
+            "status": str(getattr(identity, "status", "") or ""),
+            "provider": str(getattr(identity, "provider", "") or ""),
+            "external_subject": str(getattr(identity, "external_subject", "") or ""),
+            "email": str(getattr(identity, "email", "") or ""),
+            "session_version": int(getattr(principal, "session_version", 1) or 1),
+            "metadata": metadata if isinstance(metadata, dict) else {},
+            "created_at": self._serialize_datetime(getattr(identity, "created_at", None)),
+            "updated_at": self._serialize_datetime(getattr(identity, "updated_at", None)),
+        }
+
+    def upsert_platform_admin_grant(
         self,
         *,
-        admin_ref: str,
+        principal_id: str,
         role: str = PLATFORM_ADMIN_ROLE_PLATFORM_ADMIN,
         status: str = PLATFORM_ADMIN_STATUS_ACTIVE,
         provider: str = "manual",
@@ -82,22 +111,28 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
         metadata_json: dict[str, object] | None = None,
         audit_context: ServiceAuditContext | None = None,
     ) -> dict[str, object]:
-        normalized_admin_ref = admin_ref.strip()
+        normalized_principal_id = principal_id.strip()
         normalized_role = _canonicalize_platform_admin_role_for_write(role)
         normalized_status = status.strip() or PLATFORM_ADMIN_STATUS_ACTIVE
         normalized_provider = provider.strip().lower() or "manual"
         normalized_email = email.strip().lower() if email else None
         normalized_subject = external_subject.strip() if external_subject else None
-        if not normalized_admin_ref:
+        if not normalized_principal_id:
             raise CommercialPermissionError(
-                "service.platform_admin_ref_required",
-                "platform admin ref is required",
+                "service.principal_id_required",
+                "principal id is required",
             )
         with get_session(self.database_url) as session:
             repository = CommercialRepository(session)
-            identity = repository.upsert_platform_admin_identity(
-                admin_id=f"pad_{uuid4().hex}",
-                admin_ref=normalized_admin_ref,
+            principal = repository.upsert_principal_identity(
+                principal_id=normalized_principal_id,
+                email=normalized_email,
+                status=PRINCIPAL_STATUS_ACTIVE,
+                metadata_json={"source": "platform_admin_grant"},
+            )
+            identity = repository.upsert_platform_admin_grant(
+                grant_id=f"pad_{uuid4().hex}",
+                principal_id=normalized_principal_id,
                 provider=normalized_provider,
                 external_subject=normalized_subject,
                 email=normalized_email,
@@ -105,43 +140,43 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
                 status=normalized_status,
                 metadata_json=metadata_json,
             )
-            payload = cast(Any, self)._serialize_platform_admin_identity(identity)
+            payload = self._serialize_platform_admin_grant(identity, principal=principal)
             self._record_service_audit_in_session(
                 repository=repository,
                 audit_context=audit_context,
-                event_kind="platform_admin_identity.upsert",
+                event_kind="platform_admin_grant.upsert",
                 outcome="succeeded",
                 scope_kind="platform_admin",
-                scope_id=normalized_admin_ref,
+                scope_id=normalized_principal_id,
                 payload_json=payload,
             )
             session.commit()
             return payload
 
-    def resolve_platform_admin_identity(
+    def resolve_platform_admin_grant(
         self,
         *,
-        admin_ref: str,
+        principal_id: str,
         bootstrap_role: str = PLATFORM_ADMIN_ROLE_PLATFORM_ADMIN,
         allow_bootstrap: bool = False,
     ) -> dict[str, object]:
-        normalized_admin_ref = admin_ref.strip()
-        if not normalized_admin_ref:
+        normalized_principal_id = principal_id.strip()
+        if not normalized_principal_id:
             raise CommercialPermissionError(
-                "service.platform_admin_ref_required",
-                "platform admin ref is required",
+                "service.principal_id_required",
+                "principal id is required",
             )
         with get_session(self.database_url) as session:
             repository = CommercialRepository(session)
-            identity = repository.get_platform_admin_identity(admin_ref=normalized_admin_ref)
+            identity = repository.get_platform_admin_grant(principal_id=normalized_principal_id)
             if identity is None:
                 if not allow_bootstrap:
                     raise CommercialNotFoundError(
                         "service.platform_admin_not_found",
-                        f"platform admin '{normalized_admin_ref}' was not found",
+                        f"platform admin '{normalized_principal_id}' was not found",
                     )
                 return {
-                    "admin_ref": normalized_admin_ref,
+                    "principal_id": normalized_principal_id,
                     "identity_type": IDENTITY_TYPE_PLATFORM_ADMIN,
                     "role": _canonicalize_platform_admin_role_for_write(bootstrap_role),
                     "capabilities": _platform_capability_flags(
@@ -158,39 +193,45 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
             if str(identity.status or "") != PLATFORM_ADMIN_STATUS_ACTIVE:
                 raise CommercialPermissionError(
                     "service.platform_admin_disabled",
-                    f"platform admin '{normalized_admin_ref}' is disabled",
+                    f"platform admin '{normalized_principal_id}' is disabled",
                 )
-            return cast(Any, self)._serialize_platform_admin_identity(identity)
+            principal = repository.get_principal_identity_by_ref(
+                principal_id=normalized_principal_id,
+            )
+            return self._serialize_platform_admin_grant(identity, principal=principal)
 
-    def delete_platform_admin_identity(
+    def delete_platform_admin_grant(
         self,
         *,
-        admin_ref: str,
+        principal_id: str,
         audit_context: ServiceAuditContext | None = None,
     ) -> dict[str, object]:
-        normalized_admin_ref = admin_ref.strip()
-        if not normalized_admin_ref:
+        normalized_principal_id = principal_id.strip()
+        if not normalized_principal_id:
             raise CommercialPermissionError(
-                "service.platform_admin_ref_required",
-                "platform admin ref is required",
+                "service.principal_id_required",
+                "principal id is required",
             )
         with get_session(self.database_url) as session:
             repository = CommercialRepository(session)
-            identity = repository.get_platform_admin_identity(admin_ref=normalized_admin_ref)
+            identity = repository.get_platform_admin_grant(principal_id=normalized_principal_id)
             if identity is None:
                 raise CommercialNotFoundError(
                     "service.platform_admin_not_found",
-                    f"platform admin '{normalized_admin_ref}' was not found",
+                    f"platform admin '{normalized_principal_id}' was not found",
                 )
-            payload = cast(Any, self)._serialize_platform_admin_identity(identity)
-            repository.delete_platform_admin_identity(admin_ref=normalized_admin_ref)
+            principal = repository.get_principal_identity_by_ref(
+                principal_id=normalized_principal_id,
+            )
+            payload = self._serialize_platform_admin_grant(identity, principal=principal)
+            repository.delete_platform_admin_grant(principal_id=normalized_principal_id)
             self._record_service_audit_in_session(
                 repository=repository,
                 audit_context=audit_context,
-                event_kind="platform_admin_identity.delete",
+                event_kind="platform_admin_grant.delete",
                 outcome="succeeded",
                 scope_kind="platform_admin",
-                scope_id=normalized_admin_ref,
+                scope_id=normalized_principal_id,
                 payload_json=payload,
             )
             session.commit()
@@ -215,8 +256,8 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
         with get_session(self.database_url) as session:
             repository = CommercialRepository(session)
             accounts_total = repository.count_accounts()
-            site_admins_active = repository.count_site_admin_identities(
-                status=SITE_ADMIN_STATUS_ACTIVE
+            principals_active = repository.count_principals(
+                status=PRINCIPAL_STATUS_ACTIVE
             )
             sites_total = repository.count_sites()
             sites_active = repository.count_sites(status=SITE_STATUS_ACTIVE)
@@ -384,7 +425,7 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
             "generated_at": self._serialize_datetime(now),
             "counts": {
                 "accounts_total": accounts_total,
-                "site_admins_active": site_admins_active,
+                "principals_active": principals_active,
                 "sites_total": sites_total,
                 "sites_active": sites_active,
                 "subscriptions_total": subscriptions_total,
@@ -645,16 +686,566 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
             "attention_items": attention_items,
         }
 
+    def list_admin_portal_users(
+        self,
+        *,
+        q: str | None = None,
+        source: str | None = "portal_self_registration",
+        status: str | None = None,
+        package_alias: str | None = None,
+        qq_bound: bool | None = None,
+        limit: int = 100,
+    ) -> dict[str, object]:
+        normalized_q = str(q or "").strip().lower()
+        normalized_source = str(source or "portal_self_registration").strip().lower()
+        if normalized_source in {"", "self_registered", "self-registration"}:
+            normalized_source = "portal_self_registration"
+        if normalized_source not in {"all", "portal_self_registration", "principal_access"}:
+            raise CommercialValidationError(
+                "service.portal_user_source_invalid",
+                "portal user source must be all, portal_self_registration, or principal_access",
+            )
+        normalized_status = str(status or "").strip().lower()
+        if normalized_status and normalized_status not in {
+            PRINCIPAL_STATUS_ACTIVE,
+            PRINCIPAL_STATUS_DISABLED,
+        }:
+            raise CommercialValidationError(
+                "service.portal_user_status_invalid",
+                "portal user status must be active or disabled",
+            )
+        normalized_package = str(package_alias or "").strip().lower()
+        resolved_limit = min(max(int(limit or 100), 1), 500)
+
+        with get_session(self.database_url) as session:
+            repository = CommercialRepository(session)
+            principals = repository.list_principals(
+                status=normalized_status or None,
+                limit=None,
+            )
+            principal_ids = [str(principal.principal_id or "") for principal in principals]
+            memberships = repository.list_account_user_memberships(
+                principal_ids=principal_ids,
+                statuses=None,
+            )
+            grants = repository.list_site_user_grants(
+                principal_ids=principal_ids,
+                statuses=None,
+            )
+            qq_bindings = repository.list_identity_provider_bindings(
+                principal_ids=principal_ids,
+                provider="qq",
+                statuses=None,
+            )
+            account_ids = sorted(
+                {
+                    str(membership.account_id or "")
+                    for membership in memberships
+                    if str(membership.account_id or "").strip()
+                }
+            )
+            site_ids = sorted(
+                {
+                    str(grant.site_id or "")
+                    for grant in grants
+                    if str(grant.site_id or "").strip()
+                }
+            )
+            accounts = repository.list_accounts(account_ids=account_ids, limit=None)
+            sites = repository.list_sites(site_ids=site_ids, limit=None)
+            subscriptions = repository.list_subscriptions(account_ids=account_ids, limit=None)
+
+        memberships_by_principal: dict[str, list[Any]] = defaultdict(list)
+        for membership in memberships:
+            memberships_by_principal[str(membership.principal_id or "")].append(membership)
+
+        grants_by_principal: dict[str, list[Any]] = defaultdict(list)
+        for grant in grants:
+            grants_by_principal[str(grant.principal_id or "")].append(grant)
+
+        qq_bindings_by_principal: dict[str, list[Any]] = defaultdict(list)
+        for binding in qq_bindings:
+            qq_bindings_by_principal[str(binding.principal_id or "")].append(binding)
+
+        accounts_by_id = {str(account.account_id or ""): account for account in accounts}
+        sites_by_id = {str(site.site_id or ""): site for site in sites}
+        subscriptions_by_account: dict[str, list[AccountSubscription]] = defaultdict(list)
+        for subscription in subscriptions:
+            subscriptions_by_account[str(subscription.account_id or "")].append(subscription)
+
+        def metadata_source(*objects: Any) -> str:
+            for item in objects:
+                metadata = getattr(item, "metadata_json", None)
+                if isinstance(metadata, dict):
+                    source_value = str(metadata.get("source") or "").strip()
+                    if source_value:
+                        return source_value
+            return ""
+
+        def preferred_active(items: Sequence[Any], *, active_status: str) -> Any | None:
+            return next(
+                (item for item in items if str(getattr(item, "status", "") or "") == active_status),
+                items[0] if items else None,
+            )
+
+        service = cast(Any, self)
+        items: list[dict[str, object]] = []
+        for principal in principals:
+            principal_id = str(principal.principal_id or "")
+            principal_memberships = memberships_by_principal.get(principal_id, [])
+            principal_grants = grants_by_principal.get(principal_id, [])
+            if not principal_memberships and not principal_grants:
+                continue
+            selected_membership = preferred_active(
+                principal_memberships,
+                active_status=ACCOUNT_USER_MEMBERSHIP_STATUS_ACTIVE,
+            )
+            account = accounts_by_id.get(str(getattr(selected_membership, "account_id", "") or ""))
+            selected_grant = preferred_active(
+                principal_grants,
+                active_status=SITE_USER_GRANT_STATUS_ACTIVE,
+            )
+            site = sites_by_id.get(str(getattr(selected_grant, "site_id", "") or ""))
+            source_value = metadata_source(
+                principal,
+                selected_membership,
+                account,
+                site,
+                selected_grant,
+            )
+            if normalized_source != "all" and source_value != normalized_source:
+                continue
+            account_subscriptions = (
+                subscriptions_by_account.get(str(getattr(account, "account_id", "") or ""), [])
+                if account is not None
+                else []
+            )
+            primary_subscription = service._select_primary_subscription(account_subscriptions)
+            package_summary = service._build_subscription_package_summary(
+                primary_subscription,
+                site_count=len(principal_grants),
+            )
+            subscription_payload = (
+                service._serialize_subscription(primary_subscription)
+                if primary_subscription is not None
+                else None
+            )
+            active_qq_bindings = [
+                binding
+                for binding in qq_bindings_by_principal.get(principal_id, [])
+                if str(getattr(binding, "status", "") or "")
+                == IDENTITY_PROVIDER_BINDING_STATUS_ACTIVE
+            ]
+            is_qq_bound = bool(active_qq_bindings)
+            if qq_bound is not None and is_qq_bound is not qq_bound:
+                continue
+            package_blob = " ".join(
+                [
+                    str(package_summary.get("package_alias") or ""),
+                    str(package_summary.get("display_package_label") or ""),
+                    str(getattr(primary_subscription, "plan_id", "") or ""),
+                ]
+            ).lower()
+            if normalized_package and normalized_package not in package_blob:
+                continue
+            site_metadata = getattr(site, "metadata_json", None)
+            wordpress_url = (
+                str(site_metadata.get("wordpress_url") or "").strip()
+                if isinstance(site_metadata, dict)
+                else ""
+            )
+            search_blob = " ".join(
+                [
+                    principal_id,
+                    str(getattr(principal, "email", "") or ""),
+                    str(getattr(account, "account_id", "") or ""),
+                    str(getattr(account, "name", "") or ""),
+                    str(getattr(site, "site_id", "") or ""),
+                    str(getattr(site, "name", "") or ""),
+                    wordpress_url,
+                    str(package_summary.get("package_alias") or ""),
+                ]
+            ).lower()
+            if normalized_q and normalized_q not in search_blob:
+                continue
+            latest_qq_login_at = next(
+                (
+                    getattr(binding, "last_login_at", None)
+                    for binding in active_qq_bindings
+                    if getattr(binding, "last_login_at", None) is not None
+                ),
+                None,
+            )
+            item = {
+                "principal_id": principal_id,
+                "email": str(getattr(principal, "email", "") or ""),
+                "status": str(getattr(principal, "status", "") or ""),
+                "session_version": int(getattr(principal, "session_version", 1) or 1),
+                "source": source_value,
+                "registration_source": source_value,
+                "last_login_at": self._serialize_datetime(
+                    getattr(principal, "last_login_at", None)
+                ),
+                "created_at": self._serialize_datetime(getattr(principal, "created_at", None)),
+                "account": service._serialize_account(account) if account is not None else None,
+                "account_id": str(getattr(account, "account_id", "") or ""),
+                "account_name": str(getattr(account, "name", "") or ""),
+                "account_status": str(getattr(account, "status", "") or ""),
+                "membership_status": str(getattr(selected_membership, "status", "") or ""),
+                "site": service._serialize_site(site) if site is not None else None,
+                "site_id": str(getattr(site, "site_id", "") or ""),
+                "site_name": str(getattr(site, "name", "") or ""),
+                "site_status": str(getattr(site, "status", "") or ""),
+                "wordpress_url": wordpress_url,
+                "grant_status": str(getattr(selected_grant, "status", "") or ""),
+                "subscription": subscription_payload,
+                "subscription_id": str(getattr(primary_subscription, "subscription_id", "") or ""),
+                "subscription_status": str(getattr(primary_subscription, "status", "") or ""),
+                "plan_id": str(getattr(primary_subscription, "plan_id", "") or ""),
+                **package_summary,
+                "qq_bound": is_qq_bound,
+                "qq_binding_count": len(active_qq_bindings),
+                "qq_last_login_at": self._serialize_datetime(latest_qq_login_at),
+            }
+            items.append(item)
+
+        summary_counts = Counter(str(item.get("status") or "") for item in items)
+        qq_bound_total = sum(1 for item in items if bool(item.get("qq_bound")))
+        self_registered_total = sum(
+            1 for item in items if str(item.get("source") or "") == "portal_self_registration"
+        )
+        filtered_total = len(items)
+        if resolved_limit > 0:
+            items = items[:resolved_limit]
+        return {
+            "filters": {
+                "q": normalized_q,
+                "source": normalized_source,
+                "status": normalized_status,
+                "package_alias": package_alias or "",
+                "qq_bound": qq_bound,
+                "limit": resolved_limit,
+            },
+            "items": items,
+            "total": filtered_total,
+            "summary": {
+                "active": int(summary_counts.get(PRINCIPAL_STATUS_ACTIVE, 0)),
+                "disabled": int(summary_counts.get(PRINCIPAL_STATUS_DISABLED, 0)),
+                "qq_bound": qq_bound_total,
+                "self_registered": self_registered_total,
+            },
+        }
+
+    def get_admin_portal_user_audit(
+        self,
+        *,
+        principal_id: str,
+        limit: int = 50,
+    ) -> dict[str, object]:
+        normalized_principal_id = str(principal_id or "").strip()
+        if not normalized_principal_id:
+            raise CommercialValidationError(
+                "service.principal_id_required",
+                "principal id is required",
+            )
+        resolved_limit = min(max(int(limit or 50), 1), 100)
+        with get_session(self.database_url) as session:
+            repository = CommercialRepository(session)
+            identity = repository.get_principal_identity_by_ref(
+                principal_id=normalized_principal_id,
+            )
+            if identity is None:
+                raise CommercialNotFoundError(
+                    "service.principal_not_found",
+                    f"principal '{normalized_principal_id}' was not found",
+                )
+            events = repository.list_service_audit_events_for_principal(
+                principal_id=normalized_principal_id,
+                limit=resolved_limit,
+            )
+
+        items = [self._serialize_service_audit_event(event) for event in events]
+        outcomes = Counter(str(item.get("outcome") or "unknown") for item in items)
+        event_kinds = Counter(str(item.get("event_kind") or "unknown") for item in items)
+        disable_events = [
+            item for item in items if str(item.get("event_kind") or "") == "portal_user.disable"
+        ]
+        latest_disable = disable_events[0] if disable_events else None
+        latest_payload: dict[str, object] = {}
+        if isinstance(latest_disable, dict) and isinstance(latest_disable.get("payload"), dict):
+            latest_payload = cast(dict[str, object], latest_disable.get("payload"))
+        return {
+            "principal": {
+                "principal_id": normalized_principal_id,
+                "email": str(getattr(identity, "email", "") or ""),
+                "status": str(getattr(identity, "status", "") or ""),
+                "session_version": int(getattr(identity, "session_version", 1) or 1),
+                "last_login_at": self._serialize_datetime(
+                    getattr(identity, "last_login_at", None)
+                ),
+                "created_at": self._serialize_datetime(getattr(identity, "created_at", None)),
+            },
+            "items": items,
+            "total": len(items),
+            "summary": {
+                "events": len(items),
+                "succeeded": int(outcomes.get("succeeded", 0)),
+                "failed": int(outcomes.get("failed", 0)),
+                "registration_events": int(event_kinds.get("portal.registration", 0)),
+                "disable_events": int(event_kinds.get("portal_user.disable", 0)),
+                "latest_disable_reason": str(latest_payload.get("reason") or ""),
+                "latest_disable_revoked_site_grants": self._coerce_int(
+                    latest_payload.get("revoked_site_grants")
+                ),
+                "latest_disable_revoked_account_memberships": self._coerce_int(
+                    latest_payload.get("revoked_account_memberships")
+                ),
+                "latest_disable_revoked_identity_provider_bindings": self._coerce_int(
+                    latest_payload.get("revoked_identity_provider_bindings")
+                ),
+            },
+            "filters": {
+                "principal_id": normalized_principal_id,
+                "limit": resolved_limit,
+            },
+        }
+
+    def disable_admin_portal_user(
+        self,
+        *,
+        principal_id: str,
+        reason: str = "",
+        audit_context: ServiceAuditContext | None = None,
+    ) -> dict[str, object]:
+        normalized_principal_id = principal_id.strip()
+        if not normalized_principal_id:
+            raise CommercialValidationError(
+                "service.principal_id_required",
+                "principal id is required",
+            )
+        normalized_reason = str(reason or "").strip()[:500]
+        with get_session(self.database_url) as session:
+            repository = CommercialRepository(session)
+            identity = repository.get_principal_identity_by_ref(
+                principal_id=normalized_principal_id,
+            )
+            if identity is None:
+                raise CommercialNotFoundError(
+                    "service.principal_not_found",
+                    f"principal '{normalized_principal_id}' was not found",
+                )
+            identity.status = PRINCIPAL_STATUS_DISABLED
+            identity = (
+                repository.increment_principal_session_version(
+                    principal_id=normalized_principal_id,
+                )
+                or identity
+            )
+            revoked_grants = repository.revoke_site_user_grants(
+                principal_id=normalized_principal_id,
+            )
+            revoked_memberships = repository.revoke_account_user_memberships(
+                principal_id=normalized_principal_id,
+            )
+            revoked_bindings = repository.revoke_identity_provider_bindings(
+                principal_id=normalized_principal_id,
+                provider="qq",
+            )
+            payload: dict[str, object] = {
+                "principal_id": normalized_principal_id,
+                "email": str(getattr(identity, "email", "") or ""),
+                "status": str(getattr(identity, "status", "") or ""),
+                "session_version": int(getattr(identity, "session_version", 1) or 1),
+                "revoked_site_grants": revoked_grants,
+                "revoked_account_memberships": revoked_memberships,
+                "revoked_identity_provider_bindings": revoked_bindings,
+                "reason": normalized_reason,
+            }
+            self._record_service_audit_in_session(
+                repository=repository,
+                audit_context=audit_context,
+                event_kind="portal_user.disable",
+                outcome="succeeded",
+                scope_kind="principal",
+                scope_id=normalized_principal_id,
+                payload_json=payload,
+            )
+            session.commit()
+            return payload
+
+    def batch_disable_admin_portal_users(
+        self,
+        *,
+        principal_ids: Sequence[str],
+        reason: str,
+        audit_context: ServiceAuditContext | None = None,
+    ) -> dict[str, object]:
+        normalized_reason = str(reason or "").strip()[:500]
+        if not normalized_reason:
+            raise CommercialValidationError(
+                "service.portal_user_batch_disable_reason_required",
+                "batch disable reason is required",
+            )
+        normalized_principal_ids: list[str] = []
+        seen_principal_ids: set[str] = set()
+        for principal_id in principal_ids:
+            normalized_principal_id = str(principal_id or "").strip()
+            if not normalized_principal_id or normalized_principal_id in seen_principal_ids:
+                continue
+            normalized_principal_ids.append(normalized_principal_id)
+            seen_principal_ids.add(normalized_principal_id)
+        if not normalized_principal_ids:
+            raise CommercialValidationError(
+                "service.portal_user_batch_disable_empty",
+                "at least one principal id is required",
+            )
+        if len(normalized_principal_ids) > 100:
+            raise CommercialValidationError(
+                "service.portal_user_batch_disable_too_many",
+                "batch disable accepts at most 100 principal ids",
+            )
+
+        items: list[dict[str, object]] = []
+        totals = {
+            "attempted": len(normalized_principal_ids),
+            "disabled": 0,
+            "already_disabled": 0,
+            "failed": 0,
+            "revoked_site_grants": 0,
+            "revoked_account_memberships": 0,
+            "revoked_identity_provider_bindings": 0,
+        }
+        with get_session(self.database_url) as session:
+            repository = CommercialRepository(session)
+            for normalized_principal_id in normalized_principal_ids:
+                identity = repository.get_principal_identity_by_ref(
+                    principal_id=normalized_principal_id,
+                )
+                if identity is None:
+                    totals["failed"] += 1
+                    items.append(
+                        {
+                            "principal_id": normalized_principal_id,
+                            "outcome": "failed",
+                            "error_code": "service.principal_not_found",
+                            "message": f"principal '{normalized_principal_id}' was not found",
+                        }
+                    )
+                    continue
+
+                was_disabled = (
+                    str(getattr(identity, "status", "") or "") == PRINCIPAL_STATUS_DISABLED
+                )
+                identity.status = PRINCIPAL_STATUS_DISABLED
+                if not was_disabled:
+                    identity = (
+                        repository.increment_principal_session_version(
+                            principal_id=normalized_principal_id,
+                        )
+                        or identity
+                    )
+                revoked_grants = repository.revoke_site_user_grants(
+                    principal_id=normalized_principal_id,
+                )
+                revoked_memberships = repository.revoke_account_user_memberships(
+                    principal_id=normalized_principal_id,
+                )
+                revoked_bindings = repository.revoke_identity_provider_bindings(
+                    principal_id=normalized_principal_id,
+                    provider="qq",
+                )
+                totals["revoked_site_grants"] += revoked_grants
+                totals["revoked_account_memberships"] += revoked_memberships
+                totals["revoked_identity_provider_bindings"] += revoked_bindings
+                outcome = "already_disabled" if was_disabled else "disabled"
+                totals[outcome] += 1
+                item_payload: dict[str, object] = {
+                    "principal_id": normalized_principal_id,
+                    "email": str(getattr(identity, "email", "") or ""),
+                    "status": str(getattr(identity, "status", "") or ""),
+                    "session_version": int(getattr(identity, "session_version", 1) or 1),
+                    "outcome": outcome,
+                    "revoked_site_grants": revoked_grants,
+                    "revoked_account_memberships": revoked_memberships,
+                    "revoked_identity_provider_bindings": revoked_bindings,
+                    "reason": normalized_reason,
+                }
+                items.append(item_payload)
+                self._record_service_audit_in_session(
+                    repository=repository,
+                    audit_context=audit_context,
+                    event_kind="portal_user.disable",
+                    outcome="succeeded",
+                    scope_kind="principal",
+                    scope_id=normalized_principal_id,
+                    payload_json={
+                        **item_payload,
+                        "batch": True,
+                        "batch_id": (
+                            audit_context.idempotency_key
+                            if audit_context is not None
+                            else ""
+                        ),
+                    },
+                )
+
+            batch_payload: dict[str, object] = {
+                "reason": normalized_reason,
+                "totals": totals,
+                "principal_ids": normalized_principal_ids,
+            }
+            self._record_service_audit_in_session(
+                repository=repository,
+                audit_context=audit_context,
+                event_kind="portal_user.batch_disable",
+                outcome="succeeded" if totals["failed"] == 0 else "partial",
+                scope_kind="portal_user_batch",
+                scope_id=(
+                    audit_context.idempotency_key if audit_context is not None else ""
+                ),
+                payload_json=batch_payload,
+            )
+            session.commit()
+
+        return {
+            "reason": normalized_reason,
+            "items": items,
+            "totals": totals,
+            "total": len(items),
+        }
+
     def list_admin_accounts(
         self,
         *,
+        q: str | None = None,
         status: str | None = None,
         expires_before: datetime | None = None,
         coverage_state: str | None = None,
         package_kind: str | None = None,
         top_plan_id: str | None = None,
+        sort: str = "created_at",
+        offset: int = 0,
         limit: int = 100,
     ) -> dict[str, object]:
+        normalized_query = " ".join(str(q or "").strip().lower().split())
+        normalized_sort = sort if sort in {"created_at", "display_name"} else "created_at"
+        normalized_offset = max(0, int(offset or 0))
+
+        def account_payload_for(item: dict[str, object]) -> dict[str, object]:
+            account_payload = item.get("account")
+            return account_payload if isinstance(account_payload, dict) else {}
+
+        def account_display_sort_key(item: dict[str, object]) -> tuple[str, str]:
+            account_payload = account_payload_for(item)
+            metadata = account_payload.get("metadata")
+            metadata_payload = metadata if isinstance(metadata, dict) else {}
+            display_name = (
+                str(metadata_payload.get("operator_display_name") or "").strip()
+                or str(account_payload.get("name") or "").strip()
+                or str(account_payload.get("account_id") or "").strip()
+            )
+            return (display_name.lower(), str(account_payload.get("account_id") or ""))
+
         with get_session(self.database_url) as session:
             repository = CommercialRepository(session)
             filtered_account_ids: set[str] | None = None
@@ -678,7 +1269,14 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
                 account_ids=(
                     sorted(filtered_account_ids) if filtered_account_ids is not None else None
                 ),
-                limit=None if coverage_state or package_kind or top_plan_id else limit,
+                limit=None
+                if coverage_state
+                or package_kind
+                or top_plan_id
+                or normalized_query
+                or normalized_sort == "display_name"
+                or normalized_offset
+                else limit,
             )
             account_ids = [account.account_id for account in accounts]
             site_counts = repository.count_sites_by_account(account_ids=account_ids)
@@ -736,20 +1334,297 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
                 continue
             if top_plan_id and str(item.get("top_plan_id") or "") != top_plan_id:
                 continue
+            if normalized_query:
+                account_payload = account_payload_for(item)
+                raw_metadata = account_payload.get("metadata")
+                metadata: dict[str, object] = (
+                    cast(dict[str, object], raw_metadata) if isinstance(raw_metadata, dict) else {}
+                )
+                searchable_text = " ".join(
+                    str(value or "")
+                    for value in [
+                        account_payload.get("account_id"),
+                        account_payload.get("name"),
+                        metadata.get("operator_display_name"),
+                        metadata.get("operator_note"),
+                        metadata.get("account_status_note"),
+                        item.get("display_package_label"),
+                        item.get("package_kind"),
+                        item.get("coverage_state"),
+                        item.get("top_plan_id"),
+                    ]
+                ).lower()
+                if not all(term in searchable_text for term in normalized_query.split(" ")):
+                    continue
             items.append(item)
+        if normalized_sort == "display_name":
+            items = sorted(items, key=account_display_sort_key)
+        total = len(items)
+        if normalized_offset:
+            items = items[normalized_offset:]
         if limit > 0:
             items = items[:limit]
         return {
             "filters": {
+                "q": normalized_query,
                 "status": status or "",
                 "expires_before": self._serialize_datetime(expires_before),
                 "coverage_state": coverage_state or "",
                 "package_kind": package_kind or "",
                 "top_plan_id": top_plan_id or "",
+                "sort": normalized_sort,
+                "offset": normalized_offset,
                 "limit": limit,
             },
             "items": items,
-            "total": len(items),
+            "total": total,
+        }
+
+    def get_admin_coverage_work_queue(
+        self,
+        *,
+        limit: int = 100,
+    ) -> dict[str, object]:
+        with get_session(self.database_url) as session:
+            repository = CommercialRepository(session)
+            accounts = repository.list_accounts(limit=None)
+            account_ids = [account.account_id for account in accounts]
+            subscriptions = repository.list_subscriptions(account_ids=account_ids, limit=None)
+            sites = repository.list_sites(account_ids=account_ids, limit=None)
+            site_ids = [site.site_id for site in sites]
+            active_key_counts = repository.count_site_keys_by_site(
+                site_ids=site_ids,
+                statuses=[SITE_API_KEY_STATUS_ACTIVE],
+            )
+            latest_billing_by_site = repository.get_latest_billing_snapshots_by_site(
+                site_ids=site_ids,
+            )
+
+        service = cast(Any, self)
+        subscriptions_by_account: dict[str, list[AccountSubscription]] = defaultdict(list)
+        for subscription in subscriptions:
+            subscriptions_by_account[subscription.account_id].append(subscription)
+
+        sites_by_account: dict[str, list[Any]] = defaultdict(list)
+        for site in sites:
+            if site.account_id:
+                sites_by_account[site.account_id].append(site)
+
+        now = self.now_factory()
+        items: list[dict[str, object]] = []
+        for account in accounts:
+            account_sites = sites_by_account.get(account.account_id, [])
+            account_subscriptions = subscriptions_by_account.get(account.account_id, [])
+            primary_subscription = service._select_primary_subscription(account_subscriptions)
+            package_summary = service._build_subscription_package_summary(
+                primary_subscription,
+                site_count=len(account_sites),
+            )
+            site_count = len(account_sites)
+            active_site_count = sum(
+                1
+                for site in account_sites
+                if str(getattr(site, "status", "") or "") == SITE_STATUS_ACTIVE
+            )
+            active_key_site_count = sum(
+                1
+                for site in account_sites
+                if int(active_key_counts.get(str(getattr(site, "site_id", "") or ""), 0) or 0)
+                > 0
+            )
+            missing_key_site_count = max(0, site_count - active_key_site_count)
+            subscription_status = str(getattr(primary_subscription, "status", "") or "")
+            coverage_state = str(package_summary.get("coverage_state") or "")
+            raw_period_end_at = getattr(primary_subscription, "current_period_end_at", None)
+            period_end_at = (
+                self._normalize_datetime(raw_period_end_at)
+                if isinstance(raw_period_end_at, datetime)
+                else None
+            )
+            days_until_end: int | None = None
+            if period_end_at is not None:
+                days_until_end = int((period_end_at - now).total_seconds() // 86400)
+                if (period_end_at - now).total_seconds() % 86400:
+                    days_until_end += 1
+            billing_status: dict[str, object] = {
+                "status": "missing" if site_count > 0 else "not_applicable",
+                "summary": "",
+                "fresh_site_count": 0,
+                "stale_site_count": 0,
+                "missing_site_count": site_count,
+            }
+            if primary_subscription is not None:
+                period_start_at, resolved_period_end_at = service._resolve_period(
+                    primary_subscription,
+                    now,
+                )
+                billing_status = service._build_subscription_billing_snapshot_status(
+                    subscription=primary_subscription,
+                    sites=account_sites,
+                    latest_billing_snapshots=latest_billing_by_site,
+                    period_start_at=period_start_at,
+                    period_end_at=resolved_period_end_at,
+                )
+
+            reason_code = ""
+            reason_label = ""
+            recommended_action = ""
+            action_label = ""
+            action_href = ""
+            severity = "ok"
+
+            if primary_subscription is None and coverage_state == "uncovered" and site_count > 0:
+                severity = "error"
+                reason_code = "missing_package_coverage"
+                reason_label = "Customer has sites but no active package coverage."
+                recommended_action = "change_customer_package"
+                action_label = "Open package actions"
+                action_href = f"/admin/accounts/{account.account_id}#coverage-actions"
+            elif subscription_status and subscription_status not in {"active", "trialing"}:
+                severity = "error"
+                reason_code = "subscription_lifecycle_risk"
+                reason_label = "Subscription status can block service continuity."
+                recommended_action = "repair_subscription_lifecycle"
+                action_label = "Inspect subscription"
+                action_href = (
+                    f"/admin/subscriptions/{primary_subscription.subscription_id}"
+                    if primary_subscription is not None
+                    else f"/admin/accounts/{account.account_id}#coverage-actions"
+                )
+            elif str(billing_status.get("status") or "") in {"missing", "stale"} and site_count > 0:
+                severity = "warning"
+                reason_code = "billing_snapshot_follow_up"
+                reason_label = "Current-period billing snapshot needs follow-up."
+                recommended_action = "inspect_billing_snapshot"
+                action_label = "Inspect subscription"
+                action_href = (
+                    f"/admin/subscriptions/{primary_subscription.subscription_id}"
+                    if primary_subscription is not None
+                    else f"/admin/accounts/{account.account_id}#coverage-actions"
+                )
+            elif days_until_end is not None and 0 <= days_until_end <= 14:
+                severity = "warning"
+                reason_code = "subscription_expiring_soon"
+                reason_label = "Current period ends soon."
+                recommended_action = "review_renewal"
+                action_label = "Inspect subscription"
+                action_href = (
+                    f"/admin/subscriptions/{primary_subscription.subscription_id}"
+                    if primary_subscription is not None
+                    else f"/admin/accounts/{account.account_id}#coverage-actions"
+                )
+            elif active_site_count < site_count:
+                severity = "warning"
+                reason_code = "site_status_follow_up"
+                reason_label = "One or more sites are not active."
+                recommended_action = "inspect_site_footprint"
+                action_label = "Open site footprint"
+                action_href = f"/admin/accounts/{account.account_id}#site-footprint"
+            elif missing_key_site_count > 0:
+                severity = "warning"
+                reason_code = "site_key_missing"
+                reason_label = "One or more sites lack active Cloud API key coverage."
+                recommended_action = "inspect_site_key_coverage"
+                action_label = "Open site footprint"
+                action_href = f"/admin/accounts/{account.account_id}#site-footprint"
+            elif site_count > 0:
+                severity = "ok"
+                reason_code = "service_coverage_aligned"
+                reason_label = "Package, subscription, site, key, and billing evidence are aligned."
+                recommended_action = "inspect_when_needed"
+                action_label = "Open customer"
+                action_href = f"/admin/accounts/{account.account_id}"
+            else:
+                severity = "inactive"
+                reason_code = "no_site_footprint"
+                reason_label = "Customer has no site footprint yet."
+                recommended_action = "wait_for_site_onboarding"
+                action_label = "Open customer"
+                action_href = f"/admin/accounts/{account.account_id}"
+
+            if severity == "ok" and reason_code == "service_coverage_aligned":
+                priority = 90
+            elif severity == "inactive":
+                priority = 100
+            elif severity == "error":
+                priority = 0
+            else:
+                priority = 10
+            if reason_code == "missing_package_coverage":
+                priority = 0
+            elif reason_code == "subscription_lifecycle_risk":
+                priority = 1
+            elif reason_code == "billing_snapshot_follow_up":
+                priority = 2
+            elif reason_code == "subscription_expiring_soon":
+                priority = 3
+            elif reason_code == "site_status_follow_up":
+                priority = 4
+            elif reason_code == "site_key_missing":
+                priority = 5
+
+            items.append(
+                {
+                    "account": service._serialize_account(account),
+                    "primary_subscription": (
+                        service._serialize_subscription(primary_subscription)
+                        if primary_subscription is not None
+                        else None
+                    ),
+                    "package": package_summary,
+                    "severity": severity,
+                    "priority": priority,
+                    "reason_code": reason_code,
+                    "reason_label": reason_label,
+                    "recommended_action": recommended_action,
+                    "action_label": action_label,
+                    "action_href": action_href,
+                    "evidence": {
+                        "site_count": site_count,
+                        "active_site_count": active_site_count,
+                        "active_key_site_count": active_key_site_count,
+                        "missing_key_site_count": missing_key_site_count,
+                        "subscription_status": subscription_status or "missing",
+                        "billing_snapshot_status": billing_status,
+                        "current_period_end_at": self._serialize_datetime(period_end_at),
+                        "days_until_end": days_until_end,
+                    },
+                }
+            )
+
+        def work_queue_sort_key(item: dict[str, object]) -> tuple[int, str, str]:
+            priority_source = item.get("priority")
+            priority = self._coerce_int(priority_source if priority_source else 100)
+            account = item.get("account")
+            account_payload: dict[str, object] = (
+                cast(dict[str, object], account) if isinstance(account, dict) else {}
+            )
+            return (
+                priority,
+                str(account_payload.get("name") or ""),
+                str(account_payload.get("account_id") or ""),
+            )
+
+        items.sort(key=work_queue_sort_key)
+        visible_items = items[:limit] if limit > 0 else items
+        reason_counts = Counter(str(item.get("reason_code") or "") for item in items)
+        severity_counts = Counter(str(item.get("severity") or "") for item in items)
+        return {
+            "generated_at": self._serialize_datetime(now),
+            "filters": {"limit": limit},
+            "summary": {
+                "total": len(items),
+                "visible": len(visible_items),
+                "needs_action": sum(
+                    1 for item in items if str(item.get("severity") or "") in {"error", "warning"}
+                ),
+                "error": severity_counts.get("error", 0),
+                "warning": severity_counts.get("warning", 0),
+                "ok": severity_counts.get("ok", 0),
+                "inactive": severity_counts.get("inactive", 0),
+                "reason_counts": dict(reason_counts),
+            },
+            "items": visible_items,
         }
 
     def get_admin_account(self, account_id: str) -> dict[str, object]:
@@ -761,12 +1636,29 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
                     "service.account_not_found",
                     f"account '{account_id}' was not found",
                 )
+            reconciled = cast(Any, self)._reconcile_account_subscription_state_in_session(
+                repository=repository,
+                account_id=account_id,
+                now=self.now_factory(),
+            )
             sites = repository.list_sites(account_id=account_id, limit=None)
             subscriptions = repository.list_subscriptions(account_id=account_id, limit=None)
+            primary_subscription = cast(Any, self)._select_primary_subscription(subscriptions)
+            if primary_subscription is not None:
+                subscriptions = [
+                    primary_subscription,
+                    *[
+                        subscription
+                        for subscription in subscriptions
+                        if subscription.subscription_id != primary_subscription.subscription_id
+                    ],
+                ]
             active_key_counts = repository.count_site_keys_by_site(
                 site_ids=[site.site_id for site in sites],
                 statuses=[SITE_API_KEY_STATUS_ACTIVE],
             )
+            if reconciled is not None:
+                session.commit()
 
         return {
             "account": cast(Any, self)._serialize_account(account),
@@ -796,22 +1688,20 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
                     "service.account_not_found",
                     f"account '{account_id}' was not found",
                 )
+            reconciled = cast(Any, self)._reconcile_account_subscription_state_in_session(
+                repository=repository,
+                account_id=account_id,
+                now=now,
+            )
             sites = repository.list_sites(account_id=account_id, limit=None)
             site_ids = [str(site.site_id or "") for site in sites if str(site.site_id or "")]
             subscriptions = repository.list_subscriptions(account_id=account_id, limit=None)
+            if reconciled is not None:
+                session.commit()
             primary_subscription = cast(Any, self)._select_primary_subscription(subscriptions)
-            plan_version = (
-                repository.get_plan_version(primary_subscription.plan_version_id)
-                if primary_subscription is not None and primary_subscription.plan_version_id
-                else None
-            )
-            snapshot = repository.get_active_entitlement_snapshot(
-                account_id,
-                subscription_id=(
-                    primary_subscription.subscription_id
-                    if primary_subscription is not None
-                    else None
-                ),
+            plan_version = cast(Any, self)._resolve_current_subscription_plan_version(
+                repository,
+                primary_subscription,
             )
             period_start_at, period_end_at = cast(Any, self)._resolve_period(
                 primary_subscription,
@@ -850,17 +1740,12 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
                 limit=None,
             )
             totals = cast(Any, self)._aggregate_meter_events(meter_events)
-            budgets = (
-                cast(Any, self)._normalize_budgets(snapshot.budgets_json)
-                if snapshot is not None
-                else cast(Any, self)._normalize_budgets(
-                    getattr(plan_version, "budgets_json", None)
-                )
+            budgets = cast(Any, self)._resolve_effective_subscription_budgets(
+                plan_version=plan_version,
+                subscription=primary_subscription,
             )
             policy = cast(Any, self)._normalize_commercial_policy(
-                snapshot.policy_json
-                if snapshot is not None
-                else getattr(plan_version, "policy_json", None)
+                getattr(plan_version, "policy_json", None)
             )
             budget_state = cast(Any, self)._build_budget_policy_state(
                 repository=repository,
@@ -889,7 +1774,7 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
                 until=period_end_at,
             )
             batch_limits = cast(Any, self)._resolve_runtime_batch_limits(
-                snapshot=snapshot,
+                snapshot=None,
                 plan_version=plan_version,
             )
 
@@ -908,11 +1793,16 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
         indexed_chunk_count = sum(
             int(item.get("chunks") or 0) for item in knowledge_counts.values()
         )
-        site_limit = service._coerce_int(getattr(snapshot, "site_limit", 0))
+        site_limit = service._resolve_site_limit(
+            plan_version=plan_version,
+            subscription=primary_subscription,
+        )
         concurrency = (
-            service._normalize_concurrency(snapshot.concurrency_json)
-            if snapshot is not None
-            else service._normalize_concurrency(getattr(plan_version, "concurrency_json", None))
+            service._normalize_concurrency(getattr(plan_version, "concurrency_json", None))
+        )
+        vector_document_limit = cast(Any, self)._resolve_account_vector_documents_limit(
+            snapshot=None,
+            plan_version=plan_version,
         )
         ledger_source = bool(credit_ledger_entries)
         credit_rate_version = AI_CREDIT_RATE_VERSION if ledger_source else "ai-credit-estimate-v2"
@@ -972,11 +1862,7 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
                 key="vector_documents",
                 label="Vector indexed articles",
                 used=indexed_document_count,
-                limit=site_count
-                * max(
-                    0,
-                    int(self.settings.site_knowledge_max_indexed_documents_per_site),
-                ),
+                limit=vector_document_limit,
                 unit="document",
             ),
             self._quota_metric(
@@ -1259,6 +2145,30 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
                 until=period_end_at,
                 limit=None,
             )
+            run_records_by_id = {
+                str(run.run_id): run
+                for run in repository.list_run_records_by_ids(
+                    [
+                        str(getattr(entry, "run_id", "") or "")
+                        for entry in entries
+                        if str(getattr(entry, "run_id", "") or "").strip()
+                    ]
+                )
+            }
+            feature_by_entry_id = {
+                str(getattr(entry, "ledger_entry_id", "") or ""): (
+                    self._build_portal_credit_ledger_feature(
+                        source_type=str(getattr(entry, "source_type", "") or ""),
+                        run=run_records_by_id.get(str(getattr(entry, "run_id", "") or "")),
+                    )
+                )
+                for entry in entries
+                if self._credit_ledger_entry_category(
+                    event_type=str(getattr(entry, "event_type", "") or ""),
+                    source_type=str(getattr(entry, "source_type", "") or ""),
+                )
+                == "ai_usage"
+            }
 
         service = cast(Any, self)
         breakdown = build_credit_breakdown_from_ledger(summary_entries)
@@ -1291,7 +2201,10 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
                 "breakdown": breakdown,
             },
             "items": [
-                self._serialize_credit_ledger_entry(entry, include_internal=True)
+                {
+                    **self._serialize_credit_ledger_entry(entry, include_internal=True),
+                    **feature_by_entry_id.get(str(getattr(entry, "ledger_entry_id", "") or ""), {}),
+                }
                 for entry in entries
             ],
         }
@@ -1304,23 +2217,43 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
         credit: dict[str, object] = (
             cast(dict[str, object], raw_credit) if isinstance(raw_credit, dict) else {}
         )
+        raw_resource_limits = summary.get("resource_limits")
+        raw_resource_limits = raw_resource_limits if isinstance(raw_resource_limits, list) else []
+        resource_by_key = {
+            str(item.get("key") or ""): item
+            for item in raw_resource_limits
+            if isinstance(item, dict)
+        }
+        resource_limits = [
+            resource_by_key[key]
+            for key in ("bound_sites", "vector_documents")
+            if key in resource_by_key
+        ]
+        visible_statuses = [
+            str(item.get("status") or "ok")
+            for item in [credit, *resource_limits]
+            if isinstance(item, dict)
+        ]
+        portal_status = (
+            "limited"
+            if "limited" in visible_statuses
+            else "near_limit"
+            if "near_limit" in visible_statuses
+            else "ok"
+        )
         return {
             "account_id": str(summary.get("account_id") or account_id),
             "generated_at": summary.get("generated_at"),
             "period_start_at": summary.get("period_start_at"),
             "period_end_at": summary.get("period_end_at"),
-            "status": summary.get("status"),
+            "status": portal_status,
             "credit": credit,
             "credit_policy": (
                 summary.get("credit_policy")
                 if isinstance(summary.get("credit_policy"), dict)
                 else {}
             ),
-            "resource_limits": (
-                summary.get("resource_limits")
-                if isinstance(summary.get("resource_limits"), list)
-                else []
-            ),
+            "resource_limits": resource_limits,
             "breakdown": breakdown,
             "credit_usage_detail": self._build_portal_credit_usage_detail(
                 credit=credit,
@@ -1564,6 +2497,87 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
             return f"Refund event added {credits} AI credits back to the account."
         return f"{event_type or 'Credit'} ledger event recorded {credits} AI credits."
 
+    def _build_portal_credit_ledger_feature(
+        self,
+        *,
+        source_type: str,
+        run: object | None,
+    ) -> dict[str, object]:
+        ability_name = str(getattr(run, "ability_name", "") or "").strip().lower()
+        ability_family = str(getattr(run, "ability_family", "") or "").strip().lower()
+        execution_kind = str(getattr(run, "execution_kind", "") or "").strip().lower()
+        normalized_source = str(source_type or "").strip().lower()
+        tokens = " ".join(
+            token
+            for token in (normalized_source, ability_name, ability_family, execution_kind)
+            if token
+        )
+
+        if normalized_source.startswith("zhihu") or "zhihu" in tokens:
+            feature_key = "topic_research"
+        elif normalized_source == "web_search" or "web-search" in tokens:
+            feature_key = "web_search"
+        elif (
+            "site-knowledge" in tokens
+            or "site_knowledge" in tokens
+            or ability_family == "knowledge"
+            or execution_kind in {"embedding", "site_knowledge", "knowledge"}
+            or normalized_source in {"vector_documents", "vector_chunks"}
+        ):
+            feature_key = "site_knowledge"
+        elif (
+            "image" in tokens
+            or ability_family in {"vision", "image"}
+            or normalized_source == "image_recommendation"
+        ):
+            feature_key = "image_assistance"
+        elif "audio" in tokens or normalized_source == "audio_generation":
+            feature_key = "audio_generation"
+        elif (
+            "article" in tokens
+            or "content" in tokens
+            or "writing" in tokens
+            or "wp-ai-connector" in tokens
+            or normalized_source in {"runs", "tokens", "tokens_total", "provider_calls_other"}
+            or ability_family in {"text", "workflow"}
+        ):
+            feature_key = "content_generation"
+        else:
+            feature_key = "content_generation"
+
+        labels = {
+            "content_generation": (
+                "Content writing",
+                "The site used AI to draft, revise, or organize content.",
+            ),
+            "topic_research": (
+                "Topic research",
+                "The site used AI to look up public topics or hot-list information.",
+            ),
+            "web_search": (
+                "Web search",
+                "The site used AI to search public web information.",
+            ),
+            "site_knowledge": (
+                "Site knowledge",
+                "The site used AI to search or update its site knowledge.",
+            ),
+            "image_assistance": (
+                "Image assistance",
+                "The site used AI to recommend, generate, or process images.",
+            ),
+            "audio_generation": (
+                "Audio generation",
+                "The site used AI to generate or process audio.",
+            ),
+        }
+        label, detail = labels[feature_key]
+        return {
+            "feature_key": feature_key,
+            "feature_label": label,
+            "feature_detail": detail,
+        }
+
     def _serialize_credit_ledger_entry(
         self,
         entry: object,
@@ -1614,6 +2628,10 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
                 created_at if isinstance(created_at, datetime | str) else None
             ),
         }
+        if isinstance(entry, dict):
+            for key in ("feature_key", "feature_label", "feature_detail"):
+                if entry.get(key):
+                    payload[key] = str(entry.get(key) or "")
         if include_internal:
             payload.update(
                 {
@@ -2068,7 +3086,6 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
         active_key_site_count = site_count - len(sites_without_active_key)
         subscription_status = str(getattr(primary_subscription, "status", "") or "")
         has_coverage = coverage_state == "covered" and package_kind not in {
-            "dev_baseline",
             "unknown",
             "uncovered",
         }
@@ -2125,7 +3142,7 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
                 "detail": (
                     f"{package_label} coverage is ready."
                     if has_coverage and subscription_stable
-                    else "Apply Free, Pro, or Agency coverage before granting site admin access."
+                    else "Apply Free, Pro, or Agency coverage before granting site user access."
                 ),
             },
         ]
@@ -2133,8 +3150,8 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
         status = "ready" if not blocking_codes else "action_required"
         if not account_active or site_count == 0:
             status = "blocked"
-        next_action = "review_site_admin_access"
-        next_action_label = "Review site admin access"
+        next_action = "review_principal_access"
+        next_action_label = "Review site user access"
         if not account_active:
             next_action = "review_customer_status"
             next_action_label = "Review customer status"
@@ -2166,7 +3183,7 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
             "checks": checks,
         }
 
-    def list_admin_platform_admin_identities(
+    def list_admin_platform_admin_grants(
         self,
         *,
         status: str | None = None,
@@ -2176,12 +3193,21 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
     ) -> dict[str, object]:
         with get_session(self.database_url) as session:
             repository = CommercialRepository(session)
-            identities = repository.list_platform_admin_identities(
+            identities = repository.list_platform_admin_grants(
                 status=status,
                 role=role,
                 provider=provider,
                 limit=limit,
             )
+            items = [
+                self._serialize_platform_admin_grant(
+                    identity,
+                    principal=repository.get_principal_identity_by_ref(
+                        principal_id=str(identity.principal_id)
+                    ),
+                )
+                for identity in identities
+            ]
         return {
             "filters": {
                 "status": status or "",
@@ -2189,10 +3215,7 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
                 "provider": provider or "",
                 "limit": limit,
             },
-            "items": [
-                cast(Any, self)._serialize_platform_admin_identity(identity)
-                for identity in identities
-            ],
+            "items": items,
         }
 
     def _resolve_shadow_tariff(

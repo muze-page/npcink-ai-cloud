@@ -2,7 +2,7 @@
 
 > Status: canonical release gate
 >
-> Updated: 2026-04-15
+> Updated: 2026-06-29
 >
 > Scope: `cloud/**` formal release execution, production env verification, smoke, rollback readiness
 
@@ -13,7 +13,8 @@ This checklist is the final gate before formally releasing Npcink AI Cloud.
 It is intentionally split into:
 
 - repo ready: repository code, scripts, and local validation are landed
-- env required: production secrets, URLs, trusted hosts/TLS, SMTP, worker cadence, OTLP, and provider credentials are configured on the release host
+- env required: production secrets, URLs, trusted hosts/TLS, worker cadence, OTLP, and provider credentials are configured on the release host
+- service settings required: Portal public URL, QQ login when used, and SMTP are configured in `/admin/service-settings`
 - operator required: backup/rollback, cadence, heartbeat, trace, token rotation, and log inspection procedures are confirmed by the release operator
 - smoke required: `deploy/release-smoke.sh`, real mailbox login, signed addon projection reads, and one real signed runtime request pass on the release host
 
@@ -49,7 +50,7 @@ Current open blockers:
 | --- | --- | --- | --- |
 | production secrets | env required | release operator | production secret store contains distinct runtime, admin, session, provider, and Portal secrets |
 | TLS / trusted hosts | env required | release operator | public release origin has valid TLS and matches trusted host / browser origin allowlists |
-| SMTP real mailbox | env required | release operator | production SMTP sends a login code to a real invited mailbox |
+| SMTP real mailbox | service settings required | release operator | production SMTP sends a login code to a real invited mailbox |
 | worker heartbeat | operator required | release operator | `/internal/service/observability/summary` shows fresh worker heartbeats |
 | OTLP sink | operator required | release operator | trace sink endpoint and query URL are configured and a fresh Cloud trace is queryable |
 | DB backup/rollback | operator required | database owner | backup artifact exists and rollback procedure has been written down |
@@ -71,18 +72,20 @@ All items in this section are `Required`.
 
 ### 3.2 Public Base URLs
 
-- [ ] `NPCINK_CLOUD_BASE_URL` matches the real public release URL
-- [ ] `NPCINK_CLOUD_PORTAL_PUBLIC_BASE_URL` matches the real public portal URL
+- [ ] local development entry remains `http://127.0.0.1:8010/` and is not used
+  as a production public URL
+- [ ] production `.env.deploy` sets `NPCINK_CLOUD_BASE_URL=https://cloud.npc.ink`
+- [ ] `NPCINK_CLOUD_BROWSER_ORIGIN_ALLOWLIST=https://cloud.npc.ink`
+- [ ] `NPCINK_CLOUD_TRUSTED_HOST_ALLOWLIST=cloud.npc.ink`
+- [ ] `/admin/service-settings` Portal public URL matches the real public portal URL
 - [ ] public reverse proxy and TLS are already valid for the release host
 
-### 3.3 Portal Email Delivery
+### 3.3 Portal Login And Email Service Settings
 
-- [ ] `NPCINK_CLOUD_PORTAL_EMAIL_SMTP_HOST` is configured
-- [ ] `NPCINK_CLOUD_PORTAL_EMAIL_SMTP_PORT` is configured
-- [ ] `NPCINK_CLOUD_PORTAL_EMAIL_SMTP_USERNAME` is configured if required by provider
-- [ ] `NPCINK_CLOUD_PORTAL_EMAIL_SMTP_PASSWORD` is configured if required by provider
-- [ ] `NPCINK_CLOUD_PORTAL_EMAIL_FROM_EMAIL` is configured
-- [ ] `NPCINK_CLOUD_PORTAL_EMAIL_FROM_NAME` is configured
+- [ ] `/admin/service-settings` Portal public URL is saved
+- [ ] `/admin/service-settings` QQ login is configured and tested when QQ login is enabled
+- [ ] `/admin/service-settings` SMTP host, port, TLS mode, sender email, and sender name are configured
+- [ ] `/admin/service-settings` SMTP username and write-only password are configured if required by provider
 - [ ] one real mailbox can receive login codes from production SMTP
 
 ### 3.4 Production Guardrails
@@ -92,6 +95,9 @@ All items in this section are `Required`.
 - [ ] no stub-only login path is used during production smoke
 - [ ] `ops-worker` is deployed and running with the intended cadence intervals
 - [ ] `callback-worker` is deployed and running for terminal callback delivery
+- [ ] `NPCINK_CLOUD_API_WORKERS` matches the release host CPU/memory budget
+- [ ] `NPCINK_CLOUD_RUNTIME_WORKER_POLL_SECONDS` is set for the release host
+- [ ] `NPCINK_CLOUD_RUNTIME_CALLBACK_WORKER_POLL_SECONDS` is set for the release host
 - [ ] `NPCINK_CLOUD_WORKER_HEARTBEAT_INTERVAL_SECONDS` is set for the release host
 - [ ] cadence env is explicitly set for the release host:
   - `NPCINK_CLOUD_OPS_CADENCE_POLL_SECONDS`
@@ -100,10 +106,7 @@ All items in this section are `Required`.
   - `NPCINK_CLOUD_ROUTER_DIAGNOSTICS_INTERVAL_SECONDS`
   - `NPCINK_CLOUD_LATENCY_PROBE_INTERVAL_SECONDS`
   - `NPCINK_CLOUD_ALERT_PROVIDER_DEGRADATION_INTERVAL_SECONDS`
-  - `NPCINK_CLOUD_HOSTED_MODEL_GOVERNANCE_INTERVAL_SECONDS`
   - `NPCINK_CLOUD_PROVIDER_HEALTH_SCAN_INTERVAL_SECONDS`
-  - `NPCINK_CLOUD_HOSTED_MODEL_GOVERNANCE_WORKER_RECENT_MINUTES`
-  - `NPCINK_CLOUD_HOSTED_MODEL_GOVERNANCE_WORKER_LIMIT`
 - [ ] OTLP export target is explicit for the release host:
   - `NPCINK_CLOUD_OTEL_EXPORTER_OTLP_ENDPOINT`
   - `NPCINK_CLOUD_OTEL_TRACE_SINK_OTLP_ENDPOINT`

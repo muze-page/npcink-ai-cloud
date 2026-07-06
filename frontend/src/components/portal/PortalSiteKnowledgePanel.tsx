@@ -65,22 +65,22 @@ export function PortalSiteKnowledgePanel({
           <p className="text-xs font-semibold uppercase tracking-[0.18em] text-gray-500 dark:text-gray-400">
             {t('portal.vector_obs.eyebrow', {}, 'Site knowledge')}
           </p>
-          <h2 className="mt-2 text-xl font-semibold text-gray-950 dark:text-white">
-            {t('portal.vector_obs.title', {}, 'Cloud vector search')}
-          </h2>
+	          <h2 className="mt-2 text-xl font-semibold text-gray-950 dark:text-white">
+	            {t('portal.vector_obs.title', {}, 'Site knowledge')}
+	          </h2>
           <p className="mt-2 max-w-2xl text-sm leading-6 text-gray-600 dark:text-gray-300">
             {t(
               'portal.vector_obs.desc',
               {},
-              'Read-only indexing and semantic search metrics for this site. Cloud reports coverage and hit quality; WordPress remains the content source and write owner.'
+	              'Read-only status for site knowledge search.'
             )}
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           {summary?.health ? (
             <BackofficeStatusBadge
-              status={summary.health.status}
-              label={`${summary.health.status} · ${summary.health.score}`}
+	              status={summary.health.status}
+	              label={t(`status.${summary.health.status}`, {}, summary.health.status)}
             />
           ) : null}
           {onRetry ? (
@@ -101,11 +101,11 @@ export function PortalSiteKnowledgePanel({
         </BackofficeStackCard>
       ) : !hasActivity ? (
         <BackofficeEmptyState
-          title={t('portal.vector_obs.empty_title', {}, 'No vector activity yet')}
+	          title={t('portal.vector_obs.empty_title', {}, 'No site knowledge activity yet')}
           description={t(
             'portal.vector_obs.empty_desc',
             {},
-            'Metrics will appear after this site sends site knowledge sync or search runs to Cloud.'
+	            'Activity will appear after site knowledge sync or search runs.'
           )}
         />
       ) : (
@@ -114,9 +114,9 @@ export function PortalSiteKnowledgePanel({
             columnsClassName="md:grid-cols-4"
             items={[
               {
-                label: t('portal.vector_obs.indexed', {}, 'Indexed'),
-                value: formatNumber(Number(totals?.current_document_count || 0)),
-                detail: `${formatNumber(Number(totals?.current_chunk_count || 0))} chunks`,
+	                label: t('portal.vector_obs.indexed', {}, 'Saved pages'),
+	                value: formatNumber(Number(totals?.current_document_count || 0)),
+	                detail: t('portal.vector_obs.saved_piece_count', { count: formatNumber(Number(totals?.current_chunk_count || 0)) }, '{{count}} saved piece(s)'),
               },
               {
                 label: t('portal.vector_obs.searches', {}, 'Searches'),
@@ -124,18 +124,18 @@ export function PortalSiteKnowledgePanel({
                 detail: `${summary?.window?.hours || 24}h`,
               },
               {
-                label: t('portal.vector_obs.no_hit', {}, 'No-hit rate'),
-                value: formatPercent(Number(totals?.no_hit_rate || 0)),
-                detail: `${formatNumber(Number(totals?.no_hit_total || 0))} no hits`,
+	                label: t('portal.vector_obs.no_hit', {}, 'No answer rate'),
+	                value: formatPercent(Number(totals?.no_hit_rate || 0)),
+	                detail: t('portal.vector_obs.no_answer_count', { count: formatNumber(Number(totals?.no_hit_total || 0)) }, '{{count}} no answer'),
                 toneClassName:
                   Number(totals?.no_hit_rate || 0) >= 0.25
                     ? 'text-amber-700 dark:text-amber-200'
                     : '',
               },
               {
-                label: t('portal.vector_obs.p95', {}, 'P95 search'),
-                value: `${formatNumber(Number(totals?.p95_search_latency_ms || 0))}ms`,
-                detail: `top1 ${formatScore(Number(totals?.avg_top1_score || 0))}`,
+	                label: t('portal.vector_obs.p95', {}, 'Search time'),
+	                value: `${formatNumber(Number(totals?.p95_search_latency_ms || 0))}ms`,
+	                detail: t('portal.vector_obs.match_score', { score: formatScore(Number(totals?.avg_top1_score || 0)) }, 'Match {{score}}'),
                 size: 'compact',
               },
             ]}
@@ -144,20 +144,20 @@ export function PortalSiteKnowledgePanel({
           <div className="grid gap-5 xl:grid-cols-2">
             <BackofficeStackCard className="space-y-3">
               <h3 className="text-sm font-semibold text-slate-950 dark:text-white">
-                {t('portal.vector_obs.trend', {}, 'Searches and no-hit')}
+	                {t('portal.vector_obs.trend', {}, 'Searches and no answers')}
               </h3>
               <AnalyticsLineChart
                 data={timelineData}
                 height={240}
                 primarySeriesName={t('portal.vector_obs.searches', {}, 'Searches')}
-                secondarySeriesName={t('portal.vector_obs.no_hit_count', {}, 'No-hit')}
+	                secondarySeriesName={t('portal.vector_obs.no_hit_count', {}, 'No answer')}
                 primaryColor="#2563eb"
                 secondaryColor="#f59e0b"
               />
             </BackofficeStackCard>
             <BackofficeStackCard className="space-y-3">
               <h3 className="text-sm font-semibold text-slate-950 dark:text-white">
-                {t('portal.vector_obs.intents', {}, 'Search intents')}
+	                  {t('portal.vector_obs.intents', {}, 'Search topics')}
               </h3>
               <AnalyticsBarChart data={intentData} height={240} barColor="#2563eb" />
             </BackofficeStackCard>
@@ -167,25 +167,14 @@ export function PortalSiteKnowledgePanel({
             <BackofficeStackCard className="space-y-3">
               <div className="flex items-center justify-between gap-3">
                 <h3 className="text-sm font-semibold text-slate-950 dark:text-white">
-                  {t('portal.vector_obs.coverage', {}, 'Index coverage')}
-                </h3>
-                <BackofficeTag tone="info">
-                  {snapshot?.vector_backend || 'local'}
-                </BackofficeTag>
+	                  {t('portal.vector_obs.coverage', {}, 'Knowledge coverage')}
+	                </h3>
               </div>
               <div className="space-y-2 text-sm text-slate-700 dark:text-slate-300">
                 <div className="flex justify-between gap-3">
-                  <span>{t('portal.vector_obs.last_indexed', {}, 'Last indexed')}</span>
+	                  <span>{t('portal.vector_obs.last_indexed', {}, 'Last updated')}</span>
                   <span className="font-semibold text-slate-950 dark:text-white">
                     {snapshot?.last_indexed_at ? formatDate(snapshot.last_indexed_at) : t('common.not_found')}
-                  </span>
-                </div>
-                <div className="flex justify-between gap-3">
-                  <span>{t('portal.vector_obs.embedding', {}, 'Embedding')}</span>
-                  <span className="font-semibold text-slate-950 dark:text-white">
-                    {snapshot
-                      ? `${snapshot.embedding_provider} · ${snapshot.embedding_dimensions}d`
-                      : t('common.not_found')}
                   </span>
                 </div>
                 <div className="flex flex-wrap gap-2 pt-1">
@@ -200,7 +189,7 @@ export function PortalSiteKnowledgePanel({
 
             <BackofficeStackCard className="space-y-3">
               <h3 className="text-sm font-semibold text-slate-950 dark:text-white">
-                {t('portal.vector_obs.failures', {}, 'Failures')}
+	                  {t('portal.vector_obs.failures', {}, 'Issues')}
               </h3>
               {(summary?.errors || []).length ? (
                 <div className="space-y-2">
@@ -211,7 +200,7 @@ export function PortalSiteKnowledgePanel({
                     >
                       <div className="min-w-0">
                         <p className="truncate font-semibold text-slate-950 dark:text-white">
-                          {item.error_code}
+	                          {t('portal.vector_obs.issue_item', {}, 'Knowledge issue')}
                         </p>
                         <p className="text-xs text-slate-500 dark:text-slate-400">
                           {item.last_seen_at ? formatDate(item.last_seen_at) : t('common.not_found')}
@@ -223,7 +212,7 @@ export function PortalSiteKnowledgePanel({
                 </div>
               ) : (
                 <p className="text-sm text-slate-600 dark:text-slate-300">
-                  {t('portal.vector_obs.no_failures', {}, 'No failures in this window.')}
+	                  {t('portal.vector_obs.no_failures', {}, 'No issues in this period.')}
                 </p>
               )}
             </BackofficeStackCard>

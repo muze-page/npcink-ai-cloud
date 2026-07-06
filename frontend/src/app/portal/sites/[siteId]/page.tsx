@@ -1,24 +1,21 @@
 'use client';
 
 import React, { Suspense, useEffect, useState } from 'react';
-import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import { LoadingFallback } from '@/components/ui/LoadingFallback';
-import { BackofficeMetricStrip, BackofficePageStack, BackofficeSectionPanel, BackofficeStackCard } from '@/components/backoffice/BackofficeScaffold';
+import { BackofficePageStack, BackofficeSectionPanel, BackofficeStackCard } from '@/components/backoffice/BackofficeScaffold';
 import { BackofficeStatusBadge } from '@/components/backoffice/BackofficeStatusBadge';
 import { PortalWorkspaceHeader } from '@/components/portal/PortalWorkspaceHeader';
 import { PortalErrorState, PortalLoadingState, PortalSignedOutState } from '@/components/portal/PortalPageState';
 import { useLocale } from '@/contexts/LocaleContext';
 import { useSession } from '@/hooks/useSession';
 import { portalClient, type PortalSiteSummaryRecord, type Site } from '@/lib/portal-client';
-import { resolveCustomerPackageDisplay } from '@/lib/customer-package-display';
 import { formatPortalErrorMessage } from '@/lib/portal-error';
 import {
   getPortalSiteDisplayName,
-  getPortalSiteSecondaryLabel,
   getPortalSiteWordPressUrl,
 } from '@/lib/portal-site-display';
-import { formatDate, formatNumber as formatInteger } from '@/lib/utils';
+import { formatDate } from '@/lib/utils';
 
 function PortalSiteRecordContent() {
   const params = useParams<{ siteId?: string }>();
@@ -89,23 +86,17 @@ function PortalSiteRecordContent() {
     status: (summary.site?.status || sessionSite?.status || 'inactive') as Site['status'],
     created_at: summary.site?.created_at || sessionSite?.created_at || '',
   };
-  const coverage = summary.coverage || null;
-  const packageDisplay = resolveCustomerPackageDisplay(t, {
-    planId: coverage?.plan_id || session.current_subscription?.plan_id,
-    planVersionId: coverage?.plan_version_id || session.current_subscription?.plan_version_id,
-    packageAlias: summary.package_alias || coverage?.package_alias || session.current_subscription?.package_alias,
-    formalPlanName: sessionSite?.plan_name || summary.site?.plan_name,
-    planKind: session.current_subscription?.plan_kind,
-    coverageState: coverage || sessionSite?.plan_name ? 'covered' : 'uncovered',
-  });
-  const packageLabel = packageDisplay.display_package_label || t('common.not_found');
-  const requestsLimit = Number(summary.entitlement_snapshot?.requests_limit || 0);
-  const tokensLimit = Number(summary.entitlement_snapshot?.tokens_limit || 0);
+  const siteUrl = getPortalSiteWordPressUrl(site);
+  const siteNeedsAttention = site.status !== 'active' || !siteUrl;
+  const siteStatusLabel = siteNeedsAttention
+    ? t('portal.home.filter_attention_only', {}, 'Needs attention')
+    : t('portal.home.risk_level_normal', {}, 'Normal');
+  const contactStatusLabel = t('portal.site_record_contact_available', {}, 'Available in Contact');
 
   return (
     <BackofficePageStack>
       <PortalWorkspaceHeader
-        eyebrow={t('portal.site_record_label', {}, 'Site record')}
+        eyebrow={t('portal.site_record_label', {}, 'Site summary')}
         title={getPortalSiteDisplayName(site)}
         currentPage="record"
         selectedSiteId={siteId}
@@ -114,114 +105,100 @@ function PortalSiteRecordContent() {
         showSiteContextSummary
         metrics={[
           {
-            label: t('common.package', {}, 'Package'),
-            value: packageLabel,
-            detail: coverage?.status || summary.subscription_status || t('common.status'),
-          },
-          {
             label: t('common.status', {}, 'Status'),
-            value: site.status,
-            detail: getPortalSiteSecondaryLabel(site),
+            value: siteStatusLabel,
+            detail: siteUrl || t('portal.site_url_missing_short', {}, 'Site URL not configured'),
           },
           {
-            label: t('usage.requests_month', {}, 'Requests / month'),
-            value: requestsLimit ? formatInteger(requestsLimit) : t('common.not_found'),
+            label: t('portal.site_address_label', {}, 'Site address'),
+            value: siteUrl ? t('portal.site_address_configured', {}, 'Configured') : t('portal.site_url_missing_short', {}, 'Site URL not configured'),
+            detail: siteUrl || t('portal.site_record_address_missing_detail', {}, 'Add a site address so support can identify this site faster.'),
           },
           {
-            label: t('usage.tokens_month', {}, 'Tokens / month'),
-            value: tokensLimit ? formatInteger(tokensLimit) : t('common.not_found'),
+            label: t('common.created_at', {}, 'Created'),
+            value: site.created_at ? formatDate(site.created_at) : t('portal.home.package_pending_label', {}, 'To confirm'),
           },
         ]}
-        primaryAction={
-          <Link href={`/portal/keys?site=${siteId}`} className="btn btn-primary">
-            {t('portal.home.open_keys_action', {}, 'Open Keys')}
-          </Link>
-        }
-        secondaryActions={
-          <Link href={`/portal/usage?site=${siteId}`} className="btn btn-secondary">
-            {t('portal.home.usage_action', {}, 'View Usage')}
-          </Link>
-        }
       />
 
-      <div className="grid gap-5 lg:grid-cols-[0.9fr_1.1fr]">
-        <BackofficeSectionPanel className="space-y-4">
-          <div>
-            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-gray-500 dark:text-gray-400">
-              {t('portal.site_record_package_label', {}, 'Package')}
-            </p>
-            <h2 className="mt-2 text-xl font-semibold text-gray-950 dark:text-white">{packageLabel}</h2>
-            <p className="mt-2 text-sm leading-6 text-gray-600 dark:text-gray-300">
-              {t(
-                'portal.site_record_package_access_desc',
+      <BackofficeSectionPanel className="space-y-4" variant="portal">
+        <div className="max-w-2xl">
+          <p className="text-xs font-semibold text-gray-500 dark:text-gray-400">
+            {t('portal.site_record_current_label', {}, 'Current site')}
+          </p>
+          <h2 className="mt-2 text-xl font-semibold text-gray-950 dark:text-white">
+            {t('portal.site_record_current_title', {}, 'What needs attention?')}
+          </h2>
+          <p className="mt-2 text-sm leading-6 text-slate-600 dark:text-slate-300">
+            {siteNeedsAttention
+              ? t(
+                'portal.site_record_attention_desc',
                 {},
-                'This is the clearest place to confirm the current package, current period, your role, and allowed actions for this site.'
+                'This site still has information to confirm. Contact support if it looks wrong.'
+              )
+              : t(
+                'portal.site_record_ready_desc',
+                {},
+                'This site address and service status look normal.'
               )}
-            </p>
-          </div>
-          <BackofficeStackCard>
-            <div className="flex items-start justify-between gap-3">
-              <div>
+          </p>
+        </div>
+        <div className="grid gap-3 lg:grid-cols-3">
+          <BackofficeStackCard variant="portal">
+            <div className="space-y-1">
+              <p className="text-sm font-semibold text-slate-950 dark:text-white">
+                {t('portal.site_address_label', {}, 'Site address')}
+              </p>
+              <p className="break-words text-sm leading-6 text-slate-600 dark:text-slate-300">
+                {siteUrl || t('portal.site_url_missing', {}, 'WordPress URL not configured')}
+              </p>
+            </div>
+          </BackofficeStackCard>
+          <BackofficeStackCard variant="portal">
+            <div className="flex h-full items-start justify-between gap-3">
+              <div className="space-y-1">
                 <p className="text-sm font-semibold text-slate-950 dark:text-white">
-                  {t('portal.billing.coverage_label', {}, 'Coverage')}
+                  {t('portal.nav_account', {}, 'Contact')}
                 </p>
-                <p className="mt-2 text-sm text-slate-600 dark:text-slate-300">
-                  {coverage?.subscription_id || summary.covered_by_subscription_id || t('common.not_found')}
+                <p className="text-sm leading-6 text-slate-600 dark:text-slate-300">
+                  {t(
+                    'portal.site_record_contact_desc',
+                    {},
+                    'Use the Contact page to confirm the email and service contact details for this account.'
+                  )}
+                </p>
+              </div>
+              <BackofficeStatusBadge status="active" label={contactStatusLabel} />
+            </div>
+          </BackofficeStackCard>
+          <BackofficeStackCard variant="portal">
+            <div className="flex h-full items-start justify-between gap-3">
+              <div className="space-y-1">
+                <p className="text-sm font-semibold text-slate-950 dark:text-white">
+                  {t('portal.site_record_attention_title', {}, 'Need to handle?')}
+                </p>
+                <p className="text-sm leading-6 text-slate-600 dark:text-slate-300">
+                  {siteNeedsAttention
+                    ? t(
+                      'portal.site_record_attention_action',
+                      {},
+                      'The site status or address needs confirmation.'
+                    )
+                    : t(
+                      'portal.site_record_ready_action',
+                      {},
+                      'No action is needed for this site right now.'
+                    )}
                 </p>
               </div>
               <BackofficeStatusBadge
-                status={coverage?.status || summary.subscription_status || 'unknown'}
-                label={coverage?.status || summary.subscription_status || t('common.unknown')}
+                status={siteNeedsAttention ? 'warning' : 'active'}
+                label={siteStatusLabel}
               />
             </div>
           </BackofficeStackCard>
-          <BackofficeMetricStrip
-            columnsClassName="md:grid-cols-2"
-            items={[
-              {
-                label: t('common.account', {}, 'Account'),
-                value: site.account_id || summary.account_id || t('common.not_found'),
-              },
-              {
-                label: t('common.created_at', {}, 'Created'),
-                value: site.created_at ? formatDate(site.created_at) : t('common.not_found'),
-              },
-            ]}
-          />
-        </BackofficeSectionPanel>
-
-        <BackofficeSectionPanel className="space-y-4">
-          <div>
-            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-gray-500 dark:text-gray-400">
-              {t('portal.site_record_runtime_label', {}, 'Runtime')}
-            </p>
-            <h2 className="mt-2 text-xl font-semibold text-gray-950 dark:text-white">
-              {t('portal.site_record_runtime_title', {}, 'Runtime entry points')}
-            </h2>
-          </div>
-          <div className="grid gap-3 md:grid-cols-2">
-            <Link href={`/portal/keys?site=${siteId}`} className="rounded-[1rem] border border-slate-200/80 px-4 py-4 text-sm font-medium text-slate-900 transition hover:bg-slate-50 dark:border-slate-800 dark:text-slate-100 dark:hover:bg-slate-900/60">
-              {t('portal.nav_keys', {}, 'Keys')}
-            </Link>
-            <Link href={`/portal/usage?site=${siteId}`} className="rounded-[1rem] border border-slate-200/80 px-4 py-4 text-sm font-medium text-slate-900 transition hover:bg-slate-50 dark:border-slate-800 dark:text-slate-100 dark:hover:bg-slate-900/60">
-              {t('portal.nav_usage', {}, 'Usage')}
-            </Link>
-            <Link href={`/portal/monitoring?site=${siteId}`} className="rounded-[1rem] border border-slate-200/80 px-4 py-4 text-sm font-medium text-slate-900 transition hover:bg-slate-50 dark:border-slate-800 dark:text-slate-100 dark:hover:bg-slate-900/60">
-              {t('portal.monitoring.nav_label', {}, 'Monitoring')}
-            </Link>
-            <Link href={`/portal/billing?site=${siteId}`} className="rounded-[1rem] border border-slate-200/80 px-4 py-4 text-sm font-medium text-slate-900 transition hover:bg-slate-50 dark:border-slate-800 dark:text-slate-100 dark:hover:bg-slate-900/60">
-              {t('portal.nav_package', {}, 'Package')}
-            </Link>
-            <Link href="/portal/sites" className="rounded-[1rem] border border-slate-200/80 px-4 py-4 text-sm font-medium text-slate-900 transition hover:bg-slate-50 dark:border-slate-800 dark:text-slate-100 dark:hover:bg-slate-900/60">
-              {t('portal.nav_sites', {}, 'Sites')}
-            </Link>
-          </div>
-          <BackofficeStackCard className="text-sm leading-6 text-slate-600 dark:text-slate-300">
-            {getPortalSiteWordPressUrl(site) ||
-              t('portal.site_url_missing', {}, 'WordPress URL not configured')}
-          </BackofficeStackCard>
-        </BackofficeSectionPanel>
-      </div>
+        </div>
+      </BackofficeSectionPanel>
     </BackofficePageStack>
   );
 }

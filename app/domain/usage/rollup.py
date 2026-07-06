@@ -13,7 +13,6 @@ ROUTER_PERFORMANCE_BATCH_SCOPE = "router_performance_batch"
 ROUTER_DIAGNOSTICS_BATCH_SCOPE = "router_diagnostics_batch"
 LATENCY_PROBE_BATCH_SCOPE = "latency_probe_batch"
 ALERT_EVALUATE_BATCH_SCOPE = "alert_evaluate_batch"
-HOSTED_MODEL_GOVERNANCE_BATCH_SCOPE = "hosted_model_governance_batch"
 
 
 def _coerce_int(value: object, default: int = 0) -> int:
@@ -726,117 +725,6 @@ class UsageRollupService:
 
         return None
 
-    def store_hosted_model_governance_batch(
-        self,
-        *,
-        window_minutes: int,
-        limit: int = 25,
-    ) -> dict[str, object]:
-        if window_minutes <= 0:
-            raise ValueError("window_minutes must be positive")
-
-        now = self.now_factory()
-        generated_at = now.astimezone(UTC).replace(microsecond=0)
-        scope_id = self._build_router_diagnostics_scope_id(
-            generated_at=generated_at,
-            recent_minutes=window_minutes,
-        )
-
-        from app.domain.runtime.service import RuntimeService
-
-        payload = RuntimeService(
-            self.database_url,
-        ).get_hosted_model_governance_diagnostics(
-            recent_minutes=window_minutes,
-            limit=limit,
-        )
-        payload["source"] = "cloud_hosted_model_governance"
-        payload["delivery"] = {
-            "owner": "internal_admin_readonly",
-            "buffer_kind": "usage_rollup",
-            "scope_kind": HOSTED_MODEL_GOVERNANCE_BATCH_SCOPE,
-        }
-        payload["rollup"] = {
-            "site_scope": GLOBAL_SITE_SCOPE,
-            "scope_kind": HOSTED_MODEL_GOVERNANCE_BATCH_SCOPE,
-            "scope_id": scope_id,
-            "generated_at": generated_at.strftime("%Y-%m-%d %H:%M:%S"),
-        }
-
-        rollup_key = self._build_rollup_key(
-            GLOBAL_SITE_SCOPE,
-            HOSTED_MODEL_GOVERNANCE_BATCH_SCOPE,
-            scope_id,
-        )
-        with get_session(self.database_url) as session:
-            repository = StatsRepository(session)
-            repository.upsert_usage_rollup(
-                rollup_key=rollup_key,
-                site_scope=GLOBAL_SITE_SCOPE,
-                scope_kind=HOSTED_MODEL_GOVERNANCE_BATCH_SCOPE,
-                scope_id=scope_id,
-                payload_json=payload,
-            )
-            session.commit()
-
-        alert_summary = _dict_value(payload.get("alert_summary"))
-        daily_digest = _dict_value(alert_summary.get("daily_digest"))
-        return {
-            "generated_at": now.strftime("%Y-%m-%d %H:%M:%S"),
-            "scope_kind": HOSTED_MODEL_GOVERNANCE_BATCH_SCOPE,
-            "scope_id": scope_id,
-            "rollup_key": rollup_key,
-            "delivery_owner": "internal_admin_readonly",
-            "stored_batches_total": 1,
-            "status": str(alert_summary.get("status") or "inactive"),
-            "alert_count": _coerce_int(alert_summary.get("alert_count")),
-            "runs": _coerce_int(daily_digest.get("runs")),
-            "provider_calls": _coerce_int(daily_digest.get("provider_calls")),
-            "meter_events": _coerce_int(daily_digest.get("meter_events")),
-        }
-
-    def get_hosted_model_governance_batch(
-        self,
-        *,
-        window_minutes: int = 1440,
-    ) -> dict[str, object] | None:
-        if window_minutes <= 0:
-            raise ValueError("window_minutes must be positive")
-
-        scope_suffix = f"__{int(window_minutes)}m"
-        with get_session(self.database_url) as session:
-            repository = StatsRepository(session)
-            rollups = repository.list_usage_rollups(
-                site_scope=GLOBAL_SITE_SCOPE,
-                scope_kind=HOSTED_MODEL_GOVERNANCE_BATCH_SCOPE,
-            )
-
-        for rollup in reversed(rollups):
-            if not str(getattr(rollup, "scope_id", "")).endswith(scope_suffix):
-                continue
-            payload = rollup.payload_json if isinstance(rollup.payload_json, dict) else {}
-            if not payload:
-                continue
-            payload.setdefault("source", "cloud_hosted_model_governance")
-            payload.setdefault(
-                "delivery",
-                {
-                    "owner": "internal_admin_readonly",
-                    "buffer_kind": "usage_rollup",
-                    "scope_kind": HOSTED_MODEL_GOVERNANCE_BATCH_SCOPE,
-                },
-            )
-            payload.setdefault(
-                "rollup",
-                {
-                    "site_scope": GLOBAL_SITE_SCOPE,
-                    "scope_kind": HOSTED_MODEL_GOVERNANCE_BATCH_SCOPE,
-                    "scope_id": str(getattr(rollup, "scope_id", "")),
-                },
-            )
-            return payload
-
-        return None
 
     def _build_rollup_key(
         self,

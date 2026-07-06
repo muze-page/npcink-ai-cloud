@@ -20,6 +20,7 @@ from app.adapters.providers.base import (
     ProviderExecutionRequest,
     ProviderExecutionResult,
 )
+from app.adapters.providers.minimax import MiniMaxProviderAdapter
 from app.adapters.providers.openai import OpenAIProviderAdapter
 from app.adapters.queue.in_memory import InMemoryRuntimeQueue
 from app.api.main import create_app
@@ -29,6 +30,8 @@ from app.core.db import dispose_engine, get_session, init_schema
 from app.core.models import (
     SITE_API_KEY_STATUS_REVOKED,
     AccountSubscription,
+    AudioAsset,
+    MediaDerivativeArtifact,
     PlanVersion,
     RunRecord,
     RuntimeGuardEvent,
@@ -45,6 +48,8 @@ from app.core.security import (
 from app.core.services import CloudServices
 from app.domain.catalog.service import CatalogService
 from app.domain.hosted_model_defaults import (
+    AUDIO_NARRATION_MODEL_ID,
+    AUDIO_NARRATION_PROFILE_ID,
     FREE_GPT55_MODEL_ID,
     FREE_GPT55_TEXT_PROFILE_ID,
     GROK_IMAGINE_IMAGE_MODEL_ID,
@@ -61,6 +66,7 @@ from app.domain.web_search.service import (
 from tests.conftest import (
     build_auth_headers,
     merge_json_headers,
+    seed_provider_model_allowlist,
     seed_site_auth,
 )
 
@@ -869,6 +875,329 @@ def test_execute_route_rejects_oversized_image_generation_inputs(
 
     assert response.status_code == 400, response.text
     assert response.json()["error_code"] == "image_generation.image_count_invalid"
+
+    dispose_engine(database_url)
+
+
+def test_execute_route_defaults_audio_generation_to_minimax_narration(
+    tmp_path: Path,
+) -> None:
+    provider = MiniMaxProviderAdapter(
+        allow_sample_catalog=True,
+        allow_sample_execution=True,
+    )
+    database_url, client = _build_client(
+        tmp_path,
+        providers={"minimax": provider},
+        settings_overrides={
+            "audio_asset_playback_token_secret": "test-audio-playback-secret-00000000"
+        },
+    )
+    seed_provider_model_allowlist(
+        database_url,
+        provider_id="minimax",
+        kind="minimax",
+        model_ids=[AUDIO_NARRATION_MODEL_ID],
+        capability_ids=["audio_generation"],
+        runtime_profile_ids=["audio.narration.default"],
+        base_url="https://api.minimaxi.com",
+    )
+    payload = {
+        "site_id": "site_alpha",
+        "ability_name": "npcink-cloud/generate-audio",
+        "contract_version": "audio_generation_request.v1",
+        "channel": "openapi",
+        "execution_tier": "cloud",
+        "execution_pattern": "inline",
+        "input": {
+            "contract_version": "audio_generation_request.v1",
+            "intent": "article_narration",
+            "text": "这是一段文章旁白。",
+            "format": "mp3",
+            "response_format": "url",
+        },
+        "policy": {"allow_fallback": False},
+    }
+    body = json.dumps(payload).encode("utf-8")
+    headers = merge_json_headers(
+        build_auth_headers(
+            "POST",
+            "/v1/runtime/execute",
+            site_id="site_alpha",
+            idempotency_key="idem-audio-generation-default-001",
+            nonce="nonce-audio-generation-default-001",
+            trace_id="1234567890abcdef1234567890abcd06",
+            body=body,
+        )
+    )
+
+    response = client.post("/v1/runtime/execute", content=body, headers=headers)
+
+    assert response.status_code == 200, response.text
+    data = response.json()["data"]
+    assert data["status"] == "succeeded"
+    assert data["profile_id"] == AUDIO_NARRATION_PROFILE_ID
+    assert data["model_id"] == AUDIO_NARRATION_MODEL_ID
+    assert data["execution_context"]["ability_family"] == "audio"
+    assert data["execution_context"]["data_classification"] == "internal"
+    assert data["result"]["artifact_type"] == "audio_generation_candidates"
+    assert data["result"]["direct_wordpress_write"] is False
+    assert data["result"]["audios"][0]["mime_type"] == "audio/mpeg"
+    audio_url = data["result"]["audios"][0]["url"]
+    assert audio_url.startswith("/v1/runtime/artifacts/")
+    assert "/public-download?token=" in audio_url
+    assert data["result"]["audios"][0]["artifact"]["source_media_type"] == "audio"
+    assert data["result"]["audios"][0]["artifact"]["download_url"] == audio_url
+    assert data["result"]["audios"][0]["artifact"]["authenticated_download_url"].endswith(
+        "/download"
+    )
+    assert data["result"]["audio_materialization"]["status"] == "materialized"
+
+    with get_session(database_url) as session:
+        artifact = session.query(MediaDerivativeArtifact).filter_by(site_id="site_alpha").one()
+        assert artifact.source_media_type == "audio"
+        assert artifact.blob_data
+        assert artifact.mime_type == "audio/mpeg"
+        artifact_id = artifact.artifact_id
+
+    download_headers = build_auth_headers(
+        "GET",
+        f"/v1/runtime/artifacts/{artifact_id}/download",
+        site_id="site_alpha",
+    )
+    download_response = client.get(
+        f"/v1/runtime/artifacts/{artifact_id}/download",
+        headers=download_headers,
+    )
+    assert download_response.status_code == 200
+    assert download_response.headers["content-type"].startswith("audio/mpeg")
+    assert int(download_response.headers["content-length"]) == len(download_response.content)
+    assert download_response.content.startswith(b"ID3")
+
+    public_download_response = client.get(audio_url)
+    assert public_download_response.status_code == 200
+    assert public_download_response.headers["content-type"].startswith("audio/mpeg")
+    assert int(public_download_response.headers["content-length"]) == len(
+        public_download_response.content
+    )
+    assert public_download_response.content.startswith(b"ID3")
+
+    invalid_public_download_response = client.get(
+        f"/v1/runtime/artifacts/{artifact_id}/public-download?token=bad"
+    )
+    assert invalid_public_download_response.status_code == 403
+
+    promote_payload = {
+        "artifact_id": artifact_id,
+        "source_content_hash": "sha256:" + ("a" * 64),
+        "metadata": {"post_id": 42, "post_type": "post", "title": "Audio article"},
+        "playback_ttl_seconds": 120,
+    }
+    promote_body = json.dumps(promote_payload).encode("utf-8")
+    promote_headers = merge_json_headers(
+        build_auth_headers(
+            "POST",
+            "/v1/runtime/audio-assets",
+            site_id="site_alpha",
+            idempotency_key="idem-audio-asset-promote-001",
+            nonce="nonce-audio-asset-promote-001",
+            trace_id="1234567890abcdef1234567890abcd17",
+            body=promote_body,
+        )
+    )
+    promote_response = client.post(
+        "/v1/runtime/audio-assets",
+        content=promote_body,
+        headers=promote_headers,
+    )
+    assert promote_response.status_code == 200, promote_response.text
+    promoted = promote_response.json()["data"]
+    assert promoted["playback_mode"] == "cloud_hosted"
+    assert promoted["direct_wordpress_write"] is False
+    assert promoted["source_artifact_id"] == artifact_id
+    assert promoted["source_content_hash"] == "sha256:" + ("a" * 64)
+    assert promoted["playback_url"].startswith(
+        f"/v1/runtime/audio-assets/{promoted['asset_id']}/playback?"
+    )
+
+    playback_response = client.get(promoted["playback_url"])
+    assert playback_response.status_code == 200
+    assert playback_response.headers["content-type"].startswith("audio/mpeg")
+    assert playback_response.content.startswith(b"ID3")
+
+    invalid_playback_response = client.get(
+        f"/v1/runtime/audio-assets/{promoted['asset_id']}/playback?expires=1&token=bad"
+    )
+    assert invalid_playback_response.status_code == 410
+
+    playback_url_headers = build_auth_headers(
+        "GET",
+        f"/v1/runtime/audio-assets/{promoted['asset_id']}/playback-url",
+        site_id="site_alpha",
+        query="ttl_seconds=180",
+    )
+    playback_url_response = client.get(
+        f"/v1/runtime/audio-assets/{promoted['asset_id']}/playback-url?ttl_seconds=180",
+        headers=playback_url_headers,
+    )
+    assert playback_url_response.status_code == 200, playback_url_response.text
+    playback_url_data = playback_url_response.json()["data"]
+    assert playback_url_data["asset_id"] == promoted["asset_id"]
+    assert playback_url_data["playback_url_ttl_seconds"] == 180
+
+    beta_playback_url_headers = build_auth_headers(
+        "GET",
+        f"/v1/runtime/audio-assets/{promoted['asset_id']}/playback-url",
+        site_id="site_beta",
+        key_id="key_beta",
+        query="ttl_seconds=180",
+    )
+    beta_playback_url_response = client.get(
+        f"/v1/runtime/audio-assets/{promoted['asset_id']}/playback-url?ttl_seconds=180",
+        headers=beta_playback_url_headers,
+    )
+    assert beta_playback_url_response.status_code == 404
+
+    with get_session(database_url) as session:
+        asset = session.query(AudioAsset).filter_by(site_id="site_alpha").one()
+        assert asset.asset_id == promoted["asset_id"]
+        assert asset.source_artifact_id == artifact_id
+        assert asset.source_run_id
+        assert asset.blob_data.startswith(b"ID3")
+        assert asset.metadata_json["playback_mode"] == "cloud_hosted"
+
+    dispose_engine(database_url)
+
+
+def test_execute_route_fails_audio_generation_when_provider_url_cannot_materialize(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/v1/models"):
+            return httpx.Response(200, json={"data": [{"id": AUDIO_NARRATION_MODEL_ID}]})
+        return httpx.Response(
+            200,
+            json={
+                "data": {
+                    "audio_url": "https://minimax.example.test/audio/signed.mp3",
+                    "extra_info": {
+                        "usage_characters": 9,
+                        "audio_length": 2400,
+                        "audio_format": "mp3",
+                    },
+                },
+                "base_resp": {"status_code": 0, "status_msg": "success"},
+            },
+        )
+
+    provider = MiniMaxProviderAdapter(
+        api_key="test-minimax-key",
+        allow_sample_catalog=True,
+        transport=httpx.MockTransport(handler),
+    )
+    database_url, client = _build_client(tmp_path, providers={"minimax": provider})
+    seed_provider_model_allowlist(
+        database_url,
+        provider_id="minimax",
+        kind="minimax",
+        model_ids=[AUDIO_NARRATION_MODEL_ID],
+        capability_ids=["audio_generation"],
+        runtime_profile_ids=["audio.narration.default"],
+        base_url="https://api.minimaxi.com",
+    )
+
+    from app.domain.audio_generation import artifacts as audio_artifacts
+
+    def fail_download(*args: object, **kwargs: object) -> bytes:
+        raise audio_artifacts.AudioArtifactMaterializationError(
+            "provider audio URL returned HTTP 403"
+        )
+
+    monkeypatch.setattr(audio_artifacts, "_download_audio_url", fail_download)
+
+    payload = {
+        "site_id": "site_alpha",
+        "ability_name": "npcink-cloud/generate-audio",
+        "contract_version": "audio_generation_request.v1",
+        "channel": "openapi",
+        "execution_tier": "cloud",
+        "execution_pattern": "inline",
+        "input": {
+            "contract_version": "audio_generation_request.v1",
+            "intent": "article_narration",
+            "text": "这是一段文章旁白。",
+            "format": "mp3",
+            "response_format": "url",
+        },
+        "policy": {"allow_fallback": False},
+    }
+    body = json.dumps(payload).encode("utf-8")
+    headers = merge_json_headers(
+        build_auth_headers(
+            "POST",
+            "/v1/runtime/execute",
+            site_id="site_alpha",
+            idempotency_key="idem-audio-generation-materialize-fail-001",
+            nonce="nonce-audio-generation-materialize-fail-001",
+            trace_id="1234567890abcdef1234567890abcd16",
+            body=body,
+        )
+    )
+
+    response = client.post("/v1/runtime/execute", content=body, headers=headers)
+
+    assert response.status_code == 200, response.text
+    data = response.json()["data"]
+    assert data["status"] == "failed"
+    assert data["error_code"] == "audio_generation.artifact_materialization_failed"
+    assert "HTTP 403" in data["error_message"]
+    with get_session(database_url) as session:
+        assert session.query(MediaDerivativeArtifact).count() == 0
+
+    dispose_engine(database_url)
+
+
+def test_execute_route_rejects_audio_generation_write_controls(
+    tmp_path: Path,
+) -> None:
+    provider = MiniMaxProviderAdapter(
+        allow_sample_catalog=True,
+        allow_sample_execution=True,
+    )
+    database_url, client = _build_client(tmp_path, providers={"minimax": provider})
+    payload = {
+        "site_id": "site_alpha",
+        "ability_name": "npcink-cloud/generate-audio",
+        "contract_version": "audio_generation_request.v1",
+        "channel": "openapi",
+        "execution_tier": "cloud",
+        "execution_pattern": "inline",
+        "input": {
+            "contract_version": "audio_generation_request.v1",
+            "intent": "article_narration",
+            "text": "这是一段文章旁白。",
+            "direct_wordpress_write": True,
+        },
+        "policy": {"allow_fallback": False},
+    }
+    body = json.dumps(payload).encode("utf-8")
+    headers = merge_json_headers(
+        build_auth_headers(
+            "POST",
+            "/v1/runtime/execute",
+            site_id="site_alpha",
+            idempotency_key="idem-audio-generation-reject-001",
+            nonce="nonce-audio-generation-reject-001",
+            trace_id="1234567890abcdef1234567890abcd07",
+            body=body,
+        )
+    )
+
+    response = client.post("/v1/runtime/execute", content=body, headers=headers)
+
+    assert response.status_code == 400, response.text
+    assert response.json()["error_code"] == "audio_generation.write_or_secret_field_forbidden"
 
     dispose_engine(database_url)
 
@@ -1843,7 +2172,7 @@ def test_execute_route_rejects_budget_exhaustion(tmp_path: Path) -> None:
         database_url,
         site_id="site_alpha",
         scopes=["runtime:execute", "runtime:read", "runtime:resolve"],
-        budgets={"max_runs_per_period": 1},
+        budgets={"max_ai_credits_per_period": 1},
     )
     payload = {
         "site_id": "site_alpha",
@@ -1904,11 +2233,11 @@ def test_execute_route_allows_budget_grace_with_runtime_downgrade(tmp_path: Path
         database_url,
         site_id="site_alpha",
         scopes=["runtime:execute", "runtime:read", "runtime:resolve"],
-        budgets={"max_runs_per_period": 1},
+        budgets={"max_ai_credits_per_period": 1},
         concurrency={"max_active_runs": 2},
         policy={
             "budgets": {
-                "runs": {
+                "ai_credits": {
                     "grace_requests": 1,
                     "downgrade_policy": {
                         "retry_max": 0,
@@ -2855,7 +3184,7 @@ def test_execute_route_rejects_secret_like_runtime_input(tmp_path: Path) -> None
         "idempotency_key": "idem-secret-detected-001",
         "input": {
             "messages": [{"role": "user", "content": "summarize this draft"}],
-            "provider_key": "sk-testtesttesttesttesttesttest",
+            "provider_key": "redaction-fixture-provider-key",
         },
     }
     body = json.dumps(payload).encode("utf-8")

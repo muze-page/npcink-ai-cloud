@@ -22,7 +22,6 @@ from app.core.models import (
     SITE_STATUS_ACTIVE,
     SUBSCRIPTION_STATUS_ACTIVE,
     SUBSCRIPTION_STATUS_TRIALING,
-    AccountEntitlementSnapshot,
     AccountSubscription,
     ProviderCallRecord,
     RunRecord,
@@ -82,7 +81,7 @@ class CommercialServiceRuntimeMixin(CommercialServiceAuditMixin):
                 metadata_json={"source": "seed_runtime"},
             )
             if plan_id == DEFAULT_FREE_PLAN_ID and plan_version_id == DEFAULT_FREE_PLAN_VERSION_ID:
-                service._ensure_plan_free_version_in_session(repository=repository)
+                service._ensure_free_version_in_session(repository=repository)
             else:
                 repository.upsert_plan(
                     plan_id=plan_id,
@@ -273,10 +272,9 @@ class CommercialServiceRuntimeMixin(CommercialServiceAuditMixin):
             site.account_id or "",
             subscription_id=subscription.subscription_id,
         )
-        plan_version = (
-            repository.get_plan_version(subscription.plan_version_id)
-            if subscription.plan_version_id
-            else None
+        plan_version = service._resolve_current_subscription_plan_version(
+            repository,
+            subscription,
         )
         if snapshot is None or snapshot.status != ENTITLEMENT_SNAPSHOT_STATUS_ACTIVE:
             error = RuntimeEntitlementDeniedError(site_id, ability_family, "snapshot_missing")
@@ -302,9 +300,9 @@ class CommercialServiceRuntimeMixin(CommercialServiceAuditMixin):
             session.commit()
             raise error
 
-        policy = service._normalize_commercial_policy(snapshot.policy_json)
+        policy = service._normalize_commercial_policy(getattr(plan_version, "policy_json", None))
         batch_limits = service._resolve_runtime_batch_limits(
-            snapshot=snapshot,
+            snapshot=None,
             plan_version=plan_version,
         )
 
@@ -383,8 +381,9 @@ class CommercialServiceRuntimeMixin(CommercialServiceAuditMixin):
             ):
                 policy_actions.append(subscription_action)
 
+        entitlement_source = plan_version or snapshot
         if not self._entitlements_allow(
-            snapshot,
+            entitlement_source,
             ability_family=ability_family,
             channel=channel,
             execution_kind=execution_kind,
@@ -411,14 +410,18 @@ class CommercialServiceRuntimeMixin(CommercialServiceAuditMixin):
                 idempotency_key=idempotency_key,
                 payload_json={
                     "reason": "entitlement_miss",
-                    "entitlements": service._normalize_entitlements(snapshot.entitlements_json),
+                    "entitlements": service._normalize_entitlements(
+                        getattr(entitlement_source, "entitlements_json", None)
+                    ),
                 },
             )
             session.commit()
             raise error
 
         active_runs = repository.count_active_runs(site_id)
-        concurrency = service._normalize_concurrency(snapshot.concurrency_json)
+        concurrency = service._normalize_concurrency(
+            getattr(entitlement_source, "concurrency_json", None)
+        )
         max_active_runs = self._coerce_int(concurrency.get("max_active_runs"))
         if request_kind == "execute" and max_active_runs > 0 and active_runs >= max_active_runs:
             error = RuntimeConcurrencyExceededError(site_id, max_active_runs)
@@ -454,8 +457,11 @@ class CommercialServiceRuntimeMixin(CommercialServiceAuditMixin):
             period_end_at=period_end_at,
             limit=None,
         )
-        totals = service._aggregate_meter_events(meter_events)
-        budgets = service._normalize_budgets(snapshot.budgets_json)
+        budgets = service._resolve_effective_subscription_budgets(
+            plan_version=plan_version,
+            subscription=subscription,
+            snapshot=snapshot,
+        )
         credit_entries = repository.list_credit_ledger_entries(
             account_ids=[subscription.account_id],
             subscription_id=subscription.subscription_id,
@@ -491,9 +497,6 @@ class CommercialServiceRuntimeMixin(CommercialServiceAuditMixin):
                 budgets.get("max_ai_credits_per_period"),
                 projected_ai_credits,
             ),
-            ("runs", totals.get("runs", 0.0), budgets.get("max_runs_per_period"), 1.0),
-            ("tokens", totals.get("tokens_total", 0.0), budgets.get("max_tokens_per_period"), 0.0),
-            ("cost", totals.get("cost", 0.0), budgets.get("max_cost_per_period"), 0.0),
         )
         for meter_key, current_total, budget_value, projected_quantity in budget_checks:
             limit = self._coerce_float(budget_value)
@@ -554,45 +557,6 @@ class CommercialServiceRuntimeMixin(CommercialServiceAuditMixin):
             meter_events,
             batch_limits=batch_limits,
         )
-        if (
-            request_kind == "execute"
-            and ability_family == "automation"
-            and execution_kind == "nightly_site_inspection"
-        ):
-            max_runs = self._coerce_int(
-                pro_cloud_runtime.get("max_nightly_inspection_runs_per_period")
-            )
-            used_runs = self._coerce_int(
-                pro_cloud_runtime.get("used_nightly_inspection_runs")
-            )
-            if max_runs > 0 and used_runs >= max_runs:
-                error = RuntimeQuotaExceededError("nightly_site_inspection_runs", max_runs)
-                self._record_commercial_decision_in_session(
-                    repository=repository,
-                    account_id=subscription.account_id,
-                    site_id=site_id,
-                    subscription_id=subscription.subscription_id,
-                    plan_version_id=subscription.plan_version_id,
-                    run_id=run_id,
-                    request_kind=request_kind,
-                    decision="deny",
-                    decision_code=error.error_code,
-                    ability_family=ability_family,
-                    channel=channel,
-                    execution_kind=execution_kind,
-                    execution_tier=execution_tier,
-                    data_classification=data_classification,
-                    trace_id=trace_id,
-                    idempotency_key=idempotency_key,
-                    payload_json={
-                        "meter_key": "nightly_site_inspection_runs",
-                        "current_total": used_runs,
-                        "limit": max_runs,
-                        "pro_cloud_runtime": pro_cloud_runtime,
-                    },
-                )
-                session.commit()
-                raise error
 
         effective_runtime_policy_overrides: dict[str, object] = {}
         for action in policy_actions:
@@ -610,7 +574,9 @@ class CommercialServiceRuntimeMixin(CommercialServiceAuditMixin):
             "period_start_at": period_start_at,
             "period_end_at": period_end_at,
             "period_renewed": period_renewed,
-            "entitlements": service._normalize_entitlements(snapshot.entitlements_json),
+            "entitlements": service._normalize_entitlements(
+                getattr(plan_version, "entitlements_json", None)
+            ),
             "budgets": budgets,
             "ai_credit_budget": {
                 "used": used_ai_credits,
@@ -916,7 +882,7 @@ class CommercialServiceRuntimeMixin(CommercialServiceAuditMixin):
 
     def _entitlements_allow(
         self,
-        snapshot: AccountEntitlementSnapshot,
+        entitlement_source: object | None,
         *,
         ability_family: str,
         channel: str,
@@ -924,7 +890,9 @@ class CommercialServiceRuntimeMixin(CommercialServiceAuditMixin):
         execution_tier: str,
         data_classification: str,
     ) -> bool:
-        entitlements = cast(Any, self)._normalize_entitlements(snapshot.entitlements_json)
+        entitlements = cast(Any, self)._normalize_entitlements(
+            getattr(entitlement_source, "entitlements_json", None)
+        )
         checks = (
             (entitlements.get("ability_families"), ability_family),
             (entitlements.get("channels"), channel),

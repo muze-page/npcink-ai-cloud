@@ -19,7 +19,8 @@ Current focus lock:
 - keep only minimum usage, error, and provider evidence needed to support that
   loop
 - pause new admin governance pages, dashboards, reports, alert-ranking
-  expansion, and commercial front-office work until the core AI path is proven
+  expansion, and broad commercial front-office work until the core AI path is
+  proven
 - do not add new orchestration infrastructure or move local plugin truth into
   Cloud
 
@@ -43,6 +44,7 @@ Operational references:
 - [docs/internal-alpha-onboarding-smoke-runbook.md](docs/internal-alpha-onboarding-smoke-runbook.md)
 - [docs/external-trial-capability-note-2026-06-10.md](docs/external-trial-capability-note-2026-06-10.md)
 - [docs/external-trial-readiness-checklist-2026-06-10.md](docs/external-trial-readiness-checklist-2026-06-10.md)
+- [docs/small-customer-trial-commercial-readiness-v1.md](docs/small-customer-trial-commercial-readiness-v1.md)
 - [docs/external-trial-operator-runbook-2026-06-11.md](docs/external-trial-operator-runbook-2026-06-11.md)
 - [docs/external-trial-copy-and-log-2026-06-11.md](docs/external-trial-copy-and-log-2026-06-11.md)
 - [docs/external-trial-record-magick-ai-local-2026-06-10.md](docs/external-trial-record-magick-ai-local-2026-06-10.md)
@@ -55,6 +57,7 @@ Operational references:
 - [docs/cloud-ai-data-handling-standard-v1.md](docs/cloud-ai-data-handling-standard-v1.md)
 - [docs/cloud-production-release-policy-v1.md](docs/cloud-production-release-policy-v1.md)
 - [docs/cloud-content-generation-boundary-v1.md](docs/cloud-content-generation-boundary-v1.md)
+- [docs/cloud-open-callback-boundary-v1.md](docs/cloud-open-callback-boundary-v1.md)
 - [docs/cloud-bulk-article-run-v1.md](docs/cloud-bulk-article-run-v1.md)
 - [docs/nightly-site-inspection-morning-brief-v1.md](docs/nightly-site-inspection-morning-brief-v1.md)
 - [docs/cloud-agent-positioning-v1.md](docs/cloud-agent-positioning-v1.md)
@@ -62,6 +65,8 @@ Operational references:
 - [docs/internal-ai-advisor-v1.md](docs/internal-ai-advisor-v1.md)
 - [docs/site-ops-cloud-analysis-runtime-v1.md](docs/site-ops-cloud-analysis-runtime-v1.md)
 - [docs/writing-assistance-evidence-history-2026-06.md](docs/writing-assistance-evidence-history-2026-06.md)
+- [docs/cloud-production-deployment-history-2026-06-24.md](docs/cloud-production-deployment-history-2026-06-24.md)
+- [docs/ai-provider-env-config-retirement-2026-06-26.md](docs/ai-provider-env-config-retirement-2026-06-26.md)
 
 ## Test Entry For Agents
 
@@ -86,9 +91,13 @@ repository; it points at a path that no longer exists here.
 ## Seed & Smoke Quick Entry
 
 - local runtime seed: `pnpm run seed:smoke`
+- local login seed: `pnpm run login:seed:dev`
 - local portal real-site bootstrap: `pnpm run portal:bind:dev -- --site-id <site-id> --member-email <email>`
 - scaffold one new Cloud route pack: `pnpm run scaffold:route -- --route-id <route-id>`
 - scaffold one new Portal route pack: `pnpm run scaffold:portal-route -- --route-id <route-id>`
+- local frontend dependency lock check: `pnpm run check:frontend-locks`
+- local frontend health check: `bash scripts/dev-frontend-doctor.sh`
+- local frontend dependency recovery: `bash scripts/dev-frontend-recover.sh`
 - perimeter seam: `pnpm run check:perimeter`
 - hosted runtime smoke: `pnpm run smoke:local-alpha`
 - internal alpha onboarding smoke: `pnpm run smoke:internal-alpha-onboarding`
@@ -201,23 +210,28 @@ Still deferred in the current phase:
   and bounded abuse watchlists
 - broader queued/running lease recovery beyond the current queue-backed runtime
   worker plus callback dispatch stale-lease reclaim
-- customer-facing commercial front-office still remains deferred:
+- customer-facing commercial front-office remains bounded:
   - seat lifecycle
-  - checkout/payment
+  - real WeChat Pay checkout/payment provider integration
   - invoice/reconciliation
   - dunning-grade customer billing front-office
+  - the current credit-pack catalog and payment-order state are launch
+    service-plane details; Alipay page-pay can be enabled only with explicit
+    RSA2 signing/verification configuration, while WeChat Pay remains deferred
+    until provider signature verification, callback replay, and amount/currency
+    matching are implemented
 - richer platform admin directory/session inventory remains deferred
 
 Commercial acceptance freeze:
 
 - `plans + plan_versions` remain the only package execution truth
 - `free / pro / agency` remain tier templates
-- `plan_free / plan_free_v1` is the explicit production free package
+- `free / free_v1` is the explicit production free package
 - `Free / Pro / Agency` remain the only current package presentation aliases
 - points are presentation, not a ledger
 - operator top-up means current billing period budget headroom only
-- no wallet, no permanent credit, no customer self-serve buy flow in the current phase
-- `plan_dev_unlimited / plan_dev_unlimited_v1` remain dev-only bootstrap/runtime baselines, not production free packaging
+- no wallet, no permanent credit, and no entitlement change without the Cloud
+  payment-order or operator service-plane path in the current phase
 
 ## Validation Ladder
 
@@ -474,6 +488,69 @@ Expected results: the required containers are `Up`, the restart policy prints
 entrypoint returns HTTP `200`. A running `proxy` with `502 Bad Gateway` usually
 means `api` or `frontend` is not running yet.
 
+### API reload recovery
+
+The dev API runs `uvicorn --reload` so API-side Python edits are picked up
+without a manual rebuild. The reload watcher is intentionally limited to `app`
+and `migrations`, excludes `app/workers/*`, and sets
+`--timeout-graceful-shutdown 5` so a stale in-process background task cannot
+hold reload forever.
+
+If an admin page such as `/admin/ability-models` keeps showing a loading state
+but has no visible error, first separate auth and API latency:
+
+```bash
+curl -i http://127.0.0.1:8010/admin/ability-models
+docker compose -f docker-compose.dev.yml logs --tail=120 api
+docker compose -f docker-compose.dev.yml logs --tail=120 frontend
+```
+
+Normal unauthenticated behavior is a `307` redirect to
+`/admin/login?redirect=...`. A stuck dev reload typically shows
+`Waiting for background tasks to complete` in the API logs, while the frontend
+logs show `/api/admin/*` requests taking tens of seconds. Recover with:
+
+```bash
+docker compose -f docker-compose.dev.yml restart api
+```
+
+After restart, the same admin data endpoints should return in milliseconds. Do
+not treat this as a Cloud runtime routing bug unless the API has restarted and
+the specific endpoint still returns an application error.
+
+Worker-only edits should not reload the API. If `frontend` logs show
+`/api/admin/ability-models/runtime-projection`,
+`/api/admin/ai-resources`, and `/api/admin/wordpress-ai-routing` all taking
+tens of seconds after a worker file edit, confirm the compose command still
+contains `--reload-exclude app/workers/*` and recreate the dev API container:
+
+```bash
+docker compose -f docker-compose.dev.yml up -d api
+```
+
+If a queued runtime action such as audio preview reports
+`runtime.provider_not_configured` even though the provider page is enabled and
+healthy, check the runtime worker as well:
+
+```bash
+docker compose -f docker-compose.dev.yml logs --tail=120 worker
+docker compose -f docker-compose.dev.yml restart worker
+```
+
+The dev worker refreshes DB-managed execution providers before each queue poll,
+so provider connection edits should not require a worker restart after this
+code is loaded. A restart is still useful when the worker process itself was
+started before local code changes were mounted.
+
+The default dev compose stack does not start `otel-collector`. To keep API
+reloads responsive, it clears `NPCINK_CLOUD_OTEL_EXPORTER_OTLP_ENDPOINT` for
+local containers even if `.env` contains the production-style collector URL.
+Opt in to local trace export only when a collector is actually running:
+
+```bash
+NPCINK_CLOUD_DEV_OTEL_EXPORTER_OTLP_ENDPOINT=http://host.docker.internal:4318/v1/traces pnpm run dev
+```
+
 Keep local-only debug credentials such as `NPCINK_CLOUD_INTERNAL_AUTH_TOKEN`,
 `NPCINK_CLOUD_ADMIN_BOOTSTRAP_TOKEN`, `NPCINK_CLOUD_ADMIN_SESSION_SECRET`, and
 `NPCINK_CLOUD_PORTAL_JWT_SECRET` in `.env.local` for dev Docker runs.
@@ -501,9 +578,24 @@ config now fails fast when these are missing:
 - `NPCINK_CLOUD_ADMIN_BOOTSTRAP_TOKEN`
 - `NPCINK_CLOUD_ADMIN_SESSION_SECRET`
 - `NPCINK_CLOUD_PORTAL_JWT_SECRET`
-- `NPCINK_CLOUD_PORTAL_PUBLIC_BASE_URL`
-- `NPCINK_CLOUD_PORTAL_EMAIL_SMTP_HOST`
-- `NPCINK_CLOUD_PORTAL_EMAIL_FROM_EMAIL`
+- `NPCINK_CLOUD_BROWSER_ORIGIN_ALLOWLIST`
+- `NPCINK_CLOUD_TRUSTED_HOST_ALLOWLIST`
+
+After the first platform-admin login, configure Portal public URL, QQ login,
+and Portal email delivery in `/admin/service-settings`. These service settings
+are stored by Cloud runtime storage and are no longer read from `.env`.
+
+If a development deploy still has Portal public URL, QQ login, or SMTP values
+in `.env`, import the current `NPCINK_CLOUD_*` values once before removing
+those service-setting keys:
+
+```bash
+docker compose -f docker-compose.dev.yml run --rm api \
+  python -m app.dev.import_service_settings_from_env
+```
+
+The import command writes only to `service_settings`, keeps secret values out of
+stdout, and does not re-enable `.env` fallback.
 
 Additional hardening rules now enforced:
 
@@ -578,20 +670,18 @@ source deploy/workspace-target.env.sh
 pnpm run wp-cron:ssh -- remove
 ```
 
-Platform identity/admin roadmap:
+Platform identity/admin and portal references:
 
-- current identity layering and third-party recommendation:
-  [cloud-identity-system-overview-and-roadmap.md](../../magick-ai/docs/archive/plans/cloud-identity-system-overview-and-roadmap.md)
-- current bounded read-only admin surface:
-  [cloud-admin-mvp-plan.md](../../magick-ai/docs/archive/plans/cloud-admin-mvp-plan.md)
-- current invite-only onboarding hardening slice:
-  [cloud-invite-only-onboarding-v1-1-plan.md](../../magick-ai/docs/archive/plans/cloud-invite-only-onboarding-v1-1-plan.md)
-- current member invite/login operator checklist:
-  [cloud-portal-member-invite-flow-checklist.md](../../magick-ai/docs/archive/plans/cloud-portal-member-invite-flow-checklist.md)
-- recommended platform super-admin plus controlled impersonation direction:
-  [cloud-platform-admin-and-impersonation-plan.md](../../magick-ai/docs/archive/plans/cloud-platform-admin-and-impersonation-plan.md)
-- current platform role contract:
-  [cloud-platform-admin-role-model-v1.md](../../magick-ai/docs/contracts/cloud-platform-admin-role-model-v1.md)
+- current bounded admin cleanup closeout:
+  [admin-surface-cleanup-closeout-2026-07-02.md](docs/admin-surface-cleanup-closeout-2026-07-02.md)
+- current account/portal stage closeout:
+  [cloud-account-portal-stage-closeout-summary-2026-06-29.md](docs/cloud-account-portal-stage-closeout-summary-2026-06-29.md)
+- current portal user management history:
+  [admin-portal-user-management-history-2026-06-29.md](docs/admin-portal-user-management-history-2026-06-29.md)
+- current payment seam summary:
+  [commercial-billing-payment-stage-summary-2026-06-23.md](docs/commercial-billing-payment-stage-summary-2026-06-23.md)
+- payment gateway contract:
+  [payment-gateway-contract-v1.md](docs/payment-gateway-contract-v1.md)
 
 Health endpoints:
 
@@ -617,9 +707,16 @@ Portal member auth:
   - `POST /portal/v1/auth/code/verify`
 - successful verification establishes the cookie-backed portal session used by
   `/portal/*` and `/portal/v1/*`
+- WordPress addon authorization uses the bounded Portal connection seam:
+  - `POST /portal/v1/addon-connections` requires a Portal session and issues a
+    short-lived return code after creating or activating the site connection
+  - `POST /portal/v1/addon-connections/exchange` consumes that one-time code
+    from the WordPress server and returns the customer-facing Cloud API key
 - production deploys should set:
   - `NPCINK_CLOUD_PORTAL_JWT_SECRET`
-  - `NPCINK_CLOUD_PORTAL_PUBLIC_BASE_URL`
+- production deploys should configure in `/admin/service-settings`:
+  - Portal public URL
+  - QQ login, when enabled
   - SMTP sender settings for verification-code delivery
 Platform admin bootstrap auth:
 
@@ -642,23 +739,25 @@ Platform admin bootstrap auth:
 - platform-admin bootstrap uses the configured single platform admin reference
   and does not require a separate identity-provisioning surface
 - current operator runbook for lean validation:
-  - [cloud-platform-login-and-invite-runbook.md](../../magick-ai/docs/archive/plans/cloud-platform-login-and-invite-runbook.md)
+  - [deploy/OPS_PLAYBOOK.md](deploy/OPS_PLAYBOOK.md)
 Buyer-facing web routes:
 
 - `GET /`
 - `GET /portal/login`
 - `GET /portal`
 - `GET /portal/sites`
-- `GET /portal/keys`
 - `GET /portal/usage`
 - `GET /portal/billing`
 - `GET /portal/audit`
 - `GET /portal/logout`
 
 These routes are a bounded Cloud service status and portal layer, not a
-customer-facing commercial front-office. Marketing pages, top-up catalog pages,
-impersonation pages, compliance pages, and request queues are intentionally
-removed.
+customer-facing commercial front-office. Marketing pages, standalone top-up
+catalog request pages, impersonation pages, compliance pages, and request queues
+are intentionally removed. The Portal usage surface may show credit-pack
+catalog, payment orders, and simulated payment status as bounded billing detail;
+real external payment provider checkout remains gated by
+[payment-gateway-contract-v1.md](docs/payment-gateway-contract-v1.md).
 
 ## Verification Quickstart
 
@@ -666,13 +765,16 @@ For the fastest local verification loop:
 
 1. Configure local portal auth in `.env`:
    - `NPCINK_CLOUD_PORTAL_JWT_SECRET=dev-portal-jwt-secret-with-at-least-thirty-two-bytes`
-   - `NPCINK_CLOUD_PORTAL_PUBLIC_BASE_URL=http://127.0.0.1:8010`
 2. Start local Cloud:
    - `pnpm run dev`
    - optional frontend auto-sync loop: `pnpm run frontend:watch`
-3. Prefer binding Portal to one already provisioned real site:
+3. For stable local admin/portal debugging, seed the fixed local login data:
+   - `pnpm run login:seed:dev`
+   - default site: `site_smoke`
+   - default portal email: `portal-demo@example.com`
+4. Prefer binding Portal to one already provisioned real site:
    - `pnpm run portal:bind:dev -- --site-id <site-id> --member-email <email>`
-4. If the environment is empty, seed a runtime baseline and then bind Portal:
+5. If the environment is empty and you need a custom site, seed a runtime baseline and then bind Portal:
    - `pnpm run seed:smoke`
    - `pnpm run portal:bind:dev -- --site-id <site-id> --member-email <email>`
 
@@ -687,10 +789,11 @@ operator smoke, and does not create portal members or portal-facing sample data.
 
 Primary local verification routes:
 
+- `http://127.0.0.1:8010/admin/login`
 - `http://127.0.0.1:8010/portal/login`
 - `http://127.0.0.1:8010/portal`
 - `http://127.0.0.1:8010/portal/overview`
-- `http://127.0.0.1:8010/portal/keys`
+- `http://127.0.0.1:8010/portal/sites`
 
 `portal:bind:dev` marks its output as `"data_mode": "real_site_bootstrap"`
 and does not synthesize seeded runs or usage. It only binds a portal member
@@ -721,11 +824,9 @@ development-code helpers live under `deploy/dev/`:
 
 - `deploy/dev/remote-portal-login-code-smoke.sh`
 
-For the shortest command-only runbook, see
-[cloud-mvp-ops-runbook.md](../../magick-ai/docs/archive/plans/cloud-mvp-ops-runbook.md).
-
-For one current-state identity overview and recommended evolution path, see
-[cloud-identity-system-overview-and-roadmap.md](../../magick-ai/docs/archive/plans/cloud-identity-system-overview-and-roadmap.md).
+For formal operator procedures, see [deploy/OPS_PLAYBOOK.md](deploy/OPS_PLAYBOOK.md).
+For the current portal/account state, see
+[cloud-account-portal-stage-closeout-summary-2026-06-29.md](docs/cloud-account-portal-stage-closeout-summary-2026-06-29.md).
 
 ## Admin Console
 
@@ -779,7 +880,8 @@ The bounded internal admin surface is now landed. It is:
 
 Plan and handoff truth:
 
-- [cloud-admin-mvp-plan.md](../../magick-ai/docs/archive/plans/cloud-admin-mvp-plan.md)
+- [admin-surface-cleanup-closeout-2026-07-02.md](docs/admin-surface-cleanup-closeout-2026-07-02.md)
+- [admin-customer-surface-consolidation-history-2026-06-30.md](docs/admin-customer-surface-consolidation-history-2026-06-30.md)
 
 Current internal admin routes:
 
@@ -823,8 +925,10 @@ and not a second control plane.
 In production-style deploys, the bundled proxy forwards `/admin` and `/admin/*`
 as the only public platform-admin surface. Legacy `/ops/*` paths are removed.
 
-Current acceptance receipt:
-[cloud-mvp-acceptance-receipt-2026-03-23.md](../../magick-ai/docs/archive/plans/cloud-mvp-acceptance-receipt-2026-03-23.md)
+Current acceptance and cleanup receipts:
+
+- [admin-surface-cleanup-closeout-2026-07-02.md](docs/admin-surface-cleanup-closeout-2026-07-02.md)
+- [admin-runtime-surface-cleanup-closeout-2026-07-01.md](docs/admin-runtime-surface-cleanup-closeout-2026-07-01.md)
 
 Current auth decision stays bounded:
 
@@ -847,25 +951,13 @@ Portal email login delivery:
   locale; current supported values are `en`, `zh-CN`, and `zh-TW`
 - if SMTP is not configured, development/test mode falls back to returning the
   verification code in-app for local debugging
-- set `NPCINK_CLOUD_PORTAL_PUBLIC_BASE_URL` when email links must point at the
-  external customer-facing domain instead of the direct request host
-- for SMTP delivery, configure:
-  - `NPCINK_CLOUD_PORTAL_EMAIL_SMTP_HOST`
-  - `NPCINK_CLOUD_PORTAL_EMAIL_SMTP_PORT`
-  - `NPCINK_CLOUD_PORTAL_EMAIL_SMTP_USERNAME`
-  - `NPCINK_CLOUD_PORTAL_EMAIL_SMTP_PASSWORD`
-  - `NPCINK_CLOUD_PORTAL_EMAIL_SMTP_USE_SSL`
-  - `NPCINK_CLOUD_PORTAL_EMAIL_SMTP_USE_STARTTLS`
-  - `NPCINK_CLOUD_PORTAL_EMAIL_FROM_EMAIL`
-  - `NPCINK_CLOUD_PORTAL_EMAIL_FROM_NAME`
-  - `NPCINK_CLOUD_PORTAL_EMAIL_REPLY_TO`
+- configure Portal public URL and SMTP delivery in `/admin/service-settings`;
+  SMTP password is write-only and runtime delivery has no `.env` fallback
 
-For Alibaba Cloud enterprise mailbox, point the SMTP settings above at the
-SMTP host/port and SSL or STARTTLS mode provided by your mailbox admin panel.
+For Alibaba Cloud enterprise mailbox, point the service settings at the SMTP
+host/port and SSL or STARTTLS mode provided by your mailbox admin panel.
 This keeps Cloud generic while still supporting Aliyun enterprise mail as the
 actual sender.
-For Aliyun-specific deploys, keep the concrete SMTP values in the chosen deploy
-env file rather than committing provider-specific secrets.
 
 Portal email self-test:
 
@@ -890,21 +982,8 @@ curl -X POST http://127.0.0.1:8000/internal/portal/email/test \
 Provider execution modes:
 
 - default: sample mode, no external provider calls
-- set `NPCINK_CLOUD_OPENAI_API_KEY` to enable real OpenAI-compatible
-  HTTP execution for `chat_completions / responses / embeddings`
-- set `NPCINK_CLOUD_ANTHROPIC_API_KEY` to enable real Anthropic HTTP execution
-  for text-only `messages`
-- set `NPCINK_CLOUD_LITELLM_PROVIDER_ENABLED=true` with
-  `NPCINK_CLOUD_LITELLM_BASE_URL` to enable LiteLLM Gateway as a hosted
-  provider source
-- set `NPCINK_CLOUD_VLLM_PROVIDER_ENABLED=true` with
-  `NPCINK_CLOUD_VLLM_BASE_URL` to enable a self-hosted vLLM OpenAI-compatible
-  provider
-- set `NPCINK_CLOUD_TEI_PROVIDER_ENABLED=true` with
-  `NPCINK_CLOUD_TEI_BASE_URL` and `NPCINK_CLOUD_TEI_MODEL_IDS` to enable a
-  self-hosted TEI embedding provider
-- set `NPCINK_CLOUD_OPENROUTER_PROVIDER_ENABLED=true` with
-  `NPCINK_CLOUD_OPENROUTER_API_KEY` to enable OpenRouter as a hosted provider
+- configure model provider channels in `/admin/ai-resources`;
+  provider keys are stored as DB provider connections, not `.env.local` values
 
 Provider integration boundary:
 
@@ -1176,16 +1255,6 @@ docker compose -f docker-compose.dev.yml run --rm api python -m app.dev.seed_run
   --secret npcink-cloud-test-secret
 ```
 
-Example real provider env:
-
-```bash
-export NPCINK_CLOUD_OPENAI_API_KEY=sk-...
-export NPCINK_CLOUD_OPENAI_BASE_URL=https://api.openai.com/v1
-export NPCINK_CLOUD_ANTHROPIC_API_KEY=sk-ant-...
-export NPCINK_CLOUD_ANTHROPIC_BASE_URL=https://api.anthropic.com
-export NPCINK_CLOUD_ANTHROPIC_VERSION=2023-06-01
-```
-
 If cross-arch Docker builds are unstable from your network, you can also export
 optional pip mirror args before `make bundle` or `deploy-to-ssh-host.sh`:
 
@@ -1197,9 +1266,10 @@ export NPCINK_CLOUD_PIP_TRUSTED_HOST=pypi.tuna.tsinghua.edu.cn
 With a real API key, `POST /internal/catalog/refresh` plus a valid
 `X-Npcink-Internal-Token`, and
 `python -m app.workers.catalog_refresh` fetch `/models` from the configured
-provider instead of using the built-in sample catalog. Anthropic is only added
-to the runtime registry when `NPCINK_CLOUD_ANTHROPIC_API_KEY` is configured, so
-an unconfigured sample adapter does not silently alter default routing.
+provider instead of using the built-in sample catalog. Provider credentials and
+provider-specific runtime configuration are managed as DB provider connections
+through `/admin/ai-resources`; unconfigured sample adapters do not silently alter
+default routing.
 
 For router-performance offload staging, `python -m app.workers.router_performance_snapshot`
 now acts as a one-shot cadence worker. It enumerates active sites, builds the
@@ -1306,7 +1376,7 @@ pnpm run deploy:ssh -- --ssh-host your-cloud-host
 pnpm run env:ssh -- --ssh-host your-cloud-host
 ```
 
-From `cloud/`, you can also run:
+From the repository root, you can also run:
 
 ```bash
 make router-performance
@@ -1452,20 +1522,9 @@ Notes:
   `deploy/WORKSPACE_TARGET.md`, but SSH user, base URL, and deploy env
   still need to be completed before the host is deploy-ready.
 
-Remote provider env sync example:
-
-```bash
-export NPCINK_CLOUD_ANTHROPIC_API_KEY=sk-ant-...
-pnpm run env:ssh -- \
-  --ssh-host your-cloud-host \
-  --ssh-user root \
-  --remote-dir /opt/npcink-ai-cloud \
-  --set NPCINK_CLOUD_ANTHROPIC_BASE_URL=https://api.anthropic.com \
-  --set NPCINK_CLOUD_ANTHROPIC_VERSION=2023-06-01 \
-  --from-env NPCINK_CLOUD_ANTHROPIC_API_KEY
-```
-
-After syncing env, confirm readiness before running Anthropic smoke:
+Remote model provider setup now happens through `/admin/ai-resources` after
+deploy. Add or update the provider connection there, then use the masked
+connection test before running provider-specific smoke.
 
 ```bash
 ssh root@your-cloud-host 'cd /opt/npcink-ai-cloud/current && bash -s' \

@@ -14,15 +14,20 @@ export function ThemeToggle() {
 
   // 使用默认值避免 hydration 不匹配
   const displayIsDark = mounted ? isDark : false;
+  const handleToggleTheme = () => {
+    if (!mounted) {
+      return;
+    }
+    toggleTheme();
+  };
 
   return (
     <button
       type="button"
-      onClick={toggleTheme}
+      onClick={handleToggleTheme}
       className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-slate-200/80 bg-white/85 text-slate-600 shadow-sm transition-all hover:-translate-y-0.5 hover:border-slate-300 hover:text-slate-900 dark:border-slate-700 dark:bg-slate-900/80 dark:text-slate-300 dark:hover:border-slate-600 dark:hover:bg-slate-800 dark:hover:text-slate-100"
       aria-label={displayIsDark ? t('theme.switch_to_light') : t('theme.switch_to_dark')}
       title={displayIsDark ? t('theme.switch_to_light') : t('theme.switch_to_dark')}
-      disabled={!mounted}
     >
       {displayIsDark ? (
         <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">

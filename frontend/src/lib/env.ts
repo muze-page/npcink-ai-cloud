@@ -9,9 +9,9 @@ const envSchema = z.object({
   CLOUD_PUBLIC_BASE_URL: z.string().url().default('http://127.0.0.1:8010'),
   NPCINK_CLOUD_INTERNAL_AUTH_TOKEN: z.string().optional().default(''),
   NPCINK_CLOUD_ADMIN_BOOTSTRAP_TOKEN: z.string().optional().default(''),
-  NPCINK_CLOUD_ADMIN_BOOTSTRAP_ADMIN_REF: z.string().optional().default('platform:internal_root'),
+  NPCINK_CLOUD_ADMIN_BOOTSTRAP_PRINCIPAL_ID: z.string().optional().default('platform:internal_root'),
   NPCINK_CLOUD_DEV_PORTAL_EMAIL: z.string().optional().default('portal-demo@example.com'),
-  NPCINK_CLOUD_DEV_PORTAL_SITE_ID: z.string().optional().default('site_npcink-local'),
+  NPCINK_CLOUD_DEV_PORTAL_SITE_ID: z.string().optional().default('site_smoke'),
 });
 
 export type Env = z.infer<typeof envSchema>;
@@ -90,7 +90,7 @@ export function validateEnv(): Env {
     CLOUD_PUBLIC_BASE_URL: rawPublicBaseUrl,
     NPCINK_CLOUD_INTERNAL_AUTH_TOKEN: process.env.NPCINK_CLOUD_INTERNAL_AUTH_TOKEN,
     NPCINK_CLOUD_ADMIN_BOOTSTRAP_TOKEN: process.env.NPCINK_CLOUD_ADMIN_BOOTSTRAP_TOKEN,
-    NPCINK_CLOUD_ADMIN_BOOTSTRAP_ADMIN_REF: process.env.NPCINK_CLOUD_ADMIN_BOOTSTRAP_ADMIN_REF,
+    NPCINK_CLOUD_ADMIN_BOOTSTRAP_PRINCIPAL_ID: process.env.NPCINK_CLOUD_ADMIN_BOOTSTRAP_PRINCIPAL_ID,
     NPCINK_CLOUD_DEV_PORTAL_EMAIL: process.env.NPCINK_CLOUD_DEV_PORTAL_EMAIL,
     NPCINK_CLOUD_DEV_PORTAL_SITE_ID: process.env.NPCINK_CLOUD_DEV_PORTAL_SITE_ID,
   });
@@ -170,18 +170,6 @@ export function isMiniDevRequestHost(hostHeader: string | null | undefined): boo
   return isMiniDevHost(hostname);
 }
 
-export function isMiniDevDockEnabled(): boolean {
-  if (!isBrowserRuntime()) {
-    return false;
-  }
-
-  if (process.env.NODE_ENV === 'production') {
-    return false;
-  }
-
-  return isMiniDevHost(window.location.hostname);
-}
-
 export function getPortalApiBaseUrl(): string {
   if (isBrowserRuntime()) {
     return '/api/portal';
@@ -226,7 +214,7 @@ export function getAdminBootstrapToken(): string {
 }
 
 export function getAdminBootstrapAdminRef(): string {
-  return getEnv().NPCINK_CLOUD_ADMIN_BOOTSTRAP_ADMIN_REF.trim() || 'platform:internal_root';
+  return getEnv().NPCINK_CLOUD_ADMIN_BOOTSTRAP_PRINCIPAL_ID.trim() || 'platform:internal_root';
 }
 
 export function getDevPortalEmail(): string {
@@ -234,5 +222,5 @@ export function getDevPortalEmail(): string {
 }
 
 export function getDevPortalSiteId(): string {
-  return getEnv().NPCINK_CLOUD_DEV_PORTAL_SITE_ID.trim() || 'site_npcink-local';
+  return getEnv().NPCINK_CLOUD_DEV_PORTAL_SITE_ID.trim() || 'site_smoke';
 }

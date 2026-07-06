@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import re
 from datetime import UTC, datetime, timedelta
 
 from fastapi import Request
 from fastapi.responses import JSONResponse, RedirectResponse
 
+from app.adapters.repositories.commercial_repository import CommercialRepository
 from app.api.auth import (
     AUTHORIZATION_HEADER,
     PortalAuthContext,
@@ -14,10 +16,13 @@ from app.api.auth import (
     decode_portal_bearer_claims,
     decode_portal_session_cookie_claims,
     get_cloud_services,
+    resolve_portal_remember_me_session_ttl_seconds,
     resolve_portal_session_ttl_seconds,
+    validate_portal_principal_session,
 )
 from app.api.envelope import build_envelope
-from app.core.models import SITE_STATUS_ARCHIVED
+from app.core.db import get_session
+from app.core.models import SITE_STATUS_ACTIVE, SITE_STATUS_ARCHIVED
 from app.core.security import extract_trace_id
 from app.domain.commercial.errors import CommercialServiceError
 from app.domain.commercial.service import CommercialService
@@ -27,6 +32,7 @@ COOKIE_PORTAL_SESSION_TOKEN = "magick_portal_session_token"
 COOKIE_BEARER_TOKEN = COOKIE_PORTAL_SESSION_TOKEN
 COOKIE_SESSION_ISSUED_AT = "magick_portal_session_issued_at"
 COOKIE_SESSION_EXPIRES_AT = "magick_portal_session_expires_at"
+COOKIE_SITE_ID_PATTERN = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")
 
 
 def _dict_value(value: object) -> dict[str, object]:
@@ -41,6 +47,11 @@ def _object_list(value: object) -> list[object]:
     return value if isinstance(value, list) else []
 
 
+def _cookie_safe_site_id(value: str) -> str:
+    site_id = value.strip()
+    return site_id if COOKIE_SITE_ID_PATTERN.fullmatch(site_id) else ""
+
+
 def get_commercial_service(request: Request) -> CommercialService:
     services = get_cloud_services(request)
     return CommercialService(services.settings.database_url, settings=services.settings)
@@ -51,6 +62,17 @@ def portal_auth_mode(request: Request) -> str:
     if settings.portal_jwt_secret:
         return "jwt"
     return "disabled"
+
+
+def _safe_portal_error_message(error_code: str) -> str:
+    messages = {
+        "auth.portal_session_required": "portal session is required",
+        "auth.portal_session_revoked": "portal session is no longer valid",
+        "auth.portal_session_invalid": "portal session is invalid",
+        "auth.portal_login_code_invalid": "portal login code is invalid",
+        "auth.portal_oauth_failed": "portal OAuth request failed",
+    }
+    return messages.get(str(error_code or ""), "portal request failed")
 
 
 def portal_json_error(
@@ -65,7 +87,7 @@ def portal_json_error(
         content=build_envelope(
             status="error",
             error_code=error_code,
-            message=message,
+            message=_safe_portal_error_message(error_code),
             trace_id=extract_trace_id(request.headers.get("traceparent", "")),
             revision="m6",
         ),
@@ -112,14 +134,19 @@ def current_portal_browser_session(
                 session_required_message,
             )
         claims = decode_portal_session_cookie_claims(settings, token)
-        site_admin_ref = str(claims.get("sub") or "").strip()
-        if not site_admin_ref:
+        principal_id = str(claims.get("sub") or "").strip()
+        if not principal_id:
             raise PortalBearerTokenError(
                 401,
                 session_required_error_code,
                 session_required_message,
             )
         token_expires_at = ""
+        validate_portal_principal_session(
+            settings,
+            principal_id=principal_id,
+            session_version=int(claims.get("session_version") or 1),
+        )
         if claims.get("exp"):
             token_expires_at = (
                 datetime.fromtimestamp(int(claims["exp"]), tz=UTC)
@@ -127,7 +154,8 @@ def current_portal_browser_session(
                 .replace("+00:00", "Z")
             )
         return {
-            "site_admin_ref": site_admin_ref,
+            "principal_id": principal_id,
+            "site_id": _cookie_safe_site_id(str(claims.get("site_id") or "")),
             "auth_mode": "jwt",
             "issued_at": issued_at,
             "expires_at": token_expires_at or expires_at,
@@ -153,7 +181,9 @@ def current_portal_site_session(
         session_required_error_code=session_required_error_code,
         session_required_message=session_required_message,
     )
-    site_id = request.cookies.get(COOKIE_SITE_ID, "").strip()
+    site_id = _cookie_safe_site_id(str(session.get("site_id") or ""))
+    if not site_id:
+        site_id = _cookie_safe_site_id(request.cookies.get(COOKIE_SITE_ID, ""))
     if not site_id:
         raise PortalBearerTokenError(
             401,
@@ -169,19 +199,25 @@ def current_portal_site_session(
 def serialize_portal_session(
     request: Request,
     *,
-    site_admin_ref: str,
+    principal_id: str,
     site_id: str = "",
     strict_site: bool = True,
     session_metadata: dict[str, object] | None = None,
 ) -> dict[str, object]:
     service = get_commercial_service(request)
-    sites = service.list_portal_sites(site_admin_ref=site_admin_ref)
-    accounts = service.list_portal_accounts(site_admin_ref=site_admin_ref)
+    sites = service.list_portal_sites(principal_id=principal_id)
+    accounts = service.list_portal_accounts(principal_id=principal_id)
+    principal_profile = service.get_portal_principal_profile(principal_id=principal_id)
     site_items = _dict_list(sites.get("items"))
     visible_site_items = [
         item
         for item in site_items
         if str(_dict_value(item.get("site")).get("status") or "").strip() != SITE_STATUS_ARCHIVED
+    ]
+    active_site_items = [
+        item
+        for item in visible_site_items
+        if str(_dict_value(item.get("site")).get("status") or "").strip() == SITE_STATUS_ACTIVE
     ]
     selected_site: dict[str, object] | None = None
     selected_role = ""
@@ -190,13 +226,13 @@ def serialize_portal_session(
     resolved_site_id = site_id
     session = session_metadata or _resolve_portal_session_metadata(
         request,
-        site_admin_ref=site_admin_ref,
+        principal_id=principal_id,
     )
     if site_id:
         try:
             access = service.resolve_portal_site_access(
                 site_id=site_id,
-                site_admin_ref=site_admin_ref,
+                principal_id=principal_id,
             )
         except CommercialServiceError:
             if strict_site:
@@ -206,19 +242,31 @@ def serialize_portal_session(
             selected_site = _dict_value(access.get("site")) or None
             selected_role = str(access.get("role") or "")
             selected_account_id = str(access.get("account_id") or "")
-            if str(_dict_value(selected_site).get("status") or "").strip() == SITE_STATUS_ARCHIVED:
+            selected_status = str(_dict_value(selected_site).get("status") or "").strip()
+            if selected_status == SITE_STATUS_ARCHIVED:
                 if strict_site:
                     raise CommercialServiceError(
                         403,
-                        "service.portal_site_archived",
-                        "archived portal sites cannot be selected as the current site",
+                        "service.portal_site_removed",
+                        "removed portal sites cannot be selected as the current site",
                     )
                 selected_site = None
                 selected_role = ""
                 selected_account_id = ""
                 resolved_site_id = ""
-    if not resolved_site_id and visible_site_items:
-        fallback_item = visible_site_items[0]
+            elif selected_status != SITE_STATUS_ACTIVE:
+                if strict_site:
+                    raise CommercialServiceError(
+                        403,
+                        "service.portal_site_inactive",
+                        "inactive portal sites cannot be selected as the current site",
+                    )
+                selected_site = None
+                selected_role = ""
+                selected_account_id = ""
+                resolved_site_id = ""
+    if not resolved_site_id and active_site_items:
+        fallback_item = active_site_items[0]
         fallback_site = fallback_item.get("site") if isinstance(fallback_item, dict) else {}
         if isinstance(fallback_site, dict):
             selected_site = fallback_site
@@ -235,10 +283,13 @@ def serialize_portal_session(
         except CommercialServiceError:
             account_detail = {}
         subscriptions = _dict_list(account_detail.get("subscriptions"))
-        current_subscription = subscriptions[0] if subscriptions else None
+        if subscriptions:
+            primary_subscription = _dict_value(subscriptions[0].get("subscription"))
+            current_subscription = primary_subscription or subscriptions[0]
     return {
         "site_id": resolved_site_id,
-        "site_admin_ref": site_admin_ref,
+        "principal_id": principal_id,
+        "email": str(principal_profile.get("email") or ""),
         "account_id": selected_account_id,
         "identity_type": (
             str(account_items[0].get("identity_type") or "") if account_items else ""
@@ -267,14 +318,24 @@ def serialize_portal_session(
     }
 
 
-def build_new_portal_session_metadata(request: Request) -> dict[str, object]:
+def build_new_portal_session_metadata(
+    request: Request,
+    *,
+    ttl_seconds: int | None = None,
+) -> dict[str, object]:
     settings = get_cloud_services(request).settings
     now = datetime.now(UTC)
-    ttl_seconds = resolve_portal_session_ttl_seconds(settings)
+    resolved_ttl_seconds = (
+        max(60, int(ttl_seconds or 0))
+        if ttl_seconds is not None
+        else resolve_portal_session_ttl_seconds(settings)
+    )
     return {
-        "site_admin_ref": "",
+        "principal_id": "",
         "issued_at": now.isoformat().replace("+00:00", "Z"),
-        "expires_at": (now + timedelta(seconds=ttl_seconds)).isoformat().replace("+00:00", "Z"),
+        "expires_at": (now + timedelta(seconds=resolved_ttl_seconds))
+        .isoformat()
+        .replace("+00:00", "Z"),
         "transport": "cookie",
         "revocable": True,
     }
@@ -284,37 +345,37 @@ def set_portal_session_cookies(
     request: Request,
     response: JSONResponse,
     *,
-    site_admin_ref: str,
+    principal_id: str,
     site_id: str = "",
+    session_version: int | None = None,
+    ttl_seconds: int | None = None,
 ) -> None:
     settings = get_cloud_services(request).settings
     now = datetime.now(UTC)
-    ttl_seconds = resolve_portal_session_ttl_seconds(settings)
+    resolved_ttl_seconds = (
+        max(60, int(ttl_seconds or 0))
+        if ttl_seconds is not None
+        else resolve_portal_session_ttl_seconds(settings)
+    )
     secure = portal_cookie_secure(request)
     issued_at = now.isoformat().replace("+00:00", "Z")
-    expires_at = (now + timedelta(seconds=ttl_seconds)).isoformat().replace("+00:00", "Z")
-    if site_id:
-        response.set_cookie(
-            COOKIE_SITE_ID,
-            site_id,
-            httponly=True,
-            secure=secure,
-            samesite="lax",
-            max_age=ttl_seconds,
-        )
-    else:
-        response.delete_cookie(COOKIE_SITE_ID)
+    expires_at = (now + timedelta(seconds=resolved_ttl_seconds)).isoformat().replace("+00:00", "Z")
+    token_site_id = _cookie_safe_site_id(site_id)
+    response.delete_cookie(COOKIE_SITE_ID)
     response.set_cookie(
         COOKIE_PORTAL_SESSION_TOKEN,
         build_portal_session_token(
             settings,
-            site_admin_ref=site_admin_ref,
-            expires_at=now + timedelta(seconds=ttl_seconds),
+            principal_id=principal_id,
+            site_id=token_site_id,
+            session_version=session_version
+            or _resolve_portal_principal_session_version(request, principal_id=principal_id),
+            expires_at=now + timedelta(seconds=resolved_ttl_seconds),
         ),
         httponly=True,
         secure=secure,
         samesite="lax",
-        max_age=ttl_seconds,
+        max_age=resolved_ttl_seconds,
     )
     response.set_cookie(
         COOKIE_SESSION_ISSUED_AT,
@@ -322,7 +383,7 @@ def set_portal_session_cookies(
         httponly=True,
         secure=secure,
         samesite="lax",
-        max_age=ttl_seconds,
+        max_age=resolved_ttl_seconds,
     )
     response.set_cookie(
         COOKIE_SESSION_EXPIRES_AT,
@@ -330,8 +391,29 @@ def set_portal_session_cookies(
         httponly=True,
         secure=secure,
         samesite="lax",
-        max_age=ttl_seconds,
+        max_age=resolved_ttl_seconds,
     )
+
+
+def resolve_portal_login_session_ttl_seconds(request: Request, *, remember_me: bool) -> int:
+    settings = get_cloud_services(request).settings
+    if remember_me:
+        return resolve_portal_remember_me_session_ttl_seconds(settings)
+    return resolve_portal_session_ttl_seconds(settings)
+
+
+def _resolve_portal_principal_session_version(
+    request: Request,
+    *,
+    principal_id: str,
+) -> int:
+    settings = get_cloud_services(request).settings
+    with get_session(settings.database_url) as session:
+        repository = CommercialRepository(session)
+        identity = repository.get_principal_identity_by_ref(principal_id=principal_id)
+        if identity is not None:
+            return int(identity.session_version or 1)
+    return 1
 
 
 def clear_portal_session_cookies(response: JSONResponse | RedirectResponse) -> None:
@@ -349,7 +431,7 @@ def _has_portal_request_headers(request: Request) -> bool:
     )
 
 
-def _resolve_portal_session_metadata(request: Request, *, site_admin_ref: str) -> dict[str, object]:
+def _resolve_portal_session_metadata(request: Request, *, principal_id: str) -> dict[str, object]:
     if _has_portal_request_headers(request):
         auth_header = request.headers.get(AUTHORIZATION_HEADER, "").strip()
         if auth_header.lower().startswith("bearer "):
@@ -372,14 +454,14 @@ def _resolve_portal_session_metadata(request: Request, *, site_admin_ref: str) -
                     .replace("+00:00", "Z")
                 )
             return {
-                "site_admin_ref": site_admin_ref,
+                "principal_id": principal_id,
                 "issued_at": issued_at,
                 "expires_at": expires_at,
                 "transport": "header",
                 "revocable": False,
             }
         return {
-            "site_admin_ref": site_admin_ref,
+            "principal_id": principal_id,
             "issued_at": "",
             "expires_at": "",
             "transport": "header",
@@ -388,7 +470,7 @@ def _resolve_portal_session_metadata(request: Request, *, site_admin_ref: str) -
 
     session = current_portal_browser_session(request)
     return {
-        "site_admin_ref": site_admin_ref,
+        "principal_id": principal_id,
         "issued_at": session.get("issued_at", ""),
         "expires_at": session.get("expires_at", ""),
         "transport": "cookie",
@@ -424,7 +506,10 @@ async def resolve_portal_request_context(
                 error_code=error.error_code,
                 message=error.message,
             )
-        return PortalAuthContext(site_admin_ref=session["site_admin_ref"])
+        return PortalAuthContext(
+            principal_id=session["principal_id"],
+            site_id=str(session.get("site_id") or ""),
+        )
 
     return await authorize_portal_request(
         request,

@@ -136,7 +136,7 @@ def _post_execute(
 
 def _set_plan_metadata(database_url: str, metadata: dict[str, Any]) -> None:
     with get_session(database_url) as session:
-        plan_version = session.get(PlanVersion, "plan_free_v1")
+        plan_version = session.get(PlanVersion, "free_v1")
         assert plan_version is not None
         existing = (
             plan_version.metadata_json if isinstance(plan_version.metadata_json, dict) else {}
@@ -612,7 +612,7 @@ def test_cloud_batch_runtime_rejects_over_plan_batch_item_limit(tmp_path: Path) 
     assert "nightly_site_inspection" in body["message"]
 
 
-def test_cloud_batch_runtime_rejects_over_period_inspection_quota(tmp_path: Path) -> None:
+def test_cloud_batch_runtime_ignores_legacy_period_inspection_quota(tmp_path: Path) -> None:
     database_url, _, _, client = _build_client(tmp_path)
     _set_plan_metadata(
         database_url,
@@ -655,10 +655,9 @@ def test_cloud_batch_runtime_rejects_over_period_inspection_quota(tmp_path: Path
         idempotency_key="cloud-batch-period-limit",
     )
 
-    assert response.status_code == 429
-    body = response.json()
-    assert body["error_code"] == "commercial.quota_exceeded"
-    assert "nightly_site_inspection_runs" in body["message"]
+    assert response.status_code == 200
+    body = response.json()["data"]
+    assert body["status"] == "queued"
 
 
 def test_cloud_batch_runtime_rejects_write_control_fields(tmp_path: Path) -> None:

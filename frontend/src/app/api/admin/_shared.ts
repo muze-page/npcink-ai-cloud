@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getApiBaseUrl, getInternalAuthToken } from '@/lib/env';
 
 export type AdminSessionPayload = {
+  principal_id: string;
   platform_admin_ref: string;
   identity_type?: string;
   role: string;
@@ -208,14 +209,16 @@ function parseAdminSessionPayload(payload: unknown): AdminSessionPayload | null 
       ? (payload.data as Record<string, unknown>)
       : null;
 
-  const platformAdminRef = String(data?.platform_admin_ref || '').trim();
+  const principalId = String(data?.principal_id || data?.platform_admin_ref || '').trim();
+  const platformAdminRef = String(data?.platform_admin_ref || principalId).trim();
   const role = String(data?.role || '').trim();
   const authMode = String(data?.auth_mode || '').trim();
-  if (!platformAdminRef || !role || !authMode) {
+  if (!principalId || !platformAdminRef || !role || !authMode) {
     return null;
   }
 
   return {
+    principal_id: principalId,
     platform_admin_ref: platformAdminRef,
     identity_type: String(data?.identity_type || ''),
     role,

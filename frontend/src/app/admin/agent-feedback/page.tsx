@@ -78,26 +78,30 @@ type AgentFeedbackSummary = {
   };
 };
 
+type TranslationFn = (key: string, params?: Record<string, string>, fallback?: string) => string;
+
 const WINDOW_OPTIONS = [
   { label: '24h', value: 24 },
   { label: '7d', value: 168 },
 ];
 
-const LABEL_FALLBACKS: Record<string, string> = {
-  duplicate_suggestion: 'Duplicate suggestion',
-  evidence_useful: 'Evidence useful',
-  evidence_weak: 'Evidence weak',
-  good_but_needs_human_draft: 'Needs human draft',
-  missing_context: 'Missing context',
-  not_relevant_to_site: 'Not relevant',
-  operator_confidence_high: 'High confidence',
-  operator_confidence_low: 'Low confidence',
-  source_or_license_risk: 'Source/license risk',
-  too_generic: 'Too generic',
-  unsafe_or_overreaching: 'Unsafe or overreaching',
-  visual_quality_low: 'Visual quality low',
-  wrong_intent: 'Wrong intent',
-  wrong_next_step: 'Wrong next step',
+const LABEL_FALLBACKS: Record<string, { key: string; fallback: string }> = {
+  already_handled: { key: 'admin.agent_feedback.label_already_handled', fallback: 'Already handled' },
+  duplicate_suggestion: { key: 'admin.agent_feedback.label_duplicate_suggestion', fallback: 'Duplicate suggestion' },
+  evidence_useful: { key: 'admin.agent_feedback.label_evidence_useful', fallback: 'Evidence useful' },
+  evidence_weak: { key: 'admin.agent_feedback.label_evidence_weak', fallback: 'Evidence weak' },
+  good_but_needs_human_draft: { key: 'admin.agent_feedback.label_good_but_needs_human_draft', fallback: 'Needs human draft' },
+  missing_context: { key: 'admin.agent_feedback.label_missing_context', fallback: 'Missing context' },
+  not_relevant_to_site: { key: 'admin.agent_feedback.label_not_relevant_to_site', fallback: 'Not relevant' },
+  operator_confidence_high: { key: 'admin.agent_feedback.label_operator_confidence_high', fallback: 'High confidence' },
+  operator_confidence_low: { key: 'admin.agent_feedback.label_operator_confidence_low', fallback: 'Low confidence' },
+  source_or_license_risk: { key: 'admin.agent_feedback.label_source_or_license_risk', fallback: 'Source/license risk' },
+  too_generic: { key: 'admin.agent_feedback.label_too_generic', fallback: 'Too generic' },
+  unsafe_or_overreaching: { key: 'admin.agent_feedback.label_unsafe_or_overreaching', fallback: 'Unsafe or overreaching' },
+  visual_quality_low: { key: 'admin.agent_feedback.label_visual_quality_low', fallback: 'Visual quality low' },
+  wrong_intent: { key: 'admin.agent_feedback.label_wrong_intent', fallback: 'Wrong intent' },
+  wrong_next_step: { key: 'admin.agent_feedback.label_wrong_next_step', fallback: 'Wrong next step' },
+  wrong_priority: { key: 'admin.agent_feedback.label_wrong_priority', fallback: 'Wrong priority' },
 };
 
 const LOW_QUALITY_LABELS = new Set([
@@ -201,8 +205,9 @@ function formatPercent(value: number): string {
   return `${(Number(value || 0) * 100).toFixed(1)}%`;
 }
 
-function labelText(label: string): string {
-  return LABEL_FALLBACKS[label] || label.replaceAll('_', ' ');
+function labelText(t: TranslationFn, label: string): string {
+  const copy = LABEL_FALLBACKS[label];
+  return copy ? t(copy.key, {}, copy.fallback) : label.replaceAll('_', ' ');
 }
 
 function labelTone(label: string): BackofficeTagTone {
@@ -232,6 +237,21 @@ function trendBucketLabel(value: string): string {
   const day = String(date.getDate()).padStart(2, '0');
   const hour = String(date.getHours()).padStart(2, '0');
   return `${month}/${day} ${hour}:00`;
+}
+
+function metricWindowDetail(t: TranslationFn, data: AgentFeedbackSummary): string {
+  if (data.limited) {
+    return t(
+      'admin.agent_feedback.limited_detail',
+      { count: formatNumber(data.maxEvents) },
+      'Limited to {{count}} events'
+    );
+  }
+  return t(
+    'admin.agent_feedback.window_detail',
+    { hours: formatNumber(data.windowHours) },
+    '{{hours}}h window'
+  );
 }
 
 function AgentFeedbackQualityDashboard() {
@@ -313,7 +333,7 @@ function AgentFeedbackQualityDashboard() {
                 {
                   label: t('admin.agent_feedback.events', {}, 'Events'),
                   value: formatNumber(data.eventsTotal),
-                  detail: data.limited ? `Limited to ${formatNumber(data.maxEvents)} events` : `${data.windowHours}h window`,
+                  detail: metricWindowDetail(t, data),
                 },
                 {
                   label: t('admin.agent_feedback.accepted_rate', {}, 'Accepted'),
@@ -356,7 +376,7 @@ function AgentFeedbackQualityDashboard() {
                 setSiteIdFilter(siteIdInput.trim());
               }
             }}
-            placeholder="site_id"
+            placeholder={t('admin.agent_feedback.site_filter', {}, 'Site ID')}
             className="h-8 rounded-full border border-slate-200/80 bg-white/80 px-3 text-xs text-slate-700 placeholder:text-slate-400 dark:border-slate-700 dark:bg-slate-900/60 dark:text-slate-200 dark:placeholder:text-slate-500"
           />
           <button
@@ -364,7 +384,7 @@ function AgentFeedbackQualityDashboard() {
             onClick={() => setSiteIdFilter(siteIdInput.trim())}
             className="h-8 rounded-full border border-slate-200/80 bg-white/80 px-3 text-xs font-medium text-slate-700 transition hover:border-slate-300 hover:text-slate-950 dark:border-slate-700 dark:bg-slate-900/60 dark:text-slate-200 dark:hover:border-slate-600 dark:hover:text-white"
           >
-            {t('common.filter', {}, 'Filter')}
+            {t('admin.agent_feedback.filter_action', {}, 'Filter')}
           </button>
           <button
             type="button"
@@ -378,7 +398,14 @@ function AgentFeedbackQualityDashboard() {
         {data ? (
           <div className="mt-4 flex flex-wrap items-center gap-2 text-sm text-slate-600 dark:text-slate-300">
             <BackofficeStatusBadge status="read_only" label={t('admin.read_only', {}, 'Read-only')} />
-            <BackofficeStatusBadge status="inactive" label={data.productionMutation ? 'Mutation enabled' : 'No mutation'} />
+            <BackofficeStatusBadge
+              status="inactive"
+              label={
+                data.productionMutation
+                  ? t('admin.agent_feedback.mutation_enabled', {}, 'Mutation enabled')
+                  : t('admin.agent_feedback.no_mutation', {}, 'No mutation')
+              }
+            />
             <BackofficeTag tone="neutral">{data.scope || 'all_sites'}</BackofficeTag>
             {data.siteId ? <BackofficeIdentifier value={data.siteId} /> : null}
             {data.generatedAt ? <span>{t('common.updated_at', {}, 'Updated')}: {formatDate(data.generatedAt)}</span> : null}
@@ -407,11 +434,31 @@ function AgentFeedbackQualityDashboard() {
           <BackofficeMetricStrip
             columnsClassName="md:grid-cols-2 xl:grid-cols-5"
             items={[
-              { label: 'Contract', value: data.contractVersion || data.artifactType, size: 'compact' },
-              { label: 'Control plane', value: data.boundary.controlPlane || 'wordpress_local', size: 'compact' },
-              { label: 'Approval', value: data.approvalTruth || data.boundary.approvalTruth, size: 'compact' },
-              { label: 'Preflight', value: data.preflightTruth || data.boundary.preflightTruth, size: 'compact' },
-              { label: 'Final write', value: data.finalWriteTruth || data.boundary.finalWriteTruth, size: 'compact' },
+              {
+                label: t('admin.agent_feedback.contract', {}, 'Contract'),
+                value: data.contractVersion || data.artifactType,
+                size: 'compact',
+              },
+              {
+                label: t('admin.agent_feedback.control_plane', {}, 'Control plane'),
+                value: data.boundary.controlPlane || 'wordpress_local',
+                size: 'compact',
+              },
+              {
+                label: t('admin.agent_feedback.approval', {}, 'Approval'),
+                value: data.approvalTruth || data.boundary.approvalTruth,
+                size: 'compact',
+              },
+              {
+                label: t('admin.agent_feedback.preflight', {}, 'Preflight'),
+                value: data.preflightTruth || data.boundary.preflightTruth,
+                size: 'compact',
+              },
+              {
+                label: t('admin.agent_feedback.final_write', {}, 'Final write'),
+                value: data.finalWriteTruth || data.boundary.finalWriteTruth,
+                size: 'compact',
+              },
             ]}
           />
         </BackofficeSectionPanel>
@@ -441,23 +488,23 @@ function AgentFeedbackQualityDashboard() {
               <table className="min-w-full divide-y divide-slate-200/80 text-sm dark:divide-slate-800">
                 <thead className="bg-slate-50/80 text-xs uppercase tracking-[0.16em] text-slate-500 dark:bg-slate-950/30 dark:text-slate-400">
                   <tr>
-                    <th className="px-5 py-3 text-left font-semibold">Runtime</th>
-                    <th className="px-5 py-3 text-left font-semibold">Surface</th>
-                    <th className="px-5 py-3 text-right font-semibold">Events</th>
-                    <th className="px-5 py-3 text-right font-semibold">Accepted</th>
-                    <th className="px-5 py-3 text-right font-semibold">Evidence weak</th>
-                    <th className="px-5 py-3 text-right font-semibold">Wrong step</th>
-                    <th className="px-5 py-3 text-right font-semibold">Top labels</th>
+                    <th className="px-5 py-3 text-left font-semibold">{t('admin.agent_feedback.runtime', {}, 'Runtime')}</th>
+                    <th className="px-5 py-3 text-left font-semibold">{t('admin.agent_feedback.surface', {}, 'Surface')}</th>
+                    <th className="px-5 py-3 text-right font-semibold">{t('admin.agent_feedback.events', {}, 'Events')}</th>
+                    <th className="px-5 py-3 text-right font-semibold">{t('admin.agent_feedback.accepted_rate', {}, 'Accepted')}</th>
+                    <th className="px-5 py-3 text-right font-semibold">{t('admin.agent_feedback.evidence_weak', {}, 'Evidence weak')}</th>
+                    <th className="px-5 py-3 text-right font-semibold">{t('admin.agent_feedback.wrong_next_step_short', {}, 'Wrong step')}</th>
+                    <th className="px-5 py-3 text-right font-semibold">{t('admin.agent_feedback.top_labels', {}, 'Top labels')}</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-200/80 dark:divide-slate-800">
                   {data.scenarios.map((scenario) => (
                     <tr key={`${scenario.sourceRuntime}:${scenario.localSurface}`} className="bg-white/55 dark:bg-slate-950/20">
                       <td className="px-5 py-3">
-                        <BackofficeIdentifier value={scenario.sourceRuntime || 'unknown'} />
+                        <BackofficeIdentifier value={scenario.sourceRuntime || t('common.unknown')} />
                       </td>
                       <td className="px-5 py-3">
-                        <BackofficeIdentifier value={scenario.localSurface || 'unknown'} />
+                        <BackofficeIdentifier value={scenario.localSurface || t('common.unknown')} />
                       </td>
                       <td className="px-5 py-3 text-right text-slate-700 dark:text-slate-200">
                         {formatNumber(scenario.eventsTotal)}
@@ -477,7 +524,7 @@ function AgentFeedbackQualityDashboard() {
                         <div className="flex flex-wrap justify-end gap-1.5">
                           {sortedCounts(scenario.labels).slice(0, 3).map((item) => (
                             <BackofficeTag key={item.label} tone={labelTone(item.label)}>
-                              {labelText(item.label)} · {formatNumber(item.count)}
+                              {labelText(t, item.label)} · {formatNumber(item.count)}
                             </BackofficeTag>
                           ))}
                         </div>
@@ -502,7 +549,7 @@ function AgentFeedbackQualityDashboard() {
               <div className="space-y-2">
                 {labelCounts.map((item) => (
                   <BackofficeStackCard key={item.label} className="flex items-center justify-between gap-3">
-                    <BackofficeTag tone={labelTone(item.label)}>{labelText(item.label)}</BackofficeTag>
+                    <BackofficeTag tone={labelTone(item.label)}>{labelText(t, item.label)}</BackofficeTag>
                     <span className="text-sm font-semibold text-slate-700 dark:text-slate-200">{formatNumber(item.count)}</span>
                   </BackofficeStackCard>
                 ))}
@@ -552,13 +599,27 @@ function AgentFeedbackQualityDashboard() {
                   <BackofficeStackCard key={point.bucket}>
                     <div className="flex items-center justify-between gap-3">
                       <span className="text-sm font-semibold text-slate-950 dark:text-white">{trendBucketLabel(point.bucket)}</span>
-                      <span className="text-sm text-slate-600 dark:text-slate-300">{formatNumber(point.eventsTotal)} events</span>
+                      <span className="text-sm text-slate-600 dark:text-slate-300">
+                        {t(
+                          'admin.agent_feedback.trend_events',
+                          { count: formatNumber(point.eventsTotal) },
+                          '{{count}} events'
+                        )}
+                      </span>
                     </div>
                     <div className="mt-2 grid grid-cols-4 gap-2 text-xs text-slate-500 dark:text-slate-400">
-                      <span>Accepted {formatNumber(point.accepted)}</span>
-                      <span>Rejected {formatNumber(point.rejected)}</span>
-                      <span>Evidence {formatNumber(point.evidenceWeak)}</span>
-                      <span>Wrong step {formatNumber(point.wrongNextStep)}</span>
+                      <span>
+                        {t('admin.agent_feedback.trend_accepted', { count: formatNumber(point.accepted) }, 'Accepted {{count}}')}
+                      </span>
+                      <span>
+                        {t('admin.agent_feedback.trend_rejected', { count: formatNumber(point.rejected) }, 'Rejected {{count}}')}
+                      </span>
+                      <span>
+                        {t('admin.agent_feedback.trend_evidence', { count: formatNumber(point.evidenceWeak) }, 'Evidence {{count}}')}
+                      </span>
+                      <span>
+                        {t('admin.agent_feedback.trend_wrong_step', { count: formatNumber(point.wrongNextStep) }, 'Wrong step {{count}}')}
+                      </span>
                     </div>
                   </BackofficeStackCard>
                 ))}

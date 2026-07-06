@@ -12,6 +12,13 @@ from app.adapters.providers.registry import resolve_execution_provider_adapters
 from app.api.auth import authorize_public_request, get_cloud_services
 from app.api.envelope import build_envelope
 from app.core.security import PUBLIC_RUNTIME_MAX_BODY_BYTES, RequestAuthContext
+from app.domain.audio_generation.contracts import (
+    AUDIO_GENERATION_ABILITIES,
+    AUDIO_GENERATION_ABILITY_FAMILY,
+    AUDIO_GENERATION_DATA_CLASSIFICATION,
+    AUDIO_GENERATION_EXECUTION_KIND,
+    AUDIO_GENERATION_PROFILE_ID,
+)
 from app.domain.cloud_batch_runtime.contracts import (
     CLOUD_BATCH_RUNTIME_ABILITIES,
     CLOUD_BATCH_RUNTIME_ABILITY_FAMILY,
@@ -78,6 +85,16 @@ from app.domain.web_search.contracts import (
     WEB_SEARCH_EXECUTION_KIND,
     WEB_SEARCH_PROFILE_ID,
 )
+from app.domain.wordpress_ai_connector.contracts import (
+    WP_AI_CONNECTOR_ABILITIES,
+    WP_AI_CONNECTOR_ABILITY_FAMILY,
+    WP_AI_CONNECTOR_DATA_CLASSIFICATION,
+    WP_AI_CONNECTOR_EXECUTION_KIND,
+)
+from app.domain.wordpress_ai_connector.routing_profiles import (
+    WP_AI_CONNECTOR_IMAGE_GENERATION_PROFILE_ID,
+    resolve_wordpress_ai_connector_profile_id,
+)
 
 router = APIRouter(prefix="/v1/runtime", tags=["runtime"])
 
@@ -127,6 +144,7 @@ class RuntimePayload(BaseModel):
         "mcp",
         "openclaw",
         "knowledge",
+        "audio",
     ] = "text"
     canonical_run_id: str | None = Field(default=None, max_length=191)
     skill_id: str | None = Field(default=None, max_length=191)
@@ -254,6 +272,23 @@ def _is_web_search_payload(payload: RuntimePayload) -> bool:
     return payload.ability_name in WEB_SEARCH_ABILITIES
 
 
+def _is_wordpress_ai_connector_payload(payload: RuntimePayload) -> bool:
+    return payload.ability_name in WP_AI_CONNECTOR_ABILITIES
+
+
+def _is_wordpress_ai_image_generation_payload(payload: RuntimePayload) -> bool:
+    input_payload = payload.input if isinstance(payload.input, dict) else {}
+    return (
+        _is_image_generation_payload(payload)
+        and (
+            payload.channel == "wordpress_ai_connector"
+            or str(input_payload.get("source_surface") or "") == "wordpress_ai_connector"
+        )
+        and str(input_payload.get("connector_id") or "") == "npcink-cloud"
+        and str(input_payload.get("task") or "") == "image_generation"
+    )
+
+
 def _is_image_source_payload(payload: RuntimePayload) -> bool:
     return payload.ability_name in IMAGE_SOURCE_ABILITIES
 
@@ -286,6 +321,10 @@ def _is_image_generation_payload(payload: RuntimePayload) -> bool:
     return payload.ability_name in IMAGE_GENERATION_ABILITIES
 
 
+def _is_audio_generation_payload(payload: RuntimePayload) -> bool:
+    return payload.ability_name in AUDIO_GENERATION_ABILITIES
+
+
 def _is_image_context_evidence_payload(payload: RuntimePayload) -> bool:
     return payload.ability_name in IMAGE_CONTEXT_EVIDENCE_ABILITIES
 
@@ -311,6 +350,8 @@ def _resolve_ability_family(payload: RuntimePayload) -> str:
         return MEDIA_BATCH_PLAN_ABILITY_FAMILY
     if _is_image_context_evidence_payload(payload):
         return IMAGE_CONTEXT_EVIDENCE_ABILITY_FAMILY
+    if _is_audio_generation_payload(payload):
+        return AUDIO_GENERATION_ABILITY_FAMILY
     if _is_image_generation_payload(payload):
         return IMAGE_GENERATION_ABILITY_FAMILY
     if _is_image_source_payload(payload):
@@ -319,6 +360,8 @@ def _resolve_ability_family(payload: RuntimePayload) -> str:
         return SITE_KNOWLEDGE_ABILITY_FAMILY
     if _is_web_search_payload(payload):
         return WEB_SEARCH_ABILITY_FAMILY
+    if _is_wordpress_ai_connector_payload(payload):
+        return WP_AI_CONNECTOR_ABILITY_FAMILY
     return payload.ability_family
 
 
@@ -331,6 +374,8 @@ def _resolve_execution_kind(payload: RuntimePayload) -> str:
         return MEDIA_BATCH_PLAN_EXECUTION_KIND
     if _is_image_context_evidence_payload(payload) and not payload.execution_kind:
         return IMAGE_CONTEXT_EVIDENCE_EXECUTION_KIND
+    if _is_audio_generation_payload(payload) and not payload.execution_kind:
+        return AUDIO_GENERATION_EXECUTION_KIND
     if _is_image_generation_payload(payload) and not payload.execution_kind:
         return IMAGE_GENERATION_EXECUTION_KIND
     if _is_image_source_payload(payload) and not payload.execution_kind:
@@ -339,6 +384,8 @@ def _resolve_execution_kind(payload: RuntimePayload) -> str:
         return SITE_KNOWLEDGE_EXECUTION_KIND
     if _is_web_search_payload(payload) and not payload.execution_kind:
         return WEB_SEARCH_EXECUTION_KIND
+    if _is_wordpress_ai_connector_payload(payload):
+        return WP_AI_CONNECTOR_EXECUTION_KIND
     return payload.execution_kind
 
 
@@ -351,6 +398,10 @@ def _resolve_profile_id(payload: RuntimePayload) -> str:
         return MEDIA_BATCH_PLAN_PROFILE_ID
     if _is_image_context_evidence_payload(payload) and not payload.profile_id:
         return IMAGE_CONTEXT_EVIDENCE_PROFILE_ID
+    if _is_audio_generation_payload(payload) and not payload.profile_id:
+        return AUDIO_GENERATION_PROFILE_ID
+    if _is_wordpress_ai_image_generation_payload(payload) and not payload.profile_id:
+        return WP_AI_CONNECTOR_IMAGE_GENERATION_PROFILE_ID
     if _is_image_generation_payload(payload) and not payload.profile_id:
         return IMAGE_GENERATION_PROFILE_ID
     if _is_image_source_payload(payload) and not payload.profile_id:
@@ -359,6 +410,9 @@ def _resolve_profile_id(payload: RuntimePayload) -> str:
         return SITE_KNOWLEDGE_PROFILE_ID
     if _is_web_search_payload(payload) and not payload.profile_id:
         return WEB_SEARCH_PROFILE_ID
+    if _is_wordpress_ai_connector_payload(payload):
+        input_payload = payload.input if isinstance(payload.input, dict) else {}
+        return resolve_wordpress_ai_connector_profile_id(input_payload)
     if not payload.profile_id and payload.ability_family in {
         "text",
         "openclaw",
@@ -379,6 +433,8 @@ def _resolve_data_classification(payload: RuntimePayload) -> str:
         return MEDIA_BATCH_PLAN_DATA_CLASSIFICATION
     if _is_image_context_evidence_payload(payload):
         return IMAGE_CONTEXT_EVIDENCE_DATA_CLASSIFICATION
+    if _is_audio_generation_payload(payload):
+        return _resolve_feature_data_classification(payload, AUDIO_GENERATION_DATA_CLASSIFICATION)
     if _is_image_generation_payload(payload):
         return _resolve_feature_data_classification(payload, IMAGE_GENERATION_DATA_CLASSIFICATION)
     if _is_image_source_payload(payload):
@@ -387,6 +443,8 @@ def _resolve_data_classification(payload: RuntimePayload) -> str:
         return SITE_KNOWLEDGE_DATA_CLASSIFICATION
     if _is_web_search_payload(payload):
         return WEB_SEARCH_DATA_CLASSIFICATION
+    if _is_wordpress_ai_connector_payload(payload):
+        return WP_AI_CONNECTOR_DATA_CLASSIFICATION
     return payload.data_classification
 
 

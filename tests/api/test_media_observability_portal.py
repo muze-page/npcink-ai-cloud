@@ -19,20 +19,34 @@ from tests.conftest import (
     TEST_ADMIN_SESSION_SECRET,
     TEST_INTERNAL_AUTH_TOKEN,
     TEST_PORTAL_JWT_SECRET,
-    build_portal_headers,
     seed_site_auth,
 )
+from tests.conftest import (
+    build_portal_headers as _build_portal_headers,
+)
+
+_PORTAL_GRANT: dict[str, object] = {}
+
+
+def build_portal_headers(**kwargs: object) -> dict[str, str]:
+    if "principal_id" not in kwargs and _PORTAL_GRANT:
+        kwargs["principal_id"] = str(_PORTAL_GRANT["principal_id"])
+        kwargs["session_version"] = int(_PORTAL_GRANT.get("session_version") or 1)
+    return _build_portal_headers(**kwargs)
 
 
 def _build_client(tmp_path: Path) -> tuple[str, TestClient]:
+    _PORTAL_GRANT.clear()
     database_url = f"sqlite+pysqlite:///{tmp_path / 'media-obs-portal.sqlite3'}"
     init_schema(database_url)
     seed_site_auth(database_url, site_id="site-media-portal-001", scopes=["stats:read"])
     seed_site_auth(database_url, site_id="site-media-portal-002", scopes=["stats:read"])
-    CommercialService(database_url).upsert_site_admin_access(
+    _PORTAL_GRANT.update(
+        CommercialService(database_url).upsert_principal_access(
         site_id="site-media-portal-001",
         email="portal-admin@example.com",
         metadata_json={"source": "test"},
+        )
     )
     settings = Settings(
         project_name="Npcink AI Cloud Test",

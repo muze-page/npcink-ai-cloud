@@ -12,11 +12,32 @@ import {
 } from '@/components/backoffice/BackofficeScaffold';
 import { useLocale } from '@/contexts/LocaleContext';
 
+function adminLoginErrorMessage(errorCode: string | null, detail: string | null): string {
+  switch (errorCode) {
+    case 'auth.admin_bootstrap_token_invalid':
+      return 'Admin bootstrap token is not valid. Use NPCINK_CLOUD_ADMIN_BOOTSTRAP_TOKEN from the current local environment.';
+    case 'auth.admin_bootstrap_token_required':
+      return 'Admin bootstrap token is required.';
+    case 'auth.admin_bootstrap_not_configured':
+      return 'Admin bootstrap token is not configured for this Cloud environment.';
+    case 'auth.origin_not_allowed':
+    case 'auth.browser_origin_not_allowed':
+      return 'This browser origin is not allowed for admin login.';
+    case 'auth.dev_entry_unreachable':
+      return 'Cloud API is unreachable. Check that the local Cloud API service is running.';
+    default:
+      return detail || errorCode || '';
+  }
+}
+
 function AdminLoginPageContent() {
   const searchParams = useSearchParams();
   const { t } = useLocale();
   const error = searchParams.get('error');
+  const detail = searchParams.get('detail');
+  const traceId = searchParams.get('trace_id');
   const redirectTo = searchParams.get('redirect') || '/admin';
+  const errorMessage = adminLoginErrorMessage(error, detail);
 
   return (
     <div className="mx-auto min-h-[74vh] w-full max-w-6xl px-4 py-12">
@@ -73,7 +94,18 @@ function AdminLoginPageContent() {
         <BackofficeSectionPanel className="mx-auto w-full max-w-2xl space-y-6">
           {error ? (
             <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-900 dark:bg-red-950/40 dark:text-red-300">
-              {error}
+              <p className="font-medium">{errorMessage}</p>
+              <p className="mt-1 text-xs text-red-600/80 dark:text-red-300/80">
+                Error code: {error}
+              </p>
+              {traceId ? (
+                <details className="mt-2 text-xs text-red-600/80 dark:text-red-300/80">
+                  <summary className="cursor-pointer font-medium">
+                    {t('portal.support_information', {}, 'Support information')}
+                  </summary>
+                  <p className="mt-1 break-all font-mono">Trace: {traceId}</p>
+                </details>
+              ) : null}
             </div>
           ) : null}
 

@@ -1,12 +1,11 @@
 'use client';
 
+import Link from 'next/link';
 import React, { Suspense, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { LoadingFallback } from '@/components/ui/LoadingFallback';
 import {
-  BackofficeLayer,
   BackofficePageStack,
-  BackofficePrimaryPanel,
   BackofficeSectionPanel,
   BackofficeStackCard,
 } from '@/components/backoffice/BackofficeScaffold';
@@ -18,6 +17,7 @@ import { cn } from '@/lib/utils';
 interface FormState {
   email: string;
   code: string;
+  rememberMe: boolean;
   step: 'request' | 'verify';
   status: 'idle' | 'submitting' | 'verifying' | 'error';
   message: string;
@@ -30,6 +30,7 @@ function LoginFormContent() {
   const [form, setForm] = useState<FormState>({
     email: '',
     code: '',
+    rememberMe: false,
     step: 'request',
     status: 'idle',
     message: '',
@@ -104,7 +105,7 @@ function LoginFormContent() {
     setForm((prev) => ({ ...prev, status: 'verifying', message: '' }));
 
     try {
-      await verifyLoginCode(normalizedEmail, normalizedCode);
+      await verifyLoginCode(normalizedEmail, normalizedCode, { rememberMe: form.rememberMe });
       router.push('/portal');
     } catch (error) {
       setForm((prev) => ({
@@ -130,183 +131,175 @@ function LoginFormContent() {
   };
 
   return (
-    <div className="mx-auto min-h-[80vh] w-full max-w-5xl px-4 py-10">
+    <div className="mx-auto flex min-h-[72vh] w-full max-w-5xl items-center px-4 py-10">
       <BackofficePageStack>
-        <BackofficePrimaryPanel
-          eyebrow={t('portal.login.chip')}
-          title={t('auth.welcome_back')}
-          description={t(
-            'auth.sign_in_desc',
-            undefined,
-            'Use your approved site admin email address to receive a one-time verification code.'
-          )}
-          summary={(
-            <div className="grid gap-4 lg:grid-cols-2">
-              <BackofficeStackCard>
-                <p className="text-[0.68rem] font-bold uppercase tracking-[0.24em] text-blue-600 dark:text-blue-300">
-                  {t('portal.login.surface_label')}
+        <BackofficeSectionPanel className="w-full overflow-hidden p-0" variant="portal">
+          <div className="grid gap-0 lg:grid-cols-[minmax(0,1.05fr)_minmax(18rem,0.75fr)]">
+            <div className="space-y-6 p-5 md:p-7">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-[0.22em] text-blue-700 dark:text-blue-300">
+                  {t('portal.login.existing_label', undefined, 'Existing account')}
                 </p>
-                <p className="mt-2 text-sm leading-6 text-slate-600 dark:text-slate-300">
-                  {t('portal.login.surface_desc')}
-                </p>
-              </BackofficeStackCard>
-              <BackofficeStackCard>
-                <p className="text-[0.68rem] font-bold uppercase tracking-[0.24em] text-blue-600 dark:text-blue-300">
-                  {t('auth.email_verification', undefined, 'Email verification')}
-                </p>
-                <p className="mt-2 text-sm leading-6 text-slate-600 dark:text-slate-300">
+                <h1 className="mt-3 text-2xl font-semibold tracking-tight text-gray-950 dark:text-white md:text-[2rem]">
+                  {t('portal.login.title', undefined, 'Log in to user service center')}
+                </h1>
+                <p className="mt-3 max-w-xl text-sm leading-6 text-gray-600 dark:text-gray-300">
                   {t(
-                    'auth.email_verification_desc',
+                    form.step === 'request' ? 'auth.sign_in_desc' : 'auth.verify_code_desc',
                     undefined,
-                    'Platform admins approve site admin access first. Only approved email addresses can request a verification code.'
+                    form.step === 'request'
+                      ? 'Use your Portal email address to receive a one-time verification code.'
+                      : 'Enter the code you received to create your portal session.'
                   )}
                 </p>
-              </BackofficeStackCard>
-            </div>
-          )}
-        >
-          <BackofficeStackCard className="bg-white/80 dark:bg-slate-950/55">
-            <p className="text-[0.68rem] font-bold uppercase tracking-[0.24em] text-blue-600 dark:text-blue-300">
-              {t('portal.login.surface_label')}
-            </p>
-            <p className="mt-2 text-sm leading-6 text-slate-600 dark:text-slate-300">
-              {t(
-                'portal.login.notice',
-                undefined,
-                'Enter your approved site admin email address, receive a verification code, then continue into the portal workspace.'
-              )}
-            </p>
-          </BackofficeStackCard>
-        </BackofficePrimaryPanel>
+              </div>
 
-        <BackofficeLayer
-          eyebrow={t('portal.login.surface_label')}
-          title={t(
-            form.step === 'request' ? 'auth.request_code_title' : 'auth.verify_code_title',
-            undefined,
-            form.step === 'request' ? 'Request verification code' : 'Verify code'
-          )}
-          description={t(
-            form.step === 'request' ? 'auth.request_code_desc' : 'auth.verify_code_desc',
-            undefined,
-            form.step === 'request'
-              ? 'We will send a short-lived code to your approved site admin email address.'
-              : 'Enter the code you received to create your portal session.'
-          )}
-        />
+              <form
+                onSubmit={form.step === 'request' ? handleRequestCode : handleVerifyCode}
+                className="space-y-5"
+              >
+                <div>
+                  <label htmlFor="email" className="mb-2 block text-sm font-medium">
+                    {t('auth.email')}
+                  </label>
+                  <input
+                    id="email"
+                    type="email"
+                    value={form.email}
+                    onChange={(event) =>
+                      setForm((prev) => ({
+                        ...prev,
+                        email: event.target.value,
+                        status: 'idle',
+                        message: '',
+                      }))
+                    }
+                    placeholder={t('auth.email_placeholder')}
+                    className={cn('input', form.status === 'error' && 'border-red-500 focus:ring-red-500')}
+                    disabled={form.status === 'submitting' || form.status === 'verifying' || form.step === 'verify'}
+                  />
+                </div>
 
-        <BackofficeSectionPanel className="mx-auto w-full max-w-2xl space-y-6">
-          <form
-            onSubmit={form.step === 'request' ? handleRequestCode : handleVerifyCode}
-            className="space-y-6"
-          >
-            <div>
-              <label htmlFor="email" className="mb-2 block text-sm font-medium">
-                {t('auth.email')}
-              </label>
+                {form.step === 'verify' ? (
+                  <div>
+                    <label htmlFor="code" className="mb-2 block text-sm font-medium">
+                      {t('auth.verification_code', undefined, 'Verification code')}
+                    </label>
+                    <input
+                      id="code"
+                      type="text"
+                      inputMode="numeric"
+                      value={form.code}
+                      onChange={(event) =>
+                        setForm((prev) => ({
+                          ...prev,
+                          code: event.target.value,
+                          status: 'idle',
+                          message: '',
+                        }))
+                      }
+                      placeholder={t('auth.verification_code_placeholder', undefined, 'Enter the 6-digit code')}
+                      className={cn('input', form.status === 'error' && 'border-red-500 focus:ring-red-500')}
+                      disabled={form.status === 'verifying'}
+                    />
+                  </div>
+            ) : null}
+
+            <label className="flex items-start gap-3 rounded-2xl border border-slate-200/80 bg-slate-50/80 px-4 py-3 text-left text-sm text-slate-700 dark:border-slate-800 dark:bg-slate-950/55 dark:text-slate-200">
               <input
-                id="email"
-                type="email"
-                value={form.email}
+                type="checkbox"
+                className="mt-1 h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500 dark:border-slate-700"
+                checked={form.rememberMe}
+                disabled={form.status === 'submitting' || form.status === 'verifying'}
                 onChange={(event) =>
                   setForm((prev) => ({
                     ...prev,
-                    email: event.target.value,
+                    rememberMe: event.target.checked,
                     status: 'idle',
                     message: '',
                   }))
                 }
-                placeholder={t('auth.email_placeholder')}
-                className={cn('input', form.status === 'error' && 'border-red-500 focus:ring-red-500')}
-                disabled={form.status === 'submitting' || form.status === 'verifying' || form.step === 'verify'}
               />
-            </div>
-
-            {form.step === 'verify' ? (
-              <div>
-                <label htmlFor="code" className="mb-2 block text-sm font-medium">
-                  {t('auth.verification_code', undefined, 'Verification code')}
-                </label>
-                <input
-                  id="code"
-                  type="text"
-                  inputMode="numeric"
-                  value={form.code}
-                  onChange={(event) =>
-                    setForm((prev) => ({
-                      ...prev,
-                      code: event.target.value,
-                      status: 'idle',
-                      message: '',
-                    }))
-                  }
-                  placeholder={t('auth.verification_code_placeholder', undefined, 'Enter the 6-digit code')}
-                  className={cn('input', form.status === 'error' && 'border-red-500 focus:ring-red-500')}
-                  disabled={form.status === 'verifying'}
-                />
-              </div>
-            ) : null}
+              <span>
+                <span className="block font-semibold text-slate-900 dark:text-white">
+                  {t('auth.remember_me_7_days', undefined, 'Keep me signed in for 7 days on this device')}
+                </span>
+                <span className="mt-1 block text-xs leading-5 text-slate-500 dark:text-slate-400">
+                  {t('auth.remember_me_7_days_desc', undefined, 'Use this only on a private device. Signing out clears this session.')}
+                </span>
+              </span>
+            </label>
 
             {form.message ? (
               <div
                 className={cn(
-                  'text-sm',
-                  form.status === 'error'
-                    ? 'text-red-600 dark:text-red-400'
-                    : 'text-slate-600 dark:text-slate-300'
-                )}
-              >
-                {form.message}
-              </div>
-            ) : null}
+                      'rounded-2xl px-3 py-2 text-sm',
+                      form.status === 'error'
+                        ? 'bg-red-50 text-red-700 dark:bg-red-950/30 dark:text-red-300'
+                        : 'bg-blue-50 text-blue-700 dark:bg-blue-950/30 dark:text-blue-200'
+                    )}
+                  >
+                    {form.message}
+                  </div>
+                ) : null}
 
-            <div className="flex flex-col gap-3 sm:flex-row">
-              <button
-                type="submit"
-                disabled={form.status === 'submitting' || form.status === 'verifying'}
-                className="btn btn-primary flex-1 justify-center"
-              >
-                {form.step === 'request'
-                  ? form.status === 'submitting'
-                    ? t('auth.sending')
-                    : t('auth.send_login_code', undefined, 'Send verification code')
-                  : form.status === 'verifying'
-                    ? t('auth.signing_in')
-                    : t('auth.verify_and_continue', undefined, 'Verify and continue')}
-              </button>
+                <div className="flex flex-col gap-3 sm:flex-row">
+                  <button
+                    type="submit"
+                    disabled={form.status === 'submitting' || form.status === 'verifying'}
+                    className="btn btn-primary flex-1 justify-center"
+                  >
+                    {form.step === 'request'
+                      ? form.status === 'submitting'
+                        ? t('auth.sending')
+                        : t('auth.send_login_code', undefined, 'Send verification code')
+                      : form.status === 'verifying'
+                        ? t('auth.signing_in')
+                        : t('auth.verify_and_continue', undefined, 'Verify and continue')}
+                  </button>
 
-              {form.step === 'verify' ? (
-                <button
-                  type="button"
-                  className="btn btn-secondary justify-center"
-                  onClick={resetFlow}
-                >
-                  {t('auth.try_another_email')}
-                </button>
-              ) : null}
+                  {form.step === 'verify' ? (
+                    <button
+                      type="button"
+                      className="btn btn-secondary justify-center"
+                      onClick={resetFlow}
+                    >
+                      {t('auth.try_another_email')}
+                    </button>
+                  ) : null}
+                </div>
+              </form>
             </div>
-          </form>
 
-          <div className="border-t border-gray-200 pt-6 dark:border-gray-700">
-            <p className="text-center text-sm text-gray-600 dark:text-gray-400">
-              {t(
-                'auth.no_password',
-                undefined,
-                'Portal sign-in is passwordless. Platform admins approve site admin access first, then you verify with a one-time code.'
-              )}
-            </p>
+            <aside className="border-t border-slate-200/80 bg-slate-50/70 p-5 dark:border-slate-800 dark:bg-slate-950/35 md:p-7 lg:border-l lg:border-t-0">
+              <BackofficeStackCard className="bg-white/70 dark:bg-slate-950/35" variant="portal">
+                <p className="text-[0.68rem] font-bold uppercase tracking-[0.24em] text-blue-600 dark:text-blue-300">
+                  {t('portal.register.free_label', undefined, 'Free')}
+                </p>
+                <h2 className="mt-3 text-lg font-semibold text-slate-950 dark:text-white">
+                  {t('portal.login.new_title', undefined, 'No account yet?')}
+                </h2>
+                <p className="mt-2 text-sm leading-6 text-slate-600 dark:text-slate-300">
+                  {t(
+                    'portal.login.new_desc',
+                    undefined,
+                    'Create a Free account for one WordPress site, then come back to sign in with email.'
+                  )}
+                </p>
+                <Link href="/portal/register" className="btn btn-secondary mt-4 w-full justify-center">
+                  {t('auth.create_free_account', undefined, 'Create a Free account')}
+                </Link>
+              </BackofficeStackCard>
+
+              <p className="mt-4 text-xs leading-5 text-slate-500 dark:text-slate-400">
+                {t(
+                  'auth.no_password',
+                  undefined,
+                  'Portal sign-in is passwordless. New users can create a Free account and bind QQ quick login after signing in.'
+                )}
+              </p>
+            </aside>
           </div>
-        </BackofficeSectionPanel>
-
-        <BackofficeLayer
-          eyebrow={t('backoffice.layer_secondary')}
-          title={t('auth.get_started')}
-          description={t('portal.login.footer')}
-        />
-        <BackofficeSectionPanel className="mx-auto w-full max-w-2xl text-center">
-          <p className="text-sm text-gray-600 dark:text-gray-400">
-            {t('portal.login.footer')}
-          </p>
         </BackofficeSectionPanel>
       </BackofficePageStack>
     </div>

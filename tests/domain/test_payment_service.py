@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from sqlalchemy import select
@@ -15,6 +16,7 @@ from app.core.models import (
     PAYMENT_REFUND_STATUS_SUCCEEDED,
     SUBSCRIPTION_STATUS_ACTIVE,
     SUBSCRIPTION_STATUS_CANCELED,
+    SUBSCRIPTION_STATUS_TRIALING,
     AccountEntitlementSnapshot,
     AccountSubscription,
     CreditLedgerEntry,
@@ -109,6 +111,91 @@ def test_payment_order_does_not_grant_entitlement_until_paid(tmp_path: Path) -> 
     dispose_engine(database_url)
 
 
+def test_account_pro_trial_replaces_default_free_once(tmp_path: Path) -> None:
+    database_url = _sqlite_url(tmp_path)
+    init_schema(database_url)
+    service = _service(database_url)
+    service.upsert_account(
+        account_id="acct_trial",
+        name="Trial account",
+        bind_default_free=True,
+    )
+
+    trial = service.start_account_pro_trial(
+        account_id="acct_trial",
+        audit_context=_audit("pro-trial-start"),
+    )
+
+    assert trial["subscription"]["status"] == SUBSCRIPTION_STATUS_TRIALING
+    assert trial["subscription"]["plan_id"] == "pro"
+    assert trial["subscription"]["metadata"]["trial_for_tier"] == "pro"
+    assert trial["trial"]["trial_days"] == 14
+    with get_session(database_url) as session:
+        subscriptions = list(session.scalars(select(AccountSubscription)))
+        assert len(subscriptions) == 2
+        statuses = {item.plan_id: item.status for item in subscriptions}
+        assert statuses["free"] == SUBSCRIPTION_STATUS_CANCELED
+        assert statuses["pro"] == SUBSCRIPTION_STATUS_TRIALING
+        active_snapshots = list(session.scalars(select(AccountEntitlementSnapshot)))
+        assert len(active_snapshots) == 2
+        assert sum(1 for item in active_snapshots if item.status == "active") == 1
+
+    repeat = service.start_account_pro_trial(
+        account_id="acct_trial",
+        audit_context=_audit("pro-trial-repeat"),
+    )
+    assert repeat["subscription"]["subscription_id"] == trial["subscription"]["subscription_id"]
+
+    dispose_engine(database_url)
+
+
+def test_expired_pro_trial_falls_back_to_default_free(tmp_path: Path) -> None:
+    database_url = _sqlite_url(tmp_path)
+    init_schema(database_url)
+    service = _service(database_url)
+    service.upsert_account(
+        account_id="acct_trial_expired",
+        name="Expired trial account",
+        bind_default_free=True,
+    )
+    service.start_account_pro_trial(
+        account_id="acct_trial_expired",
+        audit_context=_audit("pro-trial-expired-start"),
+    )
+    expired_at = datetime.now(UTC) - timedelta(days=1)
+    with get_session(database_url) as session:
+        trial_subscription = session.scalar(
+            select(AccountSubscription).where(AccountSubscription.plan_id == "pro")
+        )
+        assert trial_subscription is not None
+        trial_subscription.current_period_end_at = expired_at
+        metadata = dict(trial_subscription.metadata_json or {})
+        metadata["trial_ends_at"] = expired_at.isoformat()
+        trial_subscription.metadata_json = metadata
+        session.commit()
+
+    account = service.get_admin_account("acct_trial_expired")
+
+    assert account["subscriptions"][0]["subscription"]["plan_id"] == "free"
+    assert account["subscriptions"][0]["subscription"]["status"] == SUBSCRIPTION_STATUS_ACTIVE
+    with get_session(database_url) as session:
+        subscriptions = list(session.scalars(select(AccountSubscription)))
+        statuses = {item.plan_id: item.status for item in subscriptions}
+        assert statuses["pro"] == SUBSCRIPTION_STATUS_CANCELED
+        assert statuses["free"] == SUBSCRIPTION_STATUS_ACTIVE
+        active_snapshots = list(
+            session.scalars(
+                select(AccountEntitlementSnapshot).where(
+                    AccountEntitlementSnapshot.status == "active"
+                )
+            )
+        )
+        assert len(active_snapshots) == 1
+        assert active_snapshots[0].subscription_id == "sub_acct_trial_expired_free"
+
+    dispose_engine(database_url)
+
+
 def test_payment_service_verifies_gateway_callbacks(tmp_path: Path) -> None:
     database_url = _sqlite_url(tmp_path)
     init_schema(database_url)
@@ -142,6 +229,97 @@ def test_payment_service_verifies_gateway_callbacks(tmp_path: Path) -> None:
     assert refund["provider"] == "alipay"
     assert refund["external_refund_no"] == "ref_callback_001"
     assert refund["status"] == "succeeded"
+
+    dispose_engine(database_url)
+
+
+def test_pro_monthly_payment_replaces_free_or_trial_subscription(tmp_path: Path) -> None:
+    database_url = _sqlite_url(tmp_path)
+    init_schema(database_url)
+    service = _service(database_url)
+    service.upsert_account(
+        account_id="acct_pro_monthly",
+        name="Pro monthly account",
+        bind_default_free=True,
+    )
+    trial = service.start_account_pro_trial(
+        account_id="acct_pro_monthly",
+        audit_context=_audit("pro-monthly-trial"),
+    )
+    order = service.create_account_pro_monthly_payment_order(
+        account_id="acct_pro_monthly",
+        audit_context=_audit("pro-monthly-order"),
+    )
+
+    assert order["amount"] == 29.0
+    assert order["currency"] == "CNY"
+    assert order["provider"] == "alipay"
+    assert order["metadata"]["billing_cycle"] == "monthly"
+    assert order["subscription_id"] == trial["subscription"]["subscription_id"]
+
+    paid = service.mark_payment_order_paid(
+        order_id=str(order["order_id"]),
+        provider_event_id="alipay-pro-monthly-paid-1",
+        amount=29.0,
+        audit_context=_audit("pro-monthly-paid"),
+    )
+
+    assert paid["subscription"]["status"] == SUBSCRIPTION_STATUS_ACTIVE
+    assert paid["subscription"]["plan_id"] == "pro"
+    assert paid["subscription"]["metadata"]["billing_cycle"] == "monthly"
+    assert paid["subscription"]["metadata"]["payment_order_id"] == order["order_id"]
+    with get_session(database_url) as session:
+        subscriptions = list(session.scalars(select(AccountSubscription)))
+        covered = [
+            item
+            for item in subscriptions
+            if item.status in {SUBSCRIPTION_STATUS_ACTIVE, SUBSCRIPTION_STATUS_TRIALING}
+        ]
+        assert len(covered) == 1
+        assert covered[0].plan_id == "pro"
+        assert covered[0].subscription_id == trial["subscription"]["subscription_id"]
+
+    dispose_engine(database_url)
+
+
+def test_pro_monthly_order_after_trial_expiry_is_new_paid_subscription(
+    tmp_path: Path,
+) -> None:
+    database_url = _sqlite_url(tmp_path)
+    init_schema(database_url)
+    service = _service(database_url)
+    service.upsert_account(
+        account_id="acct_pro_after_expiry",
+        name="Pro after expiry account",
+        bind_default_free=True,
+    )
+    trial = service.start_account_pro_trial(
+        account_id="acct_pro_after_expiry",
+        audit_context=_audit("pro-after-expiry-trial"),
+    )
+    expired_at = datetime.now(UTC) - timedelta(seconds=1)
+    with get_session(database_url) as session:
+        trial_subscription = session.get(
+            AccountSubscription,
+            str(trial["subscription"]["subscription_id"]),
+        )
+        assert trial_subscription is not None
+        trial_subscription.current_period_end_at = expired_at
+        session.commit()
+
+    order = service.create_account_pro_monthly_payment_order(
+        account_id="acct_pro_after_expiry",
+        audit_context=_audit("pro-after-expiry-order"),
+    )
+
+    assert order["amount"] == 29.0
+    assert order["subscription_id"] == ""
+    assert order["metadata"]["trial_conversion"] is False
+    with get_session(database_url) as session:
+        subscriptions = list(session.scalars(select(AccountSubscription)))
+        statuses = {item.plan_id: item.status for item in subscriptions}
+        assert statuses["pro"] == SUBSCRIPTION_STATUS_CANCELED
+        assert statuses["free"] == SUBSCRIPTION_STATUS_ACTIVE
 
     dispose_engine(database_url)
 

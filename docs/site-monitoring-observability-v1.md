@@ -101,7 +101,7 @@ Each item contains:
 
 Current triggers:
 
-- `site_monitoring.api_key_missing`: no active site API key;
+- `site_monitoring.connection_credential_missing`: no active site connection credential;
 - `site_monitoring.api_key_expiring`: active key expires within seven days;
 - `site_monitoring.api_key_stale`: active key has not been used in seven days;
 - `site_monitoring.no_activity`: active key exists, but Cloud saw no activity;
@@ -124,7 +124,7 @@ Portal action rows are clickable. The UI routes by `source`:
 - `media`: switch to the Media tab;
 - `vector`: switch to the Vector tab;
 - `quota` or `runtime`: open `/portal/usage?site={site_id}`;
-- `keys` or `activity`: open `/portal/keys?site={site_id}`;
+- `connection`, `keys`, or `activity`: open `/portal/sites/{site_id}`;
 - unknown source: stay on the overview.
 
 The backend contract stays simple: it emits stable source and code values. The

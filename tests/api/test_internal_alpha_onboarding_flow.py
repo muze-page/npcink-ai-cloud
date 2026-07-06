@@ -197,9 +197,9 @@ def test_internal_alpha_onboarding_flow_closes_admin_user_site_key_usage_audit(
     )
     _post_internal(
         client,
-        f"/internal/service/sites/{site_id}/site-admin-access",
+        f"/internal/service/sites/{site_id}/user-grants",
         json_payload={"email": "alpha@example.com"},
-        idempotency_key="alpha-site-admin-access-001",
+        idempotency_key="alpha-user-grants-001",
     )
 
     login_code_response = client.post(
@@ -220,9 +220,9 @@ def test_internal_alpha_onboarding_flow_closes_admin_user_site_key_usage_audit(
     )
     assert verify_response.status_code == 200, verify_response.text
     portal_session = verify_response.json()["data"]
-    assert portal_session["site_admin_ref"] == "site_admin:alpha@example.com"
-    assert portal_session["identity_type"] == "site_admin"
-    assert portal_session["role"] == "site_admin"
+    assert portal_session["principal_id"].startswith("prn_")
+    assert portal_session["identity_type"] == "user"
+    assert portal_session["role"] == "user"
     assert portal_session["account_id"] == "acct_alpha_flow"
     assert portal_session["site_id"] == site_id
     assert portal_session["sites"][0]["site"]["site_id"] == site_id
@@ -320,7 +320,7 @@ def test_internal_alpha_onboarding_flow_closes_admin_user_site_key_usage_audit(
     )
     assert admin_audit_response.status_code == 200, admin_audit_response.text
     admin_audit_items = admin_audit_response.json()["data"]["items"]
-    assert any(item["actor_kind"] == "site_admin" for item in admin_audit_items)
+    assert any(item["actor_kind"] == "principal" for item in admin_audit_items)
     assert any(item["event_kind"] == "site_key.issue" for item in admin_audit_items)
 
     with get_session(database_url) as session:

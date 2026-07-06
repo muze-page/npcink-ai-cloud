@@ -145,7 +145,7 @@ PLAN_TIER_REGISTRY: dict[str, dict[str, object]] = {
         "tier_id": "pro",
         "label": "Pro",
         "package_alias": "Pro",
-        "usage_band": "10,000 AI credits and 30 Pro Nightly Inspection runs per month.",
+        "usage_band": "10,000 AI credits per month.",
         "positioning": "Commercial Pro package with normal hosted AI consumption controlled by monthly AI credits and separate resource boundaries.",
         "monthly_included_points": 10_000,
         "budgets_template": {
@@ -157,7 +157,7 @@ PLAN_TIER_REGISTRY: dict[str, dict[str, object]] = {
         "concurrency_template": {"max_active_runs": 3},
         "site_limit": 5,
         "max_batch_items": 25,
-        "nightly_inspection_runs_per_period": 30,
+        "nightly_inspection_runs_per_period": 0,
         "nightly_inspection_retention_days": 14,
         "nightly_inspection_payload_modes": ["metadata_only", "excerpt"],
         "automation_enabled": True,
@@ -178,7 +178,7 @@ PLAN_TIER_REGISTRY: dict[str, dict[str, object]] = {
         "tier_id": "agency",
         "label": "Agency",
         "package_alias": "Agency",
-        "usage_band": "150,000 AI credits and 150 Pro Nightly Inspection runs per month.",
+        "usage_band": "150,000 AI credits per month.",
         "positioning": "Commercial Agency package for custom or multi-site Cloud runtime detail with higher AI credit, batch, and resource headroom.",
         "monthly_included_points": 150_000,
         "budgets_template": {
@@ -190,7 +190,7 @@ PLAN_TIER_REGISTRY: dict[str, dict[str, object]] = {
         "concurrency_template": {"max_active_runs": 10},
         "site_limit": 25,
         "max_batch_items": 100,
-        "nightly_inspection_runs_per_period": 150,
+        "nightly_inspection_runs_per_period": 0,
         "nightly_inspection_retention_days": 30,
         "nightly_inspection_payload_modes": ["metadata_only", "excerpt"],
         "automation_enabled": True,
@@ -209,11 +209,14 @@ PLAN_TIER_REGISTRY: dict[str, dict[str, object]] = {
     },
 }
 DEFAULT_PLAN_TIER_ID = "pro"
-DEFAULT_FREE_PLAN_ID = "plan_free"
-DEFAULT_FREE_PLAN_VERSION_ID = "plan_free_v1"
+DEFAULT_FREE_PLAN_ID = "free"
+DEFAULT_FREE_PLAN_VERSION_ID = "free_v1"
 DEFAULT_FREE_PLAN_KIND = "default_free"
 DEFAULT_FREE_PLAN_SOURCE = "production_default_free_shell_v1"
 DEFAULT_FREE_SUBSCRIPTION_SOURCE = "production_default_free_bind_v1"
+PRO_TRIAL_DAYS = 14
+PRO_MONTHLY_PRICE_CNY = 29.0
+PRO_MONTHLY_BILLING_CYCLE = "monthly"
 CANONICAL_TIER_PLAN_IDS = {tier_id: (tier_id, f"{tier_id}_v1") for tier_id in PLAN_TIER_REGISTRY}
 OPERATOR_MANAGED_POINTS_PACK_REGISTRY: dict[str, dict[str, object]] = {
     "pack_small": {

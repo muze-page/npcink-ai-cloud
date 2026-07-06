@@ -1,5 +1,4 @@
 import type { Metadata } from 'next';
-import { MiniDevDock } from '@/components/dev/MiniDevDock';
 import { ToastProvider } from '@/components/ui/Toast';
 import { LocaleProvider } from '@/contexts/LocaleContext';
 import { ThemeProvider } from '@/contexts/ThemeContext';
@@ -23,7 +22,6 @@ export default function RootLayout({
           <LocaleProvider>
             <ToastProvider>
               {children}
-              <MiniDevDock />
             </ToastProvider>
           </LocaleProvider>
         </ThemeProvider>

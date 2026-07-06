@@ -104,22 +104,6 @@ def _run_alert_provider_degradation_summary(settings: Settings) -> dict[str, obj
     }
 
 
-def _run_hosted_model_governance_summary(settings: Settings) -> dict[str, object]:
-    result = UsageRollupService(settings.database_url).store_hosted_model_governance_batch(
-        window_minutes=settings.hosted_model_governance_worker_recent_minutes,
-        limit=settings.hosted_model_governance_worker_limit,
-    )
-    return {
-        "stored_batches_total": _coerce_int(result.get("stored_batches_total")),
-        "status": str(result.get("status") or ""),
-        "alert_count": _coerce_int(result.get("alert_count")),
-        "runs": _coerce_int(result.get("runs")),
-        "provider_calls": _coerce_int(result.get("provider_calls")),
-        "meter_events": _coerce_int(result.get("meter_events")),
-        "rollup_scope_kind": str(result.get("scope_kind") or ""),
-    }
-
-
 def _run_provider_health_scan(settings: Settings) -> dict[str, object]:
     result = CatalogService(
         settings.database_url,
@@ -181,12 +165,6 @@ def cadence_task_specs() -> list[CadenceTaskSpec]:
             event_kind="alert.provider_degradation_cadence",
             interval_seconds=lambda settings: settings.alert_provider_degradation_interval_seconds,
             runner=_run_alert_provider_degradation_summary,
-        ),
-        CadenceTaskSpec(
-            task_id="hosted_model_governance",
-            event_kind="hosted_model.governance_cadence",
-            interval_seconds=lambda settings: settings.hosted_model_governance_interval_seconds,
-            runner=_run_hosted_model_governance_summary,
         ),
         CadenceTaskSpec(
             task_id="provider_health_scan",

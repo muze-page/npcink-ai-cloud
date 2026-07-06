@@ -198,6 +198,14 @@ The probe timed out. A real remote deploy still requires an operator to provide
 the expected SSH key and make the target host reachable on port 22 from the
 current network.
 
+Current workspace target update, 2026-07-06:
+
+- The old host `114.132.150.46` is no longer the active workspace target.
+- The current production host is `120.24.237.214`.
+- The current production public origin is `https://cloud.npc.ink`.
+- Passwords, SSH keys, production tokens, provider keys, DB credentials, and
+  `.env.deploy` remain operator-held secrets and must not be committed.
+
 ## Current Operator Handoff
 
 The repository-side work is complete for the problems found in this pass.

@@ -5,6 +5,7 @@ import {
   DEFAULT_LOCALE,
   persistLocale,
   readStoredLocale,
+  resolveLocale,
   translate as translateMessage,
   type Locale,
 } from '@/lib/i18n';
@@ -28,8 +29,9 @@ export function LocaleProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const setLocale = useCallback((newLocale: Locale) => {
-    setLocaleState(newLocale);
-    persistLocale(newLocale);
+    const normalizedLocale = resolveLocale(newLocale) ?? DEFAULT_LOCALE;
+    setLocaleState(normalizedLocale);
+    persistLocale(normalizedLocale);
   }, []);
 
   useEffect(() => {

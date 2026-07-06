@@ -232,7 +232,7 @@ def test_openrouter_provider_sets_router_headers_and_namespaces_model_ids() -> N
     assert [model.model_id for model in snapshot.models] == ["openrouter/openai/gpt-4.1-mini"]
 
 
-def test_provider_registry_registers_optional_upstreams_only_when_enabled() -> None:
+def test_provider_registry_does_not_register_optional_upstreams_from_env_flags() -> None:
     settings = Settings(
         _env_file=None,
         environment="development",
@@ -251,11 +251,11 @@ def test_provider_registry_registers_optional_upstreams_only_when_enabled() -> N
 
     providers = build_provider_adapters(settings)
 
-    assert "litellm" in providers
-    assert "vllm" in providers
-    assert "tei" in providers
-    assert "openrouter" in providers
-    assert "siliconflow" in providers
+    assert "litellm" not in providers
+    assert "vllm" not in providers
+    assert "tei" not in providers
+    assert "openrouter" not in providers
+    assert "siliconflow" not in providers
 
 
 def test_provider_registry_omits_default_openai_without_credentials_outside_dev_test() -> None:
@@ -268,9 +268,8 @@ def test_provider_registry_omits_default_openai_without_credentials_outside_dev_
         admin_bootstrap_token="npcink-cloud-admin-bootstrap-token-32b",
         admin_session_secret="npcink-cloud-ops-session-secret-prod-32b",
         portal_jwt_secret="npcink-cloud-portal-jwt-secret-prod-32b",
-        portal_public_base_url="https://cloud.example.com",
-        portal_email_smtp_host="smtp.example.com",
-        portal_email_from_email="no-reply@example.com",
+        browser_origin_allowlist="https://cloud.example.com",
+        trusted_host_allowlist="cloud.example.com",
     )
 
     providers = build_provider_adapters(production_settings)
