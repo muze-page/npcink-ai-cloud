@@ -1,13 +1,22 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, NamedTuple
 
-from sqlalchemy import select
+from sqlalchemy import case, func, select
 
 from app.core.db import get_session
 from app.core.models import ProviderCallRecord, RunRecord
 from app.domain.image_sources.contracts import IMAGE_SOURCE_ABILITIES
+
+
+class ProviderMetricsRow(NamedTuple):
+    provider_id: object
+    call_count: object
+    error_count: object
+    latency_total_ms: object
+    cost_total: object
+    last_seen_at: datetime | None
 
 
 class ImageSourceMetricsService:
@@ -43,7 +52,23 @@ class ImageSourceMetricsService:
             )
 
             call_statement = (
-                select(ProviderCallRecord, RunRecord)
+                select(
+                    ProviderCallRecord.provider_id,
+                    func.count(ProviderCallRecord.id),
+                    func.sum(
+                        case(
+                            (
+                                ProviderCallRecord.error_code.is_not(None)
+                                & (ProviderCallRecord.error_code != ""),
+                                1,
+                            ),
+                            else_=0,
+                        )
+                    ),
+                    func.sum(ProviderCallRecord.latency_ms),
+                    func.sum(ProviderCallRecord.cost),
+                    func.max(ProviderCallRecord.created_at),
+                )
                 .join(RunRecord, ProviderCallRecord.run_id == RunRecord.run_id)
                 .where(
                     RunRecord.ability_name.in_(IMAGE_SOURCE_ABILITIES),
@@ -53,14 +78,28 @@ class ImageSourceMetricsService:
             )
             if site_id:
                 call_statement = call_statement.where(RunRecord.site_id == site_id)
-            provider_call_rows = [
-                (row[0], row[1])
-                for row in session.execute(
-                    call_statement.order_by(
-                        ProviderCallRecord.created_at.desc(),
-                        ProviderCallRecord.id.desc(),
-                    ).limit(10000)
+            provider_rows = [
+                ProviderMetricsRow(
+                    provider_id=provider_id,
+                    call_count=call_count,
+                    error_count=error_count,
+                    latency_total_ms=latency_total,
+                    cost_total=cost_total,
+                    last_seen_at=last_seen_at if isinstance(last_seen_at, datetime) else None,
                 )
+                for (
+                    provider_id,
+                    call_count,
+                    error_count,
+                    latency_total,
+                    cost_total,
+                    last_seen_at,
+                ) in session.execute(
+                    call_statement.group_by(ProviderCallRecord.provider_id).order_by(
+                        func.count(ProviderCallRecord.id).desc(),
+                        ProviderCallRecord.provider_id.asc(),
+                    )
+                ).all()
             ]
 
         return self._build_summary(
@@ -69,7 +108,7 @@ class ImageSourceMetricsService:
             start_at=start_at,
             current_time=current_time,
             runs=runs,
-            provider_call_rows=provider_call_rows,
+            provider_rows=provider_rows,
         )
 
     def _build_summary(
@@ -80,56 +119,35 @@ class ImageSourceMetricsService:
         start_at: datetime,
         current_time: datetime,
         runs: list[RunRecord],
-        provider_call_rows: list[tuple[ProviderCallRecord, RunRecord]],
+        provider_rows: list[ProviderMetricsRow],
     ) -> dict[str, object]:
         fast_first_runs = [run for run in runs if self._latency_mode(run) == "fast_first"]
         deferred_runs = [run for run in runs if self._has_deferred_enrichment(run)]
-        provider_errors = [
-            call for call, _run in provider_call_rows if str(call.error_code or "").strip()
-        ]
-        provider_groups: dict[str, dict[str, object]] = {}
-        for call, _run in provider_call_rows:
-            provider_id = str(call.provider_id or "unknown").strip() or "unknown"
-            group = provider_groups.setdefault(
-                provider_id,
-                {
-                    "provider_id": provider_id,
-                    "calls": 0,
-                    "errors": 0,
-                    "latency_total_ms": 0,
-                    "cost_total": 0.0,
-                    "last_seen_at": "",
-                },
-            )
-            group["calls"] = self._coerce_int(group.get("calls")) + 1
-            group["errors"] = self._coerce_int(group.get("errors")) + (
-                1 if str(call.error_code or "").strip() else 0
-            )
-            group["latency_total_ms"] = self._coerce_int(
-                group.get("latency_total_ms")
-            ) + int(call.latency_ms or 0)
-            group["cost_total"] = self._coerce_float(group.get("cost_total")) + float(
-                call.cost or 0.0
-            )
-            group["last_seen_at"] = self._max_timestamp(
-                str(group["last_seen_at"] or ""),
-                call.created_at,
-            )
-
         provider_summaries = [
-            self._finalize_provider_group(group)
-            for group in sorted(
-                provider_groups.values(),
-                key=lambda item: (
-                    -self._coerce_int(item.get("calls")),
-                    str(item.get("provider_id") or ""),
-                ),
+            self._finalize_provider_group(
+                {
+                    "provider_id": str(row.provider_id or "unknown").strip() or "unknown",
+                    "calls": self._coerce_int(row.call_count),
+                    "errors": self._coerce_int(row.error_count),
+                    "latency_total_ms": self._coerce_int(row.latency_total_ms),
+                    "cost_total": self._coerce_float(row.cost_total),
+                    "last_seen_at": self._format_datetime(row.last_seen_at),
+                }
             )
+            for row in provider_rows
         ]
+
         recent_runs = [self._run_summary(run) for run in runs[:20]]
         total_runs = len(runs)
-        total_provider_calls = len(provider_call_rows)
-        latency_values = [int(call.latency_ms or 0) for call, _run in provider_call_rows]
+        total_provider_calls = sum(
+            self._coerce_int(provider.get("calls")) for provider in provider_summaries
+        )
+        total_provider_errors = sum(
+            self._coerce_int(provider.get("errors")) for provider in provider_summaries
+        )
+        latency_total = sum(
+            self._coerce_int(row.latency_total_ms) for row in provider_rows
+        )
         totals = {
             "runs": total_runs,
             "succeeded": sum(1 for run in runs if run.status == "succeeded"),
@@ -138,8 +156,11 @@ class ImageSourceMetricsService:
             "complete_runs": max(0, total_runs - len(fast_first_runs)),
             "deferred_enrichment_runs": len(deferred_runs),
             "provider_calls": total_provider_calls,
-            "provider_errors": len(provider_errors),
-            "avg_provider_latency_ms": self._average_int(latency_values),
+            "provider_errors": total_provider_errors,
+            "avg_provider_latency_ms": self._average_int(
+                [latency_total],
+                denominator=total_provider_calls,
+            ),
         }
         return {
             "contract_version": "image-source-readonly-metrics.v1",
@@ -157,7 +178,7 @@ class ImageSourceMetricsService:
             "rates": {
                 "fast_first_rate": self._rate(len(fast_first_runs), total_runs),
                 "deferred_enrichment_rate": self._rate(len(deferred_runs), total_runs),
-                "provider_error_rate": self._rate(len(provider_errors), total_provider_calls),
+                "provider_error_rate": self._rate(total_provider_errors, total_provider_calls),
             },
             "providers": provider_summaries,
             "recent_runs": recent_runs,

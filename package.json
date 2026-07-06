@@ -66,6 +66,11 @@
     "check:agent-feedback-quality": "bash scripts/check-agent-feedback-quality.sh",
     "check:visual:frontend": "pnpm --dir frontend run test:visual",
     "check:e2e:deploy-bundle:smoke": "bash scripts/cloud-deploy-bundle-smoke-flow.sh",
+    "perf:runtime-hot-path": "docker compose -f docker-compose.dev.yml run --rm api python scripts/runtime_hot_path_explain.py --format json",
+    "perf:runtime-hot-path:require-indexes": "docker compose -f docker-compose.dev.yml run --rm api python scripts/runtime_hot_path_explain.py --format json --require-indexes",
+    "perf:production-baseline": "python scripts/production_performance_baseline.py --format json --require-indexes",
+    "perf:production-baseline:ssh": "bash deploy/production-performance-baseline-to-ssh-host.sh",
+    "smoke:prod-python-extras": "bash scripts/production-python-extras-smoke.sh",
     "scaffold:route": "node scripts/scaffold-cloud-route.js",
     "scaffold:portal-route": "node scripts/scaffold-cloud-portal-route.js",
     "scaffold:frontend-handoff": "node scripts/scaffold-cloud-frontend-handoff.js"

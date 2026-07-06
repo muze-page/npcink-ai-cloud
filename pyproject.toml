@@ -25,7 +25,6 @@ dependencies = [
   "opentelemetry-exporter-otlp>=1.30,<2.0",
   "Pillow>=12.2,<13.0",
   "python-multipart>=0.0.31,<1.0",
-  "pymilvus>=2.4,<3.0",
 ]
 
 [project.optional-dependencies]
@@ -34,6 +33,9 @@ dev = [
   "pytest>=9.0.3,<10.0",
   "pytest-asyncio>=1.0,<2.0",
   "ruff>=0.11,<1.0",
+]
+zilliz = [
+  "pymilvus>=2.4,<3.0",
 ]
 
 [tool.setuptools.packages.find]

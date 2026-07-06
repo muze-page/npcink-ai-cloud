@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from time import monotonic
 from typing import Any, cast
 
 from app.adapters.providers.registry import resolve_execution_provider_adapters
@@ -10,6 +11,8 @@ from app.core.db import require_database_connection
 from app.core.logging import configure_logging, get_logger
 from app.domain.runtime.service import RuntimeService
 from app.workers.heartbeat import WorkerHeartbeat
+
+PROVIDER_REFRESH_SECONDS = 15.0
 
 
 def _close_if_supported(resource: Any) -> None:
@@ -60,6 +63,8 @@ def main() -> None:
         interval_seconds=settings.worker_heartbeat_interval_seconds,
     )
     last_provider_ids: tuple[str, ...] = ()
+    service: RuntimeService | None = None
+    next_provider_refresh_at = 0.0
 
     logger.info(
         "runtime queue worker started (poll=%ss, batch=%s, queue=%s)",
@@ -78,7 +83,10 @@ def main() -> None:
 
     try:
         while True:
-            service = _build_runtime_service(settings, runtime_queue)
+            current_time = monotonic()
+            if service is None or current_time >= next_provider_refresh_at:
+                service = _build_runtime_service(settings, runtime_queue)
+                next_provider_refresh_at = current_time + PROVIDER_REFRESH_SECONDS
             provider_ids = tuple(sorted(service.providers))
             if provider_ids != last_provider_ids:
                 logger.info(

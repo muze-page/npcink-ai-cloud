@@ -61,6 +61,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        PACKAGE_EXTRAS: ${NPCINK_CLOUD_PACKAGE_EXTRAS:-}
     image: npcink-ai-cloud-api:prod
     restart: unless-stopped
     command: gunicorn -k uvicorn.workers.UvicornWorker -w ${NPCINK_CLOUD_API_WORKERS:-2} -b 0.0.0.0:8000 app.api.main:app
@@ -173,6 +175,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        PACKAGE_EXTRAS: ${NPCINK_CLOUD_PACKAGE_EXTRAS:-}
     image: npcink-ai-cloud-worker:prod
     restart: unless-stopped
     command: python -m app.workers.runtime_queue
@@ -257,6 +261,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        PACKAGE_EXTRAS: ${NPCINK_CLOUD_PACKAGE_EXTRAS:-}
     image: npcink-ai-cloud-callback-worker:prod
     restart: unless-stopped
     command: python -m app.workers.callback_dispatch
@@ -291,6 +297,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        PACKAGE_EXTRAS: ${NPCINK_CLOUD_PACKAGE_EXTRAS:-}
     image: npcink-ai-cloud-ops-worker:prod
     restart: unless-stopped
     command: python -m app.workers.ops_cadence

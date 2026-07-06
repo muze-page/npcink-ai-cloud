@@ -7,25 +7,25 @@ history.
 ## Confirmed values
 
 - Remote host IP: read from `NPCINK_CLOUD_DEPLOY_SSH_HOST`
-- Remote domain: `magick.sofile.cn`
+- Current remote host IP: `120.24.237.214`
+- Remote domain: `cloud.npc.ink`
 - SSH user: `root`
-- SSH identity file:
-  `../../config/key/Magick_AI.pem`
-- Local SSL cert source:
-  `../../config/magick.sofile.cn_nginx-ssl/`
-- Confirmed public base URL target: `https://magick.sofile.cn`
+- SSH credential: operator-held production secret; do not store the password in
+  this repository. If key-based SSH is used, set
+  `NPCINK_CLOUD_DEPLOY_IDENTITY_FILE` outside Git or in a local-only env file.
+- Confirmed public base URL target: `https://cloud.npc.ink`
 - Remote deploy root exists: `/opt/npcink-ai-cloud`
-- Current host-nginx bind status:
-  - `magick.sofile.cn` DNS A -> current `NPCINK_CLOUD_DEPLOY_SSH_HOST`
-  - system `nginx` now listens on `80/443` and proxies to `127.0.0.1:8010`
-  - local-on-server `curl -k https://127.0.0.1/health/live` reaches Cloud successfully
-  - public `http://magick.sofile.cn/*` works and redirects to `https://...`
-  - public `https://magick.sofile.cn/*` had already been verified reachable before the first remote Authentik bootstrap
+- Current domain status:
+  - `cloud.npc.ink` is the production public origin.
+  - `GET https://cloud.npc.ink/health/live` was verified reachable from this
+    workstation on 2026-07-06.
+  - `magick.sofile.cn` and host `114.132.150.46` are historical targets and
+    should not be used for new Cloud deployment or smoke commands.
 - Current remote provider mode: OpenAI provider is configured against
   `https://api.deepseek.com/v1`
-- Current remote `.env.deploy` already contains active internal auth and provider
-  credentials; local `.env.deploy` has been synced from the remote target
-  for workspace handoff
+- Current remote `.env.deploy` should remain server-side or in the deploy secret
+  store. Do not commit production tokens, provider keys, DB credentials, SSH
+  credentials, or `.env.deploy`.
 
 ## Saved launcher file
 
@@ -38,6 +38,9 @@ Load it with:
 ```bash
 source deploy/workspace-target.env.sh
 ```
+
+The launcher exports only non-secret target metadata. Password-based SSH must
+be supplied by the operator at connection time or managed outside Git.
 
 ## Current deploy loop
 
