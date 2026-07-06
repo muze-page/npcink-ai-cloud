@@ -60,6 +60,16 @@ For validation, Zilliz Cloud can be used with Cloud-managed credentials and
 can be added later behind the same contract without changing WordPress-side
 settings or ability names.
 
+`site_knowledge_status.v1` and `site_knowledge_sync.v1` responses include an
+`ownership` block and a `truth_boundaries` block. Cloud is the owner for Site
+Knowledge index execution, index lifecycle, freshness policy, vector storage,
+embedding execution, and diagnostics detail. The Cloud Addon remains the
+WordPress-side delivery bridge for public change hints, while source content,
+local approval, final write authority, and WordPress writes remain with the
+local WordPress host. These fields are response metadata only; they do not add a
+Cloud ability registry, workflow registry, WordPress control plane, or direct
+write path.
+
 ### Cloud Web Search Evidence
 
 Cloud Web Search provides external-web evidence through the hosted runtime
@@ -190,6 +200,7 @@ Current guardrails include:
 - per-site indexed chunk limits;
 - bounded query and document content lengths;
 - quota status in Site Knowledge status responses;
+- explicit Site Knowledge owner/truth fields in status and sync responses;
 - existing runtime run concurrency limits;
 - existing worker/runtime offload instead of adding Temporal, Celery, Kafka,
   RabbitMQ, NATS, or Kubernetes-first infrastructure.
