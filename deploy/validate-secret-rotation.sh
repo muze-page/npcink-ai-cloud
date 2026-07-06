@@ -239,6 +239,6 @@ http_request \
 	"Accept: text/html"
 assert_status "${HTTP_STATUS}" "303" "invalid admin bootstrap should redirect with error"
 assert_header_contains "${HTTP_HEADERS}" "auth.admin_bootstrap_token_invalid" "invalid admin bootstrap should surface token error"
-assert_header_not_contains "${HTTP_HEADERS}" "magick_admin_session_token=" "invalid admin bootstrap must not set ops session cookie"
+assert_header_not_contains "${HTTP_HEADERS}" "npcink_admin_session_token=" "invalid admin bootstrap must not set ops session cookie"
 
 ok "Secret rotation validation checks passed."

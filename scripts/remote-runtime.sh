@@ -93,7 +93,7 @@ target_env_or_default() {
 	local default_value="$3"
 	local upper
 	upper="$(target_upper "${target}")"
-	local var_name="MAGICK_AI_REMOTE_RUNTIME_${upper}_${suffix}"
+	local var_name="NPCINK_CLOUD_REMOTE_RUNTIME_${upper}_${suffix}"
 	printf '%s\n' "${!var_name:-${default_value}}"
 }
 
@@ -102,7 +102,7 @@ target_env_value() {
 	local suffix="$2"
 	local upper
 	upper="$(target_upper "${target}")"
-	local var_name="MAGICK_AI_REMOTE_RUNTIME_${upper}_${suffix}"
+	local var_name="NPCINK_CLOUD_REMOTE_RUNTIME_${upper}_${suffix}"
 	if [ -n "${!var_name+x}" ]; then
 		printf '%s\n' "${!var_name}"
 	fi

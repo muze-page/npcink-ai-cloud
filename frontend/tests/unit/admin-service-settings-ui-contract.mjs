@@ -67,6 +67,36 @@ assert.match(
 
 assert.match(
   source,
+  /const \[emailConfigExpanded, setEmailConfigExpanded\] = useState\(false\);/,
+  'low-frequency SMTP fields must be hidden behind an explicit expanded state'
+);
+
+assert.match(
+  source,
+  /setEmailConfigExpanded\(email\.status === 'missing_config' \|\| email\.status === 'error'\);/,
+  'SMTP config should auto-expand only when missing or errored'
+);
+
+assert.match(
+  source,
+  /const \[emailPreviewOpen, setEmailPreviewOpen\] = useState\(false\);/,
+  'email template preview must live behind an explicit drawer state'
+);
+
+assert.match(
+  source,
+  /role="dialog"[\s\S]*aria-modal="true"[\s\S]*email-preview-drawer-title/,
+  'email template preview must render as a modal drawer instead of always occupying the settings page'
+);
+
+assert.match(
+  source,
+  /onClick=\{openEmailPreviewDrawer\}/,
+  'email settings page must expose a dedicated action to open the preview drawer'
+);
+
+assert.match(
+  source,
   /同发件邮箱/,
   'service settings page must expose a same-as-from-email SMTP username shortcut'
 );

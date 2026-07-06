@@ -27,11 +27,15 @@ from app.core.security import extract_trace_id
 from app.domain.commercial.errors import CommercialServiceError
 from app.domain.commercial.service import CommercialService
 
-COOKIE_SITE_ID = "magick_portal_site_id"
-COOKIE_PORTAL_SESSION_TOKEN = "magick_portal_session_token"
+COOKIE_SITE_ID = "npcink_portal_site_id"
+COOKIE_PORTAL_SESSION_TOKEN = "npcink_portal_session_token"
 COOKIE_BEARER_TOKEN = COOKIE_PORTAL_SESSION_TOKEN
-COOKIE_SESSION_ISSUED_AT = "magick_portal_session_issued_at"
-COOKIE_SESSION_EXPIRES_AT = "magick_portal_session_expires_at"
+COOKIE_SESSION_ISSUED_AT = "npcink_portal_session_issued_at"
+COOKIE_SESSION_EXPIRES_AT = "npcink_portal_session_expires_at"
+COOKIE_SITE_ID_LEGACY = "magick_portal_site_id"
+COOKIE_PORTAL_SESSION_TOKEN_LEGACY = "magick_portal_session_token"
+COOKIE_SESSION_ISSUED_AT_LEGACY = "magick_portal_session_issued_at"
+COOKIE_SESSION_EXPIRES_AT_LEGACY = "magick_portal_session_expires_at"
 COOKIE_SITE_ID_PATTERN = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")
 
 
@@ -362,6 +366,10 @@ def set_portal_session_cookies(
     expires_at = (now + timedelta(seconds=resolved_ttl_seconds)).isoformat().replace("+00:00", "Z")
     token_site_id = _cookie_safe_site_id(site_id)
     response.delete_cookie(COOKIE_SITE_ID)
+    response.delete_cookie(COOKIE_SITE_ID_LEGACY)
+    response.delete_cookie(COOKIE_PORTAL_SESSION_TOKEN_LEGACY)
+    response.delete_cookie(COOKIE_SESSION_ISSUED_AT_LEGACY)
+    response.delete_cookie(COOKIE_SESSION_EXPIRES_AT_LEGACY)
     response.set_cookie(
         COOKIE_PORTAL_SESSION_TOKEN,
         build_portal_session_token(
@@ -421,6 +429,10 @@ def clear_portal_session_cookies(response: JSONResponse | RedirectResponse) -> N
     response.delete_cookie(COOKIE_PORTAL_SESSION_TOKEN)
     response.delete_cookie(COOKIE_SESSION_ISSUED_AT)
     response.delete_cookie(COOKIE_SESSION_EXPIRES_AT)
+    response.delete_cookie(COOKIE_SITE_ID_LEGACY)
+    response.delete_cookie(COOKIE_PORTAL_SESSION_TOKEN_LEGACY)
+    response.delete_cookie(COOKIE_SESSION_ISSUED_AT_LEGACY)
+    response.delete_cookie(COOKIE_SESSION_EXPIRES_AT_LEGACY)
 
 
 def _has_portal_request_headers(request: Request) -> bool:

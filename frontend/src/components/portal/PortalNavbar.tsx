@@ -161,7 +161,7 @@ export function PortalNavbar() {
             </span>
             <span className="flex flex-col leading-none">
               <span className="text-[0.68rem] font-bold uppercase tracking-[0.3em] text-blue-600 dark:text-blue-300">
-                Magick AI
+                Npcink AI
               </span>
               <span className="text-sm font-semibold text-slate-900 dark:text-slate-100">
                 {t('portal.nav_title', undefined, 'Workspace')}

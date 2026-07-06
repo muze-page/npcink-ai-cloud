@@ -316,6 +316,13 @@ class ServiceSettingsEmailTestPayload(BaseModel):
     recipient_email: str = Field(min_length=3, max_length=320)
 
 
+class ServiceSettingsEmailPreviewPayload(BaseModel):
+    preview_type: str = Field(default="login", max_length=32)
+    locale: str = Field(default="zh-CN", max_length=16)
+    from_name: str = Field(default="", max_length=191)
+    from_email: str = Field(default="", max_length=320)
+
+
 class ModelReferenceSyncPayload(BaseModel):
     source_url: str = Field(default="", max_length=500)
     payload: dict[str, Any] | None = None
@@ -3429,6 +3436,33 @@ async def test_admin_portal_email_settings(
     return build_envelope(
         status="ok",
         message="portal email settings tested",
+        data=result,
+        revision="m6",
+    )
+
+
+@router.post("/admin/service-settings/email/preview")
+async def preview_admin_portal_email_settings(
+    request: Request,
+    payload: ServiceSettingsEmailPreviewPayload,
+) -> Any:
+    auth = await authorize_internal_request(request, require_idempotency=True)
+    if auth is not None:
+        return auth
+    services = get_cloud_services(request)
+    result = ServiceSettingsAdminService(
+        services.settings.database_url,
+        services.settings,
+    ).preview_email(
+        preview_type=payload.preview_type,
+        project_name=services.settings.project_name,
+        locale=payload.locale,
+        from_name=payload.from_name,
+        from_email=payload.from_email,
+    )
+    return build_envelope(
+        status="ok",
+        message="portal email preview generated",
         data=result,
         revision="m6",
     )

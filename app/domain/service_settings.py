@@ -405,6 +405,44 @@ class ServiceSettingsAdminService:
             "credential_value_exposure": "none",
         }
 
+    def preview_email(
+        self,
+        *,
+        preview_type: str,
+        project_name: str,
+        locale: str,
+        from_name: str = "",
+        from_email: str = "",
+    ) -> dict[str, Any]:
+        from app.adapters.notifications.smtp import build_portal_email_preview
+
+        row = _load_service_setting(self.database_url, SERVICE_SETTING_PORTAL_EMAIL)
+        config = _dict(row.config_json) if row is not None else {}
+        public_base_url = resolve_portal_public_base_url(self.database_url, self.settings)
+        preview = build_portal_email_preview(
+            preview_type=preview_type,
+            project_name=project_name,
+            locale=locale,
+            portal_url=f"{public_base_url.rstrip('/')}/portal/login"
+            if public_base_url
+            else "/portal/login",
+        )
+        recommended_from_name = "Npcink AI Cloud"
+        resolved_from_name = _string(from_name) or _string(config.get("from_name"))
+        resolved_from_email = _string(from_email) or _string(config.get("from_email"))
+        return {
+            "surface": "admin_service_settings_email_preview",
+            "setting_id": SERVICE_SETTING_PORTAL_EMAIL,
+            "preview_type": preview["preview_type"],
+            "subject": preview["subject"],
+            "text": preview["text"],
+            "html": preview["html"],
+            "from_name": resolved_from_name or recommended_from_name,
+            "from_email": resolved_from_email or "auth@npc.ink",
+            "recommended_from_name": recommended_from_name,
+            "credential_value_exposure": "none",
+        }
+
     def _save(
         self,
         *,

@@ -1,0 +1,25 @@
+{
+  "change_classification": "cloud detail",
+  "truth_owner": "npcink-ai-cloud service runtime and operator surfaces",
+  "final_write_owner": "wordpress_local",
+  "fail_closed_expectation": "email, branding, and cookie cleanup must not create a second control plane; if service settings are incomplete, Portal email delivery and admin/portal sessions fail closed through existing auth and settings validation",
+  "human_review_required": true,
+  "required_docs": [
+    "README.md",
+    "docs/cloud-content-generation-boundary-v1.md",
+    "docs/cloud-task-pack-boundary-v1.md",
+    "docs/cloud-agent-workflow-metadata-registry-v1.md",
+    "docs/cloud-agent-feedback-quality-gate-v1.md",
+    "docs/cloud-production-release-policy-v1.md"
+  ],
+  "required_gates": [
+    "pnpm run check:anti-drift",
+    "pnpm run check:perimeter",
+    "pnpm run check:release-policy",
+    "pnpm run check:fast",
+    "pnpm run smoke:local-alpha",
+    "pnpm run check:risk"
+  ],
+  "description": "Release-readiness cleanup before first real users: improve Portal email templates and preview, simplify admin service-settings email UI, update visible Npcink branding, migrate runtime cookie names from magick_* to npcink_*, and refresh local script env var names. Cloud remains the hosted runtime/service-detail layer and does not take WordPress write, approval, ability, workflow, prompt, router, MCP, or OpenClaw truth.",
+  "operator_note": "This standalone repository does not expose a check:risk script; current local substitutes run in this session are check:fast, check:perimeter, check:release-policy, targeted backend/frontend tests, target ESLint, i18n contract, diff check, residual scans, and browser/curl cookie smoke. Run smoke:local-alpha against the intended environment before production promotion."
+}

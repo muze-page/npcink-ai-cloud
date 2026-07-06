@@ -28,7 +28,7 @@ ABILITY_NAME="${NPCINK_CLOUD_ABILITY_NAME:-npcink-abilities-toolkit/build-articl
 CHANNEL="${NPCINK_CLOUD_CHANNEL:-openapi}"
 EXECUTION_KIND="${NPCINK_CLOUD_EXECUTION_KIND:-text}"
 PROMPT_TEXT="${NPCINK_CLOUD_PROMPT_TEXT:-Npcink AI DeepSeek smoke ok}"
-EXPECTED_PROVIDER_ID="${NPCINK_CLOUD_EXPECTED_PROVIDER_ID:-openai}"
+EXPECTED_PROVIDER_ID="${NPCINK_CLOUD_EXPECTED_PROVIDER_ID:-}"
 EXPECTED_MODEL_ID="${NPCINK_CLOUD_EXPECTED_MODEL_ID:-}"
 EVIDENCE_DIR="${NPCINK_CLOUD_LOCAL_ALPHA_SMOKE_EVIDENCE_DIR:-${ROOT_DIR}/.tmp/local-alpha-smoke}"
 
@@ -314,7 +314,7 @@ do
 			"${WORDPRESS_URL%/}${candidate_path}"
 	)"
 	case "${candidate_body}" in
-		*"Cloud API Key"*)
+		*"npcink-cloud-addon"*|*"Npcink Cloud Addon"*)
 			WORDPRESS_ADDON_PATH="${candidate_path}"
 			WORDPRESS_ADDON_BODY="${candidate_body}"
 			break
@@ -327,7 +327,7 @@ case "${WORDPRESS_ADDON_BODY}" in
 	*"已验证"*|*"Cloud settings are saved and verified."*) ;;
 	*) fail "WordPress Cloud addon page should show verified status" ;;
 esac
-assert_body_contains "${WORDPRESS_ADDON_BODY}" "Cloud API Key" "WordPress Cloud addon page should render the Cloud settings tab"
+assert_body_contains "${WORDPRESS_ADDON_BODY}" "npcink-cloud-addon" "WordPress Cloud addon page should render the Cloud addon admin shell"
 
 ok "Refreshing local alpha runtime baseline"
 docker compose -f "${ROOT_DIR}/docker-compose.dev.yml" exec -T api \
@@ -404,8 +404,8 @@ PY
 http_request "POST" "${BASE_URL%/}/portal/v1/auth/code/verify" "${PORTAL_COOKIE_JAR}" "${VERIFY_BODY}" \
 	"Origin: ${BASE_URL%/}"
 assert_status "${HTTP_STATUS}" "200" "portal login code verify should succeed"
-assert_json_non_empty "${HTTP_BODY}" "data.site_admin_ref" "portal session should include site_admin_ref"
-PORTAL_SITE_ADMIN_REF="$(json_read_path "${HTTP_BODY}" "data.site_admin_ref")"
+assert_json_non_empty "${HTTP_BODY}" "data.principal_id" "portal session should include principal_id"
+PORTAL_PRINCIPAL_REF="$(json_read_path "${HTTP_BODY}" "data.principal_id")"
 
 SELECT_SITE_BODY="$(SITE_ID_VALUE="${SITE_ID}" python3 - <<'PY'
 import json
@@ -445,7 +445,7 @@ if [ "${HTTP_STATUS}" != "200" ] && [ "${HTTP_STATUS}" != "303" ]; then
 fi
 http_request "GET" "${BASE_URL%/}/admin/session" "${ADMIN_COOKIE_JAR}" ""
 assert_status "${HTTP_STATUS}" "200" "admin session should load"
-assert_json_non_empty "${HTTP_BODY}" "data.platform_admin_ref" "admin session should include platform admin ref"
+assert_json_non_empty "${HTTP_BODY}" "data.principal_id" "admin session should include principal_id"
 
 signed_request "GET" "/v1/catalog/models" "" "" "idem-local-alpha-catalog-${IDEMPOTENCY_SUFFIX}" ""
 assert_status "${HTTP_STATUS}" "200" "catalog/models should succeed"
@@ -511,7 +511,7 @@ EVIDENCE_FILE="${EVIDENCE_DIR}/evidence-${IDEMPOTENCY_SUFFIX}.json"
 BASE_URL_VALUE="${BASE_URL}" \
 WORDPRESS_URL_VALUE="${WORDPRESS_URL}" \
 SITE_ID_VALUE="${SITE_ID}" \
-SITE_ADMIN_REF_VALUE="${PORTAL_SITE_ADMIN_REF}" \
+PORTAL_PRINCIPAL_REF_VALUE="${PORTAL_PRINCIPAL_REF}" \
 OPERATIONAL_READY_VALUE="${OPERATIONAL_READY_BODY}" \
 OBSERVABILITY_VALUE="${OBSERVABILITY_BODY}" \
 WORDPRESS_ADDON_VERIFIED_VALUE="true" \
@@ -541,7 +541,7 @@ evidence = {
     "wordpress_url": os.environ["WORDPRESS_URL_VALUE"],
     "site_id": os.environ["SITE_ID_VALUE"],
     "portal": {
-        "site_admin_ref": os.environ["SITE_ADMIN_REF_VALUE"],
+        "principal_ref": os.environ["PORTAL_PRINCIPAL_REF_VALUE"],
     },
     "operational_ready": {
         "ok": operational_ready.get("ok"),

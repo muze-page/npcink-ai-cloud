@@ -1,8 +1,8 @@
 import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
 
-const ADMIN_SESSION_COOKIE = 'magick_admin_session_token';
-const PORTAL_SESSION_COOKIE = 'magick_portal_session_token';
+const ADMIN_SESSION_COOKIE = 'npcink_admin_session_token';
+const PORTAL_SESSION_COOKIE = 'npcink_portal_session_token';
 
 function buildContentSecurityPolicy(): string {
   const isDevelopment = process.env.NODE_ENV !== 'production';

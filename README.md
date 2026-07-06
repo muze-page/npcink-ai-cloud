@@ -67,6 +67,7 @@ Operational references:
 - [docs/writing-assistance-evidence-history-2026-06.md](docs/writing-assistance-evidence-history-2026-06.md)
 - [docs/cloud-production-deployment-history-2026-06-24.md](docs/cloud-production-deployment-history-2026-06-24.md)
 - [docs/ai-provider-env-config-retirement-2026-06-26.md](docs/ai-provider-env-config-retirement-2026-06-26.md)
+- [docs/cloud-runtime-reference-notes-2026-07.md](docs/cloud-runtime-reference-notes-2026-07.md)
 
 ## Test Entry For Agents
 
@@ -724,7 +725,7 @@ Platform admin bootstrap auth:
 - current bounded bootstrap path:
   - `POST /admin/auth/bootstrap`
   - request body: `{"token":"<admin bootstrap token>"}`
-  - response establishes `magick_admin_session_token`
+  - response establishes `npcink_admin_session_token`
 - current admin session inspect path:
   - `GET /admin/session`
 - current visible admin pages:
