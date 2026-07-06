@@ -20,6 +20,7 @@ from app.core.models import (
     AccountEntitlementSnapshot,
     AccountSubscription,
     BillingSnapshot,
+    PlanVersion,
     Site,
 )
 from app.domain.commercial.errors import (
@@ -2072,8 +2073,8 @@ class CommercialServiceBillingMixin(CommercialServiceAuditMixin):
     def _resolve_effective_subscription_budgets(
         self,
         *,
-        plan_version: object | None,
-        subscription: object | None,
+        plan_version: PlanVersion | None,
+        subscription: AccountSubscription | None,
     ) -> dict[str, object]:
         budgets = self._normalize_budgets(getattr(plan_version, "budgets_json", None))
         metadata = getattr(subscription, "metadata_json", None)
@@ -2107,8 +2108,8 @@ class CommercialServiceBillingMixin(CommercialServiceAuditMixin):
     def _resolve_current_subscription_plan_version(
         self,
         repository: CommercialRepository,
-        subscription: object | None,
-    ) -> object | None:
+        subscription: AccountSubscription | None,
+    ) -> PlanVersion | None:
         if subscription is None:
             return None
         plan_id = str(getattr(subscription, "plan_id", "") or "").strip()
