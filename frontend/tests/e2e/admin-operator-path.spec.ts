@@ -113,7 +113,7 @@ test('admin operator path smoke: queue and inspector routes stay connected', asy
   await expect(page.getByText(/checkout|buy points|storefront/i)).toHaveCount(0);
 
   await page.goto(`/admin/accounts/${LONG_ACCOUNT_ID}`);
-  await expect(page.getByRole('heading', { name: /Magick AI Demo|MVP Account|acct_mvp_enterprise_primary/i }).first()).toBeVisible();
+  await expect(page.getByRole('heading', { name: /Npcink AI Demo|MVP Account|acct_mvp_enterprise_primary/i }).first()).toBeVisible();
   await expect(page.getByRole('link', { name: /Open customer subscription|打开客户订阅/i })).toHaveCount(0);
   await expect(page.getByText(/Package and top-up|套餐和加量|方案和加量/i).first()).toBeVisible();
   await expect(page.getByRole('link', { name: /View sites|查看站点|查看站點/i })).toBeVisible();
@@ -186,7 +186,7 @@ test('admin queue pages keep one primary header action and shared identifier tre
 
   await page.goto('/admin/accounts');
   await expect(page.locator(`a[href="/admin/accounts/${LONG_ACCOUNT_ID}"]`).first()).toBeVisible();
-  await expect(page.getByText(/Magick AI Demo/i)).toBeVisible();
+  await expect(page.getByText(/Npcink AI Demo/i)).toBeVisible();
   await expect(page.getByText(/Pilot customer\. Confirm package before public release\./i)).toBeVisible();
   await expect(page.getByText(/Free Account|免费客户|免費客戶/i)).toBeVisible();
   await expect(page.getByText(/Uncovered Account|未覆盖客户|未覆蓋客戶/i)).toBeVisible();

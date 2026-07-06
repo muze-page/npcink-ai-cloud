@@ -725,7 +725,7 @@ Platform admin bootstrap auth:
 - current bounded bootstrap path:
   - `POST /admin/auth/bootstrap`
   - request body: `{"token":"<admin bootstrap token>"}`
-  - response establishes `magick_admin_session_token`
+  - response establishes `npcink_admin_session_token`
 - current admin session inspect path:
   - `GET /admin/session`
 - current visible admin pages:

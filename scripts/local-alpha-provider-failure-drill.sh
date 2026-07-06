@@ -2,8 +2,8 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
-EVIDENCE_DIR="${MAGICK_AI_PROVIDER_FAILURE_DRILL_EVIDENCE_DIR:-${ROOT_DIR}/.tmp/local-alpha-provider-failure-drill}"
-SUFFIX="${MAGICK_AI_PROVIDER_FAILURE_DRILL_SUFFIX:-$(date -u '+%Y%m%d%H%M%S')}"
+EVIDENCE_DIR="${NPCINK_CLOUD_PROVIDER_FAILURE_DRILL_EVIDENCE_DIR:-${ROOT_DIR}/.tmp/local-alpha-provider-failure-drill}"
+SUFFIX="${NPCINK_CLOUD_PROVIDER_FAILURE_DRILL_SUFFIX:-$(date -u '+%Y%m%d%H%M%S')}"
 EVIDENCE_FILE="${EVIDENCE_DIR}/evidence-${SUFFIX}.json"
 
 mkdir -p "${EVIDENCE_DIR}"

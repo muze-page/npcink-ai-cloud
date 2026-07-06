@@ -101,7 +101,7 @@ async function installPortalMocks(page: Page) {
 
   await page.context().addCookies([
     {
-      name: 'magick_portal_session_token',
+      name: 'npcink_portal_session_token',
       value: 'e2e-portal-session',
       url: BASE_URL,
     },

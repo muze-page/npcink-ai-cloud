@@ -224,6 +224,32 @@ class FakePortalEmailSender(PortalEmailSender):
             }
         )
 
+    def send_registration_code(
+        self,
+        *,
+        recipient_email: str,
+        principal_id: str,
+        code: str,
+        expires_in_seconds: int,
+        project_name: str,
+        site_name: str = "",
+        wordpress_url: str = "",
+        locale: str = "zh-CN",
+    ) -> None:
+        self.messages.append(
+            {
+                "kind": "registration_code",
+                "recipient_email": recipient_email,
+                "principal_id": principal_id,
+                "code": code,
+                "expires_in_seconds": expires_in_seconds,
+                "project_name": project_name,
+                "site_name": site_name,
+                "wordpress_url": wordpress_url,
+                "locale": locale,
+            }
+        )
+
     def send_email_change_code(
         self,
         *,
@@ -1411,7 +1437,7 @@ def test_portal_ai_insights_are_manual_cached_and_redacted(tmp_path: Path) -> No
     assert analysis["generation"]["mode"] == "llm"
     assert analysis["generation"]["cache_status"] == "miss"
     assert analysis["ai_disclosure"]["generated_by_ai"] is True
-    assert analysis["ai_disclosure"]["brand_label"] == "Magick AI"
+    assert analysis["ai_disclosure"]["brand_label"] == "Npcink AI"
     assert analysis["agent_handoff"]["agent_id"] == "internal_ops_advisor_agent"
     assert analysis["agent_handoff"]["handoff_type"] == "operator_recommendation"
     assert analysis["agent_handoff"]["requires_operator_review"] is True
@@ -2765,6 +2791,37 @@ def test_portal_login_code_request_uses_real_sender_when_configured(
     assert fake_sender.messages[0]["kind"] == "login_code"
     assert fake_sender.messages[0]["locale"] == "zh-CN"
     assert len(str(fake_sender.messages[0]["code"])) == 6
+
+    dispose_engine(database_url)
+
+
+def test_portal_registration_code_request_uses_registration_sender(
+    tmp_path: Path,
+) -> None:
+    fake_sender = FakePortalEmailSender()
+    database_url, client = _build_client(
+        tmp_path,
+        settings_overrides={
+            "portal_jwt_secret": TEST_PORTAL_JWT_SECRET,
+            "portal_login_code_ttl_seconds": 300,
+        },
+        portal_email_sender=fake_sender,
+    )
+
+    request_data = _request_portal_registration_code(
+        client,
+        email="registration-mail@example.com",
+        site_url="https://registration.example.com",
+        site_name="Registration Demo Site",
+    )
+
+    assert request_data["delivery"] == "email"
+    assert request_data["code"] == ""
+    assert len(fake_sender.messages) == 1
+    assert fake_sender.messages[0]["kind"] == "registration_code"
+    assert fake_sender.messages[0]["recipient_email"] == "registration-mail@example.com"
+    assert fake_sender.messages[0]["site_name"] == "Registration Demo Site"
+    assert fake_sender.messages[0]["wordpress_url"] == "https://registration.example.com"
 
     dispose_engine(database_url)
 

@@ -7,7 +7,12 @@ import {
 } from '@/app/api/admin/_shared';
 import { getAdminBootstrapAdminRef } from '@/lib/env';
 
-const ADMIN_SESSION_COOKIE = 'magick_admin_session_token';
+const ADMIN_SESSION_COOKIE = 'npcink_admin_session_token';
+const ADMIN_SESSION_COOKIE_LEGACY = 'magick_admin_session_token';
+const FORWARDED_ADMIN_COOKIE_NAMES = new Set([
+  ADMIN_SESSION_COOKIE,
+  ADMIN_SESSION_COOKIE_LEGACY,
+]);
 
 type ParsedSetCookie = {
   name: string;
@@ -94,7 +99,7 @@ function parseSetCookie(header: string): ParsedSetCookie | null {
 function applyCookieForwarding(response: Response, nextResponse: NextResponse): void {
   for (const header of readSetCookieHeaders(response)) {
     const parsed = parseSetCookie(header);
-    if (!parsed || parsed.name !== ADMIN_SESSION_COOKIE) {
+    if (!parsed || !FORWARDED_ADMIN_COOKIE_NAMES.has(parsed.name)) {
       continue;
     }
 

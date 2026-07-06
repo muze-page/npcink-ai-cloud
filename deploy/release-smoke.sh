@@ -383,7 +383,7 @@ if [ "${HTTP_STATUS}" = "200" ]; then
 fi
 http_request "POST" "${BASE_URL%/}/admin/auth/bootstrap" "${ADMIN_COOKIE_JAR}" "${ADMIN_BODY}" "Origin: ${BASE_URL%/}"
 assert_status "${HTTP_STATUS}" "200" "admin bootstrap login should succeed"
-assert_body_contains "${HTTP_HEADERS}" "magick_admin_session_token" "admin bootstrap should set ops session cookie"
+assert_body_contains "${HTTP_HEADERS}" "npcink_admin_session_token" "admin bootstrap should set ops session cookie"
 
 http_request "GET" "${BASE_URL%/}/admin/session" "${ADMIN_COOKIE_JAR}"
 assert_status "${HTTP_STATUS}" "200" "admin session should load"

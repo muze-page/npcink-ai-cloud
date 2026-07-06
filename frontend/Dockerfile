@@ -24,8 +24,8 @@ RUN mkdir -p frontend/public
 
 ENV NEXT_TELEMETRY_DISABLED=1
 ENV NODE_ENV=production
-ARG CLOUD_API_BASE_URL=https://api.magick.invalid
-ARG CLOUD_PUBLIC_BASE_URL=https://cloud.magick.invalid
+ARG CLOUD_API_BASE_URL=https://cloud.npc.ink
+ARG CLOUD_PUBLIC_BASE_URL=https://cloud.npc.ink
 ENV CLOUD_API_BASE_URL=${CLOUD_API_BASE_URL}
 ENV CLOUD_PUBLIC_BASE_URL=${CLOUD_PUBLIC_BASE_URL}
 

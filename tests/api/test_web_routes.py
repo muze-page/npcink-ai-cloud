@@ -109,6 +109,32 @@ class FakePortalEmailSender(PortalEmailSender):
             }
         )
 
+    def send_registration_code(
+        self,
+        *,
+        recipient_email: str,
+        principal_id: str,
+        code: str,
+        expires_in_seconds: int,
+        project_name: str,
+        site_name: str = "",
+        wordpress_url: str = "",
+        locale: str = "zh-CN",
+    ) -> None:
+        self.messages.append(
+            {
+                "kind": "registration_code",
+                "recipient_email": recipient_email,
+                "principal_id": principal_id,
+                "code": code,
+                "expires_in_seconds": expires_in_seconds,
+                "project_name": project_name,
+                "site_name": site_name,
+                "wordpress_url": wordpress_url,
+                "locale": locale,
+            }
+        )
+
     def send_email_change_code(
         self,
         *,
@@ -168,7 +194,10 @@ def _login_platform_admin(
     )
     assert response.status_code == 303, response.text
     assert response.headers["location"].startswith("/admin"), response.headers["location"]
-    assert "magick_admin_session_token" in response.headers.get("set-cookie", "")
+    set_cookie_header = response.headers.get("set-cookie", "")
+    assert "npcink_admin_session_token" in set_cookie_header
+    assert "magick_admin_session_token" in set_cookie_header
+    assert "Max-Age=0" in set_cookie_header
     return client
 
 
