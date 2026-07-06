@@ -167,6 +167,24 @@ function buildAlipayReturnUrl(publicBaseUrl: string): string {
   }
 }
 
+function inferBrowserPublicBaseUrl(): string {
+  if (typeof window === 'undefined') return '';
+  try {
+    const parsed = new URL(window.location.origin);
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return '';
+    if (
+      parsed.hostname === 'localhost' ||
+      parsed.hostname === '::1' ||
+      parsed.hostname.startsWith('127.')
+    ) {
+      return '';
+    }
+    return `${parsed.protocol}//${parsed.host}`;
+  } catch {
+    return '';
+  }
+}
+
 function payloadRecord(payload: BackendPayload): Record<string, unknown> | null {
   return payload && typeof payload === 'object' ? payload : null;
 }
@@ -294,6 +312,7 @@ export default function AdminServiceSettingsPage() {
   const [emailPreview, setEmailPreview] = useState<EmailPreview | null>(null);
   const [emailConfigExpanded, setEmailConfigExpanded] = useState(false);
   const [emailPreviewOpen, setEmailPreviewOpen] = useState(false);
+  const [browserPublicBaseUrl, setBrowserPublicBaseUrl] = useState('');
 
   const [portalPublicForm, setPortalPublicForm] = useState<PortalPublicForm>({
     enabled: true,
@@ -396,6 +415,10 @@ export default function AdminServiceSettingsPage() {
     void loadSettings();
   }, [loadSettings]);
 
+  useEffect(() => {
+    setBrowserPublicBaseUrl(inferBrowserPublicBaseUrl());
+  }, []);
+
   const metrics = useMemo(() => {
     const settings = data?.settings;
     return [
@@ -430,13 +453,17 @@ export default function AdminServiceSettingsPage() {
     return buildQqRedirectUri(portalPublicForm.public_base_url);
   }, [portalPublicForm.public_base_url]);
 
+  const savedPortalPublicBaseUrl = portalPublicForm.public_base_url.trim();
+  const effectivePortalPublicBaseUrl = savedPortalPublicBaseUrl || browserPublicBaseUrl;
+  const portalPublicAutosavePending = !savedPortalPublicBaseUrl && Boolean(browserPublicBaseUrl);
+
   const defaultAlipayNotifyUrl = useMemo(() => {
-    return buildAlipayNotifyUrl(portalPublicForm.public_base_url);
-  }, [portalPublicForm.public_base_url]);
+    return buildAlipayNotifyUrl(effectivePortalPublicBaseUrl);
+  }, [effectivePortalPublicBaseUrl]);
 
   const defaultAlipayReturnUrl = useMemo(() => {
-    return buildAlipayReturnUrl(portalPublicForm.public_base_url);
-  }, [portalPublicForm.public_base_url]);
+    return buildAlipayReturnUrl(effectivePortalPublicBaseUrl);
+  }, [effectivePortalPublicBaseUrl]);
 
   const resolvedAlipayNotifyUrl = alipayForm.notify_url || defaultAlipayNotifyUrl;
   const resolvedAlipayReturnUrl = alipayForm.return_url || defaultAlipayReturnUrl;
@@ -473,6 +500,24 @@ export default function AdminServiceSettingsPage() {
     }
   }
 
+  async function patchJson(
+    path: string,
+    body: Record<string, unknown>,
+    fallbackMessage: string
+  ): Promise<BackendPayload> {
+    const response = await fetch(path, {
+      method: 'PATCH',
+      credentials: 'include',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const payload = await readBackendPayload(response);
+    if (!response.ok) {
+      throw new Error(requestErrorMessage(response, payload, fallbackMessage, t));
+    }
+    return payload;
+  }
+
   async function saveJson(
     path: string,
     body: Record<string, unknown>,
@@ -482,21 +527,13 @@ export default function AdminServiceSettingsPage() {
     setSaving(savingKey);
     setError('');
     setNotice('');
+    const fallbackMessage = t('admin.service_settings.save_failed', {}, 'Failed to save service settings.');
     try {
-      const response = await fetch(path, {
-        method: 'PATCH',
-        credentials: 'include',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(body),
-      });
-      const payload = await readBackendPayload(response);
-      if (!response.ok) {
-        throw new Error(requestErrorMessage(response, payload, t('admin.service_settings.save_failed', {}, 'Failed to save service settings.'), t));
-      }
+      await patchJson(path, body, fallbackMessage);
       setNotice(successMessage);
       await loadSettings();
     } catch (saveError) {
-      setError(saveError instanceof Error ? saveError.message : t('admin.service_settings.save_failed', {}, 'Failed to save service settings.'));
+      setError(saveError instanceof Error ? saveError.message : fallbackMessage);
     } finally {
       setSaving('');
     }
@@ -629,19 +666,22 @@ export default function AdminServiceSettingsPage() {
     void saveJson('/api/admin/service-settings/email', payload, 'email', t('admin.service_settings.email_saved', {}, 'Email settings saved.'));
   }
 
-  function submitAlipay(event: FormEvent<HTMLFormElement>) {
+  async function submitAlipay(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (alipayForm.enabled && (!resolvedAlipayNotifyUrl || !resolvedAlipayReturnUrl)) {
+    const alipayPublicBaseUrl = savedPortalPublicBaseUrl || browserPublicBaseUrl;
+    const nextAlipayNotifyUrl = alipayForm.notify_url || buildAlipayNotifyUrl(alipayPublicBaseUrl);
+    const nextAlipayReturnUrl = alipayForm.return_url || buildAlipayReturnUrl(alipayPublicBaseUrl);
+    if (alipayForm.enabled && (!nextAlipayNotifyUrl || !nextAlipayReturnUrl)) {
       setNotice('');
-      setError(t('admin.service_settings.alipay_requires_public_url', {}, '先保存门户基础地址，再保存支付宝配置。notify_url 和 return_url 会自动生成。'));
+      setError(t('admin.service_settings.alipay_requires_public_url', {}, '支付宝回调地址需要先确定公开访问域名。请先保存门户基础地址，系统会自动生成 notify_url 和 return_url。'));
       return;
     }
     const payload: Record<string, unknown> = {
       enabled: alipayForm.enabled,
       app_id: alipayForm.app_id,
       gateway_url: alipayForm.gateway_url,
-      notify_url: resolvedAlipayNotifyUrl,
-      return_url: resolvedAlipayReturnUrl,
+      notify_url: nextAlipayNotifyUrl,
+      return_url: nextAlipayReturnUrl,
     };
     if (alipayForm.private_key) {
       payload.private_key = alipayForm.private_key;
@@ -649,7 +689,34 @@ export default function AdminServiceSettingsPage() {
     if (alipayForm.public_key) {
       payload.public_key = alipayForm.public_key;
     }
-    void saveJson('/api/admin/service-settings/alipay-payment', payload, 'alipay-payment', t('admin.service_settings.alipay_saved', {}, '支付宝支付配置已保存。'));
+    setSaving('alipay-payment');
+    setError('');
+    setNotice('');
+    const fallbackMessage = t('admin.service_settings.save_failed', {}, '保存服务配置失败。');
+    try {
+      if (alipayForm.enabled && !savedPortalPublicBaseUrl && browserPublicBaseUrl) {
+        await patchJson(
+          '/api/admin/service-settings/portal-public',
+          {
+            ...portalPublicForm,
+            enabled: true,
+            public_base_url: browserPublicBaseUrl,
+          },
+          fallbackMessage
+        );
+      }
+      await patchJson('/api/admin/service-settings/alipay-payment', payload, fallbackMessage);
+      setNotice(
+        !savedPortalPublicBaseUrl && browserPublicBaseUrl
+          ? t('admin.service_settings.alipay_saved_with_public_url', { baseUrl: browserPublicBaseUrl }, '已先保存门户基础地址 {{baseUrl}}，并保存支付宝支付配置。')
+          : t('admin.service_settings.alipay_saved', {}, '支付宝支付配置已保存。')
+      );
+      await loadSettings();
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : fallbackMessage);
+    } finally {
+      setSaving('');
+    }
   }
 
   const secretConfigured = {
@@ -810,6 +877,16 @@ export default function AdminServiceSettingsPage() {
                   </button>
                   {t('admin.service_settings.portal_enabled_label', {}, 'Portal entry enabled')}
                 </div>
+                {browserPublicBaseUrl && portalPublicForm.public_base_url.trim() !== browserPublicBaseUrl ? (
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    disabled={saving === 'portal-public'}
+                    onClick={() => setPortalPublicForm((current) => ({ ...current, enabled: true, public_base_url: browserPublicBaseUrl }))}
+                  >
+                    {t('admin.service_settings.use_current_base_url', {}, '使用当前访问地址')}
+                  </button>
+                ) : null}
                 <button type="submit" className="btn btn-primary" disabled={saving === 'portal-public'}>
                   {saving === 'portal-public'
                     ? t('admin.service_settings.saving', {}, 'Saving')
@@ -1301,9 +1378,22 @@ export default function AdminServiceSettingsPage() {
                 <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
                   {t('admin.service_settings.alipay_desc', {}, '保存支付宝网页支付所需凭证。密钥加密存储，不会在页面回显。')}
                 </p>
+                <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm dark:border-slate-800 dark:bg-slate-950/60">
+                  <p className="font-medium text-slate-700 dark:text-slate-200">
+                    {t('admin.service_settings.alipay_callback_base_label', {}, '回调基础地址')}
+                  </p>
+                  <p className="mt-1 font-mono text-xs text-slate-600 dark:text-slate-300">
+                    {effectivePortalPublicBaseUrl || t('admin.service_settings.alipay_callback_base_missing', {}, '尚未设置')}
+                  </p>
+                  <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                    {portalPublicAutosavePending
+                      ? t('admin.service_settings.alipay_public_url_autosave_notice', { baseUrl: browserPublicBaseUrl }, '保存支付宝配置时会先保存当前访问地址 {{baseUrl}}，再自动生成 notify_url 和 return_url。')
+                      : t('admin.service_settings.alipay_callback_base_ready', {}, 'notify_url 和 return_url 会从这个地址自动生成。')}
+                  </p>
+                </div>
               </div>
 
-              <form className="grid gap-4 lg:grid-cols-2" onSubmit={submitAlipay}>
+              <form className="grid gap-4 lg:grid-cols-2" onSubmit={(event) => void submitAlipay(event)}>
                 <label className={labelClassName()}>
                   App ID
                   <input
