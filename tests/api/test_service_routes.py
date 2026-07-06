@@ -4647,6 +4647,9 @@ def test_service_routes_admin_read_facade(tmp_path: Path) -> None:
     assert tier_templates[0]["site_limit"] == 1
     assert tier_templates[1]["site_limit"] == 5
     assert tier_templates[2]["site_limit"] == 25
+    assert tier_templates[0]["max_vector_documents"] == 100
+    assert tier_templates[1]["max_vector_documents"] == 2000
+    assert tier_templates[2]["max_vector_documents"] == 10000
     assert tier_templates[2]["concurrency_template"]["max_active_runs"] == 10
     assert tier_templates[0]["canonical_shell"]["entitlements"]["execution_tiers"] == ["cloud"]
     assert tier_templates[1]["canonical_shell"]["budgets"]["max_ai_credits_per_period"] == 10000
@@ -4671,6 +4674,7 @@ def test_service_routes_admin_read_facade(tmp_path: Path) -> None:
     assert admin_plan_summary["tier_summary"]["package_alias"] == "Pro"
     assert admin_plan_summary["tier_summary"]["monthly_included_points"] == 10000
     assert admin_plan_summary["tier_summary"]["site_limit"] == 5
+    assert admin_plan_summary["tier_summary"]["max_vector_documents"] == 2000
     assert admin_plan_summary["tier_summary"]["max_batch_items"] == 25
     assert admin_plan_summary["tier_summary"]["nightly_inspection_runs_per_period"] == 30
     assert admin_plan_summary["tier_summary"]["nightly_inspection_retention_days"] == 14
@@ -4687,6 +4691,7 @@ def test_service_routes_admin_read_facade(tmp_path: Path) -> None:
     assert plan_detail["tier_summary"]["package_alias"] == "Pro"
     assert plan_detail["tier_summary"]["monthly_included_points"] == 10000
     assert plan_detail["tier_summary"]["site_limit"] == 5
+    assert plan_detail["tier_summary"]["max_vector_documents"] == 2000
     assert plan_detail["tier_summary"]["max_batch_items"] == 25
     assert plan_detail["tier_summary"]["nightly_inspection_runs_per_period"] == 30
     assert plan_detail["tier_summary"]["nightly_inspection_retention_days"] == 14
@@ -4851,6 +4856,7 @@ def test_service_routes_plan_tier_fallback_and_package_fit_cues(tmp_path: Path) 
     assert plans["free_ops"]["tier_summary"]["package_alias"] == "Free"
     assert plans["free_ops"]["tier_summary"]["monthly_included_points"] == 300
     assert plans["free_ops"]["tier_summary"]["site_limit"] == 1
+    assert plans["free_ops"]["tier_summary"]["max_vector_documents"] == 100
     assert plans["free_ops"]["tier_summary"]["max_batch_items"] == 5
     assert plans["free_ops"]["tier_summary"]["automation_enabled"] is True
     assert plans["free_ops"]["tier_summary"]["api_enabled"] is True
@@ -4858,6 +4864,7 @@ def test_service_routes_plan_tier_fallback_and_package_fit_cues(tmp_path: Path) 
     assert plans["plan_version_tier"]["tier_summary"]["tier_id"] == "agency"
     assert plans["plan_version_tier"]["tier_summary"]["package_alias"] == "Agency"
     assert plans["plan_version_tier"]["tier_summary"]["monthly_included_points"] == 150000
+    assert plans["plan_version_tier"]["tier_summary"]["max_vector_documents"] == 10000
     assert plans["plan_version_tier"]["tier_summary"]["max_batch_items"] == 100
     assert (
         plans["plan_version_tier"]["tier_summary"][
@@ -4868,6 +4875,7 @@ def test_service_routes_plan_tier_fallback_and_package_fit_cues(tmp_path: Path) 
     assert plans["plan_version_tier"]["tier_summary"]["openclaw_enabled"] is True
     assert plans["agency_ops"]["tier_summary"]["tier_id"] == "agency"
     assert plans["general_ops"]["tier_summary"]["tier_id"] == "pro"
+    assert plans["general_ops"]["tier_summary"]["max_vector_documents"] == 2000
     assert plans["general_ops"]["tier_summary"]["max_batch_items"] == 25
     assert plans["general_ops"]["tier_summary"]["nightly_inspection_runs_per_period"] == 30
 
@@ -4876,6 +4884,7 @@ def test_service_routes_plan_tier_fallback_and_package_fit_cues(tmp_path: Path) 
     assert free_detail["tier_summary"]["tier_id"] == "free"
     assert free_detail["tier_summary"]["package_alias"] == "Free"
     assert free_detail["tier_summary"]["monthly_included_points"] == 300
+    assert free_detail["tier_summary"]["max_vector_documents"] == 100
     assert free_detail["tier_summary"]["budgets_template"]["max_ai_credits_per_period"] == 300
     free_cue_codes = {item["code"] for item in free_detail["package_fit_cues"]}
     assert "package_fit.cost_ceiling_missing" in free_cue_codes
@@ -5052,6 +5061,7 @@ def test_admin_account_quota_summary_reports_ai_credits_and_resource_limits(
     assert resource_limits["bound_sites"]["used"] == 1.0
     assert resource_limits["active_api_key_sites"]["used"] == 1.0
     assert resource_limits["vector_documents"]["unit"] == "document"
+    assert resource_limits["vector_documents"]["limit"] == 100.0
     assert data["coverage"]["active_key_site_count"] == 1
 
 

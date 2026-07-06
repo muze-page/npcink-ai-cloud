@@ -33,6 +33,7 @@ from app.core.models import (
     CreditLedgerEntry,
     IdentityProviderBinding,
     PaymentOrder,
+    PlanVersion,
     PluginObservabilityEvent,
     Principal,
     RunRecord,
@@ -3802,6 +3803,9 @@ def test_portal_summary_usage_entitlements_and_audit_routes(tmp_path: Path) -> N
         json={
             "plan_version_id": "plan_portal_reads_v1",
             "version_label": "v1",
+            "metadata": {
+                "max_vector_documents": 100,
+            },
             "policy": {
                 "reconciliation": {
                     "tolerance": {
@@ -3810,7 +3814,7 @@ def test_portal_summary_usage_entitlements_and_audit_routes(tmp_path: Path) -> N
                         "tokens_total": 0,
                         "cost": 0,
                     }
-                }
+                },
             },
         },
         headers=build_internal_headers(idempotency_key="portal-reads-plan-version-001"),
@@ -3833,6 +3837,47 @@ def test_portal_summary_usage_entitlements_and_audit_routes(tmp_path: Path) -> N
             .order_by(AccountSubscription.created_at.desc())
         )
         assert subscription is not None
+        entitlement_snapshot = session.scalar(
+            select(AccountEntitlementSnapshot).where(
+                AccountEntitlementSnapshot.account_id == "acct_portal_reads",
+                AccountEntitlementSnapshot.status == "active",
+            )
+        )
+        assert entitlement_snapshot is not None
+        entitlement_snapshot.budgets_json = {
+            **(entitlement_snapshot.budgets_json or {}),
+            "max_ai_credits_per_period": 300,
+            "max_runs_per_period": 10,
+            "max_tokens_per_period": 10000,
+        }
+        entitlement_snapshot.concurrency_json = {
+            **(entitlement_snapshot.concurrency_json or {}),
+            "max_active_runs": 1,
+        }
+        assert entitlement_snapshot.budgets_json["max_ai_credits_per_period"] == 300
+        assert entitlement_snapshot.concurrency_json["max_active_runs"] == 1
+        plan_version = session.scalar(
+            select(PlanVersion).where(
+                PlanVersion.plan_version_id == subscription.plan_version_id
+            )
+        )
+        assert plan_version is not None
+        plan_version.budgets_json = {
+            **(plan_version.budgets_json or {}),
+            "max_ai_credits_per_period": 2000,
+            "max_runs_per_period": 0,
+            "max_tokens_per_period": 0,
+        }
+        plan_version.concurrency_json = {
+            **(plan_version.concurrency_json or {}),
+            "max_active_runs": 5,
+        }
+        plan_version.metadata_json = {
+            **(plan_version.metadata_json or {}),
+            "max_batch_items": 5,
+            "max_vector_documents": 100,
+            "site_limit": 1,
+        }
         repository = CommercialRepository(session)
         session.add_all(
             [
@@ -4010,6 +4055,7 @@ def test_portal_summary_usage_entitlements_and_audit_routes(tmp_path: Path) -> N
     quota_summary = entitlements_data["quota_summary"]
     assert quota_summary["account_id"] == "acct_portal_reads"
     assert quota_summary["credit"]["key"] == "ai_credits"
+    assert quota_summary["credit"]["limit"] == 2000.0
     assert quota_summary["credit"]["estimated"] is False
     assert quota_summary["credit_policy"]["rate_version"] == "ai-credit-ledger-v2"
     assert quota_summary["credit_policy"]["topup_policy"] == (
@@ -4029,11 +4075,20 @@ def test_portal_summary_usage_entitlements_and_audit_routes(tmp_path: Path) -> N
         if item["key"] == "zhihu_hot_topics"
     )["capability_group"] == "zhihu_open_platform"
     assert "internal_limits" not in quota_summary
-    assert {item["key"] for item in quota_summary["resource_limits"]} >= {
+    assert {item["key"] for item in quota_summary["resource_limits"]} == {
         "bound_sites",
-        "active_api_key_sites",
+        "concurrent_runs",
+        "batch_items",
         "vector_documents",
     }
+    vector_documents = next(
+        item for item in quota_summary["resource_limits"] if item["key"] == "vector_documents"
+    )
+    assert vector_documents["limit"] == 100.0
+    concurrent_runs = next(
+        item for item in quota_summary["resource_limits"] if item["key"] == "concurrent_runs"
+    )
+    assert concurrent_runs["limit"] == 5.0
 
     credit_ledger_response = client.get(
         "/portal/v1/sites/site_portal_reads/credit-ledger?limit=10",
