@@ -52,7 +52,6 @@ def _allow_local_debug_portal_same_origin_bypass(request: Request) -> bool:
         str(request.headers.get("origin") or ""),
         str(request.headers.get("referer") or ""),
         str(request.base_url),
-        str(settings.portal_public_base_url or ""),
     )
     return any(_debug_local_origin_allowed(settings, value) for value in candidates)
 

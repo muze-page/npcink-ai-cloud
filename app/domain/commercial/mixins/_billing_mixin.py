@@ -20,9 +20,11 @@ from app.core.models import (
     AccountEntitlementSnapshot,
     AccountSubscription,
     BillingSnapshot,
+    PlanVersion,
     Site,
 )
 from app.domain.commercial.errors import (
+    CommercialConflictError,
     CommercialNotFoundError,
     CommercialValidationError,
 )
@@ -152,6 +154,7 @@ PLAN_TIER_REGISTRY: dict[str, dict[str, object]] = {
         },
         "concurrency_template": {"max_active_runs": 1},
         "site_limit": 1,
+        "max_vector_documents": 100,
         "max_batch_items": 5,
         "nightly_inspection_runs_per_period": 0,
         "nightly_inspection_retention_days": 14,
@@ -174,7 +177,7 @@ PLAN_TIER_REGISTRY: dict[str, dict[str, object]] = {
         "tier_id": "pro",
         "label": "Pro",
         "package_alias": "Pro",
-        "usage_band": "10,000 AI credits and 30 Pro Nightly Inspection runs per month.",
+        "usage_band": "10,000 AI credits per month.",
         "positioning": "Commercial Pro package with normal hosted AI consumption controlled by monthly AI credits and separate resource boundaries.",
         "monthly_included_points": 10_000,
         "budgets_template": {
@@ -185,8 +188,9 @@ PLAN_TIER_REGISTRY: dict[str, dict[str, object]] = {
         },
         "concurrency_template": {"max_active_runs": 3},
         "site_limit": 5,
+        "max_vector_documents": 2000,
         "max_batch_items": 25,
-        "nightly_inspection_runs_per_period": 30,
+        "nightly_inspection_runs_per_period": 0,
         "nightly_inspection_retention_days": 14,
         "nightly_inspection_payload_modes": ["metadata_only", "excerpt"],
         "automation_enabled": True,
@@ -207,7 +211,7 @@ PLAN_TIER_REGISTRY: dict[str, dict[str, object]] = {
         "tier_id": "agency",
         "label": "Agency",
         "package_alias": "Agency",
-        "usage_band": "150,000 AI credits and 150 Pro Nightly Inspection runs per month.",
+        "usage_band": "150,000 AI credits per month.",
         "positioning": "Commercial Agency package for custom or multi-site Cloud runtime detail with higher AI credit, batch, and resource headroom.",
         "monthly_included_points": 150_000,
         "budgets_template": {
@@ -218,8 +222,9 @@ PLAN_TIER_REGISTRY: dict[str, dict[str, object]] = {
         },
         "concurrency_template": {"max_active_runs": 10},
         "site_limit": 25,
+        "max_vector_documents": 10000,
         "max_batch_items": 100,
-        "nightly_inspection_runs_per_period": 150,
+        "nightly_inspection_runs_per_period": 0,
         "nightly_inspection_retention_days": 30,
         "nightly_inspection_payload_modes": ["metadata_only", "excerpt"],
         "automation_enabled": True,
@@ -238,8 +243,8 @@ PLAN_TIER_REGISTRY: dict[str, dict[str, object]] = {
     },
 }
 DEFAULT_PLAN_TIER_ID = "pro"
-DEFAULT_FREE_PLAN_ID = "plan_free"
-DEFAULT_FREE_PLAN_VERSION_ID = "plan_free_v1"
+DEFAULT_FREE_PLAN_ID = "free"
+DEFAULT_FREE_PLAN_VERSION_ID = "free_v1"
 DEFAULT_FREE_PLAN_KIND = "default_free"
 DEFAULT_FREE_PLAN_SOURCE = "production_default_free_shell_v1"
 DEFAULT_FREE_SUBSCRIPTION_SOURCE = "production_default_free_bind_v1"
@@ -364,6 +369,23 @@ class CommercialServiceBillingMixin(CommercialServiceAuditMixin):
                     "service.plan_not_found",
                     f"plan '{plan_id}' was not found",
                 )
+            label_conflict = next(
+                (
+                    version
+                    for version in repository.list_plan_versions(plan_id=plan_id, limit=None)
+                    if version.version_label == version_label
+                    and version.plan_version_id != plan_version_id
+                ),
+                None,
+            )
+            if label_conflict is not None:
+                raise CommercialConflictError(
+                    "service.plan_version_label_conflict",
+                    (
+                        f"plan '{plan_id}' already has version label '{version_label}' "
+                        f"on plan version '{label_conflict.plan_version_id}'"
+                    ),
+                )
             plan_version = repository.upsert_plan_version(
                 plan_version_id=plan_version_id,
                 plan_id=plan_id,
@@ -466,15 +488,12 @@ class CommercialServiceBillingMixin(CommercialServiceAuditMixin):
                 site.account_id or "",
                 subscription_id=subscription.subscription_id if subscription else None,
             )
-            plan_version = (
-                repository.get_plan_version(subscription.plan_version_id)
-                if subscription is not None
-                else None
+            plan_version = self._resolve_current_subscription_plan_version(
+                repository,
+                subscription,
             )
             policy = self._normalize_commercial_policy(
-                snapshot.policy_json
-                if snapshot is not None
-                else getattr(plan_version, "policy_json", None)
+                getattr(plan_version, "policy_json", None)
             )
             period_start_at, period_end_at = self._resolve_period(subscription, now)
             meter_events = repository.list_usage_meter_events(
@@ -485,10 +504,9 @@ class CommercialServiceBillingMixin(CommercialServiceAuditMixin):
                 limit=None,
             )
             totals = self._aggregate_meter_events(meter_events)
-            budgets = (
-                self._normalize_budgets(snapshot.budgets_json)
-                if snapshot is not None
-                else self._normalize_budgets(getattr(plan_version, "budgets_json", None))
+            budgets = self._resolve_effective_subscription_budgets(
+                plan_version=plan_version,
+                subscription=subscription,
             )
             budget_state = self._build_budget_policy_state(
                 repository=repository,
@@ -499,7 +517,7 @@ class CommercialServiceBillingMixin(CommercialServiceAuditMixin):
                 period_start_at=period_start_at,
             )
             batch_limits = self._resolve_runtime_batch_limits(
-                snapshot=snapshot,
+                snapshot=None,
                 plan_version=plan_version,
             )
             pro_cloud_runtime = self._build_pro_cloud_runtime_state(
@@ -577,12 +595,12 @@ class CommercialServiceBillingMixin(CommercialServiceAuditMixin):
                 self._serialize_billing_snapshot(current_snapshot) if current_snapshot else None
             )
             snapshot_totals = current_snapshot.totals_json if current_snapshot is not None else {}
-            snapshot = repository.get_active_entitlement_snapshot(
-                site.account_id or "",
-                subscription_id=subscription.subscription_id,
+            plan_version = self._resolve_current_subscription_plan_version(
+                repository,
+                subscription,
             )
             policy = self._normalize_commercial_policy(
-                snapshot.policy_json if snapshot is not None else None
+                getattr(plan_version, "policy_json", None)
             )
             tolerance = self._normalize_reconciliation_tolerance(
                 policy.get("reconciliation") if isinstance(policy, dict) else None
@@ -980,28 +998,20 @@ class CommercialServiceBillingMixin(CommercialServiceAuditMixin):
                 repository.get_account(subscription.account_id) if subscription.account_id else None
             )
             plan = repository.get_plan(subscription.plan_id) if subscription.plan_id else None
-            plan_version = (
-                repository.get_plan_version(subscription.plan_version_id)
-                if subscription.plan_version_id
-                else None
+            plan_version = self._resolve_current_subscription_plan_version(
+                repository,
+                subscription,
             )
             sites = repository.list_sites(account_id=subscription.account_id, limit=None)
             billing_snapshots = repository.get_latest_billing_snapshots_by_site(
                 site_ids=[site.site_id for site in sites]
             )
-            snapshot = repository.get_active_entitlement_snapshot(
-                subscription.account_id or "",
-                subscription_id=subscription.subscription_id,
-            )
             policy = self._normalize_commercial_policy(
-                snapshot.policy_json
-                if snapshot is not None
-                else getattr(plan_version, "policy_json", None)
+                getattr(plan_version, "policy_json", None)
             )
-            budgets = (
-                self._normalize_budgets(snapshot.budgets_json)
-                if snapshot is not None
-                else self._normalize_budgets(getattr(plan_version, "budgets_json", None))
+            budgets = self._resolve_effective_subscription_budgets(
+                plan_version=plan_version,
+                subscription=subscription,
             )
             now = self.now_factory()
             period_start_at, period_end_at = self._resolve_period(subscription, now)
@@ -1059,7 +1069,10 @@ class CommercialServiceBillingMixin(CommercialServiceAuditMixin):
             "coverage": self._build_subscription_coverage_summary(
                 subscription,
                 site_count=site_count,
-                site_limit=self._coerce_int(getattr(snapshot, "site_limit", 0)),
+                site_limit=cast(Any, self)._resolve_site_limit(
+                    plan_version=plan_version,
+                    subscription=subscription,
+                ),
             ),
             "commercial_policy": policy,
             "budget_headroom": self._build_subscription_budget_headroom(
@@ -1106,7 +1119,7 @@ class CommercialServiceBillingMixin(CommercialServiceAuditMixin):
                 "items": [self._serialize_meter_event(event) for event in events],
             }
 
-    def _ensure_plan_free_version_in_session(
+    def _ensure_free_version_in_session(
         self,
         *,
         repository: CommercialRepository,
@@ -1153,6 +1166,9 @@ class CommercialServiceBillingMixin(CommercialServiceAuditMixin):
                 "package_alias": str(baseline.get("package_alias") or "Free"),
                 "plan_kind": DEFAULT_FREE_PLAN_KIND,
                 "site_limit": self._coerce_int(baseline.get("site_limit")),
+                "max_vector_documents": self._coerce_int(
+                    baseline.get("max_vector_documents")
+                ),
                 "monthly_included_points": self._coerce_int(
                     baseline.get("monthly_included_points")
                 ),
@@ -1183,7 +1199,7 @@ class CommercialServiceBillingMixin(CommercialServiceAuditMixin):
         tier_id: str,
     ) -> tuple[str, str]:
         if tier_id == "free":
-            return self._ensure_plan_free_version_in_session(repository=repository)
+            return self._ensure_free_version_in_session(repository=repository)
 
         baseline = PLAN_TIER_REGISTRY.get(tier_id)
         if baseline is None:
@@ -1234,6 +1250,9 @@ class CommercialServiceBillingMixin(CommercialServiceAuditMixin):
                     baseline.get("monthly_included_points")
                 ),
                 "site_limit": self._coerce_int(baseline.get("site_limit")),
+                "max_vector_documents": self._coerce_int(
+                    baseline.get("max_vector_documents")
+                ),
                 "max_batch_items": self._coerce_int(baseline.get("max_batch_items")),
                 "nightly_inspection_runs_per_period": self._coerce_int(
                     baseline.get("nightly_inspection_runs_per_period")
@@ -1307,7 +1326,7 @@ class CommercialServiceBillingMixin(CommercialServiceAuditMixin):
                 "service.subscription_not_found",
                 f"subscription '{subscription_id}' was not found",
             )
-        plan_version = repository.get_plan_version(subscription.plan_version_id)
+        plan_version = self._resolve_current_subscription_plan_version(repository, subscription)
         if plan_version is None:
             raise CommercialNotFoundError(
                 "service.plan_version_not_found",
@@ -1330,28 +1349,13 @@ class CommercialServiceBillingMixin(CommercialServiceAuditMixin):
                 "operator-managed top-up target period does not match the active subscription period",
             )
 
-        active_snapshot = repository.get_active_entitlement_snapshot(
-            subscription.account_id,
-            subscription_id=subscription.subscription_id,
+        base_entitlements = self._normalize_entitlements(plan_version.entitlements_json)
+        base_budgets = self._resolve_effective_subscription_budgets(
+            plan_version=plan_version,
+            subscription=subscription,
         )
-        base_entitlements = self._normalize_entitlements(
-            active_snapshot.entitlements_json
-            if active_snapshot is not None
-            else plan_version.entitlements_json
-        )
-        base_budgets = self._normalize_budgets(
-            active_snapshot.budgets_json
-            if active_snapshot is not None
-            else plan_version.budgets_json
-        )
-        base_concurrency = self._normalize_concurrency(
-            active_snapshot.concurrency_json
-            if active_snapshot is not None
-            else plan_version.concurrency_json
-        )
-        base_policy = self._normalize_commercial_policy(
-            active_snapshot.policy_json if active_snapshot is not None else plan_version.policy_json
-        )
+        base_concurrency = self._normalize_concurrency(plan_version.concurrency_json)
+        base_policy = self._normalize_commercial_policy(plan_version.policy_json)
 
         topup_id = f"topup_{uuid4().hex[:12]}"
         increment_payload = {
@@ -1471,7 +1475,6 @@ class CommercialServiceBillingMixin(CommercialServiceAuditMixin):
             site_limit=cast(Any, self)._resolve_site_limit(
                 plan_version=plan_version,
                 subscription=subscription,
-                snapshot=active_snapshot,
             ),
             metadata_json={
                 "source": "subscription_topup",
@@ -1683,6 +1686,7 @@ class CommercialServiceBillingMixin(CommercialServiceAuditMixin):
                 ),
             },
             "budgets": {
+                "ai_credits": self._normalize_budget_policy(budgets_raw.get("ai_credits")),
                 "runs": self._normalize_budget_policy(budgets_raw.get("runs")),
                 "tokens": self._normalize_budget_policy(budgets_raw.get("tokens")),
                 "cost": self._normalize_budget_policy(budgets_raw.get("cost")),
@@ -1728,7 +1732,22 @@ class CommercialServiceBillingMixin(CommercialServiceAuditMixin):
             )
             return subscription, snapshot, False
 
-        plan_version = repository.get_plan_version(subscription.plan_version_id)
+        if subscription.status == SUBSCRIPTION_STATUS_TRIALING:
+            cast(Any, self)._reconcile_account_subscription_state_in_session(
+                repository=repository,
+                account_id=subscription.account_id,
+                now=now,
+            )
+            fallback_subscription = repository.get_runtime_subscription(subscription.account_id)
+            if fallback_subscription is None:
+                return subscription, None, True
+            fallback_snapshot = repository.get_active_entitlement_snapshot(
+                fallback_subscription.account_id,
+                subscription_id=fallback_subscription.subscription_id,
+            )
+            return fallback_subscription, fallback_snapshot, True
+
+        plan_version = self._resolve_current_subscription_plan_version(repository, subscription)
         if plan_version is None:
             return subscription, None, False
 
@@ -1816,13 +1835,11 @@ class CommercialServiceBillingMixin(CommercialServiceAuditMixin):
             "contract_version": "pro-cloud-runtime-entitlement-v1",
             "feature_id": "nightly_site_inspection",
             "execution_pattern": "whole_run_offload",
-            "meter_key": "nightly_site_inspection_runs",
-            "limit_enforced": max_runs > 0,
+            "meter_key": "ai_credits",
+            "limit_enforced": False,
             "max_nightly_inspection_runs_per_period": max_runs,
             "used_nightly_inspection_runs": used_runs,
-            "remaining_nightly_inspection_runs": (
-                max(0, max_runs - used_runs) if max_runs > 0 else 0
-            ),
+            "remaining_nightly_inspection_runs": 0,
             "max_batch_items": max(0, self._coerce_int(batch_limits.get("max_batch_items"))),
             "result_retention_days": max(
                 0,
@@ -1832,7 +1849,7 @@ class CommercialServiceBillingMixin(CommercialServiceAuditMixin):
                 batch_limits.get("nightly_inspection_payload_modes"),
                 default=["metadata_only", "excerpt"],
             ),
-            "quota_exhausted": max_runs > 0 and used_runs >= max_runs,
+            "quota_exhausted": False,
         }
 
     def _build_billing_snapshot_id(
@@ -2038,6 +2055,80 @@ class CommercialServiceBillingMixin(CommercialServiceAuditMixin):
             ),
         }
 
+    def _resolve_account_vector_documents_limit(
+        self,
+        *,
+        snapshot: object | None,
+        plan_version: object | None,
+    ) -> int:
+        metadata: dict[str, object] = {}
+        plan_metadata = getattr(plan_version, "metadata_json", None)
+        if isinstance(plan_metadata, dict):
+            metadata.update(plan_metadata)
+        snapshot_metadata = getattr(snapshot, "metadata_json", None)
+        if isinstance(snapshot_metadata, dict):
+            metadata.update(snapshot_metadata)
+        return max(0, self._coerce_int(metadata.get("max_vector_documents")))
+
+    def _resolve_effective_subscription_budgets(
+        self,
+        *,
+        plan_version: PlanVersion | None,
+        subscription: AccountSubscription | None,
+        snapshot: AccountEntitlementSnapshot | None = None,
+    ) -> dict[str, object]:
+        budget_source = snapshot if snapshot is not None else plan_version
+        budgets = self._normalize_budgets(getattr(budget_source, "budgets_json", None))
+        metadata = getattr(subscription, "metadata_json", None)
+        topup_totals = (
+            metadata.get("current_period_topup_totals") if isinstance(metadata, dict) else None
+        )
+        topup_totals = topup_totals if isinstance(topup_totals, dict) else {}
+        return {
+            "max_ai_credits_per_period": round(
+                self._coerce_float(budgets.get("max_ai_credits_per_period"))
+                + self._coerce_float(topup_totals.get("ai_credits")),
+                6,
+            ),
+            "max_runs_per_period": round(
+                self._coerce_float(budgets.get("max_runs_per_period"))
+                + self._coerce_float(topup_totals.get("runs")),
+                6,
+            ),
+            "max_tokens_per_period": round(
+                self._coerce_float(budgets.get("max_tokens_per_period"))
+                + self._coerce_float(topup_totals.get("tokens")),
+                6,
+            ),
+            "max_cost_per_period": round(
+                self._coerce_float(budgets.get("max_cost_per_period"))
+                + self._coerce_float(topup_totals.get("cost")),
+                6,
+            ),
+        }
+
+    def _resolve_current_subscription_plan_version(
+        self,
+        repository: CommercialRepository,
+        subscription: AccountSubscription | None,
+    ) -> PlanVersion | None:
+        if subscription is None:
+            return None
+        plan_id = str(getattr(subscription, "plan_id", "") or "").strip()
+        if plan_id:
+            published_versions = repository.list_plan_versions(
+                plan_id=plan_id,
+                status=PLAN_VERSION_STATUS_PUBLISHED,
+                limit=1,
+            )
+            if published_versions:
+                return published_versions[0]
+            versions = repository.list_plan_versions(plan_id=plan_id, limit=1)
+            if versions:
+                return versions[0]
+        plan_version_id = str(getattr(subscription, "plan_version_id", "") or "").strip()
+        return repository.get_plan_version(plan_version_id) if plan_version_id else None
+
     def _select_latest_plan_version(
         self, versions: list[dict[str, object]]
     ) -> dict[str, object] | None:
@@ -2118,6 +2209,7 @@ class CommercialServiceBillingMixin(CommercialServiceAuditMixin):
             "positioning": str(baseline.get("positioning") or ""),
             "monthly_included_points": self._coerce_int(baseline.get("monthly_included_points")),
             "site_limit": self._coerce_int(baseline.get("site_limit")),
+            "max_vector_documents": self._coerce_int(baseline.get("max_vector_documents")),
             "budgets_template": budgets_template,
             "concurrency_template": concurrency_template,
             "max_batch_items": self._coerce_int(baseline.get("max_batch_items")),
@@ -2151,6 +2243,9 @@ class CommercialServiceBillingMixin(CommercialServiceAuditMixin):
                         baseline.get("monthly_included_points")
                     ),
                     "site_limit": self._coerce_int(baseline.get("site_limit")),
+                    "max_vector_documents": self._coerce_int(
+                        baseline.get("max_vector_documents")
+                    ),
                     "max_batch_items": self._coerce_int(baseline.get("max_batch_items")),
                     "nightly_inspection_runs_per_period": self._coerce_int(
                         baseline.get("nightly_inspection_runs_per_period")
@@ -2428,8 +2523,6 @@ class CommercialServiceBillingMixin(CommercialServiceAuditMixin):
         plan_kind = str(metadata.get("plan_kind") or "").strip()
         if plan_id == DEFAULT_FREE_PLAN_ID or plan_kind == DEFAULT_FREE_PLAN_KIND:
             return "formal_free"
-        if plan_id == "plan_dev_unlimited":
-            return "dev_baseline"
         if plan_id:
             return "tier_package"
         return "unknown"
@@ -2452,8 +2545,6 @@ class CommercialServiceBillingMixin(CommercialServiceAuditMixin):
         if package_alias:
             return package_alias
         plan_id = str(getattr(subscription, "plan_id", "") or "").strip()
-        if package_kind == "dev_baseline":
-            return "Dev Unlimited"
         if package_kind == "formal_free":
             return "Free"
         tier_package_alias = str(

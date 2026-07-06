@@ -1,41 +1,68 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
-from fastapi import APIRouter, Query, Request
+from fastapi import APIRouter, BackgroundTasks, Query, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
+from sqlalchemy import select
 
 from app.adapters.providers.registry import resolve_live_provider_adapters
+from app.adapters.repositories.catalog_repository import CatalogRepository
 from app.api.auth import authorize_internal_request, get_cloud_services
 from app.api.envelope import build_envelope
+from app.core.db import get_session
+from app.core.models import ProviderConnection
 from app.core.security import extract_trace_id
 from app.domain.advisor.service import InternalAIAdvisorService
 from app.domain.agent_feedback.service import AgentFeedbackService
 from app.domain.agent_workflow_metadata import (
     MEDIA_DERIVATIVE_WORKFLOW_ID,
-    WEB_SEARCH_EVIDENCE_WORKFLOW_ID,
     get_agent_workflow_metadata_projection,
     get_workflow_metadata,
+)
+from app.domain.audio_generation.workbench import (
+    AudioWorkbenchError,
+    AudioWorkbenchService,
 )
 from app.domain.catalog.service import CatalogService
 from app.domain.commercial.errors import CommercialServiceError
 from app.domain.commercial.service import CommercialService, ServiceAuditContext
 from app.domain.hosted_model_defaults import FREE_GPT55_MODEL_ID
-from app.domain.image_sources.admin_config import ImageSourceAdminConfigService
 from app.domain.image_sources.metrics import ImageSourceMetricsService
 from app.domain.media_derivatives.metrics import MediaDerivativeObservabilityService
+from app.domain.model_references import ModelReferenceError, ModelReferenceService
 from app.domain.observability.plugin_events import PluginObservabilityService
 from app.domain.observability.service import ObservabilityService
+from app.domain.provider_connections.model_allowlist import (
+    build_provider_model_allowlist,
+)
+from app.domain.provider_connections.runtime_settings import (
+    apply_provider_connection_runtime_settings,
+)
+from app.domain.provider_connections.service import (
+    ProviderConnectionAdminError,
+    ProviderConnectionAdminService,
+)
+from app.domain.provider_resources import (
+    build_admin_ability_model_runtime_projection,
+    build_admin_ai_resource_projection,
+)
 from app.domain.runtime.models import (
     RUNTIME_BACKLOG_SCOPE_KIND_PATTERN,
     RUNTIME_DIAGNOSTIC_ISSUE_KIND_PATTERN,
 )
-from app.domain.runtime.service import RuntimeService
+from app.domain.runtime.service import RuntimeRunNotFoundError, RuntimeService
+from app.domain.service_settings import (
+    ServiceSettingsAdminError,
+    ServiceSettingsAdminService,
+)
 from app.domain.site_knowledge.metrics import SiteKnowledgeObservabilityService
-from app.domain.usage.rollup import UsageRollupService
-from app.domain.web_search.admin_config import WebSearchAdminConfigService
+from app.domain.wordpress_ai_connector.routing_profiles import (
+    WP_AI_CONNECTOR_PROFILE_SPECS,
+    WP_AI_CONNECTOR_PROFILE_SPECS_BY_ID,
+)
 from app.workers.ops_cadence import build_cadence_summary
 
 router = APIRouter(prefix="/internal/service", tags=["service"])
@@ -76,6 +103,15 @@ class AccountStatusPayload(BaseModel):
     reason: str = ""
 
 
+class PortalUserDisablePayload(BaseModel):
+    reason: str = ""
+
+
+class PortalUsersBatchDisablePayload(BaseModel):
+    principal_ids: list[str] = Field(default_factory=list)
+    reason: str = ""
+
+
 class SiteProvisionPayload(BaseModel):
     site_id: str
     account_id: str
@@ -88,7 +124,7 @@ class SiteStatusPayload(BaseModel):
     reason: str = ""
 
 
-class SiteAdminAccessPayload(BaseModel):
+class PrincipalAccessPayload(BaseModel):
     email: str
     status: str = "active"
     metadata: dict[str, Any] = Field(default_factory=dict)
@@ -209,15 +245,99 @@ class PluginAttentionStatePayload(BaseModel):
     note: str = Field(default="", max_length=512)
 
 
-class WebSearchProviderSettingsPayload(BaseModel):
-    provider_mode: str = Field(default="disabled", max_length=32)
-    providers: dict[str, Any] = Field(default_factory=dict)
+class AudioWorkbenchCreatePayload(BaseModel):
+    intent: str = Field(default="article_narration", max_length=64)
+    site_id: str = Field(default="", max_length=191)
+    title: str = Field(default="", max_length=240)
+    body: str = Field(min_length=1, max_length=25000)
+    format: str = Field(default="mp3", max_length=16)
+    preview_instance_id: str = Field(default="", max_length=191)
 
 
-class ImageSourceProviderSettingsPayload(BaseModel):
-    provider_mode: str = Field(default="disabled", max_length=32)
-    providers: dict[str, Any] = Field(default_factory=dict)
-    runtime: dict[str, Any] = Field(default_factory=dict)
+class ProviderConnectionPayload(BaseModel):
+    connection_id: str | None = Field(default=None, max_length=64)
+    provider_id: str | None = Field(default=None, max_length=64)
+    provider_type: str | None = Field(default=None, max_length=64)
+    kind: str | None = Field(default=None, max_length=64)
+    display_name: str = Field(default="", max_length=191)
+    enabled: bool = True
+    base_url: str = Field(default="", max_length=500)
+    note: str = Field(default="", max_length=512)
+    priority: int = Field(default=100, ge=0, le=999)
+    source_role: str = Field(default="execution_source", max_length=32)
+    capability_ids: list[str] = Field(default_factory=list)
+    runtime_profile_ids: list[str] = Field(default_factory=list)
+    config: dict[str, Any] = Field(default_factory=dict)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    credential: str | None = None
+    secret: str | None = None
+    secretless: bool = False
+
+
+class PortalPublicServiceSettingsPayload(BaseModel):
+    enabled: bool = True
+    public_base_url: str = Field(max_length=500)
+
+
+class QQLoginServiceSettingsPayload(BaseModel):
+    enabled: bool = True
+    client_id: str = Field(max_length=191)
+    client_secret: str | None = Field(default=None, max_length=500)
+    redirect_uri: str = Field(default="", max_length=500)
+    scope: str = Field(default="get_user_info", max_length=128)
+    timeout_seconds: float = Field(default=10.0, gt=0, le=60)
+
+
+class PortalEmailServiceSettingsPayload(BaseModel):
+    enabled: bool = True
+    smtp_host: str = Field(max_length=191)
+    smtp_port: int = Field(default=465, gt=0, le=65535)
+    smtp_username: str = Field(default="", max_length=191)
+    smtp_password: str | None = Field(default=None, max_length=500)
+    smtp_use_ssl: bool = True
+    smtp_use_starttls: bool = False
+    smtp_timeout_seconds: float = Field(default=20.0, gt=0, le=120)
+    from_email: str = Field(max_length=320)
+    from_name: str = Field(default="", max_length=191)
+    reply_to: str = Field(default="", max_length=320)
+
+
+class AlipayPaymentServiceSettingsPayload(BaseModel):
+    enabled: bool = True
+    app_id: str = Field(default="", max_length=191)
+    gateway_url: str = Field(default="https://openapi.alipay.com/gateway.do", max_length=500)
+    notify_url: str = Field(default="", max_length=500)
+    return_url: str = Field(default="", max_length=500)
+    private_key: str | None = Field(default=None, max_length=20000)
+    public_key: str | None = Field(default=None, max_length=20000)
+
+
+class ServiceSettingsEmailTestPayload(BaseModel):
+    recipient_email: str = Field(min_length=3, max_length=320)
+
+
+class ModelReferenceSyncPayload(BaseModel):
+    source_url: str = Field(default="", max_length=500)
+    payload: dict[str, Any] | None = None
+
+
+class WordPressAIRoutingProfilePayload(BaseModel):
+    profile_id: str = Field(max_length=64)
+    candidate_instance_ids: list[str] = Field(default_factory=list)
+    timeout_ms: int = Field(default=30000, ge=1000, le=90000)
+    allow_fallback: bool = True
+    max_retries: int = Field(default=0, ge=0, le=1)
+    note: str = Field(default="", max_length=512)
+
+
+class WordPressAIRoutingSettingsPayload(BaseModel):
+    profiles: list[WordPressAIRoutingProfilePayload] = Field(default_factory=list)
+
+
+class AbilityModelRuntimeBindingPayload(BaseModel):
+    ability_id: str = Field(max_length=64)
+    instance_id: str = Field(max_length=191)
+    note: str = Field(default="", max_length=512)
 
 
 class OpsSummaryDisclosureReviewPayload(BaseModel):
@@ -312,6 +432,166 @@ def _build_audit_payload(payload: BaseModel | None = None) -> dict[str, Any]:
     return payload.model_dump(mode="json")
 
 
+def _record_provider_connection_audit(
+    request: Request,
+    *,
+    event_kind: str,
+    outcome: str,
+    scope_id: str,
+    request_payload: ProviderConnectionPayload | None = None,
+    result: dict[str, Any] | None = None,
+    error_code: str = "",
+    message: str = "",
+) -> dict[str, Any] | None:
+    try:
+        return _get_commercial_service(request).record_service_audit_event(
+            audit_context=_build_audit_context(request),
+            event_kind=event_kind,
+            outcome=outcome,
+            scope_kind="provider_connection",
+            scope_id=scope_id,
+            payload_json=_provider_connection_audit_payload(
+                request_payload=request_payload,
+                result=result,
+                error_code=error_code,
+                message=message,
+            ),
+        )
+    except Exception:
+        return None
+
+
+def _record_service_setting_audit(
+    request: Request,
+    *,
+    event_kind: str,
+    outcome: str,
+    setting_id: str,
+    result: dict[str, Any] | None = None,
+    error_code: str = "",
+    message: str = "",
+) -> None:
+    try:
+        _get_commercial_service(request).record_service_audit_event(
+            audit_context=_build_audit_context(request),
+            event_kind=event_kind,
+            outcome=outcome,
+            scope_kind="service_setting",
+            scope_id=setting_id,
+            payload_json={
+                "surface": "admin_service_settings",
+                "setting_id": setting_id,
+                "result": _service_setting_audit_result(result or {}),
+                "error_code": error_code,
+                "message": message,
+                "credential_value_exposure": "none",
+            },
+        )
+    except Exception:
+        return
+
+
+def _service_setting_audit_result(result: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "setting_id": str(result.get("setting_id") or ""),
+        "enabled": bool(result.get("enabled")),
+        "configured": bool(result.get("configured")),
+        "status": str(result.get("status") or ""),
+        "last_error_code": str(result.get("last_error_code") or ""),
+    }
+
+
+def _provider_connection_audit_payload(
+    *,
+    request_payload: ProviderConnectionPayload | None,
+    result: dict[str, Any] | None,
+    error_code: str,
+    message: str,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "surface": "admin_provider_connections",
+        "credential_value_exposure": "presence_only",
+        "content_exposed": False,
+    }
+    if request_payload is not None:
+        raw = request_payload.model_dump(mode="json")
+        payload["request"] = {
+            "connection_id": str(raw.get("connection_id") or ""),
+            "provider_id": str(raw.get("provider_id") or ""),
+            "provider_type": str(raw.get("provider_type") or ""),
+            "kind": str(raw.get("kind") or ""),
+            "enabled": bool(raw.get("enabled", True)),
+            "base_url_present": bool(str(raw.get("base_url") or "").strip()),
+            "capability_ids": [
+                str(item) for item in raw.get("capability_ids", []) if str(item)
+            ],
+            "runtime_profile_ids": [
+                str(item) for item in raw.get("runtime_profile_ids", []) if str(item)
+            ],
+            "credential_provided": bool(str(raw.get("credential") or "").strip()),
+            "secret_provided": bool(str(raw.get("secret") or "").strip()),
+            "config_present": bool(raw.get("config")),
+            "metadata_present": bool(raw.get("metadata")),
+        }
+    if result:
+        payload["result"] = _provider_connection_result_summary(result)
+    if error_code:
+        payload["error_code"] = error_code
+    if message:
+        payload["message"] = message[:360]
+    return payload
+
+
+def _provider_connection_result_summary(result: dict[str, Any]) -> dict[str, Any]:
+    connection = _dict_value(result.get("connection"))
+    if not connection and str(result.get("connection_id") or ""):
+        connection = result
+    summary: dict[str, Any] = {}
+    if connection:
+        summary["connection"] = {
+            "connection_id": str(connection.get("connection_id") or ""),
+            "provider_id": str(connection.get("provider_id") or ""),
+            "provider_type": str(connection.get("provider_type") or ""),
+            "kind": str(connection.get("kind") or ""),
+            "enabled": bool(connection.get("enabled")),
+            "configured": bool(connection.get("configured")),
+            "status": str(connection.get("status") or ""),
+            "capability_ids": [
+                str(item) for item in connection.get("capability_ids", []) if str(item)
+            ],
+            "runtime_profile_ids": [
+                str(item) for item in connection.get("runtime_profile_ids", []) if str(item)
+            ],
+        }
+    if "imported" in result or "skipped" in result:
+        summary["imported_connection_ids"] = [
+            str(_dict_value(item).get("connection_id") or "")
+            for item in result.get("imported", [])
+            if isinstance(item, dict)
+        ]
+        summary["skipped"] = [
+            {
+                "connection_id": str(_dict_value(item).get("connection_id") or ""),
+                "reason": str(_dict_value(item).get("reason") or ""),
+            }
+            for item in result.get("skipped", [])
+            if isinstance(item, dict)
+        ]
+    if "deleted" in result:
+        summary["deleted"] = bool(result.get("deleted"))
+    if "ok" in result:
+        summary["test"] = {
+            "ok": bool(result.get("ok")),
+            "status": str(result.get("status") or ""),
+            "stage": str(result.get("stage") or ""),
+            "error_code": str(result.get("error_code") or ""),
+            "catalog_model_count": int(
+                _dict_value(result.get("catalog")).get("model_count") or 0
+            ),
+        }
+    return summary
+
+
 def _build_audit_filters(
     *,
     account_id: str | None = None,
@@ -367,6 +647,296 @@ def _merge_receipt(data: Any, receipt: dict[str, Any]) -> Any:
     if isinstance(data, dict):
         return {**data, "receipt": receipt}
     return {"value": data, "receipt": receipt}
+
+
+def _serialize_wordpress_ai_instance(
+    instance: Any,
+    model: Any,
+    provider: Any | None = None,
+) -> dict[str, Any]:
+    return {
+        "instance_id": str(instance.instance_id or ""),
+        "provider_id": str(instance.provider_id or ""),
+        "provider_display_name": str(getattr(provider, "display_name", "") or ""),
+        "adapter_type": str(getattr(provider, "adapter_type", "") or ""),
+        "model_id": str(instance.model_id or ""),
+        "endpoint_variant": str(instance.endpoint_variant or ""),
+        "region": str(instance.region or ""),
+        "health_status": str(instance.health_status or "unknown"),
+        "weight": int(instance.weight or 0),
+        "capability_tags": list(instance.capability_tags or []),
+        "model_status": str(model.status or ""),
+        "model_feature": str(model.feature or ""),
+        "price_input": model.price_input,
+        "price_output": model.price_output,
+    }
+
+
+def _build_wordpress_ai_routing_projection(
+    database_url: str,
+    *,
+    settings: Any | None = None,
+) -> dict[str, Any]:
+    provider_model_allowlist = build_provider_model_allowlist(database_url, settings=settings)
+    with get_session(database_url) as session:
+        repository = CatalogRepository(session)
+        instances = repository.list_instances_for_provider()
+        models = repository.list_models_by_ids([instance.model_id for instance in instances])
+        models_by_id = {model.model_id: model for model in models}
+        providers = repository.list_providers_by_ids(
+            [instance.provider_id for instance in instances]
+        )
+        providers_by_id = {provider.provider_id: provider for provider in providers}
+        instances_by_id = {instance.instance_id: instance for instance in instances}
+
+        available_instances_by_kind: dict[str, list[dict[str, Any]]] = {
+            "text": [],
+            "image_generation": [],
+            "audio_generation": [],
+            "embedding": [],
+        }
+        for instance in instances:
+            model = models_by_id.get(instance.model_id)
+            if model is None or model.status != "available":
+                continue
+            if not provider_model_allowlist.allows(
+                provider_id=instance.provider_id,
+                model_id=instance.model_id,
+            ):
+                continue
+            if model.feature not in available_instances_by_kind:
+                continue
+            available_instances_by_kind[model.feature].append(
+                _serialize_wordpress_ai_instance(
+                    instance,
+                    model,
+                    providers_by_id.get(instance.provider_id),
+                )
+            )
+
+        profiles: list[dict[str, Any]] = []
+        for spec in WP_AI_CONNECTOR_PROFILE_SPECS:
+            profile = repository.get_routing_profile(spec.profile_id)
+            binding = repository.get_routing_binding(spec.profile_id)
+            policy = profile.default_policy_json if profile is not None else {}
+            if not isinstance(policy, dict):
+                policy = {}
+            selection_policy = binding.selection_policy_json if binding is not None else {}
+            if not isinstance(selection_policy, dict):
+                selection_policy = {}
+            candidate_instance_ids = (
+                list(binding.candidate_instance_ids or []) if binding is not None else []
+            )
+            candidate_items = []
+            effective_candidate_instance_ids = []
+            for instance_id in candidate_instance_ids:
+                if instance_id not in instances_by_id:
+                    continue
+                instance = instances_by_id[instance_id]
+                model = models_by_id.get(instance.model_id)
+                if model is None:
+                    continue
+                if not provider_model_allowlist.allows(
+                    provider_id=instance.provider_id,
+                    model_id=instance.model_id,
+                ):
+                    continue
+                effective_candidate_instance_ids.append(instance_id)
+                candidate_items.append(
+                    _serialize_wordpress_ai_instance(
+                        instance,
+                        model,
+                        providers_by_id.get(instance.provider_id),
+                    )
+                )
+
+            profiles.append(
+                {
+                    "profile_id": spec.profile_id,
+                    "group_id": spec.group_id,
+                    "routing_intent": spec.routing_intent,
+                    "label": spec.label,
+                    "description": spec.description,
+                    "tasks": list(spec.tasks),
+                    "execution_kind": (
+                        profile.execution_kind if profile is not None else spec.execution_kind
+                    ),
+                    "candidate_instance_ids": effective_candidate_instance_ids,
+                    "candidates": candidate_items,
+                    "timeout_ms": int(policy.get("timeout_ms") or spec.timeout_ms),
+                    "max_timeout_ms": spec.max_timeout_ms,
+                    "allow_fallback": bool(policy.get("allow_fallback", spec.allow_fallback)),
+                    "max_retries": int(policy.get("max_retries") or spec.max_retries),
+                    "revision": str(binding.revision if binding is not None else ""),
+                    "updated_at": (
+                        binding.updated_at.isoformat()
+                        if binding is not None and binding.updated_at is not None
+                        else ""
+                    ),
+                    "selection_policy": selection_policy,
+                    "status": (
+                        "configured" if effective_candidate_instance_ids else "needs_candidates"
+                    ),
+                }
+            )
+
+    return {
+        "contract_version": "cloud-ability-model-routing.v1",
+        "surface": "wordpress_ai_connector_routing",
+        "projection_kind": "runtime_profile_binding",
+        "owner": "cloud_runtime",
+        "local_control_plane": "wordpress_plugin",
+        "customer_model_selection": False,
+        "direct_wordpress_write": False,
+        "prompt_or_preset_editor": False,
+        "available_text_instances": available_instances_by_kind["text"],
+        "available_image_instances": available_instances_by_kind["image_generation"],
+        "available_audio_instances": available_instances_by_kind["audio_generation"],
+        "available_embedding_instances": available_instances_by_kind["embedding"],
+        "profiles": profiles,
+        "boundary": {
+            "public_runtime_accepts_raw_model_instance": False,
+            "results_write_posture": "suggestion_only",
+            "admin_surface": "platform_admin_only",
+            "cloud_ability_registry": False,
+            "wordpress_ability_truth": "local_plugin",
+        },
+    }
+
+
+def _validate_wordpress_ai_routing_payload(
+    database_url: str,
+    payload: WordPressAIRoutingSettingsPayload,
+    *,
+    settings: Any | None = None,
+) -> tuple[list[WordPressAIRoutingProfilePayload], str]:
+    if not payload.profiles:
+        return [], "at least one WordPress AI routing profile is required"
+
+    known_profile_ids = set(WP_AI_CONNECTOR_PROFILE_SPECS_BY_ID)
+    seen_profile_ids: set[str] = set()
+    provider_model_allowlist = build_provider_model_allowlist(database_url, settings=settings)
+    with get_session(database_url) as session:
+        repository = CatalogRepository(session)
+        for profile_payload in payload.profiles:
+            profile_id = profile_payload.profile_id.strip()
+            if profile_id not in known_profile_ids:
+                return [], f"unsupported WordPress AI routing profile: {profile_id}"
+            if profile_id in seen_profile_ids:
+                return [], f"duplicate WordPress AI routing profile: {profile_id}"
+            seen_profile_ids.add(profile_id)
+            candidate_instance_ids = [
+                str(instance_id or "").strip()
+                for instance_id in profile_payload.candidate_instance_ids
+                if str(instance_id or "").strip()
+            ]
+            if not candidate_instance_ids:
+                return [], f"profile {profile_id} requires at least one candidate instance"
+            if len(candidate_instance_ids) != len(set(candidate_instance_ids)):
+                return [], f"profile {profile_id} includes duplicate candidate instances"
+            if profile_payload.timeout_ms > WP_AI_CONNECTOR_PROFILE_SPECS_BY_ID[
+                profile_id
+            ].max_timeout_ms:
+                return [], (
+                    f"profile {profile_id} timeout_ms exceeds max "
+                    f"{WP_AI_CONNECTOR_PROFILE_SPECS_BY_ID[profile_id].max_timeout_ms}"
+                )
+
+            instances = repository.list_instances_by_ids(candidate_instance_ids)
+            instances_by_id = {instance.instance_id: instance for instance in instances}
+            missing = [
+                instance_id
+                for instance_id in candidate_instance_ids
+                if instance_id not in instances_by_id
+            ]
+            if missing:
+                return [], f"profile {profile_id} references unknown instance: {missing[0]}"
+
+            models = repository.list_models_by_ids([instance.model_id for instance in instances])
+            models_by_id = {model.model_id: model for model in models}
+            for instance in instances:
+                model = models_by_id.get(instance.model_id)
+                if model is None:
+                    return [], f"profile {profile_id} references an instance without a model"
+                spec = WP_AI_CONNECTOR_PROFILE_SPECS_BY_ID[profile_id]
+                if model.feature != spec.execution_kind or model.status != "available":
+                    return [], (
+                        f"profile {profile_id} may only use available "
+                        f"{spec.execution_kind} instances"
+                    )
+                if not provider_model_allowlist.allows(
+                    provider_id=instance.provider_id,
+                    model_id=instance.model_id,
+                ):
+                    return [], (
+                        f"profile {profile_id} may only use models enabled "
+                        f"for provider {instance.provider_id}: {instance.model_id}"
+                    )
+
+    return payload.profiles, ""
+
+
+def _normalize_runtime_id_list(value: object) -> list[str]:
+    if isinstance(value, str):
+        raw_items: tuple[object, ...] = tuple(value.split(","))
+    elif isinstance(value, list):
+        raw_items = tuple(value)
+    else:
+        raw_items = ()
+    normalized: list[str] = []
+    for item in raw_items:
+        text = str(item or "").strip()
+        if text and text not in normalized:
+            normalized.append(text)
+    return normalized
+
+
+def _merge_runtime_id_list(value: object, required_ids: list[str]) -> list[str]:
+    merged = _normalize_runtime_id_list(value)
+    for required_id in required_ids:
+        if required_id and required_id not in merged:
+            merged.append(required_id)
+    return merged
+
+
+def _provider_connection_supports_embedding(
+    row: ProviderConnection,
+    *,
+    provider_id: str,
+) -> bool:
+    config = _dict_value(row.config_json)
+    configured = bool(row.secret_ciphertext) or bool(config.get("secretless"))
+    if not row.enabled or not configured:
+        return False
+    row_provider_id = str(config.get("provider_id") or row.connection_id or "").strip().lower()
+    kind = str(config.get("kind") or row.provider_type or "").strip().lower()
+    capability_ids = _normalize_runtime_id_list(config.get("capability_ids"))
+    runtime_profile_ids = _normalize_runtime_id_list(config.get("runtime_profile_ids"))
+    if row_provider_id != provider_id.lower():
+        return False
+    if kind == "embedding_provider":
+        return True
+    return "embedding" in capability_ids and "embed.default" in runtime_profile_ids
+
+
+def _embedding_dimensions_for_model(model_id: str, config: dict[str, Any], default: int) -> int:
+    configured = config.get("dimensions")
+    if isinstance(configured, int) and configured > 0:
+        return configured
+    try:
+        parsed = int(str(configured))
+        if parsed > 0:
+            return parsed
+    except (TypeError, ValueError):
+        pass
+    normalized_model_id = model_id.lower()
+    if "bge-m3" in normalized_model_id:
+        return 1024
+    if "text-embedding-3-large" in normalized_model_id:
+        return 3072
+    if "text-embedding-3-small" in normalized_model_id:
+        return 1536
+    return default
 
 
 def _build_runtime_explanations(
@@ -642,11 +1212,11 @@ async def provision_site(
     return build_envelope(status="ok", message="site provisioned", data=result, revision="m6")
 
 
-@router.post("/sites/{site_id}/site-admin-access")
-async def upsert_site_admin_access(
+@router.post("/sites/{site_id}/user-grants")
+async def upsert_principal_access(
     request: Request,
     site_id: str,
-    payload: SiteAdminAccessPayload,
+    payload: PrincipalAccessPayload,
 ) -> Any:
     auth = await authorize_internal_request(request, require_idempotency=True)
     if auth is not None:
@@ -654,7 +1224,7 @@ async def upsert_site_admin_access(
     service = _get_commercial_service(request)
     audit_context = _build_audit_context(request)
     try:
-        result = service.upsert_site_admin_access(
+        result = service.upsert_principal_access(
             site_id=site_id,
             email=payload.email,
             status=payload.status,
@@ -664,17 +1234,17 @@ async def upsert_site_admin_access(
     except CommercialServiceError as error:
         _record_service_failure(
             request,
-            event_kind="site_admin_access.upsert",
+            event_kind="principal_access.upsert",
             error=error,
             site_id=site_id,
-            scope_kind="site_admin_access",
+            scope_kind="principal_access",
             scope_id=site_id,
             payload_json=_build_audit_payload(payload),
         )
         return _service_error_response(error)
     return build_envelope(
         status="ok",
-        message="site admin access saved",
+        message="user site grant saved",
         data=result,
         revision="m6",
     )
@@ -992,8 +1562,8 @@ async def publish_plan_version(
                 scope_id=payload.plan_version_id,
                 outcome="succeeded",
                 effective_summary=(
-                    f"Plan version {payload.plan_version_id} is now published "
-                    "and ready for subscription binding."
+                    f"Plan version {payload.plan_version_id} is now published. "
+                    "Existing subscriptions on this plan use the latest package values."
                 ),
             ),
         ),
@@ -1531,17 +2101,18 @@ async def get_admin_overview(
     result["runtime_diagnostics"] = runtime_service.get_runtime_diagnostics_summary(
         recent_minutes=runtime_recent_minutes,
     )
-    hosted_model_governance = runtime_service.get_hosted_model_governance_diagnostics(
+    runtime_telemetry = runtime_service.get_runtime_telemetry_diagnostics(
         recent_minutes=hosted_model_recent_minutes,
         limit=10,
     )
-    result["hosted_model_governance"] = {
-        "filters": hosted_model_governance.get("filters", {}),
-        "generated_at": hosted_model_governance.get("generated_at", ""),
-        "totals": hosted_model_governance.get("totals", {}),
-        "alert_summary": hosted_model_governance.get("alert_summary", {}),
-        "boundary": hosted_model_governance.get("boundary", {}),
+    runtime_telemetry_projection = {
+        "filters": runtime_telemetry.get("filters", {}),
+        "generated_at": runtime_telemetry.get("generated_at", ""),
+        "totals": runtime_telemetry.get("totals", {}),
+        "alert_summary": runtime_telemetry.get("alert_summary", {}),
+        "boundary": runtime_telemetry.get("boundary", {}),
     }
+    result["runtime_telemetry"] = runtime_telemetry_projection
     attention_subscriptions = _dict_list(result.get("attention_subscriptions"))
     first_attention = attention_subscriptions[0] if attention_subscriptions else {}
     first_attention_account_id = ""
@@ -1574,6 +2145,26 @@ async def get_admin_overview(
         message="admin overview loaded",
         data=result,
         revision="m6",
+    )
+
+
+@router.get("/admin/coverage-work-queue")
+async def get_admin_coverage_work_queue(
+    request: Request,
+    limit: int = Query(default=100, ge=1, le=500),
+) -> Any:
+    auth = await authorize_internal_request(request, require_idempotency=False)
+    if auth is not None:
+        return auth
+    try:
+        result = _get_commercial_service(request).get_admin_coverage_work_queue(limit=limit)
+    except CommercialServiceError as error:
+        return _service_error_response(error, request=request)
+    return build_envelope(
+        status="ok",
+        message="admin coverage work queue loaded",
+        data=result,
+        revision="m1",
     )
 
 
@@ -1890,11 +2481,14 @@ async def get_ops_summary_value_metrics(
 @router.get("/admin/accounts")
 async def list_admin_accounts(
     request: Request,
+    q: str | None = Query(default=None, max_length=128),
     status: str | None = Query(default=None),
     expires_before: datetime | None = Query(default=None),  # noqa: B008
     coverage_state: str | None = Query(default=None),
     package_kind: str | None = Query(default=None),
     top_plan_id: str | None = Query(default=None),
+    sort: str = Query(default="created_at", pattern="^(created_at|display_name)$"),
+    offset: int = Query(default=0, ge=0),
     limit: int = Query(default=100, ge=1, le=500),
 ) -> Any:
     auth = await authorize_internal_request(request, require_idempotency=False)
@@ -1902,11 +2496,14 @@ async def list_admin_accounts(
         return auth
     try:
         result = _get_commercial_service(request).list_admin_accounts(
+            q=q,
             status=status,
             expires_before=expires_before,
             coverage_state=coverage_state,
             package_kind=package_kind,
             top_plan_id=top_plan_id,
+            sort=sort,
+            offset=offset,
             limit=limit,
         )
     except CommercialServiceError as error:
@@ -1915,7 +2512,7 @@ async def list_admin_accounts(
         status="ok",
         message="admin accounts loaded",
         data=result,
-        revision="m6",
+        revision="m7",
     )
 
 
@@ -1983,6 +2580,155 @@ async def get_admin_account_credit_ledger(
         status="ok",
         message="admin account credit ledger loaded",
         data=result,
+        revision="m6",
+    )
+
+
+@router.get("/admin/portal-users")
+async def list_admin_portal_users(
+    request: Request,
+    q: str | None = Query(default=None, max_length=191),
+    source: str | None = Query(default="portal_self_registration", max_length=64),
+    status: str | None = Query(default=None, max_length=32),
+    package_alias: str | None = Query(default=None, max_length=64),
+    qq_bound: bool | None = Query(default=None),
+    limit: int = Query(default=100, ge=1, le=500),
+) -> Any:
+    auth = await authorize_internal_request(request, require_idempotency=False)
+    if auth is not None:
+        return auth
+    try:
+        result = _get_commercial_service(request).list_admin_portal_users(
+            q=q,
+            source=source,
+            status=status,
+            package_alias=package_alias,
+            qq_bound=qq_bound,
+            limit=limit,
+        )
+    except CommercialServiceError as error:
+        return _service_error_response(error, request=request)
+    return build_envelope(
+        status="ok",
+        message="admin portal users loaded",
+        data=result,
+        revision="m6",
+    )
+
+
+@router.get("/admin/portal-users/{principal_id}/audit")
+async def get_admin_portal_user_audit(
+    request: Request,
+    principal_id: str,
+    limit: int = Query(default=50, ge=1, le=100),
+) -> Any:
+    auth = await authorize_internal_request(request, require_idempotency=False)
+    if auth is not None:
+        return auth
+    try:
+        result = _get_commercial_service(request).get_admin_portal_user_audit(
+            principal_id=principal_id,
+            limit=limit,
+        )
+    except CommercialServiceError as error:
+        return _service_error_response(error, request=request)
+    return build_envelope(
+        status="ok",
+        message="admin portal user audit loaded",
+        data=result,
+        revision="m6",
+    )
+
+
+@router.post("/admin/portal-users/batch-disable")
+async def batch_disable_admin_portal_users(
+    request: Request,
+    payload: PortalUsersBatchDisablePayload,
+) -> Any:
+    auth = await authorize_internal_request(request, require_idempotency=True)
+    if auth is not None:
+        return auth
+    service = _get_commercial_service(request)
+    audit_context = _build_audit_context(request)
+    try:
+        result = service.batch_disable_admin_portal_users(
+            principal_ids=payload.principal_ids,
+            reason=payload.reason,
+            audit_context=audit_context,
+        )
+    except CommercialServiceError as error:
+        _record_service_failure(
+            request,
+            event_kind="portal_user.batch_disable",
+            error=error,
+            scope_kind="portal_user_batch",
+            scope_id=str(_build_audit_context(request).idempotency_key or ""),
+            payload_json=_build_audit_payload(payload),
+        )
+        return _service_error_response(error, request=request)
+    totals = _dict_value(result.get("totals")) if isinstance(result, dict) else {}
+    return build_envelope(
+        status="ok",
+        message="admin portal users batch disabled",
+        data=_merge_receipt(
+            result,
+            _build_operator_receipt(
+                event_kind="portal_user.batch_disable",
+                scope_kind="portal_user_batch",
+                scope_id=str(audit_context.idempotency_key or ""),
+                outcome="succeeded" if int(totals.get("failed") or 0) == 0 else "partial",
+                effective_summary=(
+                    f"Batch disable processed {int(totals.get('attempted') or 0)} "
+                    f"portal users with {int(totals.get('failed') or 0)} failures."
+                ),
+            ),
+        ),
+        revision="m6",
+    )
+
+
+@router.post("/admin/portal-users/{principal_id}/disable")
+async def disable_admin_portal_user(
+    request: Request,
+    principal_id: str,
+    payload: PortalUserDisablePayload,
+) -> Any:
+    auth = await authorize_internal_request(request, require_idempotency=True)
+    if auth is not None:
+        return auth
+    service = _get_commercial_service(request)
+    audit_context = _build_audit_context(request)
+    try:
+        result = service.disable_admin_portal_user(
+            principal_id=principal_id,
+            reason=payload.reason,
+            audit_context=audit_context,
+        )
+    except CommercialServiceError as error:
+        _record_service_failure(
+            request,
+            event_kind="portal_user.disable",
+            error=error,
+            scope_kind="principal",
+            scope_id=principal_id,
+            payload_json=_build_audit_payload(payload),
+        )
+        return _service_error_response(error, request=request)
+    return build_envelope(
+        status="ok",
+        message="admin portal user disabled",
+        data=_merge_receipt(
+            result,
+            _build_operator_receipt(
+                event_kind="portal_user.disable",
+                scope_kind="principal",
+                scope_id=principal_id,
+                outcome="succeeded",
+                effective_summary=(
+                    f"Principal {principal_id} was disabled and active portal access was revoked."
+                ),
+            ),
+        ),
         revision="m6",
     )
 
@@ -2266,7 +3012,20 @@ async def rebuild_admin_subscription_billing_snapshots(
     return build_envelope(
         status="ok",
         message="subscription billing snapshots rebuilt",
-        data=result,
+        data=_merge_receipt(
+            result,
+            _build_operator_receipt(
+                event_kind="subscription.billing_snapshot.rebuild",
+                scope_kind="subscription",
+                scope_id=subscription_id,
+                outcome="succeeded",
+                effective_summary=(
+                    f"Billing snapshots for subscription {subscription_id} were rebuilt "
+                    "from usage records."
+                ),
+                account_id=str(_dict_value(result.get("subscription")).get("account_id") or ""),
+            ),
+        ),
         revision="m6",
     )
 
@@ -2426,22 +3185,6 @@ async def get_admin_agent_feedback(
     )
 
 
-@router.get("/admin/web-search-providers")
-async def get_admin_web_search_providers(request: Request) -> Any:
-    auth = await authorize_internal_request(request, require_idempotency=False)
-    if auth is not None:
-        return auth
-    services = get_cloud_services(request)
-    result = WebSearchAdminConfigService(services.settings).get_config()
-    result["workflow_metadata"] = get_workflow_metadata(WEB_SEARCH_EVIDENCE_WORKFLOW_ID)
-    return build_envelope(
-        status="ok",
-        message="web search provider settings loaded",
-        data=result,
-        revision="m6",
-    )
-
-
 @router.get("/admin/agent-workflow-metadata")
 async def get_admin_agent_workflow_metadata(request: Request) -> Any:
     auth = await authorize_internal_request(request, require_idempotency=False)
@@ -2455,56 +3198,1092 @@ async def get_admin_agent_workflow_metadata(request: Request) -> Any:
     )
 
 
-@router.post("/admin/web-search-providers")
-async def update_admin_web_search_providers(
-    request: Request,
-    payload: WebSearchProviderSettingsPayload,
-) -> Any:
-    auth = await authorize_internal_request(request, require_idempotency=True)
+@router.get("/admin/service-settings")
+async def get_admin_service_settings(request: Request) -> Any:
+    auth = await authorize_internal_request(request, require_idempotency=False)
     if auth is not None:
         return auth
     services = get_cloud_services(request)
-    result = WebSearchAdminConfigService(services.settings).save_config(
-        payload.model_dump(mode="json")
-    )
-    result["workflow_metadata"] = get_workflow_metadata(WEB_SEARCH_EVIDENCE_WORKFLOW_ID)
+    result = ServiceSettingsAdminService(
+        services.settings.database_url,
+        services.settings,
+    ).get_settings()
     return build_envelope(
         status="ok",
-        message="web search provider settings saved",
+        message="service settings loaded",
         data=result,
         revision="m6",
     )
 
 
-@router.get("/admin/image-source-providers")
-async def get_admin_image_source_providers(request: Request) -> Any:
+@router.patch("/admin/service-settings/portal-public")
+async def update_admin_portal_public_settings(
+    request: Request,
+    payload: PortalPublicServiceSettingsPayload,
+) -> Any:
+    auth = await authorize_internal_request(request, require_idempotency=True)
+    if auth is not None:
+        return auth
+    services = get_cloud_services(request)
+    try:
+        result = ServiceSettingsAdminService(
+            services.settings.database_url,
+            services.settings,
+        ).save_portal_public(payload.model_dump(mode="json"))
+    except ServiceSettingsAdminError as error:
+        _record_service_setting_audit(
+            request,
+            event_kind="service_setting.save",
+            outcome="error",
+            setting_id="portal_public",
+            error_code=error.error_code,
+            message=error.message,
+        )
+        return JSONResponse(
+            status_code=error.status_code,
+            content=build_envelope(
+                status="error",
+                error_code=error.error_code,
+                message=error.message,
+                revision="m6",
+            ),
+        )
+    _record_service_setting_audit(
+        request,
+        event_kind="service_setting.save",
+        outcome="succeeded",
+        setting_id="portal_public",
+        result=result,
+    )
+    return build_envelope(
+        status="ok",
+        message="portal public settings saved",
+        data=result,
+        revision="m6",
+    )
+
+
+@router.patch("/admin/service-settings/qq-login")
+async def update_admin_qq_login_settings(
+    request: Request,
+    payload: QQLoginServiceSettingsPayload,
+) -> Any:
+    auth = await authorize_internal_request(request, require_idempotency=True)
+    if auth is not None:
+        return auth
+    services = get_cloud_services(request)
+    try:
+        result = ServiceSettingsAdminService(
+            services.settings.database_url,
+            services.settings,
+        ).save_qq_login(payload.model_dump(mode="json"))
+    except ServiceSettingsAdminError as error:
+        _record_service_setting_audit(
+            request,
+            event_kind="service_setting.save",
+            outcome="error",
+            setting_id="portal_qq_login",
+            error_code=error.error_code,
+            message=error.message,
+        )
+        return JSONResponse(
+            status_code=error.status_code,
+            content=build_envelope(
+                status="error",
+                error_code=error.error_code,
+                message=error.message,
+                revision="m6",
+            ),
+        )
+    _record_service_setting_audit(
+        request,
+        event_kind="service_setting.save",
+        outcome="succeeded",
+        setting_id="portal_qq_login",
+        result=result,
+    )
+    return build_envelope(
+        status="ok",
+        message="QQ login settings saved",
+        data=result,
+        revision="m6",
+    )
+
+
+@router.post("/admin/service-settings/qq-login/test")
+async def test_admin_qq_login_settings(request: Request) -> Any:
+    auth = await authorize_internal_request(request, require_idempotency=True)
+    if auth is not None:
+        return auth
+    services = get_cloud_services(request)
+    result = ServiceSettingsAdminService(
+        services.settings.database_url,
+        services.settings,
+    ).test_qq_login()
+    _record_service_setting_audit(
+        request,
+        event_kind="service_setting.test",
+        outcome="succeeded" if result.get("status") == "ready" else "error",
+        setting_id="portal_qq_login",
+        result=result,
+        error_code="" if result.get("status") == "ready" else "service_settings.qq_not_ready",
+        message=str(result.get("message") or ""),
+    )
+    return build_envelope(
+        status="ok",
+        message="QQ login settings tested",
+        data=result,
+        revision="m6",
+    )
+
+
+@router.patch("/admin/service-settings/email")
+async def update_admin_portal_email_settings(
+    request: Request,
+    payload: PortalEmailServiceSettingsPayload,
+) -> Any:
+    auth = await authorize_internal_request(request, require_idempotency=True)
+    if auth is not None:
+        return auth
+    services = get_cloud_services(request)
+    try:
+        result = ServiceSettingsAdminService(
+            services.settings.database_url,
+            services.settings,
+        ).save_email(payload.model_dump(mode="json"))
+    except ServiceSettingsAdminError as error:
+        _record_service_setting_audit(
+            request,
+            event_kind="service_setting.save",
+            outcome="error",
+            setting_id="portal_email",
+            error_code=error.error_code,
+            message=error.message,
+        )
+        return JSONResponse(
+            status_code=error.status_code,
+            content=build_envelope(
+                status="error",
+                error_code=error.error_code,
+                message=error.message,
+                revision="m6",
+            ),
+        )
+    _record_service_setting_audit(
+        request,
+        event_kind="service_setting.save",
+        outcome="succeeded",
+        setting_id="portal_email",
+        result=result,
+    )
+    return build_envelope(
+        status="ok",
+        message="portal email settings saved",
+        data=result,
+        revision="m6",
+    )
+
+
+@router.post("/admin/service-settings/email/test")
+async def test_admin_portal_email_settings(
+    request: Request,
+    payload: ServiceSettingsEmailTestPayload,
+) -> Any:
+    auth = await authorize_internal_request(request, require_idempotency=True)
+    if auth is not None:
+        return auth
+    services = get_cloud_services(request)
+    try:
+        result = ServiceSettingsAdminService(
+            services.settings.database_url,
+            services.settings,
+        ).test_email(
+            recipient_email=payload.recipient_email,
+            project_name=services.settings.project_name,
+        )
+    except ServiceSettingsAdminError as error:
+        _record_service_setting_audit(
+            request,
+            event_kind="service_setting.test",
+            outcome="error",
+            setting_id="portal_email",
+            error_code=error.error_code,
+            message=error.message,
+        )
+        return JSONResponse(
+            status_code=error.status_code,
+            content=build_envelope(
+                status="error",
+                error_code=error.error_code,
+                message=error.message,
+                revision="m6",
+            ),
+        )
+    _record_service_setting_audit(
+        request,
+        event_kind="service_setting.test",
+        outcome="succeeded",
+        setting_id="portal_email",
+        result=result,
+    )
+    return build_envelope(
+        status="ok",
+        message="portal email settings tested",
+        data=result,
+        revision="m6",
+    )
+
+
+@router.patch("/admin/service-settings/alipay-payment")
+async def update_admin_alipay_payment_settings(
+    request: Request,
+    payload: AlipayPaymentServiceSettingsPayload,
+) -> Any:
+    auth = await authorize_internal_request(request, require_idempotency=True)
+    if auth is not None:
+        return auth
+    services = get_cloud_services(request)
+    try:
+        result = ServiceSettingsAdminService(
+            services.settings.database_url,
+            services.settings,
+        ).save_alipay_payment(payload.model_dump(mode="json"))
+    except ServiceSettingsAdminError as error:
+        _record_service_setting_audit(
+            request,
+            event_kind="service_setting.save",
+            outcome="error",
+            setting_id="payment_alipay",
+            error_code=error.error_code,
+            message=error.message,
+        )
+        return JSONResponse(
+            status_code=error.status_code,
+            content=build_envelope(
+                status="error",
+                error_code=error.error_code,
+                message=error.message,
+                revision="m6",
+            ),
+        )
+    _record_service_setting_audit(
+        request,
+        event_kind="service_setting.save",
+        outcome="succeeded",
+        setting_id="payment_alipay",
+        result=result,
+    )
+    return build_envelope(
+        status="ok",
+        message="Alipay payment settings saved",
+        data=result,
+        revision="m6",
+    )
+
+
+@router.post("/admin/service-settings/alipay-payment/test")
+async def test_admin_alipay_payment_settings(request: Request) -> Any:
+    auth = await authorize_internal_request(request, require_idempotency=True)
+    if auth is not None:
+        return auth
+    services = get_cloud_services(request)
+    try:
+        result = ServiceSettingsAdminService(
+            services.settings.database_url,
+            services.settings,
+        ).test_alipay_payment()
+    except ServiceSettingsAdminError as error:
+        _record_service_setting_audit(
+            request,
+            event_kind="service_setting.test",
+            outcome="error",
+            setting_id="payment_alipay",
+            error_code=error.error_code,
+            message=error.message,
+        )
+        return JSONResponse(
+            status_code=error.status_code,
+            content=build_envelope(
+                status="error",
+                error_code=error.error_code,
+                message=error.message,
+                revision="m6",
+            ),
+        )
+    _record_service_setting_audit(
+        request,
+        event_kind="service_setting.test",
+        outcome="succeeded" if result.get("status") == "ready" else "error",
+        setting_id="payment_alipay",
+        result=result,
+        error_code="" if result.get("status") == "ready" else "service_settings.alipay_not_ready",
+        message=str(result.get("message") or ""),
+    )
+    return build_envelope(
+        status="ok",
+        message="Alipay payment settings tested",
+        data=result,
+        revision="m6",
+    )
+
+
+@router.get("/admin/provider-connections")
+async def list_admin_provider_connections(request: Request) -> Any:
+    auth = await authorize_internal_request(request, require_idempotency=False)
+    if auth is not None:
+        return auth
+    services = get_cloud_services(request)
+    result = ProviderConnectionAdminService(
+        services.settings.database_url,
+        services.settings,
+    ).list_connections()
+    return build_envelope(
+        status="ok",
+        message="provider connections loaded",
+        data=result,
+        revision="m6",
+    )
+
+
+@router.post("/admin/provider-connections")
+async def create_admin_provider_connection(
+    request: Request,
+    payload: ProviderConnectionPayload,
+) -> Any:
+    auth = await authorize_internal_request(request, require_idempotency=True)
+    if auth is not None:
+        return auth
+    services = get_cloud_services(request)
+    try:
+        result = ProviderConnectionAdminService(
+            services.settings.database_url,
+            services.settings,
+        ).save_connection(payload.model_dump(mode="json"))
+    except ProviderConnectionAdminError as error:
+        _record_provider_connection_audit(
+            request,
+            event_kind="provider_connection.save",
+            outcome="error",
+            scope_id=str(payload.connection_id or payload.provider_id or ""),
+            request_payload=payload,
+            error_code=error.error_code,
+            message=error.message,
+        )
+        return JSONResponse(
+            status_code=error.status_code,
+            content=build_envelope(
+                status="error",
+                error_code=error.error_code,
+                message=error.message,
+                revision="m6",
+            ),
+        )
+    audit_event = _record_provider_connection_audit(
+        request,
+        event_kind="provider_connection.save",
+        outcome="succeeded",
+        scope_id=str(result.get("connection_id") or ""),
+        request_payload=payload,
+        result=result,
+    )
+    return build_envelope(
+        status="ok",
+        message="provider connection saved",
+        data=_merge_receipt(
+            result,
+            _build_operator_receipt(
+                event_kind="provider_connection.save",
+                scope_kind="provider_connection",
+                scope_id=str(result.get("connection_id") or ""),
+                outcome="succeeded",
+                effective_summary=(
+                    f"Provider connection {str(result.get('connection_id') or '')} was saved."
+                ),
+                audit_event=audit_event,
+            ),
+        ),
+        revision="m6",
+    )
+
+
+@router.patch("/admin/provider-connections/{connection_id}")
+async def update_admin_provider_connection(
+    request: Request,
+    connection_id: str,
+    payload: ProviderConnectionPayload,
+) -> Any:
+    auth = await authorize_internal_request(request, require_idempotency=True)
+    if auth is not None:
+        return auth
+    services = get_cloud_services(request)
+    try:
+        result = ProviderConnectionAdminService(
+            services.settings.database_url,
+            services.settings,
+        ).save_connection(payload.model_dump(mode="json"), connection_id=connection_id)
+    except ProviderConnectionAdminError as error:
+        _record_provider_connection_audit(
+            request,
+            event_kind="provider_connection.save",
+            outcome="error",
+            scope_id=connection_id,
+            request_payload=payload,
+            error_code=error.error_code,
+            message=error.message,
+        )
+        return JSONResponse(
+            status_code=error.status_code,
+            content=build_envelope(
+                status="error",
+                error_code=error.error_code,
+                message=error.message,
+                revision="m6",
+            ),
+        )
+    audit_event = _record_provider_connection_audit(
+        request,
+        event_kind="provider_connection.save",
+        outcome="succeeded",
+        scope_id=str(result.get("connection_id") or connection_id),
+        request_payload=payload,
+        result=result,
+    )
+    return build_envelope(
+        status="ok",
+        message="provider connection saved",
+        data=_merge_receipt(
+            result,
+            _build_operator_receipt(
+                event_kind="provider_connection.save",
+                scope_kind="provider_connection",
+                scope_id=str(result.get("connection_id") or connection_id),
+                outcome="succeeded",
+                effective_summary=(
+                    "Provider connection "
+                    f"{str(result.get('connection_id') or connection_id)} was saved."
+                ),
+                audit_event=audit_event,
+            ),
+        ),
+        revision="m6",
+    )
+
+
+@router.post("/admin/provider-connections/preview-catalog")
+async def preview_admin_provider_connection_catalog(
+    request: Request,
+    payload: ProviderConnectionPayload,
+) -> Any:
+    auth = await authorize_internal_request(request, require_idempotency=True)
+    if auth is not None:
+        return auth
+    services = get_cloud_services(request)
+    try:
+        result = ProviderConnectionAdminService(
+            services.settings.database_url,
+            services.settings,
+        ).preview_catalog(payload.model_dump(mode="json"))
+    except ProviderConnectionAdminError as error:
+        return JSONResponse(
+            status_code=error.status_code,
+            content=build_envelope(
+                status="error",
+                error_code=error.error_code,
+                message=error.message,
+                revision="m6",
+            ),
+        )
+    return build_envelope(
+        status="ok",
+        message="provider catalog preview loaded",
+        data=result,
+        revision="m6",
+    )
+
+
+@router.delete("/admin/provider-connections/{connection_id}")
+async def delete_admin_provider_connection(request: Request, connection_id: str) -> Any:
+    auth = await authorize_internal_request(request, require_idempotency=True)
+    if auth is not None:
+        return auth
+    services = get_cloud_services(request)
+    try:
+        result = ProviderConnectionAdminService(
+            services.settings.database_url,
+            services.settings,
+        ).delete_connection(connection_id)
+    except ProviderConnectionAdminError as error:
+        _record_provider_connection_audit(
+            request,
+            event_kind="provider_connection.delete",
+            outcome="error",
+            scope_id=connection_id,
+            error_code=error.error_code,
+            message=error.message,
+        )
+        return JSONResponse(
+            status_code=error.status_code,
+            content=build_envelope(
+                status="error",
+                error_code=error.error_code,
+                message=error.message,
+                revision="m6",
+            ),
+        )
+    audit_event = _record_provider_connection_audit(
+        request,
+        event_kind="provider_connection.delete",
+        outcome="succeeded",
+        scope_id=connection_id,
+        result=result,
+    )
+    return build_envelope(
+        status="ok",
+        message="provider connection deleted",
+        data=_merge_receipt(
+            result,
+            _build_operator_receipt(
+                event_kind="provider_connection.delete",
+                scope_kind="provider_connection",
+                scope_id=connection_id,
+                outcome="succeeded",
+                effective_summary=f"Provider connection {connection_id} was deleted.",
+                audit_event=audit_event,
+            ),
+        ),
+        revision="m6",
+    )
+
+
+@router.post("/admin/provider-connections/{connection_id}/test")
+async def test_admin_provider_connection(request: Request, connection_id: str) -> Any:
+    auth = await authorize_internal_request(request, require_idempotency=True)
+    if auth is not None:
+        return auth
+    services = get_cloud_services(request)
+    try:
+        result = ProviderConnectionAdminService(
+            services.settings.database_url,
+            services.settings,
+        ).test_connection(connection_id)
+    except ProviderConnectionAdminError as error:
+        _record_provider_connection_audit(
+            request,
+            event_kind="provider_connection.test",
+            outcome="error",
+            scope_id=connection_id,
+            error_code=error.error_code,
+            message=error.message,
+        )
+        return JSONResponse(
+            status_code=error.status_code,
+            content=build_envelope(
+                status="error",
+                error_code=error.error_code,
+                message=error.message,
+                revision="m6",
+            ),
+        )
+    audit_event = _record_provider_connection_audit(
+        request,
+        event_kind="provider_connection.test",
+        outcome="succeeded" if result.get("ok") else "error",
+        scope_id=connection_id,
+        result=result,
+        error_code=str(result.get("error_code") or ""),
+        message=str(result.get("message") or ""),
+    )
+    return build_envelope(
+        status="ok" if result.get("ok") else "error",
+        message=str(result.get("message") or "provider connection tested"),
+        data=_merge_receipt(
+            result,
+            _build_operator_receipt(
+                event_kind="provider_connection.test",
+                scope_kind="provider_connection",
+                scope_id=connection_id,
+                outcome="succeeded" if result.get("ok") else "error",
+                effective_summary=str(result.get("message") or "Provider connection was tested."),
+                audit_event=audit_event,
+            ),
+        ),
+        revision="m6",
+    )
+
+
+@router.get("/admin/model-references")
+async def list_admin_model_references(
+    request: Request,
+    provider_id: str = "",
+    model_ids: str = "",
+    feature: str = "",
+    include_deprecated: bool = True,
+    search: str = "",
+    limit: int = Query(default=200, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+) -> Any:
+    auth = await authorize_internal_request(request, require_idempotency=False)
+    if auth is not None:
+        return auth
+    services = get_cloud_services(request)
+    result = ModelReferenceService(services.settings.database_url).list_references(
+        provider_id=provider_id,
+        model_ids=[item.strip() for item in model_ids.split(",") if item.strip()],
+        feature=feature,
+        include_deprecated=include_deprecated,
+        search=search,
+        limit=limit,
+        offset=offset,
+    )
+    return build_envelope(
+        status="ok",
+        message="model references loaded",
+        data=result,
+        revision="m6",
+    )
+
+
+@router.post("/admin/model-references/sync")
+async def sync_admin_model_references(
+    request: Request,
+    payload: ModelReferenceSyncPayload,
+) -> Any:
+    auth = await authorize_internal_request(request, require_idempotency=True)
+    if auth is not None:
+        return auth
+    services = get_cloud_services(request)
+    try:
+        result = ModelReferenceService(services.settings.database_url).sync_models_dev(
+            payload=payload.payload,
+            source_url=payload.source_url,
+        )
+    except ModelReferenceError as error:
+        return JSONResponse(
+            status_code=error.status_code,
+            content=build_envelope(
+                status="error",
+                error_code=error.error_code,
+                message=error.message,
+                revision="m6",
+            ),
+        )
+    return build_envelope(
+        status="ok",
+        message="model references synced",
+        data=result,
+        revision="m6",
+    )
+
+
+@router.get("/admin/ai-resources")
+async def get_admin_ai_resources(request: Request) -> Any:
     auth = await authorize_internal_request(request, require_idempotency=False)
     if auth is not None:
         return auth
     services = get_cloud_services(request)
     return build_envelope(
         status="ok",
-        message="image source provider settings loaded",
-        data=ImageSourceAdminConfigService(services.settings).get_config(),
+        message="AI resource projection loaded",
+        data=build_admin_ai_resource_projection(
+            services.settings,
+            providers=resolve_live_provider_adapters(
+                services.settings,
+                base_providers=services.providers,
+                include_enabled_connections=True,
+            ),
+            database_url=services.settings.database_url,
+        ),
         revision="m6",
     )
 
 
-@router.post("/admin/image-source-providers")
-async def update_admin_image_source_providers(
+@router.get("/admin/ability-models/runtime-projection")
+async def get_admin_ability_model_runtime_projection(request: Request) -> Any:
+    auth = await authorize_internal_request(request, require_idempotency=False)
+    if auth is not None:
+        return auth
+    services = get_cloud_services(request)
+    return build_envelope(
+        status="ok",
+        message="Ability model runtime projection loaded",
+        data=build_admin_ability_model_runtime_projection(
+            services.settings,
+            providers=resolve_live_provider_adapters(
+                services.settings,
+                base_providers=services.providers,
+                include_enabled_connections=True,
+            ),
+            database_url=services.settings.database_url,
+        ),
+        revision="m6",
+    )
+
+
+@router.post("/admin/ability-models/runtime-binding")
+async def update_admin_ability_model_runtime_binding(
     request: Request,
-    payload: ImageSourceProviderSettingsPayload,
+    payload: AbilityModelRuntimeBindingPayload,
 ) -> Any:
     auth = await authorize_internal_request(request, require_idempotency=True)
     if auth is not None:
         return auth
     services = get_cloud_services(request)
-    result = ImageSourceAdminConfigService(services.settings).save_config(
-        payload.model_dump(mode="json")
+    ability_id = payload.ability_id.strip()
+    instance_id = payload.instance_id.strip()
+    if ability_id != "site_knowledge_embedding":
+        return JSONResponse(
+            status_code=400,
+            content=build_envelope(
+                status="error",
+                error_code="ability_model_runtime_binding.unsupported_ability",
+                message="Only Site Knowledge embedding runtime binding is supported.",
+                revision="m6",
+            ),
+        )
+    if not instance_id:
+        return JSONResponse(
+            status_code=400,
+            content=build_envelope(
+                status="error",
+                error_code="ability_model_runtime_binding.invalid_instance",
+                message="A runtime model instance is required.",
+                revision="m6",
+            ),
+        )
+
+    connection_id = ""
+    provider_id = ""
+    model_id = ""
+    with get_session(services.settings.database_url) as session:
+        repository = CatalogRepository(session)
+        instances = repository.list_instances_by_ids([instance_id])
+        instance = instances[0] if instances else None
+        if instance is None:
+            return JSONResponse(
+                status_code=400,
+                content=build_envelope(
+                    status="error",
+                    error_code="ability_model_runtime_binding.unknown_instance",
+                    message="The selected runtime model instance does not exist.",
+                    revision="m6",
+                ),
+            )
+        model = repository.get_model(instance.model_id)
+        if model is None or model.status != "available" or model.feature != "embedding":
+            return JSONResponse(
+                status_code=400,
+                content=build_envelope(
+                    status="error",
+                    error_code="ability_model_runtime_binding.invalid_model",
+                    message="Site Knowledge can only use available embedding model instances.",
+                    revision="m6",
+                ),
+            )
+
+        provider_id = str(instance.provider_id or "").strip()
+        model_id = str(instance.model_id or "").strip()
+        connections = list(
+            session.scalars(
+                select(ProviderConnection)
+                .where(ProviderConnection.enabled.is_(True))
+                .order_by(ProviderConnection.connection_id.asc())
+            )
+        )
+        connection = next(
+            (
+                row
+                for row in connections
+                if _provider_connection_supports_embedding(row, provider_id=provider_id)
+            ),
+            None,
+        )
+        if connection is None:
+            return JSONResponse(
+                status_code=400,
+                content=build_envelope(
+                    status="error",
+                    error_code="ability_model_runtime_binding.missing_provider_connection",
+                    message=(
+                        "The selected embedding model requires an enabled provider "
+                        "connection with embedding capability."
+                    ),
+                    revision="m6",
+                ),
+            )
+
+        config = dict(_dict_value(connection.config_json))
+        config["provider_id"] = provider_id
+        config["kind"] = str(config.get("kind") or connection.provider_type or provider_id)
+        config["model_id"] = model_id
+        config["capability_ids"] = _merge_runtime_id_list(
+            config.get("capability_ids"),
+            ["embedding"],
+        )
+        config["runtime_profile_ids"] = _merge_runtime_id_list(
+            config.get("runtime_profile_ids"),
+            ["embed.default"],
+        )
+        config["dimensions"] = _embedding_dimensions_for_model(
+            model_id,
+            config,
+            services.settings.site_knowledge_embedding_dimensions,
+        )
+        config["managed_surface"] = "admin_ability_model_runtime_binding"
+        if payload.note.strip():
+            config["operator_note"] = payload.note.strip()
+        connection.config_json = config
+        connection.status = "configured"
+        connection.updated_at = datetime.now(UTC)
+        connection_id = str(connection.connection_id or "").strip()
+        session.commit()
+
+    apply_provider_connection_runtime_settings(services.settings)
+    audit_event = None
+    try:
+        audit_event = _get_commercial_service(request).record_service_audit_event(
+            audit_context=_build_audit_context(request),
+            event_kind="ability_model_runtime_binding.update",
+            outcome="succeeded",
+            scope_kind="runtime_profile",
+            scope_id="embed.default",
+            payload_json={
+                "surface": "admin_ability_model_runtime_projection",
+                "ability_id": ability_id,
+                "provider_id": provider_id,
+                "model_id": model_id,
+                "instance_id": instance_id,
+                "connection_id": connection_id,
+                "credential_value_exposure": "none",
+                "content_exposed": False,
+            },
+        )
+    except Exception:
+        audit_event = None
+
+    result = build_admin_ability_model_runtime_projection(
+        services.settings,
+        providers=resolve_live_provider_adapters(
+            services.settings,
+            base_providers=services.providers,
+            include_enabled_connections=True,
+        ),
+        database_url=services.settings.database_url,
     )
     return build_envelope(
         status="ok",
-        message="image source provider settings saved",
+        message="Ability model runtime binding saved",
+        data=_merge_receipt(
+            result,
+            _build_operator_receipt(
+                event_kind="ability_model_runtime_binding.update",
+                scope_kind="runtime_profile",
+                scope_id="embed.default",
+                outcome="succeeded",
+                effective_summary="Site Knowledge embedding runtime model was updated.",
+                audit_event=audit_event,
+            ),
+        ),
+        revision="m6",
+    )
+
+
+@router.get("/admin/wordpress-ai-routing")
+async def get_admin_wordpress_ai_routing(request: Request) -> Any:
+    auth = await authorize_internal_request(request, require_idempotency=False)
+    if auth is not None:
+        return auth
+    services = get_cloud_services(request)
+    return build_envelope(
+        status="ok",
+        message="WordPress AI connector routing loaded",
+        data=_build_wordpress_ai_routing_projection(
+            services.settings.database_url,
+            settings=services.settings,
+        ),
+        revision="m6",
+    )
+
+
+@router.post("/admin/wordpress-ai-routing")
+async def update_admin_wordpress_ai_routing(
+    request: Request,
+    payload: WordPressAIRoutingSettingsPayload,
+) -> Any:
+    auth = await authorize_internal_request(request, require_idempotency=True)
+    if auth is not None:
+        return auth
+    services = get_cloud_services(request)
+    profiles, error_message = _validate_wordpress_ai_routing_payload(
+        services.settings.database_url,
+        payload,
+        settings=services.settings,
+    )
+    if error_message:
+        return JSONResponse(
+            status_code=400,
+            content=build_envelope(
+                status="error",
+                error_code="wordpress_ai_routing.invalid_profile",
+                message=error_message,
+                revision="m6",
+            ),
+        )
+
+    revision = f"wp-ai-admin-{int(datetime.now(UTC).timestamp())}"
+    with get_session(services.settings.database_url) as session:
+        repository = CatalogRepository(session)
+        for profile_payload in profiles:
+            profile_id = profile_payload.profile_id.strip()
+            spec = WP_AI_CONNECTOR_PROFILE_SPECS_BY_ID[profile_id]
+            candidate_instance_ids = [
+                str(instance_id or "").strip()
+                for instance_id in profile_payload.candidate_instance_ids
+                if str(instance_id or "").strip()
+            ]
+            repository.upsert_routing_profile(
+                profile_id=profile_id,
+                execution_kind=spec.execution_kind,
+                default_policy_json={
+                    "allow_fallback": profile_payload.allow_fallback,
+                    "max_retries": profile_payload.max_retries,
+                    "timeout_ms": profile_payload.timeout_ms,
+                    "managed_surface": "wordpress_ai_connector",
+                    "task_group": spec.group_id,
+                    "routing_intent": spec.routing_intent,
+                    "tasks": list(spec.tasks),
+                    "operator_note": profile_payload.note.strip(),
+                },
+            )
+            repository.upsert_routing_binding(
+                profile_id=profile_id,
+                candidate_instance_ids=candidate_instance_ids,
+                selection_policy_json={
+                    "strategy": "ordered",
+                    "managed_surface": "wordpress_ai_connector",
+                    "task_group": spec.group_id,
+                    "routing_intent": spec.routing_intent,
+                    "operator_note": profile_payload.note.strip(),
+                },
+                revision=revision,
+            )
+        session.commit()
+
+    audit_event = None
+    try:
+        audit_event = _get_commercial_service(request).record_service_audit_event(
+            audit_context=_build_audit_context(request),
+            event_kind="wordpress_ai_routing.update",
+            outcome="succeeded",
+            scope_kind="runtime_profile",
+            scope_id="wordpress_ai_connector",
+            payload_json={
+                "profile_ids": [profile.profile_id for profile in profiles],
+                "revision": revision,
+            },
+        )
+    except Exception:
+        audit_event = None
+
+    result = _build_wordpress_ai_routing_projection(
+        services.settings.database_url,
+        settings=services.settings,
+    )
+    return build_envelope(
+        status="ok",
+        message="WordPress AI connector routing saved",
+        data=_merge_receipt(
+            result,
+            _build_operator_receipt(
+                event_kind="wordpress_ai_routing.update",
+                scope_kind="runtime_profile",
+                scope_id="wordpress_ai_connector",
+                outcome="succeeded",
+                effective_summary="WordPress AI connector task routing was updated.",
+                audit_event=audit_event,
+            ),
+        ),
+        revision="m6",
+    )
+
+
+def _audio_workbench_service(request: Request) -> AudioWorkbenchService:
+    services = get_cloud_services(request)
+    return AudioWorkbenchService(
+        services.settings.database_url,
+        settings=services.settings,
+        providers=services.providers,
+        runtime_queue=services.runtime_queue,
+        callback_dispatcher=services.callback_dispatcher,
+    )
+
+
+@router.post("/admin/audio-jobs")
+async def create_admin_audio_job(
+    request: Request,
+    payload: AudioWorkbenchCreatePayload,
+    background_tasks: BackgroundTasks,
+) -> Any:
+    auth = await authorize_internal_request(request, require_idempotency=True)
+    if auth is not None:
+        return auth
+    service = _audio_workbench_service(request)
+    try:
+        result = service.create_job(payload.model_dump(mode="json"))
+    except AudioWorkbenchError as error:
+        return JSONResponse(
+            status_code=400,
+            content=build_envelope(
+                status="error",
+                error_code=error.error_code,
+                message=error.message,
+                data=error.to_payload(),
+                revision="m6",
+            ),
+        )
+    if str(result.get("status") or "") == "queued":
+        background_tasks.add_task(service.process_one_queued_job)
+    return build_envelope(
+        status="ok",
+        message="audio job created",
+        data=result,
+        revision="m6",
+    )
+
+
+@router.get("/admin/audio-jobs/recent")
+async def list_admin_audio_jobs_recent(request: Request, limit: int = Query(default=10)) -> Any:
+    auth = await authorize_internal_request(request, require_idempotency=False)
+    if auth is not None:
+        return auth
+    result = _audio_workbench_service(request).list_recent_jobs(limit=limit)
+    return build_envelope(
+        status="ok",
+        message="recent audio jobs loaded",
+        data=result,
+        revision="m6",
+    )
+
+
+@router.get("/admin/audio-jobs/{run_id}")
+async def get_admin_audio_job(request: Request, run_id: str) -> Any:
+    auth = await authorize_internal_request(request, require_idempotency=False)
+    if auth is not None:
+        return auth
+    try:
+        result = _audio_workbench_service(request).get_job(run_id)
+    except RuntimeRunNotFoundError as error:
+        return JSONResponse(
+            status_code=404,
+            content=build_envelope(
+                status="error",
+                error_code=error.error_code,
+                message=error.message,
+                revision="m6",
+            ),
+        )
+    return build_envelope(
+        status="ok",
+        message="audio job loaded",
         data=result,
         revision="m6",
     )
@@ -2763,9 +4542,9 @@ async def get_nightly_inspection_observability(
     )
 
 
-@router.get("/admin/hosted-model-governance")
-@router.get("/runtime/diagnostics/hosted-model-governance")
-async def get_hosted_model_governance_diagnostics(
+@router.get("/admin/runtime-telemetry")
+@router.get("/runtime/diagnostics/runtime-telemetry")
+async def get_runtime_telemetry_diagnostics(
     request: Request,
     site_id: str | None = Query(default=None),
     recent_minutes: int = Query(default=60, ge=1, le=10080),
@@ -2775,73 +4554,14 @@ async def get_hosted_model_governance_diagnostics(
     if auth is not None:
         return auth
     services = get_cloud_services(request)
-    result = RuntimeService(services.settings.database_url).get_hosted_model_governance_diagnostics(
+    result = RuntimeService(services.settings.database_url).get_runtime_telemetry_diagnostics(
         site_id=site_id,
         recent_minutes=recent_minutes,
         limit=limit,
     )
     return build_envelope(
         status="ok",
-        message="hosted model governance diagnostics loaded",
-        data=result,
-        revision="m1",
-    )
-
-
-@router.get("/admin/hosted-model-governance-cadence")
-async def get_hosted_model_governance_cadence(
-    request: Request,
-    recent_minutes: int = Query(default=1440, ge=1, le=10080),
-) -> Any:
-    auth = await authorize_internal_request(request, require_idempotency=False)
-    if auth is not None:
-        return auth
-    services = get_cloud_services(request)
-    result = UsageRollupService(services.settings.database_url).get_hosted_model_governance_batch(
-        window_minutes=recent_minutes,
-    )
-    if result is None:
-        result = {
-            "available": False,
-            "source": "cloud_hosted_model_governance_empty",
-            "filters": {
-                "site_id": "",
-                "recent_minutes": recent_minutes,
-            },
-            "generated_at": "",
-            "alert_summary": {
-                "status": "inactive",
-                "summary": "No hosted model governance cadence record is available yet.",
-                "alert_count": 0,
-                "alerts": [],
-                "daily_digest": {
-                    "runs": 0,
-                    "provider_calls": 0,
-                    "meter_events": 0,
-                    "metered_run_coverage_rate": 0,
-                    "provider_call_run_coverage_rate": 0,
-                    "unmetered_run_count": 0,
-                    "runs_without_provider_call_count": 0,
-                },
-            },
-            "delivery": {
-                "owner": "internal_admin_readonly",
-                "buffer_kind": "usage_rollup",
-                "scope_kind": "hosted_model_governance_batch",
-            },
-            "boundary": {
-                "surface": "internal_admin_summary",
-                "cloud_role": "hosted_runtime_detail",
-                "local_control_plane": "wordpress_plugin",
-                "direct_wordpress_write": False,
-                "contains_prompt_or_result_payloads": False,
-            },
-        }
-    else:
-        result = {**result, "available": True}
-    return build_envelope(
-        status="ok",
-        message="hosted model governance cadence loaded",
+        message="runtime telemetry diagnostics loaded",
         data=result,
         revision="m1",
     )

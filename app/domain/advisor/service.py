@@ -362,11 +362,18 @@ class InternalAIAdvisorService:
         )
         action_required = _list(overview.get("action_required"))
         health = _dict(overview.get("health"))
+        generated_at = str(overview.get("generated_at") or datetime.now(UTC).isoformat())
+        window = _dict(overview.get("window"))
         diagnostic_items = [
-            _site_diagnostic_item(_dict(item))
+            _site_diagnostic_item(
+                _dict(item),
+                generated_at=generated_at,
+                window=window,
+            )
             for item in action_required[:3]
             if isinstance(item, dict)
         ]
+        diagnostic_workflow = _site_diagnostic_workflow_summary(diagnostic_items)
         status = "attention" if diagnostic_items else "ok"
         severity = "info"
         if any(item.get("severity") == "error" for item in diagnostic_items):
@@ -457,6 +464,12 @@ class InternalAIAdvisorService:
             },
         )
         payload["diagnostic_items"] = diagnostic_items
+        payload["diagnostic_workflow"] = diagnostic_workflow
+        payload["evidence_window"] = {
+            "hours": _int(window.get("hours")),
+            "start_at": str(window.get("start_at") or ""),
+            "end_at": str(window.get("end_at") or ""),
+        }
         payload["safety"] = {
             "write_posture": "suggestion_only",
             "direct_wordpress_write": False,
@@ -2063,10 +2076,27 @@ def _action(action: str) -> dict[str, Any]:
     return {"action": action, "requires_operator": True}
 
 
-def _site_diagnostic_item(item: dict[str, Any]) -> dict[str, Any]:
+def _site_diagnostic_item(
+    item: dict[str, Any],
+    *,
+    generated_at: str,
+    window: dict[str, Any],
+) -> dict[str, Any]:
     source = str(item.get("source") or "").strip().lower()
     code = str(item.get("code") or "site_diagnostics.attention").strip()
+    state = _dict(item.get("state"))
+    workflow_status = _site_diagnostic_workflow_status(
+        str(state.get("workflow_status") or item.get("workflow_status") or "active")
+    )
+    updated_at = str(state.get("updated_at") or generated_at)
+    diagnostic_key = _site_diagnostic_key(
+        attention_key=str(item.get("attention_key") or ""),
+        source=source,
+        code=code,
+        title=str(item.get("title") or ""),
+    )
     return {
+        "diagnostic_key": diagnostic_key,
         "code": code,
         "severity": str(item.get("severity") or "warning"),
         "source": source or "monitoring",
@@ -2075,8 +2105,71 @@ def _site_diagnostic_item(item: dict[str, Any]) -> dict[str, Any]:
         "likely_cause": _site_diagnostic_likely_cause(source=source, code=code),
         "next_step": str(item.get("suggested_action") or "Open site monitoring detail."),
         "recommended_action_id": _site_diagnostic_action_id(source=source, code=code),
+        "workflow_status": workflow_status,
+        "status_detail": {
+            "workflow_status": workflow_status,
+            "status_source": "operator_state" if state else "monitoring_signal",
+            "allowed_statuses": ["new", "acknowledged", "muted", "resolved"],
+            "muted_until": str(state.get("muted_until") or ""),
+            "operator_note": str(state.get("operator_note") or ""),
+            "updated_at": updated_at,
+        },
+        "evidence_window": {
+            "hours": _int(window.get("hours")),
+            "start_at": str(window.get("start_at") or ""),
+            "end_at": str(window.get("end_at") or ""),
+        },
+        "last_updated_at": updated_at,
         "operator_review_required": True,
         "direct_wordpress_write": False,
+    }
+
+
+def _site_diagnostic_key(
+    *,
+    attention_key: str,
+    source: str,
+    code: str,
+    title: str,
+) -> str:
+    if attention_key:
+        return f"plugin_attention:{attention_key}"
+    seed = json.dumps(
+        {
+            "source": source or "monitoring",
+            "code": code,
+            "title": title,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return f"site_diag:{hashlib.sha256(seed.encode('utf-8')).hexdigest()[:24]}"
+
+
+def _site_diagnostic_workflow_status(value: str) -> str:
+    status = str(value or "").strip().lower()
+    if status == "active":
+        return "new"
+    if status in {"new", "acknowledged", "muted", "resolved"}:
+        return status
+    return "new"
+
+
+def _site_diagnostic_workflow_summary(items: list[dict[str, Any]]) -> dict[str, Any]:
+    counts = {
+        "new": 0,
+        "acknowledged": 0,
+        "muted": 0,
+        "resolved": 0,
+    }
+    for item in items:
+        status = _site_diagnostic_workflow_status(str(item.get("workflow_status") or "new"))
+        counts[status] += 1
+    return {
+        **counts,
+        "total": len(items),
+        "needs_attention": counts["new"] + counts["acknowledged"],
+        "allowed_statuses": ["new", "acknowledged", "muted", "resolved"],
     }
 
 

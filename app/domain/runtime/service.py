@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from datetime import UTC, datetime, timedelta
 from time import perf_counter
 from typing import Any, cast
@@ -52,6 +53,16 @@ from app.core.security import (
     REPLAY_SCOPE_PUBLIC_POST_KEY,
     REPLAY_SCOPE_PUBLIC_POST_SITE,
 )
+from app.domain.audio_generation.artifacts import (
+    AudioArtifactMaterializationConfig,
+    AudioArtifactMaterializationError,
+    materialize_audio_generation_candidates,
+)
+from app.domain.audio_generation.contracts import (
+    AUDIO_GENERATION_ABILITIES,
+    AudioGenerationContractViolation,
+    validate_audio_generation_runtime_contract,
+)
 from app.domain.cloud_batch_runtime.contracts import (
     CLOUD_BATCH_RUNTIME_ABILITIES,
     CLOUD_BATCH_RUNTIME_EXECUTION_KIND,
@@ -81,6 +92,11 @@ from app.domain.image_generation.contracts import (
     IMAGE_GENERATION_ABILITIES,
     ImageGenerationContractViolation,
     validate_image_generation_runtime_contract,
+)
+from app.domain.image_generation.inline_images import (
+    InlineImageMaterializationConfig,
+    InlineImageMaterializationError,
+    materialize_inline_image_candidates_from_urls,
 )
 from app.domain.image_sources.contracts import (
     IMAGE_SOURCE_ABILITIES,
@@ -179,6 +195,15 @@ from app.domain.web_search.contracts import (
     validate_web_search_runtime_contract,
 )
 from app.domain.web_search.service import WebSearchProviderError, WebSearchService
+from app.domain.wordpress_ai_connector.contracts import (
+    WP_AI_CONNECTOR_ABILITIES,
+    WP_AI_CONNECTOR_MAX_TIMEOUT_SECONDS,
+    WordPressAIConnectorContractViolation,
+    validate_wordpress_ai_connector_runtime_contract,
+)
+from app.domain.wordpress_ai_connector.routing_profiles import (
+    resolve_wordpress_ai_connector_profile_spec,
+)
 
 logger = get_logger(__name__)
 
@@ -211,10 +236,14 @@ class RuntimeService:
     ) -> None:
         self.database_url = database_url
         self.settings = settings or get_settings()
-        self.routing_service = RoutingService(database_url)
         self.commercial_service = CommercialService(database_url, settings=self.settings)
         self.providers = (
             providers if providers is not None else build_provider_adapters(self.settings)
+        )
+        self.routing_service = RoutingService(
+            database_url,
+            settings=self.settings,
+            execution_provider_ids=set(self.providers),
         )
         self.runtime_queue = runtime_queue
         self.callback_dispatcher = callback_dispatcher
@@ -223,8 +252,12 @@ class RuntimeService:
 
     def resolve(self, request: RuntimeRequest) -> dict[str, object]:
         self._validate_runtime_data_handling_contract(request)
+        if self._is_audio_generation_request(request):
+            self._validate_audio_generation_contract(request)
         if self._is_image_generation_request(request):
             self._validate_image_generation_contract(request)
+        if self._is_wordpress_ai_connector_request(request):
+            self._validate_wordpress_ai_connector_contract(request)
 
         resolution = self.routing_service.resolve(
             profile_id=request.profile_id,
@@ -262,6 +295,12 @@ class RuntimeService:
             merged_policy,
             execution_contract=execution_contract,
         )
+        if self._is_wordpress_ai_connector_managed_request(request):
+            merged_policy = self._apply_wordpress_ai_connector_managed_policy(
+                merged_policy,
+                default_policy=resolution.default_policy,
+                profile_id=resolution.profile_id,
+            )
         merged_policy = self._apply_routing_snapshot(merged_policy, resolution)
         merged_policy = self._apply_commercial_policy_overrides(
             merged_policy,
@@ -308,14 +347,19 @@ class RuntimeService:
             return self._execute_site_knowledge_request(request)
         if self._is_web_search_request(request):
             return self._execute_web_search_request(request)
+        if self._is_audio_generation_request(request):
+            self._validate_audio_generation_contract(request)
         if self._is_image_generation_request(request):
             self._validate_image_generation_contract(request)
+        if self._is_wordpress_ai_connector_request(request):
+            self._validate_wordpress_ai_connector_contract(request)
 
         resolution = self.routing_service.resolve(
             profile_id=request.profile_id,
             execution_kind=request.execution_kind,
         )
         merged_policy = self._merge_policy(resolution.default_policy, request.policy)
+        resolution = self._prefer_routing_candidate(resolution, merged_policy)
         merged_policy = self._apply_routing_snapshot(merged_policy, resolution)
         trace_id = request.trace_id or uuid4().hex
         run_id = f"run_{uuid4().hex}"
@@ -335,6 +379,12 @@ class RuntimeService:
                 merged_policy,
                 execution_contract=execution_contract,
             )
+            if self._is_wordpress_ai_connector_managed_request(request):
+                merged_policy = self._apply_wordpress_ai_connector_managed_policy(
+                    merged_policy,
+                    default_policy=resolution.default_policy,
+                    profile_id=resolution.profile_id,
+                )
 
             if request.idempotency_key:
                 existing = repository.get_run_by_idempotency(
@@ -429,11 +479,17 @@ class RuntimeService:
                     idempotent_replay=False,
                 )
 
+            provider_input_payload = request.input_payload
+            if self._is_wordpress_ai_connector_request(request):
+                provider_input_payload = self._build_wordpress_ai_connector_provider_input(
+                    request.input_payload
+                )
+
             self._execute_candidate_chain(
                 run,
                 repository=repository,
                 candidates=resolution.candidates,
-                input_payload=request.input_payload,
+                input_payload=provider_input_payload,
             )
             session.commit()
             return self._build_execution_response(
@@ -1574,7 +1630,7 @@ class RuntimeService:
             **summary,
         }
 
-    def get_hosted_model_governance_diagnostics(
+    def get_runtime_telemetry_diagnostics(
         self,
         *,
         site_id: str | None = None,
@@ -2168,10 +2224,10 @@ class RuntimeService:
             "runs_without_provider_call_count": max(0, runs_total - len(provider_call_run_ids)),
             "review_guidance": (
                 "Inspect capabilities below full metering coverage before enabling "
-                "new hosted model families at higher traffic."
+                "new runtime providers at higher traffic."
             )
             if unmetered_capabilities or missing_provider_call_capabilities
-            else "Recent hosted model families have runtime meter coverage in this window.",
+            else "Recent runtime providers have meter coverage in this window.",
         }
 
     def _build_hosted_governance_alert_summary(
@@ -2221,7 +2277,7 @@ class RuntimeService:
                     "count": max(0, count),
                     "capabilities": capabilities[:10],
                     "suggested_action": suggested_action,
-                    "href": "/admin/hosted-models",
+                    "href": "/admin/troubleshooting",
                 }
             )
 
@@ -2234,8 +2290,8 @@ class RuntimeService:
             add_alert(
                 code="hosted_model.unmetered_runs",
                 severity="error",
-                title="Hosted model meter coverage gap",
-                summary="Some hosted model runs are not represented in usage metering.",
+                title="Runtime meter coverage gap",
+                summary="Some runtime runs are not represented in usage metering.",
                 count=unmetered_run_count,
                 capabilities=unmetered_capabilities,
                 suggested_action="inspect_metering_callback_or_usage_event_mapping",
@@ -2253,8 +2309,8 @@ class RuntimeService:
             add_alert(
                 code="hosted_model.provider_call_gap",
                 severity="warning",
-                title="Hosted model provider call coverage gap",
-                summary="Some hosted runs do not have matching provider call telemetry.",
+                title="Provider call coverage gap",
+                summary="Some runtime runs do not have matching provider call telemetry.",
                 count=runs_without_provider_call_count,
                 capabilities=provider_gap_capabilities,
                 suggested_action="inspect_provider_call_recording_for_hosted_profiles",
@@ -2275,8 +2331,8 @@ class RuntimeService:
             add_alert(
                 code="hosted_model.provider_errors",
                 severity="error" if provider_errors >= 5 else "warning",
-                title="Hosted model provider errors",
-                summary="Provider calls are returning errors in the current governance window.",
+                title="Provider call errors",
+                summary="Provider calls are returning errors in the current telemetry window.",
                 count=provider_errors,
                 capabilities=provider_error_groups,
                 suggested_action="inspect_provider_credentials_quota_and_health",
@@ -2296,11 +2352,11 @@ class RuntimeService:
             add_alert(
                 code="hosted_model.failed_runs",
                 severity="warning",
-                title="Hosted model failed runs",
-                summary="Hosted model runs are failing before or during provider execution.",
+                title="Runtime runs failed",
+                summary="Runtime runs are failing before or during provider execution.",
                 count=failed_runs,
                 capabilities=failed_groups,
-                suggested_action="inspect_runtime_failure_detail_for_hosted_models",
+                suggested_action="inspect_runtime_failure_detail",
             )
 
         alerts.sort(
@@ -2320,23 +2376,23 @@ class RuntimeService:
             else "ok"
         )
         if status == "inactive":
-            summary = "No hosted model runs were observed in this governance window."
+            summary = "No runtime runs were observed in this telemetry window."
             next_action = "continue_monitoring"
         elif status == "error":
-            summary = "Hosted model governance has coverage or provider errors that need review."
-            next_action = str(alerts[0].get("suggested_action") or "inspect_hosted_models")
+            summary = "Runtime telemetry has coverage or provider errors that need review."
+            next_action = str(alerts[0].get("suggested_action") or "inspect_runtime_telemetry")
         elif status == "warning":
-            summary = "Hosted model governance has telemetry gaps to review before traffic expands."
-            next_action = str(alerts[0].get("suggested_action") or "inspect_hosted_models")
+            summary = "Runtime telemetry has coverage gaps to review before traffic expands."
+            next_action = str(alerts[0].get("suggested_action") or "inspect_runtime_telemetry")
         else:
-            summary = "Hosted model governance is covered in this window."
+            summary = "Runtime telemetry is covered in this window."
             next_action = "continue_monitoring"
 
         return {
             "status": status,
             "summary": summary,
             "next_action": next_action,
-            "href": "/admin/hosted-models",
+            "href": "/admin/troubleshooting",
             "alerts": alerts[:8],
             "alert_count": len(alerts),
             "daily_digest": {
@@ -3269,11 +3325,15 @@ class RuntimeService:
             run.policy_json = policy
             candidates = resolution.candidates
 
+        input_payload = self._get_execution_input_payload(run)
+        if self._is_wordpress_ai_connector_run(run):
+            input_payload = self._build_wordpress_ai_connector_provider_input(input_payload)
+
         self._execute_candidate_chain(
             run,
             repository=repository,
             candidates=candidates,
-            input_payload=self._get_execution_input_payload(run),
+            input_payload=input_payload,
         )
 
     def _execute_candidate_chain(
@@ -3422,15 +3482,59 @@ class RuntimeService:
                     run=run,
                     provider_call=provider_call,
                 )
+                provider_output = provider_result.output
+                if self._is_wordpress_ai_connector_run(run):
+                    provider_output = self._normalize_wordpress_ai_connector_provider_output(
+                        provider_output,
+                        input_payload=input_payload,
+                    )
+                if self._is_wordpress_ai_connector_image_generation_run(
+                    run,
+                    input_payload=input_payload,
+                ):
+                    try:
+                        provider_output = self._materialize_wordpress_ai_inline_image_output(
+                            provider_output,
+                        )
+                    except InlineImageMaterializationError as error:
+                        repository.mark_run_failed(
+                            run,
+                            error_code=error.error_code,
+                            error_message=error.message,
+                            provider_id=candidate.provider_id,
+                            model_id=candidate.model_id,
+                            instance_id=candidate.instance_id,
+                            fallback_used=fallback_used,
+                        )
+                        return
+                if self._is_audio_generation_run(run):
+                    try:
+                        provider_output = self._materialize_audio_generation_output(
+                            run,
+                            repository=repository,
+                            provider_output=provider_output,
+                        )
+                    except AudioArtifactMaterializationError as error:
+                        repository.mark_run_failed(
+                            run,
+                            error_code=error.error_code,
+                            error_message=error.message,
+                            provider_id=candidate.provider_id,
+                            model_id=candidate.model_id,
+                            instance_id=candidate.instance_id,
+                            fallback_used=fallback_used,
+                        )
+                        return
+
                 storage_mode = self._get_storage_mode(
                     run.policy_json if isinstance(run.policy_json, dict) else {}
                 )
                 prepared_result = self._prepare_result_for_storage(
-                    provider_result.output,
+                    provider_output,
                     storage_mode=storage_mode,
                 )
                 if storage_mode == RUNTIME_STORAGE_MODE_NO_STORE:
-                    _set_transient_result_json(run, provider_result.output)
+                    _set_transient_result_json(run, provider_output)
                 automatic_web_search = policy.get("automatic_web_search")
                 if isinstance(automatic_web_search, dict):
                     prepared_result = dict(prepared_result)
@@ -5331,6 +5435,9 @@ class RuntimeService:
     def _is_image_generation_request(self, request: RuntimeRequest) -> bool:
         return request.ability_name in IMAGE_GENERATION_ABILITIES
 
+    def _is_audio_generation_request(self, request: RuntimeRequest) -> bool:
+        return request.ability_name in AUDIO_GENERATION_ABILITIES
+
     def _is_media_batch_plan_request(self, request: RuntimeRequest) -> bool:
         return request.ability_name in MEDIA_BATCH_PLAN_ABILITIES
 
@@ -5349,11 +5456,59 @@ class RuntimeService:
     def _is_web_search_request(self, request: RuntimeRequest) -> bool:
         return request.ability_name in WEB_SEARCH_ABILITIES
 
+    def _is_wordpress_ai_connector_request(self, request: RuntimeRequest) -> bool:
+        return request.ability_name in WP_AI_CONNECTOR_ABILITIES
+
+    def _is_wordpress_ai_connector_managed_request(self, request: RuntimeRequest) -> bool:
+        if self._is_wordpress_ai_connector_request(request):
+            return True
+        input_payload = request.input_payload if isinstance(request.input_payload, dict) else {}
+        return (
+            self._is_image_generation_request(request)
+            and request.channel == "wordpress_ai_connector"
+            and str(input_payload.get("source_surface") or "") == "wordpress_ai_connector"
+            and str(input_payload.get("connector_id") or "") == "npcink-cloud"
+            and str(input_payload.get("task") or "") == "image_generation"
+        )
+
     def _is_image_source_run(self, run: RunRecord) -> bool:
         return str(run.ability_name or "") in IMAGE_SOURCE_ABILITIES
 
     def _is_image_generation_run(self, run: RunRecord) -> bool:
         return str(run.ability_name or "") in IMAGE_GENERATION_ABILITIES
+
+    def _is_audio_generation_run(self, run: RunRecord) -> bool:
+        return str(run.ability_name or "") in AUDIO_GENERATION_ABILITIES
+
+    def _materialize_audio_generation_output(
+        self,
+        run: RunRecord,
+        *,
+        repository: RuntimeRepository,
+        provider_output: dict[str, Any],
+    ) -> dict[str, Any]:
+        return materialize_audio_generation_candidates(
+            session=repository.session,
+            run=run,
+            result_json=provider_output,
+            config=AudioArtifactMaterializationConfig(
+                ttl_minutes=max(1, int(self.settings.audio_generation_artifact_ttl_minutes)),
+                max_bytes=max(1, int(self.settings.audio_generation_artifact_max_bytes)),
+                timeout_seconds=max(
+                    0.001,
+                    float(self.settings.audio_generation_artifact_download_timeout_seconds),
+                ),
+            ),
+        )
+
+    def _materialize_wordpress_ai_inline_image_output(
+        self,
+        provider_output: dict[str, Any],
+    ) -> dict[str, Any]:
+        return materialize_inline_image_candidates_from_urls(
+            provider_output,
+            config=InlineImageMaterializationConfig(),
+        )
 
     def _is_media_batch_plan_run(self, run: RunRecord) -> bool:
         return str(run.ability_name or "") in MEDIA_BATCH_PLAN_ABILITIES
@@ -5369,6 +5524,366 @@ class RuntimeService:
 
     def _is_web_search_run(self, run: RunRecord) -> bool:
         return str(run.ability_name or "") in WEB_SEARCH_ABILITIES
+
+    def _is_wordpress_ai_connector_run(self, run: RunRecord) -> bool:
+        return str(run.ability_name or "") in WP_AI_CONNECTOR_ABILITIES
+
+    def _is_wordpress_ai_connector_image_generation_run(
+        self,
+        run: RunRecord,
+        *,
+        input_payload: dict[str, Any],
+    ) -> bool:
+        return (
+            self._is_image_generation_run(run)
+            and str(run.channel or "") == "wordpress_ai_connector"
+            and str(input_payload.get("source_surface") or "") == "wordpress_ai_connector"
+            and str(input_payload.get("connector_id") or "") == "npcink-cloud"
+            and str(input_payload.get("task") or "") == "image_generation"
+            and str(input_payload.get("response_format") or "") == "b64_json"
+        )
+
+    def _build_wordpress_ai_connector_provider_input(
+        self,
+        input_payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        scene_request = input_payload.get("request")
+        scene_request = scene_request if isinstance(scene_request, dict) else {}
+        task = str(input_payload.get("task") or "").strip()
+        prompt = str(scene_request.get("prompt") or input_payload.get("prompt") or "").strip()
+        system_instruction = str(scene_request.get("system_instruction") or "").strip()
+
+        task_instruction = {
+            "alt_text_suggest": "Generate concise image alt text. Return only the alt text.",
+            "comment_moderation": (
+                "Classify the comment moderation outcome. Return strict JSON only. "
+                "No markdown."
+            ),
+            "comment_reply_suggest": "Draft a concise comment reply. Return only the reply text.",
+            "content_classification": (
+                'Classify the content. Return strict JSON only: {"suggestions":'
+                '[{"term":"...","confidence":0.8,"is_new":false}]}. No markdown.'
+            ),
+            "content_rewrite": (
+                "Rewrite the content as requested. Return only the rewritten content."
+            ),
+            "content_summary": "Summarize the content. Return only the summary.",
+            "excerpt_generation": "Generate a concise excerpt. Return only the excerpt.",
+            "meta_description": (
+                "Generate one SEO meta description, 120 to 155 characters. Return "
+                "only the description."
+            ),
+            "title_generation": "Generate exactly one concise title. Return only the title text.",
+        }.get(task, "Return only the requested suggestion. Do not explain.")
+
+        fragments = [task_instruction]
+        fragments.append(
+            "Use the same language as the scene input unless a WordPress ability "
+            "instruction explicitly asks for another language."
+        )
+        if system_instruction:
+            fragments.append(system_instruction)
+        if prompt:
+            fragments.append(f"Scene input:\n{prompt}")
+        fragments.append("Do not mention this instruction. Do not explain your answer.")
+
+        provider_input: dict[str, Any] = {
+            "input": "\n\n".join(fragments),
+            "text": prompt,
+            "metadata": {
+                "source_surface": "wordpress_ai_connector",
+                "task": task,
+                "suggestion_only": True,
+            },
+        }
+
+        default_max_tokens = {
+            "alt_text_suggest": 48,
+            "comment_moderation": 120,
+            "comment_reply_suggest": 180,
+            "content_classification": 220,
+            "content_rewrite": 512,
+            "content_summary": 160,
+            "excerpt_generation": 140,
+            "meta_description": 80,
+            "title_generation": 48,
+        }.get(task, 160)
+
+        max_tokens = self._coerce_int(scene_request.get("max_tokens"), default=0)
+        if max_tokens <= 0:
+            max_tokens = default_max_tokens
+        if max_tokens > 0:
+            provider_input["max_tokens"] = max_tokens
+            provider_input["max_output_tokens"] = max_tokens
+
+        temperature = scene_request.get("temperature")
+        if isinstance(temperature, (int, float)):
+            provider_input["temperature"] = float(temperature)
+
+        return provider_input
+
+    def _normalize_wordpress_ai_connector_provider_output(
+        self,
+        output: dict[str, Any],
+        *,
+        input_payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        metadata = input_payload.get("metadata")
+        metadata = metadata if isinstance(metadata, dict) else {}
+        task = str(metadata.get("task") or "").strip()
+        output_text = self._extract_provider_output_text(output)
+        if not output_text:
+            return output
+
+        normalized_text = ""
+        if task == "meta_description":
+            normalized_text = self._normalize_wordpress_ai_meta_description(
+                output_text,
+                source_text=str(input_payload.get("text") or ""),
+            )
+        elif task == "content_classification":
+            normalized_text = self._normalize_wordpress_ai_classification_output(
+                output_text,
+                source_text=str(input_payload.get("text") or ""),
+            )
+        elif task in ("title_generation", "excerpt_generation", "content_summary"):
+            normalized_text = self._normalize_wordpress_ai_plain_text_output(
+                output_text,
+                limit={
+                    "title_generation": 80,
+                    "excerpt_generation": 180,
+                    "content_summary": 220,
+                }[task],
+                strip_explanation=task == "title_generation",
+            )
+
+        if not normalized_text:
+            return output
+
+        normalized = dict(output)
+        normalized["output_text"] = normalized_text
+        normalized["messages"] = [{"role": "assistant", "content": normalized_text}]
+        return normalized
+
+    def _extract_provider_output_text(self, output: dict[str, Any]) -> str:
+        for key in ("output_text", "text", "content"):
+            value = output.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+
+        choices = output.get("choices")
+        if isinstance(choices, list) and choices:
+            choice = choices[0]
+            if isinstance(choice, dict):
+                text = choice.get("text")
+                if isinstance(text, str) and text.strip():
+                    return text.strip()
+                message = choice.get("message")
+                if isinstance(message, dict):
+                    content = message.get("content")
+                    if isinstance(content, str) and content.strip():
+                        return content.strip()
+
+        return ""
+
+    def _normalize_wordpress_ai_meta_description(
+        self,
+        output_text: str,
+        *,
+        source_text: str = "",
+    ) -> str:
+        text = self._strip_wordpress_ai_markdown(output_text)
+        text = re.split(r"\s+#{1,6}\s+", text, maxsplit=1)[0].strip()
+        if ":" in text[:64] and len(text.split(":", 1)[1].strip()) >= 40:
+            text = text.split(":", 1)[1].strip()
+        if self._is_latin_heavy(text):
+            cjk_fallback = self._extract_wordpress_ai_cjk_text(source_text, limit=155)
+            if cjk_fallback:
+                return cjk_fallback
+        return self._truncate_wordpress_ai_text(text, limit=155)
+
+    def _normalize_wordpress_ai_plain_text_output(
+        self,
+        output_text: str,
+        *,
+        limit: int,
+        strip_explanation: bool = False,
+    ) -> str:
+        text = self._strip_wordpress_ai_markdown(output_text)
+        if strip_explanation:
+            text = re.split(
+                r"\s+(?:说明|解释|理由|Explanation|Reasoning)\s*[:：]",
+                text,
+                maxsplit=1,
+            )[0].strip()
+        return self._trim_incomplete_wordpress_ai_tail(
+            self._truncate_wordpress_ai_text(text, limit=limit)
+        )
+
+    def _normalize_wordpress_ai_classification_output(
+        self,
+        output_text: str,
+        *,
+        source_text: str = "",
+    ) -> str:
+        parsed = self._parse_wordpress_ai_classification_json(output_text)
+        if parsed is None:
+            parsed = {
+                "suggestions": [
+                    {
+                        "term": term,
+                        "confidence": 0.6,
+                        "is_new": True,
+                    }
+                    for term in self._extract_wordpress_ai_classification_terms(
+                        output_text,
+                        source_text=source_text,
+                    )
+                ]
+            }
+        return json.dumps(parsed, ensure_ascii=False, separators=(",", ":"))
+
+    def _parse_wordpress_ai_classification_json(
+        self,
+        output_text: str,
+    ) -> dict[str, Any] | None:
+        candidates = [output_text.strip()]
+        fenced = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", output_text, flags=re.S)
+        if fenced:
+            candidates.insert(0, fenced.group(1).strip())
+
+        for candidate in candidates:
+            try:
+                parsed = json.loads(candidate)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(parsed, dict) and isinstance(parsed.get("suggestions"), list):
+                return {
+                    "suggestions": self._sanitize_wordpress_ai_classification_suggestions(
+                        parsed.get("suggestions")
+                    )
+                }
+
+        return None
+
+    def _sanitize_wordpress_ai_classification_suggestions(
+        self,
+        suggestions: Any,
+    ) -> list[dict[str, Any]]:
+        sanitized: list[dict[str, Any]] = []
+        if not isinstance(suggestions, list):
+            return sanitized
+        for suggestion in suggestions:
+            if not isinstance(suggestion, dict):
+                continue
+            term = str(suggestion.get("term") or "").strip()
+            if not term:
+                continue
+            confidence = suggestion.get("confidence")
+            confidence = float(confidence) if isinstance(confidence, (int, float)) else 0.6
+            confidence = max(0.0, min(1.0, confidence))
+            sanitized.append(
+                {
+                    "term": self._truncate_wordpress_ai_text(term, limit=48),
+                    "confidence": confidence,
+                    "is_new": bool(suggestion.get("is_new", True)),
+                }
+            )
+            if len(sanitized) >= 5:
+                break
+        return sanitized
+
+    def _extract_wordpress_ai_classification_terms(
+        self,
+        output_text: str,
+        *,
+        source_text: str = "",
+    ) -> list[str]:
+        terms: list[str] = []
+        for text in (source_text, output_text):
+            for match in re.finditer(
+                r"\b(?:Npcink|WordPress|Cloud|Addon|API|AI|SEO)"
+                r"(?:\s+(?:Npcink|WordPress|Cloud|Addon|API|AI|SEO)){0,3}\b",
+                text,
+            ):
+                term = self._truncate_wordpress_ai_text(match.group(0), limit=48)
+                if 2 <= len(term) <= 48 and term not in terms:
+                    terms.append(term)
+                if len(terms) >= 3:
+                    return terms
+
+        for phrase in (
+            "云端运行时",
+            "内容分类",
+            "建议式输出",
+            "通用聊天入口",
+            "标题生成",
+            "SEO 描述",
+        ):
+            if phrase in source_text and phrase not in terms:
+                terms.append(phrase)
+            if len(terms) >= 3:
+                return terms
+
+        text = output_text.strip()
+        text = re.sub(r"^```(?:json|text|markdown)?\s*", "", text, flags=re.I)
+        text = re.sub(r"\s*```$", "", text)
+        text = re.sub(r"[*_`]+", "", text)
+        parts = re.split(r"[\n,，;；、|]+", text)
+        for part in parts:
+            term = re.sub(r"^\s*[-*\d.)、]+", "", part).strip()
+            term = re.sub(r"^(term|tag|category|标签|分类)\s*[:：]\s*", "", term, flags=re.I)
+            term = self._truncate_wordpress_ai_text(term, limit=48)
+            if 2 <= len(term) <= 48 and term not in terms:
+                terms.append(term)
+            if len(terms) >= 3:
+                break
+        return terms
+
+    def _strip_wordpress_ai_markdown(self, output_text: str) -> str:
+        text = output_text.strip()
+        text = re.sub(r"^```(?:json|text|markdown)?\s*", "", text, flags=re.I)
+        text = re.sub(r"\s*```$", "", text)
+        text = re.sub(r"(?m)^\s*#{1,6}\s*", "", text)
+        text = re.sub(r"[*_`]+", "", text)
+        text = re.sub(r"\s+", " ", text)
+        return text.strip()
+
+    def _is_latin_heavy(self, text: str) -> bool:
+        cjk_count = len(re.findall(r"[\u4e00-\u9fff]", text))
+        latin_count = len(re.findall(r"[A-Za-z]", text))
+        return latin_count > max(24, cjk_count * 2)
+
+    def _extract_wordpress_ai_cjk_text(self, source_text: str, *, limit: int) -> str:
+        fragments = re.findall(
+            r"[\u4e00-\u9fff][\u4e00-\u9fffA-Za-z0-9，。！？、：；（）《》“”\"'\\s-]{16,}",
+            source_text,
+        )
+        if not fragments:
+            return ""
+        text = max((fragment.strip() for fragment in fragments), key=len)
+        text = re.sub(r"\s+", "", text)
+        return self._truncate_wordpress_ai_text(text, limit=limit)
+
+    def _trim_incomplete_wordpress_ai_tail(self, text: str) -> str:
+        return re.sub(r"\s+\d+[.)、]?$", "", text).strip()
+
+    def _truncate_wordpress_ai_text(self, text: str, *, limit: int) -> str:
+        text = text.strip()
+        if len(text) <= limit:
+            return text
+        candidate = text[:limit].rstrip()
+        punctuation_index = max(
+            candidate.rfind("。"),
+            candidate.rfind("！"),
+            candidate.rfind("？"),
+            candidate.rfind("."),
+            candidate.rfind("!"),
+            candidate.rfind("?"),
+        )
+        if punctuation_index >= 80:
+            return candidate[: punctuation_index + 1].strip()
+        return candidate[: max(0, limit - 3)].rstrip("，,；;：:、 ") + "..."
 
     def _validate_site_knowledge_contract(self, request: RuntimeRequest) -> None:
         try:
@@ -5510,6 +6025,41 @@ class RuntimeService:
             raise RuntimeExecutionContractError(
                 "image_source.inline_required",
                 "image source currently supports inline-compatible execution only",
+            )
+        if request.timeout_seconds > RUNTIME_MAX_TIMEOUT_SECONDS:
+            raise RuntimeExecutionContractError(
+                "runtime.contract_timeout_exceeded",
+                f"timeout_seconds exceeds max allowed value {RUNTIME_MAX_TIMEOUT_SECONDS}",
+            )
+        if request.retry_max > RUNTIME_MAX_RETRY_MAX:
+            raise RuntimeExecutionContractError(
+                "runtime.contract_retry_exceeded",
+                f"retry_max exceeds max allowed value {RUNTIME_MAX_RETRY_MAX}",
+            )
+        if request.retention_ttl > RUNTIME_MAX_RETENTION_TTL:
+            raise RuntimeExecutionContractError(
+                "runtime.contract_retention_exceeded",
+                f"retention_ttl exceeds max allowed value {RUNTIME_MAX_RETENTION_TTL}",
+            )
+
+    def _validate_audio_generation_contract(self, request: RuntimeRequest) -> None:
+        try:
+            validate_audio_generation_runtime_contract(
+                ability_name=request.ability_name,
+                contract_version=request.contract_version,
+                input_payload=request.input_payload,
+            )
+        except AudioGenerationContractViolation as error:
+            raise RuntimeExecutionContractError(error.error_code, error.message) from error
+        if request.ability_name not in AUDIO_GENERATION_ABILITIES:
+            raise RuntimeExecutionContractError(
+                "audio_generation.unknown_ability",
+                "audio generation ability_name is not supported",
+            )
+        if request.execution_pattern not in {"inline", "whole_run_offload"}:
+            raise RuntimeExecutionContractError(
+                "audio_generation.execution_pattern_invalid",
+                "audio generation supports inline or whole_run_offload execution",
             )
         if request.timeout_seconds > RUNTIME_MAX_TIMEOUT_SECONDS:
             raise RuntimeExecutionContractError(
@@ -5754,6 +6304,37 @@ class RuntimeService:
             "direct_wordpress_write": False,
         }
         return policy
+
+    def _validate_wordpress_ai_connector_contract(self, request: RuntimeRequest) -> None:
+        try:
+            validate_wordpress_ai_connector_runtime_contract(
+                ability_name=request.ability_name,
+                contract_version=request.contract_version,
+                input_payload=request.input_payload,
+            )
+        except WordPressAIConnectorContractViolation as error:
+            raise RuntimeExecutionContractError(error.error_code, error.message) from error
+        if request.execution_pattern != "inline":
+            raise RuntimeExecutionContractError(
+                "wp_ai_connector.inline_required",
+                "WordPress AI connector currently supports inline execution only",
+            )
+        if request.timeout_seconds > WP_AI_CONNECTOR_MAX_TIMEOUT_SECONDS:
+            raise RuntimeExecutionContractError(
+                "wp_ai_connector.timeout_exceeded",
+                "WordPress AI connector timeout_seconds exceeds max allowed value "
+                f"{WP_AI_CONNECTOR_MAX_TIMEOUT_SECONDS}",
+            )
+        if request.retry_max > 1:
+            raise RuntimeExecutionContractError(
+                "wp_ai_connector.retry_exceeded",
+                "WordPress AI connector retry_max exceeds max allowed value 1",
+            )
+        if request.retention_ttl > 86400:
+            raise RuntimeExecutionContractError(
+                "wp_ai_connector.retention_exceeded",
+                "WordPress AI connector retention_ttl exceeds max allowed value 86400",
+            )
 
     def _validate_web_search_contract(self, request: RuntimeRequest) -> None:
         try:
@@ -6163,6 +6744,49 @@ class RuntimeService:
             policy.pop("callback_url", None)
         return policy
 
+    def _apply_wordpress_ai_connector_managed_policy(
+        self,
+        merged_policy: dict[str, object],
+        *,
+        default_policy: dict[str, object],
+        profile_id: str,
+    ) -> dict[str, object]:
+        if default_policy.get("managed_surface") != "wordpress_ai_connector":
+            return merged_policy
+
+        policy = dict(merged_policy)
+        spec = resolve_wordpress_ai_connector_profile_spec(profile_id)
+        timeout_ms = max(1, self._coerce_int(default_policy.get("timeout_ms"), default=30_000))
+        timeout_seconds = max(1, int((timeout_ms + 999) / 1000))
+        max_retries = max(0, self._coerce_int(default_policy.get("max_retries"), default=0))
+        task_group = str(default_policy.get("task_group") or (spec.group_id if spec else ""))
+        routing_intent = str(
+            default_policy.get("routing_intent") or (spec.routing_intent if spec else "")
+        )
+        policy["timeout_ms"] = timeout_ms
+        policy["timeout_seconds"] = timeout_seconds
+        policy["max_retries"] = max_retries
+        policy["retry_max"] = max_retries
+        policy["allow_fallback"] = bool(default_policy.get("allow_fallback", True))
+        policy["managed_surface"] = "wordpress_ai_connector"
+        if task_group:
+            policy["task_group"] = task_group
+        if routing_intent:
+            policy["routing_intent"] = routing_intent
+
+        execution_contract = policy.get("execution_contract")
+        if isinstance(execution_contract, dict):
+            execution_contract = dict(execution_contract)
+            execution_contract["timeout_seconds"] = timeout_seconds
+            execution_contract["retry_max"] = max_retries
+            execution_contract["managed_surface"] = "wordpress_ai_connector"
+            if task_group:
+                execution_contract["task_group"] = task_group
+            if routing_intent:
+                execution_contract["routing_intent"] = routing_intent
+            policy["execution_contract"] = execution_contract
+        return policy
+
     def _apply_routing_snapshot(
         self,
         merged_policy: dict[str, object],
@@ -6174,6 +6798,29 @@ class RuntimeService:
             self._serialize_routing_candidate(candidate) for candidate in resolution.candidates
         ]
         return policy
+
+    def _prefer_routing_candidate(
+        self,
+        resolution: RoutingResolution,
+        policy: dict[str, object],
+    ) -> RoutingResolution:
+        preferred_instance_id = str(policy.get("preferred_instance_id") or "").strip()
+        if not preferred_instance_id:
+            return resolution
+        candidates = list(resolution.candidates)
+        preferred = [
+            candidate
+            for candidate in candidates
+            if candidate.instance_id == preferred_instance_id
+        ]
+        if not preferred:
+            return resolution
+        resolution.candidates = preferred + [
+            candidate
+            for candidate in candidates
+            if candidate.instance_id != preferred_instance_id
+        ]
+        return resolution
 
     def _apply_commercial_policy_overrides(
         self,

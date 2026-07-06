@@ -44,7 +44,6 @@ class Settings(BaseSettings):
     router_diagnostics_interval_seconds: int = Field(default=900)
     latency_probe_interval_seconds: int = Field(default=900)
     alert_provider_degradation_interval_seconds: int = Field(default=900)
-    hosted_model_governance_interval_seconds: int = Field(default=3600)
     provider_health_scan_interval_seconds: int = Field(default=900)
     media_derivative_max_body_bytes: int = Field(default=51 * 1024 * 1024)
     media_derivative_batch_default_chunk_size: int = Field(default=10)
@@ -64,8 +63,6 @@ class Settings(BaseSettings):
     alert_worker_min_requests: int = Field(default=20)
     alert_worker_error_rate_threshold: float = Field(default=0.25)
     alert_worker_latency_ms_threshold: int = Field(default=20000)
-    hosted_model_governance_worker_recent_minutes: int = Field(default=1440)
-    hosted_model_governance_worker_limit: int = Field(default=25)
     auth_timestamp_tolerance_seconds: int = Field(default=300)
     public_post_rate_limit_window_seconds: int = Field(default=60)
     public_post_max_requests_per_window: int = Field(default=120)
@@ -108,38 +105,23 @@ class Settings(BaseSettings):
             "NPCINK_CLOUD_OPS_SESSION_TTL_SECONDS",
         ),
     )
-    admin_bootstrap_admin_ref: str = Field(
+    admin_bootstrap_principal_id: str = Field(
         default="platform:internal_root",
-        validation_alias=AliasChoices(
-            "NPCINK_CLOUD_ADMIN_BOOTSTRAP_ADMIN_REF",
-            "NPCINK_CLOUD_OPS_BOOTSTRAP_ADMIN_REF",
-        ),
+        validation_alias="NPCINK_CLOUD_ADMIN_BOOTSTRAP_PRINCIPAL_ID",
     )
-    admin_bootstrap_admin_role: str = Field(
+    admin_bootstrap_platform_admin_role: str = Field(
         default=PLATFORM_ADMIN_ROLE_PLATFORM_ADMIN,
-        validation_alias=AliasChoices(
-            "NPCINK_CLOUD_ADMIN_BOOTSTRAP_ADMIN_ROLE",
-            "NPCINK_CLOUD_OPS_BOOTSTRAP_ADMIN_ROLE",
-        ),
+        validation_alias="NPCINK_CLOUD_ADMIN_BOOTSTRAP_PLATFORM_ADMIN_ROLE",
     )
     portal_jwt_secret: str | None = Field(default=None)
     portal_jwt_algorithm: str = Field(default="HS256")
     portal_jwt_issuer: str | None = Field(default=None)
     portal_jwt_audience: str | None = Field(default=None)
     portal_session_ttl_seconds: int = Field(default=8 * 60 * 60)
+    portal_remember_me_session_ttl_seconds: int = Field(default=7 * 24 * 60 * 60)
     portal_login_code_ttl_seconds: int = Field(default=10 * 60)
     portal_login_code_max_attempts: int = Field(default=5)
-    portal_public_base_url: str | None = Field(default=None)
-    portal_email_smtp_host: str | None = Field(default=None)
-    portal_email_smtp_port: int = Field(default=465)
-    portal_email_smtp_username: str | None = Field(default=None)
-    portal_email_smtp_password: str | None = Field(default=None)
-    portal_email_smtp_use_ssl: bool = Field(default=True)
-    portal_email_smtp_use_starttls: bool = Field(default=False)
-    portal_email_smtp_timeout_seconds: float = Field(default=20.0)
-    portal_email_from_email: str | None = Field(default=None)
-    portal_email_from_name: str | None = Field(default=None)
-    portal_email_reply_to: str | None = Field(default=None)
+    portal_oauth_state_ttl_seconds: int = Field(default=10 * 60)
     otel_service_name: str = Field(default="npcink-ai-cloud")
     otel_exporter_otlp_endpoint: str | None = Field(default=None)
     otel_trace_sink_otlp_endpoint: str | None = Field(default=None)
@@ -189,6 +171,19 @@ class Settings(BaseSettings):
             "NPCINK_CLOUD_OPENAI_COMPATIBLE_PROVIDER_LABEL",
         ),
     )
+    minimax_provider_enabled: bool = Field(default=False)
+    minimax_base_url: str = Field(default="https://api.minimaxi.com")
+    minimax_api_key: str | None = Field(default=None)
+    minimax_group_id: str | None = Field(default=None)
+    minimax_timeout_seconds: float = Field(default=30.0)
+    minimax_default_voice_id: str = Field(default="male-qn-qingse")
+    minimax_admin_env_path: str = Field(default=".env.local")
+    audio_generation_artifact_ttl_minutes: int = Field(default=60)
+    audio_generation_artifact_max_bytes: int = Field(default=24 * 1024 * 1024)
+    audio_generation_artifact_download_timeout_seconds: float = Field(default=20.0)
+    audio_asset_playback_url_ttl_seconds: int = Field(default=15 * 60)
+    audio_asset_playback_url_max_ttl_seconds: int = Field(default=60 * 60)
+    audio_asset_playback_token_secret: str | None = Field(default=None)
     litellm_provider_enabled: bool = Field(default=False)
     litellm_base_url: str | None = Field(default=None)
     litellm_api_key: str | None = Field(default=None)
@@ -342,20 +337,14 @@ class Settings(BaseSettings):
     def explicit_browser_origins(self) -> set[str]:
         origins = {
             self._normalize_origin(item)
-            for item in (
-                *str(self.browser_origin_allowlist or "").split(","),
-                str(self.portal_public_base_url or ""),
-            )
+            for item in str(self.browser_origin_allowlist or "").split(",")
         }
         return {origin for origin in origins if origin}
 
     def trusted_hosts(self) -> set[str]:
         hosts = {
             self._normalize_host(item)
-            for item in (
-                *str(self.trusted_host_allowlist or "").split(","),
-                str(self.portal_public_base_url or ""),
-            )
+            for item in str(self.trusted_host_allowlist or "").split(",")
         }
         hosts = {host for host in hosts if host}
         environment = str(self.environment or "").strip().lower()
@@ -425,30 +414,18 @@ class Settings(BaseSettings):
                 "admin_bootstrap_token must differ from internal_auth_token outside "
                 "development/test environments"
             )
-        if production_like and not str(self.portal_public_base_url or "").strip():
-            raise ValueError(
-                "portal_public_base_url is required outside development/test environments"
-            )
         if production_like and not str(self.portal_jwt_secret or "").strip():
             raise ValueError("portal_jwt_secret is required outside development/test environments")
-        if production_like and not str(self.portal_email_smtp_host or "").strip():
-            raise ValueError(
-                "portal_email_smtp_host is required outside development/test environments"
-            )
-        if production_like and not str(self.portal_email_from_email or "").strip():
-            raise ValueError(
-                "portal_email_from_email is required outside development/test environments"
-            )
         if production_like and not self.explicit_browser_origins():
             raise ValueError(
-                "browser_origin_allowlist or portal_public_base_url is required outside "
-                "development/test environments"
+                "browser_origin_allowlist is required outside development/test environments"
             )
         if production_like and not self.trusted_hosts():
             raise ValueError(
-                "trusted_host_allowlist or portal_public_base_url is required outside "
-                "development/test environments"
+                "trusted_host_allowlist is required outside development/test environments"
             )
+        if self.portal_oauth_state_ttl_seconds < 60:
+            raise ValueError("portal_oauth_state_ttl_seconds must be at least 60")
         if self.ops_cadence_poll_seconds < 5:
             raise ValueError("ops_cadence_poll_seconds must be at least 5")
         if self.runtime_callback_worker_poll_seconds < 1:
@@ -487,8 +464,6 @@ class Settings(BaseSettings):
             raise ValueError("latency_probe_interval_seconds must be at least 60")
         if self.alert_provider_degradation_interval_seconds < 60:
             raise ValueError("alert_provider_degradation_interval_seconds must be at least 60")
-        if self.hosted_model_governance_interval_seconds < 60:
-            raise ValueError("hosted_model_governance_interval_seconds must be at least 60")
         if self.provider_health_scan_interval_seconds < 60:
             raise ValueError("provider_health_scan_interval_seconds must be at least 60")
         if self.router_performance_worker_window_hours < 1:
@@ -505,12 +480,6 @@ class Settings(BaseSettings):
             raise ValueError("latency_probe_worker_site_limit must be at least 1")
         if self.latency_probe_worker_instance_limit < 1:
             raise ValueError("latency_probe_worker_instance_limit must be at least 1")
-        if not 1 <= self.hosted_model_governance_worker_recent_minutes <= 10080:
-            raise ValueError(
-                "hosted_model_governance_worker_recent_minutes must be between 1 and 10080"
-            )
-        if not 1 <= self.hosted_model_governance_worker_limit <= 100:
-            raise ValueError("hosted_model_governance_worker_limit must be between 1 and 100")
         if not 5 <= self.alert_worker_window_minutes <= 1440:
             raise ValueError("alert_worker_window_minutes must be between 5 and 1440")
         if self.alert_worker_site_limit < 1:

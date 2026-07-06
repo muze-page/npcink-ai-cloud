@@ -230,15 +230,20 @@ class SiteMonitoringOverviewService:
         active_key_count = self._coerce_int(key_state.get("active_key_count"))
         expires_in_days = key_state.get("expires_in_days")
         if active_key_count <= 0:
-            components.append(self._component("api_key", "error", 0, "No active Cloud API key."))
+            components.append(
+                self._component("connection", "error", 0, "No active Cloud connection credential.")
+            )
             actions.append(
                 self._action(
-                    code="site_monitoring.api_key_missing",
+                    code="site_monitoring.connection_credential_missing",
                     severity="error",
-                    source="keys",
-                    title="No active Cloud API key",
+                    source="connection",
+                    title="No active Cloud connection credential",
                     detail="This site cannot reliably send Cloud telemetry or runtime requests.",
-                    suggested_action="Issue or rotate a site API key from the Portal settings.",
+                    suggested_action=(
+                        "Reconnect the site from the WordPress plugin so Cloud can issue "
+                        "a fresh connection credential automatically."
+                    ),
                     sort_weight=10,
                 )
             )
@@ -255,7 +260,7 @@ class SiteMonitoringOverviewService:
                 self._action(
                     code="site_monitoring.api_key_expiring",
                     severity="warning",
-                    source="keys",
+                    source="connection",
                     title="Cloud API key expires soon",
                     detail="A site API key is close to expiry.",
                     suggested_action=(
@@ -335,6 +340,9 @@ class SiteMonitoringOverviewService:
                     detail=str(item.get("detail") or item.get("summary") or ""),
                     suggested_action=str(item.get("suggested_action") or "Open plugin monitoring."),
                     sort_weight=30,
+                    attention_key=str(item.get("attention_key") or ""),
+                    workflow_status=workflow_status,
+                    state=state,
                 )
             )
 
@@ -525,7 +533,7 @@ class SiteMonitoringOverviewService:
             self._action(
                 code="site_monitoring.api_key_stale",
                 severity="warning",
-                source="keys",
+            source="connection",
                 title="Cloud API key has not been used recently",
                 detail=f"Last key usage was {self._format_datetime(last_used_at)}.",
                 suggested_action=(
@@ -611,8 +619,11 @@ class SiteMonitoringOverviewService:
         detail: str,
         suggested_action: str,
         sort_weight: int,
+        attention_key: str = "",
+        workflow_status: str = "active",
+        state: dict[str, Any] | None = None,
     ) -> dict[str, object]:
-        return {
+        action: dict[str, object] = {
             "code": code,
             "severity": severity if severity in {"warning", "error"} else "warning",
             "source": source,
@@ -620,7 +631,13 @@ class SiteMonitoringOverviewService:
             "detail": detail,
             "suggested_action": suggested_action,
             "sort_weight": sort_weight,
+            "workflow_status": workflow_status if workflow_status else "active",
         }
+        if attention_key:
+            action["attention_key"] = attention_key
+        if state:
+            action["state"] = state
+        return action
 
     def _status_from_score(self, score: int) -> str:
         if score < 70:

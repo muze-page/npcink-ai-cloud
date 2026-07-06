@@ -396,6 +396,62 @@ def test_openai_adapter_executes_responses_over_http() -> None:
     assert result.tokens_out == 9
 
 
+def test_openai_adapter_retries_responses_without_unsupported_metadata() -> None:
+    seen_payloads: list[dict[str, object]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path.endswith("/responses")
+        payload = json.loads(request.content.decode("utf-8"))
+        seen_payloads.append(payload)
+        if len(seen_payloads) == 1:
+            assert payload["metadata"] == {"source_surface": "wordpress_ai_connector"}
+            return httpx.Response(
+                400,
+                json={
+                    "error": {
+                        "message": "Unsupported parameter: metadata",
+                        "param": "metadata",
+                        "type": "invalid_request_error",
+                    }
+                },
+            )
+        assert "metadata" not in payload
+        return httpx.Response(
+            200,
+            json={
+                "model": "gpt-5.5",
+                "output": [
+                    {
+                        "type": "message",
+                        "status": "completed",
+                        "content": [{"type": "output_text", "text": "routed title"}],
+                    }
+                ],
+                "usage": {"input_tokens": 12, "output_tokens": 3},
+            },
+        )
+
+    adapter = OpenAIProviderAdapter(
+        api_key="test-api-key",
+        transport=httpx.MockTransport(handler),
+    )
+
+    result = adapter.execute(
+        _build_request(
+            execution_kind="text",
+            endpoint_variant="responses",
+            model_id="gpt-5.5",
+            input_payload={
+                "input": "Generate exactly one concise title.",
+                "metadata": {"source_surface": "wordpress_ai_connector"},
+            },
+        )
+    )
+
+    assert result.output["output_text"] == "routed title"
+    assert len(seen_payloads) == 2
+
+
 def test_openai_adapter_executes_embeddings_over_http() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.path.endswith("/embeddings")

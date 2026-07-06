@@ -8,7 +8,7 @@ import { cn } from '@/lib/utils';
 export function LocaleSwitcher() {
   const { locale, setLocale, t } = useLocale();
   const buttonId = useId();
-  const currentLocale = localeOptions.find((l) => l.value === locale);
+  const currentLocale = localeOptions.find((l) => l.value === locale) ?? localeOptions.find((l) => l.value === 'zh-CN') ?? localeOptions[0];
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
 

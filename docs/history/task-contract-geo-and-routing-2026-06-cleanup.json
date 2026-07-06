@@ -1,0 +1,18 @@
+{
+  "change_classification": "cloud detail",
+  "truth_owner": "local plugin",
+  "final_write_owner": "local plugin",
+  "fail_closed_expectation": "cloud cleanup removes retired surfaces; runtime falls back to existing local/plugin truth",
+  "human_review_required": true,
+  "required_docs": [
+    "docs/cloud-task-pack-boundary-v1.md",
+    "docs/cloud-compliance-security-positioning.md"
+  ],
+  "required_gates": [
+    "pnpm run check:anti-drift",
+    "pnpm run check:perimeter",
+    "pnpm run smoke:local-alpha"
+  ],
+  "historical_note": "Archived from the repository root after the strong-contraction cleanup. The original one-off envelope referenced pnpm run check:risk, but this standalone Cloud repository does not expose that script.",
+  "description": "Strong contraction post-cleanup: remove dead code from backend and frontend after the cloud strong contraction. This PR only removes retired surfaces (PortalActionRequest, PlatformImpersonationSession, OperatorManagedTopupPackOverlay, portal thick features, admin thick features) and does NOT add new APIs, workers, projections, or migrations."
+}

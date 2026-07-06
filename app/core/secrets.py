@@ -97,6 +97,62 @@ def decrypt_site_api_signing_secret(ciphertext: str | None, *, settings: Setting
         raise RuntimeError("site api signing secret could not be decrypted") from error
 
 
+def encrypt_addon_connection_payload(
+    payload: dict[str, object],
+    *,
+    settings: Settings,
+) -> str:
+    encoded = json.dumps(payload, ensure_ascii=True, separators=(",", ":"), sort_keys=True)
+    return (
+        _build_fernet(
+            _resolve_encryption_secret(
+                (
+                    settings.admin_session_secret,
+                    settings.portal_jwt_secret,
+                    settings.internal_auth_token,
+                ),
+                error_message="addon connection payload secret is not configured",
+            ),
+            purpose="wordpress_addon_connection_payload",
+        )
+        .encrypt(encoded.encode("utf-8"))
+        .decode("utf-8")
+    )
+
+
+def decrypt_addon_connection_payload(
+    ciphertext: str | None,
+    *,
+    settings: Settings,
+) -> dict[str, object]:
+    token = str(ciphertext or "").strip()
+    if not token:
+        return {}
+    try:
+        decoded = (
+            _build_fernet(
+                _resolve_encryption_secret(
+                    (
+                        settings.admin_session_secret,
+                        settings.portal_jwt_secret,
+                        settings.internal_auth_token,
+                    ),
+                    error_message="addon connection payload secret is not configured",
+                ),
+                purpose="wordpress_addon_connection_payload",
+            )
+            .decrypt(token.encode("utf-8"))
+            .decode("utf-8")
+        )
+    except InvalidToken as error:
+        raise RuntimeError("addon connection payload could not be decrypted") from error
+    try:
+        payload = json.loads(decoded)
+    except json.JSONDecodeError as error:
+        raise RuntimeError("addon connection payload is not valid json") from error
+    return payload if isinstance(payload, dict) else {}
+
+
 def encrypt_runtime_execution_input(
     input_payload: dict[str, object],
     *,
@@ -134,6 +190,96 @@ def decrypt_runtime_execution_input(
     except json.JSONDecodeError as error:
         raise RuntimeError("runtime execution input is not valid json") from error
     return decoded if isinstance(decoded, dict) else {}
+
+
+def encrypt_provider_connection_secret(secret: str, *, settings: Settings) -> str:
+    normalized = str(secret or "")
+    if not normalized:
+        return ""
+    return (
+        _build_fernet(
+            _resolve_encryption_secret(
+                (
+                    settings.admin_session_secret,
+                    settings.portal_jwt_secret,
+                    settings.internal_auth_token,
+                ),
+                error_message="provider connection secret is not configured",
+            ),
+            purpose="provider_connection_secret",
+        )
+        .encrypt(normalized.encode("utf-8"))
+        .decode("utf-8")
+    )
+
+
+def decrypt_provider_connection_secret(ciphertext: str | None, *, settings: Settings) -> str:
+    token = str(ciphertext or "").strip()
+    if not token:
+        return ""
+    try:
+        return (
+            _build_fernet(
+                _resolve_encryption_secret(
+                    (
+                        settings.admin_session_secret,
+                        settings.portal_jwt_secret,
+                        settings.internal_auth_token,
+                    ),
+                    error_message="provider connection secret is not configured",
+                ),
+                purpose="provider_connection_secret",
+            )
+            .decrypt(token.encode("utf-8"))
+            .decode("utf-8")
+        )
+    except InvalidToken as error:
+        raise RuntimeError("provider connection secret could not be decrypted") from error
+
+
+def encrypt_service_setting_secret(secret: str, *, settings: Settings) -> str:
+    normalized = str(secret or "")
+    if not normalized:
+        return ""
+    return (
+        _build_fernet(
+            _resolve_encryption_secret(
+                (
+                    settings.admin_session_secret,
+                    settings.portal_jwt_secret,
+                    settings.internal_auth_token,
+                ),
+                error_message="service setting secret is not configured",
+            ),
+            purpose="service_setting_secret",
+        )
+        .encrypt(normalized.encode("utf-8"))
+        .decode("utf-8")
+    )
+
+
+def decrypt_service_setting_secret(ciphertext: str | None, *, settings: Settings) -> str:
+    token = str(ciphertext or "").strip()
+    if not token:
+        return ""
+    try:
+        return (
+            _build_fernet(
+                _resolve_encryption_secret(
+                    (
+                        settings.admin_session_secret,
+                        settings.portal_jwt_secret,
+                        settings.internal_auth_token,
+                    ),
+                    error_message="service setting secret is not configured",
+                ),
+                purpose="service_setting_secret",
+            )
+            .decrypt(token.encode("utf-8"))
+            .decode("utf-8")
+        )
+    except InvalidToken as error:
+        raise RuntimeError("service setting secret could not be decrypted") from error
 
 
 def _resolve_encryption_secret(

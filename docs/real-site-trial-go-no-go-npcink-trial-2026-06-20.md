@@ -7,6 +7,9 @@ Purpose: close the `npcink-trial` real-site clone evidence chain and decide the
 next safe step toward proving Npcink AI Cloud as a WordPress hosted AI runtime
 enhancement layer.
 
+Historical ID note: this document records the old Free package IDs
+`plan_free` / `plan_free_v1`; current package records use `free` / `free_v1`.
+
 ## Final Objective
 
 The objective is not to expand the Cloud product surface. The objective is to

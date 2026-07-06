@@ -1,6 +1,5 @@
 'use client';
 
-import Link from 'next/link';
 import {
   BackofficeEmptyState,
   BackofficeMetricStrip,
@@ -94,18 +93,18 @@ export function PortalPluginMonitoringPanel({
     <BackofficeSectionPanel className="space-y-4">
       <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
         <div>
-          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-gray-500 dark:text-gray-400">
-            {t('portal.monitoring.eyebrow', {}, 'Plugin monitoring')}
-          </p>
-          <h2 className="mt-2 text-xl font-semibold text-gray-950 dark:text-white">
-            {t('portal.monitoring.title', {}, 'Installed plugin health')}
-          </h2>
-          <p className="mt-2 max-w-2xl text-sm leading-6 text-gray-600 dark:text-gray-300">
-            {t(
-              'portal.monitoring.desc',
-              {},
-              'Read-only metadata from this WordPress site. Enable and verify Cloud Addon monitoring before events appear here.'
-            )}
+	          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-gray-500 dark:text-gray-400">
+	            {t('portal.monitoring.eyebrow', {}, 'Site connection')}
+	          </p>
+	          <h2 className="mt-2 text-xl font-semibold text-gray-950 dark:text-white">
+	            {t('portal.monitoring.title', {}, 'Site connection status')}
+	          </h2>
+	          <p className="mt-2 max-w-2xl text-sm leading-6 text-gray-600 dark:text-gray-300">
+	            {t(
+	              'portal.monitoring.desc',
+	              {},
+	              'Read-only connection activity from this WordPress site.'
+	            )}
           </p>
         </div>
         <div className="flex flex-wrap gap-2 lg:justify-end">
@@ -113,11 +112,6 @@ export function PortalPluginMonitoringPanel({
             <button type="button" className="btn btn-secondary btn-sm" onClick={onRetry}>
               {t('common.refresh', {}, 'Refresh')}
             </button>
-          ) : null}
-          {compact ? (
-            <Link href={`/portal/monitoring?site=${encodeURIComponent(siteId)}`} className="btn btn-secondary btn-sm">
-              {t('portal.monitoring.open_detail', {}, 'Open detail')}
-            </Link>
           ) : null}
         </div>
       </div>
@@ -131,39 +125,39 @@ export function PortalPluginMonitoringPanel({
           {error}
         </BackofficeStackCard>
       ) : !hasEvents ? (
-        <BackofficeEmptyState
-          title={t('portal.monitoring.empty_title', {}, 'No plugin events yet')}
-          description={t(
-            'portal.monitoring.empty_desc',
-            {},
-            'Install and verify the Cloud Addon, enable monitoring, then refresh this panel after local plugin activity is captured.'
-          )}
-        />
+	        <BackofficeEmptyState
+	          title={t('portal.monitoring.empty_title', {}, 'No connection activity yet')}
+	          description={t(
+	            'portal.monitoring.empty_desc',
+	            {},
+	            'Activity will appear after the site connects and sends service checks.'
+	          )}
+	        />
       ) : (
         <>
           <BackofficeMetricStrip
             columnsClassName="md:grid-cols-4"
             items={[
-              {
-                label: t('portal.monitoring.events', {}, 'Events'),
-                value: formatNumber(Number(totals?.events_total || 0)),
-                detail: `${summary?.window?.hours || 24}h`,
-              },
-              {
-                label: t('portal.monitoring.errors', {}, 'Errors'),
-                value: formatNumber(Number(totals?.error_total || 0)),
-                detail: t('portal.monitoring.error_detail', {}, 'Metadata-only'),
-                toneClassName: Number(totals?.error_total || 0) > 0 ? 'text-amber-700 dark:text-amber-200' : '',
-              },
-              {
-                label: t('portal.monitoring.success_rate', {}, 'Success rate'),
-                value: formatSuccessRate(Number(totals?.success_rate || 0)),
-                detail: t('portal.monitoring.success_detail', {}, 'Non-error events'),
+	              {
+	                label: t('portal.monitoring.events', {}, 'Activity'),
+	                value: formatNumber(Number(totals?.events_total || 0)),
+	                detail: `${summary?.window?.hours || 24}h`,
+	              },
+	              {
+	                label: t('portal.monitoring.errors', {}, 'Issues'),
+	                value: formatNumber(Number(totals?.error_total || 0)),
+	                detail: t('portal.monitoring.error_detail', {}, 'No private content shown'),
+	                toneClassName: Number(totals?.error_total || 0) > 0 ? 'text-amber-700 dark:text-amber-200' : '',
+	              },
+	              {
+	                label: t('portal.monitoring.success_rate', {}, 'OK rate'),
+	                value: formatSuccessRate(Number(totals?.success_rate || 0)),
+	                detail: t('portal.monitoring.success_detail', {}, 'Activity without issues'),
               },
               {
                 label: t('portal.monitoring.last_seen', {}, 'Last seen'),
                 value: totals?.last_seen_at ? formatDate(totals.last_seen_at) : t('common.not_found'),
-                detail: t('portal.monitoring.last_seen_detail', {}, 'Cloud received'),
+                detail: t('portal.monitoring.last_seen_detail', {}, 'Updated'),
               },
             ]}
           />
@@ -173,16 +167,16 @@ export function PortalPluginMonitoringPanel({
               <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
                 <div>
                   <p className="text-xs font-semibold uppercase tracking-[0.16em] text-gray-500 dark:text-gray-400">
-                    {t('portal.monitoring.health_label', {}, 'Health')}
+	                    {t('portal.monitoring.health_label', {}, 'Status')}
                   </p>
                   <h3 className="mt-1 text-sm font-semibold text-slate-950 dark:text-white">
-                    {health?.summary || t('portal.monitoring.health_default', {}, 'Plugin telemetry status')}
+	                    {health?.summary || t('portal.monitoring.health_default', {}, 'Connection status')}
                   </h3>
                 </div>
                 {health ? (
                   <BackofficeStatusBadge
-                    status={health.status}
-                    label={`${health.status} · ${health.score}`}
+	                    status={health.status}
+	                    label={t(`status.${health.status}`, {}, health.status)}
                     className="shrink-0"
                   />
                 ) : null}
@@ -199,11 +193,6 @@ export function PortalPluginMonitoringPanel({
 	                        <BackofficeTag tone={attentionTone(item.severity)}>{item.severity}</BackofficeTag>
 	                      </div>
 	                      <p className="mt-2 text-xs leading-5 text-slate-600 dark:text-slate-300">{item.detail}</p>
-	                      {item.workflow_status && item.workflow_status !== 'active' ? (
-	                        <BackofficeTag tone="info" className="mt-2">
-	                          {item.workflow_status}
-	                        </BackofficeTag>
-	                      ) : null}
 	                      {item.suggested_action ? (
                         <p className="mt-2 text-xs leading-5 text-slate-500 dark:text-slate-400">
                           {item.suggested_action}
@@ -252,14 +241,14 @@ export function PortalPluginMonitoringPanel({
                     {t('portal.monitoring.trend_label', {}, 'Trend')}
                   </p>
                   <h3 className="mt-1 text-sm font-semibold text-slate-950 dark:text-white">
-                    {t('portal.monitoring.trend_title', {}, 'Events and errors')}
+	                    {t('portal.monitoring.trend_title', {}, 'Activity and issues')}
                   </h3>
                 </div>
                 <AnalyticsLineChart
                   data={timelineData}
                   height={220}
-                  primarySeriesName={t('portal.monitoring.events', {}, 'Events')}
-                  secondarySeriesName={t('portal.monitoring.errors', {}, 'Errors')}
+	                  primarySeriesName={t('portal.monitoring.events', {}, 'Activity')}
+	                  secondarySeriesName={t('portal.monitoring.errors', {}, 'Issues')}
                   primaryColor="#2563eb"
                   secondaryColor="#f59e0b"
                 />
@@ -267,12 +256,12 @@ export function PortalPluginMonitoringPanel({
               <BackofficeStackCard className="space-y-3">
                 <div>
                   <p className="text-xs font-semibold uppercase tracking-[0.16em] text-gray-500 dark:text-gray-400">
-                    {t('portal.monitoring.plugin_compare_label', {}, 'Plugins')}
+	                    {t('portal.monitoring.plugin_compare_label', {}, 'Connection parts')}
                   </p>
                   <h3 className="mt-1 text-sm font-semibold text-slate-950 dark:text-white">
                     {hasPluginErrors
-                      ? t('portal.monitoring.plugin_errors_title', {}, 'Error pressure')
-                      : t('portal.monitoring.plugin_volume_title', {}, 'Event volume')}
+	                      ? t('portal.monitoring.plugin_errors_title', {}, 'Issue count')
+	                      : t('portal.monitoring.plugin_volume_title', {}, 'Activity volume')}
                   </h3>
                 </div>
                 <AnalyticsBarChart
@@ -289,12 +278,9 @@ export function PortalPluginMonitoringPanel({
               <BackofficeStackCard key={plugin.plugin_slug} className="space-y-3">
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
-                    <p className="truncate text-sm font-semibold text-slate-950 dark:text-white">
-                      {pluginLabel(plugin.plugin_slug)}
-                    </p>
-                    <p className="mt-1 truncate text-xs text-slate-500 dark:text-slate-400">
-                      {plugin.plugin_slug}
-                    </p>
+	                    <p className="truncate text-sm font-semibold text-slate-950 dark:text-white">
+	                      {pluginLabel(plugin.plugin_slug)}
+	                    </p>
                   </div>
                   <BackofficeStatusBadge
                     status={successStatus(plugin.success_rate, plugin.error_total)}
@@ -303,25 +289,30 @@ export function PortalPluginMonitoringPanel({
                   />
                 </div>
                 <div className="flex flex-wrap gap-2 text-xs text-slate-600 dark:text-slate-300">
-                  <BackofficeTag>{formatNumber(plugin.events_total)} {t('portal.monitoring.events', {}, 'Events')}</BackofficeTag>
-                  <BackofficeTag tone={plugin.error_total > 0 ? 'warning' : 'success'}>
-                    {formatNumber(plugin.error_total)} {t('portal.monitoring.errors', {}, 'Errors')}
-                  </BackofficeTag>
+	                  <BackofficeTag>{formatNumber(plugin.events_total)} {t('portal.monitoring.events', {}, 'Activity')}</BackofficeTag>
+	                  <BackofficeTag tone={plugin.error_total > 0 ? 'warning' : 'success'}>
+	                    {formatNumber(plugin.error_total)} {t('portal.monitoring.errors', {}, 'Issues')}
+	                  </BackofficeTag>
                   <BackofficeTag>{formatSuccessRate(plugin.success_rate)}</BackofficeTag>
                 </div>
                 {!compact && plugin.event_kinds.length ? (
-                  <div className="space-y-2 border-t border-slate-200/80 pt-3 text-xs dark:border-slate-800">
-                    {plugin.event_kinds.slice(0, 3).map((eventKind) => (
-                      <div key={`${plugin.plugin_slug}-${eventKind.event_kind}`} className="flex items-center justify-between gap-3">
-                        <span className="min-w-0 truncate text-slate-600 dark:text-slate-300">
-                          {eventKind.event_kind}
-                        </span>
-                        <span className="shrink-0 text-slate-500 dark:text-slate-400">
-                          {formatNumber(eventKind.events_total)}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
+                  <details className="border-t border-slate-200/80 pt-3 text-xs dark:border-slate-800">
+                    <summary className="cursor-pointer font-semibold text-slate-500 dark:text-slate-400">
+                      {t('portal.monitoring.support_event_types', {}, 'Support event types')}
+                    </summary>
+                    <div className="mt-2 space-y-2">
+                      {plugin.event_kinds.slice(0, 3).map((eventKind) => (
+                        <div key={`${plugin.plugin_slug}-${eventKind.event_kind}`} className="flex items-center justify-between gap-3">
+                          <span className="min-w-0 truncate text-slate-600 dark:text-slate-300">
+                            {eventKind.event_kind}
+                          </span>
+                          <span className="shrink-0 text-slate-500 dark:text-slate-400">
+                            {formatNumber(eventKind.events_total)}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </details>
                 ) : null}
               </BackofficeStackCard>
             ))}
@@ -331,19 +322,19 @@ export function PortalPluginMonitoringPanel({
             <BackofficeStackCard className="space-y-3">
               <div>
                 <p className="text-sm font-semibold text-slate-950 dark:text-white">
-                  {t('portal.monitoring.recent_errors', {}, 'Recent errors')}
+	                  {t('portal.monitoring.recent_errors', {}, 'Recent issues')}
                 </p>
                 <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                  {t('portal.monitoring.recent_errors_desc', {}, 'Payloads, prompts, content, secrets, and raw requests are not shown.')}
+	                  {t('portal.monitoring.recent_errors_desc', {}, 'Private content and raw requests are not shown.')}
                 </p>
               </div>
               <div className="divide-y divide-slate-200/80 dark:divide-slate-800">
                 {recentErrors.slice(0, 5).map((item, index) => (
                   <div key={`${item.plugin_slug}-${item.event_kind}-${item.received_at}-${index}`} className="grid gap-2 py-3 text-sm lg:grid-cols-[160px_minmax(0,1fr)_180px] lg:items-center">
                     <span className="font-medium text-slate-900 dark:text-slate-100">{pluginLabel(item.plugin_slug)}</span>
-                    <span className="min-w-0 truncate text-slate-600 dark:text-slate-300">
-                      {item.error_code || item.event_kind}
-                    </span>
+	                    <span className="min-w-0 truncate text-slate-600 dark:text-slate-300">
+	                      {t('portal.monitoring.recent_issue_item', {}, 'Connection issue')}
+	                    </span>
                     <span className="text-xs text-slate-500 dark:text-slate-400 lg:text-right">
                       {formatDate(item.received_at)}
                     </span>

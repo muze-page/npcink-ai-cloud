@@ -45,6 +45,7 @@ AI_CREDIT_BREAKDOWN_ORDER = (
     "zhihu_direct_answer_deep",
     "zhihu_direct_answer_deepsearch",
     "image_recommendation",
+    "audio_generation",
     "provider_calls_other",
     "vector_documents",
     "vector_chunks",
@@ -61,6 +62,7 @@ AI_CREDIT_COMPONENT_LABELS = {
     "zhihu_direct_answer_deep": "Zhihu direct answer deep calls",
     "zhihu_direct_answer_deepsearch": "Zhihu direct answer DeepSearch calls",
     "image_recommendation": "Image recommendation calls",
+    "audio_generation": "Audio generation calls",
     "provider_calls_other": "Other provider calls",
     "vector_documents": "Vector indexed articles",
     "vector_chunks": "Vector indexed chunks",
@@ -157,6 +159,15 @@ AI_CREDIT_COMPONENT_POLICY_REGISTRY: dict[str, dict[str, object]] = {
         "rate_unit": None,
         "rounding": "none",
     },
+    "audio_generation": {
+        "source_type": "audio_generation",
+        "label": AI_CREDIT_COMPONENT_LABELS["audio_generation"],
+        "charge_mode": "consume",
+        "unit": "call",
+        "rate": 5.0,
+        "rate_unit": None,
+        "rounding": "none",
+    },
     "provider_calls_other": {
         "source_type": "provider_calls_other",
         "label": AI_CREDIT_COMPONENT_LABELS["provider_calls_other"],
@@ -225,6 +236,14 @@ AI_CREDIT_CAPABILITY_POLICY_REGISTRY: dict[str, dict[str, object]] = {
         "request_base_credits": 1.0,
         "ledger_components": ["runs", "tokens_total", "image_recommendation"],
     },
+    "runtime:audio": {
+        "capability_key": "runtime:audio",
+        "ability_families": ["audio"],
+        "execution_kinds": ["audio_generation"],
+        "charge_mode": "run_and_provider_usage",
+        "request_base_credits": 1.0,
+        "ledger_components": ["runs", "tokens_total", "audio_generation"],
+    },
     "runtime:site_knowledge": {
         "capability_key": "runtime:site_knowledge",
         "ability_families": ["knowledge"],
@@ -277,6 +296,15 @@ AI_CREDIT_FEATURE_CHARGE_RULES: dict[str, dict[str, object]] = {
         "capability_key": "runtime:image",
         "charge_policy": "charge_base_run_tokens_and_image_provider_usage",
         "ledger_components": ["runs", "tokens_total", "image_recommendation"],
+        "limit_policy": "ai_credits_required_before_execute",
+        "budget_key": "ai_credits",
+        "contract_version": AI_CREDIT_FEATURE_CHARGE_RULES_VERSION,
+    },
+    "audio_generation": {
+        "feature_key": "audio_generation",
+        "capability_key": "runtime:audio",
+        "charge_policy": "charge_base_run_tokens_and_audio_provider_usage",
+        "ledger_components": ["runs", "tokens_total", "audio_generation"],
         "limit_policy": "ai_credits_required_before_execute",
         "budget_key": "ai_credits",
         "contract_version": AI_CREDIT_FEATURE_CHARGE_RULES_VERSION,
@@ -351,6 +379,8 @@ def classify_provider_credit_component(
         return zhihu_component
     if "search" in normalized_execution_kind:
         return dict(AI_CREDIT_COMPONENT_POLICY_REGISTRY["web_search"])
+    if "audio" in normalized_execution_kind or normalized_ability_family == "audio":
+        return dict(AI_CREDIT_COMPONENT_POLICY_REGISTRY["audio_generation"])
     if "image" in normalized_execution_kind or normalized_ability_family == "vision":
         return dict(AI_CREDIT_COMPONENT_POLICY_REGISTRY["image_recommendation"])
     return dict(AI_CREDIT_COMPONENT_POLICY_REGISTRY["provider_calls_other"])
@@ -439,6 +469,8 @@ def resolve_ai_credit_capability_policy(
     normalized_kind = str(execution_kind or "").strip().lower()
     if normalized_kind in {"web_search", "search"} or "search" in normalized_kind:
         return dict(AI_CREDIT_CAPABILITY_POLICY_REGISTRY["runtime:web_search"])
+    if normalized_family == "audio" or "audio" in normalized_kind:
+        return dict(AI_CREDIT_CAPABILITY_POLICY_REGISTRY["runtime:audio"])
     if normalized_family == "vision" or "image" in normalized_kind or normalized_kind == "vision":
         return dict(AI_CREDIT_CAPABILITY_POLICY_REGISTRY["runtime:image"])
     if normalized_family == "knowledge" or normalized_kind in {"embedding", "site_knowledge"}:
@@ -477,6 +509,10 @@ def estimate_runtime_request_ai_credits(
     elif str(ability_family or "").strip().lower() == "vision" or "image" in normalized_kind:
         estimate += _coerce_float(
             AI_CREDIT_COMPONENT_POLICY_REGISTRY["image_recommendation"].get("rate")
+        )
+    elif str(ability_family or "").strip().lower() == "audio" or "audio" in normalized_kind:
+        estimate += _coerce_float(
+            AI_CREDIT_COMPONENT_POLICY_REGISTRY["audio_generation"].get("rate")
         )
     return round(max(0.0, estimate), 6)
 

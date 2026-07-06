@@ -38,8 +38,9 @@ read-only diagnosis companion that stays inside the existing service-plane evide
      - `pnpm run drill:provider-failure` (isolated fake-provider drill)
      - `GET /internal/service/runtime/diagnostics/summary` → `failures`
      - `GET /internal/service/runtime/diagnostics/runs?status=failed&limit=20`
-  3. If the provider is DeepSeek (OpenAI-compatible adapter), confirm the local
-     `NPCINK_CLOUD_OPENAI_API_KEY` is valid and not rate-limited.
+  3. If the provider is DeepSeek or another OpenAI-compatible adapter, confirm
+     the corresponding `/admin/ai-resources` provider connection is configured,
+     tested, and not rate-limited.
 - **Do not**: change provider adapter code during the drill; use the drill to confirm
   whether the issue is credential/quota vs. adapter behavior.
 

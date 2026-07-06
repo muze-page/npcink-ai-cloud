@@ -46,9 +46,19 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        PACKAGE_EXTRAS: "[dev]"
     image: npcink-ai-cloud-api:dev
     restart: unless-stopped
-    command: uvicorn app.api.main:app --host 0.0.0.0 --port 8000 --reload
+    command: >-
+      uvicorn app.api.main:app
+      --host 0.0.0.0
+      --port 8000
+      --reload
+      --reload-dir app
+      --reload-dir migrations
+      --reload-exclude app/workers/*
+      --timeout-graceful-shutdown 5
     env_file:
       - ./.env
       - ./.env.local
@@ -58,6 +68,7 @@ services:
       NPCINK_CLOUD_DATABASE_URL: postgresql+psycopg://npcink:npcink@postgres:5432/npcink_ai_cloud
       NPCINK_CLOUD_REDIS_URL: redis://redis:6379/0
       NPCINK_CLOUD_PORTAL_JWT_SECRET: ${NPCINK_CLOUD_PORTAL_JWT_SECRET:-dev-portal-preview-token-32-bytes}
+      NPCINK_CLOUD_OTEL_EXPORTER_OTLP_ENDPOINT: ${NPCINK_CLOUD_DEV_OTEL_EXPORTER_OTLP_ENDPOINT:-}
     expose:
       - "8000"
     depends_on:
@@ -75,6 +86,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        PACKAGE_EXTRAS: "[dev]"
     image: npcink-ai-cloud-worker:dev
     restart: unless-stopped
     command: python -m app.workers.runtime_queue
@@ -86,6 +99,7 @@ services:
       NPCINK_CLOUD_LOG_LEVEL: DEBUG
       NPCINK_CLOUD_DATABASE_URL: postgresql+psycopg://npcink:npcink@postgres:5432/npcink_ai_cloud
       NPCINK_CLOUD_REDIS_URL: redis://redis:6379/0
+      NPCINK_CLOUD_OTEL_EXPORTER_OTLP_ENDPOINT: ${NPCINK_CLOUD_DEV_OTEL_EXPORTER_OTLP_ENDPOINT:-}
     depends_on:
       postgres:
         condition: service_healthy
@@ -100,6 +114,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        PACKAGE_EXTRAS: "[dev]"
     image: npcink-ai-cloud-callback-worker:dev
     restart: unless-stopped
     command: python -m app.workers.callback_dispatch
@@ -111,6 +127,7 @@ services:
       NPCINK_CLOUD_LOG_LEVEL: DEBUG
       NPCINK_CLOUD_DATABASE_URL: postgresql+psycopg://npcink:npcink@postgres:5432/npcink_ai_cloud
       NPCINK_CLOUD_REDIS_URL: redis://redis:6379/0
+      NPCINK_CLOUD_OTEL_EXPORTER_OTLP_ENDPOINT: ${NPCINK_CLOUD_DEV_OTEL_EXPORTER_OTLP_ENDPOINT:-}
     depends_on:
       postgres:
         condition: service_healthy
@@ -125,6 +142,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        PACKAGE_EXTRAS: "[dev]"
     image: npcink-ai-cloud-ops-worker:dev
     restart: unless-stopped
     command: python -m app.workers.ops_cadence
@@ -137,6 +156,7 @@ services:
       NPCINK_CLOUD_DATABASE_URL: postgresql+psycopg://npcink:npcink@postgres:5432/npcink_ai_cloud
       NPCINK_CLOUD_REDIS_URL: redis://redis:6379/0
       NPCINK_CLOUD_WORKER_HEARTBEAT_INTERVAL_SECONDS: ${NPCINK_CLOUD_WORKER_HEARTBEAT_INTERVAL_SECONDS:-60}
+      NPCINK_CLOUD_OTEL_EXPORTER_OTLP_ENDPOINT: ${NPCINK_CLOUD_DEV_OTEL_EXPORTER_OTLP_ENDPOINT:-}
     depends_on:
       postgres:
         condition: service_healthy
@@ -157,7 +177,8 @@ services:
       - ./.env.local
     environment:
       CLOUD_API_BASE_URL: http://api:8000
-      CLOUD_PUBLIC_BASE_URL: ${NPCINK_CLOUD_PORTAL_PUBLIC_BASE_URL:-http://127.0.0.1:8010}
+      CLOUD_PUBLIC_BASE_URL: ${NPCINK_CLOUD_BASE_URL:-http://127.0.0.1:8010}
+      NPCINK_CLOUD_OTEL_EXPORTER_OTLP_ENDPOINT: ${NPCINK_CLOUD_DEV_OTEL_EXPORTER_OTLP_ENDPOINT:-}
       NODE_OPTIONS: --max-old-space-size=1536
       NEXT_TELEMETRY_DISABLED: "1"
       DISABLE_DEPENDENCY_CHECK: "true"
@@ -165,11 +186,13 @@ services:
       - "3000"
     volumes:
       - ./frontend:/app
-      - ./node_modules/.pnpm:/node_modules/.pnpm
-      - /app/.next
+      - cloud-frontend-node-modules-dev:/app/node_modules
+      - cloud-frontend-next-cache-dev:/app/.next
     depends_on:
       - api
 
 volumes:
   cloud-postgres-dev:
   cloud-redis-dev:
+  cloud-frontend-node-modules-dev:
+  cloud-frontend-next-cache-dev:

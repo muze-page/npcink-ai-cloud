@@ -2,6 +2,7 @@
 
 import React, { useCallback, useEffect, useState, Suspense } from 'react';
 import Link from 'next/link';
+import { AdminMutationReceipt, type AdminMutationReceiptPayload } from '@/components/admin/AdminMutationReceipt';
 import { LoadingFallback } from '@/components/ui/LoadingFallback';
 import { useParams } from 'next/navigation';
 import { BackofficeIdentifier } from '@/components/backoffice/BackofficeIdentifier';
@@ -59,32 +60,6 @@ interface AccountDetail {
     status?: string;
     name?: string;
   }>;
-  trial_readiness?: TrialReadinessSummary;
-}
-
-interface TrialReadinessCheck {
-  code: string;
-  label: string;
-  ok: boolean;
-  detail: string;
-}
-
-interface TrialReadinessSummary {
-  status: 'ready' | 'action_required' | 'blocked' | string;
-  next_action: string;
-  next_action_label: string;
-  blocking_codes: string[];
-  summary: {
-    site_count: number;
-    active_site_count: number;
-    active_key_site_count: number;
-    sites_without_active_key: string[];
-    subscription_status?: string;
-    display_package_label?: string;
-    package_kind?: PackageKind | string;
-    coverage_state?: CoverageState | string;
-  };
-  checks: TrialReadinessCheck[];
 }
 
 interface PackagePlanListItem {
@@ -290,6 +265,8 @@ type PendingConfirmation = {
   variant?: 'default' | 'danger';
   onConfirm: () => void;
 };
+
+type AccountDetailTab = 'coverage' | 'quota' | 'sites' | 'advanced';
 
 function selectPrimarySubscription(account: AccountDetail | null): AccountDetail['subscriptions'][number] | null {
   if (!account?.subscriptions.length) {
@@ -498,6 +475,7 @@ function AccountDetailContent() {
   const [isSavingAccountMeta, setIsSavingAccountMeta] = useState(false);
   const [accountStatusNotice, setAccountStatusNotice] = useState<string | null>(null);
   const [accountStatusError, setAccountStatusError] = useState<string | null>(null);
+  const [accountStatusReceipt, setAccountStatusReceipt] = useState<AdminMutationReceiptPayload | null>(null);
   const [accountStatusPending, setAccountStatusPending] = useState<'suspend' | 'restore' | null>(null);
   const [suspendReason, setSuspendReason] = useState('');
   const [packageForm, setPackageForm] = useState({
@@ -510,6 +488,7 @@ function AccountDetailContent() {
   });
   const [packageActionNotice, setPackageActionNotice] = useState<string | null>(null);
   const [packageActionError, setPackageActionError] = useState<string | null>(null);
+  const [packageActionReceipt, setPackageActionReceipt] = useState<AdminMutationReceiptPayload | null>(null);
   const [packageActionPending, setPackageActionPending] = useState<'change' | 'suspend' | 'cancel' | null>(null);
   const [topUpActionPending, setTopUpActionPending] = useState<string | null>(null);
   const [creditAdjustmentForm, setCreditAdjustmentForm] = useState({
@@ -525,6 +504,7 @@ function AccountDetailContent() {
   const [quotaSummary, setQuotaSummary] = useState<AccountQuotaSummary | null>(null);
   const [creditLedger, setCreditLedger] = useState<AccountCreditLedger | null>(null);
   const [nowMs] = useState(() => Date.now());
+  const [activeDetailTab, setActiveDetailTab] = useState<AccountDetailTab>('coverage');
 
   const loadPackagePlans = useCallback(async () => {
     try {
@@ -708,8 +688,6 @@ function AccountDetailContent() {
       const accountStatusUpdatedAt = String(accountMetadata.account_status_updated_at || '').trim();
       const sites = Array.isArray(payload.sites) ? payload.sites : [];
       const subscriptions = Array.isArray(payload.subscriptions) ? payload.subscriptions : [];
-      const readiness = payload.trial_readiness || {};
-      const readinessSummary = readiness.summary || {};
       const nextAccount: AccountDetail = {
         account_id: String(accountData.account_id || accountId),
         name: String(accountData.name || accountData.account_id || accountId),
@@ -754,36 +732,6 @@ function AccountDetailContent() {
             coverage_state: packageDisplay.coverage_state,
           };
         }),
-        trial_readiness: readiness.status
-          ? {
-              status: String(readiness.status || 'action_required'),
-              next_action: String(readiness.next_action || ''),
-              next_action_label: String(readiness.next_action_label || ''),
-              blocking_codes: Array.isArray(readiness.blocking_codes)
-                ? readiness.blocking_codes.map((item: unknown) => String(item))
-                : [],
-              summary: {
-                site_count: Number(readinessSummary.site_count || 0),
-                active_site_count: Number(readinessSummary.active_site_count || 0),
-                active_key_site_count: Number(readinessSummary.active_key_site_count || 0),
-                sites_without_active_key: Array.isArray(readinessSummary.sites_without_active_key)
-                  ? readinessSummary.sites_without_active_key.map((item: unknown) => String(item))
-                  : [],
-                subscription_status: String(readinessSummary.subscription_status || ''),
-                display_package_label: String(readinessSummary.display_package_label || ''),
-                package_kind: String(readinessSummary.package_kind || ''),
-                coverage_state: String(readinessSummary.coverage_state || ''),
-              },
-              checks: Array.isArray(readiness.checks)
-                ? readiness.checks.map((item: Record<string, unknown>) => ({
-                    code: String(item.code || ''),
-                    label: String(item.label || ''),
-                    ok: Boolean(item.ok),
-                    detail: String(item.detail || ''),
-                  }))
-                : [],
-            }
-          : undefined,
       };
       setAccount(nextAccount);
       setAccountMetaForm({
@@ -910,12 +858,14 @@ function AccountDetailContent() {
           'A coverage package option and package version are required before changing coverage.'
         )
       );
+      setPackageActionReceipt(null);
       return;
     }
 
     setPackageActionPending('change');
     setPackageActionError(null);
     setPackageActionNotice(null);
+    setPackageActionReceipt(null);
     try {
       const response = await fetch(`/api/admin/accounts/${encodeURIComponent(accountId)}/subscription`, {
         method: 'POST',
@@ -945,6 +895,7 @@ function AccountDetailContent() {
       if (!response.ok) {
         throw new Error(payload.message || t('error.failed_save', {}, 'Failed to save.'));
       }
+      setPackageActionReceipt((payload.data?.receipt || null) as AdminMutationReceiptPayload | null);
       setPackageActionNotice(
         t(
           'admin.account_detail.package_changed_notice',
@@ -968,6 +919,7 @@ function AccountDetailContent() {
     setPackageActionPending(action);
     setPackageActionError(null);
     setPackageActionNotice(null);
+    setPackageActionReceipt(null);
     try {
       const response = await fetch(
         `/api/admin/accounts/${encodeURIComponent(accountId)}/subscription/${action}`,
@@ -982,6 +934,7 @@ function AccountDetailContent() {
       if (!response.ok) {
         throw new Error(payload.message || t('error.failed_save', {}, 'Failed to save.'));
       }
+      setPackageActionReceipt((payload.data?.receipt || null) as AdminMutationReceiptPayload | null);
       setPackageActionNotice(
         action === 'suspend'
           ? t(
@@ -1012,6 +965,7 @@ function AccountDetailContent() {
     setAccountStatusPending(action);
     setAccountStatusNotice(null);
     setAccountStatusError(null);
+    setAccountStatusReceipt(null);
     try {
       const response = await fetch(`/api/admin/accounts/${encodeURIComponent(account.account_id)}/${action}`, {
         method: 'POST',
@@ -1025,6 +979,7 @@ function AccountDetailContent() {
       if (!response.ok) {
         throw new Error(payload.message || t('error.failed_save', {}, 'Failed to save.'));
       }
+      setAccountStatusReceipt((payload.data?.receipt || null) as AdminMutationReceiptPayload | null);
       const nextStatus = String(payload.data?.status || (action === 'restore' ? 'active' : 'suspended'));
       const metadata = payload.data?.metadata && typeof payload.data.metadata === 'object'
         ? payload.data.metadata
@@ -1063,12 +1018,14 @@ function AccountDetailContent() {
           'A current subscription is required before applying a top-up pack.'
         )
       );
+      setPackageActionReceipt(null);
       return;
     }
 
     setTopUpActionPending(pack.pack_id);
     setPackageActionError(null);
     setPackageActionNotice(null);
+    setPackageActionReceipt(null);
     try {
       const response = await fetch(`/api/admin/subscriptions/${encodeURIComponent(subscriptionId)}/topup`, {
         method: 'POST',
@@ -1089,6 +1046,7 @@ function AccountDetailContent() {
       if (!response.ok) {
         throw new Error(payload.message || t('error.failed_save', {}, 'Failed to save.'));
       }
+      setPackageActionReceipt((payload.data?.receipt || null) as AdminMutationReceiptPayload | null);
       setPackageActionNotice(
         t(
           'admin.account_detail.topup_pack_applied_notice',
@@ -1116,6 +1074,7 @@ function AccountDetailContent() {
           'Enter a non-zero AI credit delta.'
         )
       );
+      setPackageActionReceipt(null);
       return;
     }
     if (!creditAdjustmentForm.reason.trim()) {
@@ -1126,12 +1085,14 @@ function AccountDetailContent() {
           'Enter an operator reason before applying the credit adjustment.'
         )
       );
+      setPackageActionReceipt(null);
       return;
     }
 
     setCreditAdjustmentPending(true);
     setPackageActionError(null);
     setPackageActionNotice(null);
+    setPackageActionReceipt(null);
     try {
       const response = await fetch(
         `/api/admin/accounts/${encodeURIComponent(accountId)}/credit-ledger/adjustments`,
@@ -1154,6 +1115,7 @@ function AccountDetailContent() {
       if (!response.ok) {
         throw new Error(payload.message || t('error.failed_save', {}, 'Failed to save.'));
       }
+      setPackageActionReceipt((payload.data?.receipt || null) as AdminMutationReceiptPayload | null);
       setPackageActionNotice(
         t(
           'admin.account_detail.credit_adjustment_applied_notice',
@@ -1181,6 +1143,30 @@ function AccountDetailContent() {
     void loadAccount();
     void loadPackagePlans();
   }, [loadAccount, loadPackagePlans]);
+
+  useEffect(() => {
+    const activateTabFromHash = () => {
+      if (window.location.hash === '#site-footprint') {
+        setActiveDetailTab('sites');
+        return;
+      }
+      if (window.location.hash === '#quota-posture') {
+        setActiveDetailTab('quota');
+        return;
+      }
+      if (window.location.hash === '#advanced-checks') {
+        setActiveDetailTab('advanced');
+        return;
+      }
+      if (window.location.hash === '#coverage-actions') {
+        setActiveDetailTab('coverage');
+      }
+    };
+
+    activateTabFromHash();
+    window.addEventListener('hashchange', activateTabFromHash);
+    return () => window.removeEventListener('hashchange', activateTabFromHash);
+  }, []);
 
   if (isLoading) {
     return (
@@ -1229,9 +1215,7 @@ function AccountDetailContent() {
   const resourceMetricByKey = new Map((quotaSummary?.resource_limits || []).map((item) => [item.key, item]));
   const creditMetric = quotaSummary?.credit || null;
   const runBudgetSummary = creditMetric ? metricToBudgetSummary(creditMetric) : summarizeBudget(siteRuntimeData, 'runs');
-  const activeKeySiteCount =
-    account.trial_readiness?.summary?.active_key_site_count ??
-    siteRuntimeItems.filter((item) => item.activeKeyCount > 0).length;
+  const activeKeySiteCount = siteRuntimeItems.filter((item) => item.activeKeyCount > 0).length;
   const boundSitesMetric = resourceMetricByKey.get('bound_sites') || null;
   const vectorDocumentsMetric = resourceMetricByKey.get('vector_documents') || null;
   const concurrentRunsMetric = resourceMetricByKey.get('concurrent_runs') || null;
@@ -1278,79 +1262,17 @@ function AccountDetailContent() {
   const hasCoverageGap = uncoveredSiteCount > 0;
   const hasUncoveredCommercialPosture =
     primaryPackage.coverage_state === 'uncovered' || hasCoverageGap || (account.subscription_count === 0 && account.site_count > 0);
-  const hasDevBaselineOnly = primaryPackage.package_kind === 'dev_baseline';
   const hasPaidCoverage =
     primaryPackage.package_kind === 'tier_package' && primaryPackage.coverage_state === 'covered';
   const hasFormalFreeCoverage =
     primaryPackage.package_kind === 'formal_free' && primaryPackage.coverage_state === 'covered';
-  const trialReadiness = account.trial_readiness || null;
-  const trialReadinessTone =
-    trialReadiness?.status === 'ready'
-      ? 'ok'
-      : trialReadiness?.status === 'blocked'
-        ? 'error'
-        : 'warning';
-  const trialReadinessTitle =
-    trialReadiness?.status === 'ready'
-      ? t('admin.account_detail.trial_readiness_ready_title', undefined, 'Ready for controlled trial')
-      : trialReadiness?.status === 'blocked'
-        ? t('admin.account_detail.trial_readiness_blocked_title', undefined, 'Blocked before trial')
-        : t('admin.account_detail.trial_readiness_action_title', undefined, 'Action required before trial');
-  const trialReadinessDescription =
-    trialReadiness?.status === 'ready'
-      ? t(
-          'admin.account_detail.trial_readiness_ready_desc',
-          undefined,
-          'Package coverage, active site posture, Cloud API key coverage, and site admin workspace access are ready for a controlled trial.'
-        )
-      : t(
-          'admin.account_detail.trial_readiness_action_desc',
-          undefined,
-          'Use this checklist as the operator path for internal testing: fix the first failed item, then rerun smoke or bind the approved site administrator.'
-        );
-  const trialSummary = trialReadiness?.summary;
-  const trialMetricItems = [
-    {
-      label: t('admin.account_detail.trial_sites_metric', undefined, 'Sites active'),
-      value: `${formatInteger(trialSummary?.active_site_count || 0)}/${formatInteger(trialSummary?.site_count || 0)}`,
-      detail: t('admin.account_detail.trial_sites_metric_desc', undefined, 'Approved WordPress sites attached to this customer.'),
-      toneClassName:
-        trialSummary && trialSummary.site_count > 0 && trialSummary.active_site_count === trialSummary.site_count
-          ? undefined
-          : 'text-red-600 dark:text-red-400',
-      size: 'compact' as const,
-    },
-    {
-      label: t('admin.account_detail.trial_keys_metric', undefined, 'API keys'),
-      value: `${formatInteger(trialSummary?.active_key_site_count || 0)}/${formatInteger(trialSummary?.site_count || 0)}`,
-      detail: t('admin.account_detail.trial_keys_metric_desc', undefined, 'Sites with active Cloud API key coverage.'),
-      toneClassName:
-        trialSummary && trialSummary.site_count > 0 && trialSummary.active_key_site_count === trialSummary.site_count
-          ? undefined
-          : 'text-red-600 dark:text-red-400',
-      size: 'compact' as const,
-    },
-    {
-      label: t('common.package', undefined, 'Package'),
-      value: trialSummary?.display_package_label || primaryPackage.display_package_label,
-      detail: translateCoverageStateLabel(t, (trialSummary?.coverage_state as CoverageState) || primaryPackage.coverage_state),
-      toneClassName:
-        (trialSummary?.coverage_state || primaryPackage.coverage_state) === 'covered'
-          ? undefined
-          : 'text-red-600 dark:text-red-400',
-      size: 'compact' as const,
-    },
-  ];
   const postureTone =
-    account.status === 'suspended' || riskySubscriptions.length > 0 || hasUncoveredCommercialPosture || hasDevBaselineOnly
+    account.status === 'suspended' || riskySubscriptions.length > 0 || hasUncoveredCommercialPosture
       ? 'error'
       : 'ok';
   const postureTitle = (() => {
     if (account.status === 'suspended') {
       return t('admin.account_detail.suspended_title', undefined, 'Customer access is suspended');
-    }
-    if (hasDevBaselineOnly) {
-      return t('admin.account_detail.dev_baseline_only_title', undefined, 'Dev baseline only');
     }
     if (hasUncoveredCommercialPosture) {
       return t('admin.account_detail.uncovered_posture_title', undefined, 'Uncovered commercial posture');
@@ -1369,9 +1291,6 @@ function AccountDetailContent() {
   const postureDescription = (() => {
     if (account.status === 'suspended') {
       return t('admin.account_detail.suspended_desc', undefined, 'Commercial or support review should happen before any new customer session starts from this customer.');
-    }
-    if (hasDevBaselineOnly) {
-      return t('admin.account_detail.dev_baseline_only_desc', undefined, 'This customer currently resolves to a dev baseline. Do not treat it as production package coverage until an operator rebinds it.');
     }
     if (hasUncoveredCommercialPosture) {
       return t('admin.account_detail.uncovered_posture_desc', undefined, 'This customer has real uncovered posture. Keep it distinct from Free coverage and move directly into subscription/package follow-up.');
@@ -1400,7 +1319,7 @@ function AccountDetailContent() {
       value: primaryPackage.display_package_label,
       detail: `${translatePackageKindLabel(t, primaryPackage.package_kind)} · ${translateCoverageStateLabel(t, primaryPackage.coverage_state)}`,
       toneClassName:
-        primaryPackage.coverage_state === 'uncovered' || primaryPackage.package_kind === 'dev_baseline'
+        primaryPackage.coverage_state === 'uncovered'
           ? 'text-red-600 dark:text-red-400'
           : undefined,
     },
@@ -1528,59 +1447,55 @@ function AccountDetailContent() {
   const accountTitle = resolveAccountTitle(account, t);
   const showPostureBadge = postureTone !== 'ok';
   const showAccountStatusBadge = account.status !== 'active' && account.status !== 'unknown';
+  const hasAdvancedChecks = Object.keys(siteRuntimeData).length > 0;
+  const detailTabs: Array<{ id: AccountDetailTab; label: string; detail: string; href: string }> = [
+    {
+      id: 'coverage',
+      label: t('admin.account_detail.coverage_tab', undefined, 'Package'),
+      detail: primaryPackage.display_package_label,
+      href: '#coverage-actions',
+    },
+    {
+      id: 'quota',
+      label: t('admin.account_detail.quota_tab', undefined, 'Usage'),
+      detail: quotaNeedsAttention ? translateStatusLabel('warning', t) : translateStatusLabel('ok', t),
+      href: '#quota-posture',
+    },
+    {
+      id: 'sites',
+      label: t('admin.account_detail.sites_tab', undefined, 'Sites'),
+      detail: formatInteger(account.site_count),
+      href: '#site-footprint',
+    },
+    ...(hasAdvancedChecks
+      ? [
+          {
+            id: 'advanced' as const,
+            label: t('admin.account_detail.advanced_tab', undefined, 'Checks'),
+            detail: formatInteger(Object.keys(siteRuntimeData).length),
+            href: '#advanced-checks',
+          },
+        ]
+      : []),
+  ];
   return (
     <BackofficePageStack>
       <BackofficePrimaryPanel
         eyebrow={t('admin.account_posture')}
         title={accountTitle}
         description={postureDescription}
-        actions={(
-          <>
-            <a href="#coverage-actions" className="btn btn-primary">
-              {t('admin.account_detail.manage_package_action', undefined, 'Manage package')}
-            </a>
-            <button
-              type="button"
-              onClick={() => {
-                setSuspendReason('');
-                setPendingConfirmation({
-                  title:
-                    account.status === 'suspended'
-                      ? t('admin.accounts.confirm_restore_title', {}, 'Confirm account restore')
-                      : t('admin.accounts.confirm_suspend_title', {}, 'Confirm account suspension'),
-                  message:
-                    account.status === 'suspended'
-                      ? t(
-                          'admin.accounts.confirm_restore_desc',
-                          { account: accountTitle },
-                          `Restore ${accountTitle} to active access?`
-                        )
-                      : t(
-                          'admin.accounts.confirm_suspend_desc',
-                          { account: accountTitle },
-                          `Suspend ${accountTitle}? Customer portal access and site actions will be blocked by account status.`
-                        ),
-                  confirmLabel:
-                    account.status === 'suspended'
-                      ? t('admin.accounts.restore_account_action', {}, 'Restore account')
-                      : t('admin.accounts.suspend_account_action', {}, 'Suspend account'),
-                  showSuspendReason: account.status !== 'suspended',
-                  variant: account.status === 'suspended' ? 'default' : 'danger',
-                  onConfirm: () => void handleAccountStatusMutation(account.status === 'suspended' ? 'restore' : 'suspend'),
-                });
-              }}
-              className="btn btn-secondary"
-              disabled={accountStatusPending !== null}
-            >
-              {accountStatusPending
-                ? t('common.saving', {}, 'Saving...')
-                : account.status === 'suspended'
-                  ? t('admin.accounts.restore_account_action', {}, 'Restore account')
-                  : t('admin.accounts.suspend_account_action', {}, 'Suspend account')}
-            </button>
-            <Link href="/admin/accounts" className="btn btn-secondary">
-              {t('admin.back_to_accounts')}
-            </Link>
+	        actions={(
+	          <>
+	            <a
+                href="#coverage-actions"
+                className="btn btn-primary"
+                onClick={() => setActiveDetailTab('coverage')}
+              >
+	              {t('admin.account_detail.manage_package_action', undefined, 'Manage package')}
+	            </a>
+	            <Link href="/admin/accounts" className="btn btn-secondary">
+	              {t('admin.back_to_accounts')}
+	            </Link>
           </>
         )}
         aside={(
@@ -1617,21 +1532,87 @@ function AccountDetailContent() {
           </div>
         )}
       >
-        <div className="flex flex-wrap items-center gap-2">
-          <BackofficeIdentifier value={account.account_id} className="text-xs text-gray-500 dark:text-gray-400" />
-          {showPostureBadge ? (
-            <BackofficeStatusBadge status={postureTone} label={translateStatusLabel(postureTone, t)} />
+	        <div className="flex flex-wrap items-center gap-2">
+	          <BackofficeIdentifier value={account.account_id} className="text-xs text-gray-500 dark:text-gray-400" />
+	          {showPostureBadge ? (
+	            <BackofficeStatusBadge status={postureTone} label={translateStatusLabel(postureTone, t)} />
           ) : null}
           {showAccountStatusBadge ? (
-            <BackofficeStatusBadge status={account.status} label={translateStatusLabel(account.status, t)} />
-          ) : null}
-        </div>
-        {accountStatusNotice ? (
-          <p className="text-sm text-emerald-700 dark:text-emerald-300">{accountStatusNotice}</p>
-        ) : null}
+	            <BackofficeStatusBadge status={account.status} label={translateStatusLabel(account.status, t)} />
+	          ) : null}
+	        </div>
+	        <BackofficeStackCard className="flex flex-col gap-4 bg-white/80 dark:bg-slate-950/55 lg:flex-row lg:items-center lg:justify-between">
+	          <div>
+	            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-gray-500 dark:text-gray-400">
+	              {t('admin.account_detail.access_status_title', undefined, 'Customer access status')}
+	            </p>
+	            <div className="mt-2 flex flex-wrap items-center gap-2">
+	              <BackofficeStatusBadge status={account.status} label={translateStatusLabel(account.status, t)} />
+	              <span className="text-sm text-slate-600 dark:text-slate-300">
+	                {account.status === 'suspended'
+	                  ? t(
+	                      'admin.account_detail.access_status_suspended_desc',
+	                      undefined,
+	                      'Portal access and site actions are currently blocked for this customer.'
+	                    )
+	                  : t(
+	                      'admin.account_detail.access_status_active_desc',
+	                      undefined,
+	                      'Portal access follows this customer record and related site grants.'
+	                    )}
+	              </span>
+	            </div>
+	          </div>
+	          <button
+	            type="button"
+	            onClick={() => {
+	              setSuspendReason('');
+	              setPendingConfirmation({
+	                title:
+	                  account.status === 'suspended'
+	                    ? t('admin.accounts.confirm_restore_title', {}, 'Confirm account restore')
+	                    : t('admin.accounts.confirm_suspend_title', {}, 'Confirm account suspension'),
+	                message:
+	                  account.status === 'suspended'
+	                    ? t(
+	                        'admin.accounts.confirm_restore_desc',
+	                        { account: accountTitle },
+	                        `Restore ${accountTitle} to active access?`
+	                      )
+	                    : t(
+	                        'admin.accounts.confirm_suspend_desc',
+	                        { account: accountTitle },
+	                        `Suspend ${accountTitle}? Customer portal access and site actions will be blocked by account status.`
+	                      ),
+	                confirmLabel:
+	                  account.status === 'suspended'
+	                    ? t('admin.accounts.restore_account_action', {}, 'Restore account')
+	                    : t('admin.accounts.suspend_account_action', {}, 'Suspend account'),
+	                showSuspendReason: account.status !== 'suspended',
+	                variant: account.status === 'suspended' ? 'default' : 'danger',
+	                onConfirm: () => void handleAccountStatusMutation(account.status === 'suspended' ? 'restore' : 'suspend'),
+	              });
+	            }}
+	            className={cn(
+	              'btn btn-secondary self-start lg:self-auto',
+	              account.status !== 'suspended' && 'border-amber-200 text-amber-700 hover:border-amber-300 dark:border-amber-900/60 dark:text-amber-200'
+	            )}
+	            disabled={accountStatusPending !== null}
+	          >
+	            {accountStatusPending
+	              ? t('common.saving', {}, 'Saving...')
+	              : account.status === 'suspended'
+	                ? t('admin.accounts.restore_account_action', {}, 'Restore account')
+	                : t('admin.accounts.suspend_account_action', {}, 'Suspend account')}
+	          </button>
+	        </BackofficeStackCard>
+	        {accountStatusNotice ? (
+	          <p className="text-sm text-emerald-700 dark:text-emerald-300">{accountStatusNotice}</p>
+	        ) : null}
         {accountStatusError ? (
           <p className="text-sm text-red-600 dark:text-red-300">{accountStatusError}</p>
         ) : null}
+        <AdminMutationReceipt receipt={accountStatusReceipt} />
         {account.account_status_note ? (
           <p className="text-sm text-amber-700 dark:text-amber-300">
             {t('admin.accounts.suspend_reason_label', {}, 'Suspension reason')}: {account.account_status_note}
@@ -1692,6 +1673,34 @@ function AccountDetailContent() {
             ) : null}
           </form>
         </details>
+        <div
+          role="tablist"
+          aria-label={t('admin.account_detail.tabs_label', undefined, 'Customer detail sections')}
+          className="grid gap-2 rounded-[1rem] border border-slate-200/80 bg-white/75 p-2 dark:border-slate-800 dark:bg-slate-950/40 md:grid-cols-4"
+        >
+          {detailTabs.map((tab) => {
+            const isActive = activeDetailTab === tab.id;
+            return (
+              <a
+                key={tab.id}
+                role="tab"
+                aria-selected={isActive}
+                href={tab.href}
+                onClick={() => setActiveDetailTab(tab.id)}
+                className={cn(
+                  'rounded-[0.85rem] px-3 py-2.5 text-left transition hover:bg-slate-100 dark:hover:bg-slate-900',
+                  isActive
+                    ? 'border border-blue-200 bg-blue-50 text-blue-900 dark:border-blue-900/60 dark:bg-blue-950/25 dark:text-blue-100'
+                    : 'border border-transparent text-slate-600 dark:text-slate-300'
+                )}
+              >
+                <span className="block text-sm font-semibold">{tab.label}</span>
+                <span className="mt-1 block truncate text-xs text-slate-500 dark:text-slate-400">{tab.detail}</span>
+              </a>
+            );
+          })}
+        </div>
+        {activeDetailTab === 'coverage' ? (
         <div className="grid gap-4 xl:grid-cols-[0.9fr_1.1fr]">
           <div id="coverage-actions">
           <BackofficeStackCard className="bg-white/80 dark:bg-slate-950/55">
@@ -1983,8 +1992,9 @@ function AccountDetailContent() {
                 {packageActionError}
               </BackofficeStackCard>
             ) : null}
+            <AdminMutationReceipt receipt={packageActionReceipt} />
             <div className="mt-4 flex flex-wrap gap-3">
-              <a href="#site-footprint" className="btn btn-secondary">
+              <a href="#site-footprint" className="btn btn-secondary" onClick={() => setActiveDetailTab('sites')}>
                 {t('admin.account_detail.view_sites_action', undefined, 'View sites')}
               </a>
             </div>
@@ -2190,58 +2200,11 @@ function AccountDetailContent() {
             </details>
           </BackofficeStackCard>
         </div>
+        ) : null}
       </BackofficePrimaryPanel>
 
-      {trialReadiness ? (
-        <BackofficeSectionPanel>
-          <details data-ui="trial-readiness-summary" className="group">
-            <summary className="flex cursor-pointer list-none items-center justify-between gap-4">
-              <div>
-                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-gray-500 dark:text-gray-400">
-                  {t('admin.account_detail.advanced_checks_eyebrow', undefined, 'Advanced checks')}
-                </p>
-                <h2 className="mt-2 text-xl font-semibold text-gray-950 dark:text-white">
-                  {t('admin.account_detail.trial_readiness_eyebrow', undefined, 'Trial readiness')}
-                </h2>
-                <p className="mt-1 text-sm text-gray-600 dark:text-gray-400">
-                  {trialReadinessTitle}
-                </p>
-              </div>
-              <BackofficeStatusBadge status={trialReadinessTone} label={translateStatusLabel(trialReadinessTone, t)} />
-            </summary>
-            <div className="mt-5 space-y-4">
-              <p className="max-w-3xl text-sm leading-6 text-gray-600 dark:text-gray-300">
-                {trialReadinessDescription}
-              </p>
-              <BackofficeMetricStrip items={trialMetricItems} columnsClassName="md:grid-cols-2 xl:grid-cols-4" />
-              <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
-                {trialReadiness.checks.map((check) => (
-                  <div
-                    key={check.code}
-                    className={cn(
-                      'rounded-[1rem] border px-3 py-3 text-sm',
-                      check.ok
-                        ? 'border-emerald-200 bg-emerald-50/70 text-emerald-800 dark:border-emerald-900/50 dark:bg-emerald-950/20 dark:text-emerald-200'
-                        : 'border-amber-200 bg-amber-50/75 text-amber-900 dark:border-amber-900/50 dark:bg-amber-950/20 dark:text-amber-100'
-                    )}
-                  >
-                    <div className="flex items-start justify-between gap-3">
-                      <p className="font-semibold">{check.label}</p>
-                      <BackofficeStatusBadge
-                        status={check.ok ? 'ok' : 'warning'}
-                        label={check.ok ? translateStatusLabel('ok', t) : translateStatusLabel('warning', t)}
-                      />
-                    </div>
-                    <p className="mt-2 text-xs leading-5 opacity-85">{check.detail}</p>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </details>
-        </BackofficeSectionPanel>
-      ) : null}
-
-      <BackofficeSectionPanel className="space-y-5">
+      {activeDetailTab === 'quota' ? (
+      <BackofficeSectionPanel id="quota-posture" className="space-y-5">
         <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
           <div>
             <p className="text-xs font-semibold uppercase tracking-[0.18em] text-gray-500 dark:text-gray-400">
@@ -2447,7 +2410,7 @@ function AccountDetailContent() {
                           )}
                         </p>
                         <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                          {[entry.event_type, entry.site_id, entry.run_id].filter(Boolean).join(' · ') || entry.source_id || '-'}
+                          {entry.event_type || t('portal.usage.credit_ledger_default_event', {}, 'Usage event')}
                         </p>
                       </div>
                       <p className="text-slate-700 dark:text-slate-300">
@@ -2550,7 +2513,9 @@ function AccountDetailContent() {
           </BackofficeStackCard>
         </div>
       </BackofficeSectionPanel>
+      ) : null}
 
+      {activeDetailTab === 'sites' ? (
       <div id="site-footprint" className="grid gap-6 xl:grid-cols-[1.1fr_0.9fr]">
         <BackofficeSectionPanel className="space-y-4">
           <div>
@@ -2605,9 +2570,10 @@ function AccountDetailContent() {
           )}
         </BackofficeSectionPanel>
       </div>
+      ) : null}
 
-      {Object.keys(siteRuntimeData).length > 0 ? (
-        <BackofficeSectionPanel>
+      {activeDetailTab === 'advanced' && hasAdvancedChecks ? (
+        <BackofficeSectionPanel id="advanced-checks">
           <details className="group">
             <summary className="flex cursor-pointer list-none items-center justify-between gap-4">
               <div>

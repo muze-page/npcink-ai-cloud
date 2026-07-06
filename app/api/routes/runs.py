@@ -56,6 +56,18 @@ def _get_runtime_service(request: Request) -> RuntimeService:
     )
 
 
+def _get_runtime_read_service(request: Request) -> RuntimeService:
+    services = get_cloud_services(request)
+    return RuntimeService(
+        services.settings.database_url,
+        settings=services.settings,
+        runtime_queue=services.runtime_queue,
+        callback_dispatcher=services.callback_dispatcher,
+        callback_max_attempts=services.settings.runtime_callback_max_attempts,
+        callback_retry_backoff_seconds=services.settings.runtime_callback_retry_backoff_seconds,
+    )
+
+
 def _run_error_response(
     *,
     status_code: int,
@@ -123,7 +135,7 @@ async def list_recent_nightly_inspection_runs(
     if isinstance(auth, JSONResponse):
         return auth
 
-    service = _get_runtime_service(request)
+    service = _get_runtime_read_service(request)
     result = await run_in_threadpool(
         service.list_recent_nightly_inspection_runs,
         site_id=auth.site_id,
@@ -151,7 +163,7 @@ async def get_run(
     if isinstance(auth, JSONResponse):
         return auth
 
-    service = _get_runtime_service(request)
+    service = _get_runtime_read_service(request)
 
     try:
         run = await run_in_threadpool(service.get_run, run_id, site_id=auth.site_id)
@@ -233,7 +245,7 @@ async def get_run_result(
     if isinstance(auth, JSONResponse):
         return auth
 
-    service = _get_runtime_service(request)
+    service = _get_runtime_read_service(request)
 
     try:
         result = await run_in_threadpool(service.get_run_result, run_id, site_id=auth.site_id)
@@ -279,7 +291,7 @@ async def cancel_run(
     if isinstance(auth, JSONResponse):
         return auth
 
-    service = _get_runtime_service(request)
+    service = _get_runtime_read_service(request)
 
     try:
         run = await run_in_threadpool(service.cancel_run, run_id, site_id=auth.site_id)
@@ -325,7 +337,7 @@ async def repair_run(
     if isinstance(auth, JSONResponse):
         return auth
 
-    service = _get_runtime_service(request)
+    service = _get_runtime_read_service(request)
 
     try:
         result = await run_in_threadpool(

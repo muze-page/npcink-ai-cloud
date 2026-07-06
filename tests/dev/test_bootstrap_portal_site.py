@@ -12,7 +12,7 @@ def _sqlite_url(tmp_path: Path) -> str:
     return f"sqlite+pysqlite:///{tmp_path / 'bootstrap-portal-site.sqlite3'}"
 
 
-def test_bootstrap_portal_site_binds_site_admin_to_existing_site_without_demo_usage(
+def test_bootstrap_portal_site_binds_principal_to_existing_site_without_demo_usage(
     tmp_path: Path,
 ) -> None:
     database_url = _sqlite_url(tmp_path)
@@ -41,7 +41,7 @@ def test_bootstrap_portal_site_binds_site_admin_to_existing_site_without_demo_us
     result = bootstrap_portal_site(
         settings=settings,
         site_id="site_realish",
-        site_admin_email="buyer@example.com",
+        principal_email="buyer@example.com",
         public_base_url="http://127.0.0.1:8010",
         rebuild_billing_snapshot=True,
         issue_key=False,
@@ -52,9 +52,9 @@ def test_bootstrap_portal_site_binds_site_admin_to_existing_site_without_demo_us
     )
 
     assert result["data_mode"] == "real_site_bootstrap"
-    assert result["portal"]["site_admin_access"]["site_admin_ref"] == "site_admin:buyer@example.com"
-    assert result["portal"]["site_admin_access"]["status"] == "active"
-    assert result["portal"]["site_admin_access"]["grant_status"] == "active"
+    assert result["portal"]["principal_access"]["principal_id"].startswith("prn_")
+    assert result["portal"]["principal_access"]["status"] == "active"
+    assert result["portal"]["principal_access"]["grant_status"] == "active"
     assert result["site_summary"]["site"]["site_id"] == "site_realish"
     assert result["usage_summary"]["windows"]["today"]["runs_total"] == 0
     assert result["usage_meter"]["totals"] == {}
@@ -98,7 +98,7 @@ def test_bootstrap_portal_site_can_optionally_issue_one_new_key(tmp_path: Path) 
     result = bootstrap_portal_site(
         settings=settings,
         site_id="site_realish_issue",
-        site_admin_email="buyer@example.com",
+        principal_email="buyer@example.com",
         public_base_url="http://127.0.0.1:8010",
         rebuild_billing_snapshot=False,
         issue_key=True,

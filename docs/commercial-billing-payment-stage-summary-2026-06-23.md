@@ -248,9 +248,9 @@ also define:
 
 ### Secret Scanner Noise
 
-The test fixture `sk-testtesttesttesttesttesttest` is safe but triggers the
-eval-lab quality gate. Consider replacing it with a non-secret-shaped string
-while preserving the redaction test intent.
+The former OpenAI-shaped fake test fixture has been replaced with
+`redaction-fixture-provider-key`, preserving the redaction test intent without
+triggering secret scanner noise.
 
 ## Recommended Next Steps
 

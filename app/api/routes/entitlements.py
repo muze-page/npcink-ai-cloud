@@ -91,15 +91,13 @@ def _resolve_package_tier(policy: dict[str, object]) -> str:
 
 def _resolve_status(policy: dict[str, object]) -> str:
     subscription = _dict(policy.get("subscription"))
-    snapshot = _dict(policy.get("entitlement_snapshot"))
-    if not subscription or not snapshot:
+    if not subscription:
         return "uncovered"
 
     subscription_status = str(subscription.get("status") or "").strip().lower()
-    snapshot_status = str(snapshot.get("status") or "").strip().lower()
     if subscription_status == "suspended":
         return "suspended"
-    if subscription_status in {"active", "trialing"} and snapshot_status == "active":
+    if subscription_status in {"active", "trialing"}:
         return "active"
     return "inactive"
 
@@ -111,12 +109,10 @@ def _resolve_usage_limits(
 ) -> dict[str, object]:
     snapshot = _dict(policy.get("entitlement_snapshot"))
     plan_version = _dict(policy.get("plan_version"))
-    budgets = _dict(snapshot.get("budgets")) or _dict(plan_version.get("budgets"))
+    budgets = _dict(plan_version.get("budgets")) or _dict(snapshot.get("budgets"))
     return {
         "period": "month",
-        "max_runs": _coerce_float(budgets.get("max_runs_per_period")),
-        "max_tokens": _coerce_float(budgets.get("max_tokens_per_period")),
-        "max_cost_usd": _coerce_float(budgets.get("max_cost_per_period")),
+        "max_ai_credits": _coerce_float(budgets.get("max_ai_credits_per_period")),
         "max_sites": site_limit,
     }
 
@@ -124,11 +120,9 @@ def _resolve_usage_limits(
 def _resolve_site_limit(policy: dict[str, object], tier_id: str) -> int:
     snapshot = _dict(policy.get("entitlement_snapshot"))
     plan_metadata = _dict(_dict(policy.get("plan_version")).get("metadata"))
-    value = (
-        snapshot.get("site_limit")
-        if snapshot.get("site_limit") is not None
-        else plan_metadata.get("site_limit")
-    )
+    value = plan_metadata.get("site_limit")
+    if value is None:
+        value = snapshot.get("site_limit")
     resolved = _coerce_int(value, default=0)
     return max(0, resolved)
 
@@ -136,8 +130,8 @@ def _resolve_site_limit(policy: dict[str, object], tier_id: str) -> int:
 def _resolve_runtime_quota(policy: dict[str, object]) -> dict[str, object]:
     snapshot = _dict(policy.get("entitlement_snapshot"))
     plan_version = _dict(policy.get("plan_version"))
-    entitlements = _dict(snapshot.get("entitlements")) or _dict(plan_version.get("entitlements"))
-    concurrency = _dict(snapshot.get("concurrency")) or _dict(plan_version.get("concurrency"))
+    entitlements = _dict(plan_version.get("entitlements")) or _dict(snapshot.get("entitlements"))
+    concurrency = _dict(plan_version.get("concurrency")) or _dict(snapshot.get("concurrency"))
     batch_limits = _dict(policy.get("batch_limits"))
     return {
         "max_active_runs": _coerce_int(concurrency.get("max_active_runs")),
@@ -154,17 +148,16 @@ def _resolve_pro_cloud_runtime(policy: dict[str, object]) -> dict[str, object]:
     )
     max_runs = _coerce_int(pro_runtime.get("max_nightly_inspection_runs_per_period"))
     used_runs = _coerce_int(pro_runtime.get("used_nightly_inspection_runs"))
-    remaining_runs = _coerce_int(pro_runtime.get("remaining_nightly_inspection_runs"))
     return {
         "contract_version": "pro-cloud-runtime-entitlement-v1",
         "feature_id": "nightly_site_inspection",
         "execution_pattern": "whole_run_offload",
-        "meter_key": "nightly_site_inspection_runs",
-        "limit_enforced": max_runs > 0,
+        "meter_key": "ai_credits",
+        "limit_enforced": False,
         "max_nightly_inspection_runs_per_period": max_runs,
         "used_nightly_inspection_runs": used_runs,
-        "remaining_nightly_inspection_runs": remaining_runs if max_runs > 0 else 0,
-        "quota_exhausted": max_runs > 0 and used_runs >= max_runs,
+        "remaining_nightly_inspection_runs": 0,
+        "quota_exhausted": False,
         "max_batch_items": _coerce_int(
             pro_runtime.get("max_batch_items") or batch_limits.get("max_batch_items")
         ),

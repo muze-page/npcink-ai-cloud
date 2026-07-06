@@ -5,7 +5,6 @@ type TranslateFn = (key: string, params?: Record<string, string>, fallback?: str
 export type PackageKind =
   | 'formal_free'
   | 'tier_package'
-  | 'dev_baseline'
   | 'uncovered'
   | 'unknown';
 
@@ -61,13 +60,13 @@ export function resolveCustomerPackageDisplay(
   const packageAlias = String(input.packageAlias || '').trim();
   const formalPlanName = String(input.formalPlanName || '').trim();
   const explicitPlanKind = String(input.planKind || '').trim();
-  const explicitPackageKind = String(input.packageKind || '').trim() as PackageKind;
+  const explicitPackageKind = normalizePackageKind(input.packageKind);
   const coverageState =
     String(input.coverageState || '').trim() === 'covered' ? 'covered' : 'uncovered';
 
   let packageKind: PackageKind = explicitPackageKind || 'unknown';
   if (!explicitPackageKind) {
-    if (planId === 'plan_dev_unlimited' || planId === 'plan_free' || explicitPlanKind === 'default_free') {
+    if (planId === 'free' || explicitPlanKind === 'default_free') {
       packageKind = 'formal_free';
     } else if (planId || planVersionId) {
       packageKind = 'tier_package';
@@ -86,7 +85,7 @@ export function resolveCustomerPackageDisplay(
   if (packageKind === 'formal_free') {
     return {
       display_package_label:
-        packageAlias || localizePackageAlias(t, 'plan_free', localizePlanName(t, 'plan_free', 'Free')),
+        packageAlias || localizePackageAlias(t, 'free', localizePlanName(t, 'free', 'Free')),
       package_kind: packageKind,
       coverage_state: coverageState,
     };
@@ -127,14 +126,25 @@ export function translatePackageKindLabel(
     case 'formal_free':
       return t('admin.plan_package_alias_free', {}, 'Free');
     case 'tier_package':
-      return t('admin.tier_template_binding', {}, 'Tier-bound plan');
-    case 'dev_baseline':
-      return t('admin.dev_baseline', {}, 'Dev baseline');
+      return t('admin.tier_template_binding', {}, 'Standard package');
     case 'uncovered':
       return t('admin.package_label_uncovered', {}, 'Uncovered');
     default:
       return t('common.unknown', {}, 'Unknown');
   }
+}
+
+function normalizePackageKind(value: unknown): PackageKind | undefined {
+  const normalized = String(value || '').trim();
+  if (!normalized) {
+    return undefined;
+  }
+  return normalized === 'formal_free' ||
+    normalized === 'tier_package' ||
+    normalized === 'uncovered' ||
+    normalized === 'unknown'
+    ? normalized
+    : 'unknown';
 }
 
 export function translateCoverageStateLabel(

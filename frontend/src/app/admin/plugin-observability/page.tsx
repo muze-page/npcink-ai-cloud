@@ -302,10 +302,16 @@ function normalizePluginObservability(raw: any): PluginObservabilityData {
 }
 
 type WindowOption = 24 | 72 | 168;
-type PluginFilter = 'all' | 'npcink-abilities-toolkit' | 'npcink-governance-core' | 'npcink-ai-client-adapter';
+type PluginFilter =
+  | 'all'
+  | 'npcink-abilities-toolkit'
+  | 'npcink-governance-core'
+  | 'npcink-ai-client-adapter'
+  | 'npcink-cloud-addon';
 type AttentionWorkflowFilter = 'active' | 'acknowledged' | 'muted' | 'resolved' | 'all';
 type AttentionSeverityFilter = 'all' | 'warning' | 'error';
 type AttentionStateAction = 'acknowledge' | 'mute' | 'resolve' | 'clear';
+type TranslationFn = (key: string, params?: Record<string, string>, fallback?: string) => string;
 
 const WINDOW_OPTIONS: { value: WindowOption; label: string }[] = [
   { value: 24, label: '24h' },
@@ -313,25 +319,26 @@ const WINDOW_OPTIONS: { value: WindowOption; label: string }[] = [
   { value: 168, label: '168h' },
 ];
 
-const PLUGIN_FILTER_OPTIONS: { value: PluginFilter; label: string }[] = [
-  { value: 'all', label: 'All' },
-  { value: 'npcink-abilities-toolkit', label: 'Abilities' },
-  { value: 'npcink-governance-core', label: 'Core' },
-  { value: 'npcink-ai-client-adapter', label: 'Adapter' },
+const PLUGIN_FILTER_OPTIONS: { value: PluginFilter; labelKey: string; fallback: string }[] = [
+  { value: 'all', labelKey: 'admin.plugin_obs_filter_all', fallback: 'All plugins' },
+  { value: 'npcink-abilities-toolkit', labelKey: 'admin.plugin_obs_filter_abilities', fallback: 'Abilities' },
+  { value: 'npcink-governance-core', labelKey: 'admin.plugin_obs_filter_core', fallback: 'Core' },
+  { value: 'npcink-ai-client-adapter', labelKey: 'admin.plugin_obs_filter_adapter', fallback: 'Adapter' },
+  { value: 'npcink-cloud-addon', labelKey: 'admin.plugin_obs_filter_addon', fallback: 'Cloud Addon' },
 ];
 
-const ATTENTION_WORKFLOW_OPTIONS: { value: AttentionWorkflowFilter; label: string }[] = [
-  { value: 'active', label: 'Open' },
-  { value: 'acknowledged', label: 'Ack' },
-  { value: 'muted', label: 'Muted' },
-  { value: 'resolved', label: 'Resolved' },
-  { value: 'all', label: 'All' },
+const ATTENTION_WORKFLOW_OPTIONS: { value: AttentionWorkflowFilter; labelKey: string; fallback: string }[] = [
+  { value: 'active', labelKey: 'admin.plugin_obs_workflow_active', fallback: 'Open' },
+  { value: 'acknowledged', labelKey: 'admin.plugin_obs_workflow_acknowledged', fallback: 'Acknowledged' },
+  { value: 'muted', labelKey: 'admin.plugin_obs_workflow_muted', fallback: 'Muted' },
+  { value: 'resolved', labelKey: 'admin.plugin_obs_workflow_resolved', fallback: 'Resolved' },
+  { value: 'all', labelKey: 'admin.plugin_obs_workflow_all', fallback: 'All states' },
 ];
 
-const ATTENTION_SEVERITY_OPTIONS: { value: AttentionSeverityFilter; label: string }[] = [
-  { value: 'all', label: 'All severity' },
-  { value: 'error', label: 'Error' },
-  { value: 'warning', label: 'Warning' },
+const ATTENTION_SEVERITY_OPTIONS: { value: AttentionSeverityFilter; labelKey: string; fallback: string }[] = [
+  { value: 'all', labelKey: 'admin.plugin_obs_severity_all', fallback: 'All severity' },
+  { value: 'error', labelKey: 'admin.plugin_obs_severity_error', fallback: 'Error' },
+  { value: 'warning', labelKey: 'admin.plugin_obs_severity_warning', fallback: 'Warning' },
 ];
 
 function formatSuccessRate(rate: number): string {
@@ -362,6 +369,115 @@ function timestampValue(value: string): number {
 }
 
 type SiteSortKey = 'errors' | 'success' | 'events' | 'latency' | 'lastSeen';
+
+function statusLabel(t: TranslationFn, status: string): string {
+  return t(`status.${status || 'unknown'}`, {}, status || 'unknown');
+}
+
+function pluginHealthSummary(t: TranslationFn, data: PluginObservabilityData): string {
+  if (data.totals.eventsTotal <= 0 || data.health.status === 'inactive') {
+    return t(
+      'admin.plugin_obs_health_summary_inactive',
+      {},
+      'No plugin events in this window.'
+    );
+  }
+  return t(
+    'admin.plugin_obs_health_summary_active',
+    {
+      events: formatInteger(data.totals.eventsTotal),
+      errors: formatInteger(data.totals.errorTotal),
+      latency: formatInteger(data.totals.avgLatencyMs),
+    },
+    '{{events}} events · {{errors}} errors · avg {{latency}}ms'
+  );
+}
+
+function pluginDigestCopy(t: TranslationFn, data: PluginObservabilityData) {
+  if (data.totals.eventsTotal <= 0) return null;
+  const topPlugin = data.digest.topPluginSlug || data.plugins[0]?.pluginSlug || t('common.not_available');
+  const topError = data.digest.topErrorCode || data.errors[0]?.errorCode || t('admin.plugin_obs_no_errors_short', {}, 'None');
+  const hours = String(data.digest.windowHours || data.window.hours || 24);
+  const periodKey = data.digest.periodLabel
+    ? `admin.plugin_obs_period_${data.digest.periodLabel}`
+    : 'admin.plugin_obs_period_hours';
+  return {
+    period: t(periodKey, { hours }, data.digest.periodLabel || `${hours}h`),
+    headline: t(
+      'admin.plugin_obs_digest_headline',
+      {
+        events: formatInteger(data.totals.eventsTotal),
+        errors: formatInteger(data.totals.errorTotal),
+        sites: formatInteger(data.totals.activeSiteCount),
+        plugins: formatInteger(data.totals.activePluginCount),
+      },
+      '{{events}} plugin events across {{sites}} sites and {{plugins}} plugins.'
+    ),
+    bullets: [
+      t('admin.plugin_obs_digest_bullet_success', { rate: formatSuccessRate(data.totals.successRate) }, 'Success rate: {{rate}}'),
+      t('admin.plugin_obs_digest_bullet_latency', { latency: formatInteger(data.totals.avgLatencyMs) }, 'Average latency: {{latency}}ms'),
+      t('admin.plugin_obs_digest_bullet_top_plugin', { plugin: topPlugin }, 'Top reporting plugin: {{plugin}}'),
+      t('admin.plugin_obs_digest_bullet_top_error', { error: topError }, 'Top error: {{error}}'),
+    ],
+  };
+}
+
+function attentionCodeSuffix(code: string): string {
+  return (
+    code
+      .trim()
+      .toLowerCase()
+      .replace(/^plugin_observability[._-]*/, '')
+      .replace(/[^a-z0-9]+/g, '_')
+      .replace(/^_+|_+$/g, '') || 'default'
+  );
+}
+
+function missingPluginsFromDetail(detail: string): string {
+  return detail.replace(/^Missing plugin telemetry:\s*/i, '').trim();
+}
+
+function attentionParams(t: TranslationFn, item: AttentionItem): Record<string, string> {
+  const fallback = t('common.not_available');
+  return {
+    site: item.siteId || fallback,
+    plugin: item.pluginSlug || fallback,
+    plugins: missingPluginsFromDetail(item.detail) || item.pluginSlug || fallback,
+    eventKind: item.eventKind || fallback,
+    errorCode: item.errorCode || fallback,
+  };
+}
+
+function attentionCopy(
+  t: TranslationFn,
+  item: AttentionItem,
+  field: 'title' | 'detail' | 'action'
+): string {
+  const params = attentionParams(t, item);
+  const suffix = attentionCodeSuffix(item.code);
+  const defaultFallback =
+    field === 'title'
+      ? 'Watch item'
+      : field === 'detail'
+        ? 'Review this plugin observability signal against the related metadata.'
+        : 'Review the linked metadata and local plugin logs.';
+  const defaultCopy = t(`admin.plugin_obs_attention_${field}_default`, params, defaultFallback);
+  return t(`admin.plugin_obs_attention_${field}_${suffix}`, params, defaultCopy);
+}
+
+function attentionActionLabel(t: TranslationFn, action: AttentionStateAction): string {
+  return t(
+    `admin.plugin_obs_action_${action}`,
+    {},
+    action === 'acknowledge'
+      ? 'Acknowledge'
+      : action === 'mute'
+        ? 'Mute 24h'
+        : action === 'resolve'
+          ? 'Resolve'
+          : 'Clear state'
+  );
+}
 
 function AdminPluginObservabilityContent() {
   const { t } = useLocale();
@@ -522,6 +638,8 @@ function AdminPluginObservabilityContent() {
     return lookup;
   }, [data]);
 
+  const digestCopy = useMemo(() => (data ? pluginDigestCopy(t, data) : null), [data, t]);
+
   if (error) {
     return (
       <div className="flex min-h-[60vh] items-center justify-center">
@@ -550,7 +668,7 @@ function AdminPluginObservabilityContent() {
         description={t(
           'admin.plugin_observability_desc',
           {},
-          'Cross-site plugin event volume, error rates, latency, and recent errors for npcink-abilities-toolkit, npcink-governance-core, and npcink-ai-client-adapter.'
+          'Cross-site plugin event volume, error rates, latency, and recent errors for npcink-abilities-toolkit, npcink-governance-core, npcink-ai-client-adapter, and npcink-cloud-addon.'
         )}
         aside={
           data ? (
@@ -560,15 +678,22 @@ function AdminPluginObservabilityContent() {
                 items={[
                   {
                     label: t('admin.plugin_obs_health', {}, 'Health'),
-                    value: `${data.health.status} · ${data.health.score}`,
-                    detail: data.health.summary,
+                    value: `${statusLabel(t, data.health.status)} · ${data.health.score}`,
+                    detail: pluginHealthSummary(t, data),
                     toneClassName: data.health.status === 'error' ? 'text-rose-600 dark:text-rose-400' : data.health.status === 'warning' ? 'text-amber-600 dark:text-amber-400' : undefined,
                     size: 'compact',
                   },
                   {
                     label: t('admin.plugin_obs_events', {}, 'Events'),
                     value: formatInteger(data.totals.eventsTotal),
-                    detail: `${formatInteger(data.totals.okTotal)} ok / ${formatInteger(data.totals.errorTotal)} error`,
+                    detail: t(
+                      'admin.plugin_obs_events_detail',
+                      {
+                        ok: formatInteger(data.totals.okTotal),
+                        error: formatInteger(data.totals.errorTotal),
+                      },
+                      '{{ok}} ok / {{error}} error'
+                    ),
                   },
                   {
                     label: t('admin.plugin_obs_success_rate', {}, 'Success rate'),
@@ -582,8 +707,8 @@ function AdminPluginObservabilityContent() {
                   },
                   {
                     label: t('admin.plugin_obs_active', {}, 'Active'),
-                    value: `${formatInteger(data.totals.activeSiteCount)}s / ${formatInteger(data.totals.activePluginCount)}p`,
-                    detail: 'sites / plugins',
+                    value: `${formatInteger(data.totals.activeSiteCount)} / ${formatInteger(data.totals.activePluginCount)}`,
+                    detail: t('admin.plugin_obs_active_detail', {}, 'sites / plugins'),
                     size: 'compact',
                   },
                 ]}
@@ -611,7 +736,7 @@ function AdminPluginObservabilityContent() {
               tone="accent"
               onClick={() => setPluginFilter(opt.value)}
             >
-              {opt.label}
+              {t(opt.labelKey, {}, opt.fallback)}
             </BackofficeFilterPill>
           ))}
           <span className="mx-1 h-5 w-px bg-slate-200 dark:bg-slate-700" />
@@ -620,7 +745,7 @@ function AdminPluginObservabilityContent() {
             value={siteIdInput}
             onChange={(e) => setSiteIdInput(e.target.value)}
             onKeyDown={handleSiteIdKeyDown}
-            placeholder="site_id"
+            placeholder={t('admin.plugin_obs_site_filter', {}, 'Site ID')}
             className="h-8 rounded-full border border-slate-200/80 bg-white/80 px-3 text-xs text-slate-700 placeholder:text-slate-400 dark:border-slate-700 dark:bg-slate-900/60 dark:text-slate-200 dark:placeholder:text-slate-500"
           />
           <button
@@ -628,7 +753,7 @@ function AdminPluginObservabilityContent() {
             onClick={handleSiteIdSubmit}
             className="h-8 rounded-full border border-slate-200/80 bg-white/80 px-3 text-xs font-medium text-slate-700 transition hover:border-slate-300 hover:text-slate-950 dark:border-slate-700 dark:bg-slate-900/60 dark:text-slate-200 dark:hover:border-slate-600 dark:hover:text-white"
           >
-            Filter
+            {t('common.apply', {}, 'Apply')}
           </button>
           <button
             type="button"
@@ -648,7 +773,7 @@ function AdminPluginObservabilityContent() {
 
       {isEmpty ? (
         <BackofficeEmptyState
-          title={t('admin.plugin_obs_empty_title', {}, '暂无插件监控事件')}
+          title={t('admin.plugin_obs_empty_title', {}, 'No plugin observability events')}
           description={t(
             'admin.plugin_obs_empty_desc',
             {},
@@ -657,7 +782,7 @@ function AdminPluginObservabilityContent() {
         />
       ) : (
         <>
-          {data?.digest.headline ? (
+          {digestCopy ? (
             <BackofficeSectionPanel className="space-y-3">
               <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
                 <div>
@@ -665,25 +790,23 @@ function AdminPluginObservabilityContent() {
                     {t('admin.plugin_obs_digest_label', {}, 'Digest')}
                   </p>
                   <h2 className="mt-2 text-xl font-semibold text-gray-950 dark:text-white">
-                    {data.digest.headline}
+                    {digestCopy.headline}
                   </h2>
                 </div>
                 <BackofficeTag tone="info">
-                  {data.digest.periodLabel || `${data.digest.windowHours}h`}
+                  {digestCopy.period}
                 </BackofficeTag>
               </div>
-              {data.digest.bullets.length ? (
-                <div className="grid gap-2 md:grid-cols-2">
-                  {data.digest.bullets.map((item) => (
-                    <div
-                      key={item}
-                      className="rounded-xl border border-slate-200/80 bg-white/70 px-3 py-2 text-sm text-slate-600 dark:border-slate-800 dark:bg-slate-900/40 dark:text-slate-300"
-                    >
-                      {item}
-                    </div>
-                  ))}
-                </div>
-              ) : null}
+              <div className="grid gap-2 md:grid-cols-2">
+                {digestCopy.bullets.map((item) => (
+                  <div
+                    key={item}
+                    className="rounded-xl border border-slate-200/80 bg-white/70 px-3 py-2 text-sm text-slate-600 dark:border-slate-800 dark:bg-slate-900/40 dark:text-slate-300"
+                  >
+                    {item}
+                  </div>
+                ))}
+              </div>
             </BackofficeSectionPanel>
           ) : null}
 
@@ -698,13 +821,26 @@ function AdminPluginObservabilityContent() {
                     {t('admin.plugin_obs_attention_title', {}, 'Current watch items')}
                   </h2>
                   <p className="mt-2 text-sm text-slate-600 dark:text-slate-300">
-                    {formatInteger(data.attentionWorkflow.needsAttention)} open /{' '}
-                    {formatInteger(data.attentionWorkflow.total)} total
+                    {t(
+                      'admin.plugin_obs_attention_count_detail',
+                      {
+                        open: formatInteger(data.attentionWorkflow.needsAttention),
+                        total: formatInteger(data.attentionWorkflow.total),
+                      },
+                      '{{open}} open / {{total}} total'
+                    )}
+                  </p>
+                  <p className="mt-2 text-xs leading-5 text-slate-500 dark:text-slate-400">
+                    {t(
+                      'admin.plugin_obs_attention_scope_notice',
+                      {},
+                      'Attention state is Cloud display state only. It does not mutate local plugin settings, approvals, ability definitions, routing, or WordPress content.'
+                    )}
                   </p>
                 </div>
                 <BackofficeStatusBadge
                   status={data.health.status}
-                  label={`${data.health.status} · ${data.health.score}`}
+                  label={`${statusLabel(t, data.health.status)} · ${data.health.score}`}
                 />
               </div>
               <div className="flex flex-wrap gap-2">
@@ -715,7 +851,7 @@ function AdminPluginObservabilityContent() {
                     tone="info"
                     onClick={() => setAttentionWorkflowFilter(option.value)}
                   >
-                    {option.label}
+                    {t(option.labelKey, {}, option.fallback)}
                   </BackofficeFilterPill>
                 ))}
                 <span className="mx-1 h-5 w-px bg-slate-200 dark:bg-slate-700" />
@@ -726,7 +862,7 @@ function AdminPluginObservabilityContent() {
                     tone="accent"
                     onClick={() => setAttentionSeverityFilter(option.value)}
                   >
-                    {option.label}
+                    {t(option.labelKey, {}, option.fallback)}
                   </BackofficeFilterPill>
                 ))}
                 <select
@@ -736,7 +872,7 @@ function AdminPluginObservabilityContent() {
                 >
                   {attentionCodeOptions.map((code) => (
                     <option key={code} value={code}>
-                      {code === 'all' ? 'All codes' : code}
+                      {code === 'all' ? t('admin.plugin_obs_attention_all_codes', {}, 'All codes') : code}
                     </option>
                   ))}
                 </select>
@@ -746,23 +882,29 @@ function AdminPluginObservabilityContent() {
                   <BackofficeStackCard key={item.attentionKey || `${item.code}-${item.siteId}`}>
                     <div className="flex items-start justify-between gap-3">
                       <div className="min-w-0">
-                        <p className="font-semibold text-slate-950 dark:text-white">{item.title}</p>
-                        <p className="mt-1 text-sm leading-6 text-slate-600 dark:text-slate-300">{item.detail}</p>
-                        {item.suggestedAction ? (
-                          <p className="mt-2 text-xs leading-5 text-slate-500 dark:text-slate-400">
-                            {item.suggestedAction}
-                          </p>
-                        ) : null}
+                        <p className="font-semibold text-slate-950 dark:text-white">
+                          {attentionCopy(t, item, 'title')}
+                        </p>
+                        <p className="mt-1 text-sm leading-6 text-slate-600 dark:text-slate-300">
+                          {attentionCopy(t, item, 'detail')}
+                        </p>
+                        <p className="mt-2 text-xs leading-5 text-slate-500 dark:text-slate-400">
+                          {attentionCopy(t, item, 'action')}
+                        </p>
                         <div className="mt-2 flex flex-wrap gap-1.5">
                           {item.siteId ? <BackofficeTag>{item.siteId}</BackofficeTag> : null}
                           {item.pluginSlug ? <BackofficeTag tone="info">{item.pluginSlug}</BackofficeTag> : null}
                           {item.errorCode ? <BackofficeTag tone="danger">{item.errorCode}</BackofficeTag> : null}
                           <BackofficeTag tone={item.workflowStatus === 'active' ? 'warning' : 'info'}>
-                            {item.workflowStatus}
+                            {t(`admin.plugin_obs_workflow_${item.workflowStatus}`, {}, item.workflowStatus)}
                           </BackofficeTag>
                           {item.state?.mutedUntil ? (
                             <BackofficeTag tone="info">
-                              muted until {formatDate(item.state.mutedUntil)}
+                              {t(
+                                'admin.plugin_obs_muted_until',
+                                { date: formatDate(item.state.mutedUntil) },
+                                'Muted until {{date}}'
+                              )}
                             </BackofficeTag>
                           ) : null}
                         </div>
@@ -775,7 +917,7 @@ function AdminPluginObservabilityContent() {
                               disabled={attentionActionKey === `${item.attentionKey}-${action}`}
                               onClick={() => void handleAttentionStateAction(item, action)}
                             >
-                              {action === 'acknowledge' ? 'Ack' : action === 'mute' ? 'Mute 24h' : 'Resolve'}
+                              {attentionActionLabel(t, action)}
                             </button>
                           ))}
                           {item.workflowStatus !== 'active' ? (
@@ -785,12 +927,14 @@ function AdminPluginObservabilityContent() {
                               disabled={attentionActionKey === `${item.attentionKey}-clear`}
                               onClick={() => void handleAttentionStateAction(item, 'clear')}
                             >
-                              Clear state
+                              {attentionActionLabel(t, 'clear')}
                             </button>
                           ) : null}
                         </div>
                       </div>
-                      <BackofficeTag tone={attentionTone(item.severity)}>{item.severity}</BackofficeTag>
+                      <BackofficeTag tone={attentionTone(item.severity)}>
+                        {t(`admin.plugin_obs_severity_${item.severity}`, {}, item.severity)}
+                      </BackofficeTag>
                     </div>
                   </BackofficeStackCard>
                 ))}
@@ -859,7 +1003,15 @@ function AdminPluginObservabilityContent() {
                       <div className="min-w-0">
                         <p className="font-semibold text-slate-950 dark:text-white">{plugin.pluginSlug}</p>
                         <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">
-                          {formatInteger(plugin.eventsTotal)} events &middot; {formatSuccessRate(plugin.successRate)} &middot; {plugin.avgLatencyMs}ms avg
+                          {t(
+                            'admin.plugin_obs_plugin_detail',
+                            {
+                              events: formatInteger(plugin.eventsTotal),
+                              rate: formatSuccessRate(plugin.successRate),
+                              latency: formatInteger(plugin.avgLatencyMs),
+                            },
+                            '{{events}} events · {{rate}} · avg {{latency}}ms'
+                          )}
                         </p>
                         <div className="mt-2 flex flex-wrap gap-1.5">
                           {plugin.eventKinds.map((ek) => (
@@ -930,13 +1082,17 @@ function AdminPluginObservabilityContent() {
                           <td className="px-4 py-3">
                             <BackofficeIdentifier value={site.siteId} className="font-medium text-slate-950 dark:text-white" />
                             <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                              {formatInteger(site.pluginCount)} plugins
+                              {t(
+                                'admin.plugin_obs_plugins_detail',
+                                { count: formatInteger(site.pluginCount) },
+                                '{{count}} plugins'
+                              )}
                             </p>
                           </td>
                           <td className="px-4 py-3">
                             <BackofficeStatusBadge
                               status={site.health.status}
-                              label={`${site.health.status} · ${site.health.score}`}
+                              label={`${statusLabel(t, site.health.status)} · ${site.health.score}`}
                             />
                           </td>
                           <td className="px-4 py-3 text-right text-slate-700 dark:text-slate-200">
@@ -1010,7 +1166,12 @@ function AdminPluginObservabilityContent() {
                         <div className="min-w-0">
                           <p className="font-mono text-sm font-semibold text-rose-700 dark:text-rose-300">{err.errorCode}</p>
                           <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">
-                            {err.pluginSlug} &middot; {err.eventKind} &middot; {formatInteger(err.count)} occurrences
+                            {err.pluginSlug} &middot; {err.eventKind} &middot;{' '}
+                            {t(
+                              'admin.plugin_obs_error_occurrences',
+                              { count: formatInteger(err.count) },
+                              '{{count}} occurrences'
+                            )}
                           </p>
                           {err.siteId ? (
                             <BackofficeIdentifier value={err.siteId} className="mt-1 text-xs text-slate-500 dark:text-slate-400" />
@@ -1044,7 +1205,7 @@ function AdminPluginObservabilityContent() {
                       <div className="min-w-0 space-y-1">
                         <div className="flex items-start justify-between gap-3">
                           <p className="font-mono text-sm font-semibold text-rose-700 dark:text-rose-300">{re.errorCode}</p>
-                          <BackofficeStatusBadge status="error" label={re.status} />
+                          <BackofficeStatusBadge status="error" label={statusLabel(t, re.status)} />
                         </div>
                         <p className="text-sm text-slate-600 dark:text-slate-300">
                           {re.pluginSlug} &middot; {re.eventKind}
@@ -1053,10 +1214,16 @@ function AdminPluginObservabilityContent() {
                           <BackofficeIdentifier value={re.siteId} className="text-xs text-slate-500 dark:text-slate-400" />
                         ) : null}
                         {re.abilityId ? (
-                          <p className="text-xs text-slate-500 dark:text-slate-400">ability: <BackofficeIdentifier value={re.abilityId} /></p>
+                          <p className="text-xs text-slate-500 dark:text-slate-400">
+                            {t('admin.plugin_obs_recent_ability', {}, 'Ability')}:{' '}
+                            <BackofficeIdentifier value={re.abilityId} />
+                          </p>
                         ) : null}
                         {re.proposalId ? (
-                          <p className="text-xs text-slate-500 dark:text-slate-400">proposal: <BackofficeIdentifier value={re.proposalId} /></p>
+                          <p className="text-xs text-slate-500 dark:text-slate-400">
+                            {t('admin.plugin_obs_recent_proposal', {}, 'Proposal')}:{' '}
+                            <BackofficeIdentifier value={re.proposalId} />
+                          </p>
                         ) : null}
                         {re.route ? (
                           <p className="font-mono text-xs text-slate-500 dark:text-slate-400">{re.route}</p>

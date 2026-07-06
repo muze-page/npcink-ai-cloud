@@ -6,7 +6,7 @@ import secrets
 from collections import Counter
 from datetime import UTC, datetime, timedelta
 from typing import Any, cast
-from urllib.parse import urlsplit
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from uuid import uuid4
 
 from app.adapters.repositories.commercial_repository import CommercialRepository
@@ -17,38 +17,50 @@ from app.core.callback_security import (
 from app.core.db import get_session
 from app.core.models import (
     ACCOUNT_STATUS_ACTIVE,
-    SITE_ADMIN_SITE_GRANT_STATUS_ACTIVE,
-    SITE_ADMIN_STATUS_ACTIVE,
+    ACCOUNT_USER_MEMBERSHIP_STATUS_ACTIVE,
+    PORTAL_OAUTH_STATE_STATUS_CONSUMED,
+    PORTAL_OAUTH_STATE_STATUS_EXPIRED,
+    PORTAL_OAUTH_STATE_STATUS_PENDING,
+    PRINCIPAL_STATUS_ACTIVE,
     SITE_API_KEY_STATUS_ACTIVE,
     SITE_API_KEY_STATUS_EXPIRED,
     SITE_API_KEY_STATUS_REVOKED,
     SITE_STATUS_ACTIVE,
     SITE_STATUS_ARCHIVED,
+    SITE_STATUS_INACTIVE,
     SITE_STATUS_PROVISIONING,
     SITE_STATUS_SUSPENDED,
+    SITE_USER_GRANT_STATUS_ACTIVE,
     AccountSubscription,
     Site,
     SiteApiKey,
 )
 from app.core.secrets import (
+    decrypt_addon_connection_payload,
+    encrypt_addon_connection_payload,
     encrypt_runtime_terminal_callback_secret,
     encrypt_site_api_signing_secret,
 )
 from app.core.security import build_secret_hash
 from app.domain.commercial.audit_context import ServiceAuditContext
-from app.domain.commercial.customer_api_keys import expand_api_key_scopes
+from app.domain.commercial.customer_api_keys import (
+    DEFAULT_PORTAL_RUNTIME_SCOPES,
+    build_customer_api_key,
+    expand_api_key_scopes,
+)
 from app.domain.commercial.errors import (
     CommercialNotFoundError,
     CommercialPermissionError,
     CommercialValidationError,
 )
 from app.domain.commercial.identity import (
-    IDENTITY_TYPE_SITE_ADMIN,
-    SITE_ADMIN_ROLE_SITE_ADMIN,
+    IDENTITY_TYPE_USER,
+    USER_ROLE_USER,
     _extract_site_wordpress_url,
     _normalize_portal_site_url,
     _slugify_portal_site_segment,
-    resolve_site_admin_allowed_actions,
+    normalize_user_role,
+    resolve_principal_allowed_actions,
 )
 from app.domain.commercial.mixins._audit_mixin import CommercialServiceAuditMixin
 from app.domain.commercial.service import (
@@ -56,8 +68,162 @@ from app.domain.commercial.service import (
     PLAN_TIER_REGISTRY,
 )
 
+WORDPRESS_ADDON_CONNECTION_PROVIDER = "wordpress_addon_connection"
+WORDPRESS_ADDON_CONNECTION_TTL_SECONDS = 10 * 60
+
+
+def _hash_addon_connection_value(value: str, *, prefix: str) -> str:
+    normalized = str(value or "").strip()
+    if not normalized:
+        raise CommercialValidationError(
+            "service.wordpress_addon_connection_value_required",
+            "wordpress addon connection value is required",
+        )
+    return build_secret_hash(f"{WORDPRESS_ADDON_CONNECTION_PROVIDER}:{prefix}:{normalized}")
+
+
+def _normalize_addon_return_url(value: str) -> str:
+    raw = str(value or "").strip()
+    parsed = urlsplit(raw)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise CommercialValidationError(
+            "service.wordpress_addon_return_url_invalid",
+            "wordpress addon return_url must be an absolute http or https URL",
+        )
+    return raw[:2048]
+
+
+def _append_addon_return_query(return_url: str, *, code: str, state: str) -> str:
+    parsed = urlsplit(return_url)
+    query = dict(parse_qsl(parsed.query, keep_blank_values=True))
+    query["code"] = code
+    if state:
+        query["state"] = state
+    return urlunsplit(
+        (
+            parsed.scheme,
+            parsed.netloc,
+            parsed.path,
+            urlencode(query),
+            parsed.fragment,
+        )
+    )
+
 
 class CommercialServiceSiteMixin(CommercialServiceAuditMixin):
+    def _deactivate_account_active_sibling_sites(
+        self,
+        *,
+        repository: CommercialRepository,
+        account_id: str,
+        activated_site_id: str,
+        audit_context: ServiceAuditContext | None,
+    ) -> list[dict[str, object]]:
+        deactivated_sites: list[dict[str, object]] = []
+        for sibling in repository.list_sites(account_id=account_id):
+            if sibling.site_id == activated_site_id or sibling.status != SITE_STATUS_ACTIVE:
+                continue
+            sibling.status = SITE_STATUS_INACTIVE
+            payload = self._serialize_site(sibling)
+            deactivated_sites.append(payload)
+            self._record_service_audit_in_session(
+                repository=repository,
+                audit_context=audit_context,
+                event_kind="site.deactivate",
+                outcome="succeeded",
+                account_id=sibling.account_id,
+                site_id=sibling.site_id,
+                scope_kind="site",
+                scope_id=sibling.site_id,
+                payload_json={
+                    **payload,
+                    "reason": "portal_single_active_site_switch",
+                    "activated_site_id": activated_site_id,
+                },
+            )
+        return deactivated_sites
+
+    def _revoke_active_site_keys_in_session(
+        self,
+        *,
+        repository: CommercialRepository,
+        site_id: str,
+        now: datetime,
+        audit_context: ServiceAuditContext | None,
+        reason: str,
+    ) -> list[str]:
+        revoked_key_ids: list[str] = []
+        for api_key in repository.list_site_keys(site_id):
+            if str(api_key.status or "") != SITE_API_KEY_STATUS_ACTIVE:
+                continue
+            api_key.status = SITE_API_KEY_STATUS_REVOKED
+            api_key.revoked_at = now
+            revoked_key_ids.append(api_key.key_id)
+            key_payload = self._serialize_site_key(api_key)
+            self._record_service_audit_in_session(
+                repository=repository,
+                audit_context=audit_context,
+                event_kind="site_key.revoke",
+                outcome="succeeded",
+                site_id=site_id,
+                key_id=api_key.key_id,
+                scope_kind="site_key",
+                scope_id=api_key.key_id,
+                payload_json={
+                    **key_payload,
+                    "reason": reason,
+                },
+            )
+        return revoked_key_ids
+
+    def _issue_automatic_runtime_site_key_in_session(
+        self,
+        *,
+        repository: CommercialRepository,
+        site: Site,
+        secret: str,
+        key_id: str,
+        label: str,
+        metadata_json: dict[str, object],
+        audit_context: ServiceAuditContext | None,
+        replaced_key_ids: list[str] | None = None,
+    ) -> SiteApiKey:
+        api_key = repository.upsert_site_key(
+            key_id=key_id,
+            site_id=site.site_id,
+            secret_hash=build_secret_hash(secret),
+            signing_secret_ciphertext=encrypt_site_api_signing_secret(
+                secret,
+                settings=self.settings,
+            ),
+            label=label,
+            scopes_json=expand_api_key_scopes(DEFAULT_PORTAL_RUNTIME_SCOPES),
+            metadata_json=metadata_json,
+            status=SITE_API_KEY_STATUS_ACTIVE,
+            rotated_from_key_id=None,
+            replaced_by_key_id=None,
+            expires_at=None,
+            revoked_at=None,
+        )
+        payload = self._serialize_site_key(api_key)
+        self._record_service_audit_in_session(
+            repository=repository,
+            audit_context=audit_context,
+            event_kind="site_key.issue",
+            outcome="succeeded",
+            account_id=site.account_id,
+            site_id=site.site_id,
+            key_id=api_key.key_id,
+            scope_kind="site_key",
+            scope_id=api_key.key_id,
+            payload_json={
+                **payload,
+                "source": "automatic_runtime_credential",
+                "replaced_key_ids": list(replaced_key_ids or []),
+            },
+        )
+        return api_key
+
     def provision_site(
         self,
         *,
@@ -125,13 +291,13 @@ class CommercialServiceSiteMixin(CommercialServiceAuditMixin):
         self,
         *,
         account_id: str,
-        site_admin_ref: str,
+        principal_id: str,
         wordpress_url: str,
         site_name: str = "",
         audit_context: ServiceAuditContext | None = None,
     ) -> dict[str, object]:
         normalized_account_id = str(account_id or "").strip()
-        normalized_site_admin_ref = str(site_admin_ref or "").strip()
+        normalized_principal_id = str(principal_id or "").strip()
         canonical_wordpress_url, site_source = _normalize_portal_site_url(wordpress_url)
         site_slug = _slugify_portal_site_segment(site_source)
         if not normalized_account_id:
@@ -139,10 +305,10 @@ class CommercialServiceSiteMixin(CommercialServiceAuditMixin):
                 "service.account_id_required",
                 "account id is required",
             )
-        if not normalized_site_admin_ref:
+        if not normalized_principal_id:
             raise CommercialPermissionError(
-                "service.site_admin_ref_required",
-                "site admin ref is required",
+                "service.principal_id_required",
+                "principal id is required",
             )
         if not site_slug:
             raise CommercialPermissionError(
@@ -169,13 +335,13 @@ class CommercialServiceSiteMixin(CommercialServiceAuditMixin):
                     "service.portal_account_inactive",
                     f"account '{normalized_account_id}' is not active",
                 )
-            identity = repository.get_site_admin_identity_by_ref(
-                site_admin_ref=normalized_site_admin_ref,
+            identity = repository.get_principal_identity_by_ref(
+                principal_id=normalized_principal_id,
             )
-            if identity is None or identity.status != SITE_ADMIN_STATUS_ACTIVE:
+            if identity is None or identity.status != PRINCIPAL_STATUS_ACTIVE:
                 raise CommercialPermissionError(
-                    "service.site_admin_access_required",
-                    f"site admin '{normalized_site_admin_ref}' is not active",
+                    "service.principal_access_required",
+                    f"principal '{normalized_principal_id}' is not active",
                 )
             existing_site = repository.get_site(normalized_site_id)
             if existing_site is not None:
@@ -221,18 +387,27 @@ class CommercialServiceSiteMixin(CommercialServiceAuditMixin):
                 },
                 provisioned_at=now,
             )
-            repository.upsert_site_admin_site_grant(
+            repository.upsert_principal_site_grant(
                 grant_id=f"sadmg_{uuid4().hex}",
-                site_admin_id=identity.site_admin_id,
+                principal_id=identity.principal_id,
                 site_id=site.site_id,
-                status=SITE_ADMIN_SITE_GRANT_STATUS_ACTIVE,
+                status=SITE_USER_GRANT_STATUS_ACTIVE,
+                metadata_json={"source": "portal_connect_site"},
+            )
+            repository.upsert_account_user_membership(
+                membership_id=f"aum_{uuid4().hex}",
+                principal_id=identity.principal_id,
+                account_id=normalized_account_id,
+                role=normalize_user_role(USER_ROLE_USER),
+                status=ACCOUNT_USER_MEMBERSHIP_STATUS_ACTIVE,
+                allowed_actions_json=resolve_principal_allowed_actions(),
                 metadata_json={"source": "portal_connect_site"},
             )
             payload = {
                 "account_id": normalized_account_id,
-                "site_admin_ref": normalized_site_admin_ref,
-                "identity_type": IDENTITY_TYPE_SITE_ADMIN,
-                "role": SITE_ADMIN_ROLE_SITE_ADMIN,
+                "principal_id": normalized_principal_id,
+                "identity_type": IDENTITY_TYPE_USER,
+                "role": USER_ROLE_USER,
                 "wordpress_url": canonical_wordpress_url,
                 "site": self._serialize_site(site),
                 "subscription": service._serialize_subscription(subscription),
@@ -258,7 +433,7 @@ class CommercialServiceSiteMixin(CommercialServiceAuditMixin):
                     ),
                 },
                 "next": {
-                    "keys_path": f"/portal/keys?site={site.site_id}",
+                    "connection_path": f"/portal/sites/{site.site_id}",
                     "sites_path": f"/portal/sites?site={site.site_id}",
                 },
             }
@@ -312,6 +487,99 @@ class CommercialServiceSiteMixin(CommercialServiceAuditMixin):
             session.commit()
             return payload
 
+    def activate_portal_site(
+        self,
+        site_id: str,
+        *,
+        audit_context: ServiceAuditContext | None = None,
+    ) -> dict[str, object]:
+        now = self.now_factory()
+        with get_session(self.database_url) as session:
+            repository = CommercialRepository(session)
+            site = repository.get_site(site_id)
+            if site is None:
+                raise CommercialNotFoundError(
+                    "service.site_not_found",
+                    f"site '{site_id}' was not found",
+                )
+            if str(site.status or "") in {SITE_STATUS_ARCHIVED, SITE_STATUS_SUSPENDED}:
+                raise CommercialPermissionError(
+                    "service.portal_site_not_activatable",
+                    f"site '{site_id}' cannot be activated from the portal",
+                )
+            deactivated_sites = self._deactivate_account_active_sibling_sites(
+                repository=repository,
+                account_id=site.account_id or "",
+                activated_site_id=site.site_id,
+                audit_context=audit_context,
+            )
+            site.status = SITE_STATUS_ACTIVE
+            if site.provisioned_at is None:
+                site.provisioned_at = now
+            site.activated_at = now
+            site.suspended_at = None
+            site.suspension_reason = None
+            payload = self._serialize_site(site)
+            self._record_service_audit_in_session(
+                repository=repository,
+                audit_context=audit_context,
+                event_kind="site.activate",
+                outcome="succeeded",
+                account_id=site.account_id,
+                site_id=site.site_id,
+                scope_kind="site",
+                scope_id=site.site_id,
+                payload_json={
+                    **payload,
+                    "deactivated_site_ids": [
+                        str(item.get("site_id") or "") for item in deactivated_sites
+                    ],
+                },
+            )
+            session.commit()
+            return {
+                "site": payload,
+                "deactivated_sites": deactivated_sites,
+            }
+
+    def deactivate_portal_site(
+        self,
+        site_id: str,
+        *,
+        audit_context: ServiceAuditContext | None = None,
+    ) -> dict[str, object]:
+        with get_session(self.database_url) as session:
+            repository = CommercialRepository(session)
+            site = repository.get_site(site_id)
+            if site is None:
+                raise CommercialNotFoundError(
+                    "service.site_not_found",
+                    f"site '{site_id}' was not found",
+                )
+            if str(site.status or "") in {SITE_STATUS_ARCHIVED, SITE_STATUS_SUSPENDED}:
+                raise CommercialPermissionError(
+                    "service.portal_site_not_deactivatable",
+                    f"site '{site_id}' cannot be deactivated from the portal",
+                )
+            site.status = SITE_STATUS_INACTIVE
+            payload = self._serialize_site(site)
+            self._record_service_audit_in_session(
+                repository=repository,
+                audit_context=audit_context,
+                event_kind="site.deactivate",
+                outcome="succeeded",
+                account_id=site.account_id,
+                site_id=site.site_id,
+                scope_kind="site",
+                scope_id=site.site_id,
+                payload_json={
+                    **payload,
+                    "reason": "portal_user_deactivated_site",
+                },
+            )
+            session.commit()
+            return payload
+
     def suspend_site(
         self,
         site_id: str,
@@ -346,7 +614,7 @@ class CommercialServiceSiteMixin(CommercialServiceAuditMixin):
             session.commit()
             return payload
 
-    def archive_site(
+    def remove_portal_site(
         self,
         site_id: str,
         *,
@@ -361,79 +629,68 @@ class CommercialServiceSiteMixin(CommercialServiceAuditMixin):
                     "service.site_not_found",
                     f"site '{site_id}' was not found",
                 )
+            if str(site.status or "") == SITE_STATUS_SUSPENDED:
+                raise CommercialPermissionError(
+                    "service.portal_site_not_removable",
+                    f"site '{site_id}' cannot be removed from the portal",
+                )
+            if str(site.status or "") == SITE_STATUS_ARCHIVED:
+                return {
+                    "site": self._serialize_site(site),
+                    "revoked_key_ids": [],
+                }
             metadata = dict(site.metadata_json or {})
             lifecycle = metadata.get("portal_lifecycle")
             lifecycle = dict(lifecycle) if isinstance(lifecycle, dict) else {}
             previous_status = str(site.status or "").strip()
             lifecycle["previous_status"] = previous_status
-            lifecycle["archived_at"] = self._serialize_datetime(now)
-            lifecycle["archived"] = True
+            lifecycle["removed_at"] = self._serialize_datetime(now)
+            lifecycle["removed"] = True
             metadata["portal_lifecycle"] = lifecycle
             site.metadata_json = metadata
             site.status = SITE_STATUS_ARCHIVED
+            revoked_key_ids: list[str] = []
+            for api_key in repository.list_site_keys(site.site_id):
+                if str(api_key.status or "") != SITE_API_KEY_STATUS_ACTIVE:
+                    continue
+                api_key.status = SITE_API_KEY_STATUS_REVOKED
+                api_key.revoked_at = now
+                revoked_key_ids.append(api_key.key_id)
+                key_payload = self._serialize_site_key(api_key)
+                self._record_service_audit_in_session(
+                    repository=repository,
+                    audit_context=audit_context,
+                    event_kind="site_key.revoke",
+                    outcome="succeeded",
+                    site_id=site.site_id,
+                    key_id=api_key.key_id,
+                    scope_kind="site_key",
+                    scope_id=api_key.key_id,
+                    payload_json={
+                        **key_payload,
+                        "reason": "portal_user_removed_site",
+                    },
+                )
             payload = self._serialize_site(site)
             self._record_service_audit_in_session(
                 repository=repository,
                 audit_context=audit_context,
-                event_kind="site.archive",
+                event_kind="site.remove",
                 outcome="succeeded",
                 account_id=site.account_id,
                 site_id=site.site_id,
                 scope_kind="site",
                 scope_id=site.site_id,
-                payload_json=payload,
+                payload_json={
+                    **payload,
+                    "revoked_key_ids": revoked_key_ids,
+                },
             )
             session.commit()
-            return payload
-
-    def restore_site(
-        self,
-        site_id: str,
-        *,
-        audit_context: ServiceAuditContext | None = None,
-    ) -> dict[str, object]:
-        now = self.now_factory()
-        with get_session(self.database_url) as session:
-            repository = CommercialRepository(session)
-            site = repository.get_site(site_id)
-            if site is None:
-                raise CommercialNotFoundError(
-                    "service.site_not_found",
-                    f"site '{site_id}' was not found",
-                )
-            metadata = dict(site.metadata_json or {})
-            lifecycle = metadata.get("portal_lifecycle")
-            lifecycle = dict(lifecycle) if isinstance(lifecycle, dict) else {}
-            previous_status = str(lifecycle.get("previous_status") or "").strip()
-            if previous_status not in {
-                SITE_STATUS_ACTIVE,
-                SITE_STATUS_PROVISIONING,
-                SITE_STATUS_SUSPENDED,
-            }:
-                previous_status = (
-                    SITE_STATUS_ACTIVE
-                    if site.activated_at is not None
-                    else SITE_STATUS_PROVISIONING
-                )
-            lifecycle["archived"] = False
-            lifecycle["restored_at"] = self._serialize_datetime(now)
-            metadata["portal_lifecycle"] = lifecycle
-            site.metadata_json = metadata
-            site.status = previous_status
-            payload = self._serialize_site(site)
-            self._record_service_audit_in_session(
-                repository=repository,
-                audit_context=audit_context,
-                event_kind="site.restore",
-                outcome="succeeded",
-                account_id=site.account_id,
-                site_id=site.site_id,
-                scope_kind="site",
-                scope_id=site.site_id,
-                payload_json=payload,
-            )
-            session.commit()
-            return payload
+            return {
+                "site": payload,
+                "revoked_key_ids": revoked_key_ids,
+            }
 
     def update_site_runtime_callbacks(
         self,
@@ -546,6 +803,16 @@ class CommercialServiceSiteMixin(CommercialServiceAuditMixin):
                     "service.site_not_found",
                     f"site '{site_id}' was not found",
                 )
+            if str(site.status or "") == SITE_STATUS_ARCHIVED:
+                raise CommercialPermissionError(
+                    "service.portal_site_removed",
+                    f"site '{site_id}' has been removed",
+                )
+            if str(site.status or "") == SITE_STATUS_SUSPENDED:
+                raise CommercialPermissionError(
+                    "service.portal_site_suspended",
+                    f"site '{site_id}' is suspended",
+                )
             api_key = repository.upsert_site_key(
                 key_id=resolved_key_id,
                 site_id=site_id,
@@ -577,6 +844,15 @@ class CommercialServiceSiteMixin(CommercialServiceAuditMixin):
                 payload_json=payload,
             )
             if activate_site_on_issue and site.status == SITE_STATUS_PROVISIONING:
+                deactivated_site_ids = [
+                    str(item.get("site_id") or "")
+                    for item in self._deactivate_account_active_sibling_sites(
+                        repository=repository,
+                        account_id=site.account_id or "",
+                        activated_site_id=site.site_id,
+                        audit_context=audit_context,
+                    )
+                ]
                 site.status = SITE_STATUS_ACTIVE
                 if site.provisioned_at is None:
                     site.provisioned_at = now
@@ -585,6 +861,7 @@ class CommercialServiceSiteMixin(CommercialServiceAuditMixin):
                 site.suspension_reason = None
                 payload["site_status"] = site.status
                 payload["site_activated"] = True
+                payload["deactivated_site_ids"] = deactivated_site_ids
                 self._record_service_audit_in_session(
                     repository=repository,
                     audit_context=audit_context,
@@ -595,13 +872,355 @@ class CommercialServiceSiteMixin(CommercialServiceAuditMixin):
                     key_id=api_key.key_id,
                     scope_kind="site",
                     scope_id=site.site_id,
-                    payload_json=self._serialize_site(site),
+                    payload_json={
+                        **self._serialize_site(site),
+                        "deactivated_site_ids": deactivated_site_ids,
+                    },
                 )
             else:
                 payload["site_status"] = str(site.status or "")
                 payload["site_activated"] = False
             session.commit()
             return payload
+
+    def create_wordpress_addon_connection(
+        self,
+        *,
+        account_id: str,
+        principal_id: str,
+        wordpress_url: str,
+        site_name: str,
+        return_url: str,
+        addon_state: str,
+        audit_context: ServiceAuditContext | None = None,
+    ) -> dict[str, object]:
+        normalized_account_id = str(account_id or "").strip()
+        normalized_principal_id = str(principal_id or "").strip()
+        safe_return_url = _normalize_addon_return_url(return_url)
+        normalized_addon_state = str(addon_state or "").strip()
+        if not normalized_addon_state:
+            raise CommercialValidationError(
+                "service.wordpress_addon_state_required",
+                "wordpress addon state is required",
+            )
+        canonical_wordpress_url, site_source = _normalize_portal_site_url(wordpress_url)
+        site_slug = _slugify_portal_site_segment(site_source)
+        if not normalized_account_id:
+            raise CommercialPermissionError(
+                "service.account_id_required",
+                "account id is required",
+            )
+        if not normalized_principal_id:
+            raise CommercialPermissionError(
+                "service.principal_id_required",
+                "principal id is required",
+            )
+        if not site_slug:
+            raise CommercialPermissionError(
+                "service.portal_site_slug_invalid",
+                "wordpress site url could not be converted into a stable site id",
+            )
+
+        normalized_site_id = f"site_{site_slug}"
+        resolved_site_name = (
+            str(site_name or "").strip()
+            or urlsplit(canonical_wordpress_url).hostname
+            or normalized_site_id
+        )
+        now = self.now_factory()
+        key_secret = f"sk_{secrets.token_urlsafe(24)}"
+        key_id = f"key_{uuid4().hex}"
+        connection_code = secrets.token_urlsafe(32)
+        expires_at = now + timedelta(seconds=WORDPRESS_ADDON_CONNECTION_TTL_SECONDS)
+
+        with get_session(self.database_url) as session:
+            repository = CommercialRepository(session)
+            account = repository.get_account(normalized_account_id)
+            if account is None:
+                raise CommercialNotFoundError(
+                    "service.account_not_found",
+                    f"account '{normalized_account_id}' was not found",
+                )
+            if str(account.status or "") != ACCOUNT_STATUS_ACTIVE:
+                raise CommercialPermissionError(
+                    "service.portal_account_inactive",
+                    f"account '{normalized_account_id}' is not active",
+                )
+            identity = repository.get_principal_identity_by_ref(
+                principal_id=normalized_principal_id,
+            )
+            if identity is None or identity.status != PRINCIPAL_STATUS_ACTIVE:
+                raise CommercialPermissionError(
+                    "service.principal_access_required",
+                    f"principal '{normalized_principal_id}' is not active",
+                )
+            subscription = repository.get_runtime_subscription(normalized_account_id)
+            if subscription is None:
+                raise CommercialPermissionError(
+                    "service.subscription_required",
+                    f"account '{normalized_account_id}' does not have an active customer subscription",
+                )
+            snapshot = repository.get_active_entitlement_snapshot(
+                normalized_account_id,
+                subscription_id=subscription.subscription_id,
+            )
+            if snapshot is None:
+                raise CommercialPermissionError(
+                    "service.entitlement_snapshot_required",
+                    f"account '{normalized_account_id}' does not have an active entitlement snapshot",
+                )
+
+            service = cast(Any, self)
+            existing_site = repository.get_site(normalized_site_id)
+            site_created = False
+            if existing_site is None:
+                service._assert_account_site_capacity(
+                    repository=repository,
+                    account_id=normalized_account_id,
+                    snapshot=snapshot,
+                )
+                site = repository.upsert_site(
+                    site_id=normalized_site_id,
+                    account_id=normalized_account_id,
+                    name=resolved_site_name,
+                    status=SITE_STATUS_PROVISIONING,
+                    metadata_json={
+                        "source": "portal_self_serve",
+                        "wordpress_url": canonical_wordpress_url,
+                        "created_via": "wordpress_addon_connection",
+                    },
+                    provisioned_at=now,
+                )
+                site_created = True
+                self._record_service_audit_in_session(
+                    repository=repository,
+                    audit_context=audit_context,
+                    event_kind="site.provision",
+                    outcome="succeeded",
+                    account_id=normalized_account_id,
+                    site_id=site.site_id,
+                    scope_kind="site",
+                    scope_id=site.site_id,
+                    payload_json=self._serialize_site(site),
+                )
+            else:
+                site = existing_site
+                if str(site.account_id or "") != normalized_account_id:
+                    raise CommercialPermissionError(
+                        "service.portal_site_conflict",
+                        f"site id '{normalized_site_id}' is already bound to another account",
+                    )
+                if str(site.status or "") in {SITE_STATUS_ARCHIVED, SITE_STATUS_SUSPENDED}:
+                    raise CommercialPermissionError(
+                        "service.portal_site_not_connectable",
+                        f"site '{normalized_site_id}' is not available for addon connection",
+                    )
+
+            repository.upsert_principal_site_grant(
+                grant_id=f"sadmg_{uuid4().hex}",
+                principal_id=identity.principal_id,
+                site_id=site.site_id,
+                status=SITE_USER_GRANT_STATUS_ACTIVE,
+                metadata_json={"source": "wordpress_addon_connection"},
+            )
+            repository.upsert_account_user_membership(
+                membership_id=f"aum_{uuid4().hex}",
+                principal_id=identity.principal_id,
+                account_id=normalized_account_id,
+                role=normalize_user_role(USER_ROLE_USER),
+                status=ACCOUNT_USER_MEMBERSHIP_STATUS_ACTIVE,
+                allowed_actions_json=resolve_principal_allowed_actions(),
+                metadata_json={"source": "wordpress_addon_connection"},
+            )
+
+            revoked_key_ids = self._revoke_active_site_keys_in_session(
+                repository=repository,
+                site_id=site.site_id,
+                now=now,
+                audit_context=audit_context,
+                reason="wordpress_addon_connection_reissued",
+            )
+            api_key = self._issue_automatic_runtime_site_key_in_session(
+                repository=repository,
+                site=site,
+                secret=key_secret,
+                key_id=key_id,
+                label="WordPress addon connection",
+                metadata_json={
+                    "source": "wordpress_addon_connection",
+                    "wordpress_url": canonical_wordpress_url,
+                    "credential_owner": "system",
+                    "user_visible": False,
+                },
+                audit_context=audit_context,
+                replaced_key_ids=revoked_key_ids,
+            )
+            if site.status in {SITE_STATUS_PROVISIONING, SITE_STATUS_INACTIVE}:
+                deactivated_site_ids = [
+                    str(item.get("site_id") or "")
+                    for item in self._deactivate_account_active_sibling_sites(
+                        repository=repository,
+                        account_id=site.account_id or "",
+                        activated_site_id=site.site_id,
+                        audit_context=audit_context,
+                    )
+                ]
+                site.status = SITE_STATUS_ACTIVE
+                if site.provisioned_at is None:
+                    site.provisioned_at = now
+                site.activated_at = now
+                site.suspended_at = None
+                site.suspension_reason = None
+                self._record_service_audit_in_session(
+                    repository=repository,
+                    audit_context=audit_context,
+                    event_kind="site.activate",
+                    outcome="succeeded",
+                    account_id=site.account_id,
+                    site_id=site.site_id,
+                    key_id=api_key.key_id,
+                    scope_kind="site",
+                    scope_id=site.site_id,
+                    payload_json={
+                        **self._serialize_site(site),
+                        "deactivated_site_ids": deactivated_site_ids,
+                    },
+                )
+
+            cloud_api_key = build_customer_api_key(
+                site_id=site.site_id,
+                key_id=api_key.key_id,
+                secret=key_secret,
+            )
+            repository.create_portal_oauth_state(
+                state_id=f"wacs_{uuid4().hex}",
+                provider=WORDPRESS_ADDON_CONNECTION_PROVIDER,
+                state_hash=_hash_addon_connection_value(connection_code, prefix="code"),
+                return_to=safe_return_url,
+                client_scope_id=site.site_id,
+                expires_at=expires_at,
+                metadata_json={
+                    "source": "wordpress_addon_connection",
+                    "site_id": site.site_id,
+                    "key_id": api_key.key_id,
+                    "addon_state_hash": _hash_addon_connection_value(
+                        normalized_addon_state,
+                        prefix="state",
+                    ),
+                    "payload_ciphertext": encrypt_addon_connection_payload(
+                        {
+                            "site_id": site.site_id,
+                            "key_id": api_key.key_id,
+                            "cloud_api_key": cloud_api_key,
+                        },
+                        settings=self.settings,
+                    ),
+                },
+            )
+
+            connection_payload = {
+                "site_id": site.site_id,
+                "key_id": api_key.key_id,
+                "site_created": site_created,
+                "revoked_key_ids": revoked_key_ids,
+                "expires_at": self._serialize_datetime(expires_at),
+                "return_url": safe_return_url,
+            }
+            self._record_service_audit_in_session(
+                repository=repository,
+                audit_context=audit_context,
+                event_kind="wordpress_addon_connection.issue",
+                outcome="succeeded",
+                account_id=site.account_id,
+                site_id=site.site_id,
+                key_id=api_key.key_id,
+                scope_kind="site",
+                scope_id=site.site_id,
+                payload_json=connection_payload,
+            )
+            session.commit()
+
+        return {
+            **connection_payload,
+            "redirect_url": _append_addon_return_query(
+                safe_return_url,
+                code=connection_code,
+                state=normalized_addon_state,
+            ),
+            "expires_in_seconds": WORDPRESS_ADDON_CONNECTION_TTL_SECONDS,
+        }
+
+    def consume_wordpress_addon_connection(
+        self,
+        *,
+        code: str,
+        addon_state: str,
+    ) -> dict[str, object]:
+        normalized_code = str(code or "").strip()
+        normalized_addon_state = str(addon_state or "").strip()
+        if not normalized_code or not normalized_addon_state:
+            raise CommercialPermissionError(
+                "service.wordpress_addon_connection_code_required",
+                "wordpress addon connection code and state are required",
+            )
+        now = self.now_factory()
+        with get_session(self.database_url) as session:
+            repository = CommercialRepository(session)
+            row = repository.get_portal_oauth_state(
+                provider=WORDPRESS_ADDON_CONNECTION_PROVIDER,
+                state_hash=_hash_addon_connection_value(normalized_code, prefix="code"),
+            )
+            if row is None:
+                raise CommercialPermissionError(
+                    "service.wordpress_addon_connection_code_invalid",
+                    "wordpress addon connection code is invalid",
+                )
+            if row.status != PORTAL_OAUTH_STATE_STATUS_PENDING or row.consumed_at is not None:
+                raise CommercialPermissionError(
+                    "service.wordpress_addon_connection_code_invalid",
+                    "wordpress addon connection code is invalid",
+                )
+            metadata = row.metadata_json if isinstance(row.metadata_json, dict) else {}
+            expected_state_hash = str(metadata.get("addon_state_hash") or "")
+            if expected_state_hash != _hash_addon_connection_value(
+                normalized_addon_state,
+                prefix="state",
+            ):
+                raise CommercialPermissionError(
+                    "service.wordpress_addon_connection_state_invalid",
+                    "wordpress addon connection state is invalid",
+                )
+            row_expires_at = (
+                row.expires_at.replace(tzinfo=UTC)
+                if row.expires_at.tzinfo is None
+                else row.expires_at.astimezone(UTC)
+            )
+            if row_expires_at <= now:
+                row.status = PORTAL_OAUTH_STATE_STATUS_EXPIRED
+                row.consumed_at = now
+                session.commit()
+                raise CommercialPermissionError(
+                    "service.wordpress_addon_connection_code_expired",
+                    "wordpress addon connection code has expired",
+                )
+            try:
+                payload = decrypt_addon_connection_payload(
+                    str(metadata.get("payload_ciphertext") or ""),
+                    settings=self.settings,
+                )
+            except RuntimeError as error:
+                raise CommercialPermissionError(
+                    "service.wordpress_addon_connection_payload_invalid",
+                    "wordpress addon connection payload is invalid",
+                ) from error
+            row.status = PORTAL_OAUTH_STATE_STATUS_CONSUMED
+            row.consumed_at = now
+            session.commit()
+        return {
+            "site_id": str(payload.get("site_id") or ""),
+            "key_id": str(payload.get("key_id") or ""),
+            "cloud_api_key": str(payload.get("cloud_api_key") or ""),
+        }
 
     def list_site_keys(
         self,
@@ -784,7 +1403,7 @@ class CommercialServiceSiteMixin(CommercialServiceAuditMixin):
         self,
         *,
         site_id: str,
-        site_admin_ref: str,
+        principal_id: str,
         required_roles: set[str] | None = None,
     ) -> dict[str, object]:
         with get_session(self.database_url) as session:
@@ -806,63 +1425,86 @@ class CommercialServiceSiteMixin(CommercialServiceAuditMixin):
                     "service.portal_account_inactive",
                     f"account '{site.account_id}' is not active",
                 )
-            grant_pair = repository.get_site_admin_site_grant(
-                site_admin_ref=site_admin_ref,
+            grant_pair = repository.get_principal_site_grant(
+                principal_id=principal_id,
                 site_id=site_id,
             )
             if grant_pair is None:
                 raise CommercialPermissionError(
-                    "service.site_admin_access_required",
-                    f"site admin '{site_admin_ref}' is not active for site '{site_id}'",
+                    "service.principal_access_required",
+                    f"principal '{principal_id}' is not active for site '{site_id}'",
                 )
             identity, grant = grant_pair
             if (
-                identity.status != SITE_ADMIN_STATUS_ACTIVE
-                or grant.status != SITE_ADMIN_SITE_GRANT_STATUS_ACTIVE
+                identity.status != PRINCIPAL_STATUS_ACTIVE
+                or grant.status != SITE_USER_GRANT_STATUS_ACTIVE
             ):
                 raise CommercialPermissionError(
-                    "service.site_admin_access_required",
-                    f"site admin '{site_admin_ref}' is not active for site '{site_id}'",
+                    "service.principal_access_required",
+                    f"principal '{principal_id}' is not active for site '{site_id}'",
                 )
-            if required_roles is not None and SITE_ADMIN_ROLE_SITE_ADMIN not in required_roles:
+            membership_row = repository.get_account_user_membership(
+                principal_id=principal_id,
+                account_id=site.account_id,
+            )
+            if membership_row is None:
+                role = USER_ROLE_USER
+                allowed_actions = resolve_principal_allowed_actions()
+            else:
+                _account, _membership_identity, membership = membership_row
+                if membership.status != ACCOUNT_USER_MEMBERSHIP_STATUS_ACTIVE:
+                    raise CommercialPermissionError(
+                        "service.principal_access_required",
+                        f"principal '{principal_id}' is not active for account '{site.account_id}'",
+                    )
+                role = normalize_user_role(str(membership.role or USER_ROLE_USER))
+                allowed_actions = (
+                    [
+                        str(action).strip()
+                        for action in (membership.allowed_actions_json or [])
+                        if str(action).strip()
+                    ]
+                    or resolve_principal_allowed_actions()
+                )
+            if required_roles is not None and role not in required_roles:
                 raise CommercialPermissionError(
                     "service.portal_role_forbidden",
-                    f"site admin '{site_admin_ref}' lacks required role for site '{site_id}'",
+                    f"principal '{principal_id}' lacks required role for site '{site_id}'",
                 )
         return {
             "site_id": site.site_id,
             "account_id": site.account_id,
-            "site_admin_ref": site_admin_ref,
-            "identity_type": IDENTITY_TYPE_SITE_ADMIN,
-            "allowed_actions": resolve_site_admin_allowed_actions(),
-            "role": SITE_ADMIN_ROLE_SITE_ADMIN,
+            "principal_id": principal_id,
+            "identity_type": IDENTITY_TYPE_USER,
+            "allowed_actions": allowed_actions,
+            "role": role,
             "site": self._serialize_site(site),
         }
 
     def list_portal_sites(
         self,
         *,
-        site_admin_ref: str,
+        principal_id: str,
     ) -> dict[str, object]:
         with get_session(self.database_url) as session:
             repository = CommercialRepository(session)
             items = []
-            for site, _identity, grant in repository.list_sites_for_site_admin(
-                site_admin_ref=site_admin_ref,
-                grant_statuses=[SITE_ADMIN_SITE_GRANT_STATUS_ACTIVE],
+            for site, _identity, grant in repository.list_sites_for_principal(
+                principal_id=principal_id,
+                grant_statuses=[SITE_USER_GRANT_STATUS_ACTIVE],
             ):
                 items.append(
                     {
-                        "site_admin_ref": site_admin_ref,
-                        "identity_type": IDENTITY_TYPE_SITE_ADMIN,
-                        "allowed_actions": resolve_site_admin_allowed_actions(),
-                        "role": SITE_ADMIN_ROLE_SITE_ADMIN,
+                        "principal_id": principal_id,
+                        "identity_type": IDENTITY_TYPE_USER,
+                        "allowed_actions": resolve_principal_allowed_actions(),
+                        "role": USER_ROLE_USER,
                         "grant_status": grant.status,
                         "site": self._serialize_site(site),
                     }
                 )
             return {
-                "site_admin_ref": site_admin_ref,
+                "principal_id": principal_id,
                 "items": items,
             }
 
@@ -1048,13 +1690,13 @@ class CommercialServiceSiteMixin(CommercialServiceAuditMixin):
                     "site_status",
                     site.status == SITE_STATUS_ACTIVE,
                     "站点已激活" if site.status == SITE_STATUS_ACTIVE else "站点尚未激活或已暂停",
-                    "先在站点页恢复/激活站点，再重试云端请求。",
+                    "先在站点页启用站点，或重新接入已移除站点，再重试云端请求。",
                 ),
                 self._build_diagnostic_check(
                     "active_key",
                     len(active_keys) > 0,
-                    "存在可用 API Key" if active_keys else "没有可用 API Key",
-                    "在密钥页创建或轮换一个有效 Key。",
+                    "连接凭证可用" if active_keys else "没有可用连接凭证",
+                    "从 WordPress 插件重新连接站点，系统会自动生成新的连接凭证。",
                 ),
                 self._build_diagnostic_check(
                     "wordpress_url",

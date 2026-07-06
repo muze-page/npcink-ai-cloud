@@ -75,6 +75,20 @@ class CatalogRepository:
         )
         return list(self.session.scalars(statement))
 
+    def list_providers_by_ids(self, provider_ids: list[str]) -> list[CatalogProvider]:
+        if not provider_ids:
+            return []
+
+        statement = select(CatalogProvider).where(CatalogProvider.provider_id.in_(provider_ids))
+        providers_by_id = {
+            provider.provider_id: provider for provider in self.session.scalars(statement)
+        }
+        return [
+            providers_by_id[provider_id]
+            for provider_id in provider_ids
+            if provider_id in providers_by_id
+        ]
+
     def get_model(self, model_id: str) -> CatalogModel | None:
         return self.session.get(CatalogModel, model_id)
 

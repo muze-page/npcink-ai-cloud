@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import pytest
 
@@ -12,16 +13,34 @@ def _cloud_root() -> Path:
     return Path(__file__).resolve().parents[2]
 
 
-def test_prod_env_files_use_canonical_admin_and_openai_names() -> None:
+def _documented_env_value(text: str, key: str) -> str:
+    prefix = f"{key}="
+    for token in text.replace("`", " ").split():
+        if token.startswith(prefix):
+            return token.removeprefix(prefix).rstrip(".,;")
+    return ""
+
+
+def _documented_https_host(text: str, key: str) -> str:
+    parsed = urlsplit(_documented_env_value(text, key))
+    return parsed.netloc if parsed.scheme == "https" else ""
+
+
+def test_prod_env_files_use_canonical_admin_names_and_do_not_expose_ai_provider_env() -> None:
     cloud_root = _cloud_root()
     compose_text = (cloud_root / "docker-compose.prod.yml").read_text()
     env_example_text = (cloud_root / ".env.example").read_text()
     readme_text = (cloud_root / "README.md").read_text()
     checklist_text = (cloud_root / "deploy" / "RELEASE_CHECKLIST.md").read_text()
+    playbook_text = (cloud_root / "deploy" / "OPS_PLAYBOOK.md").read_text()
+    provider_runbook_text = (
+        cloud_root / "docs" / "provider-connection-production-runbook-2026-06-30.md"
+    ).read_text()
 
     for text in (compose_text, env_example_text, readme_text, checklist_text):
         assert "NPCINK_CLOUD_ADMIN_SESSION_SECRET" in text
         assert "NPCINK_CLOUD_ADMIN_BOOTSTRAP_TOKEN" in text
+        assert "NPCINK_CLOUD_BASE_URL" in text or text is readme_text
         assert "NPCINK_CLOUD_OPS_CADENCE_POLL_SECONDS" in text
         assert "NPCINK_CLOUD_RUNTIME_CALLBACK_WORKER_POLL_SECONDS" in text or text is checklist_text
         assert "NPCINK_CLOUD_WORKER_HEARTBEAT_INTERVAL_SECONDS" in text or text is checklist_text
@@ -29,21 +48,67 @@ def test_prod_env_files_use_canonical_admin_and_openai_names() -> None:
             "NPCINK_CLOUD_PROVIDER_HEALTH_SCAN_INTERVAL_SECONDS" in text or text is checklist_text
         )
         assert "NPCINK_CLOUD_OTEL_TRACE_SINK_OTLP_ENDPOINT" in text or text is checklist_text
-        assert "NPCINK_CLOUD_OPENAI_BASE_URL" in text or text is checklist_text
 
     assert "callback-worker:" in compose_text
     assert "otel-collector:" in compose_text
     assert "jaeger:" in compose_text
+    assert "NPCINK_CLOUD_ADMIN_BOOTSTRAP_PRINCIPAL_ID" in compose_text
+    assert "NPCINK_CLOUD_ADMIN_BOOTSTRAP_PRINCIPAL_ID" in env_example_text
+    assert "NPCINK_CLOUD_ADMIN_BOOTSTRAP_PLATFORM_ADMIN_ROLE" in compose_text
+    assert "NPCINK_CLOUD_ADMIN_BOOTSTRAP_PLATFORM_ADMIN_ROLE" in env_example_text
 
     assert "NPCINK_CLOUD_OPS_SESSION_SECRET" not in compose_text
     assert "NPCINK_CLOUD_OPS_SESSION_SECRET" not in env_example_text
     assert "NPCINK_CLOUD_OPS_SESSION_SECRET" not in readme_text
     assert "NPCINK_CLOUD_OPS_SESSION_SECRET" not in checklist_text
+    assert "NPCINK_CLOUD_ADMIN_BOOTSTRAP_ADMIN_REF" not in compose_text
+    assert "NPCINK_CLOUD_ADMIN_BOOTSTRAP_ADMIN_REF" not in env_example_text
+    assert "NPCINK_CLOUD_ADMIN_BOOTSTRAP_ADMIN_ROLE" not in compose_text
+    assert "NPCINK_CLOUD_ADMIN_BOOTSTRAP_ADMIN_ROLE" not in env_example_text
     assert "NPCINK_CLOUD_OPENAI_COMPATIBLE_" not in compose_text
     assert "NPCINK_CLOUD_OPENAI_COMPATIBLE_" not in env_example_text
     assert "NPCINK_CLOUD_OPENAI_COMPATIBLE_" not in readme_text
+    assert "NPCINK_CLOUD_OPENAI_API_KEY=" not in env_example_text
+    assert "NPCINK_CLOUD_OPENAI_BASE_URL=" not in env_example_text
+    assert "NPCINK_CLOUD_MINIMAX_API_KEY=" not in env_example_text
+    assert "NPCINK_CLOUD_MINIMAX_BASE_URL=" not in env_example_text
+    assert "NPCINK_CLOUD_ANTHROPIC_API_KEY=" not in env_example_text
+    assert "NPCINK_CLOUD_LITELLM_API_KEY=" not in env_example_text
+    assert "NPCINK_CLOUD_VLLM_API_KEY=" not in env_example_text
+    assert "NPCINK_CLOUD_TEI_API_KEY=" not in env_example_text
+    assert "NPCINK_CLOUD_OPENROUTER_API_KEY=" not in env_example_text
+    assert "NPCINK_CLOUD_SILICONFLOW_API_KEY=" not in env_example_text
+    assert "AI provider channels are managed in Cloud runtime storage" in env_example_text
     assert "NPCINK_CLOUD_FEATURE_FLAGS_JSON" in env_example_text
     assert "NPCINK_CLOUD_FEATURE_FLAGS_JSON" in readme_text
+    assert "http://127.0.0.1:8010" in env_example_text
+    assert _documented_https_host(checklist_text, "NPCINK_CLOUD_BASE_URL") == "cloud.npc.ink"
+    assert (
+        _documented_env_value(checklist_text, "NPCINK_CLOUD_TRUSTED_HOST_ALLOWLIST")
+        == "cloud.npc.ink"
+    )
+    assert _documented_https_host(playbook_text, "NPCINK_CLOUD_BASE_URL") == "cloud.npc.ink"
+    assert "Resource Tuning Baseline" in playbook_text
+    assert "NPCINK_CLOUD_API_WORKERS" in playbook_text
+    assert "NPCINK_CLOUD_RUNTIME_WORKER_POLL_SECONDS" in playbook_text
+    assert "db_managed_provider_connections" in provider_runbook_text
+    assert "deploy/remote-provider-matrix-smoke.sh" in provider_runbook_text
+    assert "`search_tavily`" in provider_runbook_text
+    assert "`search_bocha`" in provider_runbook_text
+    assert "`search_apify`" in provider_runbook_text
+    assert "`search_zhihu`" in provider_runbook_text
+    assert "`search_jina_reader`" in provider_runbook_text
+    assert "optional URL reader enhancement" in provider_runbook_text
+    assert "`image_unsplash`" in provider_runbook_text
+    assert "`siliconflow_env`" in provider_runbook_text
+    assert "`tei_env`" in provider_runbook_text
+    assert "`embedding_siliconflow`" not in provider_runbook_text
+    assert "`vector_zilliz`" in provider_runbook_text
+    assert "Do not put provider credentials back into `.env.deploy`" in provider_runbook_text
+    assert "NPCINK_CLOUD_WEB_SEARCH_ZHIHU_ACCESS_SECRET=" not in provider_runbook_text
+    assert "NPCINK_CLOUD_IMAGE_SOURCE_UNSPLASH_ACCESS_KEY=" not in provider_runbook_text
+    assert "NPCINK_CLOUD_SITE_KNOWLEDGE_ZILLIZ_TOKEN=" not in provider_runbook_text
+    assert "NPCINK_CLOUD_RUNTIME_CALLBACK_WORKER_POLL_SECONDS" in playbook_text
 
 
 def test_env_example_production_payload_validates_with_canonical_names(
@@ -64,14 +129,11 @@ def test_env_example_production_payload_validates_with_canonical_names(
         "NPCINK_CLOUD_ADMIN_BOOTSTRAP_TOKEN=": "NPCINK_CLOUD_ADMIN_BOOTSTRAP_TOKEN=" + ("b" * 32),
         "NPCINK_CLOUD_ADMIN_SESSION_SECRET=": "NPCINK_CLOUD_ADMIN_SESSION_SECRET=" + ("a" * 32),
         "NPCINK_CLOUD_PORTAL_JWT_SECRET=": "NPCINK_CLOUD_PORTAL_JWT_SECRET=" + ("j" * 32),
-        "NPCINK_CLOUD_PORTAL_PUBLIC_BASE_URL=": (
-            "NPCINK_CLOUD_PORTAL_PUBLIC_BASE_URL=https://cloud.example.com"
+        "NPCINK_CLOUD_BROWSER_ORIGIN_ALLOWLIST=": (
+            "NPCINK_CLOUD_BROWSER_ORIGIN_ALLOWLIST=https://cloud.example.com"
         ),
-        "NPCINK_CLOUD_PORTAL_EMAIL_SMTP_HOST=": (
-            "NPCINK_CLOUD_PORTAL_EMAIL_SMTP_HOST=smtp.example.com"
-        ),
-        "NPCINK_CLOUD_PORTAL_EMAIL_FROM_EMAIL=": (
-            "NPCINK_CLOUD_PORTAL_EMAIL_FROM_EMAIL=noreply@example.com"
+        "NPCINK_CLOUD_TRUSTED_HOST_ALLOWLIST=": (
+            "NPCINK_CLOUD_TRUSTED_HOST_ALLOWLIST=cloud.example.com"
         ),
     }
     for original, updated in replacements.items():
@@ -92,7 +154,7 @@ def test_env_example_production_payload_validates_with_canonical_names(
     assert settings.openai_base_url == "https://api.openai.com/v1"
 
 
-def test_settings_accept_legacy_admin_and_openai_env_aliases(monkeypatch) -> None:
+def test_settings_accept_legacy_admin_aliases_without_requiring_openai_env(monkeypatch) -> None:
     monkeypatch.setenv("NPCINK_CLOUD_ENVIRONMENT", "production")
     monkeypatch.setenv("NPCINK_CLOUD_DATABASE_URL", "sqlite+pysqlite:///:memory:")
     monkeypatch.setenv("NPCINK_CLOUD_REDIS_URL", "redis://localhost:6379/0")
@@ -101,17 +163,14 @@ def test_settings_accept_legacy_admin_and_openai_env_aliases(monkeypatch) -> Non
     monkeypatch.setenv("NPCINK_CLOUD_ADMIN_SESSION_SECRET", "a" * 32)
     monkeypatch.setenv("NPCINK_CLOUD_OPS_SESSION_SECRET", "a" * 32)
     monkeypatch.setenv("NPCINK_CLOUD_PORTAL_JWT_SECRET", "j" * 32)
-    monkeypatch.setenv("NPCINK_CLOUD_PORTAL_PUBLIC_BASE_URL", "https://cloud.example.com")
-    monkeypatch.setenv("NPCINK_CLOUD_PORTAL_EMAIL_SMTP_HOST", "smtp.example.com")
-    monkeypatch.setenv("NPCINK_CLOUD_PORTAL_EMAIL_FROM_EMAIL", "noreply@example.com")
-    monkeypatch.setenv("NPCINK_CLOUD_OPENAI_API_KEY", "sk-current")
-    monkeypatch.setenv("NPCINK_CLOUD_OPENAI_BASE_URL", "https://current.example.com/v1")
+    monkeypatch.setenv("NPCINK_CLOUD_BROWSER_ORIGIN_ALLOWLIST", "https://cloud.example.com")
+    monkeypatch.setenv("NPCINK_CLOUD_TRUSTED_HOST_ALLOWLIST", "cloud.example.com")
 
     settings = Settings(_env_file=None)
 
     assert settings.admin_session_secret == "a" * 32
-    assert settings.openai_api_key == "sk-current"
-    assert settings.openai_base_url == "https://current.example.com/v1"
+    assert settings.openai_api_key in {None, ""}
+    assert settings.openai_base_url == "https://api.openai.com/v1"
 
 
 def test_preview_and_baseline_scripts_lock_migration_and_schema_checks() -> None:
@@ -132,6 +191,9 @@ def test_preview_and_baseline_scripts_lock_migration_and_schema_checks() -> None
     deploy_to_ssh_script = (_cloud_root() / "deploy" / "deploy-to-ssh-host.sh").read_text()
     common_script = (_cloud_root() / "deploy" / "common.sh").read_text()
     remote_load_script = (_cloud_root() / "deploy" / "remote-load-and-up.sh").read_text()
+    provider_matrix_smoke = (
+        _cloud_root() / "deploy" / "remote-provider-matrix-smoke.sh"
+    ).read_text()
 
     assert "alembic upgrade head" in preview_script
     assert "python -m app.dev.baseline_status" in preview_script
@@ -169,6 +231,7 @@ def test_preview_and_baseline_scripts_lock_migration_and_schema_checks() -> None
     assert "proxy_set_header Host $host;" in nginx_dev_conf
     assert "proxy_set_header X-Forwarded-Host $host;" in nginx_dev_conf
     assert "location = /health/operational-ready" in nginx_dev_conf
+    assert "location /open/" in nginx_dev_conf
     assert "callback-worker:" in preview_script
     assert "ops-worker:" in preview_script
     assert "ops-worker:" in dev_compose_text
@@ -197,6 +260,10 @@ def test_preview_and_baseline_scripts_lock_migration_and_schema_checks() -> None
     assert "NPCINK_CLOUD_HEALTH_FORWARDED_PROTO" in common_script
     assert "NPCINK_CLOUD_BROWSER_ORIGIN_ALLOWLIST" in remote_load_script
     assert "configure_ready_origin_headers" in remote_load_script
+    assert "NPCINK_CLOUD_REQUIRED_PROVIDER_CAPABILITIES" in provider_matrix_smoke
+    assert "db_managed_provider_connections" in provider_matrix_smoke
+    assert '"direct_wordpress_write": False' in provider_matrix_smoke
+    assert '"secret_exposure": "none"' in provider_matrix_smoke
 
 
 def test_deploy_bundle_smoke_uses_sample_provider_and_skip_frontend_contract() -> None:
@@ -207,6 +274,7 @@ def test_deploy_bundle_smoke_uses_sample_provider_and_skip_frontend_contract() -
     package_json = (cloud_root / "package.json").read_text()
     frontend_dockerfile = (cloud_root / "frontend" / "Dockerfile").read_text()
     bundle_script = (cloud_root / "deploy" / "bundle-images.sh").read_text()
+    remote_load_script = (cloud_root / "deploy" / "remote-load-and-up.sh").read_text()
     static_terms_deploy_script = (
         cloud_root / "deploy" / "deploy-static-terms-to-ssh-host.sh"
     ).read_text()
@@ -247,6 +315,7 @@ def test_deploy_bundle_smoke_uses_sample_provider_and_skip_frontend_contract() -
     assert "proxy_set_header X-Forwarded-Host $host;" in nginx_prod_conf
     assert "proxy_set_header X-Forwarded-Proto $npcink_forwarded_proto;" in nginx_prod_conf
     assert "location = /admin/auth/bootstrap" in nginx_prod_conf
+    assert "location /open/" in nginx_prod_conf
     assert "proxy_set_header Host $npcink_forwarded_host;" in nginx_prod_conf
     assert "proxy_set_header X-Forwarded-Host $npcink_forwarded_host;" in nginx_prod_conf
     assert "proxy_pass http://npcink_ai_cloud_api;" in nginx_prod_conf
@@ -259,10 +328,19 @@ def test_deploy_bundle_smoke_uses_sample_provider_and_skip_frontend_contract() -
     assert "try_files /terms/index.html =404;" in nginx_prod_conf
     assert "location /terms/" in nginx_prod_conf
     assert "root /usr/share/nginx/html/npcink-site;" in nginx_prod_conf
+    assert "./site:/usr/share/nginx/html/npcink-site:ro" in compose_text
     assert "\"${BASE_URL%/}/terms\"" in remote_smoke_script
     assert "/terms/en/terms.html" in remote_smoke_script
     assert "/terms/zh/terms.html" in remote_smoke_script
     assert "/terms/styles.css" in remote_smoke_script
+    assert "--skip-terms-checks" in remote_smoke_script
+    assert "Npcink Cloud Legal Documents" in remote_smoke_script
+    assert "data.result.images" in remote_smoke_script
+    assert "postgres.tar.gz" in bundle_script
+    assert "otel-collector.tar.gz" in bundle_script
+    assert "jaeger.tar.gz" in bundle_script
+    assert "otel-collector.tar.gz" in remote_load_script
+    assert "jaeger.tar.gz" in remote_load_script
     assert "static_terms_only" in ci_workflow
     assert "site/terms/*" in ci_workflow
     assert "needs: [classify, backend, frontend, static-terms]" in ci_workflow

@@ -2,9 +2,9 @@
 
 import React, { Suspense, useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
-import { BackofficeIdentifier } from '@/components/backoffice/BackofficeIdentifier';
 import { BackofficeStatusBadge } from '@/components/backoffice/BackofficeStatusBadge';
 import {
+  BackofficeInfoHint,
   BackofficeLayer,
   BackofficeMetricStrip,
   BackofficePageStack,
@@ -18,14 +18,13 @@ import {
   localizeFeatureGroup,
   localizeOperatorNote,
   localizePackageAlias,
-  localizePlanName,
   localizePositioning,
   localizeTierLabel,
   localizeUsageBand,
 } from '@/lib/admin-plan-copy';
-import { ADMIN_CURRENCY, formatAdminCurrency } from '@/lib/currency';
+import { ADMIN_CURRENCY } from '@/lib/currency';
 import { readResponsePayload } from '@/lib/safe-response';
-import { formatNumber as formatInteger } from '@/lib/utils';
+import { formatCurrency, formatNumber as formatInteger } from '@/lib/utils';
 import { resolveUiErrorMessage } from '@/lib/errors';
 
 type PlanVersionRecord = {
@@ -35,6 +34,7 @@ type PlanVersionRecord = {
   currency: string;
   budgets: Record<string, unknown>;
   concurrency: Record<string, unknown>;
+  metadata?: Record<string, unknown>;
   created_at: string;
 };
 
@@ -85,29 +85,46 @@ type CanonicalTierCoverageItem = {
   isPresent: boolean;
 };
 
+const PLAN_CATALOG_LOAD_TIMEOUT_MS = 10_000;
+
 function numericValue(value: unknown): number {
   const numeric = Number(value ?? 0);
   return Number.isFinite(numeric) ? numeric : 0;
 }
 
 function formatBudgetCurrency(value: unknown): string {
-  return formatAdminCurrency(numericValue(value));
+  return formatCurrency(numericValue(value), ADMIN_CURRENCY);
 }
 
-function normalizeTierId(value: string): string {
-  return value === 'starter' ? 'free' : value;
+function latestMetadataValue(
+  latestVersion: PlanVersionRecord | null | undefined,
+  fallback: unknown,
+  key: string
+): number {
+  const metadata = latestVersion?.metadata || {};
+  return numericValue(metadata[key] ?? fallback);
+}
+
+async function fetchPlanCatalog(): Promise<Response> {
+  const controller = new AbortController();
+  const timeoutId = window.setTimeout(() => controller.abort(), PLAN_CATALOG_LOAD_TIMEOUT_MS);
+  try {
+    return await fetch('/api/admin/plans', {
+      credentials: 'include',
+      signal: controller.signal,
+    });
+  } finally {
+    window.clearTimeout(timeoutId);
+  }
 }
 
 function findCanonicalShellPlan(plans: PlanListItem[], tierId: string): PlanListItem | undefined {
-  const expectedTierId = normalizeTierId(tierId);
+  const expectedTierId = tierId;
   return plans.find((item) => {
     const planId = item.plan.plan_id;
-    const metadataTierId = normalizeTierId(String(item.plan.metadata?.tier_id || ''));
-    const summaryTierId = normalizeTierId(String(item.tier_summary?.tier_id || ''));
+    const metadataTierId = String(item.plan.metadata?.tier_id || '');
+    const summaryTierId = String(item.tier_summary?.tier_id || '');
     if (planId === tierId || planId === expectedTierId) {
-      return true;
-    }
-    if (expectedTierId === 'free' && (planId === 'plan_free' || item.plan.metadata?.plan_kind === 'default_free')) {
       return true;
     }
     return (
@@ -126,7 +143,6 @@ function PlansContent() {
   const [notice, setNotice] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [isBootstrapping, setIsBootstrapping] = useState(false);
-  const [autoBootstrapAttempted, setAutoBootstrapAttempted] = useState(false);
   const [form, setForm] = useState({
     plan_id: '',
     name: '',
@@ -138,7 +154,7 @@ function PlansContent() {
     setIsLoading(true);
     setError(null);
     try {
-      const response = await fetch('/api/admin/plans', { credentials: 'include' });
+      const response = await fetchPlanCatalog();
       const payload = await readResponsePayload<{ data?: { items?: PlanListItem[]; tier_templates?: TierSummary[] }; message?: string }>(response);
       if (!response.ok) {
         throw new Error(resolveUiErrorMessage('message' in payload ? payload.message : null, t('error.failed_load')));
@@ -146,7 +162,12 @@ function PlansContent() {
       setPlans((('data' in payload ? payload.data?.items : []) || []) as PlanListItem[]);
       setTierTemplates((('data' in payload ? payload.data?.tier_templates : []) || []) as TierSummary[]);
     } catch (err) {
-      setError(resolveUiErrorMessage(err instanceof Error ? err.message : null, t('error.failed_load')));
+      const isAbort = err instanceof DOMException && err.name === 'AbortError';
+      setError(
+        isAbort
+          ? t('admin.plans.load_timeout', {}, 'Package catalog did not finish loading. Retry, then check the admin plans endpoint if it repeats.')
+          : resolveUiErrorMessage(err instanceof Error ? err.message : null, t('error.failed_load'))
+      );
     } finally {
       setIsLoading(false);
     }
@@ -262,7 +283,7 @@ function PlansContent() {
         t(
           'admin.package_shell_bootstrap_notice',
           {},
-          `${localizedAlias} shell is now available as a canonical ${shell.tier_id} plan.`
+          `${localizedAlias} package is now available for customer assignment.`
         )
       );
       await loadPlans();
@@ -286,32 +307,9 @@ function PlansContent() {
     }
     for (const shell of missingShells) {
       // Sequential bootstrap keeps notices and server-side upserts predictable.
-      // eslint-disable-next-line no-await-in-loop
       await handleBootstrapShell(shell);
     }
   }, [handleBootstrapShell, plans, t, tierTemplates]);
-
-  useEffect(() => {
-    if (isLoading || isBootstrapping || autoBootstrapAttempted || tierTemplates.length === 0) {
-      return;
-    }
-    const missingShells = tierTemplates.filter((shell) => {
-      const existing = findCanonicalShellPlan(plans, shell.tier_id);
-      return !existing || Number(existing.published_version_count || 0) === 0;
-    });
-    if (missingShells.length === 0) {
-      return;
-    }
-    setAutoBootstrapAttempted(true);
-    void handleBootstrapMissingShells();
-  }, [
-    autoBootstrapAttempted,
-    handleBootstrapMissingShells,
-    isBootstrapping,
-    isLoading,
-    plans,
-    tierTemplates,
-  ]);
 
   if (isLoading) {
     return <LoadingFallback />;
@@ -331,9 +329,6 @@ function PlansContent() {
     );
   }
 
-  const isDefaultProductionPlan = (item: PlanListItem) =>
-    item.plan.plan_id === 'plan_free' || item.plan.metadata?.plan_kind === 'default_free';
-  const isDevBaselinePlan = (item: PlanListItem) => item.plan.plan_id === 'plan_dev_unlimited';
   const canonicalTierCoverage: CanonicalTierCoverageItem[] = tierTemplates.map((shell) => {
     const item = findCanonicalShellPlan(plans, shell.tier_id) || null;
     return {
@@ -352,23 +347,18 @@ function PlansContent() {
     0
   );
   const missingShellCount = canonicalTierCoverage.filter((entry) => !entry.isPresent).length;
-  const defaultProductionPlans = plans.filter(isDefaultProductionPlan);
-  const defaultProductionActiveSubscriptions = defaultProductionPlans.reduce(
-    (sum, item) => sum + Number(item.subscription_counts?.active || 0),
-    0
-  );
-  const devBaselinePlans = plans.filter(isDevBaselinePlan);
 
   return (
     <BackofficePageStack>
       <BackofficePrimaryPanel
-        eyebrow={t('admin.nav_coverage', {}, 'Coverage')}
+        eyebrow={t('admin.nav_plan_catalog', {}, 'Package Catalog')}
         title={t('admin.coverage_package_catalog_title', {}, 'Coverage package catalog')}
         description={t(
           'admin.package_management_center_desc',
           {},
-          'Manage Free, Pro, and Agency package settings. Assign packages from customer coverage when needed.'
+          'Read the active Free, Pro, and Agency package posture first. Open detail only when price, limits, or release state needs maintenance.'
         )}
+        descriptionDisplay="hint"
         aside={
           <div className="w-full xl:w-[44rem]">
             <BackofficeMetricStrip
@@ -377,11 +367,16 @@ function PlansContent() {
                   label: t('admin.managed_packages', {}, 'Managed packages'),
                   value: formatInteger(tierTemplates.length),
                   detail: t('admin.managed_packages_detail', {}, 'Free / Pro / Agency are the main packages exposed to account coverage.'),
+                  detailDisplay: 'hint',
                   size: 'compact',
                 },
                 {
                   label: t('admin.ready_packages', {}, 'Ready packages'),
                   value: formatInteger(visibleCanonicalPlans),
+                  detail: missingShellCount > 0
+                    ? t('admin.plans.missing_packages_detail', {}, 'Some packages need advanced setup.')
+                    : t('admin.plans.ready_packages_detail', {}, 'All public packages have a published record.'),
+                  detailDisplay: 'hint',
                   size: 'compact',
                 },
                 { label: t('admin.active_subscriptions'), value: formatInteger(activeSubscriptions), size: 'compact' },
@@ -391,11 +386,7 @@ function PlansContent() {
           </div>
         }
       >
-        <div className="mb-4 flex flex-wrap gap-2">
-          <Link href="/admin/subscriptions" className="btn btn-secondary btn-sm">
-            {t('admin.back_to_coverage', {}, 'Back to coverage')}
-          </Link>
-        </div>
+        {null}
       </BackofficePrimaryPanel>
 
       <BackofficeLayer
@@ -404,26 +395,50 @@ function PlansContent() {
         description={t(
           'admin.package_price_features_desc',
           {},
-          'Open a package to edit price, usage limits, features, and status.'
+          'Compare the public package limits. Maintenance and migration controls stay under Advanced maintenance.'
         )}
+        descriptionDisplay="hint"
       />
       <BackofficeSectionPanel className="space-y-4">
+        {error ? (
+          <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-200">
+            {error}
+          </div>
+        ) : null}
         <div className="grid gap-4 xl:grid-cols-3">
           {canonicalTierCoverage.map(({ shell, item, isPresent }) => {
             const latestVersion = item?.latest_version || item?.versions?.[0] || null;
             const budgets = (latestVersion?.budgets || shell.budgets_template || {}) as Record<string, unknown>;
             const concurrency = (latestVersion?.concurrency || shell.concurrency_template || {}) as Record<string, unknown>;
             const sourceTier = item?.tier_summary || shell;
+            const monthlyIncludedPoints = latestMetadataValue(
+              latestVersion,
+              sourceTier.monthly_included_points,
+              'monthly_included_points'
+            );
+            const siteLimit = latestMetadataValue(latestVersion, sourceTier.site_limit, 'site_limit');
+            const batchCeiling = latestMetadataValue(latestVersion, sourceTier.max_batch_items, 'max_batch_items');
             const features = sourceTier.feature_groups || [];
+            const activeSubscriptionCount = Number(item?.subscription_counts?.active || 0);
+            const packageAlias = localizePackageAlias(t, shell.tier_id, sourceTier.package_alias);
             return (
-              <BackofficeStackCard key={`price-features-${shell.tier_id}`} className="flex flex-col">
+              <BackofficeStackCard
+                key={`price-features-${shell.tier_id}`}
+                className="flex flex-col"
+                role="group"
+                aria-label={t(
+                  'admin.package_card_label',
+                  { package: packageAlias },
+                  `${packageAlias} package`
+                )}
+              >
                 <div className="flex items-start justify-between gap-3">
                   <div>
                     <p className="text-xs font-medium uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
                       {localizeTierLabel(t, shell.tier_id, sourceTier.label)}
                     </p>
                     <h2 className="mt-2 text-xl font-semibold text-slate-950 dark:text-white">
-                      {localizePackageAlias(t, shell.tier_id, sourceTier.package_alias)}
+                      {packageAlias}
                     </h2>
                   </div>
                   <BackofficeStatusBadge
@@ -435,20 +450,16 @@ function PlansContent() {
                   className="mt-5"
                   items={[
                     {
-                      label: t('admin.period_cost_budget', {}, 'Period cost budget'),
+                      label: t('admin.included_points', {}, 'Included points'),
+                      value: formatInteger(monthlyIncludedPoints),
+                    },
+                    {
+                      label: t('admin.period_cost_budget', {}, 'Package fee'),
                       value: formatBudgetCurrency(budgets.max_cost_per_period),
                     },
                     {
-                      label: t('billing.runs', {}, 'Runs'),
-                      value: formatInteger(numericValue(budgets.max_runs_per_period)),
-                    },
-                    {
-                      label: t('common.tokens'),
-                      value: formatInteger(numericValue(budgets.max_tokens_per_period)),
-                    },
-                    {
                       label: t('admin.site_limit', {}, 'Site limit'),
-                      value: formatInteger(numericValue(sourceTier.site_limit)),
+                      value: formatInteger(siteLimit),
                     },
                     {
                       label: t('admin.concurrency', {}, 'Concurrency'),
@@ -456,7 +467,11 @@ function PlansContent() {
                     },
                     {
                       label: t('admin.batch_ceiling', {}, 'Batch ceiling'),
-                      value: formatInteger(numericValue(sourceTier.max_batch_items)),
+                      value: formatInteger(batchCeiling),
+                    },
+                    {
+                      label: t('admin.active_subscriptions'),
+                      value: formatInteger(activeSubscriptionCount),
                     },
                   ]}
                 />
@@ -498,14 +513,9 @@ function PlansContent() {
                       {t('common.manage', {}, 'Manage')}
                     </Link>
                   ) : (
-                    <button
-                      type="button"
-                      className="btn btn-secondary"
-                      disabled={isBootstrapping}
-                      onClick={() => void handleBootstrapShell(shell)}
-                    >
-                      {t('admin.create_package_shell', {}, `Create ${localizePackageAlias(t, shell.tier_id, shell.package_alias)} shell`)}
-                    </button>
+                    <a href="#package-maintenance" className="btn btn-secondary">
+                      {t('admin.plans.open_advanced_setup', {}, 'Advanced setup')}
+                    </a>
                   )}
                 </div>
               </BackofficeStackCard>
@@ -514,115 +524,50 @@ function PlansContent() {
         </div>
       </BackofficeSectionPanel>
 
-      <BackofficeLayer
-        eyebrow={t('admin.nav_coverage', {}, 'Coverage')}
-        title={t('admin.default_production_plans', {}, 'Default production plans')}
-        description={t(
-          'admin.default_production_plans_desc',
-          {},
-          'Treat plan_free as a formal production package object. Keep it distinct from tier templates and from the dev-only baseline.'
-        )}
-      />
-
-      <details className="rounded-2xl border border-dashed border-slate-200 px-4 py-4 dark:border-slate-800">
-        <summary className="cursor-pointer list-none text-sm font-medium text-slate-700 dark:text-slate-300">
-          {t('admin.package_shell_maintenance_toggle_label', {}, 'Default plan maintenance')}
-        </summary>
-      <BackofficeLayer
-        className="mt-4"
-        eyebrow={t('admin.nav_coverage', {}, 'Coverage')}
-        title={t('admin.default_production_plans', {}, 'Default production plans')}
-        description={t(
-          'admin.default_production_plans_desc',
-          {},
-          'Treat plan_free as a formal production package object. Keep it distinct from tier templates and from the dev-only baseline.'
-        )}
-      />
-      <BackofficeSectionPanel className="space-y-4">
-        <BackofficeMetricStrip
-          items={[
-            {
-              label: t('admin.default_production_plans', {}, 'Default production plans'),
-              value: formatInteger(defaultProductionPlans.length),
-            },
-            {
-              label: t('admin.active_subscriptions'),
-              value: formatInteger(defaultProductionActiveSubscriptions),
-            },
-            {
-              label: t('admin.dev_baseline', {}, 'Dev baseline'),
-              value: formatInteger(devBaselinePlans.length),
-              detail: t(
-                'admin.dev_baseline_desc',
-                {},
-                'plan_dev_unlimited remains internal and should not be read as production free coverage.'
-              ),
-            },
-          ]}
-          columnsClassName="md:grid-cols-3"
-        />
-        <div className="grid gap-4 xl:grid-cols-2">
-          {defaultProductionPlans.map((item) => (
-            <BackofficeStackCard key={item.plan.plan_id}>
-              <div className="flex items-start justify-between gap-3">
-                <div>
-                  <p className="text-sm font-semibold text-slate-950 dark:text-white">
-                    {localizePlanName(t, item.plan.plan_id, item.plan.name)}
-                  </p>
-                  <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                    {t('admin.formal_production_plan', {}, 'Formal production plan')} ·{' '}
-                    {localizePackageAlias(t, item.tier_summary?.tier_id || item.plan.plan_id, item.tier_summary?.package_alias || item.plan.name)}
-                  </p>
-                </div>
-                <BackofficeStatusBadge
-                  status={item.latest_version ? 'published' : 'draft'}
-                  label={formatInteger(item.subscription_counts?.active || 0)}
-                />
-              </div>
-              <div className="mt-4 flex flex-wrap gap-2">
-                <BackofficeIdentifier value={item.plan.plan_id} />
-                {item.latest_version?.plan_version_id ? (
-                  <BackofficeIdentifier value={item.latest_version.plan_version_id} />
-                ) : null}
-              </div>
-              <p className="mt-3 text-sm leading-6 text-slate-600 dark:text-slate-300">
-                {item.plan.description ||
-                  t(
-                    'admin.default_production_plan_fallback_desc',
+      {missingShellCount > 0 ? (
+      <details id="package-maintenance" className="rounded-2xl border border-dashed border-slate-200 bg-white/70 px-4 py-4 dark:border-slate-800 dark:bg-slate-950/40">
+        <summary className="cursor-pointer list-none">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <p className="flex items-center gap-2 text-sm font-semibold text-slate-950 dark:text-white">
+                <span>{t('admin.package_shell_maintenance_toggle_label', {}, 'Package initialization')}</span>
+                <BackofficeInfoHint
+                  detail={t(
+                    'admin.plans.advanced_maintenance_desc',
                     {},
-                    'This package carries the explicit production free posture.'
+                    'Initialize missing standard packages or create an exceptional package record.'
                   )}
+                />
               </p>
-              <div className="mt-4">
-                <Link href={`/admin/plans/${item.plan.plan_id}`} className="btn btn-secondary">
-                  {t('common.view_details', {}, 'View details')}
-                </Link>
-              </div>
-            </BackofficeStackCard>
-          ))}
-          {defaultProductionPlans.length === 0 ? (
-            <BackofficeStackCard>
-              <p className="text-sm text-slate-600 dark:text-slate-300">
-                {t(
-                  'admin.default_production_plans_empty',
-                  {},
-                  'No formal default production plan is present yet. plan_free should appear here after bootstrap or migration.'
-                )}
-              </p>
-            </BackofficeStackCard>
-          ) : null}
-        </div>
-      </BackofficeSectionPanel>
+            </div>
+            <span className="inline-flex w-fit items-center rounded-full border border-slate-200 px-3 py-1 text-xs font-semibold text-slate-600 dark:border-slate-800 dark:text-slate-300">
+              {missingShellCount > 0
+                ? t('admin.package_shell_bootstrap_missing', {}, 'Some standard packages are still missing or unpublished.')
+                : t('admin.package_shells_present', {}, 'All standard packages are already available.')}
+            </span>
+          </div>
+        </summary>
+        {notice ? (
+          <div className="mt-4 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700 dark:border-emerald-900/60 dark:bg-emerald-950/30 dark:text-emerald-300">
+            {notice}
+          </div>
+        ) : null}
+        {error ? (
+          <div className="mt-4 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-900/60 dark:bg-red-950/30 dark:text-red-300">
+            {error}
+          </div>
+        ) : null}
 
       <div className="mt-4 rounded-2xl border border-dashed border-slate-200 px-4 py-4 dark:border-slate-800">
         <BackofficeLayer
           eyebrow={t('admin.quick_actions')}
-          title={t('admin.package_shell_bootstrap_title', {}, 'Canonical coverage package shells')}
+          title={t('admin.package_shell_bootstrap_title', {}, 'Create missing standard packages')}
           description={t(
             'admin.package_shell_bootstrap_desc',
             {},
             'Use these shortcuts to create any missing Free / Pro / Agency package entries before assigning them to customers.'
           )}
+          descriptionDisplay="hint"
         />
         <BackofficeSectionPanel className="mt-4 space-y-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
@@ -641,7 +586,7 @@ function PlansContent() {
             onClick={() => void handleBootstrapMissingShells()}
             disabled={isBootstrapping || missingShellCount === 0}
           >
-            {t('admin.bootstrap_missing_shells', {}, 'Bootstrap missing package shells')}
+            {t('admin.bootstrap_missing_shells', {}, 'Create missing packages')}
           </button>
         </div>
         <div className="grid gap-4 xl:grid-cols-3">
@@ -688,14 +633,14 @@ function PlansContent() {
                 >
                   {isPresent
                     ? t('admin.package_shell_present', {}, 'Already present')
-                    : t('admin.create_package_shell', {}, `Create ${localizePackageAlias(t, shell.tier_id, shell.package_alias)} shell`)}
+                    : t('admin.create_package_shell', {}, `Create ${localizePackageAlias(t, shell.tier_id, shell.package_alias)} package`)}
                 </button>
                 {item?.plan?.plan_id ? (
                   <p className="mt-3 text-xs text-slate-500 dark:text-slate-400">
                     {t(
                       'admin.package_shell_binding',
                       { planId: item.plan.plan_id },
-                      `Canonical shell currently binds to ${item.plan.plan_id}.`
+                      `This standard package uses ID ${item.plan.plan_id}.`
                     )}
                   </p>
                 ) : null}
@@ -709,32 +654,23 @@ function PlansContent() {
       <div className="mt-4 rounded-2xl border border-dashed border-slate-200 px-4 py-4 dark:border-slate-800">
         <BackofficeLayer
           eyebrow={t('admin.quick_actions')}
-          title={t('admin.create_plan_title', {}, 'Create coverage package shell')}
+          title={t('admin.create_plan_title', {}, 'Create package record')}
           description={t(
             'admin.create_plan_form_desc_v2',
             {},
             'Create package objects here only when the customer coverage queue genuinely needs a new package. This is a deep inspection workflow, not a default operator path.'
           )}
+          descriptionDisplay="hint"
         />
         <BackofficeSectionPanel className="mt-4">
-        {notice ? (
-          <div className="mb-4 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700 dark:border-emerald-900/60 dark:bg-emerald-950/30 dark:text-emerald-300">
-            {notice}
-          </div>
-        ) : null}
-        {error ? (
-          <div className="mb-4 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-900/60 dark:bg-red-950/30 dark:text-red-300">
-            {error}
-          </div>
-        ) : null}
         <form className="grid gap-4 md:grid-cols-2 xl:grid-cols-[0.9fr_1fr_0.7fr]" onSubmit={handleCreatePlan}>
           <label className="text-sm">
-            <span className="mb-2 block font-medium text-gray-700 dark:text-gray-300">Plan ID</span>
+            <span className="mb-2 block font-medium text-gray-700 dark:text-gray-300">{t('admin.plan_id', {}, 'Package ID')}</span>
             <input
               value={form.plan_id}
               onChange={(event) => setForm((current) => ({ ...current, plan_id: event.target.value }))}
               className="input w-full"
-              placeholder="plan_free"
+              placeholder="free"
               required
             />
           </label>
@@ -769,7 +705,7 @@ function PlansContent() {
               placeholder={t(
                 'admin.plan_description_placeholder',
                 {},
-                'Describe the intended tier posture, operating band, and any operator-only package notes.'
+                'Describe the intended package posture, operating band, and any operator-only notes.'
               )}
             />
           </label>
@@ -782,6 +718,7 @@ function PlansContent() {
         </BackofficeSectionPanel>
       </div>
       </details>
+      ) : null}
     </BackofficePageStack>
   );
 }
@@ -797,7 +734,11 @@ function PackageStatRows({
     <div className={className}>
       <dl className="grid gap-x-5 gap-y-3 md:grid-cols-2">
         {items.map((item) => (
-          <div key={item.label} className="flex items-baseline justify-between gap-4 border-b border-slate-200/70 pb-2 last:border-b-0 dark:border-slate-800">
+          <div
+            key={item.label}
+            className="flex items-baseline justify-between gap-4 border-b border-slate-200/70 pb-2 last:border-b-0 dark:border-slate-800"
+            aria-label={`${item.label}: ${item.value}`}
+          >
             <dt className="min-w-0 text-sm text-slate-500 dark:text-slate-400">{item.label}</dt>
             <dd className="shrink-0 text-lg font-semibold tabular-nums text-slate-950 dark:text-white">{item.value}</dd>
           </div>

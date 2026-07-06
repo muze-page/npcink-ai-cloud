@@ -257,6 +257,6 @@ def test_site_monitoring_overview_flags_missing_active_key(tmp_path: Path) -> No
     assert summary["health"]["status"] == "error"
     assert summary["health"]["score"] == 0
     codes = {item["code"] for item in summary["action_required"]}
-    assert "site_monitoring.api_key_missing" in codes
+    assert "site_monitoring.connection_credential_missing" in codes
     assert not _json_contains(summary, "secret_hash")
     assert not _json_contains(summary, "key_default")

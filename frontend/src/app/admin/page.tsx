@@ -2,6 +2,7 @@
 
 import React, { Suspense, useEffect, useState } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { LoadingFallback } from '@/components/ui/LoadingFallback';
 import { useLocale } from '@/contexts/LocaleContext';
 import { formatAdminCurrency } from '@/lib/currency';
@@ -10,11 +11,11 @@ import { buildAdminOperatorWatchItems, operatorSeverityClasses } from '@/lib/adm
 import { resolveUiErrorMessage } from '@/lib/errors';
 import {
   BackofficeMetricStrip,
-  BackofficePageStack,
   BackofficePrimaryPanel,
   BackofficeSectionPanel,
   BackofficeStackCard,
 } from '@/components/backoffice/BackofficeScaffold';
+import { AdminWorkspacePage, AdminWorkspaceSplit } from '@/components/admin/AdminWorkspace';
 
 interface AdminOverview {
   generatedAt: string;
@@ -123,7 +124,7 @@ interface AdminOverview {
     nextStepKind: string;
     nextStepRef: string;
   }>;
-  hostedModelGovernance: {
+  runtimeTelemetry: {
     status: string;
     summary: string;
     alertCount: number;
@@ -157,9 +158,9 @@ function normalizeOverview(raw: any): AdminOverview {
   const guard = runtimeDiagnostics?.guard ?? {};
   const recentUsage = raw?.recent_usage ?? {};
   const totals = recentUsage?.totals ?? {};
-  const hostedGovernance = raw?.hosted_model_governance ?? {};
-  const hostedAlertSummary = hostedGovernance?.alert_summary ?? {};
-  const hostedDailyDigest = hostedAlertSummary?.daily_digest ?? {};
+  const runtimeTelemetry = raw?.runtime_telemetry ?? {};
+  const runtimeTelemetryAlertSummary = runtimeTelemetry?.alert_summary ?? {};
+  const runtimeTelemetryDailyDigest = runtimeTelemetryAlertSummary?.daily_digest ?? {};
   const platformCredit = raw?.platform_credit_summary ?? {};
   const platformCreditMetric = platformCredit?.credit ?? {};
 
@@ -291,22 +292,22 @@ function normalizeOverview(raw: any): AdminOverview {
           nextStepRef: String(item?.next_step_ref ?? ''),
         }))
       : [],
-    hostedModelGovernance: {
-      status: String(hostedAlertSummary.status ?? 'inactive'),
-      summary: String(hostedAlertSummary.summary ?? ''),
-      alertCount: Number(hostedAlertSummary.alert_count ?? 0),
-      href: String(hostedAlertSummary.href ?? '/admin/hosted-models'),
+    runtimeTelemetry: {
+      status: String(runtimeTelemetryAlertSummary.status ?? 'inactive'),
+      summary: String(runtimeTelemetryAlertSummary.summary ?? ''),
+      alertCount: Number(runtimeTelemetryAlertSummary.alert_count ?? 0),
+      href: String(runtimeTelemetryAlertSummary.href ?? '/admin/troubleshooting') || '/admin/troubleshooting',
       dailyDigest: {
-        runs: Number(hostedDailyDigest.runs ?? 0),
-        providerCalls: Number(hostedDailyDigest.provider_calls ?? 0),
-        meterEvents: Number(hostedDailyDigest.meter_events ?? 0),
-        meteredRunCoverageRate: Number(hostedDailyDigest.metered_run_coverage_rate ?? 0),
-        providerCallRunCoverageRate: Number(hostedDailyDigest.provider_call_run_coverage_rate ?? 0),
-        unmeteredRunCount: Number(hostedDailyDigest.unmetered_run_count ?? 0),
-        runsWithoutProviderCallCount: Number(hostedDailyDigest.runs_without_provider_call_count ?? 0),
+        runs: Number(runtimeTelemetryDailyDigest.runs ?? 0),
+        providerCalls: Number(runtimeTelemetryDailyDigest.provider_calls ?? 0),
+        meterEvents: Number(runtimeTelemetryDailyDigest.meter_events ?? 0),
+        meteredRunCoverageRate: Number(runtimeTelemetryDailyDigest.metered_run_coverage_rate ?? 0),
+        providerCallRunCoverageRate: Number(runtimeTelemetryDailyDigest.provider_call_run_coverage_rate ?? 0),
+        unmeteredRunCount: Number(runtimeTelemetryDailyDigest.unmetered_run_count ?? 0),
+        runsWithoutProviderCallCount: Number(runtimeTelemetryDailyDigest.runs_without_provider_call_count ?? 0),
       },
-      alerts: Array.isArray(hostedAlertSummary.alerts)
-        ? hostedAlertSummary.alerts.map((item: any) => ({
+      alerts: Array.isArray(runtimeTelemetryAlertSummary.alerts)
+        ? runtimeTelemetryAlertSummary.alerts.map((item: any) => ({
             code: String(item?.code ?? ''),
             severity: String(item?.severity ?? ''),
             title: String(item?.title ?? ''),
@@ -401,11 +402,32 @@ function platformCreditWatchSeverity(severity: string): 'watch' | 'warn' | 'acti
   return 'watch';
 }
 
+function coverageToneClass(value: number): string {
+  if (value >= 0.95) {
+    return 'text-emerald-700 dark:text-emerald-300';
+  }
+  if (value >= 0.8) {
+    return 'text-amber-700 dark:text-amber-300';
+  }
+  return 'text-red-700 dark:text-red-300';
+}
+
+function buildAdminLookupHref(path: string, query: string): string {
+  const trimmed = query.trim();
+  if (!trimmed) {
+    return path;
+  }
+  const params = new URLSearchParams({ q: trimmed });
+  return `${path}?${params.toString()}`;
+}
+
 function AdminOverviewContent() {
   const { t } = useLocale();
+  const router = useRouter();
   const [overview, setOverview] = useState<AdminOverview | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [supportQuery, setSupportQuery] = useState('');
 
   useEffect(() => {
     const loadOverview = async () => {
@@ -458,12 +480,12 @@ function AdminOverviewContent() {
     expiringSubscriptionsIn7Days: overview.expiringSubscriptions.in7Days,
     attentionSubscriptionsCount: overview.attentionSubscriptions.length,
     firstAttentionReason: overview.attentionSubscriptions[0]?.reason || '',
-    hostedModelGovernance: {
-      status: overview.hostedModelGovernance.status,
-      alertCount: overview.hostedModelGovernance.alertCount,
-      firstAlertTitle: overview.hostedModelGovernance.alerts[0]?.title || '',
-      firstAlertSummary: overview.hostedModelGovernance.alerts[0]?.summary || '',
-      summary: overview.hostedModelGovernance.summary,
+    runtimeTelemetry: {
+      status: overview.runtimeTelemetry.status,
+      alertCount: overview.runtimeTelemetry.alertCount,
+      firstAlertTitle: overview.runtimeTelemetry.alerts[0]?.title || '',
+      firstAlertSummary: overview.runtimeTelemetry.alerts[0]?.summary || '',
+      summary: overview.runtimeTelemetry.summary,
     },
     formatValue: formatInteger,
     copy: {
@@ -475,11 +497,11 @@ function AdminOverviewContent() {
       expiryReason: t('admin.watch_expiry_reason'),
       attentionTitle: t('admin.watch_attention_title'),
       attentionFallbackReason: t('admin.watch_attention_reason'),
-      hostedTitle: t('admin.watch_hosted_governance_title', {}, 'Hosted model governance needs review'),
-      hostedReason: t(
-        'admin.watch_hosted_governance_reason',
+      runtimeTelemetryTitle: t('admin.watch_runtime_telemetry_title', {}, 'Runtime telemetry needs review'),
+      runtimeTelemetryReason: t(
+        'admin.watch_runtime_telemetry_reason',
         {},
-        'Hosted model telemetry or metering coverage needs review before traffic expands.'
+        'Runtime telemetry coverage needs review before traffic expands.'
       ),
     },
   });
@@ -487,10 +509,10 @@ function AdminOverviewContent() {
   const statusTone =
     overview.runtimeSummary.callbackFailed > 0
       ? 'error'
-      : overview.hostedModelGovernance.status === 'error'
+      : overview.runtimeTelemetry.status === 'error'
         ? 'error'
       : overview.attentionSubscriptions.length > 0 ||
-          overview.hostedModelGovernance.status === 'warning' ||
+          overview.runtimeTelemetry.status === 'warning' ||
           overview.expiringSubscriptions.in7Days > 0 ||
           overview.runtimeSummary.guardEvents > 0 ||
           overview.runtimeSummary.callbackPending > 0
@@ -543,14 +565,14 @@ function AdminOverviewContent() {
       detail: t('admin.home_metric_subscriptions', {}, 'Subscriptions currently contributing to access.'),
     },
     {
-      label: t('admin.running_runs'),
-      value: formatInteger(overview.runtimeSummary.runningRuns),
-      detail: t('admin.home_metric_running', {}, 'Work already in flight across the hosted runtime.'),
+      label: t('admin.platform_credit_total_label', {}, 'AI credits used'),
+      value: formatInteger(Math.round(overview.platformCreditSummary.credit.used)),
+      detail: t('admin.home_metric_credit', {}, 'Current evidence-window AI credit consumption.'),
     },
     {
-      label: t('admin.guard_events'),
-      value: formatInteger(overview.runtimeSummary.guardEvents),
-      detail: t('admin.home_metric_guard', {}, 'Recent guard signals that may need follow-up.'),
+      label: t('admin.home_runtime_runs', {}, 'Runtime runs'),
+      value: formatInteger(overview.recentUsage.runs),
+      detail: t('admin.home_metric_runtime_runs', {}, 'Hosted runtime executions in the current evidence window.'),
     },
   ];
   const commercialItems = overview.attentionSubscriptions.slice(0, 2);
@@ -584,23 +606,102 @@ function AdminOverviewContent() {
   const firstOperatorWatchScope = firstOperatorWatchItem?.scope || '';
   const attentionNotes = operatorWatchItems.slice(0, 2);
   const primaryActionHref =
-    firstOperatorWatchScope.startsWith('hosted.')
-      ? '/admin/hosted-models'
+    firstOperatorWatchScope.startsWith('runtime.telemetry')
+      ? '/admin/troubleshooting'
       : firstOperatorWatchScope.startsWith('runtime.') || firstOperatorWatchScope.startsWith('request.')
         ? '/admin/accounts'
         : statusTone === 'error' || commercialItems.length > 0 || overview.expiringSubscriptions.in7Days > 0
-          ? '/admin/subscriptions'
+          ? '/admin/coverage'
           : '/admin/accounts';
   const primaryActionLabel =
-    primaryActionHref === '/admin/hosted-models'
-      ? t('admin.home_primary_action_hosted_models', {}, 'Inspect hosted models')
-      : primaryActionHref === '/admin/subscriptions'
-      ? t('admin.home_primary_action_coverage', {}, 'Review coverage')
+    primaryActionHref === '/admin/troubleshooting'
+      ? t('admin.home_primary_action_runtime_telemetry', {}, 'Inspect runtime telemetry')
+      : primaryActionHref === '/admin/coverage'
+      ? t('admin.home_primary_action_coverage', {}, 'Review service status')
       : t('admin.home_primary_action_accounts', {}, 'Review customers');
   const secondaryActionHref =
     '/admin/accounts';
   const secondaryActionLabel =
     t('admin.home_secondary_action_accounts', {}, 'Inspect accounts');
+  const supportLookupAccountHref = buildAdminLookupHref('/admin/accounts', supportQuery);
+  const supportLookupPortalUserHref = buildAdminLookupHref('/admin/portal-users', supportQuery);
+  const quickLinks = [
+    {
+      href: '/admin/coverage',
+      label: t('admin.home_quick_service_status', {}, 'Service status'),
+      detail: t('admin.home_quick_service_status_desc', {}, 'Customer coverage, package, and subscription pressure.'),
+    },
+    {
+      href: '/admin/accounts',
+      label: t('admin.home_quick_customers', {}, 'Customers'),
+      detail: t('admin.home_quick_customers_desc', {}, 'Account, site, package, and support context.'),
+    },
+    {
+      href: '/admin/troubleshooting',
+      label: t('admin.home_quick_runtime_diagnostics', {}, 'Runtime diagnostics'),
+      detail: t(
+        'admin.home_quick_runtime_diagnostics_desc',
+        {},
+        'Runtime, plugin, media, vector, and feedback evidence.'
+      ),
+    },
+    {
+      href: '/admin/ai-resources',
+      label: t('admin.home_quick_providers', {}, 'Providers'),
+      detail: t('admin.home_quick_providers_desc', {}, 'Cloud runtime suppliers and credential readiness.'),
+    },
+    {
+      href: '/admin/service-settings',
+      label: t('admin.home_quick_service_settings', {}, 'Service settings'),
+      detail: t('admin.home_quick_service_settings_desc', {}, 'Portal login, delivery, and Cloud-owned service configuration.'),
+    },
+  ];
+  const evidenceWindowMetrics = [
+    {
+      label: t('admin.home_evidence_runs', {}, 'Runs'),
+      value: formatInteger(overview.recentUsage.runs),
+      detail: t('admin.home_evidence_runs_desc', {}, 'Hosted executions in the current overview window.'),
+    },
+    {
+      label: t('admin.home_evidence_provider_calls', {}, 'Provider calls'),
+      value: formatInteger(overview.recentUsage.providerCalls),
+      detail: t('admin.home_evidence_provider_calls_desc', {}, 'Observed provider-call records in the same window.'),
+    },
+    {
+      label: t('admin.home_evidence_cost', {}, 'Cost'),
+      value: formatAdminCurrency(overview.recentUsage.cost),
+      detail: t('admin.home_evidence_cost_desc', {}, 'Internal estimated cost, not a customer wallet balance.'),
+      size: 'compact' as const,
+    },
+    {
+      label: t('admin.home_evidence_meter_coverage', {}, 'Meter coverage'),
+      value: formatPercent(overview.runtimeTelemetry.dailyDigest.meteredRunCoverageRate),
+      detail: t('admin.home_evidence_meter_coverage_desc', {}, 'Share of runtime runs represented in usage metering.'),
+      toneClassName: coverageToneClass(overview.runtimeTelemetry.dailyDigest.meteredRunCoverageRate),
+    },
+  ];
+  const runtimeStatusItems = [
+    {
+      label: t('admin.home_runtime_queued', {}, 'Queued'),
+      value: formatInteger(overview.runtimeSummary.queuedRuns),
+      detail: t('admin.home_runtime_queued_detail', {}, 'Runs waiting for hosted execution.'),
+    },
+    {
+      label: t('admin.running_runs', {}, 'Running'),
+      value: formatInteger(overview.runtimeSummary.runningRuns),
+      detail: t('admin.home_metric_running', {}, 'Work already in flight across the hosted runtime.'),
+    },
+    {
+      label: t('admin.home_runtime_pending', {}, 'Callback pending'),
+      value: formatInteger(overview.runtimeSummary.callbackPending),
+      detail: t('admin.home_runtime_pending_detail', {}, 'Terminal callbacks waiting for delivery.'),
+    },
+    {
+      label: t('admin.guard_events', {}, 'Guard events'),
+      value: formatInteger(overview.runtimeSummary.guardEvents),
+      detail: t('admin.home_metric_guard', {}, 'Recent guard signals that may need follow-up.'),
+    },
+  ];
   const commercialPanelMetrics = [
     {
       label: t('admin.home_commercial_attention', {}, 'Attention now'),
@@ -623,21 +724,21 @@ function AdminOverviewContent() {
     },
   ];
   const recentAuditItems = overview.recentAuditSummary.slice(0, 4);
-  const hostedGovernanceMetrics = [
+  const runtimeTelemetryMetrics = [
     {
-      label: t('admin.home_hosted_runs', {}, 'Hosted runs'),
-      value: formatInteger(overview.hostedModelGovernance.dailyDigest.runs),
-      detail: t('admin.home_hosted_runs_detail', {}, 'Runs observed in the hosted model governance window.'),
+      label: t('admin.home_runtime_telemetry_runs', {}, 'Runtime runs'),
+      value: formatInteger(overview.runtimeTelemetry.dailyDigest.runs),
+      detail: t('admin.home_runtime_telemetry_runs_detail', {}, 'Runs observed in the runtime telemetry window.'),
     },
     {
-      label: t('admin.home_hosted_meter', {}, 'Meter coverage'),
-      value: formatPercent(overview.hostedModelGovernance.dailyDigest.meteredRunCoverageRate),
-      detail: t('admin.home_hosted_meter_detail', {}, 'Share of hosted runs represented in usage metering.'),
+      label: t('admin.home_runtime_telemetry_meter', {}, 'Meter coverage'),
+      value: formatPercent(overview.runtimeTelemetry.dailyDigest.meteredRunCoverageRate),
+      detail: t('admin.home_runtime_telemetry_meter_detail', {}, 'Share of runtime runs represented in usage metering.'),
     },
     {
-      label: t('admin.home_hosted_provider', {}, 'Provider coverage'),
-      value: formatPercent(overview.hostedModelGovernance.dailyDigest.providerCallRunCoverageRate),
-      detail: t('admin.home_hosted_provider_detail', {}, 'Share of hosted runs with provider call telemetry.'),
+      label: t('admin.home_runtime_telemetry_provider', {}, 'Provider coverage'),
+      value: formatPercent(overview.runtimeTelemetry.dailyDigest.providerCallRunCoverageRate),
+      detail: t('admin.home_runtime_telemetry_provider_detail', {}, 'Share of runtime runs with provider call telemetry.'),
     },
   ];
   const platformCredit = overview.platformCreditSummary;
@@ -675,11 +776,13 @@ function AdminOverviewContent() {
   ];
 
   return (
-    <BackofficePageStack>
+    <AdminWorkspacePage>
       <BackofficePrimaryPanel
         eyebrow={t('admin.operator_surface', {}, 'Operator surface')}
         title={t('admin.home_title', {}, 'Platform state comes first')}
         description={platformConclusion}
+        className="rounded-[1.2rem] shadow-none"
+        contentClassName="px-5 py-5 md:px-6 md:py-5"
         actions={(
           <>
             <Link href={primaryActionHref} className="btn btn-primary">
@@ -739,6 +842,158 @@ function AdminOverviewContent() {
           )}
         </div>
       </BackofficePrimaryPanel>
+
+      <AdminWorkspaceSplit
+        primary={(
+          <>
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-gray-500 dark:text-gray-400">
+                  {t('admin.home_quick_actions_eyebrow', {}, 'Operator console')}
+                </p>
+                <h2 className="mt-2 text-xl font-semibold text-gray-950 dark:text-white">
+                  {t('admin.home_quick_actions_title', {}, 'Open the right surface first')}
+                </h2>
+                <p className="mt-1 max-w-2xl text-sm leading-6 text-gray-600 dark:text-gray-400">
+                  {t(
+                    'admin.home_quick_actions_desc',
+                    {},
+                    'These entries only open existing Cloud service-plane detail surfaces. They do not edit WordPress, prompts, routers, abilities, or workflows.'
+                  )}
+                </p>
+              </div>
+            </div>
+            <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+              {quickLinks.map((item) => (
+                <Link
+                  key={item.href}
+                  href={item.href}
+                  className="group block rounded-2xl border border-slate-200/80 bg-white/80 px-4 py-3.5 text-sm transition hover:-translate-y-0.5 hover:border-blue-200 hover:bg-blue-50/70 hover:shadow-sm dark:border-slate-800 dark:bg-slate-950/45 dark:hover:border-blue-900/70 dark:hover:bg-blue-950/25"
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="font-semibold text-slate-950 dark:text-white">{item.label}</p>
+                      <p className="mt-1 line-clamp-2 text-xs leading-5 text-slate-500 dark:text-slate-400">
+                        {item.detail}
+                      </p>
+                    </div>
+                    <span className="shrink-0 text-slate-400 transition group-hover:translate-x-0.5 group-hover:text-blue-600 dark:text-slate-500 dark:group-hover:text-blue-300">
+                      →
+                    </span>
+                  </div>
+                </Link>
+              ))}
+            </div>
+            <BackofficeStackCard className="mt-4 bg-white/80 dark:bg-slate-950/45" data-admin-support-lookup>
+              <div className="grid gap-4">
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-[0.18em] text-gray-500 dark:text-gray-400">
+                    {t('admin.home_support_lookup_eyebrow', {}, 'Support lookup')}
+                  </p>
+                  <h3 className="mt-2 text-base font-semibold text-slate-950 dark:text-white">
+                    {t('admin.home_support_lookup_title', {}, 'Find the customer record first')}
+                  </h3>
+                  <p className="mt-1 text-sm leading-6 text-slate-600 dark:text-slate-300">
+                    {t(
+                      'admin.home_support_lookup_desc',
+                      {},
+                      'Search by email, customer, site, or domain. Start from the customer or Portal user record, then open service status only when coverage needs follow-up.'
+                    )}
+                  </p>
+                </div>
+                <form
+                  className="flex w-full flex-col gap-2 sm:flex-row"
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    router.push(supportLookupAccountHref);
+                  }}
+                >
+                  <label className="sr-only" htmlFor="admin-support-lookup-query">
+                    {t('admin.home_support_lookup_label', {}, 'Support lookup query')}
+                  </label>
+                  <input
+                    id="admin-support-lookup-query"
+                    type="search"
+                    value={supportQuery}
+                    onChange={(event) => setSupportQuery(event.target.value)}
+                    placeholder={t('admin.home_support_lookup_placeholder', {}, 'Email, customer, site, or domain')}
+                    className="min-h-11 min-w-0 flex-1 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-blue-400 focus:ring-2 focus:ring-blue-100 dark:border-slate-700 dark:bg-slate-950 dark:text-white dark:focus:border-blue-500 dark:focus:ring-blue-950"
+                  />
+                  <div className="flex shrink-0 gap-2">
+                    <Link href={supportLookupAccountHref} className="btn btn-primary btn-sm whitespace-nowrap">
+                      {t('admin.home_support_lookup_accounts', {}, 'Find customer')}
+                    </Link>
+                    <Link href={supportLookupPortalUserHref} className="btn btn-secondary btn-sm whitespace-nowrap">
+                      {t('admin.home_support_lookup_portal_users', {}, 'Find user')}
+                    </Link>
+                  </div>
+                </form>
+              </div>
+              <div className="mt-4 flex flex-wrap gap-2 text-xs">
+                <Link
+                  href="/admin/coverage"
+                  className="rounded-full border border-slate-200 px-3 py-1.5 font-medium text-slate-600 transition hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700 dark:border-slate-800 dark:text-slate-300 dark:hover:border-blue-900 dark:hover:bg-blue-950/30 dark:hover:text-blue-300"
+                >
+                  {t('admin.home_support_lookup_coverage', {}, 'Open service status')}
+                </Link>
+                <Link
+                  href="/admin/troubleshooting"
+                  className="rounded-full border border-slate-200 px-3 py-1.5 font-medium text-slate-600 transition hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700 dark:border-slate-800 dark:text-slate-300 dark:hover:border-blue-900 dark:hover:bg-blue-950/30 dark:hover:text-blue-300"
+                >
+                  {t('admin.home_support_lookup_diagnostics', {}, 'Open diagnostics')}
+                </Link>
+              </div>
+            </BackofficeStackCard>
+          </>
+        )}
+        inspector={(
+          <>
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-gray-500 dark:text-gray-400">
+                  {t('admin.home_evidence_window_eyebrow', {}, 'Evidence window')}
+                </p>
+                <h2 className="mt-2 text-xl font-semibold text-gray-950 dark:text-white">
+                  {t('admin.home_evidence_window_title', {}, 'Runtime and usage snapshot')}
+                </h2>
+                <p className="mt-1 text-sm leading-6 text-gray-600 dark:text-gray-400">
+                  {t(
+                    'admin.home_evidence_window_desc',
+                    { days: String(overview.recentUsage.windowDays) },
+                    `Current ${overview.recentUsage.windowDays}-day overview signals from existing runtime and metering evidence.`
+                  )}
+                </p>
+              </div>
+              <span
+                className={cn(
+                  'rounded-full border px-2.5 py-1 text-[0.68rem] font-semibold uppercase tracking-[0.18em]',
+                  statusClasses
+                )}
+              >
+                {statusLabel}
+              </span>
+            </div>
+            <BackofficeMetricStrip
+              items={evidenceWindowMetrics}
+              columnsClassName="mt-4 grid-cols-2 md:grid-cols-2 xl:grid-cols-2"
+            />
+            <div className="mt-4 grid gap-2 sm:grid-cols-2">
+              {runtimeStatusItems.map((item) => (
+                <div
+                  key={item.label}
+                  className="rounded-xl border border-slate-200/80 bg-slate-50/70 px-3 py-2.5 dark:border-slate-800 dark:bg-slate-950/35"
+                  title={item.detail}
+                >
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="text-xs font-medium text-slate-500 dark:text-slate-400">{item.label}</span>
+                    <span className="text-sm font-semibold text-slate-950 dark:text-white">{item.value}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </>
+        )}
+      />
 
       <BackofficeSectionPanel className="space-y-5">
         <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
@@ -988,11 +1243,11 @@ function AdminOverviewContent() {
                 {t('admin.home_section_commercial', {}, 'Commercial attention')}
               </p>
               <h2 className="mt-2 text-xl font-semibold text-gray-950 dark:text-white">
-                {t('admin.home_section_commercial_title', {}, 'Which customers need coverage follow-up next?')}
+                {t('admin.home_section_commercial_title', {}, 'Which customers need service follow-up next?')}
               </h2>
             </div>
-            <Link href="/admin/subscriptions" className="text-sm font-medium text-blue-600 hover:text-blue-700 dark:text-blue-300 dark:hover:text-blue-200">
-              {t('admin.nav_coverage', {}, 'Coverage')} →
+            <Link href="/admin/coverage" className="text-sm font-medium text-blue-600 hover:text-blue-700 dark:text-blue-300 dark:hover:text-blue-200">
+              {t('admin.nav_coverage', {}, 'Service status')} →
             </Link>
           </div>
           <BackofficeMetricStrip items={commercialPanelMetrics} columnsClassName="xl:grid-cols-1" />
@@ -1015,7 +1270,7 @@ function AdminOverviewContent() {
                         href={item.href}
                         className="text-xs font-medium text-blue-600 hover:text-blue-700 dark:text-blue-300 dark:hover:text-blue-200"
                       >
-                        {t('admin.home_open_customer_coverage_action', {}, 'Open customer coverage')} →
+                        {t('admin.home_open_customer_coverage_action', {}, 'Open customer service status')} →
                       </Link>
                     </div>
                   </div>
@@ -1050,14 +1305,14 @@ function AdminOverviewContent() {
               {t('admin.home_section_runtime_title', {}, 'Which runtime signals need follow-up?')}
             </h2>
           </div>
-          <Link href="/admin/hosted-models" className="text-sm font-medium text-blue-600 hover:text-blue-700 dark:text-blue-300 dark:hover:text-blue-200">
+          <Link href="/admin/troubleshooting" className="text-sm font-medium text-blue-600 hover:text-blue-700 dark:text-blue-300 dark:hover:text-blue-200">
             {t('admin.home_secondary_action_runtime', {}, 'Inspect runtime sources')} →
           </Link>
         </div>
-        <BackofficeMetricStrip items={hostedGovernanceMetrics} columnsClassName="md:grid-cols-3" />
-        {overview.hostedModelGovernance.alerts.length > 0 ? (
+        <BackofficeMetricStrip items={runtimeTelemetryMetrics} columnsClassName="md:grid-cols-3" />
+        {overview.runtimeTelemetry.alerts.length > 0 ? (
           <div className="grid gap-3 xl:grid-cols-2">
-            {overview.hostedModelGovernance.alerts.slice(0, 2).map((alert) => (
+            {overview.runtimeTelemetry.alerts.slice(0, 2).map((alert) => (
               <BackofficeStackCard key={alert.code}>
                 <div className="flex items-start justify-between gap-3">
                   <div>
@@ -1089,8 +1344,8 @@ function AdminOverviewContent() {
           </div>
         ) : (
           <BackofficeStackCard className="text-sm text-slate-600 dark:text-slate-300">
-            {overview.hostedModelGovernance.summary ||
-              t('admin.home_hosted_empty', {}, 'No hosted model governance alerts are active today.')}
+            {overview.runtimeTelemetry.summary ||
+              t('admin.home_runtime_telemetry_empty', {}, 'No runtime telemetry alerts are active today.')}
           </BackofficeStackCard>
         )}
       </BackofficeSectionPanel>
@@ -1130,7 +1385,7 @@ function AdminOverviewContent() {
           </BackofficeStackCard>
         </div>
       </details>
-    </BackofficePageStack>
+    </AdminWorkspacePage>
   );
 }
 

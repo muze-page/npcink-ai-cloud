@@ -32,6 +32,9 @@ PUBLIC_RUNTIME_MAX_NONCE_LENGTH = 128
 NONCE_HEADER = "X-Npcink-Nonce"
 IDEMPOTENCY_KEY_PATTERN = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
 NONCE_PATTERN = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
+SECRET_HASH_ALGORITHM = "pbkdf2_sha256"
+SECRET_HASH_ITERATIONS = 210_000
+SECRET_HASH_SALT = b"npcink-ai-cloud-secret-hash-v2"
 REPLAY_SCOPE_PUBLIC_POST_SITE = "public_post_site"
 REPLAY_SCOPE_PUBLIC_POST_KEY = "public_post_key"
 REPLAY_SCOPE_PUBLIC_POST_IP = "public_post_ip"
@@ -69,7 +72,18 @@ def build_body_digest(payload: bytes) -> str:
 
 
 def build_secret_hash(secret: str) -> str:
-    return hashlib.sha256(secret.encode("utf-8")).hexdigest()
+    digest = hashlib.pbkdf2_hmac(
+        "sha256",
+        secret.encode("utf-8"),
+        SECRET_HASH_SALT,
+        SECRET_HASH_ITERATIONS,
+    ).hex()
+    return f"{SECRET_HASH_ALGORITHM}${SECRET_HASH_ITERATIONS}${digest}"
+
+
+def verify_secret_hash(secret: str, stored_hash: str) -> bool:
+    expected = build_secret_hash(secret)
+    return hmac.compare_digest(expected, str(stored_hash or ""))
 
 
 def build_canonical_request(

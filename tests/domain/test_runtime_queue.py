@@ -28,7 +28,7 @@ from app.domain.runtime.models import (
     RuntimeRequest,
 )
 from app.domain.runtime.service import RuntimeService
-from tests.conftest import seed_site_auth
+from tests.conftest import seed_openai_model_allowlist, seed_site_auth
 
 
 def _sqlite_url(tmp_path: Path) -> str:
@@ -56,6 +56,7 @@ def test_execute_requires_preprovisioned_active_site(tmp_path: Path) -> None:
     database_url = _sqlite_url(tmp_path)
     init_schema(database_url)
     CatalogService(database_url).refresh_catalog()
+    seed_openai_model_allowlist(database_url)
 
     service = _runtime_service(database_url)
     request = RuntimeRequest(
@@ -106,6 +107,7 @@ def test_process_next_queued_run_claims_from_database_without_signal(tmp_path: P
     database_url = _sqlite_url(tmp_path)
     init_schema(database_url)
     CatalogService(database_url).refresh_catalog()
+    seed_openai_model_allowlist(database_url)
     seed_site_auth(database_url, site_id="site_queue")
 
     service = _runtime_service(database_url)
@@ -163,6 +165,7 @@ def test_claim_next_queued_run_uses_atomic_update_returning(tmp_path: Path) -> N
     database_url = _sqlite_url(tmp_path)
     init_schema(database_url)
     CatalogService(database_url).refresh_catalog()
+    seed_openai_model_allowlist(database_url)
     seed_site_auth(database_url, site_id="site_queue")
 
     service = _runtime_service(database_url)
@@ -213,6 +216,7 @@ def test_process_queued_runs_drains_signaled_and_unsignaled_runs_in_one_cycle(
     database_url = _sqlite_url(tmp_path)
     init_schema(database_url)
     CatalogService(database_url).refresh_catalog()
+    seed_openai_model_allowlist(database_url)
     seed_site_auth(
         database_url,
         site_id="site_queue",
@@ -310,6 +314,7 @@ def test_cleanup_expired_run_results_purges_stored_result(tmp_path: Path) -> Non
     database_url = _sqlite_url(tmp_path)
     init_schema(database_url)
     CatalogService(database_url).refresh_catalog()
+    seed_openai_model_allowlist(database_url)
     seed_site_auth(database_url, site_id="site_queue")
 
     service = _runtime_service(database_url)
@@ -350,6 +355,7 @@ def test_cancel_run_marks_queued_run_canceled(tmp_path: Path) -> None:
     database_url = _sqlite_url(tmp_path)
     init_schema(database_url)
     CatalogService(database_url).refresh_catalog()
+    seed_openai_model_allowlist(database_url)
     seed_site_auth(database_url, site_id="site_queue")
 
     service = _runtime_service(database_url)
@@ -391,6 +397,7 @@ def test_dispatch_pending_callbacks_delivers_terminal_run(
     database_url = _sqlite_url(tmp_path)
     init_schema(database_url)
     CatalogService(database_url).refresh_catalog()
+    seed_openai_model_allowlist(database_url)
     seed_site_auth(database_url, site_id="site_queue")
 
     service = _runtime_service(database_url)
@@ -445,6 +452,7 @@ def test_dispatch_pending_callbacks_recovers_stale_dispatching_lease(
     database_url = _sqlite_url(tmp_path)
     init_schema(database_url)
     CatalogService(database_url).refresh_catalog()
+    seed_openai_model_allowlist(database_url)
     seed_site_auth(database_url, site_id="site_queue")
 
     service = _runtime_service(database_url)
@@ -522,6 +530,7 @@ def test_bounded_auto_repairs_requeue_stale_queued_runs_and_audit_worker_actor(
     database_url = _sqlite_url(tmp_path)
     init_schema(database_url)
     CatalogService(database_url).refresh_catalog()
+    seed_openai_model_allowlist(database_url)
     seed_site_auth(database_url, site_id="site_queue")
 
     service = _runtime_service(database_url)
@@ -588,6 +597,7 @@ def test_bounded_auto_repairs_redeliver_callback_overdue_runs_and_surface_operat
     database_url = _sqlite_url(tmp_path)
     init_schema(database_url)
     CatalogService(database_url).refresh_catalog()
+    seed_openai_model_allowlist(database_url)
     seed_site_auth(database_url, site_id="site_queue")
 
     service = _runtime_service(database_url)
@@ -688,6 +698,7 @@ def test_runtime_backlog_diagnostics_group_by_scope_and_classify_bottlenecks(
     database_url = _sqlite_url(tmp_path)
     init_schema(database_url)
     CatalogService(database_url).refresh_catalog()
+    seed_openai_model_allowlist(database_url)
     seed_site_auth(
         database_url,
         site_id="site_queue",
@@ -783,6 +794,7 @@ def test_callback_dispatch_recovery_logs_audit_failure_but_keeps_recovery_flow(
     database_url = _sqlite_url(tmp_path)
     init_schema(database_url)
     CatalogService(database_url).refresh_catalog()
+    seed_openai_model_allowlist(database_url)
     seed_site_auth(database_url, site_id="site_queue")
 
     service = _runtime_service(database_url)

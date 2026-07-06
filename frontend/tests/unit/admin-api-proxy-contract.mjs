@@ -25,6 +25,18 @@ assert.match(
 
 assert.match(
   source,
+  /ADMIN_IDEMPOTENCY_KEY_PATTERN[\s\S]*resolveAdminIdempotencyKey[\s\S]*createAdminIdempotencyKey/,
+  'admin proxy must sanitize or replace invalid write idempotency keys before forwarding to backend'
+);
+
+assert.doesNotMatch(
+  source,
+  /'idempotency-key',/,
+  'admin proxy must not copy raw idempotency-key as a generic forwarded header'
+);
+
+assert.match(
+  source,
   /\^accounts\\\/\[\^\/\]\+\\\/subscription\(\?:\\\/\(\?:suspend\|cancel\)\)\?\$/,
   'admin account subscription writes must route to the backend admin service namespace'
 );
@@ -33,6 +45,42 @@ assert.match(
   source,
   /return `\/internal\/service\/admin\/\$\{normalized\}`;/,
   'admin-prefixed write exceptions must preserve /internal/service/admin'
+);
+
+assert.match(
+  source,
+  /\^service-settings\(\?:\\\/\.\+\)\?\$/,
+  'admin service-settings writes must route through the backend admin service namespace'
+);
+
+assert.doesNotMatch(
+  source,
+  /audio-providers/,
+  'admin proxy must not expose the retired env-backed audio provider settings routes'
+);
+
+assert.doesNotMatch(
+  source,
+  /web-search-providers|image-source-providers/,
+  'admin proxy must not expose retired env-backed capability provider settings routes'
+);
+
+assert.match(
+  source,
+  /normalized === 'audio-jobs'[\s\S]*?return '\/internal\/service\/admin\/audio-jobs';/,
+  'audio workbench job creation must route through the backend admin service namespace'
+);
+
+assert.doesNotMatch(
+  source,
+  /normalized === 'ai-resources\/profile-preferences'[\s\S]*?return '\/internal\/service\/admin\/ai-resources\/profile-preferences';/,
+  'admin proxy must not expose retired AI resource profile-preferences route after audio routes moved to ability-model routing'
+);
+
+assert.match(
+  source,
+  /normalized === 'provider-connections\/preview-catalog'[\s\S]*?return '\/internal\/service\/admin\/provider-connections\/preview-catalog';/,
+  'provider connection catalog previews must route through the backend admin service namespace'
 );
 
 assert.match(

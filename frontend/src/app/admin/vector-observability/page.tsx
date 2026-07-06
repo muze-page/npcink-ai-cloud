@@ -201,6 +201,31 @@ function formatScore(value: number): string {
   return Number(value || 0).toFixed(3);
 }
 
+function vectorStatusLabel(
+  t: (key: string, params?: Record<string, string>, fallback?: string) => string,
+  status: string
+): string {
+  return t(`status.${status || 'unknown'}`, {}, status || 'unknown');
+}
+
+function vectorHealthSummary(
+  t: (key: string, params?: Record<string, string>, fallback?: string) => string,
+  data: VectorObservabilityData
+): string {
+  if (data.health.status === 'inactive') {
+    return t('admin.vector_obs.health_summary_inactive', {}, 'No Site Knowledge activity in this window.');
+  }
+  return t(
+    'admin.vector_obs.health_summary_active',
+    {
+      searches: formatNumber(data.totals.searchQueriesTotal),
+      noHitRate: formatPercent(data.totals.noHitRate),
+      p95: formatNumber(data.totals.p95SearchLatencyMs),
+    },
+    '{{searches}} searches · {{noHitRate}} no-hit · P95 {{p95}}ms'
+  );
+}
+
 function timelineLabel(value: string): string {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return '';
@@ -266,17 +291,39 @@ function AdminVectorObservabilityContent() {
   const intentData = useMemo(
     () =>
       (data?.intents || []).map((item) => ({
-        label: item.intent || 'unknown',
+        label: item.intent || t('admin.vector_obs.unknown_intent', {}, 'Unknown'),
         value: item.queriesTotal,
         color: item.noHitRate >= 0.25 ? '#f59e0b' : '#2563eb',
       })),
-    [data]
+    [data, t]
   );
   const isEmpty =
     data !== null &&
     data.totals.indexJobsTotal === 0 &&
     data.totals.searchQueriesTotal === 0 &&
     data.totals.currentChunkCount === 0;
+  const emptyChecks = [
+    t(
+      'admin.vector_obs.empty_check_sync',
+      {},
+      'Confirm the site has run Site Knowledge sync through Cloud.'
+    ),
+    t(
+      'admin.vector_obs.empty_check_embedding',
+      {},
+      'Check the embedding provider and model binding before retrying sync.'
+    ),
+    t(
+      'admin.vector_obs.empty_check_vector_store',
+      {},
+      'Check vector store connectivity if sync jobs exist but no chunks appear.'
+    ),
+    t(
+      'admin.vector_obs.empty_check_search',
+      {},
+      'Confirm semantic search traffic exists for the selected site and window.'
+    ),
+  ];
 
   if (loading && !data) {
     return <LoadingFallback />;
@@ -314,8 +361,8 @@ function AdminVectorObservabilityContent() {
                 items={[
                   {
                     label: t('admin.vector_obs.health', {}, 'Health'),
-                    value: `${data.health.status} · ${data.health.score}`,
-                    detail: data.health.summary,
+                    value: `${vectorStatusLabel(t, data.health.status)} · ${data.health.score}`,
+                    detail: vectorHealthSummary(t, data),
                     toneClassName:
                       data.health.status === 'error'
                         ? 'text-rose-600 dark:text-rose-400'
@@ -327,12 +374,20 @@ function AdminVectorObservabilityContent() {
                   {
                     label: t('admin.vector_obs.indexed', {}, 'Indexed'),
                     value: formatNumber(data.totals.currentDocumentCount),
-                    detail: `${formatNumber(data.totals.currentChunkCount)} chunks`,
+                    detail: t(
+                      'admin.vector_obs.detail_chunks',
+                      { count: formatNumber(data.totals.currentChunkCount) },
+                      '{{count}} chunks'
+                    ),
                   },
                   {
                     label: t('admin.vector_obs.searches', {}, 'Searches'),
                     value: formatNumber(data.totals.searchQueriesTotal),
-                    detail: `${formatNumber(data.totals.noHitTotal)} no-hit`,
+                    detail: t(
+                      'admin.vector_obs.detail_no_hit',
+                      { count: formatNumber(data.totals.noHitTotal) },
+                      '{{count}} no-hit'
+                    ),
                   },
                   {
                     label: t('admin.vector_obs.no_hit_rate', {}, 'No-hit rate'),
@@ -345,7 +400,11 @@ function AdminVectorObservabilityContent() {
                   {
                     label: t('admin.vector_obs.p95', {}, 'P95 search'),
                     value: `${formatNumber(data.totals.p95SearchLatencyMs)}ms`,
-                    detail: `top1 ${formatScore(data.totals.avgTop1Score)}`,
+                    detail: t(
+                      'admin.vector_obs.detail_top1',
+                      { score: formatScore(data.totals.avgTop1Score) },
+                      'top1 {{score}}'
+                    ),
                     size: 'compact',
                   },
                 ]}
@@ -404,14 +463,29 @@ function AdminVectorObservabilityContent() {
       </BackofficeSectionPanel>
 
       {isEmpty ? (
-        <BackofficeEmptyState
-          title={t('admin.vector_obs.empty_title', {}, 'No vector activity yet')}
-          description={t(
-            'admin.vector_obs.empty_desc',
-            {},
-            'Vector observability will populate after sites run knowledge sync or semantic search through Cloud.'
-          )}
-        />
+        <>
+          <BackofficeEmptyState
+            title={t('admin.vector_obs.empty_title', {}, 'No vector activity yet')}
+            description={t(
+              'admin.vector_obs.empty_desc',
+              {},
+              'Vector observability will populate after sites run knowledge sync or semantic search through Cloud.'
+            )}
+          />
+          <BackofficeSectionPanel>
+            <h3 className="text-sm font-semibold text-slate-950 dark:text-white">
+              {t('admin.vector_obs.empty_checks_title', {}, 'Read-only checks')}
+            </h3>
+            <ul className="mt-3 space-y-2 text-sm text-slate-600 dark:text-slate-300">
+              {emptyChecks.map((item) => (
+                <li key={item} className="flex gap-2">
+                  <span aria-hidden="true" className="mt-2 h-1.5 w-1.5 rounded-full bg-slate-400" />
+                  <span>{item}</span>
+                </li>
+              ))}
+            </ul>
+          </BackofficeSectionPanel>
+        </>
       ) : (
         <>
           <div className="grid gap-5 xl:grid-cols-2">
@@ -467,7 +541,14 @@ function AdminVectorObservabilityContent() {
                           <BackofficeIdentifier value={site.siteId} />
                         </td>
                         <td className="px-3 py-3">
-                          {formatNumber(site.documentCount)} docs · {formatNumber(site.chunkCount)} chunks
+                          {t(
+                            'admin.vector_obs.coverage_value',
+                            {
+                              docs: formatNumber(site.documentCount),
+                              chunks: formatNumber(site.chunkCount),
+                            },
+                            '{{docs}} docs · {{chunks}} chunks'
+                          )}
                         </td>
                         <td className="px-3 py-3">{formatNumber(site.queriesTotal)}</td>
                         <td className="px-3 py-3">{formatPercent(site.noHitRate)}</td>
@@ -513,11 +594,23 @@ function AdminVectorObservabilityContent() {
                   >
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <BackofficeIdentifier value={snapshot.siteId} />
-                      <BackofficeTag tone="info">{snapshot.vectorBackend || 'local'}</BackofficeTag>
+                      <BackofficeTag tone="info">
+                        {snapshot.vectorBackend || t('admin.vector_obs.backend_local', {}, 'local')}
+                      </BackofficeTag>
                     </div>
                     <div className="mt-2 text-slate-600 dark:text-slate-300">
-                      {formatNumber(snapshot.documentCount)} docs · {formatNumber(snapshot.chunkCount)} chunks ·{' '}
-                      {snapshot.embeddingProvider || 'deterministic'} {snapshot.embeddingDimensions}d
+                      {t(
+                        'admin.vector_obs.coverage_value',
+                        {
+                          docs: formatNumber(snapshot.documentCount),
+                          chunks: formatNumber(snapshot.chunkCount),
+                        },
+                        '{{docs}} docs · {{chunks}} chunks'
+                      )}{' '}
+                      ·{' '}
+                      {snapshot.embeddingProvider ||
+                        t('admin.vector_obs.embedding_deterministic', {}, 'deterministic')}{' '}
+                      {snapshot.embeddingDimensions}d
                     </div>
                   </div>
                 ))}
@@ -531,7 +624,11 @@ function AdminVectorObservabilityContent() {
                 </h3>
                 <BackofficeStatusBadge
                   status={(data?.errors || []).length ? 'warning' : 'ok'}
-                  label={(data?.errors || []).length ? 'needs attention' : 'ok'}
+                  label={
+                    (data?.errors || []).length
+                      ? t('admin.vector_obs.needs_attention', {}, 'Needs attention')
+                      : t('status.ok', {}, 'OK')
+                  }
                 />
               </div>
               {(data?.errors || []).length ? (

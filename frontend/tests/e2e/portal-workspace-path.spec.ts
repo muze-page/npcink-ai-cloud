@@ -123,6 +123,23 @@ async function installPortalMocks(page: Page) {
       return;
     }
 
+    if (pathname === '/auth/identity-providers') {
+      await fulfillJson(route, {
+        principal_id: 'prn_8d95fab64fa7487bb31cd81c3adac4a8',
+        providers: [
+          {
+            provider: 'qq',
+            display_name: 'QQ',
+            configured: false,
+            bound: false,
+            binding: null,
+            bind_start_path: '/portal/v1/auth/qq/start',
+          },
+        ],
+      });
+      return;
+    }
+
     if (pathname === '/sites/site_attention/summary') {
       await fulfillJson(route, {
         site_id: 'site_attention',
@@ -273,6 +290,7 @@ async function installPortalMocks(page: Page) {
         signals: [],
         diagnostic_items: [
           {
+            diagnostic_key: 'plugin_attention:e2e_plugin_runtime_failure',
             code: 'plugin_observability.plugin_error',
             severity: 'warning',
             source: 'plugins',
@@ -281,10 +299,39 @@ async function installPortalMocks(page: Page) {
             likely_cause: 'Plugin telemetry reports active errors.',
             next_step: 'Open Plugins and inspect recent errors.',
             recommended_action_id: 'inspect_plugin_observability_attention',
+            workflow_status: 'new',
+            status_detail: {
+              workflow_status: 'new',
+              status_source: 'monitoring_signal',
+              allowed_statuses: ['new', 'acknowledged', 'muted', 'resolved'],
+              muted_until: '',
+              operator_note: '',
+              updated_at: '2026-04-07T10:00:00Z',
+            },
+            evidence_window: {
+              hours: 24,
+              start_at: '2026-04-06T10:00:00Z',
+              end_at: '2026-04-07T10:00:00Z',
+            },
+            last_updated_at: '2026-04-07T10:00:00Z',
             operator_review_required: true,
             direct_wordpress_write: false,
           },
         ],
+        diagnostic_workflow: {
+          new: 1,
+          acknowledged: 0,
+          muted: 0,
+          resolved: 0,
+          total: 1,
+          needs_attention: 1,
+          allowed_statuses: ['new', 'acknowledged', 'muted', 'resolved'],
+        },
+        evidence_window: {
+          hours: 24,
+          start_at: '2026-04-06T10:00:00Z',
+          end_at: '2026-04-07T10:00:00Z',
+        },
         safety: {
           write_posture: 'suggestion_only',
           direct_wordpress_write: false,
@@ -713,12 +760,15 @@ test('portal workspace interaction path: attention strip to filtered table to dr
   await page.goto('/portal');
 
   const portalPrimaryNav = page.locator('[data-ui="portal-primary-nav"]');
-  await expect(portalPrimaryNav.locator('> a')).toHaveCount(5);
-  await expect(portalPrimaryNav.getByRole('link', { name: /^Workspace$|^工作区$|^工作區$/i })).toBeVisible();
-  await expect(portalPrimaryNav.getByRole('link', { name: /^Keys$|^密钥$|^金鑰$/i })).toBeVisible();
-  await expect(portalPrimaryNav.getByRole('link', { name: /^Usage$|^用量$/i })).toBeVisible();
-  await expect(portalPrimaryNav.getByRole('link', { name: /^Package$|^套餐$|^方案$/i })).toBeVisible();
-  await expect(portalPrimaryNav.getByRole('link', { name: /^Sites$|^站点$|^站點$/i })).toBeVisible();
+  await expect(portalPrimaryNav.locator('> a')).toHaveCount(4);
+  await expect(portalPrimaryNav.getByRole('link', { name: /^Overview$|^概览$|^概覽$|^Workspace$|^工作区$|^工作區$/i })).toBeVisible();
+  await expect(portalPrimaryNav.getByRole('link', { name: /^Plan and usage$|^套餐与用量$|^套餐與用量$/i })).toBeVisible();
+  await expect(portalPrimaryNav.getByRole('link', { name: /^Sites and domain$|^站点与域名$|^站點與網域$/i })).toBeVisible();
+  await expect(portalPrimaryNav.getByRole('link', { name: /^Contact$|^联系方式$|^聯絡方式$/i })).toBeVisible();
+  await expect(portalPrimaryNav.getByRole('link', { name: /^Billing$|^账单$|^帳單$/i })).toHaveCount(0);
+  await expect(portalPrimaryNav.getByRole('link', { name: /^Monitoring$|^监控$|^監控$/i })).toHaveCount(0);
+  await expect(portalPrimaryNav.getByRole('link', { name: /^AI Insights$|^AI 分析$/i })).toHaveCount(0);
+  await expect(portalPrimaryNav.getByRole('link', { name: /^Keys$|^密钥$|^金鑰$/i })).toHaveCount(0);
   await expect(portalPrimaryNav.getByRole('link', { name: /^Audit$|^审计$|^稽核$/i })).toHaveCount(0);
   await expect(portalPrimaryNav.getByRole('link', { name: /^Preferences$|^个人偏好$|^偏好設定$/i })).toHaveCount(0);
   await expect(portalPrimaryNav.getByRole('link', { name: /Package Guide|套餐说明|方案說明/i })).toHaveCount(0);
@@ -730,7 +780,7 @@ test('portal workspace interaction path: attention strip to filtered table to dr
   await expect(page.getByRole('heading', { level: 2, name: /my sites|站点/i })).toBeVisible();
   await expect(page.getByRole('heading', { level: 2, name: /current status|当前状态|目前狀態/i })).toBeVisible();
   await expect(page.getByText(/Next action|下一步/i).first()).toBeVisible();
-  await expect(page.getByRole('link', { name: /open keys|打开密钥|打開金鑰/i })).toBeVisible();
+  await expect(page.getByRole('link', { name: /open site|查看站点|查看站點/i }).first()).toBeVisible();
 
   await page.getByRole('button', { name: /attention site.*查看|attention site.*view/i }).first().click();
 
@@ -740,21 +790,36 @@ test('portal workspace interaction path: attention strip to filtered table to dr
   await page.locator('a[href="/portal/usage?site=site_attention"]').first().click();
 
   await expect(page).toHaveURL(/\/portal\/usage\?site=site_attention/);
-  await expect(page.getByRole('heading', { level: 1, name: /usage|用量/i })).toBeVisible();
+  await expect(page.getByRole('heading', { level: 1, name: /Plan and usage|套餐与用量|usage|用量|当前周期用量/i })).toBeVisible();
   await expect(page.getByRole('combobox').first()).toHaveValue('site_attention');
-  await expect(page.getByText(/Requests left|剩余 requests|剩餘 requests/i)).toBeVisible();
+  await expect(page.getByText(/Requests left|剩余请求|剩余 requests|剩餘 requests/i)).toBeVisible();
   await expect(page.getByText(/Tokens left|剩余 tokens|剩餘 tokens/i)).toBeVisible();
-  await expect(page.getByText(/Cost headroom|剩余成本空间|剩餘成本空間/i)).toBeVisible();
+  await expect(page.getByText(/Cost headroom|成本余量|剩余成本空间|剩餘成本空間/i)).toBeVisible();
 });
 
-test('portal workspace surfaces keep one primary action in the header', async ({ page }) => {
+test('portal workspace keeps one primary action and sites keeps add action secondary', async ({ page }) => {
   await installPortalMocks(page);
 
   await page.goto('/portal');
   await expect(page.locator('section').first().locator('.btn.btn-primary')).toHaveCount(1);
 
-  await page.goto('/portal/keys?site=site_clear');
-  await expect(page.locator('section').first().locator('.btn.btn-primary')).toHaveCount(1);
+  await page.goto('/portal/sites?site=site_clear');
+  await expect(page.locator('section').first().locator('.btn.btn-primary')).toHaveCount(0);
+  await expect(page.locator('section').first().locator('.btn.btn-secondary')).toHaveCount(1);
+  await expect(page.getByRole('button', { name: /add site|添加站点|新增站點/i })).toBeVisible();
+});
+
+test('portal contact page hides internal identifiers by default', async ({ page }) => {
+  await installPortalMocks(page);
+
+  await page.goto('/portal/account');
+  await expect(page.getByRole('heading', { level: 1, name: /Contact|联系方式|聯絡方式/i })).toBeVisible();
+  await expect(page.locator('[data-portal-account="contact-info"]')).toHaveCount(1);
+  await expect(page.locator('[data-portal-account="support-details"]')).toHaveCount(1);
+  await expect(page.locator('[data-portal-account="support-details"]')).not.toHaveAttribute('open', /.+/);
+  await expect(page.getByText(/portal-demo@example\.com/i).first()).toBeVisible();
+  await expect(page.getByText(/prn_8d95fab64fa7487bb31cd81c3adac4a8/i)).toHaveCount(0);
+  await expect(page.getByText(/acct_portal/i)).not.toBeVisible();
 });
 
 test('portal monitoring shows diagnostic advisor and routes to plugin evidence', async ({ page }) => {
@@ -765,7 +830,10 @@ test('portal monitoring shows diagnostic advisor and routes to plugin evidence',
   await expect(page.getByRole('heading', { name: /site diagnostics/i })).toBeVisible();
   await expect(page.getByText(/suggestion only/i)).toBeVisible();
   await expect(page.getByText(/no direct wordpress write/i)).toBeVisible();
+  await expect(page.getByText(/^New$/i).first()).toBeVisible();
+  await expect(page.getByText(/Evidence window/i)).toBeVisible();
   await expect(page.getByText(/Adapter runtime failure/i)).toBeVisible();
+  await expect(page.getByText(/^new$/i).first()).toBeVisible();
 
   await page.getByRole('button', { name: /Adapter runtime failure/i }).click();
 

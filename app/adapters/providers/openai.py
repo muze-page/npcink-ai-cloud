@@ -335,6 +335,14 @@ class OpenAIProviderAdapter:
         try:
             with self._build_client(request.timeout_ms) as client:
                 response = client.post(endpoint_path, json=payload)
+                if (
+                    response.status_code == 400
+                    and "metadata" in payload
+                    and self._response_reports_unsupported_parameter(response, "metadata")
+                ):
+                    retry_payload = dict(payload)
+                    retry_payload.pop("metadata", None)
+                    response = client.post(endpoint_path, json=retry_payload)
                 response.raise_for_status()
         except httpx.TimeoutException as error:
             raise ProviderExecutionError(
@@ -357,6 +365,33 @@ class OpenAIProviderAdapter:
         response_json = response.json()
         latency_ms = max(1, int((time.monotonic() - started_at) * 1000))
         return self._build_http_result(request, response_json, latency_ms)
+
+    @staticmethod
+    def _response_reports_unsupported_parameter(
+        response: httpx.Response,
+        parameter: str,
+    ) -> bool:
+        try:
+            payload = response.json()
+        except ValueError:
+            return False
+        error_payload = payload.get("error") if isinstance(payload, dict) else None
+        values: list[object] = [error_payload]
+        if isinstance(error_payload, dict):
+            values.extend(
+                [
+                    error_payload.get("message"),
+                    error_payload.get("param"),
+                    error_payload.get("code"),
+                    error_payload.get("type"),
+                ]
+            )
+        values.append(payload)
+        needle = parameter.lower()
+        return any(
+            needle in str(value).lower() and "unsupported" in str(value).lower()
+            for value in values
+        )
 
     def _build_client(self, request_timeout_ms: int) -> httpx.Client:
         timeout_seconds = min(

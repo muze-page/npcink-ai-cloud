@@ -3,6 +3,7 @@ import {
   buildBackendUrl,
   buildForwardedRequestHeaders,
   forwardBackendJson,
+  getExternalRequestOrigin,
 } from '@/app/api/admin/_shared';
 import { getAdminBootstrapAdminRef } from '@/lib/env';
 
@@ -116,6 +117,9 @@ async function forwardAdminBootstrap(
     token: string;
     admin_ref: string;
     redirect: string;
+  },
+  options: {
+    wantsLoginRedirect: boolean;
   }
 ) {
   const payload = {
@@ -137,6 +141,11 @@ async function forwardAdminBootstrap(
 
   const location = response.headers.get('location');
   if (!location) {
+    if (options.wantsLoginRedirect) {
+      const payload = await response.json().catch(() => ({}));
+      const errorCode = String(payload?.error_code || 'auth.admin_bootstrap_failed');
+      return redirectToLogin(request, errorCode, payload?.message, payload?.data, payload?.meta, bootstrap.redirect);
+    }
     return forwardBackendJson(response);
   }
 
@@ -146,9 +155,58 @@ async function forwardAdminBootstrap(
   return nextResponse;
 }
 
+function sanitizeAdminRedirect(value: string): string {
+  const normalized = String(value || '/admin').trim() || '/admin';
+  try {
+    const parsed = new URL(normalized, 'http://local.invalid');
+    if (parsed.origin !== 'http://local.invalid' || !parsed.pathname.startsWith('/admin')) {
+      return '/admin';
+    }
+    return `${parsed.pathname}${parsed.search}`;
+  } catch {
+    return '/admin';
+  }
+}
+
+function redirectToLogin(
+  request: NextRequest,
+  errorCode: string,
+  message: unknown,
+  data: unknown,
+  meta: unknown,
+  redirect: string
+): NextResponse {
+  const url = new URL('/admin/login', getExternalRequestOrigin(request));
+  url.searchParams.set('error', errorCode);
+  const detail = String(message || '').trim();
+  if (detail) {
+    url.searchParams.set('detail', detail);
+  }
+  const payloadData = data && typeof data === 'object' ? data : {};
+  const payloadMeta = meta && typeof meta === 'object' ? meta : {};
+  const traceId = String(
+    (payloadData as { trace_id?: unknown }).trace_id ||
+      (payloadMeta as { trace_id?: unknown }).trace_id ||
+      ''
+  ).trim();
+  if (traceId) {
+    url.searchParams.set('trace_id', traceId);
+  }
+  url.searchParams.set('redirect', sanitizeAdminRedirect(redirect));
+  const response = NextResponse.redirect(url, 303);
+  response.headers.set('Cache-Control', 'no-store');
+  return response;
+}
+
 export async function GET(request: NextRequest) {
   const redirect = String(request.nextUrl.searchParams.get('redirect') || '/admin').trim() || '/admin';
-  return NextResponse.redirect(new URL(`/admin/login?redirect=${encodeURIComponent(redirect)}`, request.url), 303);
+  return NextResponse.redirect(
+    new URL(
+      `/admin/login?redirect=${encodeURIComponent(redirect)}`,
+      getExternalRequestOrigin(request)
+    ),
+    303
+  );
 }
 
 export async function POST(request: NextRequest) {
@@ -173,5 +231,7 @@ export async function POST(request: NextRequest) {
     token,
     admin_ref: adminRef,
     redirect,
+  }, {
+    wantsLoginRedirect: !contentType.includes('application/json'),
   });
 }

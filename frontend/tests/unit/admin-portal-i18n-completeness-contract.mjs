@@ -1,8 +1,9 @@
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { extname, join, resolve } from 'node:path';
 import assert from 'node:assert/strict';
+import { frontendRoot } from './_paths.mjs';
 
-const root = process.cwd();
+const root = frontendRoot;
 const i18nPath = resolve(root, 'src/lib/i18n.ts');
 const source = readFileSync(i18nPath, 'utf8');
 
@@ -54,12 +55,46 @@ function collectTranslationKeys(filePath) {
 
 const localeBlocks = {
   en: getLocaleBlock('en', 'zh-CN'),
-  'zh-CN': getLocaleBlock('zh-CN', 'zh-TW'),
-  'zh-TW': getLocaleBlock('zh-TW'),
+  'zh-CN': getLocaleBlock('zh-CN'),
 };
+
+assert.doesNotMatch(
+  source,
+  /^\s*'zh-TW': \{/m,
+  'Traditional Chinese translations are intentionally not part of the bilingual surface'
+);
 
 const translationLockedFiles = [
   resolve(root, 'src/app/admin/layout.tsx'),
+  resolve(root, 'src/app/admin/page.tsx'),
+  resolve(root, 'src/app/admin/accounts/page.tsx'),
+  resolve(root, 'src/app/admin/accounts/[accountId]/page.tsx'),
+  resolve(root, 'src/app/admin/ai-advisor/page.tsx'),
+  resolve(root, 'src/app/admin/portal-users/page.tsx'),
+  resolve(root, 'src/app/admin/service-settings/page.tsx'),
+  resolve(root, 'src/app/admin/sites/[siteId]/page.tsx'),
+  resolve(root, 'src/app/admin/subscriptions/page.tsx'),
+  resolve(root, 'src/app/admin/subscriptions/[subscriptionId]/page.tsx'),
+  resolve(root, 'src/app/admin/plans/page.tsx'),
+  resolve(root, 'src/app/admin/plans/[planId]/page.tsx'),
+  resolve(root, 'src/app/admin/coverage/page.tsx'),
+  resolve(root, 'src/components/admin/AdminAuditSummaryPanel.tsx'),
+  resolve(root, 'src/components/admin/AdminMutationReceipt.tsx'),
+  resolve(root, 'src/app/page.tsx'),
+  resolve(root, 'src/app/portal/page.tsx'),
+  resolve(root, 'src/app/portal/login/page.tsx'),
+  resolve(root, 'src/app/portal/sites/[siteId]/page.tsx'),
+  resolve(root, 'src/app/portal/monitoring/page.tsx'),
+  resolve(root, 'src/app/portal/audit/PortalAuditClient.tsx'),
+  resolve(root, 'src/components/portal/PortalNavbar.tsx'),
+  resolve(root, 'src/components/portal/PortalPluginMonitoringPanel.tsx'),
+  resolve(root, 'src/components/portal/PortalMediaProcessingPanel.tsx'),
+  resolve(root, 'src/components/portal/PortalSiteKnowledgePanel.tsx'),
+  resolve(root, 'src/components/portal/PortalSiteInspectorDrawer.tsx'),
+  resolve(root, 'src/app/portal/account/page.tsx'),
+  resolve(root, 'src/app/portal/register/page.tsx'),
+  resolve(root, 'src/app/portal/usage/page.tsx'),
+  resolve(root, 'src/app/portal/billing/page.tsx'),
 ];
 
 const keys = new Set();

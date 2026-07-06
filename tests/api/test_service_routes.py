@@ -3,34 +3,81 @@ from __future__ import annotations
 import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 import httpx
+import pytest
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
 from app.adapters.callbacks.http import HttpRuntimeCallbackDispatcher
+from app.adapters.providers.base import (
+    CatalogInstanceSeed,
+    CatalogModelSeed,
+    ProviderAdapter,
+    ProviderCatalogSnapshot,
+    ProviderExecutionError,
+    ProviderExecutionRequest,
+    ProviderExecutionResult,
+)
+from app.adapters.providers.minimax import MiniMaxProviderAdapter
+from app.adapters.repositories.catalog_repository import CatalogRepository
 from app.adapters.repositories.commercial_repository import CommercialRepository
 from app.api.main import create_app
 from app.core.config import Settings
 from app.core.db import dispose_engine, get_session, init_schema
 from app.core.models import (
+    ACCOUNT_USER_MEMBERSHIP_STATUS_REVOKED,
+    PRINCIPAL_STATUS_DISABLED,
+    SITE_STATUS_ARCHIVED,
+    SITE_USER_GRANT_STATUS_REVOKED,
     SUBSCRIPTION_STATUS_PAST_DUE,
     AccountEntitlementSnapshot,
     AccountSubscription,
+    AccountUserMembership,
     BillingSnapshot,
+    ModelReferenceModel,
+    ModelReferenceSource,
     PluginObservabilityEvent,
+    Principal,
     ProviderCallRecord,
+    ProviderConnection,
     ReplayReceipt,
     RunRecord,
     RuntimeGuardEvent,
+    ServiceAuditEvent,
+    ServiceSetting,
+    Site,
+    SiteUserGrant,
     UsageMeterEvent,
+)
+from app.core.secrets import (
+    decrypt_provider_connection_secret,
+    decrypt_service_setting_secret,
+    encrypt_provider_connection_secret,
 )
 from app.core.security import REPLAY_SCOPE_PUBLIC_POST_SITE
 from app.core.services import CloudServices
 from app.domain.catalog.service import CatalogService
 from app.domain.commercial.service import CommercialService, ServiceAuditContext
+from app.domain.hosted_model_defaults import (
+    AUDIO_NARRATION_MODEL_ID,
+    AUDIO_NARRATION_PROFILE_ID,
+    TEXT_AI_PROFILE_ID,
+)
+from app.domain.provider_connections.service import ProviderConnectionAdminService
 from app.domain.runtime.service import RuntimeService
-from app.domain.usage.rollup import UsageRollupService
+from app.domain.web_search.service import (
+    TavilyWebSearchProvider,
+    WebSearchExecutionResult,
+    WebSearchProviderUsage,
+)
+from app.domain.wordpress_ai_connector.routing_profiles import (
+    WP_AI_CONNECTOR_AUDIO_GENERATION_PROFILE_ID,
+    WP_AI_CONNECTOR_SHORT_TEXT_PROFILE_ID,
+)
 from app.workers.ops_cadence import run_due_tasks
 from tests.conftest import (
     TEST_ADMIN_SESSION_SECRET,
@@ -39,8 +86,23 @@ from tests.conftest import (
     build_auth_headers,
     build_internal_headers,
     merge_json_headers,
+    seed_provider_model_allowlist,
     seed_site_auth,
 )
+
+
+def _alipay_test_keys() -> tuple[str, str]:
+    private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    private_pem = private_key.private_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PrivateFormat.PKCS8,
+        encryption_algorithm=serialization.NoEncryption(),
+    ).decode("utf-8")
+    public_pem = private_key.public_key().public_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PublicFormat.SubjectPublicKeyInfo,
+    ).decode("utf-8")
+    return private_pem, public_pem
 
 
 def _sqlite_url(tmp_path: Path) -> str:
@@ -51,10 +113,11 @@ def _build_client(
     tmp_path: Path,
     *,
     settings_overrides: dict[str, object] | None = None,
+    providers: dict[str, ProviderAdapter] | None = None,
 ) -> tuple[str, TestClient]:
     database_url = _sqlite_url(tmp_path)
     init_schema(database_url)
-    CatalogService(database_url).refresh_catalog()
+    CatalogService(database_url, providers=providers).refresh_catalog()
 
     settings_kwargs = {
         "_env_file": None,
@@ -77,6 +140,9 @@ def _build_client(
         "openrouter_api_key": "",
         "siliconflow_provider_enabled": False,
         "siliconflow_api_key": "",
+        "minimax_provider_enabled": False,
+        "minimax_api_key": "",
+        "minimax_group_id": "",
         "web_search_provider": "disabled",
         "web_search_tavily_api_key": "",
         "web_search_bocha_api_key": "",
@@ -91,7 +157,8 @@ def _build_client(
     }
     settings_kwargs.update(settings_overrides or {})
     settings = Settings(**settings_kwargs)
-    return database_url, TestClient(create_app(CloudServices(settings=settings)))
+    services = CloudServices(settings=settings, providers=providers or {})
+    return database_url, TestClient(create_app(services))
 
 
 def _runtime_service_settings(database_url: str) -> Settings:
@@ -119,96 +186,435 @@ def _runtime_service_settings(database_url: str) -> Settings:
     )
 
 
-def test_admin_web_search_provider_settings_are_masked_and_update_runtime(
+def _request_portal_registration_code(
+    client: TestClient,
+    *,
+    email: str,
+    site_url: str,
+    site_name: str = "",
+) -> dict[str, object]:
+    response = client.post(
+        "/portal/v1/register/code/request",
+        json={
+            "email": email,
+            "site_url": site_url,
+            "site_name": site_name,
+            "use_case": "content generation",
+        },
+        headers={
+            "origin": "http://testserver",
+            "referer": "http://testserver/",
+            "x-npcink-debug-portal-link": "1",
+            "x-npcink-dev-login-code": "1",
+        },
+    )
+    assert response.status_code == 200, response.text
+    return response.json()["data"]
+
+
+def _verify_portal_registration_code(
+    client: TestClient,
+    *,
+    email: str,
+    code: str,
+) -> dict[str, object]:
+    response = client.post(
+        "/portal/v1/register/verify",
+        json={"email": email, "code": code},
+        headers={
+            "origin": "http://testserver",
+            "referer": "http://testserver/",
+        },
+    )
+    assert response.status_code == 200, response.text
+    return response.json()["data"]
+
+
+class FixedAudioSummaryScriptProvider:
+    provider_id = "openai"
+    display_name = "Fixed Text Provider"
+    adapter_type = "openai"
+
+    def __init__(self) -> None:
+        self.requests: list[ProviderExecutionRequest] = []
+
+    def fetch_catalog(self) -> ProviderCatalogSnapshot:
+        return ProviderCatalogSnapshot(
+            provider_id=self.provider_id,
+            display_name=self.display_name,
+            adapter_type=self.adapter_type,
+            models=[
+                CatalogModelSeed(
+                    model_id="gpt-hosted-free-next",
+                    family="gpt-hosted-free",
+                    feature="text",
+                    status="available",
+                    context_window=256000,
+                    price_input=0.0,
+                    price_output=0.0,
+                    raw_json={"tier": "quality", "surface": "hosted_free_tools"},
+                    instances=[
+                        CatalogInstanceSeed(
+                            instance_id="openai-global-hosted-free-next",
+                            endpoint_variant="responses",
+                            region="global",
+                            capability_tags=["text", "quality", "hosted-free"],
+                            is_default=True,
+                            weight=140,
+                        )
+                    ],
+                )
+            ],
+        )
+
+    def execute(self, request: ProviderExecutionRequest) -> ProviderExecutionResult:
+        self.requests.append(request)
+        output_text = json.dumps(
+            {
+                "opening": "这是一段适合收听的长文摘要。",
+                "key_points": [
+                    "第一，文章先交代背景。",
+                    "第二，文章说明关键问题。",
+                    "第三，文章给出解决方案。",
+                ],
+                "closing": "如果你需要完整细节，再回到原文继续阅读。",
+                "assumptions_to_verify": [],
+            },
+            ensure_ascii=False,
+        )
+        return ProviderExecutionResult(
+            output={
+                "output_text": output_text,
+                "messages": [{"role": "assistant", "content": output_text}],
+                "model_id": request.model_id,
+            },
+            latency_ms=25,
+            tokens_in=80,
+            tokens_out=60,
+            cost=0.0,
+        )
+
+
+def _bind_audio_summary_script_profile(database_url: str, *, revision: str) -> None:
+    with get_session(database_url) as session:
+        CatalogRepository(session).upsert_routing_binding(
+            profile_id=WP_AI_CONNECTOR_SHORT_TEXT_PROFILE_ID,
+            candidate_instance_ids=["openai-global-hosted-free-next"],
+            selection_policy_json={
+                "strategy": "ordered",
+                "test_override": revision,
+            },
+            revision=revision,
+        )
+        session.commit()
+
+
+def _seed_minimax_audio_model_allowlist(database_url: str) -> None:
+    seed_provider_model_allowlist(
+        database_url,
+        provider_id="minimax",
+        kind="minimax",
+        model_ids=[AUDIO_NARRATION_MODEL_ID],
+        capability_ids=["audio_generation"],
+        runtime_profile_ids=[
+            AUDIO_NARRATION_PROFILE_ID,
+            WP_AI_CONNECTOR_AUDIO_GENERATION_PROFILE_ID,
+        ],
+        base_url="https://api.minimaxi.com",
+    )
+
+
+def _seed_openai_text_model_allowlist(
+    database_url: str,
+    *,
+    model_ids: list[str] | None = None,
+) -> None:
+    seed_provider_model_allowlist(
+        database_url,
+        provider_id="openai",
+        kind="openai_compatible",
+        model_ids=model_ids or ["gpt-4.1-mini", "gpt-hosted-free-next", "gpt-5.5"],
+        capability_ids=["text_generation"],
+        runtime_profile_ids=[TEXT_AI_PROFILE_ID, WP_AI_CONNECTOR_SHORT_TEXT_PROFILE_ID],
+        base_url="https://api.openai.test/v1",
+    )
+
+
+class FlakyAudioSummaryScriptProvider(FixedAudioSummaryScriptProvider):
+    def execute(self, request: ProviderExecutionRequest) -> ProviderExecutionResult:
+        self.requests.append(request)
+        if len(self.requests) == 1:
+            raise ProviderExecutionError(
+                "provider.upstream_error",
+                "upstream error: temporary text provider failure",
+                retryable=True,
+            )
+        output_text = json.dumps(
+            {
+                "opening": "重试后生成的长文音频摘要。",
+                "key_points": ["模型第二次调用成功。"],
+                "closing": "可以继续生成音频候选。",
+                "assumptions_to_verify": [],
+            },
+            ensure_ascii=False,
+        )
+        return ProviderExecutionResult(
+            output={
+                "output_text": output_text,
+                "messages": [{"role": "assistant", "content": output_text}],
+                "model_id": request.model_id,
+            },
+            latency_ms=30,
+            tokens_in=80,
+            tokens_out=30,
+            cost=0.0,
+        )
+
+
+class EmptyAudioSummaryScriptProvider(FixedAudioSummaryScriptProvider):
+    def execute(self, request: ProviderExecutionRequest) -> ProviderExecutionResult:
+        self.requests.append(request)
+        return ProviderExecutionResult(
+            output={
+                "output_text": "",
+                "messages": [{"role": "assistant", "content": ""}],
+                "model_id": request.model_id,
+            },
+            latency_ms=20,
+            tokens_in=80,
+            tokens_out=0,
+            cost=0.0,
+        )
+
+
+def test_admin_portal_users_lists_self_registered_users_and_disables_access(
     tmp_path: Path,
 ) -> None:
-    env_path = tmp_path / ".env.local"
     database_url, client = _build_client(
         tmp_path,
         settings_overrides={
-            "web_search_admin_env_path": str(env_path),
+            "portal_jwt_secret": TEST_PORTAL_JWT_SECRET,
+            "portal_login_code_ttl_seconds": 300,
+            "debug_local_origin_allowlist": "http://testserver",
         },
     )
 
-    initial = client.get(
+    email = "admin-portal-user@example.com"
+    request_data = _request_portal_registration_code(
+        client,
+        email=email,
+        site_url="https://admin-portal-user.example.com",
+        site_name="Admin Portal User",
+    )
+    registration_data = _verify_portal_registration_code(
+        client,
+        email=email,
+        code=str(request_data["code"]),
+    )
+    principal_id = str(registration_data["principal_id"])
+
+    list_response = client.get(
+        "/internal/service/admin/portal-users?q=admin-portal-user",
+        headers=build_internal_headers(),
+    )
+    assert list_response.status_code == 200, list_response.text
+    list_data = list_response.json()["data"]
+    items = list_data["items"]
+    assert list_data["total"] == 1
+    assert items[0]["principal_id"] == principal_id
+    assert items[0]["email"] == email
+    assert items[0]["source"] == "portal_self_registration"
+    assert items[0]["package_alias"] == "Free"
+    assert items[0]["plan_id"] == "free"
+    assert items[0]["qq_bound"] is False
+    assert items[0]["site_id"] == "site_admin-portal-user-example-com"
+
+    disable_response = client.post(
+        f"/internal/service/admin/portal-users/{principal_id}/disable",
+        json={"reason": "operator test disable"},
+        headers=build_internal_headers(idempotency_key="admin-portal-user-disable-001"),
+    )
+    assert disable_response.status_code == 200, disable_response.text
+    disable_data = disable_response.json()["data"]
+    assert disable_data["status"] == PRINCIPAL_STATUS_DISABLED
+    assert disable_data["revoked_site_grants"] == 1
+    assert disable_data["revoked_account_memberships"] == 1
+
+    revoked_session_response = client.get("/portal/v1/session")
+    assert revoked_session_response.status_code == 401
+    assert revoked_session_response.json()["error_code"] == "auth.portal_session_revoked"
+
+    revoked_site_response = client.get(
+        f"/portal/v1/sites/{registration_data['site_id']}/summary"
+    )
+    assert revoked_site_response.status_code == 401
+    assert revoked_site_response.json()["error_code"] == "auth.portal_session_revoked"
+
+    audit_response = client.get(
+        f"/internal/service/admin/portal-users/{principal_id}/audit",
+        headers=build_internal_headers(),
+    )
+    assert audit_response.status_code == 200, audit_response.text
+    audit_data = audit_response.json()["data"]
+    assert audit_data["principal"]["principal_id"] == principal_id
+    assert audit_data["principal"]["email"] == email
+    assert audit_data["summary"]["registration_events"] == 1
+    assert audit_data["summary"]["disable_events"] == 1
+    assert audit_data["summary"]["latest_disable_reason"] == "operator test disable"
+    assert audit_data["summary"]["latest_disable_revoked_site_grants"] == 1
+    assert audit_data["summary"]["latest_disable_revoked_account_memberships"] == 1
+    event_kinds = {item["event_kind"] for item in audit_data["items"]}
+    assert "portal.registration" in event_kinds
+    assert "portal_user.disable" in event_kinds
+
+    disabled_list_response = client.get(
+        "/internal/service/admin/portal-users?status=disabled&q=admin-portal-user",
+        headers=build_internal_headers(),
+    )
+    assert disabled_list_response.status_code == 200, disabled_list_response.text
+    disabled_item = disabled_list_response.json()["data"]["items"][0]
+    assert disabled_item["status"] == PRINCIPAL_STATUS_DISABLED
+    assert disabled_item["membership_status"] == ACCOUNT_USER_MEMBERSHIP_STATUS_REVOKED
+    assert disabled_item["grant_status"] == SITE_USER_GRANT_STATUS_REVOKED
+
+    with get_session(database_url) as session:
+        identity = session.scalar(
+            select(Principal).where(Principal.principal_id == principal_id)
+        )
+        assert identity is not None
+        assert identity.status == PRINCIPAL_STATUS_DISABLED
+        assert int(identity.session_version or 0) > 1
+        membership = session.scalar(
+            select(AccountUserMembership).where(
+                AccountUserMembership.principal_id == principal_id
+            )
+        )
+        assert membership is not None
+        assert membership.status == ACCOUNT_USER_MEMBERSHIP_STATUS_REVOKED
+        grant = session.scalar(
+            select(SiteUserGrant).where(SiteUserGrant.principal_id == principal_id)
+        )
+        assert grant is not None
+        assert grant.status == SITE_USER_GRANT_STATUS_REVOKED
+
+    dispose_engine(database_url)
+
+
+def test_admin_portal_users_batch_disable_processes_each_principal(
+    tmp_path: Path,
+) -> None:
+    database_url, client = _build_client(
+        tmp_path,
+        settings_overrides={
+            "portal_jwt_secret": TEST_PORTAL_JWT_SECRET,
+            "portal_login_code_ttl_seconds": 300,
+            "debug_local_origin_allowlist": "http://testserver",
+        },
+    )
+
+    principal_ids: list[str] = []
+    for email, site_url in (
+        ("batch-one@example.com", "https://batch-one.example.com"),
+        ("batch-two@example.com", "https://batch-two.example.com"),
+    ):
+        request_data = _request_portal_registration_code(
+            client,
+            email=email,
+            site_url=site_url,
+            site_name=email.split("@")[0],
+        )
+        registration_data = _verify_portal_registration_code(
+            client,
+            email=email,
+            code=str(request_data["code"]),
+        )
+        principal_ids.append(str(registration_data["principal_id"]))
+
+    missing_principal_id = "prn_missing_batch_disable"
+    blank_reason_response = client.post(
+        "/internal/service/admin/portal-users/batch-disable",
+        json={"principal_ids": [principal_ids[0]], "reason": ""},
+        headers=build_internal_headers(idempotency_key="admin-portal-batch-disable-blank"),
+    )
+    assert blank_reason_response.status_code == 400
+    assert (
+        blank_reason_response.json()["error_code"]
+        == "service.portal_user_batch_disable_reason_required"
+    )
+
+    batch_response = client.post(
+        "/internal/service/admin/portal-users/batch-disable",
+        json={
+            "principal_ids": [*principal_ids, missing_principal_id],
+            "reason": "abuse risk review",
+        },
+        headers=build_internal_headers(idempotency_key="admin-portal-batch-disable-001"),
+    )
+    assert batch_response.status_code == 200, batch_response.text
+    batch_data = batch_response.json()["data"]
+    assert batch_data["totals"]["attempted"] == 3
+    assert batch_data["totals"]["disabled"] == 2
+    assert batch_data["totals"]["failed"] == 1
+    failed_items = [item for item in batch_data["items"] if item["outcome"] == "failed"]
+    assert failed_items[0]["principal_id"] == missing_principal_id
+    assert failed_items[0]["error_code"] == "service.principal_not_found"
+
+    with get_session(database_url) as session:
+        identities = list(
+            session.scalars(
+                select(Principal).where(Principal.principal_id.in_(principal_ids))
+            )
+        )
+        assert {identity.status for identity in identities} == {PRINCIPAL_STATUS_DISABLED}
+        memberships = list(
+            session.scalars(
+                select(AccountUserMembership).where(
+                    AccountUserMembership.principal_id.in_(principal_ids)
+                )
+            )
+        )
+        assert {membership.status for membership in memberships} == {
+            ACCOUNT_USER_MEMBERSHIP_STATUS_REVOKED
+        }
+        grants = list(
+            session.scalars(
+                select(SiteUserGrant).where(SiteUserGrant.principal_id.in_(principal_ids))
+            )
+        )
+        assert {grant.status for grant in grants} == {SITE_USER_GRANT_STATUS_REVOKED}
+
+    audit_response = client.get(
+        f"/internal/service/admin/portal-users/{principal_ids[0]}/audit",
+        headers=build_internal_headers(),
+    )
+    assert audit_response.status_code == 200, audit_response.text
+    audit_data = audit_response.json()["data"]
+    assert audit_data["summary"]["disable_events"] == 1
+    assert audit_data["summary"]["latest_disable_reason"] == "abuse risk review"
+
+    dispose_engine(database_url)
+
+
+def test_admin_web_search_provider_env_settings_route_is_retired(
+    tmp_path: Path,
+) -> None:
+    _, client = _build_client(tmp_path)
+
+    get_response = client.get(
         "/internal/service/admin/web-search-providers",
         headers=build_internal_headers(),
     )
-    assert initial.status_code == 200
-    assert initial.json()["data"]["providers"]["tavily"]["configured"] is False
-    assert initial.json()["data"]["workflow_metadata"]["workflow_id"] == (
-        "external_web_evidence_preflight"
-    )
-    assert initial.json()["data"]["workflow_metadata"]["direct_wordpress_write"] is False
-
-    response = client.post(
+    post_response = client.post(
         "/internal/service/admin/web-search-providers",
         headers=build_internal_headers(idempotency_key="web-search-provider-save"),
         json={
             "provider_mode": "auto",
-            "providers": {
-                "tavily": {
-                    "base_url": "https://api.tavily.com",
-                    "secret": "tvly-test-secret",
-                    "secret_pool": ["tvly-pool-a", "tvly-pool-b"],
-                    "secret_pool_labels": ["account-a", "account-b"],
-                    "timeout_seconds": 9,
-                    "cost": 0.001,
-                },
-                "bocha": {
-                    "base_url": "https://api.bochaai.com/v1",
-                    "secret": "bocha-test-secret",
-                    "timeout_seconds": 11,
-                    "cost": 0.002,
-                },
-                "jina_reader": {
-                    "enabled": True,
-                    "base_url": "https://r.jina.ai",
-                    "secret": "jina-test-secret",
-                    "timeout_seconds": 7,
-                    "max_pages": 3,
-                    "cost": 0.0003,
-                },
-                "apify": {
-                    "base_url": "https://api.apify.com/v2",
-                    "secret": "apify-test-token",
-                    "actor_id": "apify/google-search-scraper",
-                    "timeout_seconds": 30,
-                    "cost": 0.01,
-                },
-            },
+            "providers": {},
         },
     )
 
-    assert response.status_code == 200
-    data = response.json()["data"]
-    assert data["provider_mode"] == "auto"
-    assert data["providers"]["tavily"]["configured"] is True
-    assert data["providers"]["tavily"]["key_pool_count"] == 2
-    assert data["providers"]["tavily"]["key_pool_labels"] == ["account-a", "account-b"]
-    assert data["providers"]["bocha"]["configured"] is True
-    assert data["providers"]["jina_reader"]["enabled"] is True
-    assert data["workflow_metadata"]["workflow_version"] == ("web_search_evidence_workflow.v1")
-    assert "tvly-test-secret" not in json.dumps(data)
-    assert "tvly-pool-a" not in json.dumps(data)
-    assert "tvly-pool-b" not in json.dumps(data)
-    assert "bocha-test-secret" not in json.dumps(data)
-    assert "jina-test-secret" not in json.dumps(data)
-    assert "apify-test-token" not in json.dumps(data)
-    env_text = env_path.read_text(encoding="utf-8")
-    assert "NPCINK_CLOUD_WEB_SEARCH_PROVIDER=auto" in env_text
-    assert "NPCINK_CLOUD_WEB_SEARCH_TAVILY_API_KEY=tvly-test-secret" in env_text
-    assert "NPCINK_CLOUD_WEB_SEARCH_TAVILY_API_KEYS=tvly-pool-a,tvly-pool-b" in env_text
-    assert "NPCINK_CLOUD_WEB_SEARCH_TAVILY_API_KEY_LABELS=account-a,account-b" in env_text
-    assert "NPCINK_CLOUD_WEB_SEARCH_BOCHA_API_KEY=bocha-test-secret" in env_text
-    assert "NPCINK_CLOUD_WEB_SEARCH_JINA_READER_API_KEY=jina-test-secret" in env_text
-    assert "NPCINK_CLOUD_WEB_SEARCH_APIFY_API_TOKEN=apify-test-token" in env_text
-
-    services = client.app.state.services
-    assert services.settings.web_search_provider == "auto"
-    assert services.settings.web_search_tavily_api_keys == "tvly-pool-a,tvly-pool-b"
-    assert services.settings.web_search_tavily_api_key_labels == "account-a,account-b"
-    assert services.settings.web_search_bocha_api_key == "bocha-test-secret"
+    assert get_response.status_code == 404
+    assert post_response.status_code == 404
 
 
 def test_admin_agent_workflow_metadata_projection_is_read_only(tmp_path: Path) -> None:
@@ -236,76 +642,2381 @@ def test_admin_agent_workflow_metadata_projection_is_read_only(tmp_path: Path) -
     assert unauthorized.status_code in (401, 403)
 
 
-def test_admin_image_source_provider_settings_are_masked_and_update_runtime(
+def test_admin_service_settings_store_masked_cloud_runtime_config(tmp_path: Path) -> None:
+    database_url, client = _build_client(tmp_path)
+    alipay_private_key, alipay_public_key = _alipay_test_keys()
+
+    initial_response = client.get(
+        "/internal/service/admin/service-settings",
+        headers=build_internal_headers(),
+    )
+    assert initial_response.status_code == 200
+    assert initial_response.json()["data"]["env_fallback"] == "disabled"
+    assert (
+        initial_response.json()["data"]["settings"]["portal_email"]["status"]
+        == "missing_config"
+    )
+    assert (
+        initial_response.json()["data"]["settings"]["alipay_payment"]["status"]
+        == "missing_config"
+    )
+
+    public_response = client.patch(
+        "/internal/service/admin/service-settings/portal-public",
+        json={"public_base_url": "https://cloud.example.com"},
+        headers=build_internal_headers(idempotency_key="service-settings-public-001"),
+    )
+    assert public_response.status_code == 200, public_response.text
+    assert public_response.json()["data"]["config"]["public_base_url"] == (
+        "https://cloud.example.com"
+    )
+
+    qq_response = client.patch(
+        "/internal/service/admin/service-settings/qq-login",
+        json={
+            "client_id": "qq-client-id",
+            "client_secret": "qq-client-secret",
+            "redirect_uri": "https://cloud.example.com/open/auth/qq/callback",
+            "scope": "get_user_info",
+            "timeout_seconds": 10,
+        },
+        headers=build_internal_headers(idempotency_key="service-settings-qq-001"),
+    )
+    assert qq_response.status_code == 200, qq_response.text
+    assert qq_response.json()["data"]["status"] == "ready"
+    assert qq_response.json()["data"]["secrets"]["client_secret"]["configured"] is True
+    assert "qq-client-secret" not in json.dumps(qq_response.json())
+
+    email_response = client.patch(
+        "/internal/service/admin/service-settings/email",
+        json={
+            "smtp_host": "smtp.example.com",
+            "smtp_port": 465,
+            "smtp_username": "smtp-user",
+            "smtp_password": "smtp-password",
+            "smtp_use_ssl": True,
+            "smtp_use_starttls": False,
+            "smtp_timeout_seconds": 20,
+            "from_email": "noreply@example.com",
+            "from_name": "Npcink AI Cloud",
+            "reply_to": "support@example.com",
+        },
+        headers=build_internal_headers(idempotency_key="service-settings-email-001"),
+    )
+    assert email_response.status_code == 200, email_response.text
+    assert email_response.json()["data"]["secrets"]["smtp_password"]["display"] == (
+        "configured"
+    )
+    assert "smtp-password" not in json.dumps(email_response.json())
+
+    alipay_response = client.patch(
+        "/internal/service/admin/service-settings/alipay-payment",
+        json={
+            "enabled": True,
+            "app_id": "2026000000000099",
+            "gateway_url": "https://openapi.alipay.com/gateway.do",
+            "notify_url": "https://cloud.example.com/open/payments/alipay/notify",
+            "return_url": "https://cloud.example.com/open/payments/alipay/return",
+            "private_key": alipay_private_key,
+            "public_key": alipay_public_key,
+        },
+        headers=build_internal_headers(idempotency_key="service-settings-alipay-001"),
+    )
+    assert alipay_response.status_code == 200, alipay_response.text
+    assert alipay_response.json()["data"]["status"] == "ready"
+    assert (
+        alipay_response.json()["data"]["secrets"]["private_key"]["display"]
+        == "configured"
+    )
+    assert (
+        alipay_response.json()["data"]["secrets"]["public_key"]["display"]
+        == "configured"
+    )
+    assert alipay_private_key not in json.dumps(alipay_response.json())
+    assert alipay_public_key not in json.dumps(alipay_response.json())
+
+    alipay_test_response = client.post(
+        "/internal/service/admin/service-settings/alipay-payment/test",
+        headers=build_internal_headers(idempotency_key="service-settings-alipay-test-001"),
+    )
+    assert alipay_test_response.status_code == 200, alipay_test_response.text
+    assert alipay_test_response.json()["data"]["status"] == "ready"
+
+    with get_session(database_url) as session:
+        qq_row = session.get(ServiceSetting, "portal_qq_login")
+        email_row = session.get(ServiceSetting, "portal_email")
+        alipay_row = session.get(ServiceSetting, "payment_alipay")
+        assert qq_row is not None
+        assert email_row is not None
+        assert alipay_row is not None
+        assert decrypt_service_setting_secret(
+            str((qq_row.secret_ciphertext_json or {})["client_secret"]),
+            settings=_runtime_service_settings(database_url),
+        ) == "qq-client-secret"
+        assert decrypt_service_setting_secret(
+            str((email_row.secret_ciphertext_json or {})["smtp_password"]),
+            settings=_runtime_service_settings(database_url),
+        ) == "smtp-password"
+        assert decrypt_service_setting_secret(
+            str((alipay_row.secret_ciphertext_json or {})["private_key"]),
+            settings=_runtime_service_settings(database_url),
+        ) == alipay_private_key.strip()
+        assert decrypt_service_setting_secret(
+            str((alipay_row.secret_ciphertext_json or {})["public_key"]),
+            settings=_runtime_service_settings(database_url),
+        ) == alipay_public_key.strip()
+
+    list_response = client.get(
+        "/internal/service/admin/service-settings",
+        headers=build_internal_headers(),
+    )
+    assert list_response.status_code == 200
+    data = list_response.json()["data"]
+    assert data["settings"]["qq_login"]["configured"] is True
+    assert data["settings"]["portal_email"]["configured"] is True
+    assert data["settings"]["alipay_payment"]["configured"] is True
+    assert data["boundary"]["wordpress_control_plane"] is False
+    assert "smtp-password" not in json.dumps(data)
+    assert alipay_private_key not in json.dumps(data)
+    assert alipay_public_key not in json.dumps(data)
+
+    dispose_engine(database_url)
+
+
+def test_admin_service_settings_reject_qq_redirect_outside_public_base(
     tmp_path: Path,
 ) -> None:
-    env_path = tmp_path / ".env.local"
+    database_url, client = _build_client(tmp_path)
+    public_response = client.patch(
+        "/internal/service/admin/service-settings/portal-public",
+        json={"public_base_url": "https://cloud.example.com"},
+        headers=build_internal_headers(idempotency_key="service-settings-bad-public-001"),
+    )
+    assert public_response.status_code == 200
+
+    response = client.patch(
+        "/internal/service/admin/service-settings/qq-login",
+        json={
+            "client_id": "qq-client-id",
+            "client_secret": "qq-client-secret",
+            "redirect_uri": "https://evil.example.com/open/auth/qq/callback",
+            "scope": "get_user_info",
+            "timeout_seconds": 10,
+        },
+        headers=build_internal_headers(idempotency_key="service-settings-bad-qq-001"),
+    )
+    assert response.status_code == 400
+    assert response.json()["error_code"] == "service_settings.qq_redirect_uri_invalid"
+
+    dispose_engine(database_url)
+
+
+def test_admin_service_settings_allow_legacy_qq_redirect_path(
+    tmp_path: Path,
+) -> None:
+    database_url, client = _build_client(tmp_path)
+    public_response = client.patch(
+        "/internal/service/admin/service-settings/portal-public",
+        json={"public_base_url": "https://cloud.example.com"},
+        headers=build_internal_headers(idempotency_key="service-settings-legacy-public-001"),
+    )
+    assert public_response.status_code == 200
+
+    response = client.patch(
+        "/internal/service/admin/service-settings/qq-login",
+        json={
+            "client_id": "qq-client-id",
+            "client_secret": "qq-client-secret",
+            "redirect_uri": "https://cloud.example.com/portal/v1/auth/qq/callback",
+            "scope": "get_user_info",
+            "timeout_seconds": 10,
+        },
+        headers=build_internal_headers(idempotency_key="service-settings-legacy-qq-001"),
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["data"]["status"] == "ready"
+
+    dispose_engine(database_url)
+
+
+def test_admin_service_settings_reject_email_ssl_and_starttls(
+    tmp_path: Path,
+) -> None:
+    database_url, client = _build_client(tmp_path)
+
+    response = client.patch(
+        "/internal/service/admin/service-settings/email",
+        json={
+            "smtp_host": "smtp.example.com",
+            "smtp_port": 465,
+            "smtp_username": "smtp-user",
+            "smtp_password": "smtp-password",
+            "smtp_use_ssl": True,
+            "smtp_use_starttls": True,
+            "smtp_timeout_seconds": 20,
+            "from_email": "noreply@example.com",
+            "from_name": "Npcink AI Cloud",
+            "reply_to": "support@example.com",
+        },
+        headers=build_internal_headers(idempotency_key="service-settings-bad-email-tls-001"),
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error_code"] == "service_settings.email_tls_mode_invalid"
+
+    dispose_engine(database_url)
+
+
+def test_admin_image_source_provider_env_settings_route_is_retired(
+    tmp_path: Path,
+) -> None:
     _, client = _build_client(
         tmp_path,
         settings_overrides={
-            "image_source_admin_env_path": str(env_path),
             "image_source_provider": "disabled",
         },
     )
 
-    initial = client.get(
+    get_response = client.get(
         "/internal/service/admin/image-source-providers",
         headers=build_internal_headers(),
     )
-    assert initial.status_code == 200
-    assert initial.json()["data"]["providers"]["unsplash"]["configured"] is False
-
-    response = client.post(
+    post_response = client.post(
         "/internal/service/admin/image-source-providers",
         headers=build_internal_headers(idempotency_key="image-source-provider-save"),
         json={
             "provider_mode": "auto",
-            "providers": {
-                "unsplash": {
-                    "base_url": "https://api.unsplash.com",
-                    "secret": "unsplash-test-secret",
-                },
-                "pixabay": {
-                    "base_url": "https://pixabay.com/api/",
-                    "secret": "pixabay-test-secret",
-                },
-                "pexels": {
-                    "base_url": "https://api.pexels.com/v1",
-                    "secret": "pexels-test-secret",
-                },
-            },
-            "runtime": {
-                "timeout_seconds": 8,
-                "cost_per_query": 0.004,
-                "auto_strategy": "random",
-            },
+            "providers": {},
+            "runtime": {},
         },
     )
 
-    assert response.status_code == 200
-    data = response.json()["data"]
-    assert data["provider_mode"] == "auto"
-    assert data["auto_strategy"] == "random"
-    assert data["runtime"]["auto_strategy"] == "random"
-    assert data["providers"]["unsplash"]["configured"] is True
-    assert data["providers"]["pixabay"]["configured"] is True
-    assert data["providers"]["pexels"]["configured"] is True
-    assert data["boundary"]["final_writes"] == "core_proposal_required"
-    assert "unsplash-test-secret" not in json.dumps(data)
-    assert "pixabay-test-secret" not in json.dumps(data)
-    assert "pexels-test-secret" not in json.dumps(data)
-    env_text = env_path.read_text(encoding="utf-8")
-    assert "NPCINK_CLOUD_IMAGE_SOURCE_PROVIDER=auto" in env_text
-    assert "NPCINK_CLOUD_IMAGE_SOURCE_AUTO_STRATEGY=random" in env_text
-    assert "NPCINK_CLOUD_IMAGE_SOURCE_UNSPLASH_ACCESS_KEY=unsplash-test-secret" in env_text
-    assert "NPCINK_CLOUD_IMAGE_SOURCE_PIXABAY_API_KEY=pixabay-test-secret" in env_text
-    assert "NPCINK_CLOUD_IMAGE_SOURCE_PEXELS_API_KEY=pexels-test-secret" in env_text
+    assert get_response.status_code == 404
+    assert post_response.status_code == 404
 
+
+def test_admin_audio_provider_env_settings_routes_are_retired(
+    tmp_path: Path,
+) -> None:
+    _, client = _build_client(tmp_path)
+
+    get_response = client.get(
+        "/internal/service/admin/audio-providers",
+        headers=build_internal_headers(),
+    )
+    post_response = client.post(
+        "/internal/service/admin/audio-providers",
+        headers=build_internal_headers(idempotency_key="audio-provider-save-retired"),
+        json={"provider_mode": "minimax"},
+    )
+    test_response = client.post(
+        "/internal/service/admin/audio-providers/minimax/test",
+        headers=build_internal_headers(idempotency_key="audio-provider-test-retired"),
+        json={},
+    )
+
+    assert get_response.status_code == 404
+    assert post_response.status_code == 404
+    assert test_response.status_code == 404
+
+
+def test_admin_ai_resources_projects_connections_capabilities_and_profiles(
+    tmp_path: Path,
+) -> None:
+    _, client = _build_client(
+        tmp_path,
+        settings_overrides={
+            "openai_api_key": "openai-test-secret",
+            "openai_provider_label": "GPT 5.5 hosted",
+            "minimax_provider_enabled": True,
+            "minimax_api_key": "minimax-test-secret",
+            "minimax_group_id": "group-test-secret",
+        },
+    )
+
+    response = client.get(
+        "/internal/service/admin/ai-resources",
+        headers=build_internal_headers(),
+    )
+
+    assert response.status_code == 200, response.text
+    data = response.json()["data"]
+    assert data["surface"] == "admin_ai_resources"
+    connection_ids = {item["connection_id"] for item in data["connections"]}
+    capability_ids = {item["capability_id"] for item in data["capabilities"]}
+    matrix_ids = {item["capability_id"] for item in data["capability_matrix"]}
+    profile_ids = {item["profile_id"] for item in data["runtime_profiles"]}
+    assert "web_search_tavily" not in connection_ids
+    assert "image_source_unsplash" not in connection_ids
+    assert "embedding_deterministic" not in connection_ids
+    assert {"text_generation", "audio_generation", "image_generation", "embedding"}.issubset(
+        capability_ids
+    )
+    assert {"text_generation", "audio_generation", "image_generation", "embedding"}.issubset(
+        matrix_ids
+    )
+    feature_ids = {item["feature_id"] for item in data["feature_model_usage"]}
+    assert {
+        "content_support",
+        "audio_summary_script",
+        "article_narration",
+        "article_audio_summary",
+        "generated_image_candidates",
+        "site_knowledge_embedding",
+    }.issubset(feature_ids)
+    assert data["provider_model_health"]["source"] == "provider_call_records"
+    assert data["provider_model_health"]["content_exposed"] is False
+    assert data["provider_model_health"]["boundary"]["not_a_control_plane"] is True
+    assert {
+        TEXT_AI_PROFILE_ID,
+        "audio.narration.default",
+        "audio.summary.default",
+        "grok-imagine-image-quality",
+        "embed.default",
+    }.issubset(profile_ids)
+    matrix = {item["capability_id"]: item for item in data["capability_matrix"]}
+    assert matrix["text_generation"]["selection_owner"] == "cloud_runtime_metadata"
+    assert matrix["text_generation"]["direct_wordpress_write"] is False
+    assert matrix["image_generation"]["write_posture"] == "candidate_artifact_only"
+    assert matrix["embedding"]["default_profile_id"] == "embed.default"
+    assert data["boundary"]["direct_wordpress_write"] is False
+    assert data["boundary"]["not_a_control_plane"] is True
+    serialized = json.dumps(data)
+    assert "openai-test-secret" not in serialized
+    assert "minimax-test-secret" not in serialized
+    assert "group-test-secret" not in serialized
+
+
+def test_admin_ability_model_runtime_projection_is_bounded_and_feature_backed(
+    tmp_path: Path,
+) -> None:
+    _, client = _build_client(
+        tmp_path,
+        settings_overrides={
+            "openai_api_key": "openai-test-secret",
+            "openai_provider_label": "GPT 5.5 hosted",
+            "minimax_provider_enabled": True,
+            "minimax_api_key": "minimax-test-secret",
+            "minimax_group_id": "group-test-secret",
+        },
+    )
+
+    response = client.get(
+        "/internal/service/admin/ability-models/runtime-projection",
+        headers=build_internal_headers(),
+    )
+
+    assert response.status_code == 200, response.text
+    data = response.json()["data"]
+    assert data["surface"] == "admin_ability_model_runtime_projection"
+    assert data["projection_version"] == "admin-ability-model-runtime-projection.v1"
+    assert data["source_surface"] == "admin_ai_resources"
+    assert data["boundary"]["read_only"] is False
+    assert data["boundary"]["runtime_binding_only"] is True
+    assert data["boundary"]["configurable_runtime_bindings"] == ["site_knowledge_embedding"]
+    assert data["boundary"]["direct_wordpress_write"] is False
+    assert data["boundary"]["not_a_control_plane"] is True
+    assert "plugin_specific_overrides" in data["boundary"]["does_not_own"]
+
+    rows = {item["ability_id"]: item for item in data["rows"]}
+    assert {
+        "site_knowledge_embedding",
+        "evidence_preflight",
+        "image_source_candidates",
+    }.issubset(rows)
+    assert {
+        "content_support",
+        "generated_image_candidates",
+        "audio_summary_script",
+        "article_narration",
+        "article_audio_summary",
+    }.isdisjoint(rows)
+    assert rows["site_knowledge_embedding"]["media"] == "vector"
+    assert rows["site_knowledge_embedding"]["model_kind"] == "embedding_model"
+    assert rows["site_knowledge_embedding"]["can_configure"] is True
+    assert rows["site_knowledge_embedding"]["action"] == "configure_runtime_model"
+    assert rows["site_knowledge_embedding"]["boundary"]["runtime_binding_only"] is True
+    assert rows["evidence_preflight"]["model_kind"] == "search_text_model"
+
+    media_groups = {item["media"]: item for item in data["media_groups"]}
+    assert {"text", "image", "vector", "audio", "video"}.issubset(media_groups)
+    assert media_groups["text"]["count"] >= 1
+    assert media_groups["image"]["count"] >= 1
+    assert media_groups["vector"]["count"] >= 1
+    assert media_groups["audio"]["count"] == 0
+    assert media_groups["video"]["count"] == 0
+
+    serialized = json.dumps(data)
+    assert "openai-test-secret" not in serialized
+    assert "minimax-test-secret" not in serialized
+    assert "group-test-secret" not in serialized
+
+    unauthorized = client.get("/internal/service/admin/ability-models/runtime-projection")
+    assert unauthorized.status_code == 401
+
+
+class FixedSiliconFlowEmbeddingProvider:
+    provider_id = "siliconflow"
+    display_name = "SiliconFlow"
+    adapter_type = "siliconflow"
+
+    def fetch_catalog(self) -> ProviderCatalogSnapshot:
+        return ProviderCatalogSnapshot(
+            provider_id=self.provider_id,
+            display_name=self.display_name,
+            adapter_type=self.adapter_type,
+            models=[
+                CatalogModelSeed(
+                    model_id="siliconflow/BAAI/bge-m3",
+                    family="bge",
+                    feature="embedding",
+                    status="available",
+                    context_window=8192,
+                    price_input=0.0,
+                    price_output=0.0,
+                    raw_json={"dimensions": 1024},
+                    instances=[
+                        CatalogInstanceSeed(
+                            instance_id="siliconflow-bge-m3-embed",
+                            endpoint_variant="embeddings",
+                            region="global",
+                            capability_tags=["embedding", "site-knowledge"],
+                            is_default=True,
+                            weight=100,
+                        )
+                    ],
+                )
+            ],
+        )
+
+    def execute(self, request: ProviderExecutionRequest) -> ProviderExecutionResult:
+        raise ProviderExecutionError("provider.not_executed", "not used by this test")
+
+
+def test_admin_ability_model_runtime_binding_updates_site_knowledge_embedding(
+    tmp_path: Path,
+) -> None:
+    database_url, client = _build_client(
+        tmp_path,
+        providers={"siliconflow": FixedSiliconFlowEmbeddingProvider()},
+    )
     services = client.app.state.services
-    assert services.settings.image_source_provider == "auto"
-    assert services.settings.image_source_auto_strategy == "random"
-    assert services.settings.image_source_pixabay_api_key == "pixabay-test-secret"
-    assert services.settings.image_source_timeout_seconds == 8
+    with get_session(database_url) as session:
+        session.add(
+            ProviderConnection(
+                connection_id="model_siliconflow",
+                provider_type="siliconflow",
+                display_name="SiliconFlow",
+                enabled=True,
+                base_url="https://api.siliconflow.cn/v1",
+                config_json={
+                    "provider_id": "siliconflow",
+                    "kind": "siliconflow",
+                    "capability_ids": ["text_generation", "embedding"],
+                    "runtime_profile_ids": ["text.ai", "embed.default"],
+                    "model_id": "siliconflow/Qwen/Qwen3-8B",
+                },
+                secret_ciphertext=encrypt_provider_connection_secret(
+                    "configured-in-test",
+                    settings=services.settings,
+                ),
+                status="configured",
+                source_role="execution_source",
+                metadata_json={},
+            )
+        )
+        session.commit()
+
+    response = client.post(
+        "/internal/service/admin/ability-models/runtime-binding",
+        headers=build_internal_headers(idempotency_key="ability-binding-save"),
+        json={
+            "ability_id": "site_knowledge_embedding",
+            "instance_id": "siliconflow-bge-m3-embed",
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    data = response.json()["data"]
+    row = {item["ability_id"]: item for item in data["rows"]}["site_knowledge_embedding"]
+    assert row["media"] == "vector"
+    assert row["can_configure"] is True
+    assert row["provider_id"] == "siliconflow"
+    assert row["model_id"] == "siliconflow/BAAI/bge-m3"
+    assert data["boundary"]["runtime_binding_only"] is True
+    assert data["boundary"]["direct_wordpress_write"] is False
+    assert data["receipt"]["event_kind"] == "ability_model_runtime_binding.update"
+
+    with get_session(database_url) as session:
+        connection = session.get(ProviderConnection, "model_siliconflow")
+        assert connection is not None
+        config = connection.config_json or {}
+        assert config["provider_id"] == "siliconflow"
+        assert config["model_id"] == "siliconflow/BAAI/bge-m3"
+        assert "embedding" in config["capability_ids"]
+        assert "embed.default" in config["runtime_profile_ids"]
+        assert config["dimensions"] == 1024
+
+    serialized = json.dumps(data)
+    assert "configured-in-test" not in serialized
+
+
+def test_admin_provider_connections_store_encrypted_credentials_and_project_to_ai_resources(
+    tmp_path: Path,
+) -> None:
+    database_url, client = _build_client(tmp_path)
+
+    response = client.post(
+        "/internal/service/admin/provider-connections",
+        headers=build_internal_headers(idempotency_key="provider-connection-save"),
+        json={
+            "connection_id": "openai_primary",
+            "provider_id": "openai",
+            "provider_type": "openai_compatible",
+            "kind": "openai_compatible",
+            "display_name": "OpenAI primary",
+            "enabled": True,
+            "base_url": "https://api.openai.test/v1",
+            "capability_ids": ["text_generation", "image_generation"],
+            "runtime_profile_ids": [TEXT_AI_PROFILE_ID, "grok-imagine-image-quality"],
+            "config": {
+                "model_ids": ["gpt-5.5", "gpt-4o-mini"],
+                "model_id": "gpt-5.5",
+            },
+            "credential": "provider-connection-test-secret",
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    data = response.json()["data"]
+    assert data["connection_id"] == "openai_primary"
+    assert data["status"] == "ready"
+    assert data["configured"] is True
+    assert data["receipt"]["event_kind"] == "provider_connection.save"
+    assert data["receipt"]["scope_kind"] == "provider_connection"
+    assert data["receipt"]["scope_id"] == "openai_primary"
+    assert data["receipt"]["audit_filters"]["event_kind"] == "provider_connection.save"
+    assert data["model_ids"] == ["gpt-5.5", "gpt-4o-mini"]
+    assert data["secrets"]["credential"]["display"] == "configured"
+    serialized = json.dumps(response.json())
+    assert "provider-connection-test-secret" not in serialized
+
+    with get_session(database_url) as session:
+        row = session.get(ProviderConnection, "openai_primary")
+        assert row is not None
+        assert row.secret_ciphertext
+        assert "provider-connection-test-secret" not in row.secret_ciphertext
+        services = client.app.state.services
+        assert (
+            decrypt_provider_connection_secret(
+                row.secret_ciphertext,
+                settings=services.settings,
+            )
+            == "provider-connection-test-secret"
+        )
+        audit_event = session.scalar(
+            select(ServiceAuditEvent)
+            .where(ServiceAuditEvent.event_kind == "provider_connection.save")
+            .order_by(ServiceAuditEvent.id.desc())
+        )
+        assert audit_event is not None
+        assert audit_event.outcome == "succeeded"
+        assert audit_event.scope_kind == "provider_connection"
+        assert audit_event.scope_id == "openai_primary"
+        audit_payload = audit_event.payload_json or {}
+        assert audit_payload["request"]["credential_provided"] is True
+        assert audit_payload["credential_value_exposure"] == "presence_only"
+        assert "provider-connection-test-secret" not in json.dumps(audit_payload)
+
+    projection_response = client.get(
+        "/internal/service/admin/ai-resources",
+        headers=build_internal_headers(),
+    )
+    assert projection_response.status_code == 200, projection_response.text
+    projection = projection_response.json()["data"]
+    connections = {item["connection_id"]: item for item in projection["connections"]}
+    assert connections["openai_primary"]["managed_by"] == "cloud_provider_connections"
+    assert connections["openai_primary"]["model_ids"] == ["gpt-5.5", "gpt-4o-mini"]
+    capabilities = {item["capability_id"]: item for item in projection["capabilities"]}
+    assert "openai_primary" in capabilities["text_generation"]["connection_ids"]
+    assert "openai_primary" in capabilities["image_generation"]["connection_ids"]
+    assert projection["runtime_resolution"]
+    assert "env_migration" not in projection
+    assert "provider-connection-test-secret" not in json.dumps(projection)
+
+
+def test_admin_provider_connection_catalog_preview_fetches_models_without_persisting(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database_url, client = _build_client(tmp_path)
+
+    def fake_fetch_catalog(self: object) -> ProviderCatalogSnapshot:
+        return ProviderCatalogSnapshot(
+            provider_id="mqzj",
+            display_name="MQZJ",
+            adapter_type="openai",
+            models=[
+                CatalogModelSeed(
+                    model_id="gpt-5.5",
+                    family="gpt-5.5",
+                    feature="text",
+                    status="available",
+                    instances=[
+                        CatalogInstanceSeed(
+                            instance_id="mqzj-gpt55",
+                            endpoint_variant="chat_completions",
+                            region="test",
+                        )
+                    ],
+                ),
+                CatalogModelSeed(
+                    model_id="gpt-4o-mini",
+                    family="gpt-4o",
+                    feature="text",
+                    status="available",
+                    instances=[],
+                ),
+            ],
+        )
+
+    monkeypatch.setattr(
+        "app.adapters.providers.openai.OpenAIProviderAdapter.fetch_catalog",
+        fake_fetch_catalog,
+    )
+
+    response = client.post(
+        "/internal/service/admin/provider-connections/preview-catalog",
+        headers=build_internal_headers(idempotency_key="provider-connection-preview-catalog"),
+        json={
+            "connection_id": "mqzj_preview",
+            "provider_id": "mqzj",
+            "provider_type": "openai_compatible",
+            "kind": "openai_compatible",
+            "display_name": "MQZJ",
+            "enabled": True,
+            "base_url": "https://api.mqzj.top/v1",
+            "capability_ids": ["text_generation"],
+            "runtime_profile_ids": [TEXT_AI_PROFILE_ID],
+            "credential": "preview-secret-value",
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    data = response.json()["data"]
+    assert data["surface"] == "admin_provider_connection_catalog_preview"
+    assert data["model_count"] == 2
+    assert data["model_ids"] == ["gpt-5.5", "gpt-4o-mini"]
+    assert data["truncated"] is False
+    assert data["models"][0] == {
+        "model_id": "gpt-5.5",
+        "family": "gpt-5.5",
+        "feature": "text",
+        "status": "available",
+        "is_deprecated": False,
+        "runtime_supported": True,
+        "verified": True,
+        "capability_tags": [],
+    }
+    assert data["models"][1]["runtime_supported"] is False
+    assert data["credential_value_exposure"] == "none"
+    assert data["boundary"]["secret_exposure"] == "masked_status_only"
+    assert "preview-secret-value" not in json.dumps(response.json())
+    with get_session(database_url) as session:
+        assert session.get(ProviderConnection, "mqzj_preview") is None
+
+
+def test_admin_provider_connection_test_syncs_catalog_for_openai_compatible_supplier(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _, client = _build_client(tmp_path)
+
+    def fake_fetch_catalog(self: Any) -> ProviderCatalogSnapshot:
+        provider_id = str(getattr(self, "provider_id", "") or "")
+        display_name = str(getattr(self, "display_name", "") or "")
+        return ProviderCatalogSnapshot(
+            provider_id=provider_id,
+            display_name=display_name,
+            adapter_type="openai",
+            models=[
+                CatalogModelSeed(
+                    model_id="deepseek-chat",
+                    family="deepseek",
+                    feature="text",
+                    status="available",
+                    instances=[
+                        CatalogInstanceSeed(
+                            instance_id=f"{provider_id}-global-deepseek-chat",
+                            endpoint_variant="chat_completions",
+                            region="global",
+                            capability_tags=["text", "balanced"],
+                            is_default=True,
+                            weight=100,
+                        )
+                    ],
+                )
+            ],
+        )
+
+    monkeypatch.setattr(
+        "app.adapters.providers.openai.OpenAIProviderAdapter.fetch_catalog",
+        fake_fetch_catalog,
+    )
+
+    create_response = client.post(
+        "/internal/service/admin/provider-connections",
+        headers=build_internal_headers(idempotency_key="provider-connection-deepseek-save"),
+        json={
+            "connection_id": "deepseek",
+            "provider_id": "deepseek",
+            "provider_type": "openai_compatible",
+            "kind": "openai_compatible",
+            "display_name": "DeepSeek",
+            "enabled": True,
+            "base_url": "https://api.deepseek.com/v1",
+            "capability_ids": ["text_generation"],
+            "runtime_profile_ids": [TEXT_AI_PROFILE_ID],
+            "config": {"model_ids": ["deepseek-chat"], "model_id": "deepseek-chat"},
+            "credential": "deepseek-secret-value",
+        },
+    )
+    assert create_response.status_code == 200, create_response.text
+
+    test_response = client.post(
+        "/internal/service/admin/provider-connections/deepseek/test",
+        headers=build_internal_headers(idempotency_key="provider-connection-deepseek-test"),
+    )
+
+    assert test_response.status_code == 200, test_response.text
+    test_data = test_response.json()["data"]
+    assert test_data["catalog"]["provider_id"] == "deepseek"
+    assert test_data["catalog"]["display_name"] == "DeepSeek"
+    assert test_data["catalog"]["adapter_type"] == "openai"
+    assert test_data["catalog"]["sync"]["status"] == "synced"
+    assert test_data["receipt"]["event_kind"] == "provider_connection.test"
+    assert test_data["receipt"]["scope_id"] == "deepseek"
+    assert test_data["receipt"]["audit_filters"]["event_kind"] == "provider_connection.test"
+    assert "deepseek-secret-value" not in json.dumps(test_response.json())
+
+    routing_response = client.get(
+        "/internal/service/admin/wordpress-ai-routing",
+        headers=build_internal_headers(),
+    )
+
+    assert routing_response.status_code == 200, routing_response.text
+    routing_data = routing_response.json()["data"]
+    deepseek_instances = [
+        item
+        for item in routing_data["available_text_instances"]
+        if item["provider_id"] == "deepseek"
+    ]
+    assert deepseek_instances
+    assert deepseek_instances[0]["provider_display_name"] == "DeepSeek"
+    assert deepseek_instances[0]["adapter_type"] == "openai"
+    assert deepseek_instances[0]["model_id"] == "deepseek-chat"
+
+
+def test_admin_provider_connection_catalog_preview_returns_all_upstream_models(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database_url, client = _build_client(tmp_path)
+
+    def fake_fetch_catalog(self: Any) -> ProviderCatalogSnapshot:
+        return ProviderCatalogSnapshot(
+            provider_id="minimax",
+            display_name="MiniMax",
+            adapter_type="minimax",
+            models=[
+                CatalogModelSeed(
+                    model_id=f"minimax-model-{index:03d}",
+                    family="minimax",
+                    feature="text" if index % 2 else "audio",
+                    status="available",
+                    instances=[
+                        CatalogInstanceSeed(
+                            instance_id=f"minimax-model-{index:03d}",
+                            endpoint_variant="runtime",
+                            region="global",
+                        )
+                    ],
+                )
+                for index in range(1, 110)
+            ],
+        )
+
+    monkeypatch.setattr(
+        "app.adapters.providers.minimax.MiniMaxProviderAdapter.fetch_catalog",
+        fake_fetch_catalog,
+    )
+
+    response = client.post(
+        "/internal/service/admin/provider-connections/preview-catalog",
+        headers=build_internal_headers(idempotency_key="provider-connection-preview-full-catalog"),
+        json={
+            "connection_id": "minimax_preview",
+            "provider_id": "minimax",
+            "provider_type": "minimax",
+            "kind": "minimax",
+            "display_name": "MiniMax",
+            "enabled": True,
+            "base_url": "https://api.minimaxi.com",
+            "capability_ids": [
+                "text_generation",
+                "image_generation",
+                "audio_generation",
+                "video_generation",
+            ],
+            "runtime_profile_ids": [],
+            "credential": "preview-secret-value",
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    data = response.json()["data"]
+    assert data["model_count"] == 109
+    assert len(data["model_ids"]) == 109
+    assert len(data["models"]) == 109
+    assert data["model_ids"][-1] == "minimax-model-109"
+    assert data["models"][-1]["model_id"] == "minimax-model-109"
+    assert data["truncated"] is False
+
+
+def test_admin_provider_connection_catalog_preview_uses_saved_secret_without_exposing_it(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database_url, client = _build_client(tmp_path)
+    create_response = client.post(
+        "/internal/service/admin/provider-connections",
+        headers=build_internal_headers(idempotency_key="provider-connection-preview-saved-create"),
+        json={
+            "connection_id": "mqzj_saved",
+            "provider_id": "mqzj",
+            "provider_type": "openai_compatible",
+            "kind": "openai_compatible",
+            "display_name": "MQZJ",
+            "enabled": True,
+            "base_url": "https://api.mqzj.top/v1",
+            "capability_ids": ["text_generation"],
+            "runtime_profile_ids": [TEXT_AI_PROFILE_ID],
+            "credential": "saved-preview-secret",
+        },
+    )
+    assert create_response.status_code == 200, create_response.text
+
+    def fake_fetch_catalog(self: object) -> ProviderCatalogSnapshot:
+        return ProviderCatalogSnapshot(
+            provider_id="mqzj",
+            display_name="MQZJ",
+            adapter_type="openai",
+            models=[
+                CatalogModelSeed(
+                    model_id="gpt-5.5",
+                    family="gpt-5.5",
+                    feature="text",
+                    status="available",
+                    instances=[],
+                )
+            ],
+        )
+
+    monkeypatch.setattr(
+        "app.adapters.providers.openai.OpenAIProviderAdapter.fetch_catalog",
+        fake_fetch_catalog,
+    )
+
+    response = client.post(
+        "/internal/service/admin/provider-connections/preview-catalog",
+        headers=build_internal_headers(idempotency_key="provider-connection-preview-saved"),
+        json={
+            "connection_id": "mqzj_saved",
+            "provider_id": "mqzj",
+            "provider_type": "openai_compatible",
+            "kind": "openai_compatible",
+            "display_name": "MQZJ",
+            "enabled": True,
+            "base_url": "https://api.mqzj.top/v1",
+            "capability_ids": ["text_generation"],
+            "runtime_profile_ids": [TEXT_AI_PROFILE_ID],
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    data = response.json()["data"]
+    assert data["model_ids"] == ["gpt-5.5"]
+    assert "saved-preview-secret" not in json.dumps(response.json())
+    with get_session(database_url) as session:
+        assert session.get(ProviderConnection, "mqzj_saved") is not None
+
+
+def test_admin_provider_connection_catalog_preview_reports_unreadable_saved_secret(
+    tmp_path: Path,
+) -> None:
+    database_url, client = _build_client(tmp_path)
+    create_response = client.post(
+        "/internal/service/admin/provider-connections",
+        headers=build_internal_headers(
+            idempotency_key="provider-connection-preview-unreadable-create"
+        ),
+        json={
+            "connection_id": "minimax_unreadable",
+            "provider_id": "minimax",
+            "provider_type": "minimax",
+            "kind": "minimax",
+            "display_name": "MiniMax",
+            "enabled": True,
+            "base_url": "https://api.minimaxi.com",
+            "capability_ids": ["audio_generation"],
+            "runtime_profile_ids": [AUDIO_NARRATION_PROFILE_ID],
+            "credential": "saved-preview-secret",
+        },
+    )
+    assert create_response.status_code == 200, create_response.text
+    with get_session(database_url) as session:
+        row = session.get(ProviderConnection, "minimax_unreadable")
+        assert row is not None
+        row.secret_ciphertext = "not-a-valid-fernet-token"
+        session.commit()
+
+    response = client.post(
+        "/internal/service/admin/provider-connections/preview-catalog",
+        headers=build_internal_headers(
+            idempotency_key="provider-connection-preview-unreadable"
+        ),
+        json={
+            "connection_id": "minimax_unreadable",
+            "provider_id": "minimax",
+            "provider_type": "minimax",
+            "kind": "minimax",
+            "display_name": "MiniMax",
+            "enabled": True,
+            "base_url": "https://api.minimaxi.com",
+            "capability_ids": ["audio_generation"],
+            "runtime_profile_ids": [AUDIO_NARRATION_PROFILE_ID],
+        },
+    )
+
+    assert response.status_code == 400, response.text
+    payload = response.json()
+    assert payload["error_code"] == "provider_connection.saved_credential_unreadable"
+    assert payload["message"] == (
+        "saved provider credential cannot be decrypted; enter the API key again and save"
+    )
+    assert "saved-preview-secret" not in json.dumps(payload)
+
+
+def test_admin_provider_connection_catalog_preview_error_hides_upstream_detail(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _, client = _build_client(tmp_path)
+
+    def fake_fetch_catalog(self: object) -> ProviderCatalogSnapshot:
+        raise RuntimeError("traceback with preview-secret-value and provider stack frame")
+
+    monkeypatch.setattr(
+        "app.adapters.providers.openai.OpenAIProviderAdapter.fetch_catalog",
+        fake_fetch_catalog,
+    )
+
+    response = client.post(
+        "/internal/service/admin/provider-connections/preview-catalog",
+        headers=build_internal_headers(idempotency_key="provider-connection-preview-error"),
+        json={
+            "connection_id": "mqzj_preview_error",
+            "provider_id": "mqzj",
+            "provider_type": "openai_compatible",
+            "kind": "openai_compatible",
+            "display_name": "MQZJ",
+            "enabled": True,
+            "base_url": "https://api.mqzj.top/v1",
+            "capability_ids": ["text_generation"],
+            "runtime_profile_ids": [TEXT_AI_PROFILE_ID],
+            "credential": "preview-secret-value",
+        },
+    )
+
+    assert response.status_code == 502, response.text
+    payload = response.json()
+    assert payload["error_code"] == "provider_connection.test_failed"
+    assert payload["message"] == "provider connection catalog preview failed"
+    serialized = json.dumps(payload)
+    assert "preview-secret-value" not in serialized
+    assert "traceback" not in serialized
+    assert "provider stack frame" not in serialized
+
+
+def test_admin_model_references_syncs_models_dev_payload_as_reference_only(
+    tmp_path: Path,
+) -> None:
+    database_url, client = _build_client(tmp_path)
+    response = client.post(
+        "/internal/service/admin/model-references/sync",
+        headers=build_internal_headers(idempotency_key="model-references-sync"),
+        json={
+            "payload": {
+                "providers": {
+                    "openai": {
+                        "id": "openai",
+                        "name": "OpenAI",
+                        "doc": "https://platform.openai.com/docs",
+                        "models": {
+                            "gpt-5.5": {
+                                "id": "gpt-5.5",
+                                "name": "GPT-5.5",
+                                "family": "gpt",
+                                "reasoning": True,
+                                "tool_call": True,
+                                "structured_output": True,
+                                "release_date": "2026-06-01",
+                                "last_updated": "2026-06-18",
+                                "modalities": {
+                                    "input": ["text", "image"],
+                                    "output": ["text"],
+                                },
+                                "limit": {"context": 256000, "output": 64000},
+                                "cost": {
+                                    "input": 1.25,
+                                    "output": 10.0,
+                                    "cache_read": 0.125,
+                                },
+                            },
+                            "gpt-image-2": {
+                                "id": "gpt-image-2",
+                                "name": "GPT Image 2",
+                                "family": "gpt-image",
+                                "deprecated": True,
+                                "modalities": {
+                                    "input": ["text", "image"],
+                                    "output": ["image"],
+                                },
+                                "limit": {"context": 32000, "output": 1},
+                                "cost": {
+                                    "input": 2.0,
+                                    "output": 12.0,
+                                },
+                            },
+                        },
+                    },
+                    "deepseek": {
+                        "id": "deepseek",
+                        "name": "DeepSeek",
+                        "doc": "https://api-docs.deepseek.com",
+                        "models": {
+                            "deepseek-v4-flash": {
+                                "id": "deepseek-v4-flash",
+                                "name": "DeepSeek V4 Flash",
+                                "family": "deepseek",
+                                "reasoning": True,
+                                "modalities": {
+                                    "input": ["text"],
+                                    "output": ["text"],
+                                },
+                                "limit": {"context": 128000, "output": 8000},
+                                "cost": {
+                                    "input": 0.14,
+                                    "output": 0.28,
+                                    "cache_read": 0.0028,
+                                },
+                            },
+                            "deepseek-v4-pro": {
+                                "id": "deepseek-v4-pro",
+                                "name": "DeepSeek V4 Pro",
+                                "family": "deepseek",
+                                "reasoning": True,
+                                "modalities": {
+                                    "input": ["text"],
+                                    "output": ["text"],
+                                },
+                                "limit": {"context": 128000, "output": 8000},
+                                "cost": {
+                                    "input": 0.435,
+                                    "output": 0.87,
+                                    "cache_read": 0.003625,
+                                },
+                            },
+                        },
+                    },
+                }
+            }
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    sync_data = response.json()["data"]
+    assert sync_data["surface"] == "admin_model_reference_sync"
+    assert sync_data["source_id"] == "models.dev"
+    assert sync_data["model_count"] == 4
+    assert sync_data["price_unit"] == "usd_per_1m_tokens"
+    assert sync_data["billing_truth"] is False
+    assert sync_data["boundary"]["reference_only"] is True
+    assert sync_data["boundary"]["routing_truth"] is False
+
+    with get_session(database_url) as session:
+        source = session.get(ModelReferenceSource, "models.dev")
+        assert source is not None
+        assert source.status == "active"
+
+    list_response = client.get(
+        "/internal/service/admin/model-references?provider_id=openai",
+        headers=build_internal_headers(),
+    )
+    assert list_response.status_code == 200, list_response.text
+    data = list_response.json()["data"]
+    assert data["surface"] == "admin_model_references"
+    assert data["boundary"]["billing_truth"] is False
+    assert data["total"] == 2
+    assert data["items"][0]["model_id"] == "gpt-5.5"
+    assert data["items"][0]["feature"] == "text"
+    assert data["items"][0]["capability_flags"]["reasoning"] is True
+    assert data["items"][0]["price"] == {
+        "input": 1.25,
+        "output": 10.0,
+        "cache_read": 0.125,
+        "cache_write": None,
+        "unit": "usd_per_1m_tokens",
+        "billing_truth": False,
+    }
+    assert "OpenAI" in json.dumps(data)
+
+    image_response = client.get(
+        "/internal/service/admin/model-references?provider_id=openai&feature=image",
+        headers=build_internal_headers(),
+    )
+    assert image_response.status_code == 200, image_response.text
+    image_data = image_response.json()["data"]
+    assert image_data["total"] == 1
+    assert image_data["items"][0]["model_id"] == "gpt-image-2"
+    assert image_data["items"][0]["feature"] == "image"
+    assert image_data["items"][0]["is_deprecated"] is True
+
+    deepseek_response = client.get(
+        "/internal/service/admin/model-references?provider_id=deepseek",
+        headers=build_internal_headers(),
+    )
+    assert deepseek_response.status_code == 200, deepseek_response.text
+    deepseek_data = deepseek_response.json()["data"]
+    assert deepseek_data["total"] == 2
+    assert deepseek_data["items"][0]["model_id"] == "deepseek-v4-flash"
+    assert deepseek_data["items"][0]["feature"] == "text"
+    assert deepseek_data["items"][0]["context_window"] == 128000
+    assert deepseek_data["items"][0]["price"]["cache_read"] == 0.0028
+    assert deepseek_data["items"][1]["model_id"] == "deepseek-v4-pro"
+
+    active_response = client.get(
+        "/internal/service/admin/model-references?provider_id=openai&include_deprecated=false&search=image",
+        headers=build_internal_headers(),
+    )
+    assert active_response.status_code == 200, active_response.text
+    active_data = active_response.json()["data"]
+    assert active_data["total"] == 0
+
+    with get_session(database_url) as session:
+        row = session.scalar(
+            select(ModelReferenceModel).where(
+                ModelReferenceModel.provider_id == "openai",
+                ModelReferenceModel.model_id == "gpt-5.5",
+            )
+        )
+        assert row is not None
+        assert row.context_window == 256000
+
+
+def test_admin_ai_resources_lists_only_added_capability_provider_connections(
+    tmp_path: Path,
+) -> None:
+    _, client = _build_client(tmp_path)
+
+    initial_response = client.get(
+        "/internal/service/admin/ai-resources",
+        headers=build_internal_headers(),
+    )
+    assert initial_response.status_code == 200, initial_response.text
+    initial_connections = {
+        item["connection_id"]: item
+        for item in initial_response.json()["data"]["connections"]
+    }
+    assert "search_apify" not in initial_connections
+    assert "web_search_tavily" not in initial_connections
+
+    create_response = client.post(
+        "/internal/service/admin/provider-connections",
+        headers=build_internal_headers(idempotency_key="provider-connection-apify-save"),
+        json={
+            "connection_id": "search_apify",
+            "provider_id": "apify",
+            "provider_type": "web_search_provider",
+            "kind": "web_search_provider",
+            "display_name": "Apify",
+            "enabled": True,
+            "base_url": "https://api.apify.com/v2",
+            "capability_ids": ["web_search"],
+            "runtime_profile_ids": ["web-search.managed"],
+            "credential": "apify-provider-secret",
+        },
+    )
+    assert create_response.status_code == 200, create_response.text
+
+    projection_response = client.get(
+        "/internal/service/admin/ai-resources",
+        headers=build_internal_headers(),
+    )
+    assert projection_response.status_code == 200, projection_response.text
+    projection = projection_response.json()["data"]
+    connections = {item["connection_id"]: item for item in projection["connections"]}
+    web_search_connections = [
+        item
+        for item in projection["connections"]
+        if item.get("kind") == "web_search_provider"
+    ]
+
+    assert list(connections.keys()).count("search_apify") == 1
+    assert connections["search_apify"]["provider_id"] == "apify"
+    assert connections["search_apify"]["status"] == "ready"
+    assert [item["connection_id"] for item in web_search_connections] == ["search_apify"]
+    capabilities = {item["capability_id"]: item for item in projection["capabilities"]}
+    assert capabilities["web_search"]["connection_ids"] == ["search_apify"]
+    assert "apify-provider-secret" not in json.dumps(projection)
+
+
+def test_admin_provider_connection_test_updates_masked_diagnostics(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database_url, client = _build_client(tmp_path)
+    client.post(
+        "/internal/service/admin/provider-connections",
+        headers=build_internal_headers(idempotency_key="provider-connection-test-create"),
+        json={
+            "connection_id": "openai_testable",
+            "provider_id": "openai",
+            "provider_type": "openai_compatible",
+            "kind": "openai_compatible",
+            "display_name": "OpenAI testable",
+            "enabled": True,
+            "base_url": "https://api.openai.test/v1",
+            "capability_ids": ["text_generation"],
+            "runtime_profile_ids": [TEXT_AI_PROFILE_ID],
+            "credential": "provider-connection-test-secret",
+        },
+    )
+
+    def fake_fetch_catalog(self: object) -> ProviderCatalogSnapshot:
+        return ProviderCatalogSnapshot(
+            provider_id="openai",
+            display_name="OpenAI testable",
+            adapter_type="openai",
+            models=[
+                CatalogModelSeed(
+                    model_id="gpt-test",
+                    family="gpt-test",
+                    feature="text",
+                    status="available",
+                    instances=[
+                        CatalogInstanceSeed(
+                            instance_id="openai-test-text",
+                            endpoint_variant="responses",
+                            region="test",
+                        )
+                    ],
+                )
+            ],
+        )
+
+    monkeypatch.setattr(
+        "app.adapters.providers.openai.OpenAIProviderAdapter.fetch_catalog",
+        fake_fetch_catalog,
+    )
+
+    response = client.post(
+        "/internal/service/admin/provider-connections/openai_testable/test",
+        headers=build_internal_headers(idempotency_key="provider-connection-test-run"),
+    )
+
+    assert response.status_code == 200, response.text
+    data = response.json()["data"]
+    assert data["ok"] is True
+    assert data["status"] == "ready"
+    assert data["catalog"]["model_count"] == 1
+    assert data["catalog"]["sample_model_ids"] == ["gpt-test"]
+    assert "provider-connection-test-secret" not in json.dumps(response.json())
+    with get_session(database_url) as session:
+        row = session.get(ProviderConnection, "openai_testable")
+        assert row is not None
+        assert row.last_tested_at is not None
+        assert row.last_error_code in {None, ""}
+
+
+def test_admin_provider_connection_test_runs_web_search_probe_without_result_payload(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database_url, client = _build_client(tmp_path)
+    client.post(
+        "/internal/service/admin/provider-connections",
+        headers=build_internal_headers(idempotency_key="provider-connection-web-search-create"),
+        json={
+            "connection_id": "search_tavily_probe",
+            "provider_id": "tavily",
+            "provider_type": "web_search_provider",
+            "kind": "web_search_provider",
+            "display_name": "Tavily probe",
+            "enabled": True,
+            "base_url": "https://api.tavily.test",
+            "capability_ids": ["web_search"],
+            "runtime_profile_ids": ["web-search.managed"],
+            "credential": "tavily-provider-secret",
+        },
+    )
+
+    def fake_search(
+        self: TavilyWebSearchProvider,
+        *,
+        query: str,
+        options: dict[str, Any],
+        site_id: str,
+        run_id: str,
+    ) -> WebSearchExecutionResult:
+        assert query == "WordPress AI provider connection smoke test"
+        assert options["provider"] == "tavily"
+        assert site_id == "admin_provider_connection_test"
+        assert run_id.startswith("provider-connection-test-search_tavily_probe-")
+        return WebSearchExecutionResult(
+            result_json={
+                "artifact_type": "web_search_results",
+                "provider": "tavily",
+                "result_count": 1,
+                "results": [
+                    {
+                        "title": "Do not expose this result title",
+                        "url": "https://example.com/source",
+                        "snippet": "Do not expose this snippet",
+                    }
+                ],
+                "write_posture": "suggestion_only",
+                "direct_wordpress_write": False,
+            },
+            usage=WebSearchProviderUsage(
+                provider_id="tavily",
+                model_id="web-search",
+                instance_id="cloud-managed",
+                region="unspecified",
+                latency_ms=17,
+            ),
+        )
+
+    monkeypatch.setattr(TavilyWebSearchProvider, "search", fake_search)
+
+    response = client.post(
+        "/internal/service/admin/provider-connections/search_tavily_probe/test",
+        headers=build_internal_headers(idempotency_key="provider-connection-web-search-test"),
+    )
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    data = payload["data"]
+    assert data["ok"] is True
+    assert data["stage"] == "web_search_probe"
+    assert data["probe"] == {
+        "provider_id": "tavily",
+        "result_count": 1,
+        "latency_ms": 17,
+        "write_posture": "suggestion_only",
+        "direct_wordpress_write": False,
+    }
+    serialized = json.dumps(payload)
+    assert "tavily-provider-secret" not in serialized
+    assert "Do not expose this result title" not in serialized
+    with get_session(database_url) as session:
+        row = session.get(ProviderConnection, "search_tavily_probe")
+        assert row is not None
+        assert row.status == "ready"
+        assert row.last_tested_at is not None
+        assert row.last_error_code in {None, ""}
+
+
+def test_admin_provider_connection_test_runs_jina_reader_probe_as_secretless_enhancement(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database_url, client = _build_client(tmp_path)
+    create_response = client.post(
+        "/internal/service/admin/provider-connections",
+        headers=build_internal_headers(idempotency_key="provider-connection-jina-reader-create"),
+        json={
+            "connection_id": "search_jina_reader_probe",
+            "provider_id": "jina_reader",
+            "provider_type": "web_search_provider",
+            "kind": "web_search_provider",
+            "display_name": "Jina Reader probe",
+            "enabled": True,
+            "base_url": "https://r.jina.test",
+            "capability_ids": ["web_search"],
+            "runtime_profile_ids": ["web-search.reader"],
+        },
+    )
+    assert create_response.status_code == 200, create_response.text
+    created = create_response.json()["data"]
+    assert created["configured"] is True
+    assert created["status"] == "ready"
+
+    def fail_web_search_execute(*args: object, **kwargs: object) -> None:
+        raise AssertionError("Jina Reader probe must not run the primary web search service")
+
+    class FakeReaderClient:
+        def __init__(self, *, timeout: float) -> None:
+            assert timeout > 0
+
+        def __enter__(self) -> FakeReaderClient:
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            return None
+
+        def get(self, url: str, *, headers: dict[str, str]) -> httpx.Response:
+            assert url == "https://r.jina.test/https://example.com/"
+            assert headers == {"Accept": "text/plain"}
+            return httpx.Response(
+                200,
+                content=b"Readable source text that must not leak.",
+                request=httpx.Request("GET", url),
+            )
+
+    monkeypatch.setattr(
+        "app.domain.provider_connections.service.WebSearchService.execute",
+        fail_web_search_execute,
+    )
+    monkeypatch.setattr("app.domain.provider_connections.service.httpx.Client", FakeReaderClient)
+
+    response = client.post(
+        "/internal/service/admin/provider-connections/search_jina_reader_probe/test",
+        headers=build_internal_headers(idempotency_key="provider-connection-jina-reader-test"),
+    )
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    data = payload["data"]
+    assert data["ok"] is True
+    assert data["stage"] == "web_search_reader_probe"
+    assert data["probe"] == {
+        "provider_id": "jina_reader",
+        "result_count": 1,
+        "latency_ms": data["probe"]["latency_ms"],
+        "write_posture": "suggestion_only",
+        "direct_wordpress_write": False,
+    }
+    assert isinstance(data["probe"]["latency_ms"], int)
+    assert data["probe"]["latency_ms"] >= 0
+    serialized = json.dumps(payload)
+    assert "Readable source text" not in serialized
+    with get_session(database_url) as session:
+        row = session.get(ProviderConnection, "search_jina_reader_probe")
+        assert row is not None
+        assert row.status == "ready"
+        assert (row.config_json or {})["secretless"] is True
+        assert row.last_tested_at is not None
+        assert row.last_error_code in {None, ""}
+
+
+def test_admin_provider_connection_test_reports_missing_secret_without_leaking(
+    tmp_path: Path,
+) -> None:
+    _, client = _build_client(tmp_path)
+    create_response = client.post(
+        "/internal/service/admin/provider-connections",
+        headers=build_internal_headers(idempotency_key="provider-connection-test-missing-create"),
+        json={
+            "connection_id": "missing_secret_provider",
+            "provider_id": "missing_secret",
+            "provider_type": "openai_compatible",
+            "kind": "openai_compatible",
+            "display_name": "Missing secret",
+            "enabled": True,
+            "capability_ids": ["text_generation"],
+            "runtime_profile_ids": [TEXT_AI_PROFILE_ID],
+        },
+    )
+    assert create_response.status_code == 200, create_response.text
+
+    response = client.post(
+        "/internal/service/admin/provider-connections/missing_secret_provider/test",
+        headers=build_internal_headers(idempotency_key="provider-connection-test-missing"),
+    )
+
+    assert response.status_code == 200, response.text
+    data = response.json()["data"]
+    assert data["ok"] is False
+    assert data["status"] == "missing_secret"
+    assert data["error_code"] == "provider_connection.missing_secret"
+    assert data["boundary"]["secret_exposure"] == "masked_status_only"
+    with get_session(_sqlite_url(tmp_path)) as session:
+        audit_event = session.scalar(
+            select(ServiceAuditEvent)
+            .where(ServiceAuditEvent.event_kind == "provider_connection.test")
+            .order_by(ServiceAuditEvent.id.desc())
+        )
+        assert audit_event is not None
+        assert audit_event.outcome == "error"
+        assert audit_event.scope_id == "missing_secret_provider"
+        assert (audit_event.payload_json or {})["result"]["test"]["error_code"] == (
+            "provider_connection.missing_secret"
+        )
+
+
+def test_admin_provider_connections_env_import_route_is_retired(
+    tmp_path: Path,
+) -> None:
+    _, client = _build_client(
+        tmp_path,
+        settings_overrides={
+            "openai_api_key": "openai-env-secret",
+            "openai_base_url": "https://env-openai.test/v1",
+            "minimax_provider_enabled": True,
+            "minimax_api_key": "minimax-env-secret",
+            "minimax_group_id": "minimax-env-group",
+        },
+    )
+
+    response = client.post(
+        "/internal/service/admin/provider-connections/import-env",
+        headers=build_internal_headers(idempotency_key="provider-connection-import-env"),
+    )
+
+    assert response.status_code in {404, 405}, response.text
+    with get_session(_sqlite_url(tmp_path)) as session:
+        audit_event = session.scalar(
+            select(ServiceAuditEvent)
+            .where(ServiceAuditEvent.event_kind == "provider_connection.import_env")
+            .order_by(ServiceAuditEvent.id.desc())
+        )
+        assert audit_event is None
+
+    projection_response = client.get(
+        "/internal/service/admin/ai-resources",
+        headers=build_internal_headers(),
+    )
+    assert projection_response.status_code == 200, projection_response.text
+    projection = projection_response.json()["data"]
+    assert "env_migration" not in projection
+    assert "openai-env-secret" not in json.dumps(projection)
+    assert "minimax-env-secret" not in json.dumps(projection)
+
+
+def test_admin_provider_connections_can_be_deleted(
+    tmp_path: Path,
+) -> None:
+    _, client = _build_client(tmp_path)
+    create_response = client.post(
+        "/internal/service/admin/provider-connections",
+        headers=build_internal_headers(idempotency_key="provider-connection-create-delete"),
+        json={
+            "connection_id": "delete_me_provider",
+            "provider_id": "delete_me",
+            "provider_type": "web_search_provider",
+            "display_name": "Delete me",
+            "enabled": True,
+            "capability_ids": ["web_search"],
+            "runtime_profile_ids": ["web-search.managed"],
+            "credential": "delete-me-secret",
+        },
+    )
+    assert create_response.status_code == 200, create_response.text
+
+    delete_response = client.delete(
+        "/internal/service/admin/provider-connections/delete_me_provider",
+        headers=build_internal_headers(idempotency_key="provider-connection-delete"),
+    )
+    assert delete_response.status_code == 200, delete_response.text
+    delete_data = delete_response.json()["data"]
+    assert delete_data["deleted"] is True
+    assert delete_data["receipt"]["event_kind"] == "provider_connection.delete"
+    assert delete_data["receipt"]["scope_id"] == "delete_me_provider"
+    assert delete_data["receipt"]["audit_filters"]["event_kind"] == "provider_connection.delete"
+    with get_session(_sqlite_url(tmp_path)) as session:
+        audit_event = session.scalar(
+            select(ServiceAuditEvent)
+            .where(ServiceAuditEvent.event_kind == "provider_connection.delete")
+            .order_by(ServiceAuditEvent.id.desc())
+        )
+        assert audit_event is not None
+        assert audit_event.outcome == "succeeded"
+        assert audit_event.scope_id == "delete_me_provider"
+        assert "delete-me-secret" not in json.dumps(audit_event.payload_json or {})
+
+    list_response = client.get(
+        "/internal/service/admin/provider-connections",
+        headers=build_internal_headers(),
+    )
+    assert list_response.status_code == 200, list_response.text
+    assert list_response.json()["data"]["connections"] == []
+
+
+def test_admin_ai_resources_reads_injected_runtime_provider_adapters(
+    tmp_path: Path,
+) -> None:
+    script_provider = FixedAudioSummaryScriptProvider()
+    audio_provider = MiniMaxProviderAdapter(
+        allow_sample_catalog=True,
+        allow_sample_execution=True,
+    )
+    _, client = _build_client(
+        tmp_path,
+        providers={"openai": script_provider, "minimax": audio_provider},
+        settings_overrides={
+            "openai_api_key": "",
+            "minimax_provider_enabled": False,
+            "minimax_api_key": "",
+        },
+    )
+
+    response = client.get(
+        "/internal/service/admin/ai-resources",
+        headers=build_internal_headers(),
+    )
+
+    assert response.status_code == 200, response.text
+    data = response.json()["data"]
+    profiles = {item["profile_id"]: item for item in data["runtime_profiles"]}
+    assert profiles[TEXT_AI_PROFILE_ID]["status"] == "ready"
+    assert profiles["audio.narration.default"]["status"] == "ready"
+    assert profiles["audio.summary.default"]["status"] == "ready"
+    assert profiles["grok-imagine-image-quality"]["status"] == "ready"
+
+
+def test_admin_ai_resources_exposes_recent_runtime_evidence_without_content(
+    tmp_path: Path,
+) -> None:
+    database_url, client = _build_client(tmp_path)
+    seed_site_auth(
+        database_url,
+        site_id="site_ai_resources",
+        scopes=["runtime:execute", "runtime:read", "runtime:resolve"],
+    )
+    now = datetime.now(UTC)
+    with get_session(database_url) as session:
+        session.add(
+            RunRecord(
+                run_id="run_ai_resources_text_recent",
+                site_id="site_ai_resources",
+                account_id="acct_site_ai_resources",
+                subscription_id=None,
+                plan_version_id=None,
+                ability_name="npcink-toolbox/ai-content-support",
+                ability_family="text",
+                skill_id="",
+                workflow_id="",
+                contract_version="hosted_ai_content_support.v1",
+                channel="admin",
+                execution_kind="text",
+                execution_tier="cloud",
+                execution_pattern="inline",
+                data_classification="public_site_content",
+                profile_id=TEXT_AI_PROFILE_ID,
+                canonical_run_id=None,
+                status="succeeded",
+                idempotency_key="idem-ai-resources-text-recent",
+                request_fingerprint="fingerprint-ai-resources-text-recent",
+                trace_id="trace-ai-resources-text-recent",
+                cancel_requested_at=None,
+                canceled_at=None,
+                input_json={"prompt": "sensitive draft body should not appear"},
+                execution_input_ciphertext=None,
+                policy_json={},
+                result_ref="inline",
+                result_json={"output_text": "generated text should not appear"},
+                error_code=None,
+                error_message=None,
+                callback_status="not_requested",
+                callback_attempt_count=0,
+                callback_last_attempt_at=None,
+                callback_delivered_at=None,
+                callback_next_attempt_at=None,
+                callback_last_error_code=None,
+                callback_last_error_message=None,
+                selected_provider_id="openai",
+                selected_model_id="gpt-5.5",
+                selected_instance_id="openai-global-gpt-5-5",
+                fallback_used=False,
+                started_at=now,
+                processing_started_at=now,
+                finished_at=now,
+                retention_expires_at=now + timedelta(days=1),
+                result_purged_at=None,
+            )
+        )
+        session.add(
+            ProviderCallRecord(
+                run_id="run_ai_resources_text_recent",
+                provider_id="openai",
+                model_id="gpt-5.5",
+                instance_id="openai-global-gpt-5-5",
+                region="global",
+                latency_ms=1234,
+                tokens_in=12,
+                tokens_out=34,
+                cost=0.0042,
+                retry_count=0,
+                fallback_used=False,
+                error_code=None,
+                created_at=now,
+            )
+        )
+        session.add(
+            ProviderCallRecord(
+                run_id="run_ai_resources_text_recent",
+                provider_id="openai",
+                model_id="gpt-5.5",
+                instance_id="openai-global-gpt-5-5",
+                region="global",
+                latency_ms=25_000,
+                tokens_in=10,
+                tokens_out=0,
+                cost=0.0,
+                retry_count=1,
+                fallback_used=True,
+                error_code="provider.timeout",
+                created_at=now - timedelta(days=2),
+            )
+        )
+        session.commit()
+
+    response = client.get(
+        "/internal/service/admin/ai-resources",
+        headers=build_internal_headers(),
+    )
+
+    assert response.status_code == 200, response.text
+    data = response.json()["data"]
+    evidence = data["recent_runtime_evidence"]["profiles"][TEXT_AI_PROFILE_ID]
+    assert evidence["run_id"] == "run_ai_resources_text_recent"
+    assert evidence["status"] == "succeeded"
+    assert evidence["provider_id"] == "openai"
+    usage = {item["feature_id"]: item for item in data["feature_model_usage"]}
+    assert usage["content_support"]["last_run"]["run_id"] == "run_ai_resources_text_recent"
+    assert usage["content_support"]["last_provider_call"]["latency_ms"] == 1234
+    assert usage["content_support"]["last_provider_call"]["cost"] == 0.0042
+    assert usage["content_support"]["evidence"]["content_exposed"] is False
+    assert usage["content_support"]["boundary"]["direct_wordpress_write"] is False
+    health_rows = {
+        (item["provider_id"], item["model_id"]): item
+        for item in data["provider_model_health"]["rows"]
+    }
+    health = health_rows[("openai", "gpt-5.5")]
+    assert health["status"] == "healthy"
+    assert health["call_count"] == 1
+    assert health["success_count"] == 1
+    assert health["error_count"] == 0
+    assert health["success_rate"] == 1.0
+    assert health["avg_latency_ms"] == 1234
+    assert health["p95_latency_ms"] == 1234
+    assert health["tokens_in"] == 12
+    assert health["tokens_out"] == 34
+    assert health["cost"] == 0.0042
+    assert health["evidence"]["content_exposed"] is False
+    assert health["boundary"]["direct_wordpress_write"] is False
+    windows = {item["window_id"]: item for item in data["provider_model_health"]["windows"]}
+    assert {"last_24h", "last_7d"}.issubset(windows)
+    assert windows["last_24h"]["rows"][0]["status"] == "healthy"
+    assert windows["last_24h"]["alert_summary"]["alert_count"] == 0
+    seven_day_rows = {
+        (item["provider_id"], item["model_id"]): item
+        for item in windows["last_7d"]["rows"]
+    }
+    assert seven_day_rows[("openai", "gpt-5.5")]["status"] == "degraded"
+    assert windows["last_7d"]["alert_summary"]["alert_count"] >= 2
+    assert {
+        alert["code"] for alert in windows["last_7d"]["alert_summary"]["alerts"]
+    }.issuperset({"provider_model.degraded", "provider_model.fallback_used"})
+    assert data["provider_model_health"]["alert_summary"]["boundary"][
+        "automatic_routing_change"
+    ] is False
+    serialized = json.dumps(data)
+    assert "sensitive draft body" not in serialized
+    assert "generated text should not appear" not in serialized
+
+
+def test_admin_audio_workbench_creates_narration_job_and_exposes_result(
+    tmp_path: Path,
+) -> None:
+    provider = MiniMaxProviderAdapter(
+        allow_sample_catalog=True,
+        allow_sample_execution=True,
+    )
+    database_url, client = _build_client(
+        tmp_path,
+        providers={"minimax": provider},
+        settings_overrides={
+            "minimax_provider_enabled": True,
+            "minimax_api_key": "minimax-test-secret",
+        },
+    )
+    _seed_minimax_audio_model_allowlist(database_url)
+    seed_site_auth(
+        database_url,
+        site_id="site_audio_admin",
+        scopes=["runtime:execute", "runtime:read", "runtime:resolve"],
+    )
+    response = client.post(
+        "/internal/service/admin/audio-jobs",
+        headers=build_internal_headers(idempotency_key="audio-workbench-narration"),
+        json={
+            "site_id": "site_audio_admin",
+            "intent": "article_narration",
+            "title": "Audio test",
+            "body": "这是一段文章正文，用于生成旁白音频。",
+            "format": "mp3",
+            "preview_instance_id": "minimax-global-speech-28-turbo",
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    data = response.json()["data"]
+    assert data["status"] == "queued"
+    assert data["instance_id"] == "minimax-global-speech-28-turbo"
+    assert data["script"]["source"] == "full_article"
+    assert data["boundary"]["direct_wordpress_write"] is False
+
+    status_response = client.get(
+        f"/internal/service/admin/audio-jobs/{data['run_id']}",
+        headers=build_internal_headers(),
+    )
+
+    assert status_response.status_code == 200, status_response.text
+    status_data = status_response.json()["data"]
+    assert status_data["status"] == "succeeded"
+    assert status_data["result_ready"] is True
+    assert status_data["result"]["artifact_type"] == "audio_generation_candidates"
+    assert status_data["result"]["direct_wordpress_write"] is False
+    assert status_data["result"]["audios"][0]["mime_type"] == "audio/mpeg"
+
+    dispose_engine(database_url)
+
+
+def test_admin_audio_workbench_uses_saved_minimax_execution_connection(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database_url, client = _build_client(tmp_path)
+    CatalogService(
+        database_url,
+        providers={"minimax": MiniMaxProviderAdapter(allow_sample_catalog=True)},
+    ).refresh_catalog()
+    services = client.app.state.services
+    ProviderConnectionAdminService(database_url, services.settings).save_connection(
+        {
+            "connection_id": "minimax",
+            "provider_id": "minimax",
+            "provider_type": "minimax",
+            "kind": "minimax",
+            "display_name": "MiniMax",
+            "enabled": True,
+            "base_url": "https://api.minimaxi.com",
+            "capability_ids": ["audio_generation"],
+            "runtime_profile_ids": [
+                AUDIO_NARRATION_PROFILE_ID,
+                WP_AI_CONNECTOR_AUDIO_GENERATION_PROFILE_ID,
+            ],
+            "config": {"model_ids": [AUDIO_NARRATION_MODEL_ID]},
+            "credential": "saved-minimax-secret",
+        }
+    )
+    _seed_minimax_audio_model_allowlist(database_url)
+    seed_site_auth(
+        database_url,
+        site_id="site_audio_admin",
+        scopes=["runtime:execute", "runtime:read", "runtime:resolve"],
+    )
+
+    def fake_execute_http(
+        self: MiniMaxProviderAdapter,
+        request: ProviderExecutionRequest,
+    ) -> ProviderExecutionResult:
+        return self._execute_sample(request)
+
+    monkeypatch.setattr(MiniMaxProviderAdapter, "_execute_http", fake_execute_http)
+
+    response = client.post(
+        "/internal/service/admin/audio-jobs",
+        headers=build_internal_headers(
+            idempotency_key="audio-workbench-saved-minimax-connection"
+        ),
+        json={
+            "site_id": "site_audio_admin",
+            "intent": "article_narration",
+            "title": "Audio test",
+            "body": "这是一段文章正文，用于验证已保存的 MiniMax 凭据连接会进入运行时。",
+            "format": "mp3",
+            "preview_instance_id": "minimax-global-speech-28-turbo",
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    data = response.json()["data"]
+    assert data["status"] == "queued"
+    assert data["provider_id"] == "minimax"
+    assert data["instance_id"] == "minimax-global-speech-28-turbo"
+
+    status_response = client.get(
+        f"/internal/service/admin/audio-jobs/{data['run_id']}",
+        headers=build_internal_headers(),
+    )
+    assert status_response.status_code == 200, status_response.text
+    status_data = status_response.json()["data"]
+    assert status_data["status"] == "succeeded"
+    assert status_data["error_code"] in ("", None)
+
+    dispose_engine(database_url)
+
+
+def test_admin_audio_workbench_rejects_minimax_route_without_execution_connection(
+    tmp_path: Path,
+) -> None:
+    database_url, client = _build_client(tmp_path)
+    CatalogService(
+        database_url,
+        providers={"minimax": MiniMaxProviderAdapter(allow_sample_catalog=True)},
+    ).refresh_catalog()
+    _seed_minimax_audio_model_allowlist(database_url)
+    seed_site_auth(
+        database_url,
+        site_id="site_audio_admin",
+        scopes=["runtime:execute", "runtime:read", "runtime:resolve"],
+    )
+
+    response = client.post(
+        "/internal/service/admin/audio-jobs",
+        headers=build_internal_headers(
+            idempotency_key="audio-workbench-minimax-not-executable"
+        ),
+        json={
+            "site_id": "site_audio_admin",
+            "intent": "article_narration",
+            "title": "Audio test",
+            "body": "这是一段文章正文，用于验证不可执行连接不会进入试听候选。",
+            "format": "mp3",
+            "preview_instance_id": "minimax-global-speech-28-turbo",
+        },
+    )
+
+    assert response.status_code == 400
+    payload = response.json()
+    assert payload["error_code"] == "audio_workbench.preview_route_unavailable"
+
+    dispose_engine(database_url)
+
+
+def test_admin_audio_workbench_without_site_uses_active_preview_site(
+    tmp_path: Path,
+) -> None:
+    provider = MiniMaxProviderAdapter(
+        allow_sample_catalog=True,
+        allow_sample_execution=True,
+    )
+    database_url, client = _build_client(
+        tmp_path,
+        providers={"minimax": provider},
+        settings_overrides={
+            "minimax_provider_enabled": True,
+            "minimax_api_key": "minimax-test-secret",
+        },
+    )
+    _seed_minimax_audio_model_allowlist(database_url)
+    seed_site_auth(
+        database_url,
+        site_id="site_smoke",
+        scopes=["runtime:execute", "runtime:read", "runtime:resolve"],
+        site_status=SITE_STATUS_ARCHIVED,
+    )
+    seed_site_auth(
+        database_url,
+        site_id="site_audio_admin",
+        scopes=["runtime:execute", "runtime:read", "runtime:resolve"],
+    )
+
+    response = client.post(
+        "/internal/service/admin/audio-jobs",
+        headers=build_internal_headers(idempotency_key="audio-workbench-default-site"),
+        json={
+            "intent": "article_narration",
+            "title": "Audio test",
+            "body": "这是一段文章正文，用于验证管理员试听自动选择可用站点。",
+            "format": "mp3",
+            "preview_instance_id": "minimax-global-speech-28-turbo",
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    data = response.json()["data"]
+    assert data["site_id"] == "site_audio_admin"
+    assert data["status"] == "queued"
+
+    dispose_engine(database_url)
+
+
+def test_admin_audio_workbench_without_active_site_returns_friendly_error(
+    tmp_path: Path,
+) -> None:
+    provider = MiniMaxProviderAdapter(
+        allow_sample_catalog=True,
+        allow_sample_execution=True,
+    )
+    database_url, client = _build_client(
+        tmp_path,
+        providers={"minimax": provider},
+        settings_overrides={
+            "minimax_provider_enabled": True,
+            "minimax_api_key": "minimax-test-secret",
+        },
+    )
+    seed_site_auth(
+        database_url,
+        site_id="site_smoke",
+        scopes=["runtime:execute", "runtime:read", "runtime:resolve"],
+        site_status=SITE_STATUS_ARCHIVED,
+    )
+
+    response = client.post(
+        "/internal/service/admin/audio-jobs",
+        headers=build_internal_headers(idempotency_key="audio-workbench-no-active-site"),
+        json={
+            "intent": "article_narration",
+            "title": "Audio test",
+            "body": "这是一段文章正文，用于验证没有可用站点时的错误提示。",
+            "format": "mp3",
+            "preview_instance_id": "minimax-global-speech-28-turbo",
+        },
+    )
+
+    assert response.status_code == 400
+    payload = response.json()
+    assert payload["error_code"] == "audio_workbench.preview_site_unavailable"
+    assert payload["data"]["site_status"] == "none_active"
+    assert payload["data"]["action"] == "connect_or_activate_site"
+
+    dispose_engine(database_url)
+
+
+def test_admin_audio_workbench_rejects_unknown_preview_instance(
+    tmp_path: Path,
+) -> None:
+    provider = MiniMaxProviderAdapter(
+        allow_sample_catalog=True,
+        allow_sample_execution=True,
+    )
+    database_url, client = _build_client(
+        tmp_path,
+        providers={"minimax": provider},
+        settings_overrides={
+            "minimax_provider_enabled": True,
+            "minimax_api_key": "minimax-test-secret",
+        },
+    )
+    _seed_minimax_audio_model_allowlist(database_url)
+    seed_site_auth(
+        database_url,
+        site_id="site_audio_admin",
+        scopes=["runtime:execute", "runtime:read", "runtime:resolve"],
+    )
+
+    response = client.post(
+        "/internal/service/admin/audio-jobs",
+        headers=build_internal_headers(idempotency_key="audio-workbench-preview-invalid"),
+        json={
+            "site_id": "site_audio_admin",
+            "intent": "article_narration",
+            "title": "Audio test",
+            "body": "这是一段文章正文，用于生成旁白音频。",
+            "format": "mp3",
+            "preview_instance_id": "not-an-audio-candidate",
+        },
+    )
+
+    assert response.status_code == 400
+    payload = response.json()
+    assert payload["error_code"] == "audio_workbench.preview_instance_invalid"
+
+    dispose_engine(database_url)
+
+
+def test_admin_audio_workbench_recent_runs_are_lightweight_runtime_evidence(
+    tmp_path: Path,
+) -> None:
+    provider = MiniMaxProviderAdapter(
+        allow_sample_catalog=True,
+        allow_sample_execution=True,
+    )
+    database_url, client = _build_client(
+        tmp_path,
+        providers={"minimax": provider},
+        settings_overrides={
+            "minimax_provider_enabled": True,
+            "minimax_api_key": "minimax-test-secret",
+        },
+    )
+    _seed_minimax_audio_model_allowlist(database_url)
+    seed_site_auth(
+        database_url,
+        site_id="site_audio_admin",
+        scopes=["runtime:execute", "runtime:read", "runtime:resolve"],
+    )
+
+    create_response = client.post(
+        "/internal/service/admin/audio-jobs",
+        headers=build_internal_headers(idempotency_key="audio-workbench-recent-create"),
+        json={
+            "site_id": "site_audio_admin",
+            "intent": "article_narration",
+            "title": "Recent audio test",
+            "body": "这是一段文章正文，用于验证最近音频任务摘要。",
+            "format": "mp3",
+        },
+    )
+
+    assert create_response.status_code == 200, create_response.text
+    run_id = create_response.json()["data"]["run_id"]
+
+    recent_response = client.get(
+        "/internal/service/admin/audio-jobs/recent?limit=5",
+        headers=build_internal_headers(),
+    )
+
+    assert recent_response.status_code == 200, recent_response.text
+    data = recent_response.json()["data"]
+    assert data["contract_version"] == "admin_audio_workbench_recent_runs.v1"
+    assert data["boundary"]["direct_wordpress_write"] is False
+    assert data["items"][0]["run_id"] == run_id
+    assert data["items"][0]["intent"] in {"article_narration", "audio_generation"}
+    assert data["items"][0]["audio_ready"] is True
+    assert data["items"][0]["mime_type"] == "audio/mpeg"
+    serialized = json.dumps(data, ensure_ascii=False)
+    assert "audios" not in serialized
+    assert "url" not in serialized
+    assert "transcript" not in serialized
+    assert "这是一段文章正文" not in serialized
+
+    dispose_engine(database_url)
+
+
+def test_admin_audio_workbench_builds_summary_script_before_audio_job(
+    tmp_path: Path,
+) -> None:
+    audio_provider = MiniMaxProviderAdapter(
+        allow_sample_catalog=True,
+        allow_sample_execution=True,
+    )
+    script_provider = FixedAudioSummaryScriptProvider()
+    database_url, client = _build_client(
+        tmp_path,
+        providers={"minimax": audio_provider, "openai": script_provider},
+        settings_overrides={
+            "minimax_provider_enabled": True,
+            "minimax_api_key": "minimax-test-secret",
+        },
+    )
+    _seed_minimax_audio_model_allowlist(database_url)
+    _seed_openai_text_model_allowlist(database_url, model_ids=["gpt-hosted-free-next"])
+    seed_site_auth(
+        database_url,
+        site_id="site_audio_admin",
+        scopes=["runtime:execute", "runtime:read", "runtime:resolve"],
+    )
+    _bind_audio_summary_script_profile(
+        database_url,
+        revision="audio-summary-script-test",
+    )
+
+    response = client.post(
+        "/internal/service/admin/audio-jobs",
+        headers=build_internal_headers(idempotency_key="audio-workbench-summary"),
+        json={
+            "site_id": "site_audio_admin",
+            "intent": "article_audio_summary",
+            "title": "长文主题",
+            "body": "第一段介绍背景。第二段说明关键问题。第三段给出解决方案。第四段补充风险。",
+            "format": "mp3",
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    data = response.json()["data"]
+    assert data["script"]["source"] == "audio_summary_script"
+    assert data["script"]["intent"] == "audio_summary_script"
+    assert data["script"]["generation"]["mode"] == "hosted_ai_content_support"
+    assert data["script"]["generation"]["ability_name"] == "npcink-toolbox/ai-content-support"
+    assert data["script"]["generation"]["contract_version"] == "hosted_ai_content_support.v1"
+    assert data["script"]["generation"]["profile_id"] == (
+        WP_AI_CONNECTOR_SHORT_TEXT_PROFILE_ID
+    )
+    assert data["script"]["output_json"]["opening"] == "这是一段适合收听的长文摘要。"
+    assert "适合收听的长文摘要" in data["script"]["text"]
+    assert data["script"]["characters"] <= 4800
+    assert len(script_provider.requests) == 1
+    assert script_provider.requests[0].input_payload["intent"] == "audio_summary_script"
+
+    status_response = client.get(
+        f"/internal/service/admin/audio-jobs/{data['run_id']}",
+        headers=build_internal_headers(),
+    )
+
+    assert status_response.status_code == 200, status_response.text
+    status_data = status_response.json()["data"]
+    assert status_data["status"] == "succeeded"
+    assert status_data["result"]["audios"][0]["duration_seconds"] > 0
+
+    dispose_engine(database_url)
+
+
+def test_admin_audio_workbench_retries_transient_summary_script_failure(
+    tmp_path: Path,
+) -> None:
+    audio_provider = MiniMaxProviderAdapter(
+        allow_sample_catalog=True,
+        allow_sample_execution=True,
+    )
+    script_provider = FlakyAudioSummaryScriptProvider()
+    database_url, client = _build_client(
+        tmp_path,
+        providers={"minimax": audio_provider, "openai": script_provider},
+        settings_overrides={
+            "minimax_provider_enabled": True,
+            "minimax_api_key": "minimax-test-secret",
+        },
+    )
+    _seed_minimax_audio_model_allowlist(database_url)
+    _seed_openai_text_model_allowlist(database_url, model_ids=["gpt-hosted-free-next"])
+    seed_site_auth(
+        database_url,
+        site_id="site_audio_admin",
+        scopes=["runtime:execute", "runtime:read", "runtime:resolve"],
+    )
+    _bind_audio_summary_script_profile(
+        database_url,
+        revision="audio-summary-script-retry-test",
+    )
+
+    response = client.post(
+        "/internal/service/admin/audio-jobs",
+        headers=build_internal_headers(idempotency_key="audio-workbench-summary-retry"),
+        json={
+            "site_id": "site_audio_admin",
+            "intent": "article_audio_summary",
+            "title": "重试主题",
+            "body": "第一段介绍背景。第二段说明关键问题。",
+            "format": "mp3",
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    data = response.json()["data"]
+    assert len(script_provider.requests) == 2
+    assert script_provider.requests[0].input_payload["workbench_retry"]["attempt"] == 1
+    assert script_provider.requests[1].input_payload["workbench_retry"]["attempt"] == 2
+    assert data["script"]["generation"]["attempts"] == 2
+    assert data["script"]["generation"]["retry_attempted"] is True
+    assert "重试后生成的长文音频摘要" in data["script"]["text"]
+
+    dispose_engine(database_url)
+
+
+def test_admin_audio_workbench_returns_friendly_empty_summary_script_error(
+    tmp_path: Path,
+) -> None:
+    audio_provider = MiniMaxProviderAdapter(
+        allow_sample_catalog=True,
+        allow_sample_execution=True,
+    )
+    script_provider = EmptyAudioSummaryScriptProvider()
+    database_url, client = _build_client(
+        tmp_path,
+        providers={"minimax": audio_provider, "openai": script_provider},
+        settings_overrides={
+            "minimax_provider_enabled": True,
+            "minimax_api_key": "minimax-test-secret",
+        },
+    )
+    _seed_minimax_audio_model_allowlist(database_url)
+    _seed_openai_text_model_allowlist(database_url, model_ids=["gpt-hosted-free-next"])
+    seed_site_auth(
+        database_url,
+        site_id="site_audio_admin",
+        scopes=["runtime:execute", "runtime:read", "runtime:resolve"],
+    )
+    _bind_audio_summary_script_profile(
+        database_url,
+        revision="audio-summary-script-empty-test",
+    )
+
+    response = client.post(
+        "/internal/service/admin/audio-jobs",
+        headers=build_internal_headers(idempotency_key="audio-workbench-empty-summary"),
+        json={
+            "site_id": "site_audio_admin",
+            "intent": "article_audio_summary",
+            "title": "空脚本主题",
+            "body": "第一段介绍背景。第二段说明关键问题。",
+            "format": "mp3",
+        },
+    )
+
+    assert response.status_code == 400, response.text
+    payload = response.json()
+    assert payload["error_code"] == "audio_workbench.summary_script_empty"
+    assert "returned an empty audio summary script" in payload["message"]
+    assert "audio summary script generation returned no usable script" not in payload["message"]
+    assert payload["data"]["retryable"] is True
+    assert payload["data"]["retry_attempted"] is True
+    assert payload["data"]["action"] == "retry_or_use_narration"
+    assert payload["data"]["stage"] == "audio_summary_script"
+    assert len(script_provider.requests) == 2
+
+    dispose_engine(database_url)
+
+
+def test_admin_audio_workbench_uses_wordpress_audio_routing_profile(
+    tmp_path: Path,
+) -> None:
+    provider = MiniMaxProviderAdapter(
+        allow_sample_catalog=True,
+        allow_sample_execution=True,
+    )
+    database_url, client = _build_client(
+        tmp_path,
+        providers={"minimax": provider},
+        settings_overrides={
+            "minimax_provider_enabled": True,
+            "minimax_api_key": "minimax-test-secret",
+        },
+    )
+    _seed_minimax_audio_model_allowlist(database_url)
+    seed_site_auth(
+        database_url,
+        site_id="site_audio_admin",
+        scopes=["runtime:execute", "runtime:read", "runtime:resolve"],
+    )
+
+    response = client.post(
+        "/internal/service/admin/audio-jobs",
+        headers=build_internal_headers(idempotency_key="audio-workbench-quality-profile"),
+        json={
+            "site_id": "site_audio_admin",
+            "intent": "article_narration",
+            "title": "Audio quality test",
+            "body": "这是一段文章正文，用于验证音频模型路由。",
+            "format": "mp3",
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    data = response.json()["data"]
+    assert data["profile_id"] == WP_AI_CONNECTOR_AUDIO_GENERATION_PROFILE_ID
+    assert data["script"]["generation"]["audio_profile_id"] == (
+        WP_AI_CONNECTOR_AUDIO_GENERATION_PROFILE_ID
+    )
+
+    dispose_engine(database_url)
 
 
 def test_image_source_readonly_metrics_summarizes_fast_first_runtime(
@@ -457,7 +3168,7 @@ def test_image_source_readonly_metrics_summarizes_fast_first_runtime(
     assert "sensitive operator query should not appear" not in payload_text
 
 
-def test_hosted_model_governance_diagnostics_summarizes_runtime_families(
+def test_runtime_telemetry_diagnostics_summarizes_runtime_families(
     tmp_path: Path,
 ) -> None:
     database_url, client = _build_client(tmp_path)
@@ -634,41 +3345,33 @@ def test_hosted_model_governance_diagnostics_summarizes_runtime_families(
             )
         session.commit()
 
-    unauthenticated = client.get("/internal/service/runtime/diagnostics/hosted-model-governance")
+    unauthenticated = client.get("/internal/service/runtime/diagnostics/runtime-telemetry")
     assert unauthenticated.status_code == 401
 
     response = client.get(
-        "/internal/service/runtime/diagnostics/hosted-model-governance"
+        "/internal/service/runtime/diagnostics/runtime-telemetry"
         f"?site_id={site_id}&recent_minutes=60&limit=10",
         headers=build_internal_headers(),
     )
     admin_alias_response = client.get(
+        "/internal/service/admin/runtime-telemetry"
+        f"?site_id={site_id}&recent_minutes=10080&limit=10",
+        headers=build_internal_headers(),
+    )
+    assert response.status_code == 200
+    assert admin_alias_response.status_code == 200
+    legacy_response = client.get(
+        "/internal/service/runtime/diagnostics/hosted-model-governance"
+        f"?site_id={site_id}&recent_minutes=60&limit=10",
+        headers=build_internal_headers(),
+    )
+    legacy_admin_alias_response = client.get(
         "/internal/service/admin/hosted-model-governance"
         f"?site_id={site_id}&recent_minutes=10080&limit=10",
         headers=build_internal_headers(),
     )
-    empty_cadence_response = client.get(
-        "/internal/service/admin/hosted-model-governance-cadence?recent_minutes=60",
-        headers=build_internal_headers(),
-    )
-    UsageRollupService(database_url).store_hosted_model_governance_batch(
-        window_minutes=60,
-        limit=10,
-    )
-    cadence_response = client.get(
-        "/internal/service/admin/hosted-model-governance-cadence?recent_minutes=60",
-        headers=build_internal_headers(),
-    )
-
-    assert response.status_code == 200
-    assert admin_alias_response.status_code == 200
-    assert empty_cadence_response.status_code == 200
-    assert empty_cadence_response.json()["data"]["available"] is False
-    assert cadence_response.status_code == 200
-    cadence_payload = cadence_response.json()["data"]
-    assert cadence_payload["available"] is True
-    assert cadence_payload["source"] == "cloud_hosted_model_governance"
-    assert cadence_payload["delivery"]["owner"] == "internal_admin_readonly"
+    assert legacy_response.status_code == 404
+    assert legacy_admin_alias_response.status_code == 404
     data = response.json()["data"]
     assert admin_alias_response.json()["data"]["totals"]["runs"] == 3
     assert admin_alias_response.json()["data"]["filters"]["recent_minutes"] == 10080
@@ -992,10 +3695,22 @@ def test_internal_site_diagnostic_advisor_uses_monitoring_actions(
     }
     assert payload["diagnostic_items"]
     first_item = payload["diagnostic_items"][0]
+    assert first_item["diagnostic_key"]
     assert first_item["source"] == "plugins"
+    assert first_item["workflow_status"] == "new"
+    assert first_item["status_detail"]["workflow_status"] == "new"
+    assert first_item["status_detail"]["status_source"] in {
+        "monitoring_signal",
+        "operator_state",
+    }
+    assert first_item["evidence_window"]["hours"] == 24
+    assert first_item["last_updated_at"]
     assert first_item["operator_review_required"] is True
     assert first_item["direct_wordpress_write"] is False
     assert first_item["recommended_action_id"] == "inspect_plugin_observability_attention"
+    assert payload["diagnostic_workflow"]["new"] >= 1
+    assert payload["diagnostic_workflow"]["needs_attention"] >= 1
+    assert payload["evidence_window"]["hours"] == 24
     assert any(
         action["action"] == "inspect_plugin_observability_attention"
         and action["requires_operator"] is True
@@ -1004,6 +3719,32 @@ def test_internal_site_diagnostic_advisor_uses_monitoring_actions(
     serialized = json.dumps(payload)
     assert "must stay out of advisor response" not in serialized
     assert "payload_json" not in serialized
+
+    attention_key = first_item["diagnostic_key"].replace("plugin_attention:", "", 1)
+    acknowledge_response = client.post(
+        "/internal/service/admin/plugin-observability/attention-state",
+        headers=build_internal_headers(idempotency_key="diag-attention-ack-001"),
+        json={
+            "attention_key": attention_key,
+            "attention_code": first_item["code"],
+            "action": "acknowledge",
+            "site_id": "site_diag",
+            "note": "Operator is reviewing the plugin error.",
+        },
+    )
+    follow_up_response = client.get(
+        "/internal/service/advisor/site-diagnostics?site_id=site_diag&window_hours=24",
+        headers=build_internal_headers(),
+    )
+
+    assert acknowledge_response.status_code == 200, acknowledge_response.text
+    assert follow_up_response.status_code == 200, follow_up_response.text
+    follow_up_item = follow_up_response.json()["data"]["diagnostic_items"][0]
+    assert follow_up_item["workflow_status"] == "acknowledged"
+    assert follow_up_item["status_detail"]["status_source"] == "operator_state"
+    assert follow_up_item["status_detail"]["operator_note"] == (
+        "Operator is reviewing the plugin error."
+    )
 
     dispose_engine(database_url)
 
@@ -1161,8 +3902,8 @@ def test_service_routes_account_default_free_binding_is_explicit(tmp_path: Path)
     assert "current_subscription" not in generic_response.json()["data"]
     assert onboarding_response.status_code == 200
     onboarding_payload = onboarding_response.json()["data"]
-    assert onboarding_payload["current_subscription"]["plan_id"] == "plan_free"
-    assert onboarding_payload["current_subscription"]["plan_version_id"] == "plan_free_v1"
+    assert onboarding_payload["current_subscription"]["plan_id"] == "free"
+    assert onboarding_payload["current_subscription"]["plan_version_id"] == "free_v1"
     assert onboarding_payload["current_subscription"]["package_alias"] == "Free"
 
     with get_session(database_url) as session:
@@ -1183,10 +3924,10 @@ def test_service_routes_account_default_free_binding_is_explicit(tmp_path: Path)
 
     assert generic_subscription is None
     assert free_subscription is not None
-    assert free_subscription.plan_id == "plan_free"
-    assert free_subscription.plan_version_id == "plan_free_v1"
+    assert free_subscription.plan_id == "free"
+    assert free_subscription.plan_version_id == "free_v1"
     assert free_snapshot is not None
-    assert free_snapshot.plan_version_id == "plan_free_v1"
+    assert free_snapshot.plan_version_id == "free_v1"
 
     dispose_engine(database_url)
 
@@ -1247,6 +3988,7 @@ def test_service_routes_bind_subscription_and_rebuild_billing_snapshot(
     tmp_path: Path,
 ) -> None:
     database_url, client = _build_client(tmp_path)
+    _seed_openai_text_model_allowlist(database_url)
 
     client.post(
         "/internal/service/accounts",
@@ -1396,6 +4138,13 @@ def test_service_routes_bind_subscription_and_rebuild_billing_snapshot(
     )
     assert rebuild_subscription_response.status_code == 200
     rebuild_payload = rebuild_subscription_response.json()["data"]
+    assert rebuild_payload["receipt"]["event_kind"] == "subscription.billing_snapshot.rebuild"
+    assert rebuild_payload["receipt"]["scope_kind"] == "subscription"
+    assert rebuild_payload["receipt"]["scope_id"] == "sub_pro_topup"
+    assert (
+        rebuild_payload["receipt"]["audit_filters"]["event_kind"]
+        == "subscription.billing_snapshot.rebuild"
+    )
     assert rebuild_payload["billing_snapshot_refresh"]["status"] == "refreshed"
     assert rebuild_payload["billing_snapshot_refresh"]["site_count"] == 1
     assert rebuild_payload["billing_snapshot_status"]["status"] == "fresh"
@@ -1521,8 +4270,49 @@ def test_service_routes_bind_subscription_and_rebuild_billing_snapshot(
     dispose_engine(database_url)
 
 
+def test_service_routes_plan_version_label_conflict_is_readable(tmp_path: Path) -> None:
+    database_url, client = _build_client(tmp_path)
+
+    plan_response = client.post(
+        "/internal/service/plans",
+        json={"plan_id": "free_conflict", "name": "Free Conflict"},
+        headers=build_internal_headers(idempotency_key="svc-plan-conflict-001"),
+    )
+    first_version_response = client.post(
+        "/internal/service/plans/free_conflict/versions",
+        json={
+            "plan_version_id": "free_conflict_v1",
+            "version_label": "v1",
+            "budgets": {"max_runs_per_period": 10},
+            "concurrency": {"max_active_runs": 1},
+        },
+        headers=build_internal_headers(idempotency_key="svc-plan-conflict-version-001"),
+    )
+    conflict_response = client.post(
+        "/internal/service/plans/free_conflict/versions",
+        json={
+            "plan_version_id": "free_conflict_v2",
+            "version_label": "v1",
+            "budgets": {"max_runs_per_period": 20},
+            "concurrency": {"max_active_runs": 2},
+        },
+        headers=build_internal_headers(idempotency_key="svc-plan-conflict-version-002"),
+    )
+
+    assert plan_response.status_code == 200
+    assert first_version_response.status_code == 200
+    assert conflict_response.status_code == 409
+    conflict_payload = conflict_response.json()
+    assert conflict_payload["error_code"] == "service.plan_version_label_conflict"
+    assert "already has version label 'v1'" in conflict_payload["message"]
+    assert "free_conflict_v1" in conflict_payload["message"]
+
+    dispose_engine(database_url)
+
+
 def test_service_routes_admin_read_facade(tmp_path: Path) -> None:
     database_url, client = _build_client(tmp_path)
+    _seed_openai_text_model_allowlist(database_url)
 
     client.post(
         "/internal/service/accounts",
@@ -1544,9 +4334,9 @@ def test_service_routes_admin_read_facade(tmp_path: Path) -> None:
         headers=build_internal_headers(idempotency_key="svc-admin-site-activate-001"),
     )
     client.post(
-        "/internal/service/sites/site_primary/site-admin-access",
+        "/internal/service/sites/site_primary/user-grants",
         json={"email": "admin@example.com"},
-        headers=build_internal_headers(idempotency_key="svc-admin-site-admin-access-001"),
+        headers=build_internal_headers(idempotency_key="svc-admin-user-grants-001"),
     )
     client.post(
         "/internal/service/sites/site_primary/keys",
@@ -1631,6 +4421,10 @@ def test_service_routes_admin_read_facade(tmp_path: Path) -> None:
         "/internal/service/admin/overview",
         headers=build_internal_headers(),
     )
+    coverage_work_queue_response = client.get(
+        "/internal/service/admin/coverage-work-queue",
+        headers=build_internal_headers(),
+    )
     accounts_response = client.get(
         "/internal/service/admin/accounts",
         headers=build_internal_headers(),
@@ -1685,7 +4479,7 @@ def test_service_routes_admin_read_facade(tmp_path: Path) -> None:
     assert overview_response.status_code == 200
     overview = overview_response.json()["data"]
     assert overview["counts"]["accounts_total"] == 1
-    assert overview["counts"]["site_admins_active"] == 1
+    assert overview["counts"]["principals_active"] == 1
     assert overview["counts"]["sites_active"] == 1
     assert overview["counts"]["site_keys_active"] == 1
     assert overview["recent_usage"]["event_count"] >= 1
@@ -1697,17 +4491,18 @@ def test_service_routes_admin_read_facade(tmp_path: Path) -> None:
     assert platform_credit["trend"]["status"] in {"new_activity", "flat", "up", "down"}
     assert isinstance(platform_credit["watch_items"], list)
     assert "runtime_diagnostics" in overview
-    assert overview["hosted_model_governance"]["filters"]["recent_minutes"] == 1440
-    assert overview["hosted_model_governance"]["alert_summary"]["status"] in {
+    assert overview["runtime_telemetry"]["filters"]["recent_minutes"] == 1440
+    assert overview["runtime_telemetry"]["alert_summary"]["status"] in {
         "ok",
         "warning",
         "error",
         "inactive",
     }
     assert (
-        overview["hosted_model_governance"]["alert_summary"]["boundary"]["direct_wordpress_write"]
+        overview["runtime_telemetry"]["alert_summary"]["boundary"]["direct_wordpress_write"]
         is False
     )
+    assert "hosted_model_governance" not in overview
     assert overview["runtime_operator_explanations"]
     assert len(overview["expiring_subscriptions"]["items"]) >= 1
     assert any(
@@ -1716,6 +4511,22 @@ def test_service_routes_admin_read_facade(tmp_path: Path) -> None:
     )
     assert overview["expiring_subscriptions"]["within_30_days_expires_before"]
     assert overview["attention_subscriptions"] == []
+
+    assert coverage_work_queue_response.status_code == 200
+    coverage_queue = coverage_work_queue_response.json()["data"]
+    assert coverage_queue["summary"]["total"] == 1
+    assert coverage_queue["summary"]["needs_action"] == 1
+    coverage_item = coverage_queue["items"][0]
+    assert coverage_item["account"]["account_id"] == "acct_admin"
+    assert coverage_item["primary_subscription"]["subscription_id"] == "sub_admin"
+    assert coverage_item["package"]["display_package_label"] == "Pro"
+    assert coverage_item["severity"] == "warning"
+    assert coverage_item["reason_code"] == "subscription_expiring_soon"
+    assert coverage_item["recommended_action"] == "review_renewal"
+    assert coverage_item["action_href"] == "/admin/subscriptions/sub_admin"
+    assert coverage_item["evidence"]["site_count"] == 1
+    assert coverage_item["evidence"]["active_key_site_count"] == 1
+    assert coverage_item["evidence"]["billing_snapshot_status"]["status"] == "fresh"
 
     assert accounts_response.status_code == 200
     accounts = accounts_response.json()["data"]["items"]
@@ -1837,6 +4648,9 @@ def test_service_routes_admin_read_facade(tmp_path: Path) -> None:
     assert tier_templates[0]["site_limit"] == 1
     assert tier_templates[1]["site_limit"] == 5
     assert tier_templates[2]["site_limit"] == 25
+    assert tier_templates[0]["max_vector_documents"] == 100
+    assert tier_templates[1]["max_vector_documents"] == 2000
+    assert tier_templates[2]["max_vector_documents"] == 10000
     assert tier_templates[2]["concurrency_template"]["max_active_runs"] == 10
     assert tier_templates[0]["canonical_shell"]["entitlements"]["execution_tiers"] == ["cloud"]
     assert tier_templates[1]["canonical_shell"]["budgets"]["max_ai_credits_per_period"] == 10000
@@ -1846,14 +4660,14 @@ def test_service_routes_admin_read_facade(tmp_path: Path) -> None:
         tier_templates[1]["canonical_shell"]["metadata"][
             "nightly_inspection_runs_per_period"
         ]
-        == 30
+        == 0
     )
     assert tier_templates[2]["canonical_shell"]["metadata"]["max_batch_items"] == 100
     assert (
         tier_templates[2]["canonical_shell"]["metadata"][
             "nightly_inspection_runs_per_period"
         ]
-        == 150
+        == 0
     )
     admin_plan_summary = next(item for item in plans if item["plan"]["plan_id"] == "plan_admin")
     assert admin_plan_summary["tier_summary"]["tier_id"] == "pro"
@@ -1861,8 +4675,9 @@ def test_service_routes_admin_read_facade(tmp_path: Path) -> None:
     assert admin_plan_summary["tier_summary"]["package_alias"] == "Pro"
     assert admin_plan_summary["tier_summary"]["monthly_included_points"] == 10000
     assert admin_plan_summary["tier_summary"]["site_limit"] == 5
+    assert admin_plan_summary["tier_summary"]["max_vector_documents"] == 2000
     assert admin_plan_summary["tier_summary"]["max_batch_items"] == 25
-    assert admin_plan_summary["tier_summary"]["nightly_inspection_runs_per_period"] == 30
+    assert admin_plan_summary["tier_summary"]["nightly_inspection_runs_per_period"] == 0
     assert admin_plan_summary["tier_summary"]["nightly_inspection_retention_days"] == 14
     assert admin_plan_summary["tier_summary"]["automation_enabled"] is True
     assert admin_plan_summary["tier_summary"]["api_enabled"] is True
@@ -1877,8 +4692,9 @@ def test_service_routes_admin_read_facade(tmp_path: Path) -> None:
     assert plan_detail["tier_summary"]["package_alias"] == "Pro"
     assert plan_detail["tier_summary"]["monthly_included_points"] == 10000
     assert plan_detail["tier_summary"]["site_limit"] == 5
+    assert plan_detail["tier_summary"]["max_vector_documents"] == 2000
     assert plan_detail["tier_summary"]["max_batch_items"] == 25
-    assert plan_detail["tier_summary"]["nightly_inspection_runs_per_period"] == 30
+    assert plan_detail["tier_summary"]["nightly_inspection_runs_per_period"] == 0
     assert plan_detail["tier_summary"]["nightly_inspection_retention_days"] == 14
     assert plan_detail["tier_summary"]["automation_enabled"] is True
     assert plan_detail["tier_summary"]["api_enabled"] is True
@@ -2041,6 +4857,7 @@ def test_service_routes_plan_tier_fallback_and_package_fit_cues(tmp_path: Path) 
     assert plans["free_ops"]["tier_summary"]["package_alias"] == "Free"
     assert plans["free_ops"]["tier_summary"]["monthly_included_points"] == 300
     assert plans["free_ops"]["tier_summary"]["site_limit"] == 1
+    assert plans["free_ops"]["tier_summary"]["max_vector_documents"] == 100
     assert plans["free_ops"]["tier_summary"]["max_batch_items"] == 5
     assert plans["free_ops"]["tier_summary"]["automation_enabled"] is True
     assert plans["free_ops"]["tier_summary"]["api_enabled"] is True
@@ -2048,24 +4865,27 @@ def test_service_routes_plan_tier_fallback_and_package_fit_cues(tmp_path: Path) 
     assert plans["plan_version_tier"]["tier_summary"]["tier_id"] == "agency"
     assert plans["plan_version_tier"]["tier_summary"]["package_alias"] == "Agency"
     assert plans["plan_version_tier"]["tier_summary"]["monthly_included_points"] == 150000
+    assert plans["plan_version_tier"]["tier_summary"]["max_vector_documents"] == 10000
     assert plans["plan_version_tier"]["tier_summary"]["max_batch_items"] == 100
     assert (
         plans["plan_version_tier"]["tier_summary"][
             "nightly_inspection_runs_per_period"
         ]
-        == 150
+        == 0
     )
     assert plans["plan_version_tier"]["tier_summary"]["openclaw_enabled"] is True
     assert plans["agency_ops"]["tier_summary"]["tier_id"] == "agency"
     assert plans["general_ops"]["tier_summary"]["tier_id"] == "pro"
+    assert plans["general_ops"]["tier_summary"]["max_vector_documents"] == 2000
     assert plans["general_ops"]["tier_summary"]["max_batch_items"] == 25
-    assert plans["general_ops"]["tier_summary"]["nightly_inspection_runs_per_period"] == 30
+    assert plans["general_ops"]["tier_summary"]["nightly_inspection_runs_per_period"] == 0
 
     assert free_detail_response.status_code == 200
     free_detail = free_detail_response.json()["data"]
     assert free_detail["tier_summary"]["tier_id"] == "free"
     assert free_detail["tier_summary"]["package_alias"] == "Free"
     assert free_detail["tier_summary"]["monthly_included_points"] == 300
+    assert free_detail["tier_summary"]["max_vector_documents"] == 100
     assert free_detail["tier_summary"]["budgets_template"]["max_ai_credits_per_period"] == 300
     free_cue_codes = {item["code"] for item in free_detail["package_fit_cues"]}
     assert "package_fit.cost_ceiling_missing" in free_cue_codes
@@ -2092,13 +4912,13 @@ def test_service_routes_plan_tier_fallback_and_package_fit_cues(tmp_path: Path) 
     dispose_engine(database_url)
 
 
-def test_service_routes_removed_platform_admin_identity_routes(tmp_path: Path) -> None:
+def test_service_routes_removed_platform_admin_grant_routes(tmp_path: Path) -> None:
     database_url, client = _build_client(tmp_path)
 
     response = client.post(
         "/internal/service/platform-admin-identities",
         json={
-            "admin_ref": "platform:founder",
+            "principal_id": "platform:founder",
             "role": "platform_admin",
             "email": "founder@example.com",
             "provider": "manual",
@@ -2242,7 +5062,73 @@ def test_admin_account_quota_summary_reports_ai_credits_and_resource_limits(
     assert resource_limits["bound_sites"]["used"] == 1.0
     assert resource_limits["active_api_key_sites"]["used"] == 1.0
     assert resource_limits["vector_documents"]["unit"] == "document"
+    assert resource_limits["vector_documents"]["limit"] == 100.0
     assert data["coverage"]["active_key_site_count"] == 1
+
+
+def test_account_quota_summary_shares_ai_credits_across_sites(tmp_path: Path) -> None:
+    database_url, client = _build_client(tmp_path)
+    seed_site_auth(
+        database_url,
+        site_id="site_shared_primary",
+        scopes=["runtime:execute", "runtime:read", "stats:read"],
+        budgets={"max_ai_credits_per_period": 20},
+    )
+    seed_site_auth(
+        database_url,
+        site_id="site_shared_secondary",
+        scopes=["runtime:execute", "runtime:read", "stats:read"],
+    )
+    now = datetime.now(UTC)
+    with get_session(database_url) as session:
+        primary_subscription = session.scalar(
+            select(AccountSubscription)
+            .where(AccountSubscription.account_id == "acct_site_shared_primary")
+            .order_by(AccountSubscription.created_at.desc())
+        )
+        assert primary_subscription is not None
+        secondary_site = session.get(Site, "site_shared_secondary")
+        assert secondary_site is not None
+        secondary_site.account_id = "acct_site_shared_primary"
+        repository = CommercialRepository(session)
+        for site_id, delta in (
+            ("site_shared_primary", -3.0),
+            ("site_shared_secondary", -4.0),
+        ):
+            repository.record_credit_ledger_entry(
+                account_id="acct_site_shared_primary",
+                site_id=site_id,
+                subscription_id=primary_subscription.subscription_id,
+                plan_version_id=primary_subscription.plan_version_id,
+                run_id=f"run_{site_id}",
+                provider_call_id=None,
+                event_type="consume",
+                source_type="tokens_total",
+                source_id=f"{site_id}:tokens",
+                credit_delta=delta,
+                quantity=abs(delta),
+                unit="credit",
+                rate=1.0,
+                rate_unit=None,
+                rate_version="ai-credit-ledger-v2",
+                idempotency_key=f"{site_id}:credit-share",
+                metadata_json={"source": "account_shared_credit_test"},
+                created_at=now,
+            )
+        session.commit()
+
+    response = client.get(
+        "/internal/service/admin/accounts/acct_site_shared_primary/quota-summary",
+        headers=build_internal_headers(),
+    )
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["credit"]["used"] == 7.0
+    assert data["credit"]["limit"] == 20.0
+    assert data["credit"]["remaining"] == 13.0
+    assert data["credit"]["source"] == "ledger"
+    assert data["credit_ledger_summary"]["net_used_credits"] == 7.0
 
 
 def test_admin_account_credit_ledger_lists_current_period_entries(
@@ -2497,6 +5383,7 @@ def test_service_routes_inspect_commercial_policy_and_reconciliation(
     tmp_path: Path,
 ) -> None:
     database_url, client = _build_client(tmp_path)
+    _seed_openai_text_model_allowlist(database_url)
 
     client.post(
         "/internal/service/accounts",
@@ -2677,6 +5564,7 @@ def test_service_routes_inspect_commercial_policy_and_reconciliation(
 
 def test_service_routes_cleanup_retention_and_record_audit(tmp_path: Path) -> None:
     database_url, client = _build_client(tmp_path)
+    _seed_openai_text_model_allowlist(database_url)
     seed_site_auth(
         database_url,
         site_id="site_cleanup",
@@ -2751,7 +5639,6 @@ def test_service_routes_expose_ops_cadence_summary(tmp_path: Path) -> None:
             "router_diagnostics_interval_seconds": 60,
             "latency_probe_interval_seconds": 60,
             "alert_provider_degradation_interval_seconds": 60,
-            "hosted_model_governance_interval_seconds": 60,
             "provider_health_scan_interval_seconds": 60,
         },
     )
@@ -2782,9 +5669,9 @@ def test_service_routes_expose_ops_cadence_summary(tmp_path: Path) -> None:
 
     assert response.status_code == 200
     payload = response.json()["data"]
-    assert payload["totals"]["tasks_total"] == 9
+    assert payload["totals"]["tasks_total"] == 8
     assert any(item["task_id"] == "retention_cleanup" for item in payload["items"])
-    assert any(item["task_id"] == "hosted_model_governance" for item in payload["items"])
+    assert all(item["task_id"] != "hosted_model_governance" for item in payload["items"])
     retention_item = next(
         item for item in payload["items"] if item["task_id"] == "retention_cleanup"
     )
@@ -2842,7 +5729,7 @@ def test_service_routes_expose_observability_summary(tmp_path: Path) -> None:
     )
     assert payload["workers"]["totals"]["workers_total"] == 3
     assert any(item["worker_id"] == "runtime_queue" for item in payload["workers"]["items"])
-    assert payload["cadence"]["totals"]["tasks_total"] == 9
+    assert payload["cadence"]["totals"]["tasks_total"] == 8
     assert "status_counts" in payload["providers"]
     assert "summary" in payload["runtime"]
     assert "backlog" in payload["runtime"]
@@ -2931,8 +5818,9 @@ def test_service_routes_runtime_diagnostics_summaries_and_abuse_guard(
             "internal_post_rate_limit_window_seconds": 600,
             "internal_post_max_requests_per_window": 10,
             "internal_post_max_requests_per_ip_window": 10,
-        },
-    )
+            },
+        )
+    _seed_openai_text_model_allowlist(database_url)
     seed_site_auth(
         database_url,
         site_id="site_diag",
@@ -3393,6 +6281,7 @@ def test_service_routes_runtime_callback_dispatch_recovery_is_operator_visible(
         return httpx.Response(202)
 
     database_url, client = _build_client(tmp_path)
+    _seed_openai_text_model_allowlist(database_url)
     seed_site_auth(
         database_url,
         site_id="site_recovery",
@@ -3507,6 +6396,7 @@ def test_service_routes_runtime_backlog_diagnostics_exposes_scope_and_stale_laye
     tmp_path: Path,
 ) -> None:
     database_url, client = _build_client(tmp_path)
+    _seed_openai_text_model_allowlist(database_url)
     seed_site_auth(
         database_url,
         site_id="site_backlog_a",

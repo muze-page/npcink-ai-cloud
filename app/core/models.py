@@ -6,6 +6,7 @@ from typing import Any
 from sqlalchemy import (
     JSON,
     Boolean,
+    CheckConstraint,
     DateTime,
     Float,
     ForeignKey,
@@ -25,6 +26,7 @@ class Base(DeclarativeBase):
 
 SITE_STATUS_PROVISIONING = "provisioning"
 SITE_STATUS_ACTIVE = "active"
+SITE_STATUS_INACTIVE = "inactive"
 SITE_STATUS_SUSPENDED = "suspended"
 SITE_STATUS_ARCHIVED = "archived"
 
@@ -39,11 +41,18 @@ PORTAL_LOGIN_CODE_STATUS_PENDING = "pending"
 PORTAL_LOGIN_CODE_STATUS_CONSUMED = "consumed"
 PORTAL_LOGIN_CODE_STATUS_EXPIRED = "expired"
 PORTAL_LOGIN_CODE_STATUS_LOCKED = "locked"
+IDENTITY_PROVIDER_BINDING_STATUS_ACTIVE = "active"
+IDENTITY_PROVIDER_BINDING_STATUS_REVOKED = "revoked"
+PORTAL_OAUTH_STATE_STATUS_PENDING = "pending"
+PORTAL_OAUTH_STATE_STATUS_CONSUMED = "consumed"
+PORTAL_OAUTH_STATE_STATUS_EXPIRED = "expired"
 
-SITE_ADMIN_STATUS_ACTIVE = "active"
-SITE_ADMIN_STATUS_DISABLED = "disabled"
-SITE_ADMIN_SITE_GRANT_STATUS_ACTIVE = "active"
-SITE_ADMIN_SITE_GRANT_STATUS_REVOKED = "revoked"
+PRINCIPAL_STATUS_ACTIVE = "active"
+PRINCIPAL_STATUS_DISABLED = "disabled"
+ACCOUNT_USER_MEMBERSHIP_STATUS_ACTIVE = "active"
+ACCOUNT_USER_MEMBERSHIP_STATUS_REVOKED = "revoked"
+SITE_USER_GRANT_STATUS_ACTIVE = "active"
+SITE_USER_GRANT_STATUS_REVOKED = "revoked"
 
 PLATFORM_ADMIN_ROLE_PLATFORM_ADMIN = "platform_admin"
 
@@ -118,7 +127,7 @@ class PortalLoginCode(Base):
 
     code_id: Mapped[str] = mapped_column(String(191), primary_key=True)
     email: Mapped[str] = mapped_column(String(191), index=True)
-    site_admin_ref: Mapped[str] = mapped_column(String(191), index=True)
+    principal_id: Mapped[str] = mapped_column(String(191), index=True)
     code_hash: Mapped[str] = mapped_column(String(191))
     status: Mapped[str] = mapped_column(
         String(32),
@@ -140,12 +149,14 @@ class PortalLoginCode(Base):
     )
 
 
-class PlatformAdminIdentity(Base):
-    __tablename__ = "platform_admin_identities"
-    __table_args__ = (UniqueConstraint("admin_ref", name="uq_platform_admin_identities_admin_ref"),)
+class PlatformAdminGrant(Base):
+    __tablename__ = "platform_admin_grants"
+    __table_args__ = (
+        UniqueConstraint("principal_id", name="uq_platform_admin_grants_principal_id"),
+    )
 
-    admin_id: Mapped[str] = mapped_column(String(191), primary_key=True)
-    admin_ref: Mapped[str] = mapped_column(String(191), index=True)
+    grant_id: Mapped[str] = mapped_column(String(191), primary_key=True)
+    principal_id: Mapped[str] = mapped_column(ForeignKey("principals.principal_id"), index=True)
     provider: Mapped[str] = mapped_column(String(64), default="manual", index=True)
     external_subject: Mapped[str | None] = mapped_column(String(191), index=True)
     email: Mapped[str | None] = mapped_column(String(191), index=True)
@@ -252,19 +263,123 @@ class Site(Base):
     )
 
 
-class SiteAdminIdentity(Base):
-    __tablename__ = "site_admin_identities"
+class Principal(Base):
+    __tablename__ = "principals"
     __table_args__ = (
-        UniqueConstraint("site_admin_ref", name="uq_site_admin_identities_ref"),
-        UniqueConstraint("email", name="uq_site_admin_identities_email"),
+        UniqueConstraint("email", name="uq_principals_email"),
     )
 
-    site_admin_id: Mapped[str] = mapped_column(String(191), primary_key=True)
-    site_admin_ref: Mapped[str] = mapped_column(String(191), index=True)
-    email: Mapped[str] = mapped_column(String(191), index=True)
+    principal_id: Mapped[str] = mapped_column(String(191), primary_key=True)
+    email: Mapped[str | None] = mapped_column(String(191), index=True)
     status: Mapped[str] = mapped_column(
         String(32),
-        default=SITE_ADMIN_STATUS_ACTIVE,
+        default=PRINCIPAL_STATUS_ACTIVE,
+        index=True,
+    )
+    session_version: Mapped[int] = mapped_column(Integer, default=1)
+    metadata_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+
+class SiteUserGrant(Base):
+    __tablename__ = "site_user_grants"
+    __table_args__ = (
+        UniqueConstraint(
+            "principal_id",
+            "site_id",
+            name="uq_site_user_grants_principal_site",
+        ),
+    )
+
+    grant_id: Mapped[str] = mapped_column(String(191), primary_key=True)
+    principal_id: Mapped[str] = mapped_column(
+        ForeignKey("principals.principal_id"),
+        index=True,
+    )
+    site_id: Mapped[str] = mapped_column(ForeignKey("sites.site_id"), index=True)
+    status: Mapped[str] = mapped_column(
+        String(32),
+        default=SITE_USER_GRANT_STATUS_ACTIVE,
+        index=True,
+    )
+    metadata_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+
+class AccountUserMembership(Base):
+    __tablename__ = "account_user_memberships"
+    __table_args__ = (
+        UniqueConstraint(
+            "principal_id",
+            "account_id",
+            name="uq_account_user_memberships_principal_account",
+        ),
+        CheckConstraint("role IN ('user')", name="ck_account_user_memberships_role"),
+    )
+
+    membership_id: Mapped[str] = mapped_column(String(191), primary_key=True)
+    principal_id: Mapped[str] = mapped_column(
+        ForeignKey("principals.principal_id"),
+        index=True,
+    )
+    account_id: Mapped[str] = mapped_column(ForeignKey("accounts.account_id"), index=True)
+    role: Mapped[str] = mapped_column(String(64), default="user", index=True)
+    status: Mapped[str] = mapped_column(
+        String(32),
+        default=ACCOUNT_USER_MEMBERSHIP_STATUS_ACTIVE,
+        index=True,
+    )
+    allowed_actions_json: Mapped[list[str]] = mapped_column(JSON, default=list)
+    metadata_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+
+class IdentityProviderBinding(Base):
+    __tablename__ = "identity_provider_bindings"
+    __table_args__ = (
+        UniqueConstraint(
+            "provider",
+            "external_subject_hash",
+            name="uq_identity_provider_bindings_provider_subject",
+        ),
+    )
+
+    binding_id: Mapped[str] = mapped_column(String(191), primary_key=True)
+    principal_id: Mapped[str] = mapped_column(
+        ForeignKey("principals.principal_id"),
+        index=True,
+    )
+    provider: Mapped[str] = mapped_column(String(64), index=True)
+    external_subject_hash: Mapped[str] = mapped_column(String(191), index=True)
+    unionid_hash: Mapped[str | None] = mapped_column(String(191), index=True)
+    status: Mapped[str] = mapped_column(
+        String(32),
+        default=IDENTITY_PROVIDER_BINDING_STATUS_ACTIVE,
         index=True,
     )
     metadata_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
@@ -280,27 +395,28 @@ class SiteAdminIdentity(Base):
     )
 
 
-class SiteAdminSiteGrant(Base):
-    __tablename__ = "site_admin_site_grants"
+class PortalOAuthState(Base):
+    __tablename__ = "portal_oauth_states"
     __table_args__ = (
         UniqueConstraint(
-            "site_admin_id",
-            "site_id",
-            name="uq_site_admin_site_grants_admin_site",
+            "provider",
+            "state_hash",
+            name="uq_portal_oauth_states_provider_state",
         ),
     )
 
-    grant_id: Mapped[str] = mapped_column(String(191), primary_key=True)
-    site_admin_id: Mapped[str] = mapped_column(
-        ForeignKey("site_admin_identities.site_admin_id"),
-        index=True,
-    )
-    site_id: Mapped[str] = mapped_column(ForeignKey("sites.site_id"), index=True)
+    state_id: Mapped[str] = mapped_column(String(191), primary_key=True)
+    provider: Mapped[str] = mapped_column(String(64), index=True)
+    state_hash: Mapped[str] = mapped_column(String(191), index=True)
     status: Mapped[str] = mapped_column(
         String(32),
-        default=SITE_ADMIN_SITE_GRANT_STATUS_ACTIVE,
+        default=PORTAL_OAUTH_STATE_STATUS_PENDING,
         index=True,
     )
+    return_to: Mapped[str | None] = mapped_column(String(255))
+    client_scope_id: Mapped[str | None] = mapped_column(String(191), index=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
     metadata_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -747,6 +863,98 @@ class CatalogInstance(Base):
     )
 
 
+class ModelReferenceSource(Base):
+    __tablename__ = "model_reference_sources"
+
+    source_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    display_name: Mapped[str] = mapped_column(String(128))
+    source_url: Mapped[str] = mapped_column(String(500), default="")
+    status: Mapped[str] = mapped_column(String(32), default="active", index=True)
+    last_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_error_code: Mapped[str | None] = mapped_column(String(64))
+    last_error_message: Mapped[str | None] = mapped_column(Text)
+    metadata_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+
+class ModelReferenceModel(Base):
+    __tablename__ = "model_reference_models"
+    __table_args__ = (
+        UniqueConstraint(
+            "source_id",
+            "provider_id",
+            "model_id",
+            name="uq_model_reference_models_source_provider_model",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    source_id: Mapped[str] = mapped_column(
+        ForeignKey("model_reference_sources.source_id"),
+        index=True,
+    )
+    provider_id: Mapped[str] = mapped_column(String(64), index=True)
+    model_id: Mapped[str] = mapped_column(String(191), index=True)
+    display_name: Mapped[str] = mapped_column(String(191), default="")
+    family: Mapped[str] = mapped_column(String(96), default="")
+    feature: Mapped[str] = mapped_column(String(32), default="text", index=True)
+    modalities_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    capability_flags_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    context_window: Mapped[int | None] = mapped_column(Integer)
+    output_limit: Mapped[int | None] = mapped_column(Integer)
+    price_input: Mapped[float | None] = mapped_column(Float)
+    price_output: Mapped[float | None] = mapped_column(Float)
+    price_cache_read: Mapped[float | None] = mapped_column(Float)
+    price_cache_write: Mapped[float | None] = mapped_column(Float)
+    price_unit: Mapped[str] = mapped_column(String(64), default="usd_per_1m_tokens")
+    release_date: Mapped[str] = mapped_column(String(32), default="")
+    source_updated_at: Mapped[str] = mapped_column(String(32), default="")
+    is_deprecated: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    raw_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    synced_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+
+class ModelReferenceOverride(Base):
+    __tablename__ = "model_reference_overrides"
+    __table_args__ = (
+        UniqueConstraint(
+            "provider_id",
+            "model_id",
+            name="uq_model_reference_overrides_provider_model",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    provider_id: Mapped[str] = mapped_column(String(64), index=True)
+    model_id: Mapped[str] = mapped_column(String(191), index=True)
+    feature_override: Mapped[str | None] = mapped_column(String(32))
+    status_override: Mapped[str | None] = mapped_column(String(32))
+    price_input_override: Mapped[float | None] = mapped_column(Float)
+    price_output_override: Mapped[float | None] = mapped_column(Float)
+    price_cache_read_override: Mapped[float | None] = mapped_column(Float)
+    price_cache_write_override: Mapped[float | None] = mapped_column(Float)
+    note: Mapped[str | None] = mapped_column(Text)
+    metadata_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+
 class RoutingProfile(Base):
     __tablename__ = "routing_profiles"
 
@@ -767,6 +975,62 @@ class RoutingBinding(Base):
     candidate_instance_ids: Mapped[list[str]] = mapped_column(JSON, default=list)
     selection_policy_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
     revision: Mapped[str] = mapped_column(String(64))
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+
+class ProviderConnection(Base):
+    __tablename__ = "provider_connections"
+
+    connection_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    provider_type: Mapped[str] = mapped_column(String(64), index=True)
+    display_name: Mapped[str] = mapped_column(String(191))
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    base_url: Mapped[str] = mapped_column(String(500), default="")
+    config_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    secret_ciphertext: Mapped[str | None] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(32), default="configured", index=True)
+    source_role: Mapped[str] = mapped_column(
+        String(32),
+        default="execution_source",
+        index=True,
+    )
+    last_tested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_sync_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_error_code: Mapped[str | None] = mapped_column(String(64))
+    last_error_message: Mapped[str | None] = mapped_column(Text)
+    metadata_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+
+class ServiceSetting(Base):
+    __tablename__ = "service_settings"
+
+    setting_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    setting_kind: Mapped[str] = mapped_column(String(64), index=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    config_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    secret_ciphertext_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    status: Mapped[str] = mapped_column(String(32), default="missing_config", index=True)
+    last_tested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_error_code: Mapped[str | None] = mapped_column(String(64))
+    last_error_message: Mapped[str | None] = mapped_column(Text)
+    metadata_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+    )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
@@ -1186,6 +1450,38 @@ class MediaDerivativeArtifact(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
+    )
+
+
+class AudioAsset(Base):
+    __tablename__ = "audio_assets"
+
+    asset_id: Mapped[str] = mapped_column(String(191), primary_key=True)
+    site_id: Mapped[str] = mapped_column(ForeignKey("sites.site_id"), index=True)
+    source_artifact_id: Mapped[str | None] = mapped_column(String(191), index=True)
+    source_run_id: Mapped[str | None] = mapped_column(String(191), index=True)
+    status: Mapped[str] = mapped_column(String(32), default="active", index=True)
+    storage_ref: Mapped[str] = mapped_column(String(512))
+    blob_data: Mapped[bytes] = mapped_column(LargeBinary)
+    mime_type: Mapped[str] = mapped_column(String(64))
+    format: Mapped[str] = mapped_column(String(16))
+    duration_seconds: Mapped[float] = mapped_column(Float, default=0.0)
+    filesize_bytes: Mapped[int] = mapped_column(Integer, default=0)
+    checksum: Mapped[str] = mapped_column(String(128), index=True)
+    source_content_hash: Mapped[str | None] = mapped_column(String(128), index=True)
+    provider_id: Mapped[str | None] = mapped_column(String(64), index=True)
+    model_id: Mapped[str | None] = mapped_column(String(191), index=True)
+    trace_id: Mapped[str | None] = mapped_column(String(64), index=True)
+    metadata_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
     )
 
 

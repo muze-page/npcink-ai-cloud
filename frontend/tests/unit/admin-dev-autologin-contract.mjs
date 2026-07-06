@@ -1,14 +1,15 @@
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import assert from 'node:assert/strict';
 
 const adminRoutePath = resolve(process.cwd(), 'src/app/admin/dev-entry/route.ts');
 const portalRoutePath = resolve(process.cwd(), 'src/app/portal/dev-entry/route.ts');
 const miniDevDockPath = resolve(process.cwd(), 'src/components/dev/MiniDevDock.tsx');
+const rootLayoutPath = resolve(process.cwd(), 'src/app/layout.tsx');
 
 const adminRouteSource = readFileSync(adminRoutePath, 'utf8');
 const portalRouteSource = readFileSync(portalRoutePath, 'utf8');
-const miniDevDockSource = readFileSync(miniDevDockPath, 'utf8');
+const rootLayoutSource = readFileSync(rootLayoutPath, 'utf8');
 
 assert.match(
   adminRouteSource,
@@ -132,18 +133,13 @@ assert.match(
   'portal dev-entry success path must disable caching'
 );
 
+assert.equal(
+  existsSync(miniDevDockPath),
+  false,
+  'Local admin/portal debugging must use the real login pages, not a floating MiniDevDock shortcut'
+);
 assert.doesNotMatch(
-  miniDevDockSource,
-  /dev\.current_site_shortcut/,
-  'Mini dev dock must not expose the redundant current-site shortcut'
-);
-assert.match(
-  miniDevDockSource,
-  /\/portal\/dev-entry\?origin=\$\{encodeURIComponent\(currentOrigin\)\}&redirect=\$\{encodeURIComponent\('\/portal'\)\}/,
-  'Mini dev dock must send the portal shortcut to the portal workspace entry'
-);
-assert.match(
-  miniDevDockSource,
-  /\/admin\/dev-entry\?origin=\$\{encodeURIComponent\(currentOrigin\)\}&redirect=\$\{encodeURIComponent\('\/admin'\)\}/,
-  'Mini dev dock must send the admin shortcut to the admin workspace entry'
+  rootLayoutSource,
+  /MiniDevDock/,
+  'Root layout must not mount a floating local-dev login dock'
 );

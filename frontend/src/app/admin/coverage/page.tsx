@@ -1,9 +1,10 @@
 'use client';
 
-import React, { Suspense, useEffect, useState } from 'react';
+import React, { Suspense, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { LoadingFallback } from '@/components/ui/LoadingFallback';
 import { useLocale } from '@/contexts/LocaleContext';
+import { translateCoverageStateLabel, type CoverageState } from '@/lib/customer-package-display';
 import {
   BackofficeMetricStrip,
   BackofficePageStack,
@@ -13,104 +14,103 @@ import {
 } from '@/components/backoffice/BackofficeScaffold';
 import { BackofficeIdentifier } from '@/components/backoffice/BackofficeIdentifier';
 import { BackofficeStatusBadge } from '@/components/backoffice/BackofficeStatusBadge';
-import {
-  translateCoverageStateLabel,
-  type CoverageState as CustomerCoverageState,
-} from '@/lib/customer-package-display';
 import { resolveUiErrorMessage } from '@/lib/errors';
 import { translateStatusLabel } from '@/lib/status-display';
 import { cn, formatDate, formatNumber as formatInteger } from '@/lib/utils';
 
-type CoverageAccountItem = {
+type QueueSeverity = 'error' | 'warning' | 'ok' | 'inactive';
+type QueueView = 'needs_action' | 'all' | QueueSeverity;
+type CoverageTab = 'service_status' | 'packages';
+
+type CoverageQueueItem = {
   account: {
     account_id: string;
     name?: string;
     status?: string;
   };
-  coverage_state?: string;
-  coverage_follow_up_required?: boolean;
-  display_package_label?: string;
-  primary_subscription_id?: string;
-  site_count?: number;
-};
-
-type CoverageSubscriptionItem = {
-  subscription: {
-    subscription_id: string;
-    account_id?: string;
+  primary_subscription?: {
+    subscription_id?: string;
     status?: string;
     current_period_end_at?: string;
-  };
-  coverage?: {
-    coverage_state?: CustomerCoverageState;
+  } | null;
+  package?: {
     display_package_label?: string;
+    package_kind?: string;
+    coverage_state?: string;
+  };
+  severity: QueueSeverity;
+  priority?: number;
+  reason_code: string;
+  reason_label: string;
+  recommended_action: string;
+  action_label: string;
+  action_href: string;
+  evidence: {
+    site_count?: number;
+    active_site_count?: number;
+    active_key_site_count?: number;
+    missing_key_site_count?: number;
     subscription_status?: string;
-  };
-  account?: {
-    account_id?: string;
-    name?: string;
-  };
-  covered_sites?: Array<{
-    site_id?: string;
-    name?: string;
-  }>;
-  billing_snapshot_status?: {
-    status?: string;
-    summary?: string;
+    current_period_end_at?: string;
+    days_until_end?: number | null;
+    billing_snapshot_status?: {
+      status?: string;
+      summary?: string;
+      fresh_site_count?: number;
+      stale_site_count?: number;
+      missing_site_count?: number;
+    };
   };
 };
 
-type CoverageSiteItem = {
-  site: {
-    site_id: string;
-    account_id?: string;
-    name?: string;
-    status?: string;
-  };
-  active_key_count?: number;
-  coverage?: {
-    covered_by_subscription_id?: string;
-    subscription_status?: string;
-    coverage_state?: CustomerCoverageState;
-    display_package_label?: string;
-  };
-  recent_usage?: {
-    event_count?: number;
-    last_seen_at?: string;
-  };
-  latest_billing_snapshot?: unknown;
-};
-
-type CoverageOverview = {
+type CoverageWorkQueue = {
   generated_at?: string;
-  counts?: {
-    accounts_total?: number;
-    sites_total?: number;
-    subscriptions_total?: number;
+  summary?: {
+    total?: number;
+    visible?: number;
+    needs_action?: number;
+    error?: number;
+    warning?: number;
+    ok?: number;
+    inactive?: number;
+    reason_counts?: Record<string, number>;
   };
-  attention_subscriptions?: Array<{
-    subscription?: { subscription_id?: string; status?: string };
-    account?: { account_id?: string };
-    site?: { site_id?: string };
-    reason?: string;
-  }>;
+  items?: CoverageQueueItem[];
 };
 
-type CoverageState = {
-  overview: CoverageOverview | null;
-  accounts: CoverageAccountItem[];
-  subscriptions: CoverageSubscriptionItem[];
-  sites: CoverageSiteItem[];
+type TierSummary = {
+  tier_id: string;
+  label?: string;
+  package_alias?: string;
+  usage_band?: string;
+  monthly_included_points?: number;
+  site_limit?: number;
+  budgets_template?: Record<string, unknown>;
+  concurrency_template?: Record<string, unknown>;
+  max_batch_items?: number;
 };
 
-type CustomerCoverageQueueItem = {
-  accountId: string;
-  name: string;
-  packageLabel: string;
-  reason: string;
-  tone: string;
-  subscriptionId: string;
-  siteCount: number;
+type PlanListItem = {
+  plan?: {
+    plan_id?: string;
+    name?: string;
+    status?: string;
+    metadata?: Record<string, unknown>;
+  };
+  latest_version?: {
+    status?: string;
+    budgets?: Record<string, unknown>;
+    concurrency?: Record<string, unknown>;
+  } | null;
+  tier_summary?: TierSummary;
+  subscription_counts?: {
+    active?: number;
+  };
+};
+
+type PlanCatalog = {
+  items?: PlanListItem[];
+  tier_templates?: TierSummary[];
 };
 
 const INTERNAL_TEST_TEXT_RE = /Fatal error|Stack trace|Command line code|Uncaught ValueError|Path must not be empty|(^|[_-])smoke([_-]|$)|codex_image_smoke|site_knowledge_smoke/i;
@@ -128,84 +128,66 @@ async function readJsonData<T>(url: string): Promise<T> {
   return payload.data as T;
 }
 
-function daysUntil(raw?: string): number | null {
-  if (!raw) return null;
-  const ms = new Date(raw).getTime() - Date.now();
-  if (Number.isNaN(ms)) return null;
-  return Math.ceil(ms / 86400000);
-}
-
-function isSubscriptionRisk(item: CoverageSubscriptionItem): boolean {
-  const status = String(item.subscription.status || '').toLowerCase();
-  const billingStatus = String(item.billing_snapshot_status?.status || '').toLowerCase();
-  const remaining = daysUntil(item.subscription.current_period_end_at);
-  return (
-    (status && !['active', 'trialing'].includes(status)) ||
-    ['missing', 'stale'].includes(billingStatus) ||
-    (remaining !== null && remaining >= 0 && remaining <= 14)
-  );
-}
-
-function isSiteFollowUp(item: CoverageSiteItem): boolean {
-  const siteStatus = String(item.site.status || '').toLowerCase();
-  const coverageState = String(item.coverage?.coverage_state || '').toLowerCase();
-  const subscriptionStatus = String(item.coverage?.subscription_status || '').toLowerCase();
-  return (
-    siteStatus !== 'active' ||
-    coverageState === 'uncovered' ||
-    ['missing', 'past_due', 'suspended', 'canceled', 'expired'].includes(subscriptionStatus) ||
-    Number(item.active_key_count || 0) === 0
-  );
-}
-
-function translateCoverageReason(
-  t: (key: string, params?: Record<string, string>, fallback?: string) => string,
-  value?: string
-): string {
-  const text = String(value || '').trim();
-  if (!text) {
-    return '';
-  }
-  if (text === 'Current-period billing snapshots are still missing for at least one covered site.') {
-    return t(
-      'admin.coverage_reason_billing_snapshot_missing',
-      {},
-      'At least one covered site is missing the current-period billing snapshot.'
-    );
-  }
-  if (text === 'Current-period billing snapshots need rebuild to match the latest subscription posture.') {
-    return t(
-      'admin.coverage_reason_billing_snapshot_rebuild',
-      {},
-      'Current-period billing snapshots need rebuild to match the latest subscription posture.'
-    );
-  }
-  return text;
-}
-
-function coverageToneClassName(tone: string): string {
-  const normalized = tone.toLowerCase();
-  if (['error', 'failed', 'canceled', 'expired'].includes(normalized)) {
+function severityToneClassName(severity: string): string {
+  const normalized = severity.toLowerCase();
+  if (normalized === 'error') {
     return 'border-rose-200 bg-rose-50 text-rose-700 dark:border-rose-900/50 dark:bg-rose-950/30 dark:text-rose-200';
   }
-  if (['active', 'ok', 'success', 'covered'].includes(normalized)) {
+  if (normalized === 'warning') {
+    return 'border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-900/50 dark:bg-amber-950/30 dark:text-amber-200';
+  }
+  if (normalized === 'ok') {
     return 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900/50 dark:bg-emerald-950/30 dark:text-emerald-200';
   }
-  return 'border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-900/50 dark:bg-amber-950/30 dark:text-amber-200';
+  return 'border-slate-200 bg-slate-50 text-slate-700 dark:border-slate-800 dark:bg-slate-900/50 dark:text-slate-200';
 }
 
-function CoverageInlineStatus({
-  status,
+function translateReasonCode(
+  t: (key: string, params?: Record<string, string>, fallback?: string) => string,
+  reasonCode: string,
+  fallback: string
+): string {
+  return t(`admin.coverage.reason.${reasonCode}`, {}, fallback);
+}
+
+function translateActionLabel(
+  t: (key: string, params?: Record<string, string>, fallback?: string) => string,
+  action: string,
+  fallback: string
+): string {
+  return t(`admin.coverage.action.${action}`, {}, fallback);
+}
+
+function translateReasonShortLabel(
+  t: (key: string, params?: Record<string, string>, fallback?: string) => string,
+  reasonCode: string
+): string {
+  const fallback = reasonCode
+    .replace(/^service_/, '')
+    .replace(/_/g, ' ')
+    .replace(/\b\w/g, (letter) => letter.toUpperCase());
+  return t(`admin.coverage.reason_short.${reasonCode}`, {}, fallback);
+}
+
+function normalizeCoverageState(value?: string): CoverageState | null {
+  if (value === 'covered' || value === 'uncovered') {
+    return value;
+  }
+  return null;
+}
+
+function CoverageStatusBadge({
+  severity,
   label,
 }: {
-  status: string;
+  severity: string;
   label: string;
 }) {
   return (
     <span
       className={cn(
         'inline-flex shrink-0 rounded-full border px-2.5 py-1 text-xs font-semibold leading-none',
-        coverageToneClassName(status)
+        severityToneClassName(severity)
       )}
     >
       {label}
@@ -213,10 +195,62 @@ function CoverageInlineStatus({
   );
 }
 
+function numericValue(value: unknown): number {
+  const numeric = Number(value ?? 0);
+  return Number.isFinite(numeric) ? numeric : 0;
+}
+
+function findPlanForTier(plans: PlanListItem[], tierId: string): PlanListItem | undefined {
+  const expectedTierId = tierId;
+  return plans.find((item) => {
+    const planId = String(item.plan?.plan_id || '');
+    const metadataTierId = String(item.plan?.metadata?.tier_id || '');
+    const summaryTierId = String(item.tier_summary?.tier_id || '');
+    return (
+      planId === expectedTierId ||
+      metadataTierId === expectedTierId ||
+      summaryTierId === expectedTierId ||
+      (expectedTierId === 'free' && item.plan?.metadata?.plan_kind === 'default_free')
+    );
+  });
+}
+
+function resolvePackageName(shell: TierSummary, item?: PlanListItem): string {
+  return String(item?.tier_summary?.package_alias || item?.plan?.name || shell.package_alias || shell.label || shell.tier_id);
+}
+
+function buildQueueSummary(items: CoverageQueueItem[]): Required<NonNullable<CoverageWorkQueue['summary']>> {
+  const reasonCounts: Record<string, number> = {};
+  const summary = {
+    total: items.length,
+    visible: items.length,
+    needs_action: 0,
+    error: 0,
+    warning: 0,
+    ok: 0,
+    inactive: 0,
+    reason_counts: reasonCounts,
+  };
+
+  for (const item of items) {
+    if (item.severity === 'error') summary.error += 1;
+    if (item.severity === 'warning') summary.warning += 1;
+    if (item.severity === 'ok') summary.ok += 1;
+    if (item.severity === 'inactive') summary.inactive += 1;
+    if (item.severity === 'error' || item.severity === 'warning') summary.needs_action += 1;
+    reasonCounts[item.reason_code] = (reasonCounts[item.reason_code] || 0) + 1;
+  }
+
+  return summary;
+}
+
 function AdminCoverageContent() {
   const { t } = useLocale();
-  const [state, setState] = useState<CoverageState | null>(null);
+  const [queue, setQueue] = useState<CoverageWorkQueue | null>(null);
+  const [planCatalog, setPlanCatalog] = useState<PlanCatalog | null>(null);
   const [error, setError] = useState('');
+  const [view, setView] = useState<QueueView>('needs_action');
+  const [activeTab, setActiveTab] = useState<CoverageTab>('service_status');
 
   useEffect(() => {
     let alive = true;
@@ -224,20 +258,13 @@ function AdminCoverageContent() {
     const loadCoverage = async () => {
       setError('');
       try {
-        const [overview, accountsPayload, subscriptionsPayload, sitesPayload] = await Promise.all([
-          readJsonData<CoverageOverview>('/api/admin/overview'),
-          readJsonData<{ items?: CoverageAccountItem[] }>('/api/admin/accounts?coverage_state=uncovered'),
-          readJsonData<{ items?: CoverageSubscriptionItem[] }>('/api/admin/subscriptions'),
-          readJsonData<{ items?: CoverageSiteItem[] }>('/api/admin/sites'),
+        const [coveragePayload, plansPayload] = await Promise.all([
+          readJsonData<CoverageWorkQueue>('/api/admin/coverage-work-queue'),
+          readJsonData<PlanCatalog>('/api/admin/plans'),
         ]);
-
         if (!alive) return;
-        setState({
-          overview,
-          accounts: accountsPayload.items || [],
-          subscriptions: subscriptionsPayload.items || [],
-          sites: sitesPayload.items || [],
-        });
+        setQueue(coveragePayload);
+        setPlanCatalog(plansPayload);
       } catch (err) {
         if (!alive) return;
         setError(resolveUiErrorMessage(err instanceof Error ? err.message : null, t('error.failed_load')));
@@ -249,6 +276,23 @@ function AdminCoverageContent() {
       alive = false;
     };
   }, [t]);
+
+  const visibleQueueItems = useMemo(
+    () =>
+      (queue?.items || []).filter(
+      (item) => !isInternalCoverageRecord(item.account.account_id, item.account.name)
+      ),
+    [queue?.items]
+  );
+  const visibleSummary = useMemo(() => buildQueueSummary(visibleQueueItems), [visibleQueueItems]);
+  const visibleItems = useMemo(() => {
+    return visibleQueueItems.filter((item) => {
+      if (view === 'all') return true;
+      if (view === 'needs_action') return item.severity === 'error' || item.severity === 'warning';
+      return item.severity === view;
+    });
+  }, [visibleQueueItems, view]);
+  const selectedQueueItem = visibleItems[0] || visibleQueueItems[0] || null;
 
   if (error) {
     return (
@@ -264,92 +308,98 @@ function AdminCoverageContent() {
     );
   }
 
-  if (!state) {
+  if (!queue || !planCatalog) {
     return <LoadingFallback />;
   }
 
-  const accountItems = state.accounts
-    .filter((item) => !isInternalCoverageRecord(item.account.account_id, item.account.name))
-    .slice(0, 4);
-  const subscriptionRisks = state.subscriptions
-    .filter(isSubscriptionRisk)
-    .filter(
-      (item) =>
-        !isInternalCoverageRecord(
-          item.account?.account_id,
-          item.account?.name,
-          item.subscription.account_id,
-          item.subscription.subscription_id
-        )
-    )
-    .slice(0, 4);
-  const siteFollowUps = state.sites
-    .filter(isSiteFollowUp)
-    .filter((item) => !isInternalCoverageRecord(item.site.site_id, item.site.name, item.site.account_id))
-    .slice(0, 4);
-  const customerQueueEntries: Array<[string, CustomerCoverageQueueItem]> = [
-        ...accountItems.map((item): [string, CustomerCoverageQueueItem] => [
-          item.account.account_id,
-          {
-            accountId: item.account.account_id,
-            name: item.account.name || item.account.account_id,
-            packageLabel: item.display_package_label || t('admin.coverage_state_uncovered', {}, 'Uncovered'),
-            reason: t('admin.coverage_reason_missing_package', {}, 'Customer has site footprint without readable package coverage.'),
-            tone: 'warning',
-            subscriptionId: item.primary_subscription_id || '',
-            siteCount: Number(item.site_count || 0),
-          },
-        ]),
-        ...subscriptionRisks.map((item): [string, CustomerCoverageQueueItem] => [
-          item.account?.account_id || item.subscription.account_id || item.subscription.subscription_id,
-          {
-            accountId: item.account?.account_id || item.subscription.account_id || '',
-            name: item.account?.name || item.account?.account_id || item.subscription.account_id || item.subscription.subscription_id,
-            packageLabel: item.coverage?.display_package_label || t('common.not_available', {}, 'N/A'),
-            reason:
-              translateCoverageReason(t, item.billing_snapshot_status?.summary) ||
-              t('admin.coverage_reason_subscription_risk', {}, 'Subscription status, expiry, or billing snapshot needs review.'),
-            tone: item.subscription.status && !['active', 'trialing'].includes(item.subscription.status) ? 'error' : 'warning',
-            subscriptionId: item.subscription.subscription_id,
-            siteCount: Number(item.covered_sites?.length || 0),
-          },
-        ]),
-      ].filter(([key]) => Boolean(key));
-  const customerQueue = Array.from(new Map(customerQueueEntries).values()).slice(0, 6);
+  const filters: Array<{ value: QueueView; label: string; count: number }> = [
+    {
+      value: 'needs_action',
+      label: t('admin.coverage.filter_needs_action', {}, 'Needs action'),
+      count: visibleSummary.needs_action,
+    },
+    { value: 'error', label: translateStatusLabel('error', t), count: visibleSummary.error },
+    { value: 'warning', label: translateStatusLabel('warning', t), count: visibleSummary.warning },
+    { value: 'ok', label: translateStatusLabel('ok', t), count: visibleSummary.ok },
+    {
+      value: 'all',
+      label: t('common.all', {}, 'All'),
+      count: visibleSummary.total,
+    },
+  ];
+  const reasonEntries = Object.entries(visibleSummary.reason_counts || {})
+    .sort((left, right) => Number(right[1] || 0) - Number(left[1] || 0))
+    .slice(0, 6);
+  const packageShells = (planCatalog.tier_templates || []).filter((shell) =>
+    ['free', 'pro', 'agency'].includes(String(shell.tier_id || ''))
+  );
+  const packageRows = packageShells.map((shell) => {
+    const item = findPlanForTier(planCatalog.items || [], shell.tier_id);
+    const latestVersion = item?.latest_version || null;
+    const budgets = (latestVersion?.budgets || item?.tier_summary?.budgets_template || shell.budgets_template || {}) as Record<string, unknown>;
+    const concurrency = (latestVersion?.concurrency || item?.tier_summary?.concurrency_template || shell.concurrency_template || {}) as Record<string, unknown>;
+    const sourceTier = item?.tier_summary || shell;
+    return {
+      shell,
+      item,
+      budgets,
+      concurrency,
+      sourceTier,
+      planId: item?.plan?.plan_id,
+      name: resolvePackageName(shell, item),
+    };
+  });
+  const activePackageSubscriptions = packageRows.reduce(
+    (total, row) => total + Number(row.item?.subscription_counts?.active || 0),
+    0
+  );
+  const readyPackages = packageRows.filter((row) => row.item?.plan?.status === 'active').length;
+  const tabs: Array<{ value: CoverageTab; label: string; detail: string }> = [
+    {
+      value: 'service_status',
+      label: t('admin.coverage.tab_service_status', {}, 'Service status'),
+      detail: t('admin.coverage.tab_service_status_desc', {}, 'Customer follow-up queue'),
+    },
+    {
+      value: 'packages',
+      label: t('admin.coverage.tab_packages', {}, 'Packages'),
+      detail: t('admin.coverage.tab_packages_desc', {}, 'Free, Pro, and Agency'),
+    },
+  ];
 
   return (
     <BackofficePageStack>
       <BackofficePrimaryPanel
         eyebrow={t('admin.operator_surface', {}, 'Operator surface')}
-        title={t('admin.coverage_surface_title', {}, 'Customer coverage')}
+        title={t('admin.coverage_surface_title', {}, 'Customer service workspace')}
         description={t(
           'admin.coverage_surface_desc',
           {},
-          'Keep the operator view centered on one question: which customer is currently covered by which package, and what needs follow-up next.'
+          'Work from the highest-impact customer first. Keep service blockers, package posture, and the next operator action in one workspace.'
         )}
-        actions={
-          <Link href="/admin/plans" className="text-sm font-medium text-blue-600 hover:text-blue-700 dark:text-blue-300 dark:hover:text-blue-200">
-            {t('admin.coverage_open_package_catalog_action', {}, 'Open package catalog')} →
-          </Link>
-        }
         aside={
-          <div className="w-full xl:w-[40rem]">
+          <div className="w-full xl:w-[44rem]">
             <BackofficeMetricStrip
-              columnsClassName="md:grid-cols-3"
+              columnsClassName="md:grid-cols-4"
               items={[
                 {
-                  label: t('common.accounts', {}, 'Customers'),
-                  value: formatInteger(Number(state.overview?.counts?.accounts_total || accountItems.length)),
+                  label: t('admin.coverage.metric_needs_action', {}, 'Needs action'),
+                  value: formatInteger(visibleSummary.needs_action),
                   size: 'compact',
                 },
                 {
-                  label: t('common.subscriptions', {}, 'Subscriptions'),
-                  value: formatInteger(Number(state.overview?.counts?.subscriptions_total || state.subscriptions.length)),
+                  label: translateStatusLabel('error', t),
+                  value: formatInteger(visibleSummary.error),
                   size: 'compact',
                 },
                 {
-                  label: t('common.sites', {}, 'Sites'),
-                  value: formatInteger(Number(state.overview?.counts?.sites_total || state.sites.length)),
+                  label: translateStatusLabel('warning', t),
+                  value: formatInteger(visibleSummary.warning),
+                  size: 'compact',
+                },
+                {
+                  label: t('admin.coverage.metric_aligned', {}, 'Aligned'),
+                  value: formatInteger(visibleSummary.ok),
                   size: 'compact',
                 },
               ]}
@@ -358,194 +408,397 @@ function AdminCoverageContent() {
         }
       >
         <p className="text-sm text-slate-600 dark:text-slate-300">
-          {state.overview?.generated_at
-            ? `${t('common.updated_at', {}, 'Updated')}: ${formatDate(state.overview.generated_at)}`
+          {queue.generated_at
+            ? `${t('common.updated_at', {}, 'Updated')}: ${formatDate(queue.generated_at)}`
             : t('admin.coverage_surface_runtime_note', {}, 'Coverage reads are assembled from existing customer, subscription, and site detail surfaces.')}
         </p>
       </BackofficePrimaryPanel>
 
-      <div className="grid gap-5 xl:grid-cols-[minmax(0,1.6fr)_minmax(22rem,0.8fr)]">
+      <div className="inline-grid max-w-xl grid-cols-2 gap-1 rounded-full border border-slate-200 bg-white p-1 shadow-sm dark:border-slate-800 dark:bg-slate-950">
+        {tabs.map((tab) => (
+          <button
+            key={tab.value}
+            type="button"
+            onClick={() => setActiveTab(tab.value)}
+            className={cn(
+              'cursor-pointer rounded-full px-4 py-2 text-center transition',
+              activeTab === tab.value
+                ? 'bg-blue-600 text-white shadow-sm dark:bg-blue-500'
+                : 'text-slate-600 hover:bg-slate-50 hover:text-slate-950 dark:text-slate-300 dark:hover:bg-slate-900 dark:hover:text-white'
+            )}
+          >
+            <span className="block text-sm font-semibold">{tab.label}</span>
+            <span className={cn(
+              'mt-0.5 block text-xs',
+              activeTab === tab.value ? 'text-blue-50' : 'text-slate-500 dark:text-slate-400'
+            )}>{tab.detail}</span>
+          </button>
+        ))}
+      </div>
+
+      {activeTab === 'service_status' ? (
+      <div className="grid gap-5 xl:grid-cols-[minmax(0,1.55fr)_minmax(22rem,0.85fr)]">
         <BackofficeSectionPanel className="overflow-hidden p-0">
-          <div>
-            <div className="border-b border-slate-200/80 px-6 py-5 dark:border-slate-800">
-              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-gray-500 dark:text-gray-400">
-                {t('common.accounts', {}, 'Customers')}
-              </p>
-              <h2 className="mt-2 text-xl font-semibold text-gray-950 dark:text-white">
-                {t('admin.coverage_customer_queue_title', {}, 'Customer coverage queue')}
-              </h2>
-              <p className="mt-2 text-sm text-slate-600 dark:text-slate-300">
-                {t(
-                  'admin.coverage_customer_queue_desc',
-                  {},
-                  'Start from the customer. Subscription and site records below are evidence, not separate first-step queues.'
-                )}
-              </p>
+          <div className="border-b border-slate-200/80 px-6 py-5 dark:border-slate-800">
+            <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-gray-500 dark:text-gray-400">
+                  {t('admin.coverage.primary_queue_eyebrow', {}, 'Work queue')}
+                </p>
+                <h2 className="mt-2 text-xl font-semibold text-gray-950 dark:text-white">
+                  {t('admin.coverage_customer_queue_title', {}, 'Customers needing service follow-up')}
+                </h2>
+                <p className="mt-2 text-sm text-slate-600 dark:text-slate-300">
+                  {t(
+                    'admin.coverage_customer_queue_desc',
+                    {},
+                    'Resolve package, subscription, billing, site, and key blockers from this single customer queue.'
+                  )}
+                </p>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {filters.map((filter) => (
+                  <button
+                    key={filter.value}
+                    type="button"
+                    onClick={() => setView(filter.value)}
+                    className={cn(
+                      'rounded-full border px-3 py-1.5 text-xs font-medium transition',
+                      view === filter.value
+                        ? 'border-blue-300 bg-blue-50 text-blue-700 dark:border-blue-800 dark:bg-blue-950/30 dark:text-blue-200'
+                        : 'border-slate-200/80 bg-white/80 text-slate-700 hover:border-slate-300 hover:text-slate-950 dark:border-slate-700 dark:bg-slate-900/60 dark:text-slate-200 dark:hover:border-slate-600 dark:hover:text-white'
+                    )}
+                  >
+                    {filter.label} · {formatInteger(filter.count)}
+                  </button>
+                ))}
+              </div>
             </div>
           </div>
-          {customerQueue.length ? (
+
+          {visibleItems.length ? (
             <div className="overflow-x-auto">
-              <table className="min-w-[48rem] divide-y divide-slate-200/80 text-left text-sm dark:divide-slate-800 lg:w-full">
+              <table className="min-w-[64rem] divide-y divide-slate-200/80 text-left text-sm dark:divide-slate-800 lg:w-full">
                 <thead className="bg-slate-50/80 text-xs uppercase tracking-[0.16em] text-slate-500 dark:bg-slate-950/30 dark:text-slate-400">
                   <tr>
-                    <th className="w-[32%] px-6 py-3 font-semibold">{t('common.account', {}, 'Customer')}</th>
-                    <th className="w-[18%] px-4 py-3 font-semibold">{t('common.package', {}, 'Package')}</th>
-                    <th className="px-4 py-3 font-semibold">{t('admin.reason', {}, 'Reason')}</th>
-                    <th className="w-[9rem] px-6 py-3 text-right font-semibold">{t('common.actions', {}, 'Actions')}</th>
+                    <th className="w-[24%] px-6 py-3 font-semibold">{t('common.account', {}, 'Customer')}</th>
+                    <th className="w-[17%] px-4 py-3 font-semibold">{t('common.package', {}, 'Package')}</th>
+                    <th className="w-[28%] px-4 py-3 font-semibold">{t('admin.reason', {}, 'Reason')}</th>
+                    <th className="w-[20%] px-4 py-3 font-semibold">{t('admin.coverage.evidence', {}, 'Evidence')}</th>
+                    <th className="w-[11rem] px-6 py-3 text-right font-semibold">{t('common.actions', {}, 'Actions')}</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-200/80 dark:divide-slate-800">
-                  {customerQueue.map((item) => (
-                    <tr key={`${item.accountId || item.subscriptionId}-${item.reason}`} className="align-top hover:bg-slate-50/70 dark:hover:bg-slate-950/35">
-                      <td className="px-6 py-4">
-                        <p className="font-semibold text-slate-950 dark:text-white">{item.name}</p>
-                        {item.accountId ? (
-                          <BackofficeIdentifier value={item.accountId} className="mt-1 text-xs text-slate-500 dark:text-slate-400" />
-                        ) : item.subscriptionId ? (
-                          <BackofficeIdentifier value={item.subscriptionId} className="mt-1 text-xs text-slate-500 dark:text-slate-400" />
-                        ) : null}
-                      </td>
-                      <td className="px-4 py-4">
-                        <p className="font-medium text-slate-900 dark:text-slate-100">{item.packageLabel}</p>
-                        <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                          {t('admin.coverage_site_count_hint', { count: formatInteger(item.siteCount) }, `${formatInteger(item.siteCount)} sites`)}
-                        </p>
-                      </td>
-                      <td className="px-4 py-4">
-                        <div className="max-w-xl space-y-2">
-                          <CoverageInlineStatus status={item.tone} label={translateStatusLabel(item.tone, t)} />
-                          <p className="text-slate-600 dark:text-slate-300">{item.reason}</p>
-                        </div>
-                      </td>
-                      <td className="px-6 py-4 text-right">
-                        {item.accountId ? (
-                          <Link href={`/admin/accounts/${item.accountId}`} className="btn btn-primary btn-sm whitespace-nowrap">
-                            {t('admin.coverage_open_customer_action', {}, 'Open customer')}
+                  {visibleItems.map((item) => {
+                    const billingStatus = item.evidence.billing_snapshot_status?.status || 'unknown';
+                    const coverageState = normalizeCoverageState(item.package?.coverage_state);
+                    return (
+                      <tr key={`${item.account.account_id}-${item.reason_code}`} className="align-top hover:bg-slate-50/70 dark:hover:bg-slate-950/35">
+                        <td className="px-6 py-4">
+                          <p className="font-semibold text-slate-950 dark:text-white">
+                            {item.account.name || t('admin.subscription_detail.current_customer_label', {}, 'Current customer')}
+                          </p>
+                          <details className="mt-2 text-xs text-slate-500 dark:text-slate-400">
+                            <summary className="cursor-pointer font-medium">
+                              {t('portal.support_information', {}, 'Support information')}
+                            </summary>
+                            <div className="mt-2 space-y-1">
+                              <BackofficeIdentifier value={item.account.account_id} full />
+                              {item.primary_subscription?.subscription_id ? (
+                                <BackofficeIdentifier value={item.primary_subscription.subscription_id} full />
+                              ) : null}
+                            </div>
+                          </details>
+                        </td>
+                        <td className="px-4 py-4">
+                          <p className="font-medium text-slate-900 dark:text-slate-100">
+                            {item.package?.display_package_label || t('common.not_available', {}, 'N/A')}
+                          </p>
+                          <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                            {coverageState
+                              ? translateCoverageStateLabel(t, coverageState)
+                              : t('common.unknown', {}, 'Unknown')}
+                          </p>
+                        </td>
+                        <td className="px-4 py-4">
+                          <div className="max-w-xl space-y-2">
+                            <CoverageStatusBadge
+                              severity={item.severity}
+                              label={translateStatusLabel(item.severity, t)}
+                            />
+                            <p className="text-slate-700 dark:text-slate-200">
+                              {translateReasonCode(t, item.reason_code, item.reason_label)}
+                            </p>
+                            <p className="text-xs text-slate-500 dark:text-slate-400">
+                              {translateActionLabel(t, item.recommended_action, item.action_label)}
+                            </p>
+                          </div>
+                        </td>
+                        <td className="px-4 py-4">
+                          <dl className="space-y-1 text-xs text-slate-600 dark:text-slate-300">
+                            <div className="flex justify-between gap-3">
+                              <dt>{t('common.sites', {}, 'Sites')}</dt>
+                              <dd className="font-semibold tabular-nums">{formatInteger(Number(item.evidence.site_count || 0))}</dd>
+                            </div>
+                            <div className="flex justify-between gap-3">
+                              <dt>{t('admin.account_detail.active_api_keys_label', {}, 'Active API keys')}</dt>
+                              <dd className="font-semibold tabular-nums">{formatInteger(Number(item.evidence.active_key_site_count || 0))}</dd>
+                            </div>
+                            <div className="flex justify-between gap-3">
+                              <dt>{t('admin.subscriptions.snapshot_status_metric', {}, 'Snapshot')}</dt>
+                              <dd className="font-semibold">{translateStatusLabel(billingStatus, t)}</dd>
+                            </div>
+                            {item.evidence.days_until_end !== null && item.evidence.days_until_end !== undefined ? (
+                              <div className="flex justify-between gap-3">
+                                <dt>{t('admin.days_until_end_label', {}, 'Days left')}</dt>
+                                <dd className="font-semibold tabular-nums">{formatInteger(Number(item.evidence.days_until_end))}</dd>
+                              </div>
+                            ) : null}
+                          </dl>
+                        </td>
+                        <td className="px-6 py-4 text-right">
+                          <Link href={item.action_href || `/admin/accounts/${item.account.account_id}`} className="btn btn-primary btn-sm whitespace-nowrap">
+                            {translateActionLabel(t, item.recommended_action, item.action_label || t('common.open', {}, 'Open'))}
                           </Link>
-                        ) : item.subscriptionId ? (
-                          <Link href={`/admin/subscriptions/${item.subscriptionId}`} className="btn btn-secondary btn-sm whitespace-nowrap">
-                            {t('admin.coverage_open_subscription_detail_action', {}, 'Inspect detail')}
-                          </Link>
-                        ) : null}
-                      </td>
-                    </tr>
-                  ))}
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
-            ) : (
-              <div className="px-6 py-8">
+          ) : (
+            <div className="px-6 py-8">
               <BackofficeStackCard className="space-y-3 text-sm text-slate-600 dark:text-slate-300">
                 <div className="flex items-center justify-between gap-3">
-                  <span>{t('admin.coverage_customers_empty', {}, 'No uncovered customers are visible in this operator snapshot.')}</span>
+                  <span>{t('admin.coverage_customers_empty', {}, 'No customer service follow-up is visible in this operator snapshot.')}</span>
                   <BackofficeStatusBadge status="ok" label={translateStatusLabel('ok', t)} />
                 </div>
-                <Link href="/admin/accounts" className="btn btn-secondary btn-sm">
-                  {t('admin.coverage_open_customer_register_action', {}, 'Open customer register')}
-                </Link>
+                {visibleQueueItems.length === 0 ? (
+                  <Link href="/admin/accounts" className="btn btn-secondary btn-sm">
+                    {t('admin.coverage_open_customer_register_action', {}, 'Open customer register')}
+                  </Link>
+                ) : null}
               </BackofficeStackCard>
-              </div>
-            )}
+            </div>
+          )}
         </BackofficeSectionPanel>
 
         <div className="space-y-5">
           <BackofficeSectionPanel className="space-y-4">
-            <div>
-              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-gray-500 dark:text-gray-400">
-                {t('admin.coverage_evidence_label', {}, 'Evidence')}
-              </p>
-              <h2 className="mt-2 text-xl font-semibold text-gray-950 dark:text-white">
-                {t('admin.coverage_subscription_risks_title', {}, 'Subscription risks')}
-              </h2>
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-gray-500 dark:text-gray-400">
+                  {t('admin.coverage.inspector_eyebrow', {}, 'Inspector')}
+                </p>
+                <h2 className="mt-2 text-xl font-semibold text-gray-950 dark:text-white">
+                  {t('admin.coverage.inspector_title', {}, 'Current customer focus')}
+                </h2>
+              </div>
+              {selectedQueueItem ? (
+                <CoverageStatusBadge
+                  severity={selectedQueueItem.severity}
+                  label={translateStatusLabel(selectedQueueItem.severity, t)}
+                />
+              ) : null}
             </div>
-            <div className="space-y-3">
-              {subscriptionRisks.length ? subscriptionRisks.map((item) => (
-                <BackofficeStackCard key={item.subscription.subscription_id}>
-                  <div className="min-w-0 space-y-2">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <BackofficeIdentifier value={item.subscription.subscription_id} className="text-sm font-semibold text-slate-950 dark:text-white" />
-                      <CoverageInlineStatus
-                      status={item.subscription.status || item.billing_snapshot_status?.status || 'warning'}
-                      label={translateStatusLabel(item.subscription.status || item.billing_snapshot_status?.status || 'warning', t)}
-                    />
-                    </div>
-                    <p className="text-sm text-slate-600 dark:text-slate-300">
-                      {translateCoverageReason(t, item.billing_snapshot_status?.summary) ||
-                        item.account?.name ||
-                        item.subscription.account_id ||
-                        t('common.not_found')}
-                    </p>
-                  </div>
-                  <div className="mt-3 flex flex-wrap gap-2">
-                    <Link href={`/admin/subscriptions/${item.subscription.subscription_id}`} className="btn btn-secondary btn-sm">
-                      {t('admin.coverage_open_subscription_detail_action', {}, 'Inspect detail')}
-                    </Link>
-                  </div>
-                </BackofficeStackCard>
-              )) : (
-              <BackofficeStackCard className="space-y-3 text-sm text-slate-600 dark:text-slate-300">
-                <div className="flex items-center justify-between gap-3">
-                  <span>{t('admin.coverage_subscriptions_empty', {}, 'No subscription risk is visible in this operator snapshot.')}</span>
-                  <BackofficeStatusBadge status="ok" label={translateStatusLabel('ok', t)} />
+            {selectedQueueItem ? (
+              <div className="space-y-4">
+                <div>
+                  <p className="text-base font-semibold text-slate-950 dark:text-white">
+                    {selectedQueueItem.account.name || t('admin.subscription_detail.current_customer_label', {}, 'Current customer')}
+                  </p>
+                  <p className="mt-1 text-sm leading-6 text-slate-600 dark:text-slate-300">
+                    {translateReasonCode(t, selectedQueueItem.reason_code, selectedQueueItem.reason_label)}
+                  </p>
                 </div>
-                <Link href="/admin/subscriptions" className="btn btn-secondary btn-sm">
-                  {t('admin.coverage_open_subscription_queue_action', {}, 'Open subscription queue')}
-                </Link>
+                <dl className="grid gap-2 text-sm text-slate-600 dark:text-slate-300">
+                  <div className="flex justify-between gap-4 border-b border-slate-200/70 pb-2 dark:border-slate-800">
+                    <dt>{t('common.package', {}, 'Package')}</dt>
+                    <dd className="font-semibold text-slate-950 dark:text-white">
+                      {selectedQueueItem.package?.display_package_label || t('common.not_available', {}, 'N/A')}
+                    </dd>
+                  </div>
+                  <div className="flex justify-between gap-4 border-b border-slate-200/70 pb-2 dark:border-slate-800">
+                    <dt>{t('common.sites', {}, 'Sites')}</dt>
+                    <dd className="font-semibold tabular-nums text-slate-950 dark:text-white">
+                      {formatInteger(Number(selectedQueueItem.evidence.site_count || 0))}
+                    </dd>
+                  </div>
+                  <div className="flex justify-between gap-4 border-b border-slate-200/70 pb-2 dark:border-slate-800">
+                    <dt>{t('admin.account_detail.active_api_keys_label', {}, 'Active API keys')}</dt>
+                    <dd className="font-semibold tabular-nums text-slate-950 dark:text-white">
+                      {formatInteger(Number(selectedQueueItem.evidence.active_key_site_count || 0))}
+                    </dd>
+                  </div>
+                  <div className="flex justify-between gap-4 pb-2">
+                    <dt>{t('admin.subscriptions.snapshot_status_metric', {}, 'Snapshot')}</dt>
+                    <dd className="font-semibold text-slate-950 dark:text-white">
+                      {translateStatusLabel(selectedQueueItem.evidence.billing_snapshot_status?.status || 'unknown', t)}
+                    </dd>
+                  </div>
+                </dl>
+                <div className="flex flex-wrap gap-2">
+                  <Link href={selectedQueueItem.action_href || `/admin/accounts/${selectedQueueItem.account.account_id}`} className="btn btn-primary btn-sm">
+                    {translateActionLabel(t, selectedQueueItem.recommended_action, selectedQueueItem.action_label || t('common.open', {}, 'Open'))}
+                  </Link>
+                  <Link href={`/admin/accounts/${selectedQueueItem.account.account_id}`} className="btn btn-secondary btn-sm">
+                    {t('admin.coverage_open_customer_action', {}, 'Open customer')}
+                  </Link>
+                </div>
+                <p className="text-xs leading-5 text-slate-500 dark:text-slate-400">
+                  {t(
+                    'admin.coverage.inspector_boundary',
+                    {},
+                    'This inspector only opens existing customer, subscription, site, and package surfaces. It does not create customer-facing checkout, payment, or WordPress write controls.'
+                  )}
+                </p>
+              </div>
+            ) : (
+              <BackofficeStackCard className="text-sm text-slate-600 dark:text-slate-300">
+                {t('admin.coverage.inspector_empty', {}, 'No customer needs inspection in this snapshot.')}
               </BackofficeStackCard>
             )}
-            </div>
           </BackofficeSectionPanel>
-
           <BackofficeSectionPanel className="space-y-4">
             <div>
               <p className="text-xs font-semibold uppercase tracking-[0.18em] text-gray-500 dark:text-gray-400">
                 {t('admin.coverage_evidence_label', {}, 'Evidence')}
               </p>
               <h2 className="mt-2 text-xl font-semibold text-gray-950 dark:text-white">
-                {t('admin.coverage_sites_followup_title', {}, 'Sites needing follow-up')}
+                {t('admin.coverage.reason_summary_title', {}, 'Reason summary')}
               </h2>
             </div>
             <div className="space-y-3">
-              {siteFollowUps.length ? siteFollowUps.map((item) => (
-                <BackofficeStackCard key={item.site.site_id}>
-                  <div className="min-w-0 space-y-2">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <p className="font-semibold text-slate-950 dark:text-white">{item.site.name || item.site.site_id}</p>
-                      <CoverageInlineStatus
-                      status={item.coverage?.coverage_state === 'uncovered' ? 'warning' : item.site.status || 'warning'}
-                      label={
-                        item.coverage?.coverage_state === 'uncovered'
-                          ? translateCoverageStateLabel(t, 'uncovered')
-                          : translateStatusLabel(item.site.status || 'warning', t)
-                      }
-                    />
-                    </div>
-                    <BackofficeIdentifier value={item.site.site_id} className="text-xs text-slate-500 dark:text-slate-400" />
-                    <p className="text-sm text-slate-600 dark:text-slate-300">
-                      {item.coverage?.covered_by_subscription_id || item.site.account_id || t('common.not_found')}
-                    </p>
-                  </div>
-                  <div className="mt-3 flex flex-wrap gap-2">
-                    <Link href={`/admin/sites/${item.site.site_id}`} className="btn btn-secondary btn-sm">
-                      {t('admin.coverage_open_site_detail_action', {}, 'Inspect detail')}
-                    </Link>
-                  </div>
+              {reasonEntries.length ? reasonEntries.map(([reasonCode, count]) => (
+                <BackofficeStackCard key={reasonCode} className="flex items-center justify-between gap-4">
+                  <span className="text-sm font-medium text-slate-800 dark:text-slate-100">
+                    {translateReasonShortLabel(t, reasonCode)}
+                  </span>
+                  <span className="text-lg font-semibold tabular-nums text-slate-950 dark:text-white">
+                    {formatInteger(Number(count || 0))}
+                  </span>
                 </BackofficeStackCard>
               )) : (
-              <BackofficeStackCard className="space-y-3 text-sm text-slate-600 dark:text-slate-300">
-                <div className="flex items-center justify-between gap-3">
-                  <span>{t('admin.coverage_sites_empty', {}, 'No site-level coverage follow-up is visible in this operator snapshot.')}</span>
-                  <BackofficeStatusBadge status="ok" label={translateStatusLabel('ok', t)} />
-                </div>
-                <Link href="/admin/accounts" className="btn btn-secondary btn-sm">
-                  {t('admin.coverage_open_customer_register_action', {}, 'Open customer register')}
-                </Link>
-              </BackofficeStackCard>
-            )}
+                <BackofficeStackCard className="text-sm text-slate-600 dark:text-slate-300">
+                  {t('admin.coverage.reason_summary_empty', {}, 'No reason codes are visible in this snapshot.')}
+                </BackofficeStackCard>
+              )}
             </div>
           </BackofficeSectionPanel>
-          </div>
+        </div>
       </div>
+      ) : (
+        <div className="space-y-5">
+          <BackofficeSectionPanel className="space-y-5">
+            <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-gray-500 dark:text-gray-400">
+                  {t('admin.coverage.package_tab_eyebrow', {}, 'Package catalog')}
+                </p>
+                <h2 className="mt-2 text-xl font-semibold text-gray-950 dark:text-white">
+                  {t('admin.coverage_package_catalog_title', {}, 'Package catalog')}
+                </h2>
+                <p className="mt-2 max-w-3xl text-sm text-slate-600 dark:text-slate-300">
+                  {t(
+                    'admin.coverage.package_tab_desc',
+                    {},
+                    'Use this tab to compare package posture. Package maintenance stays in the dedicated package catalog page.'
+                  )}
+                </p>
+              </div>
+              <Link href="/admin/plans" className="btn btn-secondary btn-sm">
+                {t('admin.coverage_open_package_catalog_action', {}, 'Open package catalog')}
+              </Link>
+            </div>
+            <BackofficeMetricStrip
+              columnsClassName="md:grid-cols-3"
+              items={[
+                {
+                  label: t('admin.managed_packages', {}, 'Managed packages'),
+                  value: formatInteger(packageRows.length),
+                  size: 'compact',
+                },
+                {
+                  label: t('admin.ready_packages', {}, 'Ready packages'),
+                  value: formatInteger(readyPackages),
+                  size: 'compact',
+                },
+                {
+                  label: t('admin.active_subscriptions', {}, 'Active subscriptions'),
+                  value: formatInteger(activePackageSubscriptions),
+                  size: 'compact',
+                },
+              ]}
+            />
+          </BackofficeSectionPanel>
+
+          <div className="grid gap-4 xl:grid-cols-3">
+            {packageRows.map((row) => (
+              <BackofficeStackCard key={row.shell.tier_id} className="flex flex-col">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <p className="text-xs font-medium uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
+                      {row.sourceTier.label || row.shell.label || row.shell.tier_id}
+                    </p>
+                    <h3 className="mt-2 text-xl font-semibold text-slate-950 dark:text-white">{row.name}</h3>
+                  </div>
+                  <BackofficeStatusBadge
+                    status={row.item?.plan?.status === 'active' ? 'published' : 'draft'}
+                    label={row.item?.plan?.status === 'active' ? t('status.published', {}, 'published') : t('status.draft', {}, 'missing')}
+                  />
+                </div>
+                <dl className="mt-5 space-y-2 text-sm text-slate-600 dark:text-slate-300">
+                  <div className="flex justify-between gap-4 border-b border-slate-200/70 pb-2 dark:border-slate-800">
+                    <dt>{t('admin.site_limit', {}, 'Site limit')}</dt>
+                    <dd className="font-semibold tabular-nums text-slate-950 dark:text-white">
+                      {formatInteger(numericValue(row.sourceTier.site_limit))}
+                    </dd>
+                  </div>
+                  <div className="flex justify-between gap-4 border-b border-slate-200/70 pb-2 dark:border-slate-800">
+                    <dt>{t('billing.runs', {}, 'Runs')}</dt>
+                    <dd className="font-semibold tabular-nums text-slate-950 dark:text-white">
+                      {formatInteger(numericValue(row.budgets.max_runs_per_period))}
+                    </dd>
+                  </div>
+                  <div className="flex justify-between gap-4 border-b border-slate-200/70 pb-2 dark:border-slate-800">
+                    <dt>{t('admin.concurrency', {}, 'Concurrency')}</dt>
+                    <dd className="font-semibold tabular-nums text-slate-950 dark:text-white">
+                      {formatInteger(numericValue(row.concurrency.max_active_runs))}
+                    </dd>
+                  </div>
+                  <div className="flex justify-between gap-4 border-b border-slate-200/70 pb-2 dark:border-slate-800">
+                    <dt>{t('admin.batch_ceiling', {}, 'Batch ceiling')}</dt>
+                    <dd className="font-semibold tabular-nums text-slate-950 dark:text-white">
+                      {formatInteger(numericValue(row.sourceTier.max_batch_items))}
+                    </dd>
+                  </div>
+                  <div className="flex justify-between gap-4 pb-2">
+                    <dt>{t('admin.active_subscriptions', {}, 'Active subscriptions')}</dt>
+                    <dd className="font-semibold tabular-nums text-slate-950 dark:text-white">
+                      {formatInteger(Number(row.item?.subscription_counts?.active || 0))}
+                    </dd>
+                  </div>
+                </dl>
+                <p className="mt-3 flex-1 text-sm leading-6 text-slate-500 dark:text-slate-400">
+                  {row.sourceTier.usage_band || t('admin.package_usage_band_empty', {}, 'No usage band summary is attached.')}
+                </p>
+                <div className="mt-5">
+                  {row.planId ? (
+                    <Link href={`/admin/plans/${row.planId}`} className="btn btn-secondary btn-sm">
+                      {t('common.manage', {}, 'Manage')}
+                    </Link>
+                  ) : (
+                    <Link href="/admin/plans" className="btn btn-secondary btn-sm">
+                      {t('admin.create_package_shell', {}, 'Create package')}
+                    </Link>
+                  )}
+                </div>
+              </BackofficeStackCard>
+            ))}
+          </div>
+        </div>
+      )}
     </BackofficePageStack>
   );
 }

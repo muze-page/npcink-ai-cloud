@@ -100,12 +100,12 @@ const WINDOW_OPTIONS = [
 ];
 
 const FORMAT_OPTIONS = [
-  { label: 'All formats', value: '' },
-  { label: 'WebP', value: 'webp' },
-  { label: 'JPEG', value: 'jpeg' },
-  { label: 'PNG', value: 'png' },
-  { label: 'AVIF', value: 'avif' },
-  { label: 'Original', value: 'original' },
+  { labelKey: 'admin.media_obs.format_all', label: 'All formats', value: '' },
+  { labelKey: 'admin.media_obs.format_webp', label: 'WebP', value: 'webp' },
+  { labelKey: 'admin.media_obs.format_jpeg', label: 'JPEG', value: 'jpeg' },
+  { labelKey: 'admin.media_obs.format_png', label: 'PNG', value: 'png' },
+  { labelKey: 'admin.media_obs.format_avif', label: 'AVIF', value: 'avif' },
+  { labelKey: 'admin.media_obs.format_original', label: 'Original', value: 'original' },
 ];
 
 function normalizeMediaObservability(raw: any): MediaObservabilityData {
@@ -234,6 +234,31 @@ function statusForSuccess(successRate: number, failures: number): string {
   return 'ok';
 }
 
+function mediaStatusLabel(
+  t: (key: string, params?: Record<string, string>, fallback?: string) => string,
+  status: string
+): string {
+  return t(`status.${status || 'unknown'}`, {}, status || 'unknown');
+}
+
+function mediaHealthSummary(
+  t: (key: string, params?: Record<string, string>, fallback?: string) => string,
+  data: MediaObservabilityData
+): string {
+  if (data.health.status === 'inactive') {
+    return t('admin.media_obs.health_summary_inactive', {}, 'No media processing jobs in this window.');
+  }
+  return t(
+    'admin.media_obs.health_summary_active',
+    {
+      jobs: formatNumber(data.totals.jobsTotal),
+      failures: formatNumber(data.totals.failedTotal),
+      p95: formatNumber(data.totals.p95ProcessingDurationMs),
+    },
+    '{{jobs}} jobs · {{failures}} failed · P95 {{p95}}ms'
+  );
+}
+
 function AdminMediaObservabilityContent() {
   const { t } = useLocale();
   const [data, setData] = useState<MediaObservabilityData | null>(null);
@@ -288,20 +313,20 @@ function AdminMediaObservabilityContent() {
   const formatData = useMemo(
     () =>
       (data?.formats || []).map((item) => ({
-        label: item.targetFormat || 'unknown',
+        label: item.targetFormat || t('common.unknown', {}, 'Unknown'),
         value: item.jobsTotal,
         color: item.failedTotal > 0 ? '#f59e0b' : '#2563eb',
       })),
-    [data]
+    [data, t]
   );
   const savingsData = useMemo(
     () =>
       (data?.formats || []).map((item) => ({
-        label: item.targetFormat || 'unknown',
+        label: item.targetFormat || t('common.unknown', {}, 'Unknown'),
         value: Math.abs(item.bytesSavedTotal),
         color: item.bytesSavedTotal < 0 ? '#f59e0b' : '#10b981',
       })),
-    [data]
+    [data, t]
   );
   const isEmpty = data !== null && data.totals.jobsTotal === 0;
 
@@ -341,15 +366,22 @@ function AdminMediaObservabilityContent() {
                 items={[
                   {
                     label: t('admin.media_obs.health', {}, 'Health'),
-                    value: `${data.health.status} · ${data.health.score}`,
-                    detail: data.health.summary,
+                    value: `${mediaStatusLabel(t, data.health.status)} · ${data.health.score}`,
+                    detail: mediaHealthSummary(t, data),
                     toneClassName: data.health.status === 'error' ? 'text-rose-600 dark:text-rose-400' : data.health.status === 'warning' ? 'text-amber-600 dark:text-amber-400' : undefined,
                     size: 'compact',
                   },
                   {
                     label: t('admin.media_obs.jobs', {}, 'Jobs'),
                     value: formatNumber(data.totals.jobsTotal),
-                    detail: `${formatNumber(data.totals.succeededTotal)} ok / ${formatNumber(data.totals.failedTotal)} failed`,
+                    detail: t(
+                      'admin.media_obs.jobs_detail',
+                      {
+                        succeeded: formatNumber(data.totals.succeededTotal),
+                        failed: formatNumber(data.totals.failedTotal),
+                      },
+                      '{{succeeded}} ok / {{failed}} failed'
+                    ),
                   },
                   {
                     label: t('admin.media_obs.success_rate', {}, 'Success rate'),
@@ -366,7 +398,11 @@ function AdminMediaObservabilityContent() {
                   {
                     label: t('admin.media_obs.storage', {}, 'Active storage'),
                     value: formatBytes(data.totals.activeArtifactBytes),
-                    detail: `${formatNumber(data.totals.activeArtifactCount)} artifacts`,
+                    detail: t(
+                      'admin.media_obs.artifacts_detail',
+                      { count: formatNumber(data.totals.activeArtifactCount) },
+                      '{{count}} artifacts'
+                    ),
                     size: 'compact',
                   },
                 ]}
@@ -394,7 +430,7 @@ function AdminMediaObservabilityContent() {
               tone="accent"
               onClick={() => setTargetFormat(opt.value)}
             >
-              {opt.label}
+              {t(opt.labelKey, {}, opt.label)}
             </BackofficeFilterPill>
           ))}
           <span className="mx-1 h-5 w-px bg-slate-200 dark:bg-slate-700" />
@@ -407,7 +443,7 @@ function AdminMediaObservabilityContent() {
                 setSiteIdFilter(siteIdInput.trim());
               }
             }}
-            placeholder="site_id"
+            placeholder={t('admin.media_obs.site_filter', {}, 'Site ID')}
             className="h-8 rounded-full border border-slate-200/80 bg-white/80 px-3 text-xs text-slate-700 placeholder:text-slate-400 dark:border-slate-700 dark:bg-slate-900/60 dark:text-slate-200 dark:placeholder:text-slate-500"
           />
           <button
@@ -415,7 +451,7 @@ function AdminMediaObservabilityContent() {
             onClick={() => setSiteIdFilter(siteIdInput.trim())}
             className="h-8 rounded-full border border-slate-200/80 bg-white/80 px-3 text-xs font-medium text-slate-700 transition hover:border-slate-300 hover:text-slate-950 dark:border-slate-700 dark:bg-slate-900/60 dark:text-slate-200 dark:hover:border-slate-600 dark:hover:text-white"
           >
-            Filter
+            {t('common.apply', {}, 'Apply')}
           </button>
           <button
             type="button"
@@ -504,7 +540,11 @@ function AdminMediaObservabilityContent() {
                   {
                     label: t('admin.media_obs.downloads', {}, 'Downloads'),
                     value: formatNumber(data?.totals.artifactDownloadCount || 0),
-                    detail: `${formatNumber(data?.totals.watermarkJobCount || 0)} watermark jobs`,
+                    detail: t(
+                      'admin.media_obs.watermark_jobs_detail',
+                      { count: formatNumber(data?.totals.watermarkJobCount || 0) },
+                      '{{count}} watermark jobs'
+                    ),
                   },
                 ]}
               />
@@ -550,12 +590,12 @@ function AdminMediaObservabilityContent() {
               <table className="min-w-full divide-y divide-slate-200/80 text-sm dark:divide-slate-800">
                 <thead className="bg-slate-50/80 text-xs uppercase tracking-[0.16em] text-slate-500 dark:bg-slate-950/30 dark:text-slate-400">
                   <tr>
-                    <th className="px-5 py-3 text-left font-semibold">Site</th>
-                    <th className="px-5 py-3 text-right font-semibold">Jobs</th>
-                    <th className="px-5 py-3 text-right font-semibold">Success</th>
-                    <th className="px-5 py-3 text-right font-semibold">Size change</th>
-                    <th className="px-5 py-3 text-right font-semibold">Avg ms</th>
-                    <th className="px-5 py-3 text-right font-semibold">Last</th>
+                    <th className="px-5 py-3 text-left font-semibold">{t('common.site', {}, 'Site')}</th>
+                    <th className="px-5 py-3 text-right font-semibold">{t('admin.media_obs.jobs', {}, 'Jobs')}</th>
+                    <th className="px-5 py-3 text-right font-semibold">{t('admin.media_obs.success', {}, 'Success')}</th>
+                    <th className="px-5 py-3 text-right font-semibold">{t('admin.media_obs.saved', {}, 'Size change')}</th>
+                    <th className="px-5 py-3 text-right font-semibold">{t('admin.media_obs.avg_ms', {}, 'Avg ms')}</th>
+                    <th className="px-5 py-3 text-right font-semibold">{t('admin.media_obs.last', {}, 'Last')}</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-200/80 dark:divide-slate-800">

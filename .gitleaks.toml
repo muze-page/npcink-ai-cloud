@@ -1,0 +1,7 @@
+title = "Npcink AI Cloud gitleaks config"
+
+[extend]
+useDefault = true
+
+# Historical reviewed false positives are pinned in .gitleaks-baseline.json.
+# Do not add broad allowlists here. New findings should fail CI until reviewed.

@@ -24,6 +24,7 @@ PROMPT_TEXT="${NPCINK_CLOUD_PROMPT_TEXT:-remote deploy smoke request}"
 EXPECTED_PROVIDER_ID="${NPCINK_CLOUD_EXPECTED_PROVIDER_ID:-}"
 EXPECTED_MODEL_ID="${NPCINK_CLOUD_EXPECTED_MODEL_ID:-}"
 EXPECTED_INSTANCE_ID="${NPCINK_CLOUD_EXPECTED_INSTANCE_ID:-}"
+SKIP_TERMS_CHECKS="${NPCINK_CLOUD_SKIP_TERMS_CHECKS:-0}"
 
 while [ "$#" -gt 0 ]; do
 	case "$1" in
@@ -74,6 +75,10 @@ while [ "$#" -gt 0 ]; do
 		--expected-instance-id)
 			EXPECTED_INSTANCE_ID="$2"
 			shift 2
+			;;
+		--skip-terms-checks)
+			SKIP_TERMS_CHECKS=1
+			shift
 			;;
 		*)
 			echo "[fail] Unknown argument: $1" >&2
@@ -311,21 +316,25 @@ else
 	assert_body_contains "${HTTP_BODY}" "_next/" "portal login page should be served by Next frontend"
 fi
 
-http_request "GET" "${BASE_URL%/}/terms" ""
-assert_status "${HTTP_STATUS}" "200" "terms index should be served by the production static path without exposing internal proxy redirects"
-assert_body_contains "${HTTP_BODY}" "Npcink Cloud legal documents" "terms index should include the expected title"
+if [ "${SKIP_TERMS_CHECKS}" = "1" ]; then
+	ok "Skipping static terms checks because --skip-terms-checks was set"
+else
+	http_request "GET" "${BASE_URL%/}/terms" ""
+	assert_status "${HTTP_STATUS}" "200" "terms index should be served by the production static path without exposing internal proxy redirects"
+	assert_body_contains "${HTTP_BODY}" "Npcink Cloud Legal Documents" "terms index should include the expected title"
 
-http_request "GET" "${BASE_URL%/}/terms/en/terms.html" ""
-assert_status "${HTTP_STATUS}" "200" "English terms page should be served by the production static path"
-assert_body_contains "${HTTP_BODY}" "Npcink Cloud Terms of Service" "English terms page should include the expected title"
+	http_request "GET" "${BASE_URL%/}/terms/en/terms.html" ""
+	assert_status "${HTTP_STATUS}" "200" "English terms page should be served by the production static path"
+	assert_body_contains "${HTTP_BODY}" "Npcink Cloud Terms of Service" "English terms page should include the expected title"
 
-http_request "GET" "${BASE_URL%/}/terms/zh/terms.html" ""
-assert_status "${HTTP_STATUS}" "200" "Chinese terms page should be served by the production static path"
-assert_body_contains "${HTTP_BODY}" "Npcink Cloud 服务条款" "Chinese terms page should include the expected title"
+	http_request "GET" "${BASE_URL%/}/terms/zh/terms.html" ""
+	assert_status "${HTTP_STATUS}" "200" "Chinese terms page should be served by the production static path"
+	assert_body_contains "${HTTP_BODY}" "Npcink Cloud 服务条款" "Chinese terms page should include the expected title"
 
-http_request "GET" "${BASE_URL%/}/terms/styles.css" ""
-assert_status "${HTTP_STATUS}" "200" "terms stylesheet should be served by the production static path"
-assert_body_contains "${HTTP_BODY}" "site-header" "terms stylesheet should include the expected layout selectors"
+	http_request "GET" "${BASE_URL%/}/terms/styles.css" ""
+	assert_status "${HTTP_STATUS}" "200" "terms stylesheet should be served by the production static path"
+	assert_body_contains "${HTTP_BODY}" "site-header" "terms stylesheet should include the expected layout selectors"
+fi
 
 http_request "GET" "${BASE_URL%/}/docs" ""
 assert_status "${HTTP_STATUS}" "404" "docs should stay disabled in production perimeter"
@@ -412,7 +421,11 @@ fi
 
 signed_request "GET" "/v1/runs/${RUN_ID}/result" "" "" "idem-deploy-smoke-result-001${IDEMPOTENCY_SUFFIX_NORMALIZED}" ""
 assert_status "${HTTP_STATUS}" "200" "runs/{run_id}/result should succeed"
-assert_json_non_empty "${HTTP_BODY}" "data.result.output_text" "run result should include output_text"
+if [ "${EXECUTION_KIND}" = "image_generation" ]; then
+	assert_json_non_empty "${HTTP_BODY}" "data.result.images" "image generation result should include images"
+else
+	assert_json_non_empty "${HTTP_BODY}" "data.result.output_text" "run result should include output_text"
+fi
 
 signed_request "GET" "/v1/stats/profiles/${PROFILE_ID}" "" "" "idem-deploy-smoke-stats-001${IDEMPOTENCY_SUFFIX_NORMALIZED}" ""
 assert_status "${HTTP_STATUS}" "200" "stats/profiles should succeed"

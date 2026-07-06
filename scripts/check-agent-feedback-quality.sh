@@ -51,6 +51,7 @@ ok "Running read-only dashboard boundary contract"
 (
 	cd frontend
 	node tests/unit/admin-agent-feedback-boundary-contract.mjs
+	node tests/unit/admin-agent-feedback-i18n-contract.mjs
 )
 
 ok "Agent feedback quality gate passed"

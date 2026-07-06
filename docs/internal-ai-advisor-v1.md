@@ -69,7 +69,8 @@ The first implementation phase should stay narrow:
    - Inputs: site monitoring overview, plugin observability attention items,
      media/vector/runtime/quota/key health, and recent activity summaries.
    - Output: up to three prioritized diagnostic items with evidence summary,
-     likely cause, and one next step for operator review.
+     likely cause, one next step, evidence window, generated timestamp, and
+     lightweight workflow status for operator review.
    - Non-goal: automatic WordPress repair, plugin setting mutation, or Cloud
      creation of local Core proposals.
 
@@ -379,9 +380,12 @@ customer runtime APIs.
 
 Portal exposure is limited to site-scoped, redacted operational explanation.
 `/portal/v1/sites/{site_id}/diagnostic-advisor` may show the current site's top
-diagnostic items, likely causes, and next steps. It must not expose internal
-operator guidance, cross-customer comparisons, provider credential details, raw
-plugin payloads, or repair controls.
+diagnostic items, likely causes, next steps, evidence window, generation time,
+and lightweight workflow status (`new`, `acknowledged`, `muted`, `resolved`).
+Status is review context only; it must not grant Cloud a WordPress write path or
+repair authority. Portal diagnostics must not expose internal operator guidance,
+cross-customer comparisons, provider credential details, raw plugin payloads, or
+repair controls.
 
 ## Frontend Surface
 

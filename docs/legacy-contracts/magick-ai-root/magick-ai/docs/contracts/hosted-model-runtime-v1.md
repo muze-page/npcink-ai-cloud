@@ -129,7 +129,20 @@
 - 当前最小 site lifecycle 固定为：
   - `provisioning`
   - `active`
+  - `inactive`
   - `suspended`
+  - `archived`（产品语义为用户已移除）
+- `inactive` 表示用户在 Portal 中停用 Cloud 服务后保留的站点记录：
+  - public runtime 不接受 `inactive` site；
+  - `inactive` 不占用订阅的可用站点额度；
+  - 用户可通过 Portal 或 WordPress addon 重连重新启用；
+  - 站点密钥、用量、审计和历史记录继续保留。
+- `suspended` 表示服务面/运营面暂停，不能由用户自助绕过，也继续占用站点额度。
+- `archived` 表示用户已从 Portal 移除的历史站点记录：
+  - public runtime 不接受 `archived` site；
+  - `archived` 不占用订阅的可用站点额度；
+  - 移除时应撤销该站点 active API keys；
+  - 用量、账单和审计历史继续保留并按历史 `site_id` 可读。
 - 当前阶段允许的 provisioning owner 只有：
   - dev/test seed
   - 未来 Cloud `Service Plane / Internal Service Operations`
@@ -140,8 +153,12 @@
   - `expired`
 - customer-facing `Cloud API Key` wrapper format 固定见 [cloud-customer-api-key-format-v1.md](cloud-customer-api-key-format-v1.md)；
   它只负责交付体验，不改变底层 `site_id + key_id + secret` auth truth。
-- 若未来上线 customer-facing Portal / self-serve key 管理，对外签发/轮换 contract 固定见 [cloud-portal-api-key-issue-v1.md](cloud-portal-api-key-issue-v1.md)；
-  但 canonical key lifecycle owner 继续是 Cloud service-plane internal ops。
+- 当前用户 Portal 不再暴露自助 key 管理面；`/portal/keys` 旧入口已移除，不再作为重定向保留。
+- WordPress addon 连接 / 重连会自动签发新的 customer-facing `Cloud API Key` wrapper，并撤销该站点旧的 active runtime keys；
+  用户只管理站点启用、停用和移除，不手工创建、复制或轮换底层 key。
+- 若未来重新上线 customer-facing Portal / self-serve key 管理，必须先重新评审
+  [cloud-portal-api-key-issue-v1.md](cloud-portal-api-key-issue-v1.md)；
+  canonical key lifecycle owner 继续是 Cloud service-plane internal ops。
 - public runtime auth 只接受未过期且未撤销的 `active` key；revoked 或 expired key 统一返回 `401 auth.invalid_key`。
 - `create / rotate / revoke / expire / audit` owner 固定在 Cloud `Service Plane / Internal Service Operations`；
   public runtime surface 不得隐式补发、续期、轮换或审计 key。

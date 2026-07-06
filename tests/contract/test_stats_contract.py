@@ -9,7 +9,13 @@ from sqlalchemy import select
 from app.api.main import create_app
 from app.core.config import Settings
 from app.core.db import dispose_engine, get_session, init_schema
-from app.core.models import HealthSnapshot, ProviderCallRecord, RunRecord, RuntimeGuardEvent
+from app.core.models import (
+    HealthSnapshot,
+    ProviderCallRecord,
+    ProviderConnection,
+    RunRecord,
+    RuntimeGuardEvent,
+)
 from app.core.services import CloudServices
 from app.domain.catalog.service import CatalogService
 from app.domain.runtime.models import RuntimeRequest
@@ -22,10 +28,36 @@ def _sqlite_url(tmp_path: Path) -> str:
     return f"sqlite+pysqlite:///{tmp_path / 'stats-contract.sqlite3'}"
 
 
+def _seed_openai_model_allowlist(database_url: str) -> None:
+    with get_session(database_url) as session:
+        session.add(
+            ProviderConnection(
+                connection_id="openai",
+                provider_type="openai_compatible",
+                display_name="OpenAI",
+                enabled=True,
+                base_url="https://api.openai.test/v1",
+                config_json={
+                    "provider_id": "openai",
+                    "kind": "openai_compatible",
+                    "capability_ids": ["text_generation"],
+                    "runtime_profile_ids": ["text.balanced"],
+                    "model_ids": ["gpt-4.1-mini"],
+                },
+                secret_ciphertext="configured-in-test",
+                status="ready",
+                source_role="execution_source",
+                metadata_json={},
+            )
+        )
+        session.commit()
+
+
 def test_stats_response_shapes_are_stable(tmp_path: Path) -> None:
     database_url = _sqlite_url(tmp_path)
     init_schema(database_url)
     CatalogService(database_url).refresh_catalog()
+    _seed_openai_model_allowlist(database_url)
     CatalogService(database_url).scan_provider_health()
     seed_site_auth(database_url, site_id="site_contract", scopes=["stats:read"])
 
@@ -737,6 +769,7 @@ def test_instance_stats_contract_exposes_latency_probe_delivery_buffer_metadata(
     database_url = _sqlite_url(tmp_path)
     init_schema(database_url)
     CatalogService(database_url).refresh_catalog()
+    _seed_openai_model_allowlist(database_url)
     CatalogService(database_url).scan_provider_health()
     seed_site_auth(database_url, site_id="site_contract", scopes=["stats:read"])
 
@@ -825,6 +858,7 @@ def test_alert_provider_degradation_contract_exposes_delivery_buffer_metadata(
     database_url = _sqlite_url(tmp_path)
     init_schema(database_url)
     CatalogService(database_url).refresh_catalog()
+    _seed_openai_model_allowlist(database_url)
     CatalogService(database_url).scan_provider_health()
     seed_site_auth(database_url, site_id="site_contract", scopes=["stats:read"])
 
@@ -918,6 +952,7 @@ def test_router_diagnostics_contract_exposes_case_detail_shape(tmp_path: Path) -
     database_url = _sqlite_url(tmp_path)
     init_schema(database_url)
     CatalogService(database_url).refresh_catalog()
+    _seed_openai_model_allowlist(database_url)
     CatalogService(database_url).scan_provider_health()
     seed_site_auth(database_url, site_id="site_alpha", scopes=["stats:read"])
 
@@ -1080,6 +1115,7 @@ def test_router_diagnostics_contract_exposes_delivery_buffer_metadata(
     database_url = _sqlite_url(tmp_path)
     init_schema(database_url)
     CatalogService(database_url).refresh_catalog()
+    _seed_openai_model_allowlist(database_url)
     CatalogService(database_url).scan_provider_health()
     seed_site_auth(database_url, site_id="site_alpha", scopes=["stats:read"])
 
@@ -1165,6 +1201,7 @@ def test_router_performance_snapshot_contract_exposes_first_tranche_dimensions(
     database_url = _sqlite_url(tmp_path)
     init_schema(database_url)
     CatalogService(database_url).refresh_catalog()
+    _seed_openai_model_allowlist(database_url)
     CatalogService(database_url).scan_provider_health()
     seed_site_auth(database_url, site_id="site_alpha", scopes=["stats:read"])
 
@@ -1311,6 +1348,7 @@ def test_router_performance_projection_contract_exposes_delivery_buffer_metadata
     database_url = _sqlite_url(tmp_path)
     init_schema(database_url)
     CatalogService(database_url).refresh_catalog()
+    _seed_openai_model_allowlist(database_url)
     CatalogService(database_url).scan_provider_health()
     seed_site_auth(database_url, site_id="site_contract", scopes=["stats:read"])
 

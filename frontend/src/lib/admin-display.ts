@@ -37,7 +37,7 @@ const ADMIN_ALLOWED_ACTION_LABELS: Record<string, string> = {
   view_audit: 'admin.allowed_action_view_audit',
   provision_sites: 'admin.allowed_action_provision_sites',
   manage_site_keys: 'admin.allowed_action_manage_site_keys',
-  archive_sites: 'admin.allowed_action_archive_sites',
+  remove_sites: 'admin.allowed_action_remove_sites',
 };
 
 function humanizeCode(value: string) {

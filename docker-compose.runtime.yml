@@ -51,7 +51,7 @@ services:
       - .env.deploy
     environment:
       CLOUD_API_BASE_URL: http://api:8000
-      CLOUD_PUBLIC_BASE_URL: ${NPCINK_CLOUD_PORTAL_PUBLIC_BASE_URL:-${NPCINK_CLOUD_BASE_URL:-http://127.0.0.1:${NPCINK_CLOUD_PORT:-8010}}}
+      CLOUD_PUBLIC_BASE_URL: ${NPCINK_CLOUD_BASE_URL:-http://127.0.0.1:${NPCINK_CLOUD_PORT:-8010}}
       NODE_ENV: production
     expose:
       - "3000"
