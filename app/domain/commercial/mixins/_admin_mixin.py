@@ -1699,18 +1699,9 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
             if reconciled is not None:
                 session.commit()
             primary_subscription = cast(Any, self)._select_primary_subscription(subscriptions)
-            plan_version = (
-                repository.get_plan_version(primary_subscription.plan_version_id)
-                if primary_subscription is not None and primary_subscription.plan_version_id
-                else None
-            )
-            snapshot = repository.get_active_entitlement_snapshot(
-                account_id,
-                subscription_id=(
-                    primary_subscription.subscription_id
-                    if primary_subscription is not None
-                    else None
-                ),
+            plan_version = cast(Any, self)._resolve_current_subscription_plan_version(
+                repository,
+                primary_subscription,
             )
             period_start_at, period_end_at = cast(Any, self)._resolve_period(
                 primary_subscription,
@@ -1749,17 +1740,12 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
                 limit=None,
             )
             totals = cast(Any, self)._aggregate_meter_events(meter_events)
-            budgets = (
-                cast(Any, self)._normalize_budgets(snapshot.budgets_json)
-                if snapshot is not None
-                else cast(Any, self)._normalize_budgets(
-                    getattr(plan_version, "budgets_json", None)
-                )
+            budgets = cast(Any, self)._resolve_effective_subscription_budgets(
+                plan_version=plan_version,
+                subscription=primary_subscription,
             )
             policy = cast(Any, self)._normalize_commercial_policy(
-                snapshot.policy_json
-                if snapshot is not None
-                else getattr(plan_version, "policy_json", None)
+                getattr(plan_version, "policy_json", None)
             )
             budget_state = cast(Any, self)._build_budget_policy_state(
                 repository=repository,
@@ -1788,7 +1774,7 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
                 until=period_end_at,
             )
             batch_limits = cast(Any, self)._resolve_runtime_batch_limits(
-                snapshot=snapshot,
+                snapshot=None,
                 plan_version=plan_version,
             )
 
@@ -1807,11 +1793,16 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
         indexed_chunk_count = sum(
             int(item.get("chunks") or 0) for item in knowledge_counts.values()
         )
-        site_limit = service._coerce_int(getattr(snapshot, "site_limit", 0))
+        site_limit = service._resolve_site_limit(
+            plan_version=plan_version,
+            subscription=primary_subscription,
+        )
         concurrency = (
-            service._normalize_concurrency(snapshot.concurrency_json)
-            if snapshot is not None
-            else service._normalize_concurrency(getattr(plan_version, "concurrency_json", None))
+            service._normalize_concurrency(getattr(plan_version, "concurrency_json", None))
+        )
+        vector_document_limit = cast(Any, self)._resolve_account_vector_documents_limit(
+            snapshot=None,
+            plan_version=plan_version,
         )
         ledger_source = bool(credit_ledger_entries)
         credit_rate_version = AI_CREDIT_RATE_VERSION if ledger_source else "ai-credit-estimate-v2"
@@ -1871,11 +1862,7 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
                 key="vector_documents",
                 label="Vector indexed articles",
                 used=indexed_document_count,
-                limit=site_count
-                * max(
-                    0,
-                    int(self.settings.site_knowledge_max_indexed_documents_per_site),
-                ),
+                limit=vector_document_limit,
                 unit="document",
             ),
             self._quota_metric(
@@ -2230,23 +2217,43 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
         credit: dict[str, object] = (
             cast(dict[str, object], raw_credit) if isinstance(raw_credit, dict) else {}
         )
+        raw_resource_limits = summary.get("resource_limits")
+        raw_resource_limits = raw_resource_limits if isinstance(raw_resource_limits, list) else []
+        resource_by_key = {
+            str(item.get("key") or ""): item
+            for item in raw_resource_limits
+            if isinstance(item, dict)
+        }
+        resource_limits = [
+            resource_by_key[key]
+            for key in ("bound_sites", "vector_documents")
+            if key in resource_by_key
+        ]
+        visible_statuses = [
+            str(item.get("status") or "ok")
+            for item in [credit, *resource_limits]
+            if isinstance(item, dict)
+        ]
+        portal_status = (
+            "limited"
+            if "limited" in visible_statuses
+            else "near_limit"
+            if "near_limit" in visible_statuses
+            else "ok"
+        )
         return {
             "account_id": str(summary.get("account_id") or account_id),
             "generated_at": summary.get("generated_at"),
             "period_start_at": summary.get("period_start_at"),
             "period_end_at": summary.get("period_end_at"),
-            "status": summary.get("status"),
+            "status": portal_status,
             "credit": credit,
             "credit_policy": (
                 summary.get("credit_policy")
                 if isinstance(summary.get("credit_policy"), dict)
                 else {}
             ),
-            "resource_limits": (
-                summary.get("resource_limits")
-                if isinstance(summary.get("resource_limits"), list)
-                else []
-            ),
+            "resource_limits": resource_limits,
             "breakdown": breakdown,
             "credit_usage_detail": self._build_portal_credit_usage_detail(
                 credit=credit,

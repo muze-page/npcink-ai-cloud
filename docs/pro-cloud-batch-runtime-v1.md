@@ -114,7 +114,7 @@ scheduler. The Cloud commercial layer may enforce these package metadata fields:
 ```json
 {
   "max_batch_items": 25,
-  "nightly_inspection_runs_per_period": 30,
+  "nightly_inspection_runs_per_period": 0,
   "nightly_inspection_retention_days": 14,
   "nightly_inspection_payload_modes": ["metadata_only", "excerpt"]
 }
@@ -122,11 +122,12 @@ scheduler. The Cloud commercial layer may enforce these package metadata fields:
 
 Rules:
 
-- `nightly_inspection_runs_per_period` counts accepted `automation` runs with
-  `execution_kind: nightly_site_inspection` in the active billing period.
-- Positive values are enforced fail-closed before a new run is created.
-- `0` or omitted values keep the current internal-development posture: no
-  package-limit block, but usage metering and audit remain active.
+- `nightly_inspection_runs_per_period` is retained as a legacy read-only detail
+  field. It is no longer a customer-facing package budget.
+- Nightly inspection runs spend AI credits through the normal credit ledger
+  path. They are not blocked by a separate per-period run quota.
+- `0` or omitted values are the expected posture: no package-limit block, but
+  usage metering and audit remain active.
 - `nightly_inspection_retention_days` is customer-visible retention guidance for
   result detail; request-level `retention_ttl` still remains bounded by runtime
   contract validation.

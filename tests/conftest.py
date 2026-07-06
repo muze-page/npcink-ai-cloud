@@ -52,6 +52,7 @@ from app.core.models import (
     SUBSCRIPTION_STATUS_ACTIVE,
     AccountEntitlementSnapshot,
     AccountSubscription,
+    Plan,
     PlanVersion,
     ProviderConnection,
     Site,
@@ -171,8 +172,52 @@ def seed_site_auth(
         if subscription is not None:
             subscription.status = subscription_status
             plan_version = session.get(PlanVersion, subscription.plan_version_id)
-            if plan_version is not None and policy is not None:
-                plan_version.policy_json = policy
+            has_custom_commercial_policy = any(
+                item is not None for item in (entitlements, budgets, concurrency, policy)
+            )
+            if plan_version is not None and has_custom_commercial_policy:
+                custom_plan_id = f"{subscription.plan_id}_{site_id}"[:191]
+                custom_plan = session.get(Plan, custom_plan_id)
+                if custom_plan is None:
+                    custom_plan = Plan(
+                        plan_id=custom_plan_id,
+                        name=custom_plan_id,
+                        status="published",
+                        description=None,
+                        metadata_json={"source": "seed_site_auth"},
+                    )
+                    session.add(custom_plan)
+                    session.flush()
+                subscription.plan_id = custom_plan_id
+                custom_plan_version_id = f"{subscription.plan_version_id}_{site_id}"[:191]
+                custom_version_label = f"test_{site_id}"[:64]
+                custom_plan_version = session.get(PlanVersion, custom_plan_version_id)
+                if custom_plan_version is None:
+                    custom_plan_version = PlanVersion(
+                        plan_version_id=custom_plan_version_id,
+                        plan_id=custom_plan_id,
+                        version_label=custom_version_label,
+                        status=plan_version.status,
+                        currency=plan_version.currency,
+                        entitlements_json=dict(plan_version.entitlements_json or {}),
+                        budgets_json=dict(plan_version.budgets_json or {}),
+                        concurrency_json=dict(plan_version.concurrency_json or {}),
+                        policy_json=dict(plan_version.policy_json or {}),
+                        metadata_json=dict(plan_version.metadata_json or {}),
+                    )
+                    session.add(custom_plan_version)
+                    session.flush()
+                subscription.plan_version_id = custom_plan_version_id
+                plan_version = custom_plan_version
+            if plan_version is not None:
+                if entitlements is not None:
+                    plan_version.entitlements_json = entitlements
+                if budgets is not None:
+                    plan_version.budgets_json = budgets
+                if concurrency is not None:
+                    plan_version.concurrency_json = concurrency
+                if policy is not None:
+                    plan_version.policy_json = policy
 
         snapshot = session.scalar(
             select(AccountEntitlementSnapshot)
@@ -183,6 +228,8 @@ def seed_site_auth(
             )
         )
         if snapshot is not None:
+            if subscription is not None:
+                snapshot.plan_version_id = subscription.plan_version_id
             if entitlements is not None:
                 snapshot.entitlements_json = entitlements
             if budgets is not None:

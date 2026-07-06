@@ -52,6 +52,19 @@ Each runtime capability policy must declare:
 5. Do not charge from frontend input. The server owns amount, rate, and ledger delta.
 6. Grants, refunds, and operator adjustments must stay separate from consume components.
 
+## Product Budget Rule
+
+AI credits are the only customer-purchasable consumption budget. Runtime runs,
+tokens, provider cost, batch size, and provider-specific calls may still be
+recorded as usage evidence, diagnostics, ledger components, or internal
+guardrails, but they must not be exposed as separate purchasable resources or
+used as the primary subscription budget gate.
+
+Site Knowledge indexed article count is a package capacity boundary, not a
+separate purchasable consumption budget. Vector chunks and sync-per-run limits
+remain implementation detail unless a future contract explicitly promotes them
+to visible package capacity.
+
 ## Feature Rule Fields
 
 Feature charge rules use `AI_CREDIT_FEATURE_CHARGE_RULES_VERSION=ai-credit-feature-charge-rules-v1`.

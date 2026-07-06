@@ -84,6 +84,7 @@ type TierSummary = {
   positioning: string;
   monthly_included_points: number;
   site_limit: number;
+  max_vector_documents: number;
   budgets_template: Record<string, unknown>;
   concurrency_template: Record<string, unknown>;
   max_batch_items: number;
@@ -125,8 +126,7 @@ type PlanVersionFormState = {
   currency: string;
   monthly_included_points: string;
   site_limit: string;
-  max_runs_per_period: string;
-  max_tokens_per_period: string;
+  max_vector_documents: string;
   max_cost_per_period: string;
   max_active_runs: string;
   max_batch_items: string;
@@ -216,11 +216,10 @@ function buildInitialForm(detail: PlanDetailPayload | null): PlanVersionFormStat
     status: latestVersion?.status || 'published',
     currency: ADMIN_CURRENCY,
     monthly_included_points: numberField(
-      metadata.monthly_included_points ?? tierSummary?.monthly_included_points ?? 0
+      budgets.max_ai_credits_per_period ?? metadata.monthly_included_points ?? tierSummary?.monthly_included_points ?? 0
     ),
     site_limit: numberField(metadata.site_limit ?? tierSummary?.site_limit ?? 0),
-    max_runs_per_period: numberField(budgets.max_runs_per_period),
-    max_tokens_per_period: numberField(budgets.max_tokens_per_period),
+    max_vector_documents: numberField(metadata.max_vector_documents ?? tierSummary?.max_vector_documents ?? 0),
     max_cost_per_period: numberField(budgets.max_cost_per_period),
     max_active_runs: numberField(concurrency.max_active_runs),
     max_batch_items: numberField(metadata.max_batch_items ?? tierSummary?.max_batch_items ?? 0),
@@ -242,8 +241,7 @@ function buildBaselineFieldPatch(
   return {
     monthly_included_points: numberField(tierSummary?.monthly_included_points ?? 0),
     site_limit: numberField(tierSummary?.site_limit ?? 0),
-    max_runs_per_period: numberField(budgets.max_runs_per_period),
-    max_tokens_per_period: numberField(budgets.max_tokens_per_period),
+    max_vector_documents: numberField(tierSummary?.max_vector_documents ?? 0),
     max_cost_per_period: numberField(budgets.max_cost_per_period),
     max_active_runs: numberField(concurrency.max_active_runs),
     max_batch_items: numberField(tierSummary?.max_batch_items ?? 0),
@@ -262,11 +260,10 @@ function buildLatestFieldPatch(
   const subscriptionPolicy = (policy.subscription || tierSummary?.policy_baseline || {}) as Record<string, unknown>;
   return {
     monthly_included_points: numberField(
-      metadata.monthly_included_points ?? tierSummary?.monthly_included_points ?? 0
+      budgets.max_ai_credits_per_period ?? metadata.monthly_included_points ?? tierSummary?.monthly_included_points ?? 0
     ),
     site_limit: numberField(metadata.site_limit ?? tierSummary?.site_limit ?? 0),
-    max_runs_per_period: numberField(budgets.max_runs_per_period),
-    max_tokens_per_period: numberField(budgets.max_tokens_per_period),
+    max_vector_documents: numberField(metadata.max_vector_documents ?? tierSummary?.max_vector_documents ?? 0),
     max_cost_per_period: numberField(budgets.max_cost_per_period),
     max_active_runs: numberField(concurrency.max_active_runs),
     max_batch_items: numberField(metadata.max_batch_items ?? tierSummary?.max_batch_items ?? 0),
@@ -362,6 +359,7 @@ function PlanDetailContent() {
         {
           monthly_included_points: Number(form.monthly_included_points || 0),
           site_limit: Number(form.site_limit || 0),
+          max_vector_documents: Number(form.max_vector_documents || 0),
           max_batch_items: Number(form.max_batch_items || 0),
         }
       );
@@ -373,8 +371,9 @@ function PlanDetailContent() {
         entitlements: parseJsonObject(form.entitlements_json, 'Entitlements'),
         budgets: mergeJsonObjects(
           {
-            max_runs_per_period: Number(form.max_runs_per_period || 0),
-            max_tokens_per_period: Number(form.max_tokens_per_period || 0),
+            max_ai_credits_per_period: Number(form.monthly_included_points || 0),
+            max_runs_per_period: 0,
+            max_tokens_per_period: 0,
             max_cost_per_period: Number(form.max_cost_per_period || 0),
           },
           parseJsonObject(form.budgets_override_json, 'Budgets override')
@@ -453,16 +452,14 @@ function PlanDetailContent() {
   const latestVersion = detail.latest_version || detail.versions[0] || null;
   const tierSummary = detail.tier_summary;
   const templateBudgets = (tierSummary?.budgets_template || {}) as {
-    max_runs_per_period?: number;
-    max_tokens_per_period?: number;
+    max_ai_credits_per_period?: number;
     max_cost_per_period?: number;
   };
   const templateConcurrency = (tierSummary?.concurrency_template || {}) as {
     max_active_runs?: number;
   };
   const latestBudgets = (latestVersion?.budgets || {}) as {
-    max_runs_per_period?: number;
-    max_tokens_per_period?: number;
+    max_ai_credits_per_period?: number;
     max_cost_per_period?: number;
   };
   const latestConcurrency = (latestVersion?.concurrency || {}) as { max_active_runs?: number };
@@ -496,6 +493,14 @@ function PlanDetailContent() {
   const subscriptionQueueHref = `/admin/subscriptions?plan_id=${encodeURIComponent(detail.plan.plan_id)}`;
   const latestMetadata = (latestVersion?.metadata || {}) as Record<string, unknown>;
   const effectiveSiteLimit = numericValue(latestMetadata.site_limit ?? tierSummary?.site_limit);
+  const effectiveVectorDocuments = numericValue(
+    latestMetadata.max_vector_documents ?? tierSummary?.max_vector_documents
+  );
+  const effectivePackagePoints = numericValue(
+    latestBudgets.max_ai_credits_per_period ??
+      latestMetadata.monthly_included_points ??
+      tierSummary?.monthly_included_points
+  );
   const templateActionLabel = t(
     'admin.apply_tier_baseline',
     { tier: localizedPackageAlias || localizedTierLabel || 'tier' },
@@ -606,24 +611,24 @@ function PlanDetailContent() {
         <BackofficeMetricStrip
           items={[
             {
-              label: t('admin.period_cost_budget', {}, 'Package fee'),
-              value: formatBudgetCurrency(latestBudgets.max_cost_per_period),
-              detail: t('admin.period_cost_budget_detail', {}, 'Saved package fee for this billing period.'),
-            },
-            {
-              label: t('billing.runs', {}, 'Runs'),
-              value: formatInteger(numericValue(latestBudgets.max_runs_per_period ?? templateBudgets.max_runs_per_period)),
-              detail: t('admin.plan_template_runs_detail', {}, 'Run ceiling stored for this package period.'),
-            },
-            {
-              label: t('common.tokens'),
-              value: formatInteger(numericValue(latestBudgets.max_tokens_per_period ?? templateBudgets.max_tokens_per_period)),
-              detail: t('admin.plan_template_tokens_detail', {}, 'Token ceiling stored for this package period.'),
+              label: t('admin.included_points', {}, 'Package points'),
+              value: formatInteger(effectivePackagePoints),
+              detail: t('admin.included_points_detail', {}, 'Current-period package points shared by all sites on this account.'),
             },
             {
               label: t('admin.site_limit', {}, 'Site limit'),
               value: formatInteger(numericValue((latestVersion?.metadata || {}).site_limit || tierSummary?.site_limit)),
               detail: t('admin.site_limit_detail', {}, 'Maximum covered sites on the current customer subscription.'),
+            },
+            {
+              label: t('admin.vector_documents_limit', {}, 'Knowledge articles'),
+              value: formatInteger(effectiveVectorDocuments),
+              detail: t('admin.vector_documents_limit_detail', {}, 'Account-level article capacity for Site Knowledge indexing.'),
+            },
+            {
+              label: t('admin.period_cost_budget', {}, 'Package fee'),
+              value: formatBudgetCurrency(latestBudgets.max_cost_per_period),
+              detail: t('admin.period_cost_budget_detail', {}, 'Saved package fee for this billing period.'),
             },
             {
               label: t('admin.concurrency', {}, 'Concurrency'),
@@ -728,9 +733,9 @@ function PlanDetailContent() {
               <BackofficeMetricStrip
                 items={[
                   {
-                    label: t('admin.included_points', {}, 'Included points'),
+                    label: t('admin.included_points', {}, 'Package points'),
                     value: formatInteger(Number(tierSummary?.monthly_included_points || 0)),
-                    detail: t('admin.included_points_detail', {}, 'Presentation-layer monthly included points for package explanation only.'),
+                    detail: t('admin.included_points_detail', {}, 'Current-period package points shared by all sites on this account.'),
                   },
                   {
                     label: t('admin.site_limit', {}, 'Site limit'),
@@ -738,14 +743,9 @@ function PlanDetailContent() {
                     detail: t('admin.site_limit_detail', {}, 'Maximum covered sites on the current customer subscription.'),
                   },
                   {
-                    label: t('billing.runs', {}, 'Runs'),
-                    value: formatInteger(Number(templateBudgets.max_runs_per_period || 0)),
-                    detail: t('admin.plan_template_runs_detail', {}, 'Run ceiling stored for this package period.'),
-                  },
-                  {
-                    label: t('common.tokens'),
-                    value: formatInteger(Number(templateBudgets.max_tokens_per_period || 0)),
-                    detail: t('admin.plan_template_tokens_detail', {}, 'Token ceiling stored for this package period.'),
+                    label: t('admin.vector_documents_limit', {}, 'Knowledge articles'),
+                    value: formatInteger(Number(tierSummary?.max_vector_documents || 0)),
+                    detail: t('admin.vector_documents_limit_detail', {}, 'Account-level article capacity for Site Knowledge indexing.'),
                   },
                   {
                     label: t('common.cost'),
@@ -912,24 +912,20 @@ function PlanDetailContent() {
                       <input value={form.max_cost_per_period} onChange={(e) => setForm((c) => ({ ...c, max_cost_per_period: e.target.value }))} className="input w-full" type="number" min="0" step="0.01" />
                     </label>
                     <label className="text-sm">
-                      <span className="mb-2 block font-medium text-gray-700 dark:text-gray-300">{t('admin.included_points', {}, 'Included points')}</span>
+                      <span className="mb-2 block font-medium text-gray-700 dark:text-gray-300">{t('admin.included_points', {}, 'Package points')}</span>
                       <input value={form.monthly_included_points} onChange={(e) => setForm((c) => ({ ...c, monthly_included_points: e.target.value }))} className="input w-full" type="number" min="0" step="1" />
-                    </label>
-                    <label className="text-sm">
-                      <span className="mb-2 block font-medium text-gray-700 dark:text-gray-300">{t('admin.batch_ceiling', {}, 'Batch ceiling')}</span>
-                      <input value={form.max_batch_items} onChange={(e) => setForm((c) => ({ ...c, max_batch_items: e.target.value }))} className="input w-full" type="number" min="0" step="1" />
                     </label>
                     <label className="text-sm">
                       <span className="mb-2 block font-medium text-gray-700 dark:text-gray-300">{t('admin.site_limit', {}, 'Site limit')}</span>
                       <input value={form.site_limit} onChange={(e) => setForm((c) => ({ ...c, site_limit: e.target.value }))} className="input w-full" type="number" min="1" step="1" />
                     </label>
                     <label className="text-sm">
-                      <span className="mb-2 block font-medium text-gray-700 dark:text-gray-300">{t('billing.runs', {}, 'Runs')}</span>
-                      <input value={form.max_runs_per_period} onChange={(e) => setForm((c) => ({ ...c, max_runs_per_period: e.target.value }))} className="input w-full" type="number" min="0" step="1" />
+                      <span className="mb-2 block font-medium text-gray-700 dark:text-gray-300">{t('admin.vector_documents_limit', {}, 'Knowledge articles')}</span>
+                      <input value={form.max_vector_documents} onChange={(e) => setForm((c) => ({ ...c, max_vector_documents: e.target.value }))} className="input w-full" type="number" min="0" step="1" />
                     </label>
                     <label className="text-sm">
-                      <span className="mb-2 block font-medium text-gray-700 dark:text-gray-300">{t('common.tokens')}</span>
-                      <input value={form.max_tokens_per_period} onChange={(e) => setForm((c) => ({ ...c, max_tokens_per_period: e.target.value }))} className="input w-full" type="number" min="0" step="1" />
+                      <span className="mb-2 block font-medium text-gray-700 dark:text-gray-300">{t('admin.batch_ceiling', {}, 'Batch ceiling')}</span>
+                      <input value={form.max_batch_items} onChange={(e) => setForm((c) => ({ ...c, max_batch_items: e.target.value }))} className="input w-full" type="number" min="0" step="1" />
                     </label>
                     <label className="text-sm">
                       <span className="mb-2 block font-medium text-gray-700 dark:text-gray-300">{t('admin.concurrency', {}, 'Concurrency')}</span>

@@ -46,12 +46,14 @@ function resourceLabel(key: string, t: TranslateFn): string {
   const labels: Record<string, string> = {
     ai_credits: t('portal.usage.package_credit_allowance_label', {}, 'Package points'),
     bound_sites: t('portal.usage.site_allowance_label', {}, 'Sites'),
+    vector_documents: t('portal.usage.resource_vector_documents', {}, 'Knowledge articles'),
   };
   return labels[key] || humanizeKey(key);
 }
 
 function normalizeMetrics(quotaSummary?: QuotaSummary | null): EntitlementMetric[] {
   if (!quotaSummary) return [];
+  const visibleResourceKeys = new Set(['bound_sites', 'vector_documents']);
   const metrics: EntitlementMetric[] = [];
   if (quotaSummary.credit) {
     metrics.push({
@@ -63,7 +65,10 @@ function normalizeMetrics(quotaSummary?: QuotaSummary | null): EntitlementMetric
     ? quotaSummary.resource_limits
     : [];
   resources.forEach((resource: QuotaResource) => {
-    metrics.push({ ...resource, key: resource.key || '' });
+    const key = String(resource.key || '');
+    if (visibleResourceKeys.has(key)) {
+      metrics.push({ ...resource, key });
+    }
   });
   return metrics.filter((metric) => String(metric.key || '').trim());
 }
