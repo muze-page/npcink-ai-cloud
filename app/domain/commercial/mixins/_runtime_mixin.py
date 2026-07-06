@@ -460,6 +460,7 @@ class CommercialServiceRuntimeMixin(CommercialServiceAuditMixin):
         budgets = service._resolve_effective_subscription_budgets(
             plan_version=plan_version,
             subscription=subscription,
+            snapshot=snapshot,
         )
         credit_entries = repository.list_credit_ledger_entries(
             account_ids=[subscription.account_id],

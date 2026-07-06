@@ -2075,8 +2075,10 @@ class CommercialServiceBillingMixin(CommercialServiceAuditMixin):
         *,
         plan_version: PlanVersion | None,
         subscription: AccountSubscription | None,
+        snapshot: AccountEntitlementSnapshot | None = None,
     ) -> dict[str, object]:
-        budgets = self._normalize_budgets(getattr(plan_version, "budgets_json", None))
+        budget_source = snapshot if snapshot is not None else plan_version
+        budgets = self._normalize_budgets(getattr(budget_source, "budgets_json", None))
         metadata = getattr(subscription, "metadata_json", None)
         topup_totals = (
             metadata.get("current_period_topup_totals") if isinstance(metadata, dict) else None
