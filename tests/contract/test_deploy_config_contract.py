@@ -232,6 +232,8 @@ def test_preview_and_baseline_scripts_lock_migration_and_schema_checks() -> None
     assert "proxy_set_header X-Forwarded-Host $host;" in nginx_dev_conf
     assert "location = /health/operational-ready" in nginx_dev_conf
     assert "location /open/" in nginx_dev_conf
+    dev_open_block = nginx_dev_conf.split("location /open/ {", 1)[1].split("\n    }", 1)[0]
+    assert "proxy_set_header Connection" not in dev_open_block
     assert "callback-worker:" in preview_script
     assert "ops-worker:" in preview_script
     assert "ops-worker:" in dev_compose_text
@@ -316,6 +318,13 @@ def test_deploy_bundle_smoke_uses_sample_provider_and_skip_frontend_contract() -
     assert "proxy_set_header X-Forwarded-Proto $npcink_forwarded_proto;" in nginx_prod_conf
     assert "location = /admin/auth/bootstrap" in nginx_prod_conf
     assert "location /open/" in nginx_prod_conf
+    prod_open_block = nginx_prod_conf.split("location /open/ {", 1)[1].split("\n    }", 1)[0]
+    prod_portal_api_block = nginx_prod_conf.split("location /portal/v1/ {", 1)[1].split(
+        "\n    }",
+        1,
+    )[0]
+    assert "proxy_set_header Connection" not in prod_open_block
+    assert "proxy_set_header Connection" not in prod_portal_api_block
     assert "proxy_set_header Host $npcink_forwarded_host;" in nginx_prod_conf
     assert "proxy_set_header X-Forwarded-Host $npcink_forwarded_host;" in nginx_prod_conf
     assert "proxy_pass http://npcink_ai_cloud_api;" in nginx_prod_conf

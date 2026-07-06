@@ -46,6 +46,7 @@
     "portal:bind:dev": "bash dev/bootstrap-portal-site-dev.sh",
     "portal:bind:ssh": "bash deploy/bootstrap-portal-site-to-ssh-host.sh",
     "portal:smoke:ssh": "bash deploy/portal-smoke-to-ssh-host.sh",
+    "smoke:small-trial-preflight": "bash deploy/small-customer-trial-preflight.sh",
     "bundle": "bash deploy/bundle-images.sh",
     "deploy:ssh": "bash deploy/deploy-to-ssh-host.sh",
     "deploy:static-terms:ssh": "bash deploy/deploy-static-terms-to-ssh-host.sh",

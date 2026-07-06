@@ -129,19 +129,33 @@ Operator note:
 
 All items in this section are `Required`.
 
-Run:
+Prepare a local, untracked smoke env file:
 
 ```bash
-cd cloud
-bash deploy/release-smoke.sh \
-  --base-url https://cloud.example.com \
-  --internal-auth-token "$NPCINK_CLOUD_INTERNAL_AUTH_TOKEN" \
-  --admin-token "$NPCINK_CLOUD_ADMIN_BOOTSTRAP_TOKEN" \
-  --member-email invited-admin@example.com \
-  --login-code 123456 \
-  --addon-site-id site_example \
-  --addon-key-id key_example \
-  --addon-secret "$NPCINK_CLOUD_RELEASE_KEY_SECRET"
+mkdir -p .tmp
+cp deploy/release-smoke.env.example .tmp/release-smoke.env
+chmod 600 .tmp/release-smoke.env
+```
+
+Fill `.tmp/release-smoke.env` from the production secret store and real mailbox.
+Do not commit the filled file.
+
+Before running the formal smoke, run the small-customer trial preflight:
+
+```bash
+NPCINK_CLOUD_ENV_FILE=.tmp/release-smoke.env \
+  bash deploy/small-customer-trial-preflight.sh \
+    --base-url https://cloud.npc.ink \
+    --require-smoke-env \
+    --require-alipay-enabled
+```
+
+Then run the formal smoke:
+
+```bash
+NPCINK_CLOUD_ENV_FILE=.tmp/release-smoke.env \
+  bash deploy/release-smoke.sh \
+    --base-url https://cloud.npc.ink
 ```
 
 Required outcomes:
@@ -166,6 +180,13 @@ Required outcomes:
 - [ ] signed `GET /v1/addon/providers/release-summary` exposes the same freshness fields
 - [ ] if either addon route returns `source=live_fallback`, `fallback_reason` is present and operator-understandable
 - [ ] release smoke is incomplete unless addon credentials are provided and both signed addon routes pass freshness checks
+
+Small-customer paid trial preflight is incomplete unless:
+
+- [ ] `deploy/small-customer-trial-preflight.sh --require-smoke-env --require-alipay-enabled` passes
+- [ ] `/open/payments/alipay/return` redirects to `/portal/billing?payment_return=alipay...`
+- [ ] `/open/payments/alipay/notify` rejects an unsigned or empty callback
+- [ ] the filled smoke env file remains outside Git and has restricted local permissions
 
 ## 6. Plugin and Runtime Verification
 

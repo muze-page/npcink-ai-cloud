@@ -36,6 +36,27 @@ gateway configuration source.
 
 ## Required Checks
 
+Run the production preflight after deploy and before inviting a paying trial
+customer:
+
+```bash
+mkdir -p .tmp
+cp deploy/release-smoke.env.example .tmp/release-smoke.env
+chmod 600 .tmp/release-smoke.env
+
+# Fill .tmp/release-smoke.env from the production secret store and a real
+# mailbox login code. Do not commit the filled file.
+NPCINK_CLOUD_ENV_FILE=.tmp/release-smoke.env \
+  pnpm run smoke:small-trial-preflight -- \
+    --base-url https://cloud.npc.ink \
+    --require-smoke-env \
+    --require-alipay-enabled
+```
+
+If the preflight reports that Alipay callbacks are not enabled, do not invite a
+paying trial customer. Configure `/admin/service-settings`, run `检查支付宝配置`,
+and rerun the preflight.
+
 Run code gates:
 
 ```bash
