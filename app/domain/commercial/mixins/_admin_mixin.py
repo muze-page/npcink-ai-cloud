@@ -2226,7 +2226,7 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
         }
         resource_limits = [
             resource_by_key[key]
-            for key in ("bound_sites", "vector_documents", "concurrent_runs", "batch_items")
+            for key in ("bound_sites", "vector_documents")
             if key in resource_by_key
         ]
         visible_statuses = [

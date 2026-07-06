@@ -2172,7 +2172,7 @@ def test_execute_route_rejects_budget_exhaustion(tmp_path: Path) -> None:
         database_url,
         site_id="site_alpha",
         scopes=["runtime:execute", "runtime:read", "runtime:resolve"],
-        budgets={"max_runs_per_period": 1},
+        budgets={"max_ai_credits_per_period": 1},
     )
     payload = {
         "site_id": "site_alpha",
@@ -2233,11 +2233,11 @@ def test_execute_route_allows_budget_grace_with_runtime_downgrade(tmp_path: Path
         database_url,
         site_id="site_alpha",
         scopes=["runtime:execute", "runtime:read", "runtime:resolve"],
-        budgets={"max_runs_per_period": 1},
+        budgets={"max_ai_credits_per_period": 1},
         concurrency={"max_active_runs": 2},
         policy={
             "budgets": {
-                "runs": {
+                "ai_credits": {
                     "grace_requests": 1,
                     "downgrade_policy": {
                         "retry_max": 0,

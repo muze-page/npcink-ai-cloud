@@ -49,6 +49,7 @@ from app.core.models import (
     RuntimeGuardEvent,
     ServiceAuditEvent,
     ServiceSetting,
+    Site,
     SiteUserGrant,
     UsageMeterEvent,
 )
@@ -4659,14 +4660,14 @@ def test_service_routes_admin_read_facade(tmp_path: Path) -> None:
         tier_templates[1]["canonical_shell"]["metadata"][
             "nightly_inspection_runs_per_period"
         ]
-        == 30
+        == 0
     )
     assert tier_templates[2]["canonical_shell"]["metadata"]["max_batch_items"] == 100
     assert (
         tier_templates[2]["canonical_shell"]["metadata"][
             "nightly_inspection_runs_per_period"
         ]
-        == 150
+        == 0
     )
     admin_plan_summary = next(item for item in plans if item["plan"]["plan_id"] == "plan_admin")
     assert admin_plan_summary["tier_summary"]["tier_id"] == "pro"
@@ -4676,7 +4677,7 @@ def test_service_routes_admin_read_facade(tmp_path: Path) -> None:
     assert admin_plan_summary["tier_summary"]["site_limit"] == 5
     assert admin_plan_summary["tier_summary"]["max_vector_documents"] == 2000
     assert admin_plan_summary["tier_summary"]["max_batch_items"] == 25
-    assert admin_plan_summary["tier_summary"]["nightly_inspection_runs_per_period"] == 30
+    assert admin_plan_summary["tier_summary"]["nightly_inspection_runs_per_period"] == 0
     assert admin_plan_summary["tier_summary"]["nightly_inspection_retention_days"] == 14
     assert admin_plan_summary["tier_summary"]["automation_enabled"] is True
     assert admin_plan_summary["tier_summary"]["api_enabled"] is True
@@ -4693,7 +4694,7 @@ def test_service_routes_admin_read_facade(tmp_path: Path) -> None:
     assert plan_detail["tier_summary"]["site_limit"] == 5
     assert plan_detail["tier_summary"]["max_vector_documents"] == 2000
     assert plan_detail["tier_summary"]["max_batch_items"] == 25
-    assert plan_detail["tier_summary"]["nightly_inspection_runs_per_period"] == 30
+    assert plan_detail["tier_summary"]["nightly_inspection_runs_per_period"] == 0
     assert plan_detail["tier_summary"]["nightly_inspection_retention_days"] == 14
     assert plan_detail["tier_summary"]["automation_enabled"] is True
     assert plan_detail["tier_summary"]["api_enabled"] is True
@@ -4870,14 +4871,14 @@ def test_service_routes_plan_tier_fallback_and_package_fit_cues(tmp_path: Path) 
         plans["plan_version_tier"]["tier_summary"][
             "nightly_inspection_runs_per_period"
         ]
-        == 150
+        == 0
     )
     assert plans["plan_version_tier"]["tier_summary"]["openclaw_enabled"] is True
     assert plans["agency_ops"]["tier_summary"]["tier_id"] == "agency"
     assert plans["general_ops"]["tier_summary"]["tier_id"] == "pro"
     assert plans["general_ops"]["tier_summary"]["max_vector_documents"] == 2000
     assert plans["general_ops"]["tier_summary"]["max_batch_items"] == 25
-    assert plans["general_ops"]["tier_summary"]["nightly_inspection_runs_per_period"] == 30
+    assert plans["general_ops"]["tier_summary"]["nightly_inspection_runs_per_period"] == 0
 
     assert free_detail_response.status_code == 200
     free_detail = free_detail_response.json()["data"]
@@ -5063,6 +5064,71 @@ def test_admin_account_quota_summary_reports_ai_credits_and_resource_limits(
     assert resource_limits["vector_documents"]["unit"] == "document"
     assert resource_limits["vector_documents"]["limit"] == 100.0
     assert data["coverage"]["active_key_site_count"] == 1
+
+
+def test_account_quota_summary_shares_ai_credits_across_sites(tmp_path: Path) -> None:
+    database_url, client = _build_client(tmp_path)
+    seed_site_auth(
+        database_url,
+        site_id="site_shared_primary",
+        scopes=["runtime:execute", "runtime:read", "stats:read"],
+        budgets={"max_ai_credits_per_period": 20},
+    )
+    seed_site_auth(
+        database_url,
+        site_id="site_shared_secondary",
+        scopes=["runtime:execute", "runtime:read", "stats:read"],
+    )
+    now = datetime.now(UTC)
+    with get_session(database_url) as session:
+        primary_subscription = session.scalar(
+            select(AccountSubscription)
+            .where(AccountSubscription.account_id == "acct_site_shared_primary")
+            .order_by(AccountSubscription.created_at.desc())
+        )
+        assert primary_subscription is not None
+        secondary_site = session.get(Site, "site_shared_secondary")
+        assert secondary_site is not None
+        secondary_site.account_id = "acct_site_shared_primary"
+        repository = CommercialRepository(session)
+        for site_id, delta in (
+            ("site_shared_primary", -3.0),
+            ("site_shared_secondary", -4.0),
+        ):
+            repository.record_credit_ledger_entry(
+                account_id="acct_site_shared_primary",
+                site_id=site_id,
+                subscription_id=primary_subscription.subscription_id,
+                plan_version_id=primary_subscription.plan_version_id,
+                run_id=f"run_{site_id}",
+                provider_call_id=None,
+                event_type="consume",
+                source_type="tokens_total",
+                source_id=f"{site_id}:tokens",
+                credit_delta=delta,
+                quantity=abs(delta),
+                unit="credit",
+                rate=1.0,
+                rate_unit=None,
+                rate_version="ai-credit-ledger-v2",
+                idempotency_key=f"{site_id}:credit-share",
+                metadata_json={"source": "account_shared_credit_test"},
+                created_at=now,
+            )
+        session.commit()
+
+    response = client.get(
+        "/internal/service/admin/accounts/acct_site_shared_primary/quota-summary",
+        headers=build_internal_headers(),
+    )
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["credit"]["used"] == 7.0
+    assert data["credit"]["limit"] == 20.0
+    assert data["credit"]["remaining"] == 13.0
+    assert data["credit"]["source"] == "ledger"
+    assert data["credit_ledger_summary"]["net_used_credits"] == 7.0
 
 
 def test_admin_account_credit_ledger_lists_current_period_entries(

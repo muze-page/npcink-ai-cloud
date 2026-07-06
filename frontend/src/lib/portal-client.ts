@@ -284,6 +284,7 @@ export interface Entitlements {
     version_label?: string;
     status?: string;
     budgets?: {
+      max_ai_credits_per_period?: number;
       max_runs_per_period?: number;
       max_tokens_per_period?: number;
       max_cost_per_period?: number;
@@ -294,6 +295,7 @@ export interface Entitlements {
     tokens_limit?: number;
     features?: string[];
     budgets?: {
+      max_ai_credits_per_period?: number;
       max_runs_per_period?: number;
       max_tokens_per_period?: number;
       max_cost_per_period?: number;
@@ -401,6 +403,7 @@ export interface PortalSiteSummaryRecord {
   };
   entitlement_snapshot?: {
     budgets?: {
+      max_ai_credits_per_period?: number;
       max_runs_per_period?: number;
       max_tokens_per_period?: number;
       max_cost_per_period?: number;

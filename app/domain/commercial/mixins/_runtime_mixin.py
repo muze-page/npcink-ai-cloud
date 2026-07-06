@@ -457,7 +457,6 @@ class CommercialServiceRuntimeMixin(CommercialServiceAuditMixin):
             period_end_at=period_end_at,
             limit=None,
         )
-        totals = service._aggregate_meter_events(meter_events)
         budgets = service._resolve_effective_subscription_budgets(
             plan_version=plan_version,
             subscription=subscription,
@@ -497,9 +496,6 @@ class CommercialServiceRuntimeMixin(CommercialServiceAuditMixin):
                 budgets.get("max_ai_credits_per_period"),
                 projected_ai_credits,
             ),
-            ("runs", totals.get("runs", 0.0), budgets.get("max_runs_per_period"), 1.0),
-            ("tokens", totals.get("tokens_total", 0.0), budgets.get("max_tokens_per_period"), 0.0),
-            ("cost", totals.get("cost", 0.0), budgets.get("max_cost_per_period"), 0.0),
         )
         for meter_key, current_total, budget_value, projected_quantity in budget_checks:
             limit = self._coerce_float(budget_value)
@@ -560,45 +556,6 @@ class CommercialServiceRuntimeMixin(CommercialServiceAuditMixin):
             meter_events,
             batch_limits=batch_limits,
         )
-        if (
-            request_kind == "execute"
-            and ability_family == "automation"
-            and execution_kind == "nightly_site_inspection"
-        ):
-            max_runs = self._coerce_int(
-                pro_cloud_runtime.get("max_nightly_inspection_runs_per_period")
-            )
-            used_runs = self._coerce_int(
-                pro_cloud_runtime.get("used_nightly_inspection_runs")
-            )
-            if max_runs > 0 and used_runs >= max_runs:
-                error = RuntimeQuotaExceededError("nightly_site_inspection_runs", max_runs)
-                self._record_commercial_decision_in_session(
-                    repository=repository,
-                    account_id=subscription.account_id,
-                    site_id=site_id,
-                    subscription_id=subscription.subscription_id,
-                    plan_version_id=subscription.plan_version_id,
-                    run_id=run_id,
-                    request_kind=request_kind,
-                    decision="deny",
-                    decision_code=error.error_code,
-                    ability_family=ability_family,
-                    channel=channel,
-                    execution_kind=execution_kind,
-                    execution_tier=execution_tier,
-                    data_classification=data_classification,
-                    trace_id=trace_id,
-                    idempotency_key=idempotency_key,
-                    payload_json={
-                        "meter_key": "nightly_site_inspection_runs",
-                        "current_total": used_runs,
-                        "limit": max_runs,
-                        "pro_cloud_runtime": pro_cloud_runtime,
-                    },
-                )
-                session.commit()
-                raise error
 
         effective_runtime_policy_overrides: dict[str, object] = {}
         for action in policy_actions:

@@ -112,9 +112,7 @@ def _resolve_usage_limits(
     budgets = _dict(plan_version.get("budgets")) or _dict(snapshot.get("budgets"))
     return {
         "period": "month",
-        "max_runs": _coerce_float(budgets.get("max_runs_per_period")),
-        "max_tokens": _coerce_float(budgets.get("max_tokens_per_period")),
-        "max_cost_usd": _coerce_float(budgets.get("max_cost_per_period")),
+        "max_ai_credits": _coerce_float(budgets.get("max_ai_credits_per_period")),
         "max_sites": site_limit,
     }
 
@@ -150,17 +148,16 @@ def _resolve_pro_cloud_runtime(policy: dict[str, object]) -> dict[str, object]:
     )
     max_runs = _coerce_int(pro_runtime.get("max_nightly_inspection_runs_per_period"))
     used_runs = _coerce_int(pro_runtime.get("used_nightly_inspection_runs"))
-    remaining_runs = _coerce_int(pro_runtime.get("remaining_nightly_inspection_runs"))
     return {
         "contract_version": "pro-cloud-runtime-entitlement-v1",
         "feature_id": "nightly_site_inspection",
         "execution_pattern": "whole_run_offload",
-        "meter_key": "nightly_site_inspection_runs",
-        "limit_enforced": max_runs > 0,
+        "meter_key": "ai_credits",
+        "limit_enforced": False,
         "max_nightly_inspection_runs_per_period": max_runs,
         "used_nightly_inspection_runs": used_runs,
-        "remaining_nightly_inspection_runs": remaining_runs if max_runs > 0 else 0,
-        "quota_exhausted": max_runs > 0 and used_runs >= max_runs,
+        "remaining_nightly_inspection_runs": 0,
+        "quota_exhausted": False,
         "max_batch_items": _coerce_int(
             pro_runtime.get("max_batch_items") or batch_limits.get("max_batch_items")
         ),

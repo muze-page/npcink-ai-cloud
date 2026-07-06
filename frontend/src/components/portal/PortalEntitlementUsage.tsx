@@ -47,20 +47,13 @@ function resourceLabel(key: string, t: TranslateFn): string {
     ai_credits: t('portal.usage.package_credit_allowance_label', {}, 'Package points'),
     bound_sites: t('portal.usage.site_allowance_label', {}, 'Sites'),
     vector_documents: t('portal.usage.resource_vector_documents', {}, 'Knowledge articles'),
-    concurrent_runs: t('portal.usage.resource_concurrent_runs', {}, 'Parallel work'),
-    batch_items: t('portal.usage.resource_batch_items', {}, 'Batch size'),
   };
   return labels[key] || humanizeKey(key);
 }
 
 function normalizeMetrics(quotaSummary?: QuotaSummary | null): EntitlementMetric[] {
   if (!quotaSummary) return [];
-  const visibleResourceKeys = new Set([
-    'bound_sites',
-    'vector_documents',
-    'concurrent_runs',
-    'batch_items',
-  ]);
+  const visibleResourceKeys = new Set(['bound_sites', 'vector_documents']);
   const metrics: EntitlementMetric[] = [];
   if (quotaSummary.credit) {
     metrics.push({

@@ -176,7 +176,7 @@ PLAN_TIER_REGISTRY: dict[str, dict[str, object]] = {
         "tier_id": "pro",
         "label": "Pro",
         "package_alias": "Pro",
-        "usage_band": "10,000 AI credits and 30 Pro Nightly Inspection runs per month.",
+        "usage_band": "10,000 AI credits per month.",
         "positioning": "Commercial Pro package with normal hosted AI consumption controlled by monthly AI credits and separate resource boundaries.",
         "monthly_included_points": 10_000,
         "budgets_template": {
@@ -189,7 +189,7 @@ PLAN_TIER_REGISTRY: dict[str, dict[str, object]] = {
         "site_limit": 5,
         "max_vector_documents": 2000,
         "max_batch_items": 25,
-        "nightly_inspection_runs_per_period": 30,
+        "nightly_inspection_runs_per_period": 0,
         "nightly_inspection_retention_days": 14,
         "nightly_inspection_payload_modes": ["metadata_only", "excerpt"],
         "automation_enabled": True,
@@ -210,7 +210,7 @@ PLAN_TIER_REGISTRY: dict[str, dict[str, object]] = {
         "tier_id": "agency",
         "label": "Agency",
         "package_alias": "Agency",
-        "usage_band": "150,000 AI credits and 150 Pro Nightly Inspection runs per month.",
+        "usage_band": "150,000 AI credits per month.",
         "positioning": "Commercial Agency package for custom or multi-site Cloud runtime detail with higher AI credit, batch, and resource headroom.",
         "monthly_included_points": 150_000,
         "budgets_template": {
@@ -223,7 +223,7 @@ PLAN_TIER_REGISTRY: dict[str, dict[str, object]] = {
         "site_limit": 25,
         "max_vector_documents": 10000,
         "max_batch_items": 100,
-        "nightly_inspection_runs_per_period": 150,
+        "nightly_inspection_runs_per_period": 0,
         "nightly_inspection_retention_days": 30,
         "nightly_inspection_payload_modes": ["metadata_only", "excerpt"],
         "automation_enabled": True,
@@ -1685,6 +1685,7 @@ class CommercialServiceBillingMixin(CommercialServiceAuditMixin):
                 ),
             },
             "budgets": {
+                "ai_credits": self._normalize_budget_policy(budgets_raw.get("ai_credits")),
                 "runs": self._normalize_budget_policy(budgets_raw.get("runs")),
                 "tokens": self._normalize_budget_policy(budgets_raw.get("tokens")),
                 "cost": self._normalize_budget_policy(budgets_raw.get("cost")),
@@ -1833,13 +1834,11 @@ class CommercialServiceBillingMixin(CommercialServiceAuditMixin):
             "contract_version": "pro-cloud-runtime-entitlement-v1",
             "feature_id": "nightly_site_inspection",
             "execution_pattern": "whole_run_offload",
-            "meter_key": "nightly_site_inspection_runs",
-            "limit_enforced": max_runs > 0,
+            "meter_key": "ai_credits",
+            "limit_enforced": False,
             "max_nightly_inspection_runs_per_period": max_runs,
             "used_nightly_inspection_runs": used_runs,
-            "remaining_nightly_inspection_runs": (
-                max(0, max_runs - used_runs) if max_runs > 0 else 0
-            ),
+            "remaining_nightly_inspection_runs": 0,
             "max_batch_items": max(0, self._coerce_int(batch_limits.get("max_batch_items"))),
             "result_retention_days": max(
                 0,
@@ -1849,7 +1848,7 @@ class CommercialServiceBillingMixin(CommercialServiceAuditMixin):
                 batch_limits.get("nightly_inspection_payload_modes"),
                 default=["metadata_only", "excerpt"],
             ),
-            "quota_exhausted": max_runs > 0 and used_runs >= max_runs,
+            "quota_exhausted": False,
         }
 
     def _build_billing_snapshot_id(

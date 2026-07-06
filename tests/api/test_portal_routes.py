@@ -4077,18 +4077,12 @@ def test_portal_summary_usage_entitlements_and_audit_routes(tmp_path: Path) -> N
     assert "internal_limits" not in quota_summary
     assert {item["key"] for item in quota_summary["resource_limits"]} == {
         "bound_sites",
-        "concurrent_runs",
-        "batch_items",
         "vector_documents",
     }
     vector_documents = next(
         item for item in quota_summary["resource_limits"] if item["key"] == "vector_documents"
     )
     assert vector_documents["limit"] == 100.0
-    concurrent_runs = next(
-        item for item in quota_summary["resource_limits"] if item["key"] == "concurrent_runs"
-    )
-    assert concurrent_runs["limit"] == 5.0
 
     credit_ledger_response = client.get(
         "/portal/v1/sites/site_portal_reads/credit-ledger?limit=10",
