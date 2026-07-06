@@ -139,6 +139,36 @@ assert.match(
 
 assert.match(
   source,
+  /function inferBrowserPublicBaseUrl\(\): string[\s\S]*window\.location\.origin[\s\S]*parsed\.protocol !== 'http:' && parsed\.protocol !== 'https:'[\s\S]*parsed\.hostname === 'localhost'[\s\S]*parsed\.hostname\.startsWith\('127\.'\)[\s\S]*return `\$\{parsed\.protocol\}\/\/\$\{parsed\.host\}`;/,
+  'Alipay setup should be able to infer the current public base URL from the admin page origin'
+);
+
+assert.match(
+  source,
+  /const \[browserPublicBaseUrl, setBrowserPublicBaseUrl\] = useState\(''\);[\s\S]*setBrowserPublicBaseUrl\(inferBrowserPublicBaseUrl\(\)\);/,
+  'service settings page must store the inferred current public base URL'
+);
+
+assert.match(
+  source,
+  /const effectivePortalPublicBaseUrl = savedPortalPublicBaseUrl \|\| browserPublicBaseUrl;[\s\S]*const portalPublicAutosavePending = !savedPortalPublicBaseUrl && Boolean\(browserPublicBaseUrl\);/,
+  'Alipay callback URLs must fall back to the current admin origin when no portal base URL has been saved yet'
+);
+
+assert.match(
+  source,
+  /\/api\/admin\/service-settings\/portal-public[\s\S]*enabled: true,[\s\S]*public_base_url: browserPublicBaseUrl,[\s\S]*\/api\/admin\/service-settings\/alipay-payment/,
+  'saving enabled Alipay settings must autosave the portal base URL before saving Alipay settings when it is missing'
+);
+
+assert.match(
+  source,
+  /alipay_callback_base_label[\s\S]*alipay_public_url_autosave_notice/,
+  'Alipay settings must show the callback base URL and explain autosave behavior'
+);
+
+assert.match(
+  source,
   /\/api\/admin\/service-settings\/alipay-payment/,
   'service settings page must save Alipay payment settings through the admin service-settings API'
 );
