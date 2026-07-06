@@ -868,6 +868,55 @@ def test_admin_service_settings_reject_email_ssl_and_starttls(
     dispose_engine(database_url)
 
 
+def test_admin_service_settings_email_preview_uses_template_without_secret_exposure(
+    tmp_path: Path,
+) -> None:
+    database_url, client = _build_client(tmp_path)
+    email_response = client.patch(
+        "/internal/service/admin/service-settings/email",
+        json={
+            "smtp_host": "smtp.example.com",
+            "smtp_port": 465,
+            "smtp_username": "smtp-user",
+            "smtp_password": "smtp-password",
+            "smtp_use_ssl": True,
+            "smtp_use_starttls": False,
+            "smtp_timeout_seconds": 20,
+            "from_email": "noreply@example.com",
+            "from_name": "Npcink AI Cloud",
+            "reply_to": "support@example.com",
+        },
+        headers=build_internal_headers(idempotency_key="service-settings-email-preview-save"),
+    )
+    assert email_response.status_code == 200, email_response.text
+
+    preview_response = client.post(
+        "/internal/service/admin/service-settings/email/preview",
+        json={
+            "preview_type": "registration",
+            "locale": "zh-CN",
+            "from_name": "Npcink AI Cloud",
+            "from_email": "auth@npc.ink",
+        },
+        headers=build_internal_headers(idempotency_key="service-settings-email-preview"),
+    )
+
+    assert preview_response.status_code == 200, preview_response.text
+    data = preview_response.json()["data"]
+    assert data["surface"] == "admin_service_settings_email_preview"
+    assert data["preview_type"] == "registration"
+    assert data["from_name"] == "Npcink AI Cloud"
+    assert data["from_email"] == "auth@npc.ink"
+    assert data["recommended_from_name"] == "Npcink AI Cloud"
+    assert data["subject"].startswith("完成 Npcink AI Cloud")
+    assert data["subject"].endswith("注册")
+    assert "完成服务中心注册" in data["html"]
+    assert "smtp-password" not in json.dumps(preview_response.json())
+    assert data["credential_value_exposure"] == "none"
+
+    dispose_engine(database_url)
+
+
 def test_admin_image_source_provider_env_settings_route_is_retired(
     tmp_path: Path,
 ) -> None:

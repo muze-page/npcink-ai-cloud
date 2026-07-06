@@ -69,7 +69,8 @@ from app.domain.site_knowledge.metrics import SiteKnowledgeObservabilityService
 from app.domain.usage.service import UsageService
 
 router = APIRouter(prefix="/portal/v1", tags=["portal"])
-COOKIE_PORTAL_QQ_OAUTH_NONCE = "magick_portal_qq_oauth_nonce"
+COOKIE_PORTAL_QQ_OAUTH_NONCE = "npcink_portal_qq_oauth_nonce"
+COOKIE_PORTAL_QQ_OAUTH_NONCE_LEGACY = "magick_portal_qq_oauth_nonce"
 COOKIE_PORTAL_QQ_OAUTH_NONCE_PATH = "/"
 COOKIE_PORTAL_QQ_OAUTH_NONCE_LEGACY_PATH = "/portal/v1/auth/qq"
 
@@ -280,6 +281,7 @@ def _set_portal_qq_oauth_nonce_cookie(
     nonce: str,
     max_age: int,
 ) -> None:
+    _clear_portal_qq_oauth_nonce_cookie(response)
     response.set_cookie(
         COOKIE_PORTAL_QQ_OAUTH_NONCE,
         nonce,
@@ -295,6 +297,14 @@ def _clear_portal_qq_oauth_nonce_cookie(response: Response) -> None:
     response.delete_cookie(COOKIE_PORTAL_QQ_OAUTH_NONCE, path=COOKIE_PORTAL_QQ_OAUTH_NONCE_PATH)
     response.delete_cookie(
         COOKIE_PORTAL_QQ_OAUTH_NONCE,
+        path=COOKIE_PORTAL_QQ_OAUTH_NONCE_LEGACY_PATH,
+    )
+    response.delete_cookie(
+        COOKIE_PORTAL_QQ_OAUTH_NONCE_LEGACY,
+        path=COOKIE_PORTAL_QQ_OAUTH_NONCE_PATH,
+    )
+    response.delete_cookie(
+        COOKIE_PORTAL_QQ_OAUTH_NONCE_LEGACY,
         path=COOKIE_PORTAL_QQ_OAUTH_NONCE_LEGACY_PATH,
     )
 
@@ -797,7 +807,7 @@ def _portal_ai_disclosure(disclosure: dict[str, Any]) -> dict[str, Any]:
         "ai_assisted": bool(disclosure.get("ai_assisted")),
         "visible_label_required": bool(disclosure.get("visible_label_required")),
         "visible_label": str(disclosure.get("visible_label") or ""),
-        "brand_label": str(disclosure.get("brand_label") or "Magick AI"),
+        "brand_label": str(disclosure.get("brand_label") or "Npcink AI"),
         "visible_notice": str(disclosure.get("visible_notice") or ""),
         "review_status": str(disclosure.get("review_status") or ""),
         "reviewed_at": str(disclosure.get("reviewed_at") or ""),
@@ -1346,12 +1356,14 @@ async def request_portal_registration_code(
         return _service_error_response(error, request=request)
     if email_sender is not None:
         try:
-            email_sender.send_login_code(
+            email_sender.send_registration_code(
                 recipient_email=str(issued.get("email") or ""),
                 principal_id=str(issued.get("principal_id") or ""),
                 code=str(issued.get("code") or ""),
                 expires_in_seconds=ttl_seconds,
                 project_name=services.settings.project_name,
+                site_name=str(issued.get("site_name") or ""),
+                wordpress_url=str(issued.get("wordpress_url") or ""),
                 locale=locale,
             )
         except PortalEmailDeliveryError as error:

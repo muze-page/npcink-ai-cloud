@@ -354,7 +354,7 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
               </span>
               <span className="flex flex-col leading-none">
                 <span className="text-[0.68rem] font-bold uppercase tracking-[0.3em] text-blue-600 dark:text-blue-300">
-                  Magick AI
+                  Npcink AI
                 </span>
                 <span className="text-sm font-semibold text-slate-900 dark:text-slate-100">
                   {t('admin.console')}
@@ -394,7 +394,7 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
             </span>
             <span className={cn('min-w-0 flex flex-col leading-none', sidebarCollapsed && 'sr-only')}>
               <span className="truncate text-[0.66rem] font-bold uppercase tracking-[0.24em] text-blue-600 dark:text-blue-300">
-                Magick AI
+                Npcink AI
               </span>
               <span className="mt-1 truncate text-sm font-semibold text-slate-900 dark:text-slate-100">
                 {t('admin.console')}
@@ -422,7 +422,7 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
               </span>
               <span className="flex flex-col leading-none">
                 <span className="text-[0.68rem] font-bold uppercase tracking-[0.3em] text-blue-600 dark:text-blue-300">
-                  Magick AI
+                  Npcink AI
                 </span>
                 <span className="text-sm font-semibold text-slate-900 dark:text-slate-100">
                   {t('admin.console')}

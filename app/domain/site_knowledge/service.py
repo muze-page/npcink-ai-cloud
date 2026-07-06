@@ -524,10 +524,13 @@ class SiteKnowledgeService:
         return {
             "artifact_type": "site_knowledge_status",
             "composition_role": "site_knowledge_status",
+            "contract_version": SITE_KNOWLEDGE_CONTRACTS[SITE_KNOWLEDGE_STATUS_ABILITY],
             "status": status,
             "coverage": coverage,
             "progress": progress,
             "active_run": _serialize_active_run(active_run) if active_run is not None else {},
+            "ownership": _site_knowledge_ownership_contract(),
+            "truth_boundaries": _site_knowledge_truth_boundaries(),
             "write_posture": "suggestion_only",
             "direct_wordpress_write": False,
         }
@@ -1070,6 +1073,7 @@ class SiteKnowledgeService:
         return {
             "artifact_type": "site_knowledge_sync_request",
             "composition_role": "site_knowledge_sync_request",
+            "contract_version": SITE_KNOWLEDGE_CONTRACTS[SITE_KNOWLEDGE_SYNC_ABILITY],
             "status": status,
             "run_id": run_id,
             "sync": {
@@ -1102,9 +1106,40 @@ class SiteKnowledgeService:
                 deleted_entries=deleted_entries,
                 percent=100 if status == "completed" else None,
             ),
+            "ownership": _site_knowledge_ownership_contract(),
+            "truth_boundaries": _site_knowledge_truth_boundaries(),
             "write_posture": "suggestion_only",
             "direct_wordpress_write": False,
         }
+
+
+def _site_knowledge_ownership_contract() -> dict[str, str]:
+    return {
+        "source_content_owner": "local_wordpress_host",
+        "delivery_bridge_owner": "cloud_addon",
+        "index_execution_owner": "cloud_service",
+        "index_lifecycle_owner": "cloud_service",
+        "freshness_policy_owner": "cloud_service",
+        "diagnostics_detail_owner": "cloud_service",
+        "vector_storage_owner": "cloud_service",
+        "embedding_execution_owner": "cloud_service",
+        "approval_owner": "local_wordpress_host",
+        "final_write_owner": "local_wordpress_host",
+        "wordpress_write_owner": "local_wordpress_host",
+    }
+
+
+def _site_knowledge_truth_boundaries() -> dict[str, bool]:
+    return {
+        "cloud_is_index_truth": True,
+        "cloud_is_freshness_truth": True,
+        "cloud_is_diagnostics_truth": True,
+        "cloud_is_wordpress_control_plane": False,
+        "cloud_creates_wordpress_writes": False,
+        "cloud_owns_local_approval": False,
+        "cloud_owns_ability_registry": False,
+        "cloud_owns_workflow_registry": False,
+    }
 
 
 def _normalize_public_document(document: dict[str, Any]) -> dict[str, object] | None:

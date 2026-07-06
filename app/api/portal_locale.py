@@ -7,7 +7,7 @@ def resolve_portal_email_locale(request: Request, explicit_locale: str = "") -> 
     candidates = [
         explicit_locale,
         str(request.headers.get("x-npcink-locale") or ""),
-        str(request.cookies.get("magick_locale") or ""),
+        str(request.cookies.get("npcink_locale") or ""),
         str(request.query_params.get("lang") or ""),
         str(request.headers.get("accept-language") or "").split(",")[0],
     ]

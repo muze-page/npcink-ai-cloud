@@ -1,5 +1,5 @@
 /**
- * Magick AI Frontend - UI 组件统一导出
+ * Npcink AI Cloud frontend - UI component exports
  *
  * 所有基础 UI 组件应从这里导出
  */

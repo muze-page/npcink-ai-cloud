@@ -54,6 +54,20 @@ class FakePortalEmailSender(PortalEmailSender):
     ) -> None:
         return None
 
+    def send_registration_code(
+        self,
+        *,
+        recipient_email: str,
+        principal_id: str,
+        code: str,
+        expires_in_seconds: int,
+        project_name: str,
+        site_name: str = "",
+        wordpress_url: str = "",
+        locale: str = "zh-CN",
+    ) -> None:
+        return None
+
     def send_email_change_code(
         self,
         *,

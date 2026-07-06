@@ -283,6 +283,15 @@ def test_sync_then_search_and_status_coverage(tmp_path: Path) -> None:
         idempotency_key="status-while-sync-queued",
     )["json"]["data"]["result"]
     assert queued_status["status"] == "syncing"
+    assert queued_status["contract_version"] == "site_knowledge_status.v1"
+    assert queued_status["ownership"]["index_execution_owner"] == "cloud_service"
+    assert queued_status["ownership"]["delivery_bridge_owner"] == "cloud_addon"
+    assert queued_status["ownership"]["wordpress_write_owner"] == "local_wordpress_host"
+    assert queued_status["truth_boundaries"]["cloud_is_index_truth"] is True
+    assert queued_status["truth_boundaries"]["cloud_is_freshness_truth"] is True
+    assert queued_status["truth_boundaries"]["cloud_is_diagnostics_truth"] is True
+    assert queued_status["truth_boundaries"]["cloud_is_wordpress_control_plane"] is False
+    assert queued_status["truth_boundaries"]["cloud_creates_wordpress_writes"] is False
     assert queued_status["active_run"]["run_id"] == run_id
     assert queued_status["progress"]["stage"] == "queued"
 
@@ -304,6 +313,12 @@ def test_sync_then_search_and_status_coverage(tmp_path: Path) -> None:
         settings=settings,
         providers={},
     ).get_run_result(run_id, site_id="site_alpha")
+    assert worker_result["result"]["contract_version"] == "site_knowledge_sync.v1"
+    assert worker_result["result"]["ownership"]["index_lifecycle_owner"] == "cloud_service"
+    assert worker_result["result"]["ownership"]["freshness_policy_owner"] == "cloud_service"
+    assert worker_result["result"]["ownership"]["approval_owner"] == "local_wordpress_host"
+    assert worker_result["result"]["truth_boundaries"]["cloud_owns_ability_registry"] is False
+    assert worker_result["result"]["truth_boundaries"]["cloud_owns_workflow_registry"] is False
     assert worker_result["result"]["progress"]["stage"] == "completed"
     assert worker_result["result"]["progress"]["percent"] == 100
 
@@ -343,6 +358,11 @@ def test_sync_then_search_and_status_coverage(tmp_path: Path) -> None:
     )
     status_data = status_result["json"]["data"]["result"]
     assert status_data["status"] == "ready"
+    assert status_data["contract_version"] == "site_knowledge_status.v1"
+    assert status_data["ownership"]["diagnostics_detail_owner"] == "cloud_service"
+    assert status_data["ownership"]["final_write_owner"] == "local_wordpress_host"
+    assert status_data["truth_boundaries"]["cloud_is_diagnostics_truth"] is True
+    assert status_data["truth_boundaries"]["cloud_owns_local_approval"] is False
     assert status_data["coverage"]["indexed_posts"] == 1
     assert status_data["coverage"]["indexed_chunks"] >= 1
     assert status_data["coverage"]["post_type_coverage"] == {"post": 1.0}

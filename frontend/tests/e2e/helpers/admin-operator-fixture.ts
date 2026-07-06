@@ -41,7 +41,7 @@ export async function installAdminMocks(page: Page) {
         name: 'MVP Account',
         status: 'active',
         metadata: {
-          operator_display_name: 'Magick AI Demo',
+          operator_display_name: 'Npcink AI Demo',
           operator_note: 'Pilot customer. Confirm package before public release.',
         },
         created_at: '2026-02-01T00:00:00Z',
@@ -102,7 +102,7 @@ export async function installAdminMocks(page: Page) {
   ];
   await page.context().addCookies([
     {
-      name: 'magick_admin_session_token',
+      name: 'npcink_admin_session_token',
       value: 'e2e-admin-session',
       url: BASE_URL,
     },

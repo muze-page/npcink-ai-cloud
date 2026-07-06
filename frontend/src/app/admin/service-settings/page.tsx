@@ -1,6 +1,7 @@
 'use client';
 
 import React, { FormEvent, useCallback, useEffect, useMemo, useState } from 'react';
+import { createPortal } from 'react-dom';
 import {
   BackofficeMetricStrip,
   BackofficePageStack,
@@ -13,6 +14,8 @@ import { resolveUiErrorMessage } from '@/lib/errors';
 
 type SettingStatus = 'ready' | 'disabled' | 'missing_config' | 'error' | string;
 type ServiceSettingsTab = 'login' | 'email' | 'payment';
+type EmailPreviewType = 'login' | 'registration' | 'email_change' | 'email_changed' | 'test';
+type EmailPreviewMode = 'html' | 'text';
 type BackendPayload = Record<string, unknown> | string | null;
 type Translator = (key: string, params?: Record<string, string>, fallback?: string) => string;
 
@@ -61,6 +64,16 @@ type EmailForm = {
   from_email: string;
   from_name: string;
   reply_to: string;
+};
+
+type EmailPreview = {
+  preview_type: string;
+  subject: string;
+  text: string;
+  html: string;
+  from_name: string;
+  from_email: string;
+  recommended_from_name: string;
 };
 
 type AlipayForm = {
@@ -276,6 +289,11 @@ export default function AdminServiceSettingsPage() {
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [emailTestRecipient, setEmailTestRecipient] = useState('');
+  const [emailPreviewType, setEmailPreviewType] = useState<EmailPreviewType>('login');
+  const [emailPreviewMode, setEmailPreviewMode] = useState<EmailPreviewMode>('html');
+  const [emailPreview, setEmailPreview] = useState<EmailPreview | null>(null);
+  const [emailConfigExpanded, setEmailConfigExpanded] = useState(false);
+  const [emailPreviewOpen, setEmailPreviewOpen] = useState(false);
 
   const [portalPublicForm, setPortalPublicForm] = useState<PortalPublicForm>({
     enabled: true,
@@ -328,6 +346,7 @@ export default function AdminServiceSettingsPage() {
       const portalPublic = nextData.settings.portal_public;
       const qq = nextData.settings.qq_login;
       const email = nextData.settings.portal_email;
+      setEmailConfigExpanded(email.status === 'missing_config' || email.status === 'error');
       const alipay = nextData.settings.alipay_payment;
       const emailSmtpUsername = stringValue(email.config.smtp_username);
       const emailFromAddress = stringValue(email.config.from_email);
@@ -512,6 +531,47 @@ export default function AdminServiceSettingsPage() {
     }
   }
 
+  async function loadEmailPreview(type: EmailPreviewType = emailPreviewType) {
+    setSaving('email-preview');
+    setError('');
+    try {
+      const response = await fetch('/api/admin/service-settings/email/preview', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          preview_type: type,
+          locale: 'zh-CN',
+          from_name: emailForm.from_name,
+          from_email: emailForm.from_email,
+        }),
+      });
+      const payload = await readBackendPayload(response);
+      if (!response.ok) {
+        throw new Error(requestErrorMessage(response, payload, t('admin.service_settings.email_preview_failed', {}, 'Failed to load email preview.'), t));
+      }
+      const record = payloadRecord(payload);
+      const preview = record?.data as EmailPreview | undefined;
+      if (!preview?.html || !preview.subject) {
+        throw new Error(t('admin.service_settings.email_preview_invalid', {}, 'Email preview response is invalid.'));
+      }
+      setEmailPreview(preview);
+      setNotice('');
+    } catch (previewError) {
+      setEmailPreview(null);
+      setError(previewError instanceof Error ? previewError.message : t('admin.service_settings.email_preview_failed', {}, 'Failed to load email preview.'));
+    } finally {
+      setSaving('');
+    }
+  }
+
+  function openEmailPreviewDrawer() {
+    setEmailPreviewOpen(true);
+    if (!emailPreview) {
+      void loadEmailPreview();
+    }
+  }
+
   function submitPortalPublic(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     void saveJson(
@@ -598,6 +658,22 @@ export default function AdminServiceSettingsPage() {
     alipayPrivateKey: Boolean(data?.settings.alipay_payment.secrets.private_key?.configured),
     alipayPublicKey: Boolean(data?.settings.alipay_payment.secrets.public_key?.configured),
   };
+  const emailSetting = data?.settings.portal_email;
+  const emailStatus = emailSetting?.status || 'missing_config';
+  const emailServerSummary = emailForm.smtp_host
+    ? `${emailForm.smtp_host}:${emailForm.smtp_port || '465'}`
+    : t('admin.service_settings.email_summary_not_configured', {}, 'Not configured');
+  const emailSenderSummary = emailForm.from_email
+    ? `${emailForm.from_name || 'Npcink AI Cloud'} <${emailForm.from_email}>`
+    : t('admin.service_settings.email_summary_not_configured', {}, 'Not configured');
+  const emailEncryptionSummary = emailForm.smtp_use_ssl
+    ? 'SSL'
+    : emailForm.smtp_use_starttls
+      ? 'STARTTLS'
+      : t('admin.service_settings.email_summary_no_encryption', {}, 'None');
+  const emailLastTestedSummary = emailSetting?.last_tested_at
+    ? emailSetting.last_tested_at
+    : t('admin.service_settings.email_summary_never_tested', {}, 'Never tested');
 
   const tabs: Array<{ id: ServiceSettingsTab; label: string; description: string }> = [
     {
@@ -614,6 +690,29 @@ export default function AdminServiceSettingsPage() {
       id: 'payment',
       label: t('admin.service_settings.tab_payment', {}, '支付配置'),
       description: t('admin.service_settings.tab_payment_desc', {}, 'Alipay checkout callbacks'),
+    },
+  ];
+
+  const emailPreviewOptions: Array<{ id: EmailPreviewType; label: string }> = [
+    {
+      id: 'login',
+      label: t('admin.service_settings.email_preview_login', {}, '登录验证码'),
+    },
+    {
+      id: 'registration',
+      label: t('admin.service_settings.email_preview_registration', {}, '注册验证码'),
+    },
+    {
+      id: 'email_change',
+      label: t('admin.service_settings.email_preview_email_change', {}, '更换邮箱验证码'),
+    },
+    {
+      id: 'email_changed',
+      label: t('admin.service_settings.email_preview_email_changed', {}, '邮箱已更换通知'),
+    },
+    {
+      id: 'test',
+      label: t('admin.service_settings.email_preview_test', {}, '测试邮件'),
     },
   ];
 
@@ -799,12 +898,71 @@ export default function AdminServiceSettingsPage() {
         <BackofficeSectionPanel>
           <div id="service-settings-email" className="space-y-8" role="tabpanel">
             <section className="space-y-4">
-            <div>
-              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
-                SMTP
-              </p>
-              <h2 className="mt-2 text-xl font-semibold text-slate-950 dark:text-white">{t('admin.service_settings.email_title', {}, 'Email delivery')}</h2>
-            </div>
+              <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
+                    SMTP
+                  </p>
+                  <h2 className="mt-2 text-xl font-semibold text-slate-950 dark:text-white">{t('admin.service_settings.email_title', {}, 'Email delivery')}</h2>
+                  <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
+                    {t('admin.service_settings.email_summary_desc', {}, '常用检查保留在页面上；低频 SMTP 字段需要编辑时再展开。')}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={() => setEmailConfigExpanded((current) => !current)}
+                >
+                  {emailConfigExpanded
+                    ? t('admin.service_settings.email_config_collapse', {}, '收起 SMTP 配置')
+                    : t('admin.service_settings.email_config_edit', {}, '编辑 SMTP 配置')}
+                </button>
+              </div>
+
+              <div className="grid gap-3 rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm dark:border-slate-800 dark:bg-slate-950/40 md:grid-cols-2 xl:grid-cols-5">
+                <div>
+                  <div className="text-xs text-slate-500 dark:text-slate-400">
+                    {t('admin.service_settings.email_summary_status', {}, 'Status')}
+                  </div>
+                  <div className={`mt-1 font-semibold ${statusTone(emailStatus)}`}>
+                    {statusLabel(emailStatus, t)}
+                  </div>
+                </div>
+                <div>
+                  <div className="text-xs text-slate-500 dark:text-slate-400">
+                    {t('admin.service_settings.email_summary_server', {}, 'Server')}
+                  </div>
+                  <div className="mt-1 break-all font-semibold text-slate-900 dark:text-slate-100">
+                    {emailServerSummary}
+                  </div>
+                </div>
+                <div>
+                  <div className="text-xs text-slate-500 dark:text-slate-400">
+                    {t('admin.service_settings.email_summary_sender', {}, 'Sender')}
+                  </div>
+                  <div className="mt-1 break-all font-semibold text-slate-900 dark:text-slate-100">
+                    {emailSenderSummary}
+                  </div>
+                </div>
+                <div>
+                  <div className="text-xs text-slate-500 dark:text-slate-400">
+                    {t('admin.service_settings.email_summary_encryption', {}, 'Encryption')}
+                  </div>
+                  <div className="mt-1 font-semibold text-slate-900 dark:text-slate-100">
+                    {emailEncryptionSummary}
+                  </div>
+                </div>
+                <div>
+                  <div className="text-xs text-slate-500 dark:text-slate-400">
+                    {t('admin.service_settings.email_summary_last_tested', {}, 'Last test')}
+                  </div>
+                  <div className="mt-1 break-all font-semibold text-slate-900 dark:text-slate-100">
+                    {emailLastTestedSummary}
+                  </div>
+                </div>
+              </div>
+
+              {emailConfigExpanded ? (
             <form className="grid gap-4 lg:grid-cols-2" onSubmit={submitEmail}>
               <label className={labelClassName()}>
                 {t('admin.service_settings.smtp_host_label', {}, 'SMTP server')}
@@ -880,10 +1038,45 @@ export default function AdminServiceSettingsPage() {
                   }
                 />
               </label>
-              <label className={labelClassName()}>
-                {t('admin.service_settings.from_name_label', {}, 'Sender name')}
-                <input className={fieldClassName()} value={emailForm.from_name} disabled={loading} onChange={(event) => setEmailForm((current) => ({ ...current, from_name: event.target.value }))} />
-              </label>
+	              <label className={labelClassName()}>
+	                {t('admin.service_settings.from_name_label', {}, 'Sender name')}
+	                <input
+	                  className={fieldClassName()}
+	                  value={emailForm.from_name}
+	                  disabled={loading}
+	                  onChange={(event) =>
+	                    setEmailForm((current) => ({
+	                      ...current,
+	                      from_name: event.target.value,
+	                    }))
+	                  }
+	                  placeholder="Npcink AI Cloud"
+	                />
+	                <div className="mt-2 rounded-lg border border-blue-100 bg-blue-50 px-3 py-2 text-xs leading-5 text-blue-800 dark:border-blue-900/60 dark:bg-blue-950/30 dark:text-blue-200">
+	                  <div className="flex flex-wrap items-center justify-between gap-2">
+	                    <span>
+	                      {t(
+	                        'admin.service_settings.from_name_recommendation',
+	                        {},
+	                        '建议使用 Npcink AI Cloud。收件箱会把它显示为发件人名称，更容易和服务品牌对应。'
+	                      )}
+	                    </span>
+	                    <button
+	                      type="button"
+	                      className="text-xs font-semibold underline-offset-4 hover:underline"
+	                      disabled={loading}
+	                      onClick={() =>
+	                        setEmailForm((current) => ({
+	                          ...current,
+	                          from_name: 'Npcink AI Cloud',
+	                        }))
+	                      }
+	                    >
+	                      {t('admin.service_settings.use_recommended_from_name', {}, '使用推荐值')}
+	                    </button>
+	                  </div>
+	                </div>
+	              </label>
               <label className={labelClassName()}>
                 {t('admin.service_settings.reply_to_label', {}, 'Reply-to email')}
                 <input className={fieldClassName()} value={emailForm.reply_to} disabled={loading} onChange={(event) => setEmailForm((current) => ({ ...current, reply_to: event.target.value }))} />
@@ -914,27 +1107,185 @@ export default function AdminServiceSettingsPage() {
                 </button>
               </div>
             </form>
+              ) : null}
             </section>
 
             <section className="grid gap-3 border-t border-slate-200 pt-6 dark:border-slate-800 lg:grid-cols-[1fr_auto]">
-            <label className={labelClassName()}>
-              {t('admin.service_settings.test_recipient_label', {}, 'Test recipient')}
-              <input className={fieldClassName()} value={emailTestRecipient} onChange={(event) => setEmailTestRecipient(event.target.value)} placeholder="operator@example.com" />
-            </label>
-            <div className="flex items-end justify-end">
-              <button
-                type="button"
-                className="btn btn-secondary"
-                disabled={saving === 'email-test' || !emailTestRecipient}
-                onClick={() => postJson('/api/admin/service-settings/email/test', { recipient_email: emailTestRecipient }, 'email-test', t('admin.service_settings.email_test_sent', {}, 'Test email sent.'))}
-              >
-                {t('admin.service_settings.send_test_email', {}, 'Send test email')}
-              </button>
-            </div>
+              <label className={labelClassName()}>
+                {t('admin.service_settings.test_recipient_label', {}, 'Test recipient')}
+                <input className={fieldClassName()} value={emailTestRecipient} onChange={(event) => setEmailTestRecipient(event.target.value)} placeholder="operator@example.com" />
+              </label>
+              <div className="flex flex-wrap items-end justify-end gap-2">
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  disabled={saving === 'email-test' || !emailTestRecipient}
+                  onClick={() => postJson('/api/admin/service-settings/email/test', { recipient_email: emailTestRecipient }, 'email-test', t('admin.service_settings.email_test_sent', {}, 'Test email sent.'))}
+                >
+                  {t('admin.service_settings.send_test_email', {}, 'Send test email')}
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={openEmailPreviewDrawer}
+                >
+                  {t('admin.service_settings.email_preview_open', {}, '预览邮件模板')}
+                </button>
+              </div>
             </section>
           </div>
         </BackofficeSectionPanel>
       ) : null}
+
+      {emailPreviewOpen && typeof document !== 'undefined' ? createPortal((
+        <div className="fixed inset-0 z-50 bg-slate-950/35" role="presentation">
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="email-preview-drawer-title"
+            className="ml-auto flex h-full w-full max-w-[60rem] flex-col border-l border-slate-200 bg-white shadow-2xl dark:border-slate-800 dark:bg-slate-950"
+          >
+            <div className="flex flex-col gap-3 border-b border-slate-200 px-5 py-4 dark:border-slate-800 md:flex-row md:items-start md:justify-between">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
+                  {t('admin.service_settings.email_preview_eyebrow', {}, 'Email preview')}
+                </p>
+                <h3 id="email-preview-drawer-title" className="mt-2 text-lg font-semibold text-slate-950 dark:text-white">
+                  {t('admin.service_settings.email_preview_title', {}, '预览邮件效果')}
+                </h3>
+                <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
+                  {t(
+                    'admin.service_settings.email_preview_desc',
+                    {},
+                    '使用真实后端邮件模板生成样例。这里只预览，不发送邮件，也不会保存配置。'
+                  )}
+                </p>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  disabled={saving === 'email-preview'}
+                  onClick={() => void loadEmailPreview()}
+                >
+                  {saving === 'email-preview'
+                    ? t('admin.service_settings.email_preview_loading', {}, '生成中')
+                    : t('admin.service_settings.email_preview_refresh', {}, '生成预览')}
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={() => setEmailPreviewOpen(false)}
+                >
+                  {t('admin.service_settings.email_preview_close', {}, '关闭预览')}
+                </button>
+              </div>
+            </div>
+
+            <div className="grid min-h-0 flex-1 gap-0 overflow-hidden lg:grid-cols-[18rem_1fr]">
+              <aside className="space-y-4 overflow-auto border-b border-slate-200 p-5 dark:border-slate-800 lg:border-b-0 lg:border-r">
+                <label className={labelClassName()}>
+                  {t('admin.service_settings.email_preview_type_label', {}, '邮件类型')}
+                  <select
+                    className={fieldClassName()}
+                    value={emailPreviewType}
+                    disabled={saving === 'email-preview'}
+                    onChange={(event) => {
+                      const nextType = event.target.value as EmailPreviewType;
+                      setEmailPreviewType(nextType);
+                      void loadEmailPreview(nextType);
+                    }}
+                  >
+                    {emailPreviewOptions.map((option) => (
+                      <option key={option.id} value={option.id}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
+                <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm dark:border-slate-800 dark:bg-slate-900">
+                  <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">
+                    {t('admin.service_settings.email_preview_inbox_label', {}, 'Inbox header')}
+                  </p>
+                  <dl className="mt-3 space-y-2">
+                    <div>
+                      <dt className="text-xs text-slate-500 dark:text-slate-400">
+                        {t('admin.service_settings.email_preview_from', {}, 'From')}
+                      </dt>
+                      <dd className="break-all font-medium text-slate-900 dark:text-slate-100">
+                        {emailPreview
+                          ? `${emailPreview.from_name} <${emailPreview.from_email}>`
+                          : `${emailForm.from_name || 'Npcink AI Cloud'} <${emailForm.from_email || 'auth@npc.ink'}>`}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt className="text-xs text-slate-500 dark:text-slate-400">
+                        {t('admin.service_settings.email_preview_subject', {}, 'Subject')}
+                      </dt>
+                      <dd className="break-words font-medium text-slate-900 dark:text-slate-100">
+                        {emailPreview?.subject || t(
+                          'admin.service_settings.email_preview_not_loaded',
+                          {},
+                          '点击生成预览后显示主题'
+                        )}
+                      </dd>
+                    </div>
+                  </dl>
+                </div>
+              </aside>
+
+              <div className="flex min-h-0 flex-col overflow-hidden bg-slate-50 dark:bg-slate-900">
+                <div className="flex items-center justify-between border-b border-slate-200 bg-white px-4 py-3 dark:border-slate-800 dark:bg-slate-950">
+                  <div className="text-sm font-semibold text-slate-800 dark:text-slate-100">
+                    {emailPreviewMode === 'html'
+                      ? t('admin.service_settings.email_preview_html', {}, 'HTML 预览')
+                      : t('admin.service_settings.email_preview_text', {}, '文本预览')}
+                  </div>
+                  <div className="inline-flex rounded-lg border border-slate-200 bg-slate-50 p-1 text-xs dark:border-slate-800 dark:bg-slate-900">
+                    <button
+                      type="button"
+                      className={`rounded-md px-2 py-1 ${emailPreviewMode === 'html' ? 'bg-white text-slate-950 shadow-sm dark:bg-slate-700 dark:text-white' : 'text-slate-500 dark:text-slate-400'}`}
+                      onClick={() => setEmailPreviewMode('html')}
+                    >
+                      HTML
+                    </button>
+                    <button
+                      type="button"
+                      className={`rounded-md px-2 py-1 ${emailPreviewMode === 'text' ? 'bg-white text-slate-950 shadow-sm dark:bg-slate-700 dark:text-white' : 'text-slate-500 dark:text-slate-400'}`}
+                      onClick={() => setEmailPreviewMode('text')}
+                    >
+                      Text
+                    </button>
+                  </div>
+                </div>
+                {emailPreview ? (
+                  emailPreviewMode === 'html' ? (
+                    <iframe
+                      title={t('admin.service_settings.email_preview_iframe_title', {}, 'Email HTML preview')}
+                      sandbox=""
+                      className="min-h-0 flex-1 bg-white"
+                      srcDoc={emailPreview.html}
+                    />
+                  ) : (
+                    <pre className="min-h-0 flex-1 overflow-auto whitespace-pre-wrap bg-white p-5 text-sm leading-6 text-slate-800 dark:bg-slate-950 dark:text-slate-100">
+                      {emailPreview.text}
+                    </pre>
+                  )
+                ) : (
+                  <div className="flex min-h-[24rem] flex-1 items-center justify-center px-6 text-center text-sm text-slate-500 dark:text-slate-400">
+                    {t(
+                      'admin.service_settings.email_preview_empty',
+                      {},
+                      '选择邮件类型并生成预览，确认收件箱显示、主题和正文是否合适。'
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      ), document.body) : null}
 
       {activeTab === 'payment' ? (
         <BackofficeSectionPanel>
