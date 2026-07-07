@@ -146,7 +146,18 @@ class WordPressAIConnectorTextProvider:
         metadata = request.input_payload.get("metadata")
         if isinstance(metadata, dict):
             task = str(metadata.get("task") or "")
+        source_text = str(request.input_payload.get("text") or "")
         output_text = "Npcink Cloud Addon: WordPress AI scene helper 说明：short title rationale"
+        if task == "title_generation" and "reasoning leakage" in source_text:
+            output_text = (
+                "<think>The user wants one concise title. I should not expose "
+                "reasoning.</think>\n\nCloud Runtime Connector Verified"
+            )
+        elif task == "title_generation" and "reasoning only" in source_text:
+            output_text = (
+                "<think> The user wants a concise WordPress post title about "
+                "verifying a hosted AI runtime connector."
+            )
         if task == "content_classification":
             output_text = "- WordPress AI\n- Cloud connector\n- Scene runtime"
         elif task == "content_summary":
@@ -398,6 +409,52 @@ def test_wordpress_ai_connector_runtime_executes_scene_bound_text(tmp_path: Path
             run.policy_json["execution_contract"]["routing_intent"]
             == "content.short_text"
         )
+
+
+def test_wordpress_ai_connector_runtime_strips_reasoning_noise_from_title(
+    tmp_path: Path,
+) -> None:
+    _, client, _ = _build_client(tmp_path)
+    payload = _payload(
+        {
+            "request": {
+                "prompt": (
+                    "Suggest a concise title for reasoning leakage verification."
+                ),
+            },
+        }
+    )
+
+    response = _execute(client, payload, idempotency_key="wp-ai-connector-think-strip")
+
+    assert response.status_code == 200
+    result_text = response.json()["data"]["result"]["output_text"]
+    assert result_text == "Cloud Runtime Connector Verified"
+    assert "<think>" not in result_text
+    assert "reasoning" not in result_text.lower()
+
+
+def test_wordpress_ai_connector_runtime_does_not_leak_reasoning_only_title(
+    tmp_path: Path,
+) -> None:
+    _, client, _ = _build_client(tmp_path)
+    payload = _payload(
+        {
+            "request": {
+                "prompt": "Suggest a concise title for a reasoning only response.",
+            },
+        }
+    )
+
+    response = _execute(
+        client,
+        payload,
+        idempotency_key="wp-ai-connector-think-only",
+    )
+
+    assert response.status_code == 200
+    result_text = response.json()["data"]["result"]["output_text"]
+    assert result_text == ""
 
 
 def test_wordpress_ai_connector_runtime_projects_classification_json_scene(

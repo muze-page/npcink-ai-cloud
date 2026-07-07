@@ -5636,6 +5636,16 @@ class RuntimeService:
             return output
 
         normalized_text = ""
+        strips_reasoning_noise = (
+            task
+            in {
+                "title_generation",
+                "excerpt_generation",
+                "meta_description",
+                "content_summary",
+            }
+            and self._has_wordpress_ai_reasoning_noise(output_text)
+        )
         if task == "meta_description":
             normalized_text = self._normalize_wordpress_ai_meta_description(
                 output_text,
@@ -5657,7 +5667,7 @@ class RuntimeService:
                 strip_explanation=task == "title_generation",
             )
 
-        if not normalized_text:
+        if not normalized_text and not strips_reasoning_noise:
             return output
 
         normalized = dict(output)
@@ -5692,7 +5702,9 @@ class RuntimeService:
         *,
         source_text: str = "",
     ) -> str:
-        text = self._strip_wordpress_ai_markdown(output_text)
+        text = self._strip_wordpress_ai_markdown(
+            self._strip_wordpress_ai_reasoning_noise(output_text)
+        )
         text = re.split(r"\s+#{1,6}\s+", text, maxsplit=1)[0].strip()
         if ":" in text[:64] and len(text.split(":", 1)[1].strip()) >= 40:
             text = text.split(":", 1)[1].strip()
@@ -5709,7 +5721,9 @@ class RuntimeService:
         limit: int,
         strip_explanation: bool = False,
     ) -> str:
-        text = self._strip_wordpress_ai_markdown(output_text)
+        text = self._strip_wordpress_ai_markdown(
+            self._strip_wordpress_ai_reasoning_noise(output_text)
+        )
         if strip_explanation:
             text = re.split(
                 r"\s+(?:说明|解释|理由|Explanation|Reasoning)\s*[:：]",
@@ -5848,6 +5862,26 @@ class RuntimeService:
         text = re.sub(r"[*_`]+", "", text)
         text = re.sub(r"\s+", " ", text)
         return text.strip()
+
+    def _strip_wordpress_ai_reasoning_noise(self, output_text: str) -> str:
+        text = output_text.strip()
+        text = re.sub(r"(?is)<think\b[^>]*>.*?</think>", " ", text)
+        text = re.sub(r"(?is)^\s*<think\b[^>]*>.*?(?:\r?\n\s*\r?\n|$)", "", text)
+        text = re.sub(
+            r"(?is)^\s*(?:reasoning|explanation|analysis)\s*[:：].*?"
+            r"(?:\r?\n\s*\r?\n|$)",
+            "",
+            text,
+        )
+        return re.sub(r"\s+", " ", text).strip()
+
+    def _has_wordpress_ai_reasoning_noise(self, output_text: str) -> bool:
+        return bool(
+            re.search(
+                r"(?is)<think\b|^\s*(?:reasoning|explanation|analysis)\s*[:：]",
+                output_text,
+            )
+        )
 
     def _is_latin_heavy(self, text: str) -> bool:
         cjk_count = len(re.findall(r"[\u4e00-\u9fff]", text))
