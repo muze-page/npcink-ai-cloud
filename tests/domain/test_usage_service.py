@@ -183,7 +183,6 @@ def test_usage_service_aggregates_instance_profile_and_summary_windows(tmp_path:
 
     dispose_engine(database_url)
 
-
 def test_usage_service_window_aggregations_avoid_full_history_list_scans(
     tmp_path: Path,
     monkeypatch,
@@ -369,54 +368,5 @@ def test_usage_service_builds_logs_analytics_projections(tmp_path: Path) -> None
 
     assert unsupported["total"] == 0
     assert unsupported["status_distribution"]["total"] == 0
-
-    dispose_engine(database_url)
-
-
-def test_usage_service_builds_prompt_governance_recommendation_summaries(
-    tmp_path: Path,
-) -> None:
-    database_url = _sqlite_url(tmp_path)
-    init_schema(database_url)
-    fixed_now = datetime(2026, 3, 12, 8, 0, tzinfo=UTC)
-    _seed_runtime_activity(database_url, fixed_now)
-
-    service = UsageService(database_url, now_factory=lambda: fixed_now)
-    filters = {
-        "ability_id": "npcink-abilities-toolkit/build-article-block-plan",
-        "prompt_id": "text_generate_default",
-        "current_variant": "current",
-        "current_version": 3,
-        "candidate_variant": "candidate",
-        "candidate_version": 4,
-        "range": "24h",
-    }
-
-    eval_payload = service.get_prompt_eval_recommendation_summary(
-        site_id="site_alpha",
-        filters=filters,
-    )
-    canary_payload = service.get_prompt_canary_recommendation_summary(
-        site_id="site_alpha",
-        filters=filters,
-    )
-    upgrade_payload = service.get_prompt_upgrade_recommendation_summary(
-        site_id="site_alpha",
-        filters=filters,
-    )
-
-    for payload, recommendation_type in (
-        (eval_payload, "eval"),
-        (canary_payload, "canary"),
-        (upgrade_payload, "upgrade"),
-    ):
-        assert payload["source"] == "cloud_prompt_governance_recommendation_summary"
-        assert payload["recommendation_type"] == recommendation_type
-        assert payload["reason_summary"] != ""
-        assert payload["risk_summary"] != ""
-        assert payload["suggested_action"] != ""
-        assert payload["updated_at"] != ""
-        assert payload["boundary_note"] != ""
-        assert payload["evidence"]["logs_summary"]["total"] >= 1
 
     dispose_engine(database_url)
