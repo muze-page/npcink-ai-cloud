@@ -679,7 +679,7 @@ def _serialize_wordpress_ai_instance(
     }
 
 
-def _build_wordpress_ai_routing_projection(
+def _build_ability_model_plugin_routing_projection(
     database_url: str,
     *,
     settings: Any | None = None,
@@ -813,14 +813,14 @@ def _build_wordpress_ai_routing_projection(
     }
 
 
-def _validate_wordpress_ai_routing_payload(
+def _validate_ability_model_plugin_routing_payload(
     database_url: str,
     payload: WordPressAIRoutingSettingsPayload,
     *,
     settings: Any | None = None,
 ) -> tuple[list[WordPressAIRoutingProfilePayload], str]:
     if not payload.profiles:
-        return [], "at least one WordPress AI routing profile is required"
+        return [], "at least one plugin ability-model routing profile is required"
 
     known_profile_ids = set(WP_AI_CONNECTOR_PROFILE_SPECS_BY_ID)
     seen_profile_ids: set[str] = set()
@@ -830,9 +830,9 @@ def _validate_wordpress_ai_routing_payload(
         for profile_payload in payload.profiles:
             profile_id = profile_payload.profile_id.strip()
             if profile_id not in known_profile_ids:
-                return [], f"unsupported WordPress AI routing profile: {profile_id}"
+                return [], f"unsupported plugin ability-model routing profile: {profile_id}"
             if profile_id in seen_profile_ids:
-                return [], f"duplicate WordPress AI routing profile: {profile_id}"
+                return [], f"duplicate plugin ability-model routing profile: {profile_id}"
             seen_profile_ids.add(profile_id)
             candidate_instance_ids = [
                 str(instance_id or "").strip()
@@ -4123,16 +4123,16 @@ async def update_admin_ability_model_runtime_binding(
     )
 
 
-@router.get("/admin/wordpress-ai-routing")
-async def get_admin_wordpress_ai_routing(request: Request) -> Any:
+@router.get("/admin/ability-models/plugin-routing")
+async def get_admin_ability_model_plugin_routing(request: Request) -> Any:
     auth = await authorize_internal_request(request, require_idempotency=False)
     if auth is not None:
         return auth
     services = get_cloud_services(request)
     return build_envelope(
         status="ok",
-        message="WordPress AI connector routing loaded",
-        data=_build_wordpress_ai_routing_projection(
+        message="Plugin ability-model routing loaded",
+        data=_build_ability_model_plugin_routing_projection(
             services.settings.database_url,
             settings=services.settings,
         ),
@@ -4140,8 +4140,8 @@ async def get_admin_wordpress_ai_routing(request: Request) -> Any:
     )
 
 
-@router.post("/admin/wordpress-ai-routing")
-async def update_admin_wordpress_ai_routing(
+@router.post("/admin/ability-models/plugin-routing")
+async def update_admin_ability_model_plugin_routing(
     request: Request,
     payload: WordPressAIRoutingSettingsPayload,
 ) -> Any:
@@ -4149,7 +4149,7 @@ async def update_admin_wordpress_ai_routing(
     if auth is not None:
         return auth
     services = get_cloud_services(request)
-    profiles, error_message = _validate_wordpress_ai_routing_payload(
+    profiles, error_message = _validate_ability_model_plugin_routing_payload(
         services.settings.database_url,
         payload,
         settings=services.settings,
@@ -4159,13 +4159,13 @@ async def update_admin_wordpress_ai_routing(
             status_code=400,
             content=build_envelope(
                 status="error",
-                error_code="wordpress_ai_routing.invalid_profile",
+                error_code="ability_model_plugin_routing.invalid_profile",
                 message=error_message,
                 revision="m6",
             ),
         )
 
-    revision = f"wp-ai-admin-{int(datetime.now(UTC).timestamp())}"
+    revision = f"ability-model-routing-admin-{int(datetime.now(UTC).timestamp())}"
     with get_session(services.settings.database_url) as session:
         repository = CatalogRepository(session)
         for profile_payload in profiles:
@@ -4208,7 +4208,7 @@ async def update_admin_wordpress_ai_routing(
     try:
         audit_event = _get_commercial_service(request).record_service_audit_event(
             audit_context=_build_audit_context(request),
-            event_kind="wordpress_ai_routing.update",
+            event_kind="ability_model_plugin_routing.update",
             outcome="succeeded",
             scope_kind="runtime_profile",
             scope_id="wordpress_ai_connector",
@@ -4220,21 +4220,21 @@ async def update_admin_wordpress_ai_routing(
     except Exception:
         audit_event = None
 
-    result = _build_wordpress_ai_routing_projection(
+    result = _build_ability_model_plugin_routing_projection(
         services.settings.database_url,
         settings=services.settings,
     )
     return build_envelope(
         status="ok",
-        message="WordPress AI connector routing saved",
+        message="Plugin ability-model routing saved",
         data=_merge_receipt(
             result,
             _build_operator_receipt(
-                event_kind="wordpress_ai_routing.update",
+                event_kind="ability_model_plugin_routing.update",
                 scope_kind="runtime_profile",
                 scope_id="wordpress_ai_connector",
                 outcome="succeeded",
-                effective_summary="WordPress AI connector task routing was updated.",
+                effective_summary="Plugin ability-model routing was updated.",
                 audit_event=audit_event,
             ),
         ),

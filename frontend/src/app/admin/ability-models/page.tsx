@@ -397,7 +397,7 @@ export default function AbilityModelsPage() {
     setLoadingRouting(true);
     setPageError('');
     try {
-      const response = await fetch('/api/admin/wordpress-ai-routing', { credentials: 'include' });
+      const response = await fetch('/api/admin/ability-models/plugin-routing', { credentials: 'include' });
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) {
         throw new Error(resolveUiErrorMessage(payload, aiText('error_load_ability_models', 'Failed to load ability-model routing.')));
@@ -976,7 +976,7 @@ export default function AbilityModelsPage() {
     setPageError('');
     setPageMessage('');
     try {
-      const response = await fetch('/api/admin/wordpress-ai-routing', {
+      const response = await fetch('/api/admin/ability-models/plugin-routing', {
         method: 'POST',
         credentials: 'include',
         headers: {

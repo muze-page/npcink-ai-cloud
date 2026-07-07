@@ -43,6 +43,7 @@ def test_removed_public_control_plane_surfaces_are_absent_from_openapi(tmp_path)
         "/internal/service/admin/providers",
         "/internal/service/admin/models",
         "/internal/service/admin/recognition",
+        "/internal/service/admin/wordpress-ai-routing",
     )
 
     for path in paths:
@@ -83,6 +84,7 @@ def test_removed_urls_return_404(tmp_path) -> None:
         "/internal/service/admin/providers",
         "/internal/service/admin/models",
         "/internal/service/admin/recognition",
+        "/internal/service/admin/wordpress-ai-routing",
     )
 
     for url in removed_urls:

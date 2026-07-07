@@ -1060,13 +1060,13 @@ def test_wordpress_ai_connector_runtime_rejects_generic_chat_shape(tmp_path: Pat
     assert provider.requests == []
 
 
-def test_admin_wordpress_ai_routing_updates_platform_managed_candidates(
+def test_admin_ability_model_plugin_routing_updates_platform_managed_candidates(
     tmp_path: Path,
 ) -> None:
     database_url, client, _ = _build_client(tmp_path)
 
     get_response = client.get(
-        "/internal/service/admin/wordpress-ai-routing",
+        "/internal/service/admin/ability-models/plugin-routing",
         headers=build_internal_headers(),
     )
 
@@ -1132,7 +1132,7 @@ def test_admin_wordpress_ai_routing_updates_platform_managed_candidates(
     assert audio_generation["candidate_instance_ids"] == ["openai-wp-ai-audio-test"]
 
     response = client.post(
-        "/internal/service/admin/wordpress-ai-routing",
+        "/internal/service/admin/ability-models/plugin-routing",
         headers=merge_json_headers(
             build_internal_headers(idempotency_key="wp-ai-routing-admin-save-001")
         ),
@@ -1160,7 +1160,7 @@ def test_admin_wordpress_ai_routing_updates_platform_managed_candidates(
 
     assert response.status_code == 200
     payload = response.json()["data"]
-    assert payload["receipt"]["event_kind"] == "wordpress_ai_routing.update"
+    assert payload["receipt"]["event_kind"] == "ability_model_plugin_routing.update"
     updated = next(
         profile
         for profile in payload["profiles"]
@@ -1195,11 +1195,11 @@ def test_admin_wordpress_ai_routing_updates_platform_managed_candidates(
         assert run.policy_json["routing_intent"] == "content.short_text"
 
 
-def test_admin_wordpress_ai_routing_rejects_unknown_profile(tmp_path: Path) -> None:
+def test_admin_ability_model_plugin_routing_rejects_unknown_profile(tmp_path: Path) -> None:
     _, client, _ = _build_client(tmp_path)
 
     response = client.post(
-        "/internal/service/admin/wordpress-ai-routing",
+        "/internal/service/admin/ability-models/plugin-routing",
         headers=merge_json_headers(
             build_internal_headers(idempotency_key="wp-ai-routing-admin-save-unknown")
         ),
@@ -1217,16 +1217,16 @@ def test_admin_wordpress_ai_routing_rejects_unknown_profile(tmp_path: Path) -> N
     )
 
     assert response.status_code == 400
-    assert response.json()["error_code"] == "wordpress_ai_routing.invalid_profile"
+    assert response.json()["error_code"] == "ability_model_plugin_routing.invalid_profile"
 
 
-def test_admin_wordpress_ai_routing_rejects_execution_kind_mismatch(
+def test_admin_ability_model_plugin_routing_rejects_execution_kind_mismatch(
     tmp_path: Path,
 ) -> None:
     _, client, _ = _build_client(tmp_path)
 
     response = client.post(
-        "/internal/service/admin/wordpress-ai-routing",
+        "/internal/service/admin/ability-models/plugin-routing",
         headers=merge_json_headers(
             build_internal_headers(
                 idempotency_key="wp-ai-routing-admin-save-kind-mismatch"
@@ -1247,11 +1247,11 @@ def test_admin_wordpress_ai_routing_rejects_execution_kind_mismatch(
 
     assert response.status_code == 400
     payload = response.json()
-    assert payload["error_code"] == "wordpress_ai_routing.invalid_profile"
+    assert payload["error_code"] == "ability_model_plugin_routing.invalid_profile"
     assert "may only use available text instances" in payload["message"]
 
 
-def test_admin_wordpress_ai_routing_requires_enabled_provider_model(
+def test_admin_ability_model_plugin_routing_requires_enabled_provider_model(
     tmp_path: Path,
 ) -> None:
     database_url, client, _ = _build_client(tmp_path)
@@ -1267,7 +1267,7 @@ def test_admin_wordpress_ai_routing_requires_enabled_provider_model(
         session.commit()
 
     get_response = client.get(
-        "/internal/service/admin/wordpress-ai-routing",
+        "/internal/service/admin/ability-models/plugin-routing",
         headers=build_internal_headers(),
     )
 
@@ -1283,7 +1283,7 @@ def test_admin_wordpress_ai_routing_requires_enabled_provider_model(
     assert audio_generation["status"] == "needs_candidates"
 
     response = client.post(
-        "/internal/service/admin/wordpress-ai-routing",
+        "/internal/service/admin/ability-models/plugin-routing",
         headers=merge_json_headers(
             build_internal_headers(
                 idempotency_key="wp-ai-routing-admin-save-model-allowlist"
@@ -1304,5 +1304,5 @@ def test_admin_wordpress_ai_routing_requires_enabled_provider_model(
 
     assert response.status_code == 400
     payload = response.json()
-    assert payload["error_code"] == "wordpress_ai_routing.invalid_profile"
+    assert payload["error_code"] == "ability_model_plugin_routing.invalid_profile"
     assert "may only use models enabled for provider openai" in payload["message"]

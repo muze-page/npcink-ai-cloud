@@ -1451,7 +1451,7 @@ def test_admin_provider_connection_test_syncs_catalog_for_openai_compatible_supp
     assert "deepseek-secret-value" not in json.dumps(test_response.json())
 
     routing_response = client.get(
-        "/internal/service/admin/wordpress-ai-routing",
+        "/internal/service/admin/ability-models/plugin-routing",
         headers=build_internal_headers(),
     )
 

@@ -130,9 +130,9 @@ function buildAdminBackendPath(pathSegments: string[], method: string): string {
   }
   if (
     upperMethod === 'POST' &&
-    normalized === 'wordpress-ai-routing'
+    normalized === 'ability-models/plugin-routing'
   ) {
-    return '/internal/service/admin/wordpress-ai-routing';
+    return '/internal/service/admin/ability-models/plugin-routing';
   }
 
   return normalized ? `/internal/service/${normalized}` : '/internal/service';
