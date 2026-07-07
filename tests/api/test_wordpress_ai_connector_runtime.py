@@ -575,6 +575,30 @@ def test_wordpress_ai_connector_runtime_executes_alt_text_as_vision(
         )
 
 
+def test_wordpress_ai_connector_runtime_accepts_bounded_alt_text_data_url(
+    tmp_path: Path,
+) -> None:
+    _, client, provider = _build_client(tmp_path)
+    data_url = "data:image/png;base64,aW1hZ2UtYnl0ZXM="
+    payload = _alt_text_payload(
+        {
+            "request": {
+                "prompt": "Generate alt text.",
+                "image_url": data_url,
+                "mime_type": "image/png",
+                "filename": "blue-mug.png",
+            }
+        }
+    )
+
+    response = _execute(client, payload, idempotency_key="wp-ai-alt-text-data-url")
+
+    assert response.status_code == 200
+    provider_input = provider.requests[0].input_payload
+    responses_content = provider_input["input"][0]["content"]
+    assert {"type": "input_image", "image_url": data_url} in responses_content
+
+
 @pytest.mark.parametrize(
     ("request_overrides", "expected_error"),
     [

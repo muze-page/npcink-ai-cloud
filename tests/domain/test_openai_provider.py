@@ -452,6 +452,77 @@ def test_openai_adapter_retries_responses_without_unsupported_metadata() -> None
     assert len(seen_payloads) == 2
 
 
+def test_openai_adapter_retries_responses_404_with_chat_completions_messages() -> None:
+    seen_paths: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen_paths.append(request.url.path)
+        payload = json.loads(request.content.decode("utf-8"))
+        if request.url.path.endswith("/responses"):
+            assert payload["model"] == "gpt-4.1"
+            return httpx.Response(404, json={"error": {"message": "not found"}})
+        assert request.url.path.endswith("/chat/completions")
+        assert payload["messages"][0]["content"][0]["type"] == "text"
+        assert payload["messages"][0]["content"][1]["type"] == "image_url"
+        return httpx.Response(
+            200,
+            json={
+                "model": "gpt-4.1",
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": "Blue ceramic mug on a white table.",
+                        },
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {"prompt_tokens": 18, "completion_tokens": 9},
+            },
+        )
+
+    adapter = OpenAIProviderAdapter(
+        api_key="test-api-key",
+        transport=httpx.MockTransport(handler),
+    )
+
+    result = adapter.execute(
+        _build_request(
+            execution_kind="vision",
+            endpoint_variant="responses",
+            model_id="gpt-4.1",
+            input_payload={
+                "input": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "input_text", "text": "Write alt text."},
+                            {"type": "input_image", "image_url": "https://example.com/mug.png"},
+                        ],
+                    }
+                ],
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": "Write alt text."},
+                            {
+                                "type": "image_url",
+                                "image_url": {"url": "https://example.com/mug.png"},
+                            },
+                        ],
+                    }
+                ],
+            },
+        )
+    )
+
+    assert seen_paths == ["/v1/responses", "/v1/chat/completions"]
+    assert result.output["output_text"] == "Blue ceramic mug on a white table."
+    assert result.tokens_in == 18
+    assert result.tokens_out == 9
+
+
 def test_openai_adapter_executes_embeddings_over_http() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.path.endswith("/embeddings")

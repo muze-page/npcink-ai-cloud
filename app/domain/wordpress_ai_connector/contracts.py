@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -16,6 +17,11 @@ WP_AI_CONNECTOR_RESULT_CONTRACT = "wp_ai_connector_result.v1"
 WP_AI_CONNECTOR_MAX_PROMPT_CHARS = 12000
 WP_AI_CONNECTOR_MAX_TIMEOUT_SECONDS = 60
 WP_AI_CONNECTOR_MAX_IMAGE_URL_CHARS = 2048
+WP_AI_CONNECTOR_MAX_IMAGE_DATA_URL_CHARS = 900_000
+WP_AI_CONNECTOR_IMAGE_DATA_URL_PATTERN = re.compile(
+    r"^data:(image/(?:gif|jpeg|png|webp))(?:;[^,]*)?;base64,([A-Za-z0-9+/=\r\n]+)$",
+    re.IGNORECASE,
+)
 WP_AI_CONNECTOR_ALT_TEXT_IMAGE_MIME_TYPES = frozenset(
     {
         "image/gif",
@@ -214,6 +220,9 @@ def validate_alt_text_suggest_request(request: dict[str, Any]) -> None:
 
 
 def validate_alt_text_image_url(url: str, *, field_name: str) -> None:
+    if url.lower().startswith("data:"):
+        validate_alt_text_image_data_url(url, field_name=field_name)
+        return
     if len(url) > WP_AI_CONNECTOR_MAX_IMAGE_URL_CHARS:
         raise WordPressAIConnectorContractViolation(
             "wp_ai_connector.alt_text_image_url_too_long",
@@ -223,5 +232,25 @@ def validate_alt_text_image_url(url: str, *, field_name: str) -> None:
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
         raise WordPressAIConnectorContractViolation(
             "wp_ai_connector.alt_text_image_url_invalid",
-            f"WordPress AI alt text {field_name} must be an http(s) URL",
+            f"WordPress AI alt text {field_name} must be an http(s) URL or image data URL",
+        )
+
+
+def validate_alt_text_image_data_url(url: str, *, field_name: str) -> None:
+    if len(url) > WP_AI_CONNECTOR_MAX_IMAGE_DATA_URL_CHARS:
+        raise WordPressAIConnectorContractViolation(
+            "wp_ai_connector.alt_text_image_data_url_too_long",
+            f"WordPress AI alt text {field_name} data URL is too long",
+        )
+    match = WP_AI_CONNECTOR_IMAGE_DATA_URL_PATTERN.match(url)
+    if match is None:
+        raise WordPressAIConnectorContractViolation(
+            "wp_ai_connector.alt_text_image_url_invalid",
+            f"WordPress AI alt text {field_name} must be an http(s) URL or image data URL",
+        )
+    mime_type = match.group(1).lower()
+    if mime_type not in WP_AI_CONNECTOR_ALT_TEXT_IMAGE_MIME_TYPES:
+        raise WordPressAIConnectorContractViolation(
+            "wp_ai_connector.alt_text_mime_type_not_allowed",
+            "WordPress AI alt text suggestions require a supported image MIME type",
         )

@@ -142,6 +142,9 @@ def test_import_provider_connections_from_env_imports_siliconflow_as_model_provi
         "NPCINK_CLOUD_SITE_KNOWLEDGE_EMBEDDING_PROVIDER": "siliconflow",
         "NPCINK_CLOUD_SITE_KNOWLEDGE_EMBEDDING_MODEL": "BAAI/bge-m3",
         "NPCINK_CLOUD_SITE_KNOWLEDGE_EMBEDDING_DIMENSIONS": "1024",
+        "NPCINK_CLOUD_SILICONFLOW_MODEL_IDS": (
+            "siliconflow/Qwen/Qwen3-Omni-30B-A3B-Captioner,BAAI/bge-m3"
+        ),
     }
 
     result = import_provider_connections_from_env(
@@ -160,8 +163,52 @@ def test_import_provider_connections_from_env_imports_siliconflow_as_model_provi
         assert connection is not None
         assert connection.provider_type == "siliconflow"
         assert connection.config_json["provider_id"] == "siliconflow"
+        assert "vision" in connection.config_json["capability_ids"]
+        assert "vision.ai" in connection.config_json["runtime_profile_ids"]
+        assert "wp-ai.alt-text-vision" in connection.config_json["runtime_profile_ids"]
+        assert connection.config_json["model_ids"] == [
+            "siliconflow/Qwen/Qwen3-Omni-30B-A3B-Captioner",
+            "BAAI/bge-m3",
+        ]
         assert "embedding" in connection.config_json["capability_ids"]
         assert "embed.default" in connection.config_json["runtime_profile_ids"]
+
+    dispose_engine(database_url)
+
+
+def test_import_provider_connections_from_env_imports_openai_vision_runtime_profiles(
+    tmp_path,
+) -> None:
+    database_url = _sqlite_url(tmp_path)
+    init_schema(database_url)
+    settings = _settings(database_url)
+    env = {
+        "NPCINK_CLOUD_OPENAI_API_KEY": "openai-secret",
+        "NPCINK_CLOUD_OPENAI_BASE_URL": "https://api.openai.test/v1",
+        "NPCINK_CLOUD_OPENAI_MODEL_IDS": "Qwen/Qwen3-Omni-30B-A3B-Captioner,gpt-5.5",
+    }
+
+    result = import_provider_connections_from_env(
+        settings=settings,
+        env=env,
+        apply=True,
+    )
+
+    assert result["mode"] == "apply"
+    assert result["imported"] == ["openai_env"]
+    assert "openai-secret" not in str(result)
+
+    with get_session(database_url) as session:
+        connection = session.get(ProviderConnection, "openai_env")
+        assert connection is not None
+        assert connection.provider_type == "openai_compatible"
+        assert "vision" in connection.config_json["capability_ids"]
+        assert "vision.ai" in connection.config_json["runtime_profile_ids"]
+        assert "wp-ai.alt-text-vision" in connection.config_json["runtime_profile_ids"]
+        assert connection.config_json["model_ids"] == [
+            "Qwen/Qwen3-Omni-30B-A3B-Captioner",
+            "gpt-5.5",
+        ]
 
     dispose_engine(database_url)
 

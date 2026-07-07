@@ -8,9 +8,13 @@ from pathlib import Path
 from typing import Any
 
 from app.core.config import Settings
+from app.domain.hosted_model_defaults import VISION_AI_PROFILE_ID
 from app.domain.provider_connections.service import (
     ProviderConnectionAdminError,
     ProviderConnectionAdminService,
+)
+from app.domain.wordpress_ai_connector.routing_profiles import (
+    WP_AI_CONNECTOR_ALT_TEXT_VISION_PROFILE_ID,
 )
 
 DEFAULT_ENV_FILES = (".env", ".env.local", ".env.deploy")
@@ -174,10 +178,12 @@ def _add_model_provider_specs(
                 or "OpenAI compatible",
                 base_url=_env_first(env, "OPENAI_BASE_URL", "OPENAI_COMPATIBLE_BASE_URL")
                 or "https://api.openai.com/v1",
-                capability_ids=["text_generation", "image_generation", "embedding"],
+                capability_ids=["text_generation", "vision", "image_generation", "embedding"],
                 runtime_profile_ids=[
                     "text.ai",
                     "text.free-gpt55",
+                    VISION_AI_PROFILE_ID,
+                    WP_AI_CONNECTOR_ALT_TEXT_VISION_PROFILE_ID,
                     "grok-imagine-image-quality",
                     "embed.default",
                 ],
@@ -198,6 +204,11 @@ def _add_model_provider_specs(
                         "OPENAI_SAMPLE_CATALOG_PROFILE",
                         "OPENAI_COMPATIBLE_SAMPLE_CATALOG_PROFILE",
                     ),
+                    "model_ids": _env_list(
+                        env,
+                        "OPENAI_MODEL_IDS",
+                        "OPENAI_COMPATIBLE_MODEL_IDS",
+                    ),
                 },
             )
         )
@@ -212,14 +223,20 @@ def _add_model_provider_specs(
                 display_name="SiliconFlow",
                 base_url=_env_value(env, "SILICONFLOW_BASE_URL")
                 or "https://api.siliconflow.cn/v1",
-                capability_ids=["text_generation", "embedding"],
-                runtime_profile_ids=["text.ai", "embed.default"],
+                capability_ids=["text_generation", "vision", "embedding"],
+                runtime_profile_ids=[
+                    "text.ai",
+                    VISION_AI_PROFILE_ID,
+                    WP_AI_CONNECTOR_ALT_TEXT_VISION_PROFILE_ID,
+                    "embed.default",
+                ],
                 credential=siliconflow_key,
                 config={
                     "model_id": _env_value(env, "SITE_KNOWLEDGE_EMBEDDING_MODEL"),
                     "dimensions": _env_value(env, "SITE_KNOWLEDGE_EMBEDDING_DIMENSIONS"),
                     "timeout_seconds": _env_value(env, "SILICONFLOW_TIMEOUT_SECONDS"),
                     "pricing_url": _env_value(env, "SILICONFLOW_PRICING_URL"),
+                    "model_ids": _env_list(env, "SILICONFLOW_MODEL_IDS"),
                 },
             )
         )
@@ -638,6 +655,17 @@ def _env_first(env: dict[str, str], *suffixes: str) -> str:
         if value:
             return value
     return ""
+
+
+def _env_list(env: dict[str, str], *suffixes: str) -> list[str]:
+    for suffix in suffixes:
+        value = _env_value(env, suffix)
+        if not value:
+            continue
+        items = [item.strip() for item in value.split(",") if item.strip()]
+        if items:
+            return items
+    return []
 
 
 def _strip_env_value(value: str) -> str:
