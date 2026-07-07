@@ -3464,6 +3464,52 @@ class RuntimeService:
                     )
                     return
 
+                provider_output = provider_result.output
+                if self._is_wordpress_ai_connector_run(run):
+                    provider_output = self._normalize_wordpress_ai_connector_provider_output(
+                        provider_output,
+                        input_payload=input_payload,
+                    )
+                    if self._is_empty_wordpress_ai_connector_text_output(
+                        input_payload=input_payload,
+                        provider_output=provider_output,
+                    ):
+                        last_error_code = "provider.output_quality_rejected"
+                        last_error_message = (
+                            "provider returned no usable WordPress AI connector text"
+                        )
+                        provider_call = repository.record_provider_call(
+                            run_id=run.run_id,
+                            provider_id=candidate.provider_id,
+                            model_id=candidate.model_id,
+                            instance_id=candidate.instance_id,
+                            region=candidate.region,
+                            latency_ms=provider_result.latency_ms,
+                            tokens_in=provider_result.tokens_in,
+                            tokens_out=provider_result.tokens_out,
+                            cost=provider_result.cost,
+                            retry_count=retry_count,
+                            fallback_used=fallback_used,
+                            error_code=last_error_code,
+                        )
+                        self.commercial_service.record_provider_call_usage(
+                            session=repository.session,
+                            run=run,
+                            provider_call=provider_call,
+                        )
+                        if allow_fallback:
+                            break
+                        repository.mark_run_failed(
+                            run,
+                            error_code=last_error_code,
+                            error_message=last_error_message,
+                            provider_id=candidate.provider_id,
+                            model_id=candidate.model_id,
+                            instance_id=candidate.instance_id,
+                            fallback_used=fallback_used,
+                        )
+                        return
+
                 provider_call = repository.record_provider_call(
                     run_id=run.run_id,
                     provider_id=candidate.provider_id,
@@ -3482,12 +3528,6 @@ class RuntimeService:
                     run=run,
                     provider_call=provider_call,
                 )
-                provider_output = provider_result.output
-                if self._is_wordpress_ai_connector_run(run):
-                    provider_output = self._normalize_wordpress_ai_connector_provider_output(
-                        provider_output,
-                        input_payload=input_payload,
-                    )
                 if self._is_wordpress_ai_connector_image_generation_run(
                     run,
                     input_payload=input_payload,
@@ -5636,6 +5676,16 @@ class RuntimeService:
             return output
 
         normalized_text = ""
+        strips_reasoning_noise = (
+            task
+            in {
+                "title_generation",
+                "excerpt_generation",
+                "meta_description",
+                "content_summary",
+            }
+            and self._has_wordpress_ai_reasoning_noise(output_text)
+        )
         if task == "meta_description":
             normalized_text = self._normalize_wordpress_ai_meta_description(
                 output_text,
@@ -5657,13 +5707,66 @@ class RuntimeService:
                 strip_explanation=task == "title_generation",
             )
 
-        if not normalized_text:
+        if not normalized_text and not strips_reasoning_noise:
             return output
 
         normalized = dict(output)
         normalized["output_text"] = normalized_text
         normalized["messages"] = [{"role": "assistant", "content": normalized_text}]
         return normalized
+
+    def _is_empty_wordpress_ai_connector_text_output(
+        self,
+        *,
+        input_payload: dict[str, Any],
+        provider_output: dict[str, Any],
+    ) -> bool:
+        metadata = input_payload.get("metadata")
+        metadata = metadata if isinstance(metadata, dict) else {}
+        task = str(metadata.get("task") or "").strip()
+        if task not in {
+            "alt_text_suggest",
+            "comment_reply_suggest",
+            "content_rewrite",
+            "content_summary",
+            "excerpt_generation",
+            "meta_description",
+            "title_generation",
+        }:
+            return False
+        output_text = self._extract_provider_output_text(provider_output)
+        if output_text == "":
+            return True
+        if task != "title_generation":
+            return False
+        if self._has_unbalanced_wordpress_ai_title_quote(output_text):
+            return True
+        usage = provider_output.get("usage")
+        usage = usage if isinstance(usage, dict) else {}
+        completion_details = usage.get("completion_tokens_details")
+        completion_details = completion_details if isinstance(completion_details, dict) else {}
+        reasoning_tokens = self._coerce_int(
+            completion_details.get("reasoning_tokens"),
+            default=0,
+        )
+        visible_word_count = len(re.findall(r"\S+", output_text))
+        return reasoning_tokens > 0 and visible_word_count <= 3
+
+    def _has_unbalanced_wordpress_ai_title_quote(self, output_text: str) -> bool:
+        text = output_text.strip()
+        if not text:
+            return False
+        quote_pairs = {
+            '"': '"',
+            "'": "'",
+            "“": "”",
+            "‘": "’",
+            "「": "」",
+            "『": "』",
+            "《": "》",
+        }
+        closing = quote_pairs.get(text[0])
+        return bool(closing and not text.endswith(closing))
 
     def _extract_provider_output_text(self, output: dict[str, Any]) -> str:
         for key in ("output_text", "text", "content"):
@@ -5692,7 +5795,9 @@ class RuntimeService:
         *,
         source_text: str = "",
     ) -> str:
-        text = self._strip_wordpress_ai_markdown(output_text)
+        text = self._strip_wordpress_ai_markdown(
+            self._strip_wordpress_ai_reasoning_noise(output_text)
+        )
         text = re.split(r"\s+#{1,6}\s+", text, maxsplit=1)[0].strip()
         if ":" in text[:64] and len(text.split(":", 1)[1].strip()) >= 40:
             text = text.split(":", 1)[1].strip()
@@ -5709,10 +5814,13 @@ class RuntimeService:
         limit: int,
         strip_explanation: bool = False,
     ) -> str:
-        text = self._strip_wordpress_ai_markdown(output_text)
+        text = self._strip_wordpress_ai_markdown(
+            self._strip_wordpress_ai_reasoning_noise(output_text)
+        )
         if strip_explanation:
             text = re.split(
-                r"\s+(?:说明|解释|理由|Explanation|Reasoning)\s*[:：]",
+                r"\s+(?:说明|解释|理由|Explanation|Reasoning)\s*[:：]|"
+                r"\s+(?:This title|This headline|The title)\b",
                 text,
                 maxsplit=1,
             )[0].strip()
@@ -5848,6 +5956,26 @@ class RuntimeService:
         text = re.sub(r"[*_`]+", "", text)
         text = re.sub(r"\s+", " ", text)
         return text.strip()
+
+    def _strip_wordpress_ai_reasoning_noise(self, output_text: str) -> str:
+        text = output_text.strip()
+        text = re.sub(r"(?is)<think\b[^>]*>.*?</think>", " ", text)
+        text = re.sub(r"(?is)^\s*<think\b[^>]*>.*?(?:\r?\n\s*\r?\n|$)", "", text)
+        text = re.sub(
+            r"(?is)^\s*(?:reasoning|explanation|analysis)\s*[:：].*?"
+            r"(?:\r?\n\s*\r?\n|$)",
+            "",
+            text,
+        )
+        return re.sub(r"\s+", " ", text).strip()
+
+    def _has_wordpress_ai_reasoning_noise(self, output_text: str) -> bool:
+        return bool(
+            re.search(
+                r"(?is)<think\b|^\s*(?:reasoning|explanation|analysis)\s*[:：]",
+                output_text,
+            )
+        )
 
     def _is_latin_heavy(self, text: str) -> bool:
         cjk_count = len(re.findall(r"[\u4e00-\u9fff]", text))

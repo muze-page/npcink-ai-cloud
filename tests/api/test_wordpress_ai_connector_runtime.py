@@ -88,6 +88,26 @@ class WordPressAIConnectorTextProvider:
                     ],
                 ),
                 CatalogModelSeed(
+                    model_id="gpt-wp-ai-connector-fallback-test",
+                    family="gpt-test",
+                    feature="text",
+                    status="available",
+                    context_window=128000,
+                    price_input=0.0,
+                    price_output=0.0,
+                    raw_json={"surface": "wordpress_ai_connector_fallback_test"},
+                    instances=[
+                        CatalogInstanceSeed(
+                            instance_id="zz-openai-wp-ai-connector-fallback-test",
+                            endpoint_variant="responses",
+                            region="global",
+                            capability_tags=["text", "balanced", "hosted-free"],
+                            is_default=False,
+                            weight=50,
+                        )
+                    ],
+                ),
+                CatalogModelSeed(
                     model_id="grok-imagine-wp-ai-test",
                     family="grok-imagine-test",
                     feature="image_generation",
@@ -146,7 +166,31 @@ class WordPressAIConnectorTextProvider:
         metadata = request.input_payload.get("metadata")
         if isinstance(metadata, dict):
             task = str(metadata.get("task") or "")
+        source_text = str(request.input_payload.get("text") or "")
         output_text = "Npcink Cloud Addon: WordPress AI scene helper 说明：short title rationale"
+        if task == "title_generation" and "reasoning leakage" in source_text:
+            output_text = (
+                "<think>The user wants one concise title. I should not expose "
+                "reasoning.</think>\n\nCloud Runtime Connector Verified"
+            )
+        elif task == "title_generation" and "reasoning only" in source_text:
+            if request.model_id == "gpt-wp-ai-connector-fallback-test":
+                output_text = "Hosted Runtime Connector Verified"
+            else:
+                output_text = (
+                    "<think> The user wants a concise WordPress post title about "
+                    "verifying a hosted AI runtime connector."
+                )
+        elif task == "title_generation" and "title fragment" in source_text:
+            if request.model_id == "gpt-wp-ai-connector-fallback-test":
+                output_text = "Hosted Runtime Connector Verified"
+            else:
+                output_text = '"Verifying Your'
+        elif task == "title_generation" and "title explanation" in source_text:
+            output_text = (
+                "How to Verify a Hosted AI Runtime Connector: Essential Steps "
+                "This title balances clarity and search intent."
+            )
         if task == "content_classification":
             output_text = "- WordPress AI\n- Cloud connector\n- Scene runtime"
         elif task == "content_summary":
@@ -189,6 +233,13 @@ class WordPressAIConnectorTextProvider:
             output={
                 "output_text": output_text,
                 "model_id": request.model_id,
+                "usage": {
+                    "completion_tokens_details": {
+                        "reasoning_tokens": 42
+                        if task == "title_generation" and "title fragment" in source_text
+                        else 0
+                    }
+                },
             },
             latency_ms=12,
             tokens_in=24,
@@ -234,6 +285,7 @@ def _build_client(tmp_path: Path) -> tuple[str, TestClient, WordPressAIConnector
                     ],
                     "model_ids": [
                         "gpt-wp-ai-connector-test",
+                        "gpt-wp-ai-connector-fallback-test",
                         "grok-imagine-wp-ai-test",
                         "speech-wp-ai-connector-test",
                     ],
@@ -398,6 +450,117 @@ def test_wordpress_ai_connector_runtime_executes_scene_bound_text(tmp_path: Path
             run.policy_json["execution_contract"]["routing_intent"]
             == "content.short_text"
         )
+
+
+def test_wordpress_ai_connector_runtime_strips_reasoning_noise_from_title(
+    tmp_path: Path,
+) -> None:
+    _, client, _ = _build_client(tmp_path)
+    payload = _payload(
+        {
+            "request": {
+                "prompt": (
+                    "Suggest a concise title for reasoning leakage verification."
+                ),
+            },
+        }
+    )
+
+    response = _execute(client, payload, idempotency_key="wp-ai-connector-think-strip")
+
+    assert response.status_code == 200
+    result_text = response.json()["data"]["result"]["output_text"]
+    assert result_text == "Cloud Runtime Connector Verified"
+    assert "<think>" not in result_text
+    assert "reasoning" not in result_text.lower()
+
+
+def test_wordpress_ai_connector_runtime_falls_back_on_reasoning_only_title(
+    tmp_path: Path,
+) -> None:
+    database_url, client, provider = _build_client(tmp_path)
+    payload = _payload(
+        {
+            "request": {
+                "prompt": "Suggest a concise title for a reasoning only response.",
+            },
+        }
+    )
+
+    response = _execute(
+        client,
+        payload,
+        idempotency_key="wp-ai-connector-think-only",
+    )
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["status"] == "succeeded"
+    assert data["fallback_used"] is True
+    assert data["result"]["output_text"] == "Hosted Runtime Connector Verified"
+    assert len(provider.requests) == 2
+    assert provider.requests[0].model_id == "gpt-wp-ai-connector-test"
+    assert provider.requests[1].model_id == "gpt-wp-ai-connector-fallback-test"
+
+    with get_session(database_url) as session:
+        run = session.execute(select(RunRecord)).scalar_one()
+        assert run.fallback_used is True
+        assert run.selected_model_id == "gpt-wp-ai-connector-fallback-test"
+
+
+def test_wordpress_ai_connector_runtime_falls_back_on_incomplete_title_fragment(
+    tmp_path: Path,
+) -> None:
+    _, client, provider = _build_client(tmp_path)
+    payload = _payload(
+        {
+            "request": {
+                "prompt": "Suggest a concise title for a title fragment response.",
+            },
+        }
+    )
+
+    response = _execute(
+        client,
+        payload,
+        idempotency_key="wp-ai-connector-title-fragment",
+    )
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["status"] == "succeeded"
+    assert data["fallback_used"] is True
+    assert data["result"]["output_text"] == "Hosted Runtime Connector Verified"
+    assert len(provider.requests) == 2
+    assert provider.requests[0].model_id == "gpt-wp-ai-connector-test"
+    assert provider.requests[1].model_id == "gpt-wp-ai-connector-fallback-test"
+
+
+def test_wordpress_ai_connector_runtime_strips_title_explanation_tail(
+    tmp_path: Path,
+) -> None:
+    _, client, _ = _build_client(tmp_path)
+    payload = _payload(
+        {
+            "request": {
+                "prompt": "Suggest a concise title for a title explanation response.",
+            },
+        }
+    )
+
+    response = _execute(
+        client,
+        payload,
+        idempotency_key="wp-ai-connector-title-explanation",
+    )
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["status"] == "succeeded"
+    assert (
+        data["result"]["output_text"]
+        == "How to Verify a Hosted AI Runtime Connector: Essential Steps"
+    )
 
 
 def test_wordpress_ai_connector_runtime_projects_classification_json_scene(

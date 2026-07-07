@@ -266,6 +266,67 @@ def test_minimax_adapter_executes_text_over_openai_compatible_chat() -> None:
     assert result.tokens_out == 4
 
 
+def test_minimax_adapter_does_not_forward_chat_metadata() -> None:
+    original_input = {
+        "input": "Say hi",
+        "text": "Say hi",
+        "metadata": {
+            "source_surface": "wordpress_ai_connector",
+            "suggestion_only": True,
+        },
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content.decode("utf-8"))
+        assert payload["model"] == "MiniMax-M2.1"
+        assert payload["messages"] == [{"role": "user", "content": "Say hi"}]
+        assert "metadata" not in payload
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": "MiniMax metadata-safe result",
+                        },
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {
+                    "prompt_tokens": 3,
+                    "completion_tokens": 4,
+                    "total_tokens": 7,
+                },
+            },
+        )
+
+    adapter = MiniMaxProviderAdapter(
+        api_key="test-api-key",
+        transport=httpx.MockTransport(handler),
+    )
+
+    result = adapter.execute(
+        ProviderExecutionRequest(
+            run_id="run_minimax_metadata_test",
+            site_id="site_alpha",
+            ability_name="npcink-cloud/wp-ai-connector",
+            profile_id="wp-ai.short-text",
+            execution_kind="text",
+            model_id="MiniMax-M2.1",
+            instance_id="minimax-global-minimax-m2-1",
+            endpoint_variant="chat_completions",
+            trace_id="trace-minimax-metadata-test",
+            input_payload=original_input,
+            policy={"allow_fallback": False},
+            timeout_ms=30000,
+        )
+    )
+
+    assert original_input["metadata"]["suggestion_only"] is True
+    assert result.output["output_text"] == "MiniMax metadata-safe result"
+
+
 def test_minimax_adapter_executes_t2a_over_http() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.path.endswith("/v1/t2a_v2")
