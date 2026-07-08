@@ -140,6 +140,22 @@ chmod 600 .tmp/release-smoke.env
 Fill `.tmp/release-smoke.env` from the production secret store and real mailbox.
 Do not commit the filled file.
 
+Preferred GitHub Actions path:
+
+- add the same values to GitHub Actions secrets before the formal release:
+  - `NPCINK_CLOUD_INTERNAL_AUTH_TOKEN`
+  - `NPCINK_CLOUD_ADMIN_BOOTSTRAP_TOKEN`
+  - `NPCINK_CLOUD_RELEASE_MEMBER_EMAIL`
+  - `NPCINK_CLOUD_PORTAL_LOGIN_CODE`
+  - `NPCINK_CLOUD_RELEASE_SITE_ID`
+  - `NPCINK_CLOUD_RELEASE_KEY_ID`
+  - `NPCINK_CLOUD_RELEASE_KEY_SECRET`
+- manually run the `Release Smoke` workflow from the `production` branch;
+- keep `require_alipay_enabled=true` for a paid trial release;
+- treat a green `Release Smoke` run as the formal smoke evidence for the items
+  below, but not as a replacement for the real WordPress plugin runtime flow in
+  section 6.
+
 Before running the formal smoke, run the small-customer trial preflight:
 
 ```bash
