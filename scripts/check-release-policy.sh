@@ -41,7 +41,7 @@ require_marker "AGENTS.md" "development integration branch is"
 require_marker "AGENTS.md" "Do not directly edit production application code on the server."
 require_marker "AGENTS.md" "Any emergency server fix must be backported to Git before the next deploy."
 require_marker "AGENTS.md" "Do not commit SMTP passwords"
-require_marker "AGENTS.md" "Do not push or deploy to Gitee unless the user explicitly asks."
+require_marker "AGENTS.md" "Do not push or deploy to Gitee. Current project source control is GitHub-only."
 require_marker "AGENTS.md" "pnpm run check:release-policy"
 
 require_marker "docs/cloud-production-release-policy-v1.md" "master"

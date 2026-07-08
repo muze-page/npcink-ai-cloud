@@ -474,7 +474,7 @@ def test_lightweight_release_policy_gate_is_documented() -> None:
         "Do not directly edit production application code on the server.",
         "Any emergency server fix must be backported to Git before the next deploy.",
         "Do not commit SMTP passwords",
-        "Do not push or deploy to Gitee unless the user explicitly asks.",
+        "Do not push or deploy to Gitee. Current project source control is GitHub-only.",
         "pnpm run check:release-policy",
     ):
         assert marker in agents_text

@@ -66,7 +66,7 @@ prompt/router/preset local truth, or WordPress write owner.
 - When the worktree is dirty, use a clean temporary worktree for
   release/process changes.
 - Do not use `git add -A` in a mixed worktree.
-- Do not push or deploy to Gitee unless the user explicitly asks.
+- Do not push or deploy to Gitee. Current project source control is GitHub-only.
 - After changing release policy, run `pnpm run check:release-policy`.
 
 ## Verification Gates
