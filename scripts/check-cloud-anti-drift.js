@@ -16,18 +16,18 @@ const validChangeClassification = new Set( [
 	'cloud detail',
 	'forbidden',
 ] );
-const registryMetadataPath = path.join(
+const metadataProjectionPath = path.join(
 	cloudRoot,
 	'app',
 	'domain',
 	'agent_workflow_metadata.py'
 );
-const registryBoundaryDocPath = path.join(
+const metadataProjectionBoundaryDocPath = path.join(
 	cloudRoot,
 	'docs',
-	'cloud-agent-workflow-metadata-registry-v1.md'
+	'cloud-agent-workflow-metadata-projection-v1.md'
 );
-const registryBoundaryDocRequiredPhrases = [
+const metadataProjectionBoundaryDocRequiredPhrases = [
 	'not become a second ability registry, workflow registry, approval system, or',
 	'WordPress write owner',
 	'The preferred product term is metadata projection',
@@ -129,11 +129,11 @@ function isAdminPortalFrontendSource( file ) {
 	);
 }
 
-function loadAgentWorkflowRegistryTokens() {
-	const source = readTextIfExists( registryMetadataPath );
+function loadAgentWorkflowMetadataProjectionTokens() {
+	const source = readTextIfExists( metadataProjectionPath );
 	const tokens = [];
 	const patterns = [
-		/(?:REGISTRY_VERSION|[A-Z0-9_]*(?:AGENT_ID|WORKFLOW_ID))\s*=\s*"([^"]+)"/gu,
+		/(?:METADATA_PROJECTION_VERSION|COMPATIBILITY_REGISTRY_VERSION|[A-Z0-9_]*(?:AGENT_ID|WORKFLOW_ID))\s*=\s*"([^"]+)"/gu,
 		/(?:agent_version|workflow_version)\s*=\s*"([^"]+)"/gu,
 	];
 
@@ -148,9 +148,9 @@ function loadAgentWorkflowRegistryTokens() {
 	return orderedUniq( tokens );
 }
 
-function checkAgentWorkflowRegistryBoundaryDoc() {
-	const source = readTextIfExists( registryBoundaryDocPath );
-	const missing = registryBoundaryDocRequiredPhrases.filter(
+function checkAgentWorkflowMetadataProjectionBoundaryDoc() {
+	const source = readTextIfExists( metadataProjectionBoundaryDocPath );
+	const missing = metadataProjectionBoundaryDocRequiredPhrases.filter(
 		( phrase ) => ! source.includes( phrase )
 	);
 
@@ -160,7 +160,7 @@ function checkAgentWorkflowRegistryBoundaryDoc() {
 
 	return missing.map(
 		( phrase ) =>
-			`docs/cloud-agent-workflow-metadata-registry-v1.md missing boundary phrase: ${ phrase }`
+			`docs/cloud-agent-workflow-metadata-projection-v1.md missing metadata projection boundary phrase: ${ phrase }`
 	);
 }
 
@@ -315,6 +315,9 @@ function checkCloudAntiDrift( { contractPath, files } ) {
 		String( contract.change_classification || '' ).trim() !== '' ||
 		contractRequiredDocs.some( ( item ) => item.includes( 'cloud-' ) ) ||
 		hasFunctionalCloudTrigger;
+	const metadataProjectionHardcodingViolations = [];
+	const metadataProjectionBoundaryDocViolations =
+		checkAgentWorkflowMetadataProjectionBoundaryDoc();
 
 	const result = {
 		is_cloud_task: isCloudTask,
@@ -326,8 +329,8 @@ function checkCloudAntiDrift( { contractPath, files } ) {
 			human_review_required_missing: [],
 			executable_seam_without_backstop: [],
 			forbidden_active_surfaces: [],
-			registry_metadata_hardcoding: [],
-			registry_boundary_doc_missing: checkAgentWorkflowRegistryBoundaryDoc(),
+			metadata_projection_hardcoding: metadataProjectionHardcodingViolations,
+			metadata_projection_boundary_doc_missing: metadataProjectionBoundaryDocViolations,
 		},
 		notes: [],
 	};
@@ -404,20 +407,20 @@ function checkCloudAntiDrift( { contractPath, files } ) {
 		);
 	}
 
-	const registryMetadataTokens = loadAgentWorkflowRegistryTokens();
-	const hardcodedRegistryMetadata = orderedUniq(
+	const metadataProjectionTokens = loadAgentWorkflowMetadataProjectionTokens();
+	const hardcodedMetadataProjection = orderedUniq(
 		functionalChangedFileContents.flatMap( ( item ) => {
 			if ( ! isAdminPortalFrontendSource( item.file ) ) {
 				return [];
 			}
-			return registryMetadataTokens.filter(
+			return metadataProjectionTokens.filter(
 				( token ) => token && item.source.includes( token )
 			).map( ( token ) => `${ item.file }:${ token }` );
 		} )
 	);
-	if ( hardcodedRegistryMetadata.length > 0 ) {
-		result.violations.registry_metadata_hardcoding.push(
-			`Admin/Portal source hardcodes Agent/Workflow registry metadata; use the backend registry projection instead: ${ hardcodedRegistryMetadata.join( ', ' ) }`
+	if ( hardcodedMetadataProjection.length > 0 ) {
+		result.violations.metadata_projection_hardcoding.push(
+			`Admin/Portal source hardcodes Agent/Workflow metadata projection; use the backend metadata projection instead: ${ hardcodedMetadataProjection.join( ', ' ) }`
 		);
 	}
 
@@ -477,8 +480,8 @@ if ( require.main === module ) {
 		result.violations.human_review_required_missing.length > 0 ||
 		result.violations.executable_seam_without_backstop.length > 0 ||
 		result.violations.forbidden_active_surfaces.length > 0 ||
-		result.violations.registry_metadata_hardcoding.length > 0 ||
-		result.violations.registry_boundary_doc_missing.length > 0;
+		result.violations.metadata_projection_hardcoding.length > 0 ||
+		result.violations.metadata_projection_boundary_doc_missing.length > 0;
 
 	if ( wantsJson ) {
 		console.log( JSON.stringify( result, null, 2 ) );

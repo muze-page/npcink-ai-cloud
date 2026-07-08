@@ -10,7 +10,7 @@ from app.core.models import MediaDerivativeArtifact
 from app.domain.agent_workflow_metadata import (
     MEDIA_DERIVATIVE_WORKFLOW_ID,
     get_workflow_metadata,
-    registry_metadata_tokens,
+    metadata_projection_tokens,
 )
 from app.domain.media_derivatives.contracts import ARTIFACT_DEFAULT_TTL_MINUTES
 from app.domain.media_derivatives.processor import MediaDerivativeResult
@@ -159,8 +159,8 @@ def _media_derivative_workflow_metadata() -> dict[str, object]:
             "triggering_contract": "media_derivative_cloud_request.v1",
             "cloud_output": "temporary_derivative_artifact",
             "write_posture": "artifact_only",
-            "steps": registry_metadata_tokens(metadata.get("steps")),
-            "stop_conditions": registry_metadata_tokens(metadata.get("stop_conditions")),
+            "steps": metadata_projection_tokens(metadata.get("steps")),
+            "stop_conditions": metadata_projection_tokens(metadata.get("stop_conditions")),
         }
     )
     return metadata

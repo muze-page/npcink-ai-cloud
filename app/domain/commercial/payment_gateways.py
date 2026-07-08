@@ -8,7 +8,7 @@ from datetime import UTC, datetime
 from typing import Protocol
 from urllib.parse import urlencode
 
-from cryptography.exceptions import InvalidSignature
+from cryptography.exceptions import InvalidSignature, UnsupportedAlgorithm
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
 
@@ -351,10 +351,7 @@ class AlipayPaymentGatewayProvider(SimulatedPaymentGatewayProvider):
 
     def _sign_params(self, params: Mapping[str, object]) -> str:
         config = self._require_config()
-        private_key = serialization.load_pem_private_key(
-            _normalize_private_key_pem(_config_text(config, "private_key")),
-            password=None,
-        )
+        private_key = _load_alipay_private_key(_config_text(config, "private_key"))
         if not isinstance(private_key, rsa.RSAPrivateKey):
             raise CommercialValidationError(
                 "service.alipay_private_key_invalid",
@@ -381,9 +378,7 @@ class AlipayPaymentGatewayProvider(SimulatedPaymentGatewayProvider):
                 "service.payment_callback_signature_missing",
                 "Alipay callback is missing its signature",
             )
-        public_key = serialization.load_pem_public_key(
-            _normalize_public_key_pem(_config_text(config, "public_key"))
-        )
+        public_key = _load_alipay_public_key(_config_text(config, "public_key"))
         if not isinstance(public_key, rsa.RSAPublicKey):
             raise CommercialValidationError(
                 "service.alipay_public_key_invalid",
@@ -418,32 +413,20 @@ def validate_alipay_gateway_config(config: Mapping[str, object]) -> None:
             "service.alipay_gateway_not_configured",
             "Alipay payment gateway settings are not configured",
         )
-    private_key = serialization.load_pem_private_key(
-        _normalize_private_key_pem(_config_text(normalized, "private_key")),
-        password=None,
-    )
+    private_key = _load_alipay_private_key(_config_text(normalized, "private_key"))
     if not isinstance(private_key, rsa.RSAPrivateKey):
         raise CommercialValidationError(
             "service.alipay_private_key_invalid",
             "Alipay private key must be an RSA private key",
         )
-    public_key = serialization.load_pem_public_key(
-        _normalize_public_key_pem(_config_text(normalized, "public_key"))
-    )
+    public_key = _load_alipay_public_key(_config_text(normalized, "public_key"))
     if not isinstance(public_key, rsa.RSAPublicKey):
         raise CommercialValidationError(
             "service.alipay_public_key_invalid",
             "Alipay public key must be an RSA public key",
         )
     probe = b"npcink-ai-cloud-alipay-config-check"
-    signature = private_key.sign(probe, padding.PKCS1v15(), hashes.SHA256())
-    try:
-        public_key.verify(signature, probe, padding.PKCS1v15(), hashes.SHA256())
-    except InvalidSignature as error:
-        raise CommercialValidationError(
-            "service.alipay_key_pair_mismatch",
-            "Alipay private key and public key do not match",
-        ) from error
+    private_key.sign(probe, padding.PKCS1v15(), hashes.SHA256())
 
 
 class WeChatPayPaymentGatewayProvider(SimulatedPaymentGatewayProvider):
@@ -514,11 +497,61 @@ def _canonicalize_alipay_params(params: Mapping[str, object]) -> str:
 
 
 def _normalize_private_key_pem(value: str) -> bytes:
-    return _normalize_pem(
-        value,
-        begin_marker=_pem_marker("BEGIN", "PRIVATE KEY"),
-        end_marker=_pem_marker("END", "PRIVATE KEY"),
+    return _normalize_private_key_pem_candidates(value)[0]
+
+
+def _normalize_private_key_pem_candidates(value: str) -> list[bytes]:
+    text = value.strip().replace("\\n", "\n")
+    if _pem_marker("BEGIN", "PRIVATE KEY") in text:
+        return [text.encode("utf-8")]
+    if _pem_marker("BEGIN", "RSA PRIVATE KEY") in text:
+        return [text.encode("utf-8")]
+    compact = "".join(text.split())
+    lines = [compact[index : index + 64] for index in range(0, len(compact), 64)]
+    body = "\n".join(lines)
+    pkcs8_pem = (
+        f"{_pem_marker('BEGIN', 'PRIVATE KEY')}\n"
+        f"{body}\n"
+        f"{_pem_marker('END', 'PRIVATE KEY')}\n"
     )
+    pkcs1_pem = (
+        f"{_pem_marker('BEGIN', 'RSA PRIVATE KEY')}\n"
+        f"{body}\n"
+        f"{_pem_marker('END', 'RSA PRIVATE KEY')}\n"
+    )
+    return [
+        pkcs8_pem.encode(),
+        pkcs1_pem.encode(),
+    ]
+
+
+def _load_alipay_private_key(value: str) -> object:
+    errors: list[Exception] = []
+    for pem in _normalize_private_key_pem_candidates(value):
+        try:
+            return serialization.load_pem_private_key(pem, password=None)
+        except (TypeError, ValueError, UnsupportedAlgorithm) as error:
+            errors.append(error)
+    raise CommercialValidationError(
+        "service.alipay_private_key_format_invalid",
+        (
+            "支付宝应用私钥格式无效。请填写应用私钥，支持 PEM 格式或支付宝工具"
+            "导出的裸 Base64 私钥；不要填写支付宝公钥、应用公钥或证书。"
+        ),
+    ) from (errors[-1] if errors else None)
+
+
+def _load_alipay_public_key(value: str) -> object:
+    try:
+        return serialization.load_pem_public_key(_normalize_public_key_pem(value))
+    except (TypeError, ValueError, UnsupportedAlgorithm) as error:
+        raise CommercialValidationError(
+            "service.alipay_public_key_format_invalid",
+            (
+                "支付宝公钥格式无效。请填写支付宝开放平台提供的支付宝公钥，支持 PEM "
+                "格式或裸 Base64 公钥；不要填写应用公钥、应用私钥或证书。"
+            ),
+        ) from error
 
 
 def _normalize_public_key_pem(value: str) -> bytes:

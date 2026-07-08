@@ -59,7 +59,7 @@ type SummaryBranch = {
   safety_note: string;
   severity: string;
   status: string;
-  agentRegistryMetadata: AgentHandoff;
+  agentMetadataProjection: AgentHandoff;
   source_context: {
     advisor: {
       scope: string;
@@ -256,7 +256,8 @@ function normalizeBranch(raw: any): SummaryBranch {
   const generation = raw?.generation ?? {};
   const disclosure = raw?.ai_disclosure ?? {};
   const handoff = raw?.source_context?.advisor?.agent_handoff ?? {};
-  const registryHandoff = raw?.agent_registry_metadata ?? raw?.agent_handoff ?? handoff;
+  const metadataProjection =
+    raw?.agent_metadata_projection ?? raw?.agent_handoff ?? handoff;
   return {
     generation: {
       mode: String(generation.mode ?? ''),
@@ -299,7 +300,7 @@ function normalizeBranch(raw: any): SummaryBranch {
     safety_note: String(raw?.safety_note ?? ''),
     severity: String(raw?.severity ?? ''),
     status: String(raw?.status ?? ''),
-    agentRegistryMetadata: normalizeAgentHandoff(registryHandoff),
+    agentMetadataProjection: normalizeAgentHandoff(metadataProjection),
     source_context: {
       advisor: {
         scope: String(raw?.source_context?.advisor?.scope ?? ''),
@@ -2168,7 +2169,7 @@ function AdminAiAdvisorContent() {
               </BackofficeSectionPanel>
             </div>
 
-            <AgentHandoffPanel handoff={data.ai.agentRegistryMetadata} />
+            <AgentHandoffPanel handoff={data.ai.agentMetadataProjection} />
           </AdvisorEvaluationDetails>
         </>
       ) : null}

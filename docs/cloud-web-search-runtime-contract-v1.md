@@ -30,7 +30,7 @@ This is a static runtime ingress compatibility path, not a Cloud ability
 registry.
 
 Admin and Portal display metadata for the matching preflight workflow is sourced
-from the Cloud read-only Agent/Workflow metadata registry as
+from the Cloud read-only Agent/Workflow metadata projection as
 `external_web_evidence_preflight`. That metadata is UI/detail projection only; it
 does not change runtime routing or create a Cloud workflow truth.
 

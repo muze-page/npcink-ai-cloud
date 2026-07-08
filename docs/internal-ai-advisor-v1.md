@@ -220,9 +220,9 @@ Portal responses must not expose:
 The response must identify whether text came from a provider or deterministic
 fallback using `generation.mode`. This mode is advisory evidence, not
 authorization to execute anything.
-Admin and Portal responses may expose `agent_registry_metadata` so UI surfaces
+Admin and Portal responses may expose `agent_metadata_projection` so UI surfaces
 can render the Advisor's static handoff boundary from the Cloud read-only
-metadata registry instead of page-local constants. This field is display/detail
+metadata projection instead of page-local constants. This field is display/detail
 metadata only; it does not approve actions or create a workflow truth.
 Every text-bearing summary response must also include `ai_disclosure` as
 defined by [AI Generated Content Disclosure v1](ai-generated-content-disclosure-v1.md).

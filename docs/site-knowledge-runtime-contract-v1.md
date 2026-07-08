@@ -252,8 +252,8 @@ site_knowledge -> suggestion_only -> local proposal
 ```
 
 The handoff's static identity and boundary fields come from the Cloud read-only
-Agent/Workflow metadata registry. Runtime evidence and proposal inputs remain in
-the existing runtime result.
+Agent/Workflow metadata projection. Runtime evidence and proposal inputs remain
+in the existing runtime result.
 
 The handoff is not a new Cloud Agent platform, writable registry, route,
 workflow truth, or WordPress write authority. It is a structured local handoff

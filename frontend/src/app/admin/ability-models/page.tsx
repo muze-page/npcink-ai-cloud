@@ -62,6 +62,7 @@ type RoutingProfile = {
 
 type RoutingData = {
   available_text_instances: RuntimeInstance[];
+  available_vision_instances: RuntimeInstance[];
   available_image_instances: RuntimeInstance[];
   available_audio_instances: RuntimeInstance[];
   available_embedding_instances: RuntimeInstance[];
@@ -208,6 +209,9 @@ function normalizeRoutingData(raw: any): RoutingData {
   return {
     available_text_instances: Array.isArray(data.available_text_instances)
       ? data.available_text_instances.map(normalizeInstance)
+      : [],
+    available_vision_instances: Array.isArray(data.available_vision_instances)
+      ? data.available_vision_instances.map(normalizeInstance)
       : [],
     available_image_instances: Array.isArray(data.available_image_instances)
       ? data.available_image_instances.map(normalizeInstance)
@@ -393,7 +397,7 @@ export default function AbilityModelsPage() {
     setLoadingRouting(true);
     setPageError('');
     try {
-      const response = await fetch('/api/admin/wordpress-ai-routing', { credentials: 'include' });
+      const response = await fetch('/api/admin/ability-models/plugin-routing', { credentials: 'include' });
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) {
         throw new Error(resolveUiErrorMessage(payload, aiText('error_load_ability_models', 'Failed to load ability-model routing.')));
@@ -431,6 +435,7 @@ export default function AbilityModelsPage() {
   const runtimeInstancesById = useMemo(() => {
     const instances = [
       ...(routingData?.available_text_instances || []),
+      ...(routingData?.available_vision_instances || []),
       ...(routingData?.available_image_instances || []),
       ...(routingData?.available_audio_instances || []),
       ...(routingData?.available_embedding_instances || []),
@@ -438,28 +443,33 @@ export default function AbilityModelsPage() {
     return new Map(instances.map((instance) => [instance.instance_id, instance]));
   }, [routingData]);
 
-  const routingCandidateInstancesFor = useCallback((profile: RoutingProfile): RuntimeInstance[] => (
-    profile.execution_kind === 'image_generation'
-      ? routingData?.available_image_instances || []
-      : profile.execution_kind === 'audio_generation'
-        ? routingData?.available_audio_instances || []
-        : (routingData?.available_text_instances || []).filter((instance) => {
-          const modelId = instance.model_id.toLowerCase();
-          if (/(speech|audio|voice|tts|ocr|vision|image|embed)/i.test(modelId)) {
-            return false;
-          }
-          const featureTokens = [
-            instance.model_feature,
-            instance.endpoint_variant,
-            ...instance.capability_tags,
-          ].join(' ').toLowerCase();
-          if (featureTokens.includes('text')) return true;
-          if (featureTokens.includes('image') || featureTokens.includes('audio') || featureTokens.includes('video')) {
-            return false;
-          }
-          return true;
-        })
-  ), [routingData]);
+  const routingCandidateInstancesFor = useCallback((profile: RoutingProfile): RuntimeInstance[] => {
+    if (profile.execution_kind === 'image_generation') {
+      return routingData?.available_image_instances || [];
+    }
+    if (profile.execution_kind === 'vision') {
+      return routingData?.available_vision_instances || [];
+    }
+    if (profile.execution_kind === 'audio_generation') {
+      return routingData?.available_audio_instances || [];
+    }
+    return (routingData?.available_text_instances || []).filter((instance) => {
+      const modelId = instance.model_id.toLowerCase();
+      if (/(speech|audio|voice|tts|ocr|vision|image|embed)/i.test(modelId)) {
+        return false;
+      }
+      const featureTokens = [
+        instance.model_feature,
+        instance.endpoint_variant,
+        ...instance.capability_tags,
+      ].join(' ').toLowerCase();
+      if (featureTokens.includes('text')) return true;
+      if (featureTokens.includes('image') || featureTokens.includes('audio') || featureTokens.includes('video')) {
+        return false;
+      }
+      return true;
+    });
+  }, [routingData]);
 
   const abilityTaskLabel = useCallback((taskId: string): string => {
     const labels: Record<string, string> = {
@@ -651,6 +661,7 @@ export default function AbilityModelsPage() {
       'content.short_text': text('route_content_short_text', 'Short text suggestions'),
       'content.editorial': text('route_content_editorial', 'Editorial assistance'),
       'content.classification': text('route_content_classification', 'Content classification'),
+      'media.alt_text_vision': text('route_media_alt_text_vision', 'Alt text vision'),
       'media.image_generation': text('route_media_image_generation', 'Image generation candidates'),
       'audio.generation': text('route_audio_generation', 'Audio generation'),
     };
@@ -919,6 +930,7 @@ export default function AbilityModelsPage() {
   const routeCount = routingDrafts.length;
   const modelCandidateCount =
     (routingData?.available_text_instances.length || 0) +
+    (routingData?.available_vision_instances.length || 0) +
     (routingData?.available_image_instances.length || 0) +
     (routingData?.available_audio_instances.length || 0) +
     (routingData?.available_embedding_instances.length || 0);
@@ -964,7 +976,7 @@ export default function AbilityModelsPage() {
     setPageError('');
     setPageMessage('');
     try {
-      const response = await fetch('/api/admin/wordpress-ai-routing', {
+      const response = await fetch('/api/admin/ability-models/plugin-routing', {
         method: 'POST',
         credentials: 'include',
         headers: {

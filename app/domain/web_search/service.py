@@ -15,7 +15,7 @@ from app.core.config import Settings
 from app.domain.agent_workflow_metadata import (
     WEB_SEARCH_EVIDENCE_WORKFLOW_ID,
     get_workflow_metadata,
-    registry_metadata_tokens,
+    metadata_projection_tokens,
 )
 from app.domain.web_search.contracts import (
     ALLOWED_WEB_SEARCH_INTENTS,
@@ -1387,8 +1387,8 @@ def _web_search_workflow_metadata(options: dict[str, Any]) -> dict[str, Any]:
             "cloud_output": "external_web_evidence",
             "output_contract": SEARCH_EVIDENCE_PACK_CONTRACT,
             "write_posture": "suggestion_only",
-            "steps": registry_metadata_tokens(metadata.get("steps")),
-            "stop_conditions": registry_metadata_tokens(metadata.get("stop_conditions")),
+            "steps": metadata_projection_tokens(metadata.get("steps")),
+            "stop_conditions": metadata_projection_tokens(metadata.get("stop_conditions")),
         }
     )
     return metadata

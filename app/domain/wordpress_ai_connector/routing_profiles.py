@@ -6,6 +6,7 @@ from typing import Any
 WP_AI_CONNECTOR_SHORT_TEXT_PROFILE_ID = "wp-ai.short-text"
 WP_AI_CONNECTOR_EDITORIAL_PROFILE_ID = "wp-ai.editorial"
 WP_AI_CONNECTOR_CLASSIFICATION_PROFILE_ID = "wp-ai.classification"
+WP_AI_CONNECTOR_ALT_TEXT_VISION_PROFILE_ID = "wp-ai.alt-text-vision"
 WP_AI_CONNECTOR_IMAGE_GENERATION_PROFILE_ID = "wp-ai.image-generation"
 WP_AI_CONNECTOR_AUDIO_GENERATION_PROFILE_ID = "wp-ai.audio-generation"
 
@@ -13,6 +14,7 @@ WP_AI_CONNECTOR_PROFILE_IDS = (
     WP_AI_CONNECTOR_SHORT_TEXT_PROFILE_ID,
     WP_AI_CONNECTOR_EDITORIAL_PROFILE_ID,
     WP_AI_CONNECTOR_CLASSIFICATION_PROFILE_ID,
+    WP_AI_CONNECTOR_ALT_TEXT_VISION_PROFILE_ID,
     WP_AI_CONNECTOR_IMAGE_GENERATION_PROFILE_ID,
     WP_AI_CONNECTOR_AUDIO_GENERATION_PROFILE_ID,
 )
@@ -42,7 +44,6 @@ WP_AI_CONNECTOR_PROFILE_SPECS: tuple[WordPressAIConnectorProfileSpec, ...] = (
         label="Short text",
         execution_kind="text",
         tasks=(
-            "alt_text_suggest",
             "excerpt_generation",
             "meta_description",
             "title_generation",
@@ -55,7 +56,7 @@ WP_AI_CONNECTOR_PROFILE_SPECS: tuple[WordPressAIConnectorProfileSpec, ...] = (
         max_retries=0,
         description=(
             "Low-latency WordPress AI suggestions for titles, SEO text, excerpts, "
-            "alt text, and audio summary scripts."
+            "and audio summary scripts."
         ),
     ),
     WordPressAIConnectorProfileSpec(
@@ -95,6 +96,23 @@ WP_AI_CONNECTOR_PROFILE_SPECS: tuple[WordPressAIConnectorProfileSpec, ...] = (
         allow_fallback=True,
         max_retries=0,
         description="Structured taxonomy and moderation suggestions for WordPress AI tasks.",
+    ),
+    WordPressAIConnectorProfileSpec(
+        profile_id=WP_AI_CONNECTOR_ALT_TEXT_VISION_PROFILE_ID,
+        group_id="alt_text_vision",
+        routing_intent="media.alt_text_vision",
+        label="Alt text vision",
+        execution_kind="vision",
+        tasks=("alt_text_suggest",),
+        ordered_tiers=("default", "quality"),
+        timeout_ms=45_000,
+        max_timeout_ms=60_000,
+        allow_fallback=True,
+        max_retries=0,
+        description=(
+            "Vision model used to generate reviewable WordPress media alt text "
+            "suggestions from a bounded image reference."
+        ),
     ),
     WordPressAIConnectorProfileSpec(
         profile_id=WP_AI_CONNECTOR_IMAGE_GENERATION_PROFILE_ID,

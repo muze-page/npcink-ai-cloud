@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 import time
+from dataclasses import replace
 from typing import Any
 
 import httpx
@@ -330,19 +331,20 @@ class OpenAIProviderAdapter:
 
     def _execute_http(self, request: ProviderExecutionRequest) -> ProviderExecutionResult:
         endpoint_path, payload = self._build_http_request(request)
+        result_request = request
         started_at = time.monotonic()
 
         try:
             with self._build_client(request.timeout_ms) as client:
-                response = client.post(endpoint_path, json=payload)
+                response = self._post_with_metadata_retry(client, endpoint_path, payload)
                 if (
-                    response.status_code == 400
-                    and "metadata" in payload
-                    and self._response_reports_unsupported_parameter(response, "metadata")
+                    response.status_code == 404
+                    and endpoint_path == "/responses"
+                    and self._can_retry_responses_as_chat_completions(request)
                 ):
-                    retry_payload = dict(payload)
-                    retry_payload.pop("metadata", None)
-                    response = client.post(endpoint_path, json=retry_payload)
+                    result_request = replace(request, endpoint_variant="chat_completions")
+                    endpoint_path, payload = self._build_http_request(result_request)
+                    response = self._post_with_metadata_retry(client, endpoint_path, payload)
                 response.raise_for_status()
         except httpx.TimeoutException as error:
             raise ProviderExecutionError(
@@ -364,7 +366,34 @@ class OpenAIProviderAdapter:
 
         response_json = response.json()
         latency_ms = max(1, int((time.monotonic() - started_at) * 1000))
-        return self._build_http_result(request, response_json, latency_ms)
+        return self._build_http_result(result_request, response_json, latency_ms)
+
+    def _post_with_metadata_retry(
+        self,
+        client: httpx.Client,
+        endpoint_path: str,
+        payload: dict[str, Any],
+    ) -> httpx.Response:
+        response = client.post(endpoint_path, json=payload)
+        if (
+            response.status_code == 400
+            and "metadata" in payload
+            and self._response_reports_unsupported_parameter(response, "metadata")
+        ):
+            retry_payload = dict(payload)
+            retry_payload.pop("metadata", None)
+            response = client.post(endpoint_path, json=retry_payload)
+        return response
+
+    def _can_retry_responses_as_chat_completions(
+        self,
+        request: ProviderExecutionRequest,
+    ) -> bool:
+        if request.endpoint_variant != "responses":
+            return False
+        options = self._resolve_request_options(request.input_payload)
+        messages = options.get("messages")
+        return isinstance(messages, list) and bool(messages)
 
     @staticmethod
     def _response_reports_unsupported_parameter(

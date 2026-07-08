@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import re
 from typing import Any
+from urllib.parse import urlsplit
 
 WP_AI_CONNECTOR_ABILITY = "npcink-cloud/wp-ai-connector"
 WP_AI_CONNECTOR_ABILITIES = frozenset({WP_AI_CONNECTOR_ABILITY})
@@ -8,19 +10,40 @@ WP_AI_CONNECTOR_CONTRACT = "wp_ai_connector_runtime.v1"
 WP_AI_CONNECTOR_EXECUTION_KIND = "text"
 WP_AI_CONNECTOR_ABILITY_FAMILY = "text"
 WP_AI_CONNECTOR_DATA_CLASSIFICATION = "public_site_content"
+WP_AI_CONNECTOR_VISION_EXECUTION_KIND = "vision"
+WP_AI_CONNECTOR_VISION_ABILITY_FAMILY = "vision"
+WP_AI_CONNECTOR_VISION_DATA_CLASSIFICATION = "public_reference_media"
 WP_AI_CONNECTOR_RESULT_CONTRACT = "wp_ai_connector_result.v1"
 WP_AI_CONNECTOR_MAX_PROMPT_CHARS = 12000
 WP_AI_CONNECTOR_MAX_TIMEOUT_SECONDS = 60
+WP_AI_CONNECTOR_MAX_IMAGE_URL_CHARS = 2048
+WP_AI_CONNECTOR_MAX_IMAGE_DATA_URL_CHARS = 900_000
+WP_AI_CONNECTOR_IMAGE_DATA_URL_PATTERN = re.compile(
+    r"^data:(image/(?:gif|jpeg|png|webp))(?:;[^,]*)?;base64,([A-Za-z0-9+/=\r\n]+)$",
+    re.IGNORECASE,
+)
+WP_AI_CONNECTOR_ALT_TEXT_IMAGE_MIME_TYPES = frozenset(
+    {
+        "image/gif",
+        "image/jpeg",
+        "image/png",
+        "image/webp",
+    }
+)
 
 WP_AI_CONNECTOR_ALLOWED_TASKS = frozenset(
     {
         "alt_text_suggest",
+        "article_audio_summary",
+        "article_narration",
+        "audio_summary_script",
         "comment_moderation",
         "comment_reply_suggest",
         "content_classification",
         "content_rewrite",
         "content_summary",
         "excerpt_generation",
+        "image_generation",
         "meta_description",
         "title_generation",
     }
@@ -30,21 +53,35 @@ WP_AI_CONNECTOR_FORBIDDEN_KEYS = frozenset(
     {
         "api_key",
         "authorization",
+        "base64",
+        "b64",
+        "b64_json",
+        "callback_secret",
         "chat_id",
         "conversation_id",
         "cookie",
         "credentials",
         "function_call",
         "functions",
+        "headers",
+        "image_base64",
+        "image_data",
         "messages",
         "nonce",
         "password",
+        "provider_key",
+        "provider_secret",
         "secret",
         "session_id",
         "stream",
         "thread_id",
         "tool_calls",
         "tools",
+        "update_attachment_metadata",
+        "wordpress_write_policy",
+        "wordpress_write_target",
+        "write_control",
+        "write_controls",
         "x_magick_signature",
         "x_npcink_signature",
     }
@@ -139,6 +176,8 @@ def validate_wordpress_ai_connector_runtime_contract(
             "wp_ai_connector.prompt_too_large",
             "WordPress AI connector prompt exceeds the scene runtime size limit",
         )
+    if task == "alt_text_suggest":
+        validate_alt_text_suggest_request(request)
 
 
 def find_forbidden_wordpress_ai_connector_field(value: Any, *, path: str = "") -> str:
@@ -157,3 +196,61 @@ def find_forbidden_wordpress_ai_connector_field(value: Any, *, path: str = "") -
             if nested:
                 return nested
     return ""
+
+
+def validate_alt_text_suggest_request(request: dict[str, Any]) -> None:
+    image_url = str(request.get("image_url") or "").strip()
+    thumbnail_url = str(request.get("thumbnail_url") or "").strip()
+    if not image_url and not thumbnail_url:
+        raise WordPressAIConnectorContractViolation(
+            "wp_ai_connector.alt_text_image_required",
+            "WordPress AI alt text suggestions require image_url or thumbnail_url",
+        )
+
+    for field_name, url in (("image_url", image_url), ("thumbnail_url", thumbnail_url)):
+        if url:
+            validate_alt_text_image_url(url, field_name=field_name)
+
+    mime_type = str(request.get("mime_type") or "").split(";", 1)[0].strip().lower()
+    if mime_type and mime_type not in WP_AI_CONNECTOR_ALT_TEXT_IMAGE_MIME_TYPES:
+        raise WordPressAIConnectorContractViolation(
+            "wp_ai_connector.alt_text_mime_type_not_allowed",
+            "WordPress AI alt text suggestions require a supported image MIME type",
+        )
+
+
+def validate_alt_text_image_url(url: str, *, field_name: str) -> None:
+    if url.lower().startswith("data:"):
+        validate_alt_text_image_data_url(url, field_name=field_name)
+        return
+    if len(url) > WP_AI_CONNECTOR_MAX_IMAGE_URL_CHARS:
+        raise WordPressAIConnectorContractViolation(
+            "wp_ai_connector.alt_text_image_url_too_long",
+            f"WordPress AI alt text {field_name} is too long",
+        )
+    parsed = urlsplit(url)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise WordPressAIConnectorContractViolation(
+            "wp_ai_connector.alt_text_image_url_invalid",
+            f"WordPress AI alt text {field_name} must be an http(s) URL or image data URL",
+        )
+
+
+def validate_alt_text_image_data_url(url: str, *, field_name: str) -> None:
+    if len(url) > WP_AI_CONNECTOR_MAX_IMAGE_DATA_URL_CHARS:
+        raise WordPressAIConnectorContractViolation(
+            "wp_ai_connector.alt_text_image_data_url_too_long",
+            f"WordPress AI alt text {field_name} data URL is too long",
+        )
+    match = WP_AI_CONNECTOR_IMAGE_DATA_URL_PATTERN.match(url)
+    if match is None:
+        raise WordPressAIConnectorContractViolation(
+            "wp_ai_connector.alt_text_image_url_invalid",
+            f"WordPress AI alt text {field_name} must be an http(s) URL or image data URL",
+        )
+    mime_type = match.group(1).lower()
+    if mime_type not in WP_AI_CONNECTOR_ALT_TEXT_IMAGE_MIME_TYPES:
+        raise WordPressAIConnectorContractViolation(
+            "wp_ai_connector.alt_text_mime_type_not_allowed",
+            "WordPress AI alt text suggestions require a supported image MIME type",
+        )

@@ -32,7 +32,7 @@ const testFixtureFile = path.join(
 	tempRoot,
 	'tests',
 	'assertions',
-	'registry-metadata.test.ts'
+	'metadata-projection.test.ts'
 );
 
 function writeFile( filePath, contents ) {
@@ -54,7 +54,7 @@ try {
 		JSON.stringify(
 			{
 				change_classification: 'cloud detail',
-				truth_owner: 'cloud read-only metadata registry',
+				truth_owner: 'cloud read-only metadata projection',
 				final_write_owner: 'wordpress_local',
 				fail_closed_expectation: 'block page-local metadata drift',
 				human_review_required: false,
@@ -76,13 +76,13 @@ try {
 	} );
 	assert.strictEqual( hardcodedResult.is_cloud_task, true );
 	assert.match(
-		hardcodedResult.violations.registry_metadata_hardcoding.join( '\n' ),
+		hardcodedResult.violations.metadata_projection_hardcoding.join( '\n' ),
 		/internal_ops_advisor_agent/u
 	);
 
 	writeFile(
 		projectedPortalFile,
-		"export const metadata = response.agent_registry_metadata;\n"
+		"export const metadata = response.agent_metadata_projection;\n"
 	);
 	const projectedResult = checkCloudAntiDrift( {
 		contractPath,
@@ -90,7 +90,7 @@ try {
 	} );
 	assert.strictEqual( hasViolations( projectedResult ), false );
 	assert.deepStrictEqual(
-		projectedResult.violations.registry_boundary_doc_missing,
+		projectedResult.violations.metadata_projection_boundary_doc_missing,
 		[]
 	);
 
@@ -104,7 +104,7 @@ try {
 	} );
 	assert.strictEqual( hasViolations( testResult ), false );
 
-	console.log( '[ok] cloud anti-drift registry metadata tests passed.' );
+	console.log( '[ok] cloud anti-drift metadata projection tests passed.' );
 } finally {
 	fs.rmSync( path.dirname( hardcodedAdminFile ), { recursive: true, force: true } );
 	fs.rmSync( path.dirname( projectedPortalFile ), { recursive: true, force: true } );

@@ -19,11 +19,10 @@ WordPress write owner.
 Use `app/domain/agent_workflow_metadata.py` as the Cloud-owned read-only metadata
 projection source for Agent and Workflow UI projection.
 
-Naming note: older module, route, and response fields may still include
-`registry` for compatibility. The preferred product term is metadata projection:
-a static runtime projection catalog for display and diagnostics. It is not a
-workflow registry, execution registry, approval registry, or WordPress
-control-plane registry. New callers should treat it as metadata projection, not as authority for running or approving work.
+The preferred product term is metadata projection: a static runtime projection
+catalog for display and diagnostics. It is not a workflow registry, execution
+registry, approval registry, or WordPress control-plane registry. Callers should
+treat it as metadata projection, not as authority for running or approving work.
 
 The projection may describe:
 
@@ -40,8 +39,9 @@ Runtime and projection responses may also expose selected metadata projection
 fields:
 
 - `agent_handoff`: runtime handoff snapshot attached to the result
-- `agent_registry_metadata`: compatibility field for a redacted display
-  projection sourced from the metadata projection
+- `agent_metadata_projection`: redacted display projection sourced from the
+  metadata projection
+- `projection_version`: projection version field
 - `workflow_metadata`: workflow display projection sourced from the metadata
   projection
 

@@ -169,6 +169,18 @@ assert.match(
 
 assert.match(
   source,
+  /<details[\s\S]*alipay_callback_urls_title[\s\S]*alipay_notify_url_label[\s\S]*alipay_return_url_label[\s\S]*<\/details>/,
+  'Alipay callback URLs must be collapsed behind an explicit callback URL disclosure'
+);
+
+assert.match(
+  source,
+  /Could not deserialize key data\|ASN\\\.1[\s\S]*error_alipay_key_format/,
+  'Alipay key parser failures must be translated into an operator-friendly key-format message'
+);
+
+assert.match(
+  source,
   /\/api\/admin\/service-settings\/alipay-payment/,
   'service settings page must save Alipay payment settings through the admin service-settings API'
 );

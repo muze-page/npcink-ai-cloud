@@ -14,6 +14,7 @@ from app.domain.commercial.payment_gateways import (
     PaymentGatewayRefundRequest,
     get_payment_gateway_provider,
     normalize_payment_gateway_provider,
+    validate_alipay_gateway_config,
 )
 
 
@@ -159,6 +160,95 @@ def test_real_alipay_gateway_signs_order_and_verifies_callback() -> None:
     assert payment.external_order_no == "pay_real_alipay_001"
     assert payment.provider_trade_no == "202607040000000001"
     assert payment.amount == 29.0
+
+
+def test_real_alipay_gateway_accepts_bare_pkcs1_private_key() -> None:
+    private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    private_pkcs1_pem = private_key.private_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PrivateFormat.TraditionalOpenSSL,
+        encryption_algorithm=serialization.NoEncryption(),
+    ).decode("utf-8")
+    private_bare = (
+        private_pkcs1_pem.replace("-----BEGIN RSA PRIVATE KEY-----", "")
+        .replace("-----END RSA PRIVATE KEY-----", "")
+        .strip()
+    )
+    public_pem = private_key.public_key().public_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PublicFormat.SubjectPublicKeyInfo,
+    ).decode("utf-8")
+    config = {
+        "configured": True,
+        "enabled": True,
+        "app_id": "2026000000000001",
+        "private_key": private_bare,
+        "public_key": public_pem,
+        "gateway_url": "https://openapi.alipay.com/gateway.do",
+        "notify_url": "https://cloud.example.com/open/payments/alipay/notify",
+        "return_url": "https://cloud.example.com/open/payments/alipay/return",
+    }
+    gateway = get_payment_gateway_provider("alipay", config=config)
+
+    order = gateway.create_order(
+        PaymentGatewayOrderRequest(
+            provider="alipay",
+            order_id="pay_real_alipay_pkcs1_001",
+            amount=29.0,
+            currency="CNY",
+            subject="Npcink AI Cloud Pro monthly",
+            metadata={"purchase_kind": "subscription_plan"},
+        )
+    )
+
+    assert parse_qs(urlsplit(order.checkout_url).query)["sign_type"] == ["RSA2"]
+
+
+def test_alipay_gateway_config_accepts_distinct_platform_public_key() -> None:
+    _, app_private_pem, _ = _alipay_test_keys()
+    _, _, alipay_public_pem = _alipay_test_keys()
+
+    validate_alipay_gateway_config(
+        {
+            "configured": True,
+            "enabled": True,
+            "app_id": "2026000000000001",
+            "private_key": app_private_pem,
+            "public_key": alipay_public_pem,
+            "gateway_url": "https://openapi.alipay.com/gateway.do",
+            "notify_url": "https://cloud.example.com/open/payments/alipay/notify",
+            "return_url": "https://cloud.example.com/open/payments/alipay/return",
+        }
+    )
+
+
+def test_real_alipay_gateway_reports_invalid_key_format_without_parser_details() -> None:
+    config = {
+        "configured": True,
+        "enabled": True,
+        "app_id": "2026000000000001",
+        "private_key": "not-an-rsa-private-key",
+        "public_key": "not-an-rsa-public-key",
+        "gateway_url": "https://openapi.alipay.com/gateway.do",
+        "notify_url": "https://cloud.example.com/open/payments/alipay/notify",
+        "return_url": "https://cloud.example.com/open/payments/alipay/return",
+    }
+
+    with pytest.raises(CommercialValidationError) as excinfo:
+        get_payment_gateway_provider("alipay", config=config).create_order(
+            PaymentGatewayOrderRequest(
+                provider="alipay",
+                order_id="pay_real_alipay_bad_key_001",
+                amount=29.0,
+                currency="CNY",
+                subject="Npcink AI Cloud Pro monthly",
+                metadata={},
+            )
+        )
+
+    assert excinfo.value.error_code == "service.alipay_private_key_format_invalid"
+    assert "ASN.1" not in str(excinfo.value)
+    assert "Could not deserialize" not in str(excinfo.value)
 
 
 def test_wechat_gateway_verifies_cent_amount_callbacks() -> None:

@@ -90,6 +90,9 @@ from app.domain.wordpress_ai_connector.contracts import (
     WP_AI_CONNECTOR_ABILITY_FAMILY,
     WP_AI_CONNECTOR_DATA_CLASSIFICATION,
     WP_AI_CONNECTOR_EXECUTION_KIND,
+    WP_AI_CONNECTOR_VISION_ABILITY_FAMILY,
+    WP_AI_CONNECTOR_VISION_DATA_CLASSIFICATION,
+    WP_AI_CONNECTOR_VISION_EXECUTION_KIND,
 )
 from app.domain.wordpress_ai_connector.routing_profiles import (
     WP_AI_CONNECTOR_IMAGE_GENERATION_PROFILE_ID,
@@ -360,6 +363,8 @@ def _resolve_ability_family(payload: RuntimePayload) -> str:
         return SITE_KNOWLEDGE_ABILITY_FAMILY
     if _is_web_search_payload(payload):
         return WEB_SEARCH_ABILITY_FAMILY
+    if _is_wordpress_ai_alt_text_payload(payload):
+        return WP_AI_CONNECTOR_VISION_ABILITY_FAMILY
     if _is_wordpress_ai_connector_payload(payload):
         return WP_AI_CONNECTOR_ABILITY_FAMILY
     return payload.ability_family
@@ -384,6 +389,8 @@ def _resolve_execution_kind(payload: RuntimePayload) -> str:
         return SITE_KNOWLEDGE_EXECUTION_KIND
     if _is_web_search_payload(payload) and not payload.execution_kind:
         return WEB_SEARCH_EXECUTION_KIND
+    if _is_wordpress_ai_alt_text_payload(payload):
+        return WP_AI_CONNECTOR_VISION_EXECUTION_KIND
     if _is_wordpress_ai_connector_payload(payload):
         return WP_AI_CONNECTOR_EXECUTION_KIND
     return payload.execution_kind
@@ -443,6 +450,11 @@ def _resolve_data_classification(payload: RuntimePayload) -> str:
         return SITE_KNOWLEDGE_DATA_CLASSIFICATION
     if _is_web_search_payload(payload):
         return WEB_SEARCH_DATA_CLASSIFICATION
+    if _is_wordpress_ai_alt_text_payload(payload):
+        return _resolve_feature_data_classification(
+            payload,
+            WP_AI_CONNECTOR_VISION_DATA_CLASSIFICATION,
+        )
     if _is_wordpress_ai_connector_payload(payload):
         return WP_AI_CONNECTOR_DATA_CLASSIFICATION
     return payload.data_classification
@@ -455,6 +467,13 @@ def _resolve_feature_data_classification(
     if requested in {"pii", "secret"}:
         return requested
     return default_classification
+
+
+def _is_wordpress_ai_alt_text_payload(payload: RuntimePayload) -> bool:
+    if not _is_wordpress_ai_connector_payload(payload):
+        return False
+    input_payload = payload.input if isinstance(payload.input, dict) else {}
+    return str(input_payload.get("task") or "").strip() == "alt_text_suggest"
 
 
 def _resolve_task_backend(payload: RuntimePayload) -> dict[str, Any]:

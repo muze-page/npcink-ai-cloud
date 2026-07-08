@@ -238,6 +238,9 @@ function serviceSettingsErrorMessage(
     return t('admin.service_settings.error_alipay_return_url_invalid', {}, '支付宝同步返回地址必须来自门户基础地址，并使用 /open/payments/alipay/return。');
   }
   if (errorCode === 'service_settings.alipay_config_invalid') {
+    if (/Could not deserialize key data|ASN\.1|unsupported key type|incorrect format/i.test(rawMessage)) {
+      return t('admin.service_settings.error_alipay_key_format', {}, '支付宝密钥格式无效。应用私钥请填写应用私钥，支付宝公钥请填写支付宝开放平台提供的支付宝公钥；支持 PEM 格式或裸 Base64 内容。');
+    }
     return rawMessage
       ? t('admin.service_settings.error_alipay_config_detail', { message: rawMessage }, '支付宝配置检查失败：{{message}}')
       : t('admin.service_settings.error_alipay_config_invalid', {}, '支付宝配置检查失败。请检查 App ID、应用私钥、支付宝公钥。');
@@ -1378,19 +1381,6 @@ export default function AdminServiceSettingsPage() {
                 <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
                   {t('admin.service_settings.alipay_desc', {}, '保存支付宝网页支付所需凭证。密钥加密存储，不会在页面回显。')}
                 </p>
-                <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm dark:border-slate-800 dark:bg-slate-950/60">
-                  <p className="font-medium text-slate-700 dark:text-slate-200">
-                    {t('admin.service_settings.alipay_callback_base_label', {}, '回调基础地址')}
-                  </p>
-                  <p className="mt-1 font-mono text-xs text-slate-600 dark:text-slate-300">
-                    {effectivePortalPublicBaseUrl || t('admin.service_settings.alipay_callback_base_missing', {}, '尚未设置')}
-                  </p>
-                  <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                    {portalPublicAutosavePending
-                      ? t('admin.service_settings.alipay_public_url_autosave_notice', { baseUrl: browserPublicBaseUrl }, '保存支付宝配置时会先保存当前访问地址 {{baseUrl}}，再自动生成 notify_url 和 return_url。')
-                      : t('admin.service_settings.alipay_callback_base_ready', {}, 'notify_url 和 return_url 会从这个地址自动生成。')}
-                  </p>
-                </div>
               </div>
 
               <form className="grid gap-4 lg:grid-cols-2" onSubmit={(event) => void submitAlipay(event)}>
@@ -1414,51 +1404,76 @@ export default function AdminServiceSettingsPage() {
                   />
                 </label>
 
-                <div className="lg:col-span-2">
-                  <div className={labelClassName()}>
-                    {t('admin.service_settings.alipay_notify_url_label', {}, '异步通知地址')}
-                    <div className="mt-1 grid gap-2 lg:grid-cols-[1fr_auto]">
-                      <input
-                        className={fieldClassName()}
-                        value={resolvedAlipayNotifyUrl}
-                        readOnly
-                        disabled={loading}
-                        placeholder={t('admin.service_settings.alipay_url_placeholder', {}, '保存门户基础地址后自动生成')}
-                      />
-                      <button
-                        type="button"
-                        className="btn btn-secondary"
-                        disabled={!resolvedAlipayNotifyUrl}
-                        onClick={() => void copyText(resolvedAlipayNotifyUrl, t('admin.service_settings.alipay_notify_copied', {}, '支付宝异步通知地址已复制。'))}
-                      >
-                        {t('common.copy', {}, 'Copy')}
-                      </button>
+                <details className="group rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm dark:border-slate-800 dark:bg-slate-950/60 lg:col-span-2">
+                  <summary className="flex cursor-pointer list-none flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                    <span>
+                      <span className="font-medium text-slate-700 dark:text-slate-200">
+                        {t('admin.service_settings.alipay_callback_urls_title', {}, '回调地址')}
+                      </span>
+                      <span className="mt-1 block font-mono text-xs text-slate-600 dark:text-slate-300">
+                        {t('admin.service_settings.alipay_callback_base_label', {}, '回调基础地址')}: {effectivePortalPublicBaseUrl || t('admin.service_settings.alipay_callback_base_missing', {}, '尚未设置')}
+                      </span>
+                    </span>
+                    <span className="text-xs font-medium text-blue-600 group-open:hidden dark:text-blue-300">
+                      {t('common.view_details', {}, '查看详情')}
+                    </span>
+                    <span className="hidden text-xs font-medium text-blue-600 group-open:inline dark:text-blue-300">
+                      {t('admin.service_settings.alipay_callback_urls_collapse', {}, '收起')}
+                    </span>
+                  </summary>
+                  <div className="mt-4 grid gap-4 border-t border-slate-200 pt-4 dark:border-slate-800">
+                    <p className="text-xs text-slate-500 dark:text-slate-400">
+                      {portalPublicAutosavePending
+                        ? t('admin.service_settings.alipay_public_url_autosave_notice', { baseUrl: browserPublicBaseUrl }, '保存支付宝配置时会先保存当前访问地址 {{baseUrl}}，再自动生成 notify_url 和 return_url。')
+                        : t('admin.service_settings.alipay_callback_base_ready', {}, 'notify_url 和 return_url 会从这个地址自动生成。')}
+                    </p>
+                    <div>
+                      <div className={labelClassName()}>
+                        {t('admin.service_settings.alipay_notify_url_label', {}, '异步通知地址')}
+                        <div className="mt-1 grid gap-2 lg:grid-cols-[1fr_auto]">
+                          <input
+                            className={fieldClassName()}
+                            value={resolvedAlipayNotifyUrl}
+                            readOnly
+                            disabled={loading}
+                            placeholder={t('admin.service_settings.alipay_url_placeholder', {}, '保存门户基础地址后自动生成')}
+                          />
+                          <button
+                            type="button"
+                            className="btn btn-secondary"
+                            disabled={!resolvedAlipayNotifyUrl}
+                            onClick={() => void copyText(resolvedAlipayNotifyUrl, t('admin.service_settings.alipay_notify_copied', {}, '支付宝异步通知地址已复制。'))}
+                          >
+                            {t('common.copy', {}, 'Copy')}
+                          </button>
+                        </div>
+                      </div>
                     </div>
-                  </div>
-                </div>
 
-                <div className="lg:col-span-2">
-                  <div className={labelClassName()}>
-                    {t('admin.service_settings.alipay_return_url_label', {}, '同步返回地址')}
-                    <div className="mt-1 grid gap-2 lg:grid-cols-[1fr_auto]">
-                      <input
-                        className={fieldClassName()}
-                        value={resolvedAlipayReturnUrl}
-                        readOnly
-                        disabled={loading}
-                        placeholder={t('admin.service_settings.alipay_url_placeholder', {}, '保存门户基础地址后自动生成')}
-                      />
-                      <button
-                        type="button"
-                        className="btn btn-secondary"
-                        disabled={!resolvedAlipayReturnUrl}
-                        onClick={() => void copyText(resolvedAlipayReturnUrl, t('admin.service_settings.alipay_return_copied', {}, '支付宝同步返回地址已复制。'))}
-                      >
-                        {t('common.copy', {}, 'Copy')}
-                      </button>
+                    <div>
+                      <div className={labelClassName()}>
+                        {t('admin.service_settings.alipay_return_url_label', {}, '同步返回地址')}
+                        <div className="mt-1 grid gap-2 lg:grid-cols-[1fr_auto]">
+                          <input
+                            className={fieldClassName()}
+                            value={resolvedAlipayReturnUrl}
+                            readOnly
+                            disabled={loading}
+                            placeholder={t('admin.service_settings.alipay_url_placeholder', {}, '保存门户基础地址后自动生成')}
+                          />
+                          <button
+                            type="button"
+                            className="btn btn-secondary"
+                            disabled={!resolvedAlipayReturnUrl}
+                            onClick={() => void copyText(resolvedAlipayReturnUrl, t('admin.service_settings.alipay_return_copied', {}, '支付宝同步返回地址已复制。'))}
+                          >
+                            {t('common.copy', {}, 'Copy')}
+                          </button>
+                        </div>
+                      </div>
                     </div>
                   </div>
-                </div>
+                </details>
 
                 <label className={labelClassName()}>
                   {t('admin.service_settings.alipay_private_key_label', {}, '应用私钥')} {secretConfigured.alipayPrivateKey
@@ -1469,7 +1484,7 @@ export default function AdminServiceSettingsPage() {
                     value={alipayForm.private_key}
                     disabled={loading}
                     onChange={(event) => setAlipayForm((current) => ({ ...current, private_key: event.target.value }))}
-                    placeholder={secretConfigured.alipayPrivateKey ? t('admin.service_settings.secret_keep_placeholder', {}, '留空则保留当前密钥') : t('admin.service_settings.alipay_private_key_placeholder', {}, '粘贴 PEM 格式应用私钥')}
+                    placeholder={secretConfigured.alipayPrivateKey ? t('admin.service_settings.secret_keep_placeholder', {}, '留空则保留当前密钥') : t('admin.service_settings.alipay_private_key_placeholder', {}, '粘贴 PEM 或支付宝工具导出的裸 Base64 应用私钥')}
                   />
                 </label>
                 <label className={labelClassName()}>
@@ -1481,7 +1496,7 @@ export default function AdminServiceSettingsPage() {
                     value={alipayForm.public_key}
                     disabled={loading}
                     onChange={(event) => setAlipayForm((current) => ({ ...current, public_key: event.target.value }))}
-                    placeholder={secretConfigured.alipayPublicKey ? t('admin.service_settings.secret_keep_placeholder', {}, '留空则保留当前密钥') : t('admin.service_settings.alipay_public_key_placeholder', {}, '粘贴 PEM 格式支付宝公钥')}
+                    placeholder={secretConfigured.alipayPublicKey ? t('admin.service_settings.secret_keep_placeholder', {}, '留空则保留当前密钥') : t('admin.service_settings.alipay_public_key_placeholder', {}, '粘贴 PEM 或裸 Base64 支付宝公钥')}
                   />
                 </label>
 

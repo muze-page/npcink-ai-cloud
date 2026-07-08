@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import base64
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 import httpx
@@ -615,7 +615,18 @@ class MiniMaxProviderAdapter:
         )
         adapter.provider_id = self.provider_id
         adapter.display_name = self.display_name
+        request = self._without_openai_incompatible_chat_metadata(request)
         return adapter.execute(request)
+
+    def _without_openai_incompatible_chat_metadata(
+        self,
+        request: ProviderExecutionRequest,
+    ) -> ProviderExecutionRequest:
+        if "metadata" not in request.input_payload:
+            return request
+        input_payload = dict(request.input_payload)
+        input_payload.pop("metadata", None)
+        return replace(request, input_payload=input_payload)
 
     @property
     def _http_enabled(self) -> bool:

@@ -408,8 +408,14 @@ assert.match(
 
 assert.match(
   abilityModelsSource,
+  /fetch\('\/api\/admin\/ability-models\/plugin-routing'/,
+  'Ability-model routing page must save bounded plugin ability routes through the ability-model plugin routing endpoint'
+);
+
+assert.doesNotMatch(
+  abilityModelsSource,
   /fetch\('\/api\/admin\/wordpress-ai-routing'/,
-  'Ability-model routing page must save bounded plugin ability routes through the WordPress AI routing projection'
+  'Ability-model routing page must not keep the retired WordPress AI routing compatibility endpoint'
 );
 
 assert.doesNotMatch(
@@ -558,7 +564,7 @@ assert.doesNotMatch(
 
 assert.doesNotMatch(
   pageSource,
-  /ability_models_title|abilityModelDialog|RoutingProfile|RuntimeInstance|fetch\('\/api\/admin\/wordpress-ai-routing'|saveAbilityModelProfile|activeView === 'ability_models'/,
+  /ability_models_title|abilityModelDialog|RoutingProfile|RuntimeInstance|fetch\('\/api\/admin\/wordpress-ai-routing'|fetch\('\/api\/admin\/ability-models\/plugin-routing'|saveAbilityModelProfile|activeView === 'ability_models'/,
   'Provider Management must not keep a hidden ability-model routing editor after routing moved to the dedicated page'
 );
 
@@ -720,7 +726,7 @@ assert.match(
 
 assert.match(
   abilityModelsSource,
-  /fetch\('\/api\/admin\/wordpress-ai-routing'/,
+  /fetch\('\/api\/admin\/ability-models\/plugin-routing'/,
   'Ability-model routing page must load and save Cloud runtime ability-model routing through the bounded admin endpoint'
 );
 

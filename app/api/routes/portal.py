@@ -849,7 +849,7 @@ def _portal_ai_summary(summary: dict[str, Any]) -> dict[str, Any]:
         "generation": _portal_ai_generation(generation or {}),
         "ai_disclosure": _portal_ai_disclosure(disclosure or {}),
         "agent_handoff": _portal_ai_agent_handoff(summary.get("agent_handoff")),
-        "agent_registry_metadata": _portal_ai_agent_registry_metadata(summary.get("agent_handoff")),
+        **_portal_ai_agent_metadata_projection_fields(summary.get("agent_handoff")),
     }
 
 
@@ -870,11 +870,18 @@ def _portal_ai_history_item(item: dict[str, Any]) -> dict[str, Any]:
         "generation": _portal_ai_generation(generation or {}),
         "ai_disclosure": _portal_ai_disclosure(disclosure or {}),
         "agent_handoff": _portal_ai_agent_handoff(item.get("agent_handoff")),
-        "agent_registry_metadata": _portal_ai_agent_registry_metadata(item.get("agent_handoff")),
+        **_portal_ai_agent_metadata_projection_fields(item.get("agent_handoff")),
     }
 
 
-def _portal_ai_agent_registry_metadata(value: Any) -> dict[str, Any]:
+def _portal_ai_agent_metadata_projection_fields(value: Any) -> dict[str, Any]:
+    projection = _portal_ai_agent_metadata_projection(value)
+    return {
+        "agent_metadata_projection": projection,
+    }
+
+
+def _portal_ai_agent_metadata_projection(value: Any) -> dict[str, Any]:
     handoff = _portal_ai_agent_handoff(value)
     agent_id = handoff.get("agent_id", "")
     if not agent_id:

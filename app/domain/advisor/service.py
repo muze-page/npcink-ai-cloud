@@ -1272,7 +1272,7 @@ class InternalAIAdvisorService:
             **cached,
             "generation": generation,
             "ai_disclosure": ai_disclosure,
-            "agent_registry_metadata": _agent_registry_metadata(cached),
+            **_agent_metadata_projection_fields(cached),
         }
 
     def review_ops_summary_disclosure(
@@ -1731,7 +1731,7 @@ class InternalAIAdvisorService:
                 "write WordPress, or execute operator actions."
             ),
             "agent_handoff": _redacted_agent_handoff(advisor.get("agent_handoff")),
-            "agent_registry_metadata": _agent_registry_metadata(advisor),
+            **_agent_metadata_projection_fields(advisor),
             "evidence": _list(advisor.get("evidence")),
             "source_context": redacted_context,
             "generated_at": datetime.now(UTC).isoformat(),
@@ -2254,9 +2254,16 @@ def _advisor_agent_handoff(scope: str) -> dict[str, Any]:
     )
 
 
-def _agent_registry_metadata(value: Any) -> dict[str, Any]:
+def _agent_metadata_projection_fields(value: Any) -> dict[str, Any]:
+    projection = _agent_metadata_projection(value)
+    return {
+        "agent_metadata_projection": projection,
+    }
+
+
+def _agent_metadata_projection(value: Any) -> dict[str, Any]:
     handoff = _redacted_agent_handoff(
-        _dict(value).get("agent_registry_metadata") or _dict(value).get("agent_handoff")
+        _dict(value).get("agent_metadata_projection") or _dict(value).get("agent_handoff")
     )
     agent_id = str(handoff.get("agent_id") or "").strip()
     if not agent_id:
@@ -2510,7 +2517,7 @@ def _ops_summary_history_item(projection: SiteServiceProjection) -> dict[str, An
             "source_generation_mode": str(disclosure.get("source_generation_mode") or ""),
         },
         "agent_handoff": _redacted_agent_handoff(summary.get("agent_handoff")),
-        "agent_registry_metadata": _agent_registry_metadata(summary),
+        **_agent_metadata_projection_fields(summary),
     }
 
 

@@ -12,7 +12,7 @@ metadata and hosted runtime validation work.
 The stage covered:
 
 - Cloud-side read-only Agent/Workflow metadata display and validation.
-- Backend metadata registry consolidation for Web Search and Media workflows.
+- Backend metadata projection consolidation for Web Search and Media workflows.
 - Provider to runtime to result to usage/error evidence in the real local target
   environment.
 - CI baseline repair and local CI-equivalent verification.

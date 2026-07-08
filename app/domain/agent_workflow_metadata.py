@@ -3,7 +3,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 METADATA_PROJECTION_VERSION = "cloud-agent-workflow-metadata.v1"
-REGISTRY_VERSION = METADATA_PROJECTION_VERSION
 
 
 @dataclass(frozen=True)
@@ -259,28 +258,23 @@ def get_agent_workflow_metadata_projection() -> dict[str, object]:
     return {
         "projection_version": METADATA_PROJECTION_VERSION,
         "projection_kind": "read_only_runtime_metadata",
-        "registry_version": REGISTRY_VERSION,
         "agents": list_agent_handoff_metadata(),
         "workflows": list_workflow_metadata(),
     }
 
 
-def get_agent_workflow_registry() -> dict[str, object]:
-    return get_agent_workflow_metadata_projection()
-
-
-def registry_metadata_tokens(values: object) -> list[str]:
+def metadata_projection_tokens(values: object) -> list[str]:
     if not isinstance(values, list):
         return []
     tokens: list[str] = []
     for value in values:
-        token = _registry_metadata_token(str(value or ""))
+        token = _metadata_projection_token(str(value or ""))
         if token:
             tokens.append(token)
     return tokens
 
 
-def _registry_metadata_token(value: str) -> str:
+def _metadata_projection_token(value: str) -> str:
     parts: list[str] = []
     previous_was_separator = True
     for character in value.strip().lower():

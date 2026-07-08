@@ -8,7 +8,7 @@
     "README.md",
     "docs/cloud-content-generation-boundary-v1.md",
     "docs/cloud-task-pack-boundary-v1.md",
-    "docs/cloud-agent-workflow-metadata-registry-v1.md",
+    "docs/cloud-agent-workflow-metadata-projection-v1.md",
     "docs/cloud-agent-feedback-quality-gate-v1.md",
     "docs/cloud-production-release-policy-v1.md"
   ],

@@ -29,10 +29,16 @@ Current WordPress AI Connector routing groups are:
 
 | Routing intent | Profile ID | Execution kind | Plugin tasks |
 | --- | --- | --- | --- |
-| `content.short_text` | `wp-ai.short-text` | `text` | `alt_text_suggest`, `excerpt_generation`, `meta_description`, `title_generation` |
+| `content.short_text` | `wp-ai.short-text` | `text` | `excerpt_generation`, `meta_description`, `title_generation`, `audio_summary_script` |
 | `content.editorial` | `wp-ai.editorial` | `text` | `comment_reply_suggest`, `content_rewrite`, `content_summary` |
 | `content.classification` | `wp-ai.classification` | `text` | `comment_moderation`, `content_classification` |
+| `media.alt_text_vision` | `wp-ai.alt-text-vision` | `vision` | `alt_text_suggest` |
 | `media.image_generation` | `wp-ai.image-generation` | `image_generation` | `image_generation` |
+
+The WordPress AI alt-text ability needs a real image reference plus bounded
+textual context; Cloud must not satisfy it by advertising a text-only model as
+vision-capable. The implementation contract is tracked in
+[WordPress AI Alt Text Vision Contract Feasibility v1](wordpress-ai-alt-text-vision-contract-feasibility-v1.md).
 
 ## Ownership
 
@@ -78,7 +84,9 @@ WordPress/plugin side continues to own:
   invent callable model candidates that the supplier account did not return.
 - New plugin tasks should first map into an existing routing intent. Create a
   new routing intent only when real runtime evidence shows materially different
-  latency, cost, output shape, storage, or execution-kind needs.
+  latency, cost, output shape, storage, or execution-kind needs. `alt_text_suggest`
+  is the current exception because it changes the execution kind from text to
+  vision and requires bounded image-reference validation.
 - Cloud-native runtime abilities may have read-only projections in Admin, but
   they must not duplicate plugin task rows such as title generation, SEO
   metadata, taxonomy suggestions, or WordPress write workflows.
