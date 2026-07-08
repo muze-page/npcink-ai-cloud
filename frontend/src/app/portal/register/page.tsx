@@ -1,7 +1,6 @@
 'use client';
 
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
 import React, { Suspense, useState } from 'react';
 import {
   BackofficePageStack,
@@ -10,6 +9,7 @@ import {
 } from '@/components/backoffice/BackofficeScaffold';
 import { LoadingFallback } from '@/components/ui/LoadingFallback';
 import { useLocale } from '@/contexts/LocaleContext';
+import { useSession } from '@/hooks/useSession';
 import { portalClient } from '@/lib/portal-client';
 import { formatPortalErrorMessage } from '@/lib/portal-error';
 import { cn } from '@/lib/utils';
@@ -23,8 +23,8 @@ interface RegisterFormState {
 }
 
 function RegisterFormContent() {
-  const router = useRouter();
   const { t } = useLocale();
+  const { refresh } = useSession();
   const [form, setForm] = useState<RegisterFormState>({
     email: '',
     code: '',
@@ -101,7 +101,8 @@ function RegisterFormContent() {
     setForm((prev) => ({ ...prev, status: 'verifying', message: '' }));
     try {
       await portalClient.verifyRegistration({ email, code });
-      router.push('/portal');
+      await refresh();
+      window.location.replace('/portal');
     } catch (error) {
       setForm((prev) => ({
         ...prev,
@@ -114,6 +115,50 @@ function RegisterFormContent() {
             undefined,
             'Invalid or expired verification code.'
           )
+        ),
+      }));
+    }
+  };
+
+  const handleResendCode = async () => {
+    const email = form.email.trim().toLowerCase();
+    if (!email) {
+      setForm((prev) => ({
+        ...prev,
+        status: 'error',
+        message: t(
+          'portal.register.required',
+          undefined,
+          'Please enter your email address.'
+        ),
+      }));
+      return;
+    }
+
+    setForm((prev) => ({ ...prev, status: 'submitting', email, message: '' }));
+    try {
+      const response = await portalClient.requestRegistrationCode({
+        email,
+      });
+      setForm((prev) => ({
+        ...prev,
+        step: 'verify',
+        status: 'idle',
+        code: response.data?.code || '',
+        message: t(
+          'portal.register.code_resent',
+          { email },
+          `Verification code resent to ${email}.`
+        ),
+      }));
+    } catch (error) {
+      setForm((prev) => ({
+        ...prev,
+        status: 'error',
+        message: formatPortalErrorMessage(
+          error,
+          t,
+          t('portal.register.failed_send_code', undefined, 'Failed to send verification code')
         ),
       }));
     }
@@ -187,7 +232,7 @@ function RegisterFormContent() {
                       onChange={(event) => setField('code', event.target.value)}
                       placeholder={t('auth.verification_code_placeholder', undefined, 'Enter the 6-digit code')}
                       className={cn('input', form.status === 'error' && 'border-red-500 focus:ring-red-500')}
-                      disabled={form.status === 'verifying'}
+                      disabled={form.status === 'submitting' || form.status === 'verifying'}
                     />
                   </div>
                 )}
@@ -221,13 +266,27 @@ function RegisterFormContent() {
                   </button>
 
                   {form.step === 'verify' ? (
-                    <button
-                      type="button"
-                      className="btn btn-secondary justify-center"
-                      onClick={resetFlow}
-                    >
-                      {t('auth.try_another_email')}
-                    </button>
+                    <>
+                      <button
+                        type="button"
+                        className="btn btn-secondary justify-center"
+                        disabled={form.status === 'submitting' || form.status === 'verifying'}
+                        onClick={handleResendCode}
+                      >
+                        {form.status === 'submitting'
+                          ? t('auth.sending')
+                          : t('auth.resend_code', undefined, 'Resend code')}
+                      </button>
+
+                      <button
+                        type="button"
+                        className="btn btn-secondary justify-center"
+                        disabled={form.status === 'submitting' || form.status === 'verifying'}
+                        onClick={resetFlow}
+                      >
+                        {t('auth.try_another_email')}
+                      </button>
+                    </>
                   ) : null}
                 </div>
               </form>

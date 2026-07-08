@@ -39,8 +39,26 @@ assert.match(
 
 assert.match(
   loginSource,
+  /const handleResendCode = async \(\) =>[\s\S]*requestLoginCode\(normalizedEmail\)[\s\S]*auth\.code_resent/,
+  'Portal login verification step must allow resending the email verification code'
+);
+
+assert.match(
+  loginSource,
+  /auth\.resend_code/,
+  'Portal login verification step must show a resend-code action'
+);
+
+assert.match(
+  loginSource,
   /verifyLoginCode\(normalizedEmail, normalizedCode, \{ rememberMe: form\.rememberMe \}\)/,
   'Portal login page must send rememberMe during verification'
+);
+
+assert.match(
+  loginSource,
+  /await verifyLoginCode\(normalizedEmail, normalizedCode, \{ rememberMe: form\.rememberMe \}\)[\s\S]*window\.location\.replace\('\/portal'\)/,
+  'Portal login page must use a full-page navigation after successful cookie-backed verification'
 );
 
 console.log('portal_login_remember_me_contract: ok');

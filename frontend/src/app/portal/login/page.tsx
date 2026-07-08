@@ -2,7 +2,6 @@
 
 import Link from 'next/link';
 import React, { Suspense, useState } from 'react';
-import { useRouter } from 'next/navigation';
 import { LoadingFallback } from '@/components/ui/LoadingFallback';
 import {
   BackofficePageStack,
@@ -24,7 +23,6 @@ interface FormState {
 }
 
 function LoginFormContent() {
-  const router = useRouter();
   const { t } = useLocale();
   const { requestLoginCode, verifyLoginCode } = useSession();
   const [form, setForm] = useState<FormState>({
@@ -106,7 +104,7 @@ function LoginFormContent() {
 
     try {
       await verifyLoginCode(normalizedEmail, normalizedCode, { rememberMe: form.rememberMe });
-      router.push('/portal');
+      window.location.replace('/portal');
     } catch (error) {
       setForm((prev) => ({
         ...prev,
@@ -115,6 +113,50 @@ function LoginFormContent() {
           error,
           t,
           t('error.portal_login_code_invalid', undefined, 'Invalid or expired verification code')
+        ),
+      }));
+    }
+  };
+
+  const handleResendCode = async () => {
+    const normalizedEmail = form.email.trim().toLowerCase();
+    if (!normalizedEmail) {
+      setForm((prev) => ({
+        ...prev,
+        status: 'error',
+        message: t('error.email_required', undefined, 'Please enter your email address'),
+      }));
+      return;
+    }
+
+    setForm((prev) => ({
+      ...prev,
+      status: 'submitting',
+      email: normalizedEmail,
+      message: '',
+    }));
+
+    try {
+      const response = await requestLoginCode(normalizedEmail);
+      setForm((prev) => ({
+        ...prev,
+        status: 'idle',
+        step: 'verify',
+        code: response.code || '',
+        message: t(
+          'auth.code_resent',
+          { email: normalizedEmail },
+          `Verification code resent to ${normalizedEmail}.`
+        ),
+      }));
+    } catch (error) {
+      setForm((prev) => ({
+        ...prev,
+        status: 'error',
+        message: formatPortalErrorMessage(
+          error,
+          t,
+          t('error.failed_send_code', undefined, 'Failed to send verification code')
         ),
       }));
     }
@@ -200,7 +242,7 @@ function LoginFormContent() {
                       }
                       placeholder={t('auth.verification_code_placeholder', undefined, 'Enter the 6-digit code')}
                       className={cn('input', form.status === 'error' && 'border-red-500 focus:ring-red-500')}
-                      disabled={form.status === 'verifying'}
+                      disabled={form.status === 'submitting' || form.status === 'verifying'}
                     />
                   </div>
             ) : null}
@@ -259,13 +301,27 @@ function LoginFormContent() {
                   </button>
 
                   {form.step === 'verify' ? (
-                    <button
-                      type="button"
-                      className="btn btn-secondary justify-center"
-                      onClick={resetFlow}
-                    >
-                      {t('auth.try_another_email')}
-                    </button>
+                    <>
+                      <button
+                        type="button"
+                        className="btn btn-secondary justify-center"
+                        disabled={form.status === 'submitting' || form.status === 'verifying'}
+                        onClick={handleResendCode}
+                      >
+                        {form.status === 'submitting'
+                          ? t('auth.sending')
+                          : t('auth.resend_code', undefined, 'Resend code')}
+                      </button>
+
+                      <button
+                        type="button"
+                        className="btn btn-secondary justify-center"
+                        disabled={form.status === 'submitting' || form.status === 'verifying'}
+                        onClick={resetFlow}
+                      >
+                        {t('auth.try_another_email')}
+                      </button>
+                    </>
                   ) : null}
                 </div>
               </form>

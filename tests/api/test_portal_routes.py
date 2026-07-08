@@ -3251,7 +3251,7 @@ def test_portal_registration_code_request_is_rate_limited(
         portal_email_sender=FakePortalEmailSender(),
     )
 
-    for _index in range(3):
+    for _index in range(5):
         response = client.post(
             "/portal/v1/register/code/request",
             json={
@@ -3280,6 +3280,60 @@ def test_portal_registration_code_request_is_rate_limited(
         missing_payload_response.json()["error_code"]
         == "auth.portal_registration_code_required"
     )
+
+    dispose_engine(database_url)
+
+
+def test_portal_registration_and_login_code_requests_share_email_rate_limit_with_first_login_buffer(
+    tmp_path: Path,
+) -> None:
+    fake_sender = FakePortalEmailSender()
+    database_url, client = _build_client(
+        tmp_path,
+        settings_overrides={
+            "portal_jwt_secret": TEST_PORTAL_JWT_SECRET,
+            "portal_login_code_ttl_seconds": 300,
+        },
+        portal_email_sender=fake_sender,
+    )
+    email = "first-login-buffer@example.com"
+
+    registration_response = client.post(
+        "/portal/v1/register/code/request",
+        json={"email": email},
+    )
+    assert registration_response.status_code == 200, registration_response.text
+    assert fake_sender.messages[-1]["kind"] == "registration_code"
+
+    registration_verify_response = client.post(
+        "/portal/v1/register/verify",
+        json={"email": email, "code": fake_sender.messages[-1]["code"]},
+    )
+    assert (
+        registration_verify_response.status_code == 200
+    ), registration_verify_response.text
+
+    for _index in range(4):
+        login_response = client.post(
+            "/portal/v1/auth/code/request",
+            json={"email": email},
+        )
+        assert login_response.status_code == 200, login_response.text
+        assert login_response.json()["data"]["delivery"] == "email"
+        assert login_response.json()["data"]["code"] == ""
+
+    limited_response = client.post(
+        "/portal/v1/auth/code/request",
+        json={"email": email},
+    )
+    assert limited_response.status_code == 429
+    assert limited_response.json()["error_code"] == "portal.login_code_rate_limited"
+
+    assert (
+        [message["kind"] for message in fake_sender.messages].count("registration_code")
+        == 1
+    )
+    assert [message["kind"] for message in fake_sender.messages].count("login_code") == 4
 
     dispose_engine(database_url)
 

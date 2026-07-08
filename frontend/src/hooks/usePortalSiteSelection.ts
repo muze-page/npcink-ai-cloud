@@ -84,6 +84,7 @@ export function usePortalSiteSelection({
         params.set('site', normalizedSiteId);
         const nextUrl = `${pathname}${params.toString() ? `?${params.toString()}` : ''}`;
         router.replace(nextUrl, { scroll: false });
+        router.refresh();
       } catch (error) {
         setSelectedSiteIdState(previousSiteId);
         throw error;

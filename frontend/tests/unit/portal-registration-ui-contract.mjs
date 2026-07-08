@@ -65,8 +65,30 @@ assert.match(
 
 assert.match(
   registerSource,
+  /const handleResendCode = async \(\) =>[\s\S]*portalClient\.requestRegistrationCode[\s\S]*portal\.register\.code_resent/,
+  'portal registration verification step must allow resending the email verification code'
+);
+
+assert.match(
+  registerSource,
+  /auth\.resend_code/,
+  'portal registration verification step must show a resend-code action'
+);
+
+assert.match(
+  registerSource,
   /portalClient\.verifyRegistration/,
   'portal registration page must verify registration codes through the shared client'
+);
+assert.match(
+  registerSource,
+  /useSession/,
+  'portal registration page must use the shared session controller after verification'
+);
+assert.match(
+  registerSource,
+  /await portalClient\.verifyRegistration\([\s\S]*await refresh\(\)[\s\S]*window\.location\.replace\('\/portal'\)/,
+  'portal registration must refresh the cookie-backed Portal session and use a full-page navigation before entering the dashboard'
 );
 assert.match(
   registerSource,
