@@ -14,9 +14,9 @@ INTERNAL_AUTH_TOKEN="${NPCINK_CLOUD_INTERNAL_AUTH_TOKEN:-}"
 ADMIN_TOKEN="${NPCINK_CLOUD_ADMIN_BOOTSTRAP_TOKEN:-}"
 MEMBER_EMAIL="${NPCINK_CLOUD_RELEASE_MEMBER_EMAIL:-}"
 LOGIN_CODE="${NPCINK_CLOUD_PORTAL_LOGIN_CODE:-}"
-ADDON_SITE_ID="${NPCINK_CLOUD_RELEASE_SITE_ID:-}"
-ADDON_KEY_ID="${NPCINK_CLOUD_RELEASE_KEY_ID:-}"
-ADDON_SECRET="${NPCINK_CLOUD_RELEASE_KEY_SECRET:-}"
+RUNTIME_SITE_ID="${NPCINK_CLOUD_RELEASE_SITE_ID:-}"
+RUNTIME_KEY_ID="${NPCINK_CLOUD_RELEASE_KEY_ID:-}"
+RUNTIME_SECRET="${NPCINK_CLOUD_RELEASE_KEY_SECRET:-}"
 
 while [ "$#" -gt 0 ]; do
 	case "$1" in
@@ -40,16 +40,16 @@ while [ "$#" -gt 0 ]; do
 			LOGIN_CODE="$2"
 			shift 2
 			;;
-		--addon-site-id)
-			ADDON_SITE_ID="$2"
+		--runtime-site-id)
+			RUNTIME_SITE_ID="$2"
 			shift 2
 			;;
-		--addon-key-id)
-			ADDON_KEY_ID="$2"
+		--runtime-key-id)
+			RUNTIME_KEY_ID="$2"
 			shift 2
 			;;
-		--addon-secret)
-			ADDON_SECRET="$2"
+		--runtime-secret)
+			RUNTIME_SECRET="$2"
 			shift 2
 			;;
 		*)
@@ -77,8 +77,8 @@ fi
 if [ -z "${MEMBER_EMAIL}" ]; then
 	fail "--member-email or NPCINK_CLOUD_RELEASE_MEMBER_EMAIL is required"
 fi
-if [ -z "${ADDON_SITE_ID}" ] || [ -z "${ADDON_KEY_ID}" ] || [ -z "${ADDON_SECRET}" ]; then
-	fail "release smoke requires addon credentials: pass --addon-site-id, --addon-key-id, and --addon-secret (or set NPCINK_CLOUD_RELEASE_SITE_ID, NPCINK_CLOUD_RELEASE_KEY_ID, and NPCINK_CLOUD_RELEASE_KEY_SECRET)"
+if [ -z "${RUNTIME_SITE_ID}" ] || [ -z "${RUNTIME_KEY_ID}" ] || [ -z "${RUNTIME_SECRET}" ]; then
+	fail "release smoke requires signed runtime credentials: pass --runtime-site-id, --runtime-key-id, and --runtime-secret (or set NPCINK_CLOUD_RELEASE_SITE_ID, NPCINK_CLOUD_RELEASE_KEY_ID, and NPCINK_CLOUD_RELEASE_KEY_SECRET)"
 fi
 
 json_read_path() {
@@ -159,69 +159,6 @@ assert_body_contains() {
 	if ! printf '%s' "${body}" | grep -Fq "${needle}"; then
 		fail "${message} (missing '${needle}')"
 	fi
-}
-
-assert_json_in_set() {
-	local json_payload="$1"
-	local json_path="$2"
-	local allowed_csv="$3"
-	local message="$4"
-	local actual
-	if ! actual="$(json_read_path "${json_payload}" "${json_path}")"; then
-		fail "${message} (missing path ${json_path})"
-	fi
-	case ",${allowed_csv}," in
-		*",${actual},"*) ;;
-		*)
-			fail "${message} (expected one of ${allowed_csv}, got ${actual}; body=${json_payload})"
-			;;
-	esac
-}
-
-build_addon_auth_headers() {
-	local method="$1"
-	local path="$2"
-	local site_id="$3"
-	local key_id="$4"
-	local secret="$5"
-	local query="${6:-}"
-	METHOD="${method}" PATH_INFO="${path}" SITE_ID="${site_id}" KEY_ID="${key_id}" SECRET_VALUE="${secret}" QUERY_STRING_VALUE="${query}" python3 - <<'PY'
-from datetime import UTC, datetime
-import os
-import sys
-
-sys.path.insert(0, os.path.abspath("."))
-from app.core.security import build_body_digest, build_canonical_request, build_hmac_signature
-
-method = os.environ["METHOD"]
-path = os.environ["PATH_INFO"]
-site_id = os.environ["SITE_ID"]
-key_id = os.environ["KEY_ID"]
-secret = os.environ["SECRET_VALUE"]
-query = os.environ.get("QUERY_STRING_VALUE", "")
-trace_id = "releaseaddonprojectionsmoke0001"
-normalized = trace_id.lower().replace("-", "").ljust(32, "0")[:32]
-traceparent = f"00-{normalized}-0000000000000000-01"
-timestamp = str(int(datetime.now(UTC).timestamp()))
-canonical_request = build_canonical_request(
-    method=method,
-    path=path,
-    query=query,
-    site_id=site_id,
-    key_id=key_id,
-    timestamp=timestamp,
-    nonce="",
-    idempotency_key="",
-    traceparent=traceparent,
-    body_digest=build_body_digest(b""),
-)
-signature = build_hmac_signature(secret, canonical_request)
-print(f"X-Npcink-Site-Id: {site_id}")
-print(f"X-Npcink-Key-Id: {key_id}")
-print(f"X-Npcink-Timestamp: {timestamp}")
-print(f"X-Npcink-Signature: {signature}")
-print(f"traceparent: {traceparent}")
-PY
 }
 
 TMP_DIR="$(mktemp -d)"
@@ -314,29 +251,14 @@ assert_json_equals "${HTTP_BODY}" "data.providers.freshness" "fresh" "provider f
 assert_json_equals "${HTTP_BODY}" "data.runtime.summary.callback.pressure_state" "healthy" "callback backlog should be healthy"
 assert_json_non_empty "${HTTP_BODY}" "data.tracing.trace_sink_otlp_endpoint" "trace sink should be configured"
 
-mapfile -t ADDON_HEADERS < <(build_addon_auth_headers "GET" "/v1/addon/dashboard" "${ADDON_SITE_ID}" "${ADDON_KEY_ID}" "${ADDON_SECRET}")
-http_request "GET" "${BASE_URL%/}/v1/addon/dashboard" "${PORTAL_COOKIE_JAR}" "" "${ADDON_HEADERS[@]}"
-assert_status "${HTTP_STATUS}" "200" "addon dashboard should load"
-assert_json_in_set "${HTTP_BODY}" "data.source" "projection,live_fallback" "addon dashboard should expose projection source"
-assert_json_non_empty "${HTTP_BODY}" "data.generated_at" "addon dashboard should expose generated_at"
-assert_json_non_empty "${HTTP_BODY}" "data.fresh_until" "addon dashboard should expose fresh_until"
-assert_json_in_set "${HTTP_BODY}" "data.stale" "true,false" "addon dashboard should expose stale"
-DASHBOARD_SOURCE="$(json_read_path "${HTTP_BODY}" "data.source" 2>/dev/null || true)"
-if [ "${DASHBOARD_SOURCE}" = "live_fallback" ]; then
-	assert_json_non_empty "${HTTP_BODY}" "data.fallback_reason" "live fallback dashboard should explain fallback_reason"
-fi
-
-mapfile -t ADDON_HEADERS < <(build_addon_auth_headers "GET" "/v1/addon/providers/release-summary" "${ADDON_SITE_ID}" "${ADDON_KEY_ID}" "${ADDON_SECRET}")
-http_request "GET" "${BASE_URL%/}/v1/addon/providers/release-summary" "${PORTAL_COOKIE_JAR}" "" "${ADDON_HEADERS[@]}"
-assert_status "${HTTP_STATUS}" "200" "addon provider release summary should load"
-assert_json_in_set "${HTTP_BODY}" "data.source" "projection,live_fallback" "provider release summary should expose projection source"
-assert_json_non_empty "${HTTP_BODY}" "data.generated_at" "provider release summary should expose generated_at"
-assert_json_non_empty "${HTTP_BODY}" "data.fresh_until" "provider release summary should expose fresh_until"
-assert_json_in_set "${HTTP_BODY}" "data.stale" "true,false" "provider release summary should expose stale"
-PROVIDER_SOURCE="$(json_read_path "${HTTP_BODY}" "data.source" 2>/dev/null || true)"
-if [ "${PROVIDER_SOURCE}" = "live_fallback" ]; then
-	assert_json_non_empty "${HTTP_BODY}" "data.fallback_reason" "live fallback provider summary should explain fallback_reason"
-fi
+RUNTIME_IDEMPOTENCY_SUFFIX="${NPCINK_CLOUD_IDEMPOTENCY_SUFFIX:-release-smoke-$(date -u +%Y%m%d%H%M%S)}"
+NPCINK_CLOUD_INTERNAL_AUTH_TOKEN="${INTERNAL_AUTH_TOKEN}" \
+NPCINK_CLOUD_IDEMPOTENCY_SUFFIX="${RUNTIME_IDEMPOTENCY_SUFFIX}" \
+	bash "${ROOT_DIR}/deploy/remote-smoke.sh" \
+		--base-url "${BASE_URL}" \
+		--site-id "${RUNTIME_SITE_ID}" \
+		--key-id "${RUNTIME_KEY_ID}" \
+		--secret "${RUNTIME_SECRET}"
 
 http_request "GET" "${BASE_URL%/}/" "${PORTAL_COOKIE_JAR}"
 assert_status "${HTTP_STATUS}" "200" "home page should load"

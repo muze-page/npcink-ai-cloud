@@ -57,3 +57,12 @@ def test_addon_projection_surfaces_are_absent(tmp_path: Path) -> None:
     assert provider.status_code == 404
 
     dispose_engine(database_url)
+
+
+def test_release_smoke_does_not_depend_on_removed_addon_projection_surfaces() -> None:
+    cloud_root = Path(__file__).resolve().parents[2]
+    release_smoke_script = (cloud_root / "deploy" / "release-smoke.sh").read_text()
+
+    assert "/v1/addon/dashboard" not in release_smoke_script
+    assert "/v1/addon/providers/release-summary" not in release_smoke_script
+    assert "deploy/remote-smoke.sh" in release_smoke_script
