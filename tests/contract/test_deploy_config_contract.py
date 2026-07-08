@@ -434,6 +434,10 @@ def test_release_gate_documents_cloud_hardening_blockers() -> None:
     cloud_root = _cloud_root()
     checklist_text = (cloud_root / "deploy" / "RELEASE_CHECKLIST.md").read_text()
     playbook_text = (cloud_root / "deploy" / "OPS_PLAYBOOK.md").read_text()
+    release_smoke_script = (cloud_root / "deploy" / "release-smoke.sh").read_text()
+    release_smoke_env_example = (
+        cloud_root / "deploy" / "release-smoke.env.example"
+    ).read_text()
     release_smoke_workflow = (
         cloud_root / ".github" / "workflows" / "release-smoke.yml"
     ).read_text()
@@ -466,6 +470,22 @@ def test_release_gate_documents_cloud_hardening_blockers() -> None:
     assert "deploy/RELEASE_CHECKLIST.md" in playbook_text
     assert "the release is blocked" in playbook_text
     assert "Do not replace it with a second release entry point" in playbook_text
+    assert "deploy/remote-smoke.sh" in release_smoke_script
+    assert "--runtime-site-id" in release_smoke_script
+    assert "Signed hosted runtime smoke." in release_smoke_env_example
+    assert "signed `POST /v1/runtime/execute`" in checklist_text
+    assert "signed `GET /v1/catalog/models`" in playbook_text
+
+    for removed_marker in (
+        "/v1/addon/dashboard",
+        "/v1/addon/providers/release-summary",
+        "signed addon projection reads",
+        "Signed addon projection smoke.",
+    ):
+        assert removed_marker not in release_smoke_script
+        assert removed_marker not in checklist_text
+        assert removed_marker not in playbook_text
+        assert removed_marker not in release_smoke_env_example
 
     assert "workflow_dispatch:" in release_smoke_workflow
     assert "github.ref == 'refs/heads/production'" in release_smoke_workflow

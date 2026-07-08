@@ -4,7 +4,7 @@
 >
 > Updated: 2026-06-29
 >
-> Scope: standalone `npcink-ai-cloud` production operations, cadence recovery, addon projection-first runbook, release-time troubleshooting
+> Scope: standalone `npcink-ai-cloud` production operations, cadence recovery, signed runtime smoke, release-time troubleshooting
 
 ## Purpose
 
@@ -20,8 +20,12 @@ Primary internal checkpoints:
 - `GET /internal/service/ops/cadence`
 - `GET /internal/service/runtime/diagnostics/summary`
 - `GET /internal/service/runtime/diagnostics/backlog`
-- signed `GET /v1/addon/dashboard`
-- signed `GET /v1/addon/providers/release-summary`
+- signed `GET /v1/catalog/models`
+- signed `POST /v1/runtime/execute`
+- signed `GET /v1/runs/{run_id}`
+- signed `GET /v1/runs/{run_id}/result`
+- signed `GET /v1/stats/profiles/{profile_id}`
+- signed `GET /v1/usage/summary`
 
 ## Environment Entry Points
 
@@ -46,27 +50,31 @@ Loopback origins are a development convenience only. If a production frontend
 requires `http://127.0.0.1:8010` or `localhost` as a public URL, treat that as a
 release-blocking environment configuration error.
 
-## Addon Projection Semantics
+## Signed Runtime Smoke Semantics
 
-The addon overview and provider release summary are now `projection-first + live fallback`.
+The formal release smoke follows the current hosted runtime contract. It does
+not call retired `/v1/addon/*` projection surfaces.
 
 Operator interpretation rules:
 
-- `source=projection`: Cloud is serving the managed site projection.
-- `source=live_fallback`: Cloud could not use the projection and rebuilt the summary live.
-- `stale=false`: the summary is still inside the Cloud freshness window.
-- `stale=true`: the returned summary is outside the freshness window and should be treated as attention-worthy.
-- `fallback_reason=projection_missing`: cadence has not produced the projection yet.
-- `fallback_reason=projection_stale`: cadence output exists but is too old, so Cloud rebuilt live.
-- `fallback_reason=projection_error`: Cloud could not read the stored projection and rebuilt live.
-- release smoke now requires addon credentials; missing `site_id / key_id / secret` is itself a release-blocking configuration error.
+- `site_id / key_id / secret` identify a real provisioned, active site API key.
+- signed `GET /v1/catalog/models` confirms the public catalog read path.
+- signed `POST /v1/runtime/execute` confirms the production provider
+  configuration can execute a real hosted runtime request.
+- signed `GET /v1/runs/{run_id}` and `/result` confirm run lookup and result
+  retrieval through the current runtime contract.
+- signed `GET /v1/stats/profiles/{profile_id}` and `/v1/usage/summary` confirm
+  runtime detail and usage evidence remain readable.
+- missing signed runtime credentials are a release-blocking configuration error.
 
 Manual refresh guidance:
 
-- WordPress "刷新云端数据" refreshes the local short cache only.
-- WordPress "刷新发布证据" refreshes the local cached read of Cloud provider evidence only.
-- Neither button changes Cloud truth or forces a projection rebuild job.
-- If repeated reads keep returning `live_fallback`, inspect `ops-worker` and cadence freshness instead of relying on repeated local refresh clicks.
+- WordPress local refresh actions must remain local cache or service-status
+  reads only.
+- Release evidence must come from the signed runtime smoke and internal
+  observability endpoints, not from retired addon projection endpoints.
+- If runtime smoke fails, inspect provider health, site/key lifecycle,
+  entitlement, and runtime worker logs before changing WordPress-side controls.
 
 ## Secret Rotation
 
@@ -194,11 +202,10 @@ If real runtime smoke returns `runtime.provider_not_configured`, treat it as a r
 2. Inspect `GET /internal/service/ops/cadence`.
 3. If one or more tasks are stale, restart `ops-worker`.
 4. If staleness persists, inspect `service_audit_events` for the failing cadence task.
-5. If addon projection reads are falling back, confirm both of these cadence tasks are fresh:
-   - `addon_overview_projection`
-   - `provider_release_summary_projection`
-6. Re-run signed addon reads and confirm `source=projection` returns again, or that `live_fallback` at least carries an explicit `fallback_reason`.
-7. After recovery, verify `non_fresh_total == 0`.
+5. If runtime smoke fails after cadence recovery, inspect provider health,
+   runtime diagnostics, site/key lifecycle, and entitlement evidence before
+   changing WordPress-side controls.
+6. After recovery, verify `non_fresh_total == 0`.
 
 ## Trace Sink Check
 
@@ -231,5 +238,5 @@ Operators must be able to answer all of these from current data:
 - Are managed cadence tasks fresh?
 - Is provider health fresh, and which provider is degraded?
 - Is OTLP tracing wired to the collector endpoint?
-- Are addon overview and provider evidence coming from `projection`, or if not, why is `live_fallback` happening?
 - Has one real signed runtime request succeeded against the production provider configuration?
+- Do signed run lookup, result retrieval, stats, and usage evidence remain readable?

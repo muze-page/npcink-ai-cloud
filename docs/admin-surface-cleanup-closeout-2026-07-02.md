@@ -159,7 +159,8 @@ operator gates that cannot be satisfied by a local code session alone:
 - worker heartbeat and cadence checks;
 - OTLP sink queryability;
 - database backup and rollback confirmation;
-- real signed addon projection reads;
+- the then-current signed addon projection gate, which has since been retired
+  from the current formal release checklist;
 - one real signed runtime request without `runtime.provider_not_configured`;
 - explicit production validation approval text required by the release policy.
 

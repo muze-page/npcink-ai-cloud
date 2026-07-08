@@ -16,7 +16,7 @@ It is intentionally split into:
 - env required: production secrets, URLs, trusted hosts/TLS, worker cadence, OTLP, and provider credentials are configured on the release host
 - service settings required: Portal public URL, QQ login when used, and SMTP are configured in `/admin/service-settings`
 - operator required: backup/rollback, cadence, heartbeat, trace, token rotation, and log inspection procedures are confirmed by the release operator
-- smoke required: `deploy/release-smoke.sh`, real mailbox login, signed addon projection reads, and one real signed runtime request pass on the release host
+- smoke required: `deploy/release-smoke.sh`, real mailbox login, and one real signed hosted runtime request pass on the release host
 
 Cloud may be released only when every `Required` item below is complete.
 
@@ -188,14 +188,13 @@ Required outcomes:
 - [ ] `GET /admin/login` loads
 - [ ] `POST /admin/auth/bootstrap` succeeds with the production admin token
 - [ ] `GET /admin/session` succeeds after admin login
-- [ ] signed `GET /v1/addon/dashboard` exposes:
-  - `source`
-  - `generated_at`
-  - `fresh_until`
-  - `stale`
-- [ ] signed `GET /v1/addon/providers/release-summary` exposes the same freshness fields
-- [ ] if either addon route returns `source=live_fallback`, `fallback_reason` is present and operator-understandable
-- [ ] release smoke is incomplete unless addon credentials are provided and both signed addon routes pass freshness checks
+- [ ] signed `GET /v1/catalog/models` returns the model catalog
+- [ ] signed `POST /v1/runtime/execute` succeeds against the production provider configuration
+- [ ] signed `GET /v1/runs/{run_id}` returns the same run id
+- [ ] signed `GET /v1/runs/{run_id}/result` exposes the runtime result
+- [ ] signed `GET /v1/stats/profiles/{profile_id}` returns profile stats
+- [ ] signed `GET /v1/usage/summary` exposes the rolling usage counters
+- [ ] release smoke is incomplete unless signed runtime credentials are provided and the signed runtime path passes
 
 Small-customer paid trial preflight is incomplete unless:
 
@@ -211,8 +210,8 @@ This section is `Required` for first release or runtime/auth changes.
 - [ ] create or rotate a real Cloud API key in Portal
 - [ ] save the key into the WordPress Cloud addon
 - [ ] plugin connection test passes
-- [ ] plugin overview shows whether data came from `云端摘要投影` or `实时回退结果`
-- [ ] plugin provider evidence shows the same Cloud freshness semantics
+- [ ] plugin service status stays read-only and does not expose Cloud write controls
+- [ ] plugin provider/runtime evidence is read-only service detail, not a second control plane
 - [ ] one real signed runtime request succeeds
 - [ ] the runtime request does not fail with `runtime.provider_not_configured`
 - [ ] site usage / key / portal state remain coherent after the runtime call
