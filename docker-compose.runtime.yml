@@ -26,6 +26,23 @@ services:
     volumes:
       - cloud-redis-prod:/data
 
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.104.0
+    restart: unless-stopped
+    command: ["--config=/etc/otelcol-contrib/config.yaml"]
+    environment:
+      NPCINK_CLOUD_OTEL_TRACE_SINK_OTLP_ENDPOINT: ${NPCINK_CLOUD_OTEL_TRACE_SINK_OTLP_ENDPOINT:-jaeger:4317}
+    volumes:
+      - ./deploy/otel-collector.config.yml:/etc/otelcol-contrib/config.yaml:ro
+
+  jaeger:
+    image: jaegertracing/all-in-one:1.59
+    restart: unless-stopped
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+    ports:
+      - "${NPCINK_CLOUD_JAEGER_BIND_HOST:-127.0.0.1}:${NPCINK_CLOUD_JAEGER_UI_PORT:-16686}:16686"
+
   api:
     image: npcink-ai-cloud-api:prod
     restart: unless-stopped
@@ -33,14 +50,18 @@ services:
     env_file:
       - .env.deploy
     environment:
-      NPCINK_CLOUD_OTEL_EXPORTER_OTLP_ENDPOINT: ""
-      NPCINK_CLOUD_OTEL_TRACE_SINK_OTLP_ENDPOINT: ""
-      NPCINK_CLOUD_OTEL_TRACE_QUERY_URL: ""
+      NPCINK_CLOUD_OTEL_EXPORTER_OTLP_ENDPOINT: ${NPCINK_CLOUD_OTEL_EXPORTER_OTLP_ENDPOINT:-http://otel-collector:4318/v1/traces}
+      NPCINK_CLOUD_OTEL_TRACE_SINK_OTLP_ENDPOINT: ${NPCINK_CLOUD_OTEL_TRACE_SINK_OTLP_ENDPOINT:-jaeger:4317}
+      NPCINK_CLOUD_OTEL_TRACE_QUERY_URL: ${NPCINK_CLOUD_OTEL_TRACE_QUERY_URL:-http://127.0.0.1:${NPCINK_CLOUD_JAEGER_UI_PORT:-16686}}
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
+      otel-collector:
+        condition: service_started
+      jaeger:
+        condition: service_started
     expose:
       - "8000"
 
@@ -63,14 +84,18 @@ services:
     env_file:
       - .env.deploy
     environment:
-      NPCINK_CLOUD_OTEL_EXPORTER_OTLP_ENDPOINT: ""
-      NPCINK_CLOUD_OTEL_TRACE_SINK_OTLP_ENDPOINT: ""
-      NPCINK_CLOUD_OTEL_TRACE_QUERY_URL: ""
+      NPCINK_CLOUD_OTEL_EXPORTER_OTLP_ENDPOINT: ${NPCINK_CLOUD_OTEL_EXPORTER_OTLP_ENDPOINT:-http://otel-collector:4318/v1/traces}
+      NPCINK_CLOUD_OTEL_TRACE_SINK_OTLP_ENDPOINT: ${NPCINK_CLOUD_OTEL_TRACE_SINK_OTLP_ENDPOINT:-jaeger:4317}
+      NPCINK_CLOUD_OTEL_TRACE_QUERY_URL: ${NPCINK_CLOUD_OTEL_TRACE_QUERY_URL:-http://127.0.0.1:${NPCINK_CLOUD_JAEGER_UI_PORT:-16686}}
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
+      otel-collector:
+        condition: service_started
+      jaeger:
+        condition: service_started
 
   callback-worker:
     image: npcink-ai-cloud-worker:prod
@@ -79,14 +104,18 @@ services:
     env_file:
       - .env.deploy
     environment:
-      NPCINK_CLOUD_OTEL_EXPORTER_OTLP_ENDPOINT: ""
-      NPCINK_CLOUD_OTEL_TRACE_SINK_OTLP_ENDPOINT: ""
-      NPCINK_CLOUD_OTEL_TRACE_QUERY_URL: ""
+      NPCINK_CLOUD_OTEL_EXPORTER_OTLP_ENDPOINT: ${NPCINK_CLOUD_OTEL_EXPORTER_OTLP_ENDPOINT:-http://otel-collector:4318/v1/traces}
+      NPCINK_CLOUD_OTEL_TRACE_SINK_OTLP_ENDPOINT: ${NPCINK_CLOUD_OTEL_TRACE_SINK_OTLP_ENDPOINT:-jaeger:4317}
+      NPCINK_CLOUD_OTEL_TRACE_QUERY_URL: ${NPCINK_CLOUD_OTEL_TRACE_QUERY_URL:-http://127.0.0.1:${NPCINK_CLOUD_JAEGER_UI_PORT:-16686}}
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
+      otel-collector:
+        condition: service_started
+      jaeger:
+        condition: service_started
 
   ops-worker:
     image: npcink-ai-cloud-worker:prod
@@ -95,14 +124,18 @@ services:
     env_file:
       - .env.deploy
     environment:
-      NPCINK_CLOUD_OTEL_EXPORTER_OTLP_ENDPOINT: ""
-      NPCINK_CLOUD_OTEL_TRACE_SINK_OTLP_ENDPOINT: ""
-      NPCINK_CLOUD_OTEL_TRACE_QUERY_URL: ""
+      NPCINK_CLOUD_OTEL_EXPORTER_OTLP_ENDPOINT: ${NPCINK_CLOUD_OTEL_EXPORTER_OTLP_ENDPOINT:-http://otel-collector:4318/v1/traces}
+      NPCINK_CLOUD_OTEL_TRACE_SINK_OTLP_ENDPOINT: ${NPCINK_CLOUD_OTEL_TRACE_SINK_OTLP_ENDPOINT:-jaeger:4317}
+      NPCINK_CLOUD_OTEL_TRACE_QUERY_URL: ${NPCINK_CLOUD_OTEL_TRACE_QUERY_URL:-http://127.0.0.1:${NPCINK_CLOUD_JAEGER_UI_PORT:-16686}}
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
+      otel-collector:
+        condition: service_started
+      jaeger:
+        condition: service_started
 
   proxy:
     image: nginx:1.27-alpine

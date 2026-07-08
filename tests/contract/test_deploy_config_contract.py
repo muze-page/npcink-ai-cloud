@@ -366,6 +366,33 @@ def test_deploy_bundle_smoke_uses_sample_provider_and_skip_frontend_contract() -
     assert "postgres.tar.gz" in bundle_script
     assert "otel-collector.tar.gz" in bundle_script
     assert "jaeger.tar.gz" in bundle_script
+    assert "otel-collector:" in runtime_compose_text
+    assert "jaeger:" in runtime_compose_text
+    jaeger_localhost_port = (
+        "${NPCINK_CLOUD_JAEGER_BIND_HOST:-127.0.0.1}:"
+        "${NPCINK_CLOUD_JAEGER_UI_PORT:-16686}:16686"
+    )
+    assert jaeger_localhost_port in compose_text
+    assert jaeger_localhost_port in runtime_compose_text
+    otlp_exporter_default = (
+        "NPCINK_CLOUD_OTEL_EXPORTER_OTLP_ENDPOINT: "
+        "${NPCINK_CLOUD_OTEL_EXPORTER_OTLP_ENDPOINT:-"
+        "http://otel-collector:4318/v1/traces}"
+    )
+    trace_sink_default = (
+        "NPCINK_CLOUD_OTEL_TRACE_SINK_OTLP_ENDPOINT: "
+        "${NPCINK_CLOUD_OTEL_TRACE_SINK_OTLP_ENDPOINT:-jaeger:4317}"
+    )
+    trace_query_default = (
+        "NPCINK_CLOUD_OTEL_TRACE_QUERY_URL: "
+        "${NPCINK_CLOUD_OTEL_TRACE_QUERY_URL:-http://127.0.0.1:"
+        "${NPCINK_CLOUD_JAEGER_UI_PORT:-16686}}"
+    )
+    assert otlp_exporter_default in runtime_compose_text
+    assert trace_sink_default in runtime_compose_text
+    assert trace_query_default in runtime_compose_text
+    assert 'if service_exists otel-collector; then' in remote_load_script
+    assert 'if service_exists jaeger; then' in remote_load_script
     assert '-C "${CLOUD_DIR}" dist/worker.tar.gz' not in bundle_script
     assert '-C "${CLOUD_DIR}" dist/callback-worker.tar.gz' not in bundle_script
     assert '-C "${CLOUD_DIR}" dist/ops-worker.tar.gz' not in bundle_script

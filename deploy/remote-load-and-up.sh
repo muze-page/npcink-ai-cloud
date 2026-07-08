@@ -98,7 +98,14 @@ if [ -f "${DIST_DIR}/frontend.tar.gz" ]; then
   gzip -dc "${DIST_DIR}/frontend.tar.gz" | docker load
 fi
 
-SERVICES=(postgres redis api)
+SERVICES=(postgres redis)
+if service_exists otel-collector; then
+	SERVICES+=(otel-collector)
+fi
+if service_exists jaeger; then
+	SERVICES+=(jaeger)
+fi
+SERVICES+=(api)
 if [ "${SKIP_FRONTEND_IMAGE}" != "1" ]; then
 	SERVICES+=(frontend)
 fi
