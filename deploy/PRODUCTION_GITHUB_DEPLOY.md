@@ -49,6 +49,22 @@ The production deploy job:
 7. Verifies `/health/operational-ready`.
 8. Verifies public static legal pages, including `/terms/en/terms.html`.
 
+By default the bundle contains only the app image, the optional frontend image,
+deploy scripts, compose files, and static site files. Worker, callback-worker,
+and ops-worker services reuse the app image and are tagged on the release host.
+External service images such as Postgres, Redis, nginx, OTEL Collector, and
+Jaeger are not repackaged on every deploy; the host should already have them or
+allow Docker Compose to pull them by pinned tag.
+
+For offline or first-host bootstrap bundles, set:
+
+```bash
+NPCINK_CLOUD_INCLUDE_EXTERNAL_IMAGES=1
+```
+
+The GitHub deploy path also enables BuildKit GitHub Actions cache for app and
+frontend Docker builds.
+
 The static terms fast path runs:
 
 ```bash

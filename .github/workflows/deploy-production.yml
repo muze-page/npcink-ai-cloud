@@ -14,6 +14,7 @@ jobs:
     if: github.ref == 'refs/heads/production'
     environment: production
     permissions:
+      actions: write
       contents: read
     steps:
       - name: Validate deploy trigger

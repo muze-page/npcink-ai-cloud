@@ -64,6 +64,12 @@ if [ -f "${DIST_DIR}/api.tar.gz" ]; then
   gzip -dc "${DIST_DIR}/api.tar.gz" | docker load
 fi
 
+if docker image inspect npcink-ai-cloud-api:prod >/dev/null 2>&1; then
+  docker tag npcink-ai-cloud-api:prod npcink-ai-cloud-worker:prod
+  docker tag npcink-ai-cloud-api:prod npcink-ai-cloud-callback-worker:prod
+  docker tag npcink-ai-cloud-api:prod npcink-ai-cloud-ops-worker:prod
+fi
+
 if [ -f "${DIST_DIR}/worker.tar.gz" ]; then
   gzip -dc "${DIST_DIR}/worker.tar.gz" | docker load
 fi

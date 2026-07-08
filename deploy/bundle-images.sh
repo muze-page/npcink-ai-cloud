@@ -8,6 +8,7 @@ PIP_INDEX_URL="${NPCINK_CLOUD_PIP_INDEX_URL:-}"
 PIP_EXTRA_INDEX_URL="${NPCINK_CLOUD_PIP_EXTRA_INDEX_URL:-}"
 PIP_TRUSTED_HOST="${NPCINK_CLOUD_PIP_TRUSTED_HOST:-}"
 SKIP_FRONTEND_IMAGE="${NPCINK_CLOUD_SKIP_FRONTEND_IMAGE:-0}"
+INCLUDE_EXTERNAL_IMAGES="${NPCINK_CLOUD_INCLUDE_EXTERNAL_IMAGES:-0}"
 REMOTE_BUNDLE_ONLY="${NPCINK_CLOUD_REMOTE_BUNDLE_ONLY:-0}"
 REMOTE_DOCKER_HOST=""
 if [[ "${DOCKER_HOST:-}" == ssh://* ]]; then
@@ -38,11 +39,20 @@ if [ -n "${PIP_TRUSTED_HOST}" ]; then
 	BUILD_ARGS+=(--build-arg "PIP_TRUSTED_HOST=${PIP_TRUSTED_HOST}")
 fi
 
+BUILD_CACHE_ARGS=()
+if [ -n "${GITHUB_ACTIONS:-}" ]; then
+	BUILD_CACHE_ARGS=(
+		--cache-from type=gha
+		--cache-to type=gha,mode=max
+	)
+fi
+
 if [ -n "${IMAGE_PLATFORM}" ]; then
 	echo "[info] Building cloud images for platform ${IMAGE_PLATFORM}"
 	if [ "${#BUILD_ARGS[@]}" -gt 0 ]; then
 		docker buildx build \
 			--platform "${IMAGE_PLATFORM}" \
+			"${BUILD_CACHE_ARGS[@]}" \
 			"${BUILD_ARGS[@]}" \
 			--load \
 			-t npcink-ai-cloud-api:prod \
@@ -51,6 +61,7 @@ if [ -n "${IMAGE_PLATFORM}" ]; then
 	else
 		docker buildx build \
 			--platform "${IMAGE_PLATFORM}" \
+			"${BUILD_CACHE_ARGS[@]}" \
 			--load \
 			-t npcink-ai-cloud-api:prod \
 			-f "${CLOUD_DIR}/Dockerfile" \
@@ -62,25 +73,25 @@ if [ -n "${IMAGE_PLATFORM}" ]; then
 	if [ "${SKIP_FRONTEND_IMAGE}" != "1" ]; then
 		docker buildx build \
 			--platform "${IMAGE_PLATFORM}" \
+			"${BUILD_CACHE_ARGS[@]}" \
 			--load \
 			-t npcink-ai-cloud-frontend:prod \
 			-f "${CLOUD_DIR}/frontend/Dockerfile" \
 			"${CLOUD_DIR}"
 	fi
 else
-	if [ "${#BUILD_ARGS[@]}" -gt 0 ]; then
-		if [ "${SKIP_FRONTEND_IMAGE}" = "1" ]; then
-			docker compose -f "${CLOUD_DIR}/docker-compose.prod.yml" build "${BUILD_ARGS[@]}" api worker callback-worker ops-worker
-		else
-			docker compose -f "${CLOUD_DIR}/docker-compose.prod.yml" build "${BUILD_ARGS[@]}" api worker callback-worker ops-worker frontend
-		fi
-	else
-		if [ "${SKIP_FRONTEND_IMAGE}" = "1" ]; then
-			docker compose -f "${CLOUD_DIR}/docker-compose.prod.yml" build api worker callback-worker ops-worker
-		else
-			docker compose -f "${CLOUD_DIR}/docker-compose.prod.yml" build api worker callback-worker ops-worker frontend
-		fi
+	COMPOSE_BUILD_SERVICES=(api)
+	if [ "${SKIP_FRONTEND_IMAGE}" != "1" ]; then
+		COMPOSE_BUILD_SERVICES+=(frontend)
 	fi
+	if [ "${#BUILD_ARGS[@]}" -gt 0 ]; then
+		docker compose -f "${CLOUD_DIR}/docker-compose.prod.yml" build "${BUILD_ARGS[@]}" "${COMPOSE_BUILD_SERVICES[@]}"
+	else
+		docker compose -f "${CLOUD_DIR}/docker-compose.prod.yml" build "${COMPOSE_BUILD_SERVICES[@]}"
+	fi
+	docker tag npcink-ai-cloud-api:prod npcink-ai-cloud-worker:prod
+	docker tag npcink-ai-cloud-api:prod npcink-ai-cloud-callback-worker:prod
+	docker tag npcink-ai-cloud-api:prod npcink-ai-cloud-ops-worker:prod
 fi
 
 save_image() {
@@ -122,9 +133,10 @@ ensure_image() {
 }
 
 save_image npcink-ai-cloud-api:prod "${DIST_DIR}/api.tar.gz"
-save_image npcink-ai-cloud-worker:prod "${DIST_DIR}/worker.tar.gz"
-save_image npcink-ai-cloud-callback-worker:prod "${DIST_DIR}/callback-worker.tar.gz"
-save_image npcink-ai-cloud-ops-worker:prod "${DIST_DIR}/ops-worker.tar.gz"
+rm -f \
+	"${DIST_DIR}/worker.tar.gz" \
+	"${DIST_DIR}/callback-worker.tar.gz" \
+	"${DIST_DIR}/ops-worker.tar.gz"
 if [ "${SKIP_FRONTEND_IMAGE}" != "1" ]; then
 	save_image npcink-ai-cloud-frontend:prod "${DIST_DIR}/frontend.tar.gz"
 else
@@ -137,12 +149,19 @@ EXTERNAL_IMAGE_BUNDLES=(
 	"otel/opentelemetry-collector-contrib:0.104.0|otel-collector.tar.gz"
 	"jaegertracing/all-in-one:1.59|jaeger.tar.gz"
 )
-for item in "${EXTERNAL_IMAGE_BUNDLES[@]}"; do
-	image="${item%%|*}"
-	output="${item#*|}"
-	ensure_image "${image}"
-	save_image "${image}" "${DIST_DIR}/${output}"
-done
+if [ "${INCLUDE_EXTERNAL_IMAGES}" = "1" ]; then
+	for item in "${EXTERNAL_IMAGE_BUNDLES[@]}"; do
+		image="${item%%|*}"
+		output="${item#*|}"
+		ensure_image "${image}"
+		save_image "${image}" "${DIST_DIR}/${output}"
+	done
+else
+	for item in "${EXTERNAL_IMAGE_BUNDLES[@]}"; do
+		output="${item#*|}"
+		rm -f "${DIST_DIR}/${output}"
+	done
+fi
 
 if [ -n "${REMOTE_DOCKER_HOST}" ] && [ "${REMOTE_BUNDLE_ONLY}" = "1" ]; then
 	REMOTE_TAR_ARGS=(
@@ -151,17 +170,18 @@ if [ -n "${REMOTE_DOCKER_HOST}" ] && [ "${REMOTE_BUNDLE_ONLY}" = "1" ]; then
 		-C "${CLOUD_DIR}" deploy
 		-C "${CLOUD_DIR}" site
 		-C "${CLOUD_DIR}" dist/api.tar.gz
-		-C "${CLOUD_DIR}" dist/worker.tar.gz
-		-C "${CLOUD_DIR}" dist/callback-worker.tar.gz
-		-C "${CLOUD_DIR}" dist/ops-worker.tar.gz
-		-C "${CLOUD_DIR}" dist/postgres.tar.gz
-		-C "${CLOUD_DIR}" dist/redis.tar.gz
-		-C "${CLOUD_DIR}" dist/nginx.tar.gz
-		-C "${CLOUD_DIR}" dist/otel-collector.tar.gz
-		-C "${CLOUD_DIR}" dist/jaeger.tar.gz
 	)
 	if [ "${SKIP_FRONTEND_IMAGE}" != "1" ]; then
 		REMOTE_TAR_ARGS+=(-C "${CLOUD_DIR}" dist/frontend.tar.gz)
+	fi
+	if [ "${INCLUDE_EXTERNAL_IMAGES}" = "1" ]; then
+		REMOTE_TAR_ARGS+=(
+			-C "${CLOUD_DIR}" dist/postgres.tar.gz
+			-C "${CLOUD_DIR}" dist/redis.tar.gz
+			-C "${CLOUD_DIR}" dist/nginx.tar.gz
+			-C "${CLOUD_DIR}" dist/otel-collector.tar.gz
+			-C "${CLOUD_DIR}" dist/jaeger.tar.gz
+		)
 	fi
 
 	printf -v REMOTE_TAR_COMMAND ' %q' "${REMOTE_TAR_ARGS[@]}"
@@ -176,17 +196,18 @@ TAR_ARGS=(
 	-C "${CLOUD_DIR}" deploy
 	-C "${CLOUD_DIR}" site
 	-C "${CLOUD_DIR}" dist/api.tar.gz
-	-C "${CLOUD_DIR}" dist/worker.tar.gz
-	-C "${CLOUD_DIR}" dist/callback-worker.tar.gz
-	-C "${CLOUD_DIR}" dist/ops-worker.tar.gz
-	-C "${CLOUD_DIR}" dist/postgres.tar.gz
-	-C "${CLOUD_DIR}" dist/redis.tar.gz
-	-C "${CLOUD_DIR}" dist/nginx.tar.gz
-	-C "${CLOUD_DIR}" dist/otel-collector.tar.gz
-	-C "${CLOUD_DIR}" dist/jaeger.tar.gz
 )
 if [ "${SKIP_FRONTEND_IMAGE}" != "1" ]; then
 	TAR_ARGS+=(-C "${CLOUD_DIR}" dist/frontend.tar.gz)
+fi
+if [ "${INCLUDE_EXTERNAL_IMAGES}" = "1" ]; then
+	TAR_ARGS+=(
+		-C "${CLOUD_DIR}" dist/postgres.tar.gz
+		-C "${CLOUD_DIR}" dist/redis.tar.gz
+		-C "${CLOUD_DIR}" dist/nginx.tar.gz
+		-C "${CLOUD_DIR}" dist/otel-collector.tar.gz
+		-C "${CLOUD_DIR}" dist/jaeger.tar.gz
+	)
 fi
 tar czf "${DIST_DIR}/deploy-bundle.tgz" "${TAR_ARGS[@]}"
 

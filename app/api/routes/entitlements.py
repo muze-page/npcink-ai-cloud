@@ -173,6 +173,19 @@ def _resolve_pro_cloud_runtime(policy: dict[str, object]) -> dict[str, object]:
             "final_write_path": "core_proposal_required",
             "direct_wordpress_write": False,
         },
+        "contract_reuse": {
+            "cloud_role": "runtime_detail",
+            "toolbox_role": "product_surface",
+            "core_role": "proposal_handoff",
+            "adapter_role": "execution_profiles",
+            "toolkit_role": "ability_contracts",
+            "addon_role": "signed_transport",
+            "adds_registry": False,
+            "adds_scheduler_truth": False,
+            "adds_approval_store": False,
+            "adds_queue": False,
+            "adds_write_executor": False,
+        },
     }
 
 

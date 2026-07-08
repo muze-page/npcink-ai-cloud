@@ -345,9 +345,21 @@ def test_deploy_bundle_smoke_uses_sample_provider_and_skip_frontend_contract() -
     assert "--skip-terms-checks" in remote_smoke_script
     assert "Npcink Cloud Legal Documents" in remote_smoke_script
     assert "data.result.images" in remote_smoke_script
+    assert 'INCLUDE_EXTERNAL_IMAGES="${NPCINK_CLOUD_INCLUDE_EXTERNAL_IMAGES:-0}"' in (
+        bundle_script
+    )
+    assert 'if [ "${INCLUDE_EXTERNAL_IMAGES}" = "1" ]; then' in bundle_script
     assert "postgres.tar.gz" in bundle_script
     assert "otel-collector.tar.gz" in bundle_script
     assert "jaeger.tar.gz" in bundle_script
+    assert '-C "${CLOUD_DIR}" dist/worker.tar.gz' not in bundle_script
+    assert '-C "${CLOUD_DIR}" dist/callback-worker.tar.gz' not in bundle_script
+    assert '-C "${CLOUD_DIR}" dist/ops-worker.tar.gz' not in bundle_script
+    assert "build api worker callback-worker ops-worker" not in bundle_script
+    assert '--cache-from type=gha' in bundle_script
+    assert '--cache-to type=gha,mode=max' in bundle_script
+    assert "actions: write" in ci_workflow
+    assert "docker tag npcink-ai-cloud-api:prod npcink-ai-cloud-worker:prod" in remote_load_script
     assert "otel-collector.tar.gz" in remote_load_script
     assert "jaeger.tar.gz" in remote_load_script
     assert "static_terms_only" in ci_workflow

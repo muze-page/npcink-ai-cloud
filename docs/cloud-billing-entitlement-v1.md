@@ -97,6 +97,19 @@ An entitlement snapshot must express these fields only for the v1 contract:
       "runtime_owner": "npcink-local-automation-runtime",
       "final_write_path": "core_proposal_required",
       "direct_wordpress_write": false
+    },
+    "contract_reuse": {
+      "cloud_role": "runtime_detail",
+      "toolbox_role": "product_surface",
+      "core_role": "proposal_handoff",
+      "adapter_role": "execution_profiles",
+      "toolkit_role": "ability_contracts",
+      "addon_role": "signed_transport",
+      "adds_registry": false,
+      "adds_scheduler_truth": false,
+      "adds_approval_store": false,
+      "adds_queue": false,
+      "adds_write_executor": false
     }
   }
 }
@@ -114,6 +127,12 @@ Field rules:
   reports Nightly Site Inspection quota, usage, remaining count, batch item cap,
   result-retention guidance, and payload modes. It does not create a Cloud
   scheduler, local write permission, or second approval truth.
+- `pro_cloud_runtime.contract_reuse` is a read-only boundary projection. It
+  states that Cloud owns runtime/detail, Toolbox owns product surface, Core owns
+  proposal handoff, Adapter owns execution profiles, Toolkit owns ability
+  contracts, and Cloud Addon owns signed transport. It must keep
+  `adds_registry`, `adds_scheduler_truth`, `adds_approval_store`, `adds_queue`,
+  and `adds_write_executor` false.
 - Entitlement may restrict hosted execution, but it must not expand local
   plugin contracts, WordPress write permissions, approvals, router truth,
   prompt truth, or profile truth.
@@ -232,6 +251,19 @@ Response:
           "runtime_owner": "npcink-local-automation-runtime",
           "final_write_path": "core_proposal_required",
           "direct_wordpress_write": false
+        },
+        "contract_reuse": {
+          "cloud_role": "runtime_detail",
+          "toolbox_role": "product_surface",
+          "core_role": "proposal_handoff",
+          "adapter_role": "execution_profiles",
+          "toolkit_role": "ability_contracts",
+          "addon_role": "signed_transport",
+          "adds_registry": false,
+          "adds_scheduler_truth": false,
+          "adds_approval_store": false,
+          "adds_queue": false,
+          "adds_write_executor": false
         }
       }
     }
