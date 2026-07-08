@@ -945,7 +945,7 @@ def test_stats_routes_reject_expired_key(tmp_path: Path) -> None:
     dispose_engine(database_url)
 
 
-def test_stats_routes_accept_legacy_read_scope_alias(tmp_path: Path) -> None:
+def test_stats_routes_reject_legacy_read_scope_alias(tmp_path: Path) -> None:
     database_url, client, _ = _build_client(tmp_path)
     seed_site_auth(
         database_url,
@@ -963,8 +963,8 @@ def test_stats_routes_accept_legacy_read_scope_alias(tmp_path: Path) -> None:
         ),
     )
 
-    assert response.status_code == 200
-    assert response.json()["status"] == "ok"
+    assert response.status_code == 403
+    assert response.json()["error_code"] == "auth.scope_denied"
 
     dispose_engine(database_url)
 

@@ -3,11 +3,7 @@ from __future__ import annotations
 import base64
 import json
 
-SCOPE_ALIAS_MAP: dict[str, list[str]] = {
-    "read": ["runtime:read", "stats:read", "catalog:read", "entitlement:read"],
-    "write": [],
-    "execute": ["runtime:resolve", "runtime:execute"],
-}
+from app.domain.commercial.errors import CommercialValidationError
 
 DEFAULT_PORTAL_RUNTIME_SCOPES: list[str] = [
     "catalog:read",
@@ -17,6 +13,8 @@ DEFAULT_PORTAL_RUNTIME_SCOPES: list[str] = [
     "stats:read",
     "entitlement:read",
 ]
+
+ALLOWED_PORTAL_RUNTIME_SCOPES: frozenset[str] = frozenset(DEFAULT_PORTAL_RUNTIME_SCOPES)
 
 
 def build_customer_api_key(*, site_id: str, key_id: str, secret: str) -> str:
@@ -69,11 +67,19 @@ def expand_api_key_scopes(scopes: list[str] | None) -> list[str]:
         scope = str(raw_scope or "").strip()
         if not scope:
             continue
-        expanded = SCOPE_ALIAS_MAP.get(scope, [scope])
-        for item in expanded:
-            candidate = str(item or "").strip()
-            if not candidate or candidate in seen:
-                continue
-            seen.add(candidate)
-            normalized.append(candidate)
+        if scope in seen:
+            continue
+        seen.add(scope)
+        normalized.append(scope)
+    return normalized
+
+
+def validate_api_key_scopes_for_issue(scopes: list[str] | None) -> list[str]:
+    normalized = expand_api_key_scopes(scopes)
+    for scope in normalized:
+        if scope not in ALLOWED_PORTAL_RUNTIME_SCOPES:
+            raise CommercialValidationError(
+                "service.site_key_scope_invalid",
+                f"site key scope '{scope}' is not allowed",
+            )
     return normalized

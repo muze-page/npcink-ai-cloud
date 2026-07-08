@@ -1287,7 +1287,7 @@ def test_portal_site_keys_support_limit_offset_and_desc_sort(tmp_path: Path) -> 
     dispose_engine(database_url)
 
 
-def test_portal_issue_site_key_normalizes_legacy_scope_aliases(tmp_path: Path) -> None:
+def test_portal_issue_site_key_rejects_legacy_scope_aliases(tmp_path: Path) -> None:
     database_url, client = _build_client(tmp_path)
 
     client.post(
@@ -1321,16 +1321,15 @@ def test_portal_issue_site_key_normalizes_legacy_scope_aliases(tmp_path: Path) -
         ),
     )
 
-    assert issue_response.status_code == 200
-    scopes = set(issue_response.json()["data"]["scopes"])
-    assert scopes == {
-        "catalog:read",
-        "runtime:resolve",
-        "runtime:execute",
-        "runtime:read",
-        "stats:read",
-        "entitlement:read",
-    }
+    assert issue_response.status_code == 400
+    assert issue_response.json()["error_code"] == "service.site_key_scope_invalid"
+
+    list_response = client.get(
+        "/portal/v1/sites/site_portal_alias/api-keys",
+        headers=build_portal_headers(principal_id="principal:portal-alias@example.com"),
+    )
+    assert list_response.status_code == 200
+    assert list_response.json()["data"]["items"] == []
 
     dispose_engine(database_url)
 
