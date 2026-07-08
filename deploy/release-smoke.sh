@@ -138,6 +138,20 @@ assert_json_non_empty() {
 	fi
 }
 
+assert_json_equals() {
+	local json_payload="$1"
+	local json_path="$2"
+	local expected="$3"
+	local message="$4"
+	local actual
+	if ! actual="$(json_read_path "${json_payload}" "${json_path}")"; then
+		fail "${message} (missing path ${json_path})"
+	fi
+	if [ "${actual}" != "${expected}" ]; then
+		fail "${message} (expected ${expected}, got ${actual}; body=${json_payload})"
+	fi
+}
+
 assert_body_contains() {
 	local body="$1"
 	local needle="$2"
