@@ -115,6 +115,19 @@ def test_current_entitlement_returns_site_scoped_public_contract(tmp_path: Path)
             "final_write_path": "core_proposal_required",
             "direct_wordpress_write": False,
         },
+        "contract_reuse": {
+            "cloud_role": "runtime_detail",
+            "toolbox_role": "product_surface",
+            "core_role": "proposal_handoff",
+            "adapter_role": "execution_profiles",
+            "toolkit_role": "ability_contracts",
+            "addon_role": "signed_transport",
+            "adds_registry": False,
+            "adds_scheduler_truth": False,
+            "adds_approval_store": False,
+            "adds_queue": False,
+            "adds_write_executor": False,
+        },
     }
     credit_usage_detail = data["quota_summary"]["credit_usage_detail"]
     assert credit_usage_detail["default_visibility"] == "cloud_portal_only"
@@ -194,6 +207,19 @@ def test_current_entitlement_returns_pro_cloud_runtime_usage_detail(
     assert pro_runtime["max_batch_items"] == 25
     assert pro_runtime["result_retention_days"] == 21
     assert pro_runtime["payload_modes"] == ["metadata_only"]
+    assert pro_runtime["contract_reuse"] == {
+        "cloud_role": "runtime_detail",
+        "toolbox_role": "product_surface",
+        "core_role": "proposal_handoff",
+        "adapter_role": "execution_profiles",
+        "toolkit_role": "ability_contracts",
+        "addon_role": "signed_transport",
+        "adds_registry": False,
+        "adds_scheduler_truth": False,
+        "adds_approval_store": False,
+        "adds_queue": False,
+        "adds_write_executor": False,
+    }
 
     dispose_engine(database_url)
 
