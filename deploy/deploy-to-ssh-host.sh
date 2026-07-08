@@ -366,12 +366,12 @@ fi
 ln -sfn "${RELEASE_DIR}" "${CURRENT_LINK}"
 
 cd "${RELEASE_DIR}"
-bash deploy/remote-load-and-up.sh
-bash deploy/remote-migrate.sh
-bash deploy/remote-baseline-status.sh
+bash deploy/remote-load-and-up.sh </dev/null
+bash deploy/remote-migrate.sh </dev/null
+bash deploy/remote-baseline-status.sh </dev/null
 
 if [ "${REFRESH_PROVIDERS}" = "1" ]; then
-	bash deploy/remote-refresh-providers.sh
+	bash deploy/remote-refresh-providers.sh </dev/null
 fi
 
 if [ "${SKIP_SEED}" != "1" ]; then
@@ -379,7 +379,8 @@ if [ "${SKIP_SEED}" != "1" ]; then
 		--site-id "${SITE_ID}" \
 		--key-id "${KEY_ID}" \
 		--secret "${SECRET}" \
-		--scopes "${SCOPES}"
+		--scopes "${SCOPES}" \
+		</dev/null
 fi
 
 if [ "${SKIP_SMOKE}" != "1" ]; then
@@ -405,7 +406,7 @@ if [ "${SKIP_SMOKE}" != "1" ]; then
 	if [ -n "${EXPECTED_INSTANCE_ID}" ]; then
 		SMOKE_ARGS+=(--expected-instance-id "${EXPECTED_INSTANCE_ID}")
 	fi
-	bash deploy/remote-smoke.sh "${SMOKE_ARGS[@]}"
+	bash deploy/remote-smoke.sh "${SMOKE_ARGS[@]}" </dev/null
 fi
 
 if [ "${WITH_PORTAL_SMOKE}" = "1" ]; then
@@ -416,16 +417,18 @@ if [ "${WITH_PORTAL_SMOKE}" = "1" ]; then
 	bash deploy/remote-bootstrap-portal-site.sh \
 		--base-url "${BASE_URL}" \
 		--site-id "${SITE_ID}" \
-		--member-email "${MEMBER_EMAIL}"
+		--member-email "${MEMBER_EMAIL}" \
+		</dev/null
 	bash deploy/remote-portal-smoke.sh \
 		--base-url "${BASE_URL}" \
 		--site-id "${SITE_ID}" \
-		--member-email "${MEMBER_EMAIL}"
+		--member-email "${MEMBER_EMAIL}" \
+		</dev/null
 fi
 
 if [ "${WITH_OPERATIONAL_READY}" = "1" ]; then
 	echo "[info] Running remote operational readiness gate"
-	bash deploy/remote-operational-ready.sh --base-url "${BASE_URL}"
+	bash deploy/remote-operational-ready.sh --base-url "${BASE_URL}" </dev/null
 	echo "[ok] Remote operational readiness gate passed"
 fi
 

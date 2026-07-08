@@ -261,6 +261,14 @@ def test_preview_and_baseline_scripts_lock_migration_and_schema_checks() -> None
     assert "Operational readiness gate: enabled" in deploy_to_ssh_script
     assert "Running remote operational readiness gate" in deploy_to_ssh_script
     assert "Remote operational readiness gate passed" in deploy_to_ssh_script
+    assert "bash deploy/remote-load-and-up.sh </dev/null" in deploy_to_ssh_script
+    assert "bash deploy/remote-migrate.sh </dev/null" in deploy_to_ssh_script
+    assert "bash deploy/remote-refresh-providers.sh </dev/null" in deploy_to_ssh_script
+    assert 'bash deploy/remote-smoke.sh "${SMOKE_ARGS[@]}" </dev/null' in deploy_to_ssh_script
+    assert (
+        'bash deploy/remote-operational-ready.sh --base-url "${BASE_URL}" </dev/null'
+        in deploy_to_ssh_script
+    )
     assert "NPCINK_CLOUD_HEALTH_HOST_HEADER" in common_script
     assert "NPCINK_CLOUD_HEALTH_FORWARDED_PROTO" in common_script
     assert "NPCINK_CLOUD_BROWSER_ORIGIN_ALLOWLIST" in remote_load_script
