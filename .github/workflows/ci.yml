@@ -32,6 +32,7 @@ jobs:
   classify:
     runs-on: ubuntu-latest
     outputs:
+      deploy_required: ${{ steps.changed.outputs.deploy_required }}
       static_terms_only: ${{ steps.changed.outputs.static_terms_only }}
     steps:
       - name: Checkout
@@ -43,22 +44,35 @@ jobs:
         id: changed
         run: |
           set -euo pipefail
+          deploy_required="true"
           static_terms_only="false"
 
           if [ "${GITHUB_EVENT_NAME}" = "push" ] && [ "${GITHUB_REF}" = "refs/heads/production" ]; then
             mapfile -t changed_files < <(git diff --name-only "${{ github.event.before }}" "${{ github.sha }}")
             if [ "${#changed_files[@]}" -gt 0 ]; then
               static_terms_only="true"
+              deploy_required="false"
               for changed_file in "${changed_files[@]}"; do
                 if [[ "${changed_file}" != site/terms/* ]]; then
                   static_terms_only="false"
-                  break
                 fi
+                case "${changed_file}" in
+                  .github/*|.github/workflows/*|docs/*|docs/**/*|tests/*|tests/**/*|deploy/RELEASE_CHECKLIST.md)
+                    ;;
+                  site/terms/*)
+                    deploy_required="true"
+                    ;;
+                  *)
+                    deploy_required="true"
+                    ;;
+                esac
               done
             fi
           fi
 
+          printf 'deploy_required=%s\n' "${deploy_required}" >> "${GITHUB_OUTPUT}"
           printf 'static_terms_only=%s\n' "${static_terms_only}" >> "${GITHUB_OUTPUT}"
+          printf 'deploy_required=%s\n' "${deploy_required}"
           printf 'static_terms_only=%s\n' "${static_terms_only}"
 
   backend:
@@ -138,7 +152,7 @@ jobs:
   deploy-production:
     name: Deploy to cloud.npc.ink
     needs: [classify, backend, frontend, static-terms]
-    if: always() && github.event_name == 'push' && github.ref == 'refs/heads/production' && ((needs.classify.outputs.static_terms_only == 'true' && needs['static-terms'].result == 'success') || (needs.classify.outputs.static_terms_only != 'true' && needs.backend.result == 'success' && needs.frontend.result == 'success'))
+    if: always() && github.event_name == 'push' && github.ref == 'refs/heads/production' && needs.classify.outputs.deploy_required == 'true' && ((needs.classify.outputs.static_terms_only == 'true' && needs['static-terms'].result == 'success') || (needs.classify.outputs.static_terms_only != 'true' && needs.backend.result == 'success' && needs.frontend.result == 'success'))
     runs-on: ubuntu-latest
     environment: production
     concurrency:
