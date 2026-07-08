@@ -282,6 +282,9 @@ def test_preview_and_baseline_scripts_lock_migration_and_schema_checks() -> None
 def test_deploy_bundle_smoke_uses_sample_provider_and_skip_frontend_contract() -> None:
     cloud_root = _cloud_root()
     ci_workflow = (cloud_root / ".github" / "workflows" / "ci.yml").read_text()
+    maintenance_workflow = (
+        cloud_root / ".github" / "workflows" / "production-maintenance.yml"
+    ).read_text()
     compose_text = (cloud_root / "docker-compose.prod.yml").read_text()
     runtime_compose_text = (cloud_root / "docker-compose.runtime.yml").read_text()
     package_json = (cloud_root / "package.json").read_text()
@@ -370,6 +373,8 @@ def test_deploy_bundle_smoke_uses_sample_provider_and_skip_frontend_contract() -
     assert '--cache-from type=gha' in bundle_script
     assert '--cache-to type=gha,mode=max' in bundle_script
     assert "actions: write" in ci_workflow
+    assert "deploy_required:" in ci_workflow
+    assert "needs.classify.outputs.deploy_required == 'true'" in ci_workflow
     assert "docker tag npcink-ai-cloud-api:prod npcink-ai-cloud-worker:prod" in remote_load_script
     assert "otel-collector.tar.gz" in remote_load_script
     assert "jaeger.tar.gz" in remote_load_script
@@ -384,6 +389,16 @@ def test_deploy_bundle_smoke_uses_sample_provider_and_skip_frontend_contract() -
     )
     assert "assert_public_static_page \"/terms\"" in static_terms_deploy_script
     assert "Static terms deploy completed" in static_terms_deploy_script
+
+    assert "name: Production Maintenance" in maintenance_workflow
+    assert "github.ref == 'refs/heads/production'" in maintenance_workflow
+    assert "environment: production" in maintenance_workflow
+    assert "docker container prune -f" in maintenance_workflow
+    assert "docker image prune -af" in maintenance_workflow
+    assert "docker builder prune -af" in maintenance_workflow
+    assert "docker system prune" not in maintenance_workflow
+    assert "--volumes" not in maintenance_workflow
+    assert "rm -rf -- \"${release_dir}\"" in maintenance_workflow
 
 
 def test_static_terms_pages_are_in_release_tree() -> None:

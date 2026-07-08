@@ -1,0 +1,144 @@
+name: Production Maintenance
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: "Maintenance action to run."
+        required: true
+        default: "disk-report"
+        type: choice
+        options:
+          - "disk-report"
+          - "safe-prune"
+      release_retention_count:
+        description: "Number of release-* directories to keep when pruning old releases."
+        required: false
+        default: "4"
+
+concurrency:
+  group: production-maintenance
+  cancel-in-progress: false
+
+jobs:
+  maintenance:
+    name: Production SSH maintenance
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/production'
+    environment: production
+    permissions:
+      contents: read
+    steps:
+      - name: Install SSH key
+        env:
+          PROD_SSH_KEY: ${{ secrets.PROD_SSH_KEY }}
+          PROD_SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
+          PROD_SSH_PORT: ${{ secrets.PROD_SSH_PORT || '22' }}
+        run: |
+          set -euo pipefail
+          test -n "${PROD_SSH_KEY}"
+          test -n "${PROD_SSH_HOST}"
+          mkdir -p ~/.ssh
+          printf '%s\n' "${PROD_SSH_KEY}" > ~/.ssh/npcink_prod_maintenance_key
+          chmod 600 ~/.ssh/npcink_prod_maintenance_key
+          ssh-keyscan -p "${PROD_SSH_PORT}" -H "${PROD_SSH_HOST}" >> ~/.ssh/known_hosts
+
+      - name: Run maintenance
+        env:
+          MAINTENANCE_ACTION: ${{ inputs.action }}
+          RELEASE_RETENTION_COUNT: ${{ inputs.release_retention_count }}
+          PROD_SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
+          PROD_SSH_USER: ${{ secrets.PROD_SSH_USER || 'deploy' }}
+          PROD_SSH_PORT: ${{ secrets.PROD_SSH_PORT || '22' }}
+          PROD_REMOTE_DIR: ${{ secrets.PROD_REMOTE_DIR || '/opt/npcink-ai-cloud' }}
+        run: |
+          set -euo pipefail
+          case "${MAINTENANCE_ACTION}" in
+            disk-report|safe-prune) ;;
+            *)
+              echo "[fail] Unknown maintenance action: ${MAINTENANCE_ACTION}" >&2
+              exit 1
+              ;;
+          esac
+          case "${RELEASE_RETENTION_COUNT}" in
+            ''|*[!0-9]*)
+              echo "[fail] release_retention_count must be a positive integer" >&2
+              exit 1
+              ;;
+          esac
+          if [ "${RELEASE_RETENTION_COUNT}" -lt 1 ]; then
+            echo "[fail] release_retention_count must be at least 1" >&2
+            exit 1
+          fi
+
+          ssh_args=(
+            -p "${PROD_SSH_PORT}"
+            -i /home/runner/.ssh/npcink_prod_maintenance_key
+            -o StrictHostKeyChecking=accept-new
+            -o BatchMode=yes
+            -o ConnectTimeout=10
+          )
+          ssh_target="${PROD_SSH_USER}@${PROD_SSH_HOST}"
+
+          ssh "${ssh_args[@]}" "${ssh_target}" bash -s -- \
+            "${MAINTENANCE_ACTION}" \
+            "${PROD_REMOTE_DIR}" \
+            "${RELEASE_RETENTION_COUNT}" <<'REMOTE'
+          set -euo pipefail
+
+          action="$1"
+          remote_dir="$2"
+          keep_count="$3"
+
+          disk_report() {
+            echo "[info] Disk usage"
+            df -h
+            echo "[info] Docker disk usage"
+            docker system df || true
+            echo "[info] Remote directory usage"
+            if [ -d "${remote_dir}" ]; then
+              du -sh "${remote_dir}" || true
+              find "${remote_dir}" -maxdepth 1 -type d -name 'release-*' -printf '%T@ %p\n' \
+                | sort -rn \
+                | awk '{printf "%s\n", $2}' \
+                | head -20 \
+                | xargs -r du -sh || true
+            fi
+          }
+
+          prune_old_releases() {
+            if [ ! -d "${remote_dir}" ]; then
+              echo "[warn] Remote directory missing: ${remote_dir}" >&2
+              return
+            fi
+            current_target=""
+            if [ -L "${remote_dir}/current" ]; then
+              current_target="$(readlink -f "${remote_dir}/current" || true)"
+            fi
+            find "${remote_dir}" -maxdepth 1 -type d -name 'release-*' -printf '%T@ %p\n' \
+              | sort -rn \
+              | awk -v keep="${keep_count}" -v current="${current_target}" '
+                NR <= keep { next }
+                $2 == current { next }
+                { print $2 }
+              ' \
+              | while IFS= read -r release_dir; do
+                  if [ -n "${release_dir}" ] && [ -d "${release_dir}" ]; then
+                    echo "[info] Removing old release ${release_dir}"
+                    rm -rf -- "${release_dir}"
+                  fi
+                done
+            rm -f -- "${remote_dir}/deploy-bundle.tgz"
+          }
+
+          disk_report
+          if [ "${action}" = "safe-prune" ]; then
+            echo "[info] Pruning stopped containers, unused images, and build cache"
+            docker container prune -f || true
+            docker image prune -af || true
+            docker builder prune -af || true
+            prune_old_releases
+            echo "[info] Disk usage after safe prune"
+            disk_report
+          fi
+          REMOTE
