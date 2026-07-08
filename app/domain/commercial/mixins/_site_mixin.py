@@ -47,6 +47,7 @@ from app.domain.commercial.customer_api_keys import (
     DEFAULT_PORTAL_RUNTIME_SCOPES,
     build_customer_api_key,
     expand_api_key_scopes,
+    validate_api_key_scopes_for_issue,
 )
 from app.domain.commercial.errors import (
     CommercialNotFoundError,
@@ -793,7 +794,7 @@ class CommercialServiceSiteMixin(CommercialServiceAuditMixin):
         resolved_key_id = key_id or f"key_{uuid4().hex}"
         plaintext_secret = secret or f"sk_{secrets.token_urlsafe(24)}"
         now = self.now_factory()
-        normalized_scopes = expand_api_key_scopes(scopes)
+        normalized_scopes = validate_api_key_scopes_for_issue(scopes)
 
         with get_session(self.database_url) as session:
             repository = CommercialRepository(session)
@@ -1277,7 +1278,9 @@ class CommercialServiceSiteMixin(CommercialServiceAuditMixin):
         audit_context: ServiceAuditContext | None = None,
     ) -> dict[str, object]:
         now = self.now_factory()
-        normalized_scopes = expand_api_key_scopes(scopes) if scopes is not None else None
+        normalized_scopes = (
+            validate_api_key_scopes_for_issue(scopes) if scopes is not None else None
+        )
         with get_session(self.database_url) as session:
             repository = CommercialRepository(session)
             current = repository.get_site_key(key_id)
