@@ -1,0 +1,66 @@
+name: Release Smoke
+
+on:
+  workflow_dispatch:
+    inputs:
+      base_url:
+        description: "Production base URL to smoke."
+        required: false
+        default: "https://cloud.npc.ink"
+      require_alipay_enabled:
+        description: "Require Alipay public callbacks to be enabled."
+        required: false
+        default: "true"
+        type: choice
+        options:
+          - "true"
+          - "false"
+
+concurrency:
+  group: release-smoke-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  smoke:
+    name: Formal release smoke
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/production'
+    environment: production
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        run: python -m pip install --upgrade uv
+
+      - name: Bootstrap smoke dependencies
+        run: make bootstrap-dev
+
+      - name: Run formal release smoke
+        env:
+          NPCINK_CLOUD_BASE_URL: ${{ inputs.base_url }}
+          NPCINK_CLOUD_INTERNAL_AUTH_TOKEN: ${{ secrets.NPCINK_CLOUD_INTERNAL_AUTH_TOKEN }}
+          NPCINK_CLOUD_ADMIN_BOOTSTRAP_TOKEN: ${{ secrets.NPCINK_CLOUD_ADMIN_BOOTSTRAP_TOKEN }}
+          NPCINK_CLOUD_RELEASE_MEMBER_EMAIL: ${{ secrets.NPCINK_CLOUD_RELEASE_MEMBER_EMAIL }}
+          NPCINK_CLOUD_PORTAL_LOGIN_CODE: ${{ secrets.NPCINK_CLOUD_PORTAL_LOGIN_CODE }}
+          NPCINK_CLOUD_RELEASE_SITE_ID: ${{ secrets.NPCINK_CLOUD_RELEASE_SITE_ID }}
+          NPCINK_CLOUD_RELEASE_KEY_ID: ${{ secrets.NPCINK_CLOUD_RELEASE_KEY_ID }}
+          NPCINK_CLOUD_RELEASE_KEY_SECRET: ${{ secrets.NPCINK_CLOUD_RELEASE_KEY_SECRET }}
+        run: |
+          set -euo pipefail
+          args=(
+            --base-url "${NPCINK_CLOUD_BASE_URL}"
+            --require-smoke-env
+            --run-release-smoke
+          )
+          if [ "${{ inputs.require_alipay_enabled }}" = "true" ]; then
+            args+=(--require-alipay-enabled)
+          fi
+          bash deploy/small-customer-trial-preflight.sh "${args[@]}"
