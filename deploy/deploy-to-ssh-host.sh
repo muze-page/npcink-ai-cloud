@@ -278,6 +278,12 @@ if [ -n "${ENV_FILE}" ]; then
 	scp "${SCP_ARGS[@]}" "${ENV_FILE}" "${SSH_TARGET}:${REMOTE_ENV_PATH}"
 fi
 
+if [ "${WITH_OPERATIONAL_READY}" = "1" ]; then
+	echo "[info] Operational readiness gate: enabled"
+else
+	echo "[info] Operational readiness gate: disabled"
+fi
+
 echo "[info] Running remote deploy sequence on ${SSH_TARGET}"
 ssh "${SSH_ARGS[@]}" "${SSH_TARGET}" bash -s -- \
 	"$(remote_shell_arg "${REMOTE_DIR}")" \
@@ -418,7 +424,9 @@ if [ "${WITH_PORTAL_SMOKE}" = "1" ]; then
 fi
 
 if [ "${WITH_OPERATIONAL_READY}" = "1" ]; then
+	echo "[info] Running remote operational readiness gate"
 	bash deploy/remote-operational-ready.sh --base-url "${BASE_URL}"
+	echo "[ok] Remote operational readiness gate passed"
 fi
 
 echo "[ok] Remote release ready at ${RELEASE_DIR}"

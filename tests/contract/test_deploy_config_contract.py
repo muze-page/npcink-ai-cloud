@@ -258,6 +258,9 @@ def test_preview_and_baseline_scripts_lock_migration_and_schema_checks() -> None
     assert "BatchMode=yes" in deploy_to_ssh_script
     assert "ConnectTimeout" in deploy_to_ssh_script
     assert "SSH target is not reachable" in deploy_to_ssh_script
+    assert "Operational readiness gate: enabled" in deploy_to_ssh_script
+    assert "Running remote operational readiness gate" in deploy_to_ssh_script
+    assert "Remote operational readiness gate passed" in deploy_to_ssh_script
     assert "NPCINK_CLOUD_HEALTH_HOST_HEADER" in common_script
     assert "NPCINK_CLOUD_HEALTH_FORWARDED_PROTO" in common_script
     assert "NPCINK_CLOUD_BROWSER_ORIGIN_ALLOWLIST" in remote_load_script
