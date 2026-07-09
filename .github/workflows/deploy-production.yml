@@ -104,7 +104,7 @@ jobs:
           NPCINK_CLOUD_DEPLOY_REMOTE_DIR: ${{ secrets.PROD_REMOTE_DIR || '/opt/npcink-ai-cloud' }}
           NPCINK_CLOUD_BASE_URL: ${{ secrets.PROD_BASE_URL || 'https://cloud.npc.ink' }}
           NPCINK_CLOUD_REMOTE_COMPOSE_FILE: docker-compose.runtime.yml
-          NPCINK_CLOUD_INCLUDE_EXTERNAL_IMAGES: "1"
+          NPCINK_CLOUD_INCLUDE_EXTERNAL_IMAGES: ${{ vars.PROD_INCLUDE_EXTERNAL_IMAGES || '0' }}
           NPCINK_CLOUD_REFRESH_PROVIDERS: "1"
           NPCINK_CLOUD_WITH_OPERATIONAL_READY: "1"
         run: |

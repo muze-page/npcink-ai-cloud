@@ -85,6 +85,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -101,22 +103,30 @@ jobs:
           cache: "pnpm"
           cache-dependency-path: frontend/pnpm-lock.yaml
 
-      - name: Anti Drift Unit
-        run: pnpm run test:anti-drift
-
       - name: Install uv
         run: python -m pip install --upgrade uv
 
       - name: Bootstrap Cloud Dev Environment
         run: make bootstrap-dev
 
+      - name: PR backend fast gate
+        if: github.event_name == 'pull_request'
+        run: bash scripts/check-pr-backend-gate.sh
+
+      - name: Anti Drift Unit
+        if: github.event_name != 'pull_request'
+        run: pnpm run test:anti-drift
+
       - name: Ruff
+        if: github.event_name != 'pull_request'
         run: .venv/bin/ruff check .
 
       - name: Mypy
+        if: github.event_name != 'pull_request'
         run: .venv/bin/mypy app
 
       - name: Pytest
+        if: github.event_name != 'pull_request'
         run: .venv/bin/python -m pytest tests/api tests/contract tests/domain -q
 
   frontend:
@@ -208,7 +218,7 @@ jobs:
           NPCINK_CLOUD_DEPLOY_REMOTE_DIR: ${{ secrets.PROD_REMOTE_DIR || '/opt/npcink-ai-cloud' }}
           NPCINK_CLOUD_BASE_URL: ${{ secrets.PROD_BASE_URL || 'https://cloud.npc.ink' }}
           NPCINK_CLOUD_REMOTE_COMPOSE_FILE: docker-compose.runtime.yml
-          NPCINK_CLOUD_INCLUDE_EXTERNAL_IMAGES: "1"
+          NPCINK_CLOUD_INCLUDE_EXTERNAL_IMAGES: ${{ vars.PROD_INCLUDE_EXTERNAL_IMAGES || '0' }}
           NPCINK_CLOUD_REFRESH_PROVIDERS: "1"
           NPCINK_CLOUD_WITH_OPERATIONAL_READY: "1"
         run: |

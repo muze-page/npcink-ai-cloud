@@ -403,8 +403,12 @@ def test_deploy_bundle_smoke_uses_sample_provider_and_skip_frontend_contract() -
     assert '--cache-from type=gha' in bundle_script
     assert '--cache-to type=gha,mode=max' in bundle_script
     assert "actions: write" in ci_workflow
-    assert 'NPCINK_CLOUD_INCLUDE_EXTERNAL_IMAGES: "1"' in ci_workflow
-    assert 'NPCINK_CLOUD_INCLUDE_EXTERNAL_IMAGES: "1"' in deploy_workflow
+    external_images_default = (
+        "NPCINK_CLOUD_INCLUDE_EXTERNAL_IMAGES: "
+        "${{ vars.PROD_INCLUDE_EXTERNAL_IMAGES || '0' }}"
+    )
+    assert external_images_default in ci_workflow
+    assert external_images_default in deploy_workflow
     assert "deploy_required:" in ci_workflow
     assert "needs.classify.outputs.deploy_required == 'true'" in ci_workflow
     assert ".github/workflows/ci.yml|.github/workflows/deploy-production.yml" in (
