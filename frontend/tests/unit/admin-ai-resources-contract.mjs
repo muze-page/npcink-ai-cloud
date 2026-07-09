@@ -16,6 +16,7 @@ const adminPortalUsersPath = resolve(process.cwd(), 'src/app/admin/portal-users/
 const adminSubscriptionDetailPath = resolve(process.cwd(), 'src/app/admin/subscriptions/[subscriptionId]/page.tsx');
 const workflowMetadataPanelPath = resolve(process.cwd(), 'src/components/backoffice/CloudWorkflowMetadataPanel.tsx');
 const adminLoginPath = resolve(process.cwd(), 'src/app/admin/login/page.tsx');
+const providerReferenceLinksPath = resolve(process.cwd(), 'src/components/admin/ProviderReferenceLinks.tsx');
 const pageSource = readFileSync(pagePath, 'utf8');
 const abilityModelsSource = readFileSync(abilityModelsPath, 'utf8');
 const aiAdvisorSource = readFileSync(aiAdvisorPath, 'utf8');
@@ -28,6 +29,7 @@ const adminPortalUsersSource = readFileSync(adminPortalUsersPath, 'utf8');
 const adminSubscriptionDetailSource = readFileSync(adminSubscriptionDetailPath, 'utf8');
 const workflowMetadataPanelSource = readFileSync(workflowMetadataPanelPath, 'utf8');
 const adminLoginSource = readFileSync(adminLoginPath, 'utf8');
+const providerReferenceLinksSource = readFileSync(providerReferenceLinksPath, 'utf8');
 const i18nSource = readFileSync(resolve(process.cwd(), 'src/lib/i18n.ts'), 'utf8');
 const openCapabilityTemplateStart = pageSource.indexOf('function openCapabilityProviderTemplate');
 const openCapabilityTemplateSource = openCapabilityTemplateStart >= 0
@@ -1578,8 +1580,8 @@ assert.match(
 
 assert.match(
   pageSource,
-  /provider_links_title[\s\S]*providerFormExternalLinkItems\.map[\s\S]*href=\{item\.href\}/,
-  'Provider channel form must render preset reference links as read-only actions'
+  /ProviderReferenceLinks[\s\S]*items=\{providerFormExternalLinkItems\}[\s\S]*provider_links_title/,
+  'Provider channel form must delegate preset reference links to the shared read-only link component'
 );
 
 assert.doesNotMatch(
@@ -1590,8 +1592,14 @@ assert.doesNotMatch(
 
 assert.match(
   pageSource,
-  /connectionExternalLinkItems\(connection\)[\s\S]*providerLinkItems\.map[\s\S]*href=\{item\.href\}/,
-  'Provider channel list must render provider reference links without mixing them into model rows'
+  /connectionExternalLinkItems\(connection\)[\s\S]*ProviderReferenceLinks[\s\S]*items=\{providerLinkItems\}[\s\S]*variant="inline"/,
+  'Provider channel list must render provider reference links through the shared component without mixing them into model rows'
+);
+
+assert.match(
+  providerReferenceLinksSource,
+  /items\.map\(\(item\)[\s\S]*href=\{item\.href\}[\s\S]*translate\(item\.labelKey, item\.fallback\)/,
+  'Provider reference link component must render translated external links from sanitized provider metadata'
 );
 
 assert.match(

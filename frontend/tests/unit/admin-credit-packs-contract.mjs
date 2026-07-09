@@ -20,6 +20,16 @@ assert.match(
 );
 assert.match(
   pageSource,
+  /grid gap-4 md:grid-cols-2 2xl:grid-cols-4[\s\S]*BackofficeStackCard/,
+  'Admin credit pack page must render managed packs as a long responsive card list with four columns on wide screens'
+);
+assert.doesNotMatch(
+  pageSource,
+  /overflow-x-auto[\s\S]*min-w-\[980px\]|grid-cols-\[1\.2fr_0\.8fr_0\.8fr_0\.7fr_1\.2fr_0\.4fr\]/,
+  'Admin credit pack page must not regress to the wide horizontal table layout'
+);
+assert.match(
+  pageSource,
   /ADMIN_CURRENCY/,
   'Admin credit pack page must use the shared admin CNY currency constant'
 );

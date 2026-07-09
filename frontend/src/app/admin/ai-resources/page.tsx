@@ -10,6 +10,7 @@ import {
   BackofficeStackCard,
 } from '@/components/backoffice/BackofficeScaffold';
 import { AdminMutationReceipt, type AdminMutationReceiptPayload } from '@/components/admin/AdminMutationReceipt';
+import { ProviderReferenceLinks } from '@/components/admin/ProviderReferenceLinks';
 import { BackofficeFilterPill } from '@/components/backoffice/BackofficeFilterPill';
 import { BackofficeStatusBadge } from '@/components/backoffice/BackofficeStatusBadge';
 import { LoadingFallback } from '@/components/ui/LoadingFallback';
@@ -2867,26 +2868,11 @@ function AiResourcesContent() {
                       </label>
                     </div>
 
-                    {providerFormExternalLinkItems.length ? (
-                      <div className="grid gap-2">
-                        <div className="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
-                          {aiText('provider_links_title', 'Reference links')}
-                        </div>
-                        <div className="flex flex-wrap gap-2 text-xs">
-                          {providerFormExternalLinkItems.map((item) => (
-                            <a
-                              key={item.key}
-                              className="rounded-full border border-slate-200 px-3 py-1 font-semibold text-slate-600 transition hover:border-slate-300 hover:bg-slate-50 dark:border-slate-800 dark:text-slate-300 dark:hover:border-slate-700 dark:hover:bg-slate-900"
-                              href={item.href}
-                              target="_blank"
-                              rel="noreferrer"
-                            >
-                              {aiText(item.labelKey, item.fallback)}
-                            </a>
-                          ))}
-                        </div>
-                      </div>
-                    ) : null}
+                    <ProviderReferenceLinks
+                      items={providerFormExternalLinkItems}
+                      label={aiText('provider_links_title', 'Reference links')}
+                      translate={aiText}
+                    />
                   </div>
                 </details>
 
@@ -3414,21 +3400,12 @@ function AiResourcesContent() {
                             {connection.note ? (
                               <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">{connection.note}</div>
                             ) : null}
-                            {providerLinkItems.length ? (
-                              <div className="mt-2 flex flex-wrap gap-2 text-xs">
-                                {providerLinkItems.map((item) => (
-                                  <a
-                                    key={item.key}
-                                    className="font-semibold text-slate-600 underline decoration-slate-300 underline-offset-4 transition hover:text-slate-950 dark:text-slate-300 dark:decoration-slate-700 dark:hover:text-white"
-                                    href={item.href}
-                                    target="_blank"
-                                    rel="noreferrer"
-                                  >
-                                    {aiText(item.labelKey, item.fallback)}
-                                  </a>
-                                ))}
-                              </div>
-                            ) : null}
+                            <ProviderReferenceLinks
+                              items={providerLinkItems}
+                              label={aiText('provider_links_title', 'Reference links')}
+                              translate={aiText}
+                              variant="inline"
+                            />
                             {renderConnectionIssue(connection)}
                           </td>
                           <td className="px-4 py-4 text-slate-600 dark:text-slate-300">

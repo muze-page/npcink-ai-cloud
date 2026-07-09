@@ -55,6 +55,12 @@ assert.match(
 
 assert.match(
   source,
+  /已有 SMTP 密码密文无法用当前运行时密钥读取/,
+  'service settings page must explain unreadable saved SMTP password ciphertext without blaming database migration'
+);
+
+assert.match(
+  source,
   /SMTP 服务器拒绝认证/,
   'service settings page must explain SMTP authentication failures in Chinese'
 );
