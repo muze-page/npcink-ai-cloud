@@ -18,6 +18,7 @@ const workflowMetadataPanelPath = resolve(process.cwd(), 'src/components/backoff
 const adminLoginPath = resolve(process.cwd(), 'src/app/admin/login/page.tsx');
 const providerReferenceLinksPath = resolve(process.cwd(), 'src/components/admin/ProviderReferenceLinks.tsx');
 const supplierSummaryCardsPath = resolve(process.cwd(), 'src/components/admin/SupplierSummaryCards.tsx');
+const supplierToolbarPath = resolve(process.cwd(), 'src/components/admin/SupplierToolbar.tsx');
 const pageSource = readFileSync(pagePath, 'utf8');
 const abilityModelsSource = readFileSync(abilityModelsPath, 'utf8');
 const aiAdvisorSource = readFileSync(aiAdvisorPath, 'utf8');
@@ -32,6 +33,7 @@ const workflowMetadataPanelSource = readFileSync(workflowMetadataPanelPath, 'utf
 const adminLoginSource = readFileSync(adminLoginPath, 'utf8');
 const providerReferenceLinksSource = readFileSync(providerReferenceLinksPath, 'utf8');
 const supplierSummaryCardsSource = readFileSync(supplierSummaryCardsPath, 'utf8');
+const supplierToolbarSource = readFileSync(supplierToolbarPath, 'utf8');
 const i18nSource = readFileSync(resolve(process.cwd(), 'src/lib/i18n.ts'), 'utf8');
 const openCapabilityTemplateStart = pageSource.indexOf('function openCapabilityProviderTemplate');
 const openCapabilityTemplateSource = openCapabilityTemplateStart >= 0
@@ -364,13 +366,13 @@ assert.match(
 );
 
 assert.match(
-  pageSource,
+  supplierToolbarSource,
   /role="tablist"[\s\S]*supplier_filter_model[\s\S]*supplier_filter_capability/,
   'Supplier type switching must be a compact same-object tab row instead of a long dropdown'
 );
 
 assert.doesNotMatch(
-  connectionsToolbarSource,
+  supplierToolbarSource,
   /filter_all_supplier_types/,
   'Supplier type switching must not include a redundant all-suppliers tab'
 );
@@ -586,8 +588,8 @@ assert.match(
 );
 
 assert.match(
-  connectionsToolbarSource,
-  /<span className="sr-only">\{aiText\('field_search_connections'[\s\S]*action_add_model_supplier[\s\S]*action_add_capability_supplier/,
+  supplierToolbarSource,
+  /<span className="sr-only">\{translate\('field_search_connections'[\s\S]*action_add_model_supplier[\s\S]*action_add_capability_supplier/,
   'Provider channel toolbar must keep search and the active supplier add action without duplicate filter controls'
 );
 
@@ -604,7 +606,7 @@ assert.match(
 );
 
 assert.doesNotMatch(
-  connectionsToolbarSource,
+  supplierToolbarSource,
   /capability_category_filter|status_filter_label|connectionStatusFilter/,
   'Provider channel toolbar must not duplicate category or status filter controls'
 );
@@ -1725,13 +1727,19 @@ assert.doesNotMatch(
 );
 
 assert.match(
-  connectionsToolbarSource,
+  supplierToolbarSource,
   /field_supplier_type_filter[\s\S]*role="tablist"[\s\S]*supplier_filter_model[\s\S]*supplier_filter_capability[\s\S]*field_search_connections[\s\S]*action_add_model_supplier[\s\S]*action_add_capability_supplier/,
   'Supplier type tabs and add actions must live in the top supplier toolbar'
 );
 
+assert.match(
+  pageSource,
+  /SupplierToolbar[\s\S]*supplierTypeFilter=\{supplierTypeFilter\}[\s\S]*onSupplierTypeFilterChange=\{setSupplierTypeFilter\}[\s\S]*onAddModelSupplier=\{openNewProviderConnection\}[\s\S]*translate=\{aiText\}/,
+  'AI resources page must render the supplier toolbar through the shared component'
+);
+
 assert.doesNotMatch(
-  connectionsToolbarSource,
+  supplierToolbarSource,
   /supplier_tab_model[\s\S]*supplier_tab_capability/,
   'AI resources connections view must not keep model/capability suppliers as nested tabs'
 );

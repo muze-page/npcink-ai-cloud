@@ -12,7 +12,7 @@ import {
 import { AdminMutationReceipt, type AdminMutationReceiptPayload } from '@/components/admin/AdminMutationReceipt';
 import { ProviderReferenceLinks } from '@/components/admin/ProviderReferenceLinks';
 import { SupplierSummaryCards } from '@/components/admin/SupplierSummaryCards';
-import { BackofficeFilterPill } from '@/components/backoffice/BackofficeFilterPill';
+import { SupplierToolbar, type SupplierTypeFilter } from '@/components/admin/SupplierToolbar';
 import { BackofficeStatusBadge } from '@/components/backoffice/BackofficeStatusBadge';
 import { LoadingFallback } from '@/components/ui/LoadingFallback';
 import { useLocale } from '@/contexts/LocaleContext';
@@ -24,7 +24,6 @@ type ResourceStatus = 'ready' | 'missing_secret' | 'missing_provider' | 'disable
 type AIResourceView = 'connections';
 type ConnectionStatusFilter = 'all' | 'ready' | 'missing_secret' | 'disabled';
 type SupplierCategory = 'ai' | 'capability';
-type SupplierTypeFilter = 'model' | 'capability';
 type CapabilityProviderCategory = 'search' | 'image' | 'vector';
 type CapabilityProviderCategoryFilter = 'all' | CapabilityProviderCategory;
 
@@ -2594,50 +2593,15 @@ function AiResourcesContent() {
       {activeView === 'connections' ? (
         <>
           <BackofficeSectionPanel>
-        <div className="flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
-          <div className="flex flex-col gap-2">
-            <span className="text-xs font-semibold text-slate-600 dark:text-slate-300">
-              {aiText('field_supplier_type_filter', 'Supplier type')}
-            </span>
-            <div
-              className="flex flex-wrap gap-2"
-              role="tablist"
-              aria-label={aiText('supplier_type_tabs_label', 'Supplier type')}
-            >
-              {([
-                ['model', aiText('supplier_filter_model', 'Model suppliers')],
-                ['capability', aiText('supplier_filter_capability', 'Capability suppliers')],
-              ] as Array<[SupplierTypeFilter, string]>).map(([value, label]) => (
-                <BackofficeFilterPill
-                  key={value}
-                  role="tab"
-                  aria-selected={supplierTypeFilter === value}
-                  active={supplierTypeFilter === value}
-                  onClick={() => setSupplierTypeFilter(value)}
-                >
-                  {label}
-                </BackofficeFilterPill>
-              ))}
-            </div>
-          </div>
-          <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center xl:justify-end">
-            <label className="grid min-w-[16rem] gap-1 sm:w-[22rem]">
-              <span className="sr-only">{aiText('field_search_connections', 'Search suppliers')}</span>
-              <input
-                className="h-10 rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-white"
-                value={connectionSearch}
-                onChange={(event) => setConnectionSearch(event.target.value)}
-                placeholder={aiText('placeholder_search_connections', 'Name, provider, model, capability')}
-              />
-            </label>
-            <button type="button" className="btn btn-primary justify-center" onClick={openNewProviderConnection}>
-              {aiText('action_add_model_supplier', 'Add model supplier')}
-            </button>
-            <button type="button" className="btn btn-secondary justify-center" onClick={() => setCapabilityAddDialogOpen(true)}>
-              {aiText('action_add_capability_supplier', 'Add capability supplier')}
-            </button>
-          </div>
-        </div>
+        <SupplierToolbar
+          supplierTypeFilter={supplierTypeFilter}
+          onSupplierTypeFilterChange={setSupplierTypeFilter}
+          connectionSearch={connectionSearch}
+          onConnectionSearchChange={setConnectionSearch}
+          onAddModelSupplier={openNewProviderConnection}
+          onAddCapabilitySupplier={() => setCapabilityAddDialogOpen(true)}
+          translate={aiText}
+        />
 
         {supplierTypeFilter === 'model' || providerFormOpen ? (
           <>
