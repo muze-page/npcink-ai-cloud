@@ -20,6 +20,16 @@ assert.match(
 );
 assert.match(
   pageSource,
+  /ADMIN_CURRENCY/,
+  'Admin credit pack page must use the shared admin CNY currency constant'
+);
+assert.doesNotMatch(
+  pageSource,
+  /<option value="USD">|onChange=\{\(event\) => updateItem\(item\.pack_id, \{ currency:/,
+  'Admin credit pack page must not let operators switch customer pack pricing away from RMB'
+);
+assert.match(
+  pageSource,
   /MANAGED_TIERS[\s\S]*free[\s\S]*plus[\s\S]*pro[\s\S]*agency/,
   'Admin credit pack recommendations must place Plus between Free and Pro'
 );

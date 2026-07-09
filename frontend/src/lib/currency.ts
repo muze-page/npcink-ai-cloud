@@ -75,7 +75,7 @@ export function formatCurrencyValue(
 export const ADMIN_CURRENCY = DEFAULT_CURRENCY;
 
 export function formatAdminCurrency(value: number, options: Intl.NumberFormatOptions = {}): string {
-  return formatCurrencyValue(value, { to: ADMIN_CURRENCY, options });
+  return formatCurrencyValue(value, { from: ADMIN_CURRENCY, to: ADMIN_CURRENCY, options });
 }
 
 // ============================================

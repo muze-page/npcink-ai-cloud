@@ -14,6 +14,7 @@ import { useLocale } from '@/contexts/LocaleContext';
 import { readResponsePayload } from '@/lib/safe-response';
 import { formatNumber } from '@/lib/utils';
 import { resolveUiErrorMessage } from '@/lib/errors';
+import { ADMIN_CURRENCY } from '@/lib/currency';
 
 type CreditPackItem = {
   pack_id: string;
@@ -43,7 +44,7 @@ function normalizeItem(item: CreditPackItem): CreditPackItem {
     ai_credits: Math.max(1, Number(item.ai_credits || 0)),
     amount: Math.max(0.01, Number(item.amount || 0)),
     validity_days: Math.max(1, Number(item.validity_days || 365)),
-    currency: String(item.currency || 'CNY').toUpperCase(),
+    currency: ADMIN_CURRENCY,
     recommended_for_tiers: Array.isArray(item.recommended_for_tiers)
       ? item.recommended_for_tiers
       : [],
@@ -207,17 +208,16 @@ export default function AdminCreditPacksPage() {
         description={t(
           'admin.credit_packs_catalog_desc',
           {},
-          'Edit price, included credits, one-year validity, visibility, and recommended package fit.'
+          'Edit RMB price, included credits, one-year validity, visibility, and recommended package fit.'
         )}
       />
 
       <BackofficeSectionPanel className="overflow-x-auto">
         <div className="min-w-[980px] divide-y divide-slate-200 dark:divide-slate-800">
-          <div className="grid grid-cols-[1.2fr_0.8fr_0.7fr_0.6fr_0.7fr_1.2fr_0.4fr] gap-3 px-2 pb-3 text-xs font-semibold uppercase tracking-[0.14em] text-slate-500 dark:text-slate-400">
+          <div className="grid grid-cols-[1.2fr_0.8fr_0.8fr_0.7fr_1.2fr_0.4fr] gap-3 px-2 pb-3 text-xs font-semibold uppercase tracking-[0.14em] text-slate-500 dark:text-slate-400">
             <span>{t('admin.credit_packs_pack_label', {}, 'Pack')}</span>
             <span>{t('admin.credit_packs_credits_label', {}, 'Credits')}</span>
             <span>{t('admin.credit_packs_amount_label', {}, 'Amount')}</span>
-            <span>{t('admin.credit_packs_currency_label', {}, 'Currency')}</span>
             <span>{t('admin.credit_packs_validity_label', {}, 'Validity')}</span>
             <span>{t('admin.credit_packs_recommended_tiers_label', {}, 'Recommended')}</span>
             <span>{t('common.status', {}, 'Status')}</span>
@@ -225,7 +225,7 @@ export default function AdminCreditPacksPage() {
           {items.map((item) => (
             <div
               key={item.pack_id}
-              className="grid grid-cols-[1.2fr_0.8fr_0.7fr_0.6fr_0.7fr_1.2fr_0.4fr] gap-3 px-2 py-4 text-sm"
+              className="grid grid-cols-[1.2fr_0.8fr_0.8fr_0.7fr_1.2fr_0.4fr] gap-3 px-2 py-4 text-sm"
             >
               <label className="space-y-1">
                 <span className="block text-xs text-slate-500 dark:text-slate-400">{item.pack_id}</span>
@@ -249,7 +249,9 @@ export default function AdminCreditPacksPage() {
                 />
               </label>
               <label className="space-y-1">
-                <span className="block text-xs text-slate-500 dark:text-slate-400">{item.currency}</span>
+                <span className="block text-xs text-slate-500 dark:text-slate-400">
+                  {t('admin.credit_packs_currency_fixed_cny', {}, 'RMB pricing')}
+                </span>
                 <input
                   className="input w-full"
                   type="number"
@@ -259,14 +261,6 @@ export default function AdminCreditPacksPage() {
                   onChange={(event) => updateItem(item.pack_id, { amount: Number(event.target.value) })}
                 />
               </label>
-              <select
-                className="input h-10 w-full"
-                value={item.currency}
-                onChange={(event) => updateItem(item.pack_id, { currency: event.target.value })}
-              >
-                <option value="CNY">CNY</option>
-                <option value="USD">USD</option>
-              </select>
               <label className="space-y-1">
                 <span className="block text-xs text-slate-500 dark:text-slate-400">
                   {t('admin.credit_packs_validity_days_value', { days: String(item.validity_days) }, `${item.validity_days} days`)}

@@ -176,7 +176,7 @@ class PlanVersionPayload(BaseModel):
     plan_version_id: str
     version_label: str
     status: str = "published"
-    currency: str = "USD"
+    currency: str = "CNY"
     entitlements: dict[str, Any] = Field(default_factory=dict)
     budgets: dict[str, Any] = Field(default_factory=dict)
     concurrency: dict[str, Any] = Field(default_factory=dict)
