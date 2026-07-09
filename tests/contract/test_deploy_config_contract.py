@@ -422,7 +422,19 @@ def test_deploy_bundle_smoke_uses_sample_provider_and_skip_frontend_contract() -
     assert "site/terms/*" in ci_workflow
     assert "needs: [classify, backend, frontend, static-terms]" in ci_workflow
     assert "bash deploy/deploy-static-terms-to-ssh-host.sh" in ci_workflow
+    assert "post-production-smoke:" in ci_workflow
+    assert "needs['deploy-production'].result == 'success'" in ci_workflow
+    assert "bash deploy/small-customer-trial-preflight.sh" in ci_workflow
+    assert "--require-alipay-enabled" in ci_workflow
+    assert "bash deploy/release-smoke.sh --base-url" in ci_workflow
+    assert "ci-observability:" in ci_workflow
+    assert "python3 scripts/report-release-timing.py" in ci_workflow
+    assert "artifacts/pytest-backend.xml" in ci_workflow
+    assert "python3 scripts/report-junit-timing.py" in ci_workflow
+    assert "actions/upload-artifact@v4" in ci_workflow
+    assert "pytest-backend-timing" in ci_workflow
     assert "deploy:static-terms:ssh" in package_json
+    assert "release:junit-timing" in package_json
     assert "CURRENT_LINK=\"${REMOTE_DIR}/current\"" in static_terms_deploy_script
     assert "tar czf \"${TERMS_BUNDLE}\" -C \"${ROOT_DIR}/site\" terms" in (
         static_terms_deploy_script

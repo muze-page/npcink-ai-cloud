@@ -31,12 +31,19 @@ anti-drift checks, changed Python quality, contract tests, and changed pytest
 files. High-risk backend surfaces still escalate to the full backend gate. Pushes
 to `master`, `main`, and `production` continue to run full Ruff, Mypy, and
 `tests/api tests/contract tests/domain` before release promotion or deploy.
+Full backend push runs also upload a `pytest-backend-timing` JUnit artifact and
+write a slow-test table to the job summary.
 
 On `production` push events, `Cloud CI` runs `backend` and `frontend` first,
 then runs the `deploy-production` job only after both pass. `Deploy Production`
 is a manual fallback workflow only, and must be run from the `production`
 branch. The deploy jobs are bound to the GitHub Environment named `production`;
 add environment approval rules when the GitHub plan supports them.
+After a successful production deploy, `Cloud CI` runs `post-production-smoke`.
+That job runs the small-customer preflight automatically. It runs the formal
+release smoke too when the optional release-smoke secrets are configured; if
+they are missing, the job summary records the skip without printing secret
+values.
 
 Exception: if a `production` push changes only `site/terms/*`, `Cloud CI` uses
 the static terms fast path. That path skips backend/frontend/full Docker
@@ -76,6 +83,7 @@ After each release, capture job timing with:
 ```bash
 pnpm run release:timing -- <github-actions-run-id>
 pnpm run release:timing --from-file /tmp/github-run.json
+pnpm run release:junit-timing -- artifacts/pytest-backend.xml
 ```
 
 Use the report to separate approval wait time from actual CI, bundle upload, and
@@ -104,6 +112,18 @@ PROD_SSH_PORT=22
 PROD_SSH_KEY=<private key for deploy user>
 PROD_REMOTE_DIR=/opt/npcink-ai-cloud
 PROD_BASE_URL=https://cloud.npc.ink
+```
+
+Optional formal release-smoke secrets for automatic `post-production-smoke`:
+
+```text
+NPCINK_CLOUD_INTERNAL_AUTH_TOKEN=<internal readiness token>
+NPCINK_CLOUD_ADMIN_BOOTSTRAP_TOKEN=<admin bootstrap token>
+NPCINK_CLOUD_RELEASE_MEMBER_EMAIL=<invited release member email>
+NPCINK_CLOUD_PORTAL_LOGIN_CODE=<one valid release login code>
+NPCINK_CLOUD_RELEASE_SITE_ID=<runtime smoke site id>
+NPCINK_CLOUD_RELEASE_KEY_ID=<runtime smoke key id>
+NPCINK_CLOUD_RELEASE_KEY_SECRET=<runtime smoke key secret>
 ```
 
 Keep production runtime secrets on the server in:
