@@ -8,6 +8,56 @@ npcink_ai_cloud_require_cmd() {
 	}
 }
 
+npcink_ai_cloud_append_timing_summary() {
+	local label="$1"
+	local duration_seconds="$2"
+
+	if [ -z "${GITHUB_STEP_SUMMARY:-}" ]; then
+		return 0
+	fi
+
+	printf '| `%s` | %ss |\n' "${label}" "${duration_seconds}" >> "${GITHUB_STEP_SUMMARY}"
+}
+
+npcink_ai_cloud_start_timing_summary() {
+	local title="${1:-Deploy Timing}"
+
+	if [ -z "${GITHUB_STEP_SUMMARY:-}" ]; then
+		return 0
+	fi
+
+	{
+		printf '## %s\n\n' "${title}"
+		printf '| Step | Duration |\n'
+		printf '| --- | ---: |\n'
+	} >> "${GITHUB_STEP_SUMMARY}"
+}
+
+npcink_ai_cloud_run_timed() {
+	local label="$1"
+	shift
+	local started_at
+	local completed_at
+	local duration_seconds
+	local status
+
+	started_at="$(date +%s)"
+	echo "[timing] ${label}: start"
+	set +e
+	"$@"
+	status=$?
+	set -e
+	completed_at="$(date +%s)"
+	duration_seconds=$((completed_at - started_at))
+	if [ "${status}" -eq 0 ]; then
+		echo "[timing] ${label}: ${duration_seconds}s"
+	else
+		echo "[timing] ${label}: ${duration_seconds}s (failed: ${status})" >&2
+	fi
+	npcink_ai_cloud_append_timing_summary "${label}" "${duration_seconds}"
+	return "${status}"
+}
+
 npcink_ai_cloud_require_env_value() {
 	local key="$1"
 	local description="${2:-${key}}"

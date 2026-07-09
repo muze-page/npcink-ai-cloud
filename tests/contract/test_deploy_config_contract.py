@@ -261,6 +261,9 @@ def test_preview_and_baseline_scripts_lock_migration_and_schema_checks() -> None
     assert "Operational readiness gate: enabled" in deploy_to_ssh_script
     assert "Running remote operational readiness gate" in deploy_to_ssh_script
     assert "Remote operational readiness gate passed" in deploy_to_ssh_script
+    assert "npcink_ai_cloud_start_timing_summary" in deploy_to_ssh_script
+    assert 'remote_run_timed "remote load and up"' in deploy_to_ssh_script
+    assert 'remote_run_timed "remote operational readiness"' in deploy_to_ssh_script
     assert "bash deploy/remote-load-and-up.sh </dev/null" in deploy_to_ssh_script
     assert "bash deploy/remote-migrate.sh </dev/null" in deploy_to_ssh_script
     assert "bash deploy/remote-refresh-providers.sh </dev/null" in deploy_to_ssh_script
@@ -271,8 +274,10 @@ def test_preview_and_baseline_scripts_lock_migration_and_schema_checks() -> None
     )
     assert "NPCINK_CLOUD_HEALTH_HOST_HEADER" in common_script
     assert "NPCINK_CLOUD_HEALTH_FORWARDED_PROTO" in common_script
+    assert "npcink_ai_cloud_run_timed" in common_script
     assert "NPCINK_CLOUD_BROWSER_ORIGIN_ALLOWLIST" in remote_load_script
     assert "configure_ready_origin_headers" in remote_load_script
+    assert "compose up services" in remote_load_script
     assert "NPCINK_CLOUD_REQUIRED_PROVIDER_CAPABILITIES" in provider_matrix_smoke
     assert "db_managed_provider_connections" in provider_matrix_smoke
     assert '"direct_wordpress_write": False' in provider_matrix_smoke

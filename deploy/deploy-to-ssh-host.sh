@@ -234,13 +234,19 @@ remote_shell_arg() {
 	printf '%q' "$1"
 }
 
+npcink_ai_cloud_start_timing_summary "Deploy Step Timing"
+
 if [ -z "${IMAGE_PLATFORM}" ]; then
-	if ! ssh "${SSH_ARGS[@]}" "${SSH_TARGET}" "true" >/dev/null 2>&1; then
+	if ! npcink_ai_cloud_run_timed "ssh reachability check" ssh "${SSH_ARGS[@]}" "${SSH_TARGET}" "true" >/dev/null 2>&1; then
 		echo "[fail] SSH target is not reachable: ${SSH_TARGET}:${SSH_PORT}" >&2
 		echo "[fail] Check NPCINK_CLOUD_DEPLOY_IDENTITY_FILE, firewall/security group, and sshd." >&2
 		exit 1
 	fi
+	REMOTE_ARCH_STARTED_AT="$(date +%s)"
 	REMOTE_ARCH="$(ssh "${SSH_ARGS[@]}" "${SSH_TARGET}" "uname -m")"
+	REMOTE_ARCH_DURATION_SECONDS=$(($(date +%s) - REMOTE_ARCH_STARTED_AT))
+	echo "[timing] resolve remote architecture: ${REMOTE_ARCH_DURATION_SECONDS}s"
+	npcink_ai_cloud_append_timing_summary "resolve remote architecture" "${REMOTE_ARCH_DURATION_SECONDS}"
 	IMAGE_PLATFORM="$(resolve_remote_platform "${REMOTE_ARCH}")"
 	if [ -z "${IMAGE_PLATFORM}" ]; then
 		echo "[fail] Unsupported remote architecture: ${REMOTE_ARCH}" >&2
@@ -251,8 +257,10 @@ fi
 
 if [ "${SKIP_BUNDLE_BUILD}" -eq 0 ]; then
 	echo "[info] Building deploy bundle"
-	NPCINK_CLOUD_IMAGE_PLATFORM="${IMAGE_PLATFORM}" \
-	NPCINK_CLOUD_SKIP_FRONTEND_IMAGE="${SKIP_FRONTEND_IMAGE}" \
+	npcink_ai_cloud_run_timed "build deploy bundle" \
+		env \
+		NPCINK_CLOUD_IMAGE_PLATFORM="${IMAGE_PLATFORM}" \
+		NPCINK_CLOUD_SKIP_FRONTEND_IMAGE="${SKIP_FRONTEND_IMAGE}" \
 		bash "${ROOT_DIR}/deploy/bundle-images.sh"
 fi
 
@@ -267,15 +275,18 @@ REMOTE_ENV_BASENAME=".env.deploy"
 REMOTE_ENV_PATH=""
 
 echo "[info] Preparing remote directory ${SSH_TARGET}:${REMOTE_DIR}"
-ssh "${SSH_ARGS[@]}" "${SSH_TARGET}" "mkdir -p '${REMOTE_DIR}'"
+npcink_ai_cloud_run_timed "prepare remote directory" \
+	ssh "${SSH_ARGS[@]}" "${SSH_TARGET}" "mkdir -p '${REMOTE_DIR}'"
 
 echo "[info] Uploading deploy bundle"
-scp "${SCP_ARGS[@]}" "${BUNDLE_PATH}" "${SSH_TARGET}:${REMOTE_BUNDLE_PATH}"
+npcink_ai_cloud_run_timed "upload deploy bundle" \
+	scp "${SCP_ARGS[@]}" "${BUNDLE_PATH}" "${SSH_TARGET}:${REMOTE_BUNDLE_PATH}"
 
 if [ -n "${ENV_FILE}" ]; then
 	REMOTE_ENV_PATH="${REMOTE_DIR}/${REMOTE_ENV_BASENAME}"
 	echo "[info] Uploading env file"
-	scp "${SCP_ARGS[@]}" "${ENV_FILE}" "${SSH_TARGET}:${REMOTE_ENV_PATH}"
+	npcink_ai_cloud_run_timed "upload env file" \
+		scp "${SCP_ARGS[@]}" "${ENV_FILE}" "${SSH_TARGET}:${REMOTE_ENV_PATH}"
 fi
 
 if [ "${WITH_OPERATIONAL_READY}" = "1" ]; then
@@ -285,7 +296,8 @@ else
 fi
 
 echo "[info] Running remote deploy sequence on ${SSH_TARGET}"
-ssh "${SSH_ARGS[@]}" "${SSH_TARGET}" bash -s -- \
+npcink_ai_cloud_run_timed "remote deploy sequence" \
+	ssh "${SSH_ARGS[@]}" "${SSH_TARGET}" bash -s -- \
 	"$(remote_shell_arg "${REMOTE_DIR}")" \
 	"$(remote_shell_arg "${RELEASE_NAME}")" \
 	"$(remote_shell_arg "${REMOTE_ENV_BASENAME}")" \
@@ -342,8 +354,32 @@ WITH_OPERATIONAL_READY="${25:-0}"
 RELEASE_DIR="${REMOTE_DIR}/${RELEASE_NAME}"
 CURRENT_LINK="${REMOTE_DIR}/current"
 
+remote_run_timed() {
+	local label="$1"
+	shift
+	local started_at
+	local completed_at
+	local duration_seconds
+	local status
+
+	started_at="$(date +%s)"
+	echo "[timing] ${label}: start"
+	set +e
+	"$@"
+	status=$?
+	set -e
+	completed_at="$(date +%s)"
+	duration_seconds=$((completed_at - started_at))
+	if [ "${status}" -eq 0 ]; then
+		echo "[timing] ${label}: ${duration_seconds}s"
+	else
+		echo "[timing] ${label}: ${duration_seconds}s (failed: ${status})" >&2
+	fi
+	return "${status}"
+}
+
 mkdir -p "${RELEASE_DIR}"
-tar xzf "${REMOTE_DIR}/deploy-bundle.tgz" -C "${RELEASE_DIR}"
+remote_run_timed "remote extract bundle" tar xzf "${REMOTE_DIR}/deploy-bundle.tgz" -C "${RELEASE_DIR}"
 
 if [ -n "${REMOTE_ENV_PATH}" ] && [ -f "${REMOTE_ENV_PATH}" ]; then
 	cp "${REMOTE_ENV_PATH}" "${RELEASE_DIR}/${REMOTE_ENV_BASENAME}"
@@ -366,16 +402,16 @@ fi
 ln -sfn "${RELEASE_DIR}" "${CURRENT_LINK}"
 
 cd "${RELEASE_DIR}"
-bash deploy/remote-load-and-up.sh </dev/null
-bash deploy/remote-migrate.sh </dev/null
-bash deploy/remote-baseline-status.sh </dev/null
+remote_run_timed "remote load and up" bash deploy/remote-load-and-up.sh </dev/null
+remote_run_timed "remote migrate" bash deploy/remote-migrate.sh </dev/null
+remote_run_timed "remote baseline status" bash deploy/remote-baseline-status.sh </dev/null
 
 if [ "${REFRESH_PROVIDERS}" = "1" ]; then
-	bash deploy/remote-refresh-providers.sh </dev/null
+	remote_run_timed "remote refresh providers" bash deploy/remote-refresh-providers.sh </dev/null
 fi
 
 if [ "${SKIP_SEED}" != "1" ]; then
-	bash deploy/remote-seed-runtime.sh \
+	remote_run_timed "remote seed runtime" bash deploy/remote-seed-runtime.sh \
 		--site-id "${SITE_ID}" \
 		--key-id "${KEY_ID}" \
 		--secret "${SECRET}" \
@@ -406,7 +442,7 @@ if [ "${SKIP_SMOKE}" != "1" ]; then
 	if [ -n "${EXPECTED_INSTANCE_ID}" ]; then
 		SMOKE_ARGS+=(--expected-instance-id "${EXPECTED_INSTANCE_ID}")
 	fi
-	bash deploy/remote-smoke.sh "${SMOKE_ARGS[@]}" </dev/null
+	remote_run_timed "remote smoke" bash deploy/remote-smoke.sh "${SMOKE_ARGS[@]}" </dev/null
 fi
 
 if [ "${WITH_PORTAL_SMOKE}" = "1" ]; then
@@ -414,12 +450,12 @@ if [ "${WITH_PORTAL_SMOKE}" = "1" ]; then
 		echo "[fail] --with-portal-smoke requires --member-email or NPCINK_CLOUD_MEMBER_EMAIL" >&2
 		exit 1
 	fi
-	bash deploy/remote-bootstrap-portal-site.sh \
+	remote_run_timed "remote bootstrap portal site" bash deploy/remote-bootstrap-portal-site.sh \
 		--base-url "${BASE_URL}" \
 		--site-id "${SITE_ID}" \
 		--member-email "${MEMBER_EMAIL}" \
 		</dev/null
-	bash deploy/remote-portal-smoke.sh \
+	remote_run_timed "remote portal smoke" bash deploy/remote-portal-smoke.sh \
 		--base-url "${BASE_URL}" \
 		--site-id "${SITE_ID}" \
 		--member-email "${MEMBER_EMAIL}" \
@@ -428,7 +464,7 @@ fi
 
 if [ "${WITH_OPERATIONAL_READY}" = "1" ]; then
 	echo "[info] Running remote operational readiness gate"
-	bash deploy/remote-operational-ready.sh --base-url "${BASE_URL}" </dev/null
+	remote_run_timed "remote operational readiness" bash deploy/remote-operational-ready.sh --base-url "${BASE_URL}" </dev/null
 	echo "[ok] Remote operational readiness gate passed"
 fi
 
