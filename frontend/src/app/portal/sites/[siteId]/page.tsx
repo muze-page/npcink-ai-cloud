@@ -160,7 +160,7 @@ function PortalSiteRecordContent() {
       <BackofficeSectionPanel className="space-y-4" variant="portal">
         <div className="max-w-2xl">
           <p className="text-xs font-semibold text-gray-500 dark:text-gray-400">
-            {t('portal.site_record_current_label', {}, 'Current site')}
+            {t('portal.site_record_current_label', {}, 'Site record')}
           </p>
           <h2 className="mt-2 text-xl font-semibold text-gray-950 dark:text-white">
             {t('portal.site_record_current_title', {}, 'What needs attention?')}

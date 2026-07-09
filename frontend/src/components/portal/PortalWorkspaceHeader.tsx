@@ -105,7 +105,7 @@ export function PortalWorkspaceHeader({
         </h1>
         {showSiteContextSummary ? (
           <p className="mt-2 max-w-md truncate text-sm text-gray-600 dark:text-gray-400">
-            {selectedSiteName || selectedSiteWordPressUrl || t('portal.current_site', {}, 'Current site')}
+            {selectedSiteName || selectedSiteWordPressUrl || t('portal.current_site', {}, 'Site record')}
             {' · '}
             {selectedSiteWordPressUrl ||
               t('portal.site_url_missing', {}, 'WordPress URL not configured')}
