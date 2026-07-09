@@ -108,7 +108,7 @@ export function proxy(request: NextRequest) {
   // Redirect to login if no auth
   if (!hasSessionToken) {
     const loginUrl = new URL('/portal/login', request.url);
-    loginUrl.searchParams.set('redirect', pathname);
+    loginUrl.searchParams.set('redirect', `${pathname}${request.nextUrl.search}`);
     return withSecurityHeaders(NextResponse.redirect(loginUrl));
   }
 

@@ -29,6 +29,7 @@ export interface PortalSession {
     status: string;
     site_admin_ref: string;
     role: string;
+    allowed_actions?: string[];
     site_count: number;
     sites: Site[];
   }>;

@@ -3,12 +3,14 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+import pytest
 from sqlalchemy import select
 
 from app.core.config import Settings
 from app.core.db import dispose_engine, get_session, init_schema
 from app.core.models import (
     ENTITLEMENT_SNAPSHOT_STATUS_SUPERSEDED,
+    PAYMENT_ORDER_STATUS_CANCELED,
     PAYMENT_ORDER_STATUS_PAID,
     PAYMENT_ORDER_STATUS_PENDING,
     PAYMENT_ORDER_STATUS_REFUNDED,
@@ -24,6 +26,7 @@ from app.core.models import (
     PaymentOrder,
     PaymentRefund,
 )
+from app.domain.commercial.errors import CommercialConflictError
 from app.domain.commercial.service import CommercialService, ServiceAuditContext
 from tests.conftest import (
     TEST_ADMIN_SESSION_SECRET,
@@ -496,6 +499,11 @@ def test_credit_pack_payment_success_grants_ai_credits_once(tmp_path: Path) -> N
     assert order["metadata"]["payment_gateway"]["provider"] == "wechat_pay"
     assert order["purchase_kind"] == "credit_pack"
     assert order["credit_pack"]["pack_id"] == "pack_small"
+    assert order["credit_pack"]["validity_days"] == 365
+    assert order["metadata"]["credit_expiry_policy"] == "paid_at_plus_validity_days"
+    assert order["metadata"]["grant_policy"] == (
+        "payment_success_grants_paid_credit_until_expiry"
+    )
     assert order["target_subscription_id"] == base_paid["subscription"]["subscription_id"]
     assert order["status_detail"]["code"] == "awaiting_payment_confirmation"
     assert order["status_detail"]["simulated_payment"] is True
@@ -511,6 +519,20 @@ def test_credit_pack_payment_success_grants_ai_credits_once(tmp_path: Path) -> N
     assert paid["credit_ledger_entry"]["direction"] == "credit_in"
     assert "Credit pack payment added" in paid["credit_ledger_entry"]["explanation"]
     assert paid["credit_ledger_entry"]["credit_delta"] == 10000.0
+    assert paid["credit_ledger_entry"]["metadata"]["validity_days"] == 365
+    assert paid["credit_ledger_entry"]["metadata"]["expiry_policy"] == (
+        "paid_at_plus_validity_days"
+    )
+    grant_expires_at = datetime.fromisoformat(
+        str(paid["credit_ledger_entry"]["metadata"]["grant_expires_at"]).replace("Z", "+00:00")
+    )
+    ledger_created_at = datetime.fromisoformat(
+        str(paid["credit_ledger_entry"]["created_at"]).replace("Z", "+00:00")
+    )
+    assert timedelta(days=364, hours=23) <= grant_expires_at - ledger_created_at <= timedelta(
+        days=365,
+        minutes=1,
+    )
     assert paid_again["credit_ledger_entry"]["ledger_entry_id"] == (
         paid["credit_ledger_entry"]["ledger_entry_id"]
     )
@@ -530,6 +552,112 @@ def test_credit_pack_payment_success_grants_ai_credits_once(tmp_path: Path) -> N
         entries = list(session.scalars(select(CreditLedgerEntry)))
         assert len(entries) == 1
         assert entries[0].credit_delta == 10000.0
+
+    dispose_engine(database_url)
+
+
+def test_pending_payment_orders_expire_before_late_payment_confirmation(tmp_path: Path) -> None:
+    database_url = _sqlite_url(tmp_path)
+    init_schema(database_url)
+    service = _service(database_url)
+    _seed_account_and_plan(service)
+    order = service.create_payment_order(
+        account_id="acct_pay",
+        plan_id="plan_pro",
+        plan_version_id="plan_pro_v1",
+        amount=199.0,
+        audit_context=_audit("payment-order-expire-create"),
+    )
+    expired_created_at = datetime.now(UTC) - timedelta(hours=25)
+    with get_session(database_url) as session:
+        payment_order = session.get(PaymentOrder, str(order["order_id"]))
+        assert payment_order is not None
+        payment_order.created_at = expired_created_at
+        session.commit()
+
+    listed = service.list_account_payment_orders("acct_pay", limit=10)
+    expired_order = next(
+        item for item in listed["items"] if item["order_id"] == order["order_id"]
+    )
+    assert expired_order["status"] == PAYMENT_ORDER_STATUS_CANCELED
+    assert expired_order["status_detail"]["code"] == "expired_unpaid"
+    assert expired_order["metadata"]["cancellation_reason"] == "unpaid_order_expired"
+    assert expired_order["metadata"]["payment_order_expires_after_seconds"] == 86400
+    assert expired_order["canceled_at"]
+
+    with get_session(database_url) as session:
+        payment_order = session.get(PaymentOrder, str(order["order_id"]))
+        assert payment_order is not None
+        assert payment_order.status == PAYMENT_ORDER_STATUS_CANCELED
+        assert payment_order.canceled_at is not None
+
+    with pytest.raises(CommercialConflictError) as exc_info:
+        service.mark_payment_order_paid(
+            order_id=str(order["order_id"]),
+            provider_event_id="late-provider-confirmation",
+            amount=199.0,
+            audit_context=_audit("payment-order-expire-paid"),
+        )
+    assert exc_info.value.error_code == "service.payment_order_canceled"
+
+    dispose_engine(database_url)
+
+
+def test_admin_credit_pack_catalog_override_changes_future_orders(tmp_path: Path) -> None:
+    database_url = _sqlite_url(tmp_path)
+    init_schema(database_url)
+    service = _service(database_url)
+    _seed_account_and_plan(service)
+    package_order = service.create_payment_order(
+        account_id="acct_pay",
+        plan_id="plan_pro",
+        plan_version_id="plan_pro_v1",
+        amount=199.0,
+        audit_context=_audit("credit-pack-admin-base-order"),
+    )
+    service.mark_payment_order_paid(
+        order_id=str(package_order["order_id"]),
+        provider_event_id="alipay-credit-pack-admin-base-paid",
+        amount=199.0,
+        audit_context=_audit("credit-pack-admin-base-paid"),
+    )
+
+    catalog = service.list_credit_packs()
+    assert catalog["default_validity_days"] == 365
+    assert catalog["period_policy"] == "paid_credit_validity_days"
+    assert catalog["expiry_policy"] == "paid_at_plus_validity_days"
+    assert next(
+        item for item in catalog["items"] if item["pack_id"] == "pack_medium"
+    )["recommended_for_tiers"] == ["pro", "agency"]
+
+    updated = service.update_admin_credit_pack_catalog(
+        items=[
+            {
+                "pack_id": "pack_small",
+                "label": "Starter annual pack",
+                "ai_credits": 12000,
+                "amount": 119.0,
+                "currency": "CNY",
+                "recommended_for_tiers": ["free", "plus"],
+                "validity_days": 365,
+                "active": True,
+            }
+        ],
+        audit_context=_audit("credit-pack-catalog-update"),
+    )
+    pack_small = next(item for item in updated["items"] if item["pack_id"] == "pack_small")
+    assert pack_small["label"] == "Starter annual pack"
+    assert pack_small["ai_credits"] == 12000
+    assert pack_small["recommended_for_tiers"] == ["free", "plus"]
+
+    order = service.create_credit_pack_payment_order(
+        account_id="acct_pay",
+        pack_id="pack_small",
+        audit_context=_audit("credit-pack-overridden-order"),
+    )
+    assert order["credit_pack"]["label"] == "Starter annual pack"
+    assert order["credit_pack"]["ai_credits"] == 12000
+    assert order["amount"] == 119.0
 
     dispose_engine(database_url)
 

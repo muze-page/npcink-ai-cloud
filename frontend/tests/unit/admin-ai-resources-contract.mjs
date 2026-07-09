@@ -94,10 +94,22 @@ assert.doesNotMatch(
   'Runtime Diagnostics must not keep the legacy WordPress AI routing path active'
 );
 
+assert.doesNotMatch(
+  portalSiteConnectSource,
+  /connect_site_current_customer|portal\.support_information|BackofficeIdentifier value=\{accountId/,
+  'Portal site connect must not expose customer/account IDs or support information in the binding flow'
+);
+
 assert.match(
   portalSiteConnectSource,
-  /connect_site_current_customer[\s\S]*portal\.support_information[\s\S]*BackofficeIdentifier value=\{accountId/,
-  'Portal site connect must show customer/site defaults first and move account/site IDs into support information'
+  /isAddonConnection \? \([\s\S]*addonSiteLabel[\s\S]*wordpressUrl\.trim\(\)[\s\S]*\) : null/,
+  'Portal addon connection must show a simple read-only site summary from the WordPress return payload'
+);
+
+assert.match(
+  portalSiteConnectSource,
+  /!\s*isAddonConnection \? \([\s\S]*portal\.connect_site_url_label[\s\S]*type="url"[\s\S]*\) : null/,
+  'Portal addon connection must not render the editable WordPress URL input'
 );
 
 assert.doesNotMatch(

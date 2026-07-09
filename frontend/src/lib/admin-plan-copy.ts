@@ -6,6 +6,8 @@ export function localizeTierLabel(t: TranslateFn, tierId: string, fallback?: str
       return t('admin.plan_tier_free', {}, fallback || 'Free');
     case 'pro':
       return t('admin.plan_tier_pro', {}, fallback || 'Pro');
+    case 'plus':
+      return t('admin.plan_tier_plus', {}, fallback || 'Plus');
     case 'agency':
       return t('admin.plan_tier_agency', {}, fallback || 'Agency');
     default:
@@ -19,6 +21,8 @@ export function localizePackageAlias(t: TranslateFn, tierId: string, fallback?: 
       return t('admin.plan_package_alias_free', {}, fallback || 'Free');
     case 'pro':
       return t('admin.plan_package_alias_pro', {}, fallback || 'Pro');
+    case 'plus':
+      return t('admin.plan_package_alias_plus', {}, fallback || 'Plus');
     case 'agency':
       return t('admin.plan_package_alias_agency', {}, fallback || 'Agency');
     default:
@@ -32,6 +36,8 @@ export function localizeUsageBand(t: TranslateFn, tierId: string, fallback?: str
       return t('admin.plan_usage_band_free', {}, fallback || '300 AI credits per month.');
     case 'pro':
       return t('admin.plan_usage_band_pro', {}, fallback || '10,000 AI credits and 30 Pro Nightly Inspection runs per month.');
+    case 'plus':
+      return t('admin.plan_usage_band_plus', {}, fallback || '3,000 AI credits per month.');
     case 'agency':
       return t('admin.plan_usage_band_agency', {}, fallback || '150,000 AI credits and 150 Pro Nightly Inspection runs per month.');
     default:
@@ -45,6 +51,8 @@ export function localizePositioning(t: TranslateFn, tierId: string, fallback?: s
       return t('admin.plan_positioning_free', {}, fallback || 'Conservative single-site package with a small monthly AI credit grant and separate resource boundaries.');
     case 'pro':
       return t('admin.plan_positioning_pro', {}, fallback || 'Commercial Pro package with normal hosted AI consumption controlled by monthly AI credits and separate resource boundaries.');
+    case 'plus':
+      return t('admin.plan_positioning_plus', {}, fallback || 'Entry paid Plus package for accounts that have outgrown Free but do not yet need full Pro monthly AI credit headroom.');
     case 'agency':
       return t('admin.plan_positioning_agency', {}, fallback || 'Commercial Agency package for custom or multi-site Cloud runtime detail with higher AI credit, batch, and resource headroom.');
     default:
@@ -58,6 +66,8 @@ export function localizeOperatorNote(t: TranslateFn, tierId: string, fallback?: 
       return t('admin.plan_operator_note_free', {}, fallback || 'Free limits high-cost AI consumption through monthly AI credits while keeping ordinary Cloud service usage reviewable.');
     case 'pro':
       return t('admin.plan_operator_note_pro', {}, fallback || 'Pro keeps ordinary usage broadly available while high-cost AI search, query, and generation paths spend AI credits.');
+    case 'plus':
+      return t('admin.plan_operator_note_plus', {}, fallback || 'Plus gives early paid accounts a controlled step up from Free while keeping Pro as the normal hosted AI package.');
     case 'agency':
       return t('admin.plan_operator_note_agency', {}, fallback || 'Agency represents custom/high-volume coverage; AI credits remain the primary high-cost consumption control.');
     default:
@@ -73,6 +83,8 @@ export function localizeFeatureGroup(t: TranslateFn, feature: string): string {
       return t('admin.plan_feature_portal_usage_visibility', {}, feature);
     case 'Operator-managed subscription changes':
       return t('admin.plan_feature_operator_managed_subscription_changes', {}, feature);
+    case 'Starter paid usage headroom':
+      return t('admin.plan_feature_starter_paid_usage_headroom', {}, feature);
     case 'Hosted runtime + workflow coverage':
       return t('admin.plan_feature_hosted_runtime_workflow_coverage', {}, feature);
     case 'Automation-heavy usage':
@@ -115,6 +127,9 @@ export function resolveAdminPackageLabel(
   const raw = `${planId || ''} ${packageAlias || ''} ${fallback || ''}`.toLowerCase();
   if (raw.includes('agency')) {
     return localizePackageAlias(t, 'agency', fallback || packageAlias || 'Agency');
+  }
+  if (raw.includes('plus')) {
+    return localizePackageAlias(t, 'plus', fallback || packageAlias || 'Plus');
   }
   if (raw.includes('pro')) {
     return localizePackageAlias(t, 'pro', fallback || packageAlias || 'Pro');

@@ -1011,11 +1011,21 @@ class CommercialServiceSiteMixin(CommercialServiceAuditMixin):
                         "service.portal_site_conflict",
                         f"site id '{normalized_site_id}' is already bound to another account",
                     )
-                if str(site.status or "") in {SITE_STATUS_ARCHIVED, SITE_STATUS_SUSPENDED}:
+                if str(site.status or "") == SITE_STATUS_SUSPENDED:
                     raise CommercialPermissionError(
                         "service.portal_site_not_connectable",
                         f"site '{normalized_site_id}' is not available for addon connection",
                     )
+                if str(site.status or "") == SITE_STATUS_ARCHIVED:
+                    metadata = dict(site.metadata_json or {})
+                    lifecycle = metadata.get("portal_lifecycle")
+                    if isinstance(lifecycle, dict):
+                        lifecycle = dict(lifecycle)
+                        lifecycle.pop("removed", None)
+                        lifecycle.pop("removed_at", None)
+                        lifecycle["reconnected_at"] = self._serialize_datetime(now)
+                        metadata["portal_lifecycle"] = lifecycle
+                    site.metadata_json = metadata
 
             repository.upsert_principal_site_grant(
                 grant_id=f"sadmg_{uuid4().hex}",
@@ -1056,7 +1066,7 @@ class CommercialServiceSiteMixin(CommercialServiceAuditMixin):
                 audit_context=audit_context,
                 replaced_key_ids=revoked_key_ids,
             )
-            if site.status in {SITE_STATUS_PROVISIONING, SITE_STATUS_INACTIVE}:
+            if site.status in {SITE_STATUS_PROVISIONING, SITE_STATUS_INACTIVE, SITE_STATUS_ARCHIVED}:
                 deactivated_site_ids = [
                     str(item.get("site_id") or "")
                     for item in self._deactivate_account_active_sibling_sites(

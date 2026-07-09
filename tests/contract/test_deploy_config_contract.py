@@ -405,8 +405,23 @@ def test_deploy_bundle_smoke_uses_sample_provider_and_skip_frontend_contract() -
     assert '-C "${CLOUD_DIR}" dist/callback-worker.tar.gz' not in bundle_script
     assert '-C "${CLOUD_DIR}" dist/ops-worker.tar.gz' not in bundle_script
     assert "build api worker callback-worker ops-worker" not in bundle_script
-    assert '--cache-from type=gha' in bundle_script
-    assert '--cache-to type=gha,mode=max' in bundle_script
+    assert 'GZIP_LEVEL="${NPCINK_CLOUD_BUNDLE_GZIP_LEVEL:-1}"' in bundle_script
+    build_cache_scope_prefix = (
+        'BUILD_CACHE_SCOPE_PREFIX="${NPCINK_CLOUD_BUILD_CACHE_SCOPE_PREFIX:-npcink-ai-cloud}"'
+    )
+    assert build_cache_scope_prefix in bundle_script
+    assert '--cache-from "type=gha,scope=${BUILD_CACHE_SCOPE_PREFIX}-${cache_scope}"' in (
+        bundle_script
+    )
+    build_cache_to = (
+        '--cache-to "type=gha,scope=${BUILD_CACHE_SCOPE_PREFIX}-${cache_scope},'
+        'mode=max,ignore-error=true"'
+    )
+    assert build_cache_to in bundle_script
+    assert "set_build_cache_args api" in bundle_script
+    assert "set_build_cache_args frontend" in bundle_script
+    assert 'gzip "-${GZIP_LEVEL}" > "${output}"' in bundle_script
+    assert 'gzip "-${GZIP_LEVEL}" > "${DIST_DIR}/deploy-bundle.tgz"' in bundle_script
     assert "actions: write" in ci_workflow
     external_images_default = (
         "NPCINK_CLOUD_INCLUDE_EXTERNAL_IMAGES: "
@@ -445,7 +460,14 @@ def test_deploy_bundle_smoke_uses_sample_provider_and_skip_frontend_contract() -
     assert "artifacts/pytest-backend-shard-${{ matrix.shard }}.xml" in ci_workflow
     assert "artifacts/pytest-files-shard-${{ matrix.shard }}.txt" in ci_workflow
     assert "python3 scripts/report-junit-timing.py" in ci_workflow
-    assert "actions/upload-artifact@v4" in ci_workflow
+    assert "actions/checkout@v6" in ci_workflow
+    assert "actions/setup-node@v6" in ci_workflow
+    assert "actions/setup-python@v6" in ci_workflow
+    assert "pnpm/action-setup@v6" in ci_workflow
+    assert "docker/setup-buildx-action@v4" in ci_workflow
+    assert "gitleaks/gitleaks-action@v3" in ci_workflow
+    assert "args: detect --source" not in ci_workflow
+    assert "actions/upload-artifact@v7" in ci_workflow
     assert "pytest-backend-timing-shard-${{ matrix.shard }}" in ci_workflow
     assert (cloud_root / "ci" / "pytest-backend-durations.json").is_file()
     assert "deploy:static-terms:ssh" in package_json

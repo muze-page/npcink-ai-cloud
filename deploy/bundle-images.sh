@@ -10,6 +10,8 @@ PIP_TRUSTED_HOST="${NPCINK_CLOUD_PIP_TRUSTED_HOST:-}"
 SKIP_FRONTEND_IMAGE="${NPCINK_CLOUD_SKIP_FRONTEND_IMAGE:-0}"
 INCLUDE_EXTERNAL_IMAGES="${NPCINK_CLOUD_INCLUDE_EXTERNAL_IMAGES:-0}"
 REMOTE_BUNDLE_ONLY="${NPCINK_CLOUD_REMOTE_BUNDLE_ONLY:-0}"
+GZIP_LEVEL="${NPCINK_CLOUD_BUNDLE_GZIP_LEVEL:-1}"
+BUILD_CACHE_SCOPE_PREFIX="${NPCINK_CLOUD_BUILD_CACHE_SCOPE_PREFIX:-npcink-ai-cloud}"
 REMOTE_DOCKER_HOST=""
 if [[ "${DOCKER_HOST:-}" == ssh://* ]]; then
 	REMOTE_DOCKER_HOST="${DOCKER_HOST#ssh://}"
@@ -28,6 +30,15 @@ if [ -n "${REMOTE_DOCKER_HOST}" ]; then
 	}
 fi
 
+case "${GZIP_LEVEL}" in
+	[1-9]) ;;
+	*)
+		echo "Invalid NPCINK_CLOUD_BUNDLE_GZIP_LEVEL: ${GZIP_LEVEL}" >&2
+		echo "Expected a gzip level from 1 to 9." >&2
+		exit 1
+		;;
+esac
+
 BUILD_ARGS=()
 if [ -n "${PIP_INDEX_URL}" ]; then
 	BUILD_ARGS+=(--build-arg "PIP_INDEX_URL=${PIP_INDEX_URL}")
@@ -40,15 +51,21 @@ if [ -n "${PIP_TRUSTED_HOST}" ]; then
 fi
 
 BUILD_CACHE_ARGS=()
-if [ -n "${GITHUB_ACTIONS:-}" ]; then
-	BUILD_CACHE_ARGS=(
-		--cache-from type=gha
-		--cache-to type=gha,mode=max
-	)
-fi
+set_build_cache_args() {
+	local cache_scope="$1"
+
+	BUILD_CACHE_ARGS=()
+	if [ -n "${GITHUB_ACTIONS:-}" ] && [ "${NPCINK_CLOUD_DISABLE_GHA_BUILD_CACHE:-0}" != "1" ]; then
+		BUILD_CACHE_ARGS=(
+			--cache-from "type=gha,scope=${BUILD_CACHE_SCOPE_PREFIX}-${cache_scope}"
+			--cache-to "type=gha,scope=${BUILD_CACHE_SCOPE_PREFIX}-${cache_scope},mode=max,ignore-error=true"
+		)
+	fi
+}
 
 if [ -n "${IMAGE_PLATFORM}" ]; then
 	echo "[info] Building cloud images for platform ${IMAGE_PLATFORM}"
+	set_build_cache_args api
 	if [ "${#BUILD_ARGS[@]}" -gt 0 ]; then
 		docker buildx build \
 			--platform "${IMAGE_PLATFORM}" \
@@ -71,6 +88,7 @@ if [ -n "${IMAGE_PLATFORM}" ]; then
 	docker tag npcink-ai-cloud-api:prod npcink-ai-cloud-callback-worker:prod
 	docker tag npcink-ai-cloud-api:prod npcink-ai-cloud-ops-worker:prod
 	if [ "${SKIP_FRONTEND_IMAGE}" != "1" ]; then
+		set_build_cache_args frontend
 		docker buildx build \
 			--platform "${IMAGE_PLATFORM}" \
 			"${BUILD_CACHE_ARGS[@]}" \
@@ -100,14 +118,14 @@ save_image() {
 
 	if [ -z "${REMOTE_DOCKER_HOST}" ]; then
 		echo "[info] Saving ${image} to ${output}"
-		docker save "${image}" | gzip > "${output}"
+		docker save "${image}" | gzip "-${GZIP_LEVEL}" > "${output}"
 		return 0
 	fi
 
 	# With DOCKER_HOST=ssh://..., streaming large docker save output through the
 	# Docker CLI transport can time out. Save on the remote host, then rsync.
 	echo "[info] Saving ${image} on ${REMOTE_DOCKER_HOST}"
-	ssh "${REMOTE_DOCKER_HOST}" "mkdir -p $(printf '%q' "${DIST_DIR}") && docker save $(printf '%q' "${image}") | gzip > $(printf '%q' "${output}")"
+	ssh "${REMOTE_DOCKER_HOST}" "mkdir -p $(printf '%q' "${DIST_DIR}") && docker save $(printf '%q' "${image}") | gzip -$(printf '%q' "${GZIP_LEVEL}") > $(printf '%q' "${output}")"
 	if [ "${REMOTE_BUNDLE_ONLY}" = "1" ]; then
 		return 0
 	fi
@@ -185,7 +203,7 @@ if [ -n "${REMOTE_DOCKER_HOST}" ] && [ "${REMOTE_BUNDLE_ONLY}" = "1" ]; then
 	fi
 
 	printf -v REMOTE_TAR_COMMAND ' %q' "${REMOTE_TAR_ARGS[@]}"
-	ssh "${REMOTE_DOCKER_HOST}" "tar czf $(printf '%q' "${DIST_DIR}/deploy-bundle.tgz")${REMOTE_TAR_COMMAND}"
+	ssh "${REMOTE_DOCKER_HOST}" "tar cf -${REMOTE_TAR_COMMAND} | gzip -$(printf '%q' "${GZIP_LEVEL}") > $(printf '%q' "${DIST_DIR}/deploy-bundle.tgz")"
 	echo "Cloud deploy bundle ready on ${REMOTE_DOCKER_HOST}: ${DIST_DIR}/deploy-bundle.tgz"
 	exit 0
 fi
@@ -209,7 +227,7 @@ if [ "${INCLUDE_EXTERNAL_IMAGES}" = "1" ]; then
 		-C "${CLOUD_DIR}" dist/jaeger.tar.gz
 	)
 fi
-tar czf "${DIST_DIR}/deploy-bundle.tgz" "${TAR_ARGS[@]}"
+tar cf - "${TAR_ARGS[@]}" | gzip "-${GZIP_LEVEL}" > "${DIST_DIR}/deploy-bundle.tgz"
 
 if [ -n "${IMAGE_PLATFORM}" ]; then
 	echo "Cloud deploy bundle ready: ${DIST_DIR}/deploy-bundle.tgz (${IMAGE_PLATFORM})"

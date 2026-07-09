@@ -109,7 +109,7 @@ export function PortalEntitlementUsage({
       </div>
 
       {metrics.length > 0 ? (
-        <div className="grid gap-3 md:grid-cols-2">
+        <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
           {metrics.map((metric) => {
             const key = String(metric.key || '');
             const used = Number(metric.used || 0);

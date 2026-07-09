@@ -4690,32 +4690,42 @@ def test_service_routes_admin_read_facade(tmp_path: Path) -> None:
     assert plans_response.status_code == 200
     plans = plans_response.json()["data"]["items"]
     tier_templates = plans_response.json()["data"]["tier_templates"]
+    tier_template_by_id = {item["tier_id"]: item for item in tier_templates}
     assert len(plans) >= 1
-    assert [item["tier_id"] for item in tier_templates] == ["free", "pro", "agency"]
-    assert tier_templates[0]["package_alias"] == "Free"
-    assert tier_templates[0]["monthly_included_points"] == 300
-    assert tier_templates[1]["monthly_included_points"] == 10000
-    assert tier_templates[2]["monthly_included_points"] == 150000
-    assert tier_templates[0]["site_limit"] == 1
-    assert tier_templates[1]["site_limit"] == 5
-    assert tier_templates[2]["site_limit"] == 25
-    assert tier_templates[0]["max_vector_documents"] == 100
-    assert tier_templates[1]["max_vector_documents"] == 2000
-    assert tier_templates[2]["max_vector_documents"] == 10000
-    assert tier_templates[2]["concurrency_template"]["max_active_runs"] == 10
-    assert tier_templates[0]["canonical_shell"]["entitlements"]["execution_tiers"] == ["cloud"]
-    assert tier_templates[1]["canonical_shell"]["budgets"]["max_ai_credits_per_period"] == 10000
-    assert tier_templates[1]["canonical_shell"]["budgets"]["max_runs_per_period"] == 0
-    assert tier_templates[1]["canonical_shell"]["metadata"]["max_batch_items"] == 25
+    assert [item["tier_id"] for item in tier_templates] == ["free", "plus", "pro", "agency"]
+    assert tier_template_by_id["free"]["package_alias"] == "Free"
+    assert tier_template_by_id["free"]["monthly_included_points"] == 300
+    assert tier_template_by_id["plus"]["monthly_included_points"] == 3000
+    assert tier_template_by_id["pro"]["monthly_included_points"] == 10000
+    assert tier_template_by_id["agency"]["monthly_included_points"] == 150000
+    assert tier_template_by_id["free"]["site_limit"] == 1
+    assert tier_template_by_id["plus"]["site_limit"] == 3
+    assert tier_template_by_id["pro"]["site_limit"] == 5
+    assert tier_template_by_id["agency"]["site_limit"] == 25
+    assert tier_template_by_id["free"]["max_vector_documents"] == 100
+    assert tier_template_by_id["pro"]["max_vector_documents"] == 2000
+    assert tier_template_by_id["agency"]["max_vector_documents"] == 10000
+    assert tier_template_by_id["agency"]["concurrency_template"]["max_active_runs"] == 10
+    assert tier_template_by_id["free"]["canonical_shell"]["entitlements"]["execution_tiers"] == [
+        "cloud"
+    ]
     assert (
-        tier_templates[1]["canonical_shell"]["metadata"][
+        tier_template_by_id["pro"]["canonical_shell"]["budgets"][
+            "max_ai_credits_per_period"
+        ]
+        == 10000
+    )
+    assert tier_template_by_id["pro"]["canonical_shell"]["budgets"]["max_runs_per_period"] == 0
+    assert tier_template_by_id["pro"]["canonical_shell"]["metadata"]["max_batch_items"] == 25
+    assert (
+        tier_template_by_id["pro"]["canonical_shell"]["metadata"][
             "nightly_inspection_runs_per_period"
         ]
         == 0
     )
-    assert tier_templates[2]["canonical_shell"]["metadata"]["max_batch_items"] == 100
+    assert tier_template_by_id["agency"]["canonical_shell"]["metadata"]["max_batch_items"] == 100
     assert (
-        tier_templates[2]["canonical_shell"]["metadata"][
+        tier_template_by_id["agency"]["canonical_shell"]["metadata"][
             "nightly_inspection_runs_per_period"
         ]
         == 0

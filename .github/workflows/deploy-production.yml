@@ -61,15 +61,15 @@ jobs:
 
       - name: Checkout
         if: steps.deploy_guard.outputs.should_deploy == 'true'
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Setup pnpm
         if: steps.deploy_guard.outputs.should_deploy == 'true'
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v6
 
       - name: Setup Node
         if: steps.deploy_guard.outputs.should_deploy == 'true'
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: "20"
           cache: "pnpm"
@@ -77,7 +77,7 @@ jobs:
 
       - name: Setup Docker Buildx
         if: steps.deploy_guard.outputs.should_deploy == 'true'
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: Install SSH key
         if: steps.deploy_guard.outputs.should_deploy == 'true'

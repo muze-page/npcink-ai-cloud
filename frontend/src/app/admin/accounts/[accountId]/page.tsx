@@ -77,13 +77,14 @@ interface PackagePlanListItem {
 }
 
 type QuickPackageOption = {
-  tier_id: 'free' | 'pro' | 'agency';
+  tier_id: 'free' | 'pro' | 'plus' | 'agency';
   plan_id: string;
   plan_version_id: string;
 };
 
 const QUICK_PACKAGE_OPTIONS: QuickPackageOption[] = [
   { tier_id: 'free', plan_id: 'free', plan_version_id: 'free_v1' },
+  { tier_id: 'plus', plan_id: 'plus', plan_version_id: 'plus_v1' },
   { tier_id: 'pro', plan_id: 'pro', plan_version_id: 'pro_v1' },
   { tier_id: 'agency', plan_id: 'agency', plan_version_id: 'agency_v1' },
 ];
@@ -97,7 +98,7 @@ type TopUpPackOption = {
   runs_increment: number;
   tokens_increment: number;
   cost_increment: number;
-  recommended_for_tiers: Array<'free' | 'pro' | 'agency'>;
+  recommended_for_tiers: Array<'free' | 'pro' | 'plus' | 'agency'>;
 };
 
 const TOPUP_PACK_OPTIONS: TopUpPackOption[] = [
@@ -110,7 +111,7 @@ const TOPUP_PACK_OPTIONS: TopUpPackOption[] = [
     runs_increment: 10000,
     tokens_increment: 2000000,
     cost_increment: 99,
-    recommended_for_tiers: ['free', 'pro'],
+    recommended_for_tiers: ['free', 'plus'],
   },
   {
     pack_id: 'pack_medium',
@@ -1441,6 +1442,8 @@ function AccountDetailContent() {
   const currentTierId =
     primarySubscription?.package_alias === 'Free' || primarySubscription?.plan_id === 'free'
       ? 'free'
+      : primarySubscription?.package_alias === 'Plus' || primarySubscription?.plan_id === 'plus'
+        ? 'plus'
       : primarySubscription?.package_alias === 'Agency' || primarySubscription?.plan_id === 'agency'
         ? 'agency'
         : 'pro';
@@ -1784,13 +1787,13 @@ function AccountDetailContent() {
                     {t(
                       'admin.account_detail.change_customer_package_desc',
                       undefined,
-                      'Switch this account to Free, Pro, or Agency. User workspace stays read-only.'
+                      'Switch this account to Free, Plus, Pro, or Agency. User workspace stays read-only.'
                     )}
                   </p>
                 </div>
                 <BackofficeStatusBadge status="ok" label={t('admin.operator_managed', {}, 'Operator managed')} />
               </div>
-              <div className="mt-4 grid gap-2 sm:grid-cols-3">
+              <div className="mt-4 grid gap-2 sm:grid-cols-4">
                 {QUICK_PACKAGE_OPTIONS.map((option) => {
                   const label = localizePackageAlias(t, option.tier_id, option.tier_id);
                   const isCurrent =

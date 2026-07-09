@@ -88,4 +88,8 @@ Credit pack purchases and operator repairs are not AI usage components. They wri
 - `grant` with `source_type=credit_pack_purchase` or operator grant.
 - `adjustment` with `source_type=credit_pack_refund` or operator repair.
 
+Credit pack purchase grants include `validity_days`, `expiry_policy`, and
+`grant_expires_at` metadata. The default customer credit-pack validity is 365
+days after payment confirmation; this does not create a permanent wallet.
+
 These entries affect net AI credit usage but do not appear in usage breakdown components.

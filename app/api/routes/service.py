@@ -212,6 +212,21 @@ class CreditPackPaymentOrderPayload(BaseModel):
     site_id: str = ""
 
 
+class CreditPackCatalogItemPayload(BaseModel):
+    pack_id: str
+    label: str = ""
+    ai_credits: int = 0
+    amount: float = 0.0
+    currency: str = "CNY"
+    recommended_for_tiers: list[str] = Field(default_factory=list)
+    validity_days: int = 365
+    active: bool = True
+
+
+class CreditPackCatalogPayload(BaseModel):
+    items: list[CreditPackCatalogItemPayload] = Field(default_factory=list)
+
+
 class PaymentSucceededPayload(BaseModel):
     provider_trade_no: str = ""
     provider_event_id: str = ""
@@ -1793,6 +1808,53 @@ async def list_credit_packs(request: Request) -> Any:
         status="ok",
         message="credit packs loaded",
         data=_get_commercial_service(request).list_credit_packs(),
+        revision="m6",
+    )
+
+
+@router.get("/admin/credit-packs")
+async def get_admin_credit_pack_catalog(request: Request) -> Any:
+    auth = await authorize_internal_request(request, require_idempotency=False)
+    if auth is not None:
+        return auth
+    return build_envelope(
+        status="ok",
+        message="credit pack catalog loaded",
+        data=_get_commercial_service(request).get_admin_credit_pack_catalog(),
+        revision="m6",
+    )
+
+
+@router.patch("/admin/credit-packs")
+async def update_admin_credit_pack_catalog(
+    request: Request,
+    payload: CreditPackCatalogPayload,
+) -> Any:
+    auth = await authorize_internal_request(request, require_idempotency=True)
+    if auth is not None:
+        return auth
+    service = _get_commercial_service(request)
+    audit_context = _build_audit_context(request)
+    payload_items = [item.model_dump() for item in payload.items]
+    try:
+        result = service.update_admin_credit_pack_catalog(
+            items=payload_items,
+            audit_context=audit_context,
+        )
+    except CommercialServiceError as error:
+        _record_service_failure(
+            request,
+            event_kind="payment.credit_pack_catalog.update",
+            error=error,
+            scope_kind="service_setting",
+            scope_id="commercial_credit_pack_catalog",
+            payload_json={"items": payload_items},
+        )
+        return _service_error_response(error)
+    return build_envelope(
+        status="ok",
+        message="credit pack catalog updated",
+        data=result,
         revision="m6",
     )
 

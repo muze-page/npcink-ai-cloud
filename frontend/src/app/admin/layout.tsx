@@ -186,6 +186,11 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
           fallback: 'Package Catalog',
         },
         {
+          href: '/admin/credit-packs',
+          labelKey: 'admin.nav_credit_packs',
+          fallback: 'Credit Packs',
+        },
+        {
           href: '/admin/portal-users',
           labelKey: 'admin.nav_portal_users',
           fallback: 'Portal Users',

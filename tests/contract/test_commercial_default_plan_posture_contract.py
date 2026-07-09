@@ -20,3 +20,20 @@ def test_default_free_plan_is_the_current_bootstrap_posture() -> None:
     assert 'plan_id: str = "free"' in seed_runtime_code
     assert 'plan_version_id: str = "free_v1"' in seed_runtime_code
     assert "bind_default_free: bool = False" in account_code
+
+
+def test_plus_plan_tier_is_registered_in_service_and_billing_templates() -> None:
+    from app.domain.commercial import service
+    from app.domain.commercial.mixins import _billing_mixin
+
+    service_plus = service.PLAN_TIER_REGISTRY["plus"]
+    billing_plus = _billing_mixin.PLAN_TIER_REGISTRY["plus"]
+
+    assert service_plus["package_alias"] == "Plus"
+    assert billing_plus["package_alias"] == "Plus"
+    assert list(service.PLAN_TIER_REGISTRY)[:3] == ["free", "plus", "pro"]
+    assert list(_billing_mixin.PLAN_TIER_REGISTRY)[:3] == ["free", "plus", "pro"]
+    assert service_plus["monthly_included_points"] == 3_000
+    assert billing_plus["budgets_template"]["max_ai_credits_per_period"] == 3_000
+    assert billing_plus["site_limit"] == 3
+    assert billing_plus["concurrency_template"] == {"max_active_runs": 2}

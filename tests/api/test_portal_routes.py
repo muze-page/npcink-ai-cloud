@@ -1038,6 +1038,80 @@ def test_portal_addon_connection_reactivates_existing_inactive_site(
     dispose_engine(database_url)
 
 
+def test_portal_addon_connection_reactivates_existing_archived_site(
+    tmp_path: Path,
+) -> None:
+    database_url, client = _build_client(tmp_path)
+
+    registration_request = _request_portal_registration_code(
+        client,
+        email="addon-archived-reactivate@example.com",
+        site_url="https://primary.example.com",
+        site_name="Primary Site",
+        headers={
+            "x-npcink-debug-portal-link": "1",
+            "x-npcink-dev-login-code": "1",
+        },
+    )
+    registration = _verify_portal_registration_code(
+        client,
+        email="addon-archived-reactivate@example.com",
+        code=str(registration_request["code"]),
+    )
+    with get_session(database_url) as session:
+        site = session.get(Site, "site_primary-example-com")
+        assert site is not None
+        site.status = "archived"
+        site.metadata_json = {
+            **(site.metadata_json or {}),
+            "portal_lifecycle": {
+                "previous_status": "active",
+                "removed": True,
+                "removed_at": "2026-07-09T04:44:35Z",
+            },
+        }
+        session.commit()
+
+    return_url = (
+        "https://wp.example.com/wp-admin/admin-post.php"
+        "?action=npcink_cloud_addon_complete_auth&state=addon-state-archived-reactivate"
+    )
+    create_response = client.post(
+        "/portal/v1/addon-connections",
+        json={
+            "account_id": registration["account_id"],
+            "wordpress_url": "https://primary.example.com",
+            "site_name": "Primary Site",
+            "return_url": return_url,
+            "state": "addon-state-archived-reactivate",
+        },
+        headers={"Idempotency-Key": "portal-addon-archived-reactivate-connect"},
+    )
+    assert create_response.status_code == 200, create_response.text
+    create_data = create_response.json()["data"]
+    assert create_data["site_id"] == "site_primary-example-com"
+    assert create_data["site_created"] is False
+
+    with get_session(database_url) as session:
+        site = session.get(Site, "site_primary-example-com")
+        assert site is not None
+        assert site.status == "active"
+        lifecycle = (site.metadata_json or {}).get("portal_lifecycle") or {}
+        assert lifecycle.get("removed") is None
+        assert lifecycle.get("removed_at") is None
+        assert lifecycle.get("reconnected_at")
+        active_keys = [
+            item
+            for item in session.scalars(
+                select(SiteApiKey).where(SiteApiKey.site_id == "site_primary-example-com")
+            )
+            if item.status == "active"
+        ]
+        assert [item.key_id for item in active_keys] == [create_data["key_id"]]
+
+    dispose_engine(database_url)
+
+
 def test_portal_site_key_write_requires_manage_site_keys_action(tmp_path: Path) -> None:
     database_url, client = _build_client(tmp_path)
 

@@ -15,16 +15,15 @@ const pluginMonitoringSource = readFileSync(resolve(root, 'src/components/portal
 const siteInspectorSource = readFileSync(resolve(root, 'src/components/portal/PortalSiteInspectorDrawer.tsx'), 'utf8');
 const i18nSource = readFileSync(resolve(root, 'src/lib/i18n.ts'), 'utf8');
 
-const billingBeforeSupportDetails = billingSource.slice(0, billingSource.indexOf('<details'));
 assert.doesNotMatch(
-  billingBeforeSupportDetails,
+  billingSource,
   /common\.tokens|common\.cost|common\.requests|snapshot_id|ledger|Ledger/,
-  'Portal package records must not show tokens, cost, requests, snapshots, or ledger in the default customer view'
+  'Portal package page must not show tokens, cost, requests, snapshots, or ledger in the customer view'
 );
-assert.match(
+assert.doesNotMatch(
   billingSource,
   /<details[\s\S]*snapshot\.snapshot_id[\s\S]*<\/details>/,
-  'Portal package record IDs may only stay inside an explicit support detail disclosure'
+  'Portal package page must not expose package record IDs on the customer surface'
 );
 
 const usageDetailIndex = usageSource.indexOf('data-portal-usage="usage-detail"');
@@ -105,8 +104,8 @@ assert.doesNotMatch(
 );
 assert.doesNotMatch(
   sitesSource,
-  /sites_management_actions_title|handleExportFilteredSites|export_filtered_sites|select_visible_sites|remove_selected_sites|pendingBatchAction|activateSite|deactivateSite|removeSite/,
-  'Portal site export, activation, and bulk management controls must not be part of the customer site list'
+  /sites_management_actions_title|handleExportFilteredSites|export_filtered_sites|select_visible_sites|remove_selected_sites|pendingBatchAction|activateSite|deactivateSite/,
+  'Portal site export, activation, service toggle, and bulk management controls must not be part of the customer site list'
 );
 assert.doesNotMatch(
   sitesSource,
