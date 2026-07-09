@@ -24,7 +24,13 @@ are immediately backported to Git.
 
 ## GitHub Actions
 
-`Cloud CI` runs on `master`, `main`, and `production`.
+`Cloud CI` runs on pull requests, `master`, `main`, and `production`.
+
+Pull requests use a targeted backend gate by default: release-policy contract,
+anti-drift checks, changed Python quality, contract tests, and changed pytest
+files. High-risk backend surfaces still escalate to the full backend gate. Pushes
+to `master`, `main`, and `production` continue to run full Ruff, Mypy, and
+`tests/api tests/contract tests/domain` before release promotion or deploy.
 
 On `production` push events, `Cloud CI` runs `backend` and `frontend` first,
 then runs the `deploy-production` job only after both pass. `Deploy Production`
@@ -64,6 +70,18 @@ NPCINK_CLOUD_INCLUDE_EXTERNAL_IMAGES=1
 
 The GitHub deploy path also enables BuildKit GitHub Actions cache for app and
 frontend Docker builds.
+
+After each release, capture job timing with:
+
+```bash
+pnpm run release:timing -- <github-actions-run-id>
+pnpm run release:timing --from-file /tmp/github-run.json
+```
+
+Use the report to separate approval wait time from actual CI, bundle upload, and
+remote readiness time. `gh pr checks` can show long-running jobs as `pending 0`;
+prefer this timing report or `gh run view --json jobs` when comparing release
+duration.
 
 The static terms fast path runs:
 

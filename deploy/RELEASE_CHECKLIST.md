@@ -218,6 +218,12 @@ This section is `Required` for first release or runtime/auth changes.
 
 ## 7. Operational Sign-Off
 
+Post-release timing evidence:
+
+- [ ] GitHub Actions release timing was captured with `pnpm run release:timing -- <run-id>`
+- [ ] backend, frontend, CodeQL, deploy, approval wait, and smoke durations were recorded
+- [ ] unexpected release-time regressions have a follow-up issue or PR
+
 All items in this section are `Required`.
 
 - [ ] `platform_admin` bootstrap token storage location is defined
