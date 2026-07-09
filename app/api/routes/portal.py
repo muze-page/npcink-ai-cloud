@@ -171,6 +171,10 @@ class PortalSupportRequestPayload(BaseModel):
     context: dict[str, Any] = Field(default_factory=dict)
 
 
+class PortalSupportRequestMessagePayload(BaseModel):
+    body: str = Field(default="", max_length=4000)
+
+
 def _object_list(value: object) -> list[object]:
     return value if isinstance(value, list) else []
 
@@ -1794,7 +1798,41 @@ async def get_portal_support_request(request: Request, request_id: str) -> Any:
         return _service_error_response(error, request=request)
     return _portal_route_envelope(
         message="portal support request loaded",
-        data={"request": result},
+        data=result,
+    )
+
+
+@router.post("/support-requests/{request_id}/messages")
+async def create_portal_support_request_message(
+    request: Request,
+    request_id: str,
+    payload: PortalSupportRequestMessagePayload,
+) -> Any:
+    same_origin = _portal_same_origin_guard(request, always=True)
+    if same_origin is not None:
+        return same_origin
+    write_guard = _portal_write_guard(request)
+    if write_guard is not None:
+        return write_guard
+    auth = await resolve_portal_request_context(
+        request,
+        require_idempotency=True,
+        allow_session_cookies=True,
+    )
+    if isinstance(auth, JSONResponse):
+        return auth
+    try:
+        result = _get_commercial_service(request).create_portal_support_request_message(
+            principal_id=auth.principal_id,
+            request_id=request_id,
+            body=payload.body,
+            audit_context=_build_portal_audit_context(request, auth.principal_id),
+        )
+    except CommercialServiceError as error:
+        return _service_error_response(error, request=request)
+    return _portal_route_envelope(
+        message="portal support request message created",
+        data=result,
     )
 
 

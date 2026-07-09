@@ -1,5 +1,6 @@
 'use client';
 
+import Link from 'next/link';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   BackofficeMetricStrip,
@@ -46,6 +47,7 @@ type SupportRequestListPayload = {
 
 const STATUS_FILTERS: Array<SupportRequestStatus | ''> = ['', 'open', 'in_progress', 'resolved', 'closed'];
 const NEXT_STATUSES: SupportRequestStatus[] = ['open', 'in_progress', 'resolved', 'closed'];
+const TOPIC_FILTERS = ['', 'billing', 'payment', 'site', 'usage', 'account', 'general'] as const;
 
 function statusTone(status: string): string {
   if (status === 'open') return 'warning';
@@ -54,10 +56,11 @@ function statusTone(status: string): string {
   return 'read_only';
 }
 
-async function fetchSupportRequests(status: string, query: string): Promise<Response> {
+async function fetchSupportRequests(status: string, topic: string, query: string): Promise<Response> {
   const params = new URLSearchParams();
   params.set('limit', '100');
   if (status) params.set('status', status);
+  if (topic) params.set('topic', topic);
   if (query.trim()) params.set('q', query.trim());
   return fetch(`/api/admin/support-requests?${params.toString()}`, {
     credentials: 'include',
@@ -80,6 +83,7 @@ export default function AdminSupportRequestsPage() {
   const [summary, setSummary] = useState<SupportRequestListPayload['summary']>({});
   const [total, setTotal] = useState(0);
   const [statusFilter, setStatusFilter] = useState<SupportRequestStatus | ''>('open');
+  const [topicFilter, setTopicFilter] = useState('');
   const [query, setQuery] = useState('');
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState('');
@@ -92,7 +96,7 @@ export default function AdminSupportRequestsPage() {
     setIsLoading(true);
     setError('');
     try {
-      const response = await fetchSupportRequests(statusFilter, query);
+      const response = await fetchSupportRequests(statusFilter, topicFilter, query);
       const payload = await readResponsePayload<{ data?: SupportRequestListPayload; message?: string }>(response);
       if (!response.ok || !('data' in payload) || !payload.data) {
         throw new Error(resolveUiErrorMessage('message' in payload ? payload.message : null, t('error.failed_load')));
@@ -108,7 +112,7 @@ export default function AdminSupportRequestsPage() {
     } finally {
       setIsLoading(false);
     }
-  }, [query, statusFilter, t]);
+  }, [query, statusFilter, topicFilter, t]);
 
   useEffect(() => {
     void loadRequests();
@@ -203,12 +207,21 @@ export default function AdminSupportRequestsPage() {
               </button>
             ))}
           </div>
-          <input
-            className="input w-full lg:w-80"
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            placeholder={t('admin.support_requests_search_placeholder', {}, 'Email, site, account, or title')}
-          />
+          <div className="flex w-full flex-col gap-2 lg:w-auto lg:flex-row">
+            <select className="input lg:w-44" value={topicFilter} onChange={(event) => setTopicFilter(event.target.value)}>
+              {TOPIC_FILTERS.map((topic) => (
+                <option key={topic || 'all'} value={topic}>
+                  {topic ? t(`portal.support_topic_${topic}`, {}, topic) : t('admin.support_topic_all', {}, 'All topics')}
+                </option>
+              ))}
+            </select>
+            <input
+              className="input w-full lg:w-80"
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder={t('admin.support_requests_search_placeholder', {}, 'Email, site, account, or title')}
+            />
+          </div>
         </div>
       </BackofficeSectionPanel>
 
@@ -266,6 +279,12 @@ export default function AdminSupportRequestsPage() {
                       ? t('common.saving', {}, 'Saving...')
                       : t('admin.support_requests_update_action', {}, 'Update ticket')}
                   </button>
+                  <Link
+                    className="btn btn-secondary w-full"
+                    href={`/admin/support-requests/${encodeURIComponent(item.request_id)}`}
+                  >
+                    {t('admin.support_request_view_detail', {}, 'View detail')}
+                  </Link>
                 </div>
               </div>
             </BackofficeStackCard>

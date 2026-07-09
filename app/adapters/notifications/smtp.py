@@ -256,6 +256,58 @@ class SmtpPortalEmailSender(PortalEmailSender):
                 f"failed to deliver portal email change notice to '{recipient_email}': {error}"
             ) from error
 
+    def send_support_request_update(
+        self,
+        *,
+        recipient_email: str,
+        request_id: str,
+        title: str,
+        status: str,
+        message_body: str,
+        project_name: str,
+        portal_url: str,
+        locale: str = "zh-CN",
+    ) -> None:
+        message = EmailMessage()
+        message["Subject"] = self._build_support_request_update_subject(
+            project_name=project_name,
+            title=title,
+            locale=locale,
+        )
+        message["From"] = self._format_from_header()
+        message["To"] = recipient_email
+        if self.reply_to:
+            message["Reply-To"] = self.reply_to
+        self._set_message_body(
+            message,
+            text_body=self._build_support_request_update_text_body(
+                request_id=request_id,
+                title=title,
+                status=status,
+                message_body=message_body,
+                project_name=project_name,
+                portal_url=portal_url,
+                locale=locale,
+            ),
+            html_body=self._build_support_request_update_html_body(
+                request_id=request_id,
+                title=title,
+                status=status,
+                message_body=message_body,
+                project_name=project_name,
+                portal_url=portal_url,
+                locale=locale,
+            ),
+        )
+
+        try:
+            self._ensure_delivery_headers(message)
+            self._deliver(message)
+        except Exception as error:
+            raise PortalEmailDeliveryError(
+                f"failed to deliver support request update to '{recipient_email}': {error}"
+            ) from error
+
     def _deliver(self, message: EmailMessage) -> None:
         ssl_context = ssl.create_default_context()
         if self.use_ssl:
@@ -817,6 +869,99 @@ class SmtpPortalEmailSender(PortalEmailSender):
         if normalized_locale == "zh-TW":
             return f"{display_name} 登入電子郵件已更換"
         return f"{display_name} email changed"
+
+    def _build_support_request_update_subject(
+        self,
+        *,
+        project_name: str,
+        title: str,
+        locale: str,
+    ) -> str:
+        display_name = self._display_project_name(project_name)
+        display_title = " ".join(str(title or "工单更新").split())[:80]
+        if self._normalize_locale(locale) == "en":
+            return f"{display_name} ticket update: {display_title}"
+        return f"{display_name} 工单更新：{display_title}"
+
+    def _build_support_request_update_text_body(
+        self,
+        *,
+        request_id: str,
+        title: str,
+        status: str,
+        message_body: str,
+        project_name: str,
+        portal_url: str,
+        locale: str,
+    ) -> str:
+        display_name = self._display_project_name(project_name)
+        if self._normalize_locale(locale) == "en":
+            return "\n".join(
+                [
+                    f"{display_name} ticket update",
+                    "",
+                    f"Ticket: {title}",
+                    f"Request ID: {request_id}",
+                    f"Status: {status}",
+                    "",
+                    "Latest reply:",
+                    str(message_body or "").strip(),
+                    "",
+                    f"Open ticket: {portal_url}",
+                    "",
+                    "Please sign in to the Portal to reply or provide more information.",
+                ]
+            )
+        return "\n".join(
+            [
+                f"{display_name} 工单更新",
+                "",
+                f"工单：{title}",
+                f"工单 ID：{request_id}",
+                f"状态：{status}",
+                "",
+                "最新回复：",
+                str(message_body or "").strip(),
+                "",
+                f"查看工单：{portal_url}",
+                "",
+                "请登录 Portal 回复或补充信息。",
+            ]
+        )
+
+    def _build_support_request_update_html_body(
+        self,
+        *,
+        request_id: str,
+        title: str,
+        status: str,
+        message_body: str,
+        project_name: str,
+        portal_url: str,
+        locale: str,
+    ) -> str:
+        display_name = self._display_project_name(project_name)
+        normalized_locale = self._normalize_locale(locale)
+        if normalized_locale == "en":
+            return self._build_html_email(
+                project_name=display_name,
+                eyebrow="Ticket update",
+                title="Support replied to your ticket",
+                intro=str(message_body or "").strip(),
+                details=[("Ticket", title), ("Request ID", request_id), ("Status", status)],
+                note=(
+                    "Open the ticket in Portal to reply or provide more information: "
+                    f"{portal_url}"
+                ),
+            )
+        return self._build_html_email(
+            project_name=display_name,
+            eyebrow="工单更新",
+            title="客服已回复你的工单",
+            intro=str(message_body or "").strip(),
+            details=[("工单", title), ("工单 ID", request_id), ("状态", status)],
+            note=f"请在 Portal 查看工单并回复或补充信息：{portal_url}",
+        )
 
     def _build_html_email(
         self,

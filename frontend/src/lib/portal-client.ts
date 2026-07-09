@@ -1446,6 +1446,20 @@ export interface PortalSupportRequest {
   closed_at?: string;
 }
 
+export interface PortalSupportRequestMessage {
+  message_id: string;
+  request_id: string;
+  account_id: string;
+  site_id?: string;
+  principal_id?: string;
+  email?: string;
+  author_kind: 'customer' | 'operator' | 'system' | string;
+  visibility: 'public' | 'internal' | string;
+  body: string;
+  metadata?: Record<string, unknown>;
+  created_at?: string;
+}
+
 export interface PortalSupportRequestListPayload {
   account_id?: string;
   principal_id?: string;
@@ -1462,6 +1476,11 @@ export interface PortalSupportRequestListPayload {
   };
 }
 
+export interface PortalSupportRequestDetailPayload {
+  request: PortalSupportRequest;
+  messages: PortalSupportRequestMessage[];
+}
+
 export interface CreatePortalSupportRequestPayload {
   topic: string;
   title: string;
@@ -1469,6 +1488,10 @@ export interface CreatePortalSupportRequestPayload {
   site_id?: string;
   source_path?: string;
   context?: Record<string, unknown>;
+}
+
+export interface CreatePortalSupportRequestMessagePayload {
+  body: string;
 }
 
 export interface PortalCreditLedgerPayload {
@@ -2025,8 +2048,15 @@ export class PortalClient {
     return this.request('POST', '/support-requests', payload, { requireAuth: true });
   }
 
-  async getSupportRequest(requestId: string): Promise<PortalEnvelope<{ request: PortalSupportRequest }>> {
+  async getSupportRequest(requestId: string): Promise<PortalEnvelope<PortalSupportRequestDetailPayload>> {
     return this.request('GET', `/support-requests/${requestId}`, undefined, { requireAuth: true });
+  }
+
+  async createSupportRequestMessage(
+    requestId: string,
+    payload: CreatePortalSupportRequestMessagePayload
+  ): Promise<PortalEnvelope<{ request: PortalSupportRequest; message: PortalSupportRequestMessage }>> {
+    return this.request('POST', `/support-requests/${requestId}/messages`, payload, { requireAuth: true });
   }
 
   async createCreditPackOrder(

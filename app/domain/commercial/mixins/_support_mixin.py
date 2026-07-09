@@ -8,11 +8,16 @@ from app.adapters.repositories.commercial_repository import CommercialRepository
 from app.core.db import get_session
 from app.core.models import (
     ACCOUNT_USER_MEMBERSHIP_STATUS_ACTIVE,
+    SUPPORT_REQUEST_MESSAGE_AUTHOR_CUSTOMER,
+    SUPPORT_REQUEST_MESSAGE_AUTHOR_OPERATOR,
+    SUPPORT_REQUEST_MESSAGE_VISIBILITY_INTERNAL,
+    SUPPORT_REQUEST_MESSAGE_VISIBILITY_PUBLIC,
     SUPPORT_REQUEST_STATUS_CLOSED,
     SUPPORT_REQUEST_STATUS_IN_PROGRESS,
     SUPPORT_REQUEST_STATUS_OPEN,
     SUPPORT_REQUEST_STATUS_RESOLVED,
     SupportRequest,
+    SupportRequestMessage,
 )
 from app.domain.commercial.audit_context import ServiceAuditContext
 from app.domain.commercial.errors import (
@@ -36,6 +41,10 @@ SUPPORT_REQUEST_TOPICS = {
     "usage",
     "account",
 }
+SUPPORT_REQUEST_MESSAGE_VISIBILITIES = {
+    SUPPORT_REQUEST_MESSAGE_VISIBILITY_PUBLIC,
+    SUPPORT_REQUEST_MESSAGE_VISIBILITY_INTERNAL,
+}
 
 
 def _normalize_support_status(value: str, *, allow_empty: bool = False) -> str:
@@ -57,6 +66,16 @@ def _normalize_support_topic(value: str) -> str:
 
 def _trim_support_text(value: str, *, max_length: int) -> str:
     return str(value or "").strip()[:max_length]
+
+
+def _normalize_support_message_visibility(value: str) -> str:
+    normalized = str(value or "").strip().lower()
+    if normalized not in SUPPORT_REQUEST_MESSAGE_VISIBILITIES:
+        raise CommercialValidationError(
+            "service.support_request_message_visibility_invalid",
+            "support request message visibility is not supported",
+        )
+    return normalized
 
 
 class CommercialServiceSupportMixin(CommercialServiceAuditMixin):
@@ -120,6 +139,16 @@ class CommercialServiceSupportMixin(CommercialServiceAuditMixin):
                 priority="normal",
                 source_path=_trim_support_text(source_path, max_length=191),
                 context_json=dict(context_json or {}),
+            )
+            repository.create_support_request_message(
+                message_id=f"srm_{uuid4().hex}",
+                request=request,
+                author_kind=SUPPORT_REQUEST_MESSAGE_AUTHOR_CUSTOMER,
+                visibility=SUPPORT_REQUEST_MESSAGE_VISIBILITY_PUBLIC,
+                principal_id=normalized_principal_id,
+                email=str(profile.get("email") or ""),
+                body=normalized_description,
+                metadata_json={"source": "initial_description"},
             )
             payload = self._serialize_support_request(request)
             self._record_service_audit_in_session(
@@ -214,7 +243,16 @@ class CommercialServiceSupportMixin(CommercialServiceAuditMixin):
                 principal_id=normalized_principal_id,
                 account_id=str(request.account_id or ""),
             )
-            return self._serialize_support_request(request)
+            messages = repository.list_support_request_messages(
+                request_id=str(request.request_id or ""),
+                include_internal=False,
+            )
+            return {
+                "request": self._serialize_support_request(request),
+                "messages": [
+                    self._serialize_support_request_message(message) for message in messages
+                ],
+            }
 
     def list_admin_support_requests(
         self,
@@ -261,6 +299,166 @@ class CommercialServiceSupportMixin(CommercialServiceAuditMixin):
             },
         }
 
+    def get_admin_support_request(
+        self,
+        *,
+        request_id: str,
+    ) -> dict[str, object]:
+        with get_session(self.database_url) as session:
+            repository = CommercialRepository(session)
+            request = repository.get_support_request(str(request_id or "").strip())
+            if request is None:
+                raise CommercialNotFoundError(
+                    "service.support_request_not_found",
+                    "support request was not found",
+                )
+            messages = repository.list_support_request_messages(
+                request_id=str(request.request_id or ""),
+                include_internal=True,
+            )
+            return {
+                "request": self._serialize_support_request(request),
+                "messages": [
+                    self._serialize_support_request_message(message) for message in messages
+                ],
+            }
+
+    def create_portal_support_request_message(
+        self,
+        *,
+        principal_id: str,
+        request_id: str,
+        body: str,
+        audit_context: ServiceAuditContext | None = None,
+    ) -> dict[str, object]:
+        normalized_principal_id = str(principal_id or "").strip()
+        normalized_body = _trim_support_text(body, max_length=4000)
+        if len(normalized_body) < 2:
+            raise CommercialValidationError(
+                "service.support_request_message_required",
+                "support request message is required",
+            )
+        now = self.now_factory()
+        with get_session(self.database_url) as session:
+            repository = CommercialRepository(session)
+            request = repository.get_support_request(str(request_id or "").strip())
+            if request is None or request.principal_id != normalized_principal_id:
+                raise CommercialNotFoundError(
+                    "service.support_request_not_found",
+                    "support request was not found",
+                )
+            self._assert_portal_account_access_in_session(
+                repository=repository,
+                principal_id=normalized_principal_id,
+                account_id=str(request.account_id or ""),
+            )
+            if str(request.status or "") in {
+                SUPPORT_REQUEST_STATUS_RESOLVED,
+                SUPPORT_REQUEST_STATUS_CLOSED,
+            }:
+                request.status = SUPPORT_REQUEST_STATUS_OPEN
+                request.resolved_at = None
+                request.closed_at = None
+            message = repository.create_support_request_message(
+                message_id=f"srm_{uuid4().hex}",
+                request=request,
+                author_kind=SUPPORT_REQUEST_MESSAGE_AUTHOR_CUSTOMER,
+                visibility=SUPPORT_REQUEST_MESSAGE_VISIBILITY_PUBLIC,
+                principal_id=normalized_principal_id,
+                email=str(request.email or ""),
+                body=normalized_body,
+                metadata_json={"source": "portal_reply"},
+            )
+            payload = {
+                "request": self._serialize_support_request(request),
+                "message": self._serialize_support_request_message(message),
+            }
+            self._record_service_audit_in_session(
+                repository=repository,
+                audit_context=audit_context,
+                event_kind="support_request.message_created",
+                outcome="succeeded",
+                account_id=str(request.account_id or ""),
+                site_id=str(request.site_id or ""),
+                scope_kind="support_request",
+                scope_id=str(request.request_id),
+                payload_json={
+                    "request_id": str(request.request_id),
+                    "message_id": str(message.message_id),
+                    "author_kind": str(message.author_kind),
+                    "visibility": str(message.visibility),
+                    "status": str(request.status or ""),
+                    "created_at": self._serialize_datetime(now),
+                },
+            )
+            session.commit()
+        return payload
+
+    def create_admin_support_request_message(
+        self,
+        *,
+        request_id: str,
+        body: str,
+        visibility: str = SUPPORT_REQUEST_MESSAGE_VISIBILITY_PUBLIC,
+        audit_context: ServiceAuditContext | None = None,
+    ) -> dict[str, object]:
+        normalized_visibility = _normalize_support_message_visibility(visibility)
+        normalized_body = _trim_support_text(body, max_length=4000)
+        if len(normalized_body) < 2:
+            raise CommercialValidationError(
+                "service.support_request_message_required",
+                "support request message is required",
+            )
+        now = self.now_factory()
+        with get_session(self.database_url) as session:
+            repository = CommercialRepository(session)
+            request = repository.get_support_request(str(request_id or "").strip())
+            if request is None:
+                raise CommercialNotFoundError(
+                    "service.support_request_not_found",
+                    "support request was not found",
+                )
+            if normalized_visibility == SUPPORT_REQUEST_MESSAGE_VISIBILITY_PUBLIC and (
+                str(request.status or "") == SUPPORT_REQUEST_STATUS_OPEN
+            ):
+                request.status = SUPPORT_REQUEST_STATUS_IN_PROGRESS
+            if normalized_visibility == SUPPORT_REQUEST_MESSAGE_VISIBILITY_INTERNAL:
+                request.admin_note = normalized_body
+            message = repository.create_support_request_message(
+                message_id=f"srm_{uuid4().hex}",
+                request=request,
+                author_kind=SUPPORT_REQUEST_MESSAGE_AUTHOR_OPERATOR,
+                visibility=normalized_visibility,
+                principal_id=None,
+                email="",
+                body=normalized_body,
+                metadata_json={"source": "admin_reply"},
+            )
+            payload = {
+                "request": self._serialize_support_request(request),
+                "message": self._serialize_support_request_message(message),
+            }
+            self._record_service_audit_in_session(
+                repository=repository,
+                audit_context=audit_context,
+                event_kind="support_request.message_created",
+                outcome="succeeded",
+                account_id=str(request.account_id or ""),
+                site_id=str(request.site_id or ""),
+                scope_kind="support_request",
+                scope_id=str(request.request_id),
+                payload_json={
+                    "request_id": str(request.request_id),
+                    "message_id": str(message.message_id),
+                    "author_kind": str(message.author_kind),
+                    "visibility": str(message.visibility),
+                    "status": str(request.status or ""),
+                    "created_at": self._serialize_datetime(now),
+                },
+            )
+            session.commit()
+        return payload
+
     def update_admin_support_request(
         self,
         *,
@@ -291,6 +489,16 @@ class CommercialServiceSupportMixin(CommercialServiceAuditMixin):
                 )
             if normalized_note:
                 request.admin_note = normalized_note
+                repository.create_support_request_message(
+                    message_id=f"srm_{uuid4().hex}",
+                    request=request,
+                    author_kind=SUPPORT_REQUEST_MESSAGE_AUTHOR_OPERATOR,
+                    visibility=SUPPORT_REQUEST_MESSAGE_VISIBILITY_INTERNAL,
+                    principal_id=None,
+                    email="",
+                    body=normalized_note,
+                    metadata_json={"source": "admin_status_update"},
+                )
             session.flush()
             payload = self._serialize_support_request(request)
             self._record_service_audit_in_session(
@@ -378,4 +586,22 @@ class CommercialServiceSupportMixin(CommercialServiceAuditMixin):
             "updated_at": self._serialize_datetime(request.updated_at),
             "resolved_at": self._serialize_datetime(request.resolved_at),
             "closed_at": self._serialize_datetime(request.closed_at),
+        }
+
+    def _serialize_support_request_message(
+        self,
+        message: SupportRequestMessage,
+    ) -> dict[str, object]:
+        return {
+            "message_id": str(message.message_id or ""),
+            "request_id": str(message.request_id or ""),
+            "account_id": str(message.account_id or ""),
+            "site_id": str(message.site_id or ""),
+            "principal_id": str(message.principal_id or ""),
+            "email": str(message.email or ""),
+            "author_kind": str(message.author_kind or ""),
+            "visibility": str(message.visibility or ""),
+            "body": str(message.body or ""),
+            "metadata": message.metadata_json if isinstance(message.metadata_json, dict) else {},
+            "created_at": self._serialize_datetime(message.created_at),
         }

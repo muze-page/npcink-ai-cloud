@@ -47,6 +47,7 @@ from app.core.models import (
     SiteKnowledgeIndexJobMetric,
     SiteUserGrant,
     SupportRequest,
+    SupportRequestMessage,
     UsageMeterEvent,
 )
 
@@ -123,6 +124,52 @@ class CommercialRepository:
         self.session.add(request)
         self.session.flush()
         return request
+
+    def create_support_request_message(
+        self,
+        *,
+        message_id: str,
+        request: SupportRequest,
+        author_kind: str,
+        visibility: str,
+        body: str,
+        principal_id: str | None = None,
+        email: str = "",
+        metadata_json: dict[str, object] | None = None,
+    ) -> SupportRequestMessage:
+        message = SupportRequestMessage(
+            message_id=message_id,
+            request_id=str(request.request_id or ""),
+            account_id=str(request.account_id or ""),
+            site_id=str(request.site_id or "") or None,
+            principal_id=str(principal_id or request.principal_id or "") or None,
+            email=str(email or request.email or ""),
+            author_kind=author_kind,
+            visibility=visibility,
+            body=body,
+            metadata_json=metadata_json,
+        )
+        request.updated_at = datetime.now(UTC)
+        self.session.add(message)
+        self.session.flush()
+        return message
+
+    def list_support_request_messages(
+        self,
+        *,
+        request_id: str,
+        include_internal: bool = False,
+    ) -> list[SupportRequestMessage]:
+        statement = select(SupportRequestMessage).where(
+            SupportRequestMessage.request_id == request_id
+        )
+        if not include_internal:
+            statement = statement.where(SupportRequestMessage.visibility == "public")
+        statement = statement.order_by(
+            SupportRequestMessage.created_at.asc(),
+            SupportRequestMessage.message_id.asc(),
+        )
+        return list(self.session.scalars(statement))
 
     def list_support_requests(
         self,

@@ -1,6 +1,7 @@
 'use client';
 
 import { Suspense, useCallback, useEffect, useMemo, useState } from 'react';
+import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import {
   BackofficePageStack,
@@ -290,6 +291,12 @@ function PortalSupportContent() {
                     <p className="mt-2 line-clamp-2 text-sm leading-6 text-slate-600 dark:text-slate-300">
                       {item.description}
                     </p>
+                    <Link
+                      className="mt-3 inline-flex text-sm font-semibold text-blue-600 hover:text-blue-700 dark:text-blue-300 dark:hover:text-blue-200"
+                      href={`/portal/support/${encodeURIComponent(item.request_id)}`}
+                    >
+                      {t('portal.support_request_view_detail', {}, 'View detail')}
+                    </Link>
                   </div>
                   <div className="shrink-0 text-sm text-slate-500 dark:text-slate-400 lg:text-right">
                     <p>{t(`portal.support_topic_${item.topic}`, {}, item.topic)}</p>

@@ -294,6 +294,32 @@ class FakePortalEmailSender(PortalEmailSender):
             }
         )
 
+    def send_support_request_update(
+        self,
+        *,
+        recipient_email: str,
+        request_id: str,
+        title: str,
+        status: str,
+        message_body: str,
+        project_name: str,
+        portal_url: str,
+        locale: str = "zh-CN",
+    ) -> None:
+        self.messages.append(
+            {
+                "kind": "support_request_update",
+                "recipient_email": recipient_email,
+                "request_id": request_id,
+                "title": title,
+                "status": status,
+                "message_body": message_body,
+                "project_name": project_name,
+                "portal_url": portal_url,
+                "locale": locale,
+            }
+        )
+
 
 class _PortalDraftProvider:
     provider_id = "fake_llm"
@@ -627,7 +653,8 @@ def test_portal_issue_rotate_list_and_revoke_site_key(tmp_path: Path) -> None:
 
 
 def test_portal_support_requests_flow_to_admin_queue(tmp_path: Path) -> None:
-    database_url, client = _build_client(tmp_path)
+    fake_sender = FakePortalEmailSender()
+    database_url, client = _build_client(tmp_path, portal_email_sender=fake_sender)
 
     client.post(
         "/internal/service/accounts",
@@ -681,6 +708,17 @@ def test_portal_support_requests_flow_to_admin_queue(tmp_path: Path) -> None:
     portal_items = portal_list_response.json()["data"]["items"]
     assert [item["request_id"] for item in portal_items] == [request_id]
 
+    portal_message_response = client.post(
+        f"/portal/v1/support-requests/{request_id}/messages",
+        json={"body": "Adding the provider reference: alipay-trade-10001."},
+        headers=build_portal_headers(
+            principal_id="principal:portal-support@example.com",
+            idempotency_key="portal-support-message-001",
+        ),
+    )
+    assert portal_message_response.status_code == 200, portal_message_response.text
+    assert portal_message_response.json()["data"]["message"]["author_kind"] == "customer"
+
     admin_update_response = client.patch(
         f"/internal/service/admin/support-requests/{request_id}",
         json={"status": "in_progress", "admin_note": "Checking payment provider event."},
@@ -688,6 +726,49 @@ def test_portal_support_requests_flow_to_admin_queue(tmp_path: Path) -> None:
     )
     assert admin_update_response.status_code == 200, admin_update_response.text
     assert admin_update_response.json()["data"]["request"]["status"] == "in_progress"
+
+    admin_public_reply_response = client.post(
+        f"/internal/service/admin/support-requests/{request_id}/messages",
+        json={
+            "body": "We found the provider confirmation and are updating the order.",
+            "visibility": "public",
+        },
+        headers=build_internal_headers(idempotency_key="portal-support-admin-public-001"),
+    )
+    assert admin_public_reply_response.status_code == 200, admin_public_reply_response.text
+    admin_public_payload = admin_public_reply_response.json()["data"]
+    assert admin_public_payload["message"]["visibility"] == "public"
+    assert admin_public_payload["notification"]["delivered"] is True
+    assert fake_sender.messages[-1]["kind"] == "support_request_update"
+    assert fake_sender.messages[-1]["recipient_email"] == "portal-support@example.com"
+
+    admin_internal_note_response = client.post(
+        f"/internal/service/admin/support-requests/{request_id}/messages",
+        json={
+            "body": "Internal: payment event arrived after webhook retry.",
+            "visibility": "internal",
+        },
+        headers=build_internal_headers(idempotency_key="portal-support-admin-internal-001"),
+    )
+    assert admin_internal_note_response.status_code == 200, admin_internal_note_response.text
+    assert admin_internal_note_response.json()["data"]["message"]["visibility"] == "internal"
+
+    portal_detail_response = client.get(
+        f"/portal/v1/support-requests/{request_id}",
+        headers=build_portal_headers(principal_id="principal:portal-support@example.com"),
+    )
+    assert portal_detail_response.status_code == 200, portal_detail_response.text
+    portal_messages = portal_detail_response.json()["data"]["messages"]
+    assert [message["visibility"] for message in portal_messages] == ["public", "public", "public"]
+    assert "Internal:" not in "\n".join(message["body"] for message in portal_messages)
+
+    admin_detail_response = client.get(
+        f"/internal/service/admin/support-requests/{request_id}",
+        headers=build_internal_headers(),
+    )
+    assert admin_detail_response.status_code == 200, admin_detail_response.text
+    admin_messages = admin_detail_response.json()["data"]["messages"]
+    assert [message["visibility"] for message in admin_messages].count("internal") == 2
 
     admin_list_response = client.get(
         "/internal/service/admin/support-requests?status=in_progress",
@@ -707,7 +788,11 @@ def test_portal_support_requests_flow_to_admin_queue(tmp_path: Path) -> None:
                 )
             )
         }
-    assert audit_kinds == {"support_request.created", "support_request.updated"}
+    assert audit_kinds == {
+        "support_request.created",
+        "support_request.message_created",
+        "support_request.updated",
+    }
 
     dispose_engine(database_url)
 

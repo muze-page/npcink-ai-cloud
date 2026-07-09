@@ -5,19 +5,23 @@ import { resolve } from 'node:path';
 const root = process.cwd();
 const portalNavbarPath = resolve(root, 'src/components/portal/PortalNavbar.tsx');
 const portalSupportPagePath = resolve(root, 'src/app/portal/support/page.tsx');
+const portalSupportDetailPagePath = resolve(root, 'src/app/portal/support/[requestId]/page.tsx');
 const portalBillingPagePath = resolve(root, 'src/app/portal/billing/page.tsx');
 const portalClientPath = resolve(root, 'src/lib/portal-client.ts');
 const adminLayoutPath = resolve(root, 'src/app/admin/layout.tsx');
 const adminSupportPagePath = resolve(root, 'src/app/admin/support-requests/page.tsx');
+const adminSupportDetailPagePath = resolve(root, 'src/app/admin/support-requests/[requestId]/page.tsx');
 const adminProxyPath = resolve(root, 'src/app/api/admin/[...path]/route.ts');
 const i18nPath = resolve(root, 'src/lib/i18n.ts');
 
 const portalNavbarSource = readFileSync(portalNavbarPath, 'utf8');
 const portalSupportPageSource = readFileSync(portalSupportPagePath, 'utf8');
+const portalSupportDetailPageSource = readFileSync(portalSupportDetailPagePath, 'utf8');
 const portalBillingPageSource = readFileSync(portalBillingPagePath, 'utf8');
 const portalClientSource = readFileSync(portalClientPath, 'utf8');
 const adminLayoutSource = readFileSync(adminLayoutPath, 'utf8');
 const adminSupportPageSource = readFileSync(adminSupportPagePath, 'utf8');
+const adminSupportDetailPageSource = readFileSync(adminSupportDetailPagePath, 'utf8');
 const adminProxySource = readFileSync(adminProxyPath, 'utf8');
 const i18nSource = readFileSync(i18nPath, 'utf8');
 
@@ -57,6 +61,21 @@ assert.match(
   'Portal client must expose support request creation'
 );
 assert.match(
+  portalClientSource,
+  /async getSupportRequest[\s\S]*\/support-requests\/\$\{requestId\}/,
+  'Portal client must expose support request detail loading'
+);
+assert.match(
+  portalClientSource,
+  /async createSupportRequestMessage[\s\S]*'POST', `\/support-requests\/\$\{requestId\}\/messages`/,
+  'Portal client must expose customer ticket replies'
+);
+assert.match(
+  portalSupportDetailPageSource,
+  /portalClient\.getSupportRequest[\s\S]*portalClient\.createSupportRequestMessage/,
+  'Portal ticket detail page must load messages and let customers reply'
+);
+assert.match(
   adminLayoutSource,
   /href: '\/admin\/support-requests'[\s\S]*admin\.nav_support_requests/,
   'Admin navigation must expose the support request queue'
@@ -72,9 +91,29 @@ assert.match(
   'Admin support page must update ticket status through the admin proxy'
 );
 assert.match(
+  adminSupportPageSource,
+  /params\.set\('topic', topic\)[\s\S]*topicFilter/,
+  'Admin support queue must expose the backend topic filter'
+);
+assert.match(
+  adminSupportPageSource,
+  /href=\{`\/admin\/support-requests\/\$\{encodeURIComponent\(item\.request_id\)\}`\}/,
+  'Admin support queue must link to ticket detail'
+);
+assert.match(
+  adminSupportDetailPageSource,
+  /createSupportRequestMessage[\s\S]*visibility[\s\S]*public[\s\S]*internal/,
+  'Admin ticket detail must support public replies and internal notes'
+);
+assert.match(
   adminProxySource,
   /PATCH[\s\S]*\^support-requests\\\/\[\^\/\]\+\$/,
   'Admin proxy must route support request status updates to the admin service namespace'
+);
+assert.match(
+  adminProxySource,
+  /POST[\s\S]*\^support-requests\\\/\[\^\/\]\+\\\/messages\$/,
+  'Admin proxy must route support request message creation to the admin service namespace'
 );
 assert.match(
   i18nSource,

@@ -8,6 +8,8 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 
+from app.adapters.notifications.base import PortalEmailDeliveryError
+from app.adapters.notifications.smtp import build_portal_email_sender
 from app.adapters.providers.registry import resolve_live_provider_adapters
 from app.adapters.repositories.catalog_repository import CatalogRepository
 from app.api.auth import authorize_internal_request, get_cloud_services
@@ -57,6 +59,7 @@ from app.domain.runtime.service import RuntimeRunNotFoundError, RuntimeService
 from app.domain.service_settings import (
     ServiceSettingsAdminError,
     ServiceSettingsAdminService,
+    resolve_portal_public_base_url,
 )
 from app.domain.site_knowledge.metrics import SiteKnowledgeObservabilityService
 from app.domain.wordpress_ai_connector.routing_profiles import (
@@ -115,6 +118,11 @@ class PortalUsersBatchDisablePayload(BaseModel):
 class AdminSupportRequestUpdatePayload(BaseModel):
     status: str = ""
     admin_note: str = ""
+
+
+class AdminSupportRequestMessagePayload(BaseModel):
+    body: str = Field(default="", max_length=4000)
+    visibility: str = Field(default="public", max_length=32)
 
 
 class SiteProvisionPayload(BaseModel):
@@ -457,6 +465,57 @@ def _build_audit_payload(payload: BaseModel | None = None) -> dict[str, Any]:
     if payload is None:
         return {}
     return payload.model_dump(mode="json")
+
+
+def _send_support_request_update_notification(
+    request: Request,
+    *,
+    result: dict[str, object],
+) -> dict[str, object]:
+    request_payload = result.get("request") if isinstance(result.get("request"), dict) else {}
+    message_payload = result.get("message") if isinstance(result.get("message"), dict) else {}
+    if not isinstance(request_payload, dict) or not isinstance(message_payload, dict):
+        return {"attempted": False, "delivered": False, "reason": "invalid_payload"}
+    if str(message_payload.get("visibility") or "") != "public":
+        return {"attempted": False, "delivered": False, "reason": "internal_message"}
+    recipient_email = str(request_payload.get("email") or "").strip()
+    if not recipient_email:
+        return {"attempted": False, "delivered": False, "reason": "missing_recipient"}
+    services = get_cloud_services(request)
+    email_sender = services.portal_email_sender or build_portal_email_sender(
+        services.settings,
+        database_url=services.settings.database_url,
+    )
+    if email_sender is None:
+        return {"attempted": False, "delivered": False, "reason": "email_not_configured"}
+    try:
+        portal_base_url = resolve_portal_public_base_url(
+            services.settings.database_url,
+            services.settings,
+        ).rstrip("/")
+        email_sender.send_support_request_update(
+            recipient_email=recipient_email,
+            request_id=str(request_payload.get("request_id") or ""),
+            title=str(request_payload.get("title") or ""),
+            status=str(request_payload.get("status") or ""),
+            message_body=str(message_payload.get("body") or ""),
+            project_name=services.settings.project_name,
+            portal_url=(
+                f"{portal_base_url}/portal/support/"
+                f"{request_payload.get('request_id') or ''}"
+            ),
+            locale=str(request.headers.get("accept-language") or "zh-CN"),
+        )
+    except (NotImplementedError, AttributeError):
+        return {"attempted": False, "delivered": False, "reason": "sender_not_supported"}
+    except PortalEmailDeliveryError as error:
+        return {
+            "attempted": True,
+            "delivered": False,
+            "reason": "delivery_failed",
+            "message": str(error),
+        }
+    return {"attempted": True, "delivered": True, "reason": ""}
 
 
 def _record_provider_connection_audit(
@@ -2628,36 +2687,40 @@ async def get_admin_support_request(request: Request, request_id: str) -> Any:
     if auth is not None:
         return auth
     try:
-        result = _get_commercial_service(request).list_admin_support_requests(
-            query=request_id,
-            limit=1,
-            offset=0,
-        )
+        result = _get_commercial_service(request).get_admin_support_request(request_id=request_id)
     except CommercialServiceError as error:
         return _service_error_response(error, request=request)
-    items = result.get("items") if isinstance(result, dict) else []
-    match = next(
-        (
-            item
-            for item in items
-            if isinstance(item, dict) and str(item.get("request_id") or "") == request_id
-        ),
-        None,
-    )
-    if match is None:
-        return JSONResponse(
-            status_code=404,
-            content=build_envelope(
-                status="error",
-                message="support request was not found",
-                data={"error_code": "service.support_request_not_found"},
-                revision="m6",
-            ),
-        )
     return build_envelope(
         status="ok",
         message="support request loaded",
-        data={"request": match},
+        data=result,
+        revision="m6",
+    )
+
+
+@router.post("/admin/support-requests/{request_id}/messages")
+async def create_admin_support_request_message(
+    request: Request,
+    request_id: str,
+    payload: AdminSupportRequestMessagePayload,
+) -> Any:
+    auth = await authorize_internal_request(request, require_idempotency=True)
+    if auth is not None:
+        return auth
+    try:
+        result = _get_commercial_service(request).create_admin_support_request_message(
+            request_id=request_id,
+            body=payload.body,
+            visibility=payload.visibility,
+            audit_context=_build_audit_context(request),
+        )
+    except CommercialServiceError as error:
+        return _service_error_response(error, request=request)
+    notification = _send_support_request_update_notification(request, result=result)
+    return build_envelope(
+        status="ok",
+        message="support request message created",
+        data={**result, "notification": notification},
         revision="m6",
     )
 
