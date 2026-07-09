@@ -11,6 +11,7 @@ import {
 } from '@/components/backoffice/BackofficeScaffold';
 import { AdminMutationReceipt, type AdminMutationReceiptPayload } from '@/components/admin/AdminMutationReceipt';
 import { ProviderReferenceLinks } from '@/components/admin/ProviderReferenceLinks';
+import { SupplierSummaryCards } from '@/components/admin/SupplierSummaryCards';
 import { BackofficeFilterPill } from '@/components/backoffice/BackofficeFilterPill';
 import { BackofficeStatusBadge } from '@/components/backoffice/BackofficeStatusBadge';
 import { LoadingFallback } from '@/components/ui/LoadingFallback';
@@ -2534,8 +2535,14 @@ function AiResourcesContent() {
   const readyModelSupplierCount = data.connections.filter(
     (connection) => supplierCategory(connection) === 'ai' && connection.status === 'ready'
   ).length;
+  const modelSupplierCount = data.connections.filter(
+    (connection) => supplierCategory(connection) === 'ai'
+  ).length;
   const readyCapabilitySupplierCount = data.connections.filter(
     (connection) => supplierCategory(connection) === 'capability' && connection.status === 'ready'
+  ).length;
+  const capabilitySupplierCount = data.connections.filter(
+    (connection) => supplierCategory(connection) === 'capability'
   ).length;
   const attentionSupplierCount = data.connections.filter(
     (connection) => connection.status !== 'ready'
@@ -2560,45 +2567,14 @@ function AiResourcesContent() {
         actions={null}
         contentClassName="py-4 md:py-4"
       >
-        <div className="grid gap-3 md:grid-cols-3">
-          <div className="rounded-xl border border-slate-200 bg-white/80 px-4 py-3 dark:border-slate-800 dark:bg-slate-950/45">
-            <p className="text-[0.68rem] font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">
-              {aiText('overview_model_suppliers', 'Model suppliers')}
-            </p>
-            <p className="mt-2 text-lg font-semibold text-slate-950 dark:text-white">
-              {readyModelSupplierCount}/{data.connections.filter((connection) => supplierCategory(connection) === 'ai').length}
-            </p>
-            <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-              {aiText('overview_ready_ratio_detail', 'ready / total')}
-            </p>
-          </div>
-          <div className="rounded-xl border border-slate-200 bg-white/80 px-4 py-3 dark:border-slate-800 dark:bg-slate-950/45">
-            <p className="text-[0.68rem] font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">
-              {aiText('overview_capability_suppliers', 'Capability suppliers')}
-            </p>
-            <p className="mt-2 text-lg font-semibold text-slate-950 dark:text-white">
-              {readyCapabilitySupplierCount}/{data.connections.filter((connection) => supplierCategory(connection) === 'capability').length}
-            </p>
-            <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-              {aiText('overview_ready_ratio_detail', 'ready / total')}
-            </p>
-          </div>
-          <div className="rounded-xl border border-slate-200 bg-white/80 px-4 py-3 dark:border-slate-800 dark:bg-slate-950/45">
-            <p className="text-[0.68rem] font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">
-              {aiText('overview_attention_suppliers', 'Needs attention')}
-            </p>
-            <p className={`mt-2 text-lg font-semibold ${
-              attentionSupplierCount > 0
-                ? 'text-amber-600 dark:text-amber-400'
-                : 'text-emerald-600 dark:text-emerald-400'
-            }`}>
-              {attentionSupplierCount}
-            </p>
-            <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-              {aiText('overview_attention_detail', 'Disabled, missing, or unhealthy supplier channels')}
-            </p>
-          </div>
-        </div>
+        <SupplierSummaryCards
+          readyModelSupplierCount={readyModelSupplierCount}
+          modelSupplierCount={modelSupplierCount}
+          readyCapabilitySupplierCount={readyCapabilitySupplierCount}
+          capabilitySupplierCount={capabilitySupplierCount}
+          attentionSupplierCount={attentionSupplierCount}
+          translate={aiText}
+        />
         <p className="border-t border-slate-200 pt-4 text-xs leading-5 text-slate-500 dark:border-slate-800 dark:text-slate-400">
           {aiText('workspace_boundary_notice', 'This page opens Cloud service-plane detail only. Local plugin prompts, routers, approval, and WordPress writes stay outside Cloud.')}
         </p>

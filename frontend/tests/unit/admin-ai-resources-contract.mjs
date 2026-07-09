@@ -17,6 +17,7 @@ const adminSubscriptionDetailPath = resolve(process.cwd(), 'src/app/admin/subscr
 const workflowMetadataPanelPath = resolve(process.cwd(), 'src/components/backoffice/CloudWorkflowMetadataPanel.tsx');
 const adminLoginPath = resolve(process.cwd(), 'src/app/admin/login/page.tsx');
 const providerReferenceLinksPath = resolve(process.cwd(), 'src/components/admin/ProviderReferenceLinks.tsx');
+const supplierSummaryCardsPath = resolve(process.cwd(), 'src/components/admin/SupplierSummaryCards.tsx');
 const pageSource = readFileSync(pagePath, 'utf8');
 const abilityModelsSource = readFileSync(abilityModelsPath, 'utf8');
 const aiAdvisorSource = readFileSync(aiAdvisorPath, 'utf8');
@@ -30,6 +31,7 @@ const adminSubscriptionDetailSource = readFileSync(adminSubscriptionDetailPath, 
 const workflowMetadataPanelSource = readFileSync(workflowMetadataPanelPath, 'utf8');
 const adminLoginSource = readFileSync(adminLoginPath, 'utf8');
 const providerReferenceLinksSource = readFileSync(providerReferenceLinksPath, 'utf8');
+const supplierSummaryCardsSource = readFileSync(supplierSummaryCardsPath, 'utf8');
 const i18nSource = readFileSync(resolve(process.cwd(), 'src/lib/i18n.ts'), 'utf8');
 const openCapabilityTemplateStart = pageSource.indexOf('function openCapabilityProviderTemplate');
 const openCapabilityTemplateSource = openCapabilityTemplateStart >= 0
@@ -890,9 +892,15 @@ assert.doesNotMatch(
 );
 
 assert.match(
-  pageSource,
+  supplierSummaryCardsSource,
   /overview_model_suppliers[\s\S]*overview_capability_suppliers[\s\S]*overview_attention_suppliers/,
   'AI resources overview must use a compact supplier status strip'
+);
+
+assert.match(
+  pageSource,
+  /SupplierSummaryCards[\s\S]*readyModelSupplierCount=\{readyModelSupplierCount\}[\s\S]*capabilitySupplierCount=\{capabilitySupplierCount\}[\s\S]*translate=\{aiText\}/,
+  'AI resources page must render the compact supplier status strip through the shared component'
 );
 
 assert.doesNotMatch(
