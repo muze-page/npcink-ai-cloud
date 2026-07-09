@@ -73,6 +73,7 @@
     "perf:production-baseline": "python scripts/production_performance_baseline.py --format json --require-indexes",
     "perf:production-baseline:ssh": "bash deploy/production-performance-baseline-to-ssh-host.sh",
     "release:timing": "python3 scripts/report-release-timing.py",
+    "release:junit-timing": "python3 scripts/report-junit-timing.py",
     "smoke:prod-python-extras": "bash scripts/production-python-extras-smoke.sh",
     "scaffold:route": "node scripts/scaffold-cloud-route.js",
     "scaffold:portal-route": "node scripts/scaffold-cloud-portal-route.js",

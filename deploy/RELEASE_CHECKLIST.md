@@ -150,6 +150,9 @@ Preferred GitHub Actions path:
   - `NPCINK_CLOUD_RELEASE_SITE_ID`
   - `NPCINK_CLOUD_RELEASE_KEY_ID`
   - `NPCINK_CLOUD_RELEASE_KEY_SECRET`
+- after a successful `production` deploy, confirm the `Post-production smoke`
+  job passed. It always runs the public small-customer preflight and runs formal
+  release smoke automatically when the secrets above are configured;
 - manually run the `Release Smoke` workflow from the `production` branch;
 - keep `require_alipay_enabled=true` for a paid trial release;
 - treat a green `Release Smoke` run as the formal smoke evidence for the items
@@ -199,6 +202,7 @@ Required outcomes:
 Small-customer paid trial preflight is incomplete unless:
 
 - [ ] `deploy/small-customer-trial-preflight.sh --require-smoke-env --require-alipay-enabled` passes
+- [ ] the `Post-production smoke` GitHub Actions job passes after a production deploy
 - [ ] `/open/payments/alipay/return` redirects to `/portal/billing?payment_return=alipay...`
 - [ ] `/open/payments/alipay/notify` rejects an unsigned or empty callback
 - [ ] the filled smoke env file remains outside Git and has restricted local permissions

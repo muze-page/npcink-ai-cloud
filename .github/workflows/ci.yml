@@ -6,6 +6,7 @@ on:
   pull_request:
 
 permissions:
+  actions: read
   contents: read
 
 concurrency:
@@ -127,7 +128,31 @@ jobs:
 
       - name: Pytest
         if: github.event_name != 'pull_request'
-        run: .venv/bin/python -m pytest tests/api tests/contract tests/domain -q
+        run: |
+          mkdir -p artifacts
+          .venv/bin/python -m pytest tests/api tests/contract tests/domain -q \
+            --junitxml=artifacts/pytest-backend.xml \
+            --durations=25
+
+      - name: Summarize pytest timing
+        if: always() && github.event_name != 'pull_request'
+        run: |
+          if [ -f artifacts/pytest-backend.xml ]; then
+            python3 scripts/report-junit-timing.py artifacts/pytest-backend.xml --top 25 \
+              >> "${GITHUB_STEP_SUMMARY}"
+          else
+            echo "## Pytest Timing Report" >> "${GITHUB_STEP_SUMMARY}"
+            echo "" >> "${GITHUB_STEP_SUMMARY}"
+            echo "Pytest timing artifact was not produced." >> "${GITHUB_STEP_SUMMARY}"
+          fi
+
+      - name: Upload pytest timing artifact
+        if: always() && github.event_name != 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytest-backend-timing
+          path: artifacts/pytest-backend.xml
+          if-no-files-found: ignore
 
   frontend:
     needs: [classify]
@@ -260,3 +285,82 @@ jobs:
           test -f site/terms/zh/terms.html
           test -f site/terms/styles.css
           ! find site/terms -name '.DS_Store' -print -quit | grep -q .
+
+  post-production-smoke:
+    name: Post-production smoke
+    needs: [classify, deploy-production]
+    if: always() && github.event_name == 'push' && github.ref == 'refs/heads/production' && needs.classify.outputs.deploy_required == 'true' && needs.classify.outputs.static_terms_only != 'true' && needs['deploy-production'].result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Small-customer preflight
+        env:
+          NPCINK_CLOUD_BASE_URL: ${{ secrets.PROD_BASE_URL || 'https://cloud.npc.ink' }}
+        run: |
+          bash deploy/small-customer-trial-preflight.sh \
+            --base-url "${NPCINK_CLOUD_BASE_URL}" \
+            --require-alipay-enabled
+
+      - name: Optional formal release smoke
+        env:
+          NPCINK_CLOUD_BASE_URL: ${{ secrets.PROD_BASE_URL || 'https://cloud.npc.ink' }}
+          NPCINK_CLOUD_INTERNAL_AUTH_TOKEN: ${{ secrets.NPCINK_CLOUD_INTERNAL_AUTH_TOKEN }}
+          NPCINK_CLOUD_ADMIN_BOOTSTRAP_TOKEN: ${{ secrets.NPCINK_CLOUD_ADMIN_BOOTSTRAP_TOKEN }}
+          NPCINK_CLOUD_RELEASE_MEMBER_EMAIL: ${{ secrets.NPCINK_CLOUD_RELEASE_MEMBER_EMAIL }}
+          NPCINK_CLOUD_PORTAL_LOGIN_CODE: ${{ secrets.NPCINK_CLOUD_PORTAL_LOGIN_CODE }}
+          NPCINK_CLOUD_RELEASE_SITE_ID: ${{ secrets.NPCINK_CLOUD_RELEASE_SITE_ID }}
+          NPCINK_CLOUD_RELEASE_KEY_ID: ${{ secrets.NPCINK_CLOUD_RELEASE_KEY_ID }}
+          NPCINK_CLOUD_RELEASE_KEY_SECRET: ${{ secrets.NPCINK_CLOUD_RELEASE_KEY_SECRET }}
+        run: |
+          missing=0
+          for key in \
+            NPCINK_CLOUD_INTERNAL_AUTH_TOKEN \
+            NPCINK_CLOUD_ADMIN_BOOTSTRAP_TOKEN \
+            NPCINK_CLOUD_RELEASE_MEMBER_EMAIL \
+            NPCINK_CLOUD_PORTAL_LOGIN_CODE \
+            NPCINK_CLOUD_RELEASE_SITE_ID \
+            NPCINK_CLOUD_RELEASE_KEY_ID \
+            NPCINK_CLOUD_RELEASE_KEY_SECRET
+          do
+            if [ -z "${!key:-}" ]; then
+              missing=1
+            fi
+          done
+          if [ "${missing}" = "1" ]; then
+            echo "## Formal Release Smoke" >> "${GITHUB_STEP_SUMMARY}"
+            echo "" >> "${GITHUB_STEP_SUMMARY}"
+            echo "Skipped because one or more formal release smoke secrets are not configured." >> "${GITHUB_STEP_SUMMARY}"
+            exit 0
+          fi
+          bash deploy/release-smoke.sh --base-url "${NPCINK_CLOUD_BASE_URL}"
+
+  ci-observability:
+    name: CI observability
+    needs:
+      - secret-scan
+      - classify
+      - backend
+      - frontend
+      - deploy-production
+      - static-terms
+      - post-production-smoke
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Summarize CI timing
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if ! python3 scripts/report-release-timing.py "${GITHUB_RUN_ID}" --repo "${GITHUB_REPOSITORY}" >> "${GITHUB_STEP_SUMMARY}"; then
+            echo "## Release Timing Report" >> "${GITHUB_STEP_SUMMARY}"
+            echo "" >> "${GITHUB_STEP_SUMMARY}"
+            echo "Timing summary was unavailable for this run." >> "${GITHUB_STEP_SUMMARY}"
+          fi
