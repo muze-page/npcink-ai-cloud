@@ -65,7 +65,7 @@ jobs:
 
       - name: Setup pnpm
         if: steps.deploy_guard.outputs.should_deploy == 'true'
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v6
 
       - name: Setup Node
         if: steps.deploy_guard.outputs.should_deploy == 'true'
