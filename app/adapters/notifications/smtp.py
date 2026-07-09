@@ -4,7 +4,7 @@ import smtplib
 import ssl
 from email.header import Header
 from email.message import EmailMessage
-from email.utils import formataddr
+from email.utils import formataddr, formatdate, make_msgid
 from html import escape
 
 from app.adapters.notifications.base import PortalEmailDeliveryError, PortalEmailSender
@@ -63,6 +63,7 @@ class SmtpPortalEmailSender(PortalEmailSender):
         )
 
         try:
+            self._ensure_delivery_headers(message)
             self._deliver(message)
         except Exception as error:
             raise PortalEmailDeliveryError(
@@ -107,6 +108,7 @@ class SmtpPortalEmailSender(PortalEmailSender):
         )
 
         try:
+            self._ensure_delivery_headers(message)
             self._deliver(message)
         except Exception as error:
             raise PortalEmailDeliveryError(
@@ -157,6 +159,7 @@ class SmtpPortalEmailSender(PortalEmailSender):
         )
 
         try:
+            self._ensure_delivery_headers(message)
             self._deliver(message)
         except Exception as error:
             raise PortalEmailDeliveryError(
@@ -204,6 +207,7 @@ class SmtpPortalEmailSender(PortalEmailSender):
         )
 
         try:
+            self._ensure_delivery_headers(message)
             self._deliver(message)
         except Exception as error:
             raise PortalEmailDeliveryError(
@@ -245,6 +249,7 @@ class SmtpPortalEmailSender(PortalEmailSender):
         )
 
         try:
+            self._ensure_delivery_headers(message)
             self._deliver(message)
         except Exception as error:
             raise PortalEmailDeliveryError(
@@ -275,6 +280,18 @@ class SmtpPortalEmailSender(PortalEmailSender):
     def _login_if_configured(self, client: smtplib.SMTP) -> None:
         if self.username and self.password:
             client.login(self.username, self.password)
+
+    def _ensure_delivery_headers(self, message: EmailMessage) -> None:
+        if not message.get("Date"):
+            message["Date"] = formatdate(localtime=True)
+        if not message.get("Message-ID"):
+            message["Message-ID"] = make_msgid(domain=self._message_id_domain())
+
+    def _message_id_domain(self) -> str | None:
+        if "@" not in self.from_email:
+            return None
+        domain = self.from_email.rsplit("@", 1)[1].strip()
+        return domain or None
 
     def _format_from_header(self) -> str:
         if self.from_name:

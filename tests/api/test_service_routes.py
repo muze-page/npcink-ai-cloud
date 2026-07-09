@@ -57,6 +57,7 @@ from app.core.secrets import (
     decrypt_provider_connection_secret,
     decrypt_service_setting_secret,
     encrypt_provider_connection_secret,
+    encrypt_service_setting_secret,
 )
 from app.core.security import REPLAY_SCOPE_PUBLIC_POST_SITE
 from app.core.services import CloudServices
@@ -780,6 +781,238 @@ def test_admin_service_settings_store_masked_cloud_runtime_config(tmp_path: Path
     assert "smtp-password" not in json.dumps(data)
     assert alipay_private_key not in json.dumps(data)
     assert alipay_public_key not in json.dumps(data)
+
+    dispose_engine(database_url)
+
+
+def test_admin_service_settings_email_replaces_unreadable_existing_password(
+    tmp_path: Path,
+) -> None:
+    database_url, client = _build_client(tmp_path)
+    old_settings = _runtime_service_settings(database_url)
+    old_settings.admin_session_secret = "old-admin-session-secret-32b"
+    bad_ciphertext = encrypt_service_setting_secret("old-password", settings=old_settings)
+
+    with get_session(database_url) as session:
+        session.add(
+            ServiceSetting(
+                setting_id="portal_email",
+                setting_kind="portal",
+                enabled=False,
+                config_json={
+                    "smtp_host": "smtp.example.com",
+                    "smtp_port": 465,
+                    "smtp_username": "smtp-user",
+                    "smtp_use_ssl": True,
+                    "smtp_use_starttls": False,
+                    "smtp_timeout_seconds": 20,
+                    "from_email": "noreply@example.com",
+                    "from_name": "Npcink AI Cloud",
+                    "reply_to": "support@example.com",
+                },
+                secret_ciphertext_json={"smtp_password": bad_ciphertext},
+                status="disabled",
+                metadata_json={},
+            )
+        )
+        session.commit()
+
+    response = client.patch(
+        "/internal/service/admin/service-settings/email",
+        json={
+            "enabled": True,
+            "smtp_host": "smtp.example.com",
+            "smtp_port": 465,
+            "smtp_username": "smtp-user",
+            "smtp_password": "new-password",
+            "smtp_use_ssl": True,
+            "smtp_use_starttls": False,
+            "smtp_timeout_seconds": 20,
+            "from_email": "noreply@example.com",
+            "from_name": "Npcink AI Cloud",
+            "reply_to": "support@example.com",
+        },
+        headers=build_internal_headers(idempotency_key="service-settings-email-rotate-001"),
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["data"]["status"] == "ready"
+    with get_session(database_url) as session:
+        row = session.get(ServiceSetting, "portal_email")
+        assert row is not None
+        assert decrypt_service_setting_secret(
+            str((row.secret_ciphertext_json or {})["smtp_password"]),
+            settings=_runtime_service_settings(database_url),
+        ) == "new-password"
+
+    dispose_engine(database_url)
+
+
+def test_service_setting_secret_prefers_dedicated_key_and_reads_legacy() -> None:
+    legacy_settings = _runtime_service_settings("sqlite+pysqlite:///:memory:")
+    legacy_ciphertext = encrypt_service_setting_secret(
+        "legacy-service-secret",
+        settings=legacy_settings,
+    )
+    dedicated_settings = _runtime_service_settings("sqlite+pysqlite:///:memory:")
+    dedicated_settings.service_settings_secret = (
+        "dedicated-service-settings-secret-32b"
+    )
+
+    assert (
+        decrypt_service_setting_secret(legacy_ciphertext, settings=dedicated_settings)
+        == "legacy-service-secret"
+    )
+
+    dedicated_ciphertext = encrypt_service_setting_secret(
+        "dedicated-service-secret",
+        settings=dedicated_settings,
+    )
+    rotated_admin_settings = _runtime_service_settings("sqlite+pysqlite:///:memory:")
+    rotated_admin_settings.admin_session_secret = "rotated-admin-session-secret-32b"
+    rotated_admin_settings.service_settings_secret = (
+        "dedicated-service-settings-secret-32b"
+    )
+    assert (
+        decrypt_service_setting_secret(
+            dedicated_ciphertext,
+            settings=rotated_admin_settings,
+        )
+        == "dedicated-service-secret"
+    )
+
+    with pytest.raises(RuntimeError, match="service setting secret could not be decrypted"):
+        decrypt_service_setting_secret(dedicated_ciphertext, settings=legacy_settings)
+
+
+def test_admin_service_settings_email_migrates_readable_legacy_password_to_dedicated_key(
+    tmp_path: Path,
+) -> None:
+    dedicated_secret = "dedicated-service-settings-secret-32b"
+    database_url, client = _build_client(
+        tmp_path,
+        settings_overrides={"service_settings_secret": dedicated_secret},
+    )
+    legacy_settings = _runtime_service_settings(database_url)
+    legacy_ciphertext = encrypt_service_setting_secret(
+        "legacy-password",
+        settings=legacy_settings,
+    )
+
+    with get_session(database_url) as session:
+        session.add(
+            ServiceSetting(
+                setting_id="portal_email",
+                setting_kind="portal",
+                enabled=True,
+                config_json={
+                    "smtp_host": "smtp.example.com",
+                    "smtp_port": 465,
+                    "smtp_username": "smtp-user",
+                    "smtp_use_ssl": True,
+                    "smtp_use_starttls": False,
+                    "smtp_timeout_seconds": 20,
+                    "from_email": "noreply@example.com",
+                    "from_name": "Npcink AI Cloud",
+                    "reply_to": "support@example.com",
+                },
+                secret_ciphertext_json={"smtp_password": legacy_ciphertext},
+                status="ready",
+                metadata_json={},
+            )
+        )
+        session.commit()
+
+    response = client.patch(
+        "/internal/service/admin/service-settings/email",
+        json={
+            "enabled": True,
+            "smtp_host": "smtp.example.com",
+            "smtp_port": 465,
+            "smtp_username": "smtp-user",
+            "smtp_password": None,
+            "smtp_use_ssl": True,
+            "smtp_use_starttls": False,
+            "smtp_timeout_seconds": 20,
+            "from_email": "noreply@example.com",
+            "from_name": "Npcink AI Cloud",
+            "reply_to": "support@example.com",
+        },
+        headers=build_internal_headers(idempotency_key="service-settings-email-migrate-001"),
+    )
+
+    assert response.status_code == 200, response.text
+    with get_session(database_url) as session:
+        row = session.get(ServiceSetting, "portal_email")
+        assert row is not None
+        migrated_ciphertext = str((row.secret_ciphertext_json or {})["smtp_password"])
+
+    migrated_settings = _runtime_service_settings(database_url)
+    migrated_settings.service_settings_secret = dedicated_secret
+    migrated_settings.admin_session_secret = "rotated-admin-session-secret-32b"
+    assert (
+        decrypt_service_setting_secret(migrated_ciphertext, settings=migrated_settings)
+        == "legacy-password"
+    )
+    with pytest.raises(RuntimeError, match="service setting secret could not be decrypted"):
+        decrypt_service_setting_secret(migrated_ciphertext, settings=legacy_settings)
+
+    dispose_engine(database_url)
+
+
+def test_admin_service_settings_email_requires_reentry_for_unreadable_saved_password(
+    tmp_path: Path,
+) -> None:
+    database_url, client = _build_client(tmp_path)
+    old_settings = _runtime_service_settings(database_url)
+    old_settings.admin_session_secret = "old-admin-session-secret-32b"
+    bad_ciphertext = encrypt_service_setting_secret("old-password", settings=old_settings)
+
+    with get_session(database_url) as session:
+        session.add(
+            ServiceSetting(
+                setting_id="portal_email",
+                setting_kind="portal",
+                enabled=False,
+                config_json={
+                    "smtp_host": "smtp.example.com",
+                    "smtp_port": 465,
+                    "smtp_username": "smtp-user",
+                    "smtp_use_ssl": True,
+                    "smtp_use_starttls": False,
+                    "smtp_timeout_seconds": 20,
+                    "from_email": "noreply@example.com",
+                    "from_name": "Npcink AI Cloud",
+                    "reply_to": "support@example.com",
+                },
+                secret_ciphertext_json={"smtp_password": bad_ciphertext},
+                status="disabled",
+                metadata_json={},
+            )
+        )
+        session.commit()
+
+    response = client.patch(
+        "/internal/service/admin/service-settings/email",
+        json={
+            "enabled": True,
+            "smtp_host": "smtp.example.com",
+            "smtp_port": 465,
+            "smtp_username": "smtp-user",
+            "smtp_password": None,
+            "smtp_use_ssl": True,
+            "smtp_use_starttls": False,
+            "smtp_timeout_seconds": 20,
+            "from_email": "noreply@example.com",
+            "from_name": "Npcink AI Cloud",
+            "reply_to": "support@example.com",
+        },
+        headers=build_internal_headers(idempotency_key="service-settings-email-rotate-002"),
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error_code"] == "service_settings.email_password_required"
+    assert "Re-enter the SMTP password" in response.json()["message"]
 
     dispose_engine(database_url)
 
@@ -4703,16 +4936,16 @@ def test_service_routes_admin_read_facade(tmp_path: Path) -> None:
     assert tier_template_by_id["pro"]["site_limit"] == 5
     assert tier_template_by_id["agency"]["site_limit"] == 25
     assert tier_template_by_id["free"]["max_vector_documents"] == 100
+    assert tier_template_by_id["plus"]["max_vector_documents"] == 800
     assert tier_template_by_id["pro"]["max_vector_documents"] == 2000
     assert tier_template_by_id["agency"]["max_vector_documents"] == 10000
     assert tier_template_by_id["agency"]["concurrency_template"]["max_active_runs"] == 10
-    assert tier_template_by_id["free"]["canonical_shell"]["entitlements"]["execution_tiers"] == [
-        "cloud"
-    ]
     assert (
-        tier_template_by_id["pro"]["canonical_shell"]["budgets"][
-            "max_ai_credits_per_period"
-        ]
+        tier_template_by_id["free"]["canonical_shell"]["entitlements"]["execution_tiers"]
+        == ["cloud"]
+    )
+    assert (
+        tier_template_by_id["pro"]["canonical_shell"]["budgets"]["max_ai_credits_per_period"]
         == 10000
     )
     assert tier_template_by_id["pro"]["canonical_shell"]["budgets"]["max_runs_per_period"] == 0

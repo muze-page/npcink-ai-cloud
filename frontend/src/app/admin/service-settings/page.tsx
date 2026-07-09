@@ -214,7 +214,7 @@ function serviceSettingsErrorMessage(
     return t('admin.service_settings.error_tls_mode_invalid', {}, 'SMTP 加密方式不能同时启用 SSL 和 STARTTLS。465 端口通常只使用 SSL，587 端口通常只使用 STARTTLS。');
   }
   if (errorCode === 'service_settings.email_password_required') {
-    return t('admin.service_settings.error_email_password_required', {}, 'SMTP password is required when an SMTP username is set. Leave the password field empty only if a password was already saved.');
+    return t('admin.service_settings.error_email_password_required', {}, 'Re-enter the SMTP password or app-specific authorization code, then save again.');
   }
   if (errorCode === 'service_settings.email_username_required') {
     return t('admin.service_settings.error_email_username_required', {}, 'SMTP username is required when an SMTP password is set.');

@@ -87,6 +87,7 @@ class Settings(BaseSettings):
             "NPCINK_CLOUD_OPS_SESSION_SECRET",
         ),
     )
+    service_settings_secret: str | None = Field(default=None)
     debug_local_origin_allowlist: str = Field(default="")
     browser_origin_allowlist: str = Field(default="")
     trusted_host_allowlist: str = Field(default="")
@@ -380,6 +381,7 @@ class Settings(BaseSettings):
             "internal_auth_token": self.internal_auth_token,
             "admin_bootstrap_token": self.admin_bootstrap_token,
             "admin_session_secret": self.admin_session_secret,
+            "service_settings_secret": self.service_settings_secret,
             "portal_jwt_secret": self.portal_jwt_secret,
         }
         for field_name, raw_value in secret_fields.items():

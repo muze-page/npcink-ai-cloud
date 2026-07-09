@@ -163,13 +163,30 @@ class ServiceSettingsAdminService:
             )
         username = _string(payload.get("smtp_username"))
         password_value = payload.get("smtp_password")
-        existing = _load_service_setting(self.database_url, SERVICE_SETTING_PORTAL_EMAIL)
-        existing_password = _decrypt_secret(existing, "smtp_password", settings=self.settings)
-        if username and password_value is None and not existing_password:
-            raise ServiceSettingsAdminError(
-                "service_settings.email_password_required",
-                "SMTP password is required when username is configured",
-            )
+        enabled = bool(payload.get("enabled", True))
+        if username and password_value is None and enabled:
+            existing = _load_service_setting(self.database_url, SERVICE_SETTING_PORTAL_EMAIL)
+            try:
+                existing_password = _decrypt_secret(
+                    existing,
+                    "smtp_password",
+                    settings=self.settings,
+                )
+            except RuntimeError as error:
+                raise ServiceSettingsAdminError(
+                    "service_settings.email_password_required",
+                    (
+                        "Saved SMTP password cannot be read. "
+                        "Re-enter the SMTP password and save again."
+                    ),
+                ) from error
+            if not existing_password:
+                raise ServiceSettingsAdminError(
+                    "service_settings.email_password_required",
+                    "SMTP password is required when username is configured",
+                )
+            if self.settings.service_settings_secret:
+                password_value = existing_password
         if not username and (password_value is not None and _string(password_value)):
             raise ServiceSettingsAdminError(
                 "service_settings.email_username_required",
@@ -194,7 +211,7 @@ class ServiceSettingsAdminService:
                 "reply_to": _string(payload.get("reply_to")).lower(),
             },
             secrets={"smtp_password": password_value},
-            enabled=bool(payload.get("enabled", True)),
+            enabled=enabled,
             required_secret_keys=["smtp_password"] if username else [],
         )
         return self._serialize(row)
@@ -469,7 +486,7 @@ class ServiceSettingsAdminService:
                     metadata_json={},
                 )
                 session.add(row)
-            secret_ciphertexts = _dict(row.secret_ciphertext_json)
+            secret_ciphertexts = dict(_dict(row.secret_ciphertext_json))
             for key, raw_value in secrets.items():
                 if raw_value is None:
                     continue
