@@ -46,13 +46,14 @@ The public package names are frozen:
 | Package | Internal tier id | Purpose |
 |---------|-----------------------------|---------|
 | `Free` | `free` | Conservative single-site baseline. |
+| `Plus` | `plus` | Entry paid usage above Free and below normal Pro headroom. |
 | `Pro` | `pro` | Normal hosted runtime and workflow usage. |
 | `Agency` | `agency` | Multi-site or sustained higher-volume usage. |
 
 Rules:
 
-- `Free / Pro / Agency` are the only public package names for this contract.
-- Internal tier ids are `free / pro / agency`.
+- `Free / Plus / Pro / Agency` are the only public package names for this contract.
+- Internal tier ids are `free / plus / pro / agency`.
 - Non-approved legacy package aliases must not be introduced
   into new entitlement API fields.
 - Plan and plan-version records remain the package execution truth inside Cloud.

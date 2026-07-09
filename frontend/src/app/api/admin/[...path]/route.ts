@@ -105,6 +105,12 @@ function buildAdminBackendPath(pathSegments: string[], method: string): string {
     return `/internal/service/admin/${normalized}`;
   }
   if (
+    upperMethod === 'PATCH' &&
+    normalized === 'credit-packs'
+  ) {
+    return '/internal/service/admin/credit-packs';
+  }
+  if (
     upperMethod === 'POST' &&
     normalized === 'provider-connections/preview-catalog'
   ) {

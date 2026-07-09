@@ -5,6 +5,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 CREDIT_PACK_CATALOG_VERSION = "ai-credit-packs-v1"
+DEFAULT_CREDIT_PACK_VALIDITY_DAYS = 365
+CREDIT_PACK_PERIOD_POLICY = "paid_credit_validity_days"
+CREDIT_PACK_EXPIRY_POLICY = "paid_at_plus_validity_days"
 
 
 @dataclass(frozen=True)
@@ -15,6 +18,7 @@ class CreditPack:
     amount: float
     currency: str
     recommended_for_tiers: tuple[str, ...]
+    validity_days: int = DEFAULT_CREDIT_PACK_VALIDITY_DAYS
     active: bool = True
 
 
@@ -25,7 +29,7 @@ CREDIT_PACKS: tuple[CreditPack, ...] = (
         ai_credits=10_000,
         amount=99.0,
         currency="CNY",
-        recommended_for_tiers=("free", "pro"),
+        recommended_for_tiers=("free", "plus"),
     ),
     CreditPack(
         pack_id="pack_medium",
@@ -62,8 +66,10 @@ def serialize_credit_pack(pack: CreditPack) -> dict[str, object]:
         "amount": round(float(pack.amount), 6),
         "currency": pack.currency,
         "recommended_for_tiers": list(pack.recommended_for_tiers),
+        "validity_days": int(pack.validity_days),
         "active": pack.active,
-        "period_policy": "current_subscription_period",
+        "period_policy": CREDIT_PACK_PERIOD_POLICY,
+        "expiry_policy": CREDIT_PACK_EXPIRY_POLICY,
         "grant_event_type": "grant",
         "catalog_version": CREDIT_PACK_CATALOG_VERSION,
     }

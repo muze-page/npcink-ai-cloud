@@ -2,7 +2,7 @@
 
 Status: active for the next small-customer trial phase.
 
-Purpose: freeze the current Free / Pro / Agency commercial posture so future
+Purpose: freeze the current Free / Plus / Pro / Agency commercial posture so future
 agents do not reintroduce canceled MVP work or turn Cloud into a broad
 commercial front office.
 
@@ -34,6 +34,15 @@ WordPress write owner.
 - Initial public price is CNY 29 per month.
 - Payment provider for this phase is Alipay.
 
+### Plus
+
+- Entry paid package for accounts that have outgrown Free.
+- Managed by operator/Admin while self-serve Plus checkout is not finalized.
+- Sits between Free and Pro for monthly AI credits, site headroom, and runtime
+  concurrency.
+- Customer-facing copy may say "contact support"; it must not show a Plus
+  payment button until the Plus checkout contract is added.
+
 ### Agency
 
 - Custom high-volume package for a small number of accounts.
@@ -60,6 +69,9 @@ Pro trialing + no payment after trial end
 Free active + direct Pro payment succeeds
   -> Pro active, monthly period
 
+Plus
+  -> operator-managed active subscription
+
 Agency
   -> operator-managed active subscription
 ```
@@ -78,6 +90,7 @@ coverage.
 - Seat or member lifecycle beyond the single customer email login path.
 - WeChat Pay user-facing checkout.
 - Complex dunning. Payment reminders may be sent by email.
+- Self-serve Plus purchase.
 - Self-serve Agency purchase.
 - Cloud-side WordPress publishing or any local approval replacement.
 
@@ -107,5 +120,6 @@ Before inviting paying trial customers:
   coverage.
 - A successful payment event activates Pro monthly entitlement without being
   blocked by the existing Free or Trial subscription.
+- Plus remains operator-managed and absent from self-serve checkout.
 - Agency remains operator-managed and absent from self-serve checkout.
 - Real Alipay provider readiness is proven before collecting real payments.

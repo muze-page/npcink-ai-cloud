@@ -227,11 +227,14 @@ Still deferred in the current phase:
 Commercial acceptance freeze:
 
 - `plans + plan_versions` remain the only package execution truth
-- `free / pro / agency` remain tier templates
+- `free / plus / pro / agency` remain tier templates
 - `free / free_v1` is the explicit production free package
-- `Free / Pro / Agency` remain the only current package presentation aliases
+- `Free / Plus / Pro / Agency` remain the only current package presentation
+  aliases
 - points are presentation, not a ledger
 - operator top-up means current billing period budget headroom only
+- customer credit-pack purchases create payment-order-backed credit grants with
+  a default 365-day validity window
 - no wallet, no permanent credit, and no entitlement change without the Cloud
   payment-order or operator service-plane path in the current phase
 

@@ -36,6 +36,8 @@ import { DEFAULT_PORTAL_CURRENCY, formatPortalCurrency, normalizePortalCurrency 
 import { formatPortalErrorMessage } from '@/lib/portal-error';
 import { formatCompactNumber, formatDate, formatNumber } from '@/lib/utils';
 
+type TranslateFn = (key: string, params?: Record<string, string>, fallback?: string) => string;
+
 function coerceFiniteNumber(value: unknown): number {
   const numeric = Number(value || 0);
   return Number.isFinite(numeric) ? numeric : 0;
@@ -44,6 +46,74 @@ function coerceFiniteNumber(value: unknown): number {
 function formatQuotaValue(value: unknown, unlimited = false, unlimitedLabel = 'Unlimited'): string {
   if (unlimited) return unlimitedLabel;
   return formatNumber(Math.round(Number(value || 0)));
+}
+
+function normalizePaymentText(value: unknown): string {
+  return String(value || '').trim().toLowerCase().replace(/[\s_-]+/g, '_');
+}
+
+function resolvePaymentOrderTitle(order: PortalPaymentOrder, t: TranslateFn): string {
+  const packId = String(order.credit_pack?.pack_id || '').trim();
+  const rawTitle = String(order.credit_pack?.label || order.subject || '').trim();
+  const normalized = normalizePaymentText(`${packId} ${rawTitle}`);
+  const packKey = normalized.includes('pack_small') || normalized.includes('small_credit_pack')
+    ? 'pack_small'
+    : normalized.includes('pack_medium') || normalized.includes('medium_credit_pack')
+      ? 'pack_medium'
+      : normalized.includes('pack_large') || normalized.includes('large_credit_pack')
+        ? 'pack_large'
+        : '';
+
+  if (packKey) {
+    return t(`portal.usage.credit_pack_${packKey}`, {}, rawTitle || order.order_id);
+  }
+  if (normalized.includes('pro') || normalizePaymentText(order.purchase_kind).includes('subscription')) {
+    return t('portal.package.pro_monthly_order_title', {}, 'Pro monthly package');
+  }
+  return rawTitle || order.order_id;
+}
+
+function resolvePaymentOrderStatusLabel(order: PortalPaymentOrder, t: TranslateFn): string {
+  const status = normalizePaymentText(order.status);
+  const code = normalizePaymentText(order.status_detail?.code);
+  if (code.includes('awaiting_payment_confirmation') || status === 'pending') {
+    return t('portal.usage.payment_order_status_waiting_confirmation', {}, 'Waiting for payment confirmation');
+  }
+  if (code.includes('paid') || status === 'paid') {
+    return t('portal.usage.payment_order_status_paid', {}, 'Paid');
+  }
+  if (code.includes('refund') || status === 'refunded') {
+    return t('portal.usage.payment_order_status_refunded', {}, 'Refunded');
+  }
+  if (status === 'failed') {
+    return t('portal.usage.payment_order_status_failed', {}, 'Failed');
+  }
+  if (status === 'canceled' || status === 'cancelled') {
+    return t('portal.usage.payment_order_status_canceled', {}, 'Canceled');
+  }
+  return t('portal.usage.payment_order_status_unknown', {}, 'To confirm');
+}
+
+function resolvePaymentOrderDetail(order: PortalPaymentOrder, t: TranslateFn): string {
+  const status = normalizePaymentText(order.status);
+  const code = normalizePaymentText(order.status_detail?.code);
+  if (code.includes('awaiting_payment_confirmation') || status === 'pending') {
+    return t(
+      'portal.usage.payment_order_waiting_confirmation_detail',
+      {},
+      'Waiting for Alipay or WeChat Pay confirmation. Package changes or credits are granted after provider confirmation.'
+    );
+  }
+  if (code.includes('paid') || status === 'paid') {
+    return t('portal.usage.payment_order_paid_detail', {}, 'Payment has been confirmed.');
+  }
+  if (code.includes('refund') || status === 'refunded') {
+    return t('portal.usage.payment_order_refunded_detail', {}, 'This order has been refunded.');
+  }
+  if (status === 'failed') {
+    return t('portal.usage.payment_order_failed_detail', {}, 'Payment was not completed.');
+  }
+  return t('portal.usage.payment_order_default_detail', {}, 'Payment status is recorded by Cloud.');
 }
 
 function PortalBillingContent() {
@@ -258,7 +328,7 @@ function PortalBillingContent() {
 
   const packageActions = (
     <BackofficeStackCard variant="portal" className="bg-white/70 dark:bg-slate-950/35">
-      <div className="grid gap-3 lg:grid-cols-3">
+      <div className="grid gap-3 lg:grid-cols-4">
         <div className="rounded-[1rem] border border-slate-200 bg-slate-50/70 p-4 dark:border-slate-800 dark:bg-slate-950/35">
           <p className="text-sm font-semibold text-slate-950 dark:text-white">
             {t('portal.package.free_title', {}, 'Free')}
@@ -269,6 +339,18 @@ function PortalBillingContent() {
           <BackofficeStatusBadge
             status={currentPlanId === 'free' ? 'ok' : 'neutral'}
             label={currentPlanId === 'free' ? t('common.current', {}, 'Current') : t('common.available', {}, 'Available')}
+          />
+        </div>
+        <div className="rounded-[1rem] border border-slate-200 bg-slate-50/70 p-4 dark:border-slate-800 dark:bg-slate-950/35">
+          <p className="text-sm font-semibold text-slate-950 dark:text-white">
+            {t('portal.package.plus_title', {}, 'Plus')}
+          </p>
+          <p className="mt-2 text-sm text-slate-500 dark:text-slate-400">
+            {t('portal.package.plus_desc', {}, 'Entry paid credits and small-site headroom. Contact support while self-serve checkout is being finalized.')}
+          </p>
+          <BackofficeStatusBadge
+            status={currentPlanId === 'plus' ? 'ok' : 'neutral'}
+            label={currentPlanId === 'plus' ? t('common.current', {}, 'Current') : t('portal.package.operator_managed', {}, 'Operator managed')}
           />
         </div>
         <div className="rounded-[1rem] border border-blue-200 bg-blue-50/60 p-4 dark:border-blue-900/60 dark:bg-blue-950/20">
@@ -363,20 +445,19 @@ function PortalBillingContent() {
             >
               <div>
                 <p className="font-medium text-slate-950 dark:text-white">
-                  {order.credit_pack?.label || order.subject || order.order_id}
+                  {resolvePaymentOrderTitle(order, t)}
                 </p>
                 <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                  {order.status_detail?.detail ||
-                    t('portal.usage.payment_order_default_detail', {}, 'Payment status is recorded by Cloud.')}
+                  {resolvePaymentOrderDetail(order, t)}
                 </p>
               </div>
               <div>
                 <BackofficeStatusBadge
-                  label={order.status_detail?.label || order.status || 'pending'}
+                  label={resolvePaymentOrderStatusLabel(order, t)}
                   status={order.status || 'pending'}
                 />
                 <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
-                  {order.status_detail?.label || order.status}
+                  {resolvePaymentOrderStatusLabel(order, t)}
                 </p>
               </div>
               <div className="sm:text-right">
@@ -444,7 +525,6 @@ function PortalBillingContent() {
     return <PortalLoadingState message={t('portal.billing.loading', {}, 'Loading billing snapshots...')} />;
   }
 
-  const currency = normalizePortalCurrency(snapshots[0]?.currency || DEFAULT_PORTAL_CURRENCY);
   const latestSnapshot = snapshots[0] || null;
   const syncState = reconciliation?.reconciliation?.in_sync;
   const snapshotPlanVersionId =
@@ -554,45 +634,59 @@ function PortalBillingContent() {
                 {t(
                   'portal.usage.credit_packs_desc',
                   {},
-                  'Add points to the current package period without changing your plan.'
+                  'Add points without changing your plan. Purchased credits are valid for one year after payment.'
                 )}
               </p>
             </div>
             <BackofficeStatusBadge
               status="warning"
-              label={t('portal.usage.credit_packs_period_badge', {}, 'Current period')}
+              label={t('portal.usage.credit_packs_period_badge', {}, 'One-year validity')}
             />
           </div>
           <div className="mt-4 grid gap-3 md:grid-cols-3">
-            {availableCreditPacks.map((pack) => (
-              <div
-                key={pack.pack_id}
-                className="rounded-[1rem] border border-slate-200 bg-slate-50/70 p-4 dark:border-slate-800 dark:bg-slate-950/35"
-              >
-                <p className="text-sm font-semibold text-slate-950 dark:text-white">
-                  {t(`portal.usage.credit_pack_${pack.pack_id}`, {}, pack.label)}
-                </p>
-                <p className="mt-2 text-xl font-semibold text-slate-950 dark:text-white">
-                  {formatQuotaValue(pack.ai_credits)}
-                </p>
-                <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
-                  {formatPortalCurrency(Number(pack.amount || 0), {
-                    from: normalizePortalCurrency(pack.currency),
-                    to: DEFAULT_PORTAL_CURRENCY,
-                  })}
-                </p>
-                <button
-                  type="button"
-                  className="btn btn-secondary mt-4 w-full"
-                  disabled={creditPackPending !== null}
-                  onClick={() => void handleCreateCreditPackOrder(pack.pack_id)}
+            {availableCreditPacks.map((pack) => {
+              const validityDays = Number(
+                (pack as unknown as Record<string, unknown>).validity_days ||
+                  (creditPacks as unknown as Record<string, unknown> | null)?.default_validity_days ||
+                  365
+              );
+              return (
+                <div
+                  key={pack.pack_id}
+                  className="rounded-[1rem] border border-slate-200 bg-slate-50/70 p-4 dark:border-slate-800 dark:bg-slate-950/35"
                 >
-                  {creditPackPending === pack.pack_id
-                    ? t('common.saving', {}, 'Saving...')
-                    : t('portal.usage.credit_pack_buy_action', {}, 'Buy credits')}
-                </button>
-              </div>
-            ))}
+                  <p className="text-sm font-semibold text-slate-950 dark:text-white">
+                    {t(`portal.usage.credit_pack_${pack.pack_id}`, {}, pack.label)}
+                  </p>
+                  <p className="mt-2 text-xl font-semibold text-slate-950 dark:text-white">
+                    {formatQuotaValue(pack.ai_credits)}
+                  </p>
+                  <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
+                    {formatPortalCurrency(Number(pack.amount || 0), {
+                      from: normalizePortalCurrency(pack.currency),
+                      to: DEFAULT_PORTAL_CURRENCY,
+                    })}
+                  </p>
+                  <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
+                    {t(
+                      'portal.usage.credit_pack_validity_days',
+                      { days: String(validityDays) },
+                      `Valid for ${validityDays} days after payment`
+                    )}
+                  </p>
+                  <button
+                    type="button"
+                    className="btn btn-secondary mt-4 w-full"
+                    disabled={creditPackPending !== null}
+                    onClick={() => void handleCreateCreditPackOrder(pack.pack_id)}
+                  >
+                    {creditPackPending === pack.pack_id
+                      ? t('common.saving', {}, 'Saving...')
+                      : t('portal.usage.credit_pack_buy_action', {}, 'Buy credits')}
+                  </button>
+                </div>
+              );
+            })}
           </div>
           {creditPackOrder ? (
             <div className="mt-4 rounded-[1rem] border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800 dark:border-emerald-900/60 dark:bg-emerald-950/25 dark:text-emerald-200">
@@ -658,7 +752,10 @@ function PortalBillingContent() {
 	                  },
 	                  {
 	                    label: t('portal.usage.package_budget_label', {}, 'Budget'),
-	                    value: formatPortalCurrency(coerceFiniteNumber(snapshot.totals?.cost), { to: currency }),
+	                    value: formatPortalCurrency(coerceFiniteNumber(snapshot.totals?.cost), {
+                        from: normalizePortalCurrency(snapshot.currency || DEFAULT_PORTAL_CURRENCY),
+                        to: DEFAULT_PORTAL_CURRENCY,
+                      }),
 	                  },
                 ]}
               />
