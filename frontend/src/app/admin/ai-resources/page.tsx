@@ -2622,9 +2622,14 @@ function AiResourcesContent() {
         description={aiText('description', 'Manage Cloud runtime provider connections, model visibility, and capability sources. Runtime diagnostics stay in the Runtime Diagnostics page.')}
         descriptionDisplay="hint"
         aside={(
-          <Link href="/admin/troubleshooting" className="btn btn-secondary justify-center">
-            {aiText('action_view_diagnostics', 'View diagnostics')}
-          </Link>
+          <div className="flex flex-col gap-2 sm:flex-row">
+            <Link href="/admin/ability-models" className="btn btn-secondary justify-center">
+              {aiText('action_open_model_binding', 'Open model binding')}
+            </Link>
+            <Link href="/admin/troubleshooting" className="btn btn-secondary justify-center">
+              {aiText('action_view_diagnostics', 'View diagnostics')}
+            </Link>
+          </div>
         )}
         actions={null}
         contentClassName="py-4 md:py-4"

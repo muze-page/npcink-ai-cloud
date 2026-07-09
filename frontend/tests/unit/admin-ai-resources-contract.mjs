@@ -68,8 +68,8 @@ assert.ok(
 );
 
 assert.ok(
-  abilityModelsNavIndex >= 0,
-  'Ability-model routing must have a top-level admin navigation entry'
+  abilityModelsNavIndex < 0,
+  'Model binding must be a secondary provider entry instead of a top-level admin navigation item'
 );
 
 assert.ok(
@@ -77,9 +77,16 @@ assert.ok(
   'Providers must appear before Runtime Diagnostics in primary navigation'
 );
 
-assert.ok(
-  aiResourcesNavIndex < abilityModelsNavIndex && abilityModelsNavIndex < troubleshootingNavIndex,
-  'Model binding must sit beside Providers before Runtime Diagnostics'
+assert.match(
+  layoutSource,
+  /href: '\/admin\/ai-resources'[\s\S]*activePrefixes: \['\/admin\/ai-resources', '\/admin\/ability-models'\]/,
+  'Providers must stay selected when operators open the secondary Model Binding page'
+);
+
+assert.match(
+  aiResourcesPrimaryPanelSource,
+  /href="\/admin\/ability-models"[\s\S]*action_open_model_binding/,
+  'AI resources must expose Model Binding as an explicit secondary entry'
 );
 
 assert.doesNotMatch(
@@ -118,22 +125,10 @@ assert.doesNotMatch(
   'Portal site connect must not let the display-name helper fall back to a site ID in the default card'
 );
 
-assert.match(
-  portalNavbarSource,
-  /site\.site_id\.toLowerCase\(\)/,
-  'Portal site switcher must keep site IDs searchable'
-);
-
-assert.match(
-  portalNavbarSource,
-  /visibleSiteLabel[\s\S]*getPortalSiteWordPressUrl/,
-  'Portal site switcher must keep site IDs searchable while avoiding ID fallback in the visible label'
-);
-
 assert.doesNotMatch(
   portalNavbarSource,
-  /getPortalSiteSecondaryLabel\(site\) \|\| site\.site_id|getPortalSiteSecondaryLabel\(selectedSite\)/,
-  'Portal site switcher must not show site IDs as the default secondary label'
+  /siteSearchQuery|handleSiteChange|aria-haspopup="listbox"|portal\.search_sites_short/,
+  'Portal navbar must not expose a global site switcher; site selection belongs in site-specific surfaces'
 );
 
 assert.match(

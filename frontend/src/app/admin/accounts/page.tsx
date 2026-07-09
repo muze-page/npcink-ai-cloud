@@ -421,6 +421,9 @@ function AccountsContent() {
       >
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
           <p className="max-w-3xl text-sm text-slate-600 dark:text-slate-300">{postureConclusion}</p>
+          <Link href="/admin/portal-users" className="btn btn-secondary btn-sm w-fit">
+            {t('admin.accounts.open_portal_users_action', {}, 'Open self-registered users')}
+          </Link>
         </div>
       </BackofficePrimaryPanel>
 

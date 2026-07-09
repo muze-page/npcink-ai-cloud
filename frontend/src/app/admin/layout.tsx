@@ -181,11 +181,6 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
           fallback: 'Service Status',
         },
         {
-          href: '/admin/subscriptions',
-          labelKey: 'admin.nav_subscriptions',
-          fallback: 'Subscriptions',
-        },
-        {
           href: '/admin/plans',
           labelKey: 'admin.nav_plan_catalog',
           fallback: 'Package Catalog',
@@ -194,11 +189,6 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
           href: '/admin/credit-packs',
           labelKey: 'admin.nav_credit_packs',
           fallback: 'Credit Packs',
-        },
-        {
-          href: '/admin/portal-users',
-          labelKey: 'admin.nav_portal_users',
-          fallback: 'Portal Users',
         },
       ],
     },
@@ -212,12 +202,7 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
           href: '/admin/ai-resources',
           labelKey: 'admin.nav_ai_resources',
           fallback: 'Providers',
-          activePrefixes: ['/admin/ai-resources'],
-        },
-        {
-          href: '/admin/ability-models',
-          labelKey: 'admin.nav_ability_models',
-          fallback: 'Model Binding',
+          activePrefixes: ['/admin/ai-resources', '/admin/ability-models'],
         },
         {
           href: '/admin/troubleshooting',
