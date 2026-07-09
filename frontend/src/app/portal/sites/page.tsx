@@ -25,6 +25,8 @@ import {
   getPortalSiteDisplayName,
   getPortalSiteWordPressUrl,
 } from '@/lib/portal-site-display';
+import { portalClient } from '@/lib/portal-client';
+import { formatPortalErrorMessage } from '@/lib/portal-error';
 import { formatDate } from '@/lib/utils';
 
 const EMPTY_SITES: Array<{
@@ -42,14 +44,22 @@ function PortalSitesContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { t } = useLocale();
-  const { session, isLoading, isAuthenticated, selectSite } = useSession();
+  const { session, isLoading, isAuthenticated, selectSite, refresh } = useSession();
   const [searchQuery, setSearchQuery] = useState(() => searchParams?.get('q') || '');
   const [showConnectModal, setShowConnectModal] = useState(false);
+  const [pendingRemoveSite, setPendingRemoveSite] = useState<PortalSiteListItem | null>(null);
+  const [removeError, setRemoveError] = useState('');
+  const [removeNotice, setRemoveNotice] = useState('');
+  const [isRemovingSite, setIsRemovingSite] = useState(false);
   const sites = session?.sites ?? EMPTY_SITES;
   const activeSite = sites.find((site) => site.status === 'active') || null;
   const selectedSiteId = session?.site_id || activeSite?.site_id || '';
   const selectedSite = sites.find((site) => site.site_id === selectedSiteId) || activeSite || sites[0] || null;
   const selectedSiteWordPressUrl = getPortalSiteWordPressUrl(selectedSite);
+  const canRemoveSites = Boolean(
+    session?.allowed_actions?.includes('remove_sites') ||
+      session?.accounts?.some((account) => account.allowed_actions?.includes('remove_sites'))
+  );
   const addonConnectMode = searchParams?.get('connect') === 'wordpress-addon';
   const addonWordPressUrl = searchParams?.get('site_url') || '';
   const addonSiteName = searchParams?.get('site_name') || '';
@@ -130,6 +140,40 @@ function PortalSitesContent() {
     setShowConnectModal(false);
   };
 
+  const openRemoveSiteModal = (site: PortalSiteListItem) => {
+    setPendingRemoveSite(site);
+    setRemoveError('');
+  };
+
+  const closeRemoveSiteModal = () => {
+    if (isRemovingSite) return;
+    setPendingRemoveSite(null);
+    setRemoveError('');
+  };
+
+  const handleRemoveSite = async () => {
+    if (!pendingRemoveSite) return;
+    setIsRemovingSite(true);
+    setRemoveError('');
+    setRemoveNotice('');
+    try {
+      await portalClient.removeSite(pendingRemoveSite.site_id);
+      await refresh();
+      setRemoveNotice(t('portal.site_remove_success', {}, 'Site removed. Active keys were revoked and history was kept.'));
+      setPendingRemoveSite(null);
+    } catch (error) {
+      setRemoveError(
+        formatPortalErrorMessage(
+          error,
+          t,
+          t('portal.site_remove_failed', {}, 'Failed to remove this site.')
+        )
+      );
+    } finally {
+      setIsRemovingSite(false);
+    }
+  };
+
   return (
     <BackofficePageStack>
       <PortalWorkspaceHeader
@@ -199,6 +243,11 @@ function PortalSitesContent() {
         </div>
 
         <div className="grid gap-3">
+          {removeNotice ? (
+            <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800 dark:border-emerald-900/60 dark:bg-emerald-950/30 dark:text-emerald-100">
+              {removeNotice}
+            </div>
+          ) : null}
           {filteredSites.length === 0 ? (
             <PortalEmptyState
               title={t('portal.sites.empty_title', {}, 'No sites match this search')}
@@ -267,6 +316,15 @@ function PortalSitesContent() {
                   <Link href={`/portal/sites/${site.site_id}`} className="btn btn-secondary btn-sm">
                     {t('portal.site_record', {}, 'Site record')}
                   </Link>
+                  {canRemoveSites && site.status !== 'suspended' ? (
+                    <button
+                      type="button"
+                      onClick={() => openRemoveSiteModal(site)}
+                      className="btn btn-danger btn-sm"
+                    >
+                      {t('portal.remove_site_action', {}, 'Remove site')}
+                    </button>
+                  ) : null}
                 </div>
               </div>
             </BackofficeStackCard>
@@ -310,6 +368,45 @@ function PortalSitesContent() {
             actionHref="/portal"
           />
         )}
+      </Modal>
+
+      <Modal
+        isOpen={Boolean(pendingRemoveSite)}
+        onClose={closeRemoveSiteModal}
+        closeOnOverlay={!isRemovingSite}
+        title={t('portal.remove_site_action', {}, 'Remove site')}
+        description={t(
+          'portal.remove_site_confirm',
+          {},
+          'Remove this site? Cloud service will stop, active keys will be revoked, and usage history will be kept.'
+        )}
+        footer={
+          <>
+            <button type="button" className="btn btn-secondary" onClick={closeRemoveSiteModal} disabled={isRemovingSite}>
+              {t('common.cancel')}
+            </button>
+            <button type="button" className="btn btn-danger" onClick={() => void handleRemoveSite()} disabled={isRemovingSite}>
+              {isRemovingSite ? t('common.saving') : t('portal.remove_site_action', {}, 'Remove site')}
+            </button>
+          </>
+        }
+      >
+        <div className="space-y-3 text-sm text-slate-600 dark:text-slate-300">
+          <p className="font-semibold text-slate-950 dark:text-white">
+            {getPortalSiteDisplayName(pendingRemoveSite)}
+          </p>
+          {pendingRemoveSite ? (
+            <p className="break-words">
+              {getPortalSiteWordPressUrl(pendingRemoveSite) ||
+                t('portal.site_url_missing_short', {}, 'Site URL not configured')}
+            </p>
+          ) : null}
+          {removeError ? (
+            <p className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-red-700 dark:border-red-900/60 dark:bg-red-950/40 dark:text-red-200">
+              {removeError}
+            </p>
+          ) : null}
+        </div>
       </Modal>
     </BackofficePageStack>
   );

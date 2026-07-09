@@ -39,10 +39,10 @@ const billingMetricStrip = billingPageSource.slice(
   billingMetricStart,
   billingPageSource.indexOf('<BackofficeStackCard', billingMetricStart)
 );
-assert.match(
+assert.doesNotMatch(
   billingPageSource,
-  /function coerceFiniteNumber/,
-  'Portal package page must guard invalid numeric snapshot totals'
+  /function coerceFiniteNumber|snapshot\.totals|snapshots\.map/,
+  'Portal package page must not render raw package snapshot records on the customer surface'
 );
 assert.match(
   billingPageSource,
@@ -125,9 +125,39 @@ assert.match(
   'Shared entitlement summary must keep package points and site allowance visible together'
 );
 assert.match(
+  entitlementComponentSource,
+  /md:grid-cols-2 lg:grid-cols-3/,
+  'Shared entitlement summary must show the three primary package rights on one desktop row'
+);
+assert.match(
+  billingPageSource,
+  /resolvePaymentOrderTitle[\s\S]*pack_small[\s\S]*pack_medium[\s\S]*pack_large[\s\S]*portal\.usage\.credit_pack_\$\{packKey\}/,
+  'Portal package page must localize credit pack order titles instead of rendering raw provider labels'
+);
+assert.match(
+  billingPageSource,
+  /resolvePaymentOrderStatusLabel[\s\S]*payment_order_status_waiting_confirmation/,
+  'Portal package page must localize payment order status labels'
+);
+assert.match(
+  billingPageSource,
+  /shouldShowPaymentOrder[\s\S]*status !== 'canceled'[\s\S]*filter\(shouldShowPaymentOrder\)/,
+  'Portal package page must hide canceled or expired payment orders from the customer order list'
+);
+assert.doesNotMatch(
+  billingPageSource,
+  /order\.status_detail\?\.label|order\.status_detail\?\.detail/,
+  'Portal package page must not render backend payment-order English labels directly'
+);
+assert.doesNotMatch(
+  billingPageSource,
+  /portal\.usage\.credit_pack_validity_days/,
+  'Portal package page must not repeat per-card credit pack validity when the section already shows one-year validity'
+);
+assert.doesNotMatch(
   billingPageSource,
   /<details className="overflow-hidden rounded-\[1\.4rem\] border/,
-  'Portal package page must keep package records behind an explicit details reveal'
+  'Portal package page must not expose package record snapshots on the customer surface'
 );
 assert.doesNotMatch(
   billingPageSource,

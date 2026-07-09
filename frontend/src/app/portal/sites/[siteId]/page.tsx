@@ -1,12 +1,13 @@
 'use client';
 
 import React, { Suspense, useEffect, useState } from 'react';
-import { useParams } from 'next/navigation';
+import { useParams, useRouter } from 'next/navigation';
 import { LoadingFallback } from '@/components/ui/LoadingFallback';
 import { BackofficePageStack, BackofficeSectionPanel, BackofficeStackCard } from '@/components/backoffice/BackofficeScaffold';
 import { BackofficeStatusBadge } from '@/components/backoffice/BackofficeStatusBadge';
 import { PortalWorkspaceHeader } from '@/components/portal/PortalWorkspaceHeader';
 import { PortalErrorState, PortalLoadingState, PortalSignedOutState } from '@/components/portal/PortalPageState';
+import { Modal } from '@/components/ui/Modal';
 import { useLocale } from '@/contexts/LocaleContext';
 import { useSession } from '@/hooks/useSession';
 import { portalClient, type PortalSiteSummaryRecord, type Site } from '@/lib/portal-client';
@@ -19,11 +20,15 @@ import { formatDate } from '@/lib/utils';
 
 function PortalSiteRecordContent() {
   const params = useParams<{ siteId?: string }>();
+  const router = useRouter();
   const siteId = String(params?.siteId || '');
   const { t } = useLocale();
-  const { session, isLoading, isAuthenticated } = useSession();
+  const { session, isLoading, isAuthenticated, refresh } = useSession();
   const [summary, setSummary] = useState<PortalSiteSummaryRecord | null>(null);
   const [error, setError] = useState('');
+  const [showRemoveModal, setShowRemoveModal] = useState(false);
+  const [removeError, setRemoveError] = useState('');
+  const [isRemovingSite, setIsRemovingSite] = useState(false);
 
   useEffect(() => {
     if (!isAuthenticated || !siteId) return;
@@ -92,6 +97,37 @@ function PortalSiteRecordContent() {
     ? t('portal.home.filter_attention_only', {}, 'Needs attention')
     : t('portal.home.risk_level_normal', {}, 'Normal');
   const contactStatusLabel = t('portal.site_record_contact_available', {}, 'Available in Contact');
+  const canRemoveSites = Boolean(
+    session.allowed_actions?.includes('remove_sites') ||
+      session.accounts?.some((account) => account.allowed_actions?.includes('remove_sites'))
+  );
+  const canRemoveThisSite = canRemoveSites && site.status !== 'archived' && site.status !== 'suspended';
+
+  const closeRemoveModal = () => {
+    if (isRemovingSite) return;
+    setShowRemoveModal(false);
+    setRemoveError('');
+  };
+
+  const handleRemoveSite = async () => {
+    setIsRemovingSite(true);
+    setRemoveError('');
+    try {
+      await portalClient.removeSite(site.site_id);
+      await refresh();
+      router.push('/portal/sites');
+    } catch (err) {
+      setRemoveError(
+        formatPortalErrorMessage(
+          err,
+          t,
+          t('portal.site_remove_failed', {}, 'Failed to remove this site.')
+        )
+      );
+    } finally {
+      setIsRemovingSite(false);
+    }
+  };
 
   return (
     <BackofficePageStack>
@@ -190,6 +226,15 @@ function PortalSiteRecordContent() {
                       'No action is needed for this site right now.'
                     )}
                 </p>
+                {canRemoveThisSite ? (
+                  <button
+                    type="button"
+                    className="btn btn-danger btn-sm mt-3"
+                    onClick={() => setShowRemoveModal(true)}
+                  >
+                    {t('portal.remove_site_action', {}, 'Remove site')}
+                  </button>
+                ) : null}
               </div>
               <BackofficeStatusBadge
                 status={siteNeedsAttention ? 'warning' : 'active'}
@@ -199,6 +244,40 @@ function PortalSiteRecordContent() {
           </BackofficeStackCard>
         </div>
       </BackofficeSectionPanel>
+
+      <Modal
+        isOpen={showRemoveModal}
+        onClose={closeRemoveModal}
+        closeOnOverlay={!isRemovingSite}
+        title={t('portal.remove_site_action', {}, 'Remove site')}
+        description={t(
+          'portal.remove_site_confirm',
+          {},
+          'Remove this site? Cloud service will stop, active keys will be revoked, and usage history will be kept.'
+        )}
+        footer={
+          <>
+            <button type="button" className="btn btn-secondary" onClick={closeRemoveModal} disabled={isRemovingSite}>
+              {t('common.cancel')}
+            </button>
+            <button type="button" className="btn btn-danger" onClick={() => void handleRemoveSite()} disabled={isRemovingSite}>
+              {isRemovingSite ? t('common.saving') : t('portal.remove_site_action', {}, 'Remove site')}
+            </button>
+          </>
+        }
+      >
+        <div className="space-y-3 text-sm text-slate-600 dark:text-slate-300">
+          <p className="font-semibold text-slate-950 dark:text-white">{getPortalSiteDisplayName(site)}</p>
+          <p className="break-words">
+            {siteUrl || t('portal.site_url_missing_short', {}, 'Site URL not configured')}
+          </p>
+          {removeError ? (
+            <p className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-red-700 dark:border-red-900/60 dark:bg-red-950/40 dark:text-red-200">
+              {removeError}
+            </p>
+          ) : null}
+        </div>
+      </Modal>
     </BackofficePageStack>
   );
 }

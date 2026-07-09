@@ -57,8 +57,14 @@ assert.match(
 
 assert.match(
   loginSource,
-  /await verifyLoginCode\(normalizedEmail, normalizedCode, \{ rememberMe: form\.rememberMe \}\)[\s\S]*window\.location\.replace\('\/portal'\)/,
-  'Portal login page must use a full-page navigation after successful cookie-backed verification'
+  /resolvePortalLoginRedirect\(searchParams\.get\('redirect'\)\)/,
+  'Portal login page must resolve a safe Portal redirect from the login query'
+);
+
+assert.match(
+  loginSource,
+  /await verifyLoginCode\(normalizedEmail, normalizedCode, \{ rememberMe: form\.rememberMe \}\)[\s\S]*window\.location\.replace\(redirectTo\)/,
+  'Portal login page must use a full-page navigation to the requested safe redirect after cookie-backed verification'
 );
 
 console.log('portal_login_remember_me_contract: ok');

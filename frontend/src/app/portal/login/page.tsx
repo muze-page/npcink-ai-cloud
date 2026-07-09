@@ -1,6 +1,7 @@
 'use client';
 
 import Link from 'next/link';
+import { useSearchParams } from 'next/navigation';
 import React, { Suspense, useState } from 'react';
 import { LoadingFallback } from '@/components/ui/LoadingFallback';
 import {
@@ -22,9 +23,24 @@ interface FormState {
   message: string;
 }
 
+function resolvePortalLoginRedirect(value: string | null): string {
+  const redirect = String(value || '').trim();
+  if (
+    redirect === '/portal' ||
+    redirect.startsWith('/portal/') ||
+    redirect.startsWith('/portal?') ||
+    redirect.startsWith('/portal#')
+  ) {
+    return redirect;
+  }
+  return '/portal';
+}
+
 function LoginFormContent() {
+  const searchParams = useSearchParams();
   const { t } = useLocale();
   const { requestLoginCode, verifyLoginCode } = useSession();
+  const redirectTo = resolvePortalLoginRedirect(searchParams.get('redirect'));
   const [form, setForm] = useState<FormState>({
     email: '',
     code: '',
@@ -104,7 +120,7 @@ function LoginFormContent() {
 
     try {
       await verifyLoginCode(normalizedEmail, normalizedCode, { rememberMe: form.rememberMe });
-      window.location.replace('/portal');
+      window.location.replace(redirectTo);
     } catch (error) {
       setForm((prev) => ({
         ...prev,

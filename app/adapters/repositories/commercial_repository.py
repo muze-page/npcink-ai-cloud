@@ -14,6 +14,7 @@ from app.core.models import (
     CREDIT_LEDGER_EVENT_CONSUME,
     IDENTITY_PROVIDER_BINDING_STATUS_ACTIVE,
     IDENTITY_PROVIDER_BINDING_STATUS_REVOKED,
+    PAYMENT_ORDER_STATUS_PENDING,
     PORTAL_LOGIN_CODE_STATUS_PENDING,
     PORTAL_OAUTH_STATE_STATUS_PENDING,
     PRINCIPAL_STATUS_ACTIVE,
@@ -1346,6 +1347,23 @@ class CommercialRepository:
             statement = statement.offset(offset)
         if limit is not None and limit > 0:
             statement = statement.limit(limit)
+        return list(self.session.scalars(statement))
+
+    def list_pending_payment_orders_before(
+        self,
+        *,
+        cutoff: datetime,
+        account_id: str | None = None,
+        site_id: str | None = None,
+    ) -> list[PaymentOrder]:
+        statement = select(PaymentOrder).where(
+            PaymentOrder.status == PAYMENT_ORDER_STATUS_PENDING,
+            PaymentOrder.created_at <= cutoff,
+        )
+        if account_id:
+            statement = statement.where(PaymentOrder.account_id == account_id)
+        if site_id:
+            statement = statement.where(PaymentOrder.site_id == site_id)
         return list(self.session.scalars(statement))
 
     def count_payment_orders(

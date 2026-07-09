@@ -2,11 +2,9 @@
 
 import { useState, type FormEvent } from 'react';
 import { BackofficeStackCard } from '@/components/backoffice/BackofficeScaffold';
-import { BackofficeIdentifier } from '@/components/backoffice/BackofficeIdentifier';
 import { useLocale } from '@/contexts/LocaleContext';
 import { portalClient, type Site } from '@/lib/portal-client';
 import { formatPortalErrorMessage } from '@/lib/portal-error';
-import { getPortalSiteWordPressUrl } from '@/lib/portal-site-display';
 
 interface PortalSiteConnectPanelProps {
   accountId: string;
@@ -24,8 +22,6 @@ interface PortalSiteConnectPanelProps {
 
 export function PortalSiteConnectPanel({
   accountId,
-  currentSiteId = '',
-  sites = [],
   onCreated,
   onSiteCreated,
   onClose,
@@ -40,11 +36,10 @@ export function PortalSiteConnectPanel({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
   const isAddonConnection = Boolean(addonReturnUrl && addonState);
-  const currentSite = (currentSiteId ? sites.find((site) => site.site_id === currentSiteId) : null) || sites[0] || null;
-  const currentSiteLabel = currentSite
-    ? currentSite.site_name || getPortalSiteWordPressUrl(currentSite) || t('portal.current_site', undefined, 'Current site')
-    : t('portal.connect_site_new_site', undefined, 'New site');
-  const supportSiteId = currentSite?.site_id || currentSiteId;
+  const addonSiteLabel =
+    siteName.trim() ||
+    wordpressUrl.trim().replace(/^https?:\/\//, '').replace(/\/$/, '') ||
+    t('portal.connect_site_new_site', undefined, 'New site');
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -112,56 +107,33 @@ export function PortalSiteConnectPanel({
 	              )}
         </p>
       </div>
-      <div className="grid gap-3 sm:grid-cols-2">
-        <div className="rounded-[1rem] border border-gray-200 bg-white px-3 py-3 dark:border-gray-800 dark:bg-gray-950">
-          <p className="text-xs text-gray-500 dark:text-gray-400">{t('common.account', undefined, 'Account')}</p>
-          <p className="mt-1 text-sm font-semibold text-gray-950 dark:text-white">
-            {t('portal.connect_site_current_customer', undefined, 'Current account')}
-          </p>
-        </div>
+      {isAddonConnection ? (
         <div className="rounded-[1rem] border border-gray-200 bg-white px-3 py-3 dark:border-gray-800 dark:bg-gray-950">
           <p className="text-xs text-gray-500 dark:text-gray-400">{t('common.site', undefined, 'Site')}</p>
           <p className="mt-1 text-sm font-semibold text-gray-950 dark:text-white">
-            {currentSiteLabel}
+            {addonSiteLabel}
           </p>
-          {currentSite ? (
-            <p className="mt-1 truncate text-xs text-gray-500 dark:text-gray-400">
-              {getPortalSiteWordPressUrl(currentSite) || t('portal.site_url_missing_short', undefined, 'Site URL not configured')}
-            </p>
-          ) : null}
+          <p className="mt-1 truncate text-xs text-gray-500 dark:text-gray-400">
+            {wordpressUrl.trim() || t('portal.site_url_missing_short', undefined, 'Site URL not configured')}
+          </p>
         </div>
-      </div>
-      <details className="rounded-[1rem] border border-gray-200 bg-white px-3 py-3 text-sm dark:border-gray-800 dark:bg-gray-950">
-        <summary className="cursor-pointer font-medium text-gray-700 dark:text-gray-200">
-          {t('portal.support_information', undefined, 'Support information')}
-        </summary>
-        <div className="mt-3 grid gap-2 text-xs text-gray-500 dark:text-gray-400 sm:grid-cols-2">
-          <div>
-            <span className="block font-medium text-gray-600 dark:text-gray-300">{t('common.account', undefined, 'Account')}</span>
-            <BackofficeIdentifier value={accountId} full />
-          </div>
-          {supportSiteId ? (
-            <div>
-              <span className="block font-medium text-gray-600 dark:text-gray-300">{t('common.site', undefined, 'Site')}</span>
-              <BackofficeIdentifier value={supportSiteId} full />
-            </div>
-          ) : null}
-        </div>
-      </details>
+      ) : null}
       <form className="space-y-4" onSubmit={(event) => void handleSubmit(event)}>
-        <label className="block">
-          <span className="text-sm font-medium text-gray-700 dark:text-gray-200">
-            {t('portal.connect_site_url_label', undefined, 'WordPress site URL')}
-          </span>
-          <input
-            type="url"
-            required
-            value={wordpressUrl}
-            onChange={(event) => setWordpressUrl(event.target.value)}
-            className="mt-1 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-950 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20 dark:border-gray-700 dark:bg-gray-950 dark:text-white"
-            placeholder="https://example.com"
-          />
-        </label>
+        {!isAddonConnection ? (
+          <label className="block">
+            <span className="text-sm font-medium text-gray-700 dark:text-gray-200">
+              {t('portal.connect_site_url_label', undefined, 'WordPress site URL')}
+            </span>
+            <input
+              type="url"
+              required
+              value={wordpressUrl}
+              onChange={(event) => setWordpressUrl(event.target.value)}
+              className="mt-1 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-950 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20 dark:border-gray-700 dark:bg-gray-950 dark:text-white"
+              placeholder="https://example.com"
+            />
+          </label>
+        ) : null}
         <label className="block">
           <span className="text-sm font-medium text-gray-700 dark:text-gray-200">
             {t('portal.connect_site_name_label', undefined, 'Display name')}

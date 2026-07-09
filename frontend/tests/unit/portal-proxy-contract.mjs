@@ -5,10 +5,12 @@ import assert from 'node:assert/strict';
 const portalSharedPath = resolve(process.cwd(), 'src/app/api/portal/_shared.ts');
 const portalRoutePath = resolve(process.cwd(), 'src/app/api/portal/[...path]/route.ts');
 const adminSharedPath = resolve(process.cwd(), 'src/app/api/admin/_shared.ts');
+const proxyPath = resolve(process.cwd(), 'src/proxy.ts');
 
 const portalSharedSource = readFileSync(portalSharedPath, 'utf8');
 const portalRouteSource = readFileSync(portalRoutePath, 'utf8');
 const adminSharedSource = readFileSync(adminSharedPath, 'utf8');
+const proxySource = readFileSync(proxyPath, 'utf8');
 
 for (const headerName of [
   'authorization',
@@ -85,4 +87,10 @@ assert.match(
   portalSharedSource,
   /const requestHost = getExternalRequestHost\(request\);/,
   'portal proxy must preserve the external host instead of collapsing to an internal Next host'
+);
+
+assert.match(
+  proxySource,
+  /loginUrl\.searchParams\.set\('redirect', `\$\{pathname\}\$\{request\.nextUrl\.search\}`\)/,
+  'portal page auth redirect must preserve query parameters such as WordPress addon connection state'
 );

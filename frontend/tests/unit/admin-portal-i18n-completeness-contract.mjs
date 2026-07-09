@@ -77,6 +77,7 @@ const translationLockedFiles = [
   resolve(root, 'src/app/admin/subscriptions/[subscriptionId]/page.tsx'),
   resolve(root, 'src/app/admin/plans/page.tsx'),
   resolve(root, 'src/app/admin/plans/[planId]/page.tsx'),
+  resolve(root, 'src/app/admin/credit-packs/page.tsx'),
   resolve(root, 'src/app/admin/coverage/page.tsx'),
   resolve(root, 'src/components/admin/AdminAuditSummaryPanel.tsx'),
   resolve(root, 'src/components/admin/AdminMutationReceipt.tsx'),

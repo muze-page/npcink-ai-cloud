@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 from uuid import uuid4
 
@@ -22,12 +22,14 @@ from app.core.models import (
     PaymentEvent,
     PaymentOrder,
     PaymentRefund,
+    ServiceSetting,
 )
 from app.domain.commercial.credit_packs import (
     CREDIT_PACK_CATALOG_VERSION,
-    get_credit_pack,
+    CREDIT_PACK_EXPIRY_POLICY,
+    CREDIT_PACK_PERIOD_POLICY,
+    DEFAULT_CREDIT_PACK_VALIDITY_DAYS,
     list_credit_packs,
-    serialize_credit_pack,
 )
 from app.domain.commercial.credits import AI_CREDIT_RATE_VERSION
 from app.domain.commercial.errors import (
@@ -48,15 +50,263 @@ from app.domain.commercial.payment_gateways import (
 from app.domain.commercial.service import PRO_MONTHLY_BILLING_CYCLE, PRO_MONTHLY_PRICE_CNY
 from app.domain.service_settings import resolve_alipay_payment_runtime_config
 
+SERVICE_SETTING_CREDIT_PACK_CATALOG = "commercial_credit_pack_catalog"
+SERVICE_SETTING_KIND_COMMERCIAL = "commercial"
+PAYMENT_ORDER_PENDING_TTL = timedelta(hours=24)
+
 
 class CommercialServicePaymentMixin(CommercialServiceAuditMixin):
     def list_credit_packs(self) -> dict[str, object]:
+        service = cast(Any, self)
+        with get_session(service.database_url) as session:
+            items = self._effective_credit_pack_items_from_session(
+                session,
+                include_inactive=False,
+            )
         return {
             "catalog_version": CREDIT_PACK_CATALOG_VERSION,
-            "period_policy": "current_subscription_period",
+            "period_policy": CREDIT_PACK_PERIOD_POLICY,
+            "expiry_policy": CREDIT_PACK_EXPIRY_POLICY,
+            "default_validity_days": DEFAULT_CREDIT_PACK_VALIDITY_DAYS,
             "grant_event_type": CREDIT_LEDGER_EVENT_GRANT,
-            "items": list_credit_packs(),
+            "items": items,
         }
+
+    def get_admin_credit_pack_catalog(self) -> dict[str, object]:
+        service = cast(Any, self)
+        with get_session(service.database_url) as session:
+            row = session.get(ServiceSetting, SERVICE_SETTING_CREDIT_PACK_CATALOG)
+            items = self._effective_credit_pack_items_from_session(
+                session,
+                include_inactive=True,
+            )
+            return {
+                "setting_id": SERVICE_SETTING_CREDIT_PACK_CATALOG,
+                "catalog_version": CREDIT_PACK_CATALOG_VERSION,
+                "period_policy": CREDIT_PACK_PERIOD_POLICY,
+                "expiry_policy": CREDIT_PACK_EXPIRY_POLICY,
+                "default_validity_days": DEFAULT_CREDIT_PACK_VALIDITY_DAYS,
+                "grant_event_type": CREDIT_LEDGER_EVENT_GRANT,
+                "items": items,
+                "configured": row is not None,
+                "updated_at": service._serialize_datetime(getattr(row, "updated_at", None)),
+            }
+
+    def update_admin_credit_pack_catalog(
+        self,
+        *,
+        items: list[dict[str, object]],
+        audit_context: ServiceAuditContext | None = None,
+    ) -> dict[str, object]:
+        service = cast(Any, self)
+        now = service.now_factory()
+        default_by_id = {
+            str(item.get("pack_id") or ""): item
+            for item in list_credit_packs(include_inactive=True)
+        }
+        normalized_items = [
+            self._normalize_credit_pack_catalog_item(item, default_by_id=default_by_id)
+            for item in items
+        ]
+        seen_pack_ids: set[str] = set()
+        for item in normalized_items:
+            pack_id = str(item.get("pack_id") or "")
+            if pack_id in seen_pack_ids:
+                raise CommercialValidationError(
+                    "service.credit_pack_duplicate",
+                    f"credit pack '{pack_id}' was provided more than once",
+                )
+            seen_pack_ids.add(pack_id)
+        with get_session(service.database_url) as session:
+            repository = CommercialRepository(session)
+            row = session.get(ServiceSetting, SERVICE_SETTING_CREDIT_PACK_CATALOG)
+            if row is None:
+                row = ServiceSetting(
+                    setting_id=SERVICE_SETTING_CREDIT_PACK_CATALOG,
+                    setting_kind=SERVICE_SETTING_KIND_COMMERCIAL,
+                    enabled=True,
+                    config_json={},
+                    secret_ciphertext_json={},
+                    status="ready",
+                    last_tested_at=None,
+                    last_error_code=None,
+                    last_error_message=None,
+                    metadata_json={},
+                )
+                session.add(row)
+            row.setting_kind = SERVICE_SETTING_KIND_COMMERCIAL
+            row.enabled = True
+            row.config_json = {
+                "catalog_version": CREDIT_PACK_CATALOG_VERSION,
+                "period_policy": CREDIT_PACK_PERIOD_POLICY,
+                "expiry_policy": CREDIT_PACK_EXPIRY_POLICY,
+                "default_validity_days": DEFAULT_CREDIT_PACK_VALIDITY_DAYS,
+                "items": normalized_items,
+            }
+            row.status = "ready"
+            row.last_error_code = None
+            row.last_error_message = None
+            row.metadata_json = {
+                "source": "admin_credit_pack_catalog",
+                "updated_by": audit_context.actor_ref if audit_context is not None else "",
+            }
+            row.updated_at = now
+            session.flush()
+            result = {
+                "setting_id": SERVICE_SETTING_CREDIT_PACK_CATALOG,
+                "catalog_version": CREDIT_PACK_CATALOG_VERSION,
+                "period_policy": CREDIT_PACK_PERIOD_POLICY,
+                "expiry_policy": CREDIT_PACK_EXPIRY_POLICY,
+                "default_validity_days": DEFAULT_CREDIT_PACK_VALIDITY_DAYS,
+                "grant_event_type": CREDIT_LEDGER_EVENT_GRANT,
+                "items": self._effective_credit_pack_items_from_session(
+                    session,
+                    include_inactive=True,
+                ),
+                "configured": True,
+                "updated_at": service._serialize_datetime(now),
+            }
+            service._record_service_audit_in_session(
+                repository=repository,
+                audit_context=audit_context,
+                event_kind="payment.credit_pack_catalog.update",
+                outcome="succeeded",
+                scope_kind="service_setting",
+                scope_id=SERVICE_SETTING_CREDIT_PACK_CATALOG,
+                payload_json=result,
+            )
+            session.commit()
+            return result
+
+    def _effective_credit_pack_items_from_session(
+        self,
+        session: Any,
+        *,
+        include_inactive: bool,
+    ) -> list[dict[str, object]]:
+        default_items = list_credit_packs(include_inactive=True)
+        default_by_id = {
+            str(item.get("pack_id") or ""): item
+            for item in default_items
+        }
+        row = session.get(ServiceSetting, SERVICE_SETTING_CREDIT_PACK_CATALOG)
+        config = row.config_json if row is not None and isinstance(row.config_json, dict) else {}
+        raw_items = config.get("items") if isinstance(config, dict) else None
+        override_by_id: dict[str, dict[str, object]] = {}
+        if isinstance(raw_items, list):
+            for raw_item in raw_items:
+                if not isinstance(raw_item, dict):
+                    continue
+                try:
+                    normalized = self._normalize_credit_pack_catalog_item(
+                        raw_item,
+                        default_by_id=default_by_id,
+                    )
+                except CommercialValidationError:
+                    continue
+                override_by_id[str(normalized.get("pack_id") or "")] = normalized
+        items = [
+            {**default_item, **override_by_id.get(str(default_item.get("pack_id") or ""), {})}
+            for default_item in default_items
+        ]
+        return [
+            item
+            for item in items
+            if include_inactive or bool(item.get("active", True))
+        ]
+
+    def _effective_credit_pack_from_session(
+        self,
+        session: Any,
+        pack_id: str,
+    ) -> dict[str, object] | None:
+        normalized_pack_id = str(pack_id or "").strip()
+        for item in self._effective_credit_pack_items_from_session(
+            session,
+            include_inactive=True,
+        ):
+            if str(item.get("pack_id") or "") == normalized_pack_id:
+                return item
+        return None
+
+    def _normalize_credit_pack_catalog_item(
+        self,
+        item: dict[str, object],
+        *,
+        default_by_id: dict[str, dict[str, object]],
+    ) -> dict[str, object]:
+        pack_id = str(item.get("pack_id") or "").strip()
+        default_item = default_by_id.get(pack_id)
+        if default_item is None:
+            raise CommercialValidationError(
+                "service.credit_pack_unknown",
+                f"credit pack '{pack_id}' is not part of the managed catalog",
+            )
+        label = str(item.get("label") or default_item.get("label") or pack_id).strip()[:96]
+        ai_credits = self._normalize_credit_pack_positive_int(
+            item.get("ai_credits", default_item.get("ai_credits")),
+            field="ai_credits",
+            maximum=10_000_000,
+        )
+        amount = self._normalize_payment_amount(item.get("amount", default_item.get("amount")))
+        currency = self._normalize_payment_currency(
+            str(item.get("currency") or default_item.get("currency") or "CNY")
+        )
+        raw_tiers = item.get("recommended_for_tiers", default_item.get("recommended_for_tiers"))
+        raw_tier_values = raw_tiers if isinstance(raw_tiers, list) else []
+        recommended_for_tiers = [
+            tier
+            for tier in [
+                str(raw_tier or "").strip()
+                for raw_tier in raw_tier_values
+            ]
+            if tier in {"free", "pro", "plus", "agency"}
+        ]
+        if not recommended_for_tiers:
+            default_raw_tiers = default_item.get("recommended_for_tiers")
+            default_tier_values = default_raw_tiers if isinstance(default_raw_tiers, list) else []
+            recommended_for_tiers = [
+                str(raw_tier or "").strip()
+                for raw_tier in default_tier_values
+                if str(raw_tier or "").strip()
+            ]
+        validity_days = self._normalize_credit_pack_positive_int(
+            item.get("validity_days", default_item.get("validity_days")),
+            field="validity_days",
+            maximum=1095,
+        )
+        return {
+            "pack_id": pack_id,
+            "label": label,
+            "ai_credits": ai_credits,
+            "amount": amount,
+            "currency": currency,
+            "recommended_for_tiers": recommended_for_tiers,
+            "validity_days": validity_days,
+            "active": bool(item.get("active", default_item.get("active", True))),
+            "period_policy": CREDIT_PACK_PERIOD_POLICY,
+            "expiry_policy": CREDIT_PACK_EXPIRY_POLICY,
+            "grant_event_type": CREDIT_LEDGER_EVENT_GRANT,
+            "catalog_version": CREDIT_PACK_CATALOG_VERSION,
+        }
+
+    def _normalize_credit_pack_positive_int(
+        self,
+        value: object,
+        *,
+        field: str,
+        maximum: int,
+    ) -> int:
+        try:
+            normalized = int(cast(Any, value) or 0)
+        except (TypeError, ValueError):
+            normalized = 0
+        if normalized <= 0 or normalized > maximum:
+            raise CommercialValidationError(
+                f"service.credit_pack_{field}_invalid",
+                f"credit pack {field} must be between 1 and {maximum}",
+            )
+        return normalized
 
     def list_account_payment_orders(
         self,
@@ -77,6 +327,13 @@ class CommercialServicePaymentMixin(CommercialServiceAuditMixin):
                     "service.account_not_found",
                     f"account '{account_id}' was not found",
                 )
+            if self._cancel_expired_pending_payment_orders_in_session(
+                repository,
+                account_id=account_id,
+                site_id=normalized_site_id,
+                now=service.now_factory(),
+            ):
+                session.commit()
             total = repository.count_payment_orders(
                 account_id=account_id,
                 site_id=normalized_site_id,
@@ -120,6 +377,11 @@ class CommercialServicePaymentMixin(CommercialServiceAuditMixin):
                     "service.payment_order_not_found",
                     f"payment order '{order_id}' was not found",
                 )
+            if self._cancel_expired_pending_payment_order_in_session(
+                order,
+                now=cast(Any, self).now_factory(),
+            ):
+                session.commit()
             return self._serialize_payment_order_for_kind(order)
 
     def create_credit_pack_payment_order(
@@ -132,12 +394,6 @@ class CommercialServicePaymentMixin(CommercialServiceAuditMixin):
         audit_context: ServiceAuditContext | None = None,
     ) -> dict[str, object]:
         service = cast(Any, self)
-        pack = get_credit_pack(pack_id)
-        if pack is None or not pack.active:
-            raise CommercialValidationError(
-                "service.credit_pack_not_found",
-                f"credit pack '{pack_id}' was not found",
-            )
         normalized_provider = self._normalize_payment_provider(provider)
         now = service.now_factory()
         idempotency_key = audit_context.idempotency_key if audit_context is not None else ""
@@ -152,6 +408,12 @@ class CommercialServicePaymentMixin(CommercialServiceAuditMixin):
                     "service.account_not_found",
                     f"account '{account_id}' was not found",
                 )
+            pack = self._effective_credit_pack_from_session(session, pack_id)
+            if pack is None or not bool(pack.get("active", True)):
+                raise CommercialValidationError(
+                    "service.credit_pack_not_found",
+                    f"credit pack '{pack_id}' was not found",
+                )
             subscriptions = repository.list_subscriptions(account_id=account_id, limit=None)
             primary_subscription = service._select_primary_subscription(subscriptions)
             if primary_subscription is None:
@@ -161,15 +423,22 @@ class CommercialServicePaymentMixin(CommercialServiceAuditMixin):
                 )
             period_start_at, period_end_at = service._resolve_period(primary_subscription, now)
             order_id = f"pay_{uuid4().hex[:24]}"
+            pack_amount = cast(float, pack["amount"])
+            pack_ai_credits = cast(int, pack["ai_credits"])
+            pack_validity_days = cast(int, pack["validity_days"])
             metadata = {
                 "source": "portal_credit_pack",
                 "purchase_kind": "credit_pack",
-                "credit_pack": serialize_credit_pack(pack),
+                "credit_pack": pack,
                 "credit_pack_catalog_version": CREDIT_PACK_CATALOG_VERSION,
                 "target_subscription_id": primary_subscription.subscription_id,
-                "target_period_start_at": service._serialize_datetime(period_start_at),
-                "target_period_end_at": service._serialize_datetime(period_end_at),
-                "grant_policy": "payment_success_grants_current_period_ai_credits",
+                "subscription_period_at_order_start_at": service._serialize_datetime(
+                    period_start_at
+                ),
+                "subscription_period_at_order_end_at": service._serialize_datetime(period_end_at),
+                "validity_days": pack_validity_days,
+                "credit_expiry_policy": CREDIT_PACK_EXPIRY_POLICY,
+                "grant_policy": "payment_success_grants_paid_credit_until_expiry",
             }
             gateway = get_payment_gateway_provider(
                 normalized_provider,
@@ -179,9 +448,12 @@ class CommercialServicePaymentMixin(CommercialServiceAuditMixin):
                 PaymentGatewayOrderRequest(
                     provider=normalized_provider,
                     order_id=order_id,
-                    amount=round(float(pack.amount), 6),
-                    currency=pack.currency,
-                    subject=f"{pack.label} ({pack.ai_credits} AI credits)",
+                    amount=round(pack_amount, 6),
+                    currency=str(pack.get("currency") or "CNY"),
+                    subject=(
+                        f"{str(pack.get('label') or 'Credit pack')} "
+                        f"({pack_ai_credits} AI credits)"
+                    ),
                     metadata=metadata,
                 )
             )
@@ -196,9 +468,12 @@ class CommercialServicePaymentMixin(CommercialServiceAuditMixin):
                 provider=normalized_provider,
                 external_order_no=gateway_order.external_order_no,
                 status=PAYMENT_ORDER_STATUS_PENDING,
-                amount=round(float(pack.amount), 6),
-                currency=pack.currency,
-                subject=f"{pack.label} ({pack.ai_credits} AI credits)",
+                amount=round(pack_amount, 6),
+                currency=str(pack.get("currency") or "CNY"),
+                subject=(
+                    f"{str(pack.get('label') or 'Credit pack')} "
+                    f"({pack_ai_credits} AI credits)"
+                ),
                 checkout_url=gateway_order.checkout_url or None,
                 refund_window_end_at=now + timedelta(days=14),
                 idempotency_key=idempotency_key or None,
@@ -449,6 +724,17 @@ class CommercialServicePaymentMixin(CommercialServiceAuditMixin):
                 raise CommercialNotFoundError(
                     "service.payment_order_not_found",
                     f"payment order '{order_id}' was not found",
+                )
+            if self._cancel_expired_pending_payment_order_in_session(order, now=now):
+                session.commit()
+                raise CommercialConflictError(
+                    "service.payment_order_expired",
+                    "expired payment orders cannot be marked paid",
+                )
+            if order.status == PAYMENT_ORDER_STATUS_CANCELED:
+                raise CommercialConflictError(
+                    "service.payment_order_canceled",
+                    "canceled payment orders cannot be marked paid",
                 )
             if order.status == PAYMENT_ORDER_STATUS_REFUNDED:
                 raise CommercialConflictError(
@@ -866,6 +1152,8 @@ class CommercialServicePaymentMixin(CommercialServiceAuditMixin):
             order.paid_at = paid_at
             order.subscription_id = subscription.subscription_id
         period_start_at, period_end_at = service._resolve_period(subscription, paid_at)
+        validity_days = cast(int, pack["validity_days"])
+        grant_expires_at = (order.paid_at or paid_at) + timedelta(days=validity_days)
         ledger_entry = repository.record_credit_ledger_entry(
             account_id=order.account_id,
             site_id=order.site_id,
@@ -891,6 +1179,9 @@ class CommercialServicePaymentMixin(CommercialServiceAuditMixin):
                 "credit_pack_catalog_version": CREDIT_PACK_CATALOG_VERSION,
                 "paid_amount": round(float(order.amount or 0.0), 6),
                 "currency": order.currency,
+                "validity_days": validity_days,
+                "expiry_policy": CREDIT_PACK_EXPIRY_POLICY,
+                "grant_expires_at": service._serialize_datetime(grant_expires_at),
                 "period_start_at": service._serialize_datetime(period_start_at),
                 "period_end_at": service._serialize_datetime(period_end_at),
             },
@@ -1060,10 +1351,18 @@ class CommercialServicePaymentMixin(CommercialServiceAuditMixin):
         if not isinstance(pack, dict):
             return None
         pack_id = str(pack.get("pack_id") or "").strip()
-        ai_credits = int(pack.get("ai_credits") or 0)
+        ai_credits = int(cast(Any, pack.get("ai_credits")) or 0)
         if not pack_id or ai_credits <= 0:
             return None
-        return {**pack, "pack_id": pack_id, "ai_credits": ai_credits}
+        validity_days = int(
+            cast(Any, pack.get("validity_days")) or DEFAULT_CREDIT_PACK_VALIDITY_DAYS
+        )
+        return {
+            **pack,
+            "pack_id": pack_id,
+            "ai_credits": ai_credits,
+            "validity_days": validity_days,
+        }
 
     def _require_subscription(
         self,
@@ -1100,9 +1399,9 @@ class CommercialServicePaymentMixin(CommercialServiceAuditMixin):
             )
         return {}
 
-    def _normalize_payment_amount(self, amount: float) -> float:
+    def _normalize_payment_amount(self, amount: object) -> float:
         try:
-            normalized = round(float(amount), 6)
+            normalized = round(float(cast(Any, amount)), 6)
         except (TypeError, ValueError):
             normalized = 0.0
         if normalized <= 0:
@@ -1158,6 +1457,60 @@ class CommercialServicePaymentMixin(CommercialServiceAuditMixin):
         )
         return payload
 
+    def _normalize_payment_order_datetime(self, value: datetime | None) -> datetime | None:
+        if value is None:
+            return None
+        if value.tzinfo is None:
+            return value.replace(tzinfo=UTC)
+        return value
+
+    def _cancel_expired_pending_payment_order_in_session(
+        self,
+        order: PaymentOrder,
+        *,
+        now: datetime,
+    ) -> bool:
+        if order.status != PAYMENT_ORDER_STATUS_PENDING:
+            return False
+        created_at = self._normalize_payment_order_datetime(order.created_at)
+        current_time = self._normalize_payment_order_datetime(now) or datetime.now(UTC)
+        if created_at is None or created_at + PAYMENT_ORDER_PENDING_TTL > current_time:
+            return False
+        metadata = dict(order.metadata_json or {})
+        metadata["cancellation_reason"] = "unpaid_order_expired"
+        metadata["payment_order_expires_after_seconds"] = int(
+            PAYMENT_ORDER_PENDING_TTL.total_seconds()
+        )
+        metadata["expired_at"] = cast(Any, self)._serialize_datetime(current_time)
+        order.status = PAYMENT_ORDER_STATUS_CANCELED
+        order.canceled_at = current_time
+        order.metadata_json = metadata
+        return True
+
+    def _cancel_expired_pending_payment_orders_in_session(
+        self,
+        repository: CommercialRepository,
+        *,
+        account_id: str | None,
+        site_id: str | None,
+        now: datetime,
+    ) -> int:
+        current_time = self._normalize_payment_order_datetime(now) or datetime.now(UTC)
+        cutoff = current_time - PAYMENT_ORDER_PENDING_TTL
+        expired_orders = repository.list_pending_payment_orders_before(
+            cutoff=cutoff,
+            account_id=account_id,
+            site_id=site_id,
+        )
+        expired_count = 0
+        for order in expired_orders:
+            if self._cancel_expired_pending_payment_order_in_session(
+                order,
+                now=current_time,
+            ):
+                expired_count += 1
+        return expired_count
+
     def _payment_order_status_detail(self, order: PaymentOrder) -> dict[str, object]:
         provider_label = {
             "alipay": "Alipay",
@@ -1195,6 +1548,15 @@ class CommercialServicePaymentMixin(CommercialServiceAuditMixin):
                 "simulated_payment": False,
             }
         if order.status == PAYMENT_ORDER_STATUS_CANCELED:
+            metadata = dict(order.metadata_json or {})
+            if metadata.get("cancellation_reason") == "unpaid_order_expired":
+                return {
+                    "code": "expired_unpaid",
+                    "label": "Expired",
+                    "detail": "The payment order expired before provider confirmation.",
+                    "next_action": "none",
+                    "simulated_payment": False,
+                }
             return {
                 "code": "canceled",
                 "label": "Canceled",
