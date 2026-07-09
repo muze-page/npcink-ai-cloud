@@ -133,6 +133,16 @@ assert.doesNotMatch(
   'Portal site list must not expose current-site switching controls'
 );
 assert.doesNotMatch(
+  sitesSource,
+  /selectedSiteId|selectedSite\s*=|activeSite/,
+  'Portal site list must not derive account connection context from a current site'
+);
+assert.match(
+  sitesSource,
+  /portalAccountId[\s\S]*accountId=\{portalAccountId\}[\s\S]*currentSiteId=\{firstVisibleSiteId\}/,
+  'Portal site connection panel must use account context and only pass the first visible site as a compatibility hint'
+);
+assert.doesNotMatch(
   portalHomeSource,
   /PortalSiteConnectPanel|\/portal\/sites\?filter=/,
   'Portal home must not embed the site creation form or link to hidden site-list filters'
@@ -168,6 +178,16 @@ assert.match(
   /title=\{t\('portal\.audit\.nav_label'[\s\S]*portal\.audit\.recent_desc/,
   'Portal recent activity should show plain recent activity copy without a filter console'
 );
+assert.match(
+  monitoringSource,
+  /data-portal-support-deeplink="monitoring"/,
+  'Portal monitoring must stay available only as a support deep link'
+);
+assert.match(
+  auditSource,
+  /data-portal-support-deeplink="audit"/,
+  'Portal recent activity must stay available only as a support deep link'
+);
 
 for (const expectedCopy of [
   "'portal.billing.customer_title': 'Package'",
@@ -182,6 +202,8 @@ for (const expectedCopy of [
   "'portal.site_record': '查看站点'",
   "'portal.sites.connect_hint_title': 'Need to connect another site?'",
   "'portal.sites.connect_hint_title': '需要连接新站点？'",
+  "'portal.home.account_status_ok_desc': 'This account can use the hosted service normally.'",
+  "'portal.home.account_status_ok_desc': '当前账号可以正常使用托管服务。'",
 ]) {
   assert.ok(i18nSource.includes(expectedCopy), `${expectedCopy} must be present`);
 }

@@ -37,7 +37,7 @@ type PortalWorkspaceHeaderProps = {
   description?: string;
   eyebrowInfo?: string;
   currentPage: PortalWorkspacePage;
-  selectedSiteId: string;
+  selectedSiteId?: string;
   selectedSiteName?: string | null;
   showSiteContextSummary?: boolean;
   sites?: PortalWorkspaceSite[];
@@ -56,11 +56,10 @@ export function PortalWorkspaceHeader({
   description,
   eyebrowInfo,
   currentPage,
-  selectedSiteId,
+  selectedSiteId = '',
   selectedSiteName,
   showSiteContextSummary = false,
   sites = [],
-  onSiteChange,
   metrics = [],
   metricsColumnsClassName = 'lg:grid-cols-4',
   primaryAction,

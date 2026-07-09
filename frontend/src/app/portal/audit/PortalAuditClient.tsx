@@ -122,7 +122,7 @@ export function PortalAuditClient() {
   }
 
   return (
-    <BackofficePageStack>
+    <BackofficePageStack data-portal-support-deeplink="audit">
       <PortalWorkspaceHeader
         eyebrow={t('portal.workspace_label', {}, 'Portal')}
         title={t('portal.audit.nav_label', {}, 'Recent activity')}

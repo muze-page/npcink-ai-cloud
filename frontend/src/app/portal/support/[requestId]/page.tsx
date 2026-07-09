@@ -216,7 +216,6 @@ export default function PortalSupportRequestDetailPage() {
         title={supportRequest?.title || t('portal.support_request_detail_title', {}, 'Ticket detail')}
         description={supportRequest?.description || ''}
         currentPage="support"
-        selectedSiteId={session.site_id || ''}
         sites={(session.sites || []).filter((site) => site.status !== 'archived')}
         actions={
           <Link className="btn btn-secondary" href="/portal/support">

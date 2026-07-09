@@ -42,9 +42,8 @@ function PortalSupportContent() {
   const searchParams = useSearchParams();
   const { t } = useLocale();
   const { session, isLoading, isAuthenticated } = useSession();
-  const selectedSiteId = session?.site_id || '';
   const initialTopic = String(searchParams?.get('topic') || 'general').toLowerCase();
-  const initialSiteId = searchParams?.get('site') || selectedSiteId;
+  const initialSiteId = searchParams?.get('site') || '';
   const shouldOpenForm = searchParams?.get('new') === '1';
   const [items, setItems] = useState<PortalSupportRequest[]>([]);
   const [statusFilter, setStatusFilter] = useState<PortalSupportRequestStatus | ''>('');
@@ -65,12 +64,6 @@ function PortalSupportContent() {
       setShowForm(true);
     }
   }, [shouldOpenForm]);
-
-  useEffect(() => {
-    if (!siteId && selectedSiteId) {
-      setSiteId(selectedSiteId);
-    }
-  }, [selectedSiteId, siteId]);
 
   const loadRequests = useCallback(async () => {
     if (!isAuthenticated) {
@@ -99,6 +92,24 @@ function PortalSupportContent() {
     () => (session?.sites || []).filter((site) => site.status !== 'archived'),
     [session?.sites]
   );
+  const supportStatusRules = [
+    {
+      key: 'open',
+      label: t('portal.support_rule_open', {}, 'Open tickets are waiting for support triage.'),
+    },
+    {
+      key: 'in_progress',
+      label: t('portal.support_rule_in_progress', {}, 'In-progress tickets are being checked by support.'),
+    },
+    {
+      key: 'resolved',
+      label: t('portal.support_rule_resolved', {}, 'Resolved tickets can receive your close evaluation.'),
+    },
+    {
+      key: 'closed',
+      label: t('portal.support_rule_closed', {}, 'If a closed issue is still not solved, reply with feedback or submit a new ticket.'),
+    },
+  ];
 
   if (isLoading) {
     return <PortalLoadingState message={t('common.loading', {}, 'Loading...')} />;
@@ -152,7 +163,6 @@ function PortalSupportContent() {
           'Send billing, site, usage, or account issues to the support queue.'
         )}
         currentPage="support"
-        selectedSiteId={selectedSiteId}
         sites={visibleSites}
         actions={
           <button type="button" className="btn btn-primary" onClick={() => setShowForm((current) => !current)}>
@@ -162,6 +172,31 @@ function PortalSupportContent() {
           </button>
         }
       />
+
+      <BackofficeSectionPanel className="space-y-3" variant="portal" data-portal-support="status-rules">
+        <div>
+          <p className="text-sm font-semibold text-slate-950 dark:text-white">
+            {t('portal.support_status_rules_title', {}, 'Ticket status')}
+          </p>
+          <p className="mt-1 text-sm leading-6 text-slate-600 dark:text-slate-300">
+            {t(
+              'portal.support_status_rules_desc',
+              {},
+              'Use tickets for package, payment, site, usage, or account issues; support updates the status as the issue moves.'
+            )}
+          </p>
+        </div>
+        <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-4">
+          {supportStatusRules.map((rule) => (
+            <div key={rule.key} className="rounded-xl border border-slate-200 bg-white/70 px-3 py-3 text-sm text-slate-600 dark:border-slate-800 dark:bg-slate-950/35 dark:text-slate-300">
+              <p className="font-semibold text-slate-950 dark:text-white">
+                {t(`portal.support_status_${rule.key}`, {}, rule.key)}
+              </p>
+              <p className="mt-1 text-xs leading-5">{rule.label}</p>
+            </div>
+          ))}
+        </div>
+      </BackofficeSectionPanel>
 
       {notice ? (
         <div className="rounded-[1rem] border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800 dark:border-emerald-900/60 dark:bg-emerald-950/25 dark:text-emerald-200">

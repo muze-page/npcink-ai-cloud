@@ -5,8 +5,12 @@ import assert from 'node:assert/strict';
 const navbarPath = resolve(process.cwd(), 'src/components/portal/PortalNavbar.tsx');
 const i18nPath = resolve(process.cwd(), 'src/lib/i18n.ts');
 const aiInsightsPagePath = resolve(process.cwd(), 'src/app/portal/ai-insights/page.tsx');
+const monitoringPath = resolve(process.cwd(), 'src/app/portal/monitoring/page.tsx');
+const auditPath = resolve(process.cwd(), 'src/app/portal/audit/PortalAuditClient.tsx');
 const navbarSource = readFileSync(navbarPath, 'utf8');
 const i18nSource = readFileSync(i18nPath, 'utf8');
+const monitoringSource = readFileSync(monitoringPath, 'utf8');
+const auditSource = readFileSync(auditPath, 'utf8');
 
 const primaryStart = navbarSource.indexOf('const primaryNavItems');
 const primaryEnd = navbarSource.indexOf('const isActive', primaryStart);
@@ -36,6 +40,16 @@ assert.equal(
   existsSync(aiInsightsPagePath),
   false,
   'AI insights must not remain as a standalone customer Portal page'
+);
+assert.match(
+  monitoringSource,
+  /data-portal-support-deeplink="monitoring"/,
+  'monitoring may remain only as a support-request deep link'
+);
+assert.match(
+  auditSource,
+  /data-portal-support-deeplink="audit"/,
+  'recent activity may remain only as a support-request deep link'
 );
 assert.match(
   navbarSource,

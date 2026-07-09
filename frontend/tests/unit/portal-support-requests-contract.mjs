@@ -41,14 +41,34 @@ assert.match(
   'Portal support form must expose bounded customer-support topics'
 );
 assert.match(
+  portalSupportPageSource,
+  /support_rule_open[\s\S]*support_rule_in_progress[\s\S]*support_rule_resolved[\s\S]*support_rule_closed[\s\S]*data-portal-support="status-rules"/,
+  'Portal support page must explain ticket status, close evaluation, and reopen expectations'
+);
+assert.match(
   portalBillingPageSource,
   /\/portal\/support\?new=1&topic=billing/,
   'Portal package page must open the ticket form for package or payment issues'
 );
 assert.doesNotMatch(
   portalBillingPageSource,
+  /\/portal\/support\?new=1&topic=billing&site=|encodeURIComponent\(selectedSiteId\)/,
+  'Portal package page must open account-level billing tickets without preselecting a site'
+);
+assert.doesNotMatch(
+  portalSupportPageSource,
+  /const initialSiteId = searchParams\?\.get\('site'\) \|\| selectedSiteId|if \(!siteId && selectedSiteId\)/,
+  'Portal support form must default to account-level issues unless a site is explicitly passed'
+);
+assert.doesNotMatch(
+  portalBillingPageSource,
   /portal\.billing\.help_title|portal\.billing\.help_desc/,
   'Portal package page must not keep a separate help card after the ticket tab exists'
+);
+assert.match(
+  portalClientSource,
+  /async getAccountEntitlements[\s\S]*\/account\/entitlements[\s\S]*async createAccountCreditPackOrder[\s\S]*\/account\/credit-pack-orders/,
+  'Portal client must expose account-level package, credit pack, and payment operations'
 );
 assert.match(
   portalClientSource,
@@ -129,4 +149,9 @@ assert.match(
   i18nSource,
   /portal\.nav_support_requests[\s\S]*portal\.support_status_in_progress[\s\S]*admin\.nav_support_requests[\s\S]*admin\.support_status_in_progress/,
   'Support request Portal and Admin labels must be localized'
+);
+assert.match(
+  i18nSource,
+  /portal\.support_status_rules_title[\s\S]*portal\.support_rule_closed[\s\S]*portal\.support_status_rules_title[\s\S]*portal\.support_rule_closed/,
+  'Support status rule copy must be localized in English and Chinese'
 );
