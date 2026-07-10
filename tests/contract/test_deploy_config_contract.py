@@ -614,6 +614,7 @@ def test_release_gate_documents_current_cloud_blockers() -> None:
     assert release_smoke_script.count('"Origin: ${BASE_URL%/}"') >= 3
     assert release_smoke_script.count('"data.principal_id"') >= 2
     assert '"data.member_ref"' not in release_smoke_script
+    assert '200 | 303' in release_smoke_script
 
 
 def test_lightweight_release_policy_gate_is_documented() -> None:

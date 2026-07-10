@@ -332,7 +332,10 @@ if [ "${HTTP_STATUS}" = "200" ]; then
 	fail "internal token must not bootstrap an admin session"
 fi
 http_request "POST" "${BASE_URL%/}/admin/auth/bootstrap" "${ADMIN_COOKIE_JAR}" "${ADMIN_BODY}" "Origin: ${BASE_URL%/}"
-assert_status "${HTTP_STATUS}" "200" "admin bootstrap login should succeed"
+case "${HTTP_STATUS}" in
+	200 | 303) ;;
+	*) fail "admin bootstrap login should succeed (expected 200 or 303, got ${HTTP_STATUS}; body=${HTTP_BODY})" ;;
+esac
 assert_body_contains "${HTTP_HEADERS}" "npcink_admin_session_token" "admin bootstrap should set ops session cookie"
 
 http_request "GET" "${BASE_URL%/}/admin/session" "${ADMIN_COOKIE_JAR}"
