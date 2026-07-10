@@ -263,16 +263,23 @@ class ServiceSettingsAdminService:
         existing = _load_service_setting(self.database_url, SERVICE_SETTING_PAYMENT_ALIPAY)
         existing_private_key = _decrypt_secret(existing, "private_key", settings=self.settings)
         existing_public_key = _decrypt_secret(existing, "public_key", settings=self.settings)
-        if enabled and payload.get("private_key") is None and not existing_private_key:
+        private_key_value = payload.get("private_key")
+        public_key_value = payload.get("public_key")
+        if enabled and private_key_value is None and not existing_private_key:
             raise ServiceSettingsAdminError(
                 "service_settings.alipay_private_key_required",
                 "Alipay application private key is required",
             )
-        if enabled and payload.get("public_key") is None and not existing_public_key:
+        if enabled and public_key_value is None and not existing_public_key:
             raise ServiceSettingsAdminError(
                 "service_settings.alipay_public_key_required",
                 "Alipay public key is required",
             )
+        if self.settings.service_settings_secret:
+            if private_key_value is None and existing_private_key:
+                private_key_value = existing_private_key
+            if public_key_value is None and existing_public_key:
+                public_key_value = existing_public_key
         row = self._save(
             setting_id=SERVICE_SETTING_PAYMENT_ALIPAY,
             config={
@@ -284,8 +291,8 @@ class ServiceSettingsAdminService:
                 "payment_product_code": "FAST_INSTANT_TRADE_PAY",
             },
             secrets={
-                "private_key": payload.get("private_key"),
-                "public_key": payload.get("public_key"),
+                "private_key": private_key_value,
+                "public_key": public_key_value,
             },
             enabled=enabled,
             required_secret_keys=["private_key", "public_key"] if enabled else [],

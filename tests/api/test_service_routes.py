@@ -960,6 +960,93 @@ def test_admin_service_settings_email_migrates_readable_legacy_password_to_dedic
     dispose_engine(database_url)
 
 
+def test_admin_service_settings_alipay_migrates_readable_legacy_keys_to_dedicated_key(
+    tmp_path: Path,
+) -> None:
+    dedicated_secret = "dedicated-service-settings-secret-32b"
+    database_url, client = _build_client(
+        tmp_path,
+        settings_overrides={"service_settings_secret": dedicated_secret},
+    )
+    legacy_settings = _runtime_service_settings(database_url)
+    private_key, public_key = _alipay_test_keys()
+    legacy_private_ciphertext = encrypt_service_setting_secret(
+        private_key,
+        settings=legacy_settings,
+    )
+    legacy_public_ciphertext = encrypt_service_setting_secret(
+        public_key,
+        settings=legacy_settings,
+    )
+
+    with get_session(database_url) as session:
+        session.add(
+            ServiceSetting(
+                setting_id="portal_public",
+                setting_kind="portal",
+                enabled=True,
+                config_json={"public_base_url": "https://cloud.example.com"},
+                secret_ciphertext_json={},
+                status="ready",
+                metadata_json={},
+            )
+        )
+        session.add(
+            ServiceSetting(
+                setting_id="payment_alipay",
+                setting_kind="portal",
+                enabled=True,
+                config_json={
+                    "app_id": "alipay-app-id",
+                    "gateway_url": "https://openapi.alipay.com/gateway.do",
+                    "notify_url": "https://cloud.example.com/open/payments/alipay/notify",
+                    "return_url": "https://cloud.example.com/open/payments/alipay/return",
+                    "sign_type": "RSA2",
+                    "payment_product_code": "FAST_INSTANT_TRADE_PAY",
+                },
+                secret_ciphertext_json={
+                    "private_key": legacy_private_ciphertext,
+                    "public_key": legacy_public_ciphertext,
+                },
+                status="ready",
+                metadata_json={},
+            )
+        )
+        session.commit()
+
+    response = client.patch(
+        "/internal/service/admin/service-settings/alipay-payment",
+        json={
+            "enabled": True,
+            "app_id": "alipay-app-id",
+            "gateway_url": "https://openapi.alipay.com/gateway.do",
+            "notify_url": "https://cloud.example.com/open/payments/alipay/notify",
+            "return_url": "https://cloud.example.com/open/payments/alipay/return",
+        },
+        headers=build_internal_headers(idempotency_key="service-settings-alipay-migrate-001"),
+    )
+    assert response.status_code == 200, response.text
+
+    with get_session(database_url) as session:
+        row = session.get(ServiceSetting, "payment_alipay")
+        assert row is not None
+        migrated_ciphertexts = dict(row.secret_ciphertext_json or {})
+
+    migrated_settings = _runtime_service_settings(database_url)
+    migrated_settings.service_settings_secret = dedicated_secret
+    migrated_settings.admin_session_secret = "rotated-admin-session-secret-32b"
+    assert decrypt_service_setting_secret(
+        str(migrated_ciphertexts["private_key"]),
+        settings=migrated_settings,
+    ) == private_key.strip()
+    assert decrypt_service_setting_secret(
+        str(migrated_ciphertexts["public_key"]),
+        settings=migrated_settings,
+    ) == public_key.strip()
+
+    dispose_engine(database_url)
+
+
 def test_admin_service_settings_email_requires_reentry_for_unreadable_saved_password(
     tmp_path: Path,
 ) -> None:
@@ -1147,6 +1234,73 @@ def test_admin_service_settings_email_preview_uses_template_without_secret_expos
     assert "完成服务中心注册" in data["html"]
     assert "smtp-password" not in json.dumps(preview_response.json())
     assert data["credential_value_exposure"] == "none"
+
+    dispose_engine(database_url)
+
+
+def test_admin_service_settings_email_test_can_send_repeatedly(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database_url, client = _build_client(tmp_path)
+    email_response = client.patch(
+        "/internal/service/admin/service-settings/email",
+        json={
+            "enabled": True,
+            "smtp_host": "smtp.example.com",
+            "smtp_port": 465,
+            "smtp_username": "smtp-user",
+            "smtp_password": "smtp-password",
+            "smtp_use_ssl": True,
+            "smtp_use_starttls": False,
+            "smtp_timeout_seconds": 20,
+            "from_email": "noreply@example.com",
+            "from_name": "Npcink AI Cloud",
+            "reply_to": "support@example.com",
+        },
+        headers=build_internal_headers(idempotency_key="service-settings-email-repeat-save"),
+    )
+    assert email_response.status_code == 200, email_response.text
+
+    deliveries: list[dict[str, str]] = []
+
+    class _FakeSender:
+        def send_test_email(
+            self,
+            *,
+            recipient_email: str,
+            project_name: str,
+            portal_url: str,
+        ) -> None:
+            deliveries.append(
+                {
+                    "recipient_email": recipient_email,
+                    "project_name": project_name,
+                    "portal_url": portal_url,
+                }
+            )
+
+    monkeypatch.setattr(
+        "app.adapters.notifications.smtp.build_portal_email_sender_from_config",
+        lambda _config: _FakeSender(),
+    )
+
+    for attempt in range(1, 4):
+        response = client.post(
+            "/internal/service/admin/service-settings/email/test",
+            json={"recipient_email": "operator@example.com"},
+            headers=build_internal_headers(
+                idempotency_key=f"service-settings-email-repeat-{attempt}"
+            ),
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["data"]["status"] == "ready"
+
+    assert [item["recipient_email"] for item in deliveries] == [
+        "operator@example.com",
+        "operator@example.com",
+        "operator@example.com",
+    ]
 
     dispose_engine(database_url)
 
