@@ -306,11 +306,11 @@ http_request \
 	"${VERIFY_BODY}" \
 	"Origin: ${BASE_URL%/}"
 assert_status "${HTTP_STATUS}" "200" "portal login code verify should succeed"
-assert_json_non_empty "${HTTP_BODY}" "data.member_ref" "portal session should include member_ref"
+assert_json_non_empty "${HTTP_BODY}" "data.principal_id" "portal session should include principal_id"
 
 http_request "GET" "${BASE_URL%/}/portal/v1/session" "${PORTAL_COOKIE_JAR}"
 assert_status "${HTTP_STATUS}" "200" "portal session should load"
-assert_json_non_empty "${HTTP_BODY}" "data.member_ref" "portal session response should include member_ref"
+assert_json_non_empty "${HTTP_BODY}" "data.principal_id" "portal session response should include principal_id"
 
 http_request "GET" "${BASE_URL%/}/admin/login" "${ADMIN_COOKIE_JAR}"
 assert_status "${HTTP_STATUS}" "200" "admin login page should load"
