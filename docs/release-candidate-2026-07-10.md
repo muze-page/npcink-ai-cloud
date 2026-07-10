@@ -1,6 +1,7 @@
 # PC Launch Release Candidate - 2026-07-10
 
-Status: code-complete candidate, not production-approved.
+Status: deployed to production and validated as a PC launch candidate; not yet
+declared generally available.
 
 ## Scope
 
@@ -14,43 +15,70 @@ Cloud remains the hosted runtime and service-detail layer. This candidate does
 not add WordPress writes, approval truth, Ability/Workflow registries, or a
 second WordPress control plane.
 
-## Candidate Changes
+## Landed Changes
 
-- PR `#146` remains the validated base and is waiting for repository protection.
-- `fb236844` removes `site_user_grants`, adds Alembic `0057`, and moves Portal
-  list/detail access to indexed account-membership joins.
-- The follow-up config commit removes retired aliases, the old QQ callback,
-  old cookies, service-secret fallback, and two targeted-Mypy exceptions.
+- PR `#146` landed the PC Admin/Portal commercial polish and SMTP failure
+  redaction.
+- PR `#147` landed the Portal account-authorization hard cutover.
+- Alembic `20260710_0057` removed `site_user_grants`, added the indexed
+  account-membership lookup path, and fails closed if legacy grants exist.
+- Retired runtime aliases, the old QQ callback, old cookies, the service-secret
+  fallback, and the remaining targeted Mypy exceptions were removed.
+- PR `#148` promoted the hard cutover to production with operator approval.
+- PRs `#149` and `#150` aligned the standalone frontend dependency lock with
+  the secure PostCSS and esbuild versions and promoted the fix to production.
 
 ## Verification Evidence
 
-- focused Portal/Admin/API/contract tests: 172 passed, 1 skipped
-- Portal authorization and Addon focused tests: 161 passed
-- frontend unit contracts: passed
-- frontend TypeScript: passed
-- PC Playwright login and Addon binding: 2 passed
-- Mypy: 203 source files passed
-- targeted Mypy debt files: 2 passed
-- PostgreSQL migration: `upgrade -> downgrade -> upgrade` passed
-- local database: `20260710_0057`; obsolete site-grant table absent
-- local restart: API, runtime worker, callback worker, and ops worker healthy
-- local stored service credentials: 3 configured values, all readable with the
-  dedicated service-settings key only
+- focused Portal/Admin/API/contract tests: passed
+- frontend contracts, TypeScript, ESLint, and production build: passed
+- PC Playwright login and Addon binding: passed
+- Mypy and Ruff: passed
+- PostgreSQL migration `upgrade -> downgrade -> upgrade`: passed locally
+- production migration: `20260710_0057 (head)`
+- obsolete `site_user_grants` table: absent in production and restored backup
+- production SMTP: three consecutive real-mailbox deliveries passed
+- service-setting encryption: three settings readable with the dedicated key;
+  retired key fallbacks rejected the ciphertexts
+- production signed runtime: catalog, execute, run/result, stats, usage, health,
+  and perimeter passed
+- production workers: runtime, callback, and ops heartbeats fresh
+- production cadence: all required tasks fresh during release validation
+- dependency audit: no open Dependabot security alerts
+- production release run `29084936244`: success in `9m41s`; deploy `4m07s`;
+  post-production smoke `15s`
+- production backup restore drill: passed; see
+  [Production Backup Restore Drill - 2026-07-10](production-backup-restore-drill-2026-07-10.md)
 
-## Production Gates
+## Production Promotion
 
-- merge PR `#146` through repository protection, then retarget this stacked PR
-  to `master`
-- confirm production `site_user_grants` count is zero before migration
-- confirm production `.env.deploy` uses canonical names and a stable dedicated
-  service-settings key
-- confirm QQ Open Platform callback is `/open/auth/qq/callback`
-- take and verify a database backup and rollback command
-- run real mailbox, QQ, Alipay, and signed WordPress runtime smoke tests
-- promote through the documented `master -> production` PR with operator approval
+- Initial hard-cutover production commit:
+  `6f1b7b9829971d22e15d58b2c41a20db29db0351`
+- Current production commit:
+  `c5fdfe7a91b74c4bbc81564e9d5088102b53abde`
+- Current production release directory:
+  `/opt/npcink-ai-cloud/release-20260710100807`
+- Subsequent release-evidence updates on `master` are documentation-only and do
+  not change the deployed application commit above.
+
+## Remaining Gates Before General Availability
+
+- complete formal `deploy/release-smoke.sh` with the required Portal, Admin,
+  internal, and signed-runtime smoke credentials; the production workflow ran
+  public preflight but skipped this optional step because those secrets were
+  absent
+- one real low-value Alipay transaction, including callback and credit grant
+- one real WordPress Addon reconnect on production
+- review of historical Alembic index-name drift
+- production trace query confirmation
+- 24-hour production observation window
+- QQ login configuration and real callback smoke only if QQ login is enabled
 
 ## Rollback
 
-Revert the application commit and downgrade Alembic to `20260709_0056`. The
-downgrade recreates an empty compatibility table; it does not reconstruct old
-site-grant rows. Preserve `NPCINK_CLOUD_SERVICE_SETTINGS_SECRET` during rollback.
+Redeploy the previous production release for application regressions and retain
+the dedicated service-settings key. For a confirmed database incident, use the
+verified restore artifact documented in the backup drill, restore into a new
+database first, validate migration and critical rows, then perform a controlled
+traffic switch. Never overwrite the live production database while writers are
+running.

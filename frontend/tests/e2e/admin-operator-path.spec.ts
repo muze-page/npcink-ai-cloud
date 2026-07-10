@@ -19,27 +19,18 @@ async function replaceScopedTextInput(scope: Locator, index: number, value: stri
   await input.pressSequentially(value);
 }
 
-test('admin coverage page separates service status and packages with tabs', async ({ page }) => {
+test('admin coverage page keeps service queue primary and package catalog separate', async ({ page }) => {
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await installAdminMocks(page);
 
   await page.goto('/admin/coverage');
   await expect(page.getByRole('heading', { name: /^Customer service workspace$|^客户服务工作区$|^客戶服務工作區$/i })).toBeVisible();
-  await expect(page.getByRole('button', { name: /Service status|Follow-up queue|服务状态|跟进队列|服務狀態|跟進隊列/i })).toBeVisible();
-  await expect(page.getByRole('button', { name: /^Packages|^Package overview|^套餐|^方案/i })).toBeVisible();
+  await expect(page.getByRole('button', { name: /Service status|Follow-up queue|服务状态|跟进队列|服務狀態|跟進隊列/i })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: /^Packages|^Package overview|^套餐|^方案/i })).toHaveCount(0);
   await expect(page.getByText(/Customers needing service follow-up|需要服务跟进的客户|需要服務跟進的客戶/i).first()).toBeVisible();
   await expect(page.getByRole('link', { name: /Inspect subscription|查看订阅|檢查訂閱/i }).first()).toBeVisible();
 
-  await page.getByRole('button', { name: /^Packages|^Package overview|^套餐|^方案/i }).click();
-  await expect(page.getByRole('heading', { name: /Package catalog|Package overview|套餐目录|套餐概览|方案目錄|方案概覽/i })).toBeVisible();
-  await expect(page.getByText(/Free/i).first()).toBeVisible();
-  await expect(page.getByText(/Pro/i).first()).toBeVisible();
-  await expect(page.getByText(/Agency/i).first()).toBeVisible();
-  await expect(page.getByText(/Site limit|站点上限|站點上限/i).first()).toBeVisible();
-  await expect(page.getByRole('link', { name: /Open package catalog|打开套餐目录|打開方案目錄/i })).toHaveCount(1);
-
-  await page.getByRole('button', { name: /Service status|Follow-up queue|服务状态|跟进队列|服務狀態|跟進隊列/i }).click();
-  await expect(page.getByText(/Customers needing service follow-up|需要服务跟进的客户|需要服務跟進的客戶/i).first()).toBeVisible();
+  await expect(page.locator('a[href="/admin/plans"]').first()).toBeVisible();
 });
 
 test('admin subscription detail keeps localized operator layout', async ({ page }) => {
@@ -79,20 +70,12 @@ test('admin operator path smoke: queue and inspector routes stay connected', asy
 
   await page.goto('/admin/coverage');
   await expect(page.getByRole('heading', { name: /^Customer service workspace$|^客户服务工作区$|^客戶服務工作區$/i })).toBeVisible();
-  await expect(page.getByRole('button', { name: /Service status|Follow-up queue|服务状态|跟进队列|服務狀態|跟進隊列/i })).toBeVisible();
-  await expect(page.getByRole('button', { name: /^Packages|^Package overview|^套餐|^方案/i })).toBeVisible();
+  await expect(page.getByRole('button', { name: /Service status|Follow-up queue|服务状态|跟进队列|服務狀態|跟進隊列/i })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: /^Packages|^Package overview|^套餐|^方案/i })).toHaveCount(0);
   await expect(page.getByText(/Customers needing service follow-up|需要服务跟进的客户|需要服務跟進的客戶/i).first()).toBeVisible();
   await expect(page.getByRole('link', { name: /Open package actions|打开套餐操作|打開方案操作/i }).first()).toBeVisible();
   await expect(page.getByRole('link', { name: /Inspect subscription|查看订阅|檢查訂閱/i }).first()).toBeVisible();
-  await page.getByRole('button', { name: /^Packages|^Package overview|^套餐|^方案/i }).click();
-  await expect(page.getByRole('heading', { name: /Package catalog|Package overview|套餐目录|套餐概览|方案目錄|方案概覽/i })).toBeVisible();
-  await expect(page.getByText(/Free/i).first()).toBeVisible();
-  await expect(page.getByText(/Pro/i).first()).toBeVisible();
-  await expect(page.getByText(/Agency/i).first()).toBeVisible();
-  await expect(page.getByText(/Site limit|站点上限|站點上限/i).first()).toBeVisible();
-  await expect(page.getByRole('link', { name: /Open package catalog|打开套餐目录|打開方案目錄/i })).toHaveCount(1);
-  await page.getByRole('button', { name: /Service status|Follow-up queue|服务状态|跟进队列|服務狀態|跟進隊列/i }).click();
-  await expect(page.getByText(/Customers needing service follow-up|需要服务跟进的客户|需要服務跟進的客戶/i).first()).toBeVisible();
+  await expect(page.locator('a[href="/admin/plans"]').first()).toBeVisible();
 
   await page.goto('/admin/subscriptions');
   await expect(page.getByRole('heading', { name: /^Service risk queue$|^服务风险队列$|^服務風險隊列$/i })).toBeVisible();
@@ -116,6 +99,9 @@ test('admin operator path smoke: queue and inspector routes stay connected', asy
   await expect(page.getByRole('heading', { name: /Npcink AI Demo|MVP Account|acct_mvp_enterprise_primary/i }).first()).toBeVisible();
   await expect(page.getByRole('link', { name: /Open customer subscription|打开客户订阅/i })).toHaveCount(0);
   await expect(page.getByText(/Package and top-up|套餐和加量|方案和加量/i).first()).toBeVisible();
+  await expect(page.getByText(/Agency quote and trial|Agency 报价与试用/i)).toBeVisible();
+  await expect(page.getByRole('button', { name: /Create Agency quote|创建 Agency 报价/i })).toBeVisible();
+  await expect(page.getByRole('button', { name: /Approve 14-day trial|批准 14 天试用/i })).toBeVisible();
   await expect(page.getByRole('link', { name: /View sites|查看站点|查看站點/i })).toBeVisible();
 
   await page.goto('/admin/accounts', { waitUntil: 'domcontentloaded' });
@@ -137,10 +123,10 @@ test('admin operator path smoke: queue and inspector routes stay connected', asy
   await expect(page.getByText(/Package initialization|套餐初始化|方案初始化/i).first()).toBeVisible();
   await expect(page.getByText(/Historical Free|历史 Free/i)).toHaveCount(0);
   await expect(page.getByText(/Pro/i).first()).toBeVisible();
+  await expect(page.getByText(/Plus/i).first()).toBeVisible();
   await expect(page.getByText(/Agency/i).first()).toBeVisible();
   await expect(page.getByText(/Site limit|站点上限/i).first()).toBeVisible();
   const freePackageCard = page.getByRole('group', { name: /Free package|Free 套餐/i });
-  await expect(freePackageCard.getByLabel(/Package fee: (?:CN)?¥5\.00|费用: (?:CN)?¥5\.00/i)).toBeVisible();
   await expect(freePackageCard.getByLabel(/Site limit: 3|站点上限: 3/i)).toBeVisible();
   await expect(page.getByRole('link', { name: /Back to coverage|返回服务状态/i })).toHaveCount(0);
   await expect(page.locator('a[href="/admin/plans/free"]')).toBeVisible();

@@ -66,10 +66,14 @@ def _alipay_test_keys() -> tuple[Any, str, str]:
         format=serialization.PrivateFormat.PKCS8,
         encryption_algorithm=serialization.NoEncryption(),
     ).decode("utf-8")
-    public_pem = private_key.public_key().public_bytes(
-        encoding=serialization.Encoding.PEM,
-        format=serialization.PublicFormat.SubjectPublicKeyInfo,
-    ).decode("utf-8")
+    public_pem = (
+        private_key.public_key()
+        .public_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PublicFormat.SubjectPublicKeyInfo,
+        )
+        .decode("utf-8")
+    )
     return private_key, private_pem, public_pem
 
 
@@ -652,9 +656,10 @@ def test_portal_issue_rotate_list_and_revoke_site_key(tmp_path: Path) -> None:
     assert portal_issue_audit["actor_kind"] == "principal"
     assert portal_rotate_audit["actor_kind"] == "principal"
     assert portal_revoke_audit["actor_kind"] == "principal"
-    assert portal_issue_audit["actor_ref"] == _ACCESS_BY_EMAIL["portal-admin@example.com"][
-        "principal_id"
-    ]
+    assert (
+        portal_issue_audit["actor_ref"]
+        == _ACCESS_BY_EMAIL["portal-admin@example.com"]["principal_id"]
+    )
 
     dispose_engine(database_url)
 
@@ -2387,9 +2392,7 @@ def test_portal_auth_login_code_request_and_verify_with_jwt(tmp_path: Path) -> N
 
     with get_session(database_url) as session:
         identity = session.scalar(
-            select(Principal).where(
-                Principal.principal_id == str(consume_data["principal_id"])
-            )
+            select(Principal).where(Principal.principal_id == str(consume_data["principal_id"]))
         )
         assert identity is not None
         assert identity.status == PRINCIPAL_STATUS_ACTIVE
@@ -2479,9 +2482,10 @@ def test_portal_account_email_change_verifies_new_email_before_switching(
     assert fake_sender.messages[-1]["recipient_email"] == "old-email@example.com"
 
     with get_session(database_url) as session:
-        assert session.scalar(
-            select(Principal).where(Principal.email == "old-email@example.com")
-        ) is None
+        assert (
+            session.scalar(select(Principal).where(Principal.email == "old-email@example.com"))
+            is None
+        )
         identity = session.scalar(
             select(Principal).where(Principal.email == "new-email@example.com")
         )
@@ -2568,9 +2572,13 @@ def test_portal_auth_login_code_remember_me_extends_cookie_session(tmp_path: Pat
     expires_at = datetime.fromisoformat(
         str(consume_data["session"]["expires_at"]).replace("Z", "+00:00")
     )
-    assert timedelta(days=6, hours=23) <= expires_at - verified_at <= timedelta(
-        days=7,
-        minutes=1,
+    assert (
+        timedelta(days=6, hours=23)
+        <= expires_at - verified_at
+        <= timedelta(
+            days=7,
+            minutes=1,
+        )
     )
 
 
@@ -2676,9 +2684,9 @@ def test_portal_qq_bind_and_callback_login_reuse_user_session(
     )
     assert callback_response.status_code == 200, callback_response.text
     callback_data = callback_response.json()["data"]
-    assert callback_data["principal_id"] == _ACCESS_BY_EMAIL["portal-qq@example.com"][
-        "principal_id"
-    ]
+    assert (
+        callback_data["principal_id"] == _ACCESS_BY_EMAIL["portal-qq@example.com"]["principal_id"]
+    )
     assert callback_data["identity_type"] == "user"
     assert callback_data["role"] == "user"
     assert callback_data["auth_provider"] == "qq"
@@ -2746,9 +2754,7 @@ def test_portal_qq_callback_bind_intent_binds_current_session(
         code=str(request_data["code"]),
     )
 
-    start_response = client.get(
-        "/portal/v1/auth/qq/start?intent=bind&return_to=/portal/account"
-    )
+    start_response = client.get("/portal/v1/auth/qq/start?intent=bind&return_to=/portal/account")
     assert start_response.status_code == 200
     start_data = start_response.json()["data"]
     assert start_data["intent"] == "bind"
@@ -2814,9 +2820,7 @@ def test_open_reserved_callbacks_fail_closed(tmp_path: Path) -> None:
         json={"out_trade_no": "pay_001"},
     )
     assert alipay_notify_response.status_code == 501
-    assert alipay_notify_response.json()["error_code"] == (
-        "open.alipay_payment_notify_not_enabled"
-    )
+    assert alipay_notify_response.json()["error_code"] == ("open.alipay_payment_notify_not_enabled")
 
     alipay_return_response = client.get("/open/payments/alipay/return")
     assert alipay_return_response.status_code == 501
@@ -2827,9 +2831,7 @@ def test_open_reserved_callbacks_fail_closed(tmp_path: Path) -> None:
         json={"out_trade_no": "pay_002"},
     )
     assert wechat_notify_response.status_code == 501
-    assert wechat_notify_response.json()["error_code"] == (
-        "open.wechat_payment_notify_not_enabled"
-    )
+    assert wechat_notify_response.json()["error_code"] == ("open.wechat_payment_notify_not_enabled")
 
     dispose_engine(database_url)
 
@@ -3237,9 +3239,7 @@ def test_portal_login_code_request_fails_when_email_delivery_not_configured(
     )
     client.post(
         "/internal/service/sites/site_portal_mail_missing/activate",
-        headers=build_internal_headers(
-            idempotency_key="portal-mail-missing-site-activate-001"
-        ),
+        headers=build_internal_headers(idempotency_key="portal-mail-missing-site-activate-001"),
     )
     _grant_account_member_access(
         client,
@@ -3451,8 +3451,19 @@ def test_portal_user_can_start_pro_trial_and_create_monthly_order(
     )
     account_id = str(registration["account_id"])
 
+    offers_response = client.get(
+        "/portal/v1/account/plan-offers",
+        headers=build_portal_headers(principal_id=str(registration["principal_id"])),
+    )
+    assert offers_response.status_code == 200, offers_response.text
+    assert [item["tier_id"] for item in offers_response.json()["data"]["items"]] == [
+        "plus",
+        "pro",
+    ]
+
     trial_response = client.post(
-        "/portal/v1/account/pro-trial",
+        "/portal/v1/account/plan-trials",
+        json={"tier_id": "pro"},
         headers=build_portal_headers(
             principal_id=str(registration["principal_id"]),
             idempotency_key="portal-pro-trial-start-001",
@@ -3468,8 +3479,8 @@ def test_portal_user_can_start_pro_trial_and_create_monthly_order(
     assert trial_data["session"]["current_subscription"]["plan_id"] == "pro"
 
     order_response = client.post(
-        "/portal/v1/account/pro-monthly-order",
-        json={"provider": "alipay"},
+        "/portal/v1/account/subscription-orders",
+        json={"offer_id": "pro_monthly_v1", "provider": "alipay"},
         headers=build_portal_headers(
             principal_id=str(registration["principal_id"]),
             idempotency_key="portal-pro-monthly-order-001",
@@ -3504,9 +3515,7 @@ def test_portal_user_can_start_pro_trial_and_create_monthly_order(
     with get_session(database_url) as session:
         subscriptions = list(
             session.scalars(
-                select(AccountSubscription).where(
-                    AccountSubscription.account_id == account_id
-                )
+                select(AccountSubscription).where(AccountSubscription.account_id == account_id)
             )
         )
         assert {item.plan_id: item.status for item in subscriptions} == {
@@ -3520,6 +3529,99 @@ def test_portal_user_can_start_pro_trial_and_create_monthly_order(
         assert payment_order.amount == 29.0
         assert payment_order.currency == "CNY"
 
+    dispose_engine(database_url)
+
+
+def test_portal_shared_trial_and_admin_agency_quote_contract(tmp_path: Path) -> None:
+    database_url, client = _build_client(
+        tmp_path,
+        settings_overrides={
+            "portal_jwt_secret": TEST_PORTAL_JWT_SECRET,
+            "portal_login_code_ttl_seconds": 300,
+        },
+    )
+    request_data = _request_portal_registration_code(
+        client,
+        email="shared-paid-trial@example.com",
+        headers={"x-npcink-debug-portal-link": "1"},
+    )
+    registration = _verify_portal_registration_code(
+        client,
+        email="shared-paid-trial@example.com",
+        code=str(request_data["code"]),
+    )
+    account_id = str(registration["account_id"])
+    principal_id = str(registration["principal_id"])
+
+    plus_trial = client.post(
+        "/portal/v1/account/plan-trials",
+        json={"tier_id": "plus"},
+        headers=build_portal_headers(
+            principal_id=principal_id,
+            idempotency_key="portal-shared-plus-trial-001",
+        ),
+    )
+    assert plus_trial.status_code == 200, plus_trial.text
+    pro_trial = client.post(
+        "/portal/v1/account/plan-trials",
+        json={"tier_id": "pro"},
+        headers=build_portal_headers(
+            principal_id=principal_id,
+            idempotency_key="portal-shared-pro-trial-001",
+        ),
+    )
+    assert pro_trial.status_code == 200, pro_trial.text
+    assert (
+        pro_trial.json()["data"]["trial"]["trial_ends_at"]
+        == (plus_trial.json()["data"]["trial"]["trial_ends_at"])
+    )
+    assert pro_trial.json()["data"]["trial"]["credit_limit"] == 5_000
+
+    agency_denied = client.post(
+        "/portal/v1/account/plan-trials",
+        json={"tier_id": "agency"},
+        headers=build_portal_headers(
+            principal_id=principal_id,
+            idempotency_key="portal-shared-agency-denied-001",
+        ),
+    )
+    assert agency_denied.status_code == 422, agency_denied.text
+
+    quote = client.post(
+        f"/internal/service/admin/accounts/{account_id}/agency-quotes",
+        json={
+            "amount_cny": 499,
+            "valid_days": 7,
+            "trial_enabled": True,
+            "trial_credit_limit": 12_000,
+        },
+        headers=build_internal_headers(idempotency_key="admin-agency-quote-001"),
+    )
+    assert quote.status_code == 200, quote.text
+    offer_id = str(quote.json()["data"]["offer"]["offer_id"])
+
+    agency_trial = client.post(
+        f"/internal/service/admin/accounts/{account_id}/agency-trial",
+        json={"principal_id": principal_id, "trial_credit_limit": 12_000},
+        headers=build_internal_headers(idempotency_key="admin-agency-trial-001"),
+    )
+    assert agency_trial.status_code == 200, agency_trial.text
+    assert agency_trial.json()["data"]["subscription"]["plan_id"] == "agency"
+    assert (
+        agency_trial.json()["data"]["trial"]["trial_ends_at"]
+        == (plus_trial.json()["data"]["trial"]["trial_ends_at"])
+    )
+
+    offers = client.get(
+        "/portal/v1/account/plan-offers",
+        headers=build_portal_headers(principal_id=principal_id),
+    )
+    assert offers.status_code == 200, offers.text
+    agency_offer = next(
+        item for item in offers.json()["data"]["items"] if item["offer_id"] == offer_id
+    )
+    assert agency_offer["purchase_mode"] == "quote"
+    assert agency_offer["amount"] == 499.0
     dispose_engine(database_url)
 
 
@@ -3566,7 +3668,8 @@ def test_open_alipay_notify_marks_pro_monthly_order_paid(
     )
     principal_id = str(registration["principal_id"])
     trial_response = client.post(
-        "/portal/v1/account/pro-trial",
+        "/portal/v1/account/plan-trials",
+        json={"tier_id": "pro"},
         headers=build_portal_headers(
             principal_id=principal_id,
             idempotency_key="portal-real-alipay-pro-trial-001",
@@ -3574,8 +3677,8 @@ def test_open_alipay_notify_marks_pro_monthly_order_paid(
     )
     assert trial_response.status_code == 200, trial_response.text
     order_response = client.post(
-        "/portal/v1/account/pro-monthly-order",
-        json={"provider": "alipay"},
+        "/portal/v1/account/subscription-orders",
+        json={"offer_id": "pro_monthly_v1", "provider": "alipay"},
         headers=build_portal_headers(
             principal_id=principal_id,
             idempotency_key="portal-real-alipay-pro-order-001",
@@ -3624,10 +3727,10 @@ def test_open_alipay_notify_marks_pro_monthly_order_paid(
         assert payment_order is not None
         assert payment_order.status == "paid"
         assert payment_order.provider_trade_no == "202607040000000099"
-        subscription = session.get(AccountSubscription, str(order["subscription_id"]))
-        assert subscription is not None
-        assert subscription.status == "active"
-        assert subscription.plan_id == "pro"
+        scheduled = session.get(AccountSubscription, str(payment_order.subscription_id))
+        assert scheduled is not None
+        assert scheduled.status == "scheduled"
+        assert scheduled.plan_id == "pro"
 
     dispose_engine(database_url)
 
@@ -3656,16 +3759,15 @@ def test_portal_session_falls_back_to_free_after_pro_trial_expires(
     principal_id = str(registration["principal_id"])
 
     trial_response = client.post(
-        "/portal/v1/account/pro-trial",
+        "/portal/v1/account/plan-trials",
+        json={"tier_id": "pro"},
         headers=build_portal_headers(
             principal_id=principal_id,
             idempotency_key="portal-pro-trial-expiry-start-001",
         ),
     )
     assert trial_response.status_code == 200, trial_response.text
-    trial_subscription_id = str(
-        trial_response.json()["data"]["subscription"]["subscription_id"]
-    )
+    trial_subscription_id = str(trial_response.json()["data"]["subscription"]["subscription_id"])
     with get_session(database_url) as session:
         trial_subscription = session.get(AccountSubscription, trial_subscription_id)
         assert trial_subscription is not None
@@ -3684,9 +3786,7 @@ def test_portal_session_falls_back_to_free_after_pro_trial_expires(
     with get_session(database_url) as session:
         subscriptions = list(
             session.scalars(
-                select(AccountSubscription).where(
-                    AccountSubscription.account_id == account_id
-                )
+                select(AccountSubscription).where(AccountSubscription.account_id == account_id)
             )
         )
         assert {item.plan_id: item.status for item in subscriptions} == {
@@ -3734,10 +3834,7 @@ def test_portal_registration_code_request_is_rate_limited(
         json={"email": "limited-register@example.com", "code": ""},
     )
     assert missing_payload_response.status_code == 400
-    assert (
-        missing_payload_response.json()["error_code"]
-        == "auth.portal_registration_code_required"
-    )
+    assert missing_payload_response.json()["error_code"] == "auth.portal_registration_code_required"
 
     dispose_engine(database_url)
 
@@ -3767,9 +3864,7 @@ def test_portal_registration_and_login_code_requests_share_email_rate_limit_with
         "/portal/v1/register/verify",
         json={"email": email, "code": fake_sender.messages[-1]["code"]},
     )
-    assert (
-        registration_verify_response.status_code == 200
-    ), registration_verify_response.text
+    assert registration_verify_response.status_code == 200, registration_verify_response.text
 
     for _index in range(4):
         login_response = client.post(
@@ -3787,10 +3882,7 @@ def test_portal_registration_and_login_code_requests_share_email_rate_limit_with
     assert limited_response.status_code == 429
     assert limited_response.json()["error_code"] == "portal.login_code_rate_limited"
 
-    assert (
-        [message["kind"] for message in fake_sender.messages].count("registration_code")
-        == 1
-    )
+    assert [message["kind"] for message in fake_sender.messages].count("registration_code") == 1
     assert [message["kind"] for message in fake_sender.messages].count("login_code") == 4
 
     dispose_engine(database_url)
@@ -4032,9 +4124,10 @@ def test_portal_session_sites_selection_and_logout_support_cookie_session(
     session_response = client.get("/portal/v1/session")
     assert session_response.status_code == 200
     session_data = session_response.json()["data"]
-    assert session_data["principal_id"] == _ACCESS_BY_EMAIL[
-        "portal-session@example.com"
-    ]["principal_id"]
+    assert (
+        session_data["principal_id"]
+        == _ACCESS_BY_EMAIL["portal-session@example.com"]["principal_id"]
+    )
     assert session_data["site_id"] == ""
     assert session_data["account_id"] == "acct_portal_session"
     assert session_data["identity_type"] == "user"
@@ -4324,9 +4417,9 @@ def test_portal_session_route_supports_jwt_with_session_cookies(tmp_path: Path) 
 
     assert response.status_code == 200
     data = response.json()["data"]
-    assert data["principal_id"] == _ACCESS_BY_EMAIL[
-        "portal-session-jwt@example.com"
-    ]["principal_id"]
+    assert (
+        data["principal_id"] == _ACCESS_BY_EMAIL["portal-session-jwt@example.com"]["principal_id"]
+    )
     assert data["site_id"] == ""
     assert data["auth_mode"] == "jwt"
     assert len(data["sites"]) == 1
@@ -4430,9 +4523,7 @@ def test_portal_summary_usage_entitlements_and_audit_routes(tmp_path: Path) -> N
         assert entitlement_snapshot.budgets_json["max_ai_credits_per_period"] == 300
         assert entitlement_snapshot.concurrency_json["max_active_runs"] == 1
         plan_version = session.scalar(
-            select(PlanVersion).where(
-                PlanVersion.plan_version_id == subscription.plan_version_id
-            )
+            select(PlanVersion).where(PlanVersion.plan_version_id == subscription.plan_version_id)
         )
         assert plan_version is not None
         plan_version.budgets_json = {
@@ -4655,11 +4746,12 @@ def test_portal_summary_usage_entitlements_and_audit_routes(tmp_path: Path) -> N
         "tokens_total",
         "zhihu_hot_topics",
     }
-    assert next(
-        item
-        for item in credit_usage_detail["breakdown"]
-        if item["key"] == "zhihu_hot_topics"
-    )["capability_group"] == "zhihu_open_platform"
+    assert (
+        next(
+            item for item in credit_usage_detail["breakdown"] if item["key"] == "zhihu_hot_topics"
+        )["capability_group"]
+        == "zhihu_open_platform"
+    )
     assert "internal_limits" not in quota_summary
     assert {item["key"] for item in quota_summary["resource_limits"]} == {
         "bound_sites",
@@ -4700,28 +4792,23 @@ def test_portal_summary_usage_entitlements_and_audit_routes(tmp_path: Path) -> N
     credit_ledger_items_by_source = {
         item["source_type"]: item for item in credit_ledger_data["items"]
     }
-    assert credit_ledger_items_by_source["tokens_total"]["feature_key"] == (
-        "content_generation"
-    )
-    assert credit_ledger_items_by_source["tokens_total"]["feature_label"] == (
-        "Content writing"
-    )
+    assert credit_ledger_items_by_source["tokens_total"]["feature_key"] == ("content_generation")
+    assert credit_ledger_items_by_source["tokens_total"]["feature_label"] == ("Content writing")
     assert credit_ledger_items_by_source["runs"]["feature_key"] == "content_generation"
     assert credit_ledger_items_by_source["runs"]["feature_label"] == "Content writing"
     assert credit_ledger_items_by_source["zhihu_hot_topics"]["feature_key"] == "topic_research"
-    assert credit_ledger_items_by_source["zhihu_hot_topics"]["feature_label"] == (
-        "Topic research"
-    )
+    assert credit_ledger_items_by_source["zhihu_hot_topics"]["feature_label"] == ("Topic research")
     assert "ai_assistance" not in {
         str(item.get("feature_key") or "") for item in credit_ledger_data["items"]
     }
-    assert credit_ledger_data["summary"]["category_totals"]["ai_usage"][
-        "net_credit_delta"
-    ] == -4.0
+    assert credit_ledger_data["summary"]["category_totals"]["ai_usage"]["net_credit_delta"] == -4.0
     assert credit_ledger_data["usage_detail"]["surface"] == "portal_personal_credit_usage"
-    assert {
-        item["category"] for item in credit_ledger_data["usage_detail"]["legend"]
-    } >= {"ai_usage", "credit_pack_purchase", "refund_adjustment", "operator_adjustment"}
+    assert {item["category"] for item in credit_ledger_data["usage_detail"]["legend"]} >= {
+        "ai_usage",
+        "credit_pack_purchase",
+        "refund_adjustment",
+        "operator_adjustment",
+    }
     assert {item["key"] for item in credit_ledger_data["usage_detail"]["breakdown"]} >= {
         "runs",
         "tokens_total",
@@ -4826,16 +4913,13 @@ def test_portal_summary_usage_entitlements_and_audit_routes(tmp_path: Path) -> N
     refreshed_ledger = refreshed_credit_ledger_response.json()["data"]
     assert refreshed_ledger["summary"]["granted_credits"] == 10000.0
     assert refreshed_ledger["summary"]["net_used_credits"] == 0.0
-    assert refreshed_ledger["summary"]["category_totals"]["credit_pack_purchase"][
-        "net_credit_delta"
-    ] == 10000.0
-    assert "credit_pack_purchase" in {
-        item["source_type"] for item in refreshed_ledger["items"]
-    }
+    assert (
+        refreshed_ledger["summary"]["category_totals"]["credit_pack_purchase"]["net_credit_delta"]
+        == 10000.0
+    )
+    assert "credit_pack_purchase" in {item["source_type"] for item in refreshed_ledger["items"]}
     credit_pack_ledger_item = next(
-        item
-        for item in refreshed_ledger["items"]
-        if item["source_type"] == "credit_pack_purchase"
+        item for item in refreshed_ledger["items"] if item["source_type"] == "credit_pack_purchase"
     )
     assert "feature_key" not in credit_pack_ledger_item
     with get_session(database_url) as session:

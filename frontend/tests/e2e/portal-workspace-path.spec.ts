@@ -400,6 +400,47 @@ async function installPortalMocks(page: Page) {
       return;
     }
 
+    if (pathname === '/account/plan-offers') {
+      await fulfillJson(route, {
+        account_id: 'acct_portal',
+        principal_id: 'principal_portal',
+        trial: { available: true, trial_days: 14 },
+        items: [
+          {
+            offer_id: 'plus_monthly_v1',
+            plan_id: 'plus',
+            plan_version_id: 'plus_v1',
+            tier_id: 'plus',
+            billing_cycle: 'monthly',
+            amount: 15,
+            currency: 'CNY',
+            purchase_mode: 'self_serve',
+            status: 'active',
+            trial_enabled: true,
+            trial_days: 14,
+            trial_credit_limit: 3000,
+            trial_requires_approval: false,
+          },
+          {
+            offer_id: 'pro_monthly_v1',
+            plan_id: 'pro',
+            plan_version_id: 'pro_v1',
+            tier_id: 'pro',
+            billing_cycle: 'monthly',
+            amount: 29,
+            currency: 'CNY',
+            purchase_mode: 'self_serve',
+            status: 'active',
+            trial_enabled: true,
+            trial_days: 14,
+            trial_credit_limit: 5000,
+            trial_requires_approval: false,
+          },
+        ],
+      });
+      return;
+    }
+
     if (pathname === '/support-requests') {
       await fulfillJson(route, {
         summary: {
@@ -1124,6 +1165,9 @@ test('portal workspace interaction path: account overview to site drawer and ser
   await page.goto('/portal/billing');
   await expect(page.getByRole('heading', { level: 1, name: /^Package$|^套餐$/i })).toBeVisible();
   await expect(page.getByRole('link', { name: /Submit ticket|提交工单|提交工單/i })).toBeVisible();
+  await expect(page.getByRole('button', { name: /Buy Plus|购买 Plus/i })).toBeVisible();
+  await expect(page.getByRole('button', { name: /Buy Pro|月付购买/i })).toBeVisible();
+  await expect(page.getByRole('link', { name: /Request Agency quote|申请 Agency 报价/i })).toBeVisible();
   await page.getByText(/Recent payment orders|最近支付订单|最近支付訂單/i).click();
   await expect(page.getByText(/Small credit pack|小积分包|小積分包/i).first()).toBeVisible();
   await expect(page.getByText(/Medium credit pack|中积分包|中積分包/i)).toHaveCount(0);

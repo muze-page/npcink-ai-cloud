@@ -57,6 +57,13 @@ Rules:
 - Non-approved legacy package aliases must not be introduced
   into new entitlement API fields.
 - Plan and plan-version records remain the package execution truth inside Cloud.
+- Published plan offers are the price and purchase-mode truth. Payment orders
+  snapshot an offer; clients never supply a trusted amount or arbitrary plan
+  version.
+- Plus and Pro may use self-serve monthly offers. Agency uses an account-bound,
+  operator-approved quote that is payable from Portal.
+- Paid-package trial eligibility is shared across Plus, Pro, and Agency and may
+  be claimed only once per customer principal/account.
 
 ## 3. Entitlement Fields
 

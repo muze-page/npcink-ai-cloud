@@ -492,6 +492,14 @@ function AccountDetailContent() {
   const [packageActionReceipt, setPackageActionReceipt] = useState<AdminMutationReceiptPayload | null>(null);
   const [packageActionPending, setPackageActionPending] = useState<'change' | 'suspend' | 'cancel' | null>(null);
   const [topUpActionPending, setTopUpActionPending] = useState<string | null>(null);
+  const [agencyForm, setAgencyForm] = useState({
+    amount_cny: '499',
+    valid_days: '7',
+    trial_credit_limit: '20000',
+  });
+  const [agencyActionPending, setAgencyActionPending] = useState<'quote' | 'trial' | null>(null);
+  const [agencyActionNotice, setAgencyActionNotice] = useState<string | null>(null);
+  const [agencyActionError, setAgencyActionError] = useState<string | null>(null);
   const [creditAdjustmentForm, setCreditAdjustmentForm] = useState({
     event_type: 'grant',
     credit_delta: '',
@@ -956,6 +964,50 @@ function AccountDetailContent() {
       );
     } finally {
       setPackageActionPending(null);
+    }
+  };
+
+  const handleAgencyAction = async (action: 'quote' | 'trial') => {
+    setAgencyActionPending(action);
+    setAgencyActionNotice(null);
+    setAgencyActionError(null);
+    try {
+      const endpoint = action === 'quote' ? 'agency-quotes' : 'agency-trial';
+      const body = action === 'quote'
+        ? {
+            amount_cny: Number(agencyForm.amount_cny),
+            valid_days: Number(agencyForm.valid_days),
+            trial_enabled: true,
+            trial_credit_limit: Number(agencyForm.trial_credit_limit),
+          }
+        : {
+            trial_credit_limit: Number(agencyForm.trial_credit_limit),
+          };
+      const response = await fetch(
+        `/api/admin/accounts/${encodeURIComponent(accountId)}/${endpoint}`,
+        {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        }
+      );
+      const payload = await response.json();
+      if (!response.ok) {
+        throw new Error(payload.message || t('error.failed_save', {}, 'Failed to save.'));
+      }
+      setAgencyActionNotice(
+        action === 'quote'
+          ? t('admin.account_detail.agency_quote_created', undefined, 'Agency quote is ready in the customer Portal.')
+          : t('admin.account_detail.agency_trial_approved', undefined, 'Agency trial has been approved for 14 days.')
+      );
+      await loadAccount(selectedSiteId);
+    } catch (err) {
+      setAgencyActionError(
+        resolveUiErrorMessage(err instanceof Error ? err.message : null, t('error.failed_save'))
+      );
+    } finally {
+      setAgencyActionPending(null);
     }
   };
 
@@ -1834,6 +1886,93 @@ function AccountDetailContent() {
                   );
                 })}
               </div>
+            </div>
+            <div className="mt-5 border-t border-slate-200 pt-5 dark:border-slate-800">
+              <div className="flex flex-col gap-2 lg:flex-row lg:items-start lg:justify-between">
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-700 dark:text-slate-300">
+                    {t('admin.account_detail.agency_commerce_label', undefined, 'Agency quote and trial')}
+                  </p>
+                  <p className="mt-2 text-sm text-slate-600 dark:text-slate-300">
+                    {t(
+                      'admin.account_detail.agency_commerce_desc',
+                      undefined,
+                      'Create an account-bound quote for Portal payment or approve the single shared 14-day trial.'
+                    )}
+                  </p>
+                </div>
+                <BackofficeStatusBadge status="warning" label={t('common.approval_required', {}, 'Approval required')} />
+              </div>
+              <div className="mt-4 grid gap-3 lg:grid-cols-3">
+                <label className="text-sm text-slate-700 dark:text-slate-200">
+                  <span className="mb-2 block text-xs font-medium text-slate-500 dark:text-slate-400">
+                    {t('admin.account_detail.agency_amount_label', undefined, '30-day price (CNY)')}
+                  </span>
+                  <input
+                    type="number"
+                    min="0.01"
+                    step="0.01"
+                    value={agencyForm.amount_cny}
+                    onChange={(event) => setAgencyForm((current) => ({ ...current, amount_cny: event.target.value }))}
+                    className="input w-full"
+                  />
+                </label>
+                <label className="text-sm text-slate-700 dark:text-slate-200">
+                  <span className="mb-2 block text-xs font-medium text-slate-500 dark:text-slate-400">
+                    {t('admin.account_detail.agency_valid_days_label', undefined, 'Quote validity (days)')}
+                  </span>
+                  <input
+                    type="number"
+                    min="1"
+                    max="30"
+                    value={agencyForm.valid_days}
+                    onChange={(event) => setAgencyForm((current) => ({ ...current, valid_days: event.target.value }))}
+                    className="input w-full"
+                  />
+                </label>
+                <label className="text-sm text-slate-700 dark:text-slate-200">
+                  <span className="mb-2 block text-xs font-medium text-slate-500 dark:text-slate-400">
+                    {t('admin.account_detail.agency_trial_credits_label', undefined, 'Trial credit limit')}
+                  </span>
+                  <input
+                    type="number"
+                    min="0"
+                    max="20000"
+                    step="100"
+                    value={agencyForm.trial_credit_limit}
+                    onChange={(event) => setAgencyForm((current) => ({ ...current, trial_credit_limit: event.target.value }))}
+                    className="input w-full"
+                  />
+                </label>
+              </div>
+              <div className="mt-4 flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  disabled={agencyActionPending !== null}
+                  onClick={() => void handleAgencyAction('quote')}
+                >
+                  {agencyActionPending === 'quote'
+                    ? t('common.saving', {}, 'Saving...')
+                    : t('admin.account_detail.create_agency_quote_action', undefined, 'Create Agency quote')}
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  disabled={agencyActionPending !== null}
+                  onClick={() => void handleAgencyAction('trial')}
+                >
+                  {agencyActionPending === 'trial'
+                    ? t('common.saving', {}, 'Saving...')
+                    : t('admin.account_detail.approve_agency_trial_action', undefined, 'Approve 14-day trial')}
+                </button>
+              </div>
+              {agencyActionNotice ? (
+                <p className="mt-3 text-sm text-emerald-700 dark:text-emerald-300">{agencyActionNotice}</p>
+              ) : null}
+              {agencyActionError ? (
+                <p className="mt-3 text-sm text-red-700 dark:text-red-300">{agencyActionError}</p>
+              ) : null}
             </div>
             <div className="mt-5 rounded-2xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-950/45">
               <div className="flex flex-col gap-2 lg:flex-row lg:items-start lg:justify-between">

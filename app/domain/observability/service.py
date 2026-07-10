@@ -154,7 +154,9 @@ class ObservabilityService:
         with get_session(self.settings.database_url) as session:
             repository = StatsRepository(session)
             instances = repository.list_instances()
-            health_snapshots = repository.list_health_snapshots()
+            health_snapshots = repository.list_latest_health_snapshots(
+                [str(instance.instance_id) for instance in instances]
+            )
 
         latest_by_instance: dict[str, HealthSnapshot] = {}
         for snapshot in health_snapshots:
