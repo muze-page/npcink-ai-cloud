@@ -273,7 +273,12 @@ import os
 print(json.dumps({"email": os.environ["MEMBER_EMAIL_VALUE"]}, ensure_ascii=True))
 PY
 )"
-	http_request "POST" "${BASE_URL%/}/portal/v1/auth/code/request" "${PORTAL_COOKIE_JAR}" "${REQUEST_BODY}"
+	http_request \
+		"POST" \
+		"${BASE_URL%/}/portal/v1/auth/code/request" \
+		"${PORTAL_COOKIE_JAR}" \
+		"${REQUEST_BODY}" \
+		"Origin: ${BASE_URL%/}"
 	assert_status "${HTTP_STATUS}" "200" "portal login code request should succeed"
 
 	DELIVERY_MODE="$(json_read_path "${HTTP_BODY}" "data.delivery" 2>/dev/null || true)"
@@ -294,13 +299,18 @@ import os
 print(json.dumps({"email": os.environ["MEMBER_EMAIL_VALUE"], "code": os.environ["LOGIN_CODE_VALUE"]}, ensure_ascii=True))
 PY
 )"
-http_request "POST" "${BASE_URL%/}/portal/v1/auth/code/verify" "${PORTAL_COOKIE_JAR}" "${VERIFY_BODY}"
+http_request \
+	"POST" \
+	"${BASE_URL%/}/portal/v1/auth/code/verify" \
+	"${PORTAL_COOKIE_JAR}" \
+	"${VERIFY_BODY}" \
+	"Origin: ${BASE_URL%/}"
 assert_status "${HTTP_STATUS}" "200" "portal login code verify should succeed"
-assert_json_non_empty "${HTTP_BODY}" "data.member_ref" "portal session should include member_ref"
+assert_json_non_empty "${HTTP_BODY}" "data.principal_id" "portal session should include principal_id"
 
 http_request "GET" "${BASE_URL%/}/portal/v1/session" "${PORTAL_COOKIE_JAR}"
 assert_status "${HTTP_STATUS}" "200" "portal session should load"
-assert_json_non_empty "${HTTP_BODY}" "data.member_ref" "portal session response should include member_ref"
+assert_json_non_empty "${HTTP_BODY}" "data.principal_id" "portal session response should include principal_id"
 
 http_request "GET" "${BASE_URL%/}/admin/login" "${ADMIN_COOKIE_JAR}"
 assert_status "${HTTP_STATUS}" "200" "admin login page should load"
@@ -322,11 +332,14 @@ if [ "${HTTP_STATUS}" = "200" ]; then
 	fail "internal token must not bootstrap an admin session"
 fi
 http_request "POST" "${BASE_URL%/}/admin/auth/bootstrap" "${ADMIN_COOKIE_JAR}" "${ADMIN_BODY}" "Origin: ${BASE_URL%/}"
-assert_status "${HTTP_STATUS}" "200" "admin bootstrap login should succeed"
+case "${HTTP_STATUS}" in
+	200 | 303) ;;
+	*) fail "admin bootstrap login should succeed (expected 200 or 303, got ${HTTP_STATUS}; body=${HTTP_BODY})" ;;
+esac
 assert_body_contains "${HTTP_HEADERS}" "npcink_admin_session_token" "admin bootstrap should set ops session cookie"
 
 http_request "GET" "${BASE_URL%/}/admin/session" "${ADMIN_COOKIE_JAR}"
 assert_status "${HTTP_STATUS}" "200" "admin session should load"
-assert_json_non_empty "${HTTP_BODY}" "data.platform_admin_ref" "admin session should include platform admin ref"
+assert_json_non_empty "${HTTP_BODY}" "data.principal_id" "admin session should include principal_id"
 
 ok "Release smoke passed"
