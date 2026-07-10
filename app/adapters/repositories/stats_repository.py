@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import ColumnElement, Integer, Select, case, cast, distinct, func, select
+from sqlalchemy import ColumnElement, Integer, Select, and_, case, cast, distinct, func, select
 from sqlalchemy.orm import Session
 
 from app.core.models import (
@@ -419,6 +419,43 @@ class StatsRepository:
             if not instance_ids:
                 return []
             statement = statement.where(HealthSnapshot.instance_id.in_(instance_ids))
+        return list(self.session.scalars(statement))
+
+    def list_latest_health_snapshots(
+        self,
+        instance_ids: list[str] | None = None,
+    ) -> list[HealthSnapshot]:
+        if instance_ids is not None and not instance_ids:
+            return []
+
+        latest_timestamps_statement = select(
+            HealthSnapshot.instance_id.label("instance_id"),
+            func.max(HealthSnapshot.measured_at).label("measured_at"),
+        ).where(HealthSnapshot.instance_id.is_not(None))
+        if instance_ids is not None:
+            latest_timestamps_statement = latest_timestamps_statement.where(
+                HealthSnapshot.instance_id.in_(instance_ids)
+            )
+        latest_timestamps = latest_timestamps_statement.group_by(
+            HealthSnapshot.instance_id
+        ).subquery()
+
+        latest_ids = (
+            select(func.max(HealthSnapshot.id))
+            .join(
+                latest_timestamps,
+                and_(
+                    HealthSnapshot.instance_id == latest_timestamps.c.instance_id,
+                    HealthSnapshot.measured_at == latest_timestamps.c.measured_at,
+                ),
+            )
+            .group_by(HealthSnapshot.instance_id)
+        )
+        statement = (
+            select(HealthSnapshot)
+            .where(HealthSnapshot.id.in_(latest_ids))
+            .order_by(HealthSnapshot.instance_id.asc(), HealthSnapshot.id.asc())
+        )
         return list(self.session.scalars(statement))
 
     def upsert_usage_rollup(
