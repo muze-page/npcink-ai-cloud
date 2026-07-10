@@ -26,6 +26,8 @@ import {
   type PortalCreditPackPaymentOrder,
   type PortalPaymentOrder,
   type PortalPaymentOrderListPayload,
+  type PortalPlanOffer,
+  type PortalPlanOfferListPayload,
 } from '@/lib/portal-client';
 import { resolveCustomerPackageDisplay } from '@/lib/customer-package-display';
 import { DEFAULT_PORTAL_CURRENCY, formatPortalCurrency, normalizePortalCurrency } from '@/lib/currency';
@@ -58,8 +60,9 @@ function resolvePaymentOrderTitle(order: PortalPaymentOrder, t: TranslateFn): st
   if (packKey) {
     return t(`portal.usage.credit_pack_${packKey}`, {}, rawTitle || order.order_id);
   }
-  if (normalized.includes('pro') || normalizePaymentText(order.purchase_kind).includes('subscription')) {
-    return t('portal.package.pro_monthly_order_title', {}, 'Pro monthly package');
+  if (normalizePaymentText(order.purchase_kind).includes('subscription')) {
+    const tier = String(order.metadata?.target_tier_id || '').trim();
+    return tier ? `${tier.charAt(0).toUpperCase()}${tier.slice(1)} monthly package` : rawTitle;
   }
   return rawTitle || order.order_id;
 }
@@ -126,11 +129,12 @@ function PortalBillingContent() {
   const [entitlements, setEntitlements] = useState<Entitlements | null>(null);
   const [creditPacks, setCreditPacks] = useState<PortalCreditPackCatalogPayload | null>(null);
   const [paymentOrders, setPaymentOrders] = useState<PortalPaymentOrderListPayload | null>(null);
+  const [planOffers, setPlanOffers] = useState<PortalPlanOfferListPayload | null>(null);
   const [creditPackOrder, setCreditPackOrder] = useState<PortalCreditPackPaymentOrder | null>(null);
   const [creditPackPending, setCreditPackPending] = useState<string | null>(null);
   const [creditPackError, setCreditPackError] = useState<string | null>(null);
   const [packageOrder, setPackageOrder] = useState<PortalPaymentOrder | null>(null);
-  const [packagePending, setPackagePending] = useState<'trial' | 'pro_order' | null>(null);
+  const [packagePending, setPackagePending] = useState<string | null>(null);
   const [packageError, setPackageError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -143,11 +147,13 @@ function PortalBillingContent() {
       setEntitlements(bundle.entitlements);
       setCreditPacks(bundle.creditPacks);
       setPaymentOrders(bundle.paymentOrders);
+      setPlanOffers(bundle.planOffers || null);
     } catch (err) {
       setError(err instanceof Error ? err.message : t('error.failed_load', {}, 'Failed to load.'));
       setEntitlements(null);
       setCreditPacks(null);
       setPaymentOrders(null);
+      setPlanOffers(null);
     } finally {
       setIsLoading(false);
     }
@@ -161,13 +167,14 @@ function PortalBillingContent() {
     void loadBilling();
   }, [isAuthenticated, loadBilling, session?.account_id]);
 
-  const handleStartProTrial = async () => {
-    setPackagePending('trial');
+  const handleStartPlanTrial = async (tierId: 'plus' | 'pro') => {
+    setPackagePending(`trial:${tierId}`);
     setPackageError(null);
     setPackageOrder(null);
     try {
-      await portalClient.startProTrial();
+      await portalClient.startPlanTrial(tierId);
       await refresh();
+      await loadBilling();
     } catch (err) {
       setPackageError(formatPortalErrorMessage(err, t, t('error.failed_save')));
     } finally {
@@ -175,12 +182,12 @@ function PortalBillingContent() {
     }
   };
 
-  const handleCreateProMonthlyOrder = async () => {
-    setPackagePending('pro_order');
+  const handleCreateSubscriptionOrder = async (offer: PortalPlanOffer) => {
+    setPackagePending(`order:${offer.tier_id}`);
     setPackageError(null);
     setPackageOrder(null);
     try {
-      const response = await portalClient.createProMonthlyOrder('alipay');
+      const response = await portalClient.createSubscriptionOrder(offer.offer_id, 'alipay');
       setPackageOrder(response.data.order);
       setPaymentOrders((current) => ({
         ...(current || { items: [] }),
@@ -192,6 +199,21 @@ function PortalBillingContent() {
       if (response.data.order.checkout_url) {
         window.location.assign(response.data.order.checkout_url);
       }
+    } catch (err) {
+      setPackageError(formatPortalErrorMessage(err, t, t('error.failed_save')));
+    } finally {
+      setPackagePending(null);
+    }
+  };
+
+  const handleScheduleFreeDowngrade = async () => {
+    setPackagePending('downgrade:free');
+    setPackageError(null);
+    setPackageOrder(null);
+    try {
+      await portalClient.scheduleFreeDowngrade();
+      await refresh();
+      await loadBilling();
     } catch (err) {
       setPackageError(formatPortalErrorMessage(err, t, t('error.failed_save')));
     } finally {
@@ -240,10 +262,25 @@ function PortalBillingContent() {
   const currentSubscription = session.current_subscription || null;
   const currentPlanId = String(currentSubscription?.plan_id || '').toLowerCase();
   const currentStatus = String(currentSubscription?.status || '').toLowerCase();
-  const isPro = currentPlanId === 'pro';
-  const isProTrialing = isPro && currentStatus === 'trialing';
-  const isProPaid = isPro && currentStatus === 'active';
-  const canStartTrial = !isPro && currentPlanId !== 'agency';
+  const tierRank: Record<string, number> = { free: 0, plus: 1, pro: 2, agency: 3 };
+  const currentRank = tierRank[currentPlanId] ?? 0;
+  const offersByTier = new Map(
+    (planOffers?.items || []).map((offer) => [offer.tier_id, offer] as const)
+  );
+  const plusOffer = offersByTier.get('plus');
+  const proOffer = offersByTier.get('pro');
+  const agencyOffer = offersByTier.get('agency');
+  const canTrialTier = (tierId: 'plus' | 'pro') => {
+    const offer = offersByTier.get(tierId);
+    return Boolean(
+      offer?.trial_enabled
+      && (planOffers?.trial?.available !== false || planOffers?.trial?.status === 'active')
+      && currentStatus !== 'active'
+      && tierRank[tierId] > currentRank
+    );
+  };
+  const canBuyTier = (tierId: 'plus' | 'pro' | 'agency') =>
+    Boolean(offersByTier.get(tierId));
   const paymentReturnProvider = String(searchParams.get('payment_return') || '').toLowerCase();
   const paymentReturnOrder = String(searchParams.get('out_trade_no') || '').trim();
   const paymentReturnStatus = String(searchParams.get('trade_status') || '').trim();
@@ -307,18 +344,56 @@ function PortalBillingContent() {
             status={currentPlanId === 'free' ? 'ok' : 'neutral'}
             label={currentPlanId === 'free' ? t('common.current', {}, 'Current') : t('common.available', {}, 'Available')}
           />
+          {currentRank > 0 ? (
+            <button
+              type="button"
+              className="btn btn-secondary mt-4"
+              disabled={packagePending !== null}
+              onClick={() => void handleScheduleFreeDowngrade()}
+            >
+              {packagePending === 'downgrade:free'
+                ? t('common.saving', {}, 'Saving...')
+                : t('portal.package.schedule_free_downgrade', {}, 'Switch to Free at period end')}
+            </button>
+          ) : null}
         </div>
         <div className="rounded-[1rem] border border-slate-200 bg-slate-50/70 p-4 dark:border-slate-800 dark:bg-slate-950/35">
           <p className="text-sm font-semibold text-slate-950 dark:text-white">
             {t('portal.package.plus_title', {}, 'Plus')}
           </p>
           <p className="mt-2 text-sm text-slate-500 dark:text-slate-400">
-            {t('portal.package.plus_desc', {}, 'Entry paid credits and small-site headroom. Contact support while self-serve checkout is being finalized.')}
+            {t('portal.package.plus_desc', {}, 'CNY 15 for 30 days, with one shared 14-day paid-package trial.')}
           </p>
           <BackofficeStatusBadge
             status={currentPlanId === 'plus' ? 'ok' : 'neutral'}
-            label={currentPlanId === 'plus' ? t('common.current', {}, 'Current') : t('portal.package.operator_managed', {}, 'Operator managed')}
+            label={currentPlanId === 'plus' ? t('common.current', {}, 'Current') : t('common.available', {}, 'Available')}
           />
+          <div className="mt-4 flex flex-col gap-2">
+            <button
+              type="button"
+              className="btn btn-secondary"
+              disabled={!canTrialTier('plus') || packagePending !== null}
+              onClick={() => void handleStartPlanTrial('plus')}
+            >
+              {packagePending === 'trial:plus'
+                ? t('common.saving', {}, 'Saving...')
+                : t('portal.package.start_plus_trial', {}, 'Start 14-day trial')}
+            </button>
+            <button
+              type="button"
+              className="btn btn-primary"
+              disabled={!plusOffer || !canBuyTier('plus') || packagePending !== null}
+              onClick={() => plusOffer && void handleCreateSubscriptionOrder(plusOffer)}
+            >
+              {packagePending === 'order:plus'
+                ? t('common.saving', {}, 'Saving...')
+                : currentPlanId === 'plus'
+                  ? t('portal.package.renew_monthly', {}, 'Renew 30 days')
+                  : currentRank > tierRank.plus
+                    ? t('portal.package.schedule_paid_downgrade', {}, 'Use next period')
+                  : t('portal.package.buy_plus_monthly', {}, 'Buy Plus')}
+            </button>
+          </div>
         </div>
         <div className="rounded-[1rem] border border-blue-200 bg-blue-50/60 p-4 dark:border-blue-900/60 dark:bg-blue-950/20">
           <p className="text-sm font-semibold text-slate-950 dark:text-white">
@@ -331,26 +406,26 @@ function PortalBillingContent() {
             <button
               type="button"
               className="btn btn-secondary"
-              disabled={!canStartTrial || packagePending !== null}
-              onClick={() => void handleStartProTrial()}
+              disabled={!canTrialTier('pro') || packagePending !== null}
+              onClick={() => void handleStartPlanTrial('pro')}
             >
-              {packagePending === 'trial'
+              {packagePending === 'trial:pro'
                 ? t('common.saving', {}, 'Saving...')
-                : isProTrialing
-                  ? t('portal.package.pro_trial_active', {}, 'Trial active')
-                  : isProPaid
-                    ? t('portal.package.pro_active', {}, 'Pro active')
-                    : t('portal.package.start_pro_trial', {}, 'Start 14-day trial')}
+                : t('portal.package.start_pro_trial', {}, 'Start 14-day trial')}
             </button>
             <button
               type="button"
               className="btn btn-primary"
-              disabled={packagePending !== null}
-              onClick={() => void handleCreateProMonthlyOrder()}
+              disabled={!proOffer || !canBuyTier('pro') || packagePending !== null}
+              onClick={() => proOffer && void handleCreateSubscriptionOrder(proOffer)}
             >
-              {packagePending === 'pro_order'
+              {packagePending === 'order:pro'
                 ? t('common.saving', {}, 'Saving...')
-                : t('portal.package.buy_pro_monthly', {}, 'Buy monthly')}
+                : currentPlanId === 'pro'
+                  ? t('portal.package.renew_monthly', {}, 'Renew 30 days')
+                  : currentRank > tierRank.pro
+                    ? t('portal.package.schedule_paid_downgrade', {}, 'Use next period')
+                  : t('portal.package.buy_pro_monthly', {}, 'Buy Pro')}
             </button>
           </div>
         </div>
@@ -359,12 +434,38 @@ function PortalBillingContent() {
             {t('portal.package.agency_title', {}, 'Agency')}
           </p>
           <p className="mt-2 text-sm text-slate-500 dark:text-slate-400">
-            {t('portal.package.agency_desc', {}, 'Custom high-volume coverage. Contact support; self-serve checkout is not available.')}
+            {agencyOffer
+              ? t(
+                  'portal.package.agency_quote_desc',
+                  { amount: formatPortalCurrency(agencyOffer.amount) },
+                  `Your Agency quote is ${formatPortalCurrency(agencyOffer.amount)} for 30 days.`
+                )
+              : t('portal.package.agency_desc', {}, 'Custom high-volume coverage. Submit a request for a time-limited quote and approved trial.')}
           </p>
           <BackofficeStatusBadge
             status={currentPlanId === 'agency' ? 'ok' : 'neutral'}
             label={currentPlanId === 'agency' ? t('common.current', {}, 'Current') : t('portal.package.custom_only', {}, 'Custom')}
           />
+          <div className="mt-4">
+            {agencyOffer ? (
+              <button
+                type="button"
+                className="btn btn-primary"
+                disabled={!canBuyTier('agency') || packagePending !== null}
+                onClick={() => void handleCreateSubscriptionOrder(agencyOffer)}
+              >
+                {packagePending === 'order:agency'
+                  ? t('common.saving', {}, 'Saving...')
+                  : currentPlanId === 'agency'
+                    ? t('portal.package.renew_monthly', {}, 'Renew 30 days')
+                    : t('portal.package.buy_agency_quote', {}, 'Pay Agency quote')}
+              </button>
+            ) : (
+              <Link href="/portal/support?new=1&topic=billing" className="btn btn-secondary">
+                {t('portal.package.request_agency_quote', {}, 'Request Agency quote')}
+              </Link>
+            )}
+          </div>
         </div>
       </div>
       {packageOrder ? (
@@ -372,7 +473,7 @@ function PortalBillingContent() {
           {t(
             'portal.package.pro_order_created',
             { order: packageOrder.order_id },
-            `Pro monthly payment order ${packageOrder.order_id} has been created.`
+            `Package payment order ${packageOrder.order_id} has been created.`
           )}
         </div>
       ) : null}

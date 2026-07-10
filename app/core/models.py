@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from decimal import Decimal
 from typing import Any
 
 from sqlalchemy import (
@@ -13,6 +14,7 @@ from sqlalchemy import (
     Index,
     Integer,
     LargeBinary,
+    Numeric,
     String,
     Text,
     UniqueConstraint,
@@ -78,7 +80,28 @@ PLAN_VERSION_STATUS_DRAFT = "draft"
 PLAN_VERSION_STATUS_PUBLISHED = "published"
 PLAN_VERSION_STATUS_ARCHIVED = "archived"
 
+PLAN_OFFER_STATUS_DRAFT = "draft"
+PLAN_OFFER_STATUS_ACTIVE = "active"
+PLAN_OFFER_STATUS_RETIRED = "retired"
+PLAN_OFFER_PURCHASE_MODE_SELF_SERVE = "self_serve"
+PLAN_OFFER_PURCHASE_MODE_QUOTE = "quote"
+
+SUBSCRIPTION_ORDER_STATUS_PENDING_PAYMENT = "pending_payment"
+SUBSCRIPTION_ORDER_STATUS_PAID = "paid"
+SUBSCRIPTION_ORDER_STATUS_ACTIVATED = "activated"
+SUBSCRIPTION_ORDER_STATUS_CANCELED = "canceled"
+SUBSCRIPTION_ORDER_STATUS_REFUNDED = "refunded"
+SUBSCRIPTION_ORDER_KIND_PURCHASE = "purchase"
+SUBSCRIPTION_ORDER_KIND_UPGRADE = "upgrade"
+SUBSCRIPTION_ORDER_KIND_RENEWAL = "renewal"
+SUBSCRIPTION_ORDER_KIND_DOWNGRADE = "downgrade"
+
+TRIAL_CLAIM_STATUS_ACTIVE = "active"
+TRIAL_CLAIM_STATUS_EXPIRED = "expired"
+TRIAL_CLAIM_STATUS_CONVERTED = "converted"
+
 SUBSCRIPTION_STATUS_TRIALING = "trialing"
+SUBSCRIPTION_STATUS_SCHEDULED = "scheduled"
 SUBSCRIPTION_STATUS_ACTIVE = "active"
 SUBSCRIPTION_STATUS_PAST_DUE = "past_due"
 SUBSCRIPTION_STATUS_SUSPENDED = "suspended"
@@ -244,6 +267,93 @@ class PlanVersion(Base):
         DateTime(timezone=True),
         server_default=func.now(),
         onupdate=func.now(),
+    )
+
+
+class PlanOffer(Base):
+    __tablename__ = "plan_offers"
+
+    offer_id: Mapped[str] = mapped_column(String(191), primary_key=True)
+    plan_id: Mapped[str] = mapped_column(ForeignKey("plans.plan_id"), index=True)
+    plan_version_id: Mapped[str] = mapped_column(
+        ForeignKey("plan_versions.plan_version_id"), index=True
+    )
+    account_id: Mapped[str | None] = mapped_column(ForeignKey("accounts.account_id"), index=True)
+    tier_id: Mapped[str] = mapped_column(String(32), index=True)
+    billing_cycle: Mapped[str] = mapped_column(String(32), default="monthly")
+    amount: Mapped[Decimal] = mapped_column(Numeric(12, 2))
+    currency: Mapped[str] = mapped_column(String(16), default="CNY")
+    purchase_mode: Mapped[str] = mapped_column(String(32), index=True)
+    status: Mapped[str] = mapped_column(String(32), index=True)
+    trial_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    trial_days: Mapped[int] = mapped_column(Integer, default=0)
+    trial_credit_limit: Mapped[int] = mapped_column(Integer, default=0)
+    trial_requires_approval: Mapped[bool] = mapped_column(Boolean, default=False)
+    valid_from_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    valid_until_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    metadata_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class SubscriptionOrder(Base):
+    __tablename__ = "subscription_orders"
+
+    subscription_order_id: Mapped[str] = mapped_column(String(191), primary_key=True)
+    account_id: Mapped[str] = mapped_column(ForeignKey("accounts.account_id"), index=True)
+    offer_id: Mapped[str] = mapped_column(ForeignKey("plan_offers.offer_id"), index=True)
+    payment_order_id: Mapped[str | None] = mapped_column(
+        ForeignKey("payment_orders.order_id"), unique=True, index=True
+    )
+    source_subscription_id: Mapped[str | None] = mapped_column(String(191), index=True)
+    target_plan_id: Mapped[str] = mapped_column(String(191), index=True)
+    target_plan_version_id: Mapped[str] = mapped_column(String(191), index=True)
+    order_kind: Mapped[str] = mapped_column(String(32), index=True)
+    status: Mapped[str] = mapped_column(String(32), index=True)
+    list_amount: Mapped[Decimal] = mapped_column(Numeric(12, 2))
+    credit_amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=Decimal("0.00"))
+    payable_amount: Mapped[Decimal] = mapped_column(Numeric(12, 2))
+    currency: Mapped[str] = mapped_column(String(16), default="CNY")
+    effective_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    period_start_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    period_end_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    metadata_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class TrialClaim(Base):
+    __tablename__ = "trial_claims"
+    __table_args__ = (
+        UniqueConstraint("account_id", name="uq_trial_claims_account"),
+        UniqueConstraint("principal_id", name="uq_trial_claims_principal"),
+        UniqueConstraint("site_domain", name="uq_trial_claims_site_domain"),
+    )
+
+    claim_id: Mapped[str] = mapped_column(String(191), primary_key=True)
+    account_id: Mapped[str] = mapped_column(ForeignKey("accounts.account_id"), index=True)
+    principal_id: Mapped[str | None] = mapped_column(
+        ForeignKey("principals.principal_id"), nullable=True, index=True
+    )
+    site_domain: Mapped[str | None] = mapped_column(String(255), index=True)
+    plan_id: Mapped[str] = mapped_column(String(191), index=True)
+    plan_version_id: Mapped[str] = mapped_column(String(191), index=True)
+    tier_id: Mapped[str] = mapped_column(String(32), index=True)
+    highest_tier_id: Mapped[str] = mapped_column(String(32))
+    status: Mapped[str] = mapped_column(String(32), index=True)
+    credit_limit: Mapped[int] = mapped_column(Integer, default=0)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    ends_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    approved_by_principal_id: Mapped[str | None] = mapped_column(String(191))
+    converted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    metadata_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
 
 
@@ -769,6 +879,11 @@ class AccountSubscription(Base):
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     canceled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     suspended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    scheduled_plan_id: Mapped[str | None] = mapped_column(String(191), index=True)
+    scheduled_plan_version_id: Mapped[str | None] = mapped_column(String(191))
+    scheduled_change_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), index=True
+    )
     metadata_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

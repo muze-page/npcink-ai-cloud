@@ -1304,6 +1304,7 @@ export interface PortalUsageBundle {
   creditLedger: PortalCreditLedgerPayload;
   creditPacks: PortalCreditPackCatalogPayload;
   paymentOrders: PortalPaymentOrderListPayload;
+  planOffers?: PortalPlanOfferListPayload;
 }
 
 export interface PortalCreditLedgerEntry {
@@ -1389,7 +1390,42 @@ export interface PortalCreditPackOrderPayload {
 
 export type PortalPaymentOrder = PortalCreditPackPaymentOrder;
 
-export interface PortalProTrialPayload {
+export interface PortalPlanOffer {
+  offer_id: string;
+  plan_id: string;
+  plan_version_id: string;
+  account_id?: string;
+  tier_id: 'plus' | 'pro' | 'agency';
+  billing_cycle: 'monthly';
+  amount: number;
+  currency: 'CNY';
+  purchase_mode: 'self_serve' | 'quote';
+  status: string;
+  trial_enabled: boolean;
+  trial_days: number;
+  trial_credit_limit: number;
+  trial_requires_approval: boolean;
+  valid_from_at?: string;
+  valid_until_at?: string;
+}
+
+export interface PortalPlanOfferListPayload {
+  account_id: string;
+  principal_id: string;
+  items: PortalPlanOffer[];
+  trial?: {
+    available?: boolean;
+    status?: string;
+    tier_id?: string;
+    highest_tier_id?: string;
+    trial_days?: number;
+    credit_limit?: number;
+    trial_started_at?: string;
+    trial_ends_at?: string;
+  };
+}
+
+export interface PortalPlanTrialPayload {
   account_id: string;
   principal_id: string;
   subscription: NonNullable<PortalSession['current_subscription']>;
@@ -1399,6 +1435,7 @@ export interface PortalProTrialPayload {
     status?: string;
     tier_id?: string;
     trial_days?: number;
+    credit_limit?: number;
     trial_started_at?: string;
     trial_ends_at?: string;
     monthly_price_cny?: number;
@@ -1406,10 +1443,29 @@ export interface PortalProTrialPayload {
   session?: PortalSession;
 }
 
-export interface PortalProMonthlyOrderPayload {
+export interface PortalSubscriptionOrder {
+  subscription_order_id: string;
+  offer_id: string;
+  payment_order_id: string;
+  source_subscription_id?: string;
+  target_plan_id: string;
+  target_plan_version_id: string;
+  order_kind: 'purchase' | 'upgrade' | 'renewal' | 'downgrade';
+  status: string;
+  list_amount: number;
+  credit_amount: number;
+  payable_amount: number;
+  currency: 'CNY';
+  effective_at?: string;
+  period_start_at?: string;
+  period_end_at?: string;
+}
+
+export interface PortalSubscriptionOrderPayload {
   account_id: string;
   principal_id: string;
   order: PortalPaymentOrder;
+  subscription_order: PortalSubscriptionOrder;
 }
 
 export interface PortalPaymentOrderListPayload {
@@ -2173,17 +2229,32 @@ export class PortalClient {
     );
   }
 
-  async startProTrial(): Promise<PortalEnvelope<PortalProTrialPayload>> {
-    return this.request('POST', '/account/pro-trial', {}, { requireAuth: true });
+  async listAccountPlanOffers(): Promise<PortalEnvelope<PortalPlanOfferListPayload>> {
+    return this.request('GET', '/account/plan-offers', undefined, { requireAuth: true });
   }
 
-  async createProMonthlyOrder(provider = 'alipay'): Promise<PortalEnvelope<PortalProMonthlyOrderPayload>> {
+  async startPlanTrial(tierId: 'plus' | 'pro'): Promise<PortalEnvelope<PortalPlanTrialPayload>> {
+    return this.request('POST', '/account/plan-trials', { tier_id: tierId }, { requireAuth: true });
+  }
+
+  async createSubscriptionOrder(
+    offerId: string,
+    provider = 'alipay'
+  ): Promise<PortalEnvelope<PortalSubscriptionOrderPayload>> {
     return this.request(
       'POST',
-      '/account/pro-monthly-order',
-      { provider },
+      '/account/subscription-orders',
+      { offer_id: offerId, provider },
       { requireAuth: true }
     );
+  }
+
+  async scheduleFreeDowngrade(): Promise<PortalEnvelope<{
+    account_id: string;
+    scheduled_tier_id: 'free';
+    scheduled_change_at: string;
+  }>> {
+    return this.request('POST', '/account/free-downgrade', {}, { requireAuth: true });
   }
 
   /**
@@ -2295,23 +2366,26 @@ export class PortalClient {
     };
   }
 
-  async getAccountCommercialBundle(): Promise<Pick<PortalUsageBundle, 'entitlements' | 'creditLedger' | 'creditPacks' | 'paymentOrders'>> {
+  async getAccountCommercialBundle(): Promise<Pick<PortalUsageBundle, 'entitlements' | 'creditLedger' | 'creditPacks' | 'paymentOrders' | 'planOffers'>> {
     const [
       entitlementsResponse,
       creditLedgerResponse,
       creditPacksResponse,
       paymentOrdersResponse,
+      planOffersResponse,
     ] = await Promise.all([
       this.getAccountEntitlements(),
       this.getAccountCreditLedger({ limit: 12 }),
       this.listAccountCreditPacks(),
       this.listAccountPaymentOrders({ limit: 8 }),
+      this.listAccountPlanOffers(),
     ]);
     return {
       entitlements: entitlementsResponse.data,
       creditLedger: creditLedgerResponse.data,
       creditPacks: creditPacksResponse.data,
       paymentOrders: paymentOrdersResponse.data,
+      planOffers: planOffersResponse.data,
     };
   }
 

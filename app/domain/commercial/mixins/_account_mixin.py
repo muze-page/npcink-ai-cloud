@@ -30,8 +30,6 @@ from app.domain.commercial.service import (
     DEFAULT_FREE_PLAN_KIND,
     DEFAULT_FREE_SUBSCRIPTION_SOURCE,
     PLAN_TIER_REGISTRY,
-    PRO_MONTHLY_PRICE_CNY,
-    PRO_TRIAL_DAYS,
 )
 
 
@@ -230,119 +228,6 @@ class CommercialServiceAccountMixin(CommercialServiceAuditMixin):
             session.commit()
             return payload
 
-    def start_account_pro_trial(
-        self,
-        *,
-        account_id: str,
-        audit_context: ServiceAuditContext | None = None,
-    ) -> dict[str, object]:
-        service = cast(Any, self)
-        now = self.now_factory()
-        trial_end_at = now + timedelta(days=PRO_TRIAL_DAYS)
-        with get_session(self.database_url) as session:
-            repository = CommercialRepository(session)
-            account = repository.get_account(account_id)
-            if account is None:
-                raise CommercialNotFoundError(
-                    "service.account_not_found",
-                    f"account '{account_id}' was not found",
-                )
-            reconciled = self._reconcile_account_subscription_state_in_session(
-                repository=repository,
-                account_id=account_id,
-                now=now,
-                audit_context=audit_context,
-            )
-            if reconciled is not None:
-                session.commit()
-            subscriptions = repository.list_account_subscriptions(account_id)
-            for subscription in subscriptions:
-                metadata = subscription.metadata_json or {}
-                if str(metadata.get("trial_for_tier") or "").strip() != "pro":
-                    continue
-                if subscription.status == SUBSCRIPTION_STATUS_TRIALING:
-                    return {
-                        "subscription": service._serialize_subscription(subscription),
-                        "trial": self._build_pro_trial_state(subscription),
-                    }
-                raise CommercialValidationError(
-                    "service.pro_trial_already_used",
-                    "this account has already used the Pro trial",
-                )
-            for subscription in subscriptions:
-                if (
-                    subscription.plan_id == "pro"
-                    and subscription.status == SUBSCRIPTION_STATUS_ACTIVE
-                ):
-                    return {
-                        "subscription": service._serialize_subscription(subscription),
-                        "trial": {
-                            "available": False,
-                            "reason": "pro_already_active",
-                        },
-                    }
-
-            plan_id, plan_version_id = service._ensure_plan_tier_version_in_session(
-                repository=repository,
-                tier_id="pro",
-            )
-            self._cancel_covered_subscriptions_for_replacement(
-                repository=repository,
-                account_id=account_id,
-                now=now,
-                reason="pro_trial_started",
-            )
-            subscription, snapshot = service._bind_subscription_in_session(
-                repository=repository,
-                subscription_id=f"sub_{account_id}_pro_trial",
-                account_id=account_id,
-                plan_id=plan_id,
-                plan_version_id=plan_version_id,
-                status=SUBSCRIPTION_STATUS_TRIALING,
-                current_period_start_at=now,
-                current_period_end_at=trial_end_at,
-                metadata_json={
-                    "source": "portal_pro_trial",
-                    "tier_id": "pro",
-                    "package_alias": "Pro",
-                    "billing_mode": "trial",
-                    "trial_for_tier": "pro",
-                    "trial_days": PRO_TRIAL_DAYS,
-                    "trial_started_at": service._serialize_datetime(now),
-                    "trial_ends_at": service._serialize_datetime(trial_end_at),
-                    "monthly_price_cny": PRO_MONTHLY_PRICE_CNY,
-                    "fallback_tier_id": "free",
-                },
-            )
-            covered_sites = repository.list_sites(account_id=subscription.account_id, limit=None)
-            service._refresh_subscription_billing_snapshots_in_session(
-                repository=repository,
-                subscription=subscription,
-                covered_sites=covered_sites,
-                period_start_at=now,
-                period_end_at=trial_end_at,
-            )
-            payload = {
-                "subscription": service._serialize_subscription(subscription),
-                "entitlement_snapshot": service._serialize_entitlement_snapshot(snapshot),
-                "trial": self._build_pro_trial_state(subscription),
-            }
-            self._record_service_audit_in_session(
-                repository=repository,
-                audit_context=audit_context,
-                event_kind="subscription.pro_trial.start",
-                outcome="succeeded",
-                account_id=account_id,
-                subscription_id=subscription.subscription_id,
-                plan_id=plan_id,
-                plan_version_id=plan_version_id,
-                scope_kind="subscription",
-                scope_id=subscription.subscription_id,
-                payload_json=payload,
-            )
-            session.commit()
-            return payload
-
     def _bind_default_free_subscription_for_account_in_session(
         self,
         *,
@@ -355,9 +240,7 @@ class CommercialServiceAccountMixin(CommercialServiceAuditMixin):
             return None
 
         service = cast(Any, self)
-        plan_id, plan_version_id = service._ensure_free_version_in_session(
-            repository=repository
-        )
+        plan_id, plan_version_id = service._ensure_free_version_in_session(repository=repository)
         now = self.now_factory()
         subscription, snapshot = service._bind_subscription_in_session(
             repository=repository,
@@ -405,9 +288,7 @@ class CommercialServiceAccountMixin(CommercialServiceAuditMixin):
         audit_context: ServiceAuditContext | None = None,
     ) -> dict[str, object]:
         service = cast(Any, self)
-        plan_id, plan_version_id = service._ensure_free_version_in_session(
-            repository=repository
-        )
+        plan_id, plan_version_id = service._ensure_free_version_in_session(repository=repository)
         subscription, snapshot = service._bind_subscription_in_session(
             repository=repository,
             subscription_id=f"sub_{account_id}_free",
@@ -462,13 +343,23 @@ class CommercialServiceAccountMixin(CommercialServiceAuditMixin):
         now: datetime,
         audit_context: ServiceAuditContext | None = None,
     ) -> dict[str, object] | None:
+        applied_free_downgrade = cast(Any, self)._apply_due_free_downgrade_in_session(
+            repository=repository,
+            account_id=account_id,
+            now=now,
+        )
+        activated_orders = cast(Any, self)._activate_due_subscription_orders_in_session(
+            repository=repository,
+            account_id=account_id,
+            now=now,
+        )
         subscriptions = repository.list_account_subscriptions(account_id)
         expired_trials = []
         for subscription in subscriptions:
             if subscription.status != SUBSCRIPTION_STATUS_TRIALING:
                 continue
             metadata = dict(subscription.metadata_json or {})
-            if str(metadata.get("trial_for_tier") or "").strip() != "pro":
+            if not str(metadata.get("trial_for_tier") or "").strip():
                 continue
             period_end_at = subscription.current_period_end_at
             if period_end_at is None:
@@ -483,8 +374,29 @@ class CommercialServiceAccountMixin(CommercialServiceAuditMixin):
             subscription.metadata_json = metadata
             expired_trials.append(subscription)
 
-        if not expired_trials:
+        trial_claim = repository.find_trial_claim(account_id=account_id)
+        if (
+            trial_claim is not None
+            and trial_claim.status == "active"
+            and self._normalize_datetime(trial_claim.ends_at) <= now
+        ):
+            trial_claim.status = "expired"
+
+        if not expired_trials and not activated_orders and applied_free_downgrade is None:
             return None
+
+        if not expired_trials:
+            return {
+                "activated_subscriptions": [
+                    cast(Any, self)._serialize_subscription(subscription)
+                    for subscription in activated_orders
+                ],
+                "restored_subscription": (
+                    cast(Any, self)._serialize_subscription(applied_free_downgrade)
+                    if applied_free_downgrade is not None
+                    else None
+                ),
+            }
 
         repository.supersede_entitlement_snapshots(account_id)
         repository.session.flush()
@@ -508,7 +420,7 @@ class CommercialServiceAccountMixin(CommercialServiceAuditMixin):
                 repository=repository,
                 account_id=account_id,
                 now=now,
-                reason="pro_trial_expired",
+                reason="paid_package_trial_expired",
                 audit_context=audit_context,
             )
             payload = {
@@ -521,7 +433,7 @@ class CommercialServiceAccountMixin(CommercialServiceAuditMixin):
         self._record_service_audit_in_session(
             repository=repository,
             audit_context=audit_context,
-            event_kind="subscription.pro_trial.expire",
+            event_kind="subscription.paid_trial.expire",
             outcome="succeeded",
             account_id=account_id,
             scope_kind="account",
@@ -639,21 +551,6 @@ class CommercialServiceAccountMixin(CommercialServiceAuditMixin):
             subscription.metadata_json = metadata
         repository.supersede_entitlement_snapshots(account_id)
         repository.session.flush()
-
-    def _build_pro_trial_state(self, subscription: object) -> dict[str, object]:
-        metadata = getattr(subscription, "metadata_json", None) or {}
-        return {
-            "available": False,
-            "status": str(getattr(subscription, "status", "") or ""),
-            "tier_id": "pro",
-            "trial_days": int(metadata.get("trial_days") or PRO_TRIAL_DAYS),
-            "trial_started_at": str(metadata.get("trial_started_at") or ""),
-            "trial_ends_at": str(
-                metadata.get("trial_ends_at")
-                or self._serialize_datetime(getattr(subscription, "current_period_end_at", None))
-            ),
-            "monthly_price_cny": PRO_MONTHLY_PRICE_CNY,
-        }
 
     def _serialize_account(self, account: object) -> dict[str, object]:
         return {

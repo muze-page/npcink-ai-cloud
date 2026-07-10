@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from decimal import Decimal
 from typing import Any, cast
 from uuid import uuid4
 
@@ -30,6 +31,7 @@ from app.core.models import (
     PaymentOrder,
     PaymentRefund,
     Plan,
+    PlanOffer,
     PlanVersion,
     PlatformAdminGrant,
     PortalLoginCode,
@@ -43,10 +45,12 @@ from app.core.models import (
     SiteKnowledgeChunk,
     SiteKnowledgeDocument,
     SiteKnowledgeIndexJobMetric,
+    SubscriptionOrder,
     SupportRequest,
     SupportRequestAttachment,
     SupportRequestFeedback,
     SupportRequestMessage,
+    TrialClaim,
     UsageMeterEvent,
 )
 
@@ -59,6 +63,11 @@ class CommercialRepository:
 
     def get_account(self, account_id: str) -> Account | None:
         return self.session.get(Account, account_id)
+
+    def get_account_for_update(self, account_id: str) -> Account | None:
+        return self.session.scalar(
+            select(Account).where(Account.account_id == account_id).with_for_update()
+        )
 
     def list_accounts(
         self,
@@ -94,7 +103,7 @@ class CommercialRepository:
         request_id: str,
         account_id: str,
         site_id: str | None,
-        principal_id: str | None,
+        principal_id: str,
         email: str,
         topic: str,
         title: str,
@@ -734,6 +743,7 @@ class CommercialRepository:
         self,
         *,
         principal_ids: list[str] | None = None,
+        account_ids: list[str] | None = None,
         statuses: list[str] | None = None,
     ) -> list[AccountUserMembership]:
         statement = select(AccountUserMembership)
@@ -741,6 +751,10 @@ class CommercialRepository:
             if not principal_ids:
                 return []
             statement = statement.where(AccountUserMembership.principal_id.in_(principal_ids))
+        if account_ids is not None:
+            if not account_ids:
+                return []
+            statement = statement.where(AccountUserMembership.account_id.in_(account_ids))
         if statuses is not None:
             if not statuses:
                 return []
@@ -1270,6 +1284,85 @@ class CommercialRepository:
         self.session.flush()
         return plan_version
 
+    def get_plan_offer(self, offer_id: str) -> PlanOffer | None:
+        return self.session.get(PlanOffer, offer_id)
+
+    def list_plan_offers(
+        self,
+        *,
+        account_id: str | None = None,
+        status: str | None = None,
+        self_serve_only: bool = False,
+        now: datetime | None = None,
+    ) -> list[PlanOffer]:
+        statement = select(PlanOffer)
+        if account_id:
+            statement = statement.where(
+                or_(PlanOffer.account_id.is_(None), PlanOffer.account_id == account_id)
+            )
+        else:
+            statement = statement.where(PlanOffer.account_id.is_(None))
+        if status:
+            statement = statement.where(PlanOffer.status == status)
+        if self_serve_only:
+            statement = statement.where(PlanOffer.purchase_mode == "self_serve")
+        if now is not None:
+            statement = statement.where(
+                or_(PlanOffer.valid_from_at.is_(None), PlanOffer.valid_from_at <= now),
+                or_(PlanOffer.valid_until_at.is_(None), PlanOffer.valid_until_at > now),
+            )
+        statement = statement.order_by(PlanOffer.amount.asc(), PlanOffer.offer_id.asc())
+        return list(self.session.scalars(statement))
+
+    def upsert_plan_offer(
+        self,
+        *,
+        offer_id: str,
+        plan_id: str,
+        plan_version_id: str,
+        account_id: str | None,
+        tier_id: str,
+        billing_cycle: str,
+        amount: Decimal,
+        currency: str,
+        purchase_mode: str,
+        status: str,
+        trial_enabled: bool,
+        trial_days: int,
+        trial_credit_limit: int,
+        trial_requires_approval: bool,
+        valid_from_at: datetime | None,
+        valid_until_at: datetime | None,
+        metadata_json: dict[str, object] | None,
+    ) -> PlanOffer:
+        offer = self.get_plan_offer(offer_id)
+        values = {
+            "plan_id": plan_id,
+            "plan_version_id": plan_version_id,
+            "account_id": account_id,
+            "tier_id": tier_id,
+            "billing_cycle": billing_cycle,
+            "amount": amount,
+            "currency": currency,
+            "purchase_mode": purchase_mode,
+            "status": status,
+            "trial_enabled": trial_enabled,
+            "trial_days": trial_days,
+            "trial_credit_limit": trial_credit_limit,
+            "trial_requires_approval": trial_requires_approval,
+            "valid_from_at": valid_from_at,
+            "valid_until_at": valid_until_at,
+            "metadata_json": metadata_json,
+        }
+        if offer is None:
+            offer = PlanOffer(offer_id=offer_id, **values)
+            self.session.add(offer)
+        else:
+            for key, value in values.items():
+                setattr(offer, key, value)
+        self.session.flush()
+        return offer
+
     def get_subscription(self, subscription_id: str) -> AccountSubscription | None:
         return self.session.get(AccountSubscription, subscription_id)
 
@@ -1473,6 +1566,65 @@ class CommercialRepository:
     def get_latest_account_subscription(self, account_id: str) -> AccountSubscription | None:
         return next(iter(self.list_account_subscriptions(account_id)), None)
 
+    def get_trial_claim(self, claim_id: str) -> TrialClaim | None:
+        return self.session.get(TrialClaim, claim_id)
+
+    def find_trial_claim(
+        self,
+        *,
+        account_id: str | None = None,
+        principal_id: str | None = None,
+        site_domain: str | None = None,
+    ) -> TrialClaim | None:
+        filters: list[SQLAFilter] = []
+        if account_id:
+            filters.append(TrialClaim.account_id == account_id)
+        if principal_id:
+            filters.append(TrialClaim.principal_id == principal_id)
+        if site_domain:
+            filters.append(TrialClaim.site_domain == site_domain)
+        if not filters:
+            return None
+        return self.session.scalar(select(TrialClaim).where(or_(*filters)))
+
+    def create_trial_claim(
+        self,
+        *,
+        claim_id: str,
+        account_id: str,
+        principal_id: str | None,
+        site_domain: str | None,
+        plan_id: str,
+        plan_version_id: str,
+        tier_id: str,
+        highest_tier_id: str,
+        status: str,
+        credit_limit: int,
+        started_at: datetime,
+        ends_at: datetime,
+        approved_by_principal_id: str | None,
+        metadata_json: dict[str, object] | None,
+    ) -> TrialClaim:
+        claim = TrialClaim(
+            claim_id=claim_id,
+            account_id=account_id,
+            principal_id=principal_id,
+            site_domain=site_domain,
+            plan_id=plan_id,
+            plan_version_id=plan_version_id,
+            tier_id=tier_id,
+            highest_tier_id=highest_tier_id,
+            status=status,
+            credit_limit=credit_limit,
+            started_at=started_at,
+            ends_at=ends_at,
+            approved_by_principal_id=approved_by_principal_id,
+            metadata_json=metadata_json,
+        )
+        self.session.add(claim)
+        self.session.flush()
+        return claim
+
     def get_runtime_subscription(self, account_id: str) -> AccountSubscription | None:
         candidates = self.list_account_subscriptions(account_id)
         active_statuses = {"trialing", "active"}
@@ -1535,6 +1687,11 @@ class CommercialRepository:
 
     def get_payment_order(self, order_id: str) -> PaymentOrder | None:
         return self.session.get(PaymentOrder, order_id)
+
+    def get_payment_order_for_update(self, order_id: str) -> PaymentOrder | None:
+        return self.session.scalar(
+            select(PaymentOrder).where(PaymentOrder.order_id == order_id).with_for_update()
+        )
 
     def get_payment_order_by_idempotency_key(self, idempotency_key: str) -> PaymentOrder | None:
         if not idempotency_key:
@@ -1642,6 +1799,80 @@ class CommercialRepository:
             checkout_url=checkout_url,
             refund_window_end_at=refund_window_end_at,
             idempotency_key=idempotency_key,
+            metadata_json=metadata_json,
+        )
+        self.session.add(order)
+        self.session.flush()
+        return order
+
+    def get_subscription_order(self, subscription_order_id: str) -> SubscriptionOrder | None:
+        return self.session.get(SubscriptionOrder, subscription_order_id)
+
+    def get_subscription_order_by_payment_order(
+        self, payment_order_id: str
+    ) -> SubscriptionOrder | None:
+        if not payment_order_id:
+            return None
+        return self.session.scalar(
+            select(SubscriptionOrder).where(SubscriptionOrder.payment_order_id == payment_order_id)
+        )
+
+    def list_subscription_orders(
+        self,
+        *,
+        account_id: str,
+        limit: int | None = None,
+    ) -> list[SubscriptionOrder]:
+        statement = (
+            select(SubscriptionOrder)
+            .where(SubscriptionOrder.account_id == account_id)
+            .order_by(
+                SubscriptionOrder.created_at.desc(),
+                SubscriptionOrder.subscription_order_id.desc(),
+            )
+        )
+        if limit is not None and limit > 0:
+            statement = statement.limit(limit)
+        return list(self.session.scalars(statement))
+
+    def create_subscription_order(
+        self,
+        *,
+        subscription_order_id: str,
+        account_id: str,
+        offer_id: str,
+        payment_order_id: str | None,
+        source_subscription_id: str | None,
+        target_plan_id: str,
+        target_plan_version_id: str,
+        order_kind: str,
+        status: str,
+        list_amount: Decimal,
+        credit_amount: Decimal,
+        payable_amount: Decimal,
+        currency: str,
+        effective_at: datetime | None,
+        period_start_at: datetime | None,
+        period_end_at: datetime | None,
+        metadata_json: dict[str, object] | None,
+    ) -> SubscriptionOrder:
+        order = SubscriptionOrder(
+            subscription_order_id=subscription_order_id,
+            account_id=account_id,
+            offer_id=offer_id,
+            payment_order_id=payment_order_id,
+            source_subscription_id=source_subscription_id,
+            target_plan_id=target_plan_id,
+            target_plan_version_id=target_plan_version_id,
+            order_kind=order_kind,
+            status=status,
+            list_amount=list_amount,
+            credit_amount=credit_amount,
+            payable_amount=payable_amount,
+            currency=currency,
+            effective_at=effective_at,
+            period_start_at=period_start_at,
+            period_end_at=period_end_at,
             metadata_json=metadata_json,
         )
         self.session.add(order)

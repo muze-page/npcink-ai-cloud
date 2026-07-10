@@ -164,8 +164,9 @@ def test_account_pro_trial_replaces_default_free_once(tmp_path: Path) -> None:
         bind_default_free=True,
     )
 
-    trial = service.start_account_pro_trial(
+    trial = service.start_account_plan_trial(
         account_id="acct_trial",
+        tier_id="pro",
         audit_context=_audit("pro-trial-start"),
     )
 
@@ -183,8 +184,9 @@ def test_account_pro_trial_replaces_default_free_once(tmp_path: Path) -> None:
         assert len(active_snapshots) == 2
         assert sum(1 for item in active_snapshots if item.status == "active") == 1
 
-    repeat = service.start_account_pro_trial(
+    repeat = service.start_account_plan_trial(
         account_id="acct_trial",
+        tier_id="pro",
         audit_context=_audit("pro-trial-repeat"),
     )
     assert repeat["subscription"]["subscription_id"] == trial["subscription"]["subscription_id"]
@@ -201,8 +203,9 @@ def test_expired_pro_trial_falls_back_to_default_free(tmp_path: Path) -> None:
         name="Expired trial account",
         bind_default_free=True,
     )
-    service.start_account_pro_trial(
+    service.start_account_plan_trial(
         account_id="acct_trial_expired",
+        tier_id="pro",
         audit_context=_audit("pro-trial-expired-start"),
     )
     expired_at = datetime.now(UTC) - timedelta(days=1)
@@ -285,14 +288,17 @@ def test_pro_monthly_payment_replaces_free_or_trial_subscription(tmp_path: Path)
         name="Pro monthly account",
         bind_default_free=True,
     )
-    trial = service.start_account_pro_trial(
+    trial = service.start_account_plan_trial(
         account_id="acct_pro_monthly",
+        tier_id="pro",
         audit_context=_audit("pro-monthly-trial"),
     )
-    order = service.create_account_pro_monthly_payment_order(
+    order_result = service.create_account_subscription_payment_order(
         account_id="acct_pro_monthly",
+        offer_id="pro_monthly_v1",
         audit_context=_audit("pro-monthly-order"),
     )
+    order = order_result["order"]
 
     assert order["amount"] == 29.0
     assert order["currency"] == "CNY"
@@ -307,7 +313,7 @@ def test_pro_monthly_payment_replaces_free_or_trial_subscription(tmp_path: Path)
         audit_context=_audit("pro-monthly-paid"),
     )
 
-    assert paid["subscription"]["status"] == SUBSCRIPTION_STATUS_ACTIVE
+    assert paid["subscription"]["status"] == "scheduled"
     assert paid["subscription"]["plan_id"] == "pro"
     assert paid["subscription"]["metadata"]["billing_cycle"] == "monthly"
     assert paid["subscription"]["metadata"]["payment_order_id"] == order["order_id"]
@@ -320,7 +326,10 @@ def test_pro_monthly_payment_replaces_free_or_trial_subscription(tmp_path: Path)
         ]
         assert len(covered) == 1
         assert covered[0].plan_id == "pro"
-        assert covered[0].subscription_id == trial["subscription"]["subscription_id"]
+        assert covered[0].status == SUBSCRIPTION_STATUS_TRIALING
+        scheduled = [item for item in subscriptions if item.status == "scheduled"]
+        assert len(scheduled) == 1
+        assert scheduled[0].plan_id == "pro"
 
     dispose_engine(database_url)
 
@@ -336,8 +345,9 @@ def test_pro_monthly_order_after_trial_expiry_is_new_paid_subscription(
         name="Pro after expiry account",
         bind_default_free=True,
     )
-    trial = service.start_account_pro_trial(
+    trial = service.start_account_plan_trial(
         account_id="acct_pro_after_expiry",
+        tier_id="pro",
         audit_context=_audit("pro-after-expiry-trial"),
     )
     expired_at = datetime.now(UTC) - timedelta(seconds=1)
@@ -350,14 +360,15 @@ def test_pro_monthly_order_after_trial_expiry_is_new_paid_subscription(
         trial_subscription.current_period_end_at = expired_at
         session.commit()
 
-    order = service.create_account_pro_monthly_payment_order(
+    order_result = service.create_account_subscription_payment_order(
         account_id="acct_pro_after_expiry",
+        offer_id="pro_monthly_v1",
         audit_context=_audit("pro-after-expiry-order"),
     )
+    order = order_result["order"]
 
     assert order["amount"] == 29.0
-    assert order["subscription_id"] == ""
-    assert order["metadata"]["trial_conversion"] is False
+    assert order["subscription_id"].endswith("_free")
     with get_session(database_url) as session:
         subscriptions = list(session.scalars(select(AccountSubscription)))
         statuses = {item.plan_id: item.status for item in subscriptions}
@@ -406,8 +417,9 @@ def test_payment_success_grants_subscription_and_is_idempotent(tmp_path: Path) -
     assert paid["subscription"]["status"] == SUBSCRIPTION_STATUS_ACTIVE
     assert paid_again["subscription"]["subscription_id"] == paid["subscription"]["subscription_id"]
     with get_session(database_url) as session:
-        assert session.scalar(select(PaymentOrder)).subscription_id == (
-            paid["subscription"]["subscription_id"]
+        assert (
+            session.scalar(select(PaymentOrder)).subscription_id
+            == (paid["subscription"]["subscription_id"])
         )
         assert len(list(session.scalars(select(AccountSubscription)))) == 1
         assert len(list(session.scalars(select(AccountEntitlementSnapshot)))) == 1
@@ -513,9 +525,7 @@ def test_credit_pack_payment_success_grants_ai_credits_once(tmp_path: Path) -> N
         limit=10,
     )
     pending_credit_pack_order = next(
-        item
-        for item in pending_orders["items"]
-        if item["order_id"] == order["order_id"]
+        item for item in pending_orders["items"] if item["order_id"] == order["order_id"]
     )
     paid = service.mark_payment_order_paid(
         order_id=str(order["order_id"]),
@@ -541,9 +551,7 @@ def test_credit_pack_payment_success_grants_ai_credits_once(tmp_path: Path) -> N
     assert order["credit_pack"]["pack_id"] == "pack_small"
     assert order["credit_pack"]["validity_days"] == 365
     assert order["metadata"]["credit_expiry_policy"] == "paid_at_plus_validity_days"
-    assert order["metadata"]["grant_policy"] == (
-        "payment_success_grants_paid_credit_until_expiry"
-    )
+    assert order["metadata"]["grant_policy"] == ("payment_success_grants_paid_credit_until_expiry")
     assert order["target_subscription_id"] == base_paid["subscription"]["subscription_id"]
     assert order["status_detail"]["code"] == "awaiting_payment_confirmation"
     assert order["status_detail"]["simulated_payment"] is True
@@ -569,21 +577,24 @@ def test_credit_pack_payment_success_grants_ai_credits_once(tmp_path: Path) -> N
     ledger_created_at = datetime.fromisoformat(
         str(paid["credit_ledger_entry"]["created_at"]).replace("Z", "+00:00")
     )
-    assert timedelta(days=364, hours=23) <= grant_expires_at - ledger_created_at <= timedelta(
-        days=365,
-        minutes=1,
+    assert (
+        timedelta(days=364, hours=23)
+        <= grant_expires_at - ledger_created_at
+        <= timedelta(
+            days=365,
+            minutes=1,
+        )
     )
-    assert paid_again["credit_ledger_entry"]["ledger_entry_id"] == (
-        paid["credit_ledger_entry"]["ledger_entry_id"]
+    assert (
+        paid_again["credit_ledger_entry"]["ledger_entry_id"]
+        == (paid["credit_ledger_entry"]["ledger_entry_id"])
     )
     paid_orders = service.list_account_payment_orders(
         "acct_pay",
         limit=10,
     )
     paid_credit_pack_order = next(
-        item
-        for item in paid_orders["items"]
-        if item["order_id"] == order["order_id"]
+        item for item in paid_orders["items"] if item["order_id"] == order["order_id"]
     )
     assert paid_credit_pack_order["status"] == PAYMENT_ORDER_STATUS_PAID
     assert paid_credit_pack_order["status_detail"]["code"] == "paid_and_granted"
@@ -616,9 +627,7 @@ def test_pending_payment_orders_expire_before_late_payment_confirmation(tmp_path
         session.commit()
 
     listed = service.list_account_payment_orders("acct_pay", limit=10)
-    expired_order = next(
-        item for item in listed["items"] if item["order_id"] == order["order_id"]
-    )
+    expired_order = next(item for item in listed["items"] if item["order_id"] == order["order_id"])
     assert expired_order["status"] == PAYMENT_ORDER_STATUS_CANCELED
     assert expired_order["status_detail"]["code"] == "expired_unpaid"
     assert expired_order["metadata"]["cancellation_reason"] == "unpaid_order_expired"
@@ -666,9 +675,9 @@ def test_admin_credit_pack_catalog_override_changes_future_orders(tmp_path: Path
     assert catalog["default_validity_days"] == 365
     assert catalog["period_policy"] == "paid_credit_validity_days"
     assert catalog["expiry_policy"] == "paid_at_plus_validity_days"
-    assert next(
-        item for item in catalog["items"] if item["pack_id"] == "pack_medium"
-    )["recommended_for_tiers"] == ["pro", "agency"]
+    assert next(item for item in catalog["items"] if item["pack_id"] == "pack_medium")[
+        "recommended_for_tiers"
+    ] == ["pro", "agency"]
 
     updated = service.update_admin_credit_pack_catalog(
         items=[

@@ -156,8 +156,13 @@ class PortalCreditPackOrderPayload(BaseModel):
     provider: str = "alipay"
 
 
-class PortalProMonthlyOrderPayload(BaseModel):
-    provider: str = "alipay"
+class PortalPlanTrialPayload(BaseModel):
+    tier_id: str = Field(default="plus", pattern="^(plus|pro)$")
+
+
+class PortalSubscriptionOrderPayload(BaseModel):
+    offer_id: str = Field(min_length=1, max_length=191)
+    provider: str = Field(default="alipay", pattern="^alipay$")
 
 
 class PortalSupportRequestPayload(BaseModel):
@@ -971,9 +976,7 @@ def _resolve_primary_portal_account_access(
     principal_id: str,
 ) -> dict[str, object] | JSONResponse:
     try:
-        accounts = _get_commercial_service(request).list_portal_accounts(
-            principal_id=principal_id
-        )
+        accounts = _get_commercial_service(request).list_portal_accounts(principal_id=principal_id)
     except CommercialServiceError as error:
         return _service_error_response(error, request=request)
     for item in _object_list(accounts.get("items")):
@@ -1593,17 +1596,11 @@ async def revoke_portal_session(request: Request) -> Any:
     return _portal_session_cleared_response()
 
 
-@router.post("/account/pro-trial")
-async def start_portal_account_pro_trial(request: Request) -> Any:
-    same_origin = _portal_same_origin_guard(request, always=True)
-    if same_origin is not None:
-        return same_origin
-    write_guard = _portal_write_guard(request)
-    if write_guard is not None:
-        return write_guard
+@router.get("/account/plan-offers")
+async def list_portal_account_plan_offers(request: Request) -> Any:
     auth = await resolve_portal_request_context(
         request,
-        require_idempotency=True,
+        require_idempotency=False,
         allow_session_cookies=True,
     )
     if isinstance(auth, JSONResponse):
@@ -1615,33 +1612,23 @@ async def start_portal_account_pro_trial(request: Request) -> Any:
     if isinstance(account_id, JSONResponse):
         return account_id
     try:
-        result = _get_commercial_service(request).start_account_pro_trial(
-            account_id=account_id,
-            audit_context=_build_portal_audit_context(request, auth.principal_id),
-        )
-        session_data = serialize_portal_session(
-            request,
-            principal_id=auth.principal_id,
-            site_id=auth.site_id,
-            strict_site=False,
-        )
+        offers = _get_commercial_service(request).list_account_plan_offers(account_id=account_id)
     except CommercialServiceError as error:
         return _service_error_response(error, request=request)
     return _portal_route_envelope(
-        message="portal Pro trial started",
+        message="portal package offers listed",
         data={
             "account_id": account_id,
             "principal_id": auth.principal_id,
-            **result,
-            "session": session_data,
+            **offers,
         },
     )
 
 
-@router.post("/account/pro-monthly-order")
-async def create_portal_account_pro_monthly_order(
+@router.post("/account/plan-trials")
+async def start_portal_account_plan_trial(
     request: Request,
-    payload: PortalProMonthlyOrderPayload,
+    payload: PortalPlanTrialPayload,
 ) -> Any:
     same_origin = _portal_same_origin_guard(request, always=True)
     if same_origin is not None:
@@ -1663,19 +1650,108 @@ async def create_portal_account_pro_monthly_order(
     if isinstance(account_id, JSONResponse):
         return account_id
     try:
-        order = _get_commercial_service(request).create_account_pro_monthly_payment_order(
+        result = _get_commercial_service(request).start_account_plan_trial(
             account_id=account_id,
+            tier_id=payload.tier_id,
+            principal_id=auth.principal_id,
+            audit_context=_build_portal_audit_context(request, auth.principal_id),
+        )
+        session_data = serialize_portal_session(
+            request,
+            principal_id=auth.principal_id,
+            site_id=auth.site_id,
+            strict_site=False,
+        )
+    except CommercialServiceError as error:
+        return _service_error_response(error, request=request)
+    return _portal_route_envelope(
+        message="portal paid package trial started",
+        data={
+            "account_id": account_id,
+            "principal_id": auth.principal_id,
+            **result,
+            "session": session_data,
+        },
+    )
+
+
+@router.post("/account/subscription-orders")
+async def create_portal_account_subscription_order(
+    request: Request,
+    payload: PortalSubscriptionOrderPayload,
+) -> Any:
+    same_origin = _portal_same_origin_guard(request, always=True)
+    if same_origin is not None:
+        return same_origin
+    write_guard = _portal_write_guard(request)
+    if write_guard is not None:
+        return write_guard
+    auth = await resolve_portal_request_context(
+        request,
+        require_idempotency=True,
+        allow_session_cookies=True,
+    )
+    if isinstance(auth, JSONResponse):
+        return auth
+    account_id = _resolve_primary_portal_account_id(
+        request,
+        principal_id=auth.principal_id,
+    )
+    if isinstance(account_id, JSONResponse):
+        return account_id
+    try:
+        result = _get_commercial_service(request).create_account_subscription_payment_order(
+            account_id=account_id,
+            offer_id=payload.offer_id,
             provider=payload.provider,
             audit_context=_build_portal_audit_context(request, auth.principal_id),
         )
     except CommercialServiceError as error:
         return _service_error_response(error, request=request)
     return _portal_route_envelope(
-        message="portal Pro monthly payment order created",
+        message="portal subscription order created",
         data={
             "account_id": account_id,
             "principal_id": auth.principal_id,
-            "order": order,
+            **result,
+        },
+    )
+
+
+@router.post("/account/free-downgrade")
+async def schedule_portal_account_free_downgrade(request: Request) -> Any:
+    same_origin = _portal_same_origin_guard(request, always=True)
+    if same_origin is not None:
+        return same_origin
+    write_guard = _portal_write_guard(request)
+    if write_guard is not None:
+        return write_guard
+    auth = await resolve_portal_request_context(
+        request,
+        require_idempotency=True,
+        allow_session_cookies=True,
+    )
+    if isinstance(auth, JSONResponse):
+        return auth
+    account_id = _resolve_primary_portal_account_id(
+        request,
+        principal_id=auth.principal_id,
+    )
+    if isinstance(account_id, JSONResponse):
+        return account_id
+    try:
+        result = _get_commercial_service(request).schedule_account_free_downgrade(
+            account_id=account_id,
+            audit_context=_build_portal_audit_context(request, auth.principal_id),
+        )
+    except CommercialServiceError as error:
+        return _service_error_response(error, request=request)
+    return _portal_route_envelope(
+        message="portal Free downgrade scheduled",
+        data={
+            "account_id": account_id,
+            "principal_id": auth.principal_id,
+            **result,
         },
     )
 
