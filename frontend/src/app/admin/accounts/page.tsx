@@ -1,6 +1,6 @@
 'use client';
 
-import React, { Suspense, useEffect, useMemo, useState } from 'react';
+import React, { Suspense, useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import { BackofficeIdentifier } from '@/components/backoffice/BackofficeIdentifier';
@@ -173,7 +173,8 @@ function AccountsContent() {
   const { t } = useLocale();
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [filters, setFilters] = useState({
@@ -194,43 +195,43 @@ function AccountsContent() {
   const [isCreateOpen, setIsCreateOpen] = useState(false);
   const [showInternalAccounts, setShowInternalAccounts] = useState(false);
 
-  useEffect(() => {
-    const loadAccounts = async () => {
-      setIsLoading(true);
-      setError(null);
+  const loadAccounts = useCallback(async () => {
+    setIsLoading(true);
+    setLoadError(null);
 
-      try {
-        const params = new URLSearchParams();
-        if (filters.q.trim()) params.set('q', filters.q.trim());
-        if (filters.status) params.set('status', filters.status);
-        if (filters.expires_before) params.set('expires_before', filters.expires_before);
-        if (filters.coverage_state) params.set('coverage_state', filters.coverage_state);
-        if (filters.package_kind) params.set('package_kind', filters.package_kind);
-        if (filters.top_plan_id) params.set('top_plan_id', filters.top_plan_id);
-        params.set('sort', 'display_name');
+    try {
+      const params = new URLSearchParams();
+      if (filters.q.trim()) params.set('q', filters.q.trim());
+      if (filters.status) params.set('status', filters.status);
+      if (filters.expires_before) params.set('expires_before', filters.expires_before);
+      if (filters.coverage_state) params.set('coverage_state', filters.coverage_state);
+      if (filters.package_kind) params.set('package_kind', filters.package_kind);
+      if (filters.top_plan_id) params.set('top_plan_id', filters.top_plan_id);
+      params.set('sort', 'display_name');
 
-        const response = await fetch(`/api/admin/accounts?${params.toString()}`, {
-          credentials: 'include',
-        });
+      const response = await fetch(`/api/admin/accounts?${params.toString()}`, {
+        credentials: 'include',
+      });
 
-        if (!response.ok) {
-          throw new Error(t('error.failed_load'));
-        }
-
-        const data = await response.json();
-        const normalized = ((data.data?.items || []) as AccountsApiItem[])
-          .map((item) => normalizeAccount(item, t))
-          .filter((item): item is Account => Boolean(item));
-        setAccounts(normalized);
-      } catch (err) {
-        setError(resolveUiErrorMessage(err instanceof Error ? err.message : null, t('error.failed_load')));
-      } finally {
-        setIsLoading(false);
+      if (!response.ok) {
+        throw new Error(t('error.failed_load'));
       }
-    };
 
-    void loadAccounts();
+      const data = await response.json();
+      const normalized = ((data.data?.items || []) as AccountsApiItem[])
+        .map((item) => normalizeAccount(item, t))
+        .filter((item): item is Account => Boolean(item));
+      setAccounts(normalized);
+    } catch (err) {
+      setLoadError(resolveUiErrorMessage(err instanceof Error ? err.message : null, t('error.failed_load')));
+    } finally {
+      setIsLoading(false);
+    }
   }, [filters, t]);
+
+  useEffect(() => {
+    void loadAccounts();
+  }, [loadAccounts]);
 
   const handleFilterChange = (key: string, value: string) => {
     setFilters((prev) => ({ ...prev, [key]: value }));
@@ -251,7 +252,7 @@ function AccountsContent() {
     event.preventDefault();
     setIsSaving(true);
     setNotice(null);
-    setError(null);
+    setActionError(null);
 
     try {
       const metadata = {
@@ -296,24 +297,9 @@ function AccountsContent() {
         bind_default_free: true,
       });
       setIsCreateOpen(false);
-      const params = new URLSearchParams();
-      if (filters.q.trim()) params.set('q', filters.q.trim());
-      if (filters.status) params.set('status', filters.status);
-      if (filters.expires_before) params.set('expires_before', filters.expires_before);
-      if (filters.coverage_state) params.set('coverage_state', filters.coverage_state);
-      if (filters.package_kind) params.set('package_kind', filters.package_kind);
-      if (filters.top_plan_id) params.set('top_plan_id', filters.top_plan_id);
-      params.set('sort', 'display_name');
-      const refresh = await fetch(`/api/admin/accounts?${params.toString()}`, { credentials: 'include' });
-      if (refresh.ok) {
-        const data = await refresh.json();
-        const normalized = ((data.data?.items || []) as AccountsApiItem[])
-          .map((item) => normalizeAccount(item, t))
-          .filter((item): item is Account => Boolean(item));
-        setAccounts(normalized);
-      }
+      await loadAccounts();
     } catch (err) {
-      setError(resolveUiErrorMessage(err instanceof Error ? err.message : null, t('error.failed_save')));
+      setActionError(resolveUiErrorMessage(err instanceof Error ? err.message : null, t('error.failed_save')));
     } finally {
       setIsSaving(false);
     }
@@ -333,13 +319,13 @@ function AccountsContent() {
     return <LoadingFallback />;
   }
 
-  if (error) {
+  if (loadError) {
     return (
       <div className="flex min-h-[60vh] items-center justify-center">
-        <div className="max-w-md text-center">
+        <div role="alert" className="max-w-md text-center">
           <h2 className="mb-4 text-2xl font-bold text-red-600">{t('common.error')}</h2>
-          <p className="mb-6 text-gray-600 dark:text-gray-400">{error}</p>
-          <button onClick={() => window.location.reload()} className="btn btn-primary">
+          <p className="mb-6 text-gray-600 dark:text-gray-400">{loadError}</p>
+          <button onClick={() => void loadAccounts()} className="btn btn-primary">
             {t('common.retry')}
           </button>
         </div>
@@ -517,11 +503,13 @@ function AccountsContent() {
               />
               <span>{t('admin.accounts.bind_default_free_label', {}, 'Bind formal Free package on create')}</span>
             </label>
-            {notice ? <p className="text-sm text-emerald-700 dark:text-emerald-300 md:col-span-3">{notice}</p> : null}
+            {actionError ? <p role="alert" className="text-sm text-rose-700 dark:text-rose-300 md:col-span-3">{actionError}</p> : null}
+            {notice ? <p role="status" aria-live="polite" className="text-sm text-emerald-700 dark:text-emerald-300 md:col-span-3">{notice}</p> : null}
           </form>
-        ) : notice ? (
+        ) : actionError || notice ? (
           <div className="border-b border-slate-200/80 px-6 py-3 text-sm dark:border-slate-800">
-            <p className="text-emerald-700 dark:text-emerald-300">{notice}</p>
+            {actionError ? <p role="alert" className="text-rose-700 dark:text-rose-300">{actionError}</p> : null}
+            {notice ? <p role="status" aria-live="polite" className="text-emerald-700 dark:text-emerald-300">{notice}</p> : null}
           </div>
         ) : null}
         <div className="space-y-3 border-b border-slate-200/80 bg-white px-6 py-4 dark:border-slate-800 dark:bg-slate-950/20">

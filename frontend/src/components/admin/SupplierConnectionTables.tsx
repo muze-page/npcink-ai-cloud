@@ -82,7 +82,7 @@ const TABLE_CONFIRM_DELETE_BUTTON_CLASS =
 
 function statusTone(status: ResourceStatus): 'success' | 'warning' | 'disabled' | 'info' {
   if (status === 'ready' || status === 'healthy') return 'success';
-  if (status === 'missing_secret' || status === 'missing_provider' || status === 'degraded') return 'warning';
+  if (status === 'missing_secret' || status === 'missing_provider' || status === 'saved_credential_unreadable' || status === 'degraded') return 'warning';
   if (status === 'disabled') return 'disabled';
   return 'info';
 }
@@ -92,6 +92,7 @@ function resourceStatusLabel(status: ResourceStatus, translate: Translate): stri
     ready: translate('status_ready_label', 'Ready'),
     missing_secret: translate('status_missing_secret_label', 'Missing secret'),
     missing_provider: translate('status_missing_provider_label', 'Missing provider'),
+    saved_credential_unreadable: translate('status_saved_credential_unreadable_label', 'Credential must be saved again'),
     disabled: translate('status_disabled_label', 'Disabled'),
     healthy: translate('status_healthy_label', 'Healthy'),
     degraded: translate('status_degraded_label', 'Degraded'),
@@ -101,6 +102,19 @@ function resourceStatusLabel(status: ResourceStatus, translate: Translate): stri
     not_observed: translate('status_not_observed', 'Not observed'),
   };
   return labels[status] || status;
+}
+
+function connectionErrorLabel(errorCode: string, translate: Translate): string {
+  const labels: Record<string, string> = {
+    'provider_connection.unsupported_provider_kind': translate(
+      'provider_error_unsupported_kind',
+      'This connection type cannot be tested automatically.'
+    ),
+  };
+  return labels[errorCode] || translate(
+    'provider_last_test_failed',
+    'The last test failed. Open configuration, verify the credential, and retry.'
+  );
 }
 
 function StatusFilter({
@@ -131,6 +145,13 @@ function StatusFilter({
 
 function ConnectionIssue({ connection, translate }: { connection: SupplierConnection; translate: Translate }) {
   if (connection.enabled && connection.configured) return null;
+  if (connection.status === 'saved_credential_unreadable') {
+    return (
+      <div className="mt-2 text-xs font-medium leading-5 text-amber-700 dark:text-amber-300">
+        {translate('provider_issue_credential_unreadable', 'The saved credential cannot be read. Enter and save it again.')}
+      </div>
+    );
+  }
   return (
     <div className="mt-2 text-xs font-medium leading-5">
       {!connection.enabled ? (
@@ -264,7 +285,9 @@ export function ModelSupplierTable({
                       <div className="grid gap-1">
                         <div className="text-xs text-slate-500 dark:text-slate-400">{formatDate(connection.last_tested_at)}</div>
                         {connection.last_error_code ? (
-                          <div className="text-xs leading-5 text-amber-700 dark:text-amber-300">{connection.last_error_code}</div>
+                          <div className="text-xs leading-5 text-amber-700 dark:text-amber-300">
+                            {connectionErrorLabel(connection.last_error_code, translate)}
+                          </div>
                         ) : null}
                       </div>
                     ) : <span className="text-slate-400 dark:text-slate-500">-</span>}

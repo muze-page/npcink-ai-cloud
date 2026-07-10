@@ -238,6 +238,18 @@ assert.match(
 );
 
 assert.match(
+  supplierConnectionTablesSource,
+  /saved_credential_unreadable[\s\S]*status_saved_credential_unreadable_label/,
+  'Unreadable saved credentials must use an operator-facing status instead of a raw runtime value'
+);
+
+assert.match(
+  supplierConnectionTablesSource,
+  /connectionErrorLabel\(connection\.last_error_code, translate\)/,
+  'Stored provider test failures must use readable guidance instead of rendering raw error codes'
+);
+
+assert.match(
   i18nSource,
   /'admin\.nav_ai_resources': '供应商'/,
   'Top-level admin navigation must use compact Simplified Chinese provider copy'

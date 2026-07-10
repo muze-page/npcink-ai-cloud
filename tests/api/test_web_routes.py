@@ -294,6 +294,72 @@ def test_web_admin_bootstrap_token_is_separate_from_internal_service_token(tmp_p
     dispose_engine(database_url)
 
 
+def test_web_admin_and_portal_sessions_do_not_substitute_for_each_other(tmp_path: Path) -> None:
+    fake_sender = FakePortalEmailSender()
+    database_url, portal_client = _build_client(
+        tmp_path,
+        settings_overrides={
+            "portal_jwt_secret": TEST_PORTAL_JWT_SECRET,
+            "portal_jwt_issuer": "npcink-cloud-portal",
+            "portal_jwt_audience": "npcink-cloud-customers",
+        },
+        portal_email_sender=fake_sender,
+    )
+    _seed_account(portal_client, account_id="acct_identity_boundary")
+    site_response = portal_client.post(
+        "/internal/service/sites",
+        json={
+            "site_id": "site_identity_boundary",
+            "account_id": "acct_identity_boundary",
+            "name": "Identity Boundary Site",
+            "status": "provisioning",
+        },
+        headers=build_internal_headers(idempotency_key="identity-boundary-site"),
+    )
+    assert site_response.status_code == 200, site_response.text
+    activate_response = portal_client.post(
+        "/internal/service/sites/site_identity_boundary/activate",
+        headers=build_internal_headers(idempotency_key="identity-boundary-activate"),
+    )
+    assert activate_response.status_code == 200, activate_response.text
+    _grant_principal_access(
+        portal_client,
+        site_id="site_identity_boundary",
+        email="identity-boundary@example.com",
+    )
+
+    request_response = portal_client.post(
+        "/portal/v1/auth/code/request",
+        json={"email": "identity-boundary@example.com"},
+    )
+    assert request_response.status_code == 200, request_response.text
+    verify_response = portal_client.post(
+        "/portal/v1/auth/code/verify",
+        json={
+            "email": "identity-boundary@example.com",
+            "code": str(fake_sender.messages[0]["code"]),
+        },
+    )
+    assert verify_response.status_code == 200, verify_response.text
+    assert verify_response.json()["data"]["identity_type"] == "user"
+    assert portal_client.get("/admin/session").status_code == 401
+
+    admin_client = TestClient(portal_client.app)
+    admin_client.headers.update(
+        {
+            "origin": "http://testserver",
+            "referer": "http://testserver/",
+        }
+    )
+    _login_platform_admin(admin_client)
+    admin_session_response = admin_client.get("/admin/session")
+    assert admin_session_response.status_code == 200
+    assert admin_session_response.json()["data"]["identity_type"] == "platform_admin"
+    assert admin_client.get("/portal/v1/session").status_code == 401
+
+    dispose_engine(database_url)
+
+
 def test_web_removed_rendered_pages_return_not_found(tmp_path: Path) -> None:
     database_url, client = _build_client(tmp_path)
 

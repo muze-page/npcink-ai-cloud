@@ -809,12 +809,12 @@ export default function AdminServiceSettingsPage() {
       />
 
       {error ? (
-        <BackofficeStackCard className="border-rose-200 bg-rose-50 text-sm text-rose-700 dark:border-rose-900 dark:bg-rose-950/30 dark:text-rose-200">
+        <BackofficeStackCard role="alert" className="border-rose-200 bg-rose-50 text-sm text-rose-700 dark:border-rose-900 dark:bg-rose-950/30 dark:text-rose-200">
           {error}
         </BackofficeStackCard>
       ) : null}
       {notice ? (
-        <BackofficeStackCard className="border-emerald-200 bg-emerald-50 text-sm text-emerald-700 dark:border-emerald-900 dark:bg-emerald-950/30 dark:text-emerald-200">
+        <BackofficeStackCard role="status" aria-live="polite" className="border-emerald-200 bg-emerald-50 text-sm text-emerald-700 dark:border-emerald-900 dark:bg-emerald-950/30 dark:text-emerald-200">
           {notice}
         </BackofficeStackCard>
       ) : null}

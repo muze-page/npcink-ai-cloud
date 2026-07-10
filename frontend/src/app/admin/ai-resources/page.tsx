@@ -2481,12 +2481,12 @@ function AiResourcesContent() {
           {aiText('workspace_boundary_notice', 'This page opens Cloud service-plane detail only. Local plugin prompts, routers, approval, and WordPress writes stay outside Cloud.')}
         </p>
         {!providerFormOpen && message ? (
-          <BackofficeStackCard className="border-emerald-200 bg-emerald-50 text-sm text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950/25 dark:text-emerald-200">
+          <BackofficeStackCard role="status" aria-live="polite" className="border-emerald-200 bg-emerald-50 text-sm text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950/25 dark:text-emerald-200">
             {message}
           </BackofficeStackCard>
         ) : null}
         {!providerFormOpen && error ? (
-          <BackofficeStackCard className="border-rose-200 bg-rose-50 text-sm text-rose-800 dark:border-rose-900 dark:bg-rose-950/25 dark:text-rose-200">
+          <BackofficeStackCard role="alert" className="border-rose-200 bg-rose-50 text-sm text-rose-800 dark:border-rose-900 dark:bg-rose-950/25 dark:text-rose-200">
             {error}
           </BackofficeStackCard>
         ) : null}
