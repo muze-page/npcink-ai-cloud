@@ -6,6 +6,9 @@ from app.domain.commercial.mixins._payment_mixin import CommercialServicePayment
 from app.domain.commercial.mixins._portal_mixin import CommercialServicePortalMixin
 from app.domain.commercial.mixins._runtime_mixin import CommercialServiceRuntimeMixin
 from app.domain.commercial.mixins._site_mixin import CommercialServiceSiteMixin
+from app.domain.commercial.mixins._subscription_commerce_mixin import (
+    CommercialServiceSubscriptionCommerceMixin,
+)
 from app.domain.commercial.mixins._support_mixin import CommercialServiceSupportMixin
 
 __all__ = [
@@ -18,4 +21,5 @@ __all__ = [
     "CommercialServiceSupportMixin",
     "CommercialServiceAdminMixin",
     "CommercialServiceRuntimeMixin",
+    "CommercialServiceSubscriptionCommerceMixin",
 ]

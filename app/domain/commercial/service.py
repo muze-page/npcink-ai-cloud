@@ -247,9 +247,6 @@ DEFAULT_FREE_PLAN_VERSION_ID = "free_v1"
 DEFAULT_FREE_PLAN_KIND = "default_free"
 DEFAULT_FREE_PLAN_SOURCE = "production_default_free_shell_v1"
 DEFAULT_FREE_SUBSCRIPTION_SOURCE = "production_default_free_bind_v1"
-PRO_TRIAL_DAYS = 14
-PRO_MONTHLY_PRICE_CNY = 29.0
-PRO_MONTHLY_BILLING_CYCLE = "monthly"
 CANONICAL_TIER_PLAN_IDS = {tier_id: (tier_id, f"{tier_id}_v1") for tier_id in PLAN_TIER_REGISTRY}
 OPERATOR_MANAGED_POINTS_PACK_REGISTRY: dict[str, dict[str, object]] = {
     "pack_small": {
@@ -306,11 +303,13 @@ from app.domain.commercial.mixins import (
     CommercialServicePortalMixin,
     CommercialServiceRuntimeMixin,
     CommercialServiceSiteMixin,
+    CommercialServiceSubscriptionCommerceMixin,
     CommercialServiceSupportMixin,
 )
 
 
 class CommercialService(
+    CommercialServiceSubscriptionCommerceMixin,
     CommercialServiceAccountMixin,
     CommercialServiceSiteMixin,
     CommercialServiceBillingMixin,

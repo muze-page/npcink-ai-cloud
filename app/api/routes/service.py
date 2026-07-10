@@ -235,6 +235,19 @@ class CreditPackPaymentOrderPayload(BaseModel):
     site_id: str = ""
 
 
+class AgencyQuotePayload(BaseModel):
+    amount_cny: float = Field(gt=0, le=9_999_999_999.99)
+    valid_days: int = Field(default=7, ge=1, le=30)
+    trial_enabled: bool = True
+    trial_credit_limit: int = Field(default=20_000, ge=0, le=20_000)
+
+
+class AgencyTrialApprovalPayload(BaseModel):
+    principal_id: str = Field(default="", max_length=191)
+    site_domain: str = Field(default="", max_length=255)
+    trial_credit_limit: int = Field(default=20_000, ge=0, le=20_000)
+
+
 class CreditPackCatalogItemPayload(BaseModel):
     pack_id: str
     label: str = ""
@@ -2851,6 +2864,64 @@ async def get_admin_account_quota_summary(
         message="admin account quota summary loaded",
         data=result,
         revision="m6",
+    )
+
+
+@router.post("/admin/accounts/{account_id}/agency-quotes")
+async def create_admin_account_agency_quote(
+    request: Request,
+    account_id: str,
+    payload: AgencyQuotePayload,
+) -> Any:
+    auth = await authorize_internal_request(request, require_idempotency=True)
+    if auth is not None:
+        return auth
+    try:
+        result = _get_commercial_service(request).create_account_agency_quote(
+            account_id=account_id,
+            amount_cny=payload.amount_cny,
+            valid_days=payload.valid_days,
+            trial_enabled=payload.trial_enabled,
+            trial_credit_limit=payload.trial_credit_limit,
+            audit_context=_build_audit_context(request),
+        )
+    except CommercialServiceError as error:
+        return _service_error_response(error, request=request)
+    return build_envelope(
+        status="ok",
+        message="Agency quote created",
+        data={"offer": result},
+        revision="m8",
+    )
+
+
+@router.post("/admin/accounts/{account_id}/agency-trial")
+async def approve_admin_account_agency_trial(
+    request: Request,
+    account_id: str,
+    payload: AgencyTrialApprovalPayload,
+) -> Any:
+    auth = await authorize_internal_request(request, require_idempotency=True)
+    if auth is not None:
+        return auth
+    audit_context = _build_audit_context(request)
+    try:
+        result = _get_commercial_service(request).start_account_plan_trial(
+            account_id=account_id,
+            tier_id="agency",
+            principal_id=payload.principal_id,
+            site_domain=payload.site_domain,
+            approved_by_principal_id=audit_context.actor_ref,
+            trial_credit_limit=payload.trial_credit_limit,
+            audit_context=audit_context,
+        )
+    except CommercialServiceError as error:
+        return _service_error_response(error, request=request)
+    return build_envelope(
+        status="ok",
+        message="Agency trial approved",
+        data=result,
+        revision="m8",
     )
 
 

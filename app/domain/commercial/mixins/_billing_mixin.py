@@ -526,9 +526,7 @@ class CommercialServiceBillingMixin(CommercialServiceAuditMixin):
                 repository,
                 subscription,
             )
-            policy = self._normalize_commercial_policy(
-                getattr(plan_version, "policy_json", None)
-            )
+            policy = self._normalize_commercial_policy(getattr(plan_version, "policy_json", None))
             period_start_at, period_end_at = self._resolve_period(subscription, now)
             meter_events = repository.list_usage_meter_events(
                 site_id,
@@ -633,9 +631,7 @@ class CommercialServiceBillingMixin(CommercialServiceAuditMixin):
                 repository,
                 subscription,
             )
-            policy = self._normalize_commercial_policy(
-                getattr(plan_version, "policy_json", None)
-            )
+            policy = self._normalize_commercial_policy(getattr(plan_version, "policy_json", None))
             tolerance = self._normalize_reconciliation_tolerance(
                 policy.get("reconciliation") if isinstance(policy, dict) else None
             )
@@ -1040,9 +1036,7 @@ class CommercialServiceBillingMixin(CommercialServiceAuditMixin):
             billing_snapshots = repository.get_latest_billing_snapshots_by_site(
                 site_ids=[site.site_id for site in sites]
             )
-            policy = self._normalize_commercial_policy(
-                getattr(plan_version, "policy_json", None)
-            )
+            policy = self._normalize_commercial_policy(getattr(plan_version, "policy_json", None))
             budgets = self._resolve_effective_subscription_budgets(
                 plan_version=plan_version,
                 subscription=subscription,
@@ -1200,9 +1194,7 @@ class CommercialServiceBillingMixin(CommercialServiceAuditMixin):
                 "package_alias": str(baseline.get("package_alias") or "Free"),
                 "plan_kind": DEFAULT_FREE_PLAN_KIND,
                 "site_limit": self._coerce_int(baseline.get("site_limit")),
-                "max_vector_documents": self._coerce_int(
-                    baseline.get("max_vector_documents")
-                ),
+                "max_vector_documents": self._coerce_int(baseline.get("max_vector_documents")),
                 "monthly_included_points": self._coerce_int(
                     baseline.get("monthly_included_points")
                 ),
@@ -1284,9 +1276,7 @@ class CommercialServiceBillingMixin(CommercialServiceAuditMixin):
                     baseline.get("monthly_included_points")
                 ),
                 "site_limit": self._coerce_int(baseline.get("site_limit")),
-                "max_vector_documents": self._coerce_int(
-                    baseline.get("max_vector_documents")
-                ),
+                "max_vector_documents": self._coerce_int(baseline.get("max_vector_documents")),
                 "max_batch_items": self._coerce_int(baseline.get("max_batch_items")),
                 "nightly_inspection_runs_per_period": self._coerce_int(
                     baseline.get("nightly_inspection_runs_per_period")
@@ -1637,9 +1627,7 @@ class CommercialServiceBillingMixin(CommercialServiceAuditMixin):
     def _normalize_budgets(self, raw: dict[str, object] | None) -> dict[str, object]:
         raw = raw if isinstance(raw, dict) else {}
         return {
-            "max_ai_credits_per_period": self._coerce_float(
-                raw.get("max_ai_credits_per_period")
-            ),
+            "max_ai_credits_per_period": self._coerce_float(raw.get("max_ai_credits_per_period")),
             "max_runs_per_period": self._coerce_float(raw.get("max_runs_per_period")),
             "max_tokens_per_period": self._coerce_float(raw.get("max_tokens_per_period")),
             "max_cost_per_period": self._coerce_float(raw.get("max_cost_per_period")),
@@ -1930,6 +1918,9 @@ class CommercialServiceBillingMixin(CommercialServiceAuditMixin):
             "started_at": self._serialize_datetime(subscription.started_at),
             "canceled_at": self._serialize_datetime(subscription.canceled_at),
             "suspended_at": self._serialize_datetime(subscription.suspended_at),
+            "scheduled_plan_id": subscription.scheduled_plan_id or "",
+            "scheduled_plan_version_id": subscription.scheduled_plan_version_id or "",
+            "scheduled_change_at": self._serialize_datetime(subscription.scheduled_change_at),
             "metadata": metadata,
             "created_at": self._serialize_datetime(subscription.created_at),
             "updated_at": self._serialize_datetime(subscription.updated_at),
@@ -2286,18 +2277,14 @@ class CommercialServiceBillingMixin(CommercialServiceAuditMixin):
                         baseline.get("monthly_included_points")
                     ),
                     "site_limit": self._coerce_int(baseline.get("site_limit")),
-                    "max_vector_documents": self._coerce_int(
-                        baseline.get("max_vector_documents")
-                    ),
+                    "max_vector_documents": self._coerce_int(baseline.get("max_vector_documents")),
                     "max_batch_items": self._coerce_int(baseline.get("max_batch_items")),
                     "nightly_inspection_runs_per_period": self._coerce_int(
                         baseline.get("nightly_inspection_runs_per_period")
                     ),
                     "nightly_inspection_retention_days": max(
                         1,
-                        self._coerce_int(
-                            baseline.get("nightly_inspection_retention_days") or 14
-                        ),
+                        self._coerce_int(baseline.get("nightly_inspection_retention_days") or 14),
                     ),
                     "nightly_inspection_payload_modes": self._normalize_list(
                         baseline.get("nightly_inspection_payload_modes"),

@@ -47,7 +47,6 @@ from app.domain.commercial.payment_gateways import (
     get_payment_gateway_provider,
     normalize_payment_gateway_provider,
 )
-from app.domain.commercial.service import PRO_MONTHLY_BILLING_CYCLE, PRO_MONTHLY_PRICE_CNY
 from app.domain.service_settings import resolve_alipay_payment_runtime_config
 
 SERVICE_SETTING_CREDIT_PACK_CATALOG = "commercial_credit_pack_catalog"
@@ -185,10 +184,7 @@ class CommercialServicePaymentMixin(CommercialServiceAuditMixin):
         include_inactive: bool,
     ) -> list[dict[str, object]]:
         default_items = list_credit_packs(include_inactive=True)
-        default_by_id = {
-            str(item.get("pack_id") or ""): item
-            for item in default_items
-        }
+        default_by_id = {str(item.get("pack_id") or ""): item for item in default_items}
         row = session.get(ServiceSetting, SERVICE_SETTING_CREDIT_PACK_CATALOG)
         config = row.config_json if row is not None and isinstance(row.config_json, dict) else {}
         raw_items = config.get("items") if isinstance(config, dict) else None
@@ -209,11 +205,7 @@ class CommercialServicePaymentMixin(CommercialServiceAuditMixin):
             {**default_item, **override_by_id.get(str(default_item.get("pack_id") or ""), {})}
             for default_item in default_items
         ]
-        return [
-            item
-            for item in items
-            if include_inactive or bool(item.get("active", True))
-        ]
+        return [item for item in items if include_inactive or bool(item.get("active", True))]
 
     def _effective_credit_pack_from_session(
         self,
@@ -256,10 +248,7 @@ class CommercialServicePaymentMixin(CommercialServiceAuditMixin):
         raw_tier_values = raw_tiers if isinstance(raw_tiers, list) else []
         recommended_for_tiers = [
             tier
-            for tier in [
-                str(raw_tier or "").strip()
-                for raw_tier in raw_tier_values
-            ]
+            for tier in [str(raw_tier or "").strip() for raw_tier in raw_tier_values]
             if tier in {"free", "pro", "plus", "agency"}
         ]
         if not recommended_for_tiers:
@@ -451,8 +440,7 @@ class CommercialServicePaymentMixin(CommercialServiceAuditMixin):
                     amount=round(pack_amount, 6),
                     currency=str(pack.get("currency") or "CNY"),
                     subject=(
-                        f"{str(pack.get('label') or 'Credit pack')} "
-                        f"({pack_ai_credits} AI credits)"
+                        f"{str(pack.get('label') or 'Credit pack')} ({pack_ai_credits} AI credits)"
                     ),
                     metadata=metadata,
                 )
@@ -471,8 +459,7 @@ class CommercialServicePaymentMixin(CommercialServiceAuditMixin):
                 amount=round(pack_amount, 6),
                 currency=str(pack.get("currency") or "CNY"),
                 subject=(
-                    f"{str(pack.get('label') or 'Credit pack')} "
-                    f"({pack_ai_credits} AI credits)"
+                    f"{str(pack.get('label') or 'Credit pack')} ({pack_ai_credits} AI credits)"
                 ),
                 checkout_url=gateway_order.checkout_url or None,
                 refund_window_end_at=now + timedelta(days=14),
@@ -596,113 +583,6 @@ class CommercialServicePaymentMixin(CommercialServiceAuditMixin):
             session.commit()
             return payload
 
-    def create_account_pro_monthly_payment_order(
-        self,
-        *,
-        account_id: str,
-        provider: str = "alipay",
-        audit_context: ServiceAuditContext | None = None,
-    ) -> dict[str, object]:
-        service = cast(Any, self)
-        normalized_provider = self._normalize_payment_provider(provider)
-        if normalized_provider != "alipay":
-            raise CommercialValidationError(
-                "service.pro_payment_provider_invalid",
-                "Pro monthly checkout uses Alipay in the current trial phase",
-            )
-        now = service.now_factory()
-        idempotency_key = audit_context.idempotency_key if audit_context is not None else ""
-        with get_session(service.database_url) as session:
-            repository = CommercialRepository(session)
-            if idempotency_key:
-                existing = repository.get_payment_order_by_idempotency_key(idempotency_key)
-                if existing is not None:
-                    return self._serialize_payment_order(existing)
-            if repository.get_account(account_id) is None:
-                raise CommercialNotFoundError(
-                    "service.account_not_found",
-                    f"account '{account_id}' was not found",
-                )
-            service._reconcile_account_subscription_state_in_session(
-                repository=repository,
-                account_id=account_id,
-                now=now,
-                audit_context=audit_context,
-            )
-            plan_id, plan_version_id = service._ensure_plan_tier_version_in_session(
-                repository=repository,
-                tier_id="pro",
-            )
-            current_subscription = service._select_primary_subscription(
-                repository.list_account_subscriptions(account_id)
-            )
-            target_subscription_id = ""
-            if (
-                current_subscription is not None
-                and current_subscription.plan_id == plan_id
-                and current_subscription.status == "trialing"
-            ):
-                target_subscription_id = current_subscription.subscription_id
-            order_id = f"pay_{uuid4().hex[:24]}"
-            metadata: dict[str, object] = {
-                "source": "portal_pro_monthly_checkout",
-                "purchase_kind": "subscription_plan",
-                "target_tier_id": "pro",
-                "billing_cycle": PRO_MONTHLY_BILLING_CYCLE,
-                "monthly_price_cny": PRO_MONTHLY_PRICE_CNY,
-                "trial_conversion": bool(target_subscription_id),
-                "created_at": service._serialize_datetime(now),
-            }
-            gateway = get_payment_gateway_provider(
-                normalized_provider,
-                config=self._payment_gateway_runtime_config(normalized_provider),
-            )
-            gateway_order = gateway.create_order(
-                PaymentGatewayOrderRequest(
-                    provider=normalized_provider,
-                    order_id=order_id,
-                    amount=PRO_MONTHLY_PRICE_CNY,
-                    currency="CNY",
-                    subject="Npcink AI Cloud Pro monthly",
-                    metadata=metadata,
-                )
-            )
-            metadata["payment_gateway"] = gateway_order.provider_payload
-            order = repository.create_payment_order(
-                order_id=order_id,
-                account_id=account_id,
-                site_id=None,
-                subscription_id=target_subscription_id or None,
-                plan_id=plan_id,
-                plan_version_id=plan_version_id,
-                provider=normalized_provider,
-                external_order_no=gateway_order.external_order_no,
-                status=PAYMENT_ORDER_STATUS_PENDING,
-                amount=PRO_MONTHLY_PRICE_CNY,
-                currency="CNY",
-                subject="Npcink AI Cloud Pro monthly",
-                checkout_url=gateway_order.checkout_url or None,
-                refund_window_end_at=now + timedelta(days=14),
-                idempotency_key=idempotency_key or None,
-                metadata_json=metadata,
-            )
-            payload = self._serialize_payment_order(order)
-            service._record_service_audit_in_session(
-                repository=repository,
-                audit_context=audit_context,
-                event_kind="payment.pro_monthly_order.create",
-                outcome="succeeded",
-                account_id=order.account_id,
-                subscription_id=order.subscription_id,
-                plan_id=order.plan_id,
-                plan_version_id=order.plan_version_id,
-                scope_kind="payment_order",
-                scope_id=order.order_id,
-                payload_json=payload,
-            )
-            session.commit()
-            return payload
-
     def mark_payment_order_paid(
         self,
         *,
@@ -719,13 +599,17 @@ class CommercialServicePaymentMixin(CommercialServiceAuditMixin):
         idempotency_key = audit_context.idempotency_key if audit_context is not None else ""
         with get_session(service.database_url) as session:
             repository = CommercialRepository(session)
-            order = repository.get_payment_order(order_id)
+            order = repository.get_payment_order_for_update(order_id)
             if order is None:
                 raise CommercialNotFoundError(
                     "service.payment_order_not_found",
                     f"payment order '{order_id}' was not found",
                 )
             if self._cancel_expired_pending_payment_order_in_session(order, now=now):
+                cast(Any, self)._cancel_subscription_order_for_payment_in_session(
+                    repository=repository,
+                    payment_order_id=order.order_id,
+                )
                 session.commit()
                 raise CommercialConflictError(
                     "service.payment_order_expired",
@@ -759,6 +643,19 @@ class CommercialServicePaymentMixin(CommercialServiceAuditMixin):
             )
             if self._payment_order_purchase_kind(order) == "credit_pack":
                 payload = self._mark_credit_pack_payment_order_paid_in_session(
+                    repository=repository,
+                    order=order,
+                    event=event,
+                    provider_trade_no=provider_trade_no,
+                    paid_at=paid_at or now,
+                    audit_context=audit_context,
+                )
+                session.commit()
+                return payload
+            if self._payment_order_purchase_kind(order) == "subscription_plan" and str(
+                (order.metadata_json or {}).get("subscription_order_id") or ""
+            ):
+                payload = cast(Any, self)._apply_subscription_order_payment_in_session(
                     repository=repository,
                     order=order,
                     event=event,
@@ -807,12 +704,8 @@ class CommercialServicePaymentMixin(CommercialServiceAuditMixin):
                     "source": "payment_order",
                     "payment_order_id": order.order_id,
                     "payment_provider": order.provider,
-                    "billing_cycle": str(
-                        metadata.get("billing_cycle") or PRO_MONTHLY_BILLING_CYCLE
-                    ),
-                    "refund_window_end_at": service._serialize_datetime(
-                        order.refund_window_end_at
-                    ),
+                    "billing_cycle": str(metadata.get("billing_cycle") or "monthly"),
+                    "refund_window_end_at": service._serialize_datetime(order.refund_window_end_at),
                 },
             )
             order.subscription_id = subscription.subscription_id
@@ -866,7 +759,7 @@ class CommercialServicePaymentMixin(CommercialServiceAuditMixin):
                 existing = repository.get_payment_refund_by_idempotency_key(idempotency_key)
                 if existing is not None:
                     return self._serialize_payment_refund(existing)
-            order = repository.get_payment_order(order_id)
+            order = repository.get_payment_order_for_update(order_id)
             if order is None:
                 raise CommercialNotFoundError(
                     "service.payment_order_not_found",
@@ -877,6 +770,10 @@ class CommercialServicePaymentMixin(CommercialServiceAuditMixin):
                     "service.payment_order_not_paid",
                     "only paid orders can request refunds",
                 )
+            cast(Any, self)._assert_subscription_order_refundable_in_session(
+                repository=repository,
+                payment_order=order,
+            )
             refund_amount = self._normalize_payment_amount(
                 order.amount if amount is None else float(amount)
             )
@@ -884,6 +781,16 @@ class CommercialServicePaymentMixin(CommercialServiceAuditMixin):
                 raise CommercialValidationError(
                     "service.payment_refund_amount_invalid",
                     "refund amount cannot exceed the payment order amount",
+                )
+            committed_refund_amount = sum(
+                float(item.amount)
+                for item in repository.list_payment_refunds(order.order_id)
+                if item.status in {PAYMENT_REFUND_STATUS_REQUESTED, PAYMENT_REFUND_STATUS_SUCCEEDED}
+            )
+            if round(committed_refund_amount + refund_amount, 6) > round(float(order.amount), 6):
+                raise CommercialValidationError(
+                    "service.payment_refund_amount_invalid",
+                    "refund requests cannot exceed the remaining paid amount",
                 )
             refund_id = f"ref_{uuid4().hex[:24]}"
             refund_metadata = dict(metadata_json or {})
@@ -957,7 +864,7 @@ class CommercialServicePaymentMixin(CommercialServiceAuditMixin):
                     "service.payment_refund_not_found",
                     f"payment refund '{refund_id}' was not found",
                 )
-            order = repository.get_payment_order(refund.order_id)
+            order = repository.get_payment_order_for_update(refund.order_id)
             if order is None:
                 raise CommercialNotFoundError(
                     "service.payment_order_not_found",
@@ -993,11 +900,33 @@ class CommercialServicePaymentMixin(CommercialServiceAuditMixin):
                 )
                 refund.succeeded_at = succeeded_at or now
             revoked_subscription = None
-            full_refund = round(float(refund.amount), 6) >= round(float(order.amount), 6)
+            restored_subscription = None
+            succeeded_refund_amount = sum(
+                float(item.amount)
+                for item in repository.list_payment_refunds(order.order_id)
+                if item.status == PAYMENT_REFUND_STATUS_SUCCEEDED
+            )
+            full_refund = round(succeeded_refund_amount, 6) >= round(float(order.amount), 6)
             if full_refund and order.status != PAYMENT_ORDER_STATUS_REFUNDED:
                 order.status = PAYMENT_ORDER_STATUS_REFUNDED
                 order.refunded_at = refund.succeeded_at or now
-                if order.subscription_id:
+                is_subscription_order = bool(
+                    str((order.metadata_json or {}).get("subscription_order_id") or "")
+                )
+                if is_subscription_order:
+                    revoked_subscription = (
+                        repository.get_subscription(order.subscription_id)
+                        if order.subscription_id
+                        else None
+                    )
+                    restored_subscription = cast(
+                        Any, self
+                    )._restore_subscription_order_after_full_refund_in_session(
+                        repository=repository,
+                        order=order,
+                        now=refund.succeeded_at or now,
+                    )
+                elif order.subscription_id:
                     subscription = self._require_subscription(repository, order.subscription_id)
                     subscription.status = SUBSCRIPTION_STATUS_CANCELED
                     subscription.canceled_at = refund.succeeded_at or now
@@ -1013,6 +942,11 @@ class CommercialServicePaymentMixin(CommercialServiceAuditMixin):
                 "revoked_subscription": (
                     service._serialize_subscription(revoked_subscription)
                     if revoked_subscription is not None
+                    else {}
+                ),
+                "restored_subscription": (
+                    service._serialize_subscription(restored_subscription)
+                    if restored_subscription is not None
                     else {}
                 ),
             }
@@ -1533,8 +1467,7 @@ class CommercialServicePaymentMixin(CommercialServiceAuditMixin):
                 "code": "paid_and_granted",
                 "label": "Paid",
                 "detail": (
-                    "Payment has been confirmed and related entitlements or credits "
-                    "were applied."
+                    "Payment has been confirmed and related entitlements or credits were applied."
                 ),
                 "next_action": "none",
                 "simulated_payment": False,
