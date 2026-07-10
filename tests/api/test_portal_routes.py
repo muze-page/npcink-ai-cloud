@@ -12,7 +12,7 @@ from cryptography.hazmat.primitives.asymmetric import padding, rsa
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
-from app.adapters.notifications.base import PortalEmailSender
+from app.adapters.notifications.base import PortalEmailDeliveryError, PortalEmailSender
 from app.adapters.providers.base import (
     ProviderCatalogSnapshot,
     ProviderExecutionRequest,
@@ -183,6 +183,7 @@ def _build_client(
 class FakePortalEmailSender(PortalEmailSender):
     def __init__(self) -> None:
         self.messages: list[dict[str, object]] = []
+        self.support_update_error = ""
 
     def send_test_email(
         self,
@@ -304,6 +305,8 @@ class FakePortalEmailSender(PortalEmailSender):
         portal_url: str,
         locale: str = "zh-CN",
     ) -> None:
+        if self.support_update_error:
+            raise PortalEmailDeliveryError(self.support_update_error)
         self.messages.append(
             {
                 "kind": "support_request_update",
@@ -863,6 +866,26 @@ def test_portal_support_requests_flow_to_admin_queue(tmp_path: Path) -> None:
     )
     assert portal_reopen_feedback_response.status_code == 200, portal_reopen_feedback_response.text
     assert portal_reopen_feedback_response.json()["data"]["request"]["status"] == "open"
+
+    fake_sender.support_update_error = "SMTP authentication failed at smtp.internal:465"
+    failed_notification_response = client.post(
+        f"/internal/service/admin/support-requests/{request_id}/messages",
+        json={
+            "body": "We are retrying the payment-provider confirmation.",
+            "visibility": "public",
+        },
+        headers=build_internal_headers(
+            idempotency_key="portal-support-admin-notification-failure-001"
+        ),
+    )
+    assert failed_notification_response.status_code == 200, failed_notification_response.text
+    failed_notification = failed_notification_response.json()["data"]["notification"]
+    assert failed_notification == {
+        "attempted": True,
+        "delivered": False,
+        "reason": "delivery_failed",
+    }
+    assert "smtp.internal" not in failed_notification_response.text
 
     with get_session(database_url) as session:
         audit_kinds = {

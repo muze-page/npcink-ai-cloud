@@ -15,6 +15,7 @@ from app.adapters.repositories.catalog_repository import CatalogRepository
 from app.api.auth import authorize_internal_request, get_cloud_services
 from app.api.envelope import build_envelope
 from app.core.db import get_session
+from app.core.logging import get_logger
 from app.core.models import ProviderConnection
 from app.core.security import extract_trace_id
 from app.domain.advisor.service import InternalAIAdvisorService
@@ -69,6 +70,7 @@ from app.domain.wordpress_ai_connector.routing_profiles import (
 from app.workers.ops_cadence import build_cadence_summary
 
 router = APIRouter(prefix="/internal/service", tags=["service"])
+logger = get_logger(__name__)
 
 
 def _dict_value(value: object) -> dict[str, Any]:
@@ -515,12 +517,16 @@ def _send_support_request_update_notification(
         )
     except (NotImplementedError, AttributeError):
         return {"attempted": False, "delivered": False, "reason": "sender_not_supported"}
-    except PortalEmailDeliveryError as error:
+    except PortalEmailDeliveryError:
+        logger.exception(
+            "support request update email delivery failed: request_id=%s trace_id=%s",
+            str(request_payload.get("request_id") or ""),
+            extract_trace_id(request.headers.get("traceparent", "")),
+        )
         return {
             "attempted": True,
             "delivered": False,
             "reason": "delivery_failed",
-            "message": str(error),
         }
     return {"attempted": True, "delivered": True, "reason": ""}
 
