@@ -542,7 +542,7 @@ def test_static_terms_pages_are_in_release_tree() -> None:
     ).read_text()
 
 
-def test_release_gate_documents_cloud_hardening_blockers() -> None:
+def test_release_gate_documents_current_cloud_blockers() -> None:
     cloud_root = _cloud_root()
     checklist_text = (cloud_root / "deploy" / "RELEASE_CHECKLIST.md").read_text()
     playbook_text = (cloud_root / "deploy" / "OPS_PLAYBOOK.md").read_text()
@@ -559,20 +559,16 @@ def test_release_gate_documents_cloud_hardening_blockers() -> None:
         "env required",
         "operator required",
         "smoke required",
-        "production secrets",
-        "TLS / trusted hosts",
-        "SMTP real mailbox",
-        "worker heartbeat",
+        "real Alipay transaction",
+        "real WordPress reconnect",
+        "formal release smoke",
+        "schema drift baseline",
         "OTLP sink",
-        "DB backup/rollback",
-        "real signed runtime request",
+        "24-hour observation",
     ):
         assert marker in checklist_text
 
-    assert (
-        "`repo ready` is the only category currently closed by repository evidence"
-        in checklist_text
-    )
+    assert "the PC launch candidate is deployed to production" in checklist_text
     assert "Cloud must not be treated as GA-ready" in checklist_text
     assert "deploy/release-smoke.sh" in checklist_text
     assert "Release Smoke" in checklist_text

@@ -2,9 +2,10 @@
 
 > Status: canonical release gate
 >
-> Updated: 2026-06-29
+> Updated: 2026-07-10
 >
-> Scope: `cloud/**` formal release execution, production env verification, smoke, rollback readiness
+> Scope: formal Cloud release execution, production environment verification,
+> smoke, and rollback readiness
 
 ## 1. Purpose
 
@@ -18,7 +19,9 @@ It is intentionally split into:
 - operator required: backup/rollback, cadence, heartbeat, trace, token rotation, and log inspection procedures are confirmed by the release operator
 - smoke required: `deploy/release-smoke.sh`, real mailbox login, and one real signed hosted runtime request pass on the release host
 
-Cloud may be released only when every `Required` item below is complete.
+Cloud may be promoted for controlled production validation with explicit
+operator approval. It may be declared generally available only when every
+`Required` item below is complete.
 
 ## 2. Current Repository Status
 
@@ -40,23 +43,23 @@ Current repository status is:
 
 Repository conclusion:
 
-- `repo ready` is the only category currently closed by repository evidence
-- `env required`, `operator required`, and `smoke required` remain open until a real release host is verified
-- Cloud must not be treated as GA-ready while any `Required` item remains unchecked
+- the PC launch candidate is deployed to production;
+- repository, production environment, SMTP, signed runtime, worker/cadence,
+  dependency security, and database restore evidence are recorded;
+- Cloud must not be treated as GA-ready while any remaining `Required` item is
+  unchecked.
 
 Current open blockers:
 
 | Blocker | Category | Owner | Verification |
 | --- | --- | --- | --- |
-| production secrets | env required | release operator | production secret store contains distinct runtime, admin, session, provider, and Portal secrets |
-| stable service-settings key | env required | release operator | `NPCINK_CLOUD_SERVICE_SETTINGS_SECRET` is set, preserved across deploys, and can decrypt SMTP/payment credentials after restart |
-| TLS / trusted hosts | env required | release operator | public release origin has valid TLS and matches trusted host / browser origin allowlists |
-| SMTP real mailbox | service settings required | release operator | production SMTP sends a login code to a real invited mailbox |
-| worker heartbeat | operator required | release operator | `/internal/service/observability/summary` shows fresh worker heartbeats |
-| OTLP sink | operator required | release operator | trace sink endpoint and query URL are configured and a fresh Cloud trace is queryable |
-| DB backup/rollback | operator required | database owner | backup artifact exists and rollback procedure has been written down |
-| schema drift baseline | operator required | database owner | target is at Alembic head and any `alembic check` differences are either resolved or recorded as reviewed historical index-name drift |
-| real signed runtime request | smoke required | release operator | plugin/runtime smoke completes without `runtime.provider_not_configured` |
+| real Alipay transaction | smoke required | release operator | one low-value payment reaches paid state and grants the expected 365-day credits exactly once |
+| real WordPress reconnect | smoke required | release operator | one production Addon reconnect issues a fresh key and revokes the previous active key |
+| formal release smoke | smoke required | release operator | configure the required GitHub smoke secrets and run the complete `deploy/release-smoke.sh` path without a conditional skip |
+| schema drift baseline | operator required | database owner | historical `alembic check` index-name differences are resolved or recorded as reviewed |
+| OTLP sink | operator required | release operator | a fresh Cloud trace is queryable in the configured production sink |
+| 24-hour observation | operator required | release operator | health, workers, cadence, SMTP, callback, and runtime remain stable for 24 hours |
+| QQ login, when enabled | service settings required | release operator | real QQ login and `/open/auth/qq/callback` pass; otherwise QQ remains disabled |
 
 ## 3. Required Production Environment Checks
 
@@ -64,49 +67,50 @@ All items in this section are `Required`.
 
 ### 3.1 Secrets
 
-- [ ] `NPCINK_CLOUD_INTERNAL_AUTH_TOKEN` is set to a production value
-- [ ] `NPCINK_CLOUD_ADMIN_BOOTSTRAP_TOKEN` is set to a separate production value
-- [ ] `NPCINK_CLOUD_ADMIN_SESSION_SECRET` is set to a production value
-- [ ] `NPCINK_CLOUD_SERVICE_SETTINGS_SECRET` is set to a stable, dedicated production value and is preserved across deploys and admin-session key rotation
-- [ ] retired `OPS_*` and runtime `OPENAI_COMPATIBLE_*` names are absent from `.env.deploy`
-- [ ] QQ Open Platform uses only `/open/auth/qq/callback`
-- [ ] stored service credentials decrypt after restart without admin-session, Portal JWT, or internal-token fallback
-- [ ] `NPCINK_CLOUD_PORTAL_JWT_SECRET` is set to a production value
-- [ ] at least one real hosted-runtime provider credential is configured for the release host
-- [ ] `NPCINK_CLOUD_ADMIN_BOOTSTRAP_TOKEN` is not equal to `NPCINK_CLOUD_INTERNAL_AUTH_TOKEN`
-- [ ] browser origin allowlist and trusted host settings match the public release origin
+- [x] `NPCINK_CLOUD_INTERNAL_AUTH_TOKEN` is set to a production value
+- [x] `NPCINK_CLOUD_ADMIN_BOOTSTRAP_TOKEN` is set to a separate production value
+- [x] `NPCINK_CLOUD_ADMIN_SESSION_SECRET` is set to a production value
+- [x] `NPCINK_CLOUD_SERVICE_SETTINGS_SECRET` is set to a stable, dedicated production value and is preserved across deploys and admin-session key rotation
+- [x] retired `OPS_*` and runtime `OPENAI_COMPATIBLE_*` names are absent from `.env.deploy`
+- [x] QQ Open Platform uses only `/open/auth/qq/callback`
+- [x] stored service credentials decrypt after restart without admin-session, Portal JWT, or internal-token fallback
+- [x] `NPCINK_CLOUD_PORTAL_JWT_SECRET` is set to a production value
+- [x] at least one real hosted-runtime provider credential is configured for the release host
+- [x] `NPCINK_CLOUD_ADMIN_BOOTSTRAP_TOKEN` is not equal to `NPCINK_CLOUD_INTERNAL_AUTH_TOKEN`
+- [x] browser origin allowlist and trusted host settings match the public release origin
 
 ### 3.2 Public Base URLs
 
-- [ ] local development entry remains `http://127.0.0.1:8010/` and is not used
+- [x] local development entry remains `http://127.0.0.1:8010/` and is not used
   as a production public URL
-- [ ] production `.env.deploy` sets `NPCINK_CLOUD_BASE_URL=https://cloud.npc.ink`
-- [ ] `NPCINK_CLOUD_BROWSER_ORIGIN_ALLOWLIST=https://cloud.npc.ink`
-- [ ] `NPCINK_CLOUD_TRUSTED_HOST_ALLOWLIST=cloud.npc.ink`
-- [ ] `/admin/service-settings` Portal public URL matches the real public portal URL
-- [ ] public reverse proxy and TLS are already valid for the release host
+- [x] production `.env.deploy` sets `NPCINK_CLOUD_BASE_URL=https://cloud.npc.ink`
+- [x] `NPCINK_CLOUD_BROWSER_ORIGIN_ALLOWLIST=https://cloud.npc.ink`
+- [x] `NPCINK_CLOUD_TRUSTED_HOST_ALLOWLIST=cloud.npc.ink` is the public-host
+  baseline; production also includes required internal container/loopback hosts
+- [x] `/admin/service-settings` Portal public URL matches the real public portal URL
+- [x] public reverse proxy and TLS are already valid for the release host
 
 ### 3.3 Portal Login And Email Service Settings
 
-- [ ] `/admin/service-settings` Portal public URL is saved
-- [ ] `/admin/service-settings` QQ login is configured and tested when QQ login is enabled
-- [ ] `/admin/service-settings` SMTP host, port, TLS mode, sender email, and sender name are configured
-- [ ] `/admin/service-settings` SMTP username and write-only password are configured if required by provider
-- [ ] the stored SMTP and payment secrets remain readable after an API restart with the same `NPCINK_CLOUD_SERVICE_SETTINGS_SECRET`
-- [ ] one real mailbox can receive login codes from production SMTP
+- [x] `/admin/service-settings` Portal public URL is saved
+- [x] `/admin/service-settings` QQ login is configured and tested when QQ login is enabled; QQ is currently disabled
+- [x] `/admin/service-settings` SMTP host, port, TLS mode, sender email, and sender name are configured
+- [x] `/admin/service-settings` SMTP username and write-only password are configured if required by provider
+- [x] the stored SMTP and payment secrets remain readable after an API restart with the same `NPCINK_CLOUD_SERVICE_SETTINGS_SECRET`
+- [x] one real mailbox received three consecutive messages from production SMTP
 
 ### 3.4 Production Guardrails
 
-- [ ] `NPCINK_CLOUD_ALLOW_DEV_ADMIN_INTERNAL_TOKEN_FALLBACK=false`
-- [ ] no development-code seam is relied on for release verification
-- [ ] no stub-only login path is used during production smoke
-- [ ] `ops-worker` is deployed and running with the intended cadence intervals
-- [ ] `callback-worker` is deployed and running for terminal callback delivery
-- [ ] `NPCINK_CLOUD_API_WORKERS` matches the release host CPU/memory budget
-- [ ] `NPCINK_CLOUD_RUNTIME_WORKER_POLL_SECONDS` is set for the release host
-- [ ] `NPCINK_CLOUD_RUNTIME_CALLBACK_WORKER_POLL_SECONDS` is set for the release host
-- [ ] `NPCINK_CLOUD_WORKER_HEARTBEAT_INTERVAL_SECONDS` is set for the release host
-- [ ] cadence env is explicitly set for the release host:
+- [x] `NPCINK_CLOUD_ALLOW_DEV_ADMIN_INTERNAL_TOKEN_FALLBACK=false`
+- [x] no development-code seam is relied on for release verification
+- [x] no stub-only login path is used during production smoke
+- [x] `ops-worker` is deployed and running with the intended cadence intervals
+- [x] `callback-worker` is deployed and running for terminal callback delivery
+- [x] `NPCINK_CLOUD_API_WORKERS=1` matches the current 2 CPU / 1.8GiB RAM host budget
+- [x] `NPCINK_CLOUD_RUNTIME_WORKER_POLL_SECONDS` is set for the release host
+- [x] `NPCINK_CLOUD_RUNTIME_CALLBACK_WORKER_POLL_SECONDS` is set for the release host
+- [x] `NPCINK_CLOUD_WORKER_HEARTBEAT_INTERVAL_SECONDS` is set for the release host
+- [x] cadence env is explicitly set for the release host:
   - `NPCINK_CLOUD_OPS_CADENCE_POLL_SECONDS`
   - `NPCINK_CLOUD_RETENTION_CLEANUP_INTERVAL_SECONDS`
   - `NPCINK_CLOUD_USAGE_ROLLUP_INTERVAL_SECONDS`
@@ -114,7 +118,7 @@ All items in this section are `Required`.
   - `NPCINK_CLOUD_LATENCY_PROBE_INTERVAL_SECONDS`
   - `NPCINK_CLOUD_ALERT_PROVIDER_DEGRADATION_INTERVAL_SECONDS`
   - `NPCINK_CLOUD_PROVIDER_HEALTH_SCAN_INTERVAL_SECONDS`
-- [ ] OTLP export target is explicit for the release host:
+- [x] OTLP export target is explicit for the release host:
   - `NPCINK_CLOUD_OTEL_EXPORTER_OTLP_ENDPOINT`
   - `NPCINK_CLOUD_OTEL_TRACE_SINK_OTLP_ENDPOINT`
   - `NPCINK_CLOUD_OTEL_TRACE_QUERY_URL`
@@ -123,14 +127,16 @@ All items in this section are `Required`.
 
 All items in this section are `Required`.
 
-- [ ] target database backup exists and restore path is known
-- [ ] migration state is confirmed on the release target
+- [x] target database backup exists and restore path is known
+- [x] migration state is confirmed on the release target
 - [ ] schema drift has been checked on the target host
-- [ ] rollback plan for the database has been written down
+- [x] rollback plan for the database has been written down
 
 Operator note:
 
 - if the target database was originally bootstrapped outside Alembic control, verify migration baseline explicitly before release
+- the 2026-07-10 production restore drill passed against migration `0057`; see
+  `docs/production-backup-restore-drill-2026-07-10.md`
 
 ## 5. Formal Release Smoke
 
@@ -186,32 +192,32 @@ NPCINK_CLOUD_ENV_FILE=.tmp/release-smoke.env \
 
 Required outcomes:
 
-- [ ] `GET /health/live` returns `200`
-- [ ] `GET /health/ready` with internal auth returns `200`
-- [ ] `GET /health/operational-ready` with internal auth returns `200`
-- [ ] `GET /internal/service/observability/summary` with internal auth returns `200`
-- [ ] `GET /` loads
-- [ ] `GET /portal/login` loads
-- [ ] `POST /portal/v1/auth/code/request` succeeds
-- [ ] `POST /portal/v1/auth/code/verify` succeeds with a real login code
-- [ ] `GET /portal/v1/session` succeeds after login
-- [ ] `GET /admin/login` loads
-- [ ] `POST /admin/auth/bootstrap` succeeds with the production admin token
-- [ ] `GET /admin/session` succeeds after admin login
-- [ ] signed `GET /v1/catalog/models` returns the model catalog
-- [ ] signed `POST /v1/runtime/execute` succeeds against the production provider configuration
-- [ ] signed `GET /v1/runs/{run_id}` returns the same run id
-- [ ] signed `GET /v1/runs/{run_id}/result` exposes the runtime result
-- [ ] signed `GET /v1/stats/profiles/{profile_id}` returns profile stats
-- [ ] signed `GET /v1/usage/summary` exposes the rolling usage counters
-- [ ] release smoke is incomplete unless signed runtime credentials are provided and the signed runtime path passes
+- [x] `GET /health/live` returns `200`
+- [x] `GET /health/ready` with internal auth returns `200`
+- [x] `GET /health/operational-ready` with internal auth returns `200`
+- [x] `GET /internal/service/observability/summary` with internal auth returns `200`
+- [x] `GET /` loads
+- [x] `GET /portal/login` loads
+- [ ] `POST /portal/v1/auth/code/request` succeeds in the formal release smoke
+- [ ] `POST /portal/v1/auth/code/verify` succeeds with a real login code in the formal release smoke
+- [ ] `GET /portal/v1/session` succeeds after formal smoke login
+- [x] `GET /admin/login` loads
+- [ ] `POST /admin/auth/bootstrap` succeeds in the formal release smoke with the production admin token
+- [ ] `GET /admin/session` succeeds after formal smoke admin login
+- [x] signed `GET /v1/catalog/models` returns the model catalog
+- [x] signed `POST /v1/runtime/execute` succeeds against the production provider configuration
+- [x] signed `GET /v1/runs/{run_id}` returns the same run id
+- [x] signed `GET /v1/runs/{run_id}/result` exposes the runtime result
+- [x] signed `GET /v1/stats/profiles/{profile_id}` returns profile stats
+- [x] signed `GET /v1/usage/summary` exposes the rolling usage counters
+- [ ] the complete `deploy/release-smoke.sh` path runs with all required smoke credentials; the signed runtime subset passed manually
 
 Small-customer paid trial preflight is incomplete unless:
 
-- [ ] `deploy/small-customer-trial-preflight.sh --require-smoke-env --require-alipay-enabled` passes
-- [ ] the `Post-production smoke` GitHub Actions job passes after a production deploy
-- [ ] `/open/payments/alipay/return` redirects to `/portal/billing?payment_return=alipay...`
-- [ ] `/open/payments/alipay/notify` rejects an unsigned or empty callback
+- [ ] `deploy/small-customer-trial-preflight.sh --require-smoke-env --require-alipay-enabled` passes with the formal smoke env
+- [x] the `Post-production smoke` GitHub Actions job passes after a production deploy
+- [x] `/open/payments/alipay/return` redirects to `/portal/billing?payment_return=alipay...`
+- [x] `/open/payments/alipay/notify` rejects an unsigned or empty callback
 - [ ] the filled smoke env file remains outside Git and has restricted local permissions
 
 ## 6. Plugin and Runtime Verification
@@ -223,30 +229,30 @@ This section is `Required` for first release or runtime/auth changes.
 - [ ] plugin connection test passes
 - [ ] plugin service status stays read-only and does not expose Cloud write controls
 - [ ] plugin provider/runtime evidence is read-only service detail, not a second control plane
-- [ ] one real signed runtime request succeeds
-- [ ] the runtime request does not fail with `runtime.provider_not_configured`
+- [x] one real signed runtime request succeeds
+- [x] the runtime request does not fail with `runtime.provider_not_configured`
 - [ ] site usage / key / portal state remain coherent after the runtime call
 
 ## 7. Operational Sign-Off
 
 Post-release timing evidence:
 
-- [ ] GitHub Actions release timing was captured with `pnpm run release:timing -- <run-id>`
-- [ ] backend, frontend, CodeQL, deploy, approval wait, and smoke durations were recorded
-- [ ] unexpected release-time regressions have a follow-up issue or PR
+- [x] GitHub Actions release timing was captured with `pnpm run release:timing -- 29084936244`
+- [x] backend, frontend, deploy, overall release, and smoke durations were recorded; the production environment approval was confirmed
+- [x] no unexpected release-time regression was observed
 
 All items in this section are `Required`.
 
-- [ ] `platform_admin` bootstrap token storage location is defined
-- [ ] bootstrap token rotation procedure is defined
-- [ ] internal service token rotation procedure is defined
-- [ ] session invalidation procedure is defined
-- [ ] operator has checked `GET /internal/service/ops/cadence` and all required cadence tasks are fresh
-- [ ] operator has checked `GET /internal/service/observability/summary` and worker heartbeats are fresh
-- [ ] operator has checked provider health freshness and degraded-provider list
+- [x] `platform_admin` bootstrap token storage location is defined
+- [x] bootstrap token rotation procedure is defined
+- [x] internal service token rotation procedure is defined
+- [x] session invalidation procedure is defined
+- [x] operator has checked `GET /internal/service/ops/cadence` and all required cadence tasks are fresh
+- [x] operator has checked `GET /internal/service/observability/summary` and worker heartbeats are fresh
+- [x] operator has checked provider health freshness and degraded-provider list
 - [ ] operator has confirmed traces are queryable in the configured sink
-- [ ] rollback command path is written down
-- [ ] `deploy/OPS_PLAYBOOK.md` is the procedure source used for release
+- [x] rollback command path is written down
+- [x] `deploy/OPS_PLAYBOOK.md` is the procedure source used for release
 - [ ] operator knows where to inspect:
   - API logs
   - proxy logs
@@ -262,13 +268,14 @@ All items in this section are `Required`.
   - `/admin/sites/<site_id>`
   - `/portal/billing`
 
-## 9. Release Decision
+## 9. GA Release Decision
 
-Release may proceed only if:
+General availability may proceed only if:
 
 - every `Required` checkbox is complete
 - release smoke is green
 - database backup and rollback are confirmed
 - one real Portal mailbox and one real plugin runtime flow have both been verified
 
-If any `Required` item is incomplete, do not cut the release.
+If any `Required` item is incomplete, keep the deployment in controlled
+production validation and do not declare general availability.
