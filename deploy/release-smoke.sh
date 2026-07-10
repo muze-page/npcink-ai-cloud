@@ -266,22 +266,26 @@ assert_status "${HTTP_STATUS}" "200" "home page should load"
 http_request "GET" "${BASE_URL%/}/portal/login" "${PORTAL_COOKIE_JAR}"
 assert_status "${HTTP_STATUS}" "200" "portal login page should load"
 
-REQUEST_BODY="$(MEMBER_EMAIL_VALUE="${MEMBER_EMAIL}" python3 - <<'PY'
+if [ -z "${LOGIN_CODE}" ]; then
+	REQUEST_BODY="$(MEMBER_EMAIL_VALUE="${MEMBER_EMAIL}" python3 - <<'PY'
 import json
 import os
 print(json.dumps({"email": os.environ["MEMBER_EMAIL_VALUE"]}, ensure_ascii=True))
 PY
 )"
-http_request "POST" "${BASE_URL%/}/portal/v1/auth/code/request" "${PORTAL_COOKIE_JAR}" "${REQUEST_BODY}"
-assert_status "${HTTP_STATUS}" "200" "portal login code request should succeed"
+	http_request "POST" "${BASE_URL%/}/portal/v1/auth/code/request" "${PORTAL_COOKIE_JAR}" "${REQUEST_BODY}"
+	assert_status "${HTTP_STATUS}" "200" "portal login code request should succeed"
 
-DELIVERY_MODE="$(json_read_path "${HTTP_BODY}" "data.delivery" 2>/dev/null || true)"
-STUB_LOGIN_CODE="$(json_read_path "${HTTP_BODY}" "data.code" 2>/dev/null || true)"
-if [ -z "${LOGIN_CODE}" ] && [ -n "${STUB_LOGIN_CODE}" ] && [ "${STUB_LOGIN_CODE}" != "null" ]; then
-	LOGIN_CODE="${STUB_LOGIN_CODE}"
-fi
-if [ -z "${LOGIN_CODE}" ]; then
-	fail "portal login code is required to continue; request delivery=${DELIVERY_MODE:-unknown}. Pass --login-code when using real SMTP delivery."
+	DELIVERY_MODE="$(json_read_path "${HTTP_BODY}" "data.delivery" 2>/dev/null || true)"
+	STUB_LOGIN_CODE="$(json_read_path "${HTTP_BODY}" "data.code" 2>/dev/null || true)"
+	if [ -n "${STUB_LOGIN_CODE}" ] && [ "${STUB_LOGIN_CODE}" != "null" ]; then
+		LOGIN_CODE="${STUB_LOGIN_CODE}"
+	fi
+	if [ -z "${LOGIN_CODE}" ]; then
+		fail "portal login code is required to continue; request delivery=${DELIVERY_MODE:-unknown}. Pass --login-code when using real SMTP delivery."
+	fi
+else
+	ok "Using pre-issued Portal login code without requesting a replacement"
 fi
 
 VERIFY_BODY="$(MEMBER_EMAIL_VALUE="${MEMBER_EMAIL}" LOGIN_CODE_VALUE="${LOGIN_CODE}" python3 - <<'PY'
