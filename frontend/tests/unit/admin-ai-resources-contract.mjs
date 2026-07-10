@@ -17,6 +17,7 @@ const adminSubscriptionDetailPath = resolve(process.cwd(), 'src/app/admin/subscr
 const workflowMetadataPanelPath = resolve(process.cwd(), 'src/components/backoffice/CloudWorkflowMetadataPanel.tsx');
 const adminLoginPath = resolve(process.cwd(), 'src/app/admin/login/page.tsx');
 const providerReferenceLinksPath = resolve(process.cwd(), 'src/components/admin/ProviderReferenceLinks.tsx');
+const providerConnectionDialogPath = resolve(process.cwd(), 'src/components/admin/ProviderConnectionDialog.tsx');
 const supplierSummaryCardsPath = resolve(process.cwd(), 'src/components/admin/SupplierSummaryCards.tsx');
 const supplierToolbarPath = resolve(process.cwd(), 'src/components/admin/SupplierToolbar.tsx');
 const supplierConnectionTablesPath = resolve(process.cwd(), 'src/components/admin/SupplierConnectionTables.tsx');
@@ -33,6 +34,7 @@ const adminSubscriptionDetailSource = readFileSync(adminSubscriptionDetailPath, 
 const workflowMetadataPanelSource = readFileSync(workflowMetadataPanelPath, 'utf8');
 const adminLoginSource = readFileSync(adminLoginPath, 'utf8');
 const providerReferenceLinksSource = readFileSync(providerReferenceLinksPath, 'utf8');
+const providerConnectionDialogSource = readFileSync(providerConnectionDialogPath, 'utf8');
 const supplierSummaryCardsSource = readFileSync(supplierSummaryCardsPath, 'utf8');
 const supplierToolbarSource = readFileSync(supplierToolbarPath, 'utf8');
 const supplierConnectionTablesSource = readFileSync(supplierConnectionTablesPath, 'utf8');
@@ -1292,8 +1294,14 @@ assert.match(
 
 assert.match(
   pageSource,
-  /!\s*providerFormOpen && message[\s\S]*!\s*providerFormOpen && error[\s\S]*role="dialog"[\s\S]*\{message \|\| error \? \([\s\S]*border-b border-slate-200 px-5 py-3/,
+  /!\s*providerFormOpen && message[\s\S]*!\s*providerFormOpen && error[\s\S]*<ProviderConnectionDialog[\s\S]*message=\{message\}[\s\S]*error=\{error\}/,
   'Provider channel dialog must render operation feedback inside the modal instead of behind the overlay'
+);
+
+assert.match(
+  providerConnectionDialogSource,
+  /role="dialog"[\s\S]*\{message \|\| error \? \([\s\S]*border-b border-slate-200 px-5 py-3/,
+  'Provider channel dialog shell must own modal semantics and in-dialog operation feedback'
 );
 
 assert.match(
@@ -1381,14 +1389,14 @@ assert.match(
 );
 
 assert.match(
-  pageSource,
-  /max-h-\[calc\(100vh-3rem\)\][\s\S]*flex min-h-0 flex-1 flex-col[\s\S]*overflow-y-auto[\s\S]*save_test_notice/,
+  providerConnectionDialogSource,
+  /max-h-\[calc\(100vh-3rem\)\][\s\S]*flex min-h-0 flex-1 flex-col[\s\S]*overflow-y-auto[\s\S]*footerNotice/,
   'Provider channel dialog must keep the modal bounded with internal scrolling and a visible save footer'
 );
 
 assert.match(
-  pageSource,
-  /aria-label=\{aiText\('action_close_dialog'[\s\S]*<span aria-hidden="true">X<\/span>[\s\S]*action_cancel/,
+  providerConnectionDialogSource,
+  /aria-label=\{closeLabel\}[\s\S]*<span aria-hidden="true">X<\/span>[\s\S]*\{cancelLabel\}/,
   'Provider channel dialog must demote the top close action to a small icon while keeping the footer cancel action'
 );
 
@@ -1711,13 +1719,19 @@ assert.match(
 );
 
 assert.equal(
-  (pageSource.match(/onClick=\{closeProviderForm\}/g) || []).length,
+  (providerConnectionDialogSource.match(/onClick=\{onClose\}/g) || []).length,
   2,
   'Provider form close and cancel actions must use the transient-message cleanup path'
 );
 
 assert.match(
   pageSource,
+  /<ProviderConnectionDialog[\s\S]*onClose=\{closeProviderForm\}/,
+  'AI resources page must route both dialog close actions through transient-message cleanup'
+);
+
+assert.match(
+  providerConnectionDialogSource,
   /role="dialog"/,
   'AI resources provider form must open as an explicit dialog'
 );
