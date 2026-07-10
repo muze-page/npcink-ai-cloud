@@ -14,8 +14,10 @@ router truth, and final writes remain local.
 
 ## Production State
 
-- `master` and `production` have identical file content.
-- Production release commit: `c5fdfe7a91b74c4bbc81564e9d5088102b53abde`.
+- Production application release commit:
+  `c5fdfe7a91b74c4bbc81564e9d5088102b53abde`.
+- Release evidence may be updated on `master` after deployment; a docs-only
+  difference does not indicate an unpromoted application change.
 - Production database migration: `20260710_0057 (head)`.
 - The obsolete `site_user_grants` table is absent.
 - All 11 production services are running; the public health endpoint reports

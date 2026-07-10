@@ -58,7 +58,8 @@ second WordPress control plane.
   `c5fdfe7a91b74c4bbc81564e9d5088102b53abde`
 - Current production release directory:
   `/opt/npcink-ai-cloud/release-20260710100807`
-- Current production and `master` file content: identical
+- Subsequent release-evidence updates on `master` are documentation-only and do
+  not change the deployed application commit above.
 
 ## Remaining Gates Before General Availability
 
