@@ -388,7 +388,7 @@ class CommercialServiceBillingMixin(CommercialServiceAuditMixin):
         plan_version_id: str,
         version_label: str,
         status: str = PLAN_VERSION_STATUS_PUBLISHED,
-        currency: str = "USD",
+        currency: str = "CNY",
         entitlements_json: dict[str, object] | None = None,
         budgets_json: dict[str, object] | None = None,
         concurrency_json: dict[str, object] | None = None,
@@ -425,7 +425,7 @@ class CommercialServiceBillingMixin(CommercialServiceAuditMixin):
                 plan_id=plan_id,
                 version_label=version_label,
                 status=status,
-                currency=currency or "USD",
+                currency=self._normalize_plan_currency(currency),
                 entitlements_json=self._normalize_entitlements(entitlements_json),
                 budgets_json=self._normalize_budgets(budgets_json),
                 concurrency_json=self._normalize_concurrency(concurrency_json),
@@ -1186,7 +1186,7 @@ class CommercialServiceBillingMixin(CommercialServiceAuditMixin):
             plan_id=plan_id,
             version_label="v1",
             status=PLAN_VERSION_STATUS_PUBLISHED,
-            currency="USD",
+            currency="CNY",
             entitlements_json=cast(dict[str, object], DEFAULT_RUNTIME_ENTITLEMENTS),
             budgets_json=budgets_template,
             concurrency_json=concurrency_template,
@@ -1268,7 +1268,7 @@ class CommercialServiceBillingMixin(CommercialServiceAuditMixin):
             plan_id=plan_id,
             version_label="v1",
             status=PLAN_VERSION_STATUS_PUBLISHED,
-            currency="USD",
+            currency="CNY",
             entitlements_json=cast(dict[str, object], DEFAULT_RUNTIME_ENTITLEMENTS),
             budgets_json=budgets_template,
             concurrency_json=concurrency_template,
@@ -1651,6 +1651,15 @@ class CommercialServiceBillingMixin(CommercialServiceAuditMixin):
             "max_active_runs": self._coerce_int(raw.get("max_active_runs")),
         }
 
+    def _normalize_plan_currency(self, currency: object) -> str:
+        normalized = str(currency or "").strip().upper() or "CNY"
+        if normalized != "CNY":
+            raise CommercialValidationError(
+                "service.plan_currency_unsupported",
+                "package pricing currency must be CNY",
+            )
+        return normalized
+
     def _normalize_runtime_policy_overrides(
         self,
         raw: object,
@@ -1943,7 +1952,7 @@ class CommercialServiceBillingMixin(CommercialServiceAuditMixin):
             "plan_id": str(getattr(plan_version, "plan_id", "") or ""),
             "version_label": str(getattr(plan_version, "version_label", "") or ""),
             "status": str(getattr(plan_version, "status", "") or ""),
-            "currency": str(getattr(plan_version, "currency", "USD") or "USD"),
+            "currency": str(getattr(plan_version, "currency", "CNY") or "CNY"),
             "entitlements": self._normalize_entitlements(
                 getattr(plan_version, "entitlements_json", None)
             ),
@@ -1982,7 +1991,7 @@ class CommercialServiceBillingMixin(CommercialServiceAuditMixin):
             "site_id": str(getattr(snapshot, "site_id", "") or ""),
             "subscription_id": str(getattr(snapshot, "subscription_id", "") or ""),
             "plan_version_id": str(getattr(snapshot, "plan_version_id", "") or ""),
-            "currency": str(getattr(snapshot, "currency", "USD") or "USD"),
+            "currency": str(getattr(snapshot, "currency", "CNY") or "CNY"),
             "period_start_at": self._serialize_datetime(getattr(snapshot, "period_start_at", None)),
             "period_end_at": self._serialize_datetime(getattr(snapshot, "period_end_at", None)),
             "totals": getattr(snapshot, "totals_json", None) or {},
@@ -2786,7 +2795,7 @@ class CommercialServiceBillingMixin(CommercialServiceAuditMixin):
             site_id=site_id,
             subscription_id=subscription.subscription_id,
             plan_version_id=subscription.plan_version_id,
-            currency="USD",
+            currency="CNY",
             period_start_at=period_start_at,
             period_end_at=period_end_at,
             totals_json=cast(dict[str, object], totals),

@@ -4,10 +4,12 @@ import { fromFrontendRoot } from './_paths.mjs';
 
 const pagePath = fromFrontendRoot('src/app/admin/portal-users/page.tsx');
 const layoutPath = fromFrontendRoot('src/app/admin/layout.tsx');
+const accountsPath = fromFrontendRoot('src/app/admin/accounts/page.tsx');
 const proxyPath = fromFrontendRoot('src/app/api/admin/[...path]/route.ts');
 
 const pageSource = readFileSync(pagePath, 'utf8');
 const layoutSource = readFileSync(layoutPath, 'utf8');
+const accountsSource = readFileSync(accountsPath, 'utf8');
 const proxySource = readFileSync(proxyPath, 'utf8');
 
 assert.match(
@@ -76,10 +78,16 @@ assert.doesNotMatch(
   'portal users page must use the shared admin sidebar instead of duplicate customer tabs'
 );
 
-assert.match(
+assert.doesNotMatch(
   layoutSource,
-  /admin\.nav_group_customer_service[\s\S]*href: '\/admin\/accounts'[\s\S]*href: '\/admin\/coverage'[\s\S]*href: '\/admin\/subscriptions'[\s\S]*href: '\/admin\/plans'[\s\S]*href: '\/admin\/portal-users'/,
-  'admin customers navigation must cover customer, portal user, service status, subscription, and plan surfaces'
+  /admin\.nav_group_customer_service[\s\S]*href: '\/admin\/portal-users'/,
+  'portal users must not return as a top-level customer-ops sidebar entry'
+);
+
+assert.match(
+  accountsSource,
+  /href="\/admin\/portal-users"[\s\S]*admin\.accounts\.open_portal_users_action/,
+  'accounts page must expose portal users as a secondary entry'
 );
 
 assert.match(

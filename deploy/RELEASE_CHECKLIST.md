@@ -26,7 +26,7 @@ Current repository status is:
 
 - done: single `platform_admin` token login model is landed
 - done: hardening scope is frozen in `cloud-hardening-minimum-operations-v1.md`
-- done: invite-only `user_admin` email verification-code login is landed
+- done: invite-only Portal `user` email verification-code login is landed
 - done: legacy Portal magic-link and OIDC routes are physically removed from active runtime
 - done: legacy multi-platform-admin directory routes are removed from active runtime
 - done: Portal session is unified on JWT session cookie
@@ -49,11 +49,13 @@ Current open blockers:
 | Blocker | Category | Owner | Verification |
 | --- | --- | --- | --- |
 | production secrets | env required | release operator | production secret store contains distinct runtime, admin, session, provider, and Portal secrets |
+| stable service-settings key | env required | release operator | `NPCINK_CLOUD_SERVICE_SETTINGS_SECRET` is set, preserved across deploys, and can decrypt SMTP/payment credentials after restart |
 | TLS / trusted hosts | env required | release operator | public release origin has valid TLS and matches trusted host / browser origin allowlists |
 | SMTP real mailbox | service settings required | release operator | production SMTP sends a login code to a real invited mailbox |
 | worker heartbeat | operator required | release operator | `/internal/service/observability/summary` shows fresh worker heartbeats |
 | OTLP sink | operator required | release operator | trace sink endpoint and query URL are configured and a fresh Cloud trace is queryable |
 | DB backup/rollback | operator required | database owner | backup artifact exists and rollback procedure has been written down |
+| schema drift baseline | operator required | database owner | target is at Alembic head and any `alembic check` differences are either resolved or recorded as reviewed historical index-name drift |
 | real signed runtime request | smoke required | release operator | plugin/runtime smoke completes without `runtime.provider_not_configured` |
 
 ## 3. Required Production Environment Checks
@@ -65,6 +67,7 @@ All items in this section are `Required`.
 - [ ] `NPCINK_CLOUD_INTERNAL_AUTH_TOKEN` is set to a production value
 - [ ] `NPCINK_CLOUD_ADMIN_BOOTSTRAP_TOKEN` is set to a separate production value
 - [ ] `NPCINK_CLOUD_ADMIN_SESSION_SECRET` is set to a production value
+- [ ] `NPCINK_CLOUD_SERVICE_SETTINGS_SECRET` is set to a stable, dedicated production value and is preserved across deploys and admin-session key rotation
 - [ ] `NPCINK_CLOUD_PORTAL_JWT_SECRET` is set to a production value
 - [ ] at least one real hosted-runtime provider credential is configured for the release host
 - [ ] `NPCINK_CLOUD_ADMIN_BOOTSTRAP_TOKEN` is not equal to `NPCINK_CLOUD_INTERNAL_AUTH_TOKEN`
@@ -86,6 +89,7 @@ All items in this section are `Required`.
 - [ ] `/admin/service-settings` QQ login is configured and tested when QQ login is enabled
 - [ ] `/admin/service-settings` SMTP host, port, TLS mode, sender email, and sender name are configured
 - [ ] `/admin/service-settings` SMTP username and write-only password are configured if required by provider
+- [ ] the stored SMTP and payment secrets remain readable after an API restart with the same `NPCINK_CLOUD_SERVICE_SETTINGS_SECRET`
 - [ ] one real mailbox can receive login codes from production SMTP
 
 ### 3.4 Production Guardrails
@@ -211,8 +215,8 @@ Small-customer paid trial preflight is incomplete unless:
 
 This section is `Required` for first release or runtime/auth changes.
 
-- [ ] create or rotate a real Cloud API key in Portal
-- [ ] save the key into the WordPress Cloud addon
+- [ ] connect or reconnect one real site from the WordPress Cloud addon so Cloud automatically issues a fresh customer-facing API key
+- [ ] confirm the addon stores the issued key and the previous active site key is revoked
 - [ ] plugin connection test passes
 - [ ] plugin service status stays read-only and does not expose Cloud write controls
 - [ ] plugin provider/runtime evidence is read-only service detail, not a second control plane
@@ -253,7 +257,7 @@ All items in this section are `Required`.
 - [ ] verify one non-empty commercial/admin page:
   - `/admin/plans`
   - `/admin/sites/<site_id>`
-  - `/portal/keys?site=<site_id>`
+  - `/portal/billing`
 
 ## 9. Release Decision
 

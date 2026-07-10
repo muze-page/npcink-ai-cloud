@@ -18,6 +18,18 @@ def test_settings_require_long_security_tokens() -> None:
     assert "internal_auth_token must be at least 32 bytes long" in str(error.value)
 
 
+def test_settings_require_long_service_settings_secret_when_configured() -> None:
+    with pytest.raises(ValidationError) as error:
+        Settings(
+            environment="test",
+            database_url="sqlite+pysqlite:///:memory:",
+            redis_url="redis://localhost:6379/0",
+            service_settings_secret="too-short",
+        )
+
+    assert "service_settings_secret must be at least 32 bytes long" in str(error.value)
+
+
 def test_settings_require_admin_session_secret_outside_dev_and_test() -> None:
     with pytest.raises(ValidationError) as error:
         Settings(

@@ -24,8 +24,6 @@ interface PortalSiteInspectorDrawerProps {
   isLoading: boolean;
   error: string;
   restrictions: RestrictionItem[];
-  isCurrentSite: boolean;
-  onSelectCurrentSite: (siteId: string) => void | Promise<void>;
   previousSiteId?: string;
   nextSiteId?: string;
   onNavigateSite: (siteId: string) => void;
@@ -40,8 +38,6 @@ export function PortalSiteInspectorDrawer({
   isLoading,
   error,
   restrictions,
-  isCurrentSite,
-  onSelectCurrentSite,
   previousSiteId = '',
   nextSiteId = '',
   onNavigateSite,
@@ -112,11 +108,6 @@ export function PortalSiteInspectorDrawer({
                 label={translateStatusLabel(detailSite.status, t)}
                 className="text-[0.68rem]"
               />
-              {isCurrentSite ? (
-                <span className="rounded-full bg-[color:var(--brand-primary-soft)] px-2 py-1 text-[0.68rem] font-semibold uppercase tracking-[0.16em] text-[color:var(--brand-primary)]">
-                  {t('common.current', {}, 'Current')}
-                </span>
-              ) : null}
             </div>
             <p className="mt-1 text-sm text-slate-600 dark:text-slate-400">
               {getPortalSiteWordPressUrl(detailSite) || t('portal.site_url_missing_short', {}, 'Site URL not configured')}
@@ -137,14 +128,6 @@ export function PortalSiteInspectorDrawer({
                 className="btn btn-secondary btn-sm flex-1 sm:flex-none"
               >
                 {t('common.next', {}, 'Next')}
-              </button>
-              <button
-                type="button"
-                onClick={() => void onSelectCurrentSite(site.site_id)}
-                disabled={isCurrentSite}
-                className={cn('btn btn-secondary btn-sm w-full sm:w-auto', isCurrentSite && 'opacity-70')}
-              >
-                {isCurrentSite ? t('common.current', {}, 'Current') : t('portal.home.select_site_action', {}, 'Select')}
               </button>
             </div>
           </div>
@@ -179,13 +162,13 @@ export function PortalSiteInspectorDrawer({
                     {t('portal.home.drawer_posture_label', {}, 'Quick view')}
                   </p>
                   <h3 className="text-lg font-semibold text-slate-950 dark:text-white">
-                    {t('portal.home.drawer_posture_title', {}, 'Current site')}
+                    {t('portal.home.drawer_posture_title', {}, 'Site details')}
                   </h3>
                   <p className="text-sm leading-6 text-slate-600 dark:text-slate-300">
                     {t(
                       'portal.home.drawer_posture_desc',
                       {},
-                      'Use this quick view to confirm the current site and status before opening a dedicated page.'
+                      'Use this quick view to confirm the site status before opening a dedicated page.'
                     )}
                   </p>
                 </div>
@@ -247,7 +230,7 @@ export function PortalSiteInspectorDrawer({
                 ) : (
                   <p className="mt-3 text-sm leading-6 text-slate-600 dark:text-slate-300">
                     {restrictions[0]?.detail ||
-                      t('portal.home.recent_issues_empty_desc', {}, 'The current site looks ready for normal usage.')}
+                      t('portal.home.recent_issues_empty_desc', {}, 'This site looks ready for normal usage.')}
                   </p>
                 )}
               </section>

@@ -111,6 +111,24 @@ function buildAdminBackendPath(pathSegments: string[], method: string): string {
     return '/internal/service/admin/credit-packs';
   }
   if (
+    upperMethod === 'PATCH' &&
+    /^support-requests\/[^/]+$/.test(normalized)
+  ) {
+    return `/internal/service/admin/${normalized}`;
+  }
+  if (
+    upperMethod === 'POST' &&
+    /^support-requests\/[^/]+\/messages$/.test(normalized)
+  ) {
+    return `/internal/service/admin/${normalized}`;
+  }
+  if (
+    upperMethod === 'POST' &&
+    /^support-requests\/[^/]+\/attachments$/.test(normalized)
+  ) {
+    return `/internal/service/admin/${normalized}`;
+  }
+  if (
     upperMethod === 'POST' &&
     normalized === 'provider-connections/preview-catalog'
   ) {

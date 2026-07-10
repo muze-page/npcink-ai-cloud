@@ -213,16 +213,6 @@ def serialize_portal_session(
     accounts = service.list_portal_accounts(principal_id=principal_id)
     principal_profile = service.get_portal_principal_profile(principal_id=principal_id)
     site_items = _dict_list(sites.get("items"))
-    visible_site_items = [
-        item
-        for item in site_items
-        if str(_dict_value(item.get("site")).get("status") or "").strip() != SITE_STATUS_ARCHIVED
-    ]
-    active_site_items = [
-        item
-        for item in visible_site_items
-        if str(_dict_value(item.get("site")).get("status") or "").strip() == SITE_STATUS_ACTIVE
-    ]
     selected_site: dict[str, object] | None = None
     selected_role = ""
     selected_account_id = ""
@@ -269,14 +259,6 @@ def serialize_portal_session(
                 selected_role = ""
                 selected_account_id = ""
                 resolved_site_id = ""
-    if not resolved_site_id and active_site_items:
-        fallback_item = active_site_items[0]
-        fallback_site = fallback_item.get("site") if isinstance(fallback_item, dict) else {}
-        if isinstance(fallback_site, dict):
-            selected_site = fallback_site
-            resolved_site_id = str(fallback_site.get("site_id") or "")
-            selected_account_id = str(fallback_site.get("account_id") or "")
-        selected_role = str(fallback_item.get("role") or selected_role or "")
     account_items = _dict_list(accounts.get("items"))
     if not selected_account_id and account_items:
         selected_account_id = str(account_items[0].get("account_id") or "")

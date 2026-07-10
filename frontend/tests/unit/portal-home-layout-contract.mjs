@@ -14,7 +14,22 @@ assert.match(
 assert.match(
   source,
   /<BackofficeMetricStrip items=\{operationSummaryItems\}/,
-  'portal home must render the current site summary as a compact metric strip'
+  'portal home must render the account operation summary as a compact metric strip'
+);
+assert.match(
+  source,
+  /portalClient\s*\.\s*getAccountEntitlements[\s\S]*accountEntitlements\?\.quota_summary\?\.credit\?\.remaining/,
+  'portal home must load account-level entitlement data for remaining package points'
+);
+assert.match(
+  source,
+  /portalClient\s*\.\s*listSupportRequests[\s\S]*openTicketCount/,
+  'portal home must include account-level open ticket state in the overview'
+);
+assert.match(
+  source,
+  /account_status_ok_desc[\s\S]*account_status_issue_desc/,
+  'portal home status copy must describe the account, not only the selected site'
 );
 
 assert.match(

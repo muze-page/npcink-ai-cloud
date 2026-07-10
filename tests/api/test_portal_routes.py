@@ -12,7 +12,7 @@ from cryptography.hazmat.primitives.asymmetric import padding, rsa
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
-from app.adapters.notifications.base import PortalEmailSender
+from app.adapters.notifications.base import PortalEmailDeliveryError, PortalEmailSender
 from app.adapters.providers.base import (
     ProviderCatalogSnapshot,
     ProviderExecutionRequest,
@@ -185,6 +185,7 @@ def _build_client(
 class FakePortalEmailSender(PortalEmailSender):
     def __init__(self) -> None:
         self.messages: list[dict[str, object]] = []
+        self.support_update_error = ""
 
     def send_test_email(
         self,
@@ -290,6 +291,34 @@ class FakePortalEmailSender(PortalEmailSender):
                 "new_email": new_email,
                 "principal_id": principal_id,
                 "project_name": project_name,
+                "locale": locale,
+            }
+        )
+
+    def send_support_request_update(
+        self,
+        *,
+        recipient_email: str,
+        request_id: str,
+        title: str,
+        status: str,
+        message_body: str,
+        project_name: str,
+        portal_url: str,
+        locale: str = "zh-CN",
+    ) -> None:
+        if self.support_update_error:
+            raise PortalEmailDeliveryError(self.support_update_error)
+        self.messages.append(
+            {
+                "kind": "support_request_update",
+                "recipient_email": recipient_email,
+                "request_id": request_id,
+                "title": title,
+                "status": status,
+                "message_body": message_body,
+                "project_name": project_name,
+                "portal_url": portal_url,
                 "locale": locale,
             }
         )
@@ -622,6 +651,255 @@ def test_portal_issue_rotate_list_and_revoke_site_key(tmp_path: Path) -> None:
     assert portal_issue_audit["actor_ref"] == _GRANTS_BY_EMAIL["portal-admin@example.com"][
         "principal_id"
     ]
+
+    dispose_engine(database_url)
+
+
+def test_portal_support_requests_flow_to_admin_queue(tmp_path: Path) -> None:
+    fake_sender = FakePortalEmailSender()
+    database_url, client = _build_client(tmp_path, portal_email_sender=fake_sender)
+
+    client.post(
+        "/internal/service/accounts",
+        json={"account_id": "acct_portal_support", "name": "Portal Support Account"},
+        headers=build_internal_headers(idempotency_key="portal-support-account-001"),
+    )
+    client.post(
+        "/internal/service/sites",
+        json={
+            "site_id": "site_portal_support",
+            "account_id": "acct_portal_support",
+            "name": "Portal Support Site",
+            "status": "active",
+        },
+        headers=build_internal_headers(idempotency_key="portal-support-site-001"),
+    )
+    _grant_principal_access(
+        client,
+        site_id="site_portal_support",
+        email="portal-support@example.com",
+        idempotency_key="portal-support-user-grants-001",
+    )
+
+    create_response = client.post(
+        "/portal/v1/support-requests",
+        json={
+            "topic": "billing",
+            "title": "Payment order needs review",
+            "description": "The latest payment order still shows pending after provider return.",
+            "site_id": "site_portal_support",
+            "source_path": "/portal/billing",
+        },
+        headers=build_portal_headers(
+            principal_id="principal:portal-support@example.com",
+            idempotency_key="portal-support-create-001",
+        ),
+    )
+    assert create_response.status_code == 200, create_response.text
+    request_item = create_response.json()["data"]["request"]
+    request_id = request_item["request_id"]
+    assert request_item["account_id"] == "acct_portal_support"
+    assert request_item["site_id"] == "site_portal_support"
+    assert request_item["topic"] == "billing"
+    assert request_item["status"] == "open"
+
+    portal_list_response = client.get(
+        "/portal/v1/support-requests?status=open",
+        headers=build_portal_headers(principal_id="principal:portal-support@example.com"),
+    )
+    assert portal_list_response.status_code == 200, portal_list_response.text
+    portal_items = portal_list_response.json()["data"]["items"]
+    assert [item["request_id"] for item in portal_items] == [request_id]
+
+    portal_message_response = client.post(
+        f"/portal/v1/support-requests/{request_id}/messages",
+        json={"body": "Adding the provider reference: alipay-trade-10001."},
+        headers=build_portal_headers(
+            principal_id="principal:portal-support@example.com",
+            idempotency_key="portal-support-message-001",
+        ),
+    )
+    assert portal_message_response.status_code == 200, portal_message_response.text
+    assert portal_message_response.json()["data"]["message"]["author_kind"] == "customer"
+
+    admin_update_response = client.patch(
+        f"/internal/service/admin/support-requests/{request_id}",
+        json={"status": "in_progress", "admin_note": "Checking payment provider event."},
+        headers=build_internal_headers(idempotency_key="portal-support-admin-update-001"),
+    )
+    assert admin_update_response.status_code == 200, admin_update_response.text
+    assert admin_update_response.json()["data"]["request"]["status"] == "in_progress"
+
+    admin_public_reply_response = client.post(
+        f"/internal/service/admin/support-requests/{request_id}/messages",
+        json={
+            "body": "We found the provider confirmation and are updating the order.",
+            "visibility": "public",
+        },
+        headers=build_internal_headers(idempotency_key="portal-support-admin-public-001"),
+    )
+    assert admin_public_reply_response.status_code == 200, admin_public_reply_response.text
+    admin_public_payload = admin_public_reply_response.json()["data"]
+    assert admin_public_payload["message"]["visibility"] == "public"
+    assert admin_public_payload["notification"]["delivered"] is True
+    assert fake_sender.messages[-1]["kind"] == "support_request_update"
+    assert fake_sender.messages[-1]["recipient_email"] == "portal-support@example.com"
+
+    admin_internal_note_response = client.post(
+        f"/internal/service/admin/support-requests/{request_id}/messages",
+        json={
+            "body": "Internal: payment event arrived after webhook retry.",
+            "visibility": "internal",
+        },
+        headers=build_internal_headers(idempotency_key="portal-support-admin-internal-001"),
+    )
+    assert admin_internal_note_response.status_code == 200, admin_internal_note_response.text
+    assert admin_internal_note_response.json()["data"]["message"]["visibility"] == "internal"
+
+    portal_detail_response = client.get(
+        f"/portal/v1/support-requests/{request_id}",
+        headers=build_portal_headers(principal_id="principal:portal-support@example.com"),
+    )
+    assert portal_detail_response.status_code == 200, portal_detail_response.text
+    portal_messages = portal_detail_response.json()["data"]["messages"]
+    assert [message["visibility"] for message in portal_messages] == ["public", "public", "public"]
+    assert "Internal:" not in "\n".join(message["body"] for message in portal_messages)
+
+    portal_attachment_response = client.post(
+        f"/portal/v1/support-requests/{request_id}/attachments",
+        json={
+            "filename": "payment-note.txt",
+            "content_type": "text/plain",
+            "content_base64": "cGF5bWVudCBub3Rl",
+        },
+        headers=build_portal_headers(
+            principal_id="principal:portal-support@example.com",
+            idempotency_key="portal-support-attachment-001",
+        ),
+    )
+    assert portal_attachment_response.status_code == 200, portal_attachment_response.text
+    portal_attachment = portal_attachment_response.json()["data"]["attachment"]
+    assert portal_attachment["visibility"] == "public"
+
+    admin_attachment_response = client.post(
+        f"/internal/service/admin/support-requests/{request_id}/attachments",
+        json={
+            "filename": "operator-note.txt",
+            "content_type": "text/plain",
+            "content_base64": "aW50ZXJuYWwgbm90ZQ==",
+            "visibility": "internal",
+        },
+        headers=build_internal_headers(idempotency_key="portal-support-admin-attachment-001"),
+    )
+    assert admin_attachment_response.status_code == 200, admin_attachment_response.text
+    admin_attachment = admin_attachment_response.json()["data"]["attachment"]
+    assert admin_attachment["visibility"] == "internal"
+
+    portal_attachment_download_response = client.get(
+        f"/portal/v1/support-requests/{request_id}/attachments/{portal_attachment['attachment_id']}",
+        headers=build_portal_headers(principal_id="principal:portal-support@example.com"),
+    )
+    assert portal_attachment_download_response.status_code == 200
+    assert (
+        portal_attachment_download_response.json()["data"]["attachment"]["content_base64"]
+        == "cGF5bWVudCBub3Rl"
+    )
+
+    portal_internal_attachment_response = client.get(
+        f"/portal/v1/support-requests/{request_id}/attachments/{admin_attachment['attachment_id']}",
+        headers=build_portal_headers(principal_id="principal:portal-support@example.com"),
+    )
+    assert portal_internal_attachment_response.status_code == 404
+
+    admin_detail_response = client.get(
+        f"/internal/service/admin/support-requests/{request_id}",
+        headers=build_internal_headers(),
+    )
+    assert admin_detail_response.status_code == 200, admin_detail_response.text
+    admin_messages = admin_detail_response.json()["data"]["messages"]
+    assert [message["visibility"] for message in admin_messages].count("internal") == 2
+    admin_attachments = admin_detail_response.json()["data"]["attachments"]
+    assert sorted(attachment["visibility"] for attachment in admin_attachments) == [
+        "internal",
+        "public",
+    ]
+
+    admin_list_response = client.get(
+        "/internal/service/admin/support-requests?status=in_progress",
+        headers=build_internal_headers(),
+    )
+    assert admin_list_response.status_code == 200, admin_list_response.text
+    admin_items = admin_list_response.json()["data"]["items"]
+    assert [item["request_id"] for item in admin_items] == [request_id]
+
+    admin_resolve_response = client.patch(
+        f"/internal/service/admin/support-requests/{request_id}",
+        json={"status": "resolved", "admin_note": ""},
+        headers=build_internal_headers(idempotency_key="portal-support-admin-resolve-001"),
+    )
+    assert admin_resolve_response.status_code == 200, admin_resolve_response.text
+    assert admin_resolve_response.json()["data"]["request"]["status"] == "resolved"
+
+    portal_feedback_response = client.post(
+        f"/portal/v1/support-requests/{request_id}/feedback",
+        json={"resolved": True, "rating": 5, "comment": "Handled clearly."},
+        headers=build_portal_headers(
+            principal_id="principal:portal-support@example.com",
+            idempotency_key="portal-support-feedback-001",
+        ),
+    )
+    assert portal_feedback_response.status_code == 200, portal_feedback_response.text
+    assert portal_feedback_response.json()["data"]["request"]["status"] == "closed"
+    assert portal_feedback_response.json()["data"]["feedback"]["rating"] == 5
+
+    portal_reopen_feedback_response = client.post(
+        f"/portal/v1/support-requests/{request_id}/feedback",
+        json={"resolved": False, "rating": 2, "comment": "The order still needs review."},
+        headers=build_portal_headers(
+            principal_id="principal:portal-support@example.com",
+            idempotency_key="portal-support-feedback-002",
+        ),
+    )
+    assert portal_reopen_feedback_response.status_code == 200, portal_reopen_feedback_response.text
+    assert portal_reopen_feedback_response.json()["data"]["request"]["status"] == "open"
+
+    fake_sender.support_update_error = "SMTP authentication failed at smtp.internal:465"
+    failed_notification_response = client.post(
+        f"/internal/service/admin/support-requests/{request_id}/messages",
+        json={
+            "body": "We are retrying the payment-provider confirmation.",
+            "visibility": "public",
+        },
+        headers=build_internal_headers(
+            idempotency_key="portal-support-admin-notification-failure-001"
+        ),
+    )
+    assert failed_notification_response.status_code == 200, failed_notification_response.text
+    failed_notification = failed_notification_response.json()["data"]["notification"]
+    assert failed_notification == {
+        "attempted": True,
+        "delivered": False,
+        "reason": "delivery_failed",
+    }
+    assert "smtp.internal" not in failed_notification_response.text
+
+    with get_session(database_url) as session:
+        audit_kinds = {
+            event.event_kind
+            for event in session.scalars(
+                select(ServiceAuditEvent).where(
+                    ServiceAuditEvent.scope_kind == "support_request",
+                    ServiceAuditEvent.scope_id == request_id,
+                )
+            )
+        }
+    assert audit_kinds == {
+        "support_request.attachment_created",
+        "support_request.created",
+        "support_request.feedback_submitted",
+        "support_request.message_created",
+        "support_request.updated",
+    }
 
     dispose_engine(database_url)
 
@@ -1161,7 +1439,7 @@ def test_portal_site_key_write_requires_manage_site_keys_action(tmp_path: Path) 
     dispose_engine(database_url)
 
 
-def test_portal_site_access_allows_legacy_site_grant_without_account_membership(
+def test_portal_site_access_rejects_site_grant_without_account_membership(
     tmp_path: Path,
 ) -> None:
     database_url, client = _build_client(tmp_path)
@@ -1202,11 +1480,8 @@ def test_portal_site_access_allows_legacy_site_grant_without_account_membership(
         "/portal/v1/sites/site_portal_legacy_grant/summary",
         headers=_portal_headers_for_grant(grant),
     )
-    assert response.status_code == 200
-    data = response.json()["data"]
-    assert data["site"]["site_id"] == "site_portal_legacy_grant"
-    assert data["role"] == "user"
-    assert "view_usage" in data["allowed_actions"]
+    assert response.status_code == 403
+    assert response.json()["error_code"] == "service.principal_access_required"
 
     dispose_engine(database_url)
 
@@ -2871,6 +3146,55 @@ def test_portal_login_code_request_uses_real_sender_when_configured(
     dispose_engine(database_url)
 
 
+def test_portal_login_code_request_fails_when_email_delivery_not_configured(
+    tmp_path: Path,
+) -> None:
+    database_url, client = _build_client(
+        tmp_path,
+        settings_overrides={
+            "portal_jwt_secret": TEST_PORTAL_JWT_SECRET,
+        },
+    )
+
+    client.post(
+        "/internal/service/accounts",
+        json={"account_id": "acct_portal_mail_missing", "name": "Portal Mail Missing"},
+        headers=build_internal_headers(idempotency_key="portal-mail-missing-account-001"),
+    )
+    client.post(
+        "/internal/service/sites",
+        json={
+            "site_id": "site_portal_mail_missing",
+            "account_id": "acct_portal_mail_missing",
+            "name": "Portal Mail Missing Site",
+            "status": "provisioning",
+        },
+        headers=build_internal_headers(idempotency_key="portal-mail-missing-site-001"),
+    )
+    client.post(
+        "/internal/service/sites/site_portal_mail_missing/activate",
+        headers=build_internal_headers(
+            idempotency_key="portal-mail-missing-site-activate-001"
+        ),
+    )
+    _grant_principal_access(
+        client,
+        site_id="site_portal_mail_missing",
+        email="portal-mail-missing@example.com",
+        idempotency_key="portal-mail-missing-user-grants-001",
+    )
+
+    response = client.post(
+        "/portal/v1/auth/code/request",
+        json={"email": "portal-mail-missing@example.com", "locale": "zh-CN"},
+    )
+
+    assert response.status_code == 503
+    assert response.json()["error_code"] == "portal.email_not_configured"
+
+    dispose_engine(database_url)
+
+
 def test_portal_registration_code_request_uses_registration_sender(
     tmp_path: Path,
 ) -> None:
@@ -2905,11 +3229,13 @@ def test_portal_registration_code_request_uses_registration_sender(
 def test_portal_login_code_request_masks_missing_principal_access(
     tmp_path: Path,
 ) -> None:
+    fake_sender = FakePortalEmailSender()
     database_url, client = _build_client(
         tmp_path,
         settings_overrides={
             "portal_jwt_secret": TEST_PORTAL_JWT_SECRET,
         },
+        portal_email_sender=fake_sender,
     )
 
     response = client.post(
@@ -2920,6 +3246,7 @@ def test_portal_login_code_request_masks_missing_principal_access(
     assert response.status_code == 200
     assert response.json()["data"]["delivery"] == "email"
     assert response.json()["data"]["code"] == ""
+    assert fake_sender.messages == []
 
     dispose_engine(database_url)
 
@@ -3650,12 +3977,12 @@ def test_portal_session_sites_selection_and_logout_support_cookie_session(
     assert session_data["principal_id"] == _GRANTS_BY_EMAIL[
         "portal-session@example.com"
     ]["principal_id"]
-    assert session_data["site_id"] == "site_portal_session"
+    assert session_data["site_id"] == ""
     assert session_data["account_id"] == "acct_portal_session"
     assert session_data["identity_type"] == "user"
     assert session_data["role"] == "user"
     assert session_data["accounts"][0]["account_id"] == "acct_portal_session"
-    assert session_data["site"]["site_id"] == "site_portal_session"
+    assert session_data["site"] is None
 
     sites_response = client.get("/portal/v1/sites")
     assert sites_response.status_code == 200
@@ -3942,9 +4269,10 @@ def test_portal_session_route_supports_jwt_with_session_cookies(tmp_path: Path) 
     assert data["principal_id"] == _GRANTS_BY_EMAIL[
         "portal-session-jwt@example.com"
     ]["principal_id"]
-    assert data["site_id"] == "site_portal_session_jwt"
+    assert data["site_id"] == ""
     assert data["auth_mode"] == "jwt"
     assert len(data["sites"]) == 1
+    assert data["site"] is None
     assert data["session"]["transport"] == "header"
     assert data["session"]["revocable"] is False
     assert data["session"]["expires_at"] != ""
@@ -4217,6 +4545,19 @@ def test_portal_summary_usage_entitlements_and_audit_routes(tmp_path: Path) -> N
     assert usage_response.json()["data"]["identity_type"] == "user"
     assert usage_response.json()["data"]["role"] == "user"
 
+    account_usage_response = client.get(
+        "/portal/v1/account/usage-summary",
+        headers=build_portal_headers(principal_id="principal:portal-reads@example.com"),
+    )
+    assert account_usage_response.status_code == 200
+    account_usage_data = account_usage_response.json()["data"]
+    assert account_usage_data["site_id"] == ""
+    assert account_usage_data["site_ids"] == ["site_portal_reads"]
+    assert account_usage_data["account_id"] == "acct_portal_reads"
+    assert account_usage_data["identity_type"] == "user"
+    assert account_usage_data["role"] == "user"
+    assert account_usage_data["totals"]["sites_total"] == 1
+
     monitoring_response = client.get(
         "/portal/v1/sites/site_portal_reads/monitoring-overview?window_hours=24",
         headers=build_portal_headers(principal_id="principal:portal-reads@example.com"),
@@ -4271,6 +4612,17 @@ def test_portal_summary_usage_entitlements_and_audit_routes(tmp_path: Path) -> N
     )
     assert vector_documents["limit"] == 100.0
 
+    account_entitlements_response = client.get(
+        "/portal/v1/account/entitlements",
+        headers=build_portal_headers(principal_id="principal:portal-reads@example.com"),
+    )
+    assert account_entitlements_response.status_code == 200
+    account_entitlements_data = account_entitlements_response.json()["data"]
+    assert account_entitlements_data["site_id"] == ""
+    assert account_entitlements_data["account_id"] == "acct_portal_reads"
+    assert account_entitlements_data["quota_summary"]["credit"]["key"] == "ai_credits"
+    assert account_entitlements_data["quota_summary"]["credit"]["limit"] == 2000.0
+
     credit_ledger_response = client.get(
         "/portal/v1/sites/site_portal_reads/credit-ledger?limit=10",
         headers=build_portal_headers(principal_id="principal:portal-reads@example.com"),
@@ -4319,6 +4671,16 @@ def test_portal_summary_usage_entitlements_and_audit_routes(tmp_path: Path) -> N
     }
     assert len(credit_ledger_data["usage_detail"]["recent_items"]) == 3
 
+    account_credit_ledger_response = client.get(
+        "/portal/v1/account/credit-ledger?limit=10",
+        headers=build_portal_headers(principal_id="principal:portal-reads@example.com"),
+    )
+    assert account_credit_ledger_response.status_code == 200
+    account_credit_ledger_data = account_credit_ledger_response.json()["data"]
+    assert account_credit_ledger_data["site_id"] == ""
+    assert account_credit_ledger_data["account_id"] == "acct_portal_reads"
+    assert account_credit_ledger_data["summary"]["total_credits"] == 4.0
+
     credit_packs_response = client.get(
         "/portal/v1/sites/site_portal_reads/credit-packs",
         headers=build_portal_headers(principal_id="principal:portal-reads@example.com"),
@@ -4327,6 +4689,20 @@ def test_portal_summary_usage_entitlements_and_audit_routes(tmp_path: Path) -> N
     credit_packs_data = credit_packs_response.json()["data"]
     assert credit_packs_data["catalog_version"] == "ai-credit-packs-v1"
     assert {item["pack_id"] for item in credit_packs_data["items"]} >= {
+        "pack_small",
+        "pack_medium",
+        "pack_large",
+    }
+
+    account_credit_packs_response = client.get(
+        "/portal/v1/account/credit-packs",
+        headers=build_portal_headers(principal_id="principal:portal-reads@example.com"),
+    )
+    assert account_credit_packs_response.status_code == 200
+    account_credit_packs_data = account_credit_packs_response.json()["data"]
+    assert account_credit_packs_data["site_id"] == ""
+    assert account_credit_packs_data["account_id"] == "acct_portal_reads"
+    assert {item["pack_id"] for item in account_credit_packs_data["items"]} >= {
         "pack_small",
         "pack_medium",
         "pack_large",
@@ -4414,6 +4790,21 @@ def test_portal_summary_usage_entitlements_and_audit_routes(tmp_path: Path) -> N
         )
         assert len(credit_pack_entries) == 1
 
+    account_credit_pack_order_response = client.post(
+        "/portal/v1/account/credit-pack-orders",
+        json={"pack_id": "pack_medium"},
+        headers=build_portal_headers(
+            principal_id="principal:portal-reads@example.com",
+            idempotency_key="portal-account-credit-pack-order-001",
+        ),
+    )
+    assert account_credit_pack_order_response.status_code == 200
+    account_credit_pack_order_data = account_credit_pack_order_response.json()["data"]
+    assert account_credit_pack_order_data["site_id"] == ""
+    assert account_credit_pack_order_data["account_id"] == "acct_portal_reads"
+    assert account_credit_pack_order_data["order"]["purchase_kind"] == "credit_pack"
+    assert account_credit_pack_order_data["order"]["credit_pack"]["pack_id"] == "pack_medium"
+
     audit_response = client.get(
         "/portal/v1/sites/site_portal_reads/audit-summary",
         headers=build_portal_headers(principal_id="principal:portal-reads@example.com"),
@@ -4421,6 +4812,15 @@ def test_portal_summary_usage_entitlements_and_audit_routes(tmp_path: Path) -> N
     assert audit_response.status_code == 200
     assert audit_response.json()["data"]["site_id"] == "site_portal_reads"
     assert audit_response.json()["data"]["totals"]["events"] >= 1
+
+    account_audit_response = client.get(
+        "/portal/v1/account/audit-summary",
+        headers=build_portal_headers(principal_id="principal:portal-reads@example.com"),
+    )
+    assert account_audit_response.status_code == 200
+    assert account_audit_response.json()["data"]["site_id"] == ""
+    assert account_audit_response.json()["data"]["account_id"] == "acct_portal_reads"
+    assert account_audit_response.json()["data"]["totals"]["events"] >= 1
 
     audit_events_response = client.get(
         "/portal/v1/sites/site_portal_reads/audit-events?event_kind=site_key.issue&limit=10",
@@ -4430,6 +4830,18 @@ def test_portal_summary_usage_entitlements_and_audit_routes(tmp_path: Path) -> N
     assert audit_events_response.json()["data"]["site_id"] == "site_portal_reads"
     assert audit_events_response.json()["data"]["filters"]["event_kind"] == "site_key.issue"
     assert len(audit_events_response.json()["data"]["items"]) >= 1
+
+    account_audit_events_response = client.get(
+        "/portal/v1/account/audit-events?event_kind=site_key.issue&limit=10",
+        headers=build_portal_headers(principal_id="principal:portal-reads@example.com"),
+    )
+    assert account_audit_events_response.status_code == 200
+    account_audit_events_data = account_audit_events_response.json()["data"]
+    assert account_audit_events_data["site_id"] == ""
+    assert account_audit_events_data["account_id"] == "acct_portal_reads"
+    assert account_audit_events_data["filters"]["account_id"] == "acct_portal_reads"
+    assert account_audit_events_data["filters"]["event_kind"] == "site_key.issue"
+    assert len(account_audit_events_data["items"]) >= 1
 
     billing_response = client.get(
         "/portal/v1/sites/site_portal_reads/billing-snapshots",

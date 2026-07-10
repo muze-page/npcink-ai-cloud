@@ -306,6 +306,7 @@ from app.domain.commercial.mixins import (
     CommercialServicePortalMixin,
     CommercialServiceRuntimeMixin,
     CommercialServiceSiteMixin,
+    CommercialServiceSupportMixin,
 )
 
 
@@ -315,6 +316,7 @@ class CommercialService(
     CommercialServiceBillingMixin,
     CommercialServicePaymentMixin,
     CommercialServicePortalMixin,
+    CommercialServiceSupportMixin,
     CommercialServiceAdminMixin,
     CommercialServiceRuntimeMixin,
     CommercialServiceAuditMixin,

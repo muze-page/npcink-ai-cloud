@@ -1461,8 +1461,10 @@ class CommercialServiceSiteMixin(CommercialServiceAuditMixin):
                 account_id=site.account_id,
             )
             if membership_row is None:
-                role = USER_ROLE_USER
-                allowed_actions = resolve_principal_allowed_actions()
+                raise CommercialPermissionError(
+                    "service.principal_access_required",
+                    f"principal '{principal_id}' is not active for account '{site.account_id}'",
+                )
             else:
                 _account, _membership_identity, membership = membership_row
                 if membership.status != ACCOUNT_USER_MEMBERSHIP_STATUS_ACTIVE:

@@ -1315,7 +1315,7 @@ export async function installAdminMocks(page: Page) {
                 plan_version_id: FREE_PLAN_VERSION_ID,
                 version_label: 'Free v1',
                 status: 'published',
-                currency: 'USD',
+                currency: 'CNY',
                 budgets: {
                   max_runs_per_period: 500,
                   max_tokens_per_period: 200000,
@@ -1330,7 +1330,7 @@ export async function installAdminMocks(page: Page) {
               plan_version_id: FREE_PLAN_VERSION_ID,
               version_label: 'Free v1',
               status: 'published',
-              currency: 'USD',
+              currency: 'CNY',
               budgets: {
                 max_runs_per_period: 500,
                 max_tokens_per_period: 200000,
@@ -1380,7 +1380,7 @@ export async function installAdminMocks(page: Page) {
                 plan_version_id: LONG_PLAN_VERSION_ID,
                 version_label: 'Pro v1',
                 status: 'published',
-                currency: 'USD',
+                currency: 'CNY',
                 budgets: {
                   max_runs_per_period: 10000,
                   max_tokens_per_period: 2000000,
@@ -1394,7 +1394,7 @@ export async function installAdminMocks(page: Page) {
               plan_version_id: LONG_PLAN_VERSION_ID,
               version_label: 'Pro v1',
               status: 'published',
-              currency: 'USD',
+              currency: 'CNY',
               budgets: {
                 max_runs_per_period: 10000,
                 max_tokens_per_period: 2000000,
@@ -1449,7 +1449,7 @@ export async function installAdminMocks(page: Page) {
             plan_version_id: LONG_PLAN_VERSION_ID,
             version_label: 'Pro v1',
             status: 'published',
-            currency: 'USD',
+            currency: 'CNY',
             entitlements: { hosted: true },
             budgets: {
               max_runs_per_period: 10000,
@@ -1466,7 +1466,7 @@ export async function installAdminMocks(page: Page) {
           plan_version_id: LONG_PLAN_VERSION_ID,
           version_label: 'Pro v1',
           status: 'published',
-          currency: 'USD',
+          currency: 'CNY',
           entitlements: { hosted: true },
           budgets: {
             max_runs_per_period: 10000,
@@ -1542,7 +1542,7 @@ export async function installAdminMocks(page: Page) {
             plan_version_id: FREE_PLAN_VERSION_ID,
             version_label: 'Free v1',
             status: 'published',
-            currency: 'USD',
+            currency: 'CNY',
             entitlements: { hosted: true },
             budgets: {
               max_runs_per_period: 500,
@@ -1559,7 +1559,7 @@ export async function installAdminMocks(page: Page) {
           plan_version_id: FREE_PLAN_VERSION_ID,
           version_label: 'Free v1',
           status: 'published',
-          currency: 'USD',
+          currency: 'CNY',
           entitlements: { hosted: true },
           budgets: {
             max_runs_per_period: 500,
@@ -1606,7 +1606,7 @@ export async function installAdminMocks(page: Page) {
           plan_version_id: String(payload.plan_version_id || LONG_PLAN_VERSION_ID),
           version_label: String(payload.version_label || 'Pro v2'),
           status: String(payload.status || 'published'),
-          currency: 'USD',
+          currency: 'CNY',
           created_at: '2026-04-08T00:00:00Z',
         },
         receipt: {

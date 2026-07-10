@@ -9,9 +9,10 @@ import {
   getPortalSiteDisplayName,
   getPortalSiteWordPressUrl,
 } from '@/lib/portal-site-display';
-import { cn, formatDate } from '@/lib/utils';
+import { cn, formatDate, formatNumber } from '@/lib/utils';
 import {
   portalClient,
+  type Entitlements,
   type PortalIdentityProviderStatus,
   type PortalSiteDiagnostics,
   type PortalSiteSummaryRecord,
@@ -70,23 +71,23 @@ function buildRestrictionItems({
           ),
         }
       : null,
-	    requestLimit > 0 || tokenLimit > 0
-	      ? {
-	          tone: 'info',
-	          label: t('portal.home.restriction_limit_label', {}, 'Package usage is limited'),
-	          detail: t(
-	            'portal.home.restriction_limit_desc',
-	            {},
-		            'Open Usage to see what is left in the current package period.'
-	          ),
-	        }
-	      : null,
+    requestLimit > 0 || tokenLimit > 0
+      ? {
+          tone: 'info',
+          label: t('portal.home.restriction_limit_label', {}, 'Package usage is limited'),
+          detail: t(
+            'portal.home.restriction_limit_desc',
+            {},
+            'Open Usage to see what is left in the current package period.'
+          ),
+        }
+      : null,
   ].filter(Boolean) as RestrictionItem[];
 }
 
 export default function PortalPage() {
   const { t } = useLocale();
-  const { session, isLoading, isAuthenticated, selectSite } = useSession();
+  const { session, isLoading, isAuthenticated } = useSession();
   const [inspectedSiteId, setInspectedSiteId] = useState('');
   const [isInspectorOpen, setIsInspectorOpen] = useState(false);
   const [siteSummaryCache, setSiteSummaryCache] = useState<Record<string, PortalSiteSummaryRecord>>({});
@@ -94,15 +95,9 @@ export default function PortalPage() {
   const [inspectorError, setInspectorError] = useState('');
   const [currentSiteDiagnostics, setCurrentSiteDiagnostics] = useState<PortalSiteDiagnostics | null>(null);
   const [identityProviders, setIdentityProviders] = useState<PortalIdentityProviderStatus[]>([]);
+  const [openTicketCount, setOpenTicketCount] = useState<number | null>(null);
+  const [accountEntitlements, setAccountEntitlements] = useState<Entitlements | null>(null);
   const sessionSiteIdsKey = session?.sites?.map((site) => site.site_id).join('|') || '';
-
-  const handleSiteSelect = async (siteId: string) => {
-    try {
-      await selectSite(siteId);
-    } catch (error) {
-      console.error('Failed to select site:', error);
-    }
-  };
 
   useEffect(() => {
     if (!isInspectorOpen || !inspectedSiteId || siteSummaryCache[inspectedSiteId]) {
@@ -238,6 +233,67 @@ export default function PortalPage() {
     };
   }, [isAuthenticated]);
 
+  useEffect(() => {
+    if (!isAuthenticated) {
+      setOpenTicketCount(null);
+      return;
+    }
+
+    let isCancelled = false;
+
+    void portalClient
+      .listSupportRequests({ limit: 10 })
+      .then((response) => {
+        if (isCancelled) {
+          return;
+        }
+        const summary = response.data?.summary || {};
+        const fallbackTotal = (response.data?.items || []).filter((item) =>
+          item.status === 'open' || item.status === 'in_progress'
+        ).length;
+        setOpenTicketCount(
+          Number(summary.open || 0) + Number(summary.in_progress || 0) || fallbackTotal
+        );
+      })
+      .catch((error) => {
+        if (!isCancelled) {
+          console.error('Failed to load support request summary:', error);
+          setOpenTicketCount(null);
+        }
+      });
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [isAuthenticated]);
+
+  useEffect(() => {
+    if (!isAuthenticated) {
+      setAccountEntitlements(null);
+      return;
+    }
+
+    let isCancelled = false;
+
+    void portalClient
+      .getAccountEntitlements()
+      .then((response) => {
+        if (!isCancelled) {
+          setAccountEntitlements(response.data);
+        }
+      })
+      .catch((error) => {
+        if (!isCancelled) {
+          console.error('Failed to load account entitlements:', error);
+          setAccountEntitlements(null);
+        }
+      });
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [isAuthenticated]);
+
   if (isLoading) {
     return (
       <div className="flex min-h-[60vh] items-center justify-center">
@@ -263,47 +319,11 @@ export default function PortalPage() {
     );
   }
 
-  if (!session.sites || session.sites.length === 0) {
-    return (
-      <div className="flex min-h-[60vh] items-center justify-center">
-        <div className="surface-panel max-w-2xl p-8">
-          <PortalEmptyState
-            title={t('portal.no_sites')}
-            description={t(
-              'portal.home.no_sites_empty_desc',
-              {},
-              'Open npcink-cloud-addon in WordPress and start the connection there. After binding, this page will show your package, usage, and site status.'
-            )}
-          />
-        </div>
-      </div>
-    );
-  }
-
-  const visibleSites = session.sites.filter((site) => site.status !== 'archived');
-  if (visibleSites.length === 0) {
-    return (
-      <div className="flex min-h-[60vh] items-center justify-center">
-        <div className="surface-panel max-w-2xl p-8">
-	          <PortalEmptyState
-	            title={t('portal.no_active_sites_title', {}, 'No available sites')}
-            description={t(
-              'portal.no_active_sites_desc',
-              {},
-              'No site is currently available for this account. Reconnect from the WordPress plugin, or contact support.'
-            )}
-            actionLabel={t('portal.nav_sites', {}, 'Sites')}
-            actionHref="/portal/sites"
-          />
-        </div>
-      </div>
-    );
-  }
-
+  const visibleSites = (session.sites || []).filter((site) => site.status !== 'archived');
   const selectedSite =
-    visibleSites.find((s) => s.site_id === session.site_id) || visibleSites[0];
+    visibleSites.find((s) => s.site_id === session.site_id) || visibleSites[0] || null;
   const currentSubscription = session.current_subscription;
-  const selectedSiteWordPressUrl = getPortalSiteWordPressUrl(selectedSite);
+  const selectedSiteWordPressUrl = selectedSite ? getPortalSiteWordPressUrl(selectedSite) : '';
   const currentPackageDisplay = resolveCustomerPackageDisplay(t, {
     planId: currentSubscription?.plan_id,
     planVersionId: currentSubscription?.plan_version_id,
@@ -311,23 +331,32 @@ export default function PortalPage() {
     planKind: currentSubscription?.plan_kind,
     coverageState: currentSubscription ? 'covered' : 'uncovered',
   });
-  const entitlementFeatureCount = Array.isArray(session.entitlements?.features)
-    ? session.entitlements.features.length
-    : 0;
   const requestLimit = Number(session.entitlements?.requests_limit || 0);
   const tokenLimit = Number(session.entitlements?.tokens_limit || 0);
   const currentSiteActiveKeyCount =
     typeof currentSiteDiagnostics?.active_key_count === 'number'
       ? currentSiteDiagnostics.active_key_count
       : null;
-  const restrictionItems = buildRestrictionItems({
-    t,
-    siteStatus: selectedSite.status,
-    subscriptionStatus: currentSubscription?.status || '',
-    requestLimit,
-    tokenLimit,
-  });
-  const inspectedSite = session.sites.find((site) => site.site_id === inspectedSiteId) || null;
+  const restrictionItems = selectedSite
+    ? buildRestrictionItems({
+        t,
+        siteStatus: selectedSite.status,
+        subscriptionStatus: currentSubscription?.status || '',
+        requestLimit,
+        tokenLimit,
+      })
+    : [
+        {
+          tone: 'warn' as const,
+          label: t('portal.home.restriction_setup_label', {}, 'Site setup still needs attention'),
+          detail: t(
+            'portal.home.no_sites_empty_desc',
+            {},
+            'Open npcink-cloud-addon in WordPress and start the connection there. After binding, this page will show your package, usage, and site status.'
+          ),
+        },
+      ];
+  const inspectedSite = (session.sites || []).find((site) => site.site_id === inspectedSiteId) || null;
   const inspectedSummary = inspectedSiteId ? siteSummaryCache[inspectedSiteId] || null : null;
   const inspectorRestrictions = inspectedSite
     ? buildRestrictionItems({
@@ -344,7 +373,7 @@ export default function PortalPage() {
     setIsInspectorOpen(true);
   };
 
-  const allSites = session.sites;
+  const allSites = session.sites || [];
   const inspectedIndex = allSites.findIndex((site) => site.site_id === inspectedSiteId);
   const previousSiteId = inspectedIndex > 0 ? allSites[inspectedIndex - 1]?.site_id || '' : '';
   const nextSiteId =
@@ -364,9 +393,9 @@ export default function PortalPage() {
   const previewSites = [...visibleSites]
     .sort((left, right) => {
       const leftPriority =
-        left.site_id === selectedSite.site_id ? 0 : left.status !== 'active' || !getPortalSiteWordPressUrl(left) ? 1 : 2;
+        left.status !== 'active' || !getPortalSiteWordPressUrl(left) ? 0 : 1;
       const rightPriority =
-        right.site_id === selectedSite.site_id ? 0 : right.status !== 'active' || !getPortalSiteWordPressUrl(right) ? 1 : 2;
+        right.status !== 'active' || !getPortalSiteWordPressUrl(right) ? 0 : 1;
       if (leftPriority !== rightPriority) {
         return leftPriority - rightPriority;
       }
@@ -376,23 +405,22 @@ export default function PortalPage() {
   const hasHiddenSites = visibleSites.length > previewSites.length;
   const qqProvider = identityProviders.find((provider) => provider.provider === 'qq') || null;
   const hasPackageLabel = Boolean(currentPackageDisplay.display_package_label);
+  const selectedSiteRecordHref = selectedSite ? `/portal/sites/${selectedSite.site_id}` : '/portal/sites';
+  const isSelectedSiteConnected =
+    Boolean(selectedSite) &&
+    selectedSite?.status === 'active' &&
+    Boolean(selectedSiteWordPressUrl) &&
+    currentSiteActiveKeyCount !== null &&
+    currentSiteActiveKeyCount > 0;
   const setupChecklistItems = [
     {
       key: 'site',
-      done:
-        selectedSite.status === 'active' &&
-        Boolean(selectedSiteWordPressUrl) &&
-        currentSiteActiveKeyCount !== null &&
-        currentSiteActiveKeyCount > 0,
+      done: isSelectedSiteConnected,
       title: t('portal.home.onboarding_site_title', {}, 'Confirm site connection'),
-      detail:
-        selectedSite.status === 'active' &&
-        Boolean(selectedSiteWordPressUrl) &&
-        currentSiteActiveKeyCount !== null &&
-        currentSiteActiveKeyCount > 0
-          ? t('portal.home.onboarding_site_ready', {}, 'The WordPress site is connected and can use the service.')
-          : t('portal.home.onboarding_site_needed', {}, 'Open the WordPress plugin to reconnect the site if the address or service connection is not ready.'),
-      href: `/portal/sites/${selectedSite.site_id}`,
+      detail: isSelectedSiteConnected
+        ? t('portal.home.onboarding_site_ready', {}, 'The WordPress site is connected and can use the service.')
+        : t('portal.home.onboarding_site_needed', {}, 'Open the WordPress plugin to reconnect the site if the address or service connection is not ready.'),
+      href: selectedSiteRecordHref,
       action: t('portal.home.onboarding_site_action', {}, 'View site'),
     },
     {
@@ -402,8 +430,8 @@ export default function PortalPage() {
       detail:
         currentSubscription?.status === 'active'
           ? t('portal.home.onboarding_package_ready', {}, 'The current package is available.')
-	          : t('portal.home.onboarding_package_needed', {}, 'Review the current package and what remains this period.'),
-      href: `/portal/billing?site=${selectedSite.site_id}`,
+          : t('portal.home.onboarding_package_needed', {}, 'Review the current package and what remains this period.'),
+      href: '/portal/billing',
       action: t('portal.home.onboarding_package_action', {}, 'View package'),
     },
     {
@@ -423,8 +451,12 @@ export default function PortalPage() {
   const currentSubscriptionStatusLabel = currentSubscription?.status === 'active' || hasPackageLabel
       ? t('portal.home.package_available_label', {}, 'Available')
       : t('portal.home.package_pending_label', {}, 'To confirm');
+  const remainingCredits = Number(accountEntitlements?.quota_summary?.credit?.remaining ?? 0);
+  const accountQuotaStatus = String(accountEntitlements?.quota_summary?.status || '');
   const currentServiceStatusToken =
-    selectedSite.status !== 'active' ||
+    visibleSites.length === 0 ||
+    restrictedCount > 0 ||
+    accountQuotaStatus === 'limited' ||
     (currentSubscription?.status && currentSubscription.status !== 'active') ||
     currentSiteActiveKeyCount === 0
       ? 'warning'
@@ -445,21 +477,29 @@ export default function PortalPage() {
       : t('portal.home.onboarding_site_needed', {}, 'Open the WordPress plugin to reconnect the site if the address or service connection is not ready.');
   const operationSummaryItems = [
     {
-      label: t('portal.home.current_site_title', {}, 'Current site'),
-      value: getPortalSiteDisplayName(selectedSite),
-      detail: selectedSiteWordPressUrl || t('portal.site_url_missing', {}, 'WordPress URL not configured'),
-      size: 'compact' as const,
-    },
-    {
       label: t('portal.home.package_card_label', {}, 'Current package'),
       value: currentPackageDisplay.display_package_label || t('portal.home.package_pending_label', {}, 'To confirm'),
       detail: currentSubscriptionStatusLabel,
       size: 'compact' as const,
     },
     {
-      label: t('portal.home.connection_card_label', {}, 'Site connection'),
-      value: activeKeySummaryLabel,
-      detail: activeKeySummaryDetail,
+      label: t('portal.usage.remaining_credits', {}, 'Remaining'),
+      value: remainingCredits > 0 ? formatNumber(remainingCredits) : t('portal.home.package_pending_label', {}, 'To confirm'),
+      detail: t('portal.home.account_points_detail', {}, 'Account package points remaining this period.'),
+      size: 'compact' as const,
+    },
+    {
+      label: t('portal.home.needs_attention_sites_label', {}, 'Needs attention'),
+      value: restrictedCount,
+      detail: visibleSites.length
+        ? t('portal.home.site_status_attention_detail', { count: String(restrictedCount) }, `${restrictedCount} sites need attention.`)
+        : t('portal.home.no_sites_empty_desc', {}, 'Open npcink-cloud-addon in WordPress and start the connection there.'),
+      size: 'compact' as const,
+    },
+    {
+      label: t('portal.nav_support_requests', {}, 'Tickets'),
+      value: openTicketCount ?? t('common.loading'),
+      detail: t('portal.home.open_ticket_detail', {}, 'Open or in-progress support tickets.'),
       size: 'compact' as const,
     },
   ];
@@ -477,8 +517,6 @@ export default function PortalPage() {
         isLoading={isInspectorLoading}
         error={inspectorError}
         restrictions={inspectorRestrictions}
-        isCurrentSite={inspectedSiteId === selectedSite.site_id}
-        onSelectCurrentSite={handleSiteSelect}
         previousSiteId={previousSiteId}
         nextSiteId={nextSiteId}
         onNavigateSite={openInspector}
@@ -503,8 +541,8 @@ export default function PortalPage() {
               </div>
               <p className="mt-2 max-w-3xl text-sm leading-6 text-gray-600 dark:text-gray-300">
                 {currentServiceStatusToken === 'active'
-                  ? t('portal.home.service_status_ok_desc', {}, 'This site can use the service normally.')
-                  : t('portal.home.service_status_issue_desc', {}, 'This site needs attention before normal use can continue.')}
+                  ? t('portal.home.account_status_ok_desc', {}, 'This account can use the hosted service normally.')
+                  : t('portal.home.account_status_issue_desc', {}, 'This account has setup, package, site, or support items that need attention.')}
               </p>
             </div>
           </div>
@@ -627,8 +665,7 @@ export default function PortalPage() {
             </div>
 
             <div className="divide-y divide-slate-200/80 dark:divide-slate-800">
-              {previewSites.map((site) => {
-                const isCurrent = session.site_id === site.site_id;
+              {previewSites.length > 0 ? previewSites.map((site) => {
                 const hasAttention = site.status !== 'active' || !getPortalSiteWordPressUrl(site);
                 return (
                   <div
@@ -645,9 +682,7 @@ export default function PortalPage() {
                     }}
                     className={cn(
                       'group grid cursor-pointer gap-3 px-4 py-4 transition-all active:translate-y-px lg:grid-cols-[minmax(0,1.8fr)_120px_240px] lg:items-center',
-                      isCurrent
-                        ? 'border-l-4 border-[color:var(--brand-primary)] bg-[color:var(--surface-raised)] ring-1 ring-[color:var(--brand-primary-soft)]'
-                        : hasAttention
+                      hasAttention
                           ? 'border-l-4 border-amber-300 bg-amber-50/40 hover:bg-amber-50/70 dark:border-amber-900/60 dark:bg-amber-950/10 dark:hover:bg-amber-950/20'
                           : 'border-l-4 border-transparent bg-white/80 hover:bg-slate-50/90 dark:bg-slate-950/35 dark:hover:bg-slate-900/60'
                     )}
@@ -657,11 +692,7 @@ export default function PortalPage() {
                         <p className="truncate font-semibold text-gray-950 dark:text-white">
                           {getPortalSiteDisplayName(site)}
                         </p>
-                        {isCurrent ? (
-                          <BackofficeTag tone="info" className="uppercase tracking-[0.16em]">
-                            {t('common.current', {}, 'Current')}
-                          </BackofficeTag>
-                        ) : hasAttention ? (
+                        {hasAttention ? (
                           <BackofficeTag tone="warning" className="uppercase tracking-[0.16em]">
                             {t('portal.home.filter_attention_only', {}, 'Needs attention')}
                           </BackofficeTag>
@@ -699,7 +730,20 @@ export default function PortalPage() {
                     </div>
                   </div>
                 );
-              })}
+              }) : (
+                <div className="px-4 py-6">
+                  <PortalEmptyState
+                    title={t('portal.no_sites', {}, 'No sites')}
+                    description={t(
+                      'portal.home.no_sites_empty_desc',
+                      {},
+                      'Open npcink-cloud-addon in WordPress and start the connection there. After binding, this page will show your package, usage, and site status.'
+                    )}
+                    actionLabel={t('portal.nav_sites', {}, 'Sites')}
+                    actionHref="/portal/sites"
+                  />
+                </div>
+              )}
             </div>
             {hasHiddenSites ? (
               <div className="border-t border-slate-200/80 bg-slate-50/60 px-4 py-3 dark:border-slate-800 dark:bg-slate-950/35">

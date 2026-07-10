@@ -68,8 +68,12 @@ type BackofficeEmptyStateProps = {
   diagnosticCode?: string;
 };
 
-export function BackofficePageStack({ children, className }: BackofficeFrameProps) {
-  return <div className={cn('space-y-6', className)}>{children}</div>;
+export function BackofficePageStack({ children, className, ...props }: BackofficeFrameProps) {
+  return (
+    <div className={cn('space-y-6', className)} {...props}>
+      {children}
+    </div>
+  );
 }
 
 type BackofficeInfoHintProps = {

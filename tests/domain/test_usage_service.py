@@ -199,10 +199,23 @@ def test_usage_service_window_aggregations_avoid_full_history_list_scans(
     original_list_provider_calls_for_instance = StatsRepository.list_provider_calls_for_instance
     original_list_provider_calls_for_instances = StatsRepository.list_provider_calls_for_instances
 
-    def guarded_list_provider_calls(self, site_id=None, *, start_at=None, end_at=None):
+    def guarded_list_provider_calls(
+        self,
+        site_id=None,
+        *,
+        site_ids=None,
+        start_at=None,
+        end_at=None,
+    ):
         assert start_at is not None
         assert end_at is not None
-        return original_list_provider_calls(self, site_id, start_at=start_at, end_at=end_at)
+        return original_list_provider_calls(
+            self,
+            site_id,
+            site_ids=site_ids,
+            start_at=start_at,
+            end_at=end_at,
+        )
 
     def guarded_list_provider_calls_for_instance(
         self,

@@ -54,6 +54,18 @@ ACCOUNT_USER_MEMBERSHIP_STATUS_REVOKED = "revoked"
 SITE_USER_GRANT_STATUS_ACTIVE = "active"
 SITE_USER_GRANT_STATUS_REVOKED = "revoked"
 
+SUPPORT_REQUEST_STATUS_OPEN = "open"
+SUPPORT_REQUEST_STATUS_IN_PROGRESS = "in_progress"
+SUPPORT_REQUEST_STATUS_RESOLVED = "resolved"
+SUPPORT_REQUEST_STATUS_CLOSED = "closed"
+SUPPORT_REQUEST_MESSAGE_AUTHOR_CUSTOMER = "customer"
+SUPPORT_REQUEST_MESSAGE_AUTHOR_OPERATOR = "operator"
+SUPPORT_REQUEST_MESSAGE_AUTHOR_SYSTEM = "system"
+SUPPORT_REQUEST_MESSAGE_VISIBILITY_PUBLIC = "public"
+SUPPORT_REQUEST_MESSAGE_VISIBILITY_INTERNAL = "internal"
+SUPPORT_REQUEST_ATTACHMENT_UPLOADER_CUSTOMER = "customer"
+SUPPORT_REQUEST_ATTACHMENT_UPLOADER_OPERATOR = "operator"
+
 PLATFORM_ADMIN_ROLE_PLATFORM_ADMIN = "platform_admin"
 
 PLATFORM_ADMIN_STATUS_ACTIVE = "active"
@@ -219,7 +231,7 @@ class PlanVersion(Base):
         default=PLAN_VERSION_STATUS_PUBLISHED,
         index=True,
     )
-    currency: Mapped[str] = mapped_column(String(16), default="USD")
+    currency: Mapped[str] = mapped_column(String(16), default="CNY")
     entitlements_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     budgets_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     concurrency_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
@@ -356,6 +368,155 @@ class AccountUserMembership(Base):
         DateTime(timezone=True),
         server_default=func.now(),
         onupdate=func.now(),
+    )
+
+
+class SupportRequest(Base):
+    __tablename__ = "support_requests"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('open', 'in_progress', 'resolved', 'closed')",
+            name="ck_support_requests_status",
+        ),
+    )
+
+    request_id: Mapped[str] = mapped_column(String(191), primary_key=True)
+    account_id: Mapped[str] = mapped_column(ForeignKey("accounts.account_id"), index=True)
+    site_id: Mapped[str | None] = mapped_column(ForeignKey("sites.site_id"), index=True)
+    principal_id: Mapped[str | None] = mapped_column(
+        ForeignKey("principals.principal_id"),
+        index=True,
+    )
+    email: Mapped[str] = mapped_column(String(255), default="", index=True)
+    topic: Mapped[str] = mapped_column(String(64), default="general", index=True)
+    title: Mapped[str] = mapped_column(String(191))
+    description: Mapped[str] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(32), default=SUPPORT_REQUEST_STATUS_OPEN, index=True)
+    priority: Mapped[str] = mapped_column(String(32), default="normal", index=True)
+    source_path: Mapped[str] = mapped_column(String(191), default="")
+    admin_note: Mapped[str | None] = mapped_column(Text)
+    context_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        index=True,
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        index=True,
+    )
+
+
+class SupportRequestMessage(Base):
+    __tablename__ = "support_request_messages"
+    __table_args__ = (
+        CheckConstraint(
+            "author_kind IN ('customer', 'operator', 'system')",
+            name="ck_support_request_messages_author_kind",
+        ),
+        CheckConstraint(
+            "visibility IN ('public', 'internal')",
+            name="ck_support_request_messages_visibility",
+        ),
+    )
+
+    message_id: Mapped[str] = mapped_column(String(191), primary_key=True)
+    request_id: Mapped[str] = mapped_column(
+        ForeignKey("support_requests.request_id"),
+        index=True,
+    )
+    account_id: Mapped[str] = mapped_column(ForeignKey("accounts.account_id"), index=True)
+    site_id: Mapped[str | None] = mapped_column(ForeignKey("sites.site_id"), index=True)
+    principal_id: Mapped[str | None] = mapped_column(
+        ForeignKey("principals.principal_id"),
+        index=True,
+    )
+    email: Mapped[str] = mapped_column(String(255), default="", index=True)
+    author_kind: Mapped[str] = mapped_column(String(32), index=True)
+    visibility: Mapped[str] = mapped_column(String(32), index=True)
+    body: Mapped[str] = mapped_column(Text)
+    metadata_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        index=True,
+    )
+
+
+class SupportRequestAttachment(Base):
+    __tablename__ = "support_request_attachments"
+    __table_args__ = (
+        CheckConstraint(
+            "uploader_kind IN ('customer', 'operator')",
+            name="ck_support_request_attachments_uploader_kind",
+        ),
+        CheckConstraint(
+            "visibility IN ('public', 'internal')",
+            name="ck_support_request_attachments_visibility",
+        ),
+    )
+
+    attachment_id: Mapped[str] = mapped_column(String(191), primary_key=True)
+    request_id: Mapped[str] = mapped_column(
+        ForeignKey("support_requests.request_id"),
+        index=True,
+    )
+    message_id: Mapped[str | None] = mapped_column(
+        ForeignKey("support_request_messages.message_id"),
+        index=True,
+    )
+    account_id: Mapped[str] = mapped_column(ForeignKey("accounts.account_id"), index=True)
+    site_id: Mapped[str | None] = mapped_column(ForeignKey("sites.site_id"), index=True)
+    principal_id: Mapped[str | None] = mapped_column(
+        ForeignKey("principals.principal_id"),
+        index=True,
+    )
+    email: Mapped[str] = mapped_column(String(255), default="", index=True)
+    uploader_kind: Mapped[str] = mapped_column(String(32), index=True)
+    visibility: Mapped[str] = mapped_column(String(32), index=True)
+    filename: Mapped[str] = mapped_column(String(191))
+    content_type: Mapped[str] = mapped_column(String(128), default="")
+    byte_size: Mapped[int] = mapped_column(Integer, default=0)
+    content_bytes: Mapped[bytes] = mapped_column(LargeBinary)
+    metadata_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        index=True,
+    )
+
+
+class SupportRequestFeedback(Base):
+    __tablename__ = "support_request_feedback"
+
+    feedback_id: Mapped[str] = mapped_column(String(191), primary_key=True)
+    request_id: Mapped[str] = mapped_column(
+        ForeignKey("support_requests.request_id"),
+        unique=True,
+        index=True,
+    )
+    account_id: Mapped[str] = mapped_column(ForeignKey("accounts.account_id"), index=True)
+    site_id: Mapped[str | None] = mapped_column(ForeignKey("sites.site_id"), index=True)
+    principal_id: Mapped[str] = mapped_column(ForeignKey("principals.principal_id"), index=True)
+    email: Mapped[str] = mapped_column(String(255), default="", index=True)
+    resolved: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    rating: Mapped[int] = mapped_column(Integer, default=5, index=True)
+    comment: Mapped[str] = mapped_column(Text, default="")
+    metadata_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        index=True,
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        index=True,
     )
 
 
@@ -1362,7 +1523,7 @@ class BillingSnapshot(Base):
     site_id: Mapped[str | None] = mapped_column(String(191), index=True)
     subscription_id: Mapped[str | None] = mapped_column(String(191), index=True)
     plan_version_id: Mapped[str | None] = mapped_column(String(191), index=True)
-    currency: Mapped[str] = mapped_column(String(16), default="USD")
+    currency: Mapped[str] = mapped_column(String(16), default="CNY")
     period_start_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     period_end_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     totals_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)

@@ -149,7 +149,7 @@ function PortalMonitoringContent() {
   const latestActivityAt = overview?.activity.last_seen_at || overview?.generated_at || '';
 
   return (
-    <BackofficePageStack>
+    <BackofficePageStack data-portal-support-deeplink="monitoring">
       <PortalWorkspaceHeader
         eyebrow={t('portal.monitoring.eyebrow', {}, 'Service status')}
         title={t('portal.monitoring.page_title', {}, 'Service status')}
