@@ -224,7 +224,7 @@ def test_internal_alpha_onboarding_flow_closes_admin_user_site_key_usage_audit(
     assert portal_session["identity_type"] == "user"
     assert portal_session["role"] == "user"
     assert portal_session["account_id"] == "acct_alpha_flow"
-    assert portal_session["site_id"] == site_id
+    assert portal_session["site_id"] == ""
     assert portal_session["sites"][0]["site"]["site_id"] == site_id
 
     select_response = client.post(
