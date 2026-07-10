@@ -7,7 +7,8 @@ from fastapi.testclient import TestClient
 from app.adapters.notifications.base import PortalEmailSender
 from app.api.main import create_app
 from app.core.config import Settings
-from app.core.db import dispose_engine, init_schema
+from app.core.db import dispose_engine, get_session, init_schema
+from app.core.models import Site
 from app.core.services import CloudServices
 from app.domain.catalog.service import CatalogService
 from tests.conftest import (
@@ -179,6 +180,7 @@ class FakePortalEmailSender(PortalEmailSender):
             }
         )
 
+
 def _login_platform_admin(
     client: TestClient,
     *,
@@ -214,12 +216,18 @@ def _seed_account(
     assert response.status_code == 200, response.text
 
 
-def _grant_principal_access(client: TestClient, *, site_id: str, email: str) -> None:
+def _grant_account_member_access(client: TestClient, *, site_id: str, email: str) -> None:
     safe_email = email.replace("@", "-").replace(".", "-")
+    services = client.app.state.services
+    with get_session(services.settings.database_url) as session:
+        site = session.get(Site, site_id)
+        assert site is not None
+        account_id = str(site.account_id or "")
+    assert account_id
     response = client.post(
-        f"/internal/service/sites/{site_id}/user-grants",
+        f"/internal/service/accounts/{account_id}/members",
         json={"email": email},
-        headers=build_internal_headers(idempotency_key=f"{site_id}-{safe_email}-user-grants"),
+        headers=build_internal_headers(idempotency_key=f"{site_id}-{safe_email}-account-members"),
     )
     assert response.status_code == 200, response.text
 
@@ -322,7 +330,7 @@ def test_web_admin_and_portal_sessions_do_not_substitute_for_each_other(tmp_path
         headers=build_internal_headers(idempotency_key="identity-boundary-activate"),
     )
     assert activate_response.status_code == 200, activate_response.text
-    _grant_principal_access(
+    _grant_account_member_access(
         portal_client,
         site_id="site_identity_boundary",
         email="identity-boundary@example.com",
@@ -546,7 +554,7 @@ def test_web_portal_email_code_and_key_actions_with_jwt(tmp_path: Path) -> None:
         "/internal/service/sites/site_web/activate",
         headers=build_internal_headers(idempotency_key="web-site-activate-001"),
     )
-    _grant_principal_access(client, site_id="site_web", email="web@example.com")
+    _grant_account_member_access(client, site_id="site_web", email="web@example.com")
 
     login_request_response = client.post(
         "/portal/v1/auth/code/request",

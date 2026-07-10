@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 from typing import Any, cast
 from uuid import uuid4
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session
 from sqlalchemy.sql.elements import ColumnElement
 
@@ -18,8 +18,6 @@ from app.core.models import (
     PORTAL_LOGIN_CODE_STATUS_PENDING,
     PORTAL_OAUTH_STATE_STATUS_PENDING,
     PRINCIPAL_STATUS_ACTIVE,
-    SITE_USER_GRANT_STATUS_ACTIVE,
-    SITE_USER_GRANT_STATUS_REVOKED,
     Account,
     AccountEntitlementSnapshot,
     AccountSubscription,
@@ -45,7 +43,6 @@ from app.core.models import (
     SiteKnowledgeChunk,
     SiteKnowledgeDocument,
     SiteKnowledgeIndexJobMetric,
-    SiteUserGrant,
     SupportRequest,
     SupportRequestAttachment,
     SupportRequestFeedback,
@@ -467,9 +464,7 @@ class CommercialRepository:
         *,
         principal_id: str,
     ) -> Principal | None:
-        return self.session.scalar(
-            select(Principal).where(Principal.principal_id == principal_id)
-        )
+        return self.session.scalar(select(Principal).where(Principal.principal_id == principal_id))
 
     def get_identity_provider_binding(
         self,
@@ -815,115 +810,59 @@ class CommercialRepository:
             for account, identity, membership in self.session.execute(statement).all()
         ]
 
-    def upsert_principal_site_grant(
-        self,
-        *,
-        grant_id: str,
-        principal_id: str,
-        site_id: str,
-        status: str = SITE_USER_GRANT_STATUS_ACTIVE,
-        metadata_json: dict[str, object] | None = None,
-    ) -> SiteUserGrant:
-        grant = self.session.scalar(
-            select(SiteUserGrant).where(
-                SiteUserGrant.principal_id == principal_id,
-                SiteUserGrant.site_id == site_id,
-            )
-        )
-        if grant is None:
-            grant = SiteUserGrant(
-                grant_id=grant_id,
-                principal_id=principal_id,
-                site_id=site_id,
-                status=status,
-                metadata_json=metadata_json,
-            )
-            self.session.add(grant)
-        else:
-            grant.status = status
-            grant.metadata_json = metadata_json
-        self.session.flush()
-        return grant
-
-    def list_site_user_grants(
-        self,
-        *,
-        principal_ids: list[str] | None = None,
-        statuses: list[str] | None = None,
-    ) -> list[SiteUserGrant]:
-        statement = select(SiteUserGrant)
-        if principal_ids is not None:
-            if not principal_ids:
-                return []
-            statement = statement.where(SiteUserGrant.principal_id.in_(principal_ids))
-        if statuses is not None:
-            if not statuses:
-                return []
-            statement = statement.where(SiteUserGrant.status.in_(statuses))
-        statement = statement.order_by(
-            SiteUserGrant.created_at.desc(),
-            SiteUserGrant.grant_id.desc(),
-        )
-        return list(self.session.scalars(statement))
-
-    def revoke_site_user_grants(self, *, principal_id: str) -> int:
-        grants = self.list_site_user_grants(
-            principal_ids=[principal_id],
-            statuses=[SITE_USER_GRANT_STATUS_ACTIVE],
-        )
-        for grant in grants:
-            grant.status = SITE_USER_GRANT_STATUS_REVOKED
-        self.session.flush()
-        return len(grants)
-
-    def get_principal_site_grant(
-        self,
-        *,
-        principal_id: str,
-        site_id: str,
-    ) -> tuple[Principal, SiteUserGrant] | None:
-        row = self.session.execute(
-            select(Principal, SiteUserGrant)
-            .join(
-                SiteUserGrant,
-                SiteUserGrant.principal_id == Principal.principal_id,
-            )
-            .where(
-                Principal.principal_id == principal_id,
-                SiteUserGrant.site_id == site_id,
-            )
-        ).first()
-        if row is None:
-            return None
-        return row[0], row[1]
-
     def list_sites_for_principal(
         self,
         *,
         principal_id: str,
-        grant_statuses: list[str] | None = None,
-    ) -> list[tuple[Site, Principal, SiteUserGrant]]:
-        statuses = grant_statuses or [SITE_USER_GRANT_STATUS_ACTIVE]
+        membership_statuses: list[str] | None = None,
+    ) -> list[tuple[Site, Principal, AccountUserMembership]]:
+        statuses = membership_statuses or [ACCOUNT_USER_MEMBERSHIP_STATUS_ACTIVE]
         statement = (
-            select(Site, Principal, SiteUserGrant)
-            .join(SiteUserGrant, SiteUserGrant.site_id == Site.site_id)
+            select(Site, Principal, AccountUserMembership)
             .join(
-                Principal,
-                Principal.principal_id == SiteUserGrant.principal_id,
+                AccountUserMembership,
+                AccountUserMembership.account_id == Site.account_id,
             )
+            .join(Principal, Principal.principal_id == AccountUserMembership.principal_id)
             .join(Account, Account.account_id == Site.account_id)
             .where(
                 Principal.principal_id == principal_id,
                 Principal.status == PRINCIPAL_STATUS_ACTIVE,
-                SiteUserGrant.status.in_(statuses),
+                AccountUserMembership.status.in_(statuses),
                 Account.status == "active",
             )
             .order_by(Site.created_at.desc(), Site.site_id.asc())
         )
         return [
-            (site, identity, grant)
-            for site, identity, grant in self.session.execute(statement).all()
+            (site, identity, membership)
+            for site, identity, membership in self.session.execute(statement).all()
         ]
+
+    def get_portal_site_access(
+        self,
+        *,
+        principal_id: str,
+        site_id: str,
+    ) -> tuple[Site, Account, Principal | None, AccountUserMembership | None] | None:
+        row = self.session.execute(
+            select(Site, Account, Principal, AccountUserMembership)
+            .join(Account, Account.account_id == Site.account_id)
+            .outerjoin(
+                AccountUserMembership,
+                and_(
+                    AccountUserMembership.account_id == Site.account_id,
+                    AccountUserMembership.principal_id == principal_id,
+                ),
+            )
+            .outerjoin(
+                Principal,
+                Principal.principal_id == AccountUserMembership.principal_id,
+            )
+            .where(Site.site_id == site_id)
+        ).first()
+        if row is None:
+            return None
+        return row[0], row[1], row[2], row[3]
 
     def get_platform_admin_grant(
         self,
@@ -1882,9 +1821,9 @@ class CommercialRepository:
             .group_by(SiteKnowledgeDocument.site_id)
         )
         for site_id, count in self.session.execute(document_statement):
-            items.setdefault(str(site_id or ""), {"documents": 0, "chunks": 0})[
-                "documents"
-            ] = int(count or 0)
+            items.setdefault(str(site_id or ""), {"documents": 0, "chunks": 0})["documents"] = int(
+                count or 0
+            )
         chunk_statement = (
             select(SiteKnowledgeChunk.site_id, func.count())
             .select_from(SiteKnowledgeChunk)
@@ -2003,9 +1942,7 @@ class CommercialRepository:
         created_at: datetime | None = None,
     ) -> CreditLedgerEntry:
         existing = self.session.scalar(
-            select(CreditLedgerEntry).where(
-                CreditLedgerEntry.idempotency_key == idempotency_key
-            )
+            select(CreditLedgerEntry).where(CreditLedgerEntry.idempotency_key == idempotency_key)
         )
         if existing is not None:
             return existing

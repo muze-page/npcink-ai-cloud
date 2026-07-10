@@ -30,7 +30,6 @@ from app.core.models import (
     SITE_STATUS_INACTIVE,
     SITE_STATUS_PROVISIONING,
     SITE_STATUS_SUSPENDED,
-    SITE_USER_GRANT_STATUS_ACTIVE,
     AccountSubscription,
     Site,
     SiteApiKey,
@@ -92,6 +91,13 @@ def _normalize_addon_return_url(value: str) -> str:
             "wordpress addon return_url must be an absolute http or https URL",
         )
     return raw[:2048]
+
+
+def _addon_host_key(value: str) -> str:
+    hostname = str(urlsplit(value).hostname or "").strip().lower()
+    if hostname == "localhost" or hostname.startswith("127."):
+        return "loopback"
+    return hostname
 
 
 def _append_addon_return_query(return_url: str, *, code: str, state: str) -> str:
@@ -387,13 +393,6 @@ class CommercialServiceSiteMixin(CommercialServiceAuditMixin):
                     "created_via": "portal_connect_site",
                 },
                 provisioned_at=now,
-            )
-            repository.upsert_principal_site_grant(
-                grant_id=f"sadmg_{uuid4().hex}",
-                principal_id=identity.principal_id,
-                site_id=site.site_id,
-                status=SITE_USER_GRANT_STATUS_ACTIVE,
-                metadata_json={"source": "portal_connect_site"},
             )
             repository.upsert_account_user_membership(
                 membership_id=f"aum_{uuid4().hex}",
@@ -905,6 +904,11 @@ class CommercialServiceSiteMixin(CommercialServiceAuditMixin):
                 "wordpress addon state is required",
             )
         canonical_wordpress_url, site_source = _normalize_portal_site_url(wordpress_url)
+        if _addon_host_key(safe_return_url) != _addon_host_key(canonical_wordpress_url):
+            raise CommercialValidationError(
+                "service.wordpress_addon_return_host_mismatch",
+                "wordpress addon return_url must use the WordPress site host",
+            )
         site_slug = _slugify_portal_site_segment(site_source)
         if not normalized_account_id:
             raise CommercialPermissionError(
@@ -1027,13 +1031,6 @@ class CommercialServiceSiteMixin(CommercialServiceAuditMixin):
                         metadata["portal_lifecycle"] = lifecycle
                     site.metadata_json = metadata
 
-            repository.upsert_principal_site_grant(
-                grant_id=f"sadmg_{uuid4().hex}",
-                principal_id=identity.principal_id,
-                site_id=site.site_id,
-                status=SITE_USER_GRANT_STATUS_ACTIVE,
-                metadata_json={"source": "wordpress_addon_connection"},
-            )
             repository.upsert_account_user_membership(
                 membership_id=f"aum_{uuid4().hex}",
                 principal_id=identity.principal_id,
@@ -1066,7 +1063,11 @@ class CommercialServiceSiteMixin(CommercialServiceAuditMixin):
                 audit_context=audit_context,
                 replaced_key_ids=revoked_key_ids,
             )
-            if site.status in {SITE_STATUS_PROVISIONING, SITE_STATUS_INACTIVE, SITE_STATUS_ARCHIVED}:
+            if site.status in {
+                SITE_STATUS_PROVISIONING,
+                SITE_STATUS_INACTIVE,
+                SITE_STATUS_ARCHIVED,
+            }:
                 deactivated_site_ids = [
                     str(item.get("site_id") or "")
                     for item in self._deactivate_account_active_sibling_sites(
@@ -1421,66 +1422,37 @@ class CommercialServiceSiteMixin(CommercialServiceAuditMixin):
     ) -> dict[str, object]:
         with get_session(self.database_url) as session:
             repository = CommercialRepository(session)
-            site = repository.get_site(site_id)
-            if site is None:
+            access_row = repository.get_portal_site_access(
+                principal_id=principal_id,
+                site_id=site_id,
+            )
+            if access_row is None:
                 raise CommercialNotFoundError(
                     "service.site_not_found",
                     f"site '{site_id}' was not found",
                 )
-            if not site.account_id:
-                raise CommercialPermissionError(
-                    "service.portal_account_required",
-                    f"site '{site_id}' is not bound to an account",
-                )
-            account = repository.get_account(site.account_id)
+            site, account, identity, membership = access_row
             if account is None or account.status != ACCOUNT_STATUS_ACTIVE:
                 raise CommercialPermissionError(
                     "service.portal_account_inactive",
                     f"account '{site.account_id}' is not active",
                 )
-            grant_pair = repository.get_principal_site_grant(
-                principal_id=principal_id,
-                site_id=site_id,
-            )
-            if grant_pair is None:
-                raise CommercialPermissionError(
-                    "service.principal_access_required",
-                    f"principal '{principal_id}' is not active for site '{site_id}'",
-                )
-            identity, grant = grant_pair
             if (
-                identity.status != PRINCIPAL_STATUS_ACTIVE
-                or grant.status != SITE_USER_GRANT_STATUS_ACTIVE
+                identity is None
+                or identity.status != PRINCIPAL_STATUS_ACTIVE
+                or membership is None
+                or membership.status != ACCOUNT_USER_MEMBERSHIP_STATUS_ACTIVE
             ):
-                raise CommercialPermissionError(
-                    "service.principal_access_required",
-                    f"principal '{principal_id}' is not active for site '{site_id}'",
-                )
-            membership_row = repository.get_account_user_membership(
-                principal_id=principal_id,
-                account_id=site.account_id,
-            )
-            if membership_row is None:
                 raise CommercialPermissionError(
                     "service.principal_access_required",
                     f"principal '{principal_id}' is not active for account '{site.account_id}'",
                 )
-            else:
-                _account, _membership_identity, membership = membership_row
-                if membership.status != ACCOUNT_USER_MEMBERSHIP_STATUS_ACTIVE:
-                    raise CommercialPermissionError(
-                        "service.principal_access_required",
-                        f"principal '{principal_id}' is not active for account '{site.account_id}'",
-                    )
-                role = normalize_user_role(str(membership.role or USER_ROLE_USER))
-                allowed_actions = (
-                    [
-                        str(action).strip()
-                        for action in (membership.allowed_actions_json or [])
-                        if str(action).strip()
-                    ]
-                    or resolve_principal_allowed_actions()
-                )
+            role = normalize_user_role(str(membership.role or USER_ROLE_USER))
+            allowed_actions = [
+                str(action).strip()
+                for action in (membership.allowed_actions_json or [])
+                if str(action).strip()
+            ] or resolve_principal_allowed_actions()
             if required_roles is not None and role not in required_roles:
                 raise CommercialPermissionError(
                     "service.portal_role_forbidden",
@@ -1504,9 +1476,9 @@ class CommercialServiceSiteMixin(CommercialServiceAuditMixin):
         with get_session(self.database_url) as session:
             repository = CommercialRepository(session)
             items = []
-            for site, _identity, grant in repository.list_sites_for_principal(
+            for site, _identity, membership in repository.list_sites_for_principal(
                 principal_id=principal_id,
-                grant_statuses=[SITE_USER_GRANT_STATUS_ACTIVE],
+                membership_statuses=[ACCOUNT_USER_MEMBERSHIP_STATUS_ACTIVE],
             ):
                 items.append(
                     {
@@ -1514,7 +1486,7 @@ class CommercialServiceSiteMixin(CommercialServiceAuditMixin):
                         "identity_type": IDENTITY_TYPE_USER,
                         "allowed_actions": resolve_principal_allowed_actions(),
                         "role": USER_ROLE_USER,
-                        "grant_status": grant.status,
+                        "membership_status": membership.status,
                         "site": self._serialize_site(site),
                     }
                 )

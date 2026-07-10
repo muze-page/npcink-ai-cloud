@@ -77,9 +77,11 @@ def _build_client(tmp_path: Path) -> tuple[str, TestClient, AlphaProviderAdapter
         image_source_provider="disabled",
         site_knowledge_embedding_provider="deterministic",
     )
-    return database_url, TestClient(
-        create_app(CloudServices(settings=settings, providers={"openai": provider}))
-    ), provider
+    return (
+        database_url,
+        TestClient(create_app(CloudServices(settings=settings, providers={"openai": provider}))),
+        provider,
+    )
 
 
 def _origin_headers(*, idempotency_key: str = "") -> dict[str, str]:
@@ -197,9 +199,9 @@ def test_internal_alpha_onboarding_flow_closes_admin_user_site_key_usage_audit(
     )
     _post_internal(
         client,
-        f"/internal/service/sites/{site_id}/user-grants",
+        "/internal/service/accounts/acct_alpha_flow/members",
         json_payload={"email": "alpha@example.com"},
-        idempotency_key="alpha-user-grants-001",
+        idempotency_key="alpha-account-members-001",
     )
 
     login_code_response = client.post(

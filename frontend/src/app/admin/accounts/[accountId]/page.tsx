@@ -1561,7 +1561,7 @@ function AccountDetailContent() {
 	                  : t(
 	                      'admin.account_detail.access_status_active_desc',
 	                      undefined,
-	                      'Portal access follows this customer record and related site grants.'
+	                      'Portal access follows this customer account membership.'
 	                    )}
 	              </span>
 	            </div>

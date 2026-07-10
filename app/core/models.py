@@ -10,6 +10,7 @@ from sqlalchemy import (
     DateTime,
     Float,
     ForeignKey,
+    Index,
     Integer,
     LargeBinary,
     String,
@@ -51,8 +52,6 @@ PRINCIPAL_STATUS_ACTIVE = "active"
 PRINCIPAL_STATUS_DISABLED = "disabled"
 ACCOUNT_USER_MEMBERSHIP_STATUS_ACTIVE = "active"
 ACCOUNT_USER_MEMBERSHIP_STATUS_REVOKED = "revoked"
-SITE_USER_GRANT_STATUS_ACTIVE = "active"
-SITE_USER_GRANT_STATUS_REVOKED = "revoked"
 
 SUPPORT_REQUEST_STATUS_OPEN = "open"
 SUPPORT_REQUEST_STATUS_IN_PROGRESS = "in_progress"
@@ -277,9 +276,7 @@ class Site(Base):
 
 class Principal(Base):
     __tablename__ = "principals"
-    __table_args__ = (
-        UniqueConstraint("email", name="uq_principals_email"),
-    )
+    __table_args__ = (UniqueConstraint("email", name="uq_principals_email"),)
 
     principal_id: Mapped[str] = mapped_column(String(191), primary_key=True)
     email: Mapped[str | None] = mapped_column(String(191), index=True)
@@ -302,39 +299,6 @@ class Principal(Base):
     )
 
 
-class SiteUserGrant(Base):
-    __tablename__ = "site_user_grants"
-    __table_args__ = (
-        UniqueConstraint(
-            "principal_id",
-            "site_id",
-            name="uq_site_user_grants_principal_site",
-        ),
-    )
-
-    grant_id: Mapped[str] = mapped_column(String(191), primary_key=True)
-    principal_id: Mapped[str] = mapped_column(
-        ForeignKey("principals.principal_id"),
-        index=True,
-    )
-    site_id: Mapped[str] = mapped_column(ForeignKey("sites.site_id"), index=True)
-    status: Mapped[str] = mapped_column(
-        String(32),
-        default=SITE_USER_GRANT_STATUS_ACTIVE,
-        index=True,
-    )
-    metadata_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        server_default=func.now(),
-    )
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        server_default=func.now(),
-        onupdate=func.now(),
-    )
-
-
 class AccountUserMembership(Base):
     __tablename__ = "account_user_memberships"
     __table_args__ = (
@@ -344,6 +308,12 @@ class AccountUserMembership(Base):
             name="uq_account_user_memberships_principal_account",
         ),
         CheckConstraint("role IN ('user')", name="ck_account_user_memberships_role"),
+        Index(
+            "ix_account_user_memberships_principal_status_account",
+            "principal_id",
+            "status",
+            "account_id",
+        ),
     )
 
     membership_id: Mapped[str] = mapped_column(String(191), primary_key=True)

@@ -33,7 +33,6 @@ type PortalUserItem = {
   site_name?: string;
   site_status?: string;
   wordpress_url?: string;
-  grant_status?: string;
   subscription_id?: string;
   subscription_status?: string;
   plan_id?: string;
@@ -93,7 +92,6 @@ type PortalUserAuditDetail = {
     registration_events?: number;
     disable_events?: number;
     latest_disable_reason?: string;
-    latest_disable_revoked_site_grants?: number;
     latest_disable_revoked_account_memberships?: number;
     latest_disable_revoked_identity_provider_bindings?: number;
   };
@@ -135,7 +133,7 @@ function sourceLabel(source: string, t: Translator): string {
   if (source === 'portal_self_registration') {
     return t('admin.portal_users.source_self_registration', {}, 'Self registration');
   }
-  if (source === 'principal_access') {
+  if (source === 'account_membership') {
     return t('admin.portal_users.source_admin_provisioned', {}, 'Admin provisioned');
   }
   return source || t('common.unknown', {}, 'Unknown');
@@ -152,8 +150,8 @@ function auditEventLabel(eventKind: string, t: Translator): string {
   if (eventKind === 'portal_user.disable') {
     return t('admin.portal_users.audit_disable', {}, 'User disabled');
   }
-  if (eventKind === 'principal_access.upsert') {
-    return t('admin.portal_users.audit_principal_access', {}, 'Access provisioned');
+  if (eventKind === 'account_membership.upsert') {
+    return t('admin.portal_users.audit_account_membership', {}, 'Account access provisioned');
   }
   return eventKind || t('admin.portal_users.audit_unknown', {}, 'Unknown event');
 }
@@ -163,13 +161,11 @@ function payloadText(payload: Record<string, unknown> | undefined, t: Translator
     return '';
   }
   const reason = String(payload.reason || '').trim();
-  const revokedSiteGrants = Number(payload.revoked_site_grants || 0);
   const revokedMemberships = Number(payload.revoked_account_memberships || 0);
   const revokedBindings = Number(payload.revoked_identity_provider_bindings || 0);
-  if (reason || revokedSiteGrants || revokedMemberships || revokedBindings) {
+  if (reason || revokedMemberships || revokedBindings) {
     return [
       reason ? t('admin.portal_users.payload_reason', { reason }, 'Reason: {{reason}}') : '',
-      revokedSiteGrants ? t('admin.portal_users.payload_site_grants', { count: String(revokedSiteGrants) }, 'Site grants {{count}}') : '',
       revokedMemberships ? t('admin.portal_users.payload_account_memberships', { count: String(revokedMemberships) }, 'Account memberships {{count}}') : '',
       revokedBindings ? t('admin.portal_users.payload_qq_bindings', { count: String(revokedBindings) }, 'QQ bindings {{count}}') : '',
     ].filter(Boolean).join(' · ');
@@ -325,7 +321,6 @@ export default function AdminPortalUsersPage() {
                 ...item,
                 status: 'disabled',
                 membership_status: 'revoked',
-                grant_status: 'revoked',
                 qq_bound: false,
                 qq_binding_count: 0,
                 session_version: Number(data.session_version || item.session_version),
@@ -409,7 +404,6 @@ export default function AdminPortalUsersPage() {
                 ...item,
                 status: 'disabled',
                 membership_status: 'revoked',
-                grant_status: 'revoked',
                 qq_bound: false,
                 qq_binding_count: 0,
               }
@@ -600,7 +594,7 @@ export default function AdminPortalUsersPage() {
                             <span className="font-medium text-slate-700 dark:text-slate-200">{t('admin.portal_users.site_unbound', {}, 'No site bound')}</span>
                           )}
                           <div className="max-w-xs truncate text-xs text-slate-500 dark:text-slate-400">
-                            {user.wordpress_url || t('admin.portal_users.no_site_url', {}, 'No site URL')} · {user.grant_status || t('admin.portal_users.no_grant_status', {}, 'No grant status')}
+                            {user.wordpress_url || t('admin.portal_users.no_site_url', {}, 'No site URL')}
                           </div>
                           <details className="mt-2 text-xs text-slate-500 dark:text-slate-400">
                             <summary className="cursor-pointer font-medium">{t('portal.support_information', {}, 'Support information')}</summary>
@@ -677,7 +671,7 @@ export default function AdminPortalUsersPage() {
           message={t(
             'admin.portal_users.confirm_disable_message',
             { user: pendingUser.email || pendingUser.principal_id },
-            'After disabling {{user}}, existing Portal sessions, site grants, account memberships, and QQ quick-login bindings will be revoked.'
+            'After disabling {{user}}, existing Portal sessions, account memberships, and QQ quick-login bindings will be revoked.'
           )}
           confirmLabel={t('common.confirm', {}, 'Confirm')}
           cancelLabel={t('common.cancel', {}, 'Cancel')}
@@ -739,7 +733,7 @@ export default function AdminPortalUsersPage() {
         >
           <div className="space-y-4">
             <p className="text-sm leading-6 text-slate-600 dark:text-slate-300">
-              {t('admin.portal_users.batch_disable_body', {}, 'Batch disable invalidates selected users Portal sessions and revokes site grants, account memberships, and QQ quick-login bindings.')}
+              {t('admin.portal_users.batch_disable_body', {}, 'Batch disable invalidates selected users Portal sessions and revokes account memberships and QQ quick-login bindings.')}
             </p>
             <textarea
               value={batchDisableReason}

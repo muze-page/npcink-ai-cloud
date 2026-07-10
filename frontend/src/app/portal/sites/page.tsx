@@ -125,11 +125,13 @@ function PortalSitesContent() {
   }
 
   if (!isAuthenticated || !session) {
+    const currentPath = `${pathname}${searchParams?.toString() ? `?${searchParams.toString()}` : ''}`;
     return (
       <PortalSignedOutState
         title={t('auth.not_signed_in')}
         description={t('auth.please_sign_in')}
         actionLabel={t('nav.sign_in')}
+        actionHref={`/portal/login?redirect=${encodeURIComponent(currentPath)}`}
       />
     );
   }

@@ -145,7 +145,7 @@ class SiteStatusPayload(BaseModel):
     reason: str = ""
 
 
-class PrincipalAccessPayload(BaseModel):
+class AccountMemberAccessPayload(BaseModel):
     email: str
     status: str = "active"
     metadata: dict[str, Any] = Field(default_factory=dict)
@@ -509,8 +509,7 @@ def _send_support_request_update_notification(
             message_body=str(message_payload.get("body") or ""),
             project_name=services.settings.project_name,
             portal_url=(
-                f"{portal_base_url}/portal/support/"
-                f"{request_payload.get('request_id') or ''}"
+                f"{portal_base_url}/portal/support/{request_payload.get('request_id') or ''}"
             ),
             locale=str(request.headers.get("accept-language") or "zh-CN"),
         )
@@ -616,9 +615,7 @@ def _provider_connection_audit_payload(
             "kind": str(raw.get("kind") or ""),
             "enabled": bool(raw.get("enabled", True)),
             "base_url_present": bool(str(raw.get("base_url") or "").strip()),
-            "capability_ids": [
-                str(item) for item in raw.get("capability_ids", []) if str(item)
-            ],
+            "capability_ids": [str(item) for item in raw.get("capability_ids", []) if str(item)],
             "runtime_profile_ids": [
                 str(item) for item in raw.get("runtime_profile_ids", []) if str(item)
             ],
@@ -679,9 +676,7 @@ def _provider_connection_result_summary(result: dict[str, Any]) -> dict[str, Any
             "status": str(result.get("status") or ""),
             "stage": str(result.get("stage") or ""),
             "error_code": str(result.get("error_code") or ""),
-            "catalog_model_count": int(
-                _dict_value(result.get("catalog")).get("model_count") or 0
-            ),
+            "catalog_model_count": int(_dict_value(result.get("catalog")).get("model_count") or 0),
         }
     return summary
 
@@ -930,9 +925,10 @@ def _validate_ability_model_plugin_routing_payload(
                 return [], f"profile {profile_id} requires at least one candidate instance"
             if len(candidate_instance_ids) != len(set(candidate_instance_ids)):
                 return [], f"profile {profile_id} includes duplicate candidate instances"
-            if profile_payload.timeout_ms > WP_AI_CONNECTOR_PROFILE_SPECS_BY_ID[
-                profile_id
-            ].max_timeout_ms:
+            if (
+                profile_payload.timeout_ms
+                > WP_AI_CONNECTOR_PROFILE_SPECS_BY_ID[profile_id].max_timeout_ms
+            ):
                 return [], (
                     f"profile {profile_id} timeout_ms exceeds max "
                     f"{WP_AI_CONNECTOR_PROFILE_SPECS_BY_ID[profile_id].max_timeout_ms}"
@@ -1308,11 +1304,11 @@ async def provision_site(
     return build_envelope(status="ok", message="site provisioned", data=result, revision="m6")
 
 
-@router.post("/sites/{site_id}/user-grants")
-async def upsert_principal_access(
+@router.post("/accounts/{account_id}/members")
+async def upsert_account_member_access(
     request: Request,
-    site_id: str,
-    payload: PrincipalAccessPayload,
+    account_id: str,
+    payload: AccountMemberAccessPayload,
 ) -> Any:
     auth = await authorize_internal_request(request, require_idempotency=True)
     if auth is not None:
@@ -1320,8 +1316,8 @@ async def upsert_principal_access(
     service = _get_commercial_service(request)
     audit_context = _build_audit_context(request)
     try:
-        result = service.upsert_principal_access(
-            site_id=site_id,
+        result = service.upsert_account_member_access(
+            account_id=account_id,
             email=payload.email,
             status=payload.status,
             metadata_json=payload.metadata,
@@ -1330,17 +1326,17 @@ async def upsert_principal_access(
     except CommercialServiceError as error:
         _record_service_failure(
             request,
-            event_kind="principal_access.upsert",
+            event_kind="account_membership.upsert",
             error=error,
-            site_id=site_id,
-            scope_kind="principal_access",
-            scope_id=site_id,
+            account_id=account_id,
+            scope_kind="account_membership",
+            scope_id=account_id,
             payload_json=_build_audit_payload(payload),
         )
         return _service_error_response(error)
     return build_envelope(
         status="ok",
-        message="user site grant saved",
+        message="account member access saved",
         data=result,
         revision="m6",
     )

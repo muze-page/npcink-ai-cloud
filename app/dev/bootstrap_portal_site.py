@@ -95,8 +95,8 @@ def bootstrap_portal_site(
             f"no subscription was found for site '{site_id}'",
         )
 
-    principal_access = commercial_service.upsert_principal_access(
-        site_id=site_id,
+    account_membership = commercial_service.upsert_account_member_access(
+        account_id=account_id,
         email=normalized_email,
         status="active",
         metadata_json={
@@ -104,7 +104,7 @@ def bootstrap_portal_site(
             "site_id": site_id,
         },
     )
-    principal_id = str(principal_access.get("principal_id") or "")
+    principal_id = str(account_membership.get("principal_id") or "")
     portal_sites = commercial_service.list_portal_sites(principal_id=principal_id)
     usage_summary = UsageService(settings.database_url).get_usage_summary(site_id=site_id)
     usage_meter = commercial_service.inspect_usage_meter(site_id)
@@ -159,7 +159,7 @@ def bootstrap_portal_site(
             "auth_configured": auth_configured,
         },
         "portal": {
-            "principal_access": principal_access,
+            "account_membership": account_membership,
             "sites": portal_sites,
         },
         "site_summary": {

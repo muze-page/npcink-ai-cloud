@@ -52,9 +52,9 @@ def test_bootstrap_portal_site_binds_principal_to_existing_site_without_demo_usa
     )
 
     assert result["data_mode"] == "real_site_bootstrap"
-    assert result["portal"]["principal_access"]["principal_id"].startswith("prn_")
-    assert result["portal"]["principal_access"]["status"] == "active"
-    assert result["portal"]["principal_access"]["grant_status"] == "active"
+    assert result["portal"]["account_membership"]["principal_id"].startswith("prn_")
+    assert result["portal"]["account_membership"]["status"] == "active"
+    assert result["portal"]["account_membership"]["membership_status"] == "active"
     assert result["site_summary"]["site"]["site_id"] == "site_realish"
     assert result["usage_summary"]["windows"]["today"]["runs_total"] == 0
     assert result["usage_meter"]["totals"] == {}
