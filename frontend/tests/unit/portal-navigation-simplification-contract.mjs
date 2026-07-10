@@ -5,8 +5,12 @@ import assert from 'node:assert/strict';
 const navbarPath = resolve(process.cwd(), 'src/components/portal/PortalNavbar.tsx');
 const i18nPath = resolve(process.cwd(), 'src/lib/i18n.ts');
 const aiInsightsPagePath = resolve(process.cwd(), 'src/app/portal/ai-insights/page.tsx');
+const monitoringPath = resolve(process.cwd(), 'src/app/portal/monitoring/page.tsx');
+const auditPath = resolve(process.cwd(), 'src/app/portal/audit/PortalAuditClient.tsx');
 const navbarSource = readFileSync(navbarPath, 'utf8');
 const i18nSource = readFileSync(i18nPath, 'utf8');
+const monitoringSource = readFileSync(monitoringPath, 'utf8');
+const auditSource = readFileSync(auditPath, 'utf8');
 
 const primaryStart = navbarSource.indexOf('const primaryNavItems');
 const primaryEnd = navbarSource.indexOf('const isActive', primaryStart);
@@ -17,8 +21,8 @@ assert.ok(primaryStart >= 0 && primaryEnd > primaryStart, 'portal navbar must de
 const primaryHrefs = Array.from(primarySource.matchAll(/href:\s*'([^']+)'/g), (match) => match[1]);
 assert.deepEqual(
   primaryHrefs,
-  ['/portal', '/portal/billing', '/portal/usage', '/portal/sites', '/portal/account'],
-  'portal primary nav must stay focused on overview, package, usage, site domain, and contact/account'
+  ['/portal', '/portal/billing', '/portal/usage', '/portal/sites', '/portal/support', '/portal/account'],
+  'portal primary nav must stay focused on overview, package, usage, site domain, support requests, and contact/account'
 );
 
 assert.doesNotMatch(
@@ -36,6 +40,16 @@ assert.equal(
   existsSync(aiInsightsPagePath),
   false,
   'AI insights must not remain as a standalone customer Portal page'
+);
+assert.match(
+  monitoringSource,
+  /data-portal-support-deeplink="monitoring"/,
+  'monitoring may remain only as a support-request deep link'
+);
+assert.match(
+  auditSource,
+  /data-portal-support-deeplink="audit"/,
+  'recent activity may remain only as a support-request deep link'
 );
 assert.match(
   navbarSource,
@@ -62,11 +76,13 @@ assert.match(i18nSource, /'portal\.nav_package': 'Package'/, 'English nav copy m
 assert.match(i18nSource, /'portal\.nav_usage': 'Usage'/, 'English nav copy must expose usage as its own entry');
 assert.match(i18nSource, /'portal\.workspace_label': 'Overview'/, 'English overview copy must name the user summary surface');
 assert.match(i18nSource, /'portal\.nav_sites': 'Sites'/, 'English nav copy must keep the site entry short');
+assert.match(i18nSource, /'portal\.nav_support_requests': 'Tickets'/, 'English nav copy must expose support tickets as their own entry');
 assert.match(i18nSource, /'portal\.nav_account': 'Contact'/, 'English nav copy must emphasize contact settings');
 assert.match(i18nSource, /'portal\.nav_package': '套餐'/, 'Chinese nav copy must expose package as its own entry');
 assert.match(i18nSource, /'portal\.nav_usage': '用量'/, 'Chinese nav copy must expose usage as its own entry');
 assert.match(i18nSource, /'portal\.workspace_label': '概览'/, 'Chinese overview copy must name the user summary surface');
 assert.match(i18nSource, /'portal\.nav_sites': '站点'/, 'Chinese nav copy must keep the site entry short');
+assert.match(i18nSource, /'portal\.nav_support_requests': '工单'/, 'Chinese nav copy must expose support tickets as their own entry');
 assert.match(i18nSource, /'portal\.nav_account': '联系方式'/, 'Chinese nav copy must emphasize contact settings');
 
 console.log('portal_navigation_simplification_contract: ok');

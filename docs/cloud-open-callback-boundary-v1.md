@@ -32,8 +32,7 @@ Current path contract:
 Authentication callbacks use provider-specific paths under `/open/auth`.
 
 - QQ login callback is active at `/open/auth/qq/callback`.
-- The legacy `/portal/v1/auth/qq/callback` path is temporarily accepted for
-  existing development configuration compatibility.
+- The retired `/portal/v1/auth/qq/callback` path is rejected.
 - WeChat login callback is reserved and must fail closed until its provider
   configuration, state validation, and account-binding contract are implemented.
 

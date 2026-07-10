@@ -22,13 +22,8 @@ SERVICE_SETTING_PAYMENT_ALIPAY = "payment_alipay"
 
 SERVICE_SETTING_KIND_PORTAL = "portal"
 SERVICE_SETTING_QQ_OPEN_CALLBACK_PATH = "/open/auth/qq/callback"
-SERVICE_SETTING_QQ_LEGACY_CALLBACK_PATH = "/portal/v1/auth/qq/callback"
 SERVICE_SETTING_ALIPAY_NOTIFY_PATH = "/open/payments/alipay/notify"
 SERVICE_SETTING_ALIPAY_RETURN_PATH = "/open/payments/alipay/return"
-SERVICE_SETTING_QQ_ALLOWED_CALLBACK_PATHS = {
-    SERVICE_SETTING_QQ_OPEN_CALLBACK_PATH,
-    SERVICE_SETTING_QQ_LEGACY_CALLBACK_PATH,
-}
 
 STATUS_READY = "ready"
 STATUS_DISABLED = "disabled"
@@ -163,13 +158,29 @@ class ServiceSettingsAdminService:
             )
         username = _string(payload.get("smtp_username"))
         password_value = payload.get("smtp_password")
-        existing = _load_service_setting(self.database_url, SERVICE_SETTING_PORTAL_EMAIL)
-        existing_password = _decrypt_secret(existing, "smtp_password", settings=self.settings)
-        if username and password_value is None and not existing_password:
-            raise ServiceSettingsAdminError(
-                "service_settings.email_password_required",
-                "SMTP password is required when username is configured",
-            )
+        enabled = bool(payload.get("enabled", True))
+        if username and password_value is None and enabled:
+            existing = _load_service_setting(self.database_url, SERVICE_SETTING_PORTAL_EMAIL)
+            try:
+                existing_password = _decrypt_secret(
+                    existing,
+                    "smtp_password",
+                    settings=self.settings,
+                )
+            except RuntimeError as error:
+                raise ServiceSettingsAdminError(
+                    "service_settings.email_password_required",
+                    (
+                        "Saved SMTP password cannot be read. "
+                        "Re-enter the SMTP password and save again."
+                    ),
+                ) from error
+            if not existing_password:
+                raise ServiceSettingsAdminError(
+                    "service_settings.email_password_required",
+                    "SMTP password is required when username is configured",
+                )
+            password_value = existing_password
         if not username and (password_value is not None and _string(password_value)):
             raise ServiceSettingsAdminError(
                 "service_settings.email_username_required",
@@ -194,7 +205,7 @@ class ServiceSettingsAdminService:
                 "reply_to": _string(payload.get("reply_to")).lower(),
             },
             secrets={"smtp_password": password_value},
-            enabled=bool(payload.get("enabled", True)),
+            enabled=enabled,
             required_secret_keys=["smtp_password"] if username else [],
         )
         return self._serialize(row)
@@ -246,16 +257,22 @@ class ServiceSettingsAdminService:
         existing = _load_service_setting(self.database_url, SERVICE_SETTING_PAYMENT_ALIPAY)
         existing_private_key = _decrypt_secret(existing, "private_key", settings=self.settings)
         existing_public_key = _decrypt_secret(existing, "public_key", settings=self.settings)
-        if enabled and payload.get("private_key") is None and not existing_private_key:
+        private_key_value = payload.get("private_key")
+        public_key_value = payload.get("public_key")
+        if enabled and private_key_value is None and not existing_private_key:
             raise ServiceSettingsAdminError(
                 "service_settings.alipay_private_key_required",
                 "Alipay application private key is required",
             )
-        if enabled and payload.get("public_key") is None and not existing_public_key:
+        if enabled and public_key_value is None and not existing_public_key:
             raise ServiceSettingsAdminError(
                 "service_settings.alipay_public_key_required",
                 "Alipay public key is required",
             )
+        if private_key_value is None and existing_private_key:
+            private_key_value = existing_private_key
+        if public_key_value is None and existing_public_key:
+            public_key_value = existing_public_key
         row = self._save(
             setting_id=SERVICE_SETTING_PAYMENT_ALIPAY,
             config={
@@ -267,8 +284,8 @@ class ServiceSettingsAdminService:
                 "payment_product_code": "FAST_INSTANT_TRADE_PAY",
             },
             secrets={
-                "private_key": payload.get("private_key"),
-                "public_key": payload.get("public_key"),
+                "private_key": private_key_value,
+                "public_key": public_key_value,
             },
             enabled=enabled,
             required_secret_keys=["private_key", "public_key"] if enabled else [],
@@ -469,7 +486,7 @@ class ServiceSettingsAdminService:
                     metadata_json={},
                 )
                 session.add(row)
-            secret_ciphertexts = _dict(row.secret_ciphertext_json)
+            secret_ciphertexts = dict(_dict(row.secret_ciphertext_json))
             for key, raw_value in secrets.items():
                 if raw_value is None:
                     continue
@@ -733,7 +750,7 @@ def _qq_redirect_uri_allowed(
 ) -> bool:
     parsed = urlsplit(_string(value))
     public_parsed = urlsplit(_string(public_base_url))
-    if parsed.path not in SERVICE_SETTING_QQ_ALLOWED_CALLBACK_PATHS:
+    if parsed.path != SERVICE_SETTING_QQ_OPEN_CALLBACK_PATH:
         return False
     if parsed.scheme not in {"https", "http"} or not parsed.netloc:
         return False

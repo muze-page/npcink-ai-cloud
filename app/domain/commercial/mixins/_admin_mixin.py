@@ -24,7 +24,6 @@ from app.core.models import (
     PRINCIPAL_STATUS_DISABLED,
     SITE_API_KEY_STATUS_ACTIVE,
     SITE_STATUS_ACTIVE,
-    SITE_USER_GRANT_STATUS_ACTIVE,
     SUBSCRIPTION_STATUS_ACTIVE,
     SUBSCRIPTION_STATUS_PAST_DUE,
     SUBSCRIPTION_STATUS_SUSPENDED,
@@ -256,9 +255,7 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
         with get_session(self.database_url) as session:
             repository = CommercialRepository(session)
             accounts_total = repository.count_accounts()
-            principals_active = repository.count_principals(
-                status=PRINCIPAL_STATUS_ACTIVE
-            )
+            principals_active = repository.count_principals(status=PRINCIPAL_STATUS_ACTIVE)
             sites_total = repository.count_sites()
             sites_active = repository.count_sites(status=SITE_STATUS_ACTIVE)
             subscriptions_total = repository.count_subscriptions()
@@ -327,10 +324,9 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
                 current_period_end_before=now + timedelta(days=30),
                 limit=None,
             )
-            attention_subscriptions = (
-                repository.list_subscriptions(status=SUBSCRIPTION_STATUS_PAST_DUE, limit=5)
-                + repository.list_subscriptions(status=SUBSCRIPTION_STATUS_SUSPENDED, limit=5)
-            )
+            attention_subscriptions = repository.list_subscriptions(
+                status=SUBSCRIPTION_STATUS_PAST_DUE, limit=5
+            ) + repository.list_subscriptions(status=SUBSCRIPTION_STATUS_SUSPENDED, limit=5)
             detail_account_ids = sorted(
                 {
                     subscription.account_id
@@ -700,10 +696,10 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
         normalized_source = str(source or "portal_self_registration").strip().lower()
         if normalized_source in {"", "self_registered", "self-registration"}:
             normalized_source = "portal_self_registration"
-        if normalized_source not in {"all", "portal_self_registration", "principal_access"}:
+        if normalized_source not in {"all", "portal_self_registration", "account_membership"}:
             raise CommercialValidationError(
                 "service.portal_user_source_invalid",
-                "portal user source must be all, portal_self_registration, or principal_access",
+                "portal user source must be all, portal_self_registration, or account_membership",
             )
         normalized_status = str(status or "").strip().lower()
         if normalized_status and normalized_status not in {
@@ -728,10 +724,6 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
                 principal_ids=principal_ids,
                 statuses=None,
             )
-            grants = repository.list_site_user_grants(
-                principal_ids=principal_ids,
-                statuses=None,
-            )
             qq_bindings = repository.list_identity_provider_bindings(
                 principal_ids=principal_ids,
                 provider="qq",
@@ -744,31 +736,22 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
                     if str(membership.account_id or "").strip()
                 }
             )
-            site_ids = sorted(
-                {
-                    str(grant.site_id or "")
-                    for grant in grants
-                    if str(grant.site_id or "").strip()
-                }
-            )
             accounts = repository.list_accounts(account_ids=account_ids, limit=None)
-            sites = repository.list_sites(site_ids=site_ids, limit=None)
+            sites = repository.list_sites(account_ids=account_ids, limit=None)
             subscriptions = repository.list_subscriptions(account_ids=account_ids, limit=None)
 
         memberships_by_principal: dict[str, list[Any]] = defaultdict(list)
         for membership in memberships:
             memberships_by_principal[str(membership.principal_id or "")].append(membership)
 
-        grants_by_principal: dict[str, list[Any]] = defaultdict(list)
-        for grant in grants:
-            grants_by_principal[str(grant.principal_id or "")].append(grant)
-
         qq_bindings_by_principal: dict[str, list[Any]] = defaultdict(list)
         for binding in qq_bindings:
             qq_bindings_by_principal[str(binding.principal_id or "")].append(binding)
 
         accounts_by_id = {str(account.account_id or ""): account for account in accounts}
-        sites_by_id = {str(site.site_id or ""): site for site in sites}
+        sites_by_account: dict[str, list[Any]] = defaultdict(list)
+        for account_site in sites:
+            sites_by_account[str(account_site.account_id or "")].append(account_site)
         subscriptions_by_account: dict[str, list[AccountSubscription]] = defaultdict(list)
         for subscription in subscriptions:
             subscriptions_by_account[str(subscription.account_id or "")].append(subscription)
@@ -793,25 +776,23 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
         for principal in principals:
             principal_id = str(principal.principal_id or "")
             principal_memberships = memberships_by_principal.get(principal_id, [])
-            principal_grants = grants_by_principal.get(principal_id, [])
-            if not principal_memberships and not principal_grants:
+            if not principal_memberships:
                 continue
             selected_membership = preferred_active(
                 principal_memberships,
                 active_status=ACCOUNT_USER_MEMBERSHIP_STATUS_ACTIVE,
             )
             account = accounts_by_id.get(str(getattr(selected_membership, "account_id", "") or ""))
-            selected_grant = preferred_active(
-                principal_grants,
-                active_status=SITE_USER_GRANT_STATUS_ACTIVE,
+            account_sites = sites_by_account.get(
+                str(getattr(selected_membership, "account_id", "") or ""),
+                [],
             )
-            site = sites_by_id.get(str(getattr(selected_grant, "site_id", "") or ""))
+            site = account_sites[0] if account_sites else None
             source_value = metadata_source(
                 principal,
                 selected_membership,
                 account,
                 site,
-                selected_grant,
             )
             if normalized_source != "all" and source_value != normalized_source:
                 continue
@@ -823,7 +804,7 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
             primary_subscription = service._select_primary_subscription(account_subscriptions)
             package_summary = service._build_subscription_package_summary(
                 primary_subscription,
-                site_count=len(principal_grants),
+                site_count=len(account_sites),
             )
             subscription_payload = (
                 service._serialize_subscription(primary_subscription)
@@ -897,7 +878,6 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
                 "site_name": str(getattr(site, "name", "") or ""),
                 "site_status": str(getattr(site, "status", "") or ""),
                 "wordpress_url": wordpress_url,
-                "grant_status": str(getattr(selected_grant, "status", "") or ""),
                 "subscription": subscription_payload,
                 "subscription_id": str(getattr(primary_subscription, "subscription_id", "") or ""),
                 "subscription_status": str(getattr(primary_subscription, "status", "") or ""),
@@ -980,9 +960,7 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
                 "email": str(getattr(identity, "email", "") or ""),
                 "status": str(getattr(identity, "status", "") or ""),
                 "session_version": int(getattr(identity, "session_version", 1) or 1),
-                "last_login_at": self._serialize_datetime(
-                    getattr(identity, "last_login_at", None)
-                ),
+                "last_login_at": self._serialize_datetime(getattr(identity, "last_login_at", None)),
                 "created_at": self._serialize_datetime(getattr(identity, "created_at", None)),
             },
             "items": items,
@@ -994,9 +972,6 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
                 "registration_events": int(event_kinds.get("portal.registration", 0)),
                 "disable_events": int(event_kinds.get("portal_user.disable", 0)),
                 "latest_disable_reason": str(latest_payload.get("reason") or ""),
-                "latest_disable_revoked_site_grants": self._coerce_int(
-                    latest_payload.get("revoked_site_grants")
-                ),
                 "latest_disable_revoked_account_memberships": self._coerce_int(
                     latest_payload.get("revoked_account_memberships")
                 ),
@@ -1041,9 +1016,6 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
                 )
                 or identity
             )
-            revoked_grants = repository.revoke_site_user_grants(
-                principal_id=normalized_principal_id,
-            )
             revoked_memberships = repository.revoke_account_user_memberships(
                 principal_id=normalized_principal_id,
             )
@@ -1056,7 +1028,6 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
                 "email": str(getattr(identity, "email", "") or ""),
                 "status": str(getattr(identity, "status", "") or ""),
                 "session_version": int(getattr(identity, "session_version", 1) or 1),
-                "revoked_site_grants": revoked_grants,
                 "revoked_account_memberships": revoked_memberships,
                 "revoked_identity_provider_bindings": revoked_bindings,
                 "reason": normalized_reason,
@@ -1111,7 +1082,6 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
             "disabled": 0,
             "already_disabled": 0,
             "failed": 0,
-            "revoked_site_grants": 0,
             "revoked_account_memberships": 0,
             "revoked_identity_provider_bindings": 0,
         }
@@ -1144,9 +1114,6 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
                         )
                         or identity
                     )
-                revoked_grants = repository.revoke_site_user_grants(
-                    principal_id=normalized_principal_id,
-                )
                 revoked_memberships = repository.revoke_account_user_memberships(
                     principal_id=normalized_principal_id,
                 )
@@ -1154,7 +1121,6 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
                     principal_id=normalized_principal_id,
                     provider="qq",
                 )
-                totals["revoked_site_grants"] += revoked_grants
                 totals["revoked_account_memberships"] += revoked_memberships
                 totals["revoked_identity_provider_bindings"] += revoked_bindings
                 outcome = "already_disabled" if was_disabled else "disabled"
@@ -1165,7 +1131,6 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
                     "status": str(getattr(identity, "status", "") or ""),
                     "session_version": int(getattr(identity, "session_version", 1) or 1),
                     "outcome": outcome,
-                    "revoked_site_grants": revoked_grants,
                     "revoked_account_memberships": revoked_memberships,
                     "revoked_identity_provider_bindings": revoked_bindings,
                     "reason": normalized_reason,
@@ -1182,9 +1147,7 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
                         **item_payload,
                         "batch": True,
                         "batch_id": (
-                            audit_context.idempotency_key
-                            if audit_context is not None
-                            else ""
+                            audit_context.idempotency_key if audit_context is not None else ""
                         ),
                     },
                 )
@@ -1200,9 +1163,7 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
                 event_kind="portal_user.batch_disable",
                 outcome="succeeded" if totals["failed"] == 0 else "partial",
                 scope_kind="portal_user_batch",
-                scope_id=(
-                    audit_context.idempotency_key if audit_context is not None else ""
-                ),
+                scope_id=(audit_context.idempotency_key if audit_context is not None else ""),
                 payload_json=batch_payload,
             )
             session.commit()
@@ -1429,8 +1390,7 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
             active_key_site_count = sum(
                 1
                 for site in account_sites
-                if int(active_key_counts.get(str(getattr(site, "site_id", "") or ""), 0) or 0)
-                > 0
+                if int(active_key_counts.get(str(getattr(site, "site_id", "") or ""), 0) or 0) > 0
             )
             missing_key_site_count = max(0, site_count - active_key_site_count)
             subscription_status = str(getattr(primary_subscription, "status", "") or "")
@@ -1760,9 +1720,7 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
                 statuses=[SITE_API_KEY_STATUS_ACTIVE],
             )
             active_runs_by_site = repository.count_active_runs_by_site(site_ids=site_ids)
-            knowledge_counts = repository.summarize_site_knowledge_current_counts(
-                site_ids=site_ids
-            )
+            knowledge_counts = repository.summarize_site_knowledge_current_counts(site_ids=site_ids)
             knowledge_index_usage = repository.summarize_site_knowledge_index_usage(
                 account_id=account_id,
                 subscription_id=(
@@ -1797,8 +1755,8 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
             plan_version=plan_version,
             subscription=primary_subscription,
         )
-        concurrency = (
-            service._normalize_concurrency(getattr(plan_version, "concurrency_json", None))
+        concurrency = service._normalize_concurrency(
+            getattr(plan_version, "concurrency_json", None)
         )
         vector_document_limit = cast(Any, self)._resolve_account_vector_documents_limit(
             snapshot=None,
@@ -1815,7 +1773,9 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
                 indexed_document_count=service._coerce_int(
                     knowledge_index_usage.get("indexed_documents")
                 ),
-                indexed_chunk_count=service._coerce_int(knowledge_index_usage.get("indexed_chunks")),
+                indexed_chunk_count=service._coerce_int(
+                    knowledge_index_usage.get("indexed_chunks")
+                ),
             )
         credit_used = round(
             sum(service._coerce_float(item.get("credits")) for item in credit_breakdown),
@@ -1917,8 +1877,10 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
         resource_statuses = [
             str(item.get("status") or "ok") for item in [*resource_limits, *internal_limits]
         ]
-        status = "limited" if "limited" in [credit_status, *resource_statuses] else (
-            "near_limit" if "near_limit" in [credit_status, *resource_statuses] else "ok"
+        status = (
+            "limited"
+            if "limited" in [credit_status, *resource_statuses]
+            else ("near_limit" if "near_limit" in [credit_status, *resource_statuses] else "ok")
         )
         return {
             "account_id": account_id,
@@ -2114,9 +2076,7 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
                 now,
             )
             subscription_id = (
-                primary_subscription.subscription_id
-                if primary_subscription is not None
-                else None
+                primary_subscription.subscription_id if primary_subscription is not None else None
             )
             entries = repository.list_credit_ledger_entries(
                 account_ids=[account_id],
@@ -2674,7 +2634,9 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
                 indexed_document_count=service._coerce_int(
                     knowledge_index_usage.get("indexed_documents")
                 ),
-                indexed_chunk_count=service._coerce_int(knowledge_index_usage.get("indexed_chunks")),
+                indexed_chunk_count=service._coerce_int(
+                    knowledge_index_usage.get("indexed_chunks")
+                ),
             )
         credit_used = round(
             sum(service._coerce_float(item.get("credits")) for item in breakdown),
@@ -2876,8 +2838,7 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
                         "severity": "warning",
                         "title": "Consumption is concentrated in one account",
                         "detail": (
-                            "The top account accounts for at least 60% of this "
-                            "window's AI credits."
+                            "The top account accounts for at least 60% of this window's AI credits."
                         ),
                         "metric": "ai_credits",
                         "value": round(account_credits, 6),
@@ -3142,7 +3103,7 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
                 "detail": (
                     f"{package_label} coverage is ready."
                     if has_coverage and subscription_stable
-                    else "Apply Free, Pro, or Agency coverage before granting site user access."
+                    else "Apply Free, Plus, Pro, or Agency coverage before granting account access."
                 ),
             },
         ]
@@ -3150,8 +3111,8 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
         status = "ready" if not blocking_codes else "action_required"
         if not account_active or site_count == 0:
             status = "blocked"
-        next_action = "review_principal_access"
-        next_action_label = "Review site user access"
+        next_action = "review_account_membership"
+        next_action_label = "Review account membership"
         if not account_active:
             next_action = "review_customer_status"
             next_action_label = "Review customer status"

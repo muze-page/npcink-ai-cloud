@@ -80,31 +80,13 @@ class Settings(BaseSettings):
     internal_guard_max_reject_events_per_ip_window: int = Field(default=50)
     internal_auth_token: str | None = Field(default=None)
     admin_bootstrap_token: str | None = Field(default=None)
-    admin_session_secret: str | None = Field(
-        default=None,
-        validation_alias=AliasChoices(
-            "NPCINK_CLOUD_ADMIN_SESSION_SECRET",
-            "NPCINK_CLOUD_OPS_SESSION_SECRET",
-        ),
-    )
+    admin_session_secret: str | None = Field(default=None)
+    service_settings_secret: str | None = Field(default=None)
     debug_local_origin_allowlist: str = Field(default="")
     browser_origin_allowlist: str = Field(default="")
     trusted_host_allowlist: str = Field(default="")
-    allow_dev_admin_internal_token_fallback: bool = Field(
-        default=False,
-        validation_alias=AliasChoices(
-            "NPCINK_CLOUD_ALLOW_DEV_ADMIN_INTERNAL_TOKEN_FALLBACK",
-            "NPCINK_CLOUD_ALLOW_DEV_OPS_INTERNAL_TOKEN_FALLBACK",
-        ),
-    )
-    allow_dev_ops_internal_token_fallback: bool = Field(default=False)
-    admin_session_ttl_seconds: int = Field(
-        default=8 * 60 * 60,
-        validation_alias=AliasChoices(
-            "NPCINK_CLOUD_ADMIN_SESSION_TTL_SECONDS",
-            "NPCINK_CLOUD_OPS_SESSION_TTL_SECONDS",
-        ),
-    )
+    allow_dev_admin_internal_token_fallback: bool = Field(default=False)
+    admin_session_ttl_seconds: int = Field(default=8 * 60 * 60)
     admin_bootstrap_principal_id: str = Field(
         default="platform:internal_root",
         validation_alias="NPCINK_CLOUD_ADMIN_BOOTSTRAP_PRINCIPAL_ID",
@@ -129,48 +111,12 @@ class Settings(BaseSettings):
     feature_flags_json: str = Field(default="")
     deployment_region: str = Field(default="unspecified")
     audit_retention_days_default: int = Field(default=90)
-    openai_base_url: str = Field(
-        default="https://api.openai.com/v1",
-        validation_alias=AliasChoices(
-            "NPCINK_CLOUD_OPENAI_BASE_URL",
-            "NPCINK_CLOUD_OPENAI_COMPATIBLE_BASE_URL",
-        ),
-    )
-    openai_api_key: str | None = Field(
-        default=None,
-        validation_alias=AliasChoices(
-            "NPCINK_CLOUD_OPENAI_API_KEY",
-            "NPCINK_CLOUD_OPENAI_COMPATIBLE_API_KEY",
-        ),
-    )
-    openai_organization: str | None = Field(
-        default=None,
-        validation_alias=AliasChoices(
-            "NPCINK_CLOUD_OPENAI_ORGANIZATION",
-            "NPCINK_CLOUD_OPENAI_COMPATIBLE_ORGANIZATION",
-        ),
-    )
-    openai_timeout_seconds: float = Field(
-        default=30.0,
-        validation_alias=AliasChoices(
-            "NPCINK_CLOUD_OPENAI_TIMEOUT_SECONDS",
-            "NPCINK_CLOUD_OPENAI_COMPATIBLE_TIMEOUT_SECONDS",
-        ),
-    )
-    openai_sample_catalog_profile: str = Field(
-        default="",
-        validation_alias=AliasChoices(
-            "NPCINK_CLOUD_OPENAI_SAMPLE_CATALOG_PROFILE",
-            "NPCINK_CLOUD_OPENAI_COMPATIBLE_SAMPLE_CATALOG_PROFILE",
-        ),
-    )
-    openai_provider_label: str = Field(
-        default="",
-        validation_alias=AliasChoices(
-            "NPCINK_CLOUD_OPENAI_PROVIDER_LABEL",
-            "NPCINK_CLOUD_OPENAI_COMPATIBLE_PROVIDER_LABEL",
-        ),
-    )
+    openai_base_url: str = Field(default="https://api.openai.com/v1")
+    openai_api_key: str | None = Field(default=None)
+    openai_organization: str | None = Field(default=None)
+    openai_timeout_seconds: float = Field(default=30.0)
+    openai_sample_catalog_profile: str = Field(default="")
+    openai_provider_label: str = Field(default="")
     minimax_provider_enabled: bool = Field(default=False)
     minimax_base_url: str = Field(default="https://api.minimaxi.com")
     minimax_api_key: str | None = Field(default=None)
@@ -370,16 +316,12 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_security_settings(self) -> Settings:
-        if (
-            not self.allow_dev_admin_internal_token_fallback
-            and self.allow_dev_ops_internal_token_fallback
-        ):
-            self.allow_dev_admin_internal_token_fallback = True
         production_like = self.production_like_environment()
         secret_fields = {
             "internal_auth_token": self.internal_auth_token,
             "admin_bootstrap_token": self.admin_bootstrap_token,
             "admin_session_secret": self.admin_session_secret,
+            "service_settings_secret": self.service_settings_secret,
             "portal_jwt_secret": self.portal_jwt_secret,
         }
         for field_name, raw_value in secret_fields.items():
@@ -395,6 +337,10 @@ class Settings(BaseSettings):
         if production_like and not str(self.admin_session_secret or "").strip():
             raise ValueError(
                 "admin_session_secret is required outside development/test environments"
+            )
+        if production_like and not str(self.service_settings_secret or "").strip():
+            raise ValueError(
+                "service_settings_secret is required outside development/test environments"
             )
         if production_like and not str(self.internal_auth_token or "").strip():
             raise ValueError(

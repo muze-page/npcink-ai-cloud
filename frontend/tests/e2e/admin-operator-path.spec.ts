@@ -347,17 +347,15 @@ test('admin navigation stays customer-first', async ({ page }) => {
   const adminNav = page.getByRole('navigation', { name: /管理后台|admin/i });
   const adminPrimaryNav = page.locator('[data-ui="admin-primary-nav"]');
   const primaryLinks = adminPrimaryNav.locator('a.admin-nav-link');
-  await expect(primaryLinks).toHaveCount(10);
+  await expect(primaryLinks).toHaveCount(8);
   await expect(primaryLinks.nth(0)).toHaveAttribute('href', '/admin');
   await expect(primaryLinks.nth(1)).toHaveAttribute('href', '/admin/accounts');
-  await expect(primaryLinks.nth(2)).toHaveAttribute('href', '/admin/coverage');
-  await expect(primaryLinks.nth(3)).toHaveAttribute('href', '/admin/subscriptions');
+  await expect(primaryLinks.nth(2)).toHaveAttribute('href', '/admin/support-requests');
+  await expect(primaryLinks.nth(3)).toHaveAttribute('href', '/admin/coverage');
   await expect(primaryLinks.nth(4)).toHaveAttribute('href', '/admin/plans');
-  await expect(primaryLinks.nth(5)).toHaveAttribute('href', '/admin/portal-users');
-  await expect(primaryLinks.nth(6)).toHaveAttribute('href', '/admin/ai-resources');
-  await expect(primaryLinks.nth(7)).toHaveAttribute('href', '/admin/ability-models');
-  await expect(primaryLinks.nth(8)).toHaveAttribute('href', '/admin/troubleshooting');
-  await expect(primaryLinks.nth(9)).toHaveAttribute('href', '/admin/service-settings');
+  await expect(primaryLinks.nth(5)).toHaveAttribute('href', '/admin/ai-resources');
+  await expect(primaryLinks.nth(6)).toHaveAttribute('href', '/admin/troubleshooting');
+  await expect(primaryLinks.nth(7)).toHaveAttribute('href', '/admin/service-settings');
   await expect(adminPrimaryNav.getByText(/^Workspace$|^工作台$/i)).toBeVisible();
   await expect(adminPrimaryNav.getByText(/^Customer Ops$|^客户运营$/i)).toBeVisible();
   await expect(adminPrimaryNav.getByText(/^Runtime Plane$|^运行面$/i)).toBeVisible();
@@ -367,10 +365,13 @@ test('admin navigation stays customer-first', async ({ page }) => {
   await expect(adminNav.getByRole('link', { name: /^Sites$|^站点$|^站點$/i })).toHaveCount(0);
   await expect(adminNav.getByRole('link', { name: /^Packages \/ Service Status$|^套餐\/服务状态$|^方案\/服務狀態$/i })).toHaveCount(0);
   await expect(adminNav.getByRole('link', { name: /^Providers$|^供应商$/i })).toBeVisible();
+  await expect(adminNav.getByRole('link', { name: /^Model Binding$|^模型绑定$/i })).toHaveCount(0);
   await expect(adminNav.getByRole('link', { name: /^Runtime Diagnostics$|^运行诊断$/i })).toBeVisible();
   await expect(adminNav.getByRole('link', { name: /^Hosted Models$|^托管模型$|^託管模型$/i })).toHaveCount(0);
-  await expect(adminNav.getByRole('link', { name: /^Service Risks$|^服务风险$|^服務風險$/i })).toBeVisible();
+  await expect(adminNav.getByRole('link', { name: /^Service Risks$|^服务风险$|^服務風險$/i })).toHaveCount(0);
+  await expect(adminNav.getByRole('link', { name: /^Portal Users$|^自助注册用户$|^自助註冊使用者$/i })).toHaveCount(0);
   await expect(adminNav.getByRole('link', { name: /^Package Catalog$|^套餐目录$|^方案目錄$/i })).toBeVisible();
+  await expect(adminNav.getByRole('link', { name: /^Credit Packs$|^积分包$/i })).toHaveCount(0);
   await expect(adminNav.getByRole('link', { name: /^Members$|^成员$|^成員$/i })).toHaveCount(0);
   await expect(adminNav.getByRole('link', { name: /^Plugin Observability$|^插件观测$|^外掛觀測$/i })).toHaveCount(0);
 

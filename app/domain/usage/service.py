@@ -465,16 +465,27 @@ class UsageService:
             **self._serialize_hosted_instance_metadata(instance, model),
         }
 
-    def get_usage_summary(self, *, site_id: str | None = None) -> dict[str, Any]:
+    def get_usage_summary(
+        self,
+        *,
+        site_id: str | None = None,
+        site_ids: list[str] | None = None,
+    ) -> dict[str, Any]:
         now = self.now_factory()
         windows = self._build_windows(now)
         rolling_window = windows["rolling_24h"]
+        normalized_site_ids = (
+            sorted({str(item).strip() for item in site_ids if str(item).strip()})
+            if site_ids is not None
+            else None
+        )
 
         with get_session(self.database_url) as session:
             repository = StatsRepository(session)
             instances = repository.list_instances()
             provider_calls = repository.list_provider_calls(
                 site_id,
+                site_ids=normalized_site_ids,
                 start_at=rolling_window["start_at"],
                 end_at=rolling_window["end_at"],
             )
@@ -485,32 +496,38 @@ class UsageService:
                 start_at=windows["today"]["start_at"],
                 end_at=windows["today"]["end_at"],
                 site_id=site_id,
+                site_ids=normalized_site_ids,
             )
             today_run_latencies = repository.list_run_latency_values_window(
                 start_at=windows["today"]["start_at"],
                 end_at=windows["today"]["end_at"],
                 site_id=site_id,
+                site_ids=normalized_site_ids,
             )
             today_provider_metrics = repository.aggregate_provider_calls_window(
                 start_at=windows["today"]["start_at"],
                 end_at=windows["today"]["end_at"],
                 site_id=site_id,
+                site_ids=normalized_site_ids,
                 constrain_run_started=True,
             )
             rolling_run_metrics = repository.aggregate_runs_window(
                 start_at=rolling_window["start_at"],
                 end_at=rolling_window["end_at"],
                 site_id=site_id,
+                site_ids=normalized_site_ids,
             )
             rolling_run_latencies = repository.list_run_latency_values_window(
                 start_at=rolling_window["start_at"],
                 end_at=rolling_window["end_at"],
                 site_id=site_id,
+                site_ids=normalized_site_ids,
             )
             rolling_provider_metrics = repository.aggregate_provider_calls_window(
                 start_at=rolling_window["start_at"],
                 end_at=rolling_window["end_at"],
                 site_id=site_id,
+                site_ids=normalized_site_ids,
                 constrain_run_started=True,
             )
 
@@ -537,7 +554,13 @@ class UsageService:
             "timezone": "UTC",
             "generated_at": self._format_datetime(now),
             "totals": {
-                "sites_total": 1 if site_id else sites_total,
+                "sites_total": (
+                    1
+                    if site_id
+                    else len(normalized_site_ids)
+                    if normalized_site_ids is not None
+                    else sites_total
+                ),
                 "profiles_total": profiles_total,
                 "instances_total": len(instances),
                 "providers_total": len({instance.provider_id for instance in instances}),

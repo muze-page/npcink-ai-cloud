@@ -70,9 +70,7 @@ from app.domain.usage.service import UsageService
 
 router = APIRouter(prefix="/portal/v1", tags=["portal"])
 COOKIE_PORTAL_QQ_OAUTH_NONCE = "npcink_portal_qq_oauth_nonce"
-COOKIE_PORTAL_QQ_OAUTH_NONCE_LEGACY = "magick_portal_qq_oauth_nonce"
 COOKIE_PORTAL_QQ_OAUTH_NONCE_PATH = "/"
-COOKIE_PORTAL_QQ_OAUTH_NONCE_LEGACY_PATH = "/portal/v1/auth/qq"
 
 
 class PortalSiteKeyPayload(BaseModel):
@@ -160,6 +158,32 @@ class PortalCreditPackOrderPayload(BaseModel):
 
 class PortalProMonthlyOrderPayload(BaseModel):
     provider: str = "alipay"
+
+
+class PortalSupportRequestPayload(BaseModel):
+    topic: str = Field(default="general", max_length=64)
+    title: str = Field(default="", max_length=191)
+    description: str = Field(default="", max_length=4000)
+    site_id: str = Field(default="", max_length=191)
+    source_path: str = Field(default="", max_length=191)
+    context: dict[str, Any] = Field(default_factory=dict)
+
+
+class PortalSupportRequestMessagePayload(BaseModel):
+    body: str = Field(default="", max_length=4000)
+
+
+class PortalSupportRequestAttachmentPayload(BaseModel):
+    filename: str = Field(default="", max_length=191)
+    content_type: str = Field(default="", max_length=128)
+    content_base64: str = ""
+    message_id: str = Field(default="", max_length=191)
+
+
+class PortalSupportRequestFeedbackPayload(BaseModel):
+    resolved: bool = True
+    rating: int = Field(default=5, ge=1, le=5)
+    comment: str = Field(default="", max_length=2000)
 
 
 def _object_list(value: object) -> list[object]:
@@ -295,18 +319,6 @@ def _set_portal_qq_oauth_nonce_cookie(
 
 def _clear_portal_qq_oauth_nonce_cookie(response: Response) -> None:
     response.delete_cookie(COOKIE_PORTAL_QQ_OAUTH_NONCE, path=COOKIE_PORTAL_QQ_OAUTH_NONCE_PATH)
-    response.delete_cookie(
-        COOKIE_PORTAL_QQ_OAUTH_NONCE,
-        path=COOKIE_PORTAL_QQ_OAUTH_NONCE_LEGACY_PATH,
-    )
-    response.delete_cookie(
-        COOKIE_PORTAL_QQ_OAUTH_NONCE_LEGACY,
-        path=COOKIE_PORTAL_QQ_OAUTH_NONCE_PATH,
-    )
-    response.delete_cookie(
-        COOKIE_PORTAL_QQ_OAUTH_NONCE_LEGACY,
-        path=COOKIE_PORTAL_QQ_OAUTH_NONCE_LEGACY_PATH,
-    )
 
 
 def _build_qq_authorization_url(request: Request, *, state: str) -> str:
@@ -528,8 +540,7 @@ async def start_portal_qq_login(
     return response
 
 
-@router.get("/auth/qq/callback")
-async def finish_portal_qq_login(
+async def finish_qq_login_callback(
     request: Request,
     code: str = Query(default=""),
     state: str = Query(default=""),
@@ -945,6 +956,20 @@ def _resolve_primary_portal_account_id(
     *,
     principal_id: str,
 ) -> str | JSONResponse:
+    account_access = _resolve_primary_portal_account_access(
+        request,
+        principal_id=principal_id,
+    )
+    if isinstance(account_access, JSONResponse):
+        return account_access
+    return str(account_access.get("account_id") or "")
+
+
+def _resolve_primary_portal_account_access(
+    request: Request,
+    *,
+    principal_id: str,
+) -> dict[str, object] | JSONResponse:
     try:
         accounts = _get_commercial_service(request).list_portal_accounts(
             principal_id=principal_id
@@ -955,13 +980,22 @@ def _resolve_primary_portal_account_id(
         account = item if isinstance(item, dict) else {}
         account_id = str(account.get("account_id") or "").strip()
         if account_id:
-            return account_id
+            return account
     return portal_json_error(
         request,
         status_code=403,
         error_code="portal.account_required",
         message="portal account access is required",
     )
+
+
+def _portal_account_site_ids(account_access: dict[str, object]) -> list[str]:
+    sites = [site for site in _object_list(account_access.get("sites")) if isinstance(site, dict)]
+    return [
+        str(site.get("site_id") or "").strip()
+        for site in sites
+        if str(site.get("site_id") or "").strip()
+    ]
 
 
 def _resolve_portal_site_summary(
@@ -1041,6 +1075,13 @@ async def request_portal_login_code(
         database_url=services.settings.database_url,
     )
     allow_development_code = _allow_development_login_code(request)
+    if email_sender is None and not allow_development_code:
+        return portal_json_error(
+            request,
+            status_code=503,
+            error_code="portal.email_not_configured",
+            message="Portal email delivery is not configured",
+        )
     try:
         issued = _get_commercial_service(request).issue_portal_login_code(
             email=email,
@@ -1639,6 +1680,204 @@ async def create_portal_account_pro_monthly_order(
     )
 
 
+@router.get("/account/entitlements")
+async def get_portal_account_entitlements(request: Request) -> Any:
+    auth = await resolve_portal_request_context(
+        request,
+        require_idempotency=False,
+        allow_session_cookies=True,
+    )
+    if isinstance(auth, JSONResponse):
+        return auth
+    account_id = _resolve_primary_portal_account_id(
+        request,
+        principal_id=auth.principal_id,
+    )
+    if isinstance(account_id, JSONResponse):
+        return account_id
+    try:
+        quota_summary = _get_commercial_service(request).get_portal_account_quota_summary(
+            account_id
+        )
+    except CommercialServiceError as error:
+        return _service_error_response(error, request=request)
+    return _portal_route_envelope(
+        message="portal account entitlements loaded",
+        data={
+            "site_id": "",
+            "account_id": account_id,
+            "principal_id": auth.principal_id,
+            "identity_type": "user",
+            "allowed_actions": [],
+            "role": "user",
+            "site": {},
+            "subscription": {},
+            "plan_version": {},
+            "entitlement_snapshot": {},
+            "policy": {},
+            "period_start_at": quota_summary.get("period_start_at") or "",
+            "period_end_at": quota_summary.get("period_end_at") or "",
+            "usage_totals": {},
+            "subscription_grace": {},
+            "budget_state": {},
+            "quota_summary": quota_summary,
+            "generated_at": quota_summary.get("generated_at") or "",
+        },
+    )
+
+
+@router.get("/account/usage-summary")
+async def get_portal_account_usage_summary(request: Request) -> Any:
+    auth = await resolve_portal_request_context(
+        request,
+        require_idempotency=False,
+        allow_session_cookies=True,
+    )
+    if isinstance(auth, JSONResponse):
+        return auth
+    account_access = _resolve_primary_portal_account_access(
+        request,
+        principal_id=auth.principal_id,
+    )
+    if isinstance(account_access, JSONResponse):
+        return account_access
+    account_id = str(account_access.get("account_id") or "")
+    site_ids = _portal_account_site_ids(account_access)
+    result = UsageService(_get_commercial_service(request).database_url).get_usage_summary(
+        site_ids=site_ids
+    )
+    result["site_id"] = ""
+    result["site_ids"] = site_ids
+    result["account_id"] = account_id
+    result["principal_id"] = auth.principal_id
+    result["identity_type"] = str(account_access.get("identity_type") or "user")
+    result["allowed_actions"] = [
+        str(action)
+        for action in _object_list(account_access.get("allowed_actions"))
+        if str(action).strip()
+    ]
+    result["role"] = str(account_access.get("role") or "user")
+    return _portal_route_envelope(
+        message="portal account usage summary loaded",
+        data=result,
+    )
+
+
+@router.get("/account/credit-ledger")
+async def get_portal_account_credit_ledger(
+    request: Request,
+    limit: int = Query(default=25, ge=1, le=50),
+    offset: int = Query(default=0, ge=0),
+) -> Any:
+    auth = await resolve_portal_request_context(
+        request,
+        require_idempotency=False,
+        allow_session_cookies=True,
+    )
+    if isinstance(auth, JSONResponse):
+        return auth
+    account_id = _resolve_primary_portal_account_id(
+        request,
+        principal_id=auth.principal_id,
+    )
+    if isinstance(account_id, JSONResponse):
+        return account_id
+    try:
+        ledger = _get_commercial_service(request).get_portal_account_credit_ledger(
+            account_id,
+            limit=limit,
+            offset=offset,
+        )
+    except CommercialServiceError as error:
+        return _service_error_response(error, request=request)
+    return _portal_route_envelope(
+        message="portal account credit ledger loaded",
+        data={
+            "site_id": "",
+            "account_id": account_id,
+            "principal_id": auth.principal_id,
+            "identity_type": "user",
+            "role": "user",
+            **ledger,
+        },
+    )
+
+
+@router.get("/account/credit-packs")
+async def list_portal_account_credit_packs(request: Request) -> Any:
+    auth = await resolve_portal_request_context(
+        request,
+        require_idempotency=False,
+        allow_session_cookies=True,
+    )
+    if isinstance(auth, JSONResponse):
+        return auth
+    account_id = _resolve_primary_portal_account_id(
+        request,
+        principal_id=auth.principal_id,
+    )
+    if isinstance(account_id, JSONResponse):
+        return account_id
+    result = _get_commercial_service(request).list_credit_packs()
+    return _portal_route_envelope(
+        message="portal account credit packs loaded",
+        data={
+            **result,
+            "site_id": "",
+            "account_id": account_id,
+            "principal_id": auth.principal_id,
+            "identity_type": "user",
+            "role": "user",
+        },
+    )
+
+
+@router.post("/account/credit-pack-orders")
+async def create_portal_account_credit_pack_order(
+    request: Request,
+    payload: PortalCreditPackOrderPayload,
+) -> Any:
+    same_origin = _portal_same_origin_guard(request, always=True)
+    if same_origin is not None:
+        return same_origin
+    write_guard = _portal_write_guard(request)
+    if write_guard is not None:
+        return write_guard
+    auth = await resolve_portal_request_context(
+        request,
+        require_idempotency=True,
+        allow_session_cookies=True,
+    )
+    if isinstance(auth, JSONResponse):
+        return auth
+    account_id = _resolve_primary_portal_account_id(
+        request,
+        principal_id=auth.principal_id,
+    )
+    if isinstance(account_id, JSONResponse):
+        return account_id
+    try:
+        order = _get_commercial_service(request).create_credit_pack_payment_order(
+            account_id=account_id,
+            pack_id=payload.pack_id,
+            provider=payload.provider,
+            audit_context=_build_portal_audit_context(request, auth.principal_id),
+        )
+    except CommercialServiceError as error:
+        return _service_error_response(error, request=request)
+    return _portal_route_envelope(
+        message="portal account credit pack payment order created",
+        data={
+            "site_id": "",
+            "account_id": account_id,
+            "principal_id": auth.principal_id,
+            "identity_type": "user",
+            "role": "user",
+            "order": order,
+        },
+    )
+
+
 @router.get("/account/payment-orders")
 async def list_portal_account_payment_orders(
     request: Request,
@@ -1673,6 +1912,246 @@ async def list_portal_account_payment_orders(
             "account_id": account_id,
             "principal_id": auth.principal_id,
         },
+    )
+
+
+@router.get("/support-requests")
+async def list_portal_support_requests(
+    request: Request,
+    status: str = Query(default="", max_length=32),
+    limit: int = Query(default=20, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+) -> Any:
+    auth = await resolve_portal_request_context(
+        request,
+        require_idempotency=False,
+        allow_session_cookies=True,
+    )
+    if isinstance(auth, JSONResponse):
+        return auth
+    account_id = _resolve_primary_portal_account_id(
+        request,
+        principal_id=auth.principal_id,
+    )
+    if isinstance(account_id, JSONResponse):
+        return account_id
+    try:
+        result = _get_commercial_service(request).list_portal_support_requests(
+            principal_id=auth.principal_id,
+            account_id=account_id,
+            status=status,
+            limit=limit,
+            offset=offset,
+        )
+    except CommercialServiceError as error:
+        return _service_error_response(error, request=request)
+    return _portal_route_envelope(
+        message="portal support requests loaded",
+        data=result,
+    )
+
+
+@router.post("/support-requests")
+async def create_portal_support_request(
+    request: Request,
+    payload: PortalSupportRequestPayload,
+) -> Any:
+    same_origin = _portal_same_origin_guard(request, always=True)
+    if same_origin is not None:
+        return same_origin
+    write_guard = _portal_write_guard(request)
+    if write_guard is not None:
+        return write_guard
+    auth = await resolve_portal_request_context(
+        request,
+        require_idempotency=True,
+        allow_session_cookies=True,
+    )
+    if isinstance(auth, JSONResponse):
+        return auth
+    account_id = _resolve_primary_portal_account_id(
+        request,
+        principal_id=auth.principal_id,
+    )
+    if isinstance(account_id, JSONResponse):
+        return account_id
+    try:
+        result = _get_commercial_service(request).create_portal_support_request(
+            principal_id=auth.principal_id,
+            account_id=account_id,
+            site_id=payload.site_id,
+            topic=payload.topic,
+            title=payload.title,
+            description=payload.description,
+            source_path=payload.source_path,
+            context_json=payload.context,
+            audit_context=_build_portal_audit_context(request, auth.principal_id),
+        )
+    except CommercialServiceError as error:
+        return _service_error_response(error, request=request)
+    return _portal_route_envelope(
+        message="portal support request created",
+        data={
+            "request": result,
+            "account_id": account_id,
+            "principal_id": auth.principal_id,
+        },
+    )
+
+
+@router.get("/support-requests/{request_id}")
+async def get_portal_support_request(request: Request, request_id: str) -> Any:
+    auth = await resolve_portal_request_context(
+        request,
+        require_idempotency=False,
+        allow_session_cookies=True,
+    )
+    if isinstance(auth, JSONResponse):
+        return auth
+    try:
+        result = _get_commercial_service(request).get_portal_support_request(
+            principal_id=auth.principal_id,
+            request_id=request_id,
+        )
+    except CommercialServiceError as error:
+        return _service_error_response(error, request=request)
+    return _portal_route_envelope(
+        message="portal support request loaded",
+        data=result,
+    )
+
+
+@router.post("/support-requests/{request_id}/messages")
+async def create_portal_support_request_message(
+    request: Request,
+    request_id: str,
+    payload: PortalSupportRequestMessagePayload,
+) -> Any:
+    same_origin = _portal_same_origin_guard(request, always=True)
+    if same_origin is not None:
+        return same_origin
+    write_guard = _portal_write_guard(request)
+    if write_guard is not None:
+        return write_guard
+    auth = await resolve_portal_request_context(
+        request,
+        require_idempotency=True,
+        allow_session_cookies=True,
+    )
+    if isinstance(auth, JSONResponse):
+        return auth
+    try:
+        result = _get_commercial_service(request).create_portal_support_request_message(
+            principal_id=auth.principal_id,
+            request_id=request_id,
+            body=payload.body,
+            audit_context=_build_portal_audit_context(request, auth.principal_id),
+        )
+    except CommercialServiceError as error:
+        return _service_error_response(error, request=request)
+    return _portal_route_envelope(
+        message="portal support request message created",
+        data=result,
+    )
+
+
+@router.post("/support-requests/{request_id}/attachments")
+async def create_portal_support_request_attachment(
+    request: Request,
+    request_id: str,
+    payload: PortalSupportRequestAttachmentPayload,
+) -> Any:
+    same_origin = _portal_same_origin_guard(request, always=True)
+    if same_origin is not None:
+        return same_origin
+    write_guard = _portal_write_guard(request)
+    if write_guard is not None:
+        return write_guard
+    auth = await resolve_portal_request_context(
+        request,
+        require_idempotency=True,
+        allow_session_cookies=True,
+    )
+    if isinstance(auth, JSONResponse):
+        return auth
+    try:
+        result = _get_commercial_service(request).create_portal_support_request_attachment(
+            principal_id=auth.principal_id,
+            request_id=request_id,
+            filename=payload.filename,
+            content_type=payload.content_type,
+            content_base64=payload.content_base64,
+            message_id=payload.message_id,
+            audit_context=_build_portal_audit_context(request, auth.principal_id),
+        )
+    except CommercialServiceError as error:
+        return _service_error_response(error, request=request)
+    return _portal_route_envelope(
+        message="portal support request attachment created",
+        data=result,
+    )
+
+
+@router.get("/support-requests/{request_id}/attachments/{attachment_id}")
+async def get_portal_support_request_attachment(
+    request: Request,
+    request_id: str,
+    attachment_id: str,
+) -> Any:
+    auth = await resolve_portal_request_context(
+        request,
+        require_idempotency=False,
+        allow_session_cookies=True,
+    )
+    if isinstance(auth, JSONResponse):
+        return auth
+    try:
+        result = _get_commercial_service(request).get_portal_support_request_attachment(
+            principal_id=auth.principal_id,
+            request_id=request_id,
+            attachment_id=attachment_id,
+        )
+    except CommercialServiceError as error:
+        return _service_error_response(error, request=request)
+    return _portal_route_envelope(
+        message="portal support request attachment loaded",
+        data=result,
+    )
+
+
+@router.post("/support-requests/{request_id}/feedback")
+async def submit_portal_support_request_feedback(
+    request: Request,
+    request_id: str,
+    payload: PortalSupportRequestFeedbackPayload,
+) -> Any:
+    same_origin = _portal_same_origin_guard(request, always=True)
+    if same_origin is not None:
+        return same_origin
+    write_guard = _portal_write_guard(request)
+    if write_guard is not None:
+        return write_guard
+    auth = await resolve_portal_request_context(
+        request,
+        require_idempotency=True,
+        allow_session_cookies=True,
+    )
+    if isinstance(auth, JSONResponse):
+        return auth
+    try:
+        result = _get_commercial_service(request).submit_portal_support_request_feedback(
+            principal_id=auth.principal_id,
+            request_id=request_id,
+            resolved=payload.resolved,
+            rating=payload.rating,
+            comment=payload.comment,
+            audit_context=_build_portal_audit_context(request, auth.principal_id),
+        )
+    except CommercialServiceError as error:
+        return _service_error_response(error, request=request)
+    return _portal_route_envelope(
+        message="portal support request feedback submitted",
+        data=result,
     )
 
 
@@ -2540,6 +3019,98 @@ async def create_portal_site_credit_pack_order(
             "identity_type": str(access.get("identity_type") or ""),
             "role": str(access.get("role") or ""),
             "order": order,
+        },
+    )
+
+
+@router.get("/account/audit-summary")
+async def get_portal_account_audit_summary(request: Request) -> Any:
+    auth = await resolve_portal_request_context(
+        request,
+        require_idempotency=False,
+        allow_session_cookies=True,
+    )
+    if isinstance(auth, JSONResponse):
+        return auth
+    account_access = _resolve_primary_portal_account_access(
+        request,
+        principal_id=auth.principal_id,
+    )
+    if isinstance(account_access, JSONResponse):
+        return account_access
+    account_id = str(account_access.get("account_id") or "")
+    site_ids = _portal_account_site_ids(account_access)
+    try:
+        summary = _get_commercial_service(request).summarize_service_audit_events(
+            account_id=account_id,
+            site_ids=site_ids,
+        )
+    except CommercialServiceError as error:
+        return _service_error_response(error, request=request)
+    return _portal_route_envelope(
+        message="portal account audit summary loaded",
+        data={
+            "site_id": "",
+            "account_id": account_id,
+            "principal_id": auth.principal_id,
+            "identity_type": str(account_access.get("identity_type") or "user"),
+            "allowed_actions": [
+                str(action)
+                for action in _object_list(account_access.get("allowed_actions"))
+                if str(action).strip()
+            ],
+            "role": str(account_access.get("role") or "user"),
+            **summary,
+        },
+    )
+
+
+@router.get("/account/audit-events")
+async def list_portal_account_audit_events(
+    request: Request,
+    event_kind: str | None = Query(default=None),
+    outcome: str | None = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=200),
+) -> Any:
+    auth = await resolve_portal_request_context(
+        request,
+        require_idempotency=False,
+        allow_session_cookies=True,
+    )
+    if isinstance(auth, JSONResponse):
+        return auth
+    account_access = _resolve_primary_portal_account_access(
+        request,
+        principal_id=auth.principal_id,
+    )
+    if isinstance(account_access, JSONResponse):
+        return account_access
+    account_id = str(account_access.get("account_id") or "")
+    site_ids = _portal_account_site_ids(account_access)
+    try:
+        events = _get_commercial_service(request).list_service_audit_events(
+            account_id=account_id,
+            site_ids=site_ids,
+            event_kind=event_kind,
+            outcome=outcome,
+            limit=limit,
+        )
+    except CommercialServiceError as error:
+        return _service_error_response(error, request=request)
+    return _portal_route_envelope(
+        message="portal account audit events loaded",
+        data={
+            "site_id": "",
+            "account_id": account_id,
+            "principal_id": auth.principal_id,
+            "identity_type": str(account_access.get("identity_type") or "user"),
+            "allowed_actions": [
+                str(action)
+                for action in _object_list(account_access.get("allowed_actions"))
+                if str(action).strip()
+            ],
+            "role": str(account_access.get("role") or "user"),
+            **events,
         },
     )
 

@@ -11,7 +11,6 @@ import {
 import { BackofficeStatusBadge } from '@/components/backoffice/BackofficeStatusBadge';
 import { PortalEntitlementUsage } from '@/components/portal/PortalEntitlementUsage';
 import {
-  PortalEmptyState,
   PortalErrorState,
   PortalLoadingState,
   PortalSignedOutState,
@@ -19,13 +18,10 @@ import {
 import { PortalWorkspaceHeader } from '@/components/portal/PortalWorkspaceHeader';
 import { LoadingFallback } from '@/components/ui/LoadingFallback';
 import { useLocale } from '@/contexts/LocaleContext';
-import { usePortalSiteSelection } from '@/hooks/usePortalSiteSelection';
 import { useSession } from '@/hooks/useSession';
 import {
   portalClient,
   type Entitlements,
-  type PortalBillingReconciliation,
-  type PortalBillingSnapshot,
   type PortalCreditPackCatalogPayload,
   type PortalCreditPackPaymentOrder,
   type PortalPaymentOrder,
@@ -119,21 +115,14 @@ function resolvePaymentOrderDetail(order: PortalPaymentOrder, t: TranslateFn): s
 
 function shouldShowPaymentOrder(order: PortalPaymentOrder): boolean {
   const status = normalizePaymentText(order.status);
-  return status !== 'canceled' && status !== 'cancelled';
+  const code = normalizePaymentText(order.status_detail?.code);
+  return status !== 'canceled' && status !== 'cancelled' && status !== 'expired' && !code.includes('expired');
 }
 
 function PortalBillingContent() {
   const searchParams = useSearchParams();
   const { t } = useLocale();
-  const { session, isLoading: sessionLoading, isAuthenticated, selectSite, refresh } = useSession();
-  const { sites, selectedSiteId, selectedSite, setSelectedSiteId } = usePortalSiteSelection({
-    session,
-    isAuthenticated,
-    searchParams,
-    selectSite,
-  });
-  const [snapshots, setSnapshots] = useState<PortalBillingSnapshot[]>([]);
-  const [reconciliation, setReconciliation] = useState<PortalBillingReconciliation | null>(null);
+  const { session, isLoading: sessionLoading, isAuthenticated, refresh } = useSession();
   const [entitlements, setEntitlements] = useState<Entitlements | null>(null);
   const [creditPacks, setCreditPacks] = useState<PortalCreditPackCatalogPayload | null>(null);
   const [paymentOrders, setPaymentOrders] = useState<PortalPaymentOrderListPayload | null>(null);
@@ -146,23 +135,16 @@ function PortalBillingContent() {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const loadBilling = useCallback(async (siteId: string) => {
+  const loadBilling = useCallback(async () => {
     setIsLoading(true);
     setError(null);
     try {
-      const [billingBundle, usageBundle] = await Promise.all([
-        portalClient.getBillingBundle(siteId),
-        portalClient.getUsageBundle(siteId),
-      ]);
-      setSnapshots(billingBundle.snapshots);
-      setReconciliation(billingBundle.reconciliation);
-      setEntitlements(usageBundle.entitlements);
-      setCreditPacks(usageBundle.creditPacks);
-      setPaymentOrders(usageBundle.paymentOrders);
+      const bundle = await portalClient.getAccountCommercialBundle();
+      setEntitlements(bundle.entitlements);
+      setCreditPacks(bundle.creditPacks);
+      setPaymentOrders(bundle.paymentOrders);
     } catch (err) {
       setError(err instanceof Error ? err.message : t('error.failed_load', {}, 'Failed to load.'));
-      setSnapshots([]);
-      setReconciliation(null);
       setEntitlements(null);
       setCreditPacks(null);
       setPaymentOrders(null);
@@ -171,31 +153,13 @@ function PortalBillingContent() {
     }
   }, [t]);
 
-  const loadAccountPaymentOrders = useCallback(async () => {
-    try {
-      const response = await portalClient.listAccountPaymentOrders({ limit: 8 });
-      setPaymentOrders(response.data);
-    } catch {
-      setPaymentOrders(null);
-    }
-  }, []);
-
   useEffect(() => {
-    if (!selectedSiteId) {
+    if (!isAuthenticated || !session?.account_id) {
       setIsLoading(false);
-      if (isAuthenticated && session?.account_id) {
-        void loadAccountPaymentOrders();
-      }
       return;
     }
-    void loadBilling(selectedSiteId);
-  }, [isAuthenticated, loadAccountPaymentOrders, loadBilling, selectedSiteId, session?.account_id]);
-
-  const handleSiteChange = async (siteId: string) => {
-    await setSelectedSiteId(siteId);
-    setCreditPackOrder(null);
-    setCreditPackError(null);
-  };
+    void loadBilling();
+  }, [isAuthenticated, loadBilling, session?.account_id]);
 
   const handleStartProTrial = async () => {
     setPackagePending('trial');
@@ -236,12 +200,11 @@ function PortalBillingContent() {
   };
 
   const handleCreateCreditPackOrder = async (packId: string) => {
-    if (!selectedSiteId) return;
     setCreditPackPending(packId);
     setCreditPackError(null);
     setCreditPackOrder(null);
     try {
-      const response = await portalClient.createCreditPackOrder(selectedSiteId, packId);
+      const response = await portalClient.createAccountCreditPackOrder(packId);
       setCreditPackOrder(response.data.order);
       setPaymentOrders((current) => ({
         ...(current || { items: [] }),
@@ -289,9 +252,7 @@ function PortalBillingContent() {
 
   const handleRefreshPaymentReturn = async () => {
     await refresh();
-    if (selectedSiteId) {
-      await loadBilling(selectedSiteId);
-    }
+    await loadBilling();
   };
 
   const paymentReturnNotice = hasAlipayReturn ? (
@@ -424,117 +385,80 @@ function PortalBillingContent() {
   );
 
   const paymentOrdersCard = (
-    <BackofficeStackCard variant="portal" className="bg-white/70 dark:bg-slate-950/35">
-      <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
-        <div>
-          <p className="text-sm font-semibold text-gray-950 dark:text-white">
+    <details className="group rounded-[1.25rem] border border-slate-200 bg-white/70 dark:border-slate-800 dark:bg-slate-950/35">
+      <summary className="flex cursor-pointer list-none flex-col gap-2 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
+        <span>
+          <span className="block text-sm font-semibold text-gray-950 dark:text-white">
             {t('portal.usage.payment_orders_title', {}, 'Recent payment orders')}
-          </p>
-          <p className="mt-1 text-sm text-gray-600 dark:text-gray-400">
-            {t(
-              'portal.usage.payment_orders_desc',
-              {},
-              'Payment orders wait for verified Alipay or WeChat Pay confirmation before package changes or credits are granted. Unpaid orders expire after 24 hours.'
-            )}
-          </p>
-        </div>
-        <p className="text-xs font-medium uppercase tracking-[0.14em] text-slate-500 dark:text-slate-400">
-          {t('portal.usage.payment_orders_provider_note', {}, 'Alipay / WeChat Pay ready')}
+          </span>
+          <span className="mt-1 block text-sm text-gray-600 dark:text-gray-400">
+            {recentPaymentOrders.length > 0
+              ? t('portal.usage.payment_orders_count', { count: String(recentPaymentOrders.length) }, `${recentPaymentOrders.length} recent orders`)
+              : t('portal.usage.payment_orders_empty', {}, 'No payment orders yet.')}
+          </span>
+        </span>
+        <span className="text-xs font-medium uppercase tracking-[0.14em] text-slate-500 group-open:hidden dark:text-slate-400">
+          {t('common.view_details', {}, 'View details')}
+        </span>
+      </summary>
+      <div className="border-t border-slate-200 px-5 pb-5 pt-4 dark:border-slate-800">
+        <p className="text-sm text-gray-600 dark:text-gray-400">
+          {t(
+            'portal.usage.payment_orders_desc',
+            {},
+            'Payment orders wait for verified Alipay or WeChat Pay confirmation before package changes or credits are granted. Unpaid orders expire after 24 hours.'
+          )}
         </p>
+        {recentPaymentOrders.length > 0 ? (
+          <div className="mt-4 divide-y divide-slate-200 rounded-[1rem] border border-slate-200 text-sm dark:divide-slate-800 dark:border-slate-800">
+            {recentPaymentOrders.map((order) => (
+              <div
+                key={order.order_id}
+                className="grid grid-cols-1 gap-3 px-4 py-3 sm:grid-cols-[1fr_0.7fr_0.8fr]"
+              >
+                <div>
+                  <p className="font-medium text-slate-950 dark:text-white">
+                    {resolvePaymentOrderTitle(order, t)}
+                  </p>
+                  <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                    {resolvePaymentOrderDetail(order, t)}
+                  </p>
+                </div>
+                <div>
+                  <BackofficeStatusBadge
+                    label={resolvePaymentOrderStatusLabel(order, t)}
+                    status={order.status || 'pending'}
+                  />
+                  <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
+                    {resolvePaymentOrderStatusLabel(order, t)}
+                  </p>
+                </div>
+                <div className="sm:text-right">
+                  <p className="font-semibold text-slate-950 dark:text-white">
+                    {formatPortalCurrency(Number(order.amount || 0), {
+                      from: normalizePortalCurrency(order.currency),
+                      to: DEFAULT_PORTAL_CURRENCY,
+                    })}
+                  </p>
+                  <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                    {order.created_at ? formatDate(order.created_at) : order.order_id}
+                  </p>
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : null}
       </div>
-      {recentPaymentOrders.length > 0 ? (
-        <div className="mt-4 divide-y divide-slate-200 rounded-[1rem] border border-slate-200 text-sm dark:divide-slate-800 dark:border-slate-800">
-          {recentPaymentOrders.map((order) => (
-            <div
-              key={order.order_id}
-              className="grid grid-cols-1 gap-3 px-4 py-3 sm:grid-cols-[1fr_0.7fr_0.8fr]"
-            >
-              <div>
-                <p className="font-medium text-slate-950 dark:text-white">
-                  {resolvePaymentOrderTitle(order, t)}
-                </p>
-                <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                  {resolvePaymentOrderDetail(order, t)}
-                </p>
-              </div>
-              <div>
-                <BackofficeStatusBadge
-                  label={resolvePaymentOrderStatusLabel(order, t)}
-                  status={order.status || 'pending'}
-                />
-                <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
-                  {resolvePaymentOrderStatusLabel(order, t)}
-                </p>
-              </div>
-              <div className="sm:text-right">
-                <p className="font-semibold text-slate-950 dark:text-white">
-                  {formatPortalCurrency(Number(order.amount || 0), {
-                    from: normalizePortalCurrency(order.currency),
-                    to: DEFAULT_PORTAL_CURRENCY,
-                  })}
-                </p>
-                <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                  {order.created_at ? formatDate(order.created_at) : order.order_id}
-                </p>
-              </div>
-            </div>
-          ))}
-        </div>
-      ) : (
-        <div className="mt-4 rounded-[1rem] border border-dashed border-slate-300 px-4 py-5 text-sm text-slate-500 dark:border-slate-700 dark:text-slate-400">
-          {t('portal.usage.payment_orders_empty', {}, 'No payment orders yet.')}
-        </div>
-      )}
-    </BackofficeStackCard>
+    </details>
   );
-
-  if (!sites.length || !selectedSiteId || !selectedSite) {
-    return (
-      <BackofficePageStack>
-        <PortalWorkspaceHeader
-          eyebrow={t('portal.workspace_label', {}, 'Portal')}
-          title={t('portal.billing.customer_title', {}, 'Package')}
-          description={t('portal.billing.subtitle', {}, 'Confirm the current package, included rights, and upgrade options.')}
-          currentPage="billing"
-          sites={sites}
-          selectedSiteId={selectedSiteId}
-          onSiteChange={handleSiteChange}
-        />
-        {paymentReturnNotice}
-        <BackofficeMetricStrip
-          items={[
-            {
-              label: t('portal.current_subscription_label', {}, 'Current package'),
-              value: currentSubscription?.package_alias || currentSubscription?.plan_id || 'Free',
-            },
-            {
-              label: t('common.status'),
-              value: currentSubscription?.status || 'active',
-              detail: t('portal.billing.account_package_detail', {}, 'Package actions are account-level and do not require a connected site.'),
-              size: 'compact',
-            },
-          ]}
-          columnsClassName="lg:grid-cols-2"
-          variant="portal"
-        />
-        {packageActions}
-        {paymentOrdersCard}
-        <PortalEmptyState
-          title={t('portal.empty_no_site_title', {}, 'No site available')}
-          description={t('portal.empty_no_site_desc', {}, 'Connect a WordPress site when you are ready to use runtime services.')}
-        />
-      </BackofficePageStack>
-    );
-  }
+  const supportRequestHref = '/portal/support?new=1&topic=billing';
 
   if (isLoading) {
-    return <PortalLoadingState message={t('portal.billing.loading', {}, 'Loading billing snapshots...')} />;
+    return <PortalLoadingState message={t('portal.billing.loading', {}, 'Loading package details...')} />;
   }
 
-  const latestSnapshot = snapshots[0] || null;
-  const syncState = reconciliation?.reconciliation?.in_sync;
   const snapshotPlanVersionId =
-    latestSnapshot?.plan_version_id || currentSubscription?.plan_version_id || '';
+    currentSubscription?.plan_version_id || '';
   const packageDisplay = resolveCustomerPackageDisplay(t, {
     planId: currentSubscription?.plan_id,
     planVersionId: snapshotPlanVersionId,
@@ -560,9 +484,7 @@ function PortalBillingContent() {
   const packageStatus =
     String(quotaSummary?.status || '') === 'limited'
       ? 'warning'
-      : syncState === false
-        ? 'warning'
-        : 'ok';
+      : 'ok';
   const packageStatusLabel =
     packageStatus === 'warning'
       ? t('common.attention', {}, 'Attention')
@@ -575,9 +497,11 @@ function PortalBillingContent() {
         title={t('portal.billing.customer_title', {}, 'Package')}
         description={t('portal.billing.subtitle', {}, 'Confirm the current package, included rights, and upgrade options.')}
         currentPage="billing"
-        sites={sites}
-        selectedSiteId={selectedSiteId}
-        onSiteChange={handleSiteChange}
+        actions={
+          <Link href={supportRequestHref} className="btn btn-secondary">
+            {t('portal.support_request_new_action', {}, 'Submit ticket')}
+          </Link>
+        }
       />
 
       {paymentReturnNotice}
@@ -587,7 +511,7 @@ function PortalBillingContent() {
           title={t('error.failed_load', {}, 'Failed to load')}
           description={error}
           retryLabel={t('common.retry', {}, 'Retry')}
-          onRetry={() => void loadBilling(selectedSiteId)}
+          onRetry={() => void loadBilling()}
         />
       ) : null}
 
@@ -622,7 +546,7 @@ function PortalBillingContent() {
             />
           </div>
           <div className="flex flex-col gap-2 sm:flex-row lg:flex-col">
-            <Link href={`/portal/account?site=${selectedSiteId}`} className="btn btn-primary">
+            <Link href="/portal/account" className="btn btn-primary">
               {t('portal.billing.upgrade_action', {}, 'Upgrade package')}
             </Link>
           </div>
@@ -700,19 +624,6 @@ function PortalBillingContent() {
       ) : null}
 
       {paymentOrdersCard}
-
-      <BackofficeStackCard variant="portal" className="bg-white/70 dark:bg-slate-950/35">
-        <p className="text-sm font-semibold text-gray-950 dark:text-white">
-          {t('portal.billing.help_title', {}, 'Need help?')}
-        </p>
-        <p className="mt-2 text-sm leading-6 text-gray-600 dark:text-gray-300">
-          {t(
-            'portal.billing.help_desc',
-            {},
-            'If the package or record status looks wrong, contact support with your account email. Technical record IDs are hidden below unless support asks for them.'
-          )}
-        </p>
-      </BackofficeStackCard>
     </BackofficePageStack>
   );
 }

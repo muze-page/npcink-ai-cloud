@@ -11,6 +11,7 @@ type PortalSignedOutStateProps = {
   title: string;
   description: string;
   actionLabel: string;
+  actionHref?: string;
 };
 
 type PortalErrorStateProps = {
@@ -44,13 +45,14 @@ export function PortalSignedOutState({
   title,
   description,
   actionLabel,
+  actionHref = '/portal/login',
 }: PortalSignedOutStateProps) {
   return (
     <div className="flex min-h-[60vh] items-center justify-center">
       <div className="max-w-md text-center">
         <h2 className="mb-4 text-2xl font-bold">{title}</h2>
         <p className="mb-6 text-gray-600 dark:text-gray-400">{description}</p>
-        <a href="/portal/login" className="btn btn-primary">
+        <a href={actionHref} className="btn btn-primary">
           {actionLabel}
         </a>
       </div>

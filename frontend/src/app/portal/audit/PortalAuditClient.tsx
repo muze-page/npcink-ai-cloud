@@ -1,7 +1,6 @@
 'use client';
 
-import React, { useEffect, useMemo, useState } from 'react';
-import { useSearchParams } from 'next/navigation';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   BackofficePageStack,
   BackofficeSectionPanel,
@@ -14,11 +13,9 @@ import {
   PortalEmptyState,
   PortalErrorState,
   PortalLoadingState,
-  PortalSiteSwitchingNotice,
   PortalSignedOutState,
 } from '@/components/portal/PortalPageState';
 import { useLocale } from '@/contexts/LocaleContext';
-import { usePortalSiteSelection } from '@/hooks/usePortalSiteSelection';
 import { useSession } from '@/hooks/useSession';
 import {
   portalClient,
@@ -48,15 +45,8 @@ function getAuditTraceId(event: PortalAuditEvent): string {
 }
 
 export function PortalAuditClient() {
-  const searchParams = useSearchParams();
-  const { session, isLoading: sessionLoading, isAuthenticated, selectSite } = useSession();
+  const { session, isLoading: sessionLoading, isAuthenticated } = useSession();
   const { t } = useLocale();
-  const { sites, selectedSiteId, selectedSite, isSwitchingSite, switchingSiteName, setSelectedSiteId } = usePortalSiteSelection({
-    session,
-    isAuthenticated,
-    searchParams,
-    selectSite,
-  });
   const [auditEvents, setAuditEvents] = useState<PortalAuditEvent[]>([]);
   const [auditSummary, setAuditSummary] = useState<PortalAuditSummary | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -67,15 +57,11 @@ export function PortalAuditClient() {
     return recentEvents.filter((event) => event.outcome !== 'success').length;
   }, [recentEvents]);
 
-  const loadActivity = async (siteId: string) => {
-    if (!siteId) {
-      setIsLoading(false);
-      return;
-    }
+  const loadActivity = useCallback(async () => {
     setIsLoading(true);
     setError(null);
     try {
-      const bundle = await portalClient.getAuditBundle(siteId, { limit: 10 });
+      const bundle = await portalClient.getAuditBundle({ limit: 10 });
       setAuditSummary(bundle.summary);
       setAuditEvents(bundle.events);
     } catch (err) {
@@ -85,21 +71,15 @@ export function PortalAuditClient() {
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [t]);
 
   useEffect(() => {
-    if (!session || !isAuthenticated || !selectedSiteId) {
+    if (!session || !isAuthenticated) {
       setIsLoading(false);
       return;
     }
-    void loadActivity(selectedSiteId);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isAuthenticated, selectedSiteId, session]);
-
-  const handleSiteChange = async (siteId: string) => {
-    await setSelectedSiteId(siteId);
-    await loadActivity(siteId);
-  };
+    void loadActivity();
+  }, [isAuthenticated, loadActivity, session]);
 
   const translateOutcome = (outcome: string) => {
     if (outcome === 'error') {
@@ -136,22 +116,18 @@ export function PortalAuditClient() {
         title={t('common.error')}
         description={error}
         retryLabel={t('common.retry')}
-        onRetry={() => void loadActivity(selectedSiteId)}
+        onRetry={() => void loadActivity()}
       />
     );
   }
 
   return (
-    <BackofficePageStack>
+    <BackofficePageStack data-portal-support-deeplink="audit">
       <PortalWorkspaceHeader
-        eyebrow={t('portal.selected_site')}
+        eyebrow={t('portal.workspace_label', {}, 'Portal')}
         title={t('portal.audit.nav_label', {}, 'Recent activity')}
-        eyebrowInfo={t('portal.audit.customer_desc', {}, 'Review recent sign-in and service activity for the selected site.')}
+        eyebrowInfo={t('portal.audit.customer_desc', {}, 'Review recent sign-in and service activity visible to this account.')}
         currentPage="audit"
-        selectedSiteId={selectedSiteId}
-        selectedSiteName={selectedSite?.site_name}
-        sites={sites}
-        onSiteChange={handleSiteChange}
         metrics={[
           { label: t('portal.audit.records_total', {}, 'Total records'), value: auditSummary?.totals?.events || 0 },
           { label: t('portal.audit.visible_records', {}, 'Visible records'), value: recentEvents.length },
@@ -171,21 +147,11 @@ export function PortalAuditClient() {
         ]}
         metricsColumnsClassName="xl:grid-cols-4"
         secondaryActions={
-          <button type="button" className="btn btn-secondary" onClick={() => void loadActivity(selectedSiteId)}>
+          <button type="button" className="btn btn-secondary" onClick={() => void loadActivity()}>
             {t('common.refresh', {}, 'Refresh')}
           </button>
         }
       />
-
-      {isSwitchingSite ? (
-        <PortalSiteSwitchingNotice
-          message={t(
-            'portal.site_switching_notice_with_target',
-            { site: switchingSiteName || selectedSite?.site_name || selectedSiteId },
-            `Switching to ${switchingSiteName || selectedSite?.site_name || selectedSiteId}. Page data will update automatically.`
-          )}
-        />
-      ) : null}
 
       <BackofficeSectionPanel className="overflow-hidden p-0">
         <div className="border-b border-gray-200 px-6 py-5 dark:border-gray-800">
@@ -218,10 +184,10 @@ export function PortalAuditClient() {
                       <BackofficeStatusBadge status={event.outcome} label={translateOutcome(event.outcome)} />
                     </div>
                     <p className="text-sm text-gray-500">{formatDate(event.created_at)}</p>
-                    <div className="mt-3 rounded-xl bg-slate-50 px-3 py-2 text-xs text-gray-500 dark:bg-slate-900/60 dark:text-gray-400">
-                      <p className="font-medium text-gray-600 dark:text-gray-300">
+                    <details className="mt-3 rounded-xl bg-slate-50 px-3 py-2 text-xs text-gray-500 dark:bg-slate-900/60 dark:text-gray-400">
+                      <summary className="cursor-pointer font-medium text-gray-600 dark:text-gray-300">
                         {t('portal.support_information', {}, 'Support information')}
-                      </p>
+                      </summary>
                       <div className="mt-2 grid gap-2 sm:grid-cols-2">
                         <div>
                           <span className="block font-medium text-gray-600 dark:text-gray-300">Event ID</span>
@@ -236,7 +202,7 @@ export function PortalAuditClient() {
                           </div>
                         ) : null}
                       </div>
-                    </div>
+                    </details>
                   </div>
                   {event.outcome !== 'success' ? (
                     <BackofficeStackCard className="max-w-md border-amber-200 bg-amber-50/70 text-sm text-amber-800 dark:border-amber-900/60 dark:bg-amber-950/20 dark:text-amber-200">

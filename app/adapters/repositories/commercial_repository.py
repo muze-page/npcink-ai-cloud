@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 from typing import Any, cast
 from uuid import uuid4
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session
 from sqlalchemy.sql.elements import ColumnElement
 
@@ -18,8 +18,6 @@ from app.core.models import (
     PORTAL_LOGIN_CODE_STATUS_PENDING,
     PORTAL_OAUTH_STATE_STATUS_PENDING,
     PRINCIPAL_STATUS_ACTIVE,
-    SITE_USER_GRANT_STATUS_ACTIVE,
-    SITE_USER_GRANT_STATUS_REVOKED,
     Account,
     AccountEntitlementSnapshot,
     AccountSubscription,
@@ -45,7 +43,10 @@ from app.core.models import (
     SiteKnowledgeChunk,
     SiteKnowledgeDocument,
     SiteKnowledgeIndexJobMetric,
-    SiteUserGrant,
+    SupportRequest,
+    SupportRequestAttachment,
+    SupportRequestFeedback,
+    SupportRequestMessage,
     UsageMeterEvent,
 )
 
@@ -83,6 +84,290 @@ class CommercialRepository:
         if status:
             statement = statement.where(Account.status == status)
         return int(self.session.scalar(statement) or 0)
+
+    def get_support_request(self, request_id: str) -> SupportRequest | None:
+        return self.session.get(SupportRequest, request_id)
+
+    def create_support_request(
+        self,
+        *,
+        request_id: str,
+        account_id: str,
+        site_id: str | None,
+        principal_id: str | None,
+        email: str,
+        topic: str,
+        title: str,
+        description: str,
+        status: str,
+        priority: str,
+        source_path: str,
+        admin_note: str | None = None,
+        context_json: dict[str, object] | None = None,
+    ) -> SupportRequest:
+        request = SupportRequest(
+            request_id=request_id,
+            account_id=account_id,
+            site_id=site_id or None,
+            principal_id=principal_id or None,
+            email=email,
+            topic=topic,
+            title=title,
+            description=description,
+            status=status,
+            priority=priority,
+            source_path=source_path,
+            admin_note=admin_note,
+            context_json=context_json,
+        )
+        self.session.add(request)
+        self.session.flush()
+        return request
+
+    def create_support_request_message(
+        self,
+        *,
+        message_id: str,
+        request: SupportRequest,
+        author_kind: str,
+        visibility: str,
+        body: str,
+        principal_id: str | None = None,
+        email: str = "",
+        metadata_json: dict[str, object] | None = None,
+    ) -> SupportRequestMessage:
+        message = SupportRequestMessage(
+            message_id=message_id,
+            request_id=str(request.request_id or ""),
+            account_id=str(request.account_id or ""),
+            site_id=str(request.site_id or "") or None,
+            principal_id=str(principal_id or request.principal_id or "") or None,
+            email=str(email or request.email or ""),
+            author_kind=author_kind,
+            visibility=visibility,
+            body=body,
+            metadata_json=metadata_json,
+        )
+        request.updated_at = datetime.now(UTC)
+        self.session.add(message)
+        self.session.flush()
+        return message
+
+    def list_support_request_messages(
+        self,
+        *,
+        request_id: str,
+        include_internal: bool = False,
+    ) -> list[SupportRequestMessage]:
+        statement = select(SupportRequestMessage).where(
+            SupportRequestMessage.request_id == request_id
+        )
+        if not include_internal:
+            statement = statement.where(SupportRequestMessage.visibility == "public")
+        statement = statement.order_by(
+            SupportRequestMessage.created_at.asc(),
+            SupportRequestMessage.message_id.asc(),
+        )
+        return list(self.session.scalars(statement))
+
+    def create_support_request_attachment(
+        self,
+        *,
+        attachment_id: str,
+        request: SupportRequest,
+        uploader_kind: str,
+        visibility: str,
+        filename: str,
+        content_type: str,
+        content_bytes: bytes,
+        message_id: str | None = None,
+        principal_id: str | None = None,
+        email: str = "",
+        metadata_json: dict[str, object] | None = None,
+    ) -> SupportRequestAttachment:
+        attachment = SupportRequestAttachment(
+            attachment_id=attachment_id,
+            request_id=str(request.request_id or ""),
+            message_id=str(message_id or "") or None,
+            account_id=str(request.account_id or ""),
+            site_id=str(request.site_id or "") or None,
+            principal_id=str(principal_id or request.principal_id or "") or None,
+            email=str(email or request.email or ""),
+            uploader_kind=uploader_kind,
+            visibility=visibility,
+            filename=filename,
+            content_type=content_type,
+            byte_size=len(content_bytes),
+            content_bytes=content_bytes,
+            metadata_json=metadata_json,
+        )
+        request.updated_at = datetime.now(UTC)
+        self.session.add(attachment)
+        self.session.flush()
+        return attachment
+
+    def get_support_request_attachment(
+        self,
+        attachment_id: str,
+    ) -> SupportRequestAttachment | None:
+        return self.session.get(SupportRequestAttachment, attachment_id)
+
+    def list_support_request_attachments(
+        self,
+        *,
+        request_id: str,
+        include_internal: bool = False,
+    ) -> list[SupportRequestAttachment]:
+        statement = select(SupportRequestAttachment).where(
+            SupportRequestAttachment.request_id == request_id
+        )
+        if not include_internal:
+            statement = statement.where(SupportRequestAttachment.visibility == "public")
+        statement = statement.order_by(
+            SupportRequestAttachment.created_at.asc(),
+            SupportRequestAttachment.attachment_id.asc(),
+        )
+        return list(self.session.scalars(statement))
+
+    def count_support_request_attachments(self, *, request_id: str) -> int:
+        statement = select(func.count(SupportRequestAttachment.attachment_id)).where(
+            SupportRequestAttachment.request_id == request_id
+        )
+        return int(self.session.scalar(statement) or 0)
+
+    def get_support_request_feedback(self, request_id: str) -> SupportRequestFeedback | None:
+        statement = select(SupportRequestFeedback).where(
+            SupportRequestFeedback.request_id == request_id
+        )
+        return self.session.scalar(statement)
+
+    def upsert_support_request_feedback(
+        self,
+        *,
+        feedback_id: str,
+        request: SupportRequest,
+        principal_id: str,
+        email: str,
+        resolved: bool,
+        rating: int,
+        comment: str,
+        metadata_json: dict[str, object] | None = None,
+    ) -> SupportRequestFeedback:
+        feedback = self.get_support_request_feedback(str(request.request_id or ""))
+        if feedback is None:
+            feedback = SupportRequestFeedback(
+                feedback_id=feedback_id,
+                request_id=str(request.request_id or ""),
+                account_id=str(request.account_id or ""),
+                site_id=str(request.site_id or "") or None,
+                principal_id=principal_id,
+                email=email,
+                resolved=resolved,
+                rating=rating,
+                comment=comment,
+                metadata_json=metadata_json,
+            )
+            self.session.add(feedback)
+        else:
+            feedback.principal_id = principal_id
+            feedback.email = email
+            feedback.resolved = resolved
+            feedback.rating = rating
+            feedback.comment = comment
+            feedback.metadata_json = metadata_json
+        request.updated_at = datetime.now(UTC)
+        self.session.flush()
+        return feedback
+
+    def list_support_requests(
+        self,
+        *,
+        account_id: str | None = None,
+        site_id: str | None = None,
+        principal_id: str | None = None,
+        status: str | None = None,
+        topic: str | None = None,
+        query: str | None = None,
+        limit: int | None = None,
+        offset: int = 0,
+    ) -> list[SupportRequest]:
+        statement = select(SupportRequest).where(
+            *self._support_request_filters(
+                account_id=account_id,
+                site_id=site_id,
+                principal_id=principal_id,
+                status=status,
+                topic=topic,
+                query=query,
+            )
+        )
+        statement = statement.order_by(
+            SupportRequest.updated_at.desc(),
+            SupportRequest.created_at.desc(),
+            SupportRequest.request_id.desc(),
+        )
+        if offset > 0:
+            statement = statement.offset(offset)
+        if limit is not None and limit > 0:
+            statement = statement.limit(limit)
+        return list(self.session.scalars(statement))
+
+    def count_support_requests(
+        self,
+        *,
+        account_id: str | None = None,
+        site_id: str | None = None,
+        principal_id: str | None = None,
+        status: str | None = None,
+        topic: str | None = None,
+        query: str | None = None,
+    ) -> int:
+        statement = select(func.count(SupportRequest.request_id)).where(
+            *self._support_request_filters(
+                account_id=account_id,
+                site_id=site_id,
+                principal_id=principal_id,
+                status=status,
+                topic=topic,
+                query=query,
+            )
+        )
+        return int(self.session.scalar(statement) or 0)
+
+    def _support_request_filters(
+        self,
+        *,
+        account_id: str | None,
+        site_id: str | None,
+        principal_id: str | None,
+        status: str | None,
+        topic: str | None,
+        query: str | None,
+    ) -> list[SQLAFilter]:
+        filters: list[SQLAFilter] = []
+        if account_id:
+            filters.append(SupportRequest.account_id == account_id)
+        if site_id:
+            filters.append(SupportRequest.site_id == site_id)
+        if principal_id:
+            filters.append(SupportRequest.principal_id == principal_id)
+        if status:
+            filters.append(SupportRequest.status == status)
+        if topic:
+            filters.append(SupportRequest.topic == topic)
+        normalized_query = str(query or "").strip().lower()
+        if normalized_query:
+            pattern = f"%{normalized_query}%"
+            filters.append(
+                or_(
+                    func.lower(SupportRequest.request_id).like(pattern),
+                    func.lower(SupportRequest.email).like(pattern),
+                    func.lower(SupportRequest.title).like(pattern),
+                    func.lower(SupportRequest.account_id).like(pattern),
+                    func.lower(SupportRequest.site_id).like(pattern),
+                )
+            )
+        return filters
 
     def upsert_account(
         self,
@@ -179,9 +464,7 @@ class CommercialRepository:
         *,
         principal_id: str,
     ) -> Principal | None:
-        return self.session.scalar(
-            select(Principal).where(Principal.principal_id == principal_id)
-        )
+        return self.session.scalar(select(Principal).where(Principal.principal_id == principal_id))
 
     def get_identity_provider_binding(
         self,
@@ -527,115 +810,59 @@ class CommercialRepository:
             for account, identity, membership in self.session.execute(statement).all()
         ]
 
-    def upsert_principal_site_grant(
-        self,
-        *,
-        grant_id: str,
-        principal_id: str,
-        site_id: str,
-        status: str = SITE_USER_GRANT_STATUS_ACTIVE,
-        metadata_json: dict[str, object] | None = None,
-    ) -> SiteUserGrant:
-        grant = self.session.scalar(
-            select(SiteUserGrant).where(
-                SiteUserGrant.principal_id == principal_id,
-                SiteUserGrant.site_id == site_id,
-            )
-        )
-        if grant is None:
-            grant = SiteUserGrant(
-                grant_id=grant_id,
-                principal_id=principal_id,
-                site_id=site_id,
-                status=status,
-                metadata_json=metadata_json,
-            )
-            self.session.add(grant)
-        else:
-            grant.status = status
-            grant.metadata_json = metadata_json
-        self.session.flush()
-        return grant
-
-    def list_site_user_grants(
-        self,
-        *,
-        principal_ids: list[str] | None = None,
-        statuses: list[str] | None = None,
-    ) -> list[SiteUserGrant]:
-        statement = select(SiteUserGrant)
-        if principal_ids is not None:
-            if not principal_ids:
-                return []
-            statement = statement.where(SiteUserGrant.principal_id.in_(principal_ids))
-        if statuses is not None:
-            if not statuses:
-                return []
-            statement = statement.where(SiteUserGrant.status.in_(statuses))
-        statement = statement.order_by(
-            SiteUserGrant.created_at.desc(),
-            SiteUserGrant.grant_id.desc(),
-        )
-        return list(self.session.scalars(statement))
-
-    def revoke_site_user_grants(self, *, principal_id: str) -> int:
-        grants = self.list_site_user_grants(
-            principal_ids=[principal_id],
-            statuses=[SITE_USER_GRANT_STATUS_ACTIVE],
-        )
-        for grant in grants:
-            grant.status = SITE_USER_GRANT_STATUS_REVOKED
-        self.session.flush()
-        return len(grants)
-
-    def get_principal_site_grant(
-        self,
-        *,
-        principal_id: str,
-        site_id: str,
-    ) -> tuple[Principal, SiteUserGrant] | None:
-        row = self.session.execute(
-            select(Principal, SiteUserGrant)
-            .join(
-                SiteUserGrant,
-                SiteUserGrant.principal_id == Principal.principal_id,
-            )
-            .where(
-                Principal.principal_id == principal_id,
-                SiteUserGrant.site_id == site_id,
-            )
-        ).first()
-        if row is None:
-            return None
-        return row[0], row[1]
-
     def list_sites_for_principal(
         self,
         *,
         principal_id: str,
-        grant_statuses: list[str] | None = None,
-    ) -> list[tuple[Site, Principal, SiteUserGrant]]:
-        statuses = grant_statuses or [SITE_USER_GRANT_STATUS_ACTIVE]
+        membership_statuses: list[str] | None = None,
+    ) -> list[tuple[Site, Principal, AccountUserMembership]]:
+        statuses = membership_statuses or [ACCOUNT_USER_MEMBERSHIP_STATUS_ACTIVE]
         statement = (
-            select(Site, Principal, SiteUserGrant)
-            .join(SiteUserGrant, SiteUserGrant.site_id == Site.site_id)
+            select(Site, Principal, AccountUserMembership)
             .join(
-                Principal,
-                Principal.principal_id == SiteUserGrant.principal_id,
+                AccountUserMembership,
+                AccountUserMembership.account_id == Site.account_id,
             )
+            .join(Principal, Principal.principal_id == AccountUserMembership.principal_id)
             .join(Account, Account.account_id == Site.account_id)
             .where(
                 Principal.principal_id == principal_id,
                 Principal.status == PRINCIPAL_STATUS_ACTIVE,
-                SiteUserGrant.status.in_(statuses),
+                AccountUserMembership.status.in_(statuses),
                 Account.status == "active",
             )
             .order_by(Site.created_at.desc(), Site.site_id.asc())
         )
         return [
-            (site, identity, grant)
-            for site, identity, grant in self.session.execute(statement).all()
+            (site, identity, membership)
+            for site, identity, membership in self.session.execute(statement).all()
         ]
+
+    def get_portal_site_access(
+        self,
+        *,
+        principal_id: str,
+        site_id: str,
+    ) -> tuple[Site, Account, Principal | None, AccountUserMembership | None] | None:
+        row = self.session.execute(
+            select(Site, Account, Principal, AccountUserMembership)
+            .join(Account, Account.account_id == Site.account_id)
+            .outerjoin(
+                AccountUserMembership,
+                and_(
+                    AccountUserMembership.account_id == Site.account_id,
+                    AccountUserMembership.principal_id == principal_id,
+                ),
+            )
+            .outerjoin(
+                Principal,
+                Principal.principal_id == AccountUserMembership.principal_id,
+            )
+            .where(Site.site_id == site_id)
+        ).first()
+        if row is None:
+            return None
+        return row[0], row[1], row[2], row[3]
 
     def get_platform_admin_grant(
         self,
@@ -1594,9 +1821,9 @@ class CommercialRepository:
             .group_by(SiteKnowledgeDocument.site_id)
         )
         for site_id, count in self.session.execute(document_statement):
-            items.setdefault(str(site_id or ""), {"documents": 0, "chunks": 0})[
-                "documents"
-            ] = int(count or 0)
+            items.setdefault(str(site_id or ""), {"documents": 0, "chunks": 0})["documents"] = int(
+                count or 0
+            )
         chunk_statement = (
             select(SiteKnowledgeChunk.site_id, func.count())
             .select_from(SiteKnowledgeChunk)
@@ -1715,9 +1942,7 @@ class CommercialRepository:
         created_at: datetime | None = None,
     ) -> CreditLedgerEntry:
         existing = self.session.scalar(
-            select(CreditLedgerEntry).where(
-                CreditLedgerEntry.idempotency_key == idempotency_key
-            )
+            select(CreditLedgerEntry).where(CreditLedgerEntry.idempotency_key == idempotency_key)
         )
         if existing is not None:
             return existing
@@ -2104,20 +2329,21 @@ class CommercialRepository:
         self,
         *,
         site_id: str | None = None,
+        site_ids: list[str] | None = None,
         account_id: str | None = None,
         event_kind: str | None = None,
         outcome: str | None = None,
         limit: int = 50,
     ) -> list[ServiceAuditEvent]:
-        statement = select(ServiceAuditEvent)
-        if site_id:
-            statement = statement.where(ServiceAuditEvent.site_id == site_id)
-        if account_id:
-            statement = statement.where(ServiceAuditEvent.account_id == account_id)
-        if event_kind:
-            statement = statement.where(ServiceAuditEvent.event_kind == event_kind)
-        if outcome:
-            statement = statement.where(ServiceAuditEvent.outcome == outcome)
+        statement = select(ServiceAuditEvent).where(
+            *self._service_audit_filters(
+                site_id=site_id,
+                site_ids=site_ids,
+                account_id=account_id,
+                event_kind=event_kind,
+                outcome=outcome,
+            )
+        )
         statement = statement.order_by(
             ServiceAuditEvent.created_at.desc(),
             ServiceAuditEvent.id.desc(),
@@ -2150,6 +2376,7 @@ class CommercialRepository:
         self,
         *,
         site_id: str | None = None,
+        site_ids: list[str] | None = None,
         account_id: str | None = None,
         event_kind: str | None = None,
         outcome: str | None = None,
@@ -2164,6 +2391,7 @@ class CommercialRepository:
                     .where(
                         *self._service_audit_filters(
                             site_id=site_id,
+                            site_ids=site_ids,
                             account_id=account_id,
                             event_kind=event_kind,
                             outcome=outcome,
@@ -2179,6 +2407,7 @@ class CommercialRepository:
         self,
         *,
         site_id: str | None = None,
+        site_ids: list[str] | None = None,
         account_id: str | None = None,
         since: datetime | None = None,
         limit: int = 20,
@@ -2197,6 +2426,7 @@ class CommercialRepository:
             .where(
                 *self._service_audit_filters(
                     site_id=site_id,
+                    site_ids=site_ids,
                     account_id=account_id,
                     since=since,
                 )
@@ -2430,15 +2660,36 @@ class CommercialRepository:
         self,
         *,
         site_id: str | None = None,
+        site_ids: list[str] | None = None,
         account_id: str | None = None,
         event_kind: str | None = None,
         outcome: str | None = None,
         since: datetime | None = None,
     ) -> list[SQLAFilter]:
         filters: list[SQLAFilter] = []
+        normalized_site_ids = (
+            sorted({str(item).strip() for item in site_ids if str(item).strip()})
+            if site_ids is not None
+            else None
+        )
         if site_id:
             filters.append(ServiceAuditEvent.site_id == site_id)
-        if account_id:
+        elif account_id and normalized_site_ids is not None:
+            if normalized_site_ids:
+                filters.append(
+                    or_(
+                        ServiceAuditEvent.account_id == account_id,
+                        ServiceAuditEvent.site_id.in_(normalized_site_ids),
+                    )
+                )
+            else:
+                filters.append(ServiceAuditEvent.account_id == account_id)
+        elif normalized_site_ids is not None:
+            if normalized_site_ids:
+                filters.append(ServiceAuditEvent.site_id.in_(normalized_site_ids))
+            else:
+                filters.append(ServiceAuditEvent.id == -1)
+        elif account_id:
             filters.append(ServiceAuditEvent.account_id == account_id)
         if event_kind:
             filters.append(ServiceAuditEvent.event_kind == event_kind)

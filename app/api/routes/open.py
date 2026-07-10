@@ -8,7 +8,7 @@ from fastapi.responses import JSONResponse, PlainTextResponse, RedirectResponse
 
 from app.api.auth import get_cloud_services
 from app.api.envelope import build_envelope
-from app.api.routes.portal import finish_portal_qq_login
+from app.api.routes.portal import finish_qq_login_callback
 from app.api.routes.service import _get_commercial_service
 from app.domain.commercial.errors import CommercialServiceError
 from app.domain.service_settings import resolve_alipay_payment_runtime_config
@@ -44,7 +44,7 @@ async def finish_open_qq_login(
     code: str = Query(default=""),
     state: str = Query(default=""),
 ) -> Any:
-    return await finish_portal_qq_login(request, code=code, state=state)
+    return await finish_qq_login_callback(request, code=code, state=state)
 
 
 @router.get("/auth/wechat/callback")

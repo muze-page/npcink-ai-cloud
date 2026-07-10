@@ -42,10 +42,10 @@ def _build_client(tmp_path: Path) -> tuple[str, TestClient]:
     seed_site_auth(database_url, site_id="site-media-portal-001", scopes=["stats:read"])
     seed_site_auth(database_url, site_id="site-media-portal-002", scopes=["stats:read"])
     _PORTAL_GRANT.update(
-        CommercialService(database_url).upsert_principal_access(
-        site_id="site-media-portal-001",
-        email="portal-admin@example.com",
-        metadata_json={"source": "test"},
+        CommercialService(database_url).upsert_account_member_access(
+            account_id="acct_site-media-portal-001",
+            email="portal-admin@example.com",
+            metadata_json={"source": "test"},
         )
     )
     settings = Settings(

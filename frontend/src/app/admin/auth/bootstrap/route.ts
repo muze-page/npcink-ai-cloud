@@ -8,10 +8,8 @@ import {
 import { getAdminBootstrapAdminRef } from '@/lib/env';
 
 const ADMIN_SESSION_COOKIE = 'npcink_admin_session_token';
-const ADMIN_SESSION_COOKIE_LEGACY = 'magick_admin_session_token';
 const FORWARDED_ADMIN_COOKIE_NAMES = new Set([
   ADMIN_SESSION_COOKIE,
-  ADMIN_SESSION_COOKIE_LEGACY,
 ]);
 
 type ParsedSetCookie = {

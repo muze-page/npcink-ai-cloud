@@ -82,6 +82,7 @@ async function installLoginFlowMocks(page: Page) {
   let loggedIn = false;
   let requestCodeCount = 0;
   let verifyCodeCalled = false;
+  let addonConnectionPayload: Record<string, unknown> | null = null;
 
   await page.route(/\/(?:api\/portal|portal\/v1)\/.*/, async (route) => {
     const url = new URL(route.request().url());
@@ -153,12 +154,21 @@ async function installLoginFlowMocks(page: Page) {
       return;
     }
 
+    if (pathname === '/addon-connections') {
+      addonConnectionPayload = route.request().postDataJSON() as Record<string, unknown>;
+      await fulfillJson(route, {
+        redirect_url: `${BASE_URL}/wordpress-addon-return?code=exchange-code&state=${String(addonConnectionPayload.state || '')}`,
+      });
+      return;
+    }
+
     await fulfillError(route, 404, `unhandled:${pathname}`);
   });
 
   return {
     requestCodeCount: () => requestCodeCount,
     verifyCodeCalled: () => verifyCodeCalled,
+    addonConnectionPayload: () => addonConnectionPayload,
   };
 }
 
@@ -181,4 +191,37 @@ test('portal email-code login enters the dashboard after verification', async ({
   await expect(page.getByRole('heading', { name: /No Connected Sites|没有已连接站点/i })).toBeVisible();
   expect(calls.requestCodeCount()).toBe(2);
   expect(calls.verifyCodeCalled()).toBe(true);
+});
+
+test('addon binding survives login and returns the complete payload to WordPress', async ({ page }) => {
+  const calls = await installLoginFlowMocks(page);
+  const returnUrl =
+    'https://demo.example.com/wp-admin/admin-post.php?action=npcink_cloud_addon_complete_auth&state=addon-state-001';
+  const bindingPath = `/portal/sites?${new URLSearchParams({
+    connect: 'wordpress-addon',
+    site_url: 'https://demo.example.com',
+    site_name: 'Demo Site',
+    return_url: returnUrl,
+    state: 'addon-state-001',
+  }).toString()}`;
+
+  await page.goto(bindingPath);
+  await expect(page).toHaveURL(`${BASE_URL}/portal/login?redirect=${encodeURIComponent(bindingPath)}`);
+
+  await page.getByLabel(/Email Address|邮箱地址/i).fill(LOGIN_EMAIL);
+  await page.getByRole('button', { name: /Send verification code|发送验证码/i }).click();
+  await page.getByLabel(/Verification code|验证码/i).fill(LOGIN_CODE);
+  await page.getByRole('button', { name: /Verify and continue|验证并继续/i }).click();
+
+  await expect(page).toHaveURL(`${BASE_URL}${bindingPath}`);
+  await expect(page.getByRole('heading', { name: /Finish WordPress connection|完成站点绑定/i }).first()).toBeVisible();
+  await page.getByRole('button', { name: /Finish connection|完成绑定/i }).click();
+  await expect(page).toHaveURL(/\/wordpress-addon-return\?code=exchange-code&state=addon-state-001/);
+  expect(calls.addonConnectionPayload()).toEqual({
+    account_id: 'acct_portal_login_e2e',
+    wordpress_url: 'https://demo.example.com',
+    site_name: 'Demo Site',
+    return_url: returnUrl,
+    state: 'addon-state-001',
+  });
 });

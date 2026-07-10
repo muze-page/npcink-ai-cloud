@@ -11,5 +11,4 @@ NPCINK_CLOUD_DATABASE_URL="${NPCINK_CLOUD_DATABASE_URL:-postgresql+psycopg://npc
   docker compose -f docker-compose.prod.yml config >/dev/null
 docker compose -f docker-compose.dev.yml run --rm \
   -e NPCINK_CLOUD_OPENAI_API_KEY= \
-  -e NPCINK_CLOUD_OPENAI_COMPATIBLE_API_KEY= \
   api python -m pytest tests/api/test_health.py tests/contract/test_health_contract.py -q

@@ -1,15 +1,10 @@
 'use client';
 
 import Link from 'next/link';
-import { usePathname, useRouter, useSearchParams } from 'next/navigation';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { usePathname, useRouter } from 'next/navigation';
+import { useCallback, useMemo, useState } from 'react';
 import { useLocale } from '@/contexts/LocaleContext';
 import { useSession } from '@/hooks/useSession';
-import {
-  getPortalSiteDisplayName,
-  getPortalSiteSecondaryLabel,
-  getPortalSiteWordPressUrl,
-} from '@/lib/portal-site-display';
 import { cn } from '@/lib/utils';
 import { LocaleSwitcher } from '@/components/ui/LocaleSwitcher';
 import { ThemeToggle } from '@/components/ui/ThemeToggle';
@@ -17,14 +12,9 @@ import { ThemeToggle } from '@/components/ui/ThemeToggle';
 export function PortalNavbar() {
   const pathname = usePathname();
   const router = useRouter();
-  const searchParams = useSearchParams();
   const { t } = useLocale();
-  const { session, isAuthenticated, selectSite, logout } = useSession();
-  const [isSwitchingSite, setIsSwitchingSite] = useState(false);
+  const { isAuthenticated, logout } = useSession();
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
-  const [isSiteMenuOpen, setIsSiteMenuOpen] = useState(false);
-  const [siteSearchQuery, setSiteSearchQuery] = useState('');
-  const siteMenuRef = useRef<HTMLDivElement>(null);
 
   const primaryNavItems = useMemo(
     () => [
@@ -32,6 +22,7 @@ export function PortalNavbar() {
       { href: '/portal/billing', label: t('portal.nav_package', {}, 'Package') },
       { href: '/portal/usage', label: t('portal.nav_usage', {}, 'Usage') },
       { href: '/portal/sites', label: t('portal.nav_sites', {}, 'Sites') },
+      { href: '/portal/support', label: t('portal.nav_support_requests', {}, 'Tickets') },
       { href: '/portal/account', label: t('portal.nav_account', {}, 'Account') },
     ],
     [t]
@@ -48,107 +39,12 @@ export function PortalNavbar() {
     [pathname]
   );
 
-  const handleSiteChange = useCallback(
-    async (siteId: string) => {
-      if (!siteId || siteId === session?.site_id) {
-        return;
-      }
-      setIsSwitchingSite(true);
-      try {
-        await selectSite(siteId);
-        setIsSiteMenuOpen(false);
-        setSiteSearchQuery('');
-        const params = new URLSearchParams(searchParams?.toString() || '');
-        if (pathname !== '/portal') {
-          params.set('site', siteId);
-        }
-        const nextUrl =
-          pathname === '/portal'
-            ? '/portal'
-            : `${pathname}${params.toString() ? `?${params.toString()}` : ''}`;
-        router.replace(nextUrl);
-        router.refresh();
-      } finally {
-        setIsSwitchingSite(false);
-      }
-    },
-    [pathname, router, searchParams, selectSite, session?.site_id]
-  );
-
   const handleLogout = useCallback(async () => {
     await logout();
     router.push('/portal/login');
   }, [logout, router]);
 
-  useEffect(() => {
-    setIsSiteMenuOpen(false);
-    setSiteSearchQuery('');
-  }, [pathname]);
-
-  useEffect(() => {
-    if (!isSiteMenuOpen) {
-      return;
-    }
-
-    const handlePointerDown = (event: MouseEvent) => {
-      if (siteMenuRef.current && !siteMenuRef.current.contains(event.target as Node)) {
-        setIsSiteMenuOpen(false);
-      }
-    };
-
-    const handleEscape = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        setIsSiteMenuOpen(false);
-      }
-    };
-
-    document.addEventListener('mousedown', handlePointerDown);
-    document.addEventListener('keydown', handleEscape);
-
-    return () => {
-      document.removeEventListener('mousedown', handlePointerDown);
-      document.removeEventListener('keydown', handleEscape);
-    };
-  }, [isSiteMenuOpen]);
-
-  const visibleSites = useMemo(
-    () => (session?.sites || []).filter((site) => site.status !== 'archived'),
-    [session?.sites]
-  );
-  const filteredVisibleSites = useMemo(() => {
-    const query = siteSearchQuery.trim().toLowerCase();
-    if (!query) {
-      return visibleSites;
-    }
-    return visibleSites.filter((site) => {
-      const displayName = getPortalSiteDisplayName(site).toLowerCase();
-      const secondary = (getPortalSiteSecondaryLabel(site) || '').toLowerCase();
-      const siteId = site.site_id.toLowerCase();
-      return (
-        displayName.includes(query) ||
-        secondary.includes(query) ||
-        siteId.includes(query)
-      );
-    });
-  }, [siteSearchQuery, visibleSites]);
-  const selectedSiteId =
-    (session?.site_id && visibleSites.some((site) => site.site_id === session.site_id)
-      ? session.site_id
-      : '') ||
-    visibleSites[0]?.site_id ||
-    '';
-  const selectedSite = visibleSites.find((site) => site.site_id === selectedSiteId) || null;
   const isLoginPage = pathname === '/portal/login';
-  const visibleSiteLabel = useCallback(
-    (site: typeof visibleSites[number]) =>
-      site.site_name || getPortalSiteWordPressUrl(site) || t('portal.current_site', {}, 'Current site'),
-    [t]
-  );
-  const visibleSiteSecondaryLabel = useCallback(
-    (site: typeof visibleSites[number]) =>
-      getPortalSiteWordPressUrl(site) || t('portal.site_url_missing_short', {}, 'Site URL not configured'),
-    [t]
-  );
   return (
     <header className="sticky top-0 z-50 w-full border-b border-slate-200/70 bg-white/78 backdrop-blur-xl dark:border-slate-800 dark:bg-slate-950/78">
       <div className="container mx-auto px-4">
@@ -170,78 +66,6 @@ export function PortalNavbar() {
           </Link>
 
           <div className="flex items-center gap-2">
-            {isAuthenticated && visibleSites.length ? (
-              <div ref={siteMenuRef} className="relative hidden items-center gap-2 md:flex">
-                <span className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
-                  {t('common.site')}
-                </span>
-                <button
-                  type="button"
-                  aria-haspopup="listbox"
-                  aria-expanded={isSiteMenuOpen}
-                  className="flex w-[min(22rem,40vw)] min-w-0 items-center justify-between rounded-full border border-slate-200/80 bg-white/90 px-4 py-2 text-left text-sm text-slate-700 outline-none transition hover:border-slate-300 focus:border-blue-400 dark:border-slate-700 dark:bg-slate-900/80 dark:text-slate-200 dark:hover:border-slate-600"
-                  onClick={() => setIsSiteMenuOpen((current) => !current)}
-                  disabled={isSwitchingSite}
-                >
-                  <span className="truncate">
-                    {selectedSite
-                      ? `${visibleSiteLabel(selectedSite)} · ${visibleSiteSecondaryLabel(selectedSite)}`
-                      : t('portal.no_site_selected', {}, 'No site selected')}
-                  </span>
-                  <svg className="ml-3 h-4 w-4 shrink-0" viewBox="0 0 20 20" fill="none" aria-hidden="true">
-                    <path d="m5 7.5 5 5 5-5" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.8" />
-                  </svg>
-                </button>
-                {isSiteMenuOpen ? (
-                  <div className="absolute right-0 top-full z-20 mt-2 w-[26rem] rounded-3xl border border-slate-200/80 bg-white p-3 shadow-2xl dark:border-slate-800 dark:bg-slate-950">
-                    <input
-                      type="search"
-                      value={siteSearchQuery}
-                      onChange={(event) => setSiteSearchQuery(event.target.value)}
-                      placeholder={t('portal.search_sites_short', {}, 'Search sites')}
-                      className="input mb-3 w-full"
-                    />
-                    <div className="max-h-80 space-y-1 overflow-y-auto">
-                      {filteredVisibleSites.length === 0 ? (
-                        <div className="rounded-2xl px-3 py-6 text-center text-sm text-slate-500 dark:text-slate-400">
-                          {t('portal.site_search_empty', {}, 'No sites match this search.')}
-                        </div>
-                      ) : (
-                        filteredVisibleSites.map((site) => (
-                          <button
-                            key={site.site_id}
-                            type="button"
-                            role="option"
-                            aria-selected={site.site_id === selectedSiteId}
-                            className={cn(
-                              'block w-full rounded-2xl px-3 py-3 text-left transition-colors',
-                              site.site_id === selectedSiteId
-                                ? 'bg-slate-900 text-white dark:bg-blue-500 dark:text-slate-950'
-                                : 'text-slate-700 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-slate-800'
-                            )}
-                            onClick={() => void handleSiteChange(site.site_id)}
-                          >
-                            <p className="truncate text-sm font-semibold">
-                              {visibleSiteLabel(site)}
-                            </p>
-                            <p
-                              className={cn(
-                                'mt-1 truncate text-xs',
-                                site.site_id === selectedSiteId
-                                  ? 'text-slate-200 dark:text-slate-900'
-                                  : 'text-slate-500 dark:text-slate-400'
-                              )}
-                            >
-                              {visibleSiteSecondaryLabel(site)}
-                            </p>
-                          </button>
-                        ))
-                      )}
-                    </div>
-                  </div>
-                ) : null}
-              </div>
-            ) : null}
             <div className="hidden items-center gap-2 md:flex">
               <LocaleSwitcher />
               <ThemeToggle />
@@ -319,27 +143,6 @@ export function PortalNavbar() {
         )}
       >
         <div className="container mx-auto space-y-4 px-4 py-4">
-          {visibleSites.length ? (
-            <div className="space-y-2">
-              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
-                {t('common.site')}
-              </p>
-              <select
-                className="w-full rounded-2xl border border-slate-200/80 bg-white/90 px-3 py-3 text-sm text-slate-700 outline-none transition focus:border-blue-400 dark:border-slate-700 dark:bg-slate-900/80 dark:text-slate-200"
-                value={selectedSiteId}
-                onChange={(event) => void handleSiteChange(event.target.value)}
-                disabled={isSwitchingSite}
-              >
-                {visibleSites.map((site) => (
-                  <option key={site.site_id} value={site.site_id}>
-                    {visibleSiteLabel(site)}
-                    {' · '}
-                    {visibleSiteSecondaryLabel(site)}
-                  </option>
-                ))}
-              </select>
-            </div>
-          ) : null}
           {isAuthenticated ? (
             primaryNavItems.map((item) => (
               <Link

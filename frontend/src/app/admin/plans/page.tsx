@@ -356,17 +356,17 @@ function PlansContent() {
         description={t(
           'admin.package_management_center_desc',
           {},
-          'Read the active Free, Pro, and Agency package posture first. Open detail only when price, limits, or release state needs maintenance.'
+          'Read the active Free, Plus, Pro, and Agency package posture first. Open detail only when price, limits, or release state needs maintenance.'
         )}
         descriptionDisplay="hint"
         aside={
-          <div className="w-full xl:w-[44rem]">
+          <div className="flex w-full flex-col gap-3 xl:w-[44rem]">
             <BackofficeMetricStrip
               items={[
                 {
                   label: t('admin.managed_packages', {}, 'Managed packages'),
                   value: formatInteger(tierTemplates.length),
-                  detail: t('admin.managed_packages_detail', {}, 'Free / Pro / Agency are the main packages exposed to account coverage.'),
+                  detail: t('admin.managed_packages_detail', {}, 'Free / Plus / Pro / Agency are the main packages exposed to account coverage.'),
                   detailDisplay: 'hint',
                   size: 'compact',
                 },
@@ -383,6 +383,11 @@ function PlansContent() {
               ]}
               columnsClassName="md:grid-cols-3 xl:grid-cols-3"
             />
+            <div className="flex justify-end">
+              <Link href="/admin/credit-packs" className="btn btn-secondary w-fit">
+                {t('admin.plans.open_credit_packs', {}, 'Open credit packs')}
+              </Link>
+            </div>
           </div>
         }
       >
@@ -401,11 +406,11 @@ function PlansContent() {
       />
       <BackofficeSectionPanel className="space-y-4">
         {error ? (
-          <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-200">
+          <div role="alert" className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-200">
             {error}
           </div>
         ) : null}
-        <div className="grid gap-4 xl:grid-cols-3">
+        <div className="grid gap-4 lg:grid-cols-2 xl:grid-cols-4">
           {canonicalTierCoverage.map(({ shell, item, isPresent }) => {
             const latestVersion = item?.latest_version || item?.versions?.[0] || null;
             const budgets = (latestVersion?.budgets || shell.budgets_template || {}) as Record<string, unknown>;
@@ -418,13 +423,13 @@ function PlansContent() {
             );
             const siteLimit = latestMetadataValue(latestVersion, sourceTier.site_limit, 'site_limit');
             const batchCeiling = latestMetadataValue(latestVersion, sourceTier.max_batch_items, 'max_batch_items');
-            const features = sourceTier.feature_groups || [];
+            const runCeiling = numericValue(budgets.max_runs_per_period);
             const activeSubscriptionCount = Number(item?.subscription_counts?.active || 0);
             const packageAlias = localizePackageAlias(t, shell.tier_id, sourceTier.package_alias);
             return (
               <BackofficeStackCard
                 key={`price-features-${shell.tier_id}`}
-                className="flex flex-col"
+                className="flex min-h-[24rem] flex-col"
                 role="group"
                 aria-label={t(
                   'admin.package_card_label',
@@ -447,19 +452,15 @@ function PlansContent() {
                   />
                 </div>
                 <PackageStatRows
-                  className="mt-5"
+                  className="mt-7"
                   items={[
-                    {
-                      label: t('admin.included_points', {}, 'Included points'),
-                      value: formatInteger(monthlyIncludedPoints),
-                    },
-                    {
-                      label: t('admin.period_cost_budget', {}, 'Package fee'),
-                      value: formatBudgetCurrency(budgets.max_cost_per_period),
-                    },
                     {
                       label: t('admin.site_limit', {}, 'Site limit'),
                       value: formatInteger(siteLimit),
+                    },
+                    {
+                      label: t('admin.run_ceiling', {}, 'Run ceiling'),
+                      value: formatInteger(runCeiling),
                     },
                     {
                       label: t('admin.concurrency', {}, 'Concurrency'),
@@ -475,45 +476,20 @@ function PlansContent() {
                     },
                   ]}
                 />
-                <div className="mt-4 flex flex-wrap gap-2">
-                  {features.length ? (
-                    features.map((feature) => (
-                      <span
-                        key={feature}
-                        className="rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-600 dark:bg-slate-800 dark:text-slate-300"
-                      >
-                        {localizeFeatureGroup(t, feature)}
-                      </span>
-                    ))
-                  ) : (
-                    <span className="text-sm text-slate-500 dark:text-slate-400">
-                      {t('admin.feature_groups_empty', {}, 'No feature groups attached.')}
-                    </span>
-                  )}
-                </div>
-                <div className="mt-5 flex flex-1 items-end justify-between gap-3">
-                  <p className="text-xs leading-5 text-slate-500 dark:text-slate-400">
-                    {isPresent
-                      ? t(
-                          'admin.package_release_summary',
-                          {
-                            versions: String(item?.published_version_count || 0),
-                            subscriptions: String(item?.subscription_counts?.active || 0),
-                          },
-                          `${item?.subscription_counts?.active || 0} active subscriptions`
-                        )
-                      : t(
-                          'admin.package_missing_release_summary',
-                          {},
-                          'Create this package before customer assignment.'
-                        )}
+                <div className="mt-5 flex flex-1 flex-col justify-end gap-4">
+                  <p className="text-sm leading-6 text-slate-500 dark:text-slate-400">
+                    {t(
+                      'admin.package_monthly_credits_summary',
+                      { points: formatInteger(monthlyIncludedPoints) },
+                      `${formatInteger(monthlyIncludedPoints)} AI credits per month.`
+                    )}
                   </p>
                   {item?.plan?.plan_id ? (
-                    <Link href={`/admin/plans/${item.plan.plan_id}`} className="btn btn-secondary">
+                    <Link href={`/admin/plans/${item.plan.plan_id}`} className="btn btn-secondary w-fit">
                       {t('common.manage', {}, 'Manage')}
                     </Link>
                   ) : (
-                    <a href="#package-maintenance" className="btn btn-secondary">
+                    <a href="#package-maintenance" className="btn btn-secondary w-fit">
                       {t('admin.plans.open_advanced_setup', {}, 'Advanced setup')}
                     </a>
                   )}
@@ -548,12 +524,12 @@ function PlansContent() {
           </div>
         </summary>
         {notice ? (
-          <div className="mt-4 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700 dark:border-emerald-900/60 dark:bg-emerald-950/30 dark:text-emerald-300">
+          <div role="status" aria-live="polite" className="mt-4 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700 dark:border-emerald-900/60 dark:bg-emerald-950/30 dark:text-emerald-300">
             {notice}
           </div>
         ) : null}
         {error ? (
-          <div className="mt-4 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-900/60 dark:bg-red-950/30 dark:text-red-300">
+          <div role="alert" className="mt-4 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-900/60 dark:bg-red-950/30 dark:text-red-300">
             {error}
           </div>
         ) : null}
@@ -565,7 +541,7 @@ function PlansContent() {
           description={t(
             'admin.package_shell_bootstrap_desc',
             {},
-            'Use these shortcuts to create any missing Free / Pro / Agency package entries before assigning them to customers.'
+            'Use these shortcuts to create any missing Free / Plus / Pro / Agency package entries before assigning them to customers.'
           )}
           descriptionDisplay="hint"
         />
@@ -589,7 +565,7 @@ function PlansContent() {
             {t('admin.bootstrap_missing_shells', {}, 'Create missing packages')}
           </button>
         </div>
-        <div className="grid gap-4 xl:grid-cols-3">
+        <div className="grid gap-4 lg:grid-cols-2 2xl:grid-cols-4">
           {canonicalTierCoverage.map(({ shell, item, isPresent }) => {
             return (
               <BackofficeStackCard key={shell.tier_id}>
@@ -732,15 +708,15 @@ function PackageStatRows({
 }) {
   return (
     <div className={className}>
-      <dl className="grid gap-x-5 gap-y-3 md:grid-cols-2">
+      <dl>
         {items.map((item) => (
           <div
             key={item.label}
-            className="flex items-baseline justify-between gap-4 border-b border-slate-200/70 pb-2 last:border-b-0 dark:border-slate-800"
+            className="flex items-baseline justify-between gap-4 border-b border-slate-200/70 py-2.5 first:pt-0 last:border-b-0 dark:border-slate-800"
             aria-label={`${item.label}: ${item.value}`}
           >
             <dt className="min-w-0 text-sm text-slate-500 dark:text-slate-400">{item.label}</dt>
-            <dd className="shrink-0 text-lg font-semibold tabular-nums text-slate-950 dark:text-white">{item.value}</dd>
+            <dd className="shrink-0 text-sm font-semibold tabular-nums text-slate-950 dark:text-white">{item.value}</dd>
           </div>
         ))}
       </dl>

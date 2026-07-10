@@ -5,7 +5,6 @@ import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { Suspense, useEffect, useMemo, useState } from 'react';
 import { LoadingFallback } from '@/components/ui/LoadingFallback';
 import {
-  BackofficeMetricStrip,
   BackofficePageStack,
   BackofficeSectionPanel,
   BackofficeStackCard,
@@ -44,7 +43,7 @@ function PortalSitesContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { t } = useLocale();
-  const { session, isLoading, isAuthenticated, selectSite, refresh } = useSession();
+  const { session, isLoading, isAuthenticated, refresh } = useSession();
   const [searchQuery, setSearchQuery] = useState(() => searchParams?.get('q') || '');
   const [showConnectModal, setShowConnectModal] = useState(false);
   const [pendingRemoveSite, setPendingRemoveSite] = useState<PortalSiteListItem | null>(null);
@@ -52,10 +51,14 @@ function PortalSitesContent() {
   const [removeNotice, setRemoveNotice] = useState('');
   const [isRemovingSite, setIsRemovingSite] = useState(false);
   const sites = session?.sites ?? EMPTY_SITES;
-  const activeSite = sites.find((site) => site.status === 'active') || null;
-  const selectedSiteId = session?.site_id || activeSite?.site_id || '';
-  const selectedSite = sites.find((site) => site.site_id === selectedSiteId) || activeSite || sites[0] || null;
-  const selectedSiteWordPressUrl = getPortalSiteWordPressUrl(selectedSite);
+  const visibleSites = sites.filter((site) => site.status !== 'archived');
+  const portalAccountId =
+    session?.account_id ||
+    session?.accounts?.find((account) => account.account_id)?.account_id ||
+    '';
+  const latestConnectedSite = [...visibleSites].sort(
+    (left, right) => new Date(right.created_at).getTime() - new Date(left.created_at).getTime()
+  )[0] || null;
   const canRemoveSites = Boolean(
     session?.allowed_actions?.includes('remove_sites') ||
       session?.accounts?.some((account) => account.allowed_actions?.includes('remove_sites'))
@@ -84,16 +87,12 @@ function PortalSitesContent() {
   const sortedSites = useMemo(() => {
     const next = [...filteredSites];
     next.sort((left, right) => {
-      if (left.site_id === selectedSiteId) {
-        return -1;
-      }
-      if (right.site_id === selectedSiteId) {
-        return 1;
-      }
       return new Date(right.created_at).getTime() - new Date(left.created_at).getTime();
     });
     return next;
-  }, [filteredSites, selectedSiteId]);
+  }, [filteredSites]);
+  const visibleSiteCount = visibleSites.length;
+  const hasSearchQuery = Boolean(searchQuery.trim());
 
   useEffect(() => {
     setSearchQuery(searchParams?.get('q') || '');
@@ -126,17 +125,19 @@ function PortalSitesContent() {
   }
 
   if (!isAuthenticated || !session) {
+    const currentPath = `${pathname}${searchParams?.toString() ? `?${searchParams.toString()}` : ''}`;
     return (
       <PortalSignedOutState
         title={t('auth.not_signed_in')}
         description={t('auth.please_sign_in')}
         actionLabel={t('nav.sign_in')}
+        actionHref={`/portal/login?redirect=${encodeURIComponent(currentPath)}`}
       />
     );
   }
 
-  const handleSiteCreated = async (siteId: string) => {
-    await selectSite(siteId);
+  const handleSiteCreated = async (_siteId: string) => {
+    await refresh();
     setShowConnectModal(false);
   };
 
@@ -182,13 +183,10 @@ function PortalSitesContent() {
         eyebrowInfo={t(
           'portal.sites.desc',
           {},
-          'Use this page to see which sites are bound to you, switch the current site, and open the record for a specific site.'
+          'Use this page to review connected WordPress sites and open a site record when connection details need attention.'
         )}
         currentPage="sites"
-        selectedSiteId={selectedSiteId}
-        selectedSiteName={selectedSite?.site_name}
         sites={session.sites}
-        onSiteChange={(siteId) => void selectSite(siteId)}
         metrics={[
           { label: t('common.sites', {}, 'Sites'), value: session.sites.length },
           {
@@ -196,9 +194,13 @@ function PortalSitesContent() {
             value: session.sites.filter((site) => site.status !== 'active' || !getPortalSiteWordPressUrl(site)).length,
           },
           {
-            label: t('common.current', {}, 'Current'),
-            value: getPortalSiteDisplayName(selectedSite) || t('portal.no_site_selected', {}, 'No site selected'),
-            detail: selectedSiteWordPressUrl || t('portal.site_url_missing', {}, 'WordPress URL not configured'),
+            label: t('portal.sites.latest_connected_label', {}, 'Latest connected'),
+            value: latestConnectedSite
+              ? formatDate(latestConnectedSite.created_at)
+              : t('portal.home.package_pending_label', {}, 'To confirm'),
+            detail: latestConnectedSite
+              ? getPortalSiteDisplayName(latestConnectedSite)
+              : t('portal.no_sites', {}, 'No sites'),
           },
         ]}
         metricsColumnsClassName="lg:grid-cols-3"
@@ -210,13 +212,6 @@ function PortalSitesContent() {
             <h2 className="text-xl font-semibold text-gray-950 dark:text-white">
               {t('portal.home.my_sites_title', {}, 'My sites')}
             </h2>
-            <p className="mt-1 text-sm text-gray-600 dark:text-gray-400">
-              {t(
-                'portal.sites.simple_list_desc',
-                { count: String(sortedSites.length) },
-                'Showing connected sites. Use search if you have many sites.'
-              )}
-            </p>
           </div>
           <div className="w-full lg:w-auto">
             <input
@@ -229,6 +224,7 @@ function PortalSitesContent() {
           </div>
         </div>
 
+        {visibleSiteCount === 0 && !hasSearchQuery ? (
         <div className="rounded-xl border border-blue-100 bg-blue-50/70 px-4 py-3 text-sm text-blue-950 dark:border-blue-900/50 dark:bg-blue-950/30 dark:text-blue-100">
           <p className="font-semibold">
             {t('portal.sites.connect_hint_title', {}, 'Need to connect another site?')}
@@ -241,6 +237,7 @@ function PortalSitesContent() {
             )}
           </p>
         </div>
+        ) : null}
 
         <div className="grid gap-3">
           {removeNotice ? (
@@ -263,11 +260,7 @@ function PortalSitesContent() {
             <BackofficeStackCard
               key={site.site_id}
               variant="portal"
-              className={
-                site.site_id === selectedSiteId
-                  ? 'border-[color:var(--brand-primary)]/20 bg-[color:var(--brand-primary-soft)]/35 ring-1 ring-[color:var(--brand-primary)]/10 dark:bg-blue-500/10'
-                  : 'bg-white/80 dark:bg-slate-950/55'
-              }
+              className="bg-white/80 dark:bg-slate-950/55"
             >
               <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
                 <div className="min-w-0">
@@ -289,30 +282,19 @@ function PortalSitesContent() {
                         {t('portal.home.site_address_needs_setup', {}, 'Needs setup')}
                       </span>
                     ) : null}
-                    {site.site_id === selectedSiteId ? (
-                      <span className="rounded-full bg-[color:var(--brand-primary-soft)] px-2 py-1 text-[0.68rem] font-semibold uppercase tracking-[0.16em] text-[color:var(--brand-primary)]">
-                        {t('common.current', {}, 'Current')}
-                      </span>
-                    ) : null}
                   </div>
                   <p className="mt-1 text-sm text-gray-600 dark:text-gray-400">
-                    {getPortalSiteWordPressUrl(site) ||
-                      t('portal.site_url_missing_short', {}, 'Site URL not configured')}
+                    <span>
+                      {getPortalSiteWordPressUrl(site) ||
+                        t('portal.site_url_missing_short', {}, 'Site URL not configured')}
+                    </span>
+                    <span className="mx-2 text-slate-300 dark:text-slate-700">·</span>
+                    <span>
+                      {t('site_details.connected', {}, 'Connected')} {formatDate(site.created_at)}
+                    </span>
                   </p>
-                  <BackofficeMetricStrip
-                    items={[
-                      { label: t('site_details.connected', {}, 'Connected'), value: formatDate(site.created_at) },
-                    ]}
-                    columnsClassName="lg:grid-cols-1"
-                    variant="portal"
-                  />
                 </div>
                 <div className="flex flex-wrap items-center gap-2 lg:justify-end">
-                  {site.status !== 'active' ? null : site.site_id !== selectedSiteId ? (
-                    <button type="button" onClick={() => void selectSite(site.site_id)} className="btn btn-primary btn-sm">
-                      {t('portal.home.select_site_action', {}, 'Select')}
-                    </button>
-                  ) : null}
                   <Link href={`/portal/sites/${site.site_id}`} className="btn btn-secondary btn-sm">
                     {t('portal.site_record', {}, 'Site record')}
                   </Link>
@@ -343,10 +325,9 @@ function PortalSitesContent() {
         )}
         size="lg"
       >
-        {selectedSite?.account_id ? (
+        {portalAccountId ? (
           <PortalSiteConnectPanel
-            accountId={selectedSite.account_id}
-            currentSiteId={selectedSite.site_id}
+            accountId={portalAccountId}
             sites={session.sites}
             onSiteCreated={(siteId) => handleSiteCreated(siteId)}
             mode="modal"
@@ -358,11 +339,11 @@ function PortalSitesContent() {
           />
         ) : (
           <PortalEmptyState
-            title={t('portal.connect_site_account_required_title', {}, 'Switch into a customer-backed site first')}
+            title={t('portal.connect_site_account_required_title', {}, 'Customer account missing')}
             description={t(
               'portal.connect_site_account_required_desc',
               {},
-              'Select a current site that is already bound to a customer account before adding another site here.'
+              'Your signed-in user has no active customer account. Please create a service center account, then restart the WordPress addon connection.'
             )}
             actionLabel={t('portal.workspace_label', {}, 'Workspace')}
             actionHref="/portal"

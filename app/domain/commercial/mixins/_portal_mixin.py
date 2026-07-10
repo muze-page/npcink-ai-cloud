@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import secrets
 from collections import defaultdict
-from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 from urllib.parse import urlsplit
@@ -27,8 +26,6 @@ from app.core.models import (
     PRINCIPAL_STATUS_ACTIVE,
     PRINCIPAL_STATUS_DISABLED,
     SITE_STATUS_ACTIVE,
-    SITE_USER_GRANT_STATUS_ACTIVE,
-    SITE_USER_GRANT_STATUS_REVOKED,
     Site,
 )
 from app.core.security import build_secret_hash, verify_secret_hash
@@ -143,16 +140,6 @@ def _portal_email_change_code_metadata(value: object) -> dict[str, object]:
     if str(metadata.get("purpose") or "").strip() != "portal_email_change":
         return {}
     return metadata
-
-
-def _first_accessible_site_id(
-    grants: Sequence[tuple[Site, object, object]],
-) -> str:
-    for site, _identity, _grant in grants:
-        site_id = str(getattr(site, "site_id", "") or "").strip()
-        if site_id:
-            return site_id
-    return ""
 
 
 class CommercialServicePortalMixin(CommercialServiceAuditMixin):
@@ -432,18 +419,14 @@ class CommercialServicePortalMixin(CommercialServiceAuditMixin):
                     "service.principal_access_required",
                     "bound user is not active",
                 )
-            grants = repository.list_sites_for_principal(
-                principal_id=identity.principal_id,
-                grant_statuses=[SITE_USER_GRANT_STATUS_ACTIVE],
-            )
             memberships = repository.list_accounts_for_principal(
                 principal_id=identity.principal_id,
                 membership_statuses=[ACCOUNT_USER_MEMBERSHIP_STATUS_ACTIVE],
             )
-            if not grants and not memberships:
+            if not memberships:
                 raise CommercialPermissionError(
                     "service.principal_access_required",
-                    f"principal '{identity.principal_id}' is not active for any accessible site",
+                    f"principal '{identity.principal_id}' is not active for any customer account",
                 )
             binding.last_login_at = now
             identity.last_login_at = now
@@ -558,18 +541,14 @@ class CommercialServicePortalMixin(CommercialServiceAuditMixin):
             identity = repository.get_principal_identity_by_ref(
                 principal_id=principal_id,
             )
-            grants = repository.list_sites_for_principal(
-                principal_id=principal_id,
-                grant_statuses=[SITE_USER_GRANT_STATUS_ACTIVE],
-            )
             memberships = repository.list_accounts_for_principal(
                 principal_id=principal_id,
                 membership_statuses=[ACCOUNT_USER_MEMBERSHIP_STATUS_ACTIVE],
             )
-            if identity is None or (not grants and not memberships):
+            if identity is None or not memberships:
                 raise CommercialPermissionError(
                     "service.principal_access_required",
-                    f"principal '{principal_id}' is not active for any accessible site",
+                    f"principal '{principal_id}' is not active for any customer account",
                 )
             identity.last_login_at = now
             session.commit()
@@ -578,14 +557,6 @@ class CommercialServicePortalMixin(CommercialServiceAuditMixin):
             "principal_id": principal_id,
             "session_version": int(getattr(identity, "session_version", 1) or 1),
             "last_login_at": self._serialize_datetime(now),
-            "site_grants": [
-                {
-                    "site_id": site.site_id,
-                    "grant_id": grant.grant_id,
-                    "status": grant.status,
-                }
-                for site, _identity, grant in grants
-            ],
         }
 
     def issue_portal_email_change_code(
@@ -804,9 +775,7 @@ class CommercialServicePortalMixin(CommercialServiceAuditMixin):
 
         with get_session(self.database_url) as session:
             repository = CommercialRepository(session)
-            existing_identity = repository.get_principal_identity_by_email(
-                email=normalized_email
-            )
+            existing_identity = repository.get_principal_identity_by_email(email=normalized_email)
             if existing_identity is not None:
                 principal_id = str(existing_identity.principal_id or "").strip() or principal_id
                 account_id = f"acct_{principal_id.removeprefix('prn_')}"
@@ -818,9 +787,7 @@ class CommercialServicePortalMixin(CommercialServiceAuditMixin):
             )
             for existing in existing_codes:
                 metadata = (
-                    existing.metadata_json
-                    if isinstance(existing.metadata_json, dict)
-                    else {}
+                    existing.metadata_json if isinstance(existing.metadata_json, dict) else {}
                 )
                 if str(metadata.get("purpose") or "").strip() == "portal_registration":
                     existing.status = PORTAL_LOGIN_CODE_STATUS_EXPIRED
@@ -883,9 +850,7 @@ class CommercialServicePortalMixin(CommercialServiceAuditMixin):
             active_code = None
             registration_metadata: dict[str, object] = {}
             for candidate in active_codes:
-                registration_metadata = _portal_registration_code_metadata(
-                    candidate.metadata_json
-                )
+                registration_metadata = _portal_registration_code_metadata(candidate.metadata_json)
                 if registration_metadata:
                     active_code = candidate
                     break
@@ -910,15 +875,11 @@ class CommercialServicePortalMixin(CommercialServiceAuditMixin):
             identity = repository.get_principal_identity_by_email(email=normalized_email)
             if identity is not None:
                 principal_id = str(identity.principal_id or "").strip()
-                grants = repository.list_sites_for_principal(
-                    principal_id=principal_id,
-                    grant_statuses=[SITE_USER_GRANT_STATUS_ACTIVE],
-                )
                 memberships = repository.list_accounts_for_principal(
                     principal_id=principal_id,
                     membership_statuses=[ACCOUNT_USER_MEMBERSHIP_STATUS_ACTIVE],
                 )
-                if grants or memberships:
+                if memberships:
                     identity.last_login_at = now
                     session.commit()
                     return {
@@ -926,7 +887,7 @@ class CommercialServicePortalMixin(CommercialServiceAuditMixin):
                         "email": normalized_email,
                         "principal_id": principal_id,
                         "session_version": int(getattr(identity, "session_version", 1) or 1),
-                        "site_id": _first_accessible_site_id(grants),
+                        "site_id": "",
                         "last_login_at": self._serialize_datetime(now),
                         "next": {"portal_path": "/portal"},
                     }
@@ -994,13 +955,6 @@ class CommercialServicePortalMixin(CommercialServiceAuditMixin):
                     },
                     provisioned_at=now,
                 )
-                repository.upsert_principal_site_grant(
-                    grant_id=f"sadmg_{uuid4().hex}",
-                    principal_id=identity.principal_id,
-                    site_id=site.site_id,
-                    status=SITE_USER_GRANT_STATUS_ACTIVE,
-                    metadata_json={"source": "portal_self_registration"},
-                )
             repository.upsert_account_user_membership(
                 membership_id=f"aum_{uuid4().hex}",
                 principal_id=identity.principal_id,
@@ -1051,7 +1005,7 @@ class CommercialServicePortalMixin(CommercialServiceAuditMixin):
                 outcome="succeeded",
                 account_id=account.account_id,
                 site_id=str(getattr(site, "site_id", "") or ""),
-                scope_kind="principal_access",
+                scope_kind="account_membership",
                 scope_id=(
                     f"{site.site_id}:{identity.principal_id}"
                     if site is not None
@@ -1073,23 +1027,22 @@ class CommercialServicePortalMixin(CommercialServiceAuditMixin):
     ) -> dict[str, object]:
         with get_session(self.database_url) as session:
             repository = CommercialRepository(session)
-            candidate_sites = repository.list_sites_for_principal(
-                principal_id=principal_id,
-                grant_statuses=[SITE_USER_GRANT_STATUS_ACTIVE],
-            )
-            sites_by_account: defaultdict[str, list[Site]] = defaultdict(list)
-            for site, _identity, _grant in candidate_sites:
-                if site.account_id:
-                    sites_by_account[site.account_id].append(site)
             memberships = repository.list_accounts_for_principal(
                 principal_id=principal_id,
                 membership_statuses=[ACCOUNT_USER_MEMBERSHIP_STATUS_ACTIVE],
             )
+            membership_account_ids = [
+                str(getattr(account, "account_id", "") or "")
+                for account, _identity, _membership in memberships
+                if str(getattr(account, "account_id", "") or "").strip()
+            ]
+            sites_by_account: defaultdict[str, list[Site]] = defaultdict(list)
+            for site in repository.list_sites(account_ids=membership_account_ids, limit=None):
+                if site.account_id:
+                    sites_by_account[site.account_id].append(site)
             account_items: list[dict[str, object]] = []
-            seen_account_ids: set[str] = set()
             for account, _identity, membership in memberships:
                 account_id = str(getattr(account, "account_id", "") or "")
-                seen_account_ids.add(account_id)
                 account_items.append(
                     {
                         "account_id": account_id,
@@ -1110,36 +1063,15 @@ class CommercialServicePortalMixin(CommercialServiceAuditMixin):
                         ],
                     }
                 )
-            for account_id, sites in sites_by_account.items():
-                if account_id in seen_account_ids:
-                    continue
-                unlisted_account = repository.get_account(account_id)
-                if unlisted_account is None:
-                    continue
-                account_items.append(
-                    {
-                        "account_id": account_id,
-                        "name": str(getattr(unlisted_account, "name", "") or ""),
-                        "status": str(getattr(unlisted_account, "status", "") or ""),
-                        "principal_id": principal_id,
-                        "identity_type": IDENTITY_TYPE_USER,
-                        "allowed_actions": resolve_principal_allowed_actions(),
-                        "role": USER_ROLE_USER,
-                        "membership_id": "",
-                        "membership_status": "",
-                        "site_count": len(sites),
-                        "sites": [cast(Any, self)._serialize_site(site) for site in sites],
-                    }
-                )
             return {
                 "principal_id": principal_id,
                 "items": account_items,
             }
 
-    def upsert_principal_access(
+    def upsert_account_member_access(
         self,
         *,
-        site_id: str,
+        account_id: str,
         email: str,
         status: str = PRINCIPAL_STATUS_ACTIVE,
         metadata_json: dict[str, object] | None = None,
@@ -1152,18 +1084,13 @@ class CommercialServicePortalMixin(CommercialServiceAuditMixin):
                 "service.principal_status_invalid",
                 "principal status must be active or disabled",
             )
-        grant_status = (
-            SITE_USER_GRANT_STATUS_ACTIVE
-            if normalized_status == PRINCIPAL_STATUS_ACTIVE
-            else SITE_USER_GRANT_STATUS_REVOKED
-        )
         with get_session(self.database_url) as session:
             repository = CommercialRepository(session)
-            site = repository.get_site(site_id)
-            if site is None:
+            account = repository.get_account(account_id)
+            if account is None:
                 raise CommercialPermissionError(
-                    "service.site_not_found",
-                    f"site '{site_id}' was not found",
+                    "service.account_not_found",
+                    f"account '{account_id}' was not found",
                 )
             existing_identity = repository.get_principal_identity_by_email(
                 email=normalized_email,
@@ -1180,61 +1107,45 @@ class CommercialServicePortalMixin(CommercialServiceAuditMixin):
                 metadata_json=metadata_json,
             )
             if normalized_status == PRINCIPAL_STATUS_DISABLED:
-                identity = repository.increment_principal_session_version(
-                    principal_id=identity.principal_id,
-                ) or identity
-            grant = repository.upsert_principal_site_grant(
-                grant_id=f"sadmg_{uuid4().hex}",
+                identity = (
+                    repository.increment_principal_session_version(
+                        principal_id=identity.principal_id,
+                    )
+                    or identity
+                )
+            membership = repository.upsert_account_user_membership(
+                membership_id=f"aum_{uuid4().hex}",
                 principal_id=identity.principal_id,
-                site_id=site_id,
-                status=grant_status,
+                account_id=account_id,
+                role=normalize_user_role(USER_ROLE_USER),
+                status=(
+                    ACCOUNT_USER_MEMBERSHIP_STATUS_ACTIVE
+                    if normalized_status == PRINCIPAL_STATUS_ACTIVE
+                    else ACCOUNT_USER_MEMBERSHIP_STATUS_REVOKED
+                ),
+                allowed_actions_json=resolve_principal_allowed_actions(),
                 metadata_json={
                     **dict(metadata_json or {}),
-                    "source": str((metadata_json or {}).get("source") or "principal_access"),
+                    "source": str((metadata_json or {}).get("source") or "account_membership"),
                 },
             )
-            membership = None
-            account_id = str(getattr(site, "account_id", "") or "")
-            if account_id:
-                membership = repository.upsert_account_user_membership(
-                    membership_id=f"aum_{uuid4().hex}",
-                    principal_id=identity.principal_id,
-                    account_id=account_id,
-                    role=normalize_user_role(USER_ROLE_USER),
-                    status=(
-                        ACCOUNT_USER_MEMBERSHIP_STATUS_ACTIVE
-                        if normalized_status == PRINCIPAL_STATUS_ACTIVE
-                        else ACCOUNT_USER_MEMBERSHIP_STATUS_REVOKED
-                    ),
-                    allowed_actions_json=resolve_principal_allowed_actions(),
-                    metadata_json={
-                        **dict(metadata_json or {}),
-                        "source": str(
-                            (metadata_json or {}).get("source") or "principal_access"
-                        ),
-                    },
-                )
             payload: dict[str, object] = {
                 "principal_id": identity.principal_id,
                 "email": identity.email,
                 "status": identity.status,
                 "session_version": int(identity.session_version or 1),
                 "account_id": account_id,
-                "site_id": site_id,
-                "grant_id": grant.grant_id,
-                "grant_status": grant.status,
-                "membership_id": str(getattr(membership, "membership_id", "") or ""),
-                "membership_status": str(getattr(membership, "status", "") or ""),
+                "membership_id": membership.membership_id,
+                "membership_status": membership.status,
             }
             self._record_service_audit_in_session(
                 repository=repository,
                 audit_context=audit_context,
-                event_kind="principal_access.upsert",
+                event_kind="account_membership.upsert",
                 outcome="succeeded",
-                account_id=str(getattr(site, "account_id", "") or ""),
-                site_id=site_id,
-                scope_kind="principal_access",
-                scope_id=f"{site_id}:{principal_id}",
+                account_id=account_id,
+                scope_kind="account_membership",
+                scope_id=f"{account_id}:{principal_id}",
                 payload_json=payload,
             )
             session.commit()
@@ -1246,35 +1157,19 @@ class CommercialServicePortalMixin(CommercialServiceAuditMixin):
             repository = CommercialRepository(session)
             identity = repository.get_principal_identity_by_email(email=normalized_email)
             principal_id = str(identity.principal_id) if identity is not None else ""
-            candidate_sites = repository.list_sites_for_principal(
-                principal_id=principal_id,
-                grant_statuses=[SITE_USER_GRANT_STATUS_ACTIVE],
-            ) if principal_id else []
-            memberships = repository.list_accounts_for_principal(
-                principal_id=principal_id,
-                membership_statuses=[ACCOUNT_USER_MEMBERSHIP_STATUS_ACTIVE],
-            ) if principal_id else []
-        if identity is None or (not candidate_sites and not memberships):
+            memberships = (
+                repository.list_accounts_for_principal(
+                    principal_id=principal_id,
+                    membership_statuses=[ACCOUNT_USER_MEMBERSHIP_STATUS_ACTIVE],
+                )
+                if principal_id
+                else []
+            )
+        if identity is None or not memberships:
             raise CommercialPermissionError(
                 "service.principal_email_not_found",
-                f"no user site grant was found for '{normalized_email}'",
+                f"no customer account membership was found for '{normalized_email}'",
             )
-        site_items = [
-            {
-                "principal_id": principal_id,
-                "identity_type": IDENTITY_TYPE_USER,
-                "allowed_actions": resolve_principal_allowed_actions(),
-                "role": USER_ROLE_USER,
-                "status": grant.status,
-                "site": cast(Any, self)._serialize_site(site),
-            }
-            for site, _identity, grant in candidate_sites
-        ]
-        account_ids = {
-            str(getattr(site, "account_id", "") or "")
-            for site, _identity, _grant in candidate_sites
-            if str(getattr(site, "account_id", "") or "").strip()
-        }
         portal_accounts = self.list_portal_accounts(principal_id=principal_id)
         portal_account_items = portal_accounts.get("items")
         if not isinstance(portal_account_items, list):
@@ -1283,14 +1178,8 @@ class CommercialServicePortalMixin(CommercialServiceAuditMixin):
             "email": normalized_email,
             "principal_id": principal_id,
             "session_version": int(getattr(identity, "session_version", 1) or 1),
-            "sites": site_items,
-            "accounts": [
-                item
-                for item in portal_account_items
-                if isinstance(item, dict) and (
-                    not account_ids or str(item.get("account_id") or "") in account_ids
-                )
-            ],
+            "sites": [],
+            "accounts": [item for item in portal_account_items if isinstance(item, dict)],
         }
 
     def get_portal_principal_profile(self, *, principal_id: str) -> dict[str, object]:

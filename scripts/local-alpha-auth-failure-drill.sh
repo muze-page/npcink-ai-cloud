@@ -8,9 +8,8 @@ EVIDENCE_FILE="${EVIDENCE_DIR}/evidence-${SUFFIX}.json"
 
 mkdir -p "${EVIDENCE_DIR}"
 
-docker compose -f "${ROOT_DIR}/docker-compose.dev.yml" run --rm \
+	docker compose -f "${ROOT_DIR}/docker-compose.dev.yml" run --rm \
 	-e NPCINK_CLOUD_OPENAI_API_KEY= \
-	-e NPCINK_CLOUD_OPENAI_COMPATIBLE_API_KEY= \
 	api python -m app.dev.auth_failure_drill >"${EVIDENCE_FILE}"
 
 python3 - "${EVIDENCE_FILE}" <<'PY'

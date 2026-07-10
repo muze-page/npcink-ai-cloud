@@ -582,6 +582,9 @@ config now fails fast when these are missing:
 - `NPCINK_CLOUD_INTERNAL_AUTH_TOKEN`
 - `NPCINK_CLOUD_ADMIN_BOOTSTRAP_TOKEN`
 - `NPCINK_CLOUD_ADMIN_SESSION_SECRET`
+- `NPCINK_CLOUD_SERVICE_SETTINGS_SECRET` is recommended for new production
+  deploys so service-setting credentials are not tied to the admin session
+  secret.
 - `NPCINK_CLOUD_PORTAL_JWT_SECRET`
 - `NPCINK_CLOUD_BROWSER_ORIGIN_ALLOWLIST`
 - `NPCINK_CLOUD_TRUSTED_HOST_ALLOWLIST`
@@ -589,6 +592,11 @@ config now fails fast when these are missing:
 After the first platform-admin login, configure Portal public URL, QQ login,
 and Portal email delivery in `/admin/service-settings`. These service settings
 are stored by Cloud runtime storage and are no longer read from `.env`.
+Secret values saved through `/admin/service-settings` are encrypted with
+`NPCINK_CLOUD_SERVICE_SETTINGS_SECRET` when it is configured. Older rows saved
+before this setting are still readable through the previous runtime secret
+chain, and re-saving the email configuration migrates the SMTP password onto
+the dedicated service-settings secret.
 
 If a development deploy still has Portal public URL, QQ login, or SMTP values
 in `.env`, import the current `NPCINK_CLOUD_*` values once before removing

@@ -257,8 +257,8 @@ Before enabling each provider in production:
 - Alipay return must remain browser return UX, not payment truth.
 - WeChat Pay notify needs signature verification and reconciliation before
   any subscription or entitlement change.
-- Legacy `/portal/v1/auth/qq/callback` should be removed after development and
-  deployed configurations have migrated to `/open/auth/qq/callback`.
+- Legacy `/portal/v1/auth/qq/callback` was removed on 2026-07-10. Deployed QQ
+  applications must use `/open/auth/qq/callback`.
 
 ## Related Files
 

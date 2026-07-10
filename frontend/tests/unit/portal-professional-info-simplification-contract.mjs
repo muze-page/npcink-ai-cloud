@@ -89,7 +89,7 @@ assert.doesNotMatch(
 assert.match(
   siteRecordSource,
   /site_address_label[\s\S]*site_record_current_label[\s\S]*site_record_current_title/,
-  'Portal site record should focus on the site address and current site status'
+  'Portal site record should focus on the site address and site record status'
 );
 assert.doesNotMatch(
   siteRecordSource,
@@ -128,27 +128,77 @@ assert.match(
   'Portal site list should explain that new site connections start from the WordPress addon'
 );
 assert.doesNotMatch(
+  sitesSource,
+  /selectSite\(site\.site_id\)|home\.select_site_action|common\.current/,
+  'Portal site list must not expose current-site switching controls'
+);
+assert.doesNotMatch(
+  sitesSource,
+  /selectedSiteId|selectedSite\s*=|activeSite/,
+  'Portal site list must not derive account connection context from a current site'
+);
+assert.match(
+  sitesSource,
+  /portalAccountId[\s\S]*accountId=\{portalAccountId\}/,
+  'Portal site connection panel must use account context for addon binding'
+);
+assert.doesNotMatch(
+  sitesSource,
+  /visibleSites\.find\(\(site\) => site\.account_id\)|currentSiteId=\{firstVisibleSiteId\}|firstVisibleSiteId/,
+  'Portal site connection panel must not derive account context from a site record compatibility fallback'
+);
+assert.doesNotMatch(
   portalHomeSource,
   /PortalSiteConnectPanel|\/portal\/sites\?filter=/,
   'Portal home must not embed the site creation form or link to hidden site-list filters'
 );
+assert.doesNotMatch(
+  portalHomeSource,
+  /onSelectCurrentSite|isCurrentSite|home\.select_site_action|common\.current/,
+  'Portal home must not expose current-site switching controls'
+);
 
 assert.doesNotMatch(
   auditSource,
-  /t\('audit\.title'|audit\.event_types|audit\.success_rate|eventKindFilter|outcomeFilter|record_type_label|all_record_types|all_results|record_count_label|range_label|apply_filters|<details/,
+  /t\('audit\.title'|audit\.event_types|audit\.success_rate|eventKindFilter|outcomeFilter|record_type_label|all_record_types|all_results|record_count_label|range_label|apply_filters/,
   'Portal recent activity must not expose audit-log copy, advanced filters, or event-type controls'
+);
+assert.doesNotMatch(
+  auditSource,
+  /usePortalSiteSelection|selectedSiteId|getAuditBundle\(siteId|getAuditBundle\(selectedSiteId|listAuditEvents\(siteId/,
+  'Portal recent activity must load account-level activity instead of depending on a selected site'
+);
+assert.match(
+  auditSource,
+  /portalClient\.getAuditBundle\(\{ limit: 10 \}\)/,
+  'Portal recent activity must use the account-level audit bundle'
+);
+assert.match(
+  auditSource,
+  /<details[\s\S]*portal\.support_information[\s\S]*Event ID[\s\S]*audit\.trace_id/,
+  'Portal recent activity must collapse support identifiers behind support information'
 );
 assert.match(
   auditSource,
   /title=\{t\('portal\.audit\.nav_label'[\s\S]*portal\.audit\.recent_desc/,
   'Portal recent activity should show plain recent activity copy without a filter console'
 );
+assert.match(
+  monitoringSource,
+  /data-portal-support-deeplink="monitoring"/,
+  'Portal monitoring must stay available only as a support deep link'
+);
+assert.match(
+  auditSource,
+  /data-portal-support-deeplink="audit"/,
+  'Portal recent activity must stay available only as a support deep link'
+);
 
 for (const expectedCopy of [
   "'portal.billing.customer_title': 'Package'",
   "'portal.billing.customer_title': '套餐'",
-  "'portal.site_record_current_label': 'Current site'",
-  "'portal.site_record_current_label': '当前站点'",
+  "'portal.site_record_current_label': 'Site record'",
+  "'portal.site_record_current_label': '站点记录'",
   "'portal.audit.recent_desc': 'Only recent customer-readable activity is shown here.'",
   "'portal.audit.recent_desc': '这里只显示最近的客户可读活动。'",
   "'portal.usage.remaining_service_uses_label': 'Service uses left'",
@@ -157,6 +207,8 @@ for (const expectedCopy of [
   "'portal.site_record': '查看站点'",
   "'portal.sites.connect_hint_title': 'Need to connect another site?'",
   "'portal.sites.connect_hint_title': '需要连接新站点？'",
+  "'portal.home.account_status_ok_desc': 'This account can use the hosted service normally.'",
+  "'portal.home.account_status_ok_desc': '当前账号可以正常使用托管服务。'",
 ]) {
   assert.ok(i18nSource.includes(expectedCopy), `${expectedCopy} must be present`);
 }

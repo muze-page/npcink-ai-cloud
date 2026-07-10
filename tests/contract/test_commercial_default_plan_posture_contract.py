@@ -20,6 +20,9 @@ def test_default_free_plan_is_the_current_bootstrap_posture() -> None:
     assert 'plan_id: str = "free"' in seed_runtime_code
     assert 'plan_version_id: str = "free_v1"' in seed_runtime_code
     assert "bind_default_free: bool = False" in account_code
+    assert 'currency: str = "CNY"' in billing_code
+    assert "currency=self._normalize_plan_currency(currency)" in billing_code
+    assert billing_code.count('currency="CNY"') >= 2
 
 
 def test_plus_plan_tier_is_registered_in_service_and_billing_templates() -> None:

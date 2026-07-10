@@ -18,6 +18,18 @@ def test_settings_require_long_security_tokens() -> None:
     assert "internal_auth_token must be at least 32 bytes long" in str(error.value)
 
 
+def test_settings_require_long_service_settings_secret_when_configured() -> None:
+    with pytest.raises(ValidationError) as error:
+        Settings(
+            environment="test",
+            database_url="sqlite+pysqlite:///:memory:",
+            redis_url="redis://localhost:6379/0",
+            service_settings_secret="too-short",
+        )
+
+    assert "service_settings_secret must be at least 32 bytes long" in str(error.value)
+
+
 def test_settings_require_admin_session_secret_outside_dev_and_test() -> None:
     with pytest.raises(ValidationError) as error:
         Settings(
@@ -41,6 +53,7 @@ def test_settings_accept_hardened_production_auth_settings() -> None:
         internal_auth_token="npcink-cloud-internal-prod-token-32b",
         admin_bootstrap_token="npcink-cloud-admin-bootstrap-prod-token",
         admin_session_secret="npcink-cloud-ops-session-secret-prod-32b",
+        service_settings_secret="npcink-cloud-service-settings-prod-32b",
         portal_jwt_secret="npcink-cloud-portal-jwt-secret-prod-32b",
         browser_origin_allowlist="https://cloud.example.com",
         trusted_host_allowlist="cloud.example.com",
@@ -59,6 +72,7 @@ def test_settings_reject_dev_fallback_flag_outside_dev_and_test() -> None:
             redis_url="redis://localhost:6379/0",
             internal_auth_token="npcink-cloud-internal-prod-token-32b",
             admin_session_secret="npcink-cloud-ops-session-secret-prod-32b",
+            service_settings_secret="npcink-cloud-service-settings-prod-32b",
             allow_dev_admin_internal_token_fallback=True,
         )
 
@@ -75,6 +89,7 @@ def test_settings_reject_openai_sample_catalog_profile_outside_dev_and_test() ->
             redis_url="redis://localhost:6379/0",
             internal_auth_token="npcink-cloud-internal-prod-token-32b",
             admin_session_secret="npcink-cloud-ops-session-secret-prod-32b",
+            service_settings_secret="npcink-cloud-service-settings-prod-32b",
             portal_jwt_secret="npcink-cloud-portal-jwt-secret-prod-32b",
             browser_origin_allowlist="https://cloud.example.com",
             trusted_host_allowlist="cloud.example.com",
@@ -87,6 +102,10 @@ def test_settings_reject_openai_sample_catalog_profile_outside_dev_and_test() ->
 @pytest.mark.parametrize(
     ("overrides", "message"),
     [
+        (
+            {"service_settings_secret": ""},
+            "service_settings_secret is required outside development/test environments",
+        ),
         (
             {"internal_auth_token": ""},
             "internal_auth_token is required outside development/test environments",
@@ -126,6 +145,7 @@ def test_settings_require_production_portal_and_secret_fields(
         "internal_auth_token": "npcink-cloud-internal-prod-token-32b",
         "admin_bootstrap_token": "npcink-cloud-admin-bootstrap-prod-token",
         "admin_session_secret": "npcink-cloud-ops-session-secret-prod-32b",
+        "service_settings_secret": "npcink-cloud-service-settings-prod-32b",
         "portal_jwt_secret": "npcink-cloud-portal-jwt-secret-prod-32b",
         "browser_origin_allowlist": "https://cloud.example.com",
         "trusted_host_allowlist": "cloud.example.com",

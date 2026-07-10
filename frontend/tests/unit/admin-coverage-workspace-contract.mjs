@@ -3,6 +3,7 @@ import { resolve } from 'node:path';
 import assert from 'node:assert/strict';
 
 const coverageSource = readFileSync(resolve(process.cwd(), 'src/app/admin/coverage/page.tsx'), 'utf8');
+const layoutSource = readFileSync(resolve(process.cwd(), 'src/app/admin/layout.tsx'), 'utf8');
 const i18nSource = readFileSync(resolve(process.cwd(), 'src/lib/i18n.ts'), 'utf8');
 
 assert.match(
@@ -21,6 +22,24 @@ assert.match(
   coverageSource,
   /admin\.coverage\.inspector_title[\s\S]*selectedQueueItem[\s\S]*admin\.coverage\.inspector_boundary/,
   'Coverage workspace must show a right-side customer inspector with a boundary note'
+);
+
+assert.doesNotMatch(
+  coverageSource,
+  /tab_packages|activeTab|setActiveTab|\/api\/admin\/plans/,
+  'Coverage workspace must not reintroduce the duplicate package overview tab or fetch the package catalog directly'
+);
+
+assert.match(
+  coverageSource,
+  /href="\/admin\/subscriptions"[\s\S]*admin\.coverage_open_subscription_queue_action/,
+  'Coverage workspace must expose subscription risk as a secondary entry'
+);
+
+assert.doesNotMatch(
+  layoutSource,
+  /href: '\/admin\/subscriptions'[\s\S]*labelKey: 'admin\.nav_subscriptions'/,
+  'Subscription risk must not return as a top-level admin sidebar entry'
 );
 
 assert.match(

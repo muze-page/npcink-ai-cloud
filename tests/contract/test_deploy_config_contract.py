@@ -128,6 +128,9 @@ def test_env_example_production_payload_validates_with_canonical_names(
         "NPCINK_CLOUD_INTERNAL_AUTH_TOKEN=": "NPCINK_CLOUD_INTERNAL_AUTH_TOKEN=" + ("i" * 32),
         "NPCINK_CLOUD_ADMIN_BOOTSTRAP_TOKEN=": "NPCINK_CLOUD_ADMIN_BOOTSTRAP_TOKEN=" + ("b" * 32),
         "NPCINK_CLOUD_ADMIN_SESSION_SECRET=": "NPCINK_CLOUD_ADMIN_SESSION_SECRET=" + ("a" * 32),
+        "NPCINK_CLOUD_SERVICE_SETTINGS_SECRET=": (
+            "NPCINK_CLOUD_SERVICE_SETTINGS_SECRET=" + ("s" * 32)
+        ),
         "NPCINK_CLOUD_PORTAL_JWT_SECRET=": "NPCINK_CLOUD_PORTAL_JWT_SECRET=" + ("j" * 32),
         "NPCINK_CLOUD_BROWSER_ORIGIN_ALLOWLIST=": (
             "NPCINK_CLOUD_BROWSER_ORIGIN_ALLOWLIST=https://cloud.example.com"
@@ -154,23 +157,43 @@ def test_env_example_production_payload_validates_with_canonical_names(
     assert settings.openai_base_url == "https://api.openai.com/v1"
 
 
-def test_settings_accept_legacy_admin_aliases_without_requiring_openai_env(monkeypatch) -> None:
+def test_settings_ignore_retired_admin_and_openai_aliases(monkeypatch) -> None:
     monkeypatch.setenv("NPCINK_CLOUD_ENVIRONMENT", "production")
     monkeypatch.setenv("NPCINK_CLOUD_DATABASE_URL", "sqlite+pysqlite:///:memory:")
     monkeypatch.setenv("NPCINK_CLOUD_REDIS_URL", "redis://localhost:6379/0")
     monkeypatch.setenv("NPCINK_CLOUD_INTERNAL_AUTH_TOKEN", "i" * 32)
     monkeypatch.setenv("NPCINK_CLOUD_ADMIN_BOOTSTRAP_TOKEN", "b" * 32)
     monkeypatch.setenv("NPCINK_CLOUD_ADMIN_SESSION_SECRET", "a" * 32)
-    monkeypatch.setenv("NPCINK_CLOUD_OPS_SESSION_SECRET", "a" * 32)
+    monkeypatch.setenv("NPCINK_CLOUD_OPS_SESSION_SECRET", "z" * 32)
+    monkeypatch.setenv("NPCINK_CLOUD_SERVICE_SETTINGS_SECRET", "s" * 32)
     monkeypatch.setenv("NPCINK_CLOUD_PORTAL_JWT_SECRET", "j" * 32)
     monkeypatch.setenv("NPCINK_CLOUD_BROWSER_ORIGIN_ALLOWLIST", "https://cloud.example.com")
     monkeypatch.setenv("NPCINK_CLOUD_TRUSTED_HOST_ALLOWLIST", "cloud.example.com")
+    monkeypatch.setenv(
+        "NPCINK_CLOUD_OPENAI_COMPATIBLE_BASE_URL",
+        "https://retired.example.com/v1",
+    )
 
     settings = Settings(_env_file=None)
 
     assert settings.admin_session_secret == "a" * 32
     assert settings.openai_api_key in {None, ""}
     assert settings.openai_base_url == "https://api.openai.com/v1"
+
+
+def test_retired_ops_secret_does_not_satisfy_production_config(monkeypatch) -> None:
+    monkeypatch.setenv("NPCINK_CLOUD_ENVIRONMENT", "production")
+    monkeypatch.setenv("NPCINK_CLOUD_INTERNAL_AUTH_TOKEN", "i" * 32)
+    monkeypatch.setenv("NPCINK_CLOUD_ADMIN_BOOTSTRAP_TOKEN", "b" * 32)
+    monkeypatch.delenv("NPCINK_CLOUD_ADMIN_SESSION_SECRET", raising=False)
+    monkeypatch.setenv("NPCINK_CLOUD_OPS_SESSION_SECRET", "z" * 32)
+    monkeypatch.setenv("NPCINK_CLOUD_SERVICE_SETTINGS_SECRET", "s" * 32)
+    monkeypatch.setenv("NPCINK_CLOUD_PORTAL_JWT_SECRET", "j" * 32)
+    monkeypatch.setenv("NPCINK_CLOUD_BROWSER_ORIGIN_ALLOWLIST", "https://cloud.example.com")
+    monkeypatch.setenv("NPCINK_CLOUD_TRUSTED_HOST_ALLOWLIST", "cloud.example.com")
+
+    with pytest.raises(ValueError, match="admin_session_secret is required"):
+        Settings(_env_file=None)
 
 
 def test_preview_and_baseline_scripts_lock_migration_and_schema_checks() -> None:

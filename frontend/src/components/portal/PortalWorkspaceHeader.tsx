@@ -13,7 +13,8 @@ export type PortalWorkspacePage =
   | 'audit'
   | 'monitoring'
   | 'record'
-  | 'sites';
+  | 'sites'
+  | 'support';
 
 export type PortalWorkspaceMetric = {
   label: string;
@@ -36,7 +37,7 @@ type PortalWorkspaceHeaderProps = {
   description?: string;
   eyebrowInfo?: string;
   currentPage: PortalWorkspacePage;
-  selectedSiteId: string;
+  selectedSiteId?: string;
   selectedSiteName?: string | null;
   showSiteContextSummary?: boolean;
   sites?: PortalWorkspaceSite[];
@@ -55,11 +56,10 @@ export function PortalWorkspaceHeader({
   description,
   eyebrowInfo,
   currentPage,
-  selectedSiteId,
+  selectedSiteId = '',
   selectedSiteName,
   showSiteContextSummary = false,
   sites = [],
-  onSiteChange,
   metrics = [],
   metricsColumnsClassName = 'lg:grid-cols-4',
   primaryAction,
@@ -105,7 +105,7 @@ export function PortalWorkspaceHeader({
         </h1>
         {showSiteContextSummary ? (
           <p className="mt-2 max-w-md truncate text-sm text-gray-600 dark:text-gray-400">
-            {selectedSiteName || selectedSiteWordPressUrl || t('portal.current_site', {}, 'Current site')}
+            {selectedSiteName || selectedSiteWordPressUrl || t('portal.current_site', {}, 'Site record')}
             {' · '}
             {selectedSiteWordPressUrl ||
               t('portal.site_url_missing', {}, 'WordPress URL not configured')}

@@ -1382,10 +1382,10 @@ class CommercialServicePaymentMixin(CommercialServiceAuditMixin):
 
     def _normalize_payment_currency(self, currency: str) -> str:
         normalized = str(currency or "").strip().upper()
-        if normalized not in {"CNY", "USD"}:
+        if normalized != "CNY":
             raise CommercialValidationError(
                 "service.payment_currency_unsupported",
-                "payment currency must be CNY or USD",
+                "payment currency must be CNY",
             )
         return normalized
 

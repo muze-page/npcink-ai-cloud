@@ -1,19 +1,16 @@
 'use client';
 
 import React, { Suspense, useCallback, useEffect, useMemo, useState } from 'react';
-import { useSearchParams } from 'next/navigation';
 import { LoadingFallback } from '@/components/ui/LoadingFallback';
 import { PortalWorkspaceHeader } from '@/components/portal/PortalWorkspaceHeader';
 import {
   PortalEmptyState,
   PortalErrorState,
   PortalLoadingState,
-  PortalSiteSwitchingNotice,
   PortalSignedOutState,
 } from '@/components/portal/PortalPageState';
 import { UsageBarChart } from '@/components/ui/UsageChart';
 import { useLocale } from '@/contexts/LocaleContext';
-import { usePortalSiteSelection } from '@/hooks/usePortalSiteSelection';
 import { useRetry } from '@/hooks/useRetry';
 import { useSession } from '@/hooks/useSession';
 import {
@@ -81,26 +78,18 @@ function portalCreditBreakdownLabel(
 }
 
 function PortalUsageContent() {
-  const searchParams = useSearchParams();
   const { t } = useLocale();
-  const { session, isLoading: sessionLoading, isAuthenticated, selectSite } = useSession();
-  const { sites, selectedSiteId, selectedSite, isSwitchingSite, switchingSiteName, setSelectedSiteId } = usePortalSiteSelection({
-    session,
-    isAuthenticated,
-    searchParams,
-    selectSite,
-  });
+  const { session, isLoading: sessionLoading, isAuthenticated } = useSession();
   const [usage, setUsage] = useState<PortalUsageSummaryPayload | null>(null);
   const [entitlements, setEntitlements] = useState<Entitlements | null>(null);
   const [creditLedger, setCreditLedger] = useState<PortalCreditLedgerPayload | null>(null);
 
   const loadBundle = useCallback(async () => {
-    if (!selectedSiteId) return;
-    const bundle = await portalClient.getUsageBundle(selectedSiteId);
+    const bundle = await portalClient.getUsageBundle();
     setUsage(bundle.usage);
     setEntitlements(bundle.entitlements);
     setCreditLedger(bundle.creditLedger);
-  }, [selectedSiteId]);
+  }, []);
 
   const { execute, isLoading: retryLoading, error: retryError, retry } = useRetry(loadBundle, {
     maxRetries: 2,
@@ -109,15 +98,11 @@ function PortalUsageContent() {
   });
 
   useEffect(() => {
-    if (!session || !isAuthenticated || !selectedSiteId) {
+    if (!session || !isAuthenticated) {
       return;
     }
     void execute();
-  }, [isAuthenticated, selectedSiteId, session, execute]);
-
-  const handleSiteChange = async (siteId: string) => {
-    await setSelectedSiteId(siteId);
-  };
+  }, [isAuthenticated, session, execute]);
 
   const toFinite = (value: unknown): number => {
     const numeric = Number(value || 0);
@@ -307,26 +292,12 @@ function PortalUsageContent() {
         eyebrowInfo={t(
           'portal.usage.summary_desc',
           {},
-          "Review this period's point use, usage records, and trends for the selected site."
+          "Review this period's account point use, records, and trends."
         )}
         currentPage="usage"
-        selectedSiteId={selectedSiteId}
-        selectedSiteName={selectedSite?.site_name}
-        sites={sites}
-        onSiteChange={handleSiteChange}
         metrics={usageHeaderMetrics}
         metricsColumnsClassName="lg:grid-cols-3"
       />
-
-      {isSwitchingSite ? (
-        <PortalSiteSwitchingNotice
-          message={t(
-            'portal.site_switching_notice_with_target',
-            { site: switchingSiteName || selectedSite?.site_name || selectedSiteId },
-            `Switching to ${switchingSiteName || selectedSite?.site_name || selectedSiteId}. Page data will update automatically.`
-          )}
-        />
-      ) : null}
 
       {entitlements ? (
         <BackofficeSectionPanel className="space-y-5" variant="portal" data-portal-usage="usage-records">
@@ -533,10 +504,10 @@ function PortalUsageContent() {
           description={t(
             'portal.usage.empty_desc',
             {},
-            'This site does not have a usage snapshot for the current period yet. Open Package to confirm coverage, or return to the workspace.'
+            'This account does not have a usage snapshot for the current period yet. Open Package to confirm coverage, or return to the workspace.'
           )}
           actionLabel={t('portal.nav_package', {}, 'Package')}
-          actionHref={selectedSiteId ? `/portal/billing?site=${selectedSiteId}` : '/portal/billing'}
+          actionHref="/portal/billing"
           />
         ) : null}
         </div>

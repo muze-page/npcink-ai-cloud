@@ -32,6 +32,8 @@ def test_removed_public_control_plane_surfaces_are_absent_from_openapi(tmp_path)
         "/v1/preset/advisor/recommendation",
         "/portal/v1/notifications",
         "/portal/v1/topup-packs",
+        "/portal/v1/auth/qq/callback",
+        "/internal/service/sites/{site_id}/user-grants",
         "/internal/service/admin/topup-packs",
         "/internal/service/admin/portal-action-requests",
         "/internal/service/admin/impersonations",
@@ -63,6 +65,7 @@ def test_removed_urls_return_404(tmp_path) -> None:
         "/v1/prompt/upgrade/recommendation",
         "/v1/preset/advisor/recommendation",
         "/portal/v1/notifications",
+        "/portal/v1/auth/qq/callback",
         "/portal/v1/sites/site_alpha/analytics/overview",
         "/portal/v1/sites/site_alpha/compliance/posture",
         "/portal/v1/sites/site_alpha/package-change-requests",
@@ -85,6 +88,7 @@ def test_removed_urls_return_404(tmp_path) -> None:
         "/internal/service/admin/models",
         "/internal/service/admin/recognition",
         "/internal/service/admin/wordpress-ai-routing",
+        "/internal/service/sites/site_alpha/user-grants",
     )
 
     for url in removed_urls:

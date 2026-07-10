@@ -57,6 +57,9 @@ def test_login_code_email_has_human_subject_and_html_body() -> None:
     assert "你的登录验证码" in html
     assert "123456" in html
     assert "登录邮箱" in html
+    assert message["Date"]
+    assert message["Message-ID"]
+    assert message["Message-ID"].endswith("@example.test>")
 
 
 def test_registration_code_email_is_distinct_from_login_template() -> None:

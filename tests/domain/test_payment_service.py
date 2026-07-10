@@ -26,7 +26,7 @@ from app.core.models import (
     PaymentOrder,
     PaymentRefund,
 )
-from app.domain.commercial.errors import CommercialConflictError
+from app.domain.commercial.errors import CommercialConflictError, CommercialValidationError
 from app.domain.commercial.service import CommercialService, ServiceAuditContext
 from tests.conftest import (
     TEST_ADMIN_SESSION_SECRET,
@@ -110,6 +110,46 @@ def test_payment_order_does_not_grant_entitlement_until_paid(tmp_path: Path) -> 
         assert session.scalar(select(PaymentOrder)).status == PAYMENT_ORDER_STATUS_PENDING
         assert session.scalar(select(AccountSubscription)) is None
         assert session.scalar(select(AccountEntitlementSnapshot)) is None
+
+    dispose_engine(database_url)
+
+
+def test_admin_payment_and_credit_pack_currency_is_cny_only(tmp_path: Path) -> None:
+    database_url = _sqlite_url(tmp_path)
+    init_schema(database_url)
+    service = _service(database_url)
+    _seed_account_and_plan(service)
+
+    with pytest.raises(CommercialValidationError) as payment_error:
+        service.create_payment_order(
+            account_id="acct_pay",
+            plan_id="plan_pro",
+            plan_version_id="plan_pro_v1",
+            amount=199.0,
+            currency="USD",
+            provider="alipay",
+            subject="Pro monthly",
+            audit_context=_audit("payment-order-usd"),
+        )
+    assert payment_error.value.error_code == "service.payment_currency_unsupported"
+
+    with pytest.raises(CommercialValidationError) as catalog_error:
+        service.update_admin_credit_pack_catalog(
+            items=[
+                {
+                    "pack_id": "pack_small",
+                    "label": "Starter annual pack",
+                    "ai_credits": 12000,
+                    "amount": 119.0,
+                    "currency": "USD",
+                    "recommended_for_tiers": ["free", "plus"],
+                    "validity_days": 365,
+                    "active": True,
+                }
+            ],
+            audit_context=_audit("credit-pack-catalog-usd"),
+        )
+    assert catalog_error.value.error_code == "service.payment_currency_unsupported"
 
     dispose_engine(database_url)
 

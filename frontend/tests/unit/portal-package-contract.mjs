@@ -74,6 +74,11 @@ assert.match(
   /portal\.usage\.payment_orders_title/,
   'Portal package page must own recent payment order visibility'
 );
+assert.match(
+  billingPageSource,
+  /<details className="group[\s\S]*portal\.usage\.payment_orders_title[\s\S]*common\.view_details/,
+  'Portal package page must fold recent payment orders behind a detail disclosure'
+);
 assert.equal(
   (billingPageSource.match(/const paymentOrdersCard =/g) || []).length,
   1,
@@ -81,8 +86,8 @@ assert.equal(
 );
 assert.equal(
   (billingPageSource.match(/\{paymentOrdersCard\}/g) || []).length,
-  2,
-  'Portal package page must reuse the same payment order card for no-site and site states'
+  1,
+  'Portal package page must render the folded payment order card once in the account package view'
 );
 assert.match(
   billingPageSource,
@@ -91,8 +96,8 @@ assert.match(
 );
 assert.match(
   billingPageSource,
-  /loadAccountPaymentOrders[\s\S]*listAccountPaymentOrders/,
-  'Portal package page must load recent payment orders at account scope'
+  /getAccountCommercialBundle[\s\S]*setPaymentOrders\(bundle\.paymentOrders\)/,
+  'Portal package page must load recent payment orders at account scope through the commercial bundle'
 );
 assert.match(
   portalClientSource,
@@ -141,7 +146,7 @@ assert.match(
 );
 assert.match(
   billingPageSource,
-  /shouldShowPaymentOrder[\s\S]*status !== 'canceled'[\s\S]*filter\(shouldShowPaymentOrder\)/,
+  /shouldShowPaymentOrder[\s\S]*status !== 'canceled'[\s\S]*status !== 'expired'[\s\S]*code\.includes\('expired'\)[\s\S]*filter\(shouldShowPaymentOrder\)/,
   'Portal package page must hide canceled or expired payment orders from the customer order list'
 );
 assert.doesNotMatch(

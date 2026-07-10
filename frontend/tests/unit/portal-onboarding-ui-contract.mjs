@@ -36,7 +36,7 @@ assert.match(
 
 assert.match(
   source,
-  /currentSiteActiveKeyCount !== null && currentSiteActiveKeyCount > 0/,
+  /isSelectedSiteConnected[\s\S]*currentSiteActiveKeyCount !== null[\s\S]*currentSiteActiveKeyCount > 0/,
   'first-use checklist must consider active API key state'
 );
 

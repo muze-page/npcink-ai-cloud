@@ -33,7 +33,6 @@ from app.domain.commercial.identity import (
 )
 
 COOKIE_ADMIN_TOKEN = "npcink_admin_session_token"
-COOKIE_ADMIN_TOKEN_LEGACY = "magick_admin_session_token"
 ADMIN_SESSION_ALGORITHM = "HS256"
 
 router = APIRouter(include_in_schema=False)
@@ -213,8 +212,6 @@ def _set_admin_session_cookie(response: Response, request: Request, token: str) 
     ttl_seconds = max(60, int(get_cloud_services(request).settings.admin_session_ttl_seconds or 0))
     expires_at = datetime.now(UTC) + timedelta(seconds=ttl_seconds)
     response.delete_cookie(COOKIE_ADMIN_TOKEN, path="/admin")
-    response.delete_cookie(COOKIE_ADMIN_TOKEN_LEGACY, path="/")
-    response.delete_cookie(COOKIE_ADMIN_TOKEN_LEGACY, path="/admin")
     response.set_cookie(
         COOKIE_ADMIN_TOKEN,
         token,
@@ -230,8 +227,6 @@ def _set_admin_session_cookie(response: Response, request: Request, token: str) 
 def _clear_admin_session_cookie(response: RedirectResponse) -> None:
     response.delete_cookie(COOKIE_ADMIN_TOKEN, path="/")
     response.delete_cookie(COOKIE_ADMIN_TOKEN, path="/admin")
-    response.delete_cookie(COOKIE_ADMIN_TOKEN_LEGACY, path="/")
-    response.delete_cookie(COOKIE_ADMIN_TOKEN_LEGACY, path="/admin")
 
 
 def _admin_session_json_error(

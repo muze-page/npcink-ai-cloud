@@ -100,35 +100,13 @@ cd "${CLOUD_DIR}"
 
 ruff_targets=()
 mypy_targets=()
-skipped_mypy_targets=()
-
-mypy_debt_exceptions=(
-	"app/domain/commercial/service.py"
-	"app/domain/runtime/service.py"
-)
-
-should_skip_mypy_target() {
-	local rel="$1"
-
-	for excluded in "${mypy_debt_exceptions[@]}"; do
-		if [ "${rel}" = "${excluded}" ]; then
-			return 0
-		fi
-	done
-
-	return 1
-}
 
 while IFS= read -r rel; do
 	[ -n "${rel}" ] || continue
 	ruff_targets+=("${rel}")
 	case "${rel}" in
 		app/*)
-			if should_skip_mypy_target "${rel}"; then
-				skipped_mypy_targets+=("${rel}")
-			else
-				mypy_targets+=("${rel}")
-			fi
+			mypy_targets+=("${rel}")
 			;;
 	esac
 done < "${TMP_PATHS}"
@@ -138,11 +116,6 @@ sed 's/^/ - /' "${TMP_PATHS}"
 
 echo "[run] ruff check changed files (correctness/import subset)"
 "${CLOUD_DIR}/.venv/bin/python" -m ruff check --select I,F,E9 "${ruff_targets[@]}"
-
-if [ "${#skipped_mypy_targets[@]}" -gt 0 ]; then
-	echo "[info] Skipping mypy for registered legacy-debt files:"
-	printf ' - %s\n' "${skipped_mypy_targets[@]}"
-fi
 
 if [ "${#mypy_targets[@]}" -eq 0 ]; then
 	echo "[ok] No changed cloud app Python files detected for mypy."

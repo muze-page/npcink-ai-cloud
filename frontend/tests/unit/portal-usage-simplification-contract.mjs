@@ -55,8 +55,13 @@ assert.match(
 
 assert.doesNotMatch(
   source,
-  /portal-usage-site-select|<select[\s\S]*selectedSiteId/,
-  'portal usage page must not render a second site selector below the global workspace selector'
+  /portal-usage-site-select|<select[\s\S]*selectedSiteId|usePortalSiteSelection|getUsageBundle\(selectedSiteId/,
+  'portal usage page must not render or depend on a site selector because usage is account-level'
+);
+assert.match(
+  source,
+  /portalClient\.getUsageBundle\(\)/,
+  'portal usage page must load the account-level usage bundle'
 );
 
 const summaryIndex = source.indexOf('data-portal-usage="usage-records"');

@@ -71,3 +71,17 @@ class PortalEmailSender(ABC):
         locale: str = "zh-CN",
     ) -> None:
         raise NotImplementedError
+
+    def send_support_request_update(
+        self,
+        *,
+        recipient_email: str,
+        request_id: str,
+        title: str,
+        status: str,
+        message_body: str,
+        project_name: str,
+        portal_url: str,
+        locale: str = "zh-CN",
+    ) -> None:
+        raise NotImplementedError

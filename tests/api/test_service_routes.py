@@ -32,7 +32,6 @@ from app.core.models import (
     ACCOUNT_USER_MEMBERSHIP_STATUS_REVOKED,
     PRINCIPAL_STATUS_DISABLED,
     SITE_STATUS_ARCHIVED,
-    SITE_USER_GRANT_STATUS_REVOKED,
     SUBSCRIPTION_STATUS_PAST_DUE,
     AccountEntitlementSnapshot,
     AccountSubscription,
@@ -50,13 +49,13 @@ from app.core.models import (
     ServiceAuditEvent,
     ServiceSetting,
     Site,
-    SiteUserGrant,
     UsageMeterEvent,
 )
 from app.core.secrets import (
     decrypt_provider_connection_secret,
     decrypt_service_setting_secret,
     encrypt_provider_connection_secret,
+    encrypt_service_setting_secret,
 )
 from app.core.security import REPLAY_SCOPE_PUBLIC_POST_SITE
 from app.core.services import CloudServices
@@ -437,7 +436,6 @@ def test_admin_portal_users_lists_self_registered_users_and_disables_access(
     assert disable_response.status_code == 200, disable_response.text
     disable_data = disable_response.json()["data"]
     assert disable_data["status"] == PRINCIPAL_STATUS_DISABLED
-    assert disable_data["revoked_site_grants"] == 1
     assert disable_data["revoked_account_memberships"] == 1
 
     revoked_session_response = client.get("/portal/v1/session")
@@ -461,7 +459,6 @@ def test_admin_portal_users_lists_self_registered_users_and_disables_access(
     assert audit_data["summary"]["registration_events"] == 1
     assert audit_data["summary"]["disable_events"] == 1
     assert audit_data["summary"]["latest_disable_reason"] == "operator test disable"
-    assert audit_data["summary"]["latest_disable_revoked_site_grants"] == 1
     assert audit_data["summary"]["latest_disable_revoked_account_memberships"] == 1
     event_kinds = {item["event_kind"] for item in audit_data["items"]}
     assert "portal.registration" in event_kinds
@@ -475,7 +472,6 @@ def test_admin_portal_users_lists_self_registered_users_and_disables_access(
     disabled_item = disabled_list_response.json()["data"]["items"][0]
     assert disabled_item["status"] == PRINCIPAL_STATUS_DISABLED
     assert disabled_item["membership_status"] == ACCOUNT_USER_MEMBERSHIP_STATUS_REVOKED
-    assert disabled_item["grant_status"] == SITE_USER_GRANT_STATUS_REVOKED
 
     with get_session(database_url) as session:
         identity = session.scalar(
@@ -491,11 +487,6 @@ def test_admin_portal_users_lists_self_registered_users_and_disables_access(
         )
         assert membership is not None
         assert membership.status == ACCOUNT_USER_MEMBERSHIP_STATUS_REVOKED
-        grant = session.scalar(
-            select(SiteUserGrant).where(SiteUserGrant.principal_id == principal_id)
-        )
-        assert grant is not None
-        assert grant.status == SITE_USER_GRANT_STATUS_REVOKED
 
     dispose_engine(database_url)
 
@@ -576,12 +567,6 @@ def test_admin_portal_users_batch_disable_processes_each_principal(
         assert {membership.status for membership in memberships} == {
             ACCOUNT_USER_MEMBERSHIP_STATUS_REVOKED
         }
-        grants = list(
-            session.scalars(
-                select(SiteUserGrant).where(SiteUserGrant.principal_id.in_(principal_ids))
-            )
-        )
-        assert {grant.status for grant in grants} == {SITE_USER_GRANT_STATUS_REVOKED}
 
     audit_response = client.get(
         f"/internal/service/admin/portal-users/{principal_ids[0]}/audit",
@@ -784,6 +769,152 @@ def test_admin_service_settings_store_masked_cloud_runtime_config(tmp_path: Path
     dispose_engine(database_url)
 
 
+def test_admin_service_settings_email_replaces_unreadable_existing_password(
+    tmp_path: Path,
+) -> None:
+    database_url, client = _build_client(tmp_path)
+    old_settings = _runtime_service_settings(database_url)
+    old_settings.service_settings_secret = "old-service-settings-secret-32b"
+    bad_ciphertext = encrypt_service_setting_secret("old-password", settings=old_settings)
+
+    with get_session(database_url) as session:
+        session.add(
+            ServiceSetting(
+                setting_id="portal_email",
+                setting_kind="portal",
+                enabled=False,
+                config_json={
+                    "smtp_host": "smtp.example.com",
+                    "smtp_port": 465,
+                    "smtp_username": "smtp-user",
+                    "smtp_use_ssl": True,
+                    "smtp_use_starttls": False,
+                    "smtp_timeout_seconds": 20,
+                    "from_email": "noreply@example.com",
+                    "from_name": "Npcink AI Cloud",
+                    "reply_to": "support@example.com",
+                },
+                secret_ciphertext_json={"smtp_password": bad_ciphertext},
+                status="disabled",
+                metadata_json={},
+            )
+        )
+        session.commit()
+
+    response = client.patch(
+        "/internal/service/admin/service-settings/email",
+        json={
+            "enabled": True,
+            "smtp_host": "smtp.example.com",
+            "smtp_port": 465,
+            "smtp_username": "smtp-user",
+            "smtp_password": "new-password",
+            "smtp_use_ssl": True,
+            "smtp_use_starttls": False,
+            "smtp_timeout_seconds": 20,
+            "from_email": "noreply@example.com",
+            "from_name": "Npcink AI Cloud",
+            "reply_to": "support@example.com",
+        },
+        headers=build_internal_headers(idempotency_key="service-settings-email-rotate-001"),
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["data"]["status"] == "ready"
+    with get_session(database_url) as session:
+        row = session.get(ServiceSetting, "portal_email")
+        assert row is not None
+        assert decrypt_service_setting_secret(
+            str((row.secret_ciphertext_json or {})["smtp_password"]),
+            settings=_runtime_service_settings(database_url),
+        ) == "new-password"
+
+    dispose_engine(database_url)
+
+
+def test_service_setting_secret_only_uses_dedicated_key() -> None:
+    dedicated_settings = _runtime_service_settings("sqlite+pysqlite:///:memory:")
+    dedicated_settings.service_settings_secret = "dedicated-service-settings-secret-32b"
+    dedicated_ciphertext = encrypt_service_setting_secret(
+        "dedicated-service-secret",
+        settings=dedicated_settings,
+    )
+    assert (
+        decrypt_service_setting_secret(
+            dedicated_ciphertext,
+            settings=dedicated_settings,
+        )
+        == "dedicated-service-secret"
+    )
+
+    missing_key_settings = _runtime_service_settings("sqlite+pysqlite:///:memory:")
+    missing_key_settings.service_settings_secret = None
+    with pytest.raises(RuntimeError, match="service setting secret is not configured"):
+        decrypt_service_setting_secret(dedicated_ciphertext, settings=missing_key_settings)
+
+    wrong_key_settings = _runtime_service_settings("sqlite+pysqlite:///:memory:")
+    wrong_key_settings.service_settings_secret = "different-service-settings-secret-32b"
+    with pytest.raises(RuntimeError, match="service setting secret could not be decrypted"):
+        decrypt_service_setting_secret(dedicated_ciphertext, settings=wrong_key_settings)
+
+
+def test_admin_service_settings_email_requires_reentry_for_unreadable_saved_password(
+    tmp_path: Path,
+) -> None:
+    database_url, client = _build_client(tmp_path)
+    old_settings = _runtime_service_settings(database_url)
+    old_settings.service_settings_secret = "old-service-settings-secret-32b"
+    bad_ciphertext = encrypt_service_setting_secret("old-password", settings=old_settings)
+
+    with get_session(database_url) as session:
+        session.add(
+            ServiceSetting(
+                setting_id="portal_email",
+                setting_kind="portal",
+                enabled=False,
+                config_json={
+                    "smtp_host": "smtp.example.com",
+                    "smtp_port": 465,
+                    "smtp_username": "smtp-user",
+                    "smtp_use_ssl": True,
+                    "smtp_use_starttls": False,
+                    "smtp_timeout_seconds": 20,
+                    "from_email": "noreply@example.com",
+                    "from_name": "Npcink AI Cloud",
+                    "reply_to": "support@example.com",
+                },
+                secret_ciphertext_json={"smtp_password": bad_ciphertext},
+                status="disabled",
+                metadata_json={},
+            )
+        )
+        session.commit()
+
+    response = client.patch(
+        "/internal/service/admin/service-settings/email",
+        json={
+            "enabled": True,
+            "smtp_host": "smtp.example.com",
+            "smtp_port": 465,
+            "smtp_username": "smtp-user",
+            "smtp_password": None,
+            "smtp_use_ssl": True,
+            "smtp_use_starttls": False,
+            "smtp_timeout_seconds": 20,
+            "from_email": "noreply@example.com",
+            "from_name": "Npcink AI Cloud",
+            "reply_to": "support@example.com",
+        },
+        headers=build_internal_headers(idempotency_key="service-settings-email-rotate-002"),
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error_code"] == "service_settings.email_password_required"
+    assert "Re-enter the SMTP password" in response.json()["message"]
+
+    dispose_engine(database_url)
+
+
 def test_admin_service_settings_reject_qq_redirect_outside_public_base(
     tmp_path: Path,
 ) -> None:
@@ -812,7 +943,7 @@ def test_admin_service_settings_reject_qq_redirect_outside_public_base(
     dispose_engine(database_url)
 
 
-def test_admin_service_settings_allow_legacy_qq_redirect_path(
+def test_admin_service_settings_reject_legacy_qq_redirect_path(
     tmp_path: Path,
 ) -> None:
     database_url, client = _build_client(tmp_path)
@@ -835,8 +966,8 @@ def test_admin_service_settings_allow_legacy_qq_redirect_path(
         headers=build_internal_headers(idempotency_key="service-settings-legacy-qq-001"),
     )
 
-    assert response.status_code == 200, response.text
-    assert response.json()["data"]["status"] == "ready"
+    assert response.status_code == 400
+    assert response.json()["error_code"] == "service_settings.qq_redirect_uri_invalid"
 
     dispose_engine(database_url)
 
@@ -914,6 +1045,73 @@ def test_admin_service_settings_email_preview_uses_template_without_secret_expos
     assert "完成服务中心注册" in data["html"]
     assert "smtp-password" not in json.dumps(preview_response.json())
     assert data["credential_value_exposure"] == "none"
+
+    dispose_engine(database_url)
+
+
+def test_admin_service_settings_email_test_can_send_repeatedly(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database_url, client = _build_client(tmp_path)
+    email_response = client.patch(
+        "/internal/service/admin/service-settings/email",
+        json={
+            "enabled": True,
+            "smtp_host": "smtp.example.com",
+            "smtp_port": 465,
+            "smtp_username": "smtp-user",
+            "smtp_password": "smtp-password",
+            "smtp_use_ssl": True,
+            "smtp_use_starttls": False,
+            "smtp_timeout_seconds": 20,
+            "from_email": "noreply@example.com",
+            "from_name": "Npcink AI Cloud",
+            "reply_to": "support@example.com",
+        },
+        headers=build_internal_headers(idempotency_key="service-settings-email-repeat-save"),
+    )
+    assert email_response.status_code == 200, email_response.text
+
+    deliveries: list[dict[str, str]] = []
+
+    class _FakeSender:
+        def send_test_email(
+            self,
+            *,
+            recipient_email: str,
+            project_name: str,
+            portal_url: str,
+        ) -> None:
+            deliveries.append(
+                {
+                    "recipient_email": recipient_email,
+                    "project_name": project_name,
+                    "portal_url": portal_url,
+                }
+            )
+
+    monkeypatch.setattr(
+        "app.adapters.notifications.smtp.build_portal_email_sender_from_config",
+        lambda _config: _FakeSender(),
+    )
+
+    for attempt in range(1, 4):
+        response = client.post(
+            "/internal/service/admin/service-settings/email/test",
+            json={"recipient_email": "operator@example.com"},
+            headers=build_internal_headers(
+                idempotency_key=f"service-settings-email-repeat-{attempt}"
+            ),
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["data"]["status"] == "ready"
+
+    assert [item["recipient_email"] for item in deliveries] == [
+        "operator@example.com",
+        "operator@example.com",
+        "operator@example.com",
+    ]
 
     dispose_engine(database_url)
 
@@ -4385,9 +4583,9 @@ def test_service_routes_admin_read_facade(tmp_path: Path) -> None:
         headers=build_internal_headers(idempotency_key="svc-admin-site-activate-001"),
     )
     client.post(
-        "/internal/service/sites/site_primary/user-grants",
+        "/internal/service/accounts/acct_admin/members",
         json={"email": "admin@example.com"},
-        headers=build_internal_headers(idempotency_key="svc-admin-user-grants-001"),
+        headers=build_internal_headers(idempotency_key="svc-admin-account-members-001"),
     )
     client.post(
         "/internal/service/sites/site_primary/keys",
@@ -4703,16 +4901,16 @@ def test_service_routes_admin_read_facade(tmp_path: Path) -> None:
     assert tier_template_by_id["pro"]["site_limit"] == 5
     assert tier_template_by_id["agency"]["site_limit"] == 25
     assert tier_template_by_id["free"]["max_vector_documents"] == 100
+    assert tier_template_by_id["plus"]["max_vector_documents"] == 800
     assert tier_template_by_id["pro"]["max_vector_documents"] == 2000
     assert tier_template_by_id["agency"]["max_vector_documents"] == 10000
     assert tier_template_by_id["agency"]["concurrency_template"]["max_active_runs"] == 10
-    assert tier_template_by_id["free"]["canonical_shell"]["entitlements"]["execution_tiers"] == [
-        "cloud"
-    ]
     assert (
-        tier_template_by_id["pro"]["canonical_shell"]["budgets"][
-            "max_ai_credits_per_period"
-        ]
+        tier_template_by_id["free"]["canonical_shell"]["entitlements"]["execution_tiers"]
+        == ["cloud"]
+    )
+    assert (
+        tier_template_by_id["pro"]["canonical_shell"]["budgets"]["max_ai_credits_per_period"]
         == 10000
     )
     assert tier_template_by_id["pro"]["canonical_shell"]["budgets"]["max_runs_per_period"] == 0

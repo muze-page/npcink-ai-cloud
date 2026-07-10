@@ -8,7 +8,6 @@ import { formatPortalErrorMessage } from '@/lib/portal-error';
 
 interface PortalSiteConnectPanelProps {
   accountId: string;
-  currentSiteId?: string;
   sites?: Site[];
   onCreated?: () => void;
   onSiteCreated?: (siteId: string) => void;

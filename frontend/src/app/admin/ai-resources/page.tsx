@@ -10,7 +10,20 @@ import {
   BackofficeStackCard,
 } from '@/components/backoffice/BackofficeScaffold';
 import { AdminMutationReceipt, type AdminMutationReceiptPayload } from '@/components/admin/AdminMutationReceipt';
-import { BackofficeFilterPill } from '@/components/backoffice/BackofficeFilterPill';
+import { ProviderConnectionDialog } from '@/components/admin/ProviderConnectionDialog';
+import { ProviderReferenceLinks } from '@/components/admin/ProviderReferenceLinks';
+import {
+  CapabilitySupplierTable,
+  ModelSupplierTable,
+  type CapabilityProviderCategory,
+  type CapabilityProviderCategoryFilter,
+  type ConnectionStatusFilter,
+  type ProviderConnectionTestResult,
+  type ResourceStatus,
+  type SupplierConnection as Connection,
+} from '@/components/admin/SupplierConnectionTables';
+import { SupplierSummaryCards } from '@/components/admin/SupplierSummaryCards';
+import { SupplierToolbar, type SupplierTypeFilter } from '@/components/admin/SupplierToolbar';
 import { BackofficeStatusBadge } from '@/components/backoffice/BackofficeStatusBadge';
 import { LoadingFallback } from '@/components/ui/LoadingFallback';
 import { useLocale } from '@/contexts/LocaleContext';
@@ -18,35 +31,8 @@ import { resolveUiErrorMessage } from '@/lib/errors';
 import { generateIdempotencyKey } from '@/lib/idempotency';
 import { formatDate } from '@/lib/utils';
 
-type ResourceStatus = 'ready' | 'missing_secret' | 'missing_provider' | 'disabled' | string;
 type AIResourceView = 'connections';
-type ConnectionStatusFilter = 'all' | 'ready' | 'missing_secret' | 'disabled';
 type SupplierCategory = 'ai' | 'capability';
-type SupplierTypeFilter = 'model' | 'capability';
-type CapabilityProviderCategory = 'search' | 'image' | 'vector';
-type CapabilityProviderCategoryFilter = 'all' | CapabilityProviderCategory;
-
-type Connection = {
-  connection_id: string;
-  provider_id: string;
-  display_name: string;
-  kind: string;
-  enabled: boolean;
-  configured: boolean;
-  status: ResourceStatus;
-  base_url: string;
-  note: string;
-  priority: number;
-  capability_ids: string[];
-  runtime_profile_ids: string[];
-  model_ids?: string[];
-  last_tested_at?: string;
-  last_error_code?: string;
-  last_error_message?: string;
-  detail_href?: string;
-  managed_by?: string;
-  metadata?: Record<string, any>;
-};
 
 type Capability = {
   capability_id: string;
@@ -101,31 +87,6 @@ type RuntimeResolutionRow = {
   direct_wordpress_write: boolean;
 };
 
-type ProviderConnectionTestResult = {
-  connection_id: string;
-  provider_id: string;
-  kind: string;
-  status: ResourceStatus;
-  stage: string;
-  ok: boolean;
-  error_code: string;
-  message: string;
-  tested_at: string;
-  catalog?: {
-    provider_id?: string;
-    display_name?: string;
-    adapter_type?: string;
-    model_count?: number;
-    sample_model_ids?: string[];
-  };
-  probe?: {
-    provider_id?: string;
-    result_count?: number;
-    latency_ms?: number;
-    write_posture?: string;
-    direct_wordpress_write?: boolean;
-  };
-};
 
 type ProviderCatalogPreview = {
   provider_id: string;
@@ -482,18 +443,6 @@ type CapabilityProviderTemplate = {
   descriptionFallback: string;
 };
 
-const QUIET_STATUS_BADGE_CLASS =
-  'bg-slate-50 px-2 py-0.5 text-xs normal-case tracking-normal text-slate-600 dark:bg-slate-900 dark:text-slate-300';
-
-const TABLE_ACTION_BUTTON_CLASS =
-  'rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:border-slate-300 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-200 dark:hover:border-slate-700';
-
-const TABLE_DELETE_BUTTON_CLASS =
-  'rounded-full border border-rose-200 bg-white px-3 py-1.5 text-xs font-semibold text-rose-700 transition hover:border-rose-300 hover:bg-rose-50 disabled:cursor-not-allowed disabled:opacity-60 dark:border-rose-900 dark:bg-slate-950 dark:text-rose-300 dark:hover:border-rose-800 dark:hover:bg-rose-950/20';
-
-const TABLE_CONFIRM_DELETE_BUTTON_CLASS =
-  'rounded-full border border-rose-300 bg-rose-50 px-3 py-1.5 text-xs font-semibold text-rose-800 transition hover:border-rose-400 hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-60 dark:border-rose-800 dark:bg-rose-950/30 dark:text-rose-200 dark:hover:border-rose-700 dark:hover:bg-rose-950/50';
-
 const PROVIDER_PRESETS: ProviderPreset[] = [
   {
     id: 'openai_compatible',
@@ -753,84 +702,6 @@ const CAPABILITY_PROVIDER_TEMPLATES: CapabilityProviderTemplate[] = [
     descriptionFallback: 'Vector database provider for Site Knowledge storage and search.',
   },
 ];
-
-const RUNTIME_TELEMETRY_TEXT_KEYS: Record<string, string> = {
-  'Hosted model governance has telemetry gaps to review before traffic expands.':
-    'runtime_telemetry_text_coverage_gaps',
-  'Runtime telemetry has coverage gaps to review before traffic expands.':
-    'runtime_telemetry_text_coverage_gaps',
-  'Hosted model governance has coverage or provider errors that need review.':
-    'runtime_telemetry_text_errors',
-  'Runtime telemetry has coverage or provider errors that need review.':
-    'runtime_telemetry_text_errors',
-  'Hosted model governance is covered in this window.':
-    'runtime_telemetry_text_covered',
-  'Runtime telemetry is covered in this window.':
-    'runtime_telemetry_text_covered',
-  'No hosted model runs were observed in this governance window.':
-    'runtime_telemetry_text_no_runs',
-  'No runtime runs were observed in this telemetry window.':
-    'runtime_telemetry_text_no_runs',
-  'Hosted model provider call coverage gap':
-    'runtime_telemetry_text_provider_call_gap_title',
-  'Provider call coverage gap':
-    'runtime_telemetry_text_provider_call_gap_title',
-  'Hosted model meter coverage gap':
-    'runtime_telemetry_text_meter_gap_title',
-  'Runtime meter coverage gap':
-    'runtime_telemetry_text_meter_gap_title',
-  'Hosted model provider errors':
-    'runtime_telemetry_text_provider_errors_title',
-  'Provider call errors':
-    'runtime_telemetry_text_provider_errors_title',
-  'Hosted model failed runs':
-    'runtime_telemetry_text_failed_runs_title',
-  'Runtime runs failed':
-    'runtime_telemetry_text_failed_runs_title',
-  'Some hosted runs do not have matching provider call telemetry.':
-    'runtime_telemetry_text_provider_call_gap_summary',
-  'Some runtime runs do not have matching provider call telemetry.':
-    'runtime_telemetry_text_provider_call_gap_summary',
-  'Some hosted model runs are not represented in usage metering.':
-    'runtime_telemetry_text_meter_gap_summary',
-  'Some runtime runs are not represented in usage metering.':
-    'runtime_telemetry_text_meter_gap_summary',
-  'Provider calls are returning errors in the current governance window.':
-    'runtime_telemetry_text_provider_errors_summary',
-  'Provider calls are returning errors in the current telemetry window.':
-    'runtime_telemetry_text_provider_errors_summary',
-  'Hosted model runs are failing before or during provider execution.':
-    'runtime_telemetry_text_failed_runs_summary',
-  'Runtime runs are failing before or during provider execution.':
-    'runtime_telemetry_text_failed_runs_summary',
-  'Review hosted model families before promoting new providers.':
-    'runtime_telemetry_text_review_guidance',
-  'Inspect capabilities below full metering coverage before enabling new runtime providers at higher traffic.':
-    'runtime_telemetry_text_review_guidance',
-  continue_monitoring: 'runtime_telemetry_action_continue_monitoring',
-  inspect_provider_call_recording_for_hosted_profiles:
-    'runtime_telemetry_action_inspect_provider_calls',
-  inspect_metering_callback_or_usage_event_mapping:
-    'runtime_telemetry_action_inspect_metering',
-  inspect_provider_credentials_quota_and_health:
-    'runtime_telemetry_action_inspect_provider_health',
-  inspect_runtime_failure_detail:
-    'runtime_telemetry_action_inspect_runtime_failure',
-  inspect_runtime_failure_detail_for_hosted_models:
-    'runtime_telemetry_action_inspect_runtime_failure',
-  inspect_runtime_telemetry: 'runtime_telemetry_action_inspect_runtime',
-};
-
-function statusTone(status: ResourceStatus): 'success' | 'warning' | 'disabled' | 'info' {
-  if (status === 'ready') return 'success';
-  if (status === 'disabled') return 'disabled';
-  if (status === 'missing_secret' || status === 'missing_provider') return 'warning';
-  return 'info';
-}
-
-function labelList(values: string[]): string {
-  return values.length ? values.join(', ') : '-';
-}
 
 function connectionHost(value: string): string {
   const trimmed = value.trim();
@@ -2084,32 +1955,22 @@ function AiResourcesContent() {
     setError('');
   }
 
-  const resourceStatusLabel = useCallback((status: ResourceStatus): string => {
-    switch (status) {
-      case 'ready':
-        return aiText('status_ready_label', 'Ready');
-      case 'missing_secret':
-        return aiText('status_missing_secret_label', 'Missing secret');
-      case 'missing_provider':
-        return aiText('status_missing_provider_label', 'Missing provider');
-      case 'disabled':
-        return aiText('status_disabled_label', 'Disabled');
-      case 'healthy':
-        return aiText('status_healthy_label', 'Healthy');
-      case 'degraded':
-        return aiText('status_degraded_label', 'Degraded');
-      case 'error':
-        return aiText('status_error_label', 'Error');
-      case 'warning':
-        return aiText('status_warning_label', 'Warning');
-      case 'info':
-        return aiText('status_info_label', 'Info');
-      case 'not_observed':
-        return aiText('status_not_observed', 'Not observed');
-      default:
-        return status;
+  function configureCapabilityConnection(connection: Connection) {
+    const category = capabilityProviderCategory(connection);
+    setActiveCapabilityCategory(category);
+    if (connection.managed_by === 'cloud_provider_connections') {
+      editProviderConnection(connection);
+      return;
     }
-  }, [aiText]);
+    const template = CAPABILITY_PROVIDER_TEMPLATES.find(
+      (item) => item.category === category && item.id === connection.provider_id
+    );
+    if (template) {
+      openCapabilityProviderTemplate(template);
+      return;
+    }
+    editProviderConnection(connection);
+  }
 
   const providerTestStageLabel = useCallback((stage: string): string => {
     const normalizedStage = stage.trim();
@@ -2198,30 +2059,6 @@ function AiResourcesContent() {
     : isCapabilityProviderForm
       ? aiText('capability_channel_form_title', 'Add capability supplier')
       : aiText('channel_form_title', 'Add provider channel');
-
-  const renderConnectionIssue = useCallback((connection: Connection) => {
-    if (connection.enabled && connection.configured) {
-      return null;
-    }
-
-    return (
-      <div className="mt-2 text-xs font-medium leading-5">
-        {!connection.enabled ? (
-          <span className="text-slate-500 dark:text-slate-400">
-            {aiText('provider_issue_runtime_disabled', 'Runtime calls are disabled')}
-          </span>
-        ) : null}
-        {!connection.enabled && !connection.configured ? (
-          <span className="mx-1 text-slate-300 dark:text-slate-700">·</span>
-        ) : null}
-        {!connection.configured ? (
-          <span className="text-amber-700 dark:text-amber-300">
-            {aiText('provider_issue_missing_credential', 'Provider credential is not configured')}
-          </span>
-        ) : null}
-      </div>
-    );
-  }, [aiText]);
 
   const filteredConnections = useMemo(() => {
     const query = connectionSearch.trim().toLowerCase();
@@ -2577,17 +2414,6 @@ function AiResourcesContent() {
     selectedProviderModelIds.length
   );
 
-  const translateRuntimeTelemetryText = useCallback(
-    (value: string | undefined): string => {
-      const text = String(value || '').trim();
-      if (!text) return '';
-      const key = RUNTIME_TELEMETRY_TEXT_KEYS[text];
-      return key ? aiText(key, text) : text;
-    },
-    [aiText]
-  );
-  const runtimeTelemetryStatus = runtimeTelemetry?.alertSummary.status || 'inactive';
-
   if (loading) {
     return <LoadingFallback />;
   }
@@ -2611,8 +2437,17 @@ function AiResourcesContent() {
   const readyModelSupplierCount = data.connections.filter(
     (connection) => supplierCategory(connection) === 'ai' && connection.status === 'ready'
   ).length;
+  const modelSupplierCount = data.connections.filter(
+    (connection) => supplierCategory(connection) === 'ai'
+  ).length;
   const readyCapabilitySupplierCount = data.connections.filter(
     (connection) => supplierCategory(connection) === 'capability' && connection.status === 'ready'
+  ).length;
+  const capabilitySupplierCount = data.connections.filter(
+    (connection) => supplierCategory(connection) === 'capability'
+  ).length;
+  const attentionSupplierCount = data.connections.filter(
+    (connection) => connection.status !== 'ready'
   ).length;
   return (
     <BackofficePageStack>
@@ -2622,81 +2457,36 @@ function AiResourcesContent() {
         description={aiText('description', 'Manage Cloud runtime provider connections, model visibility, and capability sources. Runtime diagnostics stay in the Runtime Diagnostics page.')}
         descriptionDisplay="hint"
         aside={(
-          <Link href="/admin/troubleshooting" className="btn btn-secondary justify-center">
-            {aiText('action_view_diagnostics', 'View diagnostics')}
-          </Link>
+          <div className="flex flex-col gap-2 sm:flex-row">
+            <Link href="/admin/ability-models" className="btn btn-secondary justify-center">
+              {aiText('action_open_model_binding', 'Open model binding')}
+            </Link>
+            <Link href="/admin/troubleshooting" className="btn btn-secondary justify-center">
+              {aiText('action_view_diagnostics', 'View diagnostics')}
+            </Link>
+          </div>
         )}
         actions={null}
         contentClassName="py-4 md:py-4"
       >
-        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-          <div className="rounded-xl border border-slate-200 bg-white/80 px-4 py-3 dark:border-slate-800 dark:bg-slate-950/45">
-            <p className="text-[0.68rem] font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">
-              {aiText('overview_model_suppliers', 'Model suppliers')}
-            </p>
-            <p className="mt-2 text-lg font-semibold text-slate-950 dark:text-white">
-              {readyModelSupplierCount}/{data.connections.filter((connection) => supplierCategory(connection) === 'ai').length}
-            </p>
-            <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-              {aiText('overview_ready_ratio_detail', 'ready / total')}
-            </p>
-          </div>
-          <div className="rounded-xl border border-slate-200 bg-white/80 px-4 py-3 dark:border-slate-800 dark:bg-slate-950/45">
-            <p className="text-[0.68rem] font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">
-              {aiText('overview_capability_suppliers', 'Capability suppliers')}
-            </p>
-            <p className="mt-2 text-lg font-semibold text-slate-950 dark:text-white">
-              {readyCapabilitySupplierCount}/{data.connections.filter((connection) => supplierCategory(connection) === 'capability').length}
-            </p>
-            <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-              {aiText('overview_ready_ratio_detail', 'ready / total')}
-            </p>
-          </div>
-          <div className="rounded-xl border border-slate-200 bg-white/80 px-4 py-3 dark:border-slate-800 dark:bg-slate-950/45">
-            <p className="text-[0.68rem] font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">
-              {aiText('overview_runtime_profiles', 'Runtime profiles')}
-            </p>
-            <p className="mt-2 text-lg font-semibold text-slate-950 dark:text-white">
-              {data.runtime_profiles.length}
-            </p>
-            <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-              {aiText('overview_runtime_profiles_detail', 'Cloud runtime metadata only')}
-            </p>
-          </div>
-          <div className="rounded-xl border border-slate-200 bg-white/80 px-4 py-3 dark:border-slate-800 dark:bg-slate-950/45">
-            <p className="text-[0.68rem] font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">
-              {aiText('overview_telemetry', 'Telemetry')}
-            </p>
-            <p className={`mt-2 text-lg font-semibold ${
-              runtimeTelemetryStatus === 'error'
-                ? 'text-rose-600 dark:text-rose-400'
-                : runtimeTelemetryStatus === 'warning'
-                  ? 'text-amber-600 dark:text-amber-400'
-                  : runtimeTelemetryStatus === 'ok'
-                    ? 'text-emerald-600 dark:text-emerald-400'
-                    : 'text-slate-950 dark:text-white'
-            }`}>
-              {translateRuntimeTelemetryText(runtimeTelemetryStatus)}
-            </p>
-            <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-              {runtimeTelemetry
-                ? aiText('overview_runtime_runs_detail', '{{count}} runs in 24h', {
-                    count: formatInteger(runtimeTelemetry.totals.runs),
-                  })
-                : aiText('status_not_observed', 'Not observed')}
-            </p>
-          </div>
-        </div>
+        <SupplierSummaryCards
+          readyModelSupplierCount={readyModelSupplierCount}
+          modelSupplierCount={modelSupplierCount}
+          readyCapabilitySupplierCount={readyCapabilitySupplierCount}
+          capabilitySupplierCount={capabilitySupplierCount}
+          attentionSupplierCount={attentionSupplierCount}
+          translate={aiText}
+        />
         <p className="border-t border-slate-200 pt-4 text-xs leading-5 text-slate-500 dark:border-slate-800 dark:text-slate-400">
           {aiText('workspace_boundary_notice', 'This page opens Cloud service-plane detail only. Local plugin prompts, routers, approval, and WordPress writes stay outside Cloud.')}
         </p>
         {!providerFormOpen && message ? (
-          <BackofficeStackCard className="border-emerald-200 bg-emerald-50 text-sm text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950/25 dark:text-emerald-200">
+          <BackofficeStackCard role="status" aria-live="polite" className="border-emerald-200 bg-emerald-50 text-sm text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950/25 dark:text-emerald-200">
             {message}
           </BackofficeStackCard>
         ) : null}
         {!providerFormOpen && error ? (
-          <BackofficeStackCard className="border-rose-200 bg-rose-50 text-sm text-rose-800 dark:border-rose-900 dark:bg-rose-950/25 dark:text-rose-200">
+          <BackofficeStackCard role="alert" className="border-rose-200 bg-rose-50 text-sm text-rose-800 dark:border-rose-900 dark:bg-rose-950/25 dark:text-rose-200">
             {error}
           </BackofficeStackCard>
         ) : null}
@@ -2706,119 +2496,55 @@ function AiResourcesContent() {
       {activeView === 'connections' ? (
         <>
           <BackofficeSectionPanel>
-        <div className="flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
-          <div className="flex flex-col gap-2">
-            <span className="text-xs font-semibold text-slate-600 dark:text-slate-300">
-              {aiText('field_supplier_type_filter', 'Supplier type')}
-            </span>
-            <div
-              className="flex flex-wrap gap-2"
-              role="tablist"
-              aria-label={aiText('supplier_type_tabs_label', 'Supplier type')}
-            >
-              {([
-                ['model', aiText('supplier_filter_model', 'Model suppliers')],
-                ['capability', aiText('supplier_filter_capability', 'Capability suppliers')],
-              ] as Array<[SupplierTypeFilter, string]>).map(([value, label]) => (
-                <BackofficeFilterPill
-                  key={value}
-                  role="tab"
-                  aria-selected={supplierTypeFilter === value}
-                  active={supplierTypeFilter === value}
-                  onClick={() => setSupplierTypeFilter(value)}
-                >
-                  {label}
-                </BackofficeFilterPill>
-              ))}
-            </div>
-          </div>
-          <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center xl:justify-end">
-            <label className="grid min-w-[16rem] gap-1 sm:w-[22rem]">
-              <span className="sr-only">{aiText('field_search_connections', 'Search suppliers')}</span>
-              <input
-                className="h-10 rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-white"
-                value={connectionSearch}
-                onChange={(event) => setConnectionSearch(event.target.value)}
-                placeholder={aiText('placeholder_search_connections', 'Name, provider, model, capability')}
-              />
-            </label>
-            <button type="button" className="btn btn-primary justify-center" onClick={openNewProviderConnection}>
-              {aiText('action_add_model_supplier', 'Add model supplier')}
-            </button>
-            <button type="button" className="btn btn-secondary justify-center" onClick={() => setCapabilityAddDialogOpen(true)}>
-              {aiText('action_add_capability_supplier', 'Add capability supplier')}
-            </button>
-          </div>
-        </div>
+        <SupplierToolbar
+          supplierTypeFilter={supplierTypeFilter}
+          onSupplierTypeFilterChange={setSupplierTypeFilter}
+          connectionSearch={connectionSearch}
+          onConnectionSearchChange={setConnectionSearch}
+          onAddModelSupplier={openNewProviderConnection}
+          onAddCapabilitySupplier={() => setCapabilityAddDialogOpen(true)}
+          translate={aiText}
+        />
 
         {supplierTypeFilter === 'model' || providerFormOpen ? (
           <>
-        {providerFormOpen ? (
-          <div
-            className="fixed inset-0 z-50 flex items-start justify-center bg-slate-950/45 px-4 py-6 backdrop-blur-sm sm:py-10"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="provider-channel-dialog-title"
-          >
-            <div className="flex max-h-[calc(100vh-3rem)] w-full max-w-5xl flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl dark:border-slate-800 dark:bg-slate-950">
-              <div className="flex items-center justify-between gap-3 border-b border-slate-200 px-5 py-3 dark:border-slate-800">
-                <div className="min-w-0">
-                  <div className="flex min-w-0 flex-wrap items-center gap-2">
-                    <h3 id="provider-channel-dialog-title" className="text-base font-semibold text-slate-950 dark:text-white">
-                      {providerDialogTitle}
-                    </h3>
-                    {isCapabilityProviderForm ? (
-                      <BackofficeStatusBadge
-                        label={aiText('capability_supplier_badge', '{{category}} supplier', {
-                          category: capabilityCategoryLabel(providerFormCapabilityCategory),
-                        })}
-                        status="info"
-                      />
-                    ) : null}
-                    {providerFormMode === 'edit' ? (
-                      <button
-                        type="button"
-                        className="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-semibold text-slate-600 transition hover:border-slate-300 hover:bg-slate-50 hover:text-slate-900 disabled:cursor-not-allowed disabled:opacity-60 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-300 dark:hover:border-slate-700 dark:hover:text-white"
-                        disabled={savingConnection}
-                        onClick={addProviderCredentialChannel}
-                      >
-                        {aiText('action_add_credential_channel', 'Add credential')}
-                      </button>
-                    ) : null}
-                  </div>
-                </div>
+        <ProviderConnectionDialog
+          open={providerFormOpen}
+          title={providerDialogTitle}
+          titleId="provider-channel-dialog-title"
+          headerAccessory={(
+            <>
+              {isCapabilityProviderForm ? (
+                <BackofficeStatusBadge
+                  label={aiText('capability_supplier_badge', '{{category}} supplier', {
+                    category: capabilityCategoryLabel(providerFormCapabilityCategory),
+                  })}
+                  status="info"
+                />
+              ) : null}
+              {providerFormMode === 'edit' ? (
                 <button
                   type="button"
-                  className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-slate-200 bg-white text-sm font-semibold text-slate-500 transition hover:border-slate-300 hover:bg-slate-50 hover:text-slate-900 disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-400 dark:hover:border-slate-700 dark:hover:text-white"
+                  className="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-semibold text-slate-600 transition hover:border-slate-300 hover:bg-slate-50 hover:text-slate-900 disabled:cursor-not-allowed disabled:opacity-60 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-300 dark:hover:border-slate-700 dark:hover:text-white"
                   disabled={savingConnection}
-                  onClick={closeProviderForm}
-                  aria-label={aiText('action_close_dialog', 'Close')}
+                  onClick={addProviderCredentialChannel}
                 >
-                  <span aria-hidden="true">X</span>
+                  {aiText('action_add_credential_channel', 'Add credential')}
                 </button>
-              </div>
-              {message || error ? (
-                <div className="grid gap-2 border-b border-slate-200 px-5 py-3 dark:border-slate-800">
-                  {message ? (
-                    <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950/25 dark:text-emerald-200">
-                      {message}
-                    </div>
-                  ) : null}
-                  {error ? (
-                    <div className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-800 dark:border-rose-900 dark:bg-rose-950/25 dark:text-rose-200">
-                      {error}
-                    </div>
-                  ) : null}
-                </div>
               ) : null}
-              <form
-                className="flex min-h-0 flex-1 flex-col"
-                onSubmit={(event) => {
-                  event.preventDefault();
-                  void saveProviderConnection();
-                }}
-              >
-                <div className="grid min-h-0 flex-1 gap-3 overflow-y-auto px-5 py-4">
+            </>
+          )}
+          message={message}
+          error={error}
+          saving={savingConnection}
+          closeLabel={aiText('action_close_dialog', 'Close')}
+          cancelLabel={aiText('action_cancel', 'Cancel')}
+          saveLabel={aiText('action_save_and_test_connection', 'Save and test provider')}
+          savingLabel={aiText('saving', 'Saving...')}
+          footerNotice={aiText('save_test_notice', 'Saving will immediately run a masked provider test. Secrets are never returned to the browser.')}
+          onClose={closeProviderForm}
+          onSubmit={() => void saveProviderConnection()}
+        >
                 <details
                   className="group border-b border-slate-200 pb-3 dark:border-slate-800"
                   open={connectionDetailsOpen}
@@ -2956,26 +2682,11 @@ function AiResourcesContent() {
                       </label>
                     </div>
 
-                    {providerFormExternalLinkItems.length ? (
-                      <div className="grid gap-2">
-                        <div className="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
-                          {aiText('provider_links_title', 'Reference links')}
-                        </div>
-                        <div className="flex flex-wrap gap-2 text-xs">
-                          {providerFormExternalLinkItems.map((item) => (
-                            <a
-                              key={item.key}
-                              className="rounded-full border border-slate-200 px-3 py-1 font-semibold text-slate-600 transition hover:border-slate-300 hover:bg-slate-50 dark:border-slate-800 dark:text-slate-300 dark:hover:border-slate-700 dark:hover:bg-slate-900"
-                              href={item.href}
-                              target="_blank"
-                              rel="noreferrer"
-                            >
-                              {aiText(item.labelKey, item.fallback)}
-                            </a>
-                          ))}
-                        </div>
-                      </div>
-                    ) : null}
+                    <ProviderReferenceLinks
+                      items={providerFormExternalLinkItems}
+                      label={aiText('provider_links_title', 'Reference links')}
+                      translate={aiText}
+                    />
                   </div>
                 </details>
 
@@ -3420,444 +3131,53 @@ function AiResourcesContent() {
                     </div>
                   </details>
                 ) : null}
-                </div>
-                <div className="flex flex-col gap-3 border-t border-slate-200 bg-white px-5 py-3 text-sm text-slate-600 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-300 sm:flex-row sm:items-center sm:justify-between">
-                  <span>{aiText('save_test_notice', 'Saving will immediately run a masked provider test. Secrets are never returned to the browser.')}</span>
-                  <div className="flex flex-wrap gap-2">
-                    <button
-                      type="button"
-                      className="btn btn-secondary"
-                      disabled={savingConnection}
-                      onClick={closeProviderForm}
-                    >
-                      {aiText('action_cancel', 'Cancel')}
-                    </button>
-                    <button
-                      type="submit"
-                      disabled={savingConnection}
-                      className="btn btn-primary justify-center disabled:cursor-not-allowed disabled:opacity-60"
-                    >
-                      {savingConnection ? aiText('saving', 'Saving...') : aiText('action_save_and_test_connection', 'Save and test provider')}
-                    </button>
-                  </div>
-                </div>
-              </form>
-            </div>
-          </div>
-        ) : null}
-        <div className="mt-4 space-y-4">
-          {[
-            {
-              id: 'ai',
-              connections: aiSupplierConnections,
-              empty: aiText('ai_suppliers_empty', 'No model suppliers match the current filters.'),
-            },
-          ].map((supplierGroup) => (
-            <div key={supplierGroup.id} className="overflow-hidden rounded-xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-950">
-              <div className="overflow-x-auto">
-                <table className="min-w-[760px] w-full text-left text-sm">
-                  <thead className="bg-slate-50 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:bg-slate-900/60 dark:text-slate-400">
-                    <tr>
-                      <th className="px-4 py-3">
-                        <select
-                          className="h-8 rounded-md border border-slate-200 bg-white px-2 text-xs font-semibold normal-case tracking-normal text-slate-700 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-200"
-                          value={connectionStatusFilter}
-                          onChange={(event) => setConnectionStatusFilter(event.target.value as ConnectionStatusFilter)}
-                          aria-label={aiText('status_filter_label', 'Status')}
-                        >
-                          <option value="all">{aiText('filter_all_statuses', 'All statuses')}</option>
-                          <option value="ready">{aiText('filter_ready', 'Ready')}</option>
-                          <option value="missing_secret">{aiText('filter_missing_secret', 'Missing secret')}</option>
-                          <option value="disabled">{aiText('filter_disabled', 'Disabled')}</option>
-                        </select>
-                      </th>
-                      <th className="px-4 py-3">{aiText('column_provider', 'Provider')}</th>
-                      <th className="px-4 py-3">{aiText('column_enabled_models', 'Runtime allowlist')}</th>
-                      <th className="px-4 py-3">{aiText('last_test', 'Last test')}</th>
-                      <th className="w-44 px-4 py-3 text-center">{aiText('column_actions', 'Actions')}</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-200 dark:divide-slate-800">
-                    {supplierGroup.connections.map((connection) => {
-                      const category = supplierCategory(connection);
-                      const isAiSupplier = category === 'ai';
-                      const testResult = connectionTestResults[connection.connection_id];
-                      const isDeleting = deletingConnectionId === connection.connection_id;
-                      const isConfirmingDelete = confirmingDeleteConnectionId === connection.connection_id;
-                      const modelIds = connection.model_ids || [];
-                      const providerLinkItems = connectionExternalLinkItems(connection);
-                      return (
-                        <tr key={connection.connection_id} className="align-top">
-                          <td className="px-4 py-4">
-                            <BackofficeStatusBadge
-                              label={resourceStatusLabel(connection.status)}
-                              status={statusTone(connection.status)}
-                              className={connection.status === 'ready' ? QUIET_STATUS_BADGE_CLASS : undefined}
-                            />
-                          </td>
-                          <td className="px-4 py-4">
-                            <div className="font-semibold text-slate-950 dark:text-white">{connection.display_name}</div>
-                            <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                              {connection.provider_id} · {providerKindLabel(connection.kind)}
-                            </div>
-                            {connection.note ? (
-                              <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">{connection.note}</div>
-                            ) : null}
-                            {providerLinkItems.length ? (
-                              <div className="mt-2 flex flex-wrap gap-2 text-xs">
-                                {providerLinkItems.map((item) => (
-                                  <a
-                                    key={item.key}
-                                    className="font-semibold text-slate-600 underline decoration-slate-300 underline-offset-4 transition hover:text-slate-950 dark:text-slate-300 dark:decoration-slate-700 dark:hover:text-white"
-                                    href={item.href}
-                                    target="_blank"
-                                    rel="noreferrer"
-                                  >
-                                    {aiText(item.labelKey, item.fallback)}
-                                  </a>
-                                ))}
-                              </div>
-                            ) : null}
-                            {renderConnectionIssue(connection)}
-                          </td>
-                          <td className="px-4 py-4 text-slate-600 dark:text-slate-300">
-                            <div className="font-semibold text-slate-900 dark:text-white">
-                              {modelIds.length
-                                ? aiText('model_catalog_enabled_count_short', '{{count}} models', { count: String(modelIds.length) })
-                                : aiText('model_catalog_none_enabled_short', '0 models')}
-                            </div>
-                            <div className="mt-1 text-xs leading-5 text-slate-500 dark:text-slate-400">
-                              {aiText('model_catalog_allowlist_short_hint', 'Only these models can be selected by ability routes.')}
-                            </div>
-                          </td>
-                          <td className="max-w-[18rem] px-4 py-4 text-slate-600 dark:text-slate-300">
-                            {testResult ? (
-                              <div className="grid gap-1">
-                                <div className="flex items-center gap-2">
-                                  <BackofficeStatusBadge label={resourceStatusLabel(testResult.status)} status={testResult.ok ? 'success' : 'warning'} />
-                                  <span className="text-xs text-slate-500 dark:text-slate-400">{providerTestStageLabel(testResult.stage)}</span>
-                                </div>
-                                <div className="text-xs leading-5">{providerTestMessage(testResult)}</div>
-                                {testResult.catalog?.model_count ? (
-                                  <div className="text-xs text-slate-500 dark:text-slate-400">
-                                    {aiText('catalog_models', 'Catalog models')}: {testResult.catalog.model_count} · {labelList(testResult.catalog.sample_model_ids || [])}
-                                  </div>
-                                ) : null}
-                              </div>
-                            ) : connection.last_tested_at ? (
-                              <div className="grid gap-1">
-                                <div className="text-xs text-slate-500 dark:text-slate-400">
-                                  {formatDate(connection.last_tested_at)}
-                                </div>
-                                {connection.last_error_code ? (
-                                  <div className="text-xs leading-5 text-amber-700 dark:text-amber-300">
-                                    {connection.last_error_code}
-                                  </div>
-                                ) : null}
-                              </div>
-                            ) : (
-                              <span className="text-slate-400 dark:text-slate-500">-</span>
-                            )}
-                          </td>
-                          <td className="w-44 px-4 py-4 text-center">
-                            <div className="flex flex-wrap items-center justify-center gap-3">
-                              {isConfirmingDelete ? (
-                                <>
-                                  <button
-                                    type="button"
-                                    className={TABLE_CONFIRM_DELETE_BUTTON_CLASS}
-                                    disabled={isDeleting}
-                                    onClick={() => {
-                                      void deleteProviderConnection(connection);
-                                    }}
-                                  >
-                                    {isDeleting ? aiText('deleting', 'Deleting...') : aiText('action_confirm_delete', 'Confirm delete')}
-                                  </button>
-                                  <button
-                                    type="button"
-                                    className={TABLE_ACTION_BUTTON_CLASS}
-                                    disabled={isDeleting}
-                                    onClick={() => setConfirmingDeleteConnectionId('')}
-                                  >
-                                    {aiText('action_cancel', 'Cancel')}
-                                  </button>
-                                </>
-                              ) : (
-                                <>
-                                  {isAiSupplier ? (
-                                    <button
-                                      type="button"
-                                      className={TABLE_ACTION_BUTTON_CLASS}
-                                      disabled={isDeleting}
-                                      onClick={() => editProviderConnection(connection)}
-                                    >
-                                      {aiText('action_configure', 'Configure')}
-                                    </button>
-                                  ) : null}
-                                  {connection.managed_by === 'cloud_provider_connections' ? (
-                                    <button
-                                      type="button"
-                                      className={TABLE_DELETE_BUTTON_CLASS}
-                                      disabled={isDeleting}
-                                      onClick={() => setConfirmingDeleteConnectionId(connection.connection_id)}
-                                    >
-                                      {aiText('action_delete', 'Delete')}
-                                    </button>
-                                  ) : null}
-                                  {!isAiSupplier && connection.detail_href ? (
-                                    <Link href={connection.detail_href} className={TABLE_ACTION_BUTTON_CLASS}>
-                                      {aiText('action_open_config', 'Open config')}
-                                    </Link>
-                                  ) : null}
-                                  {!isAiSupplier && !connection.detail_href ? (
-                                    <span className="text-sm text-slate-400 dark:text-slate-500">-</span>
-                                  ) : null}
-                                </>
-                              )}
-                            </div>
-                          </td>
-                        </tr>
-                      );
-                    })}
-                    {supplierGroup.connections.length === 0 ? (
-                      <tr>
-                        <td colSpan={5} className="px-4 py-8 text-center text-sm text-slate-500 dark:text-slate-400">
-                          {supplierGroup.empty}
-                        </td>
-                      </tr>
-                    ) : null}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          ))}
-        </div>
+        </ProviderConnectionDialog>
+        <ModelSupplierTable
+          connections={aiSupplierConnections}
+          statusFilter={connectionStatusFilter}
+          onStatusFilterChange={setConnectionStatusFilter}
+          testResults={connectionTestResults}
+          deletingConnectionId={deletingConnectionId}
+          confirmingDeleteConnectionId={confirmingDeleteConnectionId}
+          providerKindLabel={providerKindLabel}
+          providerTestStageLabel={providerTestStageLabel}
+          providerTestMessage={providerTestMessage}
+          referenceLinksForConnection={connectionExternalLinkItems}
+          onConfigure={editProviderConnection}
+          onDelete={(connection) => void deleteProviderConnection(connection)}
+          onRequestDelete={setConfirmingDeleteConnectionId}
+          onCancelDelete={() => setConfirmingDeleteConnectionId('')}
+          translate={aiText}
+        />
           </>
         ) : null}
 
         {supplierTypeFilter === 'capability' ? (
           <div className="mt-4 space-y-4">
-            <div className="overflow-hidden rounded-xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-950">
-              <div className="overflow-x-auto">
-                <table className="min-w-[960px] w-full text-left text-sm">
-                  <thead className="bg-slate-50 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:bg-slate-900/60 dark:text-slate-400">
-                    <tr>
-                      <th className="px-4 py-3">{aiText('column_provider', 'Provider')}</th>
-                      <th className="px-4 py-3">
-                        <select
-                          className="h-8 w-36 rounded-md border border-slate-200 bg-white px-2 text-xs font-semibold normal-case tracking-normal text-slate-700 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-200"
-                          value={capabilityCategoryFilter}
-                          onChange={(event) => setCapabilityCategoryFilter(event.target.value as CapabilityProviderCategoryFilter)}
-                          aria-label={aiText('capability_category_filter', 'Capability category')}
-                        >
-                          <option value="all">{aiText('filter_all_categories', 'All categories')}</option>
-                          {(['search', 'image', 'vector'] as CapabilityProviderCategory[]).map((category) => (
-                            <option key={category} value={category}>
-                              {capabilityCategoryLabel(category)} · {capabilityConnectionsByCategory[category].length}
-                            </option>
-                          ))}
-                        </select>
-                      </th>
-                      <th className="px-4 py-3">
-                        <select
-                          className="h-8 w-36 rounded-md border border-slate-200 bg-white px-2 text-xs font-semibold normal-case tracking-normal text-slate-700 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-200"
-                          value={connectionStatusFilter}
-                          onChange={(event) => setConnectionStatusFilter(event.target.value as ConnectionStatusFilter)}
-                          aria-label={aiText('status_filter_label', 'Status')}
-                        >
-                          <option value="all">{aiText('filter_all_statuses', 'All statuses')}</option>
-                          <option value="ready">{aiText('filter_ready', 'Ready')}</option>
-                          <option value="missing_secret">{aiText('filter_missing_secret', 'Missing secret')}</option>
-                          <option value="disabled">{aiText('filter_disabled', 'Disabled')}</option>
-                        </select>
-                      </th>
-                      <th className="px-4 py-3">{aiText('column_connection', 'Connection')}</th>
-                      <th className="px-4 py-3">{aiText('last_test', 'Last test')}</th>
-                      <th className="w-52 px-4 py-3 text-center">{aiText('column_actions', 'Actions')}</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-200 dark:divide-slate-800">
-                    {activeCapabilityConnections.map((connection) => {
-                      const category = capabilityProviderCategory(connection);
-                      const testResult = connectionTestResults[connection.connection_id];
-                      const isTesting = testingConnectionId === connection.connection_id;
-                      const isDeleting = deletingConnectionId === connection.connection_id;
-                      const isConfirmingDelete = confirmingDeleteConnectionId === connection.connection_id;
-                      const canTestConnection = connection.managed_by === 'cloud_provider_connections';
-                      const channelCount = capabilityChannelCounts.get(`${connection.kind}:${connection.provider_id}`) || 0;
-                      const showPriority = channelCount > 1 || Number(connection.priority ?? 100) !== 100;
-                      return (
-                        <tr key={connection.connection_id} className="align-top">
-                          <td className="px-4 py-4 align-middle">
-                            <div className="font-semibold text-slate-950 dark:text-white">{connection.display_name}</div>
-                            <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                              {capabilityProviderPurposeLabel(connection)}
-                            </div>
-                          </td>
-                          <td className="px-4 py-4 align-middle text-xs font-semibold text-slate-600 dark:text-slate-300">
-                            {capabilityCategoryLabel(category)}
-                          </td>
-                          <td className="px-4 py-4 align-middle">
-                            <BackofficeStatusBadge
-                              label={resourceStatusLabel(connection.status)}
-                              status={statusTone(connection.status)}
-                              className={connection.status === 'ready' ? QUIET_STATUS_BADGE_CLASS : undefined}
-                            />
-                          </td>
-                          <td className="px-4 py-4 align-middle">
-                            <div className="text-xs leading-5 text-slate-500 dark:text-slate-400">
-                              <span className={connection.enabled ? 'text-slate-500 dark:text-slate-400' : 'font-semibold text-slate-500 dark:text-slate-400'}>
-                                {connection.enabled ? aiText('field_enabled', 'Enabled') : aiText('status_disabled_label', 'Disabled')}
-                              </span>
-                              <span className="mx-1 text-slate-300 dark:text-slate-700">·</span>
-                              <span className={connection.configured ? 'text-slate-500 dark:text-slate-400' : 'font-semibold text-amber-700 dark:text-amber-300'}>
-                                {connection.configured ? aiText('status_configured_label', 'Configured') : aiText('status_missing_secret_label', 'Missing secret')}
-                              </span>
-                              {showPriority ? (
-                                <>
-                                  <span className="mx-1 text-slate-300 dark:text-slate-700">·</span>
-                                  <span className={Number(connection.priority ?? 100) === 100 ? 'text-slate-400 dark:text-slate-500' : 'font-semibold text-slate-600 dark:text-slate-300'}>
-                                    {aiText('channel_priority_summary', 'Priority {{priority}}', {
-                                      priority: String(connection.priority ?? 100),
-                                    })}
-                                  </span>
-                                </>
-                              ) : null}
-                              {connection.note ? (
-                                <div className="mt-1 max-w-[16rem] truncate text-slate-400 dark:text-slate-500">
-                                  {connection.note}
-                                </div>
-                              ) : null}
-                            </div>
-                          </td>
-                          <td className="max-w-[18rem] px-4 py-4 align-middle text-slate-600 dark:text-slate-300">
-                            {testResult ? (
-                              <div className="grid gap-1">
-                                <div className="flex flex-wrap items-center gap-1.5 text-xs">
-                                  <span
-                                    className={`h-1.5 w-1.5 rounded-full ${
-                                      testResult.ok ? 'bg-emerald-500' : 'bg-amber-500'
-                                    }`}
-                                    aria-hidden="true"
-                                  />
-                                  <span className={testResult.ok ? 'font-semibold text-slate-700 dark:text-slate-200' : 'font-semibold text-amber-700 dark:text-amber-300'}>
-                                    {testResult.ok ? aiText('test_passed', 'Passed') : resourceStatusLabel(testResult.status)}
-                                  </span>
-                                  <span className="text-slate-300 dark:text-slate-700">·</span>
-                                  <span className="text-slate-500 dark:text-slate-400">{formatDate(testResult.tested_at)}</span>
-                                  <span className="text-slate-300 dark:text-slate-700">·</span>
-                                  <span className="text-slate-500 dark:text-slate-400">{providerTestStageLabel(testResult.stage)}</span>
-                                </div>
-                                {!testResult.ok ? (
-                                  <div className="text-xs leading-5 text-amber-700 dark:text-amber-300">{providerTestMessage(testResult)}</div>
-                                ) : null}
-                              </div>
-                            ) : connection.last_tested_at ? (
-                              <div className="grid gap-1">
-                                {connection.last_error_code ? (
-                                  <div className="text-xs leading-5 text-amber-700 dark:text-amber-300">
-                                    {aiText('test_failed', 'Failed')} · {formatDate(connection.last_tested_at)} · {connection.last_error_code}
-                                  </div>
-                                ) : (
-                                  <div className="flex items-center gap-1.5 text-xs text-slate-500 dark:text-slate-400">
-                                    <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" aria-hidden="true" />
-                                    <span className="font-semibold text-slate-700 dark:text-slate-200">{aiText('test_passed', 'Passed')}</span>
-                                    <span className="text-slate-300 dark:text-slate-700">·</span>
-                                    <span>{formatDate(connection.last_tested_at)}</span>
-                                  </div>
-                                )}
-                              </div>
-                            ) : (
-                              <span className="text-slate-400 dark:text-slate-500">-</span>
-                            )}
-                          </td>
-                          <td className="w-52 px-4 py-4 text-center align-middle">
-                            <div className="flex flex-wrap items-center justify-center gap-3">
-                              {isConfirmingDelete ? (
-                                <>
-                                  <button
-                                    type="button"
-                                    className={TABLE_CONFIRM_DELETE_BUTTON_CLASS}
-                                    disabled={isDeleting}
-                                    onClick={() => {
-                                      void deleteProviderConnection(connection);
-                                    }}
-                                  >
-                                    {isDeleting ? aiText('deleting', 'Deleting...') : aiText('action_confirm_delete', 'Confirm delete')}
-                                  </button>
-                                  <button
-                                    type="button"
-                                    className={TABLE_ACTION_BUTTON_CLASS}
-                                    disabled={isDeleting}
-                                    onClick={() => setConfirmingDeleteConnectionId('')}
-                                  >
-                                    {aiText('action_cancel', 'Cancel')}
-                                  </button>
-                                </>
-                              ) : (
-                                <>
-                                  {canTestConnection ? (
-                                    <button
-                                      type="button"
-                                      className={TABLE_ACTION_BUTTON_CLASS}
-                                      disabled={isTesting || isDeleting}
-                                      onClick={() => {
-                                        void runProviderConnectionTest(connection.connection_id);
-                                      }}
-                                    >
-                                      {isTesting ? aiText('testing', 'Testing...') : aiText('action_test', 'Test')}
-                                    </button>
-                                  ) : null}
-                                  <button
-                                    type="button"
-                                    className={TABLE_ACTION_BUTTON_CLASS}
-                                    disabled={isDeleting}
-                                    onClick={() => {
-                                      setActiveCapabilityCategory(category);
-                                      if (connection.managed_by === 'cloud_provider_connections') {
-                                        editProviderConnection(connection);
-                                        return;
-                                      }
-                                      const template = CAPABILITY_PROVIDER_TEMPLATES.find(
-                                        (item) => item.category === category && item.id === connection.provider_id
-                                      );
-                                      if (template) {
-                                        openCapabilityProviderTemplate(template);
-                                        return;
-                                      }
-                                      editProviderConnection(connection);
-                                    }}
-                                  >
-                                    {aiText('action_configure', 'Configure')}
-                                  </button>
-                                  {connection.managed_by === 'cloud_provider_connections' ? (
-                                    <button
-                                      type="button"
-                                      className={TABLE_DELETE_BUTTON_CLASS}
-                                      disabled={isDeleting}
-                                      onClick={() => setConfirmingDeleteConnectionId(connection.connection_id)}
-                                    >
-                                      {aiText('action_delete', 'Delete')}
-                                    </button>
-                                  ) : null}
-                                </>
-                              )}
-                            </div>
-                          </td>
-                        </tr>
-                      );
-                    })}
-                    {activeCapabilityConnections.length === 0 ? (
-                      <tr>
-                        <td colSpan={6} className="px-4 py-8 text-center text-sm text-slate-500 dark:text-slate-400">
-                          {aiText('capability_category_empty', 'No suppliers match the current category and filters.')}
-                        </td>
-                      </tr>
-                    ) : null}
-                  </tbody>
-                </table>
-              </div>
-            </div>
+            <CapabilitySupplierTable
+              connections={activeCapabilityConnections}
+              connectionsByCategory={capabilityConnectionsByCategory}
+              categoryFilter={capabilityCategoryFilter}
+              onCategoryFilterChange={setCapabilityCategoryFilter}
+              statusFilter={connectionStatusFilter}
+              onStatusFilterChange={setConnectionStatusFilter}
+              testResults={connectionTestResults}
+              channelCounts={capabilityChannelCounts}
+              testingConnectionId={testingConnectionId}
+              deletingConnectionId={deletingConnectionId}
+              confirmingDeleteConnectionId={confirmingDeleteConnectionId}
+              categoryForConnection={capabilityProviderCategory}
+              categoryLabel={capabilityCategoryLabel}
+              purposeLabel={capabilityProviderPurposeLabel}
+              providerTestStageLabel={providerTestStageLabel}
+              providerTestMessage={providerTestMessage}
+              onTest={(connectionId) => void runProviderConnectionTest(connectionId)}
+              onConfigure={configureCapabilityConnection}
+              onDelete={(connection) => void deleteProviderConnection(connection)}
+              onRequestDelete={setConfirmingDeleteConnectionId}
+              onCancelDelete={() => setConfirmingDeleteConnectionId('')}
+              translate={aiText}
+            />
             {capabilityAddDialogOpen ? (
               <div
                 className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-slate-950/45 px-4 py-6 backdrop-blur-sm sm:py-10"

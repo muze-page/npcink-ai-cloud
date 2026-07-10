@@ -627,6 +627,11 @@ function AdminOverviewContent() {
   const supportLookupPortalUserHref = buildAdminLookupHref('/admin/portal-users', supportQuery);
   const quickLinks = [
     {
+      href: '/admin/support-requests',
+      label: t('admin.home_quick_tickets', {}, 'Tickets'),
+      detail: t('admin.home_quick_tickets_desc', {}, 'Portal-submitted billing, payment, site, usage, and account issues.'),
+    },
+    {
       href: '/admin/coverage',
       label: t('admin.home_quick_service_status', {}, 'Service status'),
       detail: t('admin.home_quick_service_status_desc', {}, 'Customer coverage, package, and subscription pressure.'),
@@ -852,7 +857,7 @@ function AdminOverviewContent() {
                   {t('admin.home_quick_actions_eyebrow', {}, 'Operator console')}
                 </p>
                 <h2 className="mt-2 text-xl font-semibold text-gray-950 dark:text-white">
-                  {t('admin.home_quick_actions_title', {}, 'Open the right surface first')}
+                  {t('admin.home_quick_actions_title', {}, 'Handle queues first')}
                 </h2>
                 <p className="mt-1 max-w-2xl text-sm leading-6 text-gray-600 dark:text-gray-400">
                   {t(

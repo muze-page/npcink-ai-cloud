@@ -22,6 +22,11 @@ class StatsRepository:
     def __init__(self, session: Session) -> None:
         self.session = session
 
+    def _normalize_site_ids(self, site_ids: list[str] | None) -> list[str] | None:
+        if site_ids is None:
+            return None
+        return sorted({str(site_id).strip() for site_id in site_ids if str(site_id).strip()})
+
     def get_instance(self, instance_id: str) -> CatalogInstance | None:
         return self.session.get(CatalogInstance, instance_id)
 
@@ -120,12 +125,19 @@ class StatsRepository:
         self,
         site_id: str | None = None,
         *,
+        site_ids: list[str] | None = None,
         start_at: datetime | None = None,
         end_at: datetime | None = None,
     ) -> list[ProviderCallRecord]:
+        normalized_site_ids = self._normalize_site_ids(site_ids)
+        if normalized_site_ids is not None and not normalized_site_ids:
+            return []
         statement = select(ProviderCallRecord)
-        if site_id:
+        if site_id or normalized_site_ids is not None:
             statement = statement.join(RunRecord, RunRecord.run_id == ProviderCallRecord.run_id)
+        if normalized_site_ids is not None:
+            statement = statement.where(RunRecord.site_id.in_(normalized_site_ids))
+        if site_id:
             statement = statement.where(RunRecord.site_id == site_id)
         statement = self._apply_provider_call_window_filters(
             statement,
@@ -195,11 +207,15 @@ class StatsRepository:
         start_at: datetime,
         end_at: datetime,
         site_id: str | None = None,
+        site_ids: list[str] | None = None,
         instance_id: str | None = None,
         instance_ids: list[str] | None = None,
         constrain_run_started: bool = False,
     ) -> dict[str, object]:
-        joins_run_record = bool(site_id) or constrain_run_started
+        normalized_site_ids = self._normalize_site_ids(site_ids)
+        if normalized_site_ids is not None and not normalized_site_ids:
+            return self._empty_provider_call_metrics()
+        joins_run_record = bool(site_id) or normalized_site_ids is not None or constrain_run_started
         statement = select(
             func.count(ProviderCallRecord.id),
             func.sum(case((ProviderCallRecord.error_code.is_(None), 1), else_=0)),
@@ -215,6 +231,8 @@ class StatsRepository:
                 RunRecord,
                 RunRecord.run_id == ProviderCallRecord.run_id,
             )
+        if normalized_site_ids is not None:
+            statement = statement.where(RunRecord.site_id.in_(normalized_site_ids))
         if site_id:
             statement = statement.where(RunRecord.site_id == site_id)
         if instance_id:
@@ -261,11 +279,15 @@ class StatsRepository:
         start_at: datetime,
         end_at: datetime,
         site_id: str | None = None,
+        site_ids: list[str] | None = None,
         instance_id: str | None = None,
         instance_ids: list[str] | None = None,
         constrain_run_started: bool = False,
     ) -> list[int]:
-        joins_run_record = bool(site_id) or constrain_run_started
+        normalized_site_ids = self._normalize_site_ids(site_ids)
+        if normalized_site_ids is not None and not normalized_site_ids:
+            return []
+        joins_run_record = bool(site_id) or normalized_site_ids is not None or constrain_run_started
         statement = select(ProviderCallRecord.latency_ms).where(
             ProviderCallRecord.latency_ms.is_not(None)
         )
@@ -274,6 +296,8 @@ class StatsRepository:
                 RunRecord,
                 RunRecord.run_id == ProviderCallRecord.run_id,
             )
+        if normalized_site_ids is not None:
+            statement = statement.where(RunRecord.site_id.in_(normalized_site_ids))
         if site_id:
             statement = statement.where(RunRecord.site_id == site_id)
         if instance_id:
@@ -301,8 +325,19 @@ class StatsRepository:
         start_at: datetime,
         end_at: datetime,
         site_id: str | None = None,
+        site_ids: list[str] | None = None,
         profile_id: str | None = None,
     ) -> dict[str, object]:
+        normalized_site_ids = self._normalize_site_ids(site_ids)
+        if normalized_site_ids is not None and not normalized_site_ids:
+            return {
+                "runs_total": 0,
+                "success_total": 0,
+                "fallback_total": 0,
+                "last_seen_at": None,
+                "active_sites_total": 0,
+                "avg_latency_ms": 0,
+            }
         run_latency_ms = self._run_latency_ms_expression()
         statement = select(
             func.count(RunRecord.run_id),
@@ -312,6 +347,8 @@ class StatsRepository:
             func.count(distinct(RunRecord.site_id)),
             func.avg(run_latency_ms) if run_latency_ms is not None else func.null(),
         )
+        if normalized_site_ids is not None:
+            statement = statement.where(RunRecord.site_id.in_(normalized_site_ids))
         if site_id:
             statement = statement.where(RunRecord.site_id == site_id)
         if profile_id:
@@ -344,8 +381,12 @@ class StatsRepository:
         start_at: datetime,
         end_at: datetime,
         site_id: str | None = None,
+        site_ids: list[str] | None = None,
         profile_id: str | None = None,
     ) -> list[int]:
+        normalized_site_ids = self._normalize_site_ids(site_ids)
+        if normalized_site_ids is not None and not normalized_site_ids:
+            return []
         run_latency_ms = self._run_latency_ms_expression()
         if run_latency_ms is None:
             return []
@@ -353,6 +394,8 @@ class StatsRepository:
             RunRecord.started_at.is_not(None),
             RunRecord.finished_at.is_not(None),
         )
+        if normalized_site_ids is not None:
+            statement = statement.where(RunRecord.site_id.in_(normalized_site_ids))
         if site_id:
             statement = statement.where(RunRecord.site_id == site_id)
         if profile_id:

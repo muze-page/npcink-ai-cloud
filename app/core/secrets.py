@@ -245,9 +245,7 @@ def encrypt_service_setting_secret(secret: str, *, settings: Settings) -> str:
         _build_fernet(
             _resolve_encryption_secret(
                 (
-                    settings.admin_session_secret,
-                    settings.portal_jwt_secret,
-                    settings.internal_auth_token,
+                    settings.service_settings_secret,
                 ),
                 error_message="service setting secret is not configured",
             ),
@@ -262,19 +260,13 @@ def decrypt_service_setting_secret(ciphertext: str | None, *, settings: Settings
     token = str(ciphertext or "").strip()
     if not token:
         return ""
+    secret = _resolve_encryption_secret(
+        (settings.service_settings_secret,),
+        error_message="service setting secret is not configured",
+    )
     try:
         return (
-            _build_fernet(
-                _resolve_encryption_secret(
-                    (
-                        settings.admin_session_secret,
-                        settings.portal_jwt_secret,
-                        settings.internal_auth_token,
-                    ),
-                    error_message="service setting secret is not configured",
-                ),
-                purpose="service_setting_secret",
-            )
+            _build_fernet(secret, purpose="service_setting_secret")
             .decrypt(token.encode("utf-8"))
             .decode("utf-8")
         )

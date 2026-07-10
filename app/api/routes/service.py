@@ -8,11 +8,14 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 
+from app.adapters.notifications.base import PortalEmailDeliveryError
+from app.adapters.notifications.smtp import build_portal_email_sender
 from app.adapters.providers.registry import resolve_live_provider_adapters
 from app.adapters.repositories.catalog_repository import CatalogRepository
 from app.api.auth import authorize_internal_request, get_cloud_services
 from app.api.envelope import build_envelope
 from app.core.db import get_session
+from app.core.logging import get_logger
 from app.core.models import ProviderConnection
 from app.core.security import extract_trace_id
 from app.domain.advisor.service import InternalAIAdvisorService
@@ -57,6 +60,7 @@ from app.domain.runtime.service import RuntimeRunNotFoundError, RuntimeService
 from app.domain.service_settings import (
     ServiceSettingsAdminError,
     ServiceSettingsAdminService,
+    resolve_portal_public_base_url,
 )
 from app.domain.site_knowledge.metrics import SiteKnowledgeObservabilityService
 from app.domain.wordpress_ai_connector.routing_profiles import (
@@ -66,6 +70,7 @@ from app.domain.wordpress_ai_connector.routing_profiles import (
 from app.workers.ops_cadence import build_cadence_summary
 
 router = APIRouter(prefix="/internal/service", tags=["service"])
+logger = get_logger(__name__)
 
 
 def _dict_value(value: object) -> dict[str, Any]:
@@ -112,6 +117,24 @@ class PortalUsersBatchDisablePayload(BaseModel):
     reason: str = ""
 
 
+class AdminSupportRequestUpdatePayload(BaseModel):
+    status: str = ""
+    admin_note: str = ""
+
+
+class AdminSupportRequestMessagePayload(BaseModel):
+    body: str = Field(default="", max_length=4000)
+    visibility: str = Field(default="public", max_length=32)
+
+
+class AdminSupportRequestAttachmentPayload(BaseModel):
+    filename: str = Field(default="", max_length=191)
+    content_type: str = Field(default="", max_length=128)
+    content_base64: str = ""
+    visibility: str = Field(default="public", max_length=32)
+    message_id: str = Field(default="", max_length=191)
+
+
 class SiteProvisionPayload(BaseModel):
     site_id: str
     account_id: str
@@ -124,7 +147,7 @@ class SiteStatusPayload(BaseModel):
     reason: str = ""
 
 
-class PrincipalAccessPayload(BaseModel):
+class AccountMemberAccessPayload(BaseModel):
     email: str
     status: str = "active"
     metadata: dict[str, Any] = Field(default_factory=dict)
@@ -155,7 +178,7 @@ class PlanVersionPayload(BaseModel):
     plan_version_id: str
     version_label: str
     status: str = "published"
-    currency: str = "USD"
+    currency: str = "CNY"
     entitlements: dict[str, Any] = Field(default_factory=dict)
     budgets: dict[str, Any] = Field(default_factory=dict)
     concurrency: dict[str, Any] = Field(default_factory=dict)
@@ -454,6 +477,60 @@ def _build_audit_payload(payload: BaseModel | None = None) -> dict[str, Any]:
     return payload.model_dump(mode="json")
 
 
+def _send_support_request_update_notification(
+    request: Request,
+    *,
+    result: dict[str, object],
+) -> dict[str, object]:
+    request_payload = result.get("request") if isinstance(result.get("request"), dict) else {}
+    message_payload = result.get("message") if isinstance(result.get("message"), dict) else {}
+    if not isinstance(request_payload, dict) or not isinstance(message_payload, dict):
+        return {"attempted": False, "delivered": False, "reason": "invalid_payload"}
+    if str(message_payload.get("visibility") or "") != "public":
+        return {"attempted": False, "delivered": False, "reason": "internal_message"}
+    recipient_email = str(request_payload.get("email") or "").strip()
+    if not recipient_email:
+        return {"attempted": False, "delivered": False, "reason": "missing_recipient"}
+    services = get_cloud_services(request)
+    email_sender = services.portal_email_sender or build_portal_email_sender(
+        services.settings,
+        database_url=services.settings.database_url,
+    )
+    if email_sender is None:
+        return {"attempted": False, "delivered": False, "reason": "email_not_configured"}
+    try:
+        portal_base_url = resolve_portal_public_base_url(
+            services.settings.database_url,
+            services.settings,
+        ).rstrip("/")
+        email_sender.send_support_request_update(
+            recipient_email=recipient_email,
+            request_id=str(request_payload.get("request_id") or ""),
+            title=str(request_payload.get("title") or ""),
+            status=str(request_payload.get("status") or ""),
+            message_body=str(message_payload.get("body") or ""),
+            project_name=services.settings.project_name,
+            portal_url=(
+                f"{portal_base_url}/portal/support/{request_payload.get('request_id') or ''}"
+            ),
+            locale=str(request.headers.get("accept-language") or "zh-CN"),
+        )
+    except (NotImplementedError, AttributeError):
+        return {"attempted": False, "delivered": False, "reason": "sender_not_supported"}
+    except PortalEmailDeliveryError:
+        logger.exception(
+            "support request update email delivery failed: request_id=%s trace_id=%s",
+            str(request_payload.get("request_id") or ""),
+            extract_trace_id(request.headers.get("traceparent", "")),
+        )
+        return {
+            "attempted": True,
+            "delivered": False,
+            "reason": "delivery_failed",
+        }
+    return {"attempted": True, "delivered": True, "reason": ""}
+
+
 def _record_provider_connection_audit(
     request: Request,
     *,
@@ -544,9 +621,7 @@ def _provider_connection_audit_payload(
             "kind": str(raw.get("kind") or ""),
             "enabled": bool(raw.get("enabled", True)),
             "base_url_present": bool(str(raw.get("base_url") or "").strip()),
-            "capability_ids": [
-                str(item) for item in raw.get("capability_ids", []) if str(item)
-            ],
+            "capability_ids": [str(item) for item in raw.get("capability_ids", []) if str(item)],
             "runtime_profile_ids": [
                 str(item) for item in raw.get("runtime_profile_ids", []) if str(item)
             ],
@@ -607,9 +682,7 @@ def _provider_connection_result_summary(result: dict[str, Any]) -> dict[str, Any
             "status": str(result.get("status") or ""),
             "stage": str(result.get("stage") or ""),
             "error_code": str(result.get("error_code") or ""),
-            "catalog_model_count": int(
-                _dict_value(result.get("catalog")).get("model_count") or 0
-            ),
+            "catalog_model_count": int(_dict_value(result.get("catalog")).get("model_count") or 0),
         }
     return summary
 
@@ -858,9 +931,10 @@ def _validate_ability_model_plugin_routing_payload(
                 return [], f"profile {profile_id} requires at least one candidate instance"
             if len(candidate_instance_ids) != len(set(candidate_instance_ids)):
                 return [], f"profile {profile_id} includes duplicate candidate instances"
-            if profile_payload.timeout_ms > WP_AI_CONNECTOR_PROFILE_SPECS_BY_ID[
-                profile_id
-            ].max_timeout_ms:
+            if (
+                profile_payload.timeout_ms
+                > WP_AI_CONNECTOR_PROFILE_SPECS_BY_ID[profile_id].max_timeout_ms
+            ):
                 return [], (
                     f"profile {profile_id} timeout_ms exceeds max "
                     f"{WP_AI_CONNECTOR_PROFILE_SPECS_BY_ID[profile_id].max_timeout_ms}"
@@ -1236,11 +1310,11 @@ async def provision_site(
     return build_envelope(status="ok", message="site provisioned", data=result, revision="m6")
 
 
-@router.post("/sites/{site_id}/user-grants")
-async def upsert_principal_access(
+@router.post("/accounts/{account_id}/members")
+async def upsert_account_member_access(
     request: Request,
-    site_id: str,
-    payload: PrincipalAccessPayload,
+    account_id: str,
+    payload: AccountMemberAccessPayload,
 ) -> Any:
     auth = await authorize_internal_request(request, require_idempotency=True)
     if auth is not None:
@@ -1248,8 +1322,8 @@ async def upsert_principal_access(
     service = _get_commercial_service(request)
     audit_context = _build_audit_context(request)
     try:
-        result = service.upsert_principal_access(
-            site_id=site_id,
+        result = service.upsert_account_member_access(
+            account_id=account_id,
             email=payload.email,
             status=payload.status,
             metadata_json=payload.metadata,
@@ -1258,17 +1332,17 @@ async def upsert_principal_access(
     except CommercialServiceError as error:
         _record_service_failure(
             request,
-            event_kind="principal_access.upsert",
+            event_kind="account_membership.upsert",
             error=error,
-            site_id=site_id,
-            scope_kind="principal_access",
-            scope_id=site_id,
+            account_id=account_id,
+            scope_kind="account_membership",
+            scope_id=account_id,
             payload_json=_build_audit_payload(payload),
         )
         return _service_error_response(error)
     return build_envelope(
         status="ok",
-        message="user site grant saved",
+        message="account member access saved",
         data=result,
         revision="m6",
     )
@@ -2584,6 +2658,159 @@ async def list_admin_accounts(
         message="admin accounts loaded",
         data=result,
         revision="m7",
+    )
+
+
+@router.get("/admin/support-requests")
+async def list_admin_support_requests(
+    request: Request,
+    status: str = Query(default="", max_length=32),
+    topic: str = Query(default="", max_length=64),
+    q: str = Query(default="", max_length=191),
+    limit: int = Query(default=100, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+) -> Any:
+    auth = await authorize_internal_request(request, require_idempotency=False)
+    if auth is not None:
+        return auth
+    try:
+        result = _get_commercial_service(request).list_admin_support_requests(
+            status=status,
+            topic=topic,
+            query=q,
+            limit=limit,
+            offset=offset,
+        )
+    except CommercialServiceError as error:
+        return _service_error_response(error, request=request)
+    return build_envelope(
+        status="ok",
+        message="support requests loaded",
+        data=result,
+        revision="m6",
+    )
+
+
+@router.get("/admin/support-requests/{request_id}")
+async def get_admin_support_request(request: Request, request_id: str) -> Any:
+    auth = await authorize_internal_request(request, require_idempotency=False)
+    if auth is not None:
+        return auth
+    try:
+        result = _get_commercial_service(request).get_admin_support_request(request_id=request_id)
+    except CommercialServiceError as error:
+        return _service_error_response(error, request=request)
+    return build_envelope(
+        status="ok",
+        message="support request loaded",
+        data=result,
+        revision="m6",
+    )
+
+
+@router.post("/admin/support-requests/{request_id}/messages")
+async def create_admin_support_request_message(
+    request: Request,
+    request_id: str,
+    payload: AdminSupportRequestMessagePayload,
+) -> Any:
+    auth = await authorize_internal_request(request, require_idempotency=True)
+    if auth is not None:
+        return auth
+    try:
+        result = _get_commercial_service(request).create_admin_support_request_message(
+            request_id=request_id,
+            body=payload.body,
+            visibility=payload.visibility,
+            audit_context=_build_audit_context(request),
+        )
+    except CommercialServiceError as error:
+        return _service_error_response(error, request=request)
+    notification = _send_support_request_update_notification(request, result=result)
+    return build_envelope(
+        status="ok",
+        message="support request message created",
+        data={**result, "notification": notification},
+        revision="m6",
+    )
+
+
+@router.post("/admin/support-requests/{request_id}/attachments")
+async def create_admin_support_request_attachment(
+    request: Request,
+    request_id: str,
+    payload: AdminSupportRequestAttachmentPayload,
+) -> Any:
+    auth = await authorize_internal_request(request, require_idempotency=True)
+    if auth is not None:
+        return auth
+    try:
+        result = _get_commercial_service(request).create_admin_support_request_attachment(
+            request_id=request_id,
+            filename=payload.filename,
+            content_type=payload.content_type,
+            content_base64=payload.content_base64,
+            visibility=payload.visibility,
+            message_id=payload.message_id,
+            audit_context=_build_audit_context(request),
+        )
+    except CommercialServiceError as error:
+        return _service_error_response(error, request=request)
+    return build_envelope(
+        status="ok",
+        message="support request attachment created",
+        data=result,
+        revision="m6",
+    )
+
+
+@router.get("/admin/support-requests/{request_id}/attachments/{attachment_id}")
+async def get_admin_support_request_attachment(
+    request: Request,
+    request_id: str,
+    attachment_id: str,
+) -> Any:
+    auth = await authorize_internal_request(request, require_idempotency=False)
+    if auth is not None:
+        return auth
+    try:
+        result = _get_commercial_service(request).get_admin_support_request_attachment(
+            request_id=request_id,
+            attachment_id=attachment_id,
+        )
+    except CommercialServiceError as error:
+        return _service_error_response(error, request=request)
+    return build_envelope(
+        status="ok",
+        message="support request attachment loaded",
+        data=result,
+        revision="m6",
+    )
+
+
+@router.patch("/admin/support-requests/{request_id}")
+async def update_admin_support_request(
+    request: Request,
+    request_id: str,
+    payload: AdminSupportRequestUpdatePayload,
+) -> Any:
+    auth = await authorize_internal_request(request, require_idempotency=True)
+    if auth is not None:
+        return auth
+    try:
+        result = _get_commercial_service(request).update_admin_support_request(
+            request_id=request_id,
+            status=payload.status,
+            admin_note=payload.admin_note,
+            audit_context=_build_audit_context(request),
+        )
+    except CommercialServiceError as error:
+        return _service_error_response(error, request=request)
+    return build_envelope(
+        status="ok",
+        message="support request updated",
+        data={"request": result},
+        revision="m6",
     )
 
 

@@ -7,7 +7,8 @@ from fastapi.testclient import TestClient
 from app.adapters.notifications.base import PortalEmailSender
 from app.api.main import create_app
 from app.core.config import Settings
-from app.core.db import dispose_engine, init_schema
+from app.core.db import dispose_engine, get_session, init_schema
+from app.core.models import Site
 from app.core.services import CloudServices
 from app.domain.catalog.service import CatalogService
 from tests.conftest import (
@@ -179,6 +180,7 @@ class FakePortalEmailSender(PortalEmailSender):
             }
         )
 
+
 def _login_platform_admin(
     client: TestClient,
     *,
@@ -196,7 +198,6 @@ def _login_platform_admin(
     assert response.headers["location"].startswith("/admin"), response.headers["location"]
     set_cookie_header = response.headers.get("set-cookie", "")
     assert "npcink_admin_session_token" in set_cookie_header
-    assert "magick_admin_session_token" in set_cookie_header
     assert "Max-Age=0" in set_cookie_header
     return client
 
@@ -214,12 +215,18 @@ def _seed_account(
     assert response.status_code == 200, response.text
 
 
-def _grant_principal_access(client: TestClient, *, site_id: str, email: str) -> None:
+def _grant_account_member_access(client: TestClient, *, site_id: str, email: str) -> None:
     safe_email = email.replace("@", "-").replace(".", "-")
+    services = client.app.state.services
+    with get_session(services.settings.database_url) as session:
+        site = session.get(Site, site_id)
+        assert site is not None
+        account_id = str(site.account_id or "")
+    assert account_id
     response = client.post(
-        f"/internal/service/sites/{site_id}/user-grants",
+        f"/internal/service/accounts/{account_id}/members",
         json={"email": email},
-        headers=build_internal_headers(idempotency_key=f"{site_id}-{safe_email}-user-grants"),
+        headers=build_internal_headers(idempotency_key=f"{site_id}-{safe_email}-account-members"),
     )
     assert response.status_code == 200, response.text
 
@@ -290,6 +297,72 @@ def test_web_admin_bootstrap_token_is_separate_from_internal_service_token(tmp_p
 
     assert response.status_code == 303
     assert "auth.admin_bootstrap_token_invalid" in response.headers["location"]
+
+    dispose_engine(database_url)
+
+
+def test_web_admin_and_portal_sessions_do_not_substitute_for_each_other(tmp_path: Path) -> None:
+    fake_sender = FakePortalEmailSender()
+    database_url, portal_client = _build_client(
+        tmp_path,
+        settings_overrides={
+            "portal_jwt_secret": TEST_PORTAL_JWT_SECRET,
+            "portal_jwt_issuer": "npcink-cloud-portal",
+            "portal_jwt_audience": "npcink-cloud-customers",
+        },
+        portal_email_sender=fake_sender,
+    )
+    _seed_account(portal_client, account_id="acct_identity_boundary")
+    site_response = portal_client.post(
+        "/internal/service/sites",
+        json={
+            "site_id": "site_identity_boundary",
+            "account_id": "acct_identity_boundary",
+            "name": "Identity Boundary Site",
+            "status": "provisioning",
+        },
+        headers=build_internal_headers(idempotency_key="identity-boundary-site"),
+    )
+    assert site_response.status_code == 200, site_response.text
+    activate_response = portal_client.post(
+        "/internal/service/sites/site_identity_boundary/activate",
+        headers=build_internal_headers(idempotency_key="identity-boundary-activate"),
+    )
+    assert activate_response.status_code == 200, activate_response.text
+    _grant_account_member_access(
+        portal_client,
+        site_id="site_identity_boundary",
+        email="identity-boundary@example.com",
+    )
+
+    request_response = portal_client.post(
+        "/portal/v1/auth/code/request",
+        json={"email": "identity-boundary@example.com"},
+    )
+    assert request_response.status_code == 200, request_response.text
+    verify_response = portal_client.post(
+        "/portal/v1/auth/code/verify",
+        json={
+            "email": "identity-boundary@example.com",
+            "code": str(fake_sender.messages[0]["code"]),
+        },
+    )
+    assert verify_response.status_code == 200, verify_response.text
+    assert verify_response.json()["data"]["identity_type"] == "user"
+    assert portal_client.get("/admin/session").status_code == 401
+
+    admin_client = TestClient(portal_client.app)
+    admin_client.headers.update(
+        {
+            "origin": "http://testserver",
+            "referer": "http://testserver/",
+        }
+    )
+    _login_platform_admin(admin_client)
+    admin_session_response = admin_client.get("/admin/session")
+    assert admin_session_response.status_code == 200
+    assert admin_session_response.json()["data"]["identity_type"] == "platform_admin"
+    assert admin_client.get("/portal/v1/session").status_code == 401
 
     dispose_engine(database_url)
 
@@ -480,7 +553,7 @@ def test_web_portal_email_code_and_key_actions_with_jwt(tmp_path: Path) -> None:
         "/internal/service/sites/site_web/activate",
         headers=build_internal_headers(idempotency_key="web-site-activate-001"),
     )
-    _grant_principal_access(client, site_id="site_web", email="web@example.com")
+    _grant_account_member_access(client, site_id="site_web", email="web@example.com")
 
     login_request_response = client.post(
         "/portal/v1/auth/code/request",
