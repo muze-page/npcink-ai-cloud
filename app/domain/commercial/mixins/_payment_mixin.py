@@ -42,6 +42,7 @@ from app.domain.commercial.mixins._audit_mixin import (
     ServiceAuditContext,
 )
 from app.domain.commercial.payment_gateways import (
+    PaymentGatewayCloseRequest,
     PaymentGatewayOrderRequest,
     PaymentGatewayRefundRequest,
     get_payment_gateway_provider,
@@ -385,6 +386,92 @@ class CommercialServicePaymentMixin(CommercialServiceAuditMixin):
             ):
                 session.commit()
             return self._serialize_payment_order_for_kind(order)
+
+    def cancel_account_payment_order(
+        self,
+        *,
+        account_id: str,
+        order_id: str,
+        audit_context: ServiceAuditContext | None = None,
+    ) -> dict[str, object]:
+        service = cast(Any, self)
+        now = service.now_factory()
+        with get_session(service.database_url) as session:
+            repository = CommercialRepository(session)
+            if repository.get_account_for_update(account_id) is None:
+                raise CommercialNotFoundError(
+                    "service.account_not_found",
+                    f"account '{account_id}' was not found",
+                )
+            order = repository.get_payment_order_for_update(order_id)
+            if order is None or order.account_id != account_id:
+                raise CommercialNotFoundError(
+                    "service.payment_order_not_found",
+                    f"payment order '{order_id}' was not found",
+                )
+            if self._cancel_expired_pending_payment_order_in_session(order, now=now):
+                service._cancel_subscription_order_for_payment_in_session(
+                    repository=repository,
+                    payment_order_id=order.order_id,
+                )
+                session.commit()
+                return {"order": self._serialize_payment_order_for_kind(order)}
+            if order.status == PAYMENT_ORDER_STATUS_CANCELED:
+                session.commit()
+                return {"order": self._serialize_payment_order_for_kind(order)}
+            if order.status != PAYMENT_ORDER_STATUS_PENDING:
+                raise CommercialConflictError(
+                    "service.payment_order_not_cancelable",
+                    "Only unpaid payment orders can be canceled",
+                )
+            gateway_config = self._payment_gateway_runtime_config(order.provider)
+            if order.checkout_url and not bool(gateway_config.get("configured")):
+                raise CommercialConflictError(
+                    "service.payment_order_gateway_close_unavailable",
+                    "The payment provider is not configured to close this order safely",
+                )
+            gateway = get_payment_gateway_provider(order.provider, config=gateway_config)
+            close_result = gateway.close_order(
+                PaymentGatewayCloseRequest(
+                    provider=order.provider,
+                    order_id=order.order_id,
+                    external_order_no=order.external_order_no,
+                    metadata=dict(order.metadata_json or {}),
+                )
+            )
+            metadata = dict(order.metadata_json or {})
+            metadata.update(
+                {
+                    "cancellation_reason": "customer_canceled",
+                    "canceled_at": service._serialize_datetime(now),
+                    "payment_gateway_close": close_result.provider_payload,
+                }
+            )
+            order.status = PAYMENT_ORDER_STATUS_CANCELED
+            order.canceled_at = now
+            order.checkout_url = None
+            order.metadata_json = metadata
+            service._cancel_subscription_order_for_payment_in_session(
+                repository=repository,
+                payment_order_id=order.order_id,
+            )
+            payload = {"order": self._serialize_payment_order_for_kind(order)}
+            service._record_service_audit_in_session(
+                repository=repository,
+                audit_context=audit_context,
+                event_kind="payment_order.cancel",
+                outcome="succeeded",
+                account_id=account_id,
+                site_id=order.site_id,
+                subscription_id=order.subscription_id,
+                plan_id=order.plan_id,
+                plan_version_id=order.plan_version_id,
+                scope_kind="payment_order",
+                scope_id=order.order_id,
+                payload_json=payload,
+            )
+            session.commit()
+            return payload
 
     def create_credit_pack_payment_order(
         self,
@@ -1382,6 +1469,7 @@ class CommercialServicePaymentMixin(CommercialServiceAuditMixin):
             "currency": order.currency,
             "subject": order.subject,
             "checkout_url": order.checkout_url or "",
+            "available_actions": self._payment_order_available_actions(order),
             "purchase_kind": purchase_kind,
             "status_detail": self._payment_order_status_detail(order),
             "refund_window_end_at": service._serialize_datetime(order.refund_window_end_at),
@@ -1410,6 +1498,14 @@ class CommercialServicePaymentMixin(CommercialServiceAuditMixin):
             metadata.get("target_subscription_id") or payload.get("subscription_id") or ""
         )
         return payload
+
+    def _payment_order_available_actions(self, order: PaymentOrder) -> list[str]:
+        if order.status != PAYMENT_ORDER_STATUS_PENDING:
+            return []
+        actions = ["cancel"]
+        if order.checkout_url:
+            actions.insert(0, "continue_payment")
+        return actions
 
     def _normalize_payment_order_datetime(self, value: datetime | None) -> datetime | None:
         if value is None:

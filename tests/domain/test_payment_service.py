@@ -607,6 +607,84 @@ def test_credit_pack_payment_success_grants_ai_credits_once(tmp_path: Path) -> N
     dispose_engine(database_url)
 
 
+def test_account_can_cancel_pending_credit_pack_payment_order(tmp_path: Path) -> None:
+    database_url = _sqlite_url(tmp_path)
+    init_schema(database_url)
+    service = _service(database_url)
+    _seed_account_and_plan(service)
+    package_order = service.create_payment_order(
+        account_id="acct_pay",
+        plan_id="plan_pro",
+        plan_version_id="plan_pro_v1",
+        amount=199.0,
+        audit_context=_audit("credit-pack-cancel-base-order"),
+    )
+    service.mark_payment_order_paid(
+        order_id=str(package_order["order_id"]),
+        provider_event_id="alipay-credit-pack-cancel-base-paid",
+        amount=199.0,
+        audit_context=_audit("credit-pack-cancel-base-paid"),
+    )
+    order = service.create_credit_pack_payment_order(
+        account_id="acct_pay",
+        pack_id="pack_small",
+        provider="alipay",
+        audit_context=_audit("credit-pack-cancel-order"),
+    )
+
+    assert order["available_actions"] == ["cancel"]
+    with get_session(database_url) as session:
+        pending_record = session.get(PaymentOrder, str(order["order_id"]))
+        assert pending_record is not None
+        pending_record.checkout_url = "https://openapi.alipay.com/gateway.do?order=real"
+        session.commit()
+    with pytest.raises(CommercialConflictError) as unavailable_close_error:
+        service.cancel_account_payment_order(
+            account_id="acct_pay",
+            order_id=str(order["order_id"]),
+            audit_context=_audit("credit-pack-cancel-without-gateway"),
+        )
+    assert unavailable_close_error.value.error_code == (
+        "service.payment_order_gateway_close_unavailable"
+    )
+    with get_session(database_url) as session:
+        pending_record = session.get(PaymentOrder, str(order["order_id"]))
+        assert pending_record is not None
+        assert pending_record.status == PAYMENT_ORDER_STATUS_PENDING
+        pending_record.checkout_url = None
+        session.commit()
+    canceled = service.cancel_account_payment_order(
+        account_id="acct_pay",
+        order_id=str(order["order_id"]),
+        audit_context=_audit("credit-pack-cancel"),
+    )
+    canceled_again = service.cancel_account_payment_order(
+        account_id="acct_pay",
+        order_id=str(order["order_id"]),
+        audit_context=_audit("credit-pack-cancel-again"),
+    )
+
+    assert canceled["order"]["status"] == PAYMENT_ORDER_STATUS_CANCELED
+    assert canceled["order"]["available_actions"] == []
+    assert canceled["order"]["checkout_url"] == ""
+    assert canceled["order"]["metadata"]["cancellation_reason"] == "customer_canceled"
+    assert canceled_again["order"]["status"] == PAYMENT_ORDER_STATUS_CANCELED
+    with pytest.raises(CommercialConflictError) as paid_cancel_error:
+        service.cancel_account_payment_order(
+            account_id="acct_pay",
+            order_id=str(package_order["order_id"]),
+            audit_context=_audit("credit-pack-paid-order-cancel"),
+        )
+    assert paid_cancel_error.value.error_code == "service.payment_order_not_cancelable"
+    with get_session(database_url) as session:
+        canceled_record = session.get(PaymentOrder, str(order["order_id"]))
+        assert canceled_record is not None
+        assert canceled_record.status == PAYMENT_ORDER_STATUS_CANCELED
+        assert list(session.scalars(select(CreditLedgerEntry))) == []
+
+    dispose_engine(database_url)
+
+
 def test_pending_payment_orders_expire_before_late_payment_confirmation(tmp_path: Path) -> None:
     database_url = _sqlite_url(tmp_path)
     init_schema(database_url)
