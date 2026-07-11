@@ -106,8 +106,18 @@ coverage.
 - When package orders form an upgrade or renewal chain, refunds must be handled
   from the latest live order backward so an older refund cannot overwrite later
   paid coverage.
-- Unpaid checkout orders expire after 24 hours and no longer block a new
-  package order.
+- Unpaid checkout orders expire after 30 minutes and no longer count toward
+  the account limit after reconciliation.
+- The managed operations cadence reconciles expired orders every minute;
+  checkout creation and order reads also reconcile before returning.
+- An account may keep at most five unexpired unpaid package orders. The user
+  must cancel one before creating another after reaching that limit.
+- Users may cancel an unpaid package order. Canceled and expired orders reject
+  later payment confirmation and never activate package coverage.
+- User cancellation must receive provider close confirmation before the local
+  order is canceled. Provider close failure leaves the order pending.
+- When one package order is paid, Cloud closes the account's other unpaid
+  package orders so stale checkout links cannot produce competing changes.
 - Browser return URLs never activate rights. Only a verified provider callback
   may mark an order paid and apply the subscription transition.
 

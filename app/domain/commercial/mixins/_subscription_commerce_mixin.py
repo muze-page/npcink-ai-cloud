@@ -51,6 +51,7 @@ from app.domain.commercial.mixins._audit_mixin import (
     ServiceAuditContext,
 )
 from app.domain.commercial.payment_gateways import (
+    PaymentGatewayCloseRequest,
     PaymentGatewayOrderRequest,
     get_payment_gateway_provider,
 )
@@ -72,6 +73,7 @@ SUBSCRIPTION_PERIOD_DAYS = 30
 PAID_PACKAGE_TRIAL_DAYS = 14
 AGENCY_TRIAL_CREDIT_LIMIT_MAX = 20_000
 MONEY_QUANTUM = Decimal("0.01")
+MAX_PENDING_SUBSCRIPTION_ORDERS = 5
 
 
 class CommercialServiceSubscriptionCommerceMixin(CommercialServiceAuditMixin):
@@ -243,18 +245,23 @@ class CommercialServiceSubscriptionCommerceMixin(CommercialServiceAuditMixin):
                     "service.subscription_order_not_upgrade",
                     "The selected offer is not a paid package",
                 )
-            pending_orders = repository.list_subscription_orders(
+            if repository.count_subscription_orders(
                 account_id=account_id,
-                limit=20,
-            )
-            if any(
-                item.status
-                in {SUBSCRIPTION_ORDER_STATUS_PENDING_PAYMENT, SUBSCRIPTION_ORDER_STATUS_PAID}
-                for item in pending_orders
+                statuses={SUBSCRIPTION_ORDER_STATUS_PAID},
             ):
                 raise CommercialConflictError(
                     "service.subscription_order_pending",
-                    "This account already has a pending package order",
+                    "This account already has a paid package change waiting to take effect",
+                )
+            pending_payment_count = repository.count_subscription_orders(
+                account_id=account_id,
+                statuses={SUBSCRIPTION_ORDER_STATUS_PENDING_PAYMENT},
+            )
+            if pending_payment_count >= MAX_PENDING_SUBSCRIPTION_ORDERS:
+                raise CommercialConflictError(
+                    "service.subscription_order_pending_limit",
+                    "This account already has 5 unpaid package orders; "
+                    "cancel one before creating another",
                 )
 
             order_kind = self._resolve_subscription_order_kind(
@@ -366,6 +373,101 @@ class CommercialServiceSubscriptionCommerceMixin(CommercialServiceAuditMixin):
                 subscription_id=(current.subscription_id if current else None),
                 plan_id=offer.plan_id,
                 plan_version_id=offer.plan_version_id,
+                scope_kind="subscription_order",
+                scope_id=subscription_order.subscription_order_id,
+                payload_json=payload,
+            )
+            session.commit()
+            return payload
+
+    def cancel_account_subscription_payment_order(
+        self,
+        *,
+        account_id: str,
+        subscription_order_id: str,
+        audit_context: ServiceAuditContext | None = None,
+    ) -> dict[str, object]:
+        service = cast(Any, self)
+        now = service.now_factory()
+        with get_session(service.database_url) as session:
+            repository = CommercialRepository(session)
+            if repository.get_account_for_update(account_id) is None:
+                raise CommercialNotFoundError(
+                    "service.account_not_found",
+                    f"account '{account_id}' was not found",
+                )
+            self._reconcile_pending_subscription_orders_in_session(
+                repository=repository,
+                account_id=account_id,
+                now=now,
+            )
+            subscription_order = repository.get_subscription_order(subscription_order_id)
+            if subscription_order is None or subscription_order.account_id != account_id:
+                raise CommercialNotFoundError(
+                    "service.subscription_order_not_found",
+                    f"subscription order '{subscription_order_id}' was not found",
+                )
+            payment_order = (
+                repository.get_payment_order_for_update(subscription_order.payment_order_id)
+                if subscription_order.payment_order_id
+                else None
+            )
+            if subscription_order.status == SUBSCRIPTION_ORDER_STATUS_CANCELED:
+                payload = {
+                    "order": service._serialize_payment_order(payment_order)
+                    if payment_order is not None
+                    else {},
+                    "subscription_order": self._serialize_subscription_order(subscription_order),
+                }
+                session.commit()
+                return payload
+            if (
+                subscription_order.status != SUBSCRIPTION_ORDER_STATUS_PENDING_PAYMENT
+                or payment_order is None
+                or payment_order.status != PAYMENT_ORDER_STATUS_PENDING
+            ):
+                raise CommercialConflictError(
+                    "service.subscription_order_not_cancelable",
+                    "Only unpaid package orders can be canceled",
+                )
+            gateway = get_payment_gateway_provider(
+                payment_order.provider,
+                config=service._payment_gateway_runtime_config(payment_order.provider),
+            )
+            close_result = gateway.close_order(
+                PaymentGatewayCloseRequest(
+                    provider=payment_order.provider,
+                    order_id=payment_order.order_id,
+                    external_order_no=payment_order.external_order_no,
+                    metadata=dict(payment_order.metadata_json or {}),
+                )
+            )
+            payment_metadata = dict(payment_order.metadata_json or {})
+            payment_metadata.update(
+                {
+                    "cancellation_reason": "customer_canceled",
+                    "canceled_at": service._serialize_datetime(now),
+                    "payment_gateway_close": close_result.provider_payload,
+                }
+            )
+            payment_order.status = PAYMENT_ORDER_STATUS_CANCELED
+            payment_order.canceled_at = now
+            payment_order.checkout_url = None
+            payment_order.metadata_json = payment_metadata
+            subscription_order.status = SUBSCRIPTION_ORDER_STATUS_CANCELED
+            payload = {
+                "order": service._serialize_payment_order(payment_order),
+                "subscription_order": self._serialize_subscription_order(subscription_order),
+            }
+            self._record_service_audit_in_session(
+                repository=repository,
+                audit_context=audit_context,
+                event_kind="subscription_order.cancel",
+                outcome="succeeded",
+                account_id=account_id,
+                subscription_id=subscription_order.source_subscription_id,
+                plan_id=subscription_order.target_plan_id,
+                plan_version_id=subscription_order.target_plan_version_id,
                 scope_kind="subscription_order",
                 scope_id=subscription_order.subscription_order_id,
                 payload_json=payload,
@@ -701,6 +803,12 @@ class CommercialServiceSubscriptionCommerceMixin(CommercialServiceAuditMixin):
                 "payment_event": service._serialize_payment_event(event),
             }
 
+        self._close_other_pending_subscription_orders_in_session(
+            repository=repository,
+            account_id=order.account_id,
+            paid_subscription_order_id=subscription_order.subscription_order_id,
+            now=paid_at,
+        )
         order.status = PAYMENT_ORDER_STATUS_PAID
         order.provider_trade_no = str(provider_trade_no or "").strip() or order.provider_trade_no
         order.paid_at = paid_at
@@ -773,6 +881,59 @@ class CommercialServiceSubscriptionCommerceMixin(CommercialServiceAuditMixin):
             payload_json=payload,
         )
         return payload
+
+    def _close_other_pending_subscription_orders_in_session(
+        self,
+        *,
+        repository: CommercialRepository,
+        account_id: str,
+        paid_subscription_order_id: str,
+        now: datetime,
+    ) -> None:
+        service = cast(Any, self)
+        for candidate in repository.list_subscription_orders(account_id=account_id):
+            if (
+                candidate.subscription_order_id == paid_subscription_order_id
+                or candidate.status != SUBSCRIPTION_ORDER_STATUS_PENDING_PAYMENT
+                or not candidate.payment_order_id
+            ):
+                continue
+            payment_order = repository.get_payment_order_for_update(candidate.payment_order_id)
+            if payment_order is None or payment_order.status != PAYMENT_ORDER_STATUS_PENDING:
+                continue
+            gateway = get_payment_gateway_provider(
+                payment_order.provider,
+                config=service._payment_gateway_runtime_config(payment_order.provider),
+            )
+            try:
+                close_result = gateway.close_order(
+                    PaymentGatewayCloseRequest(
+                        provider=payment_order.provider,
+                        order_id=payment_order.order_id,
+                        external_order_no=payment_order.external_order_no,
+                        metadata=dict(payment_order.metadata_json or {}),
+                    )
+                )
+            except CommercialValidationError as error:
+                metadata = dict(payment_order.metadata_json or {})
+                metadata["superseded_close_error"] = error.error_code
+                metadata["superseded_by_subscription_order_id"] = paid_subscription_order_id
+                payment_order.metadata_json = metadata
+                continue
+            metadata = dict(payment_order.metadata_json or {})
+            metadata.update(
+                {
+                    "cancellation_reason": "superseded_by_paid_package_order",
+                    "canceled_at": service._serialize_datetime(now),
+                    "superseded_by_subscription_order_id": paid_subscription_order_id,
+                    "payment_gateway_close": close_result.provider_payload,
+                }
+            )
+            payment_order.status = PAYMENT_ORDER_STATUS_CANCELED
+            payment_order.canceled_at = now
+            payment_order.checkout_url = None
+            payment_order.metadata_json = metadata
+            candidate.status = SUBSCRIPTION_ORDER_STATUS_CANCELED
 
     def _activate_due_subscription_orders_in_session(
         self,

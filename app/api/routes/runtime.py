@@ -263,7 +263,6 @@ def _build_runtime_request(
         policy=payload.policy.to_runtime_policy(),
         idempotency_key=_resolve_idempotency_key(request, payload),
         trace_id=_resolve_trace_id(payload, auth),
-        allow_legacy_callback_url=False,
     )
 
 

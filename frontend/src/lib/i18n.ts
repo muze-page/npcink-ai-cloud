@@ -1832,7 +1832,13 @@ export const translations: Record<Locale, TranslationMap> = {
     'admin.service_settings.alipay_callback_base_missing': 'Not set',
     'admin.service_settings.alipay_callback_base_ready': 'notify_url and return_url are generated from this URL.',
     'admin.service_settings.alipay_callback_urls_collapse': 'Collapse',
-    'admin.service_settings.alipay_callback_urls_title': 'Callback URLs',
+    'admin.service_settings.alipay_callback_urls_title': 'Alipay payment callback URLs',
+    'admin.service_settings.alipay_callback_console_guidance':
+      'These URLs are sent to Alipay with each Page Pay request; do not put either one in Alipay Open Platform\'s authorization callback field. If the console separately asks for a notify URL, use the left URL; use the right URL only for a return URL.',
+    'admin.service_settings.alipay_notify_url_hint':
+      'Alipay sends the payment result server-to-server; this is the only payment confirmation source.',
+    'admin.service_settings.alipay_return_url_hint':
+      'Returns the customer to Portal after payment; it only drives the page message and does not mean payment succeeded.',
     'admin.service_settings.alipay_public_url_autosave_notice':
       'Saving Alipay settings will first save the current access URL {{baseUrl}}, then generate notify_url and return_url.',
     'admin.service_settings.alipay_requires_public_url': 'Alipay callbacks need a public access domain first. Save the Portal base URL; notify_url and return_url will be generated automatically.',
@@ -3161,7 +3167,7 @@ export const translations: Record<Locale, TranslationMap> = {
     'portal.usage.credit_pack_order_created': 'Payment order {{order}} has been created.',
     'portal.usage.payment_orders_title': 'Recent payment orders',
     'portal.usage.payment_orders_desc':
-      'Credit pack orders wait for Alipay or WeChat Pay confirmation before credits are granted. Unpaid orders expire after 24 hours.',
+      'Orders wait for verified Alipay confirmation before package changes or credits are granted. Unpaid orders expire after 30 minutes; each account may keep up to five unpaid package orders.',
     'portal.usage.payment_orders_provider_note': 'Alipay / WeChat Pay ready',
     'portal.usage.payment_orders_count': '{{count}} recent orders',
     'portal.usage.payment_order_default_detail': 'Payment status is recorded by Cloud.',
@@ -3178,6 +3184,9 @@ export const translations: Record<Locale, TranslationMap> = {
     'portal.usage.payment_order_paid_detail': 'Payment has been confirmed.',
     'portal.usage.payment_order_refunded_detail': 'This order has been refunded.',
     'portal.usage.payment_order_failed_detail': 'Payment was not completed.',
+    'portal.usage.payment_order_expires_at': 'Expires {{time}}',
+    'portal.usage.payment_order_continue': 'Continue payment',
+    'portal.usage.payment_order_cancel': 'Cancel',
     'portal.usage.payment_orders_empty': 'No payment orders for this account yet.',
     'portal.usage.resource_limits_title': 'Other limits',
     'portal.usage.resource_bound_sites': 'Bound sites',
@@ -6725,7 +6734,13 @@ export const translations: Record<Locale, TranslationMap> = {
     'admin.service_settings.alipay_callback_base_missing': '尚未设置',
     'admin.service_settings.alipay_callback_base_ready': 'notify_url 和 return_url 会从这个地址自动生成。',
     'admin.service_settings.alipay_callback_urls_collapse': '收起',
-    'admin.service_settings.alipay_callback_urls_title': '回调地址',
+    'admin.service_settings.alipay_callback_urls_title': '支付宝支付回调地址',
+    'admin.service_settings.alipay_callback_console_guidance':
+      '这两个地址会随每笔网页支付请求发送给支付宝，不需要填写支付宝开放平台的“授权回调地址”。如控制台单独要求“异步通知地址”，请填左侧地址；“同步跳转地址”才填右侧地址。',
+    'admin.service_settings.alipay_notify_url_hint':
+      '支付宝服务端通知支付结果；这是唯一的支付确认依据。',
+    'admin.service_settings.alipay_return_url_hint':
+      '用户支付后返回 Portal；只用于页面提示，不代表支付成功。',
     'admin.service_settings.alipay_public_url_autosave_notice':
       '保存支付宝配置时会先保存当前访问地址 {{baseUrl}}，再自动生成 notify_url 和 return_url。',
     'admin.service_settings.alipay_requires_public_url': '支付宝回调地址需要先确定公开访问域名。请先保存门户基础地址，系统会自动生成 notify_url 和 return_url。',
@@ -8346,7 +8361,7 @@ export const translations: Record<Locale, TranslationMap> = {
     'portal.usage.credit_pack_buy_action': '购买积分',
     'portal.usage.credit_pack_order_created': '支付订单 {{order}} 已创建。',
     'portal.usage.payment_orders_title': '最近支付订单',
-    'portal.usage.payment_orders_desc': '积分包订单需要等待支付宝或微信支付确认后，才会发放积分；未支付订单 24 小时后自动过期。',
+    'portal.usage.payment_orders_desc': '订单需要等待支付宝确认后才会变更套餐或发放积分；未支付订单 30 分钟后自动过期，每个账户最多保留 5 笔未支付套餐订单。',
     'portal.usage.payment_orders_provider_note': '已预留支付宝 / 微信支付',
     'portal.usage.payment_orders_count': '最近 {{count}} 笔订单',
     'portal.usage.payment_order_default_detail': '支付状态由 Cloud 记录。',
@@ -8363,6 +8378,9 @@ export const translations: Record<Locale, TranslationMap> = {
     'portal.usage.payment_order_paid_detail': '支付已确认。',
     'portal.usage.payment_order_refunded_detail': '该订单已退款。',
     'portal.usage.payment_order_failed_detail': '支付未完成。',
+    'portal.usage.payment_order_expires_at': '{{time}} 过期',
+    'portal.usage.payment_order_continue': '继续支付',
+    'portal.usage.payment_order_cancel': '取消订单',
     'portal.usage.payment_orders_empty': '当前账号还没有支付订单。',
     'portal.usage.resource_limits_title': '其他限制',
     'portal.usage.resource_bound_sites': '绑定站点',

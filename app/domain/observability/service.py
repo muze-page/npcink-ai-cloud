@@ -5,7 +5,6 @@ from datetime import UTC, datetime
 from app.adapters.repositories.stats_repository import StatsRepository
 from app.core.config import Settings
 from app.core.db import get_session
-from app.core.feature_flags import EnvFeatureFlagProvider
 from app.core.models import HealthSnapshot
 from app.core.services import ReadyReport
 from app.domain.runtime.service import RuntimeService
@@ -40,7 +39,6 @@ class ObservabilityService:
         cadence = build_cadence_summary(self.settings, now=current_time)
         workers = build_worker_heartbeat_summary(self.settings, now=current_time)
         providers = self._build_provider_health_summary(current_time)
-        feature_flags = EnvFeatureFlagProvider(self.settings).build_summary()
         runtime = runtime_service.get_runtime_diagnostics_summary(
             recent_minutes=recent_minutes,
         )
@@ -70,7 +68,6 @@ class ObservabilityService:
             "workers": workers,
             "cadence": cadence,
             "providers": providers,
-            "feature_flags": feature_flags,
             "runtime": {
                 "summary": runtime,
                 "backlog": backlog,

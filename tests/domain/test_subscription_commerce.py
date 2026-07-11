@@ -9,9 +9,11 @@ from sqlalchemy import select
 from app.core.config import Settings
 from app.core.db import dispose_engine, get_session, init_schema
 from app.core.models import (
+    PAYMENT_ORDER_STATUS_PENDING,
     PAYMENT_ORDER_STATUS_REFUNDED,
     SUBSCRIPTION_ORDER_STATUS_ACTIVATED,
     SUBSCRIPTION_ORDER_STATUS_CANCELED,
+    SUBSCRIPTION_ORDER_STATUS_PENDING_PAYMENT,
     SUBSCRIPTION_STATUS_ACTIVE,
     SUBSCRIPTION_STATUS_SCHEDULED,
     AccountSubscription,
@@ -438,7 +440,7 @@ def test_expired_checkout_is_canceled_and_does_not_block_reorder(tmp_path: Path)
     with get_session(database_url) as session:
         payment = session.get(PaymentOrder, str(first["order"]["order_id"]))
         assert payment is not None
-        payment.created_at = now - timedelta(hours=25)
+        payment.created_at = now - timedelta(minutes=31)
         session.commit()
 
     second = service.create_account_subscription_payment_order(
@@ -455,6 +457,141 @@ def test_expired_checkout_is_canceled_and_does_not_block_reorder(tmp_path: Path)
         )
         assert first_subscription_order is not None
         assert first_subscription_order.status == SUBSCRIPTION_ORDER_STATUS_CANCELED
+    dispose_engine(database_url)
+
+
+def test_account_can_keep_five_unpaid_package_orders_and_cancel_one(tmp_path: Path) -> None:
+    database_url = _database_url(tmp_path)
+    init_schema(database_url)
+    service = _service(database_url)
+    _account(service, "acct_pending_limit")
+
+    created = [
+        service.create_account_subscription_payment_order(
+            account_id="acct_pending_limit",
+            offer_id="plus_monthly_v1",
+            audit_context=_audit(f"pending-limit-{index}"),
+        )
+        for index in range(5)
+    ]
+    with pytest.raises(CommercialConflictError) as limit_error:
+        service.create_account_subscription_payment_order(
+            account_id="acct_pending_limit",
+            offer_id="pro_monthly_v1",
+            audit_context=_audit("pending-limit-sixth"),
+        )
+    assert limit_error.value.error_code == "service.subscription_order_pending_limit"
+
+    canceled = service.cancel_account_subscription_payment_order(
+        account_id="acct_pending_limit",
+        subscription_order_id=str(created[0]["subscription_order"]["subscription_order_id"]),
+        audit_context=_audit("pending-limit-cancel"),
+    )
+    assert canceled["order"]["status"] == "canceled"
+    assert canceled["order"]["metadata"]["cancellation_reason"] == "customer_canceled"
+    assert canceled["subscription_order"]["status"] == SUBSCRIPTION_ORDER_STATUS_CANCELED
+    with pytest.raises(CommercialConflictError) as late_payment:
+        service.mark_payment_order_paid(
+            order_id=str(created[0]["order"]["order_id"]),
+            provider_event_id="pending-limit-late-payment",
+            amount=float(created[0]["order"]["amount"]),
+            audit_context=_audit("pending-limit-late-payment"),
+        )
+    assert late_payment.value.error_code == "service.payment_order_canceled"
+
+    replacement = service.create_account_subscription_payment_order(
+        account_id="acct_pending_limit",
+        offer_id="pro_monthly_v1",
+        audit_context=_audit("pending-limit-replacement"),
+    )
+    assert replacement["order"]["status"] == "pending"
+    dispose_engine(database_url)
+
+
+def test_provider_close_failure_keeps_package_order_pending(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database_url = _database_url(tmp_path)
+    init_schema(database_url)
+    service = _service(database_url)
+    _account(service, "acct_close_failure")
+    created = service.create_account_subscription_payment_order(
+        account_id="acct_close_failure",
+        offer_id="plus_monthly_v1",
+        audit_context=_audit("close-failure-create"),
+    )
+
+    class _FailingGateway:
+        def close_order(self, request: object) -> object:
+            raise CommercialValidationError(
+                "service.alipay_order_close_failed",
+                "Alipay did not confirm that the unpaid order was closed",
+            )
+
+    monkeypatch.setattr(
+        "app.domain.commercial.mixins._subscription_commerce_mixin.get_payment_gateway_provider",
+        lambda *args, **kwargs: _FailingGateway(),
+    )
+    with pytest.raises(CommercialValidationError) as close_error:
+        service.cancel_account_subscription_payment_order(
+            account_id="acct_close_failure",
+            subscription_order_id=str(
+                created["subscription_order"]["subscription_order_id"]
+            ),
+            audit_context=_audit("close-failure-cancel"),
+        )
+    assert close_error.value.error_code == "service.alipay_order_close_failed"
+    with get_session(database_url) as session:
+        payment_order = session.get(PaymentOrder, str(created["order"]["order_id"]))
+        subscription_order = session.get(
+            SubscriptionOrder,
+            str(created["subscription_order"]["subscription_order_id"]),
+        )
+        assert payment_order is not None
+        assert payment_order.status == PAYMENT_ORDER_STATUS_PENDING
+        assert subscription_order is not None
+        assert subscription_order.status == SUBSCRIPTION_ORDER_STATUS_PENDING_PAYMENT
+    dispose_engine(database_url)
+
+
+def test_paid_package_order_closes_other_unpaid_package_orders(tmp_path: Path) -> None:
+    database_url = _database_url(tmp_path)
+    init_schema(database_url)
+    service = _service(database_url)
+    _account(service, "acct_close_siblings")
+    plus = service.create_account_subscription_payment_order(
+        account_id="acct_close_siblings",
+        offer_id="plus_monthly_v1",
+        audit_context=_audit("close-siblings-plus"),
+    )
+    pro = service.create_account_subscription_payment_order(
+        account_id="acct_close_siblings",
+        offer_id="pro_monthly_v1",
+        audit_context=_audit("close-siblings-pro"),
+    )
+
+    service.mark_payment_order_paid(
+        order_id=str(pro["order"]["order_id"]),
+        provider_event_id="close-siblings-pro-paid",
+        amount=float(pro["order"]["amount"]),
+        audit_context=_audit("close-siblings-pro-paid"),
+    )
+    with get_session(database_url) as session:
+        plus_payment = session.get(PaymentOrder, str(plus["order"]["order_id"]))
+        plus_subscription_order = session.get(
+            SubscriptionOrder,
+            str(plus["subscription_order"]["subscription_order_id"]),
+        )
+        assert plus_payment is not None
+        assert plus_payment.status == "canceled"
+        assert plus_payment.metadata_json is not None
+        assert (
+            plus_payment.metadata_json["cancellation_reason"]
+            == "superseded_by_paid_package_order"
+        )
+        assert plus_subscription_order is not None
+        assert plus_subscription_order.status == SUBSCRIPTION_ORDER_STATUS_CANCELED
     dispose_engine(database_url)
 
 

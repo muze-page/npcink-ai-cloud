@@ -1412,7 +1412,6 @@ class RuntimeService:
             policy={},
             idempotency_key=idempotency_key,
             trace_id=trace_id,
-            allow_legacy_callback_url=False,
         )
         return self.execute(request)
 
@@ -6890,19 +6889,11 @@ class RuntimeService:
         registered = self._resolve_registered_callback_config(site)
         requires_callback = callback_mode in {"polling_preferred", "terminal_callback_required"}
         if request.callback_url:
-            if not request.allow_legacy_callback_url:
-                raise RuntimeCallbackConfigurationError(
-                    request.site_id,
-                    "public runtime callback_url overrides are no longer accepted; "
-                    "register runtime_callbacks.terminal on the site instead",
-                )
-            return {
-                "source": "legacy_request",
-                "callback_url": str(request.callback_url or "").strip(),
-                "key_id": "",
-                "callback_id": "",
-                "registered": False,
-            }
+            raise RuntimeCallbackConfigurationError(
+                request.site_id,
+                "runtime callback_url overrides are not accepted; "
+                "register runtime_callbacks.terminal on the site instead",
+            )
         if not requires_callback:
             return {}
         if not bool(registered.get("enabled")):
@@ -7034,10 +7025,7 @@ class RuntimeService:
         }
         if callback_target:
             policy["runtime_callback"] = callback_target
-            if str(callback_target.get("source") or "") == "legacy_request":
-                policy["callback_url"] = str(callback_target.get("callback_url") or "")
-            else:
-                policy.pop("callback_url", None)
+            policy.pop("callback_url", None)
         else:
             policy.pop("runtime_callback", None)
             policy.pop("callback_url", None)
@@ -8186,11 +8174,7 @@ class RuntimeService:
                 0,
                 self._coerce_int(raw_task_backend.get("polling_interval_sec"), default=0),
             ),
-            "callback_url": (
-                str(callback_target.get("callback_url") or "")
-                if str(callback_target.get("source") or "") == "legacy_request"
-                else ""
-            ),
+            "callback_url": "",
             "timeout_seconds": timeout_seconds,
             "retry_max": retry_max,
             "retention_ttl": retention_ttl,
@@ -8437,18 +8421,7 @@ class RuntimeService:
     def _get_callback_target(self, policy: dict[str, object]) -> dict[str, object]:
         runtime_callback = policy.get("runtime_callback")
         runtime_callback = runtime_callback if isinstance(runtime_callback, dict) else {}
-        if runtime_callback:
-            return runtime_callback
-        callback_url = str(policy.get("callback_url") or "").strip()
-        if not callback_url:
-            return {}
-        return {
-            "source": "legacy_request",
-            "callback_url": callback_url,
-            "key_id": "",
-            "callback_id": "",
-            "registered": False,
-        }
+        return runtime_callback
 
     def _has_callback_target(self, policy: dict[str, object]) -> bool:
         return bool(self._get_callback_target(policy))

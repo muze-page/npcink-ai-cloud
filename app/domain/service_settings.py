@@ -24,6 +24,7 @@ SERVICE_SETTING_KIND_PORTAL = "portal"
 SERVICE_SETTING_QQ_OPEN_CALLBACK_PATH = "/open/auth/qq/callback"
 SERVICE_SETTING_ALIPAY_NOTIFY_PATH = "/open/payments/alipay/notify"
 SERVICE_SETTING_ALIPAY_RETURN_PATH = "/open/payments/alipay/return"
+ALIPAY_PAGE_PAY_GATEWAY_URL = "https://openapi.alipay.com/gateway.do"
 
 STATUS_READY = "ready"
 STATUS_DISABLED = "disabled"
@@ -214,9 +215,10 @@ class ServiceSettingsAdminService:
         enabled = bool(payload.get("enabled", True))
         public_base_url = resolve_portal_public_base_url(self.database_url, self.settings)
         app_id = _string(payload.get("app_id"))
-        gateway_url = _normalize_url(
-            _string(payload.get("gateway_url")) or "https://openapi.alipay.com/gateway.do"
-        )
+        # Page Pay has one production gateway. It is not an operator setting:
+        # keeping it fixed prevents a credential-bearing payment flow from being
+        # redirected to an arbitrary endpoint.
+        gateway_url = ALIPAY_PAGE_PAY_GATEWAY_URL
         notify_url = _string(payload.get("notify_url")) or _default_alipay_notify_url(
             public_base_url
         )
@@ -228,11 +230,6 @@ class ServiceSettingsAdminService:
                 raise ServiceSettingsAdminError(
                     "service_settings.alipay_app_id_required",
                     "Alipay app id is required",
-                )
-            if not gateway_url:
-                raise ServiceSettingsAdminError(
-                    "service_settings.alipay_gateway_url_invalid",
-                    "Alipay gateway URL is invalid",
                 )
             if not _callback_url_allowed(
                 notify_url,
@@ -646,7 +643,6 @@ def resolve_alipay_payment_runtime_config(database_url: str, settings: Settings)
     public_key = _decrypt_secret(row, "public_key", settings=settings)
     configured = bool(
         _string(config.get("app_id"))
-        and _string(config.get("gateway_url"))
         and _string(config.get("notify_url"))
         and _string(config.get("return_url"))
         and private_key
@@ -656,7 +652,7 @@ def resolve_alipay_payment_runtime_config(database_url: str, settings: Settings)
         "configured": configured,
         "enabled": bool(row.enabled),
         "app_id": _string(config.get("app_id")),
-        "gateway_url": _string(config.get("gateway_url")),
+        "gateway_url": ALIPAY_PAGE_PAY_GATEWAY_URL,
         "notify_url": _string(config.get("notify_url")),
         "return_url": _string(config.get("return_url")),
         "private_key": private_key,

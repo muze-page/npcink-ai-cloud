@@ -122,6 +122,15 @@ function shouldShowPaymentOrder(order: PortalPaymentOrder): boolean {
   return status !== 'canceled' && status !== 'cancelled' && status !== 'expired' && !code.includes('expired');
 }
 
+function resolveSubscriptionOrderId(order: PortalPaymentOrder): string {
+  if (!normalizePaymentText(order.purchase_kind).includes('subscription')) return '';
+  return String(order.metadata?.subscription_order_id || '').trim();
+}
+
+function isPendingPaymentOrder(order: PortalPaymentOrder): boolean {
+  return normalizePaymentText(order.status) === 'pending';
+}
+
 function PortalBillingContent() {
   const searchParams = useSearchParams();
   const { t } = useLocale();
@@ -136,6 +145,8 @@ function PortalBillingContent() {
   const [packageOrder, setPackageOrder] = useState<PortalPaymentOrder | null>(null);
   const [packagePending, setPackagePending] = useState<string | null>(null);
   const [packageError, setPackageError] = useState<string | null>(null);
+  const [cancelPendingOrderId, setCancelPendingOrderId] = useState<string | null>(null);
+  const [paymentOrderError, setPaymentOrderError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -218,6 +229,21 @@ function PortalBillingContent() {
       setPackageError(formatPortalErrorMessage(err, t, t('error.failed_save')));
     } finally {
       setPackagePending(null);
+    }
+  };
+
+  const handleCancelSubscriptionOrder = async (order: PortalPaymentOrder) => {
+    const subscriptionOrderId = resolveSubscriptionOrderId(order);
+    if (!subscriptionOrderId) return;
+    setCancelPendingOrderId(order.order_id);
+    setPaymentOrderError(null);
+    try {
+      await portalClient.cancelSubscriptionOrder(subscriptionOrderId);
+      await loadBilling();
+    } catch (err) {
+      setPaymentOrderError(formatPortalErrorMessage(err, t, t('error.failed_save')));
+    } finally {
+      setCancelPendingOrderId(null);
     }
   };
 
@@ -507,15 +533,18 @@ function PortalBillingContent() {
           {t(
             'portal.usage.payment_orders_desc',
             {},
-            'Payment orders wait for verified Alipay or WeChat Pay confirmation before package changes or credits are granted. Unpaid orders expire after 24 hours.'
+            'Payment orders wait for verified Alipay confirmation before package changes or credits are granted. Unpaid orders expire after 30 minutes; up to five package orders may remain unpaid.'
           )}
         </p>
+        {paymentOrderError ? (
+          <p className="mt-3 text-sm text-red-700 dark:text-red-300">{paymentOrderError}</p>
+        ) : null}
         {recentPaymentOrders.length > 0 ? (
           <div className="mt-4 divide-y divide-slate-200 rounded-[1rem] border border-slate-200 text-sm dark:divide-slate-800 dark:border-slate-800">
             {recentPaymentOrders.map((order) => (
               <div
                 key={order.order_id}
-                className="grid grid-cols-1 gap-3 px-4 py-3 sm:grid-cols-[1fr_0.7fr_0.8fr]"
+                className="grid grid-cols-1 gap-3 px-4 py-3 sm:grid-cols-[1fr_0.7fr_0.8fr_auto]"
               >
                 <div>
                   <p className="font-medium text-slate-950 dark:text-white">
@@ -542,8 +571,33 @@ function PortalBillingContent() {
                     })}
                   </p>
                   <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                    {order.created_at ? formatDate(order.created_at) : order.order_id}
+                    {isPendingPaymentOrder(order) && order.expires_at
+                      ? t(
+                          'portal.usage.payment_order_expires_at',
+                          { time: formatDate(order.expires_at) },
+                          `Expires ${formatDate(order.expires_at)}`
+                        )
+                      : order.created_at ? formatDate(order.created_at) : order.order_id}
                   </p>
+                </div>
+                <div className="flex items-center gap-2 sm:justify-end">
+                  {isPendingPaymentOrder(order) && order.checkout_url ? (
+                    <a className="btn btn-secondary" href={order.checkout_url}>
+                      {t('portal.usage.payment_order_continue', {}, 'Continue payment')}
+                    </a>
+                  ) : null}
+                  {isPendingPaymentOrder(order) && resolveSubscriptionOrderId(order) ? (
+                    <button
+                      type="button"
+                      className="btn btn-secondary"
+                      disabled={cancelPendingOrderId !== null}
+                      onClick={() => void handleCancelSubscriptionOrder(order)}
+                    >
+                      {cancelPendingOrderId === order.order_id
+                        ? t('common.saving', {}, 'Saving...')
+                        : t('portal.usage.payment_order_cancel', {}, 'Cancel')}
+                    </button>
+                  ) : null}
                 </div>
               </div>
             ))}

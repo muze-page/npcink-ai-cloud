@@ -51,7 +51,7 @@ from app.domain.service_settings import resolve_alipay_payment_runtime_config
 
 SERVICE_SETTING_CREDIT_PACK_CATALOG = "commercial_credit_pack_catalog"
 SERVICE_SETTING_KIND_COMMERCIAL = "commercial"
-PAYMENT_ORDER_PENDING_TTL = timedelta(hours=24)
+PAYMENT_ORDER_PENDING_TTL = timedelta(minutes=30)
 
 
 class CommercialServicePaymentMixin(CommercialServiceAuditMixin):
@@ -343,6 +343,19 @@ class CommercialServicePaymentMixin(CommercialServiceAuditMixin):
                 },
                 "items": [self._serialize_payment_order_for_kind(order) for order in orders],
             }
+
+    def expire_pending_payment_orders(self) -> dict[str, object]:
+        service = cast(Any, self)
+        with get_session(service.database_url) as session:
+            repository = CommercialRepository(session)
+            expired_orders = self._cancel_expired_pending_payment_orders_in_session(
+                repository,
+                account_id=None,
+                site_id=None,
+                now=service.now_factory(),
+            )
+            session.commit()
+            return {"expired_orders": expired_orders}
 
     def get_account_payment_order(
         self,
@@ -1348,6 +1361,12 @@ class CommercialServicePaymentMixin(CommercialServiceAuditMixin):
     def _serialize_payment_order(self, order: PaymentOrder) -> dict[str, object]:
         service = cast(Any, self)
         purchase_kind = self._payment_order_purchase_kind(order)
+        created_at = self._normalize_payment_order_datetime(order.created_at)
+        expires_at = (
+            created_at + PAYMENT_ORDER_PENDING_TTL
+            if order.status == PAYMENT_ORDER_STATUS_PENDING and created_at is not None
+            else None
+        )
         return {
             "order_id": order.order_id,
             "account_id": order.account_id,
@@ -1368,6 +1387,7 @@ class CommercialServicePaymentMixin(CommercialServiceAuditMixin):
             "refund_window_end_at": service._serialize_datetime(order.refund_window_end_at),
             "paid_at": service._serialize_datetime(order.paid_at),
             "canceled_at": service._serialize_datetime(order.canceled_at),
+            "expires_at": service._serialize_datetime(expires_at),
             "refunded_at": service._serialize_datetime(order.refunded_at),
             "metadata": order.metadata_json or {},
             "created_at": service._serialize_datetime(order.created_at),
@@ -1442,6 +1462,10 @@ class CommercialServicePaymentMixin(CommercialServiceAuditMixin):
                 order,
                 now=current_time,
             ):
+                cast(Any, self)._cancel_subscription_order_for_payment_in_session(
+                    repository=repository,
+                    payment_order_id=order.order_id,
+                )
                 expired_count += 1
         return expired_count
 

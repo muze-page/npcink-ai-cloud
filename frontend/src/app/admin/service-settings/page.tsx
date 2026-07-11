@@ -79,7 +79,6 @@ type EmailPreview = {
 type AlipayForm = {
   enabled: boolean;
   app_id: string;
-  gateway_url: string;
   notify_url: string;
   return_url: string;
   private_key: string;
@@ -347,7 +346,6 @@ export default function AdminServiceSettingsPage() {
   const [alipayForm, setAlipayForm] = useState<AlipayForm>({
     enabled: false,
     app_id: '',
-    gateway_url: 'https://openapi.alipay.com/gateway.do',
     notify_url: '',
     return_url: '',
     private_key: '',
@@ -405,7 +403,6 @@ export default function AdminServiceSettingsPage() {
       setAlipayForm({
         enabled: alipay.enabled,
         app_id: stringValue(alipay.config.app_id),
-        gateway_url: stringValue(alipay.config.gateway_url) || 'https://openapi.alipay.com/gateway.do',
         notify_url: stringValue(alipay.config.notify_url),
         return_url: stringValue(alipay.config.return_url),
         private_key: '',
@@ -686,7 +683,6 @@ export default function AdminServiceSettingsPage() {
     const payload: Record<string, unknown> = {
       enabled: alipayForm.enabled,
       app_id: alipayForm.app_id,
-      gateway_url: alipayForm.gateway_url,
       notify_url: nextAlipayNotifyUrl,
       return_url: nextAlipayReturnUrl,
     };
@@ -1397,44 +1393,31 @@ export default function AdminServiceSettingsPage() {
                     onChange={(event) => setAlipayForm((current) => ({ ...current, app_id: event.target.value }))}
                   />
                 </label>
-                <label className={labelClassName()}>
-                  {t('admin.service_settings.alipay_gateway_url_label', {}, '支付宝网关')}
-                  <input
-                    className={fieldClassName()}
-                    value={alipayForm.gateway_url}
-                    disabled={loading}
-                    onChange={(event) => setAlipayForm((current) => ({ ...current, gateway_url: event.target.value }))}
-                    placeholder="https://openapi.alipay.com/gateway.do"
-                  />
-                </label>
-
-                <details className="group rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm dark:border-slate-800 dark:bg-slate-950/60 lg:col-span-2">
-                  <summary className="flex cursor-pointer list-none flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                    <span>
-                      <span className="font-medium text-slate-700 dark:text-slate-200">
-                        {t('admin.service_settings.alipay_callback_urls_title', {}, '回调地址')}
-                      </span>
-                      <span className="mt-1 block font-mono text-xs text-slate-600 dark:text-slate-300">
-                        {t('admin.service_settings.alipay_callback_base_label', {}, '回调基础地址')}: {effectivePortalPublicBaseUrl || t('admin.service_settings.alipay_callback_base_missing', {}, '尚未设置')}
-                      </span>
-                    </span>
-                    <span className="text-xs font-medium text-blue-600 group-open:hidden dark:text-blue-300">
-                      {t('common.view_details', {}, '查看详情')}
-                    </span>
-                    <span className="hidden text-xs font-medium text-blue-600 group-open:inline dark:text-blue-300">
-                      {t('admin.service_settings.alipay_callback_urls_collapse', {}, '收起')}
-                    </span>
-                  </summary>
-                  <div className="mt-4 grid gap-4 border-t border-slate-200 pt-4 dark:border-slate-800">
-                    <p className="text-xs text-slate-500 dark:text-slate-400">
+                <section className="rounded-lg border border-slate-200 bg-slate-50 p-4 text-sm dark:border-slate-800 dark:bg-slate-950/60 lg:col-span-2">
+                  <div className="flex flex-col gap-1">
+                    <h3 className="font-medium text-slate-700 dark:text-slate-200">
+                      {t('admin.service_settings.alipay_callback_urls_title', {}, '支付宝支付回调地址')}
+                    </h3>
+                    <p className="font-mono text-xs text-slate-600 dark:text-slate-300">
+                      {t('admin.service_settings.alipay_callback_base_label', {}, '回调基础地址')}: {effectivePortalPublicBaseUrl || t('admin.service_settings.alipay_callback_base_missing', {}, '尚未设置')}
+                    </p>
+                  </div>
+                  <div className="mt-4 border-t border-slate-200 pt-4 dark:border-slate-800">
+                    <p className="text-xs leading-5 text-slate-600 dark:text-slate-300">
+                      {t('admin.service_settings.alipay_callback_console_guidance', {}, '这两个地址会随每笔网页支付请求发送给支付宝，不需要填写支付宝开放平台的“授权回调地址”。如控制台单独要求“异步通知地址”，请填左侧地址；“同步跳转地址”才填右侧地址。')}
+                    </p>
+                    <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
                       {portalPublicAutosavePending
                         ? t('admin.service_settings.alipay_public_url_autosave_notice', { baseUrl: browserPublicBaseUrl }, '保存支付宝配置时会先保存当前访问地址 {{baseUrl}}，再自动生成 notify_url 和 return_url。')
                         : t('admin.service_settings.alipay_callback_base_ready', {}, 'notify_url 和 return_url 会从这个地址自动生成。')}
                     </p>
-                    <div>
+                    <div className="mt-4 grid gap-4 md:grid-cols-2">
                       <div className={labelClassName()}>
-                        {t('admin.service_settings.alipay_notify_url_label', {}, '异步通知地址')}
-                        <div className="mt-1 grid gap-2 lg:grid-cols-[1fr_auto]">
+                        <span>{t('admin.service_settings.alipay_notify_url_label', {}, '异步通知地址')}</span>
+                        <span className="text-xs font-normal text-slate-500 dark:text-slate-400">
+                          {t('admin.service_settings.alipay_notify_url_hint', {}, '支付宝服务端通知支付结果；这是唯一的支付确认依据。')}
+                        </span>
+                        <div className="mt-1 grid gap-2 sm:grid-cols-[1fr_auto]">
                           <input
                             className={fieldClassName()}
                             value={resolvedAlipayNotifyUrl}
@@ -1452,12 +1435,12 @@ export default function AdminServiceSettingsPage() {
                           </button>
                         </div>
                       </div>
-                    </div>
-
-                    <div>
                       <div className={labelClassName()}>
-                        {t('admin.service_settings.alipay_return_url_label', {}, '同步返回地址')}
-                        <div className="mt-1 grid gap-2 lg:grid-cols-[1fr_auto]">
+                        <span>{t('admin.service_settings.alipay_return_url_label', {}, '同步返回地址')}</span>
+                        <span className="text-xs font-normal text-slate-500 dark:text-slate-400">
+                          {t('admin.service_settings.alipay_return_url_hint', {}, '用户支付后返回 Portal；只用于页面提示，不代表支付成功。')}
+                        </span>
+                        <div className="mt-1 grid gap-2 sm:grid-cols-[1fr_auto]">
                           <input
                             className={fieldClassName()}
                             value={resolvedAlipayReturnUrl}
@@ -1477,7 +1460,7 @@ export default function AdminServiceSettingsPage() {
                       </div>
                     </div>
                   </div>
-                </details>
+                </section>
 
                 <label className={labelClassName()}>
                   {t('admin.service_settings.alipay_private_key_label', {}, '应用私钥')} {secretConfigured.alipayPrivateKey

@@ -1367,6 +1367,7 @@ export interface PortalCreditPackPaymentOrder {
   currency: string;
   subject: string;
   checkout_url?: string;
+  expires_at?: string;
   purchase_kind?: string;
   status_detail?: {
     code?: string;
@@ -2245,6 +2246,17 @@ export class PortalClient {
       'POST',
       '/account/subscription-orders',
       { offer_id: offerId, provider },
+      { requireAuth: true }
+    );
+  }
+
+  async cancelSubscriptionOrder(
+    subscriptionOrderId: string
+  ): Promise<PortalEnvelope<PortalSubscriptionOrderPayload>> {
+    return this.request(
+      'DELETE',
+      `/account/subscription-orders/${encodeURIComponent(subscriptionOrderId)}`,
+      undefined,
       { requireAuth: true }
     );
   }
