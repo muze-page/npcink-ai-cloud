@@ -455,7 +455,9 @@ class CommercialServicePaymentMixin(CommercialServiceAuditMixin):
                 repository=repository,
                 payment_order_id=order.order_id,
             )
-            payload = {"order": self._serialize_payment_order_for_kind(order)}
+            payload: dict[str, object] = {
+                "order": self._serialize_payment_order_for_kind(order)
+            }
             service._record_service_audit_in_session(
                 repository=repository,
                 audit_context=audit_context,
