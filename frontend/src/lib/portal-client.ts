@@ -1367,6 +1367,7 @@ export interface PortalCreditPackPaymentOrder {
   currency: string;
   subject: string;
   checkout_url?: string;
+  available_actions?: Array<'continue_payment' | 'cancel'>;
   expires_at?: string;
   purchase_kind?: string;
   status_detail?: {
@@ -2148,6 +2149,17 @@ export class PortalClient {
 
     const query = params.toString() ? `?${params.toString()}` : '';
     return this.request('GET', `/account/payment-orders${query}`, undefined, { requireAuth: true });
+  }
+
+  async cancelAccountPaymentOrder(
+    orderId: string
+  ): Promise<PortalEnvelope<{ account_id: string; order: PortalPaymentOrder }>> {
+    return this.request(
+      'POST',
+      `/account/payment-orders/${encodeURIComponent(orderId)}/cancellation`,
+      {},
+      { requireAuth: true }
+    );
   }
 
   async listSupportRequests(

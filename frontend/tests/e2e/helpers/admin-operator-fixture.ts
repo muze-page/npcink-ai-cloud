@@ -108,6 +108,14 @@ export async function installAdminMocks(page: Page) {
     },
   ]);
 
+  await page.route('**/admin/session', async (route) => {
+    await fulfillJson(route, {
+      principal_id: 'platform:operator-e2e',
+      identity_type: 'platform_admin',
+      role: 'platform_admin',
+    });
+  });
+
   await page.route('**/api/admin/**', async (route) => {
     const url = new URL(route.request().url());
     const { pathname, searchParams } = url;

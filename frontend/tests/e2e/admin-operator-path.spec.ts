@@ -1,6 +1,40 @@
 import { expect, test, type Locator } from '@playwright/test';
 import { FREE_PLAN_ID, LONG_ACCOUNT_ID, LONG_PLAN_ID, installAdminMocks } from './helpers/admin-operator-fixture';
 
+test('admin login validates the session before redirecting or showing the token form', async ({ page }) => {
+  await installAdminMocks(page);
+
+  await page.goto('/admin/login?redirect=/admin/plans');
+  await expect(page).toHaveURL(/\/admin\/plans$/);
+  await expect(page.locator('[data-ui="admin-primary-nav"]')).toBeVisible();
+});
+
+test('an invalid admin cookie does not expose navigation or trap the login page', async ({ page }) => {
+  await page.route('**/admin/session', async (route) => {
+    await route.fulfill({
+      status: 401,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        status: 'error',
+        error_code: 'auth.admin_session_invalid',
+        message: 'admin session is invalid',
+      }),
+    });
+  });
+  await page.goto('/admin/login');
+  await page.context().addCookies([
+    {
+      name: 'npcink_admin_session_token',
+      value: 'stale-admin-session',
+      url: new URL(page.url()).origin,
+    },
+  ]);
+  await page.reload();
+
+  await expect(page.locator('#token')).toBeVisible();
+  await expect(page.locator('[data-ui="admin-primary-nav"]')).toHaveCount(0);
+});
+
 async function setScopedInputValue(scope: Locator, index: number, value: string) {
   await scope.locator('input.input').nth(index).evaluate((element, nextValue) => {
     const input = element as HTMLInputElement;

@@ -4894,6 +4894,7 @@ def test_portal_summary_usage_entitlements_and_audit_routes(tmp_path: Path) -> N
     assert payment_orders["items"][0]["status_detail"]["next_action"] == (
         "provider_payment_or_callback"
     )
+    assert payment_orders["items"][0]["available_actions"] == ["cancel"]
 
     mark_paid_response = client.post(
         f"/internal/service/payments/orders/{credit_pack_order['order_id']}/mark-paid",
@@ -4960,6 +4961,30 @@ def test_portal_summary_usage_entitlements_and_audit_routes(tmp_path: Path) -> N
     assert account_credit_pack_order_data["account_id"] == "acct_portal_reads"
     assert account_credit_pack_order_data["order"]["purchase_kind"] == "credit_pack"
     assert account_credit_pack_order_data["order"]["credit_pack"]["pack_id"] == "pack_medium"
+    assert account_credit_pack_order_data["order"]["available_actions"] == ["cancel"]
+
+    cancel_account_credit_pack_order_response = client.post(
+        (
+            "/portal/v1/account/payment-orders/"
+            f"{account_credit_pack_order_data['order']['order_id']}/cancellation"
+        ),
+        json={},
+        headers=build_portal_headers(
+            principal_id="principal:portal-reads@example.com",
+            idempotency_key="portal-account-credit-pack-order-cancel-001",
+        ),
+    )
+    assert cancel_account_credit_pack_order_response.status_code == 200
+    canceled_account_credit_pack_order = cancel_account_credit_pack_order_response.json()[
+        "data"
+    ]["order"]
+    assert canceled_account_credit_pack_order["status"] == "canceled"
+    assert canceled_account_credit_pack_order["available_actions"] == []
+    assert canceled_account_credit_pack_order["checkout_url"] == ""
+    assert (
+        canceled_account_credit_pack_order["metadata"]["cancellation_reason"]
+        == "customer_canceled"
+    )
 
     audit_response = client.get(
         "/portal/v1/sites/site_portal_reads/audit-summary",

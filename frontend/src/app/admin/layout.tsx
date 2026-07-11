@@ -8,6 +8,7 @@ import { useLocale } from '@/contexts/LocaleContext';
 import { ThemeToggle } from '@/components/ui/ThemeToggle';
 import { LocaleSwitcher } from '@/components/ui/LocaleSwitcher';
 import { AdminRouteTransition } from '@/components/admin/AdminRouteTransition';
+import { LoadingFallback } from '@/components/ui/LoadingFallback';
 
 interface AdminLayoutProps {
   children: React.ReactNode;
@@ -61,7 +62,42 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [commandOpen, setCommandOpen] = useState(false);
   const [commandQuery, setCommandQuery] = useState('');
+  const [adminSessionReady, setAdminSessionReady] = useState(isLoginPage);
   const commandInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (isLoginPage) {
+      setAdminSessionReady(true);
+      return;
+    }
+
+    let cancelled = false;
+    void fetch('/admin/session', {
+      cache: 'no-store',
+      credentials: 'include',
+    })
+      .then((response) => {
+        if (cancelled) {
+          return;
+        }
+        if (response.ok) {
+          setAdminSessionReady(true);
+          return;
+        }
+        const returnTo = `${pathname}${window.location.search}`;
+        window.location.replace(`/admin/login?redirect=${encodeURIComponent(returnTo)}`);
+      })
+      .catch(() => {
+        if (!cancelled) {
+          const returnTo = `${pathname}${window.location.search}`;
+          window.location.replace(`/admin/login?redirect=${encodeURIComponent(returnTo)}`);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isLoginPage, pathname]);
 
   useEffect(() => {
     if (!mobileNavOpen) {
@@ -361,6 +397,10 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
         <main className="flex-1">{children}</main>
       </div>
     );
+  }
+
+  if (!adminSessionReady) {
+    return <LoadingFallback />;
   }
 
   return (

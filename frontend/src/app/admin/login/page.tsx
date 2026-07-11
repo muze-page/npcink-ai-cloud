@@ -1,8 +1,8 @@
 'use client';
 
-import { Suspense } from 'react';
+import { Suspense, useEffect, useState } from 'react';
 import Link from 'next/link';
-import { useSearchParams } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import {
   BackofficeLayer,
   BackofficePageStack,
@@ -11,6 +11,20 @@ import {
   BackofficeStackCard,
 } from '@/components/backoffice/BackofficeScaffold';
 import { useLocale } from '@/contexts/LocaleContext';
+import { LoadingFallback } from '@/components/ui/LoadingFallback';
+
+function resolveAdminLoginRedirect(value: string | null): string {
+  const redirect = String(value || '').trim();
+  if (
+    redirect === '/admin' ||
+    redirect.startsWith('/admin/') ||
+    redirect.startsWith('/admin?') ||
+    redirect.startsWith('/admin#')
+  ) {
+    return redirect;
+  }
+  return '/admin';
+}
 
 function adminLoginErrorMessage(errorCode: string | null, detail: string | null): string {
   switch (errorCode) {
@@ -32,12 +46,45 @@ function adminLoginErrorMessage(errorCode: string | null, detail: string | null)
 
 function AdminLoginPageContent() {
   const searchParams = useSearchParams();
+  const router = useRouter();
   const { t } = useLocale();
+  const [isCheckingSession, setIsCheckingSession] = useState(true);
   const error = searchParams.get('error');
   const detail = searchParams.get('detail');
   const traceId = searchParams.get('trace_id');
-  const redirectTo = searchParams.get('redirect') || '/admin';
+  const redirectTo = resolveAdminLoginRedirect(searchParams.get('redirect'));
   const errorMessage = adminLoginErrorMessage(error, detail);
+
+  useEffect(() => {
+    let cancelled = false;
+    void fetch('/admin/session', {
+      cache: 'no-store',
+      credentials: 'include',
+    })
+      .then((response) => {
+        if (cancelled) {
+          return;
+        }
+        if (response.ok) {
+          router.replace(redirectTo);
+          return;
+        }
+        setIsCheckingSession(false);
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setIsCheckingSession(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [redirectTo, router]);
+
+  if (isCheckingSession) {
+    return <LoadingFallback />;
+  }
 
   return (
     <div className="mx-auto min-h-[74vh] w-full max-w-6xl px-4 py-12">

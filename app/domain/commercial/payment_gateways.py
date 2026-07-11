@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Protocol
 from urllib.parse import urlencode
+from zoneinfo import ZoneInfo
 
 import httpx
 from cryptography.exceptions import InvalidSignature, UnsupportedAlgorithm
@@ -17,6 +18,7 @@ from app.domain.commercial.errors import CommercialValidationError
 
 PAYMENT_GATEWAY_CONTRACT_VERSION = "payment-gateway-contract-v1"
 SUPPORTED_PAYMENT_GATEWAY_PROVIDERS = ("alipay", "wechat_pay", "manual")
+ALIPAY_GATEWAY_TIMEZONE = ZoneInfo("Asia/Shanghai")
 
 
 @dataclass(frozen=True)
@@ -305,7 +307,7 @@ class AlipayPaymentGatewayProvider(SimulatedPaymentGatewayProvider):
             return super().create_order(request)
         self._assert_provider(request.provider)
         config = self._require_config()
-        timestamp = datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S")
+        timestamp = datetime.now(ALIPAY_GATEWAY_TIMEZONE).strftime("%Y-%m-%d %H:%M:%S")
         amount = _format_cny_amount(request.amount)
         biz_content = {
             "out_trade_no": request.order_id,
@@ -360,7 +362,7 @@ class AlipayPaymentGatewayProvider(SimulatedPaymentGatewayProvider):
             return super().close_order(request)
         self._assert_provider(request.provider)
         config = self._require_config()
-        timestamp = datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S")
+        timestamp = datetime.now(ALIPAY_GATEWAY_TIMEZONE).strftime("%Y-%m-%d %H:%M:%S")
         biz_content = {
             "out_trade_no": request.external_order_no or request.order_id,
         }
@@ -452,7 +454,7 @@ class AlipayPaymentGatewayProvider(SimulatedPaymentGatewayProvider):
                 "Alipay private key must be an RSA private key",
             )
         signature = private_key.sign(
-            _canonicalize_alipay_params(params).encode("utf-8"),
+            _canonicalize_alipay_request_params(params).encode("utf-8"),
             padding.PKCS1v15(),
             hashes.SHA256(),
         )
@@ -481,7 +483,7 @@ class AlipayPaymentGatewayProvider(SimulatedPaymentGatewayProvider):
         try:
             public_key.verify(
                 base64.b64decode(signature),
-                _canonicalize_alipay_params(payload).encode("utf-8"),
+                _canonicalize_alipay_callback_params(payload).encode("utf-8"),
                 padding.PKCS1v15(),
                 hashes.SHA256(),
             )
@@ -611,10 +613,22 @@ def _format_cny_amount(amount: float) -> str:
     return f"{float(amount):.2f}"
 
 
-def _canonicalize_alipay_params(params: Mapping[str, object]) -> str:
+def _canonicalize_alipay_request_params(params: Mapping[str, object]) -> str:
+    return _canonicalize_alipay_params(params, excluded_keys={"sign"})
+
+
+def _canonicalize_alipay_callback_params(params: Mapping[str, object]) -> str:
+    return _canonicalize_alipay_params(params, excluded_keys={"sign", "sign_type"})
+
+
+def _canonicalize_alipay_params(
+    params: Mapping[str, object],
+    *,
+    excluded_keys: set[str],
+) -> str:
     pairs: list[tuple[str, str]] = []
     for key, value in params.items():
-        if key in {"sign", "sign_type"}:
+        if key in excluded_keys:
             continue
         if value is None:
             continue

@@ -41,6 +41,16 @@ assert.match(
   /admin-primary-nav/,
   'Admin layout must keep the stable admin-primary-nav selector for e2e checks'
 );
+assert.match(
+  layoutSource,
+  /fetch\('\/admin\/session'[\s\S]*response\.ok[\s\S]*setAdminSessionReady\(true\)[\s\S]*window\.location\.replace\(`\/admin\/login\?redirect=/,
+  'Admin layout must validate the session before showing protected navigation'
+);
+assert.match(
+  layoutSource,
+  /if \(!adminSessionReady\) \{[\s\S]*return <LoadingFallback \/>;/,
+  'Admin layout must keep the navigation hidden while session validation is pending'
+);
 
 assert.match(
   layoutSource,

@@ -87,6 +87,16 @@ assert.match(
 );
 assert.match(
   registerSource,
+  /const \{ isAuthenticated, isLoading, refresh \} = useSession\(\);[\s\S]*!isLoading && isAuthenticated[\s\S]*router\.replace\('\/portal'\)/,
+  'authenticated users must leave the Portal registration page for the default workspace'
+);
+assert.match(
+  registerSource,
+  /if \(isLoading \|\| isAuthenticated\) \{[\s\S]*return <LoadingFallback \/>;/,
+  'the registration form must remain hidden while the existing session is resolving or redirecting'
+);
+assert.match(
+  registerSource,
   /await portalClient\.verifyRegistration\([\s\S]*await refresh\(\)[\s\S]*window\.location\.replace\('\/portal'\)/,
   'portal registration must refresh the cookie-backed Portal session and use a full-page navigation before entering the dashboard'
 );
