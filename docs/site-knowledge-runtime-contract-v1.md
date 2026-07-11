@@ -285,8 +285,10 @@ The internal task policies are deliberately bounded:
 Results are relevance-filtered, deduplicated by post, and checked for a strong
 content-fingerprint overlap with the current scene before projection. Title and
 excerpt generation receive only an aggregate profile calculated from related
-historical samples: sample count, typical character length, typical sentence
-count, question-mark rate, and colon rate. The historical titles and excerpts
+historical samples: a qualitative short/medium/long preference, sentence shape,
+and qualitative question-mark and colon usage. Exact sample counts, lengths,
+and rates are not sent because models may mistake profile numbers for article
+facts. The historical titles and excerpts
 themselves are not placed in provider input. Classification receives only
 bounded existing `category` and `post_tag` names stored as Site Knowledge
 document metadata; repeated terms across related posts rank first. Source

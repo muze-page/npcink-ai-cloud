@@ -605,7 +605,8 @@ def test_wordpress_ai_connector_title_generation_uses_hidden_site_title_style(
     assert "用云端能力增强 WordPress 编辑体验" not in provider_input["input"]
     assert "让 AI 更懂你的网站内容" not in provider_input["input"]
     assert "Aggregate style profile" in provider_input["input"]
-    assert '"typical_length_chars"' in provider_input["input"]
+    assert '"length_preference"' in provider_input["input"]
+    assert '"sample_count"' not in provider_input["input"]
     assert "This chunk must not be sent" not in provider_input["input"]
     assert "generation_context.v1" in provider_input["input"]
     assert provider_input["input"].index("generation_context.v1") < provider_input["input"].index(

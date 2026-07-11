@@ -249,18 +249,33 @@ def _style_profile_references(
     lengths = [len(sample) for sample in samples]
     sentence_counts = [max(1, len(re.findall(r"[。！？.!?]+", sample))) for sample in samples]
     sample_count = len(samples)
+    typical_length = float(median(lengths))
+    typical_sentences = float(median(sentence_counts))
+    length_thresholds = (30, 55) if policy.task == "title_generation" else (80, 160)
+
+    def usage_label(matches: int) -> str:
+        rate = matches / sample_count
+        if rate <= 0.2:
+            return "rare"
+        if rate <= 0.6:
+            return "occasional"
+        return "frequent"
+
     profile = {
-        "sample_count": sample_count,
-        "typical_length_chars": int(round(median(lengths))),
-        "typical_sentence_count": int(round(median(sentence_counts))),
-        "question_mark_rate": round(
-            sum("?" in sample or "？" in sample for sample in samples) / sample_count,
-            2,
+        "length_preference": (
+            "short"
+            if typical_length <= length_thresholds[0]
+            else "medium"
+            if typical_length <= length_thresholds[1]
+            else "long"
         ),
-        "colon_rate": round(
-            sum(":" in sample or "：" in sample for sample in samples) / sample_count,
-            2,
+        "sentence_shape": (
+            "single_sentence" if typical_sentences <= 1 else "compact_multi_sentence"
         ),
+        "question_mark_usage": usage_label(
+            sum("?" in sample or "？" in sample for sample in samples)
+        ),
+        "colon_usage": usage_label(sum(":" in sample or "：" in sample for sample in samples)),
     }
     value = json.dumps(profile, ensure_ascii=False, separators=(",", ":"))
     if len(value) > policy.max_context_chars:
