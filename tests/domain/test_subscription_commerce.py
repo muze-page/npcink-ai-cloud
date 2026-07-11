@@ -140,6 +140,44 @@ def test_paid_trial_is_shared_and_only_moves_upward(tmp_path: Path) -> None:
     dispose_engine(database_url)
 
 
+def test_published_sales_price_updates_offer_and_new_checkout_snapshot(
+    tmp_path: Path,
+) -> None:
+    database_url = _database_url(tmp_path)
+    init_schema(database_url)
+    service = _service(database_url)
+    _account(service, "acct_sales_price")
+
+    initial = service.list_account_plan_offers(account_id="acct_sales_price")
+    plus_initial = next(item for item in initial["items"] if item["tier_id"] == "plus")
+    assert plus_initial["amount"] == 15.0
+    assert plus_initial["plan_version_id"] == "plus_v1"
+
+    service.publish_plan_version(
+        plan_id="plus",
+        plan_version_id="plus_v2",
+        version_label="v2",
+        budgets_json={"max_ai_credits_per_period": 3500, "max_cost_per_period": 2.5},
+        metadata_json={"tier_id": "plus", "monthly_included_points": 3500},
+        sales_price_cny=19.0,
+    )
+
+    refreshed = service.list_account_plan_offers(account_id="acct_sales_price")
+    plus_offer = next(item for item in refreshed["items"] if item["tier_id"] == "plus")
+    assert plus_offer["amount"] == 19.0
+    assert plus_offer["plan_version_id"] == "plus_v2"
+
+    checkout = service.create_account_subscription_payment_order(
+        account_id="acct_sales_price",
+        offer_id="plus_monthly_v1",
+        audit_context=_audit("sales-price-checkout"),
+    )
+    assert checkout["order"]["amount"] == 19.0
+    assert checkout["order"]["plan_version_id"] == "plus_v2"
+    assert checkout["subscription_order"]["list_amount"] == 19.0
+    dispose_engine(database_url)
+
+
 def test_paid_trial_domain_cannot_be_reused_by_another_account(tmp_path: Path) -> None:
     database_url = _database_url(tmp_path)
     init_schema(database_url)

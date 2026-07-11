@@ -3524,6 +3524,16 @@ def test_portal_user_can_start_pro_trial_and_create_monthly_order(
     assert listed_order["metadata"]["billing_cycle"] == "monthly"
     assert listed_order["expires_at"]
 
+    order_detail_response = client.get(
+        f"/portal/v1/account/payment-orders/{order['order_id']}",
+        headers=build_portal_headers(principal_id=str(registration["principal_id"])),
+    )
+    assert order_detail_response.status_code == 200, order_detail_response.text
+    order_detail = order_detail_response.json()["data"]
+    assert order_detail["account_id"] == account_id
+    assert order_detail["order"]["order_id"] == order["order_id"]
+    assert order_detail["order"]["status"] == "pending"
+
     cancel_response = client.delete(
         f"/portal/v1/account/subscription-orders/{order['metadata']['subscription_order_id']}",
         headers=build_portal_headers(

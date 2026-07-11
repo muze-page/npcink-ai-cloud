@@ -7,6 +7,9 @@ from typing import Any, cast
 
 AI_CREDIT_RATE_VERSION = "ai-credit-ledger-v2"
 AI_CREDIT_CHARGE_CONTRACT_VERSION = "ai-credit-charge-contract-v1"
+PAID_CREDIT_BALANCE_SOURCE_TYPES = frozenset(
+    {"credit_pack_purchase", "credit_pack_refund"}
+)
 AI_CREDIT_CHARGE_COMPONENT_REQUIRED_FIELDS = (
     "source_type",
     "charge_mode",
@@ -33,6 +36,24 @@ AI_CREDIT_FEATURE_CHARGE_RULE_REQUIRED_FIELDS = (
     "budget_key",
     "contract_version",
 )
+
+
+def package_credit_net_delta(entries: Iterable[object]) -> float:
+    """Return period delta for package quota, excluding paid-credit balance events."""
+
+    total = 0.0
+    for entry in entries:
+        source_type = str(getattr(entry, "source_type", "") or "")
+        if source_type in PAID_CREDIT_BALANCE_SOURCE_TYPES:
+            continue
+        total += float(getattr(entry, "credit_delta", 0.0) or 0.0)
+    return round(total, 6)
+
+
+def package_credit_used(entries: Iterable[object]) -> float:
+    """Return package allowance used after ordinary grants and adjustments."""
+
+    return round(max(0.0, -package_credit_net_delta(entries)), 6)
 
 AI_CREDIT_BREAKDOWN_ORDER = (
     "runs",

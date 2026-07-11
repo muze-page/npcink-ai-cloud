@@ -394,6 +394,7 @@ class CommercialServiceBillingMixin(CommercialServiceAuditMixin):
         concurrency_json: dict[str, object] | None = None,
         policy_json: dict[str, object] | None = None,
         metadata_json: dict[str, object] | None = None,
+        sales_price_cny: float | None = None,
         audit_context: ServiceAuditContext | None = None,
     ) -> dict[str, object]:
         with get_session(self.database_url) as session:
@@ -432,6 +433,18 @@ class CommercialServiceBillingMixin(CommercialServiceAuditMixin):
                 policy_json=self._normalize_commercial_policy(policy_json),
                 metadata_json=metadata_json,
             )
+            tier_id = self._infer_plan_tier_id(
+                repository.get_plan(plan_id),
+                [self._serialize_plan_version(plan_version)],
+            )
+            if status == PLAN_VERSION_STATUS_PUBLISHED and tier_id in {"plus", "pro"}:
+                cast(Any, self)._sync_standard_plan_offer_in_session(
+                    repository,
+                    tier_id=tier_id,
+                    plan_id=plan_id,
+                    plan_version_id=plan_version.plan_version_id,
+                    sales_price_cny=sales_price_cny,
+                )
             payload = self._serialize_plan_version(plan_version)
             self._record_service_audit_in_session(
                 repository=repository,
@@ -896,6 +909,7 @@ class CommercialServiceBillingMixin(CommercialServiceAuditMixin):
                     f"plan '{plan_id}' was not found",
                 )
             versions = repository.list_plan_versions(plan_id=plan_id, limit=None)
+            offers = repository.list_plan_offers()
             subscriptions = repository.list_subscriptions(plan_id=plan_id, limit=None)
             account_ids = [
                 subscription.account_id for subscription in subscriptions if subscription.account_id
@@ -912,11 +926,23 @@ class CommercialServiceBillingMixin(CommercialServiceAuditMixin):
         serialized_versions = [self._serialize_plan_version(version) for version in versions]
         tier_summary = self._build_plan_tier_summary(plan, serialized_versions)
         latest_version = self._select_latest_plan_version(serialized_versions)
+        sales_offer = next(
+            (
+                cast(Any, self)._serialize_plan_offer(offer)
+                for offer in offers
+                if str(getattr(offer, "plan_id", "") or "") == plan_id
+                and getattr(offer, "account_id", None) is None
+                and str(getattr(offer, "purchase_mode", "") or "") == "self_serve"
+                and str(getattr(offer, "status", "") or "") == "active"
+            ),
+            None,
+        )
         return {
             "plan": self._serialize_plan(plan),
             "versions": serialized_versions,
             "tier_summary": tier_summary,
             "latest_version": latest_version,
+            "sales_offer": sales_offer,
             "package_fit_cues": self._build_plan_package_fit_cues(
                 tier_summary=tier_summary,
                 latest_version=latest_version,
@@ -1253,6 +1279,13 @@ class CommercialServiceBillingMixin(CommercialServiceAuditMixin):
             )
 
         plan_id, plan_version_id = CANONICAL_TIER_PLAN_IDS[tier_id]
+        existing_versions = repository.list_plan_versions(
+            plan_id=plan_id,
+            status=PLAN_VERSION_STATUS_PUBLISHED,
+            limit=1,
+        )
+        if repository.get_plan(plan_id) is not None and existing_versions:
+            return plan_id, existing_versions[0].plan_version_id
         policy_baseline = self._sanitize_payload_dict(baseline.get("policy_baseline")) or {}
         budgets_template = self._sanitize_payload_dict(baseline.get("budgets_template")) or {}
         concurrency_template = (

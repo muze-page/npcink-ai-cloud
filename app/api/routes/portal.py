@@ -2037,6 +2037,38 @@ async def list_portal_account_payment_orders(
     )
 
 
+@router.get("/account/payment-orders/{order_id}")
+async def get_portal_account_payment_order(request: Request, order_id: str) -> Any:
+    auth = await resolve_portal_request_context(
+        request,
+        require_idempotency=False,
+        allow_session_cookies=True,
+    )
+    if isinstance(auth, JSONResponse):
+        return auth
+    account_id = _resolve_primary_portal_account_id(
+        request,
+        principal_id=auth.principal_id,
+    )
+    if isinstance(account_id, JSONResponse):
+        return account_id
+    try:
+        order = _get_commercial_service(request).get_account_payment_order(
+            account_id=account_id,
+            order_id=order_id,
+        )
+    except CommercialServiceError as error:
+        return _service_error_response(error, request=request)
+    return _portal_route_envelope(
+        message="portal account payment order loaded",
+        data={
+            "account_id": account_id,
+            "principal_id": auth.principal_id,
+            "order": order,
+        },
+    )
+
+
 @router.post("/account/payment-orders/{order_id}/cancellation")
 async def cancel_portal_account_payment_order(
     request: Request,

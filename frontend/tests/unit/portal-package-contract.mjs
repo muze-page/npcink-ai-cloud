@@ -96,6 +96,21 @@ assert.match(
 );
 assert.match(
   billingPageSource,
+  /getAccountPaymentOrder[\s\S]*setTimeout[\s\S]*alipay_return_paid_title/,
+  'Portal package page must poll the canonical order and render confirmed payment state'
+);
+assert.match(
+  billingPageSource,
+  /paid_offer_desc[\s\S]*formatPortalCurrency\(plusOffer\.amount\)[\s\S]*formatPortalCurrency\(proOffer\.amount\)/,
+  'Portal paid package copy must render live offer prices instead of hard-coded amounts'
+);
+assert.doesNotMatch(
+  billingPageSource,
+  /CNY 15 for 30 days|CNY 29 per month/,
+  'Portal package implementation must not keep hard-coded paid prices'
+);
+assert.match(
+  billingPageSource,
   /loadPaymentOrders[\s\S]*listAccountPaymentOrders[\s\S]*statusGroup[\s\S]*PAYMENT_ORDER_PAGE_SIZE/,
   'Portal package page must load payment orders through the dedicated status-group request'
 );
@@ -103,6 +118,11 @@ assert.match(
   portalClientSource,
   /async listAccountPaymentOrders[\s\S]*\/account\/payment-orders/,
   'Portal client must expose account-level payment order listing'
+);
+assert.match(
+  portalClientSource,
+  /async getAccountPaymentOrder[\s\S]*\/account\/payment-orders\/\$\{encodeURIComponent\(orderId\)\}/,
+  'Portal client must expose exact payment-order status lookup for return polling'
 );
 assert.match(
   portalClientSource,
@@ -133,6 +153,11 @@ assert.match(
   entitlementComponentSource,
   /package_credit_allowance_label[\s\S]*site_allowance_label/,
   'Shared entitlement summary must keep package points and site allowance visible together'
+);
+assert.match(
+  entitlementComponentSource,
+  /package_remaining_label[\s\S]*paid_remaining_label[\s\S]*total_remaining_label/,
+  'Shared entitlement summary must distinguish package, paid, and total available credits'
 );
 assert.match(
   entitlementComponentSource,

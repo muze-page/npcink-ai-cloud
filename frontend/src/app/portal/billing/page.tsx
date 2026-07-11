@@ -194,6 +194,9 @@ function PortalBillingContent() {
   const [paymentOrderOffset, setPaymentOrderOffset] = useState(0);
   const [paymentOrdersLoading, setPaymentOrdersLoading] = useState(false);
   const [paymentLaunch, setPaymentLaunch] = useState<PaymentLaunchState | null>(null);
+  const [paymentReturnOrderState, setPaymentReturnOrderState] = useState<PortalPaymentOrder | null>(null);
+  const [paymentReturnError, setPaymentReturnError] = useState<string | null>(null);
+  const [paymentReturnTimedOut, setPaymentReturnTimedOut] = useState(false);
   const paymentOrderTabInitialized = useRef(false);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -244,6 +247,20 @@ function PortalBillingContent() {
     [t]
   );
 
+  const loadPaymentReturnOrder = useCallback(async (orderId: string) => {
+    const normalizedOrderId = String(orderId || '').trim();
+    if (!normalizedOrderId) return null;
+    try {
+      const response = await portalClient.getAccountPaymentOrder(normalizedOrderId);
+      setPaymentReturnOrderState(response.data.order);
+      setPaymentReturnError(null);
+      return response.data.order;
+    } catch (err) {
+      setPaymentReturnError(formatPortalErrorMessage(err, t, t('error.failed_load')));
+      return null;
+    }
+  }, [t]);
+
   useEffect(() => {
     if (!isAuthenticated || !session?.account_id) {
       setIsLoading(false);
@@ -260,6 +277,52 @@ function PortalBillingContent() {
     loadPaymentOrders,
     paymentOrderOffset,
     paymentOrderStatusGroup,
+    session?.account_id,
+  ]);
+
+  const paymentReturnProvider = String(searchParams.get('payment_return') || '').toLowerCase();
+  const paymentReturnOrderId = String(searchParams.get('out_trade_no') || '').trim();
+  const hasAlipayReturn = paymentReturnProvider === 'alipay' && Boolean(paymentReturnOrderId);
+
+  useEffect(() => {
+    if (!isAuthenticated || !session?.account_id || !hasAlipayReturn) return;
+    let canceled = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let attempts = 0;
+    const poll = async () => {
+      const order = await loadPaymentReturnOrder(paymentReturnOrderId);
+      if (canceled) return;
+      const status = normalizePaymentText(order?.status);
+      if (status && status !== 'pending') {
+        window.history.replaceState(window.history.state, '', '/portal/billing');
+        await Promise.all([
+          refresh(),
+          loadBilling(),
+          loadPaymentOrders('all', 0),
+        ]);
+        return;
+      }
+      attempts += 1;
+      if (attempts >= 20) {
+        setPaymentReturnTimedOut(true);
+        return;
+      }
+      timer = setTimeout(() => void poll(), 3000);
+    };
+    setPaymentReturnTimedOut(false);
+    void poll();
+    return () => {
+      canceled = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, [
+    hasAlipayReturn,
+    isAuthenticated,
+    loadBilling,
+    loadPaymentOrders,
+    loadPaymentReturnOrder,
+    paymentReturnOrderId,
+    refresh,
     session?.account_id,
   ]);
 
@@ -419,10 +482,6 @@ function PortalBillingContent() {
   };
   const canBuyTier = (tierId: 'plus' | 'pro' | 'agency') =>
     Boolean(offersByTier.get(tierId));
-  const paymentReturnProvider = String(searchParams.get('payment_return') || '').toLowerCase();
-  const paymentReturnOrder = String(searchParams.get('out_trade_no') || '').trim();
-  const paymentReturnStatus = String(searchParams.get('trade_status') || '').trim();
-  const hasAlipayReturn = paymentReturnProvider === 'alipay';
   const allPaymentOrders = paymentOrders?.items || [];
   const paymentOrderCounts = paymentOrders?.counts || {
     all: allPaymentOrders.length,
@@ -432,44 +491,73 @@ function PortalBillingContent() {
   };
 
   const handleRefreshPaymentReturn = async () => {
-    await refresh();
-    await loadPaymentOrders(paymentOrderStatusGroup, paymentOrderOffset);
+    setPaymentReturnTimedOut(false);
+    await Promise.all([
+      refresh(),
+      loadBilling(),
+      loadPaymentOrders(paymentOrderStatusGroup, paymentOrderOffset),
+      loadPaymentReturnOrder(paymentReturnOrderId),
+    ]);
   };
 
+  const paymentReturnStatus = normalizePaymentText(paymentReturnOrderState?.status);
+  const paymentReturnPaid = paymentReturnStatus === 'paid';
+  const paymentReturnClosed = ['canceled', 'cancelled', 'failed', 'refunded'].includes(paymentReturnStatus);
+  const paymentReturnCredits = Number(paymentReturnOrderState?.credit_pack?.ai_credits || 0);
+
   const paymentReturnNotice = hasAlipayReturn ? (
-    <BackofficeStackCard variant="portal" className="border-blue-200 bg-blue-50/70 dark:border-blue-900/60 dark:bg-blue-950/20">
+    <BackofficeStackCard
+      variant="portal"
+      className={paymentReturnPaid
+        ? 'border-emerald-200 bg-emerald-50/70 dark:border-emerald-900/60 dark:bg-emerald-950/20'
+        : paymentReturnClosed
+          ? 'border-red-200 bg-red-50/70 dark:border-red-900/60 dark:bg-red-950/20'
+          : 'border-blue-200 bg-blue-50/70 dark:border-blue-900/60 dark:bg-blue-950/20'}
+    >
       <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <p className="text-sm font-semibold text-slate-950 dark:text-white">
-            {t('portal.package.alipay_return_title', {}, 'Payment confirmation is pending')}
+            {paymentReturnPaid
+              ? t('portal.package.alipay_return_paid_title', {}, 'Payment confirmed')
+              : paymentReturnClosed
+                ? t('portal.package.alipay_return_closed_title', {}, 'Payment was not completed')
+                : t('portal.package.alipay_return_title', {}, 'Payment confirmation is pending')}
           </p>
           <p className="mt-2 text-sm leading-6 text-slate-600 dark:text-slate-300">
-            {t(
-              'portal.package.alipay_return_desc',
-              {},
-              'You have returned from Alipay. The final package status is updated after the verified Alipay notification reaches Cloud.'
-            )}
+            {paymentReturnPaid
+              ? paymentReturnCredits > 0
+                ? t(
+                    'portal.package.alipay_return_paid_credits_desc',
+                    { count: formatNumber(paymentReturnCredits) },
+                    `Payment is confirmed and ${formatNumber(paymentReturnCredits)} credits were added.`
+                  )
+                : t('portal.package.alipay_return_paid_desc', {}, 'Payment is confirmed and your package has been updated.')
+              : paymentReturnClosed
+                ? t('portal.package.alipay_return_closed_desc', {}, 'This order is closed. You can create a new order if needed.')
+                : paymentReturnTimedOut
+                  ? t('portal.package.alipay_return_timeout_desc', {}, 'Confirmation is taking longer than expected. Refresh again or contact support with the order number.')
+                  : t(
+                      'portal.package.alipay_return_desc',
+                      {},
+                      'You have returned from Alipay. Cloud is checking the verified asynchronous notification.'
+                    )}
           </p>
-          {paymentReturnOrder || paymentReturnStatus ? (
+          {paymentReturnOrderId ? (
             <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
-              {[
-                paymentReturnOrder
-                  ? t('portal.package.alipay_return_order', { order: paymentReturnOrder }, `Order ${paymentReturnOrder}`)
-                  : '',
-                paymentReturnStatus
-                  ? t('portal.package.alipay_return_status', { status: paymentReturnStatus }, `Alipay status ${paymentReturnStatus}`)
-                  : '',
-              ].filter(Boolean).join(' · ')}
+              {t('portal.package.alipay_return_order', { order: paymentReturnOrderId }, `Order ${paymentReturnOrderId}`)}
             </p>
           ) : null}
+          {paymentReturnError ? <p className="mt-2 text-sm text-red-700 dark:text-red-300">{paymentReturnError}</p> : null}
         </div>
-        <button
-          type="button"
-          className="btn btn-secondary shrink-0"
-          onClick={() => void handleRefreshPaymentReturn()}
-        >
-          {t('common.refresh', {}, 'Refresh')}
-        </button>
+        {!paymentReturnPaid ? (
+          <button
+            type="button"
+            className="btn btn-secondary shrink-0"
+            onClick={() => void handleRefreshPaymentReturn()}
+          >
+            {t('common.refresh', {}, 'Refresh')}
+          </button>
+        ) : null}
       </div>
     </BackofficeStackCard>
   ) : null;
@@ -539,11 +627,24 @@ function PortalBillingContent() {
             {t('portal.package.plus_title', {}, 'Plus')}
           </p>
           <p className="mt-2 text-sm text-slate-500 dark:text-slate-400">
-            {t('portal.package.plus_desc', {}, 'CNY 15 for 30 days, with one shared 14-day paid-package trial.')}
+            {plusOffer
+              ? t(
+                  'portal.package.paid_offer_desc',
+                  {
+                    amount: formatPortalCurrency(plusOffer.amount),
+                    days: String(plusOffer.trial_days),
+                  },
+                  `${formatPortalCurrency(plusOffer.amount)} for 30 days, with one shared ${plusOffer.trial_days}-day paid-package trial.`
+                )
+              : t('portal.package.offer_unavailable_desc', {}, 'This package is not currently available for purchase.')}
           </p>
           <BackofficeStatusBadge
-            status={currentPlanId === 'plus' ? 'ok' : 'neutral'}
-            label={currentPlanId === 'plus' ? t('common.current', {}, 'Current') : t('common.available', {}, 'Available')}
+            status={currentPlanId === 'plus' ? 'ok' : plusOffer ? 'neutral' : 'warning'}
+            label={currentPlanId === 'plus'
+              ? t('common.current', {}, 'Current')
+              : plusOffer
+                ? t('common.available', {}, 'Available')
+                : t('portal.package.offer_unavailable', {}, 'Unavailable')}
           />
           <div className="mt-4 flex flex-col gap-2">
             <button
@@ -554,7 +655,11 @@ function PortalBillingContent() {
             >
               {packagePending === 'trial:plus'
                 ? t('common.saving', {}, 'Saving...')
-                : t('portal.package.start_plus_trial', {}, 'Start 14-day trial')}
+                : t(
+                    'portal.package.start_trial_days',
+                    { days: String(plusOffer?.trial_days || 14) },
+                    `Start ${plusOffer?.trial_days || 14}-day trial`
+                  )}
             </button>
             <button
               type="button"
@@ -577,8 +682,25 @@ function PortalBillingContent() {
             {t('portal.package.pro_title', {}, 'Pro')}
           </p>
           <p className="mt-2 text-sm text-slate-600 dark:text-slate-300">
-            {t('portal.package.pro_desc', {}, 'Start with a 14-day trial, then continue for CNY 29 per month through Alipay.')}
+            {proOffer
+              ? t(
+                  'portal.package.paid_offer_desc',
+                  {
+                    amount: formatPortalCurrency(proOffer.amount),
+                    days: String(proOffer.trial_days),
+                  },
+                  `${formatPortalCurrency(proOffer.amount)} for 30 days, with one shared ${proOffer.trial_days}-day paid-package trial.`
+                )
+              : t('portal.package.offer_unavailable_desc', {}, 'This package is not currently available for purchase.')}
           </p>
+          <BackofficeStatusBadge
+            status={currentPlanId === 'pro' ? 'ok' : proOffer ? 'neutral' : 'warning'}
+            label={currentPlanId === 'pro'
+              ? t('common.current', {}, 'Current')
+              : proOffer
+                ? t('common.available', {}, 'Available')
+                : t('portal.package.offer_unavailable', {}, 'Unavailable')}
+          />
           <div className="mt-4 flex flex-col gap-2 sm:flex-row">
             <button
               type="button"
@@ -588,7 +710,11 @@ function PortalBillingContent() {
             >
               {packagePending === 'trial:pro'
                 ? t('common.saving', {}, 'Saving...')
-                : t('portal.package.start_pro_trial', {}, 'Start 14-day trial')}
+                : t(
+                    'portal.package.start_trial_days',
+                    { days: String(proOffer?.trial_days || 14) },
+                    `Start ${proOffer?.trial_days || 14}-day trial`
+                  )}
             </button>
             <button
               type="button"

@@ -351,12 +351,19 @@ export interface Entitlements {
       estimated?: boolean;
       rate_version?: string;
       source?: string;
+      package_limit?: number;
+      package_remaining?: number;
+      paid_remaining?: number;
+      paid_grant_count?: number;
+      paid_next_expires_at?: string;
+      total_remaining?: number;
     };
     credit_policy?: {
       rate_version?: string;
       period_policy?: string;
       renewal_policy?: string;
       topup_policy?: string;
+      paid_credit_policy?: string;
     };
     resource_limits?: Array<{
       key?: string;
@@ -2159,6 +2166,17 @@ export class PortalClient {
 
     const query = params.toString() ? `?${params.toString()}` : '';
     return this.request('GET', `/account/payment-orders${query}`, undefined, { requireAuth: true });
+  }
+
+  async getAccountPaymentOrder(
+    orderId: string
+  ): Promise<PortalEnvelope<{ account_id: string; order: PortalPaymentOrder }>> {
+    return this.request(
+      'GET',
+      `/account/payment-orders/${encodeURIComponent(orderId)}`,
+      undefined,
+      { requireAuth: true }
+    );
   }
 
   async cancelAccountPaymentOrder(

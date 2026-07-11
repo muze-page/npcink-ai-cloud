@@ -36,6 +36,7 @@ from app.domain.commercial.credits import (
     AI_CREDIT_COMPONENT_LABELS,
     AI_CREDIT_RATE_VERSION,
     build_credit_breakdown_from_ledger,
+    package_credit_used,
     rounded_token_credits,
     rounded_vector_chunk_credits,
 )
@@ -1756,6 +1757,11 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
                 until=period_end_at,
                 limit=None,
             )
+            paid_credit = cast(Any, self)._paid_credit_balance_in_session(
+                repository,
+                account_id=account_id,
+                now=now,
+            )
             totals = cast(Any, self)._aggregate_meter_events(meter_events)
             budgets = cast(Any, self)._resolve_effective_subscription_budgets(
                 plan_version=plan_version,
@@ -1792,6 +1798,7 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
                 snapshot=None,
                 plan_version=plan_version,
             )
+            session.commit()
 
         service = cast(Any, self)
         site_count = len(sites)
@@ -1839,10 +1846,18 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
             6,
         )
         if ledger_source:
-            credit_used = service._coerce_float(credit_ledger_summary.get("net_used_credits"))
-        credit_limit = service._coerce_float(budgets.get("max_ai_credits_per_period"))
-        if credit_limit <= 0:
-            credit_limit = service._coerce_float(budgets.get("max_runs_per_period"))
+            credit_used = package_credit_used(credit_ledger_entries)
+        package_credit_limit = service._coerce_float(
+            budgets.get("max_ai_credits_per_period")
+        )
+        if package_credit_limit <= 0:
+            package_credit_limit = service._coerce_float(budgets.get("max_runs_per_period"))
+        paid_credit_remaining = service._coerce_float(paid_credit.get("remaining"))
+        package_credit_remaining = max(0.0, package_credit_limit - credit_used)
+        credit_limit = round(
+            credit_used + package_credit_remaining + paid_credit_remaining,
+            6,
+        )
         credit_status = self._quota_status(used=credit_used, limit=credit_limit)
 
         resource_limits = [
@@ -1961,6 +1976,15 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
                         if service._coerce_float(budgets.get("max_ai_credits_per_period")) > 0
                         else "max_runs_per_period"
                     ),
+                    "package_limit": round(package_credit_limit, 6),
+                    "package_remaining": round(package_credit_remaining, 6),
+                    "paid_remaining": round(paid_credit_remaining, 6),
+                    "paid_grant_count": int(paid_credit.get("grant_count") or 0),
+                    "paid_next_expires_at": paid_credit.get("next_expires_at") or "",
+                    "total_remaining": round(
+                        package_credit_remaining + paid_credit_remaining,
+                        6,
+                    ),
                 },
             ),
             "credit_policy": {
@@ -1968,6 +1992,7 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
                 "period_policy": "subscription_period",
                 "renewal_policy": "monthly_plan_grant_resets_each_period",
                 "topup_policy": "operator_topups_apply_to_target_period_only",
+                "paid_credit_policy": "payment_order_grants_expire_independently",
             },
             "resource_limits": resource_limits,
             "internal_limits": internal_limits,

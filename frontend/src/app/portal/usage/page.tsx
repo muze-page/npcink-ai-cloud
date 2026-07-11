@@ -174,9 +174,7 @@ function PortalUsageContent() {
   const subscription = entitlements?.subscription || null;
   const quotaSummary = entitlements?.quota_summary || null;
   const creditLedgerItems = creditLedger?.items || [];
-  const creditLedgerTotal = Number(
-    creditLedger?.summary?.net_used_credits ?? creditLedger?.summary?.total_credits ?? 0
-  );
+  const availableCredits = Number(quotaSummary?.credit?.total_remaining ?? 0);
   const creditLedgerCount = Number(creditLedger?.pagination?.total ?? creditLedger?.summary?.entry_count ?? 0);
   const formatPreferredCurrency = (value: number) => formatPortalCurrency(value, { to: DEFAULT_PORTAL_CURRENCY });
   const chartTotals = chartData.reduce(
@@ -341,9 +339,11 @@ function PortalUsageContent() {
             </div>
             <div className="text-left sm:text-right">
               <p className="text-lg font-semibold text-gray-950 dark:text-white">
-                {formatQuotaValue(creditLedgerTotal)}
+                {formatQuotaValue(availableCredits)}
               </p>
               <p className="text-xs text-gray-500 dark:text-gray-400">
+                {t('portal.usage.total_available_label', {}, 'Available now')}
+                {' · '}
                 {t(
                   'portal.usage.credit_ledger_record_count',
                   { count: formatQuotaValue(creditLedgerCount) },

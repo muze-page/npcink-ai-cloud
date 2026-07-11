@@ -1430,6 +1430,39 @@ class CreditLedgerEntry(Base):
     )
 
 
+class PaidCreditGrant(Base):
+    """Payment-order-backed expiring credits; not a general-purpose wallet."""
+
+    __tablename__ = "paid_credit_grants"
+    __table_args__ = (
+        CheckConstraint(
+            "original_credits >= 0 AND remaining_credits >= 0 AND refunded_credits >= 0",
+            name="ck_paid_credit_grants_nonnegative",
+        ),
+        CheckConstraint(
+            "remaining_credits + refunded_credits <= original_credits",
+            name="ck_paid_credit_grants_balance",
+        ),
+    )
+
+    grant_id: Mapped[str] = mapped_column(String(191), primary_key=True)
+    account_id: Mapped[str] = mapped_column(ForeignKey("accounts.account_id"), index=True)
+    payment_order_id: Mapped[str] = mapped_column(
+        ForeignKey("payment_orders.order_id"), unique=True, index=True
+    )
+    original_credits: Mapped[float] = mapped_column(Float)
+    remaining_credits: Mapped[float] = mapped_column(Float)
+    refunded_credits: Mapped[float] = mapped_column(Float, default=0.0)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    metadata_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), index=True
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
 class ReplayReceipt(Base):
     __tablename__ = "replay_receipts"
     __table_args__ = (

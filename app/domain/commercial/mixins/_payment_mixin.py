@@ -1260,6 +1260,18 @@ class CommercialServicePaymentMixin(CommercialServiceAuditMixin):
             },
             created_at=order.paid_at or paid_at,
         )
+        repository.upsert_paid_credit_grant(
+            account_id=order.account_id,
+            payment_order_id=order.order_id,
+            original_credits=ai_credits,
+            expires_at=grant_expires_at,
+            metadata_json={
+                "pack_id": str(pack["pack_id"]),
+                "payment_provider": order.provider,
+                "validity_days": validity_days,
+                "source": "credit_pack_purchase",
+            },
+        )
         payload = {
             "order": self._serialize_credit_pack_payment_order(order),
             "credit_ledger_entry": service._serialize_credit_ledger_entry(
@@ -1351,6 +1363,10 @@ class CommercialServicePaymentMixin(CommercialServiceAuditMixin):
             },
             created_at=refund.succeeded_at or succeeded_at,
         )
+        repository.refund_paid_credit_grant(
+            payment_order_id=order.order_id,
+            credits=refunded_credits,
+        )
         payload = {
             "order": self._serialize_credit_pack_payment_order(order),
             "refund": self._serialize_payment_refund(refund),
@@ -1376,6 +1392,100 @@ class CommercialServicePaymentMixin(CommercialServiceAuditMixin):
             payload_json=payload,
         )
         return payload
+
+    def _ensure_paid_credit_grants_from_ledger_in_session(
+        self,
+        repository: CommercialRepository,
+        *,
+        account_id: str,
+    ) -> None:
+        service = cast(Any, self)
+        grants = repository.list_credit_ledger_entries(
+            account_ids=[account_id],
+            event_types=[CREDIT_LEDGER_EVENT_GRANT],
+            source_types=["credit_pack_purchase"],
+            limit=None,
+        )
+        for entry in grants:
+            metadata = entry.metadata_json if isinstance(entry.metadata_json, dict) else {}
+            payment_order_id = str(metadata.get("payment_order_id") or entry.source_id or "")
+            expires_at_text = str(metadata.get("grant_expires_at") or "").strip()
+            if not payment_order_id or not expires_at_text:
+                continue
+            try:
+                expires_at = datetime.fromisoformat(expires_at_text.replace("Z", "+00:00"))
+            except ValueError:
+                continue
+            repository.upsert_paid_credit_grant(
+                account_id=account_id,
+                payment_order_id=payment_order_id,
+                original_credits=max(0.0, float(entry.credit_delta or 0.0)),
+                expires_at=service._normalize_datetime(expires_at),
+                metadata_json={
+                    "pack_id": str(metadata.get("pack_id") or ""),
+                    "validity_days": int(metadata.get("validity_days") or 0),
+                    "source": "credit_pack_ledger_backfill",
+                },
+            )
+
+        refunds = repository.list_credit_ledger_entries(
+            account_ids=[account_id],
+            event_types=[CREDIT_LEDGER_EVENT_ADJUSTMENT],
+            source_types=["credit_pack_refund"],
+            limit=None,
+        )
+        refund_totals: dict[str, float] = {}
+        for entry in refunds:
+            metadata = entry.metadata_json if isinstance(entry.metadata_json, dict) else {}
+            payment_order_id = str(metadata.get("payment_order_id") or "").strip()
+            if not payment_order_id:
+                continue
+            refund_totals[payment_order_id] = round(
+                refund_totals.get(payment_order_id, 0.0)
+                + max(0.0, -float(entry.credit_delta or 0.0)),
+                6,
+            )
+        for payment_order_id, refunded_credits in refund_totals.items():
+            grant = repository.get_paid_credit_grant_by_order(payment_order_id)
+            if grant is None:
+                continue
+            already_refunded = max(0.0, float(grant.refunded_credits or 0.0))
+            increment = max(0.0, refunded_credits - already_refunded)
+            if increment <= 0:
+                continue
+            repository.refund_paid_credit_grant(
+                payment_order_id=payment_order_id,
+                credits=increment,
+            )
+
+    def _paid_credit_balance_in_session(
+        self,
+        repository: CommercialRepository,
+        *,
+        account_id: str,
+        now: datetime,
+    ) -> dict[str, object]:
+        service = cast(Any, self)
+        self._ensure_paid_credit_grants_from_ledger_in_session(
+            repository,
+            account_id=account_id,
+        )
+        grants = repository.list_available_paid_credit_grants(
+            account_id=account_id,
+            now=now,
+        )
+        return {
+            "remaining": round(
+                sum(max(0.0, float(grant.remaining_credits or 0.0)) for grant in grants),
+                6,
+            ),
+            "grant_count": len(grants),
+            "next_expires_at": (
+                service._serialize_datetime(grants[0].expires_at)
+                if grants
+                else ""
+            ),
+        }
 
     def _record_payment_event_once(
         self,

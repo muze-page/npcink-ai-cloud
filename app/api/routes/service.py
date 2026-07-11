@@ -184,6 +184,7 @@ class PlanVersionPayload(BaseModel):
     concurrency: dict[str, Any] = Field(default_factory=dict)
     policy: dict[str, Any] = Field(default_factory=dict)
     metadata: dict[str, Any] = Field(default_factory=dict)
+    sales_price_cny: float | None = Field(default=None, ge=0)
 
 
 class SubscriptionPayload(BaseModel):
@@ -1647,6 +1648,7 @@ async def publish_plan_version(
             concurrency_json=payload.concurrency,
             policy_json=payload.policy,
             metadata_json=payload.metadata,
+            sales_price_cny=payload.sales_price_cny,
             audit_context=audit_context,
         )
     except CommercialServiceError as error:

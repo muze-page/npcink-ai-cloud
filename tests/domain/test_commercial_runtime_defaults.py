@@ -5,8 +5,15 @@ from pathlib import Path
 
 from sqlalchemy import select
 
+from app.adapters.repositories.commercial_repository import CommercialRepository
+from app.adapters.repositories.runtime_repository import RuntimeRepository
 from app.core.db import dispose_engine, get_session, init_schema
-from app.core.models import AccountEntitlementSnapshot, AccountSubscription
+from app.core.models import (
+    AccountEntitlementSnapshot,
+    AccountSubscription,
+    CreditLedgerEntry,
+    PaidCreditGrant,
+)
 from app.domain.commercial.service import CommercialService
 from tests.conftest import seed_site_auth
 
@@ -85,6 +92,141 @@ def test_authorize_runtime_request_allows_cloud_managed_knowledge_family(
     assert decision["decision_code"] == "commercial.allowed"
     assert decision["entitlements"]["ability_families"] == ["*"]
 
+    dispose_engine(database_url)
+
+
+def test_authorize_runtime_request_adds_active_paid_grants_to_package_headroom(
+    tmp_path: Path,
+) -> None:
+    database_url = _sqlite_url(tmp_path)
+    init_schema(database_url)
+    seed_site_auth(
+        database_url,
+        site_id="site_paid_credits",
+        scopes=["runtime:execute", "runtime:read", "runtime:resolve"],
+    )
+    now = datetime(2026, 7, 11, tzinfo=UTC)
+    with get_session(database_url) as session:
+        repository = CommercialRepository(session)
+        subscription = session.scalar(select(AccountSubscription))
+        assert subscription is not None
+        period_start = subscription.current_period_start_at or now
+        if period_start.tzinfo is None:
+            period_start = period_start.replace(tzinfo=UTC)
+        now = service_now = period_start + timedelta(hours=1)
+        repository.create_payment_order(
+            order_id="pay_runtime_paid_grant",
+            account_id=subscription.account_id,
+            site_id="site_paid_credits",
+            subscription_id=subscription.subscription_id,
+            plan_id=subscription.plan_id,
+            plan_version_id=subscription.plan_version_id,
+            provider="manual",
+            external_order_no="pay_runtime_paid_grant",
+            status="paid",
+            amount=99.0,
+            currency="CNY",
+            subject="Paid-credit runtime fixture",
+            checkout_url=None,
+            refund_window_end_at=None,
+            idempotency_key="pay-runtime-paid-grant",
+            metadata_json={"purchase_kind": "credit_pack"},
+        )
+        repository.upsert_paid_credit_grant(
+            account_id=subscription.account_id,
+            payment_order_id="pay_runtime_paid_grant",
+            original_credits=10_000,
+            expires_at=now + timedelta(days=365),
+        )
+        repository.record_credit_ledger_entry(
+            account_id=subscription.account_id,
+            site_id="site_paid_credits",
+            subscription_id=subscription.subscription_id,
+            plan_version_id=subscription.plan_version_id,
+            run_id="run_base_allowance",
+            provider_call_id=None,
+            source_type="runs",
+            source_id="base_allowance_consumed",
+            credit_delta=-300,
+            quantity=300,
+            unit="credit",
+            rate=1,
+            rate_unit="credit",
+            rate_version="ai-credit-ledger-v2",
+            idempotency_key="base-allowance-consumed",
+            created_at=now,
+        )
+        session.commit()
+
+    service = CommercialService(database_url, now_factory=lambda: service_now)
+    with get_session(database_url) as session:
+        decision = service.authorize_runtime_request(
+            session=session,
+            site_id="site_paid_credits",
+            ability_family="workflow",
+            channel="openapi",
+            execution_kind="text",
+            execution_tier="cloud",
+            data_classification="internal",
+            trace_id="trace-commercial-paid-credit-001",
+            idempotency_key="idem-commercial-paid-credit-001",
+            request_kind="execute",
+            estimated_ai_credits=100,
+        )
+        session.commit()
+
+    assert decision["ai_credit_budget"] == {
+        "used": 300.0,
+        "estimated_request": 100.0,
+        "limit": 10300.0,
+        "package_limit": 300.0,
+        "package_remaining": 0.0,
+        "paid_remaining": 10000.0,
+        "paid_grant_count": 1,
+        "remaining_before_request": 10000.0,
+    }
+
+    with get_session(database_url) as session:
+        subscription = session.scalar(select(AccountSubscription))
+        assert subscription is not None
+        run = RuntimeRepository(session).create_run(
+            run_id="run_paid_credit_allocation",
+            site_id="site_paid_credits",
+            account_id=subscription.account_id,
+            subscription_id=subscription.subscription_id,
+            plan_version_id=subscription.plan_version_id,
+            ability_name="test/paid-credit",
+            ability_family="workflow",
+            skill_id="",
+            workflow_id="",
+            contract_version="v1",
+            channel="openapi",
+            execution_kind="text",
+            execution_tier="cloud",
+            execution_pattern="inline",
+            data_classification="internal",
+            profile_id="text.balanced",
+            canonical_run_id=None,
+            status="running",
+            idempotency_key="run-paid-credit-allocation",
+            request_fingerprint="fingerprint-paid-credit-allocation",
+            trace_id="trace-paid-credit-allocation",
+            input_json={},
+            execution_input_ciphertext=None,
+            policy_json={},
+        )
+        service.record_run_acceptance(session=session, run=run)
+        grant = session.scalar(select(PaidCreditGrant))
+        paid_consume = session.scalar(
+            select(CreditLedgerEntry).where(
+                CreditLedgerEntry.run_id == "run_paid_credit_allocation"
+            )
+        )
+        session.commit()
+    assert grant is not None
+    assert grant.remaining_credits == 9999.0
+    assert paid_consume is not None
+    assert paid_consume.metadata_json["paid_credit_consumed"] == 1.0
     dispose_engine(database_url)
 
 

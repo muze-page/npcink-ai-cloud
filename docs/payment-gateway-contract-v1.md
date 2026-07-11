@@ -21,6 +21,11 @@ The commercial service still owns:
 - audit events;
 - credit ledger writes.
 
+For a paid credit pack, the service also owns the remaining paid-credit grant.
+The payment order is sale truth, the grant is spendable-balance truth, and the
+credit ledger is immutable usage/evidence truth. Runtime quota must not treat a
+positive ledger entry by itself as usable headroom.
+
 Do not let Alipay, WeChat Pay, SDK callback payloads, or signing details leak
 into credit ledger or entitlement logic.
 
@@ -68,6 +73,10 @@ Real provider integration must stay behind this contract. It must not change
 the payment order, credit pack, subscription, entitlement, or credit ledger
 state machine.
 
+Provider timestamps without an explicit offset must be interpreted in the
+provider's documented business timezone. Alipay `gmt_*` values are interpreted
+as Asia/Shanghai and normalized to UTC before persistence.
+
 ## Customer-facing Payment Subjects
 
 New payment orders use a stable provider-facing subject that is separate from
@@ -93,3 +102,21 @@ After that window they are hidden from Portal list responses, but the database
 record, payment evidence, audit trail, subscription relationship, and admin
 history are not deleted. Paid and refunded orders are not subject to this
 7-day customer-visibility cutoff.
+
+## Return-page Reconciliation
+
+The browser return URL is not payment evidence. Portal resolves
+`GET /portal/v1/account/payment-orders/{order_id}` for the exact internal order
+and may poll while it remains pending. Only the persisted, verified order state
+may produce a success message or trigger refreshed entitlement and quota data.
+
+## Package Price and Cost Budget
+
+Paid package versions expose two deliberately separate values:
+
+- sales price in CNY, used to synchronize the customer-facing standard offer
+  and snapshotted into new payment orders;
+- model cost budget in USD, used as an internal provider-cost guardrail for one
+  package period.
+
+Changing either value does not rewrite existing payment-order snapshots.

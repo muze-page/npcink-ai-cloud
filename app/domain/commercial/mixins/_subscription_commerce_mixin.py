@@ -1187,33 +1187,71 @@ class CommercialServiceSubscriptionCommerceMixin(CommercialServiceAuditMixin):
 
     def _ensure_standard_plan_offers_in_session(self, repository: CommercialRepository) -> None:
         service = cast(Any, self)
-        for tier_id, settings in STANDARD_PLAN_OFFERS.items():
-            offer_id = str(settings["offer_id"])
-            if repository.get_plan_offer(offer_id) is not None:
-                continue
+        for tier_id in STANDARD_PLAN_OFFERS:
             plan_id, plan_version_id = service._ensure_plan_tier_version_in_session(
                 repository=repository,
                 tier_id=tier_id,
             )
-            repository.upsert_plan_offer(
-                offer_id=offer_id,
+            self._sync_standard_plan_offer_in_session(
+                repository,
+                tier_id=tier_id,
                 plan_id=plan_id,
                 plan_version_id=plan_version_id,
-                account_id=None,
-                tier_id=tier_id,
-                billing_cycle="monthly",
-                amount=cast(Decimal, settings["amount"]),
-                currency="CNY",
-                purchase_mode=PLAN_OFFER_PURCHASE_MODE_SELF_SERVE,
-                status=PLAN_OFFER_STATUS_ACTIVE,
-                trial_enabled=True,
-                trial_days=PAID_PACKAGE_TRIAL_DAYS,
-                trial_credit_limit=int(cast(int, settings["trial_credit_limit"])),
-                trial_requires_approval=False,
-                valid_from_at=None,
-                valid_until_at=None,
-                metadata_json={"source": "canonical_paid_offer_v1"},
+                sales_price_cny=None,
             )
+
+    def _sync_standard_plan_offer_in_session(
+        self,
+        repository: CommercialRepository,
+        *,
+        tier_id: str,
+        plan_id: str,
+        plan_version_id: str,
+        sales_price_cny: float | None,
+    ) -> PlanOffer:
+        settings = STANDARD_PLAN_OFFERS[tier_id]
+        offer_id = str(settings["offer_id"])
+        existing = repository.get_plan_offer(offer_id)
+        amount = (
+            self._money(sales_price_cny)
+            if sales_price_cny is not None
+            else self._money(existing.amount if existing is not None else settings["amount"])
+        )
+        if amount <= Decimal("0.00"):
+            raise CommercialValidationError(
+                "service.plan_offer_amount_invalid",
+                "paid package sales price must be positive",
+            )
+        return repository.upsert_plan_offer(
+            offer_id=offer_id,
+            plan_id=plan_id,
+            plan_version_id=plan_version_id,
+            account_id=None,
+            tier_id=tier_id,
+            billing_cycle="monthly",
+            amount=amount,
+            currency="CNY",
+            purchase_mode=PLAN_OFFER_PURCHASE_MODE_SELF_SERVE,
+            status=PLAN_OFFER_STATUS_ACTIVE,
+            trial_enabled=(existing.trial_enabled if existing is not None else True),
+            trial_days=(
+                existing.trial_days if existing is not None else PAID_PACKAGE_TRIAL_DAYS
+            ),
+            trial_credit_limit=(
+                existing.trial_credit_limit
+                if existing is not None
+                else int(cast(int, settings["trial_credit_limit"]))
+            ),
+            trial_requires_approval=(
+                existing.trial_requires_approval if existing is not None else False
+            ),
+            valid_from_at=(existing.valid_from_at if existing is not None else None),
+            valid_until_at=(existing.valid_until_at if existing is not None else None),
+            metadata_json={
+                **((existing.metadata_json or {}) if existing is not None else {}),
+                "source": "canonical_paid_offer_v1",
+            },
+        )
 
     def _assert_offer_purchasable(
         self,

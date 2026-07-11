@@ -28,6 +28,7 @@ from app.core.models import (
     CommercialDecisionEvent,
     CreditLedgerEntry,
     IdentityProviderBinding,
+    PaidCreditGrant,
     PaymentEvent,
     PaymentOrder,
     PaymentRefund,
@@ -2316,6 +2317,109 @@ class CommercialRepository:
         if limit is not None and limit > 0:
             statement = statement.limit(limit)
         return list(self.session.scalars(statement))
+
+    def get_paid_credit_grant_by_order(self, payment_order_id: str) -> PaidCreditGrant | None:
+        return self.session.scalar(
+            select(PaidCreditGrant).where(
+                PaidCreditGrant.payment_order_id == payment_order_id
+            )
+        )
+
+    def upsert_paid_credit_grant(
+        self,
+        *,
+        account_id: str,
+        payment_order_id: str,
+        original_credits: float,
+        expires_at: datetime,
+        metadata_json: dict[str, object] | None = None,
+    ) -> PaidCreditGrant:
+        existing = self.get_paid_credit_grant_by_order(payment_order_id)
+        if existing is not None:
+            return existing
+        normalized_credits = round(max(0.0, float(original_credits or 0.0)), 6)
+        grant = PaidCreditGrant(
+            grant_id=f"pcg_{uuid4().hex}",
+            account_id=account_id,
+            payment_order_id=payment_order_id,
+            original_credits=normalized_credits,
+            remaining_credits=normalized_credits,
+            refunded_credits=0.0,
+            expires_at=expires_at,
+            metadata_json=metadata_json or {},
+            created_at=datetime.now(UTC),
+        )
+        self.session.add(grant)
+        self.session.flush()
+        return grant
+
+    def list_available_paid_credit_grants(
+        self,
+        *,
+        account_id: str,
+        now: datetime,
+        for_update: bool = False,
+    ) -> list[PaidCreditGrant]:
+        statement = (
+            select(PaidCreditGrant)
+            .where(
+                PaidCreditGrant.account_id == account_id,
+                PaidCreditGrant.remaining_credits > 0,
+                PaidCreditGrant.expires_at > now,
+            )
+            .order_by(PaidCreditGrant.expires_at.asc(), PaidCreditGrant.created_at.asc())
+        )
+        if for_update:
+            statement = statement.with_for_update()
+        return list(self.session.scalars(statement))
+
+    def consume_paid_credit_grants(
+        self,
+        *,
+        account_id: str,
+        credits: float,
+        now: datetime,
+    ) -> float:
+        remaining = round(max(0.0, float(credits or 0.0)), 6)
+        consumed = 0.0
+        for grant in self.list_available_paid_credit_grants(
+            account_id=account_id,
+            now=now,
+            for_update=True,
+        ):
+            if remaining <= 0:
+                break
+            amount = min(remaining, max(0.0, float(grant.remaining_credits or 0.0)))
+            grant.remaining_credits = round(float(grant.remaining_credits) - amount, 6)
+            consumed += amount
+            remaining -= amount
+        self.session.flush()
+        return round(consumed, 6)
+
+    def refund_paid_credit_grant(
+        self,
+        *,
+        payment_order_id: str,
+        credits: float,
+    ) -> PaidCreditGrant | None:
+        grant = self.session.scalar(
+            select(PaidCreditGrant)
+            .where(PaidCreditGrant.payment_order_id == payment_order_id)
+            .with_for_update()
+        )
+        if grant is None:
+            return None
+        normalized = round(max(0.0, float(credits or 0.0)), 6)
+        already_refunded = max(0.0, float(grant.refunded_credits or 0.0))
+        target_refunded = min(float(grant.original_credits), already_refunded + normalized)
+        increment = max(0.0, target_refunded - already_refunded)
+        grant.refunded_credits = round(target_refunded, 6)
+        grant.remaining_credits = round(
+            max(0.0, float(grant.remaining_credits or 0.0) - increment),
+            6,
+        )
+        self.session.flush()
+        return grant
 
     def count_credit_ledger_entries(
         self,

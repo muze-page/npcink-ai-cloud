@@ -114,6 +114,13 @@ type PlanDetailPayload = {
   plan: PlanRecord;
   versions: PlanVersionRecord[];
   latest_version?: PlanVersionRecord | null;
+  sales_offer?: {
+    offer_id: string;
+    amount: number;
+    currency: string;
+    status: string;
+    plan_version_id: string;
+  } | null;
   tier_summary: TierSummary;
   package_fit_cues: PackageFitCue[];
   subscriptions: PlanSubscriptionRecord[];
@@ -128,6 +135,7 @@ type PlanVersionFormState = {
   site_limit: string;
   max_vector_documents: string;
   max_cost_per_period: string;
+  sales_price_cny: string;
   max_active_runs: string;
   max_batch_items: string;
   grace_period_days: string;
@@ -191,7 +199,7 @@ function numericValue(value: unknown): number {
 }
 
 function formatBudgetCurrency(value: unknown): string {
-  return formatCurrency(numericValue(value), ADMIN_CURRENCY);
+  return formatCurrency(numericValue(value), 'USD');
 }
 
 function buildInitialForm(detail: PlanDetailPayload | null): PlanVersionFormState {
@@ -221,6 +229,7 @@ function buildInitialForm(detail: PlanDetailPayload | null): PlanVersionFormStat
     site_limit: numberField(metadata.site_limit ?? tierSummary?.site_limit ?? 0),
     max_vector_documents: numberField(metadata.max_vector_documents ?? tierSummary?.max_vector_documents ?? 0),
     max_cost_per_period: numberField(budgets.max_cost_per_period),
+    sales_price_cny: numberField(detail?.sales_offer?.amount),
     max_active_runs: numberField(concurrency.max_active_runs),
     max_batch_items: numberField(metadata.max_batch_items ?? tierSummary?.max_batch_items ?? 0),
     grace_period_days: numberField(policySubscription.grace_period_days),
@@ -397,6 +406,7 @@ function PlanDetailContent() {
           baseMetadata,
           parseJsonObject(form.metadata_override_json, 'Metadata override')
         ),
+        sales_price_cny: Number(form.sales_price_cny || 0),
       };
       const response = await fetch(`/api/admin/plans/${encodeURIComponent(planId)}/versions`, {
         method: 'POST',
@@ -624,6 +634,11 @@ function PlanDetailContent() {
               label: t('admin.vector_documents_limit', {}, 'Knowledge articles'),
               value: formatInteger(effectiveVectorDocuments),
               detail: t('admin.vector_documents_limit_detail', {}, 'Account-level article capacity for Site Knowledge indexing.'),
+            },
+            {
+              label: t('admin.sales_price_cny', {}, 'Sales price'),
+              value: formatCurrency(numericValue(detail.sales_offer?.amount), ADMIN_CURRENCY),
+              detail: t('admin.sales_price_cny_detail', {}, 'Customer-facing 30-day price used for new Alipay orders.'),
             },
             {
               label: t('admin.period_cost_budget', {}, 'Package fee'),
@@ -903,13 +918,23 @@ function PlanDetailContent() {
                     {t(
                       'admin.plan_package_fields_desc',
                       {},
-                      'These are the fields operators normally need. Currency is fixed to CNY for the platform admin.'
+                      'Customer sales price uses CNY; the internal provider-cost budget uses USD.'
                     )}
                   </p>
                   <div className="mt-4 grid gap-4 md:grid-cols-2">
                     <label className="text-sm">
-                      <span className="mb-2 block font-medium text-gray-700 dark:text-gray-300">{t('common.cost')}</span>
+                      <span className="mb-2 block font-medium text-gray-700 dark:text-gray-300">{t('admin.sales_price_cny', {}, 'Sales price (CNY)')}</span>
+                      <input value={form.sales_price_cny} onChange={(e) => setForm((c) => ({ ...c, sales_price_cny: e.target.value }))} className="input w-full" type="number" min="0" step="0.01" />
+                      <span className="mt-2 block text-xs leading-5 text-slate-500 dark:text-slate-400">
+                        {t('admin.sales_price_cny_detail', {}, 'Customer-facing 30-day price used for new Alipay orders.')}
+                      </span>
+                    </label>
+                    <label className="text-sm">
+                      <span className="mb-2 block font-medium text-gray-700 dark:text-gray-300">{t('admin.model_cost_budget_usd', {}, 'Model cost budget (USD / period)')}</span>
                       <input value={form.max_cost_per_period} onChange={(e) => setForm((c) => ({ ...c, max_cost_per_period: e.target.value }))} className="input w-full" type="number" min="0" step="0.01" />
+                      <span className="mt-2 block text-xs leading-5 text-slate-500 dark:text-slate-400">
+                        {t('admin.model_cost_budget_usd_detail', {}, 'Internal provider-cost monitoring threshold. It does not change the customer payment amount.')}
+                      </span>
                     </label>
                     <label className="text-sm">
                       <span className="mb-2 block font-medium text-gray-700 dark:text-gray-300">{t('admin.included_points', {}, 'Package points')}</span>

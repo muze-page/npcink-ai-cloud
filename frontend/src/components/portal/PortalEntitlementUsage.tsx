@@ -12,6 +12,10 @@ type EntitlementMetric = {
   unlimited?: boolean;
   usage_ratio?: number;
   status?: string;
+  package_remaining?: number;
+  paid_remaining?: number;
+  paid_next_expires_at?: string;
+  total_remaining?: number;
 };
 
 type PortalEntitlementUsageProps = {
@@ -124,6 +128,7 @@ export function PortalEntitlementUsage({
             const limitLabel = formatQuotaValue(limit, { unlimited, unlimitedLabel });
             const usedLabel = formatQuotaValue(used, { unlimited: false, unlimitedLabel });
             const remainingLabel = formatQuotaValue(displayRemaining, { unlimited, unlimitedLabel });
+            const isCredit = key === 'ai_credits';
 
             return (
               <div
@@ -157,6 +162,40 @@ export function PortalEntitlementUsage({
                   </span>
                 </div>
 
+                {isCredit ? (
+                  <div className="mt-4 grid gap-2 sm:grid-cols-3">
+                    {[
+                      {
+                        label: t('portal.usage.package_remaining_label', {}, 'Package remaining'),
+                        value: metric.package_remaining,
+                      },
+                      {
+                        label: t('portal.usage.paid_remaining_label', {}, 'Paid credits'),
+                        value: metric.paid_remaining,
+                      },
+                      {
+                        label: t('portal.usage.total_remaining_label', {}, 'Total available'),
+                        value: metric.total_remaining ?? remaining,
+                      },
+                    ].map((item) => (
+                      <div key={item.label} className="rounded-lg bg-slate-50 px-3 py-2 dark:bg-slate-900/60">
+                        <p className="text-xs text-slate-500 dark:text-slate-400">{item.label}</p>
+                        <p className="mt-1 text-lg font-semibold text-slate-950 dark:text-white">
+                          {formatQuotaValue(item.value, { unlimited: false, unlimitedLabel })}
+                        </p>
+                      </div>
+                    ))}
+                    {metric.paid_next_expires_at ? (
+                      <p className="text-xs text-slate-500 dark:text-slate-400 sm:col-span-3">
+                        {t(
+                          'portal.usage.paid_credit_expiry_hint',
+                          { date: new Date(metric.paid_next_expires_at).toLocaleDateString() },
+                          `The next paid credit grant expires on ${new Date(metric.paid_next_expires_at).toLocaleDateString()}.`
+                        )}
+                      </p>
+                    ) : null}
+                  </div>
+                ) : (
                 <div className="mt-4 flex items-end justify-between gap-3">
                   <div>
                     <p className="text-2xl font-semibold text-slate-950 dark:text-white">
@@ -170,8 +209,9 @@ export function PortalEntitlementUsage({
                     {t('portal.usage.remaining_credits', {}, 'Remaining')}: {remainingLabel}
                   </p>
                 </div>
+                )}
 
-                {!unlimited ? (
+                {!unlimited && !isCredit ? (
                   <div className="mt-4">
                     <div className="h-2 overflow-hidden rounded-full bg-slate-200 dark:bg-slate-800">
                       <div
