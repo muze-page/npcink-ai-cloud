@@ -651,6 +651,48 @@ def test_wordpress_ai_connector_title_generation_silently_falls_back_when_site_k
     assert "site_knowledge_reference" not in provider_input["metadata"]
 
 
+def test_wordpress_ai_connector_title_generation_ignores_non_list_site_knowledge_results(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _, client, provider = _build_client(tmp_path)
+
+    def return_invalid_results(
+        self: SiteKnowledgeService,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        del self, kwargs
+        return {
+            "status": "ready",
+            "evidence_gate": {"status": "passed"},
+            "results": {"title": "This object must not be treated as search results."},
+        }
+
+    monkeypatch.setattr(SiteKnowledgeService, "execute", return_invalid_results)
+    payload = _payload(
+        {
+            "request": {
+                "prompt": "Suggest a concise title for this WordPress post.",
+                "site_knowledge_reference": {
+                    "enabled": True,
+                    "mode": "site_title_style",
+                },
+            }
+        }
+    )
+
+    response = _execute(
+        client,
+        payload,
+        idempotency_key="wp-ai-title-site-style-non-list-results",
+    )
+
+    assert response.status_code == 200
+    provider_input = provider.requests[0].input_payload
+    assert "Site title style references" not in provider_input["input"]
+    assert "site_knowledge_reference" not in provider_input["metadata"]
+
+
 @pytest.mark.parametrize(
     ("task", "reference", "expected_error"),
     [

@@ -5756,7 +5756,10 @@ class RuntimeService:
         evidence_gate = self._dict_or_empty(result.get("evidence_gate"))
         if str(evidence_gate.get("status") or "") != "passed":
             return provider_input
-        results = result.get("results") if isinstance(result.get("results"), list) else []
+        raw_results = result.get("results")
+        results: list[object] = []
+        if isinstance(raw_results, list):
+            results = cast(list[object], raw_results)
         titles = self._wordpress_ai_title_style_references(results)
         if not titles:
             return provider_input
