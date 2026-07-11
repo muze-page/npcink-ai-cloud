@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import ipaddress
+import re
 from typing import Any
+from urllib.parse import urlsplit
 
 WEB_SEARCH_ABILITY = "npcink-cloud/web-search"
 NPCINK_WEB_SEARCH_ABILITY = "npcink-cloud/web-search"
@@ -10,6 +13,7 @@ SEARCH_EVIDENCE_PACK_CONTRACT = "search_evidence_pack.v1"
 SOURCE_EVIDENCE_CONTRACT = "source_evidence.v1"
 TOPIC_CANDIDATE_CONTRACT = "topic_candidate.v1"
 GROUNDED_ANSWER_CONTRACT = "grounded_answer.v1"
+SOURCE_EXTRACTION_PREVIEW_CONTRACT = "source_extraction_preview.v1"
 ATOMIC_OUTPUT_CONTRACTS = frozenset(
     {
         SOURCE_EVIDENCE_CONTRACT,
@@ -33,6 +37,7 @@ ALLOWED_WEB_SEARCH_INTENTS = frozenset(
         "pricing_snapshot",
         "product_comparison",
         "source_discovery",
+        "source_extraction_preview",
         "external_links",
         "zhihu_global_search",
         "zhihu_research",
@@ -117,6 +122,70 @@ def validate_web_search_runtime_contract(
             "web search input may not include provider secret or write/control "
             f"field '{forbidden_path}'",
         )
+    if str(input_payload.get("intent") or "").strip() == "source_extraction_preview":
+        source_url = validate_public_source_url(
+            input_payload.get("source_url") or input_payload.get("query"),
+        )
+        query_url = validate_public_source_url(input_payload.get("query"))
+        if query_url.rstrip("/") != source_url.rstrip("/"):
+            raise WebSearchContractViolation(
+                "web_search.source_query_mismatch",
+                "source extraction query and source_url must identify the same URL",
+            )
+
+
+def validate_public_source_url(value: Any) -> str:
+    source_url = str(value or "").strip()
+    if len(source_url) > 2048:
+        raise WebSearchContractViolation(
+            "web_search.source_url_too_long",
+            "source extraction URL exceeds the accepted length",
+        )
+    try:
+        parsed = urlsplit(source_url)
+    except ValueError as error:
+        raise WebSearchContractViolation(
+            "web_search.source_url_invalid",
+            "source extraction requires one valid public HTTP or HTTPS URL",
+        ) from error
+    if parsed.scheme.lower() not in {"http", "https"} or not parsed.hostname:
+        raise WebSearchContractViolation(
+            "web_search.source_url_invalid",
+            "source extraction requires one public HTTP or HTTPS URL",
+        )
+    if parsed.username or parsed.password:
+        raise WebSearchContractViolation(
+            "web_search.source_url_credentials_forbidden",
+            "source extraction URL may not contain credentials",
+        )
+
+    host = str(parsed.hostname or "").strip().lower().rstrip(".")
+    blocked_suffixes = (".localhost", ".local", ".test")
+    if host == "localhost" or host.endswith(blocked_suffixes):
+        raise WebSearchContractViolation(
+            "web_search.source_url_not_public",
+            "source extraction URL must use a public hostname",
+        )
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        address = None
+    if address is None and re.fullmatch(r"[0-9.]+", host):
+        raise WebSearchContractViolation(
+            "web_search.source_url_not_public",
+            "source extraction URL may not use an alternate numeric IP address",
+        )
+    if address is None and "." not in host:
+        raise WebSearchContractViolation(
+            "web_search.source_url_not_public",
+            "source extraction URL must use a public hostname",
+        )
+    if address is not None and not address.is_global:
+        raise WebSearchContractViolation(
+            "web_search.source_url_not_public",
+            "source extraction URL may not use a private or reserved IP address",
+        )
+    return source_url
 
 
 def find_forbidden_web_search_field(value: Any, *, path: str = "") -> str:

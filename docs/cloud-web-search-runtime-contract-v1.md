@@ -126,6 +126,7 @@ Supported first intents:
 - `pricing_snapshot`
 - `product_comparison`
 - `source_discovery`
+- `source_extraction_preview`
 - `external_links`
 - `zhihu_global_search`
 - `zhihu_research`
@@ -133,6 +134,24 @@ Supported first intents:
 - `zhida_simple`
 - `zhida_deep`
 - `zhida_deepsearch`
+
+### Exact source extraction preview
+
+`intent=source_extraction_preview` reuses the existing
+`npcink-cloud/web-search` runtime ability but bypasses provider search ranking.
+It requires one public `source_url`, calls the Cloud-managed URL Reader for
+that exact URL, and returns a bounded `source_extraction_preview.v1` artifact.
+
+The artifact exposes requested/resolved URL matching, title and publication
+metadata when supplied by the Reader, content hash, bounded start/end preview,
+word and character counts, and an explicit coverage warning. It never claims
+that Reader output proves complete capture, never returns WordPress write
+instructions, and remains `suggestion_only`.
+
+Cloud rejects credential-bearing URLs, localhost/test/local hostnames, and
+private or reserved IP literals before calling the Reader. A Reader response
+whose URL host or article path differs from the request is returned as
+`blocked` without readable content.
 
 `zhihu_global_search` is the Zhihu Open Platform full-web search lane, not the
 generic Tavily/Bocha/Apify provider pool. Toolbox or other local callers may

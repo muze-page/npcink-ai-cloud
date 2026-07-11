@@ -23,11 +23,13 @@ from app.domain.web_search.contracts import (
     GROUNDED_ANSWER_CONTRACT,
     SEARCH_EVIDENCE_PACK_CONTRACT,
     SOURCE_EVIDENCE_CONTRACT,
+    SOURCE_EXTRACTION_PREVIEW_CONTRACT,
     TOPIC_CANDIDATE_CONTRACT,
     WEB_SEARCH_ABILITY,
     WEB_SEARCH_CONTRACT,
     WebSearchContractViolation,
     coerce_positive_int,
+    validate_public_source_url,
     validate_web_search_runtime_contract,
 )
 
@@ -37,6 +39,8 @@ MAX_RESULT_SNIPPET_CHARS = 600
 MAX_DOMAIN_FILTERS = 10
 MAX_PROVIDER_RESPONSE_BYTES = 2_000_000
 MAX_READER_RESPONSE_BYTES = 500_000
+MAX_SOURCE_READER_CONTENT_CHARS = 8_000
+MAX_SOURCE_PREVIEW_CHARS = 600
 WEB_SEARCH_PROVIDER_ORDER = ("tavily", "bocha", "apify", "zhihu")
 TAVILY_KEY_QUARANTINE_SECONDS = 300.0
 _TAVILY_POOL_LOCK = threading.Lock()
@@ -130,6 +134,15 @@ class WebSearchService:
             )
         options = _build_options(input_payload)
         options["ability_name"] = ability_name
+        if str(options.get("intent") or "") == "source_extraction_preview":
+            source_url = validate_public_source_url(
+                input_payload.get("source_url") or input_payload.get("query")
+            )
+            return _extract_source_preview(
+                settings=self.settings,
+                source_url=source_url,
+                options=options,
+            )
         requested_provider = str(options.get("provider") or "").strip().lower()
         provider_id = (
             requested_provider
@@ -1378,20 +1391,202 @@ def _attach_web_search_workflow_metadata(
 
 def _web_search_workflow_metadata(options: dict[str, Any]) -> dict[str, Any]:
     metadata = dict(get_workflow_metadata(WEB_SEARCH_EVIDENCE_WORKFLOW_ID))
+    source_preview = str(options.get("intent") or "") == "source_extraction_preview"
     metadata.update(
         {
             "workflow_kind": "fixed_evidence_workflow",
             "triggering_ability": str(options.get("ability_name") or WEB_SEARCH_ABILITY),
             "triggering_contract": WEB_SEARCH_CONTRACT,
             "intent": str(options.get("intent") or "general_research"),
-            "cloud_output": "external_web_evidence",
-            "output_contract": SEARCH_EVIDENCE_PACK_CONTRACT,
+            "cloud_output": (
+                "source_extraction_preview" if source_preview else "external_web_evidence"
+            ),
+            "output_contract": (
+                SOURCE_EXTRACTION_PREVIEW_CONTRACT
+                if source_preview
+                else SEARCH_EVIDENCE_PACK_CONTRACT
+            ),
             "write_posture": "suggestion_only",
             "steps": metadata_projection_tokens(metadata.get("steps")),
             "stop_conditions": metadata_projection_tokens(metadata.get("stop_conditions")),
         }
     )
     return metadata
+
+
+def _extract_source_preview(
+    *,
+    settings: Settings,
+    source_url: str,
+    options: dict[str, Any],
+) -> WebSearchExecutionResult:
+    base_url = str(settings.web_search_jina_reader_base_url or "").strip().rstrip("/")
+    if not base_url:
+        raise WebSearchProviderError(
+            "web_search.reader_not_configured",
+            "Cloud-managed source reader is not configured",
+        )
+
+    headers = {
+        "Accept": "text/plain",
+        "X-Return-Format": "markdown",
+    }
+    api_key = str(settings.web_search_jina_reader_api_key or "").strip()
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+
+    started = time.monotonic()
+    usage = WebSearchProviderUsage(
+        provider_id="jina_reader",
+        model_id="url-reader",
+        instance_id="cloud-managed",
+        region=str(settings.deployment_region or "unspecified"),
+        latency_ms=0,
+        cost=0.0,
+    )
+    try:
+        with httpx.Client(
+            timeout=float(settings.web_search_jina_reader_timeout_seconds)
+        ) as client:
+            response = client.get(f"{base_url}/{source_url}", headers=headers)
+            response.raise_for_status()
+            reader_text = _response_text(
+                response,
+                max_bytes=MAX_READER_RESPONSE_BYTES,
+            )
+    except httpx.TimeoutException as error:
+        usage.latency_ms = max(0, int((time.monotonic() - started) * 1000))
+        usage.error_code = "provider.timeout"
+        raise WebSearchProviderError(
+            "provider.timeout",
+            "Cloud-managed source reader timed out",
+            usage=usage,
+        ) from error
+    except httpx.HTTPError as error:
+        usage.latency_ms = max(0, int((time.monotonic() - started) * 1000))
+        usage.error_code = "provider.reader_error"
+        raise WebSearchProviderError(
+            "provider.reader_error",
+            "Cloud-managed source reader failed",
+            usage=usage,
+        ) from error
+
+    usage.latency_ms = max(0, int((time.monotonic() - started) * 1000))
+    usage.cost = max(0.0, float(settings.web_search_jina_reader_cost_per_page or 0.0))
+    document = _parse_jina_reader_document(reader_text, requested_url=source_url)
+    resolved_url = str(document.get("resolved_url") or "")
+    try:
+        resolved_url = validate_public_source_url(resolved_url)
+    except WebSearchContractViolation:
+        resolved_url = ""
+    url_match = bool(resolved_url) and _source_urls_match(source_url, resolved_url)
+    content = str(document.get("content") or "").strip()
+    if not url_match:
+        content = ""
+
+    status = "ready" if content and url_match else "blocked"
+    coverage_level = "partial" if content and url_match else "unavailable"
+    content_hash = hashlib.sha256(content.encode("utf-8")).hexdigest() if content else ""
+    words = content.split()
+    source_title = (
+        _normalize_text(document.get("title"), limit=MAX_RESULT_TITLE_CHARS)
+        if url_match
+        else ""
+    )
+    item = {
+        "title": source_title,
+        "url": resolved_url,
+        "snippet": _normalize_text(content, limit=MAX_RESULT_SNIPPET_CHARS),
+        "reader_excerpt": content[:MAX_SOURCE_READER_CONTENT_CHARS].rstrip(),
+        "reader_status": status,
+        "reader_provider": "jina_reader",
+        "source": "jina_reader",
+        "write_posture": "suggestion_only",
+        "direct_wordpress_write": False,
+    }
+    result_json = {
+        "artifact_type": "source_extraction_preview",
+        "contract_version": SOURCE_EXTRACTION_PREVIEW_CONTRACT,
+        "composition_role": "external_source_extraction_preview",
+        "status": status,
+        "provider": "jina_reader",
+        "provider_mode": "cloud_managed_reader",
+        "requested_provider": "",
+        "intent": "source_extraction_preview",
+        "output_contract": SOURCE_EXTRACTION_PREVIEW_CONTRACT,
+        "requested_url": source_url,
+        "resolved_url": resolved_url,
+        "url_match": "matched" if url_match else "mismatched",
+        "title": item["title"],
+        "language": str(document.get("language") or "") if url_match else "",
+        "published_at": str(document.get("published_at") or "") if url_match else "",
+        "content_hash": content_hash,
+        "char_count": len(content),
+        "word_count": len(words),
+        "preview_start": content[:MAX_SOURCE_PREVIEW_CHARS].rstrip(),
+        "preview_end": content[-MAX_SOURCE_PREVIEW_CHARS:].lstrip() if content else "",
+        "coverage": {
+            "level": coverage_level,
+            "reader_bounded": True,
+            "complete_capture_claimed": False,
+            "warnings": (
+                [
+                    "Reader output is bounded evidence and does not prove complete "
+                    "article capture."
+                ]
+                if content
+                else ["Reader output was unavailable or did not match the requested URL."]
+            ),
+        },
+        "content_trust": "untrusted_external_source",
+        "prompt_injection_review_required": True,
+        "result_count": 1 if content else 0,
+        "results": [item] if content else [],
+        "sources": (
+            [{"title": item["title"], "url": resolved_url, "source": "jina_reader"}]
+            if content
+            else []
+        ),
+        "workflow_metadata": _web_search_workflow_metadata(options),
+        "write_posture": "suggestion_only",
+        "direct_wordpress_write": False,
+    }
+    return WebSearchExecutionResult(result_json=result_json, usage=usage)
+
+
+def _parse_jina_reader_document(text: str, *, requested_url: str) -> dict[str, str]:
+    normalized = str(text or "").replace("\r\n", "\n").replace("\r", "\n").strip()
+    metadata: dict[str, str] = {}
+    content = normalized
+    marker = re.search(r"(?im)^Markdown Content:\s*$", normalized)
+    if marker:
+        header = normalized[: marker.start()]
+        content = normalized[marker.end() :].strip()
+        for line in header.splitlines():
+            match = re.match(r"^([^:]{1,40}):\s*(.+)$", line.strip())
+            if match:
+                metadata[match.group(1).strip().lower()] = match.group(2).strip()
+    resolved_url = metadata.get("url source", "")
+    return {
+        "title": metadata.get("title", ""),
+        "resolved_url": resolved_url,
+        "published_at": metadata.get("published time", ""),
+        "language": metadata.get("language", ""),
+        "content": content,
+    }
+
+
+def _source_urls_match(requested_url: str, resolved_url: str) -> bool:
+    requested = urlsplit(requested_url)
+    resolved = urlsplit(resolved_url)
+    if str(requested.hostname or "").lower() != str(resolved.hostname or "").lower():
+        return False
+
+    def normalized_path(value: str) -> str:
+        path = re.sub(r"/+", "/", "/" + str(value or "/").lstrip("/"))
+        return "/" if path == "/" else path.rstrip("/")
+
+    return normalized_path(requested.path) == normalized_path(resolved.path)
 
 
 def _enhance_with_jina_reader(

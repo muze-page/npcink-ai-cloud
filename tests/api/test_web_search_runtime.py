@@ -21,6 +21,10 @@ from app.core.models import (
     UsageMeterEvent,
 )
 from app.core.services import CloudServices
+from app.domain.web_search.contracts import (
+    WebSearchContractViolation,
+    validate_public_source_url,
+)
 from app.domain.web_search.service import (
     _TAVILY_POOL_CURSOR,
     _TAVILY_POOL_QUARANTINED_UNTIL,
@@ -282,6 +286,276 @@ def test_cloud_managed_web_search_executes_and_records_provider_usage(
             "cost",
         ]
         assert all(event.ability_family == "knowledge" for event in meter_events)
+
+
+def test_source_extraction_preview_reads_exact_url_without_search_provider(
+    tmp_path: Path,
+    monkeypatch: Any,
+) -> None:
+    database_url, client = _build_client(
+        tmp_path,
+        settings_overrides={"web_search_provider": "disabled"},
+    )
+    captured: dict[str, Any] = {}
+
+    class FakeReaderClient:
+        def __init__(self, *, timeout: float) -> None:
+            captured["timeout"] = timeout
+
+        def __enter__(self) -> FakeReaderClient:
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            return None
+
+        def get(self, endpoint: str, *, headers: dict[str, str]) -> httpx.Response:
+            captured["endpoint"] = endpoint
+            captured["headers"] = headers
+            content = (
+                "Title: Reliable WordPress source\n"
+                "URL Source: https://example.com/guides/source\n"
+                "Published Time: 2026-07-12\n"
+                "Markdown Content:\n"
+                "This is the beginning of the extracted source.\n\n"
+                "It includes enough bounded content for a review preview.\n\n"
+                "This is the end of the extracted source."
+            )
+            return httpx.Response(
+                200,
+                text=content,
+                request=httpx.Request("GET", endpoint),
+            )
+
+    monkeypatch.setattr("app.domain.web_search.service.httpx.Client", FakeReaderClient)
+    source_url = "https://example.com/guides/source"
+    response = _execute(
+        client,
+        _payload(
+            {
+                "query": source_url,
+                "source_url": source_url,
+                "intent": "source_extraction_preview",
+                "max_results": 1,
+                "recency_days": 0,
+            }
+        ),
+        idempotency_key="source-extraction-preview",
+    )
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["status"] == "succeeded"
+    assert data["provider_call_count"] == 1
+    result = data["result"]
+    assert result["artifact_type"] == "source_extraction_preview"
+    assert result["contract_version"] == "source_extraction_preview.v1"
+    assert result["output_contract"] == "source_extraction_preview.v1"
+    assert result["status"] == "ready"
+    assert result["requested_url"] == source_url
+    assert result["resolved_url"] == source_url
+    assert result["url_match"] == "matched"
+    assert result["title"] == "Reliable WordPress source"
+    assert result["coverage"]["level"] == "partial"
+    assert result["coverage"]["reader_bounded"] is True
+    assert result["coverage"]["complete_capture_claimed"] is False
+    assert result["content_trust"] == "untrusted_external_source"
+    assert result["prompt_injection_review_required"] is True
+    assert result["preview_start"].startswith("This is the beginning")
+    assert result["preview_end"].endswith("end of the extracted source.")
+    assert result["content_hash"]
+    assert result["results"][0]["reader_provider"] == "jina_reader"
+    assert result["workflow_metadata"]["output_contract"] == (
+        "source_extraction_preview.v1"
+    )
+    assert result["write_posture"] == "suggestion_only"
+    assert result["direct_wordpress_write"] is False
+    assert captured["endpoint"] == f"https://r.jina.ai/{source_url}"
+    assert captured["headers"]["X-Return-Format"] == "markdown"
+
+    with get_session(database_url) as session:
+        run = session.get(RunRecord, data["run_id"])
+        assert run is not None
+        assert run.input_json == {}
+        provider_calls = list(
+            session.scalars(
+                select(ProviderCallRecord).where(ProviderCallRecord.run_id == run.run_id)
+            )
+        )
+        assert provider_calls[0].provider_id == "jina_reader"
+
+
+def test_source_extraction_preview_blocks_reader_url_mismatch(
+    tmp_path: Path,
+    monkeypatch: Any,
+) -> None:
+    _, client = _build_client(
+        tmp_path,
+        settings_overrides={"web_search_provider": "disabled"},
+    )
+
+    class FakeReaderClient:
+        def __init__(self, *, timeout: float) -> None:
+            pass
+
+        def __enter__(self) -> FakeReaderClient:
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            return None
+
+        def get(self, endpoint: str, *, headers: dict[str, str]) -> httpx.Response:
+            return httpx.Response(
+                200,
+                text=(
+                    "Title: Wrong article\n"
+                    "URL Source: https://example.com/guides/different\n"
+                    "Markdown Content:\nThis content must not be exposed."
+                ),
+                request=httpx.Request("GET", endpoint),
+            )
+
+    monkeypatch.setattr("app.domain.web_search.service.httpx.Client", FakeReaderClient)
+    source_url = "https://example.com/guides/source"
+    response = _execute(
+        client,
+        _payload(
+            {
+                "query": source_url,
+                "source_url": source_url,
+                "intent": "source_extraction_preview",
+                "max_results": 1,
+            }
+        ),
+        idempotency_key="source-extraction-mismatch",
+    )
+
+    assert response.status_code == 200
+    result = response.json()["data"]["result"]
+    assert result["status"] == "blocked"
+    assert result["url_match"] == "mismatched"
+    assert result["result_count"] == 0
+    assert result["results"] == []
+    assert result["preview_start"] == ""
+    assert result["content_hash"] == ""
+    assert result["title"] == ""
+    assert "This content must not be exposed" not in json.dumps(result)
+
+
+def test_source_extraction_preview_blocks_missing_reader_url_evidence(
+    tmp_path: Path,
+    monkeypatch: Any,
+) -> None:
+    _, client = _build_client(
+        tmp_path,
+        settings_overrides={"web_search_provider": "disabled"},
+    )
+
+    class FakeReaderClient:
+        def __init__(self, *, timeout: float) -> None:
+            pass
+
+        def __enter__(self) -> FakeReaderClient:
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            return None
+
+        def get(self, endpoint: str, *, headers: dict[str, str]) -> httpx.Response:
+            return httpx.Response(
+                200,
+                text=(
+                    "Title: Unverified article\n"
+                    "Markdown Content:\nUnverified reader content."
+                ),
+                request=httpx.Request("GET", endpoint),
+            )
+
+    monkeypatch.setattr("app.domain.web_search.service.httpx.Client", FakeReaderClient)
+    source_url = "https://example.com/guides/source"
+    response = _execute(
+        client,
+        _payload(
+            {
+                "query": source_url,
+                "source_url": source_url,
+                "intent": "source_extraction_preview",
+                "max_results": 1,
+            }
+        ),
+        idempotency_key="source-extraction-missing-url-evidence",
+    )
+
+    assert response.status_code == 200
+    result = response.json()["data"]["result"]
+    assert result["status"] == "blocked"
+    assert result["resolved_url"] == ""
+    assert result["results"] == []
+    assert result["title"] == ""
+    assert "Unverified reader content" not in json.dumps(result)
+
+
+@pytest.mark.parametrize(
+    "source_url",
+    [
+        "http://127.0.0.1/private",
+        "http://127.1/private",
+        "http://169.254.169.254/latest/meta-data",
+        "http://localhost/article",
+        "https://user:password@example.com/article",
+        "file:///etc/passwd",
+    ],
+)
+def test_source_extraction_preview_rejects_non_public_urls(
+    tmp_path: Path,
+    source_url: str,
+) -> None:
+    _, client = _build_client(tmp_path)
+    response = _execute(
+        client,
+        _payload(
+            {
+                "query": source_url,
+                "source_url": source_url,
+                "intent": "source_extraction_preview",
+                "max_results": 1,
+            }
+        ),
+        idempotency_key=f"source-extraction-block-{abs(hash(source_url))}",
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error_code"] in {
+        "runtime.pii_classification_required",
+        "web_search.source_url_credentials_forbidden",
+        "web_search.source_url_invalid",
+        "web_search.source_url_not_public",
+    }
+
+
+def test_source_extraction_contract_rejects_credential_bearing_url() -> None:
+    with pytest.raises(WebSearchContractViolation) as error:
+        validate_public_source_url("https://user:password@example.com/article")
+
+    assert error.value.error_code == "web_search.source_url_credentials_forbidden"
+
+
+def test_source_extraction_contract_rejects_query_url_mismatch(tmp_path: Path) -> None:
+    _, client = _build_client(tmp_path)
+    response = _execute(
+        client,
+        _payload(
+            {
+                "query": "https://example.com/requested",
+                "source_url": "https://example.com/different",
+                "intent": "source_extraction_preview",
+                "max_results": 1,
+            }
+        ),
+        idempotency_key="source-extraction-query-mismatch",
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error_code"] == "web_search.source_query_mismatch"
 
 
 def test_zhihu_direct_answer_records_lane_credit_component(
