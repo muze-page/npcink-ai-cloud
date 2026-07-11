@@ -78,8 +78,21 @@ function buildEmptyPortalSession() {
   };
 }
 
-async function installLoginFlowMocks(page: Page) {
-  let loggedIn = false;
+async function addPortalSessionCookie(page: Page) {
+  await page.context().addCookies([
+    {
+      name: 'npcink_portal_session_token',
+      value: 'e2e-portal-login-session',
+      domain: BASE_HOSTNAME,
+      path: '/',
+      httpOnly: true,
+      sameSite: 'Lax',
+    },
+  ]);
+}
+
+async function installLoginFlowMocks(page: Page, { initiallyLoggedIn = false }: { initiallyLoggedIn?: boolean } = {}) {
+  let loggedIn = initiallyLoggedIn;
   let requestCodeCount = 0;
   let verifyCodeCalled = false;
   let addonConnectionPayload: Record<string, unknown> | null = null;
@@ -120,16 +133,7 @@ async function installLoginFlowMocks(page: Page) {
       expect(body?.code).toBe(LOGIN_CODE);
       verifyCodeCalled = true;
       loggedIn = true;
-      await page.context().addCookies([
-        {
-          name: 'npcink_portal_session_token',
-          value: 'e2e-portal-login-session',
-          domain: BASE_HOSTNAME,
-          path: '/',
-          httpOnly: true,
-          sameSite: 'Lax',
-        },
-      ]);
+      await addPortalSessionCookie(page);
       await fulfillJson(route, buildEmptyPortalSession(), {
         'Set-Cookie':
           'npcink_portal_session_token=e2e-portal-login-session; Path=/; HttpOnly; SameSite=Lax',
@@ -165,6 +169,10 @@ async function installLoginFlowMocks(page: Page) {
     await fulfillError(route, 404, `unhandled:${pathname}`);
   });
 
+  if (initiallyLoggedIn) {
+    await addPortalSessionCookie(page);
+  }
+
   return {
     requestCodeCount: () => requestCodeCount,
     verifyCodeCalled: () => verifyCodeCalled,
@@ -191,6 +199,15 @@ test('portal email-code login enters the dashboard after verification', async ({
   await expect(page.getByRole('heading', { name: /No Connected Sites|没有已连接站点/i })).toBeVisible();
   expect(calls.requestCodeCount()).toBe(2);
   expect(calls.verifyCodeCalled()).toBe(true);
+});
+
+test('an authenticated user is redirected from the login page to the Portal default', async ({ page }) => {
+  await installLoginFlowMocks(page, { initiallyLoggedIn: true });
+
+  await page.goto('/portal/login');
+
+  await expect(page).toHaveURL(`${BASE_URL}/portal`);
+  await expect(page.getByRole('heading', { name: /No Connected Sites|没有已连接站点/i })).toBeVisible();
 });
 
 test('addon binding survives login and returns the complete payload to WordPress', async ({ page }) => {
