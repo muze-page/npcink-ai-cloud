@@ -1832,7 +1832,13 @@ export const translations: Record<Locale, TranslationMap> = {
     'admin.service_settings.alipay_callback_base_missing': 'Not set',
     'admin.service_settings.alipay_callback_base_ready': 'notify_url and return_url are generated from this URL.',
     'admin.service_settings.alipay_callback_urls_collapse': 'Collapse',
-    'admin.service_settings.alipay_callback_urls_title': 'Callback URLs',
+    'admin.service_settings.alipay_callback_urls_title': 'Alipay payment callback URLs',
+    'admin.service_settings.alipay_callback_console_guidance':
+      'These URLs are sent to Alipay with each Page Pay request; do not put either one in Alipay Open Platform\'s authorization callback field. If the console separately asks for a notify URL, use the left URL; use the right URL only for a return URL.',
+    'admin.service_settings.alipay_notify_url_hint':
+      'Alipay sends the payment result server-to-server; this is the only payment confirmation source.',
+    'admin.service_settings.alipay_return_url_hint':
+      'Returns the customer to Portal after payment; it only drives the page message and does not mean payment succeeded.',
     'admin.service_settings.alipay_public_url_autosave_notice':
       'Saving Alipay settings will first save the current access URL {{baseUrl}}, then generate notify_url and return_url.',
     'admin.service_settings.alipay_requires_public_url': 'Alipay callbacks need a public access domain first. Save the Portal base URL; notify_url and return_url will be generated automatically.',
@@ -6728,7 +6734,13 @@ export const translations: Record<Locale, TranslationMap> = {
     'admin.service_settings.alipay_callback_base_missing': '尚未设置',
     'admin.service_settings.alipay_callback_base_ready': 'notify_url 和 return_url 会从这个地址自动生成。',
     'admin.service_settings.alipay_callback_urls_collapse': '收起',
-    'admin.service_settings.alipay_callback_urls_title': '回调地址',
+    'admin.service_settings.alipay_callback_urls_title': '支付宝支付回调地址',
+    'admin.service_settings.alipay_callback_console_guidance':
+      '这两个地址会随每笔网页支付请求发送给支付宝，不需要填写支付宝开放平台的“授权回调地址”。如控制台单独要求“异步通知地址”，请填左侧地址；“同步跳转地址”才填右侧地址。',
+    'admin.service_settings.alipay_notify_url_hint':
+      '支付宝服务端通知支付结果；这是唯一的支付确认依据。',
+    'admin.service_settings.alipay_return_url_hint':
+      '用户支付后返回 Portal；只用于页面提示，不代表支付成功。',
     'admin.service_settings.alipay_public_url_autosave_notice':
       '保存支付宝配置时会先保存当前访问地址 {{baseUrl}}，再自动生成 notify_url 和 return_url。',
     'admin.service_settings.alipay_requires_public_url': '支付宝回调地址需要先确定公开访问域名。请先保存门户基础地址，系统会自动生成 notify_url 和 return_url。',

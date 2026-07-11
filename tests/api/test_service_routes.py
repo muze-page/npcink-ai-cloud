@@ -700,7 +700,9 @@ def test_admin_service_settings_store_masked_cloud_runtime_config(tmp_path: Path
         json={
             "enabled": True,
             "app_id": "2026000000000099",
-            "gateway_url": "https://openapi.alipay.com/gateway.do",
+            # Legacy callers may still send this field, but operators may not
+            # redirect the real Page Pay flow away from the fixed gateway.
+            "gateway_url": "https://untrusted.example.invalid/gateway.do",
             "notify_url": "https://cloud.example.com/open/payments/alipay/notify",
             "return_url": "https://cloud.example.com/open/payments/alipay/return",
             "private_key": alipay_private_key,
@@ -710,6 +712,9 @@ def test_admin_service_settings_store_masked_cloud_runtime_config(tmp_path: Path
     )
     assert alipay_response.status_code == 200, alipay_response.text
     assert alipay_response.json()["data"]["status"] == "ready"
+    assert alipay_response.json()["data"]["config"]["gateway_url"] == (
+        "https://openapi.alipay.com/gateway.do"
+    )
     assert (
         alipay_response.json()["data"]["secrets"]["private_key"]["display"]
         == "configured"
