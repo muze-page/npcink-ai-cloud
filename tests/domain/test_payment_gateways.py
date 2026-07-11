@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import json
 from urllib.parse import parse_qs, urlsplit
 
 import pytest
@@ -10,6 +11,7 @@ from cryptography.hazmat.primitives.asymmetric import padding, rsa
 from app.domain.commercial.errors import CommercialValidationError
 from app.domain.commercial.payment_gateways import (
     PAYMENT_GATEWAY_CONTRACT_VERSION,
+    PaymentGatewayCloseRequest,
     PaymentGatewayOrderRequest,
     PaymentGatewayRefundRequest,
     get_payment_gateway_provider,
@@ -140,6 +142,7 @@ def test_real_alipay_gateway_signs_order_and_verifies_callback() -> None:
     assert query["app_id"] == ["2026000000000001"]
     assert query["method"] == ["alipay.trade.page.pay"]
     assert query["sign_type"] == ["RSA2"]
+    assert "\"timeout_express\":\"30m\"" in query["biz_content"][0]
     assert order.provider_payload["gateway_mode"] == "alipay_page_pay"
 
     callback = {
@@ -160,6 +163,60 @@ def test_real_alipay_gateway_signs_order_and_verifies_callback() -> None:
     assert payment.external_order_no == "pay_real_alipay_001"
     assert payment.provider_trade_no == "202607040000000001"
     assert payment.amount == 29.0
+
+
+def test_real_alipay_gateway_closes_order(monkeypatch: pytest.MonkeyPatch) -> None:
+    private_key, private_pem, public_pem = _alipay_test_keys()
+    config = {
+        "configured": True,
+        "enabled": True,
+        "app_id": "2026000000000001",
+        "private_key": private_pem,
+        "public_key": public_pem,
+        "gateway_url": "https://openapi.alipay.com/gateway.do",
+    }
+    captured: dict[str, object] = {}
+
+    class _Response:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict[str, object]:
+            close_payload = {"code": "10000", "msg": "Success"}
+            signed_content = json.dumps(
+                close_payload,
+                ensure_ascii=False,
+                separators=(",", ":"),
+            )
+            signature = private_key.sign(  # type: ignore[attr-defined]
+                signed_content.encode("utf-8"),
+                padding.PKCS1v15(),
+                hashes.SHA256(),
+            )
+            return {
+                "alipay_trade_close_response": close_payload,
+                "sign": base64.b64encode(signature).decode("ascii"),
+            }
+
+    def _post(url: str, *, data: dict[str, str], timeout: float) -> _Response:
+        captured.update({"url": url, "data": data, "timeout": timeout})
+        return _Response()
+
+    monkeypatch.setattr("app.domain.commercial.payment_gateways.httpx.post", _post)
+    gateway = get_payment_gateway_provider("alipay", config=config)
+    result = gateway.close_order(
+        PaymentGatewayCloseRequest(
+            provider="alipay",
+            order_id="pay_close_001",
+            external_order_no="pay_close_001",
+            metadata={},
+        )
+    )
+
+    assert result.provider_payload["order_status"] == "closed"
+    assert captured["url"] == "https://openapi.alipay.com/gateway.do"
+    assert captured["timeout"] == 10.0
+    assert captured["data"]["method"] == "alipay.trade.close"  # type: ignore[index]
 
 
 def test_real_alipay_gateway_accepts_bare_pkcs1_private_key() -> None:

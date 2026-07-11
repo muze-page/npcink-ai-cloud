@@ -48,12 +48,13 @@ def test_ops_cadence_worker_records_managed_task_audit_and_respects_intervals(
         "alert_provider_degradation",
         "provider_health_scan",
         "artifact_cleanup",
+        "payment_order_expiration",
     }
     assert all(item["outcome"] == "succeeded" for item in first_results)
 
     service = CommercialService(database_url, settings=settings)
     first_events = service.list_service_audit_events(limit=20)["items"]
-    assert len(first_events) == 8
+    assert len(first_events) == 9
 
     latest_created_at = datetime.fromisoformat(
         str(first_events[0]["created_at"]).replace("Z", "+00:00")
@@ -62,7 +63,7 @@ def test_ops_cadence_worker_records_managed_task_audit_and_respects_intervals(
     assert second_results == []
 
     third_results = run_due_tasks(settings, now=latest_created_at + timedelta(seconds=61))
-    assert len(third_results) == 8
+    assert len(third_results) == 9
     assert {item["task_id"] for item in third_results} == {
         "retention_cleanup",
         "plugin_observability_cleanup",
@@ -72,6 +73,7 @@ def test_ops_cadence_worker_records_managed_task_audit_and_respects_intervals(
         "alert_provider_degradation",
         "provider_health_scan",
         "artifact_cleanup",
+        "payment_order_expiration",
     }
 
     fourth_results = run_due_tasks(settings, now=latest_created_at + timedelta(seconds=121))
@@ -84,6 +86,7 @@ def test_ops_cadence_worker_records_managed_task_audit_and_respects_intervals(
         "alert_provider_degradation",
         "provider_health_scan",
         "artifact_cleanup",
+        "payment_order_expiration",
     }
 
     fifth_results = run_due_tasks(settings, now=latest_created_at + timedelta(seconds=301))
@@ -96,6 +99,7 @@ def test_ops_cadence_worker_records_managed_task_audit_and_respects_intervals(
         "alert_provider_degradation",
         "provider_health_scan",
         "artifact_cleanup",
+        "payment_order_expiration",
     }
 
     dispose_engine(database_url)

@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 from typing import Protocol
 from urllib.parse import urlencode
 
+import httpx
 from cryptography.exceptions import InvalidSignature, UnsupportedAlgorithm
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
@@ -33,6 +34,21 @@ class PaymentGatewayOrderResult:
     provider: str
     external_order_no: str
     checkout_url: str
+    provider_payload: dict[str, object]
+
+
+@dataclass(frozen=True)
+class PaymentGatewayCloseRequest:
+    provider: str
+    order_id: str
+    external_order_no: str
+    metadata: dict[str, object]
+
+
+@dataclass(frozen=True)
+class PaymentGatewayCloseResult:
+    provider: str
+    external_order_no: str
     provider_payload: dict[str, object]
 
 
@@ -113,6 +129,9 @@ class PaymentGatewayProvider(Protocol):
     def create_refund(self, request: PaymentGatewayRefundRequest) -> PaymentGatewayRefundResult:
         ...
 
+    def close_order(self, request: PaymentGatewayCloseRequest) -> PaymentGatewayCloseResult:
+        ...
+
     def verify_payment_callback(
         self,
         payload: dict[str, object],
@@ -179,6 +198,19 @@ class SimulatedPaymentGatewayProvider:
                 "provider": self.provider,
                 "gateway_mode": self.checkout_mode,
                 "refund_status": "requested",
+            },
+        )
+
+    def close_order(self, request: PaymentGatewayCloseRequest) -> PaymentGatewayCloseResult:
+        self._assert_provider(request.provider)
+        return PaymentGatewayCloseResult(
+            provider=self.provider,
+            external_order_no=request.external_order_no or request.order_id,
+            provider_payload={
+                "contract_version": PAYMENT_GATEWAY_CONTRACT_VERSION,
+                "provider": self.provider,
+                "gateway_mode": self.checkout_mode,
+                "order_status": "closed",
             },
         )
 
@@ -281,6 +313,7 @@ class AlipayPaymentGatewayProvider(SimulatedPaymentGatewayProvider):
             "subject": request.subject[:256],
             "product_code": _config_text(config, "payment_product_code")
             or "FAST_INSTANT_TRADE_PAY",
+            "timeout_express": "30m",
         }
         params: dict[str, str] = {
             "app_id": _config_text(config, "app_id"),
@@ -309,6 +342,7 @@ class AlipayPaymentGatewayProvider(SimulatedPaymentGatewayProvider):
                 "order_status": "created",
                 "method": "alipay.trade.page.pay",
                 "sign_type": "RSA2",
+                "timeout_express": "30m",
             },
         )
 
@@ -320,6 +354,66 @@ class AlipayPaymentGatewayProvider(SimulatedPaymentGatewayProvider):
             return super().verify_payment_callback(payload)
         self._verify_callback_signature(payload)
         return super().verify_payment_callback(payload)
+
+    def close_order(self, request: PaymentGatewayCloseRequest) -> PaymentGatewayCloseResult:
+        if not self._real_gateway_enabled():
+            return super().close_order(request)
+        self._assert_provider(request.provider)
+        config = self._require_config()
+        timestamp = datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S")
+        biz_content = {
+            "out_trade_no": request.external_order_no or request.order_id,
+        }
+        params: dict[str, str] = {
+            "app_id": _config_text(config, "app_id"),
+            "method": "alipay.trade.close",
+            "format": "JSON",
+            "charset": "utf-8",
+            "sign_type": "RSA2",
+            "timestamp": timestamp,
+            "version": "1.0",
+            "biz_content": json.dumps(biz_content, ensure_ascii=False, separators=(",", ":")),
+        }
+        params["sign"] = self._sign_params(params)
+        try:
+            response = httpx.post(
+                _config_text(config, "gateway_url"),
+                data=params,
+                timeout=10.0,
+            )
+            response.raise_for_status()
+            response_payload = response.json()
+        except (httpx.HTTPError, ValueError) as error:
+            raise CommercialValidationError(
+                "service.alipay_order_close_failed",
+                "Alipay did not confirm that the unpaid order was closed",
+            ) from error
+        if not isinstance(response_payload, dict):
+            raise CommercialValidationError(
+                "service.alipay_order_close_failed",
+                "Alipay returned an invalid order close response",
+            )
+        close_payload = response_payload.get("alipay_trade_close_response", {})
+        if not isinstance(close_payload, dict) or str(close_payload.get("code") or "") != "10000":
+            raise CommercialValidationError(
+                "service.alipay_order_close_failed",
+                "Alipay did not confirm that the unpaid order was closed",
+            )
+        self._verify_response_signature(
+            close_payload,
+            str(response_payload.get("sign") or ""),
+        )
+        return PaymentGatewayCloseResult(
+            provider=self.provider,
+            external_order_no=request.external_order_no or request.order_id,
+            provider_payload={
+                "contract_version": PAYMENT_GATEWAY_CONTRACT_VERSION,
+                "provider": self.provider,
+                "gateway_mode": "alipay_trade_close",
+                "order_status": "closed",
+                "code": "10000",
+            },
+        )
 
     def verify_refund_callback(
         self,
@@ -395,6 +489,41 @@ class AlipayPaymentGatewayProvider(SimulatedPaymentGatewayProvider):
             raise CommercialValidationError(
                 "service.payment_callback_signature_invalid",
                 "Alipay callback signature is invalid",
+            ) from error
+
+    def _verify_response_signature(
+        self,
+        response_payload: dict[str, object],
+        signature: str,
+    ) -> None:
+        if not signature:
+            raise CommercialValidationError(
+                "service.alipay_response_signature_missing",
+                "Alipay response is missing its signature",
+            )
+        config = self._require_config()
+        public_key = _load_alipay_public_key(_config_text(config, "public_key"))
+        if not isinstance(public_key, rsa.RSAPublicKey):
+            raise CommercialValidationError(
+                "service.alipay_public_key_invalid",
+                "Alipay public key must be an RSA public key",
+            )
+        signed_content = json.dumps(
+            response_payload,
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+        try:
+            public_key.verify(
+                base64.b64decode(signature),
+                signed_content.encode("utf-8"),
+                padding.PKCS1v15(),
+                hashes.SHA256(),
+            )
+        except (InvalidSignature, ValueError) as error:
+            raise CommercialValidationError(
+                "service.alipay_response_signature_invalid",
+                "Alipay response signature is invalid",
             ) from error
 
 
