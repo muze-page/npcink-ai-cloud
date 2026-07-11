@@ -272,11 +272,6 @@ bespoke second-truth systems:
     already use OTel
   - prefer extending this path rather than inventing a custom trace protocol or
     local-only telemetry format
-- bounded kill switches should go through one env-backed feature-flag seam:
-  - `NPCINK_CLOUD_FEATURE_FLAGS_JSON` is the current lightweight override path
-  - it is intentionally read-only/runtime-only and does not create a new DB
-    registry or customer-visible control plane
-  - observability summary now reports the effective flag set and override count
 - commercial semantics may borrow OpenMeter-style language for:
   - entitlements
   - current-period grants/top-ups
