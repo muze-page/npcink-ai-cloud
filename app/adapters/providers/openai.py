@@ -41,6 +41,9 @@ DEEPSEEK_MODEL_PRICING_PER_MILLION: dict[str, dict[str, float]] = {
     },
 }
 MAX_UPSTREAM_ERROR_MESSAGE_CHARS = 4000
+MAX_REQUEST_METADATA_ENTRIES = 16
+MAX_REQUEST_METADATA_KEY_CHARS = 64
+MAX_REQUEST_METADATA_VALUE_CHARS = 512
 
 
 def _truncate_upstream_error_message(value: str) -> str:
@@ -336,7 +339,7 @@ class OpenAIProviderAdapter:
 
         try:
             with self._build_client(request.timeout_ms) as client:
-                response = self._post_with_metadata_retry(client, endpoint_path, payload)
+                response = self._post_with_compatibility_retry(client, endpoint_path, payload)
                 if (
                     response.status_code == 404
                     and endpoint_path == "/responses"
@@ -344,7 +347,7 @@ class OpenAIProviderAdapter:
                 ):
                     result_request = replace(request, endpoint_variant="chat_completions")
                     endpoint_path, payload = self._build_http_request(result_request)
-                    response = self._post_with_metadata_retry(client, endpoint_path, payload)
+                    response = self._post_with_compatibility_retry(client, endpoint_path, payload)
                 response.raise_for_status()
         except httpx.TimeoutException as error:
             raise ProviderExecutionError(
@@ -368,7 +371,7 @@ class OpenAIProviderAdapter:
         latency_ms = max(1, int((time.monotonic() - started_at) * 1000))
         return self._build_http_result(result_request, response_json, latency_ms)
 
-    def _post_with_metadata_retry(
+    def _post_with_compatibility_retry(
         self,
         client: httpx.Client,
         endpoint_path: str,
@@ -382,6 +385,15 @@ class OpenAIProviderAdapter:
         ):
             retry_payload = dict(payload)
             retry_payload.pop("metadata", None)
+            response = client.post(endpoint_path, json=retry_payload)
+            payload = retry_payload
+        if (
+            response.status_code == 400
+            and payload.get("temperature") != 1
+            and self._response_requires_temperature_one(response)
+        ):
+            retry_payload = dict(payload)
+            retry_payload["temperature"] = 1
             response = client.post(endpoint_path, json=retry_payload)
         return response
 
@@ -421,6 +433,21 @@ class OpenAIProviderAdapter:
             needle in str(value).lower() and "unsupported" in str(value).lower()
             for value in values
         )
+
+    @staticmethod
+    def _response_requires_temperature_one(response: httpx.Response) -> bool:
+        try:
+            payload = response.json()
+        except ValueError:
+            return False
+        error_payload = payload.get("error") if isinstance(payload, dict) else None
+        message = (
+            error_payload.get("message")
+            if isinstance(error_payload, dict)
+            else error_payload
+        )
+        normalized = str(message or "").strip().lower()
+        return "temperature" in normalized and "only 1 is allowed" in normalized
 
     def _build_client(self, request_timeout_ms: int) -> httpx.Client:
         timeout_seconds = min(
@@ -776,8 +803,9 @@ class OpenAIProviderAdapter:
             payload["logit_bias"] = options["logit_bias"]
         if isinstance(options.get("stream_options"), dict):
             payload["stream_options"] = options["stream_options"]
-        if isinstance(options.get("metadata"), dict):
-            payload["metadata"] = options["metadata"]
+        metadata = self._normalize_request_metadata(options.get("metadata"))
+        if metadata:
+            payload["metadata"] = metadata
         if isinstance(options.get("extra"), dict):
             for key, value in options["extra"].items():
                 if isinstance(key, str) and key not in payload:
@@ -815,12 +843,39 @@ class OpenAIProviderAdapter:
             value = options.get(key)
             if isinstance(value, str) and value.strip():
                 payload[key] = value.strip()
-        if isinstance(options.get("metadata"), dict):
-            payload["metadata"] = options["metadata"]
+        metadata = self._normalize_request_metadata(options.get("metadata"))
+        if metadata:
+            payload["metadata"] = metadata
         if isinstance(options.get("extra"), dict):
             for key, value in options["extra"].items():
                 if isinstance(key, str) and key not in payload:
                     payload[key] = value
+
+    @staticmethod
+    def _normalize_request_metadata(value: object) -> dict[str, str]:
+        if not isinstance(value, dict):
+            return {}
+
+        normalized: dict[str, str] = {}
+        for raw_key, raw_value in value.items():
+            if len(normalized) >= MAX_REQUEST_METADATA_ENTRIES:
+                break
+            if not isinstance(raw_key, str):
+                continue
+            key = raw_key.strip()[:MAX_REQUEST_METADATA_KEY_CHARS]
+            if not key:
+                continue
+            if isinstance(raw_value, bool):
+                item = "true" if raw_value else "false"
+            elif isinstance(raw_value, str):
+                item = raw_value.strip()
+            elif isinstance(raw_value, (int, float)):
+                item = str(raw_value)
+            else:
+                continue
+            if item:
+                normalized[key] = item[:MAX_REQUEST_METADATA_VALUE_CHARS]
+        return normalized
 
     def _resolve_image_generation_prompt(self, options: dict[str, Any]) -> str:
         prompt = options.get("prompt")

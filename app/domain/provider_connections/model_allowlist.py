@@ -7,6 +7,7 @@ from sqlalchemy import select
 
 from app.adapters.providers.registry import (
     EXECUTION_PROVIDER_SOURCE_ROLES,
+    OPENAI_COMPATIBLE_CONNECTION_KINDS,
 )
 from app.core.config import Settings
 from app.core.db import get_session
@@ -64,6 +65,11 @@ def build_provider_model_allowlist(
             model_ids = _normalize_id_list(metadata.get("model_ids"))
         if not model_ids:
             continue
+        model_ids = _effective_connection_model_ids(
+            provider_id=provider_id,
+            config=config,
+            model_ids=model_ids,
+        )
         allowed_model_ids_by_provider.setdefault(provider_id, set()).update(model_ids)
 
     return ProviderModelAllowlist(
@@ -112,3 +118,24 @@ def _normalize_id_list(value: object) -> list[str]:
         if text and text not in normalized:
             normalized.append(text)
     return normalized
+
+
+def _effective_connection_model_ids(
+    *,
+    provider_id: str,
+    config: dict[str, Any],
+    model_ids: list[str],
+) -> list[str]:
+    kind = str(config.get("kind") or "").strip().lower()
+    if "model_namespace_prefix" in config:
+        prefix = str(config.get("model_namespace_prefix") or "").strip().strip("/")
+    elif kind in OPENAI_COMPATIBLE_CONNECTION_KINDS and provider_id != "openai":
+        prefix = provider_id
+    else:
+        prefix = ""
+    if not prefix:
+        return model_ids
+    return [
+        model_id if model_id.startswith(f"{prefix}/") else f"{prefix}/{model_id}"
+        for model_id in model_ids
+    ]
