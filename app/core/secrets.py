@@ -200,9 +200,7 @@ def encrypt_provider_connection_secret(secret: str, *, settings: Settings) -> st
         _build_fernet(
             _resolve_encryption_secret(
                 (
-                    settings.admin_session_secret,
-                    settings.portal_jwt_secret,
-                    settings.internal_auth_token,
+                    settings.service_settings_secret,
                 ),
                 error_message="provider connection secret is not configured",
             ),
@@ -222,9 +220,7 @@ def decrypt_provider_connection_secret(ciphertext: str | None, *, settings: Sett
             _build_fernet(
                 _resolve_encryption_secret(
                     (
-                        settings.admin_session_secret,
-                        settings.portal_jwt_secret,
-                        settings.internal_auth_token,
+                        settings.service_settings_secret,
                     ),
                     error_message="provider connection secret is not configured",
                 ),

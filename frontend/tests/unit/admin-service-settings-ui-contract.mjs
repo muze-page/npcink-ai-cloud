@@ -175,8 +175,20 @@ assert.match(
 
 assert.match(
   source,
-  /<details[\s\S]*alipay_callback_urls_title[\s\S]*alipay_notify_url_label[\s\S]*alipay_return_url_label[\s\S]*<\/details>/,
-  'Alipay callback URLs must be collapsed behind an explicit callback URL disclosure'
+  /alipay_callback_console_guidance[\s\S]*md:grid-cols-2[\s\S]*alipay_notify_url_label[\s\S]*alipay_return_url_label/,
+  'Alipay callback URLs must be shown side by side with clear console guidance'
+);
+
+assert.match(
+  source,
+  /alipay_notify_url_hint[\s\S]*唯一的支付确认依据[\s\S]*alipay_return_url_hint[\s\S]*不代表支付成功/,
+  'Alipay settings must distinguish the authoritative notify callback from the browser return callback'
+);
+
+assert.doesNotMatch(
+  source,
+  /value=\{alipayForm\.gateway_url\}/,
+  'the fixed Alipay gateway must not be exposed as an editable operator setting'
 );
 
 assert.match(

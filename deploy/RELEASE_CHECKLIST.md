@@ -71,6 +71,7 @@ All items in this section are `Required`.
 - [x] `NPCINK_CLOUD_ADMIN_BOOTSTRAP_TOKEN` is set to a separate production value
 - [x] `NPCINK_CLOUD_ADMIN_SESSION_SECRET` is set to a production value
 - [x] `NPCINK_CLOUD_SERVICE_SETTINGS_SECRET` is set to a stable, dedicated production value and is preserved across deploys and admin-session key rotation
+- [ ] Provider Connection credentials have been re-imported or re-saved with the dedicated service-settings key before runtime traffic is restored; ciphertext created by the retired admin/Portal/internal key selection is intentionally unreadable after this cutover
 - [x] retired `OPS_*` and runtime `OPENAI_COMPATIBLE_*` names are absent from `.env.deploy`
 - [x] QQ Open Platform uses only `/open/auth/qq/callback`
 - [x] stored service credentials decrypt after restart without admin-session, Portal JWT, or internal-token fallback

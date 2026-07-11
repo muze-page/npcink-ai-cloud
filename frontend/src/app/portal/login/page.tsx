@@ -1,8 +1,8 @@
 'use client';
 
 import Link from 'next/link';
-import { useSearchParams } from 'next/navigation';
-import React, { Suspense, useState } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
+import React, { Suspense, useEffect, useState } from 'react';
 import { LoadingFallback } from '@/components/ui/LoadingFallback';
 import {
   BackofficePageStack,
@@ -38,8 +38,9 @@ function resolvePortalLoginRedirect(value: string | null): string {
 
 function LoginFormContent() {
   const searchParams = useSearchParams();
+  const router = useRouter();
   const { t } = useLocale();
-  const { requestLoginCode, verifyLoginCode } = useSession();
+  const { isAuthenticated, isLoading, requestLoginCode, verifyLoginCode } = useSession();
   const redirectTo = resolvePortalLoginRedirect(searchParams.get('redirect'));
   const [form, setForm] = useState<FormState>({
     email: '',
@@ -49,6 +50,18 @@ function LoginFormContent() {
     status: 'idle',
     message: '',
   });
+
+  useEffect(() => {
+    if (!isLoading && isAuthenticated) {
+      router.replace(redirectTo);
+    }
+  }, [isAuthenticated, isLoading, redirectTo, router]);
+
+  // Do not reveal a login form while the existing cookie-backed session is
+  // being resolved, or while the authenticated user is redirected away.
+  if (isLoading || isAuthenticated) {
+    return <LoadingFallback />;
+  }
 
   const handleRequestCode = async (event: React.FormEvent) => {
     event.preventDefault();

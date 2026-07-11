@@ -63,6 +63,18 @@ assert.match(
 
 assert.match(
   loginSource,
+  /const \{ isAuthenticated, isLoading, requestLoginCode, verifyLoginCode \} = useSession\(\);[\s\S]*useEffect\(\(\) => \{[\s\S]*!isLoading && isAuthenticated[\s\S]*router\.replace\(redirectTo\)/,
+  'an existing Portal session must leave the login page for the safe redirect target'
+);
+
+assert.match(
+  loginSource,
+  /if \(isLoading \|\| isAuthenticated\) \{[\s\S]*return <LoadingFallback \/>;/,
+  'the login form must remain hidden while the session is resolving or redirecting'
+);
+
+assert.match(
+  loginSource,
   /await verifyLoginCode\(normalizedEmail, normalizedCode, \{ rememberMe: form\.rememberMe \}\)[\s\S]*window\.location\.replace\(redirectTo\)/,
   'Portal login page must use a full-page navigation to the requested safe redirect after cookie-backed verification'
 );

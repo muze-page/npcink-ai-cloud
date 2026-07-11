@@ -154,7 +154,6 @@ class RuntimeRequest:
     policy: dict[str, Any] = field(default_factory=dict)
     idempotency_key: str | None = None
     trace_id: str | None = None
-    allow_legacy_callback_url: bool = True
 
     def __post_init__(self) -> None:
         self.input_payload = self.input_payload if isinstance(self.input_payload, dict) else {}

@@ -1835,6 +1835,26 @@ class CommercialRepository:
             statement = statement.limit(limit)
         return list(self.session.scalars(statement))
 
+    def count_subscription_orders(
+        self,
+        *,
+        account_id: str,
+        statuses: set[str],
+    ) -> int:
+        if not statuses:
+            return 0
+        return int(
+            self.session.scalar(
+                select(func.count())
+                .select_from(SubscriptionOrder)
+                .where(
+                    SubscriptionOrder.account_id == account_id,
+                    SubscriptionOrder.status.in_(statuses),
+                )
+            )
+            or 0
+        )
+
     def create_subscription_order(
         self,
         *,

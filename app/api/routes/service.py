@@ -356,7 +356,6 @@ class PortalEmailServiceSettingsPayload(BaseModel):
 class AlipayPaymentServiceSettingsPayload(BaseModel):
     enabled: bool = True
     app_id: str = Field(default="", max_length=191)
-    gateway_url: str = Field(default="https://openapi.alipay.com/gateway.do", max_length=500)
     notify_url: str = Field(default="", max_length=500)
     return_url: str = Field(default="", max_length=500)
     private_key: str | None = Field(default=None, max_length=20000)
