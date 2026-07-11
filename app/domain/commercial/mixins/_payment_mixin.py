@@ -48,11 +48,19 @@ from app.domain.commercial.payment_gateways import (
     get_payment_gateway_provider,
     normalize_payment_gateway_provider,
 )
+from app.domain.commercial.payment_subjects import build_credit_pack_payment_subject
 from app.domain.service_settings import resolve_alipay_payment_runtime_config
 
 SERVICE_SETTING_CREDIT_PACK_CATALOG = "commercial_credit_pack_catalog"
 SERVICE_SETTING_KIND_COMMERCIAL = "commercial"
 PAYMENT_ORDER_PENDING_TTL = timedelta(minutes=30)
+PAYMENT_ORDER_PORTAL_CANCELED_VISIBILITY = timedelta(days=7)
+PAYMENT_ORDER_STATUS_GROUPS: dict[str, tuple[str, ...] | None] = {
+    "all": None,
+    "pending": (PAYMENT_ORDER_STATUS_PENDING,),
+    "paid": (PAYMENT_ORDER_STATUS_PAID,),
+    "closed": (PAYMENT_ORDER_STATUS_CANCELED, PAYMENT_ORDER_STATUS_REFUNDED),
+}
 
 
 class CommercialServicePaymentMixin(CommercialServiceAuditMixin):
@@ -303,6 +311,7 @@ class CommercialServicePaymentMixin(CommercialServiceAuditMixin):
         account_id: str,
         *,
         site_id: str | None = None,
+        status_group: str = "all",
         limit: int = 20,
         offset: int = 0,
     ) -> dict[str, object]:
@@ -310,6 +319,12 @@ class CommercialServicePaymentMixin(CommercialServiceAuditMixin):
         normalized_limit = min(50, max(1, int(limit or 20)))
         normalized_offset = max(0, int(offset or 0))
         normalized_site_id = str(site_id or "").strip() or None
+        normalized_status_group = str(status_group or "all").strip().lower()
+        if normalized_status_group not in PAYMENT_ORDER_STATUS_GROUPS:
+            raise CommercialValidationError(
+                "service.payment_order_status_group_invalid",
+                "payment order status group must be all, pending, paid, or closed",
+            )
         with get_session(service.database_url) as session:
             repository = CommercialRepository(session)
             if repository.get_account(account_id) is None:
@@ -317,25 +332,47 @@ class CommercialServicePaymentMixin(CommercialServiceAuditMixin):
                     "service.account_not_found",
                     f"account '{account_id}' was not found",
                 )
+            current_time = service.now_factory()
             if self._cancel_expired_pending_payment_orders_in_session(
                 repository,
                 account_id=account_id,
                 site_id=normalized_site_id,
-                now=service.now_factory(),
+                now=current_time,
             ):
                 session.commit()
-            total = repository.count_payment_orders(
+            canceled_visible_after = current_time - PAYMENT_ORDER_PORTAL_CANCELED_VISIBILITY
+            statuses = PAYMENT_ORDER_STATUS_GROUPS[normalized_status_group]
+            status_counts = repository.count_payment_orders_by_status(
                 account_id=account_id,
                 site_id=normalized_site_id,
+                canceled_visible_after=canceled_visible_after,
             )
+            counts = {
+                "all": sum(status_counts.values()),
+                "pending": status_counts.get(PAYMENT_ORDER_STATUS_PENDING, 0),
+                "paid": status_counts.get(PAYMENT_ORDER_STATUS_PAID, 0),
+                "closed": status_counts.get(PAYMENT_ORDER_STATUS_CANCELED, 0)
+                + status_counts.get(PAYMENT_ORDER_STATUS_REFUNDED, 0),
+            }
+            total = counts[normalized_status_group]
             orders = repository.list_payment_orders(
                 account_id=account_id,
                 site_id=normalized_site_id,
+                statuses=statuses,
+                canceled_visible_after=canceled_visible_after,
                 limit=normalized_limit,
                 offset=normalized_offset,
             )
             return {
                 "generated_at": service._serialize_datetime(service.now_factory()),
+                "status_group": normalized_status_group,
+                "counts": counts,
+                "visibility": {
+                    "canceled_orders_visible_days": int(
+                        PAYMENT_ORDER_PORTAL_CANCELED_VISIBILITY.total_seconds() // 86400
+                    ),
+                    "database_records_deleted": False,
+                },
                 "pagination": {
                     "limit": normalized_limit,
                     "offset": normalized_offset,
@@ -535,15 +572,17 @@ class CommercialServicePaymentMixin(CommercialServiceAuditMixin):
                 normalized_provider,
                 config=self._payment_gateway_runtime_config(normalized_provider),
             )
+            payment_subject = build_credit_pack_payment_subject(
+                pack_id=str(pack.get("pack_id") or pack_id),
+                ai_credits=pack_ai_credits,
+            )
             gateway_order = gateway.create_order(
                 PaymentGatewayOrderRequest(
                     provider=normalized_provider,
                     order_id=order_id,
                     amount=round(pack_amount, 6),
                     currency=str(pack.get("currency") or "CNY"),
-                    subject=(
-                        f"{str(pack.get('label') or 'Credit pack')} ({pack_ai_credits} AI credits)"
-                    ),
+                    subject=payment_subject,
                     metadata=metadata,
                 )
             )
@@ -560,9 +599,7 @@ class CommercialServicePaymentMixin(CommercialServiceAuditMixin):
                 status=PAYMENT_ORDER_STATUS_PENDING,
                 amount=round(pack_amount, 6),
                 currency=str(pack.get("currency") or "CNY"),
-                subject=(
-                    f"{str(pack.get('label') or 'Credit pack')} ({pack_ai_credits} AI credits)"
-                ),
+                subject=payment_subject,
                 checkout_url=gateway_order.checkout_url or None,
                 refund_window_end_at=now + timedelta(days=14),
                 idempotency_key=idempotency_key or None,

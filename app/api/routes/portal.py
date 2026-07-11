@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import secrets
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import parse_qsl, urlencode
 
 import httpx
@@ -1999,6 +1999,9 @@ async def create_portal_account_credit_pack_order(
 @router.get("/account/payment-orders")
 async def list_portal_account_payment_orders(
     request: Request,
+    status_group: Literal["all", "pending", "paid", "closed"] = Query(  # noqa: B008
+        default="all"
+    ),
     limit: int = Query(default=10, ge=1, le=50),
     offset: int = Query(default=0, ge=0),
 ) -> Any:
@@ -2018,6 +2021,7 @@ async def list_portal_account_payment_orders(
     try:
         result = _get_commercial_service(request).list_account_payment_orders(
             account_id,
+            status_group=status_group,
             limit=limit,
             offset=offset,
         )
@@ -3091,6 +3095,9 @@ async def list_portal_site_credit_packs(request: Request, site_id: str) -> Any:
 async def list_portal_site_payment_orders(
     request: Request,
     site_id: str,
+    status_group: Literal["all", "pending", "paid", "closed"] = Query(  # noqa: B008
+        default="all"
+    ),
     limit: int = Query(default=10, ge=1, le=50),
     offset: int = Query(default=0, ge=0),
 ) -> Any:
@@ -3114,6 +3121,7 @@ async def list_portal_site_payment_orders(
         result = _get_commercial_service(request).list_account_payment_orders(
             str(access.get("account_id") or ""),
             site_id=site_id,
+            status_group=status_group,
             limit=limit,
             offset=offset,
         )

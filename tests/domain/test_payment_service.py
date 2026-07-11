@@ -546,6 +546,7 @@ def test_credit_pack_payment_success_grants_ai_credits_once(tmp_path: Path) -> N
 
     assert order["status"] == PAYMENT_ORDER_STATUS_PENDING
     assert order["provider"] == "wechat_pay"
+    assert order["subject"] == "Npcink AI Cloud 小积分包（10,000 AI 积分）"
     assert order["metadata"]["payment_gateway"]["provider"] == "wechat_pay"
     assert order["purchase_kind"] == "credit_pack"
     assert order["credit_pack"]["pack_id"] == "pack_small"
@@ -730,6 +731,65 @@ def test_pending_payment_orders_expire_before_late_payment_confirmation(tmp_path
     dispose_engine(database_url)
 
 
+def test_portal_payment_order_groups_hide_old_canceled_orders_without_deleting(
+    tmp_path: Path,
+) -> None:
+    database_url = _sqlite_url(tmp_path)
+    init_schema(database_url)
+    service = _service(database_url)
+    _seed_account_and_plan(service)
+
+    created = [
+        service.create_payment_order(
+            account_id="acct_pay",
+            plan_id="plan_pro",
+            plan_version_id="plan_pro_v1",
+            amount=15.0 + index,
+            subject=f"Payment order {index}",
+            audit_context=_audit(f"payment-order-group-{index}"),
+        )
+        for index in range(4)
+    ]
+    now = datetime.now(UTC)
+    with get_session(database_url) as session:
+        paid = session.get(PaymentOrder, str(created[1]["order_id"]))
+        recent_canceled = session.get(PaymentOrder, str(created[2]["order_id"]))
+        old_canceled = session.get(PaymentOrder, str(created[3]["order_id"]))
+        assert paid is not None
+        assert recent_canceled is not None
+        assert old_canceled is not None
+        paid.status = PAYMENT_ORDER_STATUS_PAID
+        paid.paid_at = now
+        recent_canceled.status = PAYMENT_ORDER_STATUS_CANCELED
+        recent_canceled.canceled_at = now - timedelta(days=1)
+        old_canceled.status = PAYMENT_ORDER_STATUS_CANCELED
+        old_canceled.canceled_at = now - timedelta(days=8)
+        session.commit()
+
+    all_orders = service.list_account_payment_orders("acct_pay", status_group="all")
+    pending_orders = service.list_account_payment_orders("acct_pay", status_group="pending")
+    paid_orders = service.list_account_payment_orders("acct_pay", status_group="paid")
+    closed_orders = service.list_account_payment_orders("acct_pay", status_group="closed")
+
+    assert all_orders["counts"] == {"all": 3, "pending": 1, "paid": 1, "closed": 1}
+    assert all_orders["pagination"]["total"] == 3
+    assert all_orders["visibility"] == {
+        "canceled_orders_visible_days": 7,
+        "database_records_deleted": False,
+    }
+    assert [item["order_id"] for item in pending_orders["items"]] == [
+        created[0]["order_id"]
+    ]
+    assert [item["order_id"] for item in paid_orders["items"]] == [created[1]["order_id"]]
+    assert [item["order_id"] for item in closed_orders["items"]] == [
+        created[2]["order_id"]
+    ]
+    with get_session(database_url) as session:
+        assert len(list(session.scalars(select(PaymentOrder)))) == 4
+
+    dispose_engine(database_url)
+
+
 def test_payment_order_expiration_job_cancels_due_orders(tmp_path: Path) -> None:
     database_url = _sqlite_url(tmp_path)
     init_schema(database_url)
@@ -810,6 +870,7 @@ def test_admin_credit_pack_catalog_override_changes_future_orders(tmp_path: Path
     )
     assert order["credit_pack"]["label"] == "Starter annual pack"
     assert order["credit_pack"]["ai_credits"] == 12000
+    assert order["subject"] == "Npcink AI Cloud 小积分包（12,000 AI 积分）"
     assert order["amount"] == 119.0
 
     dispose_engine(database_url)

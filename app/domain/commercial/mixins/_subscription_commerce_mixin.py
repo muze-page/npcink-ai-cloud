@@ -55,6 +55,7 @@ from app.domain.commercial.payment_gateways import (
     PaymentGatewayOrderRequest,
     get_payment_gateway_provider,
 )
+from app.domain.commercial.payment_subjects import build_subscription_payment_subject
 
 PAID_TIER_ORDER = {"free": 0, "plus": 1, "pro": 2, "agency": 3}
 STANDARD_PLAN_OFFERS: dict[str, dict[str, object]] = {
@@ -311,7 +312,7 @@ class CommercialServiceSubscriptionCommerceMixin(CommercialServiceAuditMixin):
                 normalized_provider,
                 config=service._payment_gateway_runtime_config(normalized_provider),
             )
-            subject = f"Npcink AI Cloud {target_tier.title()} monthly"
+            subject = build_subscription_payment_subject(tier_id=target_tier)
             gateway_order = gateway.create_order(
                 PaymentGatewayOrderRequest(
                     provider=normalized_provider,

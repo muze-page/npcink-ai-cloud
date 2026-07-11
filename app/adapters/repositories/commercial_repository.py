@@ -15,6 +15,7 @@ from app.core.models import (
     CREDIT_LEDGER_EVENT_CONSUME,
     IDENTITY_PROVIDER_BINDING_STATUS_ACTIVE,
     IDENTITY_PROVIDER_BINDING_STATUS_REVOKED,
+    PAYMENT_ORDER_STATUS_CANCELED,
     PAYMENT_ORDER_STATUS_PENDING,
     PORTAL_LOGIN_CODE_STATUS_PENDING,
     PORTAL_OAUTH_STATE_STATUS_PENDING,
@@ -1720,12 +1721,24 @@ class CommercialRepository:
         *,
         account_id: str,
         site_id: str | None = None,
+        statuses: tuple[str, ...] | None = None,
+        canceled_visible_after: datetime | None = None,
         limit: int | None = None,
         offset: int = 0,
     ) -> list[PaymentOrder]:
         statement = select(PaymentOrder).where(PaymentOrder.account_id == account_id)
         if site_id:
             statement = statement.where(PaymentOrder.site_id == site_id)
+        if statuses is not None:
+            statement = statement.where(PaymentOrder.status.in_(statuses))
+        if canceled_visible_after is not None:
+            statement = statement.where(
+                or_(
+                    PaymentOrder.status != PAYMENT_ORDER_STATUS_CANCELED,
+                    PaymentOrder.canceled_at.is_(None),
+                    PaymentOrder.canceled_at >= canceled_visible_after,
+                )
+            )
         statement = statement.order_by(PaymentOrder.created_at.desc(), PaymentOrder.order_id.desc())
         if offset > 0:
             statement = statement.offset(offset)
@@ -1750,18 +1763,29 @@ class CommercialRepository:
             statement = statement.where(PaymentOrder.site_id == site_id)
         return list(self.session.scalars(statement))
 
-    def count_payment_orders(
+    def count_payment_orders_by_status(
         self,
         *,
         account_id: str,
         site_id: str | None = None,
-    ) -> int:
-        statement = select(func.count(PaymentOrder.order_id)).where(
-            PaymentOrder.account_id == account_id
+        canceled_visible_after: datetime | None = None,
+    ) -> dict[str, int]:
+        statement = (
+            select(PaymentOrder.status, func.count(PaymentOrder.order_id))
+            .where(PaymentOrder.account_id == account_id)
+            .group_by(PaymentOrder.status)
         )
         if site_id:
             statement = statement.where(PaymentOrder.site_id == site_id)
-        return int(self.session.scalar(statement) or 0)
+        if canceled_visible_after is not None:
+            statement = statement.where(
+                or_(
+                    PaymentOrder.status != PAYMENT_ORDER_STATUS_CANCELED,
+                    PaymentOrder.canceled_at.is_(None),
+                    PaymentOrder.canceled_at >= canceled_visible_after,
+                )
+            )
+        return {str(status): int(count or 0) for status, count in self.session.execute(statement)}
 
     def create_payment_order(
         self,

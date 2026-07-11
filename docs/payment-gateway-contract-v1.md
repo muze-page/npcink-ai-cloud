@@ -67,3 +67,29 @@ WeChat Pay remains simulated/reserved in this phase.
 Real provider integration must stay behind this contract. It must not change
 the payment order, credit pack, subscription, entitlement, or credit ledger
 state machine.
+
+## Customer-facing Payment Subjects
+
+New payment orders use a stable provider-facing subject that is separate from
+editable internal catalog labels. The current Alipay-facing convention is:
+
+- `Npcink AI Cloud 小积分包（10,000 AI 积分）` and the equivalent medium or
+  large credit-pack descriptor using the purchase-time credit snapshot;
+- `Npcink AI Cloud Plus 月度套餐` and the equivalent paid-tier descriptor for
+  monthly subscription orders.
+
+The same subject snapshot must be sent to the payment provider and persisted on
+the Cloud payment order. Existing orders keep their original subject and are
+not rewritten when this convention or an internal catalog label changes.
+
+## Portal Order History
+
+The Portal payment-order list is a filtered customer view, not the accounting
+retention source. It supports `all`, `pending`, `paid`, and `closed` status
+groups with independent pagination and server-computed counts.
+
+Canceled and expired unpaid orders remain visible to the customer for 7 days.
+After that window they are hidden from Portal list responses, but the database
+record, payment evidence, audit trail, subscription relationship, and admin
+history are not deleted. Paid and refunded orders are not subject to this
+7-day customer-visibility cutoff.

@@ -3502,6 +3502,17 @@ def test_portal_user_can_start_pro_trial_and_create_monthly_order(
     assert payment_orders_response.status_code == 200, payment_orders_response.text
     payment_orders_data = payment_orders_response.json()["data"]
     assert payment_orders_data["account_id"] == account_id
+    assert payment_orders_data["status_group"] == "all"
+    assert payment_orders_data["counts"] == {
+        "all": 1,
+        "pending": 1,
+        "paid": 0,
+        "closed": 0,
+    }
+    assert payment_orders_data["visibility"] == {
+        "canceled_orders_visible_days": 7,
+        "database_records_deleted": False,
+    }
     assert payment_orders_data["pagination"]["total"] == 1
     listed_order = payment_orders_data["items"][0]
     assert listed_order["order_id"] == order["order_id"]
@@ -3525,6 +3536,22 @@ def test_portal_user_can_start_pro_trial_and_create_monthly_order(
     assert canceled_order["status"] == "canceled"
     assert canceled_order["checkout_url"] == ""
     assert canceled_order["metadata"]["cancellation_reason"] == "customer_canceled"
+
+    closed_orders_response = client.get(
+        "/portal/v1/account/payment-orders?status_group=closed&limit=10",
+        headers=build_portal_headers(principal_id=str(registration["principal_id"])),
+    )
+    assert closed_orders_response.status_code == 200, closed_orders_response.text
+    closed_orders_data = closed_orders_response.json()["data"]
+    assert closed_orders_data["status_group"] == "closed"
+    assert closed_orders_data["pagination"]["total"] == 1
+    assert closed_orders_data["counts"] == {
+        "all": 1,
+        "pending": 0,
+        "paid": 0,
+        "closed": 1,
+    }
+    assert closed_orders_data["items"][0]["order_id"] == order["order_id"]
 
     with get_session(database_url) as session:
         subscriptions = list(

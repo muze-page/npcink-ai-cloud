@@ -86,6 +86,8 @@ def _pay(
         audit_context=_audit(f"{key}-create"),
     )
     order = created["order"]
+    expected_tier = "Plus" if offer_id.startswith("plus_") else "Pro"
+    assert order["subject"] == f"Npcink AI Cloud {expected_tier} 月度套餐"
     return service.mark_payment_order_paid(
         order_id=str(order["order_id"]),
         provider_event_id=f"{key}-paid",
