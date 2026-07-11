@@ -17,6 +17,7 @@ LOGIN_CODE="${NPCINK_CLOUD_PORTAL_LOGIN_CODE:-}"
 RUNTIME_SITE_ID="${NPCINK_CLOUD_RELEASE_SITE_ID:-}"
 RUNTIME_KEY_ID="${NPCINK_CLOUD_RELEASE_KEY_ID:-}"
 RUNTIME_SECRET="${NPCINK_CLOUD_RELEASE_KEY_SECRET:-}"
+PERSISTED_PORTAL_COOKIE_JAR="${NPCINK_CLOUD_PORTAL_COOKIE_JAR:-}"
 
 while [ "$#" -gt 0 ]; do
 	case "$1" in
@@ -162,7 +163,24 @@ assert_body_contains() {
 }
 
 TMP_DIR="$(mktemp -d)"
-PORTAL_COOKIE_JAR="${TMP_DIR}/portal-cookies.txt"
+if [ -n "${PERSISTED_PORTAL_COOKIE_JAR}" ]; then
+	if [ -L "${PERSISTED_PORTAL_COOKIE_JAR}" ]; then
+		fail "NPCINK_CLOUD_PORTAL_COOKIE_JAR must not be a symbolic link"
+	fi
+	if [ -e "${PERSISTED_PORTAL_COOKIE_JAR}" ] && [ ! -f "${PERSISTED_PORTAL_COOKIE_JAR}" ]; then
+		fail "NPCINK_CLOUD_PORTAL_COOKIE_JAR must be a regular file"
+	fi
+	PORTAL_COOKIE_PARENT="$(dirname "${PERSISTED_PORTAL_COOKIE_JAR}")"
+	if [ ! -d "${PORTAL_COOKIE_PARENT}" ]; then
+		fail "NPCINK_CLOUD_PORTAL_COOKIE_JAR parent directory does not exist"
+	fi
+	umask 077
+	touch "${PERSISTED_PORTAL_COOKIE_JAR}"
+	chmod 600 "${PERSISTED_PORTAL_COOKIE_JAR}"
+	PORTAL_COOKIE_JAR="${PERSISTED_PORTAL_COOKIE_JAR}"
+else
+	PORTAL_COOKIE_JAR="${TMP_DIR}/portal-cookies.txt"
+fi
 ADMIN_COOKIE_JAR="${TMP_DIR}/admin-cookies.txt"
 trap 'rm -rf "${TMP_DIR}"' EXIT
 
@@ -266,7 +284,17 @@ assert_status "${HTTP_STATUS}" "200" "home page should load"
 http_request "GET" "${BASE_URL%/}/portal/login" "${PORTAL_COOKIE_JAR}"
 assert_status "${HTTP_STATUS}" "200" "portal login page should load"
 
-if [ -z "${LOGIN_CODE}" ]; then
+PORTAL_SESSION_REUSED="0"
+if [ -n "${PERSISTED_PORTAL_COOKIE_JAR}" ] && [ -s "${PORTAL_COOKIE_JAR}" ]; then
+	http_request "GET" "${BASE_URL%/}/portal/v1/session" "${PORTAL_COOKIE_JAR}"
+	if [ "${HTTP_STATUS}" = "200" ] \
+		&& json_read_path "${HTTP_BODY}" "data.principal_id" >/dev/null 2>&1; then
+		PORTAL_SESSION_REUSED="1"
+		ok "Reusing persisted Portal session without requesting an email code"
+	fi
+fi
+
+if [ "${PORTAL_SESSION_REUSED}" = "0" ] && [ -z "${LOGIN_CODE}" ]; then
 	REQUEST_BODY="$(MEMBER_EMAIL_VALUE="${MEMBER_EMAIL}" python3 - <<'PY'
 import json
 import os
@@ -290,23 +318,27 @@ PY
 		fail "portal login code is required to continue; request delivery=${DELIVERY_MODE:-unknown}. Pass --login-code when using real SMTP delivery."
 	fi
 else
-	ok "Using pre-issued Portal login code without requesting a replacement"
+	if [ "${PORTAL_SESSION_REUSED}" = "0" ]; then
+		ok "Using pre-issued Portal login code without requesting a replacement"
+	fi
 fi
 
-VERIFY_BODY="$(MEMBER_EMAIL_VALUE="${MEMBER_EMAIL}" LOGIN_CODE_VALUE="${LOGIN_CODE}" python3 - <<'PY'
+if [ "${PORTAL_SESSION_REUSED}" = "0" ]; then
+	VERIFY_BODY="$(MEMBER_EMAIL_VALUE="${MEMBER_EMAIL}" LOGIN_CODE_VALUE="${LOGIN_CODE}" python3 - <<'PY'
 import json
 import os
 print(json.dumps({"email": os.environ["MEMBER_EMAIL_VALUE"], "code": os.environ["LOGIN_CODE_VALUE"]}, ensure_ascii=True))
 PY
 )"
-http_request \
-	"POST" \
-	"${BASE_URL%/}/portal/v1/auth/code/verify" \
-	"${PORTAL_COOKIE_JAR}" \
-	"${VERIFY_BODY}" \
-	"Origin: ${BASE_URL%/}"
-assert_status "${HTTP_STATUS}" "200" "portal login code verify should succeed"
-assert_json_non_empty "${HTTP_BODY}" "data.principal_id" "portal session should include principal_id"
+	http_request \
+		"POST" \
+		"${BASE_URL%/}/portal/v1/auth/code/verify" \
+		"${PORTAL_COOKIE_JAR}" \
+		"${VERIFY_BODY}" \
+		"Origin: ${BASE_URL%/}"
+	assert_status "${HTTP_STATUS}" "200" "portal login code verify should succeed"
+	assert_json_non_empty "${HTTP_BODY}" "data.principal_id" "portal session should include principal_id"
+fi
 
 http_request "GET" "${BASE_URL%/}/portal/v1/session" "${PORTAL_COOKIE_JAR}"
 assert_status "${HTTP_STATUS}" "200" "portal session should load"

@@ -605,11 +605,17 @@ def test_release_gate_documents_current_cloud_blockers() -> None:
     assert "NPCINK_CLOUD_RELEASE_SITE_ID" in release_smoke_workflow
     assert "NPCINK_CLOUD_RELEASE_KEY_ID" in release_smoke_workflow
     assert "NPCINK_CLOUD_RELEASE_KEY_SECRET" in release_smoke_workflow
+    assert "Verify smoke tools" in release_smoke_workflow
+    assert "make bootstrap-dev" not in release_smoke_workflow
     assert "--require-smoke-env" in release_smoke_workflow
     assert "--run-release-smoke" in release_smoke_workflow
     assert "--require-alipay-enabled" in release_smoke_workflow
     assert 'if [ -z "${LOGIN_CODE}" ]; then' in release_smoke_script
     assert "Using pre-issued Portal login code" in release_smoke_script
+    assert "Reusing persisted Portal session" in release_smoke_script
+    assert "NPCINK_CLOUD_PORTAL_COOKIE_JAR" in release_smoke_script
+    assert "NPCINK_CLOUD_PORTAL_COOKIE_JAR" in release_smoke_env_example
+    assert "Do not persist this file in CI artifacts" in release_smoke_env_example
     assert "skips requesting a replacement code" in release_smoke_env_example
     assert release_smoke_script.count('"Origin: ${BASE_URL%/}"') >= 3
     assert release_smoke_script.count('"data.principal_id"') >= 3
