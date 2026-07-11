@@ -5626,7 +5626,11 @@ class RuntimeService:
                 "Generate one SEO meta description, 120 to 155 characters. Return "
                 "only the description."
             ),
-            "title_generation": "Generate exactly one concise title. Return only the title text.",
+            "title_generation": (
+                "Generate exactly one concise title faithful to the main topic. For Chinese, "
+                "normally use no more than 36 characters; for other languages, normally use "
+                "no more than 12 words. Return only the title text."
+            ),
         }.get(task, "Return only the requested suggestion. Do not explain.")
 
         fragments = [task_instruction]
@@ -5637,7 +5641,8 @@ class RuntimeService:
         fragments.append(
             "Output contract: return only the final value for this one task. Do not "
             "include introductions, headings, Markdown, bullet lists, numbered lists, "
-            "multiple options, labels, explanations, or offers to continue."
+            "multiple options, labels, explanations, or offers to continue. Never add a "
+            "name, number, claim, or event that is absent from the scene input."
         )
         if system_instruction:
             fragments.append(system_instruction)
@@ -5810,7 +5815,16 @@ class RuntimeService:
                 reason="no_usable_references",
             )
         next_input = dict(provider_input)
-        next_input["input"] = f"{str(provider_input.get('input') or '')}\n\n{reference_block}"
+        base_input = str(provider_input.get("input") or "")
+        scene_marker = "\n\nScene input:\n"
+        if scene_marker in base_input:
+            next_input["input"] = base_input.replace(
+                scene_marker,
+                f"\n\n{reference_block}{scene_marker}",
+                1,
+            )
+        else:
+            next_input["input"] = f"{reference_block}\n\n{base_input}"
         next_input = self._wordpress_ai_generation_context_status(
             next_input,
             mode=mode,

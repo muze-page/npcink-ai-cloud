@@ -607,6 +607,10 @@ def test_wordpress_ai_connector_title_generation_uses_hidden_site_title_style(
     assert provider_input["input"].count("用云端能力增强 WordPress 编辑体验") == 1
     assert "This chunk must not be sent" not in provider_input["input"]
     assert "generation_context.v1" in provider_input["input"]
+    assert provider_input["input"].index("generation_context.v1") < provider_input["input"].index(
+        "Scene input:"
+    )
+    assert "Never add a name, number, claim, or event" in provider_input["input"]
     assert provider_input["metadata"]["site_knowledge_reference"] == "applied"
     assert provider_input["metadata"]["site_knowledge_reference_count"] == 2
     assert provider_input["metadata"]["generation_context_status"] == "applied"
