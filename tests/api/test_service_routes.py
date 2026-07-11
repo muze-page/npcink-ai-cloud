@@ -420,6 +420,12 @@ def test_admin_portal_users_lists_self_registered_users_and_disables_access(
     list_data = list_response.json()["data"]
     items = list_data["items"]
     assert list_data["total"] == 1
+    assert list_data["pagination"] == {
+        "offset": 0,
+        "limit": 100,
+        "total": 1,
+        "has_more": False,
+    }
     assert items[0]["principal_id"] == principal_id
     assert items[0]["email"] == email
     assert items[0]["source"] == "portal_self_registration"
@@ -427,6 +433,20 @@ def test_admin_portal_users_lists_self_registered_users_and_disables_access(
     assert items[0]["plan_id"] == "free"
     assert items[0]["qq_bound"] is False
     assert items[0]["site_id"] == "site_admin-portal-user-example-com"
+
+    empty_page_response = client.get(
+        "/internal/service/admin/portal-users?q=admin-portal-user&offset=1&limit=1",
+        headers=build_internal_headers(),
+    )
+    assert empty_page_response.status_code == 200, empty_page_response.text
+    empty_page = empty_page_response.json()["data"]
+    assert empty_page["items"] == []
+    assert empty_page["pagination"] == {
+        "offset": 1,
+        "limit": 1,
+        "total": 1,
+        "has_more": False,
+    }
 
     disable_response = client.post(
         f"/internal/service/admin/portal-users/{principal_id}/disable",
@@ -4783,7 +4803,10 @@ def test_service_routes_admin_read_facade(tmp_path: Path) -> None:
     assert coverage_item["evidence"]["billing_snapshot_status"]["status"] == "fresh"
 
     assert accounts_response.status_code == 200
-    accounts = accounts_response.json()["data"]["items"]
+    accounts_data = accounts_response.json()["data"]
+    accounts = accounts_data["items"]
+    assert accounts_data["pagination"]["total"] == 1
+    assert accounts_data["pagination"]["has_more"] is False
     assert len(accounts) == 1
     assert accounts[0]["account"]["account_id"] == "acct_admin"
     assert accounts[0]["site_count"] == 1
@@ -4871,7 +4894,11 @@ def test_service_routes_admin_read_facade(tmp_path: Path) -> None:
     assert site_detail["runtime_operator_explanations"]
 
     assert subscriptions_response.status_code == 200
-    subscriptions = subscriptions_response.json()["data"]["items"]
+    subscriptions_data = subscriptions_response.json()["data"]
+    subscriptions = subscriptions_data["items"]
+    assert subscriptions_data["pagination"]["total"] >= 1
+    assert subscriptions_data["pagination"]["offset"] == 0
+    assert subscriptions_data["pagination"]["has_more"] is False
     assert len(subscriptions) >= 1
     assert any(item["subscription"]["subscription_id"] == "sub_admin" for item in subscriptions)
     assert all(

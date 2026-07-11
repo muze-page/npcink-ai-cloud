@@ -5,6 +5,7 @@ import { frontendRoot } from './_paths.mjs';
 
 const root = frontendRoot;
 const accountsSource = readFileSync(resolve(root, 'src/app/admin/accounts/page.tsx'), 'utf8');
+const subscriptionsSource = readFileSync(resolve(root, 'src/app/admin/subscriptions/page.tsx'), 'utf8');
 const plansSource = readFileSync(resolve(root, 'src/app/admin/plans/page.tsx'), 'utf8');
 const creditPacksSource = readFileSync(resolve(root, 'src/app/admin/credit-packs/page.tsx'), 'utf8');
 const serviceSettingsSource = readFileSync(resolve(root, 'src/app/admin/service-settings/page.tsx'), 'utf8');
@@ -33,6 +34,17 @@ assert.doesNotMatch(
   /setActionError\([\s\S]*window\.location\.reload\(\)/,
   'Account mutation failures must not force a full-page reload recovery path'
 );
+
+for (const [surface, source] of [
+  ['accounts', accountsSource],
+  ['subscriptions', subscriptionsSource],
+]) {
+  assert.match(
+    source,
+    /params\.set\('limit'[\s\S]*params\.set\('offset'[\s\S]*<ListPagination/,
+    `${surface} directory must expose all filtered records through pagination`
+  );
+}
 
 for (const [surface, source] of [
   ['packages', plansSource],

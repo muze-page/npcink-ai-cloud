@@ -946,16 +946,26 @@ class CommercialServiceBillingMixin(CommercialServiceAuditMixin):
         account_id: str | None = None,
         plan_id: str | None = None,
         expires_before: datetime | None = None,
+        offset: int = 0,
         limit: int = 100,
     ) -> dict[str, object]:
+        normalized_offset = max(0, int(offset or 0))
+        resolved_limit = max(1, int(limit or 100))
         with get_session(self.database_url) as session:
             repository = CommercialRepository(session)
+            total = repository.count_subscriptions(
+                status=status,
+                account_id=account_id,
+                plan_id=plan_id,
+                current_period_end_before=expires_before,
+            )
             subscriptions = repository.list_subscriptions(
                 status=status,
                 account_id=account_id,
                 plan_id=plan_id,
                 current_period_end_before=expires_before,
-                limit=limit,
+                offset=normalized_offset,
+                limit=resolved_limit,
             )
             account_ids = [subscription.account_id for subscription in subscriptions]
             accounts = {
@@ -1010,9 +1020,17 @@ class CommercialServiceBillingMixin(CommercialServiceAuditMixin):
                 "account_id": account_id or "",
                 "plan_id": plan_id or "",
                 "expires_before": self._serialize_datetime(expires_before),
-                "limit": limit,
+                "offset": normalized_offset,
+                "limit": resolved_limit,
             },
             "items": items,
+            "total": total,
+            "pagination": {
+                "offset": normalized_offset,
+                "limit": resolved_limit,
+                "total": total,
+                "has_more": normalized_offset + len(items) < total,
+            },
         }
 
     def get_admin_subscription(self, subscription_id: str) -> dict[str, object]:

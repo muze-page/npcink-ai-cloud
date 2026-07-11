@@ -6,6 +6,7 @@ import { useSearchParams } from 'next/navigation';
 import { BackofficeIdentifier } from '@/components/backoffice/BackofficeIdentifier';
 import { BackofficeStatusBadge } from '@/components/backoffice/BackofficeStatusBadge';
 import { LoadingFallback } from '@/components/ui/LoadingFallback';
+import { ListPagination } from '@/components/ui/ListPagination';
 import { useLocale } from '@/contexts/LocaleContext';
 import {
   resolveCustomerPackageDisplay,
@@ -158,6 +159,7 @@ function daysUntil(raw?: string): number | null {
 }
 
 const EXPIRY_ACTION_WINDOW_DAYS = 14;
+const PAGE_SIZE = 25;
 
 function accountNeedsAction(account: Account): boolean {
   const remaining = daysUntil(account.nearest_expiry);
@@ -172,6 +174,9 @@ function AccountsContent() {
   const searchParams = useSearchParams();
   const { t } = useLocale();
   const [accounts, setAccounts] = useState<Account[]>([]);
+  const [total, setTotal] = useState(0);
+  const [hiddenInternalTotal, setHiddenInternalTotal] = useState(0);
+  const [offset, setOffset] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -207,7 +212,10 @@ function AccountsContent() {
       if (filters.coverage_state) params.set('coverage_state', filters.coverage_state);
       if (filters.package_kind) params.set('package_kind', filters.package_kind);
       if (filters.top_plan_id) params.set('top_plan_id', filters.top_plan_id);
+      if (!showInternalAccounts) params.set('exclude_internal', 'true');
       params.set('sort', 'display_name');
+      params.set('limit', String(PAGE_SIZE));
+      if (offset > 0) params.set('offset', String(offset));
 
       const response = await fetch(`/api/admin/accounts?${params.toString()}`, {
         credentials: 'include',
@@ -222,22 +230,26 @@ function AccountsContent() {
         .map((item) => normalizeAccount(item, t))
         .filter((item): item is Account => Boolean(item));
       setAccounts(normalized);
+      setTotal(Number(data.data?.total || normalized.length));
+      setHiddenInternalTotal(Number(data.data?.hidden_internal_total || 0));
     } catch (err) {
       setLoadError(resolveUiErrorMessage(err instanceof Error ? err.message : null, t('error.failed_load')));
     } finally {
       setIsLoading(false);
     }
-  }, [filters, t]);
+  }, [filters, offset, showInternalAccounts, t]);
 
   useEffect(() => {
     void loadAccounts();
   }, [loadAccounts]);
 
   const handleFilterChange = (key: string, value: string) => {
+    setOffset(0);
     setFilters((prev) => ({ ...prev, [key]: value }));
   };
 
   const clearFilters = () => {
+    setOffset(0);
     setFilters({
       status: '',
       q: '',
@@ -305,7 +317,6 @@ function AccountsContent() {
     }
   };
 
-  const hiddenAccounts = useMemo(() => accounts.filter(isHiddenByDefaultAccount), [accounts]);
   const visibleAccounts = useMemo(
     () => (showInternalAccounts ? accounts : accounts.filter((account) => !isHiddenByDefaultAccount(account))),
     [accounts, showInternalAccounts]
@@ -374,9 +385,9 @@ function AccountsContent() {
           <div className="w-full xl:w-[46rem]">
             <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
               {[
-                { label: t('admin.accounts.total_users', {}, 'Users'), value: formatInteger(visibleAccounts.length) },
-                { label: t('common.sites'), value: formatInteger(sitesTotal) },
-                { label: t('common.subscriptions'), value: formatInteger(subscriptionsTotal) },
+                { label: t('admin.accounts.total_users', {}, 'Users'), value: formatInteger(total) },
+                { label: t('admin.accounts.page_sites', {}, 'Sites on this page'), value: formatInteger(sitesTotal) },
+                { label: t('admin.accounts.page_subscriptions', {}, 'Subscriptions on this page'), value: formatInteger(subscriptionsTotal) },
               ].map((item) => (
                 <div
                   key={item.label}
@@ -394,7 +405,7 @@ function AccountsContent() {
                 className="rounded-[1.1rem] border border-blue-200 bg-blue-50/80 px-4 py-3.5 text-blue-800 transition hover:border-blue-300 hover:bg-blue-100/80 dark:border-blue-900/60 dark:bg-blue-950/35 dark:text-blue-100 dark:hover:border-blue-700 dark:hover:bg-blue-950/55"
               >
                 <p className="text-[0.68rem] font-semibold uppercase tracking-[0.18em]">
-                  {t('admin.accounts.metric_service_followup', {}, 'Service follow-up')}
+                  {t('admin.accounts.page_service_followup', {}, 'Follow-up on this page')}
                 </p>
                 <p className="mt-2 text-base font-semibold leading-6">{formatInteger(needsActionCount)}</p>
                 <p className="mt-1 text-xs leading-5 text-blue-700 dark:text-blue-200">
@@ -423,7 +434,7 @@ function AccountsContent() {
               {t('admin.accounts.table_title', {}, 'Users and current packages')}
             </h2>
             <p className="mt-2 text-sm text-slate-500 dark:text-slate-400">
-              {formatInteger(listedAccounts.length)} / {formatInteger(visibleAccounts.length)}
+	              {formatInteger(listedAccounts.length)} / {formatInteger(total)}
             </p>
           </div>
           <button type="button" onClick={() => setIsCreateOpen((value) => !value)} className="btn btn-primary self-start">
@@ -571,26 +582,29 @@ function AccountsContent() {
               {t('common.clear_filters', {}, 'Clear filters')}
             </button>
           </div>
-          {hiddenAccounts.length > 0 ? (
+          {hiddenInternalTotal > 0 ? (
             <div className="flex flex-col gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-600 dark:border-slate-800 dark:bg-slate-950/40 dark:text-slate-300 sm:flex-row sm:items-center sm:justify-between">
               <span>
                 {t(
                   'admin.accounts.hidden_internal_records_note',
-                  { count: formatInteger(hiddenAccounts.length) },
-                  `${formatInteger(hiddenAccounts.length)} smoke or malformed records are hidden by default.`
+                  { count: formatInteger(hiddenInternalTotal) },
+                  `${formatInteger(hiddenInternalTotal)} smoke or malformed records are hidden by default.`
                 )}
               </span>
               <button
                 type="button"
                 className="btn btn-secondary btn-sm self-start sm:self-auto"
-                onClick={() => setShowInternalAccounts((value) => !value)}
+                onClick={() => {
+                  setOffset(0);
+                  setShowInternalAccounts((value) => !value);
+                }}
               >
                 {showInternalAccounts
                   ? t('admin.accounts.hide_internal_records', {}, 'Hide test records')
                   : t(
                       'admin.accounts.show_internal_records',
-                      { count: formatInteger(hiddenAccounts.length) },
-                      `Show test records (${formatInteger(hiddenAccounts.length)})`
+                      { count: formatInteger(hiddenInternalTotal) },
+                      `Show test records (${formatInteger(hiddenInternalTotal)})`
                     )}
               </button>
             </div>
@@ -723,6 +737,13 @@ function AccountsContent() {
             </table>
           </div>
         )}
+        <ListPagination
+          offset={offset}
+          limit={PAGE_SIZE}
+          total={total}
+          isLoading={isLoading}
+          onOffsetChange={setOffset}
+        />
       </BackofficeSectionPanel>
     </BackofficePageStack>
   );

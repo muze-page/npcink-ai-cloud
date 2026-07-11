@@ -21,6 +21,7 @@ from app.core.db import get_session, init_schema
 from app.core.models import ProviderConnection, RunRecord
 from app.core.services import CloudServices
 from app.domain.catalog.service import CatalogService
+from app.domain.site_knowledge.service import SiteKnowledgeService
 from app.domain.wordpress_ai_connector.routing_profiles import (
     WP_AI_CONNECTOR_ALT_TEXT_VISION_PROFILE_ID,
     WP_AI_CONNECTOR_AUDIO_GENERATION_PROFILE_ID,
@@ -545,6 +546,199 @@ def test_wordpress_ai_connector_runtime_executes_scene_bound_text(tmp_path: Path
             run.policy_json["execution_contract"]["routing_intent"]
             == "content.short_text"
         )
+
+
+def test_wordpress_ai_connector_title_generation_uses_hidden_site_title_style(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _, client, provider = _build_client(tmp_path)
+    captured_input: dict[str, Any] = {}
+
+    def fake_site_knowledge_execute(
+        self: SiteKnowledgeService,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        del self
+        captured_input.update(kwargs["input_payload"])
+        return {
+            "status": "ready",
+            "intent": "writing_context",
+            "evidence_gate": {"status": "passed"},
+            "results": [
+                {
+                    "post_id": 11,
+                    "title": "用云端能力增强 WordPress 编辑体验",
+                    "chunk": "This chunk must not be sent to the title model.",
+                    "score": 0.82,
+                },
+                {
+                    "post_id": 11,
+                    "title": "用云端能力增强 WordPress 编辑体验",
+                    "chunk": "Duplicate chunk.",
+                    "score": 0.8,
+                },
+                {
+                    "post_id": 12,
+                    "title": "让 AI 更懂你的网站内容",
+                    "chunk": "Another private reference chunk.",
+                    "score": 0.76,
+                },
+            ],
+        }
+
+    monkeypatch.setattr(SiteKnowledgeService, "execute", fake_site_knowledge_execute)
+    payload = _payload(
+        {
+            "request": {
+                "prompt": "Suggest a concise title for an article about site-aware AI.",
+                "site_knowledge_reference": {
+                    "enabled": True,
+                    "mode": "site_title_style",
+                },
+            }
+        }
+    )
+
+    response = _execute(client, payload, idempotency_key="wp-ai-title-site-style")
+
+    assert response.status_code == 200
+    assert response.json()["data"]["result"]["output_text"] == (
+        "Npcink Cloud Addon: WordPress AI scene helper"
+    )
+    assert captured_input["intent"] == "writing_context"
+    assert captured_input["max_results"] == 8
+    provider_input = provider.requests[0].input_payload
+    assert "用云端能力增强 WordPress 编辑体验" in provider_input["input"]
+    assert "让 AI 更懂你的网站内容" in provider_input["input"]
+    assert provider_input["input"].count("用云端能力增强 WordPress 编辑体验") == 1
+    assert "This chunk must not be sent" not in provider_input["input"]
+    assert provider_input["metadata"]["site_knowledge_reference"] == "applied"
+    assert provider_input["metadata"]["site_knowledge_reference_count"] == 2
+
+
+def test_wordpress_ai_connector_title_generation_silently_falls_back_when_site_knowledge_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _, client, provider = _build_client(tmp_path)
+
+    def fail_site_knowledge_execute(
+        self: SiteKnowledgeService,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        del self, kwargs
+        raise RuntimeError("Unexpected Site Knowledge failure.")
+
+    monkeypatch.setattr(SiteKnowledgeService, "execute", fail_site_knowledge_execute)
+    payload = _payload(
+        {
+            "request": {
+                "prompt": "Suggest a concise title for this WordPress post.",
+                "site_knowledge_reference": {
+                    "enabled": True,
+                    "mode": "site_title_style",
+                },
+            }
+        }
+    )
+
+    response = _execute(client, payload, idempotency_key="wp-ai-title-site-style-fallback")
+
+    assert response.status_code == 200
+    provider_input = provider.requests[0].input_payload
+    assert "Site title style references" not in provider_input["input"]
+    assert "site_knowledge_reference" not in provider_input["metadata"]
+
+
+def test_wordpress_ai_connector_title_generation_ignores_non_list_site_knowledge_results(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _, client, provider = _build_client(tmp_path)
+
+    def return_invalid_results(
+        self: SiteKnowledgeService,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        del self, kwargs
+        return {
+            "status": "ready",
+            "evidence_gate": {"status": "passed"},
+            "results": {"title": "This object must not be treated as search results."},
+        }
+
+    monkeypatch.setattr(SiteKnowledgeService, "execute", return_invalid_results)
+    payload = _payload(
+        {
+            "request": {
+                "prompt": "Suggest a concise title for this WordPress post.",
+                "site_knowledge_reference": {
+                    "enabled": True,
+                    "mode": "site_title_style",
+                },
+            }
+        }
+    )
+
+    response = _execute(
+        client,
+        payload,
+        idempotency_key="wp-ai-title-site-style-non-list-results",
+    )
+
+    assert response.status_code == 200
+    provider_input = provider.requests[0].input_payload
+    assert "Site title style references" not in provider_input["input"]
+    assert "site_knowledge_reference" not in provider_input["metadata"]
+
+
+@pytest.mark.parametrize(
+    ("task", "reference", "expected_error"),
+    [
+        (
+            "title_generation",
+            {"enabled": True, "mode": "site_title_style", "titles": ["Injected"]},
+            "wp_ai_connector.site_knowledge_reference_fields_forbidden",
+        ),
+        (
+            "content_summary",
+            {"enabled": True, "mode": "site_title_style"},
+            "wp_ai_connector.site_knowledge_reference_task_not_allowed",
+        ),
+        (
+            "title_generation",
+            {"enabled": "yes", "mode": "site_title_style"},
+            "wp_ai_connector.site_knowledge_reference_enabled_invalid",
+        ),
+    ],
+)
+def test_wordpress_ai_connector_site_knowledge_reference_contract_fails_closed(
+    tmp_path: Path,
+    task: str,
+    reference: dict[str, Any],
+    expected_error: str,
+) -> None:
+    _, client, provider = _build_client(tmp_path)
+    payload = _payload(
+        {
+            "task": task,
+            "request": {
+                "prompt": "Run the WordPress AI scene.",
+                "site_knowledge_reference": reference,
+            },
+        }
+    )
+
+    response = _execute(
+        client,
+        payload,
+        idempotency_key=f"wp-ai-site-reference-invalid-{expected_error}",
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error_code"] == expected_error
+    assert provider.requests == []
 
 
 def test_wordpress_ai_connector_runtime_executes_alt_text_as_vision(

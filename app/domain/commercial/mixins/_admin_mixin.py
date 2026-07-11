@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from collections import Counter, defaultdict
 from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
@@ -70,6 +71,15 @@ AI_CREDIT_LEDGER_CATEGORY_LABELS = {
     "refund": "Refund",
     "other": "Other credit event",
 }
+
+_ADMIN_INTERNAL_ACCOUNT_RE = re.compile(
+    r"(^|[_-])(smoke)([_-]|$)|codex_image_smoke|site_knowledge_smoke",
+    re.IGNORECASE,
+)
+_ADMIN_MALFORMED_ACCOUNT_RE = re.compile(
+    r"Fatal error|Stack trace|Command line code|Uncaught ValueError|Path must not be empty",
+    re.IGNORECASE,
+)
 
 
 class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
@@ -690,6 +700,7 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
         status: str | None = None,
         package_alias: str | None = None,
         qq_bound: bool | None = None,
+        offset: int = 0,
         limit: int = 100,
     ) -> dict[str, object]:
         normalized_q = str(q or "").strip().lower()
@@ -712,6 +723,7 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
             )
         normalized_package = str(package_alias or "").strip().lower()
         resolved_limit = min(max(int(limit or 100), 1), 500)
+        normalized_offset = max(0, int(offset or 0))
 
         with get_session(self.database_url) as session:
             repository = CommercialRepository(session)
@@ -895,8 +907,7 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
             1 for item in items if str(item.get("source") or "") == "portal_self_registration"
         )
         filtered_total = len(items)
-        if resolved_limit > 0:
-            items = items[:resolved_limit]
+        items = items[normalized_offset : normalized_offset + resolved_limit]
         return {
             "filters": {
                 "q": normalized_q,
@@ -904,6 +915,7 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
                 "status": normalized_status,
                 "package_alias": package_alias or "",
                 "qq_bound": qq_bound,
+                "offset": normalized_offset,
                 "limit": resolved_limit,
             },
             "items": items,
@@ -913,6 +925,12 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
                 "disabled": int(summary_counts.get(PRINCIPAL_STATUS_DISABLED, 0)),
                 "qq_bound": qq_bound_total,
                 "self_registered": self_registered_total,
+            },
+            "pagination": {
+                "offset": normalized_offset,
+                "limit": resolved_limit,
+                "total": filtered_total,
+                "has_more": normalized_offset + len(items) < filtered_total,
             },
         }
 
@@ -1184,6 +1202,7 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
         coverage_state: str | None = None,
         package_kind: str | None = None,
         top_plan_id: str | None = None,
+        exclude_internal: bool = False,
         sort: str = "created_at",
         offset: int = 0,
         limit: int = 100,
@@ -1318,6 +1337,17 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
                 if not all(term in searchable_text for term in normalized_query.split(" ")):
                     continue
             items.append(item)
+        hidden_internal_total = sum(
+            1
+            for item in items
+            if self._is_internal_or_malformed_admin_account(item)
+        )
+        if exclude_internal:
+            items = [
+                item
+                for item in items
+                if not self._is_internal_or_malformed_admin_account(item)
+            ]
         if normalized_sort == "display_name":
             items = sorted(items, key=account_display_sort_key)
         total = len(items)
@@ -1333,13 +1363,40 @@ class CommercialServiceAdminMixin(CommercialServiceAuditMixin):
                 "coverage_state": coverage_state or "",
                 "package_kind": package_kind or "",
                 "top_plan_id": top_plan_id or "",
+                "exclude_internal": exclude_internal,
                 "sort": normalized_sort,
                 "offset": normalized_offset,
                 "limit": limit,
             },
             "items": items,
             "total": total,
+            "hidden_internal_total": hidden_internal_total,
+            "pagination": {
+                "offset": normalized_offset,
+                "limit": limit,
+                "total": total,
+                "has_more": normalized_offset + len(items) < total,
+            },
         }
+
+    @staticmethod
+    def _is_internal_or_malformed_admin_account(item: dict[str, object]) -> bool:
+        account = item.get("account")
+        account_payload = account if isinstance(account, dict) else {}
+        metadata = account_payload.get("metadata")
+        metadata_payload = metadata if isinstance(metadata, dict) else {}
+        searchable = " ".join(
+            str(value or "")
+            for value in (
+                account_payload.get("account_id"),
+                account_payload.get("name"),
+                metadata_payload.get("operator_display_name"),
+            )
+        )
+        return bool(
+            _ADMIN_INTERNAL_ACCOUNT_RE.search(searchable)
+            or _ADMIN_MALFORMED_ACCOUNT_RE.search(searchable)
+        )
 
     def get_admin_coverage_work_queue(
         self,

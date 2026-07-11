@@ -18,6 +18,7 @@ WP_AI_CONNECTOR_MAX_PROMPT_CHARS = 12000
 WP_AI_CONNECTOR_MAX_TIMEOUT_SECONDS = 60
 WP_AI_CONNECTOR_MAX_IMAGE_URL_CHARS = 2048
 WP_AI_CONNECTOR_MAX_IMAGE_DATA_URL_CHARS = 900_000
+WP_AI_CONNECTOR_SITE_KNOWLEDGE_REFERENCE_MODE = "site_title_style"
 WP_AI_CONNECTOR_IMAGE_DATA_URL_PATTERN = re.compile(
     r"^data:(image/(?:gif|jpeg|png|webp))(?:;[^,]*)?;base64,([A-Za-z0-9+/=\r\n]+)$",
     re.IGNORECASE,
@@ -176,8 +177,46 @@ def validate_wordpress_ai_connector_runtime_contract(
             "wp_ai_connector.prompt_too_large",
             "WordPress AI connector prompt exceeds the scene runtime size limit",
         )
+    validate_site_knowledge_reference(request, task=task)
     if task == "alt_text_suggest":
         validate_alt_text_suggest_request(request)
+
+
+def validate_site_knowledge_reference(request: dict[str, Any], *, task: str) -> None:
+    reference = request.get("site_knowledge_reference")
+    if reference is None:
+        return
+    if not isinstance(reference, dict):
+        raise WordPressAIConnectorContractViolation(
+            "wp_ai_connector.site_knowledge_reference_invalid",
+            "WordPress AI connector site_knowledge_reference must be an object",
+        )
+
+    unknown_fields = set(reference) - {"enabled", "mode"}
+    if unknown_fields:
+        raise WordPressAIConnectorContractViolation(
+            "wp_ai_connector.site_knowledge_reference_fields_forbidden",
+            "WordPress AI connector site_knowledge_reference accepts only enabled and mode",
+        )
+
+    enabled = reference.get("enabled")
+    if not isinstance(enabled, bool):
+        raise WordPressAIConnectorContractViolation(
+            "wp_ai_connector.site_knowledge_reference_enabled_invalid",
+            "WordPress AI connector site_knowledge_reference.enabled must be boolean",
+        )
+    mode = str(reference.get("mode") or WP_AI_CONNECTOR_SITE_KNOWLEDGE_REFERENCE_MODE)
+    if mode != WP_AI_CONNECTOR_SITE_KNOWLEDGE_REFERENCE_MODE:
+        raise WordPressAIConnectorContractViolation(
+            "wp_ai_connector.site_knowledge_reference_mode_invalid",
+            "WordPress AI connector site_knowledge_reference.mode is not supported",
+        )
+    if enabled and task != "title_generation":
+        raise WordPressAIConnectorContractViolation(
+            "wp_ai_connector.site_knowledge_reference_task_not_allowed",
+            "WordPress AI connector Site Knowledge reference currently supports "
+            "title_generation only",
+        )
 
 
 def find_forbidden_wordpress_ai_connector_field(value: Any, *, path: str = "") -> str:

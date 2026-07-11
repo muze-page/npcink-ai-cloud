@@ -1,6 +1,6 @@
 'use client';
 
-import React, { Suspense, useCallback, useEffect, useState } from 'react';
+import React, { Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import {
@@ -23,9 +23,9 @@ import {
   portalClient,
   type Entitlements,
   type PortalCreditPackCatalogPayload,
-  type PortalCreditPackPaymentOrder,
   type PortalPaymentOrder,
   type PortalPaymentOrderListPayload,
+  type PortalPaymentOrderStatusGroup,
   type PortalPlanOffer,
   type PortalPlanOfferListPayload,
 } from '@/lib/portal-client';
@@ -40,6 +40,23 @@ function formatQuotaValue(value: unknown, unlimited = false, unlimitedLabel = 'U
 }
 
 type TranslateFn = (key: string, params?: Record<string, string>, fallback?: string) => string;
+
+const PAYMENT_ORDER_PAGE_SIZE = 10;
+
+type PaymentLaunchState = {
+  checkoutUrl: string;
+  opened: boolean;
+};
+
+function preparePaymentWindow(): Window | null {
+  const paymentWindow = window.open('about:blank', '_blank');
+  if (paymentWindow) paymentWindow.opener = null;
+  return paymentWindow;
+}
+
+function closePreparedPaymentWindow(paymentWindow: Window | null): void {
+  if (paymentWindow && !paymentWindow.closed) paymentWindow.close();
+}
 
 function normalizePaymentText(value: unknown): string {
   return String(value || '').trim().toLowerCase().replace(/[\s_-]+/g, '_');
@@ -62,7 +79,14 @@ function resolvePaymentOrderTitle(order: PortalPaymentOrder, t: TranslateFn): st
   }
   if (normalizePaymentText(order.purchase_kind).includes('subscription')) {
     const tier = String(order.metadata?.target_tier_id || '').trim();
-    return tier ? `${tier.charAt(0).toUpperCase()}${tier.slice(1)} monthly package` : rawTitle;
+    const tierLabel = tier ? `${tier.charAt(0).toUpperCase()}${tier.slice(1)}` : '';
+    return tierLabel
+      ? t(
+          'portal.usage.payment_order_subscription_title',
+          { tier: tierLabel },
+          `${tierLabel} monthly package`
+        )
+      : rawTitle;
   }
   return rawTitle || order.order_id;
 }
@@ -158,15 +182,19 @@ function PortalBillingContent() {
   const [creditPacks, setCreditPacks] = useState<PortalCreditPackCatalogPayload | null>(null);
   const [paymentOrders, setPaymentOrders] = useState<PortalPaymentOrderListPayload | null>(null);
   const [planOffers, setPlanOffers] = useState<PortalPlanOfferListPayload | null>(null);
-  const [creditPackOrder, setCreditPackOrder] = useState<PortalCreditPackPaymentOrder | null>(null);
   const [creditPackPending, setCreditPackPending] = useState<string | null>(null);
   const [creditPackError, setCreditPackError] = useState<string | null>(null);
-  const [packageOrder, setPackageOrder] = useState<PortalPaymentOrder | null>(null);
   const [packagePending, setPackagePending] = useState<string | null>(null);
   const [packageError, setPackageError] = useState<string | null>(null);
   const [cancelPendingOrderId, setCancelPendingOrderId] = useState<string | null>(null);
   const [cancelConfirmOrderId, setCancelConfirmOrderId] = useState<string | null>(null);
   const [paymentOrderError, setPaymentOrderError] = useState<string | null>(null);
+  const [paymentOrderStatusGroup, setPaymentOrderStatusGroup] =
+    useState<PortalPaymentOrderStatusGroup>('all');
+  const [paymentOrderOffset, setPaymentOrderOffset] = useState(0);
+  const [paymentOrdersLoading, setPaymentOrdersLoading] = useState(false);
+  const [paymentLaunch, setPaymentLaunch] = useState<PaymentLaunchState | null>(null);
+  const paymentOrderTabInitialized = useRef(false);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -177,18 +205,44 @@ function PortalBillingContent() {
       const bundle = await portalClient.getAccountCommercialBundle();
       setEntitlements(bundle.entitlements);
       setCreditPacks(bundle.creditPacks);
-      setPaymentOrders(bundle.paymentOrders);
       setPlanOffers(bundle.planOffers || null);
     } catch (err) {
       setError(err instanceof Error ? err.message : t('error.failed_load', {}, 'Failed to load.'));
       setEntitlements(null);
       setCreditPacks(null);
-      setPaymentOrders(null);
       setPlanOffers(null);
     } finally {
       setIsLoading(false);
     }
   }, [t]);
+
+  const loadPaymentOrders = useCallback(
+    async (statusGroup: PortalPaymentOrderStatusGroup, offset: number) => {
+      setPaymentOrdersLoading(true);
+      setPaymentOrderError(null);
+      try {
+        const response = await portalClient.listAccountPaymentOrders({
+          statusGroup,
+          limit: PAYMENT_ORDER_PAGE_SIZE,
+          offset,
+        });
+        setPaymentOrders(response.data);
+        if (!paymentOrderTabInitialized.current) {
+          paymentOrderTabInitialized.current = true;
+          const initialGroup = Number(response.data.counts?.pending || 0) > 0 ? 'pending' : 'all';
+          if (initialGroup !== statusGroup) {
+            setPaymentOrderStatusGroup(initialGroup);
+            setPaymentOrderOffset(0);
+          }
+        }
+      } catch (err) {
+        setPaymentOrderError(formatPortalErrorMessage(err, t, t('error.failed_load')));
+      } finally {
+        setPaymentOrdersLoading(false);
+      }
+    },
+    [t]
+  );
 
   useEffect(() => {
     if (!isAuthenticated || !session?.account_id) {
@@ -198,10 +252,42 @@ function PortalBillingContent() {
     void loadBilling();
   }, [isAuthenticated, loadBilling, session?.account_id]);
 
+  useEffect(() => {
+    if (!isAuthenticated || !session?.account_id) return;
+    void loadPaymentOrders(paymentOrderStatusGroup, paymentOrderOffset);
+  }, [
+    isAuthenticated,
+    loadPaymentOrders,
+    paymentOrderOffset,
+    paymentOrderStatusGroup,
+    session?.account_id,
+  ]);
+
+  useEffect(() => {
+    if (!isAuthenticated || !session?.account_id) return;
+    const refreshPaymentOrders = () => {
+      void loadPaymentOrders(paymentOrderStatusGroup, paymentOrderOffset);
+    };
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') refreshPaymentOrders();
+    };
+    window.addEventListener('focus', refreshPaymentOrders);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => {
+      window.removeEventListener('focus', refreshPaymentOrders);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, [
+    isAuthenticated,
+    loadPaymentOrders,
+    paymentOrderOffset,
+    paymentOrderStatusGroup,
+    session?.account_id,
+  ]);
+
   const handleStartPlanTrial = async (tierId: 'plus' | 'pro') => {
     setPackagePending(`trial:${tierId}`);
     setPackageError(null);
-    setPackageOrder(null);
     try {
       await portalClient.startPlanTrial(tierId);
       await refresh();
@@ -214,23 +300,27 @@ function PortalBillingContent() {
   };
 
   const handleCreateSubscriptionOrder = async (offer: PortalPlanOffer) => {
+    const paymentWindow = preparePaymentWindow();
     setPackagePending(`order:${offer.tier_id}`);
     setPackageError(null);
-    setPackageOrder(null);
+    setPaymentLaunch(null);
     try {
       const response = await portalClient.createSubscriptionOrder(offer.offer_id, 'alipay');
-      setPackageOrder(response.data.order);
-      setPaymentOrders((current) => ({
-        ...(current || { items: [] }),
-        items: [
-          response.data.order,
-          ...(current?.items || []).filter((item) => item.order_id !== response.data.order.order_id),
-        ].slice(0, 8),
-      }));
       if (response.data.order.checkout_url) {
-        window.location.assign(response.data.order.checkout_url);
+        if (paymentWindow && !paymentWindow.closed) {
+          paymentWindow.location.replace(response.data.order.checkout_url);
+          setPaymentLaunch({ checkoutUrl: response.data.order.checkout_url, opened: true });
+        } else {
+          setPaymentLaunch({ checkoutUrl: response.data.order.checkout_url, opened: false });
+        }
+        setPaymentOrderStatusGroup('pending');
+        setPaymentOrderOffset(0);
+        await loadPaymentOrders('pending', 0);
+      } else {
+        closePreparedPaymentWindow(paymentWindow);
       }
     } catch (err) {
+      closePreparedPaymentWindow(paymentWindow);
       setPackageError(formatPortalErrorMessage(err, t, t('error.failed_save')));
     } finally {
       setPackagePending(null);
@@ -240,7 +330,6 @@ function PortalBillingContent() {
   const handleScheduleFreeDowngrade = async () => {
     setPackagePending('downgrade:free');
     setPackageError(null);
-    setPackageOrder(null);
     try {
       await portalClient.scheduleFreeDowngrade();
       await refresh();
@@ -258,7 +347,7 @@ function PortalBillingContent() {
     setPaymentOrderError(null);
     try {
       await portalClient.cancelAccountPaymentOrder(order.order_id);
-      await loadBilling();
+      await loadPaymentOrders(paymentOrderStatusGroup, paymentOrderOffset);
     } catch (err) {
       setPaymentOrderError(formatPortalErrorMessage(err, t, t('error.failed_save')));
     } finally {
@@ -267,23 +356,27 @@ function PortalBillingContent() {
   };
 
   const handleCreateCreditPackOrder = async (packId: string) => {
+    const paymentWindow = preparePaymentWindow();
     setCreditPackPending(packId);
     setCreditPackError(null);
-    setCreditPackOrder(null);
+    setPaymentLaunch(null);
     try {
       const response = await portalClient.createAccountCreditPackOrder(packId);
-      setCreditPackOrder(response.data.order);
-      setPaymentOrders((current) => ({
-        ...(current || { items: [] }),
-        items: [
-          response.data.order,
-          ...(current?.items || []).filter((item) => item.order_id !== response.data.order.order_id),
-        ].slice(0, 8),
-      }));
       if (response.data.order.checkout_url) {
-        window.location.assign(response.data.order.checkout_url);
+        if (paymentWindow && !paymentWindow.closed) {
+          paymentWindow.location.replace(response.data.order.checkout_url);
+          setPaymentLaunch({ checkoutUrl: response.data.order.checkout_url, opened: true });
+        } else {
+          setPaymentLaunch({ checkoutUrl: response.data.order.checkout_url, opened: false });
+        }
+        setPaymentOrderStatusGroup('pending');
+        setPaymentOrderOffset(0);
+        await loadPaymentOrders('pending', 0);
+      } else {
+        closePreparedPaymentWindow(paymentWindow);
       }
     } catch (err) {
+      closePreparedPaymentWindow(paymentWindow);
       setCreditPackError(formatPortalErrorMessage(err, t, t('error.failed_save')));
     } finally {
       setCreditPackPending(null);
@@ -331,12 +424,16 @@ function PortalBillingContent() {
   const paymentReturnStatus = String(searchParams.get('trade_status') || '').trim();
   const hasAlipayReturn = paymentReturnProvider === 'alipay';
   const allPaymentOrders = paymentOrders?.items || [];
-  const pendingPaymentOrders = allPaymentOrders.filter(isPendingPaymentOrder);
-  const recentPaymentOrders = allPaymentOrders.filter((order) => !isPendingPaymentOrder(order));
+  const paymentOrderCounts = paymentOrders?.counts || {
+    all: allPaymentOrders.length,
+    pending: allPaymentOrders.filter(isPendingPaymentOrder).length,
+    paid: allPaymentOrders.filter((order) => normalizePaymentText(order.status) === 'paid').length,
+    closed: allPaymentOrders.filter((order) => !['pending', 'paid'].includes(normalizePaymentText(order.status))).length,
+  };
 
   const handleRefreshPaymentReturn = async () => {
     await refresh();
-    await loadBilling();
+    await loadPaymentOrders(paymentOrderStatusGroup, paymentOrderOffset);
   };
 
   const paymentReturnNotice = hasAlipayReturn ? (
@@ -375,6 +472,39 @@ function PortalBillingContent() {
         </button>
       </div>
     </BackofficeStackCard>
+  ) : null;
+
+  const paymentLaunchNotice = paymentLaunch ? (
+    <div
+      role="status"
+      className="rounded-[1rem] border border-blue-200 bg-blue-50/70 px-4 py-3 text-sm text-blue-900 dark:border-blue-900/60 dark:bg-blue-950/20 dark:text-blue-100"
+    >
+      {paymentLaunch.opened ? (
+        t(
+          'portal.usage.payment_page_opened',
+          {},
+          'Alipay opened in a new tab. Return here after payment and the order status will refresh automatically.'
+        )
+      ) : (
+        <span className="flex flex-wrap items-center gap-3">
+          <span>
+            {t(
+              'portal.usage.payment_page_blocked',
+              {},
+              'Your browser blocked the payment tab. Use the button to open Alipay.'
+            )}
+          </span>
+          <a
+            className="btn btn-primary"
+            href={paymentLaunch.checkoutUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            {t('portal.usage.payment_page_open_action', {}, 'Open Alipay')}
+          </a>
+        </span>
+      )}
+    </div>
   ) : null;
 
   const packageActions = (
@@ -515,15 +645,6 @@ function PortalBillingContent() {
           </div>
         </div>
       </div>
-      {packageOrder ? (
-        <div className="mt-4 rounded-[1rem] border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800 dark:border-emerald-900/60 dark:bg-emerald-950/25 dark:text-emerald-200">
-          {t(
-            'portal.package.pro_order_created',
-            { order: packageOrder.order_id },
-            `Package payment order ${packageOrder.order_id} has been created.`
-          )}
-        </div>
-      ) : null}
       {packageError ? (
         <div className="mt-4 rounded-[1rem] border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-900/60 dark:bg-red-950/25 dark:text-red-200">
           {packageError}
@@ -536,11 +657,12 @@ function PortalBillingContent() {
     <div className="divide-y divide-slate-200 overflow-hidden rounded-[1rem] border border-slate-200 text-sm dark:divide-slate-800 dark:border-slate-800">
       {orders.map((order) => {
         const isConfirmingCancel = cancelConfirmOrderId === order.order_id;
+        const isPending = isPendingPaymentOrder(order);
         return (
           <div
             key={order.order_id}
             data-payment-order-id={order.order_id}
-            className="grid gap-4 px-4 py-4 md:grid-cols-[minmax(0,1fr)_auto_auto] md:items-center"
+            className="grid gap-3 px-4 py-3 md:grid-cols-[minmax(0,1fr)_auto_auto] md:items-center"
           >
             <div className="min-w-0">
               <div className="flex flex-wrap items-center gap-2">
@@ -552,11 +674,13 @@ function PortalBillingContent() {
                   status={order.status || 'pending'}
                 />
               </div>
-              <p className="mt-1 text-xs leading-5 text-slate-500 dark:text-slate-400">
-                {resolvePaymentOrderDetail(order, t)}
-              </p>
+              {isPending ? (
+                <p className="mt-1 text-xs leading-5 text-slate-500 dark:text-slate-400">
+                  {resolvePaymentOrderDetail(order, t)}
+                </p>
+              ) : null}
               <p
-                className="mt-2 text-xs font-medium text-slate-500 dark:text-slate-400"
+                className={`${isPending ? 'mt-2' : 'mt-1'} text-xs font-medium text-slate-500 dark:text-slate-400`}
                 title={order.order_id}
               >
                 {t(
@@ -577,18 +701,23 @@ function PortalBillingContent() {
                 })}
               </p>
               <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                {isPendingPaymentOrder(order) && order.expires_at
+                {isPending && order.expires_at
                   ? t(
                       'portal.usage.payment_order_expires_at',
                       { time: formatDate(order.expires_at) },
-                      `Expires ${formatDate(order.expires_at)}`
+                      `Complete payment before ${formatDate(order.expires_at)}`
                     )
                   : order.created_at ? formatDate(order.created_at) : order.order_id}
               </p>
             </div>
             <div className="flex flex-wrap items-center gap-2 md:min-w-48 md:justify-end">
               {paymentOrderAllowsAction(order, 'continue_payment') && order.checkout_url ? (
-                <a className="btn btn-primary" href={order.checkout_url}>
+                <a
+                  className="btn btn-primary"
+                  href={order.checkout_url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
                   {t('portal.usage.payment_order_continue', {}, 'Continue payment')}
                 </a>
               ) : null}
@@ -632,6 +761,20 @@ function PortalBillingContent() {
     </div>
   );
 
+  const paymentOrderTabs: Array<{
+    id: PortalPaymentOrderStatusGroup;
+    label: string;
+  }> = [
+    { id: 'all', label: t('portal.usage.payment_orders_tab_all', {}, 'All') },
+    { id: 'pending', label: t('portal.usage.payment_orders_tab_pending', {}, 'Pending') },
+    { id: 'paid', label: t('portal.usage.payment_orders_tab_paid', {}, 'Paid') },
+    { id: 'closed', label: t('portal.usage.payment_orders_tab_closed', {}, 'Closed') },
+  ];
+  const paymentOrderTotal = Number(paymentOrders?.pagination?.total || 0);
+  const paymentOrderPageEnd = Math.min(
+    paymentOrderOffset + allPaymentOrders.length,
+    paymentOrderTotal
+  );
   const paymentOrdersCard = (
     <section className="overflow-hidden rounded-[1.25rem] border border-slate-200 bg-white/70 dark:border-slate-800 dark:bg-slate-950/35">
       <header className="flex flex-col gap-2 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
@@ -640,14 +783,15 @@ function PortalBillingContent() {
             {t('portal.usage.payment_orders_title', {}, 'Payment orders')}
           </span>
           <span className="mt-1 block text-sm text-gray-600 dark:text-gray-400">
-            {allPaymentOrders.length > 0
+            {Number(paymentOrderCounts.all || 0) > 0
               ? t(
                   'portal.usage.payment_orders_summary',
                   {
-                    pending: String(pendingPaymentOrders.length),
-                    recent: String(recentPaymentOrders.length),
+                    pending: String(paymentOrderCounts.pending || 0),
+                    paid: String(paymentOrderCounts.paid || 0),
+                    closed: String(paymentOrderCounts.closed || 0),
                   },
-                  `${pendingPaymentOrders.length} pending · ${recentPaymentOrders.length} recent`
+                  `${paymentOrderCounts.pending || 0} pending · ${paymentOrderCounts.paid || 0} paid · ${paymentOrderCounts.closed || 0} closed`
                 )
               : t('portal.usage.payment_orders_empty', {}, 'No payment orders yet.')}
           </span>
@@ -658,34 +802,85 @@ function PortalBillingContent() {
           {t(
             'portal.usage.payment_orders_desc',
             {},
-            'Payment results follow verified Alipay notifications. Unpaid orders close automatically after 30 minutes.'
+            'Payment results follow verified Alipay notifications. Unpaid orders close after 30 minutes; canceled orders remain visible here for 7 days.'
           )}
         </p>
+        <div
+          role="tablist"
+          aria-label={t('portal.usage.payment_orders_filter_label', {}, 'Filter payment orders')}
+          className="mt-4 inline-flex max-w-full gap-1 overflow-x-auto rounded-[0.875rem] bg-slate-100 p-1 dark:bg-slate-900"
+        >
+          {paymentOrderTabs.map((tab) => {
+            const selected = tab.id === paymentOrderStatusGroup;
+            return (
+              <button
+                key={tab.id}
+                type="button"
+                role="tab"
+                aria-selected={selected}
+                className={`whitespace-nowrap rounded-[0.625rem] px-3 py-2 text-sm font-medium transition-colors ${
+                  selected
+                    ? 'bg-white text-blue-700 shadow-sm dark:bg-slate-800 dark:text-blue-300'
+                    : 'text-slate-600 hover:text-slate-950 dark:text-slate-400 dark:hover:text-white'
+                }`}
+                onClick={() => {
+                  setPaymentOrderStatusGroup(tab.id);
+                  setPaymentOrderOffset(0);
+                  setCancelConfirmOrderId(null);
+                }}
+              >
+                {tab.label} <span className="tabular-nums">{paymentOrderCounts[tab.id] || 0}</span>
+              </button>
+            );
+          })}
+        </div>
         {paymentOrderError ? (
           <p className="mt-3 text-sm text-red-700 dark:text-red-300">{paymentOrderError}</p>
         ) : null}
-        {pendingPaymentOrders.length > 0 ? (
-          <div className="mt-4">
-            <h3 className="mb-2 text-xs font-semibold uppercase tracking-[0.12em] text-slate-500 dark:text-slate-400">
+        <div className="mt-4" role="tabpanel">
+          {paymentOrdersLoading && allPaymentOrders.length === 0 ? (
+            <p className="rounded-[1rem] border border-slate-200 px-4 py-6 text-sm text-slate-500 dark:border-slate-800 dark:text-slate-400">
+              {t('portal.usage.payment_orders_loading', {}, 'Loading payment orders...')}
+            </p>
+          ) : allPaymentOrders.length > 0 ? (
+            renderPaymentOrderList(allPaymentOrders)
+          ) : (
+            <p className="rounded-[1rem] border border-slate-200 px-4 py-6 text-sm text-slate-500 dark:border-slate-800 dark:text-slate-400">
+              {t('portal.usage.payment_orders_filter_empty', {}, 'No orders in this status.')}
+            </p>
+          )}
+        </div>
+        {paymentOrderTotal > PAYMENT_ORDER_PAGE_SIZE ? (
+          <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <p className="text-xs text-slate-500 dark:text-slate-400">
               {t(
-                'portal.usage.payment_orders_pending_title',
-                { count: String(pendingPaymentOrders.length) },
-                `Pending payment (${pendingPaymentOrders.length})`
+                'portal.usage.payment_orders_page_summary',
+                {
+                  start: String(paymentOrderTotal > 0 ? paymentOrderOffset + 1 : 0),
+                  end: String(paymentOrderPageEnd),
+                  total: String(paymentOrderTotal),
+                },
+                `${paymentOrderOffset + 1}-${paymentOrderPageEnd} of ${paymentOrderTotal}`
               )}
-            </h3>
-            {renderPaymentOrderList(pendingPaymentOrders)}
-          </div>
-        ) : null}
-        {recentPaymentOrders.length > 0 ? (
-          <div className="mt-5">
-            <h3 className="mb-2 text-xs font-semibold uppercase tracking-[0.12em] text-slate-500 dark:text-slate-400">
-              {t(
-                'portal.usage.payment_orders_recent_title',
-                { count: String(recentPaymentOrders.length) },
-                `Recent records (${recentPaymentOrders.length})`
-              )}
-            </h3>
-            {renderPaymentOrderList(recentPaymentOrders)}
+            </p>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                className="btn btn-secondary"
+                disabled={paymentOrderOffset === 0 || paymentOrdersLoading}
+                onClick={() => setPaymentOrderOffset(Math.max(0, paymentOrderOffset - PAYMENT_ORDER_PAGE_SIZE))}
+              >
+                {t('common.previous', {}, 'Previous')}
+              </button>
+              <button
+                type="button"
+                className="btn btn-secondary"
+                disabled={!paymentOrders?.pagination?.has_more || paymentOrdersLoading}
+                onClick={() => setPaymentOrderOffset(paymentOrderOffset + PAYMENT_ORDER_PAGE_SIZE)}
+              >
+                {t('common.next', {}, 'Next')}
+              </button>
+            </div>
           </div>
         ) : null}
       </div>
@@ -745,6 +940,8 @@ function PortalBillingContent() {
       />
 
       {paymentReturnNotice}
+
+      {paymentLaunchNotice}
 
       {error ? (
         <PortalErrorState
@@ -846,15 +1043,6 @@ function PortalBillingContent() {
               );
             })}
           </div>
-          {creditPackOrder ? (
-            <div className="mt-4 rounded-[1rem] border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800 dark:border-emerald-900/60 dark:bg-emerald-950/25 dark:text-emerald-200">
-              {t(
-                'portal.usage.credit_pack_order_created',
-                { order: creditPackOrder.order_id },
-                `Payment order ${creditPackOrder.order_id} has been created.`
-              )}
-            </div>
-          ) : null}
           {creditPackError ? (
             <div className="mt-4 rounded-[1rem] border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-900/60 dark:bg-red-950/25 dark:text-red-200">
               {creditPackError}

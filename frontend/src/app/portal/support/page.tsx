@@ -17,6 +17,7 @@ import {
 } from '@/components/portal/PortalPageState';
 import { PortalWorkspaceHeader } from '@/components/portal/PortalWorkspaceHeader';
 import { LoadingFallback } from '@/components/ui/LoadingFallback';
+import { ListPagination } from '@/components/ui/ListPagination';
 import { useLocale } from '@/contexts/LocaleContext';
 import { useSession } from '@/hooks/useSession';
 import {
@@ -29,6 +30,7 @@ import { formatDate } from '@/lib/utils';
 
 const SUPPORT_TOPICS = ['billing', 'payment', 'site', 'usage', 'account', 'general'] as const;
 const SUPPORT_STATUSES: Array<PortalSupportRequestStatus | ''> = ['', 'open', 'in_progress', 'resolved', 'closed'];
+const PAGE_SIZE = 10;
 
 function statusTone(status: string): 'ok' | 'warning' | 'neutral' | 'danger' {
   if (status === 'open') return 'warning';
@@ -46,6 +48,8 @@ function PortalSupportContent() {
   const initialSiteId = searchParams?.get('site') || '';
   const shouldOpenForm = searchParams?.get('new') === '1';
   const [items, setItems] = useState<PortalSupportRequest[]>([]);
+  const [total, setTotal] = useState(0);
+  const [offset, setOffset] = useState(0);
   const [statusFilter, setStatusFilter] = useState<PortalSupportRequestStatus | ''>('');
   const [isListLoading, setIsListLoading] = useState(true);
   const [error, setError] = useState('');
@@ -74,15 +78,17 @@ function PortalSupportContent() {
     try {
       const response = await portalClient.listSupportRequests({
         status: statusFilter || undefined,
-        limit: 50,
+        limit: PAGE_SIZE,
+        offset,
       });
       setItems(response.data.items || []);
+      setTotal(Number(response.data.pagination?.total || 0));
     } catch (err) {
       setError(formatPortalErrorMessage(err, t, t('error.failed_load', {}, 'Failed to load')));
     } finally {
       setIsListLoading(false);
     }
-  }, [isAuthenticated, statusFilter, t]);
+  }, [isAuthenticated, offset, statusFilter, t]);
 
   useEffect(() => {
     void loadRequests();
@@ -301,7 +307,10 @@ function PortalSupportContent() {
               key={status || 'all'}
               type="button"
               className={statusFilter === status ? 'btn btn-primary btn-sm' : 'btn btn-secondary btn-sm'}
-              onClick={() => setStatusFilter(status)}
+              onClick={() => {
+                setOffset(0);
+                setStatusFilter(status);
+              }}
             >
               {status ? t(`portal.support_status_${status}`, {}, status) : t('common.all', {}, 'All')}
             </button>
@@ -352,6 +361,14 @@ function PortalSupportContent() {
             }
           />
         )}
+        <ListPagination
+          offset={offset}
+          limit={PAGE_SIZE}
+          total={total}
+          isLoading={isListLoading}
+          onOffsetChange={setOffset}
+          className="mt-4 px-0 pb-0"
+        />
       </BackofficeSectionPanel>
     </BackofficePageStack>
   );

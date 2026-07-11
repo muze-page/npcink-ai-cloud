@@ -37,6 +37,11 @@ assert.match(
 );
 assert.match(
   portalSupportPageSource,
+  /<ListPagination[\s\S]*offset=\{offset\}[\s\S]*total=\{total\}/,
+  'Portal support history must expose all tickets through pagination'
+);
+assert.match(
+  portalSupportPageSource,
   /SUPPORT_TOPICS[\s\S]*billing[\s\S]*payment[\s\S]*site[\s\S]*usage[\s\S]*account[\s\S]*general/,
   'Portal support form must expose bounded customer-support topics'
 );
@@ -109,6 +114,11 @@ assert.match(
   adminSupportPageSource,
   /fetch\(`\/api\/admin\/support-requests\?\$\{params\.toString\(\)\}`/,
   'Admin support page must load the support request queue through the admin proxy'
+);
+assert.match(
+  adminSupportPageSource,
+  /params\.set\('offset'[\s\S]*<ListPagination[\s\S]*total=\{total\}/,
+  'Admin support queue must expose all filtered tickets through pagination'
 );
 assert.match(
   adminSupportPageSource,

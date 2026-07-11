@@ -12,6 +12,7 @@ import {
   BackofficeSectionPanel,
 } from '@/components/backoffice/BackofficeScaffold';
 import { LoadingFallback } from '@/components/ui/LoadingFallback';
+import { ListPagination } from '@/components/ui/ListPagination';
 import { ConfirmModal, Modal } from '@/components/ui/Modal';
 import { useLocale } from '@/contexts/LocaleContext';
 import { cn, formatDate } from '@/lib/utils';
@@ -54,6 +55,12 @@ type PortalUsersResponse = {
   items?: PortalUserItem[];
   total?: number;
   summary?: PortalUsersSummary;
+  pagination?: {
+    offset?: number;
+    limit?: number;
+    total?: number;
+    has_more?: boolean;
+  };
 };
 
 type PortalUserAuditEvent = {
@@ -181,10 +188,13 @@ function payloadText(payload: Record<string, unknown> | undefined, t: Translator
   return '';
 }
 
-function buildQuery(filters: Filters): string {
+const PAGE_SIZE = 25;
+
+function buildQuery(filters: Filters, offset: number): string {
   const params = new URLSearchParams();
   params.set('source', 'portal_self_registration');
-  params.set('limit', '200');
+  params.set('limit', String(PAGE_SIZE));
+  if (offset > 0) params.set('offset', String(offset));
   if (filters.q.trim()) params.set('q', filters.q.trim());
   if (filters.status) params.set('status', filters.status);
   if (filters.package_alias.trim()) params.set('package_alias', filters.package_alias.trim());
@@ -197,6 +207,7 @@ export default function AdminPortalUsersPage() {
   const [users, setUsers] = useState<PortalUserItem[]>([]);
   const [summary, setSummary] = useState<PortalUsersSummary>({});
   const [total, setTotal] = useState(0);
+  const [offset, setOffset] = useState(0);
   const [filters, setFilters] = useState<Filters>({
     q: '',
     status: '',
@@ -224,7 +235,7 @@ export default function AdminPortalUsersPage() {
     setLoading(true);
     setError(null);
     try {
-      const response = await fetch(`/api/admin/portal-users?${buildQuery(filters)}`, {
+      const response = await fetch(`/api/admin/portal-users?${buildQuery(filters, offset)}`, {
         credentials: 'include',
       });
       const payload = await response.json();
@@ -244,7 +255,7 @@ export default function AdminPortalUsersPage() {
     } finally {
       setLoading(false);
     }
-  }, [filters, t]);
+  }, [filters, offset, t]);
 
   useEffect(() => {
     void loadUsers();
@@ -261,10 +272,12 @@ export default function AdminPortalUsersPage() {
   );
 
   const updateFilter = (key: keyof Filters, value: string) => {
+    setOffset(0);
     setFilters((current) => ({ ...current, [key]: value }));
   };
 
   const clearFilters = () => {
+    setOffset(0);
     setFilters({
       q: '',
       status: '',
@@ -524,7 +537,7 @@ export default function AdminPortalUsersPage() {
                       checked={allActiveSelected}
                       disabled={activeUsers.length === 0}
                       onChange={toggleAllActiveUsers}
-                      aria-label={t('admin.portal_users.select_all_active', {}, 'Select all active users')}
+                      aria-label={t('admin.portal_users.select_all_active', {}, 'Select all active users on this page')}
                     />
                   </th>
                   {[
@@ -662,6 +675,13 @@ export default function AdminPortalUsersPage() {
             </table>
           </div>
         )}
+        <ListPagination
+          offset={offset}
+          limit={PAGE_SIZE}
+          total={total}
+          isLoading={loading}
+          onOffsetChange={setOffset}
+        />
       </BackofficeSectionPanel>
 
       {pendingUser ? (

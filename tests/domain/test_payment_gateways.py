@@ -136,7 +136,7 @@ def test_real_alipay_gateway_signs_order_and_verifies_callback() -> None:
             order_id="pay_real_alipay_001",
             amount=29.0,
             currency="CNY",
-            subject="Npcink AI Cloud Pro monthly",
+            subject="Npcink AI Cloud Pro 月度套餐",
             metadata={"purchase_kind": "subscription_plan"},
         )
     )
@@ -145,6 +145,7 @@ def test_real_alipay_gateway_signs_order_and_verifies_callback() -> None:
     assert query["method"] == ["alipay.trade.page.pay"]
     assert query["sign_type"] == ["RSA2"]
     assert "\"timeout_express\":\"30m\"" in query["biz_content"][0]
+    assert json.loads(query["biz_content"][0])["subject"] == "Npcink AI Cloud Pro 月度套餐"
     assert order.provider_payload["gateway_mode"] == "alipay_page_pay"
     signed_params = {
         key: values[0]

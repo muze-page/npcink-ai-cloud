@@ -1392,6 +1392,8 @@ export interface PortalCreditPackOrderPayload {
 
 export type PortalPaymentOrder = PortalCreditPackPaymentOrder;
 
+export type PortalPaymentOrderStatusGroup = 'all' | 'pending' | 'paid' | 'closed';
+
 export interface PortalPlanOffer {
   offer_id: string;
   plan_id: string;
@@ -1474,6 +1476,12 @@ export interface PortalPaymentOrderListPayload {
   site_id?: string;
   account_id?: string;
   generated_at?: string;
+  status_group?: PortalPaymentOrderStatusGroup;
+  counts?: Record<PortalPaymentOrderStatusGroup, number>;
+  visibility?: {
+    canceled_orders_visible_days?: number;
+    database_records_deleted?: boolean;
+  };
   pagination?: {
     limit?: number;
     offset?: number;
@@ -2130,9 +2138,10 @@ export class PortalClient {
 
   async listPaymentOrders(
     siteId: string,
-    options?: { limit?: number; offset?: number }
+    options?: { statusGroup?: PortalPaymentOrderStatusGroup; limit?: number; offset?: number }
   ): Promise<PortalEnvelope<PortalPaymentOrderListPayload>> {
     const params = new URLSearchParams();
+    if (options?.statusGroup) params.set('status_group', options.statusGroup);
     if (options?.limit) params.set('limit', String(options.limit));
     if (options?.offset) params.set('offset', String(options.offset));
 
@@ -2141,9 +2150,10 @@ export class PortalClient {
   }
 
   async listAccountPaymentOrders(
-    options?: { limit?: number; offset?: number }
+    options?: { statusGroup?: PortalPaymentOrderStatusGroup; limit?: number; offset?: number }
   ): Promise<PortalEnvelope<PortalPaymentOrderListPayload>> {
     const params = new URLSearchParams();
+    if (options?.statusGroup) params.set('status_group', options.statusGroup);
     if (options?.limit) params.set('limit', String(options.limit));
     if (options?.offset) params.set('offset', String(options.offset));
 
@@ -2377,9 +2387,9 @@ export class PortalClient {
     ] = await Promise.all([
       this.getAccountUsageSummary(),
       this.getAccountEntitlements(),
-      this.getAccountCreditLedger({ limit: 12 }),
+      this.getAccountCreditLedger({ limit: 20 }),
       this.listAccountCreditPacks(),
-      this.listAccountPaymentOrders({ limit: 8 }),
+      this.listAccountPaymentOrders({ statusGroup: 'all', limit: 10 }),
     ]);
     return {
       usage: usageResponse.data,
@@ -2390,25 +2400,22 @@ export class PortalClient {
     };
   }
 
-  async getAccountCommercialBundle(): Promise<Pick<PortalUsageBundle, 'entitlements' | 'creditLedger' | 'creditPacks' | 'paymentOrders' | 'planOffers'>> {
+  async getAccountCommercialBundle(): Promise<Pick<PortalUsageBundle, 'entitlements' | 'creditLedger' | 'creditPacks' | 'planOffers'>> {
     const [
       entitlementsResponse,
       creditLedgerResponse,
       creditPacksResponse,
-      paymentOrdersResponse,
       planOffersResponse,
     ] = await Promise.all([
       this.getAccountEntitlements(),
       this.getAccountCreditLedger({ limit: 12 }),
       this.listAccountCreditPacks(),
-      this.listAccountPaymentOrders({ limit: 8 }),
       this.listAccountPlanOffers(),
     ]);
     return {
       entitlements: entitlementsResponse.data,
       creditLedger: creditLedgerResponse.data,
       creditPacks: creditPacksResponse.data,
-      paymentOrders: paymentOrdersResponse.data,
       planOffers: planOffersResponse.data,
     };
   }

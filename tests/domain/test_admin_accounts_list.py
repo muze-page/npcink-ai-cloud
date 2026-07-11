@@ -65,3 +65,35 @@ def test_list_admin_accounts_sorts_and_paginates_after_filtering(tmp_path: Path)
     assert [item["account"]["account_id"] for item in result["items"]] == ["acct_zeta"]
 
     dispose_engine(database_url)
+
+
+def test_list_admin_accounts_can_exclude_internal_records_before_pagination(
+    tmp_path: Path,
+) -> None:
+    database_url = _sqlite_url(tmp_path)
+    init_schema(database_url)
+    service = CommercialService(database_url)
+
+    service.upsert_account(account_id="acct_smoke_alpha", name="Smoke Alpha")
+    service.upsert_account(account_id="acct_customer", name="Customer")
+
+    result = service.list_admin_accounts(
+        exclude_internal=True,
+        sort="display_name",
+        offset=0,
+        limit=1,
+    )
+
+    assert result["hidden_internal_total"] == 1
+    assert result["total"] == 1
+    assert result["pagination"] == {
+        "offset": 0,
+        "limit": 1,
+        "total": 1,
+        "has_more": False,
+    }
+    assert [item["account"]["account_id"] for item in result["items"]] == [
+        "acct_customer"
+    ]
+
+    dispose_engine(database_url)

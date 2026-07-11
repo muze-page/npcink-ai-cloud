@@ -96,8 +96,8 @@ assert.match(
 );
 assert.match(
   billingPageSource,
-  /getAccountCommercialBundle[\s\S]*setPaymentOrders\(bundle\.paymentOrders\)/,
-  'Portal package page must load recent payment orders at account scope through the commercial bundle'
+  /loadPaymentOrders[\s\S]*listAccountPaymentOrders[\s\S]*statusGroup[\s\S]*PAYMENT_ORDER_PAGE_SIZE/,
+  'Portal package page must load payment orders through the dedicated status-group request'
 );
 assert.match(
   portalClientSource,
@@ -111,7 +111,7 @@ assert.match(
 );
 assert.match(
   portalClientSource,
-  /getUsageBundle[\s\S]*listAccountPaymentOrders\(\{ limit: 8 \}\)/,
+  /getUsageBundle[\s\S]*listAccountPaymentOrders\(\{ statusGroup: 'all', limit: 10 \}\)/,
   'Portal usage bundle must use account-level payment orders so Pro checkout orders are visible without a site'
 );
 assert.doesNotMatch(
@@ -151,8 +151,23 @@ assert.match(
 );
 assert.match(
   billingPageSource,
-  /pendingPaymentOrders[\s\S]*recentPaymentOrders[\s\S]*payment_orders_pending_title[\s\S]*payment_orders_recent_title/,
-  'Portal package page must separate actionable pending orders from recent order history'
+  /paymentOrderTabs[\s\S]*payment_orders_tab_all[\s\S]*payment_orders_tab_pending[\s\S]*payment_orders_tab_paid[\s\S]*payment_orders_tab_closed/,
+  'Portal package page must separate payment orders with compact status tabs'
+);
+assert.match(
+  billingPageSource,
+  /preparePaymentWindow[\s\S]*window\.open\('about:blank', '_blank'\)[\s\S]*paymentWindow\.location\.replace/,
+  'Portal package purchases must pre-open a separate payment tab before the async order request completes'
+);
+assert.match(
+  billingPageSource,
+  /paymentOrderAllowsAction\(order, 'continue_payment'\)[\s\S]*target="_blank"[\s\S]*rel="noopener noreferrer"/,
+  'Portal continue-payment actions must keep the billing workspace open'
+);
+assert.match(
+  billingPageSource,
+  /window\.addEventListener\('focus', refreshPaymentOrders\)[\s\S]*visibilitychange/,
+  'Portal package page must refresh payment status when the customer returns from the payment tab'
 );
 assert.match(
   billingPageSource,

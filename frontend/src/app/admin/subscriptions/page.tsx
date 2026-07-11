@@ -6,6 +6,7 @@ import { useSearchParams } from 'next/navigation';
 import { BackofficeIdentifier } from '@/components/backoffice/BackofficeIdentifier';
 import { BackofficeStatusBadge } from '@/components/backoffice/BackofficeStatusBadge';
 import { LoadingFallback } from '@/components/ui/LoadingFallback';
+import { ListPagination } from '@/components/ui/ListPagination';
 import { useLocale } from '@/contexts/LocaleContext';
 import { formatAdminCurrency } from '@/lib/currency';
 import { resolveAdminPackageLabel } from '@/lib/admin-plan-copy';
@@ -89,6 +90,8 @@ interface SubscriptionApiItem {
   };
 }
 
+const PAGE_SIZE = 20;
+
 function daysUntil(raw?: string): number | null {
   if (!raw) {
     return null;
@@ -160,6 +163,7 @@ function SubscriptionsContent() {
   const { t } = useLocale();
   const [subscriptions, setSubscriptions] = useState<Subscription[]>([]);
   const [total, setTotal] = useState(0);
+  const [offset, setOffset] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [filters, setFilters] = useState({
@@ -180,6 +184,8 @@ function SubscriptionsContent() {
         if (filters.account_id) params.set('account_id', filters.account_id);
         if (filters.plan_id) params.set('plan_id', filters.plan_id);
         if (filters.expires_before) params.set('expires_before', filters.expires_before);
+        params.set('limit', String(PAGE_SIZE));
+        if (offset > 0) params.set('offset', String(offset));
 
         const response = await fetch(`/api/admin/subscriptions?${params.toString()}`, {
           credentials: 'include',
@@ -199,9 +205,10 @@ function SubscriptionsContent() {
     };
 
     void loadSubscriptions();
-  }, [filters, t]);
+  }, [filters, offset, t]);
 
   const handleFilterChange = (key: string, value: string) => {
+    setOffset(0);
     setFilters((prev) => ({ ...prev, [key]: value }));
   };
 
@@ -286,10 +293,10 @@ function SubscriptionsContent() {
           );
   const filterPills = [
     { value: '', label: t('common.all'), count: total },
-    { value: 'past_due', label: t('status.past_due'), count: pastDueSubscriptions },
-    { value: 'expired', label: t('status.expired'), count: expiredSubscriptions },
-    { value: 'trialing', label: t('status.trialing'), count: trialingSubscriptions },
-    { value: 'active', label: t('status.active'), count: activeSubscriptions },
+    { value: 'past_due', label: t('status.past_due') },
+    { value: 'expired', label: t('status.expired') },
+    { value: 'trialing', label: t('status.trialing') },
+    { value: 'active', label: t('status.active') },
   ];
 
   return (
@@ -302,14 +309,14 @@ function SubscriptionsContent() {
           <div className="w-full xl:w-[44rem]">
             <BackofficeMetricStrip
               items={[
-                { label: t('admin.subscriptions.needs_action_metric', {}, 'Needs action'), value: formatInteger(serviceRiskCount), size: 'compact' },
-                { label: t('admin.expiring_soon'), value: formatInteger(expiringSoon), size: 'compact' },
+                { label: t('admin.subscriptions.page_needs_action_metric', {}, 'Page needs action'), value: formatInteger(serviceRiskCount), size: 'compact' },
+                { label: t('admin.subscriptions.page_expiring_metric', {}, 'Page expiring soon'), value: formatInteger(expiringSoon), size: 'compact' },
                 {
-                  label: t('admin.subscriptions.snapshot_status_metric', {}, 'Billing stats to refresh'),
+                  label: t('admin.subscriptions.page_snapshot_status_metric', {}, 'Page billing stats to refresh'),
                   value: formatInteger(subscriptionsNeedingSnapshotFollowUp),
                   size: 'compact',
                 },
-                { label: t('admin.subscriptions.stable_metric', {}, 'Service normal'), value: formatInteger(stableSubscriptions), size: 'compact' },
+                { label: t('admin.subscriptions.page_stable_metric', {}, 'Page service normal'), value: formatInteger(stableSubscriptions), size: 'compact' },
               ]}
               columnsClassName="md:grid-cols-2 xl:grid-cols-4"
             />
@@ -332,7 +339,7 @@ function SubscriptionsContent() {
                   : 'border-slate-200/80 bg-white/80 text-slate-700 hover:border-slate-300 hover:text-slate-950 dark:border-slate-700 dark:bg-slate-900/60 dark:text-slate-200 dark:hover:border-slate-600 dark:hover:text-white'
               )}
             >
-              {pill.label} · {formatInteger(pill.count)}
+              {pill.label}{typeof pill.count === 'number' ? ` · ${formatInteger(pill.count)}` : ''}
             </button>
           ))}
         </div>
@@ -562,6 +569,13 @@ function SubscriptionsContent() {
             })}
           </div>
         )}
+        <ListPagination
+          offset={offset}
+          limit={PAGE_SIZE}
+          total={total}
+          isLoading={isLoading}
+          onOffsetChange={setOffset}
+        />
       </BackofficeSectionPanel>
     </BackofficePageStack>
   );

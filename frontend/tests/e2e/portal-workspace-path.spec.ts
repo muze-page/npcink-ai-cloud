@@ -108,6 +108,14 @@ async function installPortalMocks(page: Page) {
     },
   ]);
 
+  await page.context().route('https://pay.example.com/**', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'text/html',
+      body: '<!doctype html><title>Mock Alipay checkout</title>',
+    });
+  });
+
   await page.route(/\/(?:api\/portal|portal\/v1)\/.*/, async (route) => {
     const url = new URL(route.request().url());
     const pathname = url.pathname.replace(/^\/api\/portal/, '').replace(/^\/portal\/v1/, '');
@@ -352,6 +360,35 @@ async function installPortalMocks(page: Page) {
       return;
     }
 
+    if (pathname === '/account/credit-pack-orders' && route.request().method() === 'POST') {
+      await fulfillJson(route, {
+        site_id: '',
+        account_id: 'acct_portal',
+        order: {
+          order_id: 'pay_credit_pack_new_tab',
+          account_id: 'acct_portal',
+          provider: 'alipay',
+          status: 'pending',
+          amount: 99,
+          currency: 'CNY',
+          subject: 'Npcink AI Cloud 小积分包（10,000 AI 积分）',
+          checkout_url: 'https://pay.example.com/pay_credit_pack_new_tab',
+          available_actions: ['continue_payment', 'cancel'],
+          purchase_kind: 'credit_pack',
+          credit_pack: {
+            pack_id: 'pack_small',
+            label: 'Small credit pack',
+            ai_credits: 10000,
+            amount: 99,
+            currency: 'CNY',
+          },
+          status_detail: { code: 'awaiting_payment_confirmation' },
+          created_at: '2026-04-07T10:05:00Z',
+        },
+      });
+      return;
+    }
+
     const paymentOrderCancellation = pathname.match(
       /^\/account\/payment-orders\/([^/]+)\/cancellation$/
     );
@@ -380,73 +417,93 @@ async function installPortalMocks(page: Page) {
 
     if (pathname === '/account/payment-orders') {
       const creditPackCanceled = canceledPaymentOrderIds.has('pay_pending_visible');
+      const statusGroup = new URL(route.request().url()).searchParams.get('status_group') || 'all';
+      const allOrders = [
+        {
+          order_id: 'pay_plus_pending',
+          account_id: 'acct_portal',
+          provider: 'alipay',
+          status: 'pending',
+          amount: 15,
+          currency: 'CNY',
+          subject: 'Npcink AI Cloud Plus 月度套餐',
+          checkout_url: 'https://pay.example.com/pay_plus_pending',
+          available_actions: ['continue_payment', 'cancel'],
+          purchase_kind: 'subscription_plan',
+          expires_at: '2026-04-07T10:30:00Z',
+          metadata: {
+            subscription_order_id: 'sord_plus_pending',
+            target_tier_id: 'plus',
+          },
+          status_detail: {
+            code: 'awaiting_payment_confirmation',
+          },
+          created_at: '2026-04-07T10:00:00Z',
+        },
+        {
+          order_id: 'pay_pending_visible',
+          account_id: 'acct_portal',
+          provider: 'alipay',
+          status: creditPackCanceled ? 'canceled' : 'pending',
+          amount: 99,
+          currency: 'CNY',
+          subject: 'Npcink AI Cloud 小积分包（10,000 AI 积分）',
+          available_actions: creditPackCanceled ? [] : ['cancel'],
+          purchase_kind: 'credit_pack',
+          credit_pack: {
+            pack_id: 'pack_small',
+            label: 'Small credit pack',
+          },
+          status_detail: {
+            code: creditPackCanceled ? 'canceled' : 'awaiting_payment_confirmation',
+          },
+          created_at: '2026-04-07T09:00:00Z',
+        },
+        {
+          order_id: 'pay_expired_visible',
+          account_id: 'acct_portal',
+          provider: 'alipay',
+          status: 'canceled',
+          amount: 349,
+          currency: 'CNY',
+          subject: 'Medium credit pack',
+          available_actions: [],
+          purchase_kind: 'credit_pack',
+          status_detail: {
+            code: 'expired_unpaid',
+          },
+          created_at: '2026-04-06T09:00:00Z',
+        },
+      ];
+      const groupedOrders = allOrders.filter((order) => {
+        if (statusGroup === 'pending') return order.status === 'pending';
+        if (statusGroup === 'paid') return order.status === 'paid';
+        if (statusGroup === 'closed') return ['canceled', 'refunded'].includes(order.status);
+        return true;
+      });
+      const counts = {
+        all: allOrders.length,
+        pending: allOrders.filter((order) => order.status === 'pending').length,
+        paid: allOrders.filter((order) => order.status === 'paid').length,
+        closed: allOrders.filter((order) => ['canceled', 'refunded'].includes(order.status)).length,
+      };
       await fulfillJson(route, {
         site_id: '',
         account_id: 'acct_portal',
         generated_at: '2026-04-07T10:00:00Z',
+        status_group: statusGroup,
+        counts,
+        visibility: {
+          canceled_orders_visible_days: 7,
+          database_records_deleted: false,
+        },
         pagination: {
-          limit: 8,
+          limit: 10,
           offset: 0,
-          total: 3,
+          total: groupedOrders.length,
           has_more: false,
         },
-        items: [
-          {
-            order_id: 'pay_plus_pending',
-            account_id: 'acct_portal',
-            provider: 'alipay',
-            status: 'pending',
-            amount: 15,
-            currency: 'CNY',
-            subject: 'Npcink AI Cloud Plus monthly',
-            checkout_url: 'https://pay.example.com/pay_plus_pending',
-            available_actions: ['continue_payment', 'cancel'],
-            purchase_kind: 'subscription_plan',
-            expires_at: '2026-04-07T10:30:00Z',
-            metadata: {
-              subscription_order_id: 'sord_plus_pending',
-              target_tier_id: 'plus',
-            },
-            status_detail: {
-              code: 'awaiting_payment_confirmation',
-            },
-            created_at: '2026-04-07T10:00:00Z',
-          },
-          {
-            order_id: 'pay_pending_visible',
-            account_id: 'acct_portal',
-            provider: 'alipay',
-            status: creditPackCanceled ? 'canceled' : 'pending',
-            amount: 99,
-            currency: 'CNY',
-            subject: 'Small credit pack',
-            available_actions: creditPackCanceled ? [] : ['cancel'],
-            purchase_kind: 'credit_pack',
-            credit_pack: {
-              pack_id: 'pack_small',
-              label: 'Small credit pack',
-            },
-            status_detail: {
-              code: creditPackCanceled ? 'canceled' : 'awaiting_payment_confirmation',
-            },
-            created_at: '2026-04-07T09:00:00Z',
-          },
-          {
-            order_id: 'pay_expired_hidden',
-            account_id: 'acct_portal',
-            provider: 'alipay',
-            status: 'expired',
-            amount: 349,
-            currency: 'CNY',
-            subject: 'Medium credit pack',
-            available_actions: [],
-            purchase_kind: 'credit_pack',
-            status_detail: {
-              code: 'expired',
-            },
-            created_at: '2026-04-06T09:00:00Z',
-          },
-        ],
+        items: groupedOrders,
       });
       return;
     }
@@ -1220,16 +1277,23 @@ test('portal workspace interaction path: account overview to site drawer and ser
   await expect(page.getByRole('button', { name: /Buy Pro|月付购买/i })).toBeVisible();
   await expect(page.getByRole('link', { name: /Request Agency quote|申请 Agency 报价/i })).toBeVisible();
   await expect(page.getByText(/^Payment orders$|^支付订单$/i)).toBeVisible();
+  await expect(page.getByRole('tab', { name: /Pending|待支付/i })).toHaveAttribute('aria-selected', 'true');
   await expect(page.getByRole('link', { name: /Continue payment|继续支付/i })).toBeVisible();
-  await expect(page.getByText(/Expires|过期/i).first()).toBeVisible();
+  await expect(page.getByText(/Complete payment before|前完成支付/i).first()).toBeVisible();
+  const paymentPopupPromise = page.waitForEvent('popup');
+  await page.getByRole('button', { name: /Buy credits|购买积分/i }).click();
+  const paymentPopup = await paymentPopupPromise;
+  await paymentPopup.waitForURL('https://pay.example.com/pay_credit_pack_new_tab');
+  await expect(page.getByText(/Alipay opened in a new tab|支付宝已在新标签页打开/i)).toBeVisible();
+  await paymentPopup.close();
   const creditPackOrder = page.locator('[data-payment-order-id="pay_pending_visible"]');
   await expect(creditPackOrder.getByText(/Small credit pack|小积分包|小積分包/i)).toBeVisible();
   await expect(creditPackOrder.getByText(/Waiting for payment confirmation|等待支付确认/i)).toHaveCount(1);
   await creditPackOrder.getByRole('button', { name: /Cancel|取消订单/i }).click();
   await creditPackOrder.getByRole('button', { name: /Confirm cancel|确认取消/i }).click();
-  await expect(page.locator('[data-payment-order-id="pay_pending_visible"]')).toContainText(
-    /Canceled|已取消/i
-  );
+  await expect(page.locator('[data-payment-order-id="pay_pending_visible"]')).toHaveCount(0);
+  await page.getByRole('tab', { name: /Closed|已关闭/i }).click();
+  await expect(page.locator('[data-payment-order-id="pay_pending_visible"]')).toContainText(/Canceled|已取消/i);
   await expect(page.getByText(/Medium credit pack|中积分包|中積分包/i)).toBeVisible();
 });
 

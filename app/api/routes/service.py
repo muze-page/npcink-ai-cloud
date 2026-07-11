@@ -2644,6 +2644,7 @@ async def list_admin_accounts(
     coverage_state: str | None = Query(default=None),
     package_kind: str | None = Query(default=None),
     top_plan_id: str | None = Query(default=None),
+    exclude_internal: bool = Query(default=False),
     sort: str = Query(default="created_at", pattern="^(created_at|display_name)$"),
     offset: int = Query(default=0, ge=0),
     limit: int = Query(default=100, ge=1, le=500),
@@ -2659,6 +2660,7 @@ async def list_admin_accounts(
             coverage_state=coverage_state,
             package_kind=package_kind,
             top_plan_id=top_plan_id,
+            exclude_internal=exclude_internal,
             sort=sort,
             offset=offset,
             limit=limit,
@@ -2960,6 +2962,7 @@ async def list_admin_portal_users(
     status: str | None = Query(default=None, max_length=32),
     package_alias: str | None = Query(default=None, max_length=64),
     qq_bound: bool | None = Query(default=None),
+    offset: int = Query(default=0, ge=0),
     limit: int = Query(default=100, ge=1, le=500),
 ) -> Any:
     auth = await authorize_internal_request(request, require_idempotency=False)
@@ -2972,6 +2975,7 @@ async def list_admin_portal_users(
             status=status,
             package_alias=package_alias,
             qq_bound=qq_bound,
+            offset=offset,
             limit=limit,
         )
     except CommercialServiceError as error:
@@ -3284,6 +3288,7 @@ async def list_admin_subscriptions(
     account_id: str | None = Query(default=None),
     plan_id: str | None = Query(default=None),
     expires_before: datetime | None = Query(default=None),  # noqa: B008
+    offset: int = Query(default=0, ge=0),
     limit: int = Query(default=100, ge=1, le=500),
 ) -> Any:
     auth = await authorize_internal_request(request, require_idempotency=False)
@@ -3295,6 +3300,7 @@ async def list_admin_subscriptions(
             account_id=account_id,
             plan_id=plan_id,
             expires_before=expires_before,
+            offset=offset,
             limit=limit,
         )
     except CommercialServiceError as error:

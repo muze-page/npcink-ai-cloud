@@ -55,6 +55,79 @@ function timelineLabel(value: string): string {
   return `${String(date.getHours()).padStart(2, '0')}:00`;
 }
 
+type Translator = (key: string, params?: Record<string, string>, fallback?: string) => string;
+
+function customerHealthSummary(status: string, t: Translator): string {
+  if (status === 'ok' || status === 'active') {
+    return t('portal.monitoring.health_ok', {}, 'Site connection is reporting normally.');
+  }
+  if (status === 'inactive') {
+    return t('portal.monitoring.health_inactive', {}, 'No recent site connection activity.');
+  }
+  return t('portal.monitoring.health_attention', {}, 'Site connection needs attention.');
+}
+
+function customerAttentionCopy(
+  item: PortalPluginObservabilitySummary['attention'][number],
+  t: Translator
+): { title: string; detail: string; action: string } {
+  const plugin = pluginLabel(String(item.plugin_slug || ''));
+  const errorCode = String(item.error_code || '');
+  const commonAction = t(
+    'portal.monitoring.attention_action',
+    {},
+    'If this continues, contact support and include the site name.'
+  );
+  const copies: Record<string, { title: string; detail: string }> = {
+    'plugin_observability.inactive': {
+      title: t('portal.monitoring.attention_inactive_title', {}, 'No recent connection activity'),
+      detail: t('portal.monitoring.attention_inactive_detail', {}, 'Cloud has not received site connection activity in this period.'),
+    },
+    'plugin_observability.error_rate_high': {
+      title: t('portal.monitoring.attention_error_high_title', {}, 'Connection issue rate is high'),
+      detail: t('portal.monitoring.attention_error_high_detail', {}, 'Several recent connection activities reported issues.'),
+    },
+    'plugin_observability.error_rate_elevated': {
+      title: t('portal.monitoring.attention_error_title', {}, 'Connection issues were reported'),
+      detail: t('portal.monitoring.attention_error_detail', {}, 'At least one recent connection activity needs review.'),
+    },
+    'plugin_observability.latency_high': {
+      title: t('portal.monitoring.attention_slow_title', {}, 'Connection response is slow'),
+      detail: t('portal.monitoring.attention_slow_detail', {}, 'Recent site connection activity took longer than expected.'),
+    },
+    'plugin_observability.reporting_stale': {
+      title: t('portal.monitoring.attention_stale_title', {}, 'Connection activity is out of date'),
+      detail: t('portal.monitoring.attention_stale_detail', {}, 'The site has not sent a recent service check.'),
+    },
+    'plugin_observability.plugin_error': {
+      title: t('portal.monitoring.attention_plugin_title', {}, 'A connection component reported issues'),
+      detail: t(
+        'portal.monitoring.attention_plugin_detail',
+        { plugin: plugin || t('common.unknown', {}, 'Unknown') },
+        '{{plugin}} reported connection issues.'
+      ),
+    },
+    'plugin_observability.catalog_churn': {
+      title: t('portal.monitoring.attention_catalog_title', {}, 'Site capability information changed repeatedly'),
+      detail: t('portal.monitoring.attention_catalog_detail', {}, 'The site refreshed its capability information several times in this period.'),
+    },
+    'plugin_observability.plugin_missing': {
+      title: t('portal.monitoring.attention_missing_title', {}, 'A connection component is not reporting'),
+      detail: t('portal.monitoring.attention_missing_detail', {}, 'One or more expected site components have not sent activity.'),
+    },
+    'plugin_observability.top_error': {
+      title: t('portal.monitoring.attention_top_error_title', {}, 'A recurring connection issue needs review'),
+      detail: errorCode
+        ? t('portal.monitoring.attention_top_error_detail', { code: errorCode }, 'Issue code: {{code}}')
+        : t('portal.monitoring.attention_error_detail', {}, 'At least one recent connection activity needs review.'),
+    },
+  };
+  return { ...(copies[item.code] || {
+    title: t('portal.monitoring.customer_issue_general', {}, 'Service item needs attention'),
+    detail: t('portal.monitoring.customer_issue_detail', {}, 'If this keeps showing, contact support and include the site name.'),
+  }), action: commonAction };
+}
+
 export function PortalPluginMonitoringPanel({
   siteId,
   summary,
@@ -88,6 +161,26 @@ export function PortalPluginMonitoringPanel({
     value: Number(plugin.events_total || 0),
     color: Number(plugin.error_total || 0) > 0 ? '#f59e0b' : '#3b82f6',
   }));
+  const digestHeadline = Number(totals?.events_total || 0) <= 0
+    ? t('portal.monitoring.digest_empty', {}, 'No connection activity in this period.')
+    : Number(totals?.error_total || 0) > 0 || attention.length > 0
+      ? t('portal.monitoring.digest_attention', {}, 'Some connection activity needs review.')
+      : t('portal.monitoring.digest_ok', {}, 'Site connection activity is normal.');
+  const digestBullets = [
+    t(
+      'portal.monitoring.digest_activity',
+      {
+        events: formatNumber(Number(totals?.events_total || 0)),
+        errors: formatNumber(Number(totals?.error_total || 0)),
+      },
+      '{{events}} activities, {{errors}} issues.'
+    ),
+    t(
+      'portal.monitoring.digest_success',
+      { rate: formatSuccessRate(Number(totals?.success_rate || 0)) },
+      'Normal rate: {{rate}}.'
+    ),
+  ];
 
   return (
     <BackofficeSectionPanel className="space-y-4">
@@ -170,7 +263,7 @@ export function PortalPluginMonitoringPanel({
 	                    {t('portal.monitoring.health_label', {}, 'Status')}
                   </p>
                   <h3 className="mt-1 text-sm font-semibold text-slate-950 dark:text-white">
-	                    {health?.summary || t('portal.monitoring.health_default', {}, 'Connection status')}
+	                    {health ? customerHealthSummary(health.status, t) : t('portal.monitoring.health_default', {}, 'Connection status')}
                   </h3>
                 </div>
                 {health ? (
@@ -183,29 +276,32 @@ export function PortalPluginMonitoringPanel({
               </div>
               {attention.length ? (
                 <div className="grid gap-2 lg:grid-cols-3">
-                  {attention.slice(0, compact ? 2 : 3).map((item) => (
+                  {attention.slice(0, compact ? 2 : 3).map((item) => {
+                    const copy = customerAttentionCopy(item, t);
+                    return (
                     <div
                       key={`${item.code}-${item.plugin_slug || ''}-${item.error_code || ''}`}
                       className="rounded-xl border border-slate-200/80 bg-white/70 px-3 py-3 text-sm dark:border-slate-800 dark:bg-slate-900/40"
                     >
 	                      <div className="flex items-start justify-between gap-2">
-	                        <p className="font-semibold text-slate-950 dark:text-white">{item.title}</p>
-	                        <BackofficeTag tone={attentionTone(item.severity)}>{item.severity}</BackofficeTag>
+	                        <p className="font-semibold text-slate-950 dark:text-white">{copy.title}</p>
+	                        <BackofficeTag tone={attentionTone(item.severity)}>{t(`status.${item.severity}`, {}, item.severity)}</BackofficeTag>
 	                      </div>
-	                      <p className="mt-2 text-xs leading-5 text-slate-600 dark:text-slate-300">{item.detail}</p>
-	                      {item.suggested_action ? (
+	                      <p className="mt-2 text-xs leading-5 text-slate-600 dark:text-slate-300">{copy.detail}</p>
+	                      {copy.action ? (
                         <p className="mt-2 text-xs leading-5 text-slate-500 dark:text-slate-400">
-                          {item.suggested_action}
+                          {copy.action}
                         </p>
                       ) : null}
                     </div>
-                  ))}
+                    );
+                  })}
                 </div>
               ) : null}
             </BackofficeStackCard>
           ) : null}
 
-          {digest?.headline && !compact ? (
+          {digest && !compact ? (
             <BackofficeStackCard className="space-y-3">
               <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
                 <div>
@@ -213,14 +309,14 @@ export function PortalPluginMonitoringPanel({
                     {t('portal.monitoring.digest_label', {}, 'Digest')}
                   </p>
                   <h3 className="mt-1 text-sm font-semibold text-slate-950 dark:text-white">
-                    {digest.headline}
+                    {digestHeadline}
                   </h3>
                 </div>
-                <BackofficeTag tone="info">{digest.period_label || `${digest.window_hours}h`}</BackofficeTag>
+                <BackofficeTag tone="info">{`${digest.window_hours || summary?.window?.hours || 24}h`}</BackofficeTag>
               </div>
-              {Array.isArray(digest.bullets) && digest.bullets.length ? (
+              {digestBullets.length ? (
                 <div className="grid gap-2 md:grid-cols-2">
-                  {digest.bullets.slice(0, 4).map((item) => (
+                  {digestBullets.map((item) => (
                     <div
                       key={item}
                       className="rounded-xl border border-slate-200/80 bg-white/70 px-3 py-2 text-xs leading-5 text-slate-600 dark:border-slate-800 dark:bg-slate-900/40 dark:text-slate-300"

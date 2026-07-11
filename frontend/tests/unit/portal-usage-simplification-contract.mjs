@@ -96,6 +96,11 @@ assert.match(
   /feature_key[\s\S]*credit_ledger_feature_[\s\S]*credit_ledger_service_used_suffix[\s\S]*credit_ledger_credit_deducted/,
   'customer point ledger must show the concrete backend-provided feature and point deduction copy'
 );
+assert.match(
+  source,
+  /getAccountCreditLedger\([\s\S]*offset: nextOffset[\s\S]*<ListPagination[\s\S]*total=\{creditLedgerCount\}/,
+  'customer point ledger must expose older records through pagination'
+);
 assert.doesNotMatch(
   source,
   /formatLedgerQuantity|credit_ledger_quantity/,

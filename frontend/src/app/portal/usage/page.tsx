@@ -2,6 +2,7 @@
 
 import React, { Suspense, useCallback, useEffect, useMemo, useState } from 'react';
 import { LoadingFallback } from '@/components/ui/LoadingFallback';
+import { ListPagination } from '@/components/ui/ListPagination';
 import { PortalWorkspaceHeader } from '@/components/portal/PortalWorkspaceHeader';
 import {
   PortalEmptyState,
@@ -83,6 +84,10 @@ function PortalUsageContent() {
   const [usage, setUsage] = useState<PortalUsageSummaryPayload | null>(null);
   const [entitlements, setEntitlements] = useState<Entitlements | null>(null);
   const [creditLedger, setCreditLedger] = useState<PortalCreditLedgerPayload | null>(null);
+  const [creditLedgerOffset, setCreditLedgerOffset] = useState(0);
+  const [creditLedgerLoading, setCreditLedgerLoading] = useState(false);
+  const [creditLedgerError, setCreditLedgerError] = useState('');
+  const creditLedgerPageSize = 20;
 
   const loadBundle = useCallback(async () => {
     const bundle = await portalClient.getUsageBundle();
@@ -96,6 +101,23 @@ function PortalUsageContent() {
     initialDelay: 800,
     backoffMultiplier: 2,
   });
+
+  const loadCreditLedgerPage = async (nextOffset: number) => {
+    setCreditLedgerLoading(true);
+    setCreditLedgerError('');
+    try {
+      const response = await portalClient.getAccountCreditLedger({
+        limit: creditLedgerPageSize,
+        offset: nextOffset,
+      });
+      setCreditLedger(response.data);
+      setCreditLedgerOffset(nextOffset);
+    } catch (err) {
+      setCreditLedgerError(formatPortalErrorMessage(err, t, t('error.failed_load')));
+    } finally {
+      setCreditLedgerLoading(false);
+    }
+  };
 
   useEffect(() => {
     if (!session || !isAuthenticated) {
@@ -370,6 +392,17 @@ function PortalUsageContent() {
               )}
             </div>
           )}
+          {creditLedgerError ? (
+            <p className="text-sm text-red-700 dark:text-red-300">{creditLedgerError}</p>
+          ) : null}
+          <ListPagination
+            offset={creditLedgerOffset}
+            limit={creditLedgerPageSize}
+            total={creditLedgerCount}
+            isLoading={creditLedgerLoading}
+            onOffsetChange={(nextOffset) => void loadCreditLedgerPage(nextOffset)}
+            className="px-0 pb-0"
+          />
         </BackofficeSectionPanel>
       ) : null}
 

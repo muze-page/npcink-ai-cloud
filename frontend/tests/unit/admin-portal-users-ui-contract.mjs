@@ -14,8 +14,14 @@ const proxySource = readFileSync(proxyPath, 'utf8');
 
 assert.match(
   pageSource,
-  /fetch\(`\/api\/admin\/portal-users\?\$\{buildQuery\(filters\)\}`/,
+  /fetch\(`\/api\/admin\/portal-users\?\$\{buildQuery\(filters, offset\)\}`/,
   'portal users page must load users through the admin proxy'
+);
+
+assert.match(
+  pageSource,
+  /<ListPagination[\s\S]*offset=\{offset\}[\s\S]*total=\{total\}/,
+  'portal users page must expose all filtered users through pagination'
 );
 
 assert.match(

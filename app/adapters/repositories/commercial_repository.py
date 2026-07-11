@@ -15,6 +15,7 @@ from app.core.models import (
     CREDIT_LEDGER_EVENT_CONSUME,
     IDENTITY_PROVIDER_BINDING_STATUS_ACTIVE,
     IDENTITY_PROVIDER_BINDING_STATUS_REVOKED,
+    PAYMENT_ORDER_STATUS_CANCELED,
     PAYMENT_ORDER_STATUS_PENDING,
     PORTAL_LOGIN_CODE_STATUS_PENDING,
     PORTAL_OAUTH_STATE_STATUS_PENDING,
@@ -1388,6 +1389,7 @@ class CommercialRepository:
         site_ids: list[str] | None = None,
         plan_id: str | None = None,
         current_period_end_before: datetime | None = None,
+        offset: int = 0,
         limit: int | None = None,
     ) -> list[AccountSubscription]:
         statement = select(AccountSubscription)
@@ -1429,6 +1431,8 @@ class CommercialRepository:
         )
         if joined_sites:
             statement = statement.distinct()
+        if offset > 0:
+            statement = statement.offset(offset)
         if limit is not None and limit > 0:
             statement = statement.limit(limit)
         return list(self.session.scalars(statement))
@@ -1438,12 +1442,24 @@ class CommercialRepository:
         *,
         status: str | None = None,
         statuses: list[str] | None = None,
+        account_id: str | None = None,
+        plan_id: str | None = None,
+        current_period_end_before: datetime | None = None,
     ) -> int:
         statement = select(func.count(AccountSubscription.subscription_id))
         if status:
             statement = statement.where(AccountSubscription.status == status)
         if statuses:
             statement = statement.where(AccountSubscription.status.in_(statuses))
+        if account_id:
+            statement = statement.where(AccountSubscription.account_id == account_id)
+        if plan_id:
+            statement = statement.where(AccountSubscription.plan_id == plan_id)
+        if current_period_end_before is not None:
+            statement = statement.where(
+                AccountSubscription.current_period_end_at.is_not(None),
+                AccountSubscription.current_period_end_at <= current_period_end_before,
+            )
         return int(self.session.scalar(statement) or 0)
 
     def summarize_subscription_status_counts(self) -> dict[str, int]:
@@ -1720,12 +1736,24 @@ class CommercialRepository:
         *,
         account_id: str,
         site_id: str | None = None,
+        statuses: tuple[str, ...] | None = None,
+        canceled_visible_after: datetime | None = None,
         limit: int | None = None,
         offset: int = 0,
     ) -> list[PaymentOrder]:
         statement = select(PaymentOrder).where(PaymentOrder.account_id == account_id)
         if site_id:
             statement = statement.where(PaymentOrder.site_id == site_id)
+        if statuses is not None:
+            statement = statement.where(PaymentOrder.status.in_(statuses))
+        if canceled_visible_after is not None:
+            statement = statement.where(
+                or_(
+                    PaymentOrder.status != PAYMENT_ORDER_STATUS_CANCELED,
+                    PaymentOrder.canceled_at.is_(None),
+                    PaymentOrder.canceled_at >= canceled_visible_after,
+                )
+            )
         statement = statement.order_by(PaymentOrder.created_at.desc(), PaymentOrder.order_id.desc())
         if offset > 0:
             statement = statement.offset(offset)
@@ -1750,18 +1778,29 @@ class CommercialRepository:
             statement = statement.where(PaymentOrder.site_id == site_id)
         return list(self.session.scalars(statement))
 
-    def count_payment_orders(
+    def count_payment_orders_by_status(
         self,
         *,
         account_id: str,
         site_id: str | None = None,
-    ) -> int:
-        statement = select(func.count(PaymentOrder.order_id)).where(
-            PaymentOrder.account_id == account_id
+        canceled_visible_after: datetime | None = None,
+    ) -> dict[str, int]:
+        statement = (
+            select(PaymentOrder.status, func.count(PaymentOrder.order_id))
+            .where(PaymentOrder.account_id == account_id)
+            .group_by(PaymentOrder.status)
         )
         if site_id:
             statement = statement.where(PaymentOrder.site_id == site_id)
-        return int(self.session.scalar(statement) or 0)
+        if canceled_visible_after is not None:
+            statement = statement.where(
+                or_(
+                    PaymentOrder.status != PAYMENT_ORDER_STATUS_CANCELED,
+                    PaymentOrder.canceled_at.is_(None),
+                    PaymentOrder.canceled_at >= canceled_visible_after,
+                )
+            )
+        return {str(status): int(count or 0) for status, count in self.session.execute(statement)}
 
     def create_payment_order(
         self,
