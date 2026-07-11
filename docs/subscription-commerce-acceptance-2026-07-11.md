@@ -67,12 +67,13 @@ An isolated temporary PostgreSQL database completed:
 
 Result: passed and removed.
 
-## Remaining Production Gates
+## Production Closeout
 
-- complete formal release smoke with all required production smoke secrets;
-- create and checksum-verify a pre-deploy production backup;
-- promote the reviewed release through `master` to `production`;
-- verify production migration `20260710_0058` and the new tables;
-- complete one real low-value Plus payment, Plus-to-Pro upgrade, and controlled
-  full refund;
-- create a post-deploy `0058` backup and restore it into an isolated database.
+- Formal release smoke: passed after production deployment.
+- Pre-deploy backup: verified at migration `20260710_0057`.
+- Production promotion: completed through PR #154.
+- Production migration and commerce tables: verified at `20260710_0058`.
+- Post-deploy backup and isolated restore: passed; see
+  [Production Backup Restore Drill - 2026-07-11](production-backup-restore-drill-2026-07-11.md).
+- Real Alipay payment, Plus-to-Pro upgrade, full refund, and QQ login: deferred
+  until the external provider credentials are configured.
