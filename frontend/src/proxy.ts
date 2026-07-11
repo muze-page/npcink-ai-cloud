@@ -78,10 +78,6 @@ export function proxy(request: NextRequest) {
     );
   }
 
-  if (isAdminLogin && hasAdminSession) {
-    return withSecurityHeaders(NextResponse.redirect(new URL('/admin', request.url)));
-  }
-
   if (isAdminRoute && !isAdminPublicRoute && !hasAdminSession) {
     return withSecurityHeaders(buildAdminLoginRedirect(request));
   }

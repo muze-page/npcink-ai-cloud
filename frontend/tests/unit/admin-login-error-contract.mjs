@@ -43,6 +43,16 @@ assert.match(
   /NPCINK_CLOUD_ADMIN_BOOTSTRAP_TOKEN/,
   'admin login invalid-token copy must point operators at the current token name'
 );
+assert.match(
+  loginPageSource,
+  /resolveAdminLoginRedirect[\s\S]*fetch\('\/admin\/session'[\s\S]*response\.ok[\s\S]*router\.replace\(redirectTo\)/,
+  'admin login must validate the server session before redirecting to a safe admin destination'
+);
+assert.match(
+  loginPageSource,
+  /if \(isCheckingSession\) \{[\s\S]*return <LoadingFallback \/>;/,
+  'admin login must not show the token form before session validation finishes'
+);
 
 assert.match(
   loginPageSource,

@@ -2033,6 +2033,48 @@ async def list_portal_account_payment_orders(
     )
 
 
+@router.post("/account/payment-orders/{order_id}/cancellation")
+async def cancel_portal_account_payment_order(
+    request: Request,
+    order_id: str,
+) -> Any:
+    same_origin = _portal_same_origin_guard(request, always=True)
+    if same_origin is not None:
+        return same_origin
+    write_guard = _portal_write_guard(request)
+    if write_guard is not None:
+        return write_guard
+    auth = await resolve_portal_request_context(
+        request,
+        require_idempotency=True,
+        allow_session_cookies=True,
+    )
+    if isinstance(auth, JSONResponse):
+        return auth
+    account_id = _resolve_primary_portal_account_id(
+        request,
+        principal_id=auth.principal_id,
+    )
+    if isinstance(account_id, JSONResponse):
+        return account_id
+    try:
+        result = _get_commercial_service(request).cancel_account_payment_order(
+            account_id=account_id,
+            order_id=order_id,
+            audit_context=_build_portal_audit_context(request, auth.principal_id),
+        )
+    except CommercialServiceError as error:
+        return _service_error_response(error, request=request)
+    return _portal_route_envelope(
+        message="portal account payment order canceled",
+        data={
+            **result,
+            "account_id": account_id,
+            "principal_id": auth.principal_id,
+        },
+    )
+
+
 @router.get("/support-requests")
 async def list_portal_support_requests(
     request: Request,

@@ -76,8 +76,8 @@ assert.match(
 );
 assert.match(
   billingPageSource,
-  /<details className="group[\s\S]*portal\.usage\.payment_orders_title[\s\S]*common\.view_details/,
-  'Portal package page must fold recent payment orders behind a detail disclosure'
+  /<section className="overflow-hidden[\s\S]*portal\.usage\.payment_orders_title/,
+  'Portal package page must keep payment order actions directly visible'
 );
 assert.equal(
   (billingPageSource.match(/const paymentOrdersCard =/g) || []).length,
@@ -103,6 +103,11 @@ assert.match(
   portalClientSource,
   /async listAccountPaymentOrders[\s\S]*\/account\/payment-orders/,
   'Portal client must expose account-level payment order listing'
+);
+assert.match(
+  portalClientSource,
+  /available_actions\?: Array<'continue_payment' \| 'cancel'>[\s\S]*async cancelAccountPaymentOrder[\s\S]*\/account\/payment-orders\/\$\{encodeURIComponent\(orderId\)\}\/cancellation/,
+  'Portal payment order contract must expose server-owned actions and unified cancellation'
 );
 assert.match(
   portalClientSource,
@@ -146,8 +151,18 @@ assert.match(
 );
 assert.match(
   billingPageSource,
-  /shouldShowPaymentOrder[\s\S]*status !== 'canceled'[\s\S]*status !== 'expired'[\s\S]*code\.includes\('expired'\)[\s\S]*filter\(shouldShowPaymentOrder\)/,
-  'Portal package page must hide canceled or expired payment orders from the customer order list'
+  /pendingPaymentOrders[\s\S]*recentPaymentOrders[\s\S]*payment_orders_pending_title[\s\S]*payment_orders_recent_title/,
+  'Portal package page must separate actionable pending orders from recent order history'
+);
+assert.match(
+  billingPageSource,
+  /paymentOrderAllowsAction\(order, 'continue_payment'\)[\s\S]*paymentOrderAllowsAction\(order, 'cancel'\)[\s\S]*payment_order_confirm_cancel/,
+  'Portal package page must render server-authorized payment actions with cancel confirmation'
+);
+assert.doesNotMatch(
+  billingPageSource,
+  /<BackofficeStatusBadge[\s\S]{0,500}<p[^>]*>[\s\S]{0,120}\{resolvePaymentOrderStatusLabel\(order, t\)\}/,
+  'Portal package page must not repeat the same payment status below its badge'
 );
 assert.doesNotMatch(
   billingPageSource,

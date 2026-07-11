@@ -91,7 +91,13 @@ async function addPortalSessionCookie(page: Page) {
   ]);
 }
 
-async function installLoginFlowMocks(page: Page, { initiallyLoggedIn = false }: { initiallyLoggedIn?: boolean } = {}) {
+async function installLoginFlowMocks(
+  page: Page,
+  {
+    initiallyLoggedIn = false,
+    withSessionCookie = initiallyLoggedIn,
+  }: { initiallyLoggedIn?: boolean; withSessionCookie?: boolean } = {}
+) {
   let loggedIn = initiallyLoggedIn;
   let requestCodeCount = 0;
   let verifyCodeCalled = false;
@@ -107,6 +113,14 @@ async function installLoginFlowMocks(page: Page, { initiallyLoggedIn = false }: 
         return;
       }
       await fulfillJson(route, buildEmptyPortalSession());
+      return;
+    }
+
+    if (pathname === '/logout') {
+      loggedIn = false;
+      await fulfillJson(route, {}, {
+        'Set-Cookie': 'npcink_portal_session_token=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax',
+      });
       return;
     }
 
@@ -169,7 +183,7 @@ async function installLoginFlowMocks(page: Page, { initiallyLoggedIn = false }: 
     await fulfillError(route, 404, `unhandled:${pathname}`);
   });
 
-  if (initiallyLoggedIn) {
+  if (withSessionCookie) {
     await addPortalSessionCookie(page);
   }
 
@@ -208,6 +222,26 @@ test('an authenticated user is redirected from the login page to the Portal defa
 
   await expect(page).toHaveURL(`${BASE_URL}/portal`);
   await expect(page.getByRole('heading', { name: /No Connected Sites|没有已连接站点/i })).toBeVisible();
+});
+
+test('an authenticated user is redirected from registration to the Portal default', async ({ page }) => {
+  await installLoginFlowMocks(page, { initiallyLoggedIn: true });
+
+  await page.goto('/portal/register');
+
+  await expect(page).toHaveURL(`${BASE_URL}/portal`);
+  await expect(page.getByRole('heading', { name: /No Connected Sites|没有已连接站点/i })).toBeVisible();
+});
+
+test('a stale Portal cookie returns to login without exposing protected navigation', async ({ page }) => {
+  await installLoginFlowMocks(page, { withSessionCookie: true });
+  const protectedPath = '/portal/usage?window=rolling_24h';
+
+  await page.goto(protectedPath);
+
+  await expect(page).toHaveURL(`${BASE_URL}/portal/login?redirect=${encodeURIComponent(protectedPath)}`);
+  await expect(page.locator('[data-ui="portal-primary-nav"]')).toHaveCount(0);
+  await expect(page.getByLabel(/Email Address|邮箱地址/i)).toBeVisible();
 });
 
 test('addon binding survives login and returns the complete payload to WordPress', async ({ page }) => {
