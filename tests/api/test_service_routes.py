@@ -5987,11 +5987,7 @@ def test_service_routes_expose_observability_summary(tmp_path: Path) -> None:
     assert payload["ready"]["status"] == "error"
     assert payload["tracing"]["service_name"] == "npcink-ai-cloud"
     assert isinstance(payload["tracing"]["trace_sink_configured"], bool)
-    assert payload["feature_flags"]["summary"]["flags_total"] >= 1
-    assert payload["feature_flags"]["summary"]["overridden_total"] == 0
-    assert any(
-        item["key"] == "admin.commercial_ops.enabled" for item in payload["feature_flags"]["items"]
-    )
+    assert "feature_flags" not in payload
     assert payload["workers"]["totals"]["workers_total"] == 3
     assert any(item["worker_id"] == "runtime_queue" for item in payload["workers"]["items"])
     assert payload["cadence"]["totals"]["tasks_total"] == 9
@@ -6030,44 +6026,6 @@ def test_service_routes_observability_summary_marks_trace_sink_configured_when_p
     assert payload["tracing"]["otlp_endpoint"] == "http://host.docker.internal:4318/v1/traces"
     assert payload["tracing"]["trace_sink_otlp_endpoint"] == "host.docker.internal:4318"
     assert payload["tracing"]["trace_sink_query_url"] == "http://mini.example:16686"
-
-    dispose_engine(database_url)
-
-
-def test_service_routes_observability_summary_surfaces_feature_flag_overrides(
-    tmp_path: Path,
-) -> None:
-    database_url, client = _build_client(
-        tmp_path,
-        settings_overrides={
-            "feature_flags_json": (
-                '{"portal.billing.readonly.enabled": false,'
-                ' "runtime.experimental_probe.enabled": true}'
-            ),
-        },
-    )
-
-    response = client.get(
-        "/internal/service/observability/summary",
-        headers=build_internal_headers(),
-    )
-
-    assert response.status_code == 200
-    payload = response.json()["data"]
-    assert payload["feature_flags"]["parse_error"] == ""
-    assert payload["feature_flags"]["summary"]["overridden_total"] == 2
-    assert any(
-        item["key"] == "portal.billing.readonly.enabled"
-        and item["enabled"] is False
-        and item["source"] == "env_override"
-        for item in payload["feature_flags"]["items"]
-    )
-    assert any(
-        item["key"] == "runtime.experimental_probe.enabled"
-        and item["enabled"] is True
-        and item["source"] == "env_override"
-        for item in payload["feature_flags"]["items"]
-    )
 
     dispose_engine(database_url)
 

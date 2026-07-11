@@ -79,8 +79,8 @@ def test_prod_env_files_use_canonical_admin_names_and_do_not_expose_ai_provider_
     assert "NPCINK_CLOUD_OPENROUTER_API_KEY=" not in env_example_text
     assert "NPCINK_CLOUD_SILICONFLOW_API_KEY=" not in env_example_text
     assert "AI provider channels are managed in Cloud runtime storage" in env_example_text
-    assert "NPCINK_CLOUD_FEATURE_FLAGS_JSON" in env_example_text
-    assert "NPCINK_CLOUD_FEATURE_FLAGS_JSON" in readme_text
+    assert "NPCINK_CLOUD_FEATURE_FLAGS_JSON" not in env_example_text
+    assert "NPCINK_CLOUD_FEATURE_FLAGS_JSON" not in readme_text
     assert "http://127.0.0.1:8010" in env_example_text
     assert _documented_https_host(checklist_text, "NPCINK_CLOUD_BASE_URL") == "cloud.npc.ink"
     assert (

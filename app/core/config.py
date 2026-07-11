@@ -108,7 +108,6 @@ class Settings(BaseSettings):
     otel_exporter_otlp_endpoint: str | None = Field(default=None)
     otel_trace_sink_otlp_endpoint: str | None = Field(default=None)
     otel_trace_query_url: str | None = Field(default=None)
-    feature_flags_json: str = Field(default="")
     deployment_region: str = Field(default="unspecified")
     audit_retention_days_default: int = Field(default=90)
     openai_base_url: str = Field(default="https://api.openai.com/v1")
