@@ -3,7 +3,7 @@ from __future__ import annotations
 from functools import lru_cache
 from urllib.parse import urlsplit
 
-from pydantic import AliasChoices, Field, model_validator
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from app.core.models import PLATFORM_ADMIN_ROLE_PLATFORM_ADMIN
@@ -108,7 +108,6 @@ class Settings(BaseSettings):
     otel_exporter_otlp_endpoint: str | None = Field(default=None)
     otel_trace_sink_otlp_endpoint: str | None = Field(default=None)
     otel_trace_query_url: str | None = Field(default=None)
-    feature_flags_json: str = Field(default="")
     deployment_region: str = Field(default="unspecified")
     audit_retention_days_default: int = Field(default=90)
     openai_base_url: str = Field(default="https://api.openai.com/v1")
@@ -161,14 +160,7 @@ class Settings(BaseSettings):
     site_knowledge_rerank_top_k: int = Field(default=30)
     site_knowledge_rerank_timeout_seconds: float = Field(default=8.0)
     site_knowledge_jina_base_url: str = Field(default="https://api.jina.ai")
-    site_knowledge_jina_api_key: str | None = Field(
-        default=None,
-        validation_alias=AliasChoices(
-            "NPCINK_CLOUD_SITE_KNOWLEDGE_JINA_API_KEY",
-            "NPCINK_CLOUD_JINA_API_KEY",
-            "JINA_API_KEY",
-        ),
-    )
+    site_knowledge_jina_api_key: str | None = Field(default=None)
     site_knowledge_jina_rerank_model: str = Field(default="jina-reranker-v3")
     site_knowledge_zilliz_uri: str | None = Field(default=None)
     site_knowledge_zilliz_token: str | None = Field(default=None)

@@ -126,6 +126,13 @@ def _run_artifact_cleanup(settings: Settings) -> dict[str, object]:
     return {"purged_artifacts": purged}
 
 
+def _run_payment_order_expiration(settings: Settings) -> dict[str, object]:
+    return CommercialService(
+        settings.database_url,
+        settings=settings,
+    ).expire_pending_payment_orders()
+
+
 def cadence_task_specs() -> list[CadenceTaskSpec]:
     return [
         CadenceTaskSpec(
@@ -177,6 +184,12 @@ def cadence_task_specs() -> list[CadenceTaskSpec]:
             event_kind="runtime.artifact_cleanup.cadence",
             interval_seconds=lambda s: s.artifact_cleanup_interval_seconds,
             runner=_run_artifact_cleanup,
+        ),
+        CadenceTaskSpec(
+            task_id="payment_order_expiration",
+            event_kind="payment.order_expiration.cadence",
+            interval_seconds=lambda _settings: 60,
+            runner=_run_payment_order_expiration,
         ),
     ]
 

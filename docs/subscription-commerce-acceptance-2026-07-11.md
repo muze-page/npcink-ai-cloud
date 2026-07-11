@@ -29,7 +29,7 @@ deployment. Those remain separate release gates.
 | Agency purchase | only the quoted account can purchase the active quote | domain and Portal API tests passed |
 | shared trial | Plus may move to Pro or approved Agency without resetting the original 14-day end | domain and Portal API tests passed |
 | trial abuse prevention | account, principal, and site-domain reuse cannot create a second paid trial | domain tests passed |
-| expired checkout | unpaid orders expire after 24 hours and do not block a replacement order | domain tests passed |
+| unpaid checkout lifecycle | unpaid orders expire after 30 minutes; each account may keep five and cancel them individually | domain and Portal route tests passed |
 | callback replay | repeated payment confirmation does not duplicate subscription activation | payment tests passed |
 | partial refunds | cumulative successful refunds revoke coverage when they reach the full paid amount | domain tests passed |
 | refund ordering | an earlier package order cannot be refunded over a later live order | domain tests passed |

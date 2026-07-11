@@ -3511,6 +3511,20 @@ def test_portal_user_can_start_pro_trial_and_create_monthly_order(
     assert listed_order["site_id"] == ""
     assert listed_order["status"] == "pending"
     assert listed_order["metadata"]["billing_cycle"] == "monthly"
+    assert listed_order["expires_at"]
+
+    cancel_response = client.delete(
+        f"/portal/v1/account/subscription-orders/{order['metadata']['subscription_order_id']}",
+        headers=build_portal_headers(
+            principal_id=str(registration["principal_id"]),
+            idempotency_key="portal-pro-monthly-order-cancel-001",
+        ),
+    )
+    assert cancel_response.status_code == 200, cancel_response.text
+    canceled_order = cancel_response.json()["data"]["order"]
+    assert canceled_order["status"] == "canceled"
+    assert canceled_order["checkout_url"] == ""
+    assert canceled_order["metadata"]["cancellation_reason"] == "customer_canceled"
 
     with get_session(database_url) as session:
         subscriptions = list(

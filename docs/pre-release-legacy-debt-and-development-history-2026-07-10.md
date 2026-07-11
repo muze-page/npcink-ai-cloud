@@ -269,6 +269,20 @@ Do not rotate or remove the dedicated key as part of an application rollback.
 
 Both files pass the targeted command and the explicit debt exceptions were removed.
 
+### 5.5 Final configuration and callback hard cut
+
+Runtime settings now accept only the canonical
+`NPCINK_CLOUD_SITE_KNOWLEDGE_JINA_API_KEY`; external Jina variable names remain
+limited to the explicit provider-import command. Provider Connection
+credentials use `NPCINK_CLOUD_SERVICE_SETTINGS_SECRET` directly and no longer
+select admin-session, Portal JWT, or internal-auth keys. Existing Provider
+Connection credentials must be re-imported or re-saved during promotion.
+
+Direct runtime `callback_url` overrides are rejected in both API and domain
+entry points. Callback dispatch reads only the site-registered
+`runtime_callbacks.terminal` contract; the old persisted-policy reader and
+the `allow_legacy_callback_url` switch were removed.
+
 ### 5.5 Cleanup-only old cookies
 
 Old `magick_*` admin, Portal, QQ nonce, and locale cookie cleanup branches were

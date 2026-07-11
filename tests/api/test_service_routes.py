@@ -700,7 +700,9 @@ def test_admin_service_settings_store_masked_cloud_runtime_config(tmp_path: Path
         json={
             "enabled": True,
             "app_id": "2026000000000099",
-            "gateway_url": "https://openapi.alipay.com/gateway.do",
+            # Legacy callers may still send this field, but operators may not
+            # redirect the real Page Pay flow away from the fixed gateway.
+            "gateway_url": "https://untrusted.example.invalid/gateway.do",
             "notify_url": "https://cloud.example.com/open/payments/alipay/notify",
             "return_url": "https://cloud.example.com/open/payments/alipay/return",
             "private_key": alipay_private_key,
@@ -710,6 +712,9 @@ def test_admin_service_settings_store_masked_cloud_runtime_config(tmp_path: Path
     )
     assert alipay_response.status_code == 200, alipay_response.text
     assert alipay_response.json()["data"]["status"] == "ready"
+    assert alipay_response.json()["data"]["config"]["gateway_url"] == (
+        "https://openapi.alipay.com/gateway.do"
+    )
     assert (
         alipay_response.json()["data"]["secrets"]["private_key"]["display"]
         == "configured"
@@ -5928,8 +5933,9 @@ def test_service_routes_expose_ops_cadence_summary(tmp_path: Path) -> None:
 
     assert response.status_code == 200
     payload = response.json()["data"]
-    assert payload["totals"]["tasks_total"] == 8
+    assert payload["totals"]["tasks_total"] == 9
     assert any(item["task_id"] == "retention_cleanup" for item in payload["items"])
+    assert any(item["task_id"] == "payment_order_expiration" for item in payload["items"])
     assert all(item["task_id"] != "hosted_model_governance" for item in payload["items"])
     retention_item = next(
         item for item in payload["items"] if item["task_id"] == "retention_cleanup"
@@ -5981,14 +5987,14 @@ def test_service_routes_expose_observability_summary(tmp_path: Path) -> None:
     assert payload["ready"]["status"] == "error"
     assert payload["tracing"]["service_name"] == "npcink-ai-cloud"
     assert isinstance(payload["tracing"]["trace_sink_configured"], bool)
-    assert payload["feature_flags"]["summary"]["flags_total"] >= 1
-    assert payload["feature_flags"]["summary"]["overridden_total"] == 0
-    assert any(
-        item["key"] == "admin.commercial_ops.enabled" for item in payload["feature_flags"]["items"]
-    )
+    assert "feature_flags" not in payload
     assert payload["workers"]["totals"]["workers_total"] == 3
     assert any(item["worker_id"] == "runtime_queue" for item in payload["workers"]["items"])
-    assert payload["cadence"]["totals"]["tasks_total"] == 8
+    assert payload["cadence"]["totals"]["tasks_total"] == 9
+    assert any(
+        item["task_id"] == "payment_order_expiration"
+        for item in payload["cadence"]["items"]
+    )
     assert "status_counts" in payload["providers"]
     assert "summary" in payload["runtime"]
     assert "backlog" in payload["runtime"]
@@ -6020,44 +6026,6 @@ def test_service_routes_observability_summary_marks_trace_sink_configured_when_p
     assert payload["tracing"]["otlp_endpoint"] == "http://host.docker.internal:4318/v1/traces"
     assert payload["tracing"]["trace_sink_otlp_endpoint"] == "host.docker.internal:4318"
     assert payload["tracing"]["trace_sink_query_url"] == "http://mini.example:16686"
-
-    dispose_engine(database_url)
-
-
-def test_service_routes_observability_summary_surfaces_feature_flag_overrides(
-    tmp_path: Path,
-) -> None:
-    database_url, client = _build_client(
-        tmp_path,
-        settings_overrides={
-            "feature_flags_json": (
-                '{"portal.billing.readonly.enabled": false,'
-                ' "runtime.experimental_probe.enabled": true}'
-            ),
-        },
-    )
-
-    response = client.get(
-        "/internal/service/observability/summary",
-        headers=build_internal_headers(),
-    )
-
-    assert response.status_code == 200
-    payload = response.json()["data"]
-    assert payload["feature_flags"]["parse_error"] == ""
-    assert payload["feature_flags"]["summary"]["overridden_total"] == 2
-    assert any(
-        item["key"] == "portal.billing.readonly.enabled"
-        and item["enabled"] is False
-        and item["source"] == "env_override"
-        for item in payload["feature_flags"]["items"]
-    )
-    assert any(
-        item["key"] == "runtime.experimental_probe.enabled"
-        and item["enabled"] is True
-        and item["source"] == "env_override"
-        for item in payload["feature_flags"]["items"]
-    )
 
     dispose_engine(database_url)
 

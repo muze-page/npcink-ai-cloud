@@ -16,9 +16,11 @@ from app.adapters.queue.in_memory import InMemoryRuntimeQueue
 from app.adapters.queue.redis_runtime_queue import RedisRuntimeQueue
 from app.adapters.repositories.runtime_repository import RuntimeRepository
 from app.core.db import dispose_engine, get_session, init_schema
-from app.core.models import RunRecord, ServiceAuditEvent
+from app.core.models import RunRecord, ServiceAuditEvent, Site
+from app.core.secrets import encrypt_runtime_terminal_callback_secret
 from app.domain.catalog.service import CatalogService
 from app.domain.runtime.errors import (
+    RuntimeCallbackConfigurationError,
     RuntimeResultExpiredError,
     RuntimeSiteInactiveError,
     RuntimeSiteNotProvisionedError,
@@ -50,6 +52,36 @@ def _runtime_service(
             internal_auth_token="i" * 32,
         )
     return RuntimeService(database_url, settings=settings, **kwargs)
+
+
+def _register_runtime_callback(database_url: str, callback_url: str) -> None:
+    from app.core.config import Settings
+
+    settings = Settings(
+        _env_file=None,
+        environment="test",
+        database_url=database_url,
+        redis_url="redis://localhost:6379/0",
+        internal_auth_token="i" * 32,
+    )
+    with get_session(database_url) as session:
+        site = session.get(Site, "site_queue")
+        assert site is not None
+        site.metadata_json = {
+            "runtime_callbacks": {
+                "terminal": {
+                    "enabled": True,
+                    "callback_url": callback_url,
+                    "key_id": "runtime_callback_key",
+                    "secret_ciphertext": encrypt_runtime_terminal_callback_secret(
+                        "runtime-callback-test-secret-32b",
+                        settings=settings,
+                    ),
+                    "callback_id": "runtime_terminal",
+                }
+            }
+        }
+        session.commit()
 
 
 def test_execute_requires_preprovisioned_active_site(tmp_path: Path) -> None:
@@ -100,6 +132,31 @@ def test_execute_requires_preprovisioned_active_site(tmp_path: Path) -> None:
     with pytest.raises(RuntimeSiteInactiveError):
         service.execute(request)
 
+    dispose_engine(database_url)
+
+
+def test_domain_runtime_rejects_request_callback_override(tmp_path: Path) -> None:
+    database_url = _sqlite_url(tmp_path)
+    init_schema(database_url)
+    CatalogService(database_url).refresh_catalog()
+    seed_openai_model_allowlist(database_url)
+    seed_site_auth(database_url, site_id="site_queue")
+
+    service = _runtime_service(database_url)
+    with pytest.raises(RuntimeCallbackConfigurationError):
+        service.execute(
+            RuntimeRequest(
+                site_id="site_queue",
+                ability_name="workflow/media_nightly_image_optimize",
+                channel="openapi",
+                execution_kind="text",
+                profile_id="text.balanced",
+                callback_url="https://example.com/legacy-override",
+                input_payload={"messages": [{"role": "user", "content": "reject callback"}]},
+                idempotency_key="queue-domain-reject-callback-001",
+                trace_id="trace-queue-domain-reject-callback-001",
+            )
+        )
     dispose_engine(database_url)
 
 
@@ -399,6 +456,7 @@ def test_dispatch_pending_callbacks_delivers_terminal_run(
     CatalogService(database_url).refresh_catalog()
     seed_openai_model_allowlist(database_url)
     seed_site_auth(database_url, site_id="site_queue")
+    _register_runtime_callback(database_url, "https://example.com/domain")
 
     service = _runtime_service(database_url)
     completed = service.execute(
@@ -408,7 +466,7 @@ def test_dispatch_pending_callbacks_delivers_terminal_run(
             channel="openapi",
             execution_kind="text",
             profile_id="text.balanced",
-            callback_url="https://example.com/domain",
+            task_backend={"callback_mode": "polling_preferred"},
             idempotency_key="queue-domain-callback-001",
             trace_id="trace-queue-domain-callback-001",
             input_payload={"messages": [{"role": "user", "content": "deliver callback"}]},
@@ -454,6 +512,7 @@ def test_dispatch_pending_callbacks_recovers_stale_dispatching_lease(
     CatalogService(database_url).refresh_catalog()
     seed_openai_model_allowlist(database_url)
     seed_site_auth(database_url, site_id="site_queue")
+    _register_runtime_callback(database_url, "https://example.com/recover")
 
     service = _runtime_service(database_url)
     completed = service.execute(
@@ -463,7 +522,7 @@ def test_dispatch_pending_callbacks_recovers_stale_dispatching_lease(
             channel="openapi",
             execution_kind="text",
             profile_id="text.balanced",
-            callback_url="https://example.com/recover",
+            task_backend={"callback_mode": "polling_preferred"},
             idempotency_key="queue-domain-callback-recover-001",
             trace_id="trace-queue-domain-callback-recover-001",
             input_payload={"messages": [{"role": "user", "content": "recover callback"}]},
@@ -599,6 +658,7 @@ def test_bounded_auto_repairs_redeliver_callback_overdue_runs_and_surface_operat
     CatalogService(database_url).refresh_catalog()
     seed_openai_model_allowlist(database_url)
     seed_site_auth(database_url, site_id="site_queue")
+    _register_runtime_callback(database_url, "https://example.com/callback-overdue")
 
     service = _runtime_service(database_url)
     callback_run = service.execute(
@@ -608,7 +668,7 @@ def test_bounded_auto_repairs_redeliver_callback_overdue_runs_and_surface_operat
             channel="openapi",
             execution_kind="text",
             profile_id="text.balanced",
-            callback_url="https://example.com/callback-overdue",
+            task_backend={"callback_mode": "polling_preferred"},
             idempotency_key="queue-domain-auto-repair-callback-001",
             trace_id="trace-queue-domain-auto-repair-callback-001",
             input_payload={
@@ -796,6 +856,7 @@ def test_callback_dispatch_recovery_logs_audit_failure_but_keeps_recovery_flow(
     CatalogService(database_url).refresh_catalog()
     seed_openai_model_allowlist(database_url)
     seed_site_auth(database_url, site_id="site_queue")
+    _register_runtime_callback(database_url, "https://example.com/recover-failure")
 
     service = _runtime_service(database_url)
     completed = service.execute(
@@ -805,7 +866,7 @@ def test_callback_dispatch_recovery_logs_audit_failure_but_keeps_recovery_flow(
             channel="openapi",
             execution_kind="text",
             profile_id="text.balanced",
-            callback_url="https://example.com/recover-failure",
+            task_backend={"callback_mode": "polling_preferred"},
             input_payload={"messages": [{"role": "user", "content": "recover with audit failure"}]},
             idempotency_key="queue-domain-callback-recover-failure-001",
             trace_id="trace-queue-domain-callback-recover-failure-001",

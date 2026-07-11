@@ -359,10 +359,30 @@ async function installPortalMocks(page: Page) {
         pagination: {
           limit: 8,
           offset: 0,
-          total: 2,
+          total: 3,
           has_more: false,
         },
         items: [
+          {
+            order_id: 'pay_plus_pending',
+            account_id: 'acct_portal',
+            provider: 'alipay',
+            status: 'pending',
+            amount: 15,
+            currency: 'CNY',
+            subject: 'Npcink AI Cloud Plus monthly',
+            checkout_url: 'https://pay.example.com/pay_plus_pending',
+            purchase_kind: 'subscription_plan',
+            expires_at: '2026-04-07T10:30:00Z',
+            metadata: {
+              subscription_order_id: 'sord_plus_pending',
+              target_tier_id: 'plus',
+            },
+            status_detail: {
+              code: 'awaiting_payment_confirmation',
+            },
+            created_at: '2026-04-07T10:00:00Z',
+          },
           {
             order_id: 'pay_pending_visible',
             account_id: 'acct_portal',
@@ -1169,6 +1189,9 @@ test('portal workspace interaction path: account overview to site drawer and ser
   await expect(page.getByRole('button', { name: /Buy Pro|月付购买/i })).toBeVisible();
   await expect(page.getByRole('link', { name: /Request Agency quote|申请 Agency 报价/i })).toBeVisible();
   await page.getByText(/Recent payment orders|最近支付订单|最近支付訂單/i).click();
+  await expect(page.getByRole('link', { name: /Continue payment|继续支付/i })).toBeVisible();
+  await expect(page.getByRole('button', { name: /Cancel|取消订单/i })).toBeVisible();
+  await expect(page.getByText(/Expires|过期/i).first()).toBeVisible();
   await expect(page.getByText(/Small credit pack|小积分包|小積分包/i).first()).toBeVisible();
   await expect(page.getByText(/Medium credit pack|中积分包|中積分包/i)).toHaveCount(0);
 });
