@@ -22,6 +22,7 @@ def _settings(database_url: str) -> Settings:
         redis_url="redis://localhost:6379/0",
         internal_auth_token="npcink-cloud-internal-test-token-32b",
         admin_session_secret="npcink-cloud-admin-session-secret-32b",
+        service_settings_secret="npcink-cloud-service-settings-secret-32b",
         portal_jwt_secret="npcink-cloud-portal-jwt-secret-32b",
     )
 

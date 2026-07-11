@@ -173,12 +173,15 @@ def test_settings_ignore_retired_admin_and_openai_aliases(monkeypatch) -> None:
         "NPCINK_CLOUD_OPENAI_COMPATIBLE_BASE_URL",
         "https://retired.example.com/v1",
     )
+    monkeypatch.setenv("NPCINK_CLOUD_JINA_API_KEY", "retired-jina-secret")
+    monkeypatch.setenv("JINA_API_KEY", "external-jina-secret")
 
     settings = Settings(_env_file=None)
 
     assert settings.admin_session_secret == "a" * 32
     assert settings.openai_api_key in {None, ""}
     assert settings.openai_base_url == "https://api.openai.com/v1"
+    assert settings.site_knowledge_jina_api_key in {None, ""}
 
 
 def test_retired_ops_secret_does_not_satisfy_production_config(monkeypatch) -> None:
