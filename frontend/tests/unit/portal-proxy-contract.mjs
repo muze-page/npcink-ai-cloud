@@ -6,11 +6,15 @@ const portalSharedPath = resolve(process.cwd(), 'src/app/api/portal/_shared.ts')
 const portalRoutePath = resolve(process.cwd(), 'src/app/api/portal/[...path]/route.ts');
 const adminSharedPath = resolve(process.cwd(), 'src/app/api/admin/_shared.ts');
 const proxyPath = resolve(process.cwd(), 'src/proxy.ts');
+const portalLayoutPath = resolve(process.cwd(), 'src/app/portal/layout.tsx');
+const portalSessionBoundaryPath = resolve(process.cwd(), 'src/components/portal/PortalSessionBoundary.tsx');
 
 const portalSharedSource = readFileSync(portalSharedPath, 'utf8');
 const portalRouteSource = readFileSync(portalRoutePath, 'utf8');
 const adminSharedSource = readFileSync(adminSharedPath, 'utf8');
 const proxySource = readFileSync(proxyPath, 'utf8');
+const portalLayoutSource = readFileSync(portalLayoutPath, 'utf8');
+const portalSessionBoundarySource = readFileSync(portalSessionBoundaryPath, 'utf8');
 
 for (const headerName of [
   'authorization',
@@ -93,4 +97,24 @@ assert.match(
   proxySource,
   /loginUrl\.searchParams\.set\('redirect', `\$\{pathname\}\$\{request\.nextUrl\.search\}`\)/,
   'portal page auth redirect must preserve query parameters such as WordPress addon connection state'
+);
+assert.match(
+  portalLayoutSource,
+  /<PortalSessionBoundary>[\s\S]*<PortalNavbar \/>[\s\S]*\{children\}[\s\S]*<\/PortalSessionBoundary>/,
+  'the Portal shell must defer stale-session rendering to the shared session boundary'
+);
+assert.match(
+  portalSessionBoundarySource,
+  /if \(isLoading \|\| isAuthenticated \|\| redirectStartedRef\.current\)[\s\S]*logout\(\)\.finally\(\(\) => window\.location\.replace\(loginUrl\)\)/,
+  'a stale Portal cookie must be cleared before returning the user to login with the original path'
+);
+assert.match(
+  portalSessionBoundarySource,
+  /if \(!isPublicPath && !isLoading && !isAuthenticated\) \{[\s\S]*return <LoadingFallback \/>;/,
+  'protected Portal content and navigation must stay hidden while stale-session redirect is in progress'
+);
+assert.doesNotMatch(
+  proxySource,
+  /isAdminLogin && hasAdminSession[\s\S]*NextResponse\.redirect/,
+  'admin login must not trust cookie presence without validating the session'
 );

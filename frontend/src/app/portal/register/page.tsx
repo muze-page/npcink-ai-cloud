@@ -1,7 +1,8 @@
 'use client';
 
 import Link from 'next/link';
-import React, { Suspense, useState } from 'react';
+import { useRouter } from 'next/navigation';
+import React, { Suspense, useEffect, useState } from 'react';
 import {
   BackofficePageStack,
   BackofficeSectionPanel,
@@ -23,8 +24,9 @@ interface RegisterFormState {
 }
 
 function RegisterFormContent() {
+  const router = useRouter();
   const { t } = useLocale();
-  const { refresh } = useSession();
+  const { isAuthenticated, isLoading, refresh } = useSession();
   const [form, setForm] = useState<RegisterFormState>({
     email: '',
     code: '',
@@ -32,6 +34,16 @@ function RegisterFormContent() {
     status: 'idle',
     message: '',
   });
+
+  useEffect(() => {
+    if (!isLoading && isAuthenticated) {
+      router.replace('/portal');
+    }
+  }, [isAuthenticated, isLoading, router]);
+
+  if (isLoading || isAuthenticated) {
+    return <LoadingFallback />;
+  }
 
   const setField = (key: keyof RegisterFormState, value: string) => {
     setForm((prev) => ({ ...prev, [key]: value, status: 'idle', message: '' }));

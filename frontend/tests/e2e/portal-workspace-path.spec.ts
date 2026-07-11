@@ -98,6 +98,7 @@ function buildPortalSession(selectedSiteId: string) {
 
 async function installPortalMocks(page: Page) {
   let selectedSiteId = 'site_attention';
+  const canceledPaymentOrderIds = new Set<string>();
 
   await page.context().addCookies([
     {
@@ -351,7 +352,34 @@ async function installPortalMocks(page: Page) {
       return;
     }
 
+    const paymentOrderCancellation = pathname.match(
+      /^\/account\/payment-orders\/([^/]+)\/cancellation$/
+    );
+    if (paymentOrderCancellation && route.request().method() === 'POST') {
+      const orderId = decodeURIComponent(paymentOrderCancellation[1]);
+      canceledPaymentOrderIds.add(orderId);
+      await fulfillJson(route, {
+        account_id: 'acct_portal',
+        order: {
+          order_id: orderId,
+          account_id: 'acct_portal',
+          provider: 'alipay',
+          status: 'canceled',
+          amount: 99,
+          currency: 'CNY',
+          subject: 'Small credit pack',
+          checkout_url: '',
+          available_actions: [],
+          purchase_kind: 'credit_pack',
+          status_detail: { code: 'canceled' },
+          created_at: '2026-04-07T09:00:00Z',
+        },
+      });
+      return;
+    }
+
     if (pathname === '/account/payment-orders') {
+      const creditPackCanceled = canceledPaymentOrderIds.has('pay_pending_visible');
       await fulfillJson(route, {
         site_id: '',
         account_id: 'acct_portal',
@@ -372,6 +400,7 @@ async function installPortalMocks(page: Page) {
             currency: 'CNY',
             subject: 'Npcink AI Cloud Plus monthly',
             checkout_url: 'https://pay.example.com/pay_plus_pending',
+            available_actions: ['continue_payment', 'cancel'],
             purchase_kind: 'subscription_plan',
             expires_at: '2026-04-07T10:30:00Z',
             metadata: {
@@ -387,17 +416,18 @@ async function installPortalMocks(page: Page) {
             order_id: 'pay_pending_visible',
             account_id: 'acct_portal',
             provider: 'alipay',
-            status: 'pending',
+            status: creditPackCanceled ? 'canceled' : 'pending',
             amount: 99,
             currency: 'CNY',
             subject: 'Small credit pack',
+            available_actions: creditPackCanceled ? [] : ['cancel'],
             purchase_kind: 'credit_pack',
             credit_pack: {
               pack_id: 'pack_small',
               label: 'Small credit pack',
             },
             status_detail: {
-              code: 'awaiting_payment_confirmation',
+              code: creditPackCanceled ? 'canceled' : 'awaiting_payment_confirmation',
             },
             created_at: '2026-04-07T09:00:00Z',
           },
@@ -409,6 +439,7 @@ async function installPortalMocks(page: Page) {
             amount: 349,
             currency: 'CNY',
             subject: 'Medium credit pack',
+            available_actions: [],
             purchase_kind: 'credit_pack',
             status_detail: {
               code: 'expired',
@@ -1188,12 +1219,18 @@ test('portal workspace interaction path: account overview to site drawer and ser
   await expect(page.getByRole('button', { name: /Buy Plus|购买 Plus/i })).toBeVisible();
   await expect(page.getByRole('button', { name: /Buy Pro|月付购买/i })).toBeVisible();
   await expect(page.getByRole('link', { name: /Request Agency quote|申请 Agency 报价/i })).toBeVisible();
-  await page.getByText(/Recent payment orders|最近支付订单|最近支付訂單/i).click();
+  await expect(page.getByText(/^Payment orders$|^支付订单$/i)).toBeVisible();
   await expect(page.getByRole('link', { name: /Continue payment|继续支付/i })).toBeVisible();
-  await expect(page.getByRole('button', { name: /Cancel|取消订单/i })).toBeVisible();
   await expect(page.getByText(/Expires|过期/i).first()).toBeVisible();
-  await expect(page.getByText(/Small credit pack|小积分包|小積分包/i).first()).toBeVisible();
-  await expect(page.getByText(/Medium credit pack|中积分包|中積分包/i)).toHaveCount(0);
+  const creditPackOrder = page.locator('[data-payment-order-id="pay_pending_visible"]');
+  await expect(creditPackOrder.getByText(/Small credit pack|小积分包|小積分包/i)).toBeVisible();
+  await expect(creditPackOrder.getByText(/Waiting for payment confirmation|等待支付确认/i)).toHaveCount(1);
+  await creditPackOrder.getByRole('button', { name: /Cancel|取消订单/i }).click();
+  await creditPackOrder.getByRole('button', { name: /Confirm cancel|确认取消/i }).click();
+  await expect(page.locator('[data-payment-order-id="pay_pending_visible"]')).toContainText(
+    /Canceled|已取消/i
+  );
+  await expect(page.getByText(/Medium credit pack|中积分包|中積分包/i)).toBeVisible();
 });
 
 test('portal sites page stays a site-record list without current-site switching', async ({ page }) => {

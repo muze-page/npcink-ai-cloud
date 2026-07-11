@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import base64
 import json
+from datetime import datetime
 from urllib.parse import parse_qs, urlsplit
+from zoneinfo import ZoneInfo
 
 import pytest
 from cryptography.hazmat.primitives import hashes, serialization
@@ -144,6 +146,25 @@ def test_real_alipay_gateway_signs_order_and_verifies_callback() -> None:
     assert query["sign_type"] == ["RSA2"]
     assert "\"timeout_express\":\"30m\"" in query["biz_content"][0]
     assert order.provider_payload["gateway_mode"] == "alipay_page_pay"
+    signed_params = {
+        key: values[0]
+        for key, values in query.items()
+        if key != "sign" and values and values[0]
+    }
+    signed_content = "&".join(
+        f"{key}={value}" for key, value in sorted(signed_params.items())
+    )
+    private_key.public_key().verify(  # type: ignore[attr-defined]
+        base64.b64decode(query["sign"][0]),
+        signed_content.encode("utf-8"),
+        padding.PKCS1v15(),
+        hashes.SHA256(),
+    )
+    gateway_timestamp = datetime.strptime(
+        query["timestamp"][0],
+        "%Y-%m-%d %H:%M:%S",
+    ).replace(tzinfo=ZoneInfo("Asia/Shanghai"))
+    assert abs((datetime.now(ZoneInfo("Asia/Shanghai")) - gateway_timestamp).total_seconds()) < 5
 
     callback = {
         "app_id": "2026000000000001",
