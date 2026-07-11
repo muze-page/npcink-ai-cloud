@@ -86,17 +86,6 @@ const advancedEntries: AdvancedEntry[] = [
     groupKey: 'admin.advanced.group_runtime',
     groupFallback: 'Runtime evidence',
   },
-  {
-    href: '/admin/ai-advisor',
-    titleKey: 'admin.nav_ai_advisor',
-    titleFallback: 'AI Advisor',
-    descKey: 'admin.advanced.ai_advisor_desc',
-    descFallback: 'AI-assisted diagnosis for selected operational signals.',
-    actionKey: 'admin.advanced.action_open_advisor',
-    actionFallback: 'Open advisor',
-    groupKey: 'admin.advanced.group_governance',
-    groupFallback: 'Governance',
-  },
 ];
 
 const advancedGroups: AdvancedGroup[] = [
@@ -105,12 +94,6 @@ const advancedGroups: AdvancedGroup[] = [
     fallback: 'Runtime evidence',
     descKey: 'admin.advanced.group_runtime_desc',
     descFallback: 'Read current runtime evidence before opening individual plugin, media, vector, or feedback detail.',
-  },
-  {
-    key: 'admin.advanced.group_governance',
-    fallback: 'Governance',
-    descKey: 'admin.advanced.group_governance_desc',
-    descFallback: 'Use advisory diagnostics to explain operational posture without changing approval, routing, or WordPress state.',
   },
 ];
 

@@ -261,10 +261,10 @@ assert.match(
   'Top-level admin navigation must expose Model Binding in Simplified Chinese'
 );
 
-assert.match(
-  i18nSource,
-  /'admin\.nav_ai_advisor': '运营诊断助手'/,
-  'Advanced troubleshooting navigation must expose AI Advisor as Operations Advisor in Simplified Chinese'
+assert.doesNotMatch(
+  troubleshootingSource,
+  /href: '\/admin\/ai-advisor'/,
+  'First-release troubleshooting navigation must not expose AI Advisor as a routine entry'
 );
 
 assert.match(
