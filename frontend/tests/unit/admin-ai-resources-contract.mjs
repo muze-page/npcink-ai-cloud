@@ -1235,7 +1235,7 @@ assert.match(
 
 assert.match(
   pageSource,
-  /id: 'deepseek'[\s\S]*baseUrl: 'https:\/\/api\.deepseek\.com\/v1'[\s\S]*deepseek-chat, deepseek-reasoner/,
+  /id: 'deepseek'[\s\S]*baseUrl: 'https:\/\/api\.deepseek\.com\/v1'[\s\S]*deepseek-v4-flash, deepseek-v4-pro/,
   'Provider channel presets must include DeepSeek as an OpenAI-compatible text supplier'
 );
 
@@ -1290,6 +1290,132 @@ assert.match(
   pageSource,
   /providerId\.includes\('deepseek'\)[\s\S]*return 'deepseek'/,
   'Provider channel edit form must infer existing DeepSeek connections back to the DeepSeek preset'
+);
+
+assert.match(
+  pageSource,
+  /id: 'kimi'[\s\S]*kind: 'openai_compatible'[\s\S]*baseUrl: 'https:\/\/api\.moonshot\.cn\/v1'[\s\S]*modelIds: 'kimi-k2\.6'/,
+  'Provider channel presets must include Kimi as an OpenAI-compatible text supplier'
+);
+
+assert.match(
+  pageSource,
+  /id: 'kimi'[\s\S]*websiteUrl: 'https:\/\/www\.kimi\.com\/'[\s\S]*docsUrl: 'https:\/\/platform\.kimi\.com\/docs\/api\/overview'/,
+  'Provider channel Kimi preset must expose official website and docs reference links'
+);
+
+assert.match(
+  pageSource,
+  /providerId\.includes\('kimi'\)[\s\S]*providerId\.includes\('moonshot'\)[\s\S]*baseUrl\.includes\('moonshot'\)[\s\S]*return 'kimi'/,
+  'Provider channel edit form must infer existing Kimi and Moonshot connections back to the Kimi preset'
+);
+
+assert.match(
+  pageSource,
+  /id: 'doubao'[\s\S]*kind: 'openai_compatible'[\s\S]*baseUrl: 'https:\/\/ark\.cn-beijing\.volces\.com\/api\/v3'[\s\S]*modelIds: 'doubao-seed-2-0-lite-260215'/,
+  'Provider channel presets must include Doubao through Volcengine Ark as an OpenAI-compatible text supplier'
+);
+
+assert.match(
+  pageSource,
+  /id: 'doubao'[\s\S]*websiteUrl: 'https:\/\/www\.volcengine\.com\/product\/ark'[\s\S]*docsUrl: 'https:\/\/docs\.volcengine\.com\/docs\/82379\/1795150'/,
+  'Provider channel Doubao preset must expose official Volcengine Ark reference links'
+);
+
+assert.match(
+  pageSource,
+  /providerId\.includes\('doubao'\)[\s\S]*providerId\.includes\('volcengine'\)[\s\S]*baseUrl\.includes\('volces\.com'\)[\s\S]*return 'doubao'/,
+  'Provider channel edit form must infer existing Doubao and Volcengine connections back to the Doubao preset'
+);
+
+assert.match(
+  pageSource,
+  /id: 'xiaomi_mimo'[\s\S]*kind: 'openai_compatible'[\s\S]*baseUrl: 'https:\/\/api\.xiaomimimo\.com\/v1'[\s\S]*modelIds: 'mimo-v2\.5-pro'/,
+  'Provider channel presets must include Xiaomi MiMo as an OpenAI-compatible text supplier'
+);
+
+assert.match(
+  pageSource,
+  /id: 'xiaomi_mimo'[\s\S]*websiteUrl: 'https:\/\/mimo\.mi\.com\/'[\s\S]*docsUrl: 'https:\/\/mimo\.mi\.com\/docs\/quick-start\/first-api-call'/,
+  'Provider channel Xiaomi MiMo preset must expose official website and docs reference links'
+);
+
+assert.match(
+  pageSource,
+  /providerId\.includes\('xiaomi_mimo'\)[\s\S]*providerId === 'mimo'[\s\S]*baseUrl\.includes\('xiaomimimo\.com'\)[\s\S]*return 'xiaomi_mimo'/,
+  'Provider channel edit form must infer existing Xiaomi MiMo connections back to the Xiaomi MiMo preset'
+);
+
+assert.match(
+  pageSource,
+  /id: 'longcat'[\s\S]*kind: 'openai_compatible'[\s\S]*baseUrl: 'https:\/\/api\.longcat\.chat\/openai\/v1'[\s\S]*modelIds: 'LongCat-2\.0'/,
+  'Provider channel presets must include Meituan LongCat as an OpenAI-compatible text supplier'
+);
+
+assert.match(
+  pageSource,
+  /id: 'longcat'[\s\S]*websiteUrl: 'https:\/\/longcat\.chat\/'[\s\S]*docsUrl: 'https:\/\/longcat\.chat\/platform\/docs\/APIDocs\.html'/,
+  'Provider channel LongCat preset must expose official website and docs reference links'
+);
+
+assert.match(
+  pageSource,
+  /providerId\.includes\('longcat'\)[\s\S]*providerId\.includes\('meituan'\)[\s\S]*baseUrl\.includes\('longcat\.chat'\)[\s\S]*return 'longcat'/,
+  'Provider channel edit form must infer existing LongCat and Meituan connections back to the LongCat preset'
+);
+
+assert.match(
+  pageSource,
+  /id: 'qwen'[\s\S]*kind: 'openai_compatible'[\s\S]*baseUrl: 'https:\/\/dashscope\.aliyuncs\.com\/compatible-mode\/v1'[\s\S]*modelIds: 'qwen3\.6-plus'/,
+  'Provider channel presets must include Qwen through Alibaba Cloud Model Studio as an OpenAI-compatible text supplier'
+);
+
+assert.match(
+  pageSource,
+  /id: 'qwen'[\s\S]*websiteUrl: 'https:\/\/www\.aliyun\.com\/product\/bailian'[\s\S]*docsUrl: 'https:\/\/help\.aliyun\.com\/zh\/model-studio\/base-url'/,
+  'Provider channel Qwen preset must expose official Alibaba Cloud Model Studio reference links'
+);
+
+assert.match(
+  pageSource,
+  /providerId\.includes\('qwen'\)[\s\S]*providerId\.includes\('dashscope'\)[\s\S]*baseUrl\.includes\('dashscope'\)[\s\S]*baseUrl\.includes\('maas\.aliyuncs\.com'\)[\s\S]*return 'qwen'/,
+  'Provider channel edit form must infer existing Qwen and Model Studio connections back to the Qwen preset'
+);
+
+assert.match(
+  pageSource,
+  /id: 'hunyuan'[\s\S]*kind: 'openai_compatible'[\s\S]*baseUrl: 'https:\/\/tokenhub\.tencentmaas\.com\/v1'[\s\S]*modelIds: 'hy3-preview'/,
+  'Provider channel presets must include Hunyuan through Tencent TokenHub as an OpenAI-compatible text supplier'
+);
+
+assert.match(
+  pageSource,
+  /id: 'hunyuan'[\s\S]*websiteUrl: 'https:\/\/cloud\.tencent\.com\/product\/hunyuan'[\s\S]*docsUrl: 'https:\/\/cloud\.tencent\.com\/document\/product\/1729\/131925'/,
+  'Provider channel Hunyuan preset must expose official Tencent Cloud migration reference links'
+);
+
+assert.match(
+  pageSource,
+  /providerId\.includes\('hunyuan'\)[\s\S]*providerId\.includes\('tencent'\)[\s\S]*baseUrl\.includes\('tencentmaas\.com'\)[\s\S]*baseUrl\.includes\('hunyuan\.cloud\.tencent\.com'\)[\s\S]*return 'hunyuan'/,
+  'Provider channel edit form must infer existing Hunyuan connections across TokenHub and legacy endpoints'
+);
+
+assert.match(
+  pageSource,
+  /id: 'zhipu_glm'[\s\S]*kind: 'openai_compatible'[\s\S]*baseUrl: 'https:\/\/open\.bigmodel\.cn\/api\/paas\/v4'[\s\S]*modelIds: 'glm-5\.1'/,
+  'Provider channel presets must include Zhipu GLM as an OpenAI-compatible text supplier'
+);
+
+assert.match(
+  pageSource,
+  /id: 'zhipu_glm'[\s\S]*websiteUrl: 'https:\/\/www\.bigmodel\.cn\/'[\s\S]*docsUrl: 'https:\/\/docs\.bigmodel\.cn\/cn\/guide\/develop\/openai\/introduction'/,
+  'Provider channel Zhipu GLM preset must expose official BigModel reference links'
+);
+
+assert.match(
+  pageSource,
+  /providerId\.includes\('zhipu'\)[\s\S]*providerId\.includes\('glm'\)[\s\S]*baseUrl\.includes\('bigmodel\.cn'\)[\s\S]*return 'zhipu_glm'/,
+  'Provider channel edit form must infer existing Zhipu and GLM connections back to the Zhipu GLM preset'
 );
 
 assert.match(
