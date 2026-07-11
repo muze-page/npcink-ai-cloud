@@ -602,9 +602,10 @@ def test_wordpress_ai_connector_title_generation_uses_hidden_site_title_style(
     assert captured_input["intent"] == "writing_context"
     assert captured_input["max_results"] == 12
     provider_input = provider.requests[0].input_payload
-    assert "用云端能力增强 WordPress 编辑体验" in provider_input["input"]
-    assert "让 AI 更懂你的网站内容" in provider_input["input"]
-    assert provider_input["input"].count("用云端能力增强 WordPress 编辑体验") == 1
+    assert "用云端能力增强 WordPress 编辑体验" not in provider_input["input"]
+    assert "让 AI 更懂你的网站内容" not in provider_input["input"]
+    assert "Aggregate style profile" in provider_input["input"]
+    assert '"typical_length_chars"' in provider_input["input"]
     assert "This chunk must not be sent" not in provider_input["input"]
     assert "generation_context.v1" in provider_input["input"]
     assert provider_input["input"].index("generation_context.v1") < provider_input["input"].index(
@@ -612,7 +613,7 @@ def test_wordpress_ai_connector_title_generation_uses_hidden_site_title_style(
     )
     assert "Never add a name, number, claim, or event" in provider_input["input"]
     assert provider_input["metadata"]["site_knowledge_reference"] == "applied"
-    assert provider_input["metadata"]["site_knowledge_reference_count"] == 2
+    assert provider_input["metadata"]["site_knowledge_reference_count"] == 1
     assert provider_input["metadata"]["generation_context_status"] == "applied"
     assert provider_input["metadata"]["generation_context_reason"] == "references_applied"
 
@@ -656,9 +657,7 @@ def test_wordpress_ai_connector_title_generation_silently_falls_back_when_site_k
 @pytest.mark.parametrize(
     ("task", "mode", "expected_marker"),
     [
-        ("excerpt_generation", "site_excerpt_style", "Historical style samples"),
-        ("meta_description", "site_meta_style", "Historical style samples"),
-        ("content_summary", "site_summary_style", "Historical style samples"),
+        ("excerpt_generation", "site_excerpt_style", "Aggregate style profile"),
         (
             "content_classification",
             "site_taxonomy_history",
@@ -738,12 +737,54 @@ def test_wordpress_ai_connector_uses_task_bound_hidden_site_reference(
     assert provider_input["metadata"]["site_knowledge_reference"] == "applied"
     assert provider_input["metadata"]["site_knowledge_reference_mode"] == mode
     assert provider_input["metadata"]["generation_context_contract"] == "generation_context.v1"
-    if task == "content_summary":
-        assert "only factual source" in provider_input["input"]
     if task == "content_classification":
         assert "WordPress AI" in provider_input["input"]
         assert "Site Knowledge" in provider_input["input"]
         assert "term IDs" in provider_input["input"]
+
+
+@pytest.mark.parametrize(
+    ("task", "mode"),
+    [
+        ("meta_description", "site_meta_style"),
+        ("content_summary", "site_summary_style"),
+    ],
+)
+def test_wordpress_ai_connector_defers_context_without_task_appropriate_source_data(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    task: str,
+    mode: str,
+) -> None:
+    _, client, provider = _build_client(tmp_path)
+
+    def fail_if_retrieval_runs(
+        self: SiteKnowledgeService,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        del self, kwargs
+        raise AssertionError("deferred tasks must not perform vector retrieval")
+
+    monkeypatch.setattr(SiteKnowledgeService, "execute", fail_if_retrieval_runs)
+    response = _execute(
+        client,
+        _payload(
+            {
+                "task": task,
+                "request": {
+                    "prompt": "Run the current WordPress editor task.",
+                    "site_knowledge_reference": {"enabled": True, "mode": mode},
+                },
+            }
+        ),
+        idempotency_key=f"wp-ai-{mode}-deferred",
+    )
+
+    assert response.status_code == 200
+    provider_input = provider.requests[0].input_payload
+    assert "Generation context" not in provider_input["input"]
+    assert provider_input["metadata"]["generation_context_status"] == "unavailable"
+    assert provider_input["metadata"]["generation_context_reason"] == ("task_policy_unavailable")
 
 
 def test_wordpress_ai_connector_title_generation_ignores_non_list_site_knowledge_results(

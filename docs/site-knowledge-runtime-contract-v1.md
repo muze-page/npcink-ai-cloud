@@ -276,25 +276,34 @@ The internal task policies are deliberately bounded:
 
 | Task | Minimum score | Source posts | References | Context characters |
 | --- | ---: | ---: | ---: | ---: |
-| title | 0.35 | 6 | 5 | 900 |
-| excerpt | 0.35 | 5 | 4 | 1,600 |
-| meta description | 0.35 | 5 | 4 | 1,400 |
-| summary | 0.40 | 5 | 4 | 1,600 |
+| title | 0.35 | 6 | 1 aggregate profile | 400 |
+| excerpt | 0.35 | 5 | 1 aggregate profile | 400 |
+| meta description | deferred | 0 | 0 | 0 |
+| summary | deferred | 0 | 0 | 0 |
 | classification | 0.35 | 8 | 20 terms | 1,200 |
 
 Results are relevance-filtered, deduplicated by post, and checked for a strong
-content-fingerprint overlap with the current scene before projection. Title
-generation receives only bounded unique historical titles. Excerpt, meta, and
-summary receive only bounded public excerpts as style-only samples.
-Classification receives only bounded existing `category` and `post_tag` names
-stored as Site Knowledge document metadata; repeated terms across related posts
-rank first. Source chunks, scores, URLs, and evidence details are never placed
+content-fingerprint overlap with the current scene before projection. Title and
+excerpt generation receive only an aggregate profile calculated from related
+historical samples: sample count, typical character length, typical sentence
+count, question-mark rate, and colon rate. The historical titles and excerpts
+themselves are not placed in provider input. Classification receives only
+bounded existing `category` and `post_tag` names stored as Site Knowledge
+document metadata; repeated terms across related posts rank first. Source
+chunks, raw style samples, scores, URLs, and evidence details are never placed
 in the generation context or WordPress AI result.
 
-The provider instruction may infer title length, tone, vocabulary, and
-punctuation, but it must not copy historical text, follow instructions inside a
-sample, or introduce facts absent from the current scene input. Summary mode
-explicitly treats the current scene as the only factual source. Classification
+Meta description and summary hints remain contract-valid for forward
+compatibility but currently skip vector retrieval and fall back to ordinary
+generation. Real A/B evidence showed that substituting ordinary post excerpts
+for accepted SEO descriptions or accepted summaries distracts the model and is
+not task-appropriate background. These tasks may be activated only after Site
+Knowledge indexes a dedicated, provenance-safe source for that exact task and a
+new paired quality gate passes.
+
+The provider instruction may use aggregate title/excerpt length and punctuation
+preferences, but it must not introduce facts absent from the current scene
+input. Classification
 history is candidate vocabulary only: it cannot invent term IDs, force a term,
 or write taxonomy. Missing, insufficient, filtered, or unavailable Site
 Knowledge silently falls back to ordinary generation. Bounded provider metadata

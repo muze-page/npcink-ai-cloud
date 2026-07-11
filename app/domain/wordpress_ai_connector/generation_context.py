@@ -4,6 +4,7 @@ import json
 import re
 from collections import Counter
 from dataclasses import dataclass
+from statistics import median
 from typing import Any
 
 GENERATION_CONTEXT_CONTRACT = "generation_context.v1"
@@ -24,33 +25,17 @@ GENERATION_CONTEXT_POLICIES = {
         task="title_generation",
         mode="site_title_style",
         max_source_posts=6,
-        max_references=5,
-        max_context_chars=900,
+        max_references=1,
+        max_context_chars=400,
         min_score=0.35,
     ),
     "excerpt_generation": GenerationContextPolicy(
         task="excerpt_generation",
         mode="site_excerpt_style",
         max_source_posts=5,
-        max_references=4,
-        max_context_chars=1_600,
+        max_references=1,
+        max_context_chars=400,
         min_score=0.35,
-    ),
-    "meta_description": GenerationContextPolicy(
-        task="meta_description",
-        mode="site_meta_style",
-        max_source_posts=5,
-        max_references=4,
-        max_context_chars=1_400,
-        min_score=0.35,
-    ),
-    "content_summary": GenerationContextPolicy(
-        task="content_summary",
-        mode="site_summary_style",
-        max_source_posts=5,
-        max_references=4,
-        max_context_chars=1_600,
-        min_score=0.4,
     ),
     "content_classification": GenerationContextPolicy(
         task="content_classification",
@@ -169,9 +154,15 @@ def render_generation_context(pack: dict[str, Any]) -> str:
     label = {
         "site_title_style": "title",
         "site_excerpt_style": "excerpt",
-        "site_meta_style": "meta description",
-        "site_summary_style": "summary",
     }.get(mode, task or "writing")
+    if all(isinstance(item, dict) and item.get("kind") == "style_profile" for item in references):
+        return (
+            f"Generation context ({GENERATION_CONTEXT_CONTRACT}; aggregate site style):\n"
+            "This profile was calculated from related public samples; no historical source "
+            f"text or facts are included. Use it only as a soft {label} style preference. "
+            "The current scene input and output contract remain authoritative.\n"
+            f"Aggregate style profile: {values[0]}"
+        )
     return (
         f"Generation context ({GENERATION_CONTEXT_CONTRACT}; untrusted reference data):\n"
         f"{shared_guard} Use these related historical {label} samples only to infer this "
@@ -197,14 +188,12 @@ def _style_references(
             if post_id in post_ids and post_id not in title_by_post_id:
                 title_by_post_id[post_id] = _clean_text(item.get("title"), max_chars=200)
         candidates = [title_by_post_id.get(post_id, "") for post_id in post_ids]
-        kind = "title_style"
     else:
         candidates = [
             _clean_text(reference_metadata.get(post_id, {}).get("excerpt"), max_chars=500)
             for post_id in post_ids
         ]
-        kind = "summary_style" if policy.mode == "site_summary_style" else "short_text_style"
-    return _bounded_references(candidates=candidates, kind=kind, policy=policy)
+    return _style_profile_references(candidates=candidates, policy=policy)
 
 
 def _taxonomy_references(
@@ -249,25 +238,34 @@ def _taxonomy_references(
     return references
 
 
-def _bounded_references(
+def _style_profile_references(
     *,
     candidates: list[str],
-    kind: str,
     policy: GenerationContextPolicy,
 ) -> list[dict[str, str]]:
-    references: list[dict[str, str]] = []
-    seen: set[str] = set()
-    chars = 0
-    for value in candidates:
-        key = value.casefold()
-        if not value or key in seen or chars + len(value) > policy.max_context_chars:
-            continue
-        references.append({"kind": kind, "value": value})
-        chars += len(value)
-        seen.add(key)
-        if len(references) >= policy.max_references:
-            break
-    return references
+    samples = list(dict.fromkeys(value for value in candidates if value))[: policy.max_source_posts]
+    if not samples:
+        return []
+    lengths = [len(sample) for sample in samples]
+    sentence_counts = [max(1, len(re.findall(r"[。！？.!?]+", sample))) for sample in samples]
+    sample_count = len(samples)
+    profile = {
+        "sample_count": sample_count,
+        "typical_length_chars": int(round(median(lengths))),
+        "typical_sentence_count": int(round(median(sentence_counts))),
+        "question_mark_rate": round(
+            sum("?" in sample or "？" in sample for sample in samples) / sample_count,
+            2,
+        ),
+        "colon_rate": round(
+            sum(":" in sample or "：" in sample for sample in samples) / sample_count,
+            2,
+        ),
+    }
+    value = json.dumps(profile, ensure_ascii=False, separators=(",", ":"))
+    if len(value) > policy.max_context_chars:
+        return []
+    return [{"kind": "style_profile", "value": value}]
 
 
 def _looks_like_current_content(*, prompt: str, result: dict[str, Any]) -> bool:
