@@ -97,13 +97,12 @@ function PortalUsageContent() {
   const [creditLedgerSiteId, setCreditLedgerSiteId] = useState(
     () => searchParams.get('site') || ''
   );
-  const creditLedgerPageSize = 20;
+  const creditLedgerPageSize = 10;
 
   const loadBundle = useCallback(async () => {
     const bundle = await portalClient.getUsageBundle();
     setUsage(bundle.usage);
     setEntitlements(bundle.entitlements);
-    setCreditLedger(bundle.creditLedger);
   }, []);
 
   const { execute, isLoading: retryLoading, error: retryError, retry } = useRetry(loadBundle, {

@@ -40,6 +40,7 @@ function formatQuotaValue(value: unknown, unlimited = false, unlimitedLabel = 'U
 }
 
 type TranslateFn = (key: string, params?: Record<string, string>, fallback?: string) => string;
+type QuotaSummary = NonNullable<Entitlements['quota_summary']>;
 
 const PAYMENT_ORDER_PAGE_SIZE = 10;
 
@@ -172,6 +173,47 @@ function formatPaymentOrderReference(orderId: string): string {
   const normalized = String(orderId || '').trim();
   if (normalized.length <= 20) return normalized;
   return `${normalized.slice(0, 14)}…${normalized.slice(-4)}`;
+}
+
+function resolvePackageStatusDetail(
+  quotaSummary: QuotaSummary | null,
+  packageLabel: string,
+  t: TranslateFn
+): string {
+  const credit = quotaSummary?.credit;
+  if (credit?.status === 'limited') {
+    return t(
+      'portal.billing.package_status_credit_limited',
+      {},
+      'The package has no points remaining. Buy points or change the package to continue.'
+    );
+  }
+  const limitedResource = quotaSummary?.resource_limits?.find((resource) => (
+    resource.status === 'limited'
+    || (!resource.unlimited && Number(resource.limit || 0) > 0 && Number(resource.used || 0) > Number(resource.limit || 0))
+  ));
+  if (limitedResource?.key === 'bound_sites') {
+    return t(
+      'portal.billing.package_status_site_limited',
+      {
+        used: formatNumber(Number(limitedResource.used || 0)),
+        limit: formatNumber(Number(limitedResource.limit || 0)),
+        package: packageLabel,
+      },
+      `${formatNumber(Number(limitedResource.used || 0))} sites are connected; ${packageLabel} includes ${formatNumber(Number(limitedResource.limit || 0))}.`
+    );
+  }
+  if (limitedResource?.key === 'vector_documents') {
+    return t(
+      'portal.billing.package_status_knowledge_limited',
+      {
+        used: formatNumber(Number(limitedResource.used || 0)),
+        limit: formatNumber(Number(limitedResource.limit || 0)),
+      },
+      `Knowledge usage is ${formatNumber(Number(limitedResource.used || 0))} of ${formatNumber(Number(limitedResource.limit || 0))}.`
+    );
+  }
+  return t('portal.billing.package_status_detail', {}, 'Use this page to handle package or point needs.');
 }
 
 function PortalBillingContent() {
@@ -912,6 +954,15 @@ function PortalBillingContent() {
                   {resolvePaymentOrderDetail(order, t)}
                 </p>
               ) : null}
+              {order.purchase_kind === 'credit_pack' && Number(order.credit_pack?.ai_credits || 0) > 0 ? (
+                <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                  {t(
+                    'portal.usage.payment_order_credit_snapshot',
+                    { credits: formatNumber(Number(order.credit_pack?.ai_credits || 0)) },
+                    `${formatNumber(Number(order.credit_pack?.ai_credits || 0))} points in this order`
+                  )}
+                </p>
+              ) : null}
               <p
                 className={`${isPending ? 'mt-2' : 'mt-1'} text-xs font-medium text-slate-500 dark:text-slate-400`}
                 title={order.order_id}
@@ -927,6 +978,9 @@ function PortalBillingContent() {
               </p>
             </div>
             <div className="md:min-w-36 md:text-right">
+              <p className="text-xs text-slate-500 dark:text-slate-400">
+                {t('portal.usage.payment_order_purchase_amount', {}, 'Purchase amount')}
+              </p>
               <p className="font-semibold text-slate-950 dark:text-white">
                 {formatPortalCurrency(Number(order.amount || 0), {
                   from: normalizePortalCurrency(order.currency),
@@ -1009,9 +1063,12 @@ function PortalBillingContent() {
     paymentOrderTotal
   );
   const paymentOrdersCard = (
-    <section className="overflow-hidden rounded-[1.25rem] border border-slate-200 bg-white/70 dark:border-slate-800 dark:bg-slate-950/35">
-      <header className="flex flex-col gap-2 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
-        <span>
+    <details
+      className="group overflow-hidden rounded-[1.25rem] border border-slate-200 bg-white/70 dark:border-slate-800 dark:bg-slate-950/35"
+      open={Number(paymentOrderCounts.pending || 0) > 0}
+    >
+      <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-5 py-4 [&::-webkit-details-marker]:hidden">
+        <span className="min-w-0">
           <span className="block text-sm font-semibold text-gray-950 dark:text-white">
             {t('portal.usage.payment_orders_title', {}, 'Payment orders')}
           </span>
@@ -1029,7 +1086,8 @@ function PortalBillingContent() {
               : t('portal.usage.payment_orders_empty', {}, 'No payment orders yet.')}
           </span>
         </span>
-      </header>
+        <span aria-hidden="true" className="shrink-0 text-lg text-slate-500 transition-transform group-open:rotate-180">⌄</span>
+      </summary>
       <div className="border-t border-slate-200 px-5 pb-5 pt-4 dark:border-slate-800">
         <p className="text-sm text-gray-600 dark:text-gray-400">
           {t(
@@ -1051,7 +1109,7 @@ function PortalBillingContent() {
                 type="button"
                 role="tab"
                 aria-selected={selected}
-                className={`whitespace-nowrap rounded-[0.625rem] px-3 py-2 text-sm font-medium transition-colors ${
+                className={`min-h-11 whitespace-nowrap rounded-[0.625rem] px-3 py-2 text-sm font-medium transition-colors ${
                   selected
                     ? 'bg-white text-blue-700 shadow-sm dark:bg-slate-800 dark:text-blue-300'
                     : 'text-slate-600 hover:text-slate-950 dark:text-slate-400 dark:hover:text-white'
@@ -1117,7 +1175,7 @@ function PortalBillingContent() {
           </div>
         ) : null}
       </div>
-    </section>
+    </details>
   );
   const supportRequestHref = '/portal/support?new=1&topic=billing';
 
@@ -1191,7 +1249,7 @@ function PortalBillingContent() {
           {
             label: t('common.status'),
             value: packageStatusLabel,
-            detail: t('portal.billing.package_status_detail', {}, 'Use this page to handle package or point needs.'),
+            detail: resolvePackageStatusDetail(quotaSummary, packageLabel, t),
             size: 'compact',
           },
           {

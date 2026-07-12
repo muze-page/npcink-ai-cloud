@@ -272,7 +272,7 @@ function AccountPageContent() {
   return (
     <BackofficePageStack>
       <BackofficePrimaryPanel
-        eyebrow={t('portal.account.eyebrow', undefined, 'Account')}
+        eyebrow={t('portal.account.settings_eyebrow', undefined, 'Account settings')}
         title={t('portal.account.title', undefined, 'Contact')}
         description={t(
           'portal.account.description',
@@ -356,8 +356,8 @@ function AccountPageContent() {
                   {contactEmail || t('portal.account.contact_missing_desc', undefined, 'Email contact is not visible in this local session.')}
                 </p>
               </div>
-              <Link href="/portal/login" className="btn btn-secondary">
-                {t('portal.account.login_page', undefined, 'Login page')}
+              <Link href="/portal/audit" className="btn btn-secondary">
+                {t('portal.audit.nav_label', undefined, 'Recent activity')}
               </Link>
             </div>
           </BackofficeStackCard>

@@ -97,7 +97,6 @@ function PortalSiteRecordContent() {
   const siteStatusLabel = siteNeedsAttention
     ? t('portal.home.filter_attention_only', {}, 'Needs attention')
     : t('portal.home.risk_level_normal', {}, 'Normal');
-  const contactStatusLabel = t('portal.site_record_contact_available', {}, 'Available in Contact');
   const canRemoveSites = Boolean(
     session.allowed_actions?.includes('remove_sites') ||
       session.accounts?.some((account) => account.allowed_actions?.includes('remove_sites'))
@@ -144,7 +143,9 @@ function PortalSiteRecordContent() {
           {
             label: t('common.status', {}, 'Status'),
             value: siteStatusLabel,
-            detail: siteUrl || t('portal.site_url_missing_short', {}, 'Site URL not configured'),
+            detail: siteNeedsAttention
+              ? t('portal.site_record_attention_action', {}, 'The site status or address needs confirmation.')
+              : t('portal.site_record_ready_action', {}, 'No action is needed for this site right now.'),
           },
           {
             label: t('portal.site_address_label', {}, 'Site address'),
@@ -180,19 +181,9 @@ function PortalSiteRecordContent() {
               )}
           </p>
         </div>
-        <div className="grid gap-3 lg:grid-cols-3">
+        <div className="grid gap-3 lg:grid-cols-2">
           <BackofficeStackCard variant="portal">
-            <div className="space-y-1">
-              <p className="text-sm font-semibold text-slate-950 dark:text-white">
-                {t('portal.site_address_label', {}, 'Site address')}
-              </p>
-              <p className="break-words text-sm leading-6 text-slate-600 dark:text-slate-300">
-                {siteUrl || t('portal.site_url_missing', {}, 'WordPress URL not configured')}
-              </p>
-            </div>
-          </BackofficeStackCard>
-          <BackofficeStackCard variant="portal">
-            <div className="flex h-full items-start justify-between gap-3">
+            <div className="flex h-full flex-col items-start justify-between gap-4">
               <div className="space-y-1">
                 <p className="text-sm font-semibold text-slate-950 dark:text-white">
                   {t('portal.nav_account', {}, 'Contact')}
@@ -201,11 +192,13 @@ function PortalSiteRecordContent() {
                   {t(
                     'portal.site_record_contact_desc',
                     {},
-                    'Use the Contact page to confirm the email and service contact details for this account.'
+                    'Use the Account page to confirm the email and service contact details for this account.'
                   )}
                 </p>
               </div>
-              <BackofficeStatusBadge status="active" label={contactStatusLabel} />
+              <Link href="/portal/account" className="btn btn-secondary btn-sm">
+                {t('portal.site_record_contact_action', {}, 'Open account')}
+              </Link>
             </div>
           </BackofficeStackCard>
           <BackofficeStackCard variant="portal">

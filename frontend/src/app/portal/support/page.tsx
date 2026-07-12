@@ -312,9 +312,9 @@ function PortalSupportContent() {
 
       <BackofficeSectionPanel>
         <div className="mb-5">
-          <p className="text-sm font-semibold text-slate-950 dark:text-white">
+          <h2 className="text-lg font-semibold text-slate-950 dark:text-white">
             {t('portal.support_request_list_title', {}, 'Recent tickets')}
-          </p>
+          </h2>
           <p className="mt-1 text-sm leading-6 text-slate-600 dark:text-slate-300">
             {t('portal.support_request_list_desc', {}, 'Open and in-progress tickets stay visible until support resolves them.')}
           </p>

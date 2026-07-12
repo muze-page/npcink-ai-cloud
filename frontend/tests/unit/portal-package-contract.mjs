@@ -76,8 +76,8 @@ assert.match(
 );
 assert.match(
   billingPageSource,
-  /<section className="overflow-hidden[\s\S]*portal\.usage\.payment_orders_title/,
-  'Portal package page must keep payment order actions directly visible'
+  /<details[\s\S]*<summary[\s\S]*portal\.usage\.payment_orders_title[\s\S]*role="tablist"[\s\S]*<\/details>/,
+  'Portal package page must keep the payment summary visible and fold lower-priority order actions behind disclosure'
 );
 assert.equal(
   (billingPageSource.match(/const paymentOrdersCard =/g) || []).length,

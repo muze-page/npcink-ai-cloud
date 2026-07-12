@@ -164,7 +164,7 @@ export function PortalAuditClient() {
 
       <BackofficeSectionPanel className="overflow-hidden p-0">
         <div className="border-b border-gray-200 px-6 py-5 dark:border-gray-800">
-          <h2 className="text-xl font-semibold text-gray-950 dark:text-white">{t('portal.audit.nav_label', {}, 'Recent activity')}</h2>
+          <h2 className="text-xl font-semibold text-gray-950 dark:text-white">{t('portal.audit.records_title', {}, 'Activity records')}</h2>
           <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">
             {t('portal.audit.recent_desc', {}, 'Only recent customer-readable activity is shown here.')}
           </p>

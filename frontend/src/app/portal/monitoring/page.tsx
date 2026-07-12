@@ -236,9 +236,9 @@ function PortalMonitoringContent() {
                 size: 'compact',
               },
               {
-                label: t('portal.monitoring.errors', {}, 'Issues'),
+                label: t('portal.monitoring.recorded_errors', {}, 'Recorded error events'),
                 value: formatNumber(Number(overview.activity.plugin_errors_total || 0)),
-                detail: t('portal.monitoring.error_detail', {}, 'No private content shown'),
+                detail: t('portal.monitoring.recorded_errors_detail', {}, 'This is separate from the checks that need attention below.'),
                 size: 'compact',
               },
               {
