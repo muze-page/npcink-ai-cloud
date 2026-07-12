@@ -226,6 +226,12 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
           activePrefixes: ['/admin/ai-resources', '/admin/ability-models'],
         },
         {
+          href: '/admin/vector-settings',
+          labelKey: 'admin.nav_vector_settings',
+          fallback: 'Vector Settings',
+          activePrefixes: ['/admin/vector-settings'],
+        },
+        {
           href: '/admin/troubleshooting',
           labelKey: 'admin.nav_runtime_diagnostics',
           fallback: 'Runtime Diagnostics',

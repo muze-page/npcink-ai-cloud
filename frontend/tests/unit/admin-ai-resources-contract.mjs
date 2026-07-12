@@ -633,16 +633,16 @@ assert.match(
   'Provider channel form must render when opened from capability suppliers as well as model suppliers'
 );
 
-assert.match(
+assert.doesNotMatch(
   pageSource,
-  /isCapabilityProviderForm \? \([\s\S]*field_channel_priority[\s\S]*field_channel_note[\s\S]*placeholder_channel_note/,
-  'Provider channel form must keep priority scoped to capability suppliers and keep notes available for channels'
+  /field_channel_priority|field_channel_note|placeholder_channel_note/,
+  'Provider connection configuration must not expose channel priority or notes'
 );
 
-assert.match(
+assert.doesNotMatch(
   pageSource,
-  /note: providerConnectionForm\.note[\s\S]*priority: Number\(providerConnectionForm\.priority\)/,
-  'Provider channel save payload must persist channel note and priority metadata'
+  /providerConnectionForm\.(note|priority)|addProviderCredentialChannel|action_add_credential_channel/,
+  'Provider connection payloads must not preserve retired channel priority, notes, or backup-channel creation'
 );
 
 assert.doesNotMatch(
@@ -651,16 +651,10 @@ assert.doesNotMatch(
   'Model supplier list must not show provider priority because routing priority belongs to model-call configuration'
 );
 
-assert.match(
-  pageSource,
-  /addProviderCredentialChannel[\s\S]*credential: ''[\s\S]*action_add_credential_channel/,
-  'Provider channel form must let operators add a credential channel without copying the secret'
-);
-
-assert.match(
+assert.doesNotMatch(
   capabilitySupplierTableSource,
-  /showPriority[\s\S]*purposeLabel\(connection\)[\s\S]*channel_priority_summary[\s\S]*status_configured_label/,
-  'Capability supplier queue must keep priority in the row summary and configured state in the inspector'
+  /showPriority|channel_priority_summary|field_channel_priority|selectedConnection\.note/,
+  'Capability supplier queue must stay focused on service purpose, readiness, and actions'
 );
 
 assert.match(
@@ -2216,20 +2210,20 @@ assert.match(
 
 assert.match(
   i18nSource,
-  /'admin\.ai_resources\.capability_category_vector': '向量'/,
-  'Capability supplier vector category must provide Simplified Chinese copy'
-);
-
-assert.match(
-  i18nSource,
   /capability_provider_purpose_search[\s\S]*capability_provider_purpose_image[\s\S]*capability_provider_purpose_rerank[\s\S]*capability_provider_purpose_vector_store/,
   'Capability supplier purpose labels must provide Simplified Chinese copy instead of exposing endpoints in the list'
 );
 
 assert.match(
-  i18nSource,
-  /action_add_credential_channel[\s\S]*message_creating_credential_channel[\s\S]*field_channel_priority[\s\S]*field_channel_note/,
-  'Capability supplier priority and channel note controls must provide Simplified Chinese copy'
+  pageSource,
+  /href="\/admin\/vector-settings"[\s\S]*action_open_vector_settings/,
+  'Provider workspace must hand vector configuration to its dedicated page'
+);
+
+assert.match(
+  pageSource,
+  /\['search', 'image'\]/,
+  'Provider workspace must keep capability settings to fixed search and image-source categories'
 );
 
 assert.match(

@@ -11,8 +11,6 @@ const connections = [
     configured: false,
     status: 'missing_secret',
     base_url: 'https://api.minimax.io/v1',
-    note: 'Credential rotation required.',
-    priority: 100,
     capability_ids: ['text_generation'],
     runtime_profile_ids: ['text.ai'],
     model_ids: ['MiniMax-M2.1'],
@@ -29,8 +27,6 @@ const connections = [
     configured: true,
     status: 'ready',
     base_url: 'https://new-api.example.test/v1',
-    note: 'Primary text runtime.',
-    priority: 100,
     capability_ids: ['text_generation'],
     runtime_profile_ids: ['text.ai'],
     model_ids: ['gpt-5.5', 'gpt-5.4-mini'],
@@ -47,8 +43,6 @@ const connections = [
     configured: true,
     status: 'disabled',
     base_url: 'https://tei.example.test',
-    note: '',
-    priority: 100,
     capability_ids: ['text_generation'],
     runtime_profile_ids: ['text.ai'],
     model_ids: ['bge-m3'],
@@ -64,8 +58,6 @@ const connections = [
     configured: true,
     status: 'ready',
     base_url: 'https://api.tavily.com',
-    note: 'Primary external evidence source.',
-    priority: 10,
     capability_ids: ['web_search'],
     runtime_profile_ids: ['search.ai'],
     last_tested_at: '2026-07-12T01:00:00Z',
@@ -81,8 +73,6 @@ const connections = [
     configured: false,
     status: 'missing_secret',
     base_url: 'https://qdrant.example.test',
-    note: '',
-    priority: 100,
     capability_ids: ['vector_store'],
     runtime_profile_ids: ['vector.ai'],
     managed_by: 'cloud_provider_connections',
@@ -212,7 +202,7 @@ test('capability suppliers reuse the queue and inspector with one active add act
   await expect(page).toHaveURL(/supplier=capability/);
   await expect(page.getByRole('button', { name: /Add capability supplier|添加能力供应商/i })).toBeVisible();
   await expect(page.getByRole('button', { name: /Add model supplier|添加模型供应商/i })).toHaveCount(0);
-  await expect(page.locator('[data-ui="capability-supplier-directory"] [data-connection-id]')).toHaveCount(2);
+  await expect(page.locator('[data-ui="capability-supplier-directory"] [data-connection-id]')).toHaveCount(1);
 
   await page.locator('[data-connection-id="search_ready"]').click();
   await expect(page).toHaveURL(/focus=search_ready/);

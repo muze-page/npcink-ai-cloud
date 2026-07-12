@@ -383,8 +383,6 @@ type ProviderConnectionForm = {
   displayName: string;
   kind: string;
   baseUrl: string;
-  note: string;
-  priority: string;
   sourceRole: string;
   capabilityIds: string;
   runtimeProfileIds: string;
@@ -400,8 +398,6 @@ const EMPTY_PROVIDER_CONNECTION_FORM: ProviderConnectionForm = {
   displayName: 'OpenAI Compatible',
   kind: 'openai_compatible',
   baseUrl: 'https://api.openai.com/v1',
-  note: '',
-  priority: '100',
   sourceRole: 'execution_source',
   capabilityIds: 'text_generation, image_generation',
   runtimeProfileIds: 'text.ai, text.free-gpt55, grok-imagine-image-quality',
@@ -766,36 +762,6 @@ const CAPABILITY_PROVIDER_TEMPLATES: CapabilityProviderTemplate[] = [
     modelIds: '',
     descriptionKey: 'image_source_help_pexels',
     descriptionFallback: 'Stock image reference source for photography and visual references.',
-  },
-  {
-    id: 'jina',
-    label: 'Jina Rerank',
-    category: 'vector',
-    kind: 'rerank_provider',
-    baseUrl: 'https://api.jina.ai',
-    websiteUrl: 'https://jina.ai/',
-    statusUrl: 'https://status.jina.ai/',
-    docsUrl: 'https://api.jina.ai/docs',
-    capabilityIds: 'site_knowledge_rerank',
-    runtimeProfileIds: 'site-knowledge.rerank',
-    modelIds: 'jina-reranker-v3',
-    descriptionKey: 'vector_help_jina_rerank',
-    descriptionFallback: 'Rerank provider for Site Knowledge search results.',
-  },
-  {
-    id: 'zilliz',
-    label: 'Zilliz',
-    category: 'vector',
-    kind: 'vector_store_provider',
-    baseUrl: '',
-    websiteUrl: 'https://zilliz.com/',
-    statusUrl: 'https://status.zilliz.com/',
-    docsUrl: 'https://docs.zilliz.com/docs',
-    capabilityIds: 'vector_store',
-    runtimeProfileIds: 'site-knowledge.vector-store',
-    modelIds: '',
-    descriptionKey: 'vector_help_zilliz',
-    descriptionFallback: 'Vector database provider for Site Knowledge storage and search.',
   },
 ];
 
@@ -1605,7 +1571,7 @@ function AiResourcesContent() {
     }
     setConnectionSearch(searchParams.get('q') || '');
     const requestedCategory = searchParams.get('category');
-    if (requestedCategory === 'search' || requestedCategory === 'image' || requestedCategory === 'vector') {
+    if (requestedCategory === 'search' || requestedCategory === 'image') {
       setActiveCapabilityCategory(requestedCategory);
       setCapabilityCategoryFilter(requestedCategory);
     } else {
@@ -1638,8 +1604,6 @@ function AiResourcesContent() {
           display_name: providerConnectionForm.displayName,
           enabled: providerConnectionForm.enabled,
           base_url: providerConnectionForm.baseUrl,
-          note: providerConnectionForm.note,
-          priority: Number(providerConnectionForm.priority) || 100,
           source_role: providerConnectionForm.sourceRole,
           capability_ids: splitList(providerConnectionForm.capabilityIds),
           runtime_profile_ids: splitList(providerConnectionForm.runtimeProfileIds),
@@ -1647,8 +1611,6 @@ function AiResourcesContent() {
           metadata: {
             ui_source: 'ai_resources_channel_form',
             provider_preset: providerConnectionForm.providerPreset,
-            note: providerConnectionForm.note,
-            priority: Number(providerConnectionForm.priority) || 100,
             website_url: websiteUrl || undefined,
             status_url: statusUrl || undefined,
             docs_url: docsUrl || undefined,
@@ -2003,8 +1965,6 @@ function AiResourcesContent() {
       displayName: connection.display_name,
       kind: connection.kind,
       baseUrl: connection.base_url || '',
-      note: connection.note || '',
-      priority: String(connection.priority ?? 100),
       sourceRole: 'execution_source',
       capabilityIds: connection.capability_ids.join(', '),
       runtimeProfileIds: connection.runtime_profile_ids.join(', '),
@@ -2019,24 +1979,6 @@ function AiResourcesContent() {
   function closeProviderForm() {
     setProviderFormOpen(false);
     setMessage('');
-    setError('');
-  }
-
-  function addProviderCredentialChannel() {
-    const sourceConnectionId = providerConnectionForm.connectionId || slugifyProviderValue(providerConnectionForm.displayName || providerConnectionForm.providerId);
-    const nextConnectionId = `${sourceConnectionId}_backup`;
-    setProviderFormMode('create');
-    setConnectionDetailsOpen(true);
-    setProviderConnectionForm((current) => ({
-      ...current,
-      connectionId: nextConnectionId,
-      displayName: `${current.displayName || current.providerId} ${aiText('channel_backup_suffix', 'backup')}`,
-      credential: '',
-      note: current.note || aiText('channel_backup_note_default', 'Backup channel'),
-      priority: String(Math.min(999, (Number(current.priority) || 100) + 10)),
-      enabled: true,
-    }));
-    setMessage(aiText('message_creating_credential_channel', 'Adding a credential channel. Enter a credential, then save and test.'));
     setError('');
   }
 
@@ -2119,8 +2061,6 @@ function AiResourcesContent() {
       displayName: template.label,
       kind: template.kind,
       baseUrl: template.baseUrl,
-      note: '',
-      priority: '100',
       sourceRole: 'execution_source',
       capabilityIds: template.capabilityIds,
       runtimeProfileIds: template.runtimeProfileIds,
@@ -2271,7 +2211,10 @@ function AiResourcesContent() {
   );
 
   const capabilitySupplierConnections = useMemo(
-    () => filteredConnections.filter((connection) => supplierCategory(connection) === 'capability'),
+    () => filteredConnections.filter(
+      (connection) => supplierCategory(connection) === 'capability'
+        && capabilityProviderCategory(connection) !== 'vector'
+    ),
     [filteredConnections]
   );
 
@@ -2284,15 +2227,6 @@ function AiResourcesContent() {
   const activeCapabilityConnections = capabilityCategoryFilter === 'all'
     ? capabilitySupplierConnections
     : capabilityConnectionsByCategory[capabilityCategoryFilter];
-
-  const capabilityChannelCounts = useMemo(() => {
-    const counts = new Map<string, number>();
-    activeCapabilityConnections.forEach((connection) => {
-      const key = `${connection.kind}:${connection.provider_id}`;
-      counts.set(key, (counts.get(key) || 0) + 1);
-    });
-    return counts;
-  }, [activeCapabilityConnections]);
 
   const capabilityCategoryLabel = useCallback((category: CapabilityProviderCategory): string => {
     if (category === 'search') return aiText('capability_category_search', 'Search');
@@ -2673,6 +2607,11 @@ function AiResourcesContent() {
       {activeView === 'connections' ? (
         <>
           <BackofficeSectionPanel>
+        <div className="mb-4 flex justify-end">
+          <Link href="/admin/vector-settings" className="btn btn-secondary btn-sm">
+            {aiText('action_open_vector_settings', 'Open vector settings')}
+          </Link>
+        </div>
         <SupplierToolbar
           supplierTypeFilter={supplierTypeFilter}
           onSupplierTypeFilterChange={handleSupplierTypeFilterChange}
@@ -2692,26 +2631,14 @@ function AiResourcesContent() {
           title={providerDialogTitle}
           titleId="provider-channel-dialog-title"
           headerAccessory={(
-            <>
-              {isCapabilityProviderForm ? (
-                <BackofficeStatusBadge
-                  label={aiText('capability_supplier_badge', '{{category}} supplier', {
-                    category: capabilityCategoryLabel(providerFormCapabilityCategory),
-                  })}
-                  status="info"
-                />
-              ) : null}
-              {providerFormMode === 'edit' ? (
-                <button
-                  type="button"
-                  className="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-semibold text-slate-600 transition hover:border-slate-300 hover:bg-slate-50 hover:text-slate-900 disabled:cursor-not-allowed disabled:opacity-60 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-300 dark:hover:border-slate-700 dark:hover:text-white"
-                  disabled={savingConnection}
-                  onClick={addProviderCredentialChannel}
-                >
-                  {aiText('action_add_credential_channel', 'Add credential')}
-                </button>
-              ) : null}
-            </>
+            isCapabilityProviderForm ? (
+              <BackofficeStatusBadge
+                label={aiText('capability_supplier_badge', '{{category}} supplier', {
+                  category: capabilityCategoryLabel(providerFormCapabilityCategory),
+                })}
+                status="info"
+              />
+            ) : null
           )}
           message={message}
           error={error}
@@ -2789,6 +2716,7 @@ function AiResourcesContent() {
                             });
                           }}
                           placeholder="GPT-5.5 via NewAPI"
+                          readOnly={isCapabilityProviderForm}
                           required
                         />
                       </label>
@@ -2802,34 +2730,7 @@ function AiResourcesContent() {
                           placeholder={aiText('placeholder_keep_current_credential', 'leave blank to keep current')}
                         />
                       </label>
-                      {isCapabilityProviderForm ? (
-                        <label className="grid gap-2 text-sm font-medium text-slate-700 dark:text-slate-200">
-                          {aiText('field_channel_priority', 'Priority')}
-                          <input
-                            className="h-11 rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-white"
-                            type="number"
-                            min={0}
-                            max={999}
-                            value={providerConnectionForm.priority}
-                            onChange={(event) => updateProviderConnectionForm({ priority: event.target.value })}
-                          />
-                          <span className="text-xs font-normal leading-5 text-slate-500 dark:text-slate-400">
-                            {aiText('field_channel_priority_help', 'Lower numbers are used first. Default is 100.')}
-                          </span>
-                        </label>
-                      ) : null}
                     </div>
-
-                    <label className="grid gap-2 text-sm font-medium text-slate-700 dark:text-slate-200">
-                      {aiText('field_channel_note', 'Channel note')}
-                      <textarea
-                        className="min-h-20 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-white"
-                        value={providerConnectionForm.note}
-                        onChange={(event) => updateProviderConnectionForm({ note: event.target.value })}
-                        placeholder={aiText('placeholder_channel_note', 'Primary account, backup key, customer account, quota note')}
-                        maxLength={512}
-                      />
-                    </label>
 
                     <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_auto] md:items-end">
                       <label className="grid gap-2 text-sm font-medium text-slate-700 dark:text-slate-200">
@@ -2857,7 +2758,11 @@ function AiResourcesContent() {
                           checked={providerConnectionForm.enabled}
                           onChange={(event) => updateProviderConnectionForm({ enabled: event.target.checked })}
                         />
-                        {aiText('field_enabled_runtime', 'Enabled for runtime use')}
+                        {providerFormCapabilityCategory === 'search'
+                          ? aiText('field_use_primary_search', 'Use as primary search service')
+                          : providerFormCapabilityCategory === 'image'
+                            ? aiText('field_include_parallel_image_source', 'Include in parallel image search')
+                            : aiText('field_enabled_runtime', 'Enabled for runtime use')}
                       </label>
                     </div>
 
@@ -3347,7 +3252,6 @@ function AiResourcesContent() {
               selectedConnectionId={selectedConnectionId}
               onSelectConnection={handleSelectConnection}
               testResults={connectionTestResults}
-              channelCounts={capabilityChannelCounts}
               testingConnectionId={testingConnectionId}
               deletingConnectionId={deletingConnectionId}
               confirmingDeleteConnectionId={confirmingDeleteConnectionId}
@@ -3398,7 +3302,7 @@ function AiResourcesContent() {
                     role="tablist"
                     aria-label={aiText('capability_add_category_tabs', 'Capability supplier categories')}
                   >
-                    {(['search', 'image', 'vector'] as Array<CapabilityProviderTemplate['category']>).map((category) => (
+                    {(['search', 'image'] as Array<CapabilityProviderTemplate['category']>).map((category) => (
                       <button
                         key={category}
                         type="button"
