@@ -90,13 +90,17 @@ class CommercialServiceSubscriptionCommerceMixin(CommercialServiceAuditMixin):
                 now=now,
             )
             claim = repository.find_trial_claim(account_id=account_id)
+            current = cast(Any, self)._select_primary_subscription(
+                repository.list_account_subscriptions(account_id)
+            )
             session.commit()
             return {
                 "items": [self._serialize_plan_offer(offer) for offer in offers],
-                "trial": (
-                    self._serialize_trial_claim(claim)
-                    if claim is not None
-                    else {"available": True, "trial_days": PAID_PACKAGE_TRIAL_DAYS}
+                "trial": self._serialize_account_trial_eligibility(
+                    claim=claim,
+                    current=current,
+                    offers=offers,
+                    now=now,
                 ),
             }
 
@@ -536,6 +540,19 @@ class CommercialServiceSubscriptionCommerceMixin(CommercialServiceAuditMixin):
                 principal_id=resolved_principal_id or None,
                 site_domain=normalized_domain or None,
             )
+            current = service._select_primary_subscription(
+                repository.list_account_subscriptions(account_id)
+            )
+            if (
+                claim is None
+                and current is not None
+                and current.status == SUBSCRIPTION_STATUS_ACTIVE
+                and self._subscription_tier(current) != "free"
+            ):
+                raise CommercialValidationError(
+                    "service.paid_plan_trial_not_available",
+                    "An account with an active paid package cannot start a trial",
+                )
             target_rank = PAID_TIER_ORDER[normalized_tier]
             if claim is not None:
                 if claim.account_id != account_id:
@@ -1484,4 +1501,81 @@ class CommercialServiceSubscriptionCommerceMixin(CommercialServiceAuditMixin):
                 getattr(claim, "started_at", None)
             ),
             "trial_ends_at": cast(Any, self)._serialize_datetime(getattr(claim, "ends_at", None)),
+        }
+
+    def _serialize_account_trial_eligibility(
+        self,
+        *,
+        claim: object | None,
+        current: object | None,
+        offers: list[PlanOffer],
+        now: datetime,
+    ) -> dict[str, object]:
+        trial_tiers = [
+            offer.tier_id
+            for offer in offers
+            if offer.tier_id in {"plus", "pro"}
+            and offer.trial_enabled
+            and not offer.trial_requires_approval
+        ]
+        if claim is not None:
+            payload = self._serialize_trial_claim(claim)
+            claim_status = str(getattr(claim, "status", "") or "")
+            claim_ends_at = getattr(claim, "ends_at", None)
+            is_active = (
+                claim_status == TRIAL_CLAIM_STATUS_ACTIVE
+                and claim_ends_at is not None
+                and self._aware_datetime(claim_ends_at) > now
+            )
+            if is_active:
+                highest_tier = str(getattr(claim, "highest_tier_id", "") or "")
+                highest_rank = PAID_TIER_ORDER.get(highest_tier, 0)
+                payload.update(
+                    {
+                        "state": "active",
+                        "reason_code": "trial_active",
+                        "allowed_tiers": [
+                            tier
+                            for tier in trial_tiers
+                            if PAID_TIER_ORDER.get(tier, 0) > highest_rank
+                        ],
+                    }
+                )
+                return payload
+            payload.update(
+                {
+                    "state": "used",
+                    "reason_code": "trial_already_used",
+                    "allowed_tiers": [],
+                }
+            )
+            return payload
+
+        current_tier = self._subscription_tier(current)
+        if (
+            current is not None
+            and getattr(current, "status", "") == SUBSCRIPTION_STATUS_ACTIVE
+            and current_tier != "free"
+        ):
+            return {
+                "available": True,
+                "trial_days": PAID_PACKAGE_TRIAL_DAYS,
+                "state": "blocked",
+                "reason_code": "paid_plan_active",
+                "allowed_tiers": [],
+            }
+        if trial_tiers:
+            return {
+                "available": True,
+                "trial_days": PAID_PACKAGE_TRIAL_DAYS,
+                "state": "eligible",
+                "reason_code": "trial_available",
+                "allowed_tiers": trial_tiers,
+            }
+        return {
+            "available": False,
+            "trial_days": PAID_PACKAGE_TRIAL_DAYS,
+            "state": "unavailable",
+            "reason_code": "trial_not_offered",
+            "allowed_tiers": [],
         }

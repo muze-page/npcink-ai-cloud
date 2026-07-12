@@ -3460,6 +3460,12 @@ def test_portal_user_can_start_pro_trial_and_create_monthly_order(
         "plus",
         "pro",
     ]
+    eligible_trial = offers_response.json()["data"]["trial"]
+    assert eligible_trial["available"] is True
+    assert eligible_trial["trial_days"] == 14
+    assert eligible_trial["state"] == "eligible"
+    assert eligible_trial["reason_code"] == "trial_available"
+    assert eligible_trial["allowed_tiers"] == ["plus", "pro"]
 
     trial_response = client.post(
         "/portal/v1/account/plan-trials",
@@ -3477,6 +3483,17 @@ def test_portal_user_can_start_pro_trial_and_create_monthly_order(
     assert trial_data["subscription"]["metadata"]["trial_for_tier"] == "pro"
     assert trial_data["trial"]["trial_days"] == 14
     assert trial_data["session"]["current_subscription"]["plan_id"] == "pro"
+
+    active_offers_response = client.get(
+        "/portal/v1/account/plan-offers",
+        headers=build_portal_headers(principal_id=str(registration["principal_id"])),
+    )
+    assert active_offers_response.status_code == 200, active_offers_response.text
+    active_trial = active_offers_response.json()["data"]["trial"]
+    assert active_trial["state"] == "active"
+    assert active_trial["reason_code"] == "trial_active"
+    assert active_trial["allowed_tiers"] == []
+    assert active_trial["trial_ends_at"]
 
     order_response = client.post(
         "/portal/v1/account/subscription-orders",

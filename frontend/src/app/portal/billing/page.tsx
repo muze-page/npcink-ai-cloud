@@ -186,6 +186,7 @@ function PortalBillingContent() {
   const [creditPackError, setCreditPackError] = useState<string | null>(null);
   const [packagePending, setPackagePending] = useState<string | null>(null);
   const [packageError, setPackageError] = useState<string | null>(null);
+  const [trialTierSelection, setTrialTierSelection] = useState<'plus' | 'pro'>('pro');
   const [cancelPendingOrderId, setCancelPendingOrderId] = useState<string | null>(null);
   const [cancelConfirmOrderId, setCancelConfirmOrderId] = useState<string | null>(null);
   const [paymentOrderError, setPaymentOrderError] = useState<string | null>(null);
@@ -280,6 +281,12 @@ function PortalBillingContent() {
     paymentOrderStatusGroup,
     session?.account_id,
   ]);
+
+  useEffect(() => {
+    const allowedTiers = planOffers?.trial?.allowed_tiers || [];
+    if (!allowedTiers.length || allowedTiers.includes(trialTierSelection)) return;
+    setTrialTierSelection(allowedTiers.includes('pro') ? 'pro' : allowedTiers[0]);
+  }, [planOffers?.trial?.allowed_tiers, trialTierSelection]);
 
   const paymentReturnProvider = String(searchParams.get('payment_return') || '').toLowerCase();
   const paymentReturnOrderId = String(searchParams.get('out_trade_no') || '').trim();
@@ -476,15 +483,21 @@ function PortalBillingContent() {
   const plusOffer = offersByTier.get('plus');
   const proOffer = offersByTier.get('pro');
   const agencyOffer = offersByTier.get('agency');
-  const canTrialTier = (tierId: 'plus' | 'pro') => {
-    const offer = offersByTier.get(tierId);
-    return Boolean(
-      offer?.trial_enabled
-      && (planOffers?.trial?.available !== false || planOffers?.trial?.status === 'active')
-      && currentStatus !== 'active'
-      && tierRank[tierId] > currentRank
-    );
-  };
+  const trial = planOffers?.trial;
+  const trialState = trial?.state
+    || (trial?.status === 'active' ? 'active' : trial?.available === false ? 'used' : 'eligible');
+  const allowedTrialTiers = (trial?.allowed_tiers || []).filter(
+    (tier): tier is 'plus' | 'pro' => tier === 'plus' || tier === 'pro'
+  );
+  const selectedTrialTier = allowedTrialTiers.includes(trialTierSelection)
+    ? trialTierSelection
+    : allowedTrialTiers.includes('pro')
+      ? 'pro'
+      : allowedTrialTiers[0];
+  const selectedTrialOffer = selectedTrialTier ? offersByTier.get(selectedTrialTier) : null;
+  const trialDays = Number(trial?.trial_days || selectedTrialOffer?.trial_days || 14);
+  const activeTrialTier = String(trial?.highest_tier_id || trial?.tier_id || currentPlanId || '').toLowerCase();
+  const activeTrialTierLabel = activeTrialTier === 'plus' ? 'Plus' : activeTrialTier === 'pro' ? 'Pro' : '';
   const canBuyTier = (tierId: 'plus' | 'pro' | 'agency') =>
     Boolean(offersByTier.get(tierId));
   const allPaymentOrders = paymentOrders?.items || [];
@@ -647,6 +660,76 @@ function PortalBillingContent() {
 
   const packageActions = (
     <BackofficeStackCard variant="portal" className="bg-white/70 dark:bg-slate-950/35">
+      <section className="mb-4 rounded-[1rem] border border-blue-200 bg-blue-50/55 p-4 dark:border-blue-900/60 dark:bg-blue-950/20" aria-labelledby="portal-trial-eligibility-title">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+          <div className="min-w-0">
+            <p className="text-xs font-semibold uppercase tracking-[0.14em] text-blue-700 dark:text-blue-300">
+              {t('portal.package.trial_eyebrow', {}, 'Trial eligibility')}
+            </p>
+            <h2 id="portal-trial-eligibility-title" className="mt-1 text-base font-semibold text-slate-950 dark:text-white">
+              {trialState === 'eligible'
+                ? t('portal.package.trial_eligible_title', { days: String(trialDays) }, `${trialDays}-day paid-package trial available`)
+                : trialState === 'active'
+                  ? t('portal.package.trial_active_title', { tier: activeTrialTierLabel }, `${activeTrialTierLabel} trial is active`)
+                  : trialState === 'used'
+                    ? t('portal.package.trial_used_title', {}, 'Trial already used')
+                    : trialState === 'blocked'
+                      ? t('portal.package.trial_blocked_title', {}, 'Trial unavailable with an active paid package')
+                      : t('portal.package.trial_unavailable_title', {}, 'Trial is not currently offered')}
+            </h2>
+            <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-600 dark:text-slate-300">
+              {trialState === 'eligible'
+                ? t('portal.package.trial_shared_desc', {}, 'Each account has one shared paid-package trial. You may move to a higher tier during the trial, but the end date will not be extended.')
+                : trialState === 'active'
+                  ? t(
+                      'portal.package.trial_active_desc',
+                      {
+                        tier: activeTrialTierLabel,
+                        date: trial?.trial_ends_at ? formatDate(trial.trial_ends_at) : t('common.unknown', {}, 'To confirm'),
+                      },
+                      `${activeTrialTierLabel} trial ends ${trial?.trial_ends_at ? formatDate(trial.trial_ends_at) : 'to be confirmed'}. Moving to a higher tier does not extend the end date.`
+                    )
+                  : trialState === 'used'
+                    ? t('portal.package.trial_used_desc', {}, 'This account has already used its paid-package trial. You can still purchase a package below.')
+                    : trialState === 'blocked'
+                      ? t('portal.package.trial_blocked_desc', {}, 'This account already has an active paid package, so a trial cannot be started. Renew or change the package below.')
+                      : t('portal.package.trial_unavailable_desc', {}, 'No self-service trial is available for this account. Package purchase remains available.')}
+            </p>
+          </div>
+          {selectedTrialTier && (trialState === 'eligible' || trialState === 'active') ? (
+            <div className="w-full shrink-0 space-y-3 lg:w-auto lg:min-w-[18rem]">
+              {allowedTrialTiers.length > 1 ? (
+                <div className="grid grid-cols-2 gap-2" aria-label={t('portal.package.trial_choose_tier', {}, 'Choose trial package')}>
+                  {allowedTrialTiers.map((tier) => (
+                    <button
+                      key={tier}
+                      type="button"
+                      className={tier === selectedTrialTier ? 'btn btn-primary' : 'btn btn-secondary'}
+                      aria-pressed={tier === selectedTrialTier}
+                      disabled={packagePending !== null}
+                      onClick={() => setTrialTierSelection(tier)}
+                    >
+                      {tier === 'plus' ? 'Plus' : 'Pro'}
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+              <button
+                type="button"
+                className="btn btn-primary w-full"
+                disabled={packagePending !== null}
+                onClick={() => void handleStartPlanTrial(selectedTrialTier)}
+              >
+                {packagePending === `trial:${selectedTrialTier}`
+                  ? t('common.saving', {}, 'Saving...')
+                  : trialState === 'active'
+                    ? t('portal.package.trial_upgrade_action', { tier: selectedTrialTier === 'plus' ? 'Plus' : 'Pro' }, `Move trial to ${selectedTrialTier === 'plus' ? 'Plus' : 'Pro'}`)
+                    : t('portal.package.trial_start_action', { tier: selectedTrialTier === 'plus' ? 'Plus' : 'Pro', days: String(trialDays) }, `Start ${trialDays}-day ${selectedTrialTier === 'plus' ? 'Plus' : 'Pro'} trial`)}
+              </button>
+            </div>
+          ) : null}
+        </div>
+      </section>
       <div className="grid gap-3 lg:grid-cols-4">
         <div className="rounded-[1rem] border border-slate-200 bg-slate-50/70 p-4 dark:border-slate-800 dark:bg-slate-950/35">
           <p className="text-sm font-semibold text-slate-950 dark:text-white">
@@ -682,35 +765,22 @@ function PortalBillingContent() {
                   'portal.package.paid_offer_desc',
                   {
                     amount: formatPortalCurrency(plusOffer.amount),
-                    days: String(plusOffer.trial_days),
                   },
-                  `${formatPortalCurrency(plusOffer.amount)} for 30 days, with one shared ${plusOffer.trial_days}-day paid-package trial.`
+                  `${formatPortalCurrency(plusOffer.amount)} for 30 days.`
                 )
               : t('portal.package.offer_unavailable_desc', {}, 'This package is not currently available for purchase.')}
           </p>
-          <BackofficeStatusBadge
-            status={currentPlanId === 'plus' ? 'ok' : plusOffer ? 'neutral' : 'warning'}
-            label={currentPlanId === 'plus'
-              ? t('common.current', {}, 'Current')
-              : plusOffer
-                ? t('common.available', {}, 'Available')
+          {currentPlanId === 'plus' || !plusOffer ? (
+            <BackofficeStatusBadge
+              status={currentPlanId === 'plus' ? 'ok' : 'warning'}
+              label={currentPlanId === 'plus'
+                ? currentStatus === 'trialing'
+                  ? t('portal.package.pro_trial_active', {}, 'Trial active')
+                  : t('common.current', {}, 'Current')
                 : t('portal.package.offer_unavailable', {}, 'Unavailable')}
-          />
+            />
+          ) : null}
           <div className="mt-4 flex flex-col gap-2">
-            <button
-              type="button"
-              className="btn btn-secondary"
-              disabled={!canTrialTier('plus') || packagePending !== null}
-              onClick={() => void handleStartPlanTrial('plus')}
-            >
-              {packagePending === 'trial:plus'
-                ? t('common.saving', {}, 'Saving...')
-                : t(
-                    'portal.package.start_trial_days',
-                    { days: String(plusOffer?.trial_days || 14) },
-                    `Start ${plusOffer?.trial_days || 14}-day trial`
-                  )}
-            </button>
             <button
               type="button"
               className="btn btn-primary"
@@ -737,35 +807,22 @@ function PortalBillingContent() {
                   'portal.package.paid_offer_desc',
                   {
                     amount: formatPortalCurrency(proOffer.amount),
-                    days: String(proOffer.trial_days),
                   },
-                  `${formatPortalCurrency(proOffer.amount)} for 30 days, with one shared ${proOffer.trial_days}-day paid-package trial.`
+                  `${formatPortalCurrency(proOffer.amount)} for 30 days.`
                 )
               : t('portal.package.offer_unavailable_desc', {}, 'This package is not currently available for purchase.')}
           </p>
-          <BackofficeStatusBadge
-            status={currentPlanId === 'pro' ? 'ok' : proOffer ? 'neutral' : 'warning'}
-            label={currentPlanId === 'pro'
-              ? t('common.current', {}, 'Current')
-              : proOffer
-                ? t('common.available', {}, 'Available')
+          {currentPlanId === 'pro' || !proOffer ? (
+            <BackofficeStatusBadge
+              status={currentPlanId === 'pro' ? 'ok' : 'warning'}
+              label={currentPlanId === 'pro'
+                ? currentStatus === 'trialing'
+                  ? t('portal.package.pro_trial_active', {}, 'Trial active')
+                  : t('common.current', {}, 'Current')
                 : t('portal.package.offer_unavailable', {}, 'Unavailable')}
-          />
-          <div className="mt-4 flex flex-col gap-2 sm:flex-row">
-            <button
-              type="button"
-              className="btn btn-secondary"
-              disabled={!canTrialTier('pro') || packagePending !== null}
-              onClick={() => void handleStartPlanTrial('pro')}
-            >
-              {packagePending === 'trial:pro'
-                ? t('common.saving', {}, 'Saving...')
-                : t(
-                    'portal.package.start_trial_days',
-                    { days: String(proOffer?.trial_days || 14) },
-                    `Start ${proOffer?.trial_days || 14}-day trial`
-                  )}
-            </button>
+            />
+          ) : null}
+          <div className="mt-4 flex flex-col gap-2">
             <button
               type="button"
               className="btn btn-primary"

@@ -102,12 +102,21 @@ def test_paid_trial_is_shared_and_only_moves_upward(tmp_path: Path) -> None:
     service = _service(database_url)
     _account(service, "acct_trial_shared")
 
+    eligible = service.list_account_plan_offers(account_id="acct_trial_shared")["trial"]
+    assert eligible["state"] == "eligible"
+    assert eligible["reason_code"] == "trial_available"
+    assert eligible["allowed_tiers"] == ["plus", "pro"]
+
     plus = service.start_account_plan_trial(
         account_id="acct_trial_shared",
         tier_id="plus",
         principal_id="",
         audit_context=_audit("trial-plus"),
     )
+    plus_active = service.list_account_plan_offers(account_id="acct_trial_shared")["trial"]
+    assert plus_active["state"] == "active"
+    assert plus_active["reason_code"] == "trial_active"
+    assert plus_active["allowed_tiers"] == ["pro"]
     pro = service.start_account_plan_trial(
         account_id="acct_trial_shared",
         tier_id="pro",
@@ -118,6 +127,9 @@ def test_paid_trial_is_shared_and_only_moves_upward(tmp_path: Path) -> None:
     assert pro["subscription"]["subscription_id"] == plus["subscription"]["subscription_id"]
     assert pro["trial"]["trial_ends_at"] == plus["trial"]["trial_ends_at"]
     assert pro["trial"]["credit_limit"] == 5_000
+    pro_active = service.list_account_plan_offers(account_id="acct_trial_shared")["trial"]
+    assert pro_active["state"] == "active"
+    assert pro_active["allowed_tiers"] == []
     with pytest.raises(CommercialValidationError) as downgrade:
         service.start_account_plan_trial(
             account_id="acct_trial_shared",
@@ -137,6 +149,33 @@ def test_paid_trial_is_shared_and_only_moves_upward(tmp_path: Path) -> None:
         claims = list(session.scalars(select(TrialClaim)))
         assert len(claims) == 1
         assert claims[0].highest_tier_id == "pro"
+    dispose_engine(database_url)
+
+
+def test_active_paid_package_blocks_first_trial(tmp_path: Path) -> None:
+    database_url = _database_url(tmp_path)
+    init_schema(database_url)
+    service = _service(database_url)
+    _account(service, "acct_paid_before_trial")
+    service.list_account_plan_offers(account_id="acct_paid_before_trial")
+    _pay(
+        service,
+        account_id="acct_paid_before_trial",
+        offer_id="plus_monthly_v1",
+        key="paid-before-trial",
+    )
+
+    blocked = service.list_account_plan_offers(account_id="acct_paid_before_trial")["trial"]
+    assert blocked["state"] == "blocked"
+    assert blocked["reason_code"] == "paid_plan_active"
+    assert blocked["allowed_tiers"] == []
+    with pytest.raises(CommercialValidationError) as unavailable:
+        service.start_account_plan_trial(
+            account_id="acct_paid_before_trial",
+            tier_id="pro",
+            audit_context=_audit("paid-before-trial-blocked"),
+        )
+    assert unavailable.value.error_code == "service.paid_plan_trial_not_available"
     dispose_engine(database_url)
 
 

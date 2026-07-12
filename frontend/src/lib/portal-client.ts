@@ -1427,6 +1427,14 @@ export interface PortalPlanOfferListPayload {
   trial?: {
     available?: boolean;
     status?: string;
+    state?: 'eligible' | 'active' | 'used' | 'blocked' | 'unavailable';
+    reason_code?:
+      | 'trial_available'
+      | 'trial_active'
+      | 'trial_already_used'
+      | 'paid_plan_active'
+      | 'trial_not_offered';
+    allowed_tiers?: Array<'plus' | 'pro'>;
     tier_id?: string;
     highest_tier_id?: string;
     trial_days?: number;
