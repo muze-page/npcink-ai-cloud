@@ -44,8 +44,11 @@ from tests.conftest import (
 )
 
 
-def test_wordpress_ai_connector_text_profiles_prefer_balanced_defaults() -> None:
+def test_wordpress_ai_connector_text_profiles_prefer_gpt55_with_fallbacks() -> None:
     short_text_spec = WP_AI_CONNECTOR_PROFILE_SPECS_BY_ID[WP_AI_CONNECTOR_SHORT_TEXT_PROFILE_ID]
+    editorial_spec = WP_AI_CONNECTOR_PROFILE_SPECS_BY_ID[
+        WP_AI_CONNECTOR_EDITORIAL_PROFILE_ID
+    ]
     alt_text_vision_spec = WP_AI_CONNECTOR_PROFILE_SPECS_BY_ID[
         WP_AI_CONNECTOR_ALT_TEXT_VISION_PROFILE_ID
     ]
@@ -53,10 +56,14 @@ def test_wordpress_ai_connector_text_profiles_prefer_balanced_defaults() -> None
         WP_AI_CONNECTOR_CLASSIFICATION_PROFILE_ID
     ]
 
-    assert short_text_spec.ordered_tiers[0] == "balanced"
+    assert short_text_spec.ordered_tiers[:2] == ("free-gpt55", "hosted-free")
+    assert "balanced" in short_text_spec.ordered_tiers
+    assert editorial_spec.ordered_tiers[:2] == ("free-gpt55", "hosted-free")
+    assert "balanced" in editorial_spec.ordered_tiers
     assert alt_text_vision_spec.execution_kind == "vision"
     assert alt_text_vision_spec.tasks == ("alt_text_suggest",)
-    assert classification_spec.ordered_tiers[0] == "balanced"
+    assert classification_spec.ordered_tiers[:2] == ("free-gpt55", "hosted-free")
+    assert "balanced" in classification_spec.ordered_tiers
 
 
 class WordPressAIConnectorTextProvider:
