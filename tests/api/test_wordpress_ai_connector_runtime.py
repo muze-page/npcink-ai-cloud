@@ -45,9 +45,7 @@ from tests.conftest import (
 
 
 def test_wordpress_ai_connector_text_profiles_prefer_balanced_defaults() -> None:
-    short_text_spec = WP_AI_CONNECTOR_PROFILE_SPECS_BY_ID[
-        WP_AI_CONNECTOR_SHORT_TEXT_PROFILE_ID
-    ]
+    short_text_spec = WP_AI_CONNECTOR_PROFILE_SPECS_BY_ID[WP_AI_CONNECTOR_SHORT_TEXT_PROFILE_ID]
     alt_text_vision_spec = WP_AI_CONNECTOR_PROFILE_SPECS_BY_ID[
         WP_AI_CONNECTOR_ALT_TEXT_VISION_PROFILE_ID
     ]
@@ -538,15 +536,9 @@ def test_wordpress_ai_connector_runtime_executes_scene_bound_text(tmp_path: Path
         assert run.policy_json["execution_contract"]["contract_version"] == (
             "wp_ai_connector_runtime.v1"
         )
-        assert (
-            run.policy_json["execution_contract"]["managed_surface"]
-            == "wordpress_ai_connector"
-        )
+        assert run.policy_json["execution_contract"]["managed_surface"] == "wordpress_ai_connector"
         assert run.policy_json["execution_contract"]["task_group"] == "short_text"
-        assert (
-            run.policy_json["execution_contract"]["routing_intent"]
-            == "content.short_text"
-        )
+        assert run.policy_json["execution_contract"]["routing_intent"] == "content.short_text"
 
 
 def test_wordpress_ai_connector_title_generation_uses_hidden_site_title_style(
@@ -608,14 +600,23 @@ def test_wordpress_ai_connector_title_generation_uses_hidden_site_title_style(
         "Npcink Cloud Addon: WordPress AI scene helper"
     )
     assert captured_input["intent"] == "writing_context"
-    assert captured_input["max_results"] == 8
+    assert captured_input["max_results"] == 12
     provider_input = provider.requests[0].input_payload
-    assert "用云端能力增强 WordPress 编辑体验" in provider_input["input"]
-    assert "让 AI 更懂你的网站内容" in provider_input["input"]
-    assert provider_input["input"].count("用云端能力增强 WordPress 编辑体验") == 1
+    assert "用云端能力增强 WordPress 编辑体验" not in provider_input["input"]
+    assert "让 AI 更懂你的网站内容" not in provider_input["input"]
+    assert "Aggregate style profile" in provider_input["input"]
+    assert '"length_preference"' in provider_input["input"]
+    assert '"sample_count"' not in provider_input["input"]
     assert "This chunk must not be sent" not in provider_input["input"]
+    assert "generation_context.v1" in provider_input["input"]
+    assert provider_input["input"].index("generation_context.v1") < provider_input["input"].index(
+        "Scene input:"
+    )
+    assert "Never add a name, number, claim, or event" in provider_input["input"]
     assert provider_input["metadata"]["site_knowledge_reference"] == "applied"
-    assert provider_input["metadata"]["site_knowledge_reference_count"] == 2
+    assert provider_input["metadata"]["site_knowledge_reference_count"] == 1
+    assert provider_input["metadata"]["generation_context_status"] == "applied"
+    assert provider_input["metadata"]["generation_context_reason"] == "references_applied"
 
 
 def test_wordpress_ai_connector_title_generation_silently_falls_back_when_site_knowledge_fails(
@@ -648,20 +649,20 @@ def test_wordpress_ai_connector_title_generation_silently_falls_back_when_site_k
 
     assert response.status_code == 200
     provider_input = provider.requests[0].input_payload
-    assert "Site title style references" not in provider_input["input"]
+    assert "Generation context" not in provider_input["input"]
     assert "site_knowledge_reference" not in provider_input["metadata"]
+    assert provider_input["metadata"]["generation_context_status"] == "unavailable"
+    assert provider_input["metadata"]["generation_context_reason"] == "retrieval_failed"
 
 
 @pytest.mark.parametrize(
     ("task", "mode", "expected_marker"),
     [
-        ("excerpt_generation", "site_excerpt_style", "Site excerpt style references"),
-        ("meta_description", "site_meta_style", "Site meta description style references"),
-        ("content_summary", "site_summary_style", "Site summary style references"),
+        ("excerpt_generation", "site_excerpt_style", "Aggregate style profile"),
         (
             "content_classification",
             "site_taxonomy_history",
-            "Related-site taxonomy history",
+            "Existing taxonomy candidates",
         ),
     ],
 )
@@ -736,12 +737,55 @@ def test_wordpress_ai_connector_uses_task_bound_hidden_site_reference(
     assert "0.91" not in provider_input["input"]
     assert provider_input["metadata"]["site_knowledge_reference"] == "applied"
     assert provider_input["metadata"]["site_knowledge_reference_mode"] == mode
-    if task == "content_summary":
-        assert "only factual source" in provider_input["input"]
+    assert provider_input["metadata"]["generation_context_contract"] == "generation_context.v1"
     if task == "content_classification":
         assert "WordPress AI" in provider_input["input"]
         assert "Site Knowledge" in provider_input["input"]
         assert "term IDs" in provider_input["input"]
+
+
+@pytest.mark.parametrize(
+    ("task", "mode"),
+    [
+        ("meta_description", "site_meta_style"),
+        ("content_summary", "site_summary_style"),
+    ],
+)
+def test_wordpress_ai_connector_defers_context_without_task_appropriate_source_data(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    task: str,
+    mode: str,
+) -> None:
+    _, client, provider = _build_client(tmp_path)
+
+    def fail_if_retrieval_runs(
+        self: SiteKnowledgeService,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        del self, kwargs
+        raise AssertionError("deferred tasks must not perform vector retrieval")
+
+    monkeypatch.setattr(SiteKnowledgeService, "execute", fail_if_retrieval_runs)
+    response = _execute(
+        client,
+        _payload(
+            {
+                "task": task,
+                "request": {
+                    "prompt": "Run the current WordPress editor task.",
+                    "site_knowledge_reference": {"enabled": True, "mode": mode},
+                },
+            }
+        ),
+        idempotency_key=f"wp-ai-{mode}-deferred",
+    )
+
+    assert response.status_code == 200
+    provider_input = provider.requests[0].input_payload
+    assert "Generation context" not in provider_input["input"]
+    assert provider_input["metadata"]["generation_context_status"] == "unavailable"
+    assert provider_input["metadata"]["generation_context_reason"] == ("task_policy_unavailable")
 
 
 def test_wordpress_ai_connector_title_generation_ignores_non_list_site_knowledge_results(
@@ -782,8 +826,9 @@ def test_wordpress_ai_connector_title_generation_ignores_non_list_site_knowledge
 
     assert response.status_code == 200
     provider_input = provider.requests[0].input_payload
-    assert "Site title style references" not in provider_input["input"]
+    assert "Generation context" not in provider_input["input"]
     assert "site_knowledge_reference" not in provider_input["metadata"]
+    assert provider_input["metadata"]["generation_context_reason"] == "no_usable_references"
 
 
 @pytest.mark.parametrize(
@@ -877,10 +922,7 @@ def test_wordpress_ai_connector_runtime_executes_alt_text_as_vision(
         assert run.policy_json["task_group"] == "alt_text_vision"
         assert run.policy_json["routing_intent"] == "media.alt_text_vision"
         assert run.policy_json["execution_contract"]["task_group"] == "alt_text_vision"
-        assert (
-            run.policy_json["execution_contract"]["routing_intent"]
-            == "media.alt_text_vision"
-        )
+        assert run.policy_json["execution_contract"]["routing_intent"] == "media.alt_text_vision"
 
 
 def test_wordpress_ai_connector_runtime_accepts_bounded_alt_text_data_url(
@@ -986,9 +1028,7 @@ def test_wordpress_ai_connector_runtime_strips_reasoning_noise_from_title(
     payload = _payload(
         {
             "request": {
-                "prompt": (
-                    "Suggest a concise title for reasoning leakage verification."
-                ),
+                "prompt": ("Suggest a concise title for reasoning leakage verification."),
             },
         }
     )
@@ -1160,7 +1200,7 @@ def test_wordpress_ai_connector_runtime_projects_classification_json_scene(
     assert response.status_code == 200
     provider_input = provider.requests[0].input_payload
     assert "Return strict JSON only" in provider_input["input"]
-    assert "\"suggestions\"" in provider_input["input"]
+    assert '"suggestions"' in provider_input["input"]
     assert provider_input["max_tokens"] == 220
     assert provider_input["max_output_tokens"] == 220
     assert provider.requests[0].profile_id == WP_AI_CONNECTOR_CLASSIFICATION_PROFILE_ID
@@ -1168,8 +1208,7 @@ def test_wordpress_ai_connector_runtime_projects_classification_json_scene(
     assert result["suggestions"]
     assert all("term" in suggestion for suggestion in result["suggestions"])
     assert any(
-        suggestion["term"] in {"WordPress", "WordPress AI"}
-        for suggestion in result["suggestions"]
+        suggestion["term"] in {"WordPress", "WordPress AI"} for suggestion in result["suggestions"]
     )
 
 
@@ -1308,10 +1347,7 @@ def test_wordpress_ai_connector_image_generation_uses_managed_image_profile(
         assert run.policy_json["task_group"] == "image_generation"
         assert run.policy_json["routing_intent"] == "media.image_generation"
         assert run.policy_json["timeout_ms"] == 90000
-        assert (
-            run.policy_json["execution_contract"]["routing_intent"]
-            == "media.image_generation"
-        )
+        assert run.policy_json["execution_contract"]["routing_intent"] == "media.image_generation"
 
 
 def test_wordpress_ai_connector_runtime_rejects_timeout_above_scene_limit(
@@ -1371,12 +1407,8 @@ def test_admin_ability_model_plugin_routing_updates_platform_managed_candidates(
     assert data["boundary"]["cloud_ability_registry"] is False
     assert data["boundary"]["wordpress_ability_truth"] == "local_plugin"
     assert len(data["profiles"]) == 6
-    assert data["available_text_instances"][0]["instance_id"] == (
-        "openai-wp-ai-connector-test"
-    )
-    assert data["available_vision_instances"][0]["instance_id"] == (
-        "openai-wp-ai-vision-test"
-    )
+    assert data["available_text_instances"][0]["instance_id"] == ("openai-wp-ai-connector-test")
+    assert data["available_vision_instances"][0]["instance_id"] == ("openai-wp-ai-vision-test")
     assert data["available_image_instances"][0]["instance_id"] == "openai-wp-ai-image-test"
     assert data["available_audio_instances"][0]["instance_id"] == "openai-wp-ai-audio-test"
     short_text = next(
@@ -1520,9 +1552,7 @@ def test_admin_ability_model_plugin_routing_rejects_execution_kind_mismatch(
     response = client.post(
         "/internal/service/admin/ability-models/plugin-routing",
         headers=merge_json_headers(
-            build_internal_headers(
-                idempotency_key="wp-ai-routing-admin-save-kind-mismatch"
-            )
+            build_internal_headers(idempotency_key="wp-ai-routing-admin-save-kind-mismatch")
         ),
         json={
             "profiles": [
@@ -1577,9 +1607,7 @@ def test_admin_ability_model_plugin_routing_requires_enabled_provider_model(
     response = client.post(
         "/internal/service/admin/ability-models/plugin-routing",
         headers=merge_json_headers(
-            build_internal_headers(
-                idempotency_key="wp-ai-routing-admin-save-model-allowlist"
-            )
+            build_internal_headers(idempotency_key="wp-ai-routing-admin-save-model-allowlist")
         ),
         json={
             "profiles": [
