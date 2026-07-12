@@ -229,10 +229,10 @@ assert.doesNotMatch(
   /order\.status_detail\?\.label|order\.status_detail\?\.detail/,
   'Portal package page must not render backend payment-order English labels directly'
 );
-assert.doesNotMatch(
+assert.match(
   creditPackDialogSource,
-  /portal\.usage\.credit_pack_validity_days/,
-  'Portal package page must not repeat per-card credit pack validity when the section already shows one-year validity'
+  /portal\.usage\.credit_pack_validity_days[\s\S]*formatValidityLabel\(t, pack\.validity_days\)/,
+  'Portal package page must disclose each credit pack validity before purchase confirmation'
 );
 assert.doesNotMatch(
   billingPageSource,

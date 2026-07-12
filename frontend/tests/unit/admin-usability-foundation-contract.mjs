@@ -34,7 +34,8 @@ assert.match(siteSource, /return <AdminRouteSkeleton \/>/, 'site detail must not
 assert.match(siteSource, /usage_without_limit/, 'site detail must explain usage when no limit is configured');
 assert.doesNotMatch(siteSource, /setSiteNotice/, 'site activation success must not expand the page with an inline notice');
 
-assert.match(supportSource, /const appliedStatus = searchParams\.get\('status'\) \|\| ''/, 'ticket queue must open on all statuses and persist status in the URL');
+assert.match(supportSource, /const appliedStatus = queueParams\.get\('status'\) \|\| ''/, 'ticket queue must open on all statuses and persist status in the URL');
+assert.match(supportSource, /window\.history\.replaceState/, 'ticket queue URL updates must not race through asynchronous router transitions');
 assert.match(supportSource, /support_requests_topic_filter_label/, 'ticket topic filter must have an accessible name');
 assert.match(supportSource, /support_requests_search_label/, 'ticket search must have an accessible name');
 

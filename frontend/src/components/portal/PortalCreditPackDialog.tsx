@@ -1,6 +1,5 @@
 'use client';
 
-import { PortalStatusBadge } from '@/components/portal/PortalStatusBadge';
 import { Modal } from '@/components/ui/Modal';
 import type { PortalCreditPackCatalogPayload } from '@/lib/portal-client';
 import {
@@ -28,6 +27,21 @@ function formatPoints(value: unknown): string {
   return formatNumber(Math.round(Number(value || 0)));
 }
 
+function normalizeValidityDays(value: unknown): number | null {
+  const days = Math.round(Number(value || 0));
+  return Number.isFinite(days) && days > 0 ? days : null;
+}
+
+function formatValidityLabel(t: TranslateFn, value: unknown): string {
+  const days = normalizeValidityDays(value);
+  if (days === null) return t('common.unknown', {}, 'To confirm');
+  return t(
+    'portal.usage.credit_pack_validity_days',
+    { days: String(days) },
+    `Valid for ${days} days after payment`
+  );
+}
+
 export function PortalCreditPackDialog({
   t,
   isOpen,
@@ -46,6 +60,9 @@ export function PortalCreditPackDialog({
         to: DEFAULT_PORTAL_CURRENCY,
       })
     : '';
+  const selectedValidityLabel = selectedPack
+    ? formatValidityLabel(t, selectedPack.validity_days)
+    : null;
 
   return (
     <Modal
@@ -55,18 +72,12 @@ export function PortalCreditPackDialog({
       description={t(
         'portal.usage.credit_packs_desc',
         {},
-        'Add points without changing your plan. Purchased credits are valid for one year after payment.'
+        'Add points without changing your package. Each pack shows its validity after payment.'
       )}
       size="xl"
       className="portal-commercial-dialog max-w-4xl rounded-[18px] shadow-[0_16px_44px_rgba(15,23,42,0.14)]"
     >
       <div className="space-y-4">
-        <div className="flex justify-end">
-          <PortalStatusBadge
-            status="warning"
-            label={t('portal.usage.credit_packs_period_badge', {}, 'One-year validity')}
-          />
-        </div>
         <div
           className="grid gap-3 md:grid-cols-3"
           role="radiogroup"
@@ -98,6 +109,9 @@ export function PortalCreditPackDialog({
                   to: DEFAULT_PORTAL_CURRENCY,
                 })}
               </p>
+              <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                {formatValidityLabel(t, pack.validity_days)}
+              </p>
               <p className="mt-4 text-sm font-semibold text-[#0066cc] dark:text-[#2997ff]">
                 {selectedPackId === pack.pack_id
                   ? t('portal.usage.credit_pack_selected', {}, 'Selected')
@@ -114,13 +128,18 @@ export function PortalCreditPackDialog({
                 : t('portal.usage.credit_pack_select_hint', {}, 'Select a credit pack above to continue.')}
             </p>
             {selectedPack ? (
-              <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">
-                {t(
-                  'portal.usage.credit_pack_selection_summary',
-                  { points: formatPoints(selectedPack.ai_credits), amount: selectedAmount },
-                  `${formatPoints(selectedPack.ai_credits)} points for ${selectedAmount}`
-                )}
-              </p>
+              <div className="mt-1 space-y-1 text-sm text-slate-600 dark:text-slate-300">
+                <p>
+                  {t(
+                    'portal.usage.credit_pack_selection_summary',
+                    { points: formatPoints(selectedPack.ai_credits), amount: selectedAmount },
+                    `${formatPoints(selectedPack.ai_credits)} points for ${selectedAmount}`
+                  )}
+                </p>
+                <p>
+                  {selectedValidityLabel}
+                </p>
+              </div>
             ) : null}
           </div>
           <button

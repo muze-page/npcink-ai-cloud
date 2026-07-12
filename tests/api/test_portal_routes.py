@@ -4994,6 +4994,7 @@ def test_portal_summary_usage_entitlements_and_audit_routes(tmp_path: Path) -> N
         "pack_medium",
         "pack_large",
     }
+    assert all(int(item["validity_days"]) > 0 for item in credit_packs_data["items"])
 
     account_credit_packs_response = client.get(
         "/portal/v1/account/credit-packs",
@@ -5008,6 +5009,10 @@ def test_portal_summary_usage_entitlements_and_audit_routes(tmp_path: Path) -> N
         "pack_medium",
         "pack_large",
     }
+    assert all(
+        int(item["validity_days"]) > 0
+        for item in account_credit_packs_data["items"]
+    )
 
     credit_pack_order_response = client.post(
         "/portal/v1/sites/site_portal_reads/credit-pack-orders",

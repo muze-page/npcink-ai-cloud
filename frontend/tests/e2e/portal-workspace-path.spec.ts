@@ -401,6 +401,7 @@ async function installPortalMocks(
             ai_credits: 10000,
             amount: 99,
             currency: 'CNY',
+            validity_days: 180,
             active: true,
             period_policy: 'current_period',
             grant_event_type: 'credit_pack_purchase',
@@ -1319,6 +1320,7 @@ async function installPortalMocks(
             ai_credits: 100,
             amount: 19,
             currency: 'USD',
+            validity_days: 90,
             active: true,
             period_policy: 'current_period',
             grant_event_type: 'credit_pack_purchase',
@@ -1438,6 +1440,7 @@ test('portal workspace interaction path: account overview to site drawer and ser
   const paymentPopupPromise = page.waitForEvent('popup');
   await page.getByRole('button', { name: /Buy credits|购买积分/i }).click();
   const creditDialog = page.getByRole('dialog', { name: /Credit packs|积分包/i });
+  await expect(creditDialog.getByText(/Valid for 180 days|支付后 180 天内有效/i).first()).toBeVisible();
   await creditDialog.getByRole('radio', { name: /Small credit pack|小积分包/i }).click();
   await creditDialog.getByRole('button', { name: /Buy credits|购买积分/i }).click();
   const paymentPopup = await paymentPopupPromise;

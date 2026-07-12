@@ -1346,6 +1346,7 @@ export interface PortalCreditPack {
   ai_credits: number;
   amount: number;
   currency: string;
+  validity_days: number;
   recommended_for_tiers?: string[];
   active?: boolean;
   period_policy?: string;
@@ -1358,6 +1359,8 @@ export interface PortalCreditPackCatalogPayload {
   account_id?: string;
   catalog_version?: string;
   period_policy?: string;
+  expiry_policy?: string;
+  default_validity_days?: number;
   grant_event_type?: string;
   items: PortalCreditPack[];
 }

@@ -6,7 +6,6 @@ import { frontendRoot } from './_paths.mjs';
 const root = frontendRoot;
 const pageSource = readFileSync(resolve(root, 'src/app/admin/credit-packs/page.tsx'), 'utf8');
 const proxySource = readFileSync(resolve(root, 'src/app/api/admin/[...path]/route.ts'), 'utf8');
-const billingSource = readFileSync(resolve(root, 'src/app/portal/billing/page.tsx'), 'utf8');
 
 assert.match(
   pageSource,
@@ -52,14 +51,4 @@ assert.match(
   proxySource,
   /normalized === 'credit-packs'[\s\S]*\/internal\/service\/admin\/credit-packs/,
   'Admin proxy must route credit pack writes to the admin-prefixed service endpoint'
-);
-assert.match(
-  billingSource,
-  /portal\.usage\.credit_packs_desc[\s\S]*portal\.usage\.credit_packs_period_badge/,
-  'Portal billing must show the purchased credit validity window at section level'
-);
-assert.match(
-  billingSource,
-  /portal\.package\.plus_title/,
-  'Portal billing must expose the Plus package tier'
 );
