@@ -485,7 +485,98 @@ const PROVIDER_PRESETS: ProviderPreset[] = [
     docsUrl: 'https://api-docs.deepseek.com/',
     capabilityIds: 'text_generation',
     runtimeProfileIds: 'text.ai',
-    modelIds: 'deepseek-chat, deepseek-reasoner',
+    modelIds: 'deepseek-v4-flash, deepseek-v4-pro',
+  },
+  {
+    id: 'kimi',
+    label: 'Kimi',
+    providerId: 'kimi',
+    kind: 'openai_compatible',
+    displayName: 'Kimi',
+    baseUrl: 'https://api.moonshot.cn/v1',
+    websiteUrl: 'https://www.kimi.com/',
+    docsUrl: 'https://platform.kimi.com/docs/api/overview',
+    capabilityIds: 'text_generation',
+    runtimeProfileIds: 'text.ai',
+    modelIds: 'kimi-k2.6',
+  },
+  {
+    id: 'doubao',
+    label: 'Doubao / Volcengine Ark',
+    providerId: 'doubao',
+    kind: 'openai_compatible',
+    displayName: 'Doubao / Volcengine Ark',
+    baseUrl: 'https://ark.cn-beijing.volces.com/api/v3',
+    websiteUrl: 'https://www.volcengine.com/product/ark',
+    docsUrl: 'https://docs.volcengine.com/docs/82379/1795150',
+    capabilityIds: 'text_generation',
+    runtimeProfileIds: 'text.ai',
+    modelIds: 'doubao-seed-2-0-lite-260215',
+  },
+  {
+    id: 'xiaomi_mimo',
+    label: 'Xiaomi MiMo',
+    providerId: 'xiaomi_mimo',
+    kind: 'openai_compatible',
+    displayName: 'Xiaomi MiMo',
+    baseUrl: 'https://api.xiaomimimo.com/v1',
+    websiteUrl: 'https://mimo.mi.com/',
+    docsUrl: 'https://mimo.mi.com/docs/quick-start/first-api-call',
+    capabilityIds: 'text_generation',
+    runtimeProfileIds: 'text.ai',
+    modelIds: 'mimo-v2.5-pro',
+  },
+  {
+    id: 'longcat',
+    label: 'LongCat / Meituan',
+    providerId: 'longcat',
+    kind: 'openai_compatible',
+    displayName: 'LongCat / Meituan',
+    baseUrl: 'https://api.longcat.chat/openai/v1',
+    websiteUrl: 'https://longcat.chat/',
+    docsUrl: 'https://longcat.chat/platform/docs/APIDocs.html',
+    capabilityIds: 'text_generation',
+    runtimeProfileIds: 'text.ai',
+    modelIds: 'LongCat-2.0',
+  },
+  {
+    id: 'qwen',
+    label: 'Qwen / Alibaba Cloud Model Studio',
+    providerId: 'qwen',
+    kind: 'openai_compatible',
+    displayName: 'Qwen / Alibaba Cloud Model Studio',
+    baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+    websiteUrl: 'https://www.aliyun.com/product/bailian',
+    docsUrl: 'https://help.aliyun.com/zh/model-studio/base-url',
+    capabilityIds: 'text_generation',
+    runtimeProfileIds: 'text.ai',
+    modelIds: 'qwen3.6-plus',
+  },
+  {
+    id: 'hunyuan',
+    label: 'Hunyuan / Tencent TokenHub',
+    providerId: 'hunyuan',
+    kind: 'openai_compatible',
+    displayName: 'Hunyuan / Tencent TokenHub',
+    baseUrl: 'https://tokenhub.tencentmaas.com/v1',
+    websiteUrl: 'https://cloud.tencent.com/product/hunyuan',
+    docsUrl: 'https://cloud.tencent.com/document/product/1729/131925',
+    capabilityIds: 'text_generation',
+    runtimeProfileIds: 'text.ai',
+    modelIds: 'hy3-preview',
+  },
+  {
+    id: 'zhipu_glm',
+    label: 'Zhipu GLM',
+    providerId: 'zhipu_glm',
+    kind: 'openai_compatible',
+    displayName: 'Zhipu GLM',
+    baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
+    websiteUrl: 'https://www.bigmodel.cn/',
+    docsUrl: 'https://docs.bigmodel.cn/cn/guide/develop/openai/introduction',
+    capabilityIds: 'text_generation',
+    runtimeProfileIds: 'text.ai',
+    modelIds: 'glm-5.1',
   },
   {
     id: 'anthropic',
@@ -881,8 +972,16 @@ function providerPresetById(presetId: string): ProviderPreset {
 function inferProviderPreset(connection: Connection): string {
   const kind = connection.kind.toLowerCase();
   const providerId = connection.provider_id.toLowerCase();
-  if (providerId.includes('newapi') || connection.base_url.toLowerCase().includes('newapi')) return 'newapi';
-  if (providerId.includes('deepseek') || connection.base_url.toLowerCase().includes('deepseek')) return 'deepseek';
+  const baseUrl = connection.base_url.toLowerCase();
+  if (providerId.includes('newapi') || baseUrl.includes('newapi')) return 'newapi';
+  if (providerId.includes('deepseek') || baseUrl.includes('deepseek')) return 'deepseek';
+  if (providerId.includes('kimi') || providerId.includes('moonshot') || baseUrl.includes('moonshot')) return 'kimi';
+  if (providerId.includes('doubao') || providerId.includes('volcengine') || baseUrl.includes('volces.com')) return 'doubao';
+  if (providerId.includes('xiaomi_mimo') || providerId === 'mimo' || baseUrl.includes('xiaomimimo.com')) return 'xiaomi_mimo';
+  if (providerId.includes('longcat') || providerId.includes('meituan') || baseUrl.includes('longcat.chat')) return 'longcat';
+  if (providerId.includes('qwen') || providerId.includes('dashscope') || baseUrl.includes('dashscope') || baseUrl.includes('maas.aliyuncs.com')) return 'qwen';
+  if (providerId.includes('hunyuan') || providerId.includes('tencent') || baseUrl.includes('tencentmaas.com') || baseUrl.includes('hunyuan.cloud.tencent.com')) return 'hunyuan';
+  if (providerId.includes('zhipu') || providerId.includes('glm') || baseUrl.includes('bigmodel.cn')) return 'zhipu_glm';
   if (kind === 'anthropic') return 'anthropic';
   if (kind === 'openrouter') return 'openrouter';
   if (kind === 'siliconflow') return 'siliconflow';

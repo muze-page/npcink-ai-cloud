@@ -265,6 +265,59 @@ def test_provider_registry_namespaces_custom_openai_compatible_connections(
     dispose_engine(database_url)
 
 
+def test_provider_registry_reuses_openai_transport_for_compatible_text_providers(
+    tmp_path: Path,
+) -> None:
+    database_url = _sqlite_url(tmp_path)
+    init_schema(database_url)
+    settings = _settings(database_url)
+    service = ProviderConnectionAdminService(database_url, settings)
+
+    for provider_id, base_url in (
+        ("kimi", "https://api.moonshot.cn/v1"),
+        ("doubao", "https://ark.cn-beijing.volces.com/api/v3"),
+        ("xiaomi_mimo", "https://api.xiaomimimo.com/v1"),
+        ("longcat", "https://api.longcat.chat/openai/v1"),
+        ("qwen", "https://dashscope.aliyuncs.com/compatible-mode/v1"),
+        ("hunyuan", "https://tokenhub.tencentmaas.com/v1"),
+        ("zhipu_glm", "https://open.bigmodel.cn/api/paas/v4"),
+    ):
+        service.save_connection(
+            {
+                "connection_id": f"{provider_id}_primary",
+                "provider_id": provider_id,
+                "provider_type": "openai_compatible",
+                "kind": "openai_compatible",
+                "display_name": f"{provider_id.title()} primary",
+                "enabled": True,
+                "base_url": base_url,
+                "capability_ids": ["text_generation"],
+                "runtime_profile_ids": ["text.ai"],
+                "credential": f"{provider_id}-key",
+            }
+        )
+
+    providers = build_provider_adapters(settings, include_enabled_connections=True)
+
+    for provider_id, base_url in (
+        ("kimi", "https://api.moonshot.cn/v1"),
+        ("doubao", "https://ark.cn-beijing.volces.com/api/v3"),
+        ("xiaomi_mimo", "https://api.xiaomimimo.com/v1"),
+        ("longcat", "https://api.longcat.chat/openai/v1"),
+        ("qwen", "https://dashscope.aliyuncs.com/compatible-mode/v1"),
+        ("hunyuan", "https://tokenhub.tencentmaas.com/v1"),
+        ("zhipu_glm", "https://open.bigmodel.cn/api/paas/v4"),
+    ):
+        adapter = providers[provider_id]
+        assert isinstance(adapter, OpenAIProviderAdapter)
+        assert adapter.provider_id == provider_id
+        assert adapter.model_namespace_prefix == provider_id
+        assert adapter.base_url == base_url
+        assert adapter.api_key == f"{provider_id}-key"
+
+    dispose_engine(database_url)
+
+
 def test_runtime_settings_project_capability_provider_connections(
     tmp_path: Path,
 ) -> None:
