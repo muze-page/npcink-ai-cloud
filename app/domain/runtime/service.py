@@ -5608,9 +5608,11 @@ class RuntimeService:
         system_instruction = str(scene_request.get("system_instruction") or "").strip()
         task_contract = self._dict_or_empty(scene_request.get("task_contract"))
         task_family = str(task_contract.get("task_family") or "").strip()
+        raw_constraints = task_contract.get("constraints")
+        constraint_items = raw_constraints if isinstance(raw_constraints, list) else []
         constraints = {
             str(item).strip()
-            for item in task_contract.get("constraints", [])
+            for item in constraint_items
             if isinstance(item, str) and str(item).strip()
         }
 
