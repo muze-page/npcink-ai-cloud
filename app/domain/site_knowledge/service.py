@@ -579,6 +579,49 @@ class SiteKnowledgeService:
             source_types = [source_type for source_type in source_types if source_type != "comment"]
         current_post_id = _coerce_int(input_payload.get("current_post_id"), default=0)
 
+        indexed_embedding_models = self.repository.list_embedding_models(site_id)
+        retrieval_readiness = _embedding_space_readiness(
+            indexed_embedding_models=indexed_embedding_models,
+            query_embedding_model=self.embedding_model,
+        )
+        if retrieval_readiness["status"] == "embedding_space_mismatch":
+            workflow_support = _workflow_support_for_intent(intent)
+            evidence_gate = _evidence_gate([], evidence_policy)
+            return {
+                "artifact_type": "site_knowledge_results",
+                "composition_role": "site_knowledge_context",
+                "status": "not_ready",
+                "intent": intent,
+                "workflow_support": workflow_support,
+                "agent_handoff": _agent_handoff_for_search(
+                    intent=intent,
+                    workflow_support=workflow_support,
+                    evidence_gate=evidence_gate,
+                    results=[],
+                ),
+                "evidence_gate": evidence_gate,
+                "rerank": {
+                    "status": "skipped",
+                    "reason": "embedding_space_mismatch",
+                    "candidate_count": 0,
+                },
+                "retrieval_readiness": retrieval_readiness,
+                "result_granularity": result_granularity,
+                "result_grouping": {
+                    "strategy": (
+                        "best_ranked_chunk_per_document"
+                        if result_granularity == "document"
+                        else "ranked_chunks"
+                    ),
+                    "candidate_count": 0,
+                    "returned_count": 0,
+                    "duplicate_chunks_collapsed": 0,
+                },
+                "results": [],
+                "write_posture": "suggestion_only",
+                "direct_wordpress_write": False,
+            }
+
         query_embedding = self._embed_text(
             query,
             site_id=site_id,
@@ -620,6 +663,7 @@ class SiteKnowledgeService:
                 ),
                 "evidence_gate": evidence_gate,
                 "rerank": rerank,
+                "retrieval_readiness": retrieval_readiness,
                 "result_granularity": result_granularity,
                 "result_grouping": result_grouping,
                 "results": results,
@@ -682,6 +726,7 @@ class SiteKnowledgeService:
             ),
             "evidence_gate": evidence_gate,
             "rerank": rerank,
+            "retrieval_readiness": retrieval_readiness,
             "result_granularity": result_granularity,
             "result_grouping": result_grouping,
             "results": results,
@@ -1476,6 +1521,30 @@ def _lexical_bonus(query: str, chunk_text: str, title: str) -> float:
 def _normalize_result_granularity(value: Any) -> str:
     normalized = str(value or "chunk").strip()
     return normalized if normalized in ALLOWED_RESULT_GRANULARITIES else "chunk"
+
+
+def _embedding_space_readiness(
+    *,
+    indexed_embedding_models: list[str],
+    query_embedding_model: str,
+) -> dict[str, object]:
+    indexed_models = sorted(
+        {str(model).strip() for model in indexed_embedding_models if str(model).strip()}
+    )
+    query_model = str(query_embedding_model or "").strip()
+    if any(model != query_model for model in indexed_models):
+        return {
+            "status": "embedding_space_mismatch",
+            "query_embedding_model": query_model,
+            "indexed_embedding_models": indexed_models,
+            "action": "rebuild_index_with_current_embedding_model",
+        }
+    return {
+        "status": "ready" if indexed_models else "empty_index",
+        "query_embedding_model": query_model,
+        "indexed_embedding_models": indexed_models,
+        "action": "none" if indexed_models else "index_public_content",
+    }
 
 
 def _collapse_search_results_by_document(

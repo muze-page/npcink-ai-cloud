@@ -46,6 +46,7 @@ from app.domain.site_knowledge.service import (
     _apply_evidence_policy,
     _coerce_post_ids,
     _collapse_search_results_by_document,
+    _embedding_space_readiness,
     _filter_string_list,
     _normalize_public_taxonomies,
     _normalize_result_granularity,
@@ -280,6 +281,19 @@ def test_site_knowledge_search_input_helpers_bound_user_controlled_lists() -> No
     ) == ["post", "page", "comment"]
     assert _normalize_result_granularity(None) == "chunk"
     assert _normalize_result_granularity("document") == "document"
+    assert _embedding_space_readiness(
+        indexed_embedding_models=["BAAI/bge-m3"],
+        query_embedding_model="BAAI/bge-m3",
+    )["status"] == "ready"
+    assert _embedding_space_readiness(
+        indexed_embedding_models=["BAAI/bge-m3"],
+        query_embedding_model="BAAI/bge-large-en-v1.5",
+    ) == {
+        "status": "embedding_space_mismatch",
+        "query_embedding_model": "BAAI/bge-large-en-v1.5",
+        "indexed_embedding_models": ["BAAI/bge-m3"],
+        "action": "rebuild_index_with_current_embedding_model",
+    }
 
 
 def test_document_result_granularity_keeps_best_chunk_and_collapses_duplicates() -> None:
@@ -556,6 +570,45 @@ def test_document_search_returns_each_post_once_with_bounded_chunk_refs(
     assert result["result_grouping"]["strategy"] == "best_ranked_chunk_per_document"
     assert result["result_grouping"]["duplicate_chunks_collapsed"] > 0
     assert result["result_grouping"]["returned_count"] == 1
+
+
+def test_search_fails_closed_when_index_and_query_embedding_models_differ(
+    tmp_path: Path,
+) -> None:
+    database_url, settings, runtime_queue, client = _build_client(tmp_path)
+    _execute(client, _sync_payload(), idempotency_key="embedding-space-sync")
+    RuntimeService(
+        database_url,
+        settings=settings,
+        runtime_queue=runtime_queue,
+    ).process_next_queued_run(timeout_seconds=0)
+    settings.site_knowledge_embedding_model = "BAAI/bge-large-en-v1.5"
+
+    result = _execute(
+        client,
+        _search_payload(
+            "WordPress embedding compatibility",
+            intent="writing_support_plan",
+            result_granularity="document",
+        ),
+        idempotency_key="embedding-space-search",
+    )["json"]["data"]["result"]
+
+    assert result["status"] == "not_ready"
+    assert result["results"] == []
+    assert result["evidence_gate"]["status"] == "insufficient_evidence"
+    assert result["rerank"] == {
+        "status": "skipped",
+        "reason": "embedding_space_mismatch",
+        "candidate_count": 0,
+    }
+    assert result["retrieval_readiness"] == {
+        "status": "embedding_space_mismatch",
+        "query_embedding_model": "BAAI/bge-large-en-v1.5",
+        "indexed_embedding_models": ["BAAI/bge-m3"],
+        "action": "rebuild_index_with_current_embedding_model",
+    }
+    assert result["result_grouping"]["returned_count"] == 0
 
 
 def test_site_knowledge_postgres_fallback_search_uses_chunk_limit(

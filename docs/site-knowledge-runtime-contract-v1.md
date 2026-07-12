@@ -216,6 +216,15 @@ ranking. Toolbox and other consumers may request a granularity, but they must
 not implement independent semantic dedupe or relevance scoring. Existing
 callers that omit the field continue to receive chunk-level results.
 
+Search also verifies that indexed chunks and the current query use the same
+embedding model. Embeddings produced by different models are different vector
+spaces and must not be compared, even when their dimensions happen to match.
+When the index contains another embedding model, search fails closed with
+`status=not_ready`, an empty `results` list, and additive
+`retrieval_readiness.status=embedding_space_mismatch` diagnostics. The operator
+action is to rebuild the Cloud-owned index with the current embedding model;
+Cloud must not return low-confidence candidates from incompatible vectors.
+
 ## Product Workflows
 
 `site-knowledge-search` remains one runtime ability. Product workflows are

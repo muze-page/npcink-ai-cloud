@@ -172,6 +172,18 @@ class SiteKnowledgeRepository:
             or 0
         )
 
+    def list_embedding_models(self, site_id: str) -> list[str]:
+        return [
+            str(model)
+            for model in self.session.scalars(
+                select(SiteKnowledgeChunk.embedding_model)
+                .where(SiteKnowledgeChunk.site_id == site_id)
+                .distinct()
+                .order_by(SiteKnowledgeChunk.embedding_model.asc())
+            )
+            if str(model or "").strip()
+        ]
+
     def document_exists(self, *, site_id: str, source_type: str, source_id: int) -> bool:
         count = self.session.scalar(
             select(func.count())
