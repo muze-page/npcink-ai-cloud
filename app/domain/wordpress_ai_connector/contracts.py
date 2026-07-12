@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 from typing import Any
 from urllib.parse import urlsplit
@@ -55,6 +56,29 @@ WP_AI_CONNECTOR_ALLOWED_TASKS = frozenset(
         "title_generation",
     }
 )
+
+AI_TASK_CONTRACT = "ai_task_contract.v1"
+AI_TASK_ALLOWED_FAMILIES = frozenset(
+    {"generation", "classification", "transformation", "analysis"}
+)
+AI_TASK_ALLOWED_CONTEXTS = frozenset(
+    {
+        "current_content",
+        "site_style_profile",
+        "taxonomy_candidates",
+        "none",
+    }
+)
+AI_TASK_ALLOWED_CONSTRAINTS = frozenset(
+    {
+        "single_value",
+        "source_grounded",
+        "no_new_numbers",
+        "json_object",
+        "existing_terms_only",
+    }
+)
+AI_TASK_MAX_OUTPUT_SCHEMA_BYTES = 12_000
 
 WP_AI_CONNECTOR_FORBIDDEN_KEYS = frozenset(
     {
@@ -141,7 +165,17 @@ def validate_wordpress_ai_connector_runtime_contract(
             "WordPress AI connector input must declare connector_id=npcink-cloud",
         )
     task = str(input_payload.get("task") or "").strip()
-    if task not in WP_AI_CONNECTOR_ALLOWED_TASKS:
+    request = input_payload.get("request")
+    if not isinstance(request, dict):
+        raise WordPressAIConnectorContractViolation(
+            "wp_ai_connector.request_required",
+            "WordPress AI connector input requires a scene request object",
+        )
+
+    task_contract = request.get("task_contract")
+    if task_contract is not None:
+        validate_ai_task_contract(task_contract, task=task)
+    elif task not in WP_AI_CONNECTOR_ALLOWED_TASKS:
         raise WordPressAIConnectorContractViolation(
             "wp_ai_connector.task_not_allowed",
             "WordPress AI connector task is not supported",
@@ -162,13 +196,6 @@ def validate_wordpress_ai_connector_runtime_contract(
             "WordPress AI connector input must set no_conversation=true",
         )
 
-    request = input_payload.get("request")
-    if not isinstance(request, dict):
-        raise WordPressAIConnectorContractViolation(
-            "wp_ai_connector.request_required",
-            "WordPress AI connector input requires a scene request object",
-        )
-
     forbidden_path = find_forbidden_wordpress_ai_connector_field(input_payload)
     if forbidden_path:
         raise WordPressAIConnectorContractViolation(
@@ -183,12 +210,128 @@ def validate_wordpress_ai_connector_runtime_contract(
             "wp_ai_connector.prompt_too_large",
             "WordPress AI connector prompt exceeds the scene runtime size limit",
         )
-    validate_site_knowledge_reference(request, task=task)
+    validate_site_knowledge_reference(
+        request,
+        task=task,
+        task_contract=task_contract if isinstance(task_contract, dict) else {},
+    )
     if task == "alt_text_suggest":
         validate_alt_text_suggest_request(request)
 
 
-def validate_site_knowledge_reference(request: dict[str, Any], *, task: str) -> None:
+def validate_ai_task_contract(value: Any, *, task: str) -> None:
+    if not isinstance(value, dict):
+        raise WordPressAIConnectorContractViolation(
+            "wp_ai_connector.ai_task_contract_invalid",
+            "AI task contract must be an object",
+        )
+    allowed_fields = {
+        "contract_version",
+        "ability_name",
+        "task",
+        "task_family",
+        "context_requirements",
+        "constraints",
+        "output_schema",
+        "write_posture",
+    }
+    if set(value) - allowed_fields:
+        raise WordPressAIConnectorContractViolation(
+            "wp_ai_connector.ai_task_contract_fields_forbidden",
+            "AI task contract contains unsupported fields",
+        )
+    if str(value.get("contract_version") or "") != AI_TASK_CONTRACT:
+        raise WordPressAIConnectorContractViolation(
+            "wp_ai_connector.ai_task_contract_version_invalid",
+            "AI task contract requires ai_task_contract.v1",
+        )
+    ability_name = str(value.get("ability_name") or "").strip()
+    projected_task = str(value.get("task") or "").strip()
+    family = str(value.get("task_family") or "").strip()
+    valid_ability_name = re.fullmatch(r"[a-z0-9_-]+/[a-z0-9_-]+", ability_name) is not None
+    valid_task = re.fullmatch(r"[a-z0-9_]{1,64}", projected_task) is not None
+    if (
+        not valid_ability_name
+        or not valid_task
+        or projected_task != task
+        or family not in AI_TASK_ALLOWED_FAMILIES
+    ):
+        raise WordPressAIConnectorContractViolation(
+            "wp_ai_connector.ai_task_contract_identity_invalid",
+            "AI task contract identity does not match the registered task projection",
+        )
+    if str(value.get("write_posture") or "") != "suggestion_only":
+        raise WordPressAIConnectorContractViolation(
+            "wp_ai_connector.ai_task_contract_write_posture_invalid",
+            "AI task contract must remain suggestion_only",
+        )
+    contexts = value.get("context_requirements")
+    constraints = value.get("constraints")
+    if (
+        not isinstance(contexts, list)
+        or not all(isinstance(item, str) and item in AI_TASK_ALLOWED_CONTEXTS for item in contexts)
+        or not isinstance(constraints, list)
+        or not all(
+            isinstance(item, str) and item in AI_TASK_ALLOWED_CONSTRAINTS
+            for item in constraints
+        )
+    ):
+        raise WordPressAIConnectorContractViolation(
+            "wp_ai_connector.ai_task_contract_vocabulary_invalid",
+            "AI task contract contains an unsupported context requirement or constraint",
+        )
+    if "none" in contexts and len(contexts) != 1:
+        raise WordPressAIConnectorContractViolation(
+            "wp_ai_connector.ai_task_contract_none_invalid",
+            "AI task contract context none cannot be combined with other values",
+        )
+    output_schema = value.get("output_schema")
+    if not isinstance(output_schema, dict):
+        raise WordPressAIConnectorContractViolation(
+            "wp_ai_connector.ai_task_contract_output_schema_invalid",
+            "AI task contract requires an Ability-owned output schema",
+        )
+    try:
+        encoded_schema = json.dumps(output_schema, ensure_ascii=False, separators=(",", ":"))
+    except (TypeError, ValueError) as error:
+        raise WordPressAIConnectorContractViolation(
+            "wp_ai_connector.ai_task_contract_output_schema_invalid",
+            "AI task contract output schema must be JSON serializable",
+        ) from error
+    if len(encoded_schema.encode("utf-8")) > AI_TASK_MAX_OUTPUT_SCHEMA_BYTES:
+        raise WordPressAIConnectorContractViolation(
+            "wp_ai_connector.ai_task_contract_output_schema_too_large",
+            "AI task contract output schema exceeds the runtime projection limit",
+        )
+
+
+def resolve_site_knowledge_reference_mode(
+    *,
+    task: str,
+    task_contract: dict[str, Any] | None = None,
+) -> str:
+    expected_mode = WP_AI_CONNECTOR_SITE_KNOWLEDGE_REFERENCE_MODES_BY_TASK.get(task, "")
+    if expected_mode or not task_contract:
+        return expected_mode
+    contexts = task_contract.get("context_requirements")
+    contexts = contexts if isinstance(contexts, list) else []
+    if "taxonomy_candidates" in contexts:
+        return "site_taxonomy_history"
+    if "site_style_profile" in contexts:
+        return (
+            "site_title_style"
+            if str(task_contract.get("task_family") or "") == "generation"
+            else "site_excerpt_style"
+        )
+    return ""
+
+
+def validate_site_knowledge_reference(
+    request: dict[str, Any],
+    *,
+    task: str,
+    task_contract: dict[str, Any] | None = None,
+) -> None:
     reference = request.get("site_knowledge_reference")
     if reference is None:
         return
@@ -211,7 +354,10 @@ def validate_site_knowledge_reference(request: dict[str, Any], *, task: str) -> 
             "wp_ai_connector.site_knowledge_reference_enabled_invalid",
             "WordPress AI connector site_knowledge_reference.enabled must be boolean",
         )
-    expected_mode = WP_AI_CONNECTOR_SITE_KNOWLEDGE_REFERENCE_MODES_BY_TASK.get(task, "")
+    expected_mode = resolve_site_knowledge_reference_mode(
+        task=task,
+        task_contract=task_contract,
+    )
     mode = str(reference.get("mode") or expected_mode or "site_title_style")
     if enabled and not expected_mode:
         raise WordPressAIConnectorContractViolation(

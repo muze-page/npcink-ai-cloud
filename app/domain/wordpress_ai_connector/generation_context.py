@@ -37,6 +37,22 @@ GENERATION_CONTEXT_POLICIES = {
         max_context_chars=400,
         min_score=0.35,
     ),
+    "meta_description": GenerationContextPolicy(
+        task="meta_description",
+        mode="site_meta_style",
+        max_source_posts=5,
+        max_references=1,
+        max_context_chars=400,
+        min_score=0.35,
+    ),
+    "content_summary": GenerationContextPolicy(
+        task="content_summary",
+        mode="site_summary_style",
+        max_source_posts=5,
+        max_references=1,
+        max_context_chars=400,
+        min_score=0.35,
+    ),
     "content_classification": GenerationContextPolicy(
         task="content_classification",
         mode="site_taxonomy_history",
@@ -52,11 +68,35 @@ def generation_context_policy(
     *,
     task: str,
     mode: str,
+    task_family: str = "",
+    context_requirements: object = None,
 ) -> GenerationContextPolicy | None:
     policy = GENERATION_CONTEXT_POLICIES.get(task)
-    if policy is None or policy.mode != mode:
+    if policy is not None:
+        return policy if policy.mode == mode else None
+
+    contexts = context_requirements if isinstance(context_requirements, list) else []
+    supports_mode = (
+        mode == "site_taxonomy_history" and "taxonomy_candidates" in contexts
+    ) or (
+        mode in {"site_title_style", "site_excerpt_style"}
+        and "site_style_profile" in contexts
+    )
+    if not supports_mode or task_family not in {
+        "generation",
+        "classification",
+        "transformation",
+        "analysis",
+    }:
         return None
-    return policy
+    return GenerationContextPolicy(
+        task=task,
+        mode=mode,
+        max_source_posts=8 if mode == "site_taxonomy_history" else 5,
+        max_references=20 if mode == "site_taxonomy_history" else 1,
+        max_context_chars=1_200 if mode == "site_taxonomy_history" else 400,
+        min_score=0.35,
+    )
 
 
 def select_generation_context_post_ids(
@@ -154,6 +194,8 @@ def render_generation_context(pack: dict[str, Any]) -> str:
     label = {
         "site_title_style": "title",
         "site_excerpt_style": "excerpt",
+        "site_meta_style": "meta description",
+        "site_summary_style": "summary",
     }.get(mode, task or "writing")
     if all(isinstance(item, dict) and item.get("kind") == "style_profile" for item in references):
         return (
@@ -251,7 +293,7 @@ def _style_profile_references(
     sample_count = len(samples)
     typical_length = float(median(lengths))
     typical_sentences = float(median(sentence_counts))
-    length_thresholds = (30, 55) if policy.task == "title_generation" else (80, 160)
+    length_thresholds = (30, 55) if policy.mode == "site_title_style" else (80, 160)
 
     def usage_label(matches: int) -> str:
         rate = matches / sample_count

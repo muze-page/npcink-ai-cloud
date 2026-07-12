@@ -199,8 +199,8 @@ from app.domain.web_search.service import WebSearchProviderError, WebSearchServi
 from app.domain.wordpress_ai_connector.contracts import (
     WP_AI_CONNECTOR_ABILITIES,
     WP_AI_CONNECTOR_MAX_TIMEOUT_SECONDS,
-    WP_AI_CONNECTOR_SITE_KNOWLEDGE_REFERENCE_MODES_BY_TASK,
     WordPressAIConnectorContractViolation,
+    resolve_site_knowledge_reference_mode,
     validate_wordpress_ai_connector_runtime_contract,
 )
 from app.domain.wordpress_ai_connector.generation_context import (
@@ -5606,6 +5606,13 @@ class RuntimeService:
 
         prompt = str(scene_request.get("prompt") or input_payload.get("prompt") or "").strip()
         system_instruction = str(scene_request.get("system_instruction") or "").strip()
+        task_contract = self._dict_or_empty(scene_request.get("task_contract"))
+        task_family = str(task_contract.get("task_family") or "").strip()
+        constraints = {
+            str(item).strip()
+            for item in task_contract.get("constraints", [])
+            if isinstance(item, str) and str(item).strip()
+        }
 
         task_instruction = {
             "alt_text_suggest": "Generate concise image alt text. Return only the alt text.",
@@ -5631,7 +5638,16 @@ class RuntimeService:
                 "normally use no more than 36 characters; for other languages, normally use "
                 "no more than 12 words. Return only the title text."
             ),
-        }.get(task, "Return only the requested suggestion. Do not explain.")
+        }.get(task)
+        if task_instruction is None:
+            task_instruction = {
+                "generation": "Generate the requested value from the scene input.",
+                "classification": (
+                    "Classify the scene input according to the requested output schema."
+                ),
+                "transformation": "Transform the scene input as requested.",
+                "analysis": "Analyze the scene input and return the requested result.",
+            }.get(task_family, "Return only the requested suggestion. Do not explain.")
 
         fragments = [task_instruction]
         fragments.append(
@@ -5644,6 +5660,26 @@ class RuntimeService:
             "multiple options, labels, explanations, or offers to continue. Never add a "
             "name, number, claim, or event that is absent from the scene input."
         )
+        if "json_object" in constraints:
+            fragments.append(
+                "Return one strict JSON object matching the Ability output schema. No markdown."
+            )
+            output_schema = self._dict_or_empty(task_contract.get("output_schema"))
+            if output_schema:
+                fragments.append(
+                    "Ability output schema: "
+                    + json.dumps(output_schema, ensure_ascii=False, separators=(",", ":"))
+                )
+        if "single_value" in constraints:
+            fragments.append("Return exactly one value, not a list of alternatives.")
+        if "source_grounded" in constraints:
+            fragments.append("Keep every factual claim grounded in the current scene input.")
+        if "no_new_numbers" in constraints:
+            fragments.append(
+                "Do not introduce a number that is absent from the current scene input."
+            )
+        if "existing_terms_only" in constraints:
+            fragments.append("Choose only from the supplied existing taxonomy candidates.")
         if system_instruction:
             fragments.append(system_instruction)
         if prompt:
@@ -5656,6 +5692,9 @@ class RuntimeService:
             "metadata": {
                 "source_surface": "wordpress_ai_connector",
                 "task": task,
+                "ability_name": str(task_contract.get("ability_name") or ""),
+                "task_family": task_family,
+                "task_constraints": sorted(constraints),
                 "suggestion_only": True,
             },
         }
@@ -5670,7 +5709,15 @@ class RuntimeService:
             "excerpt_generation": 140,
             "meta_description": 80,
             "title_generation": 48,
-        }.get(task, 160)
+        }.get(
+            task,
+            {
+                "generation": 160,
+                "classification": 220,
+                "transformation": 512,
+                "analysis": 220,
+            }.get(task_family, 160),
+        )
 
         max_tokens = self._coerce_int(scene_request.get("max_tokens"), default=0)
         if max_tokens <= 0:
@@ -5696,12 +5743,21 @@ class RuntimeService:
         scene_request = self._dict_or_empty(input_payload.get("request"))
         reference = self._dict_or_empty(scene_request.get("site_knowledge_reference"))
         task = str(input_payload.get("task") or "").strip()
-        expected_mode = WP_AI_CONNECTOR_SITE_KNOWLEDGE_REFERENCE_MODES_BY_TASK.get(task, "")
+        task_contract = self._dict_or_empty(scene_request.get("task_contract"))
+        expected_mode = resolve_site_knowledge_reference_mode(
+            task=task,
+            task_contract=task_contract,
+        )
         mode = str(reference.get("mode") or "")
         if not expected_mode or mode != expected_mode or reference.get("enabled") is not True:
             return provider_input
 
-        policy = generation_context_policy(task=task, mode=mode)
+        policy = generation_context_policy(
+            task=task,
+            mode=mode,
+            task_family=str(task_contract.get("task_family") or ""),
+            context_requirements=task_contract.get("context_requirements"),
+        )
         if policy is None:
             return self._wordpress_ai_generation_context_status(
                 provider_input,
@@ -5935,6 +5991,11 @@ class RuntimeService:
         metadata = input_payload.get("metadata")
         metadata = metadata if isinstance(metadata, dict) else {}
         task = str(metadata.get("task") or "").strip()
+        constraints = {
+            str(item).strip()
+            for item in metadata.get("task_constraints", [])
+            if isinstance(item, str) and str(item).strip()
+        }
         output_text = self._extract_provider_output_text(output)
         if not output_text:
             return output
@@ -5974,6 +6035,14 @@ class RuntimeService:
                 source_text=str(input_payload.get("text") or ""),
                 task=task,
             )
+        elif "single_value" in constraints:
+            normalized_text = self._normalize_wordpress_ai_plain_text_output(
+                output_text,
+                limit=320,
+                strip_explanation=True,
+                source_text=str(input_payload.get("text") or ""),
+                task=task,
+            )
 
         if not normalized_text and not strips_reasoning_noise:
             return output
@@ -5992,6 +6061,11 @@ class RuntimeService:
         metadata = input_payload.get("metadata")
         metadata = metadata if isinstance(metadata, dict) else {}
         task = str(metadata.get("task") or "").strip()
+        constraints = {
+            str(item).strip()
+            for item in metadata.get("task_constraints", [])
+            if isinstance(item, str) and str(item).strip()
+        }
         if task not in {
             "alt_text_suggest",
             "comment_reply_suggest",
@@ -6000,7 +6074,7 @@ class RuntimeService:
             "excerpt_generation",
             "meta_description",
             "title_generation",
-        }:
+        } and "single_value" not in constraints:
             return False
         output_text = self._extract_provider_output_text(provider_output)
         if output_text == "":
