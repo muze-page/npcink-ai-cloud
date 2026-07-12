@@ -35,7 +35,7 @@ assert.doesNotMatch(
 );
 assert.match(
   usageSource,
-  /overview_title[\s\S]*view_tabs_label[\s\S]*PortalCreditTrendPanel[\s\S]*credit_ledger_title/,
+  /overview_title[\s\S]*view_tabs_label[\s\S]*PortalCreditTrendPanel[\s\S]*credit_events_title/,
   'Portal usage should lead with current-period totals and task tabs before their panels'
 );
 assert.match(

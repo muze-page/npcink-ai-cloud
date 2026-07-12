@@ -1714,6 +1714,69 @@ export interface PortalCreditTrendPayload {
   points: PortalCreditTrendPoint[];
 }
 
+export type PortalCreditEventWindow = '24h' | '7d' | '30d' | 'period';
+export type PortalCreditEventFeature =
+  | ''
+  | 'content_generation'
+  | 'topic_research'
+  | 'web_search'
+  | 'site_knowledge'
+  | 'image_assistance'
+  | 'audio_generation';
+
+export interface PortalCreditEvent {
+  event_id: string;
+  support_reference: string;
+  site_id: string;
+  feature_key: string;
+  feature_label: string;
+  feature_detail: string;
+  created_at: string;
+  net_credit_delta: number;
+  consumed_credits: number;
+  direction: 'consumed' | 'added';
+  component_count: number;
+  components: Array<{ key: string; credits: number }>;
+}
+
+export interface PortalCreditEventsPayload {
+  contract_version: 'portal-credit-events-v1';
+  account_id: string;
+  generated_at: string;
+  period_start_at: string;
+  period_end_at: string;
+  filters: { window: PortalCreditEventWindow; site_id: string; feature: string };
+  summary: { event_count: number; consumed_credits: number };
+  pagination: { limit: number; offset: number; total: number; has_more: boolean };
+  items: PortalCreditEvent[];
+}
+
+export type PortalCreditEventBucketSize = '10m' | '30m' | '60m';
+export interface PortalCreditEventBucket {
+  bucket_id: string;
+  start_at: string;
+  end_at: string;
+  consumed_credits: number;
+  event_count: number;
+  site_count: number;
+  top_feature_key: string;
+  feature_totals: Array<{ feature_key: string; consumed_credits: number; event_count: number }>;
+}
+export interface PortalCreditEventBucketsPayload {
+  contract_version: 'portal-credit-event-buckets-v1';
+  account_id: string;
+  generated_at: string;
+  period_start_at: string;
+  period_end_at: string;
+  bucket: PortalCreditEventBucketSize;
+  bucket_seconds: number;
+  timezone: string;
+  filters: { window: PortalCreditEventWindow; site_id: string; feature: string };
+  summary: { bucket_count: number; consumed_credits: number };
+  pagination: { limit: number; offset: number; total: number; has_more: boolean };
+  items: PortalCreditEventBucket[];
+}
+
 export interface PortalAuditBundle {
   summary: PortalAuditSummary;
   events: PortalAuditEvent[];
@@ -2204,6 +2267,41 @@ export class PortalClient {
     const params = new URLSearchParams({ window: options.window });
     if (options.siteId) params.set('site_id', options.siteId);
     return this.request('GET', `/account/credit-trend?${params.toString()}`, undefined, { requireAuth: true });
+  }
+
+  async getAccountCreditEvents(options: {
+    window: PortalCreditEventWindow;
+    siteId?: string;
+    feature?: PortalCreditEventFeature;
+    limit?: number;
+    offset?: number;
+    startAt?: string;
+    endAt?: string;
+  }): Promise<PortalEnvelope<PortalCreditEventsPayload>> {
+    const params = new URLSearchParams({ window: options.window });
+    if (options.siteId) params.set('site_id', options.siteId);
+    if (options.feature) params.set('feature', options.feature);
+    if (options.limit) params.set('limit', String(options.limit));
+    if (options.offset) params.set('offset', String(options.offset));
+    if (options.startAt) params.set('start_at', options.startAt);
+    if (options.endAt) params.set('end_at', options.endAt);
+    return this.request('GET', `/account/credit-events?${params.toString()}`, undefined, { requireAuth: true });
+  }
+
+  async getAccountCreditEventBuckets(options: {
+    bucket: PortalCreditEventBucketSize;
+    window: PortalCreditEventWindow;
+    siteId?: string;
+    feature?: PortalCreditEventFeature;
+    limit?: number;
+    offset?: number;
+  }): Promise<PortalEnvelope<PortalCreditEventBucketsPayload>> {
+    const params = new URLSearchParams({ bucket: options.bucket, window: options.window });
+    if (options.siteId) params.set('site_id', options.siteId);
+    if (options.feature) params.set('feature', options.feature);
+    if (options.limit) params.set('limit', String(options.limit));
+    if (options.offset) params.set('offset', String(options.offset));
+    return this.request('GET', `/account/credit-event-buckets?${params.toString()}`, undefined, { requireAuth: true });
   }
 
   async listCreditPacks(siteId: string): Promise<PortalEnvelope<PortalCreditPackCatalogPayload>> {

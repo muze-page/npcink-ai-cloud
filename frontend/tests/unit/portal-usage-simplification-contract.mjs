@@ -103,14 +103,17 @@ assert.doesNotMatch(
 );
 assert.match(
   source,
-  /feature_key[\s\S]*credit_ledger_feature_[\s\S]*credit_ledger_service_used_suffix[\s\S]*credit_ledger_credit_deducted/,
-  'customer point ledger must show the concrete backend-provided feature and point deduction copy'
+  /top_feature_key[\s\S]*credit_ledger_feature_[\s\S]*formatCreditPoints/,
+  'customer point summaries must show the main feature and total points'
 );
 assert.match(
   source,
-  /getAccountCreditLedger\([\s\S]*offset: nextOffset[\s\S]*<ListPagination[\s\S]*total=\{creditLedgerCount\}/,
-  'customer point ledger must expose older records through pagination'
+  /getAccountCreditEventBuckets\([\s\S]*offset: nextOffset[\s\S]*<ListPagination[\s\S]*total=\{creditEventCount\}/,
+  'customer point summaries must expose filtered history through pagination'
 );
+assert.match(source, /creditEventBucketSize[\s\S]*'30m'[\s\S]*selectedCreditBucket/);
+assert.match(source, /startAt: bucket\.start_at[\s\S]*endAt: bucket\.end_at/);
+assert.match(source, /component_count[\s\S]*support_reference/);
 assert.match(
   source,
   /getAccountCreditTrend\([\s\S]*creditTrendWindow[\s\S]*creditLedgerSiteId/,

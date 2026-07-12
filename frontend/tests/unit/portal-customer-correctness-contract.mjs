@@ -28,7 +28,8 @@ assert.doesNotMatch(
 );
 assert.doesNotMatch(homeSource, /role="button"[\s\S]{0,900}href=\{`\/portal\/sites\/\$\{site\.site_id\}`\}/);
 
-assert.match(usageSource, /portalClient\.getCreditLedger\(creditLedgerSiteId/);
+assert.match(usageSource, /portalClient\.getAccountCreditEvents\([\s\S]*siteId: creditLedgerSiteId/);
+assert.match(usageSource, /creditEventWindow[\s\S]*creditEventFeature/);
 assert.match(usageSource, /portal\.usage\.site_filter_label/);
 assert.match(billingSource, /id="package-options"[\s\S]*setActiveCommercialDialog\('package'\)/);
 assert.doesNotMatch(billingSource, /href="#package-options"/);

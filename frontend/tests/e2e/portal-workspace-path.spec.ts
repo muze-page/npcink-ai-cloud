@@ -387,6 +387,72 @@ async function installPortalMocks(
       return;
     }
 
+    if (pathname === '/account/credit-events') {
+      await fulfillJson(route, {
+        contract_version: 'portal-credit-events-v1',
+        account_id: 'acct_portal',
+        generated_at: '2026-04-07T10:00:00Z',
+        period_start_at: '2026-04-01T00:00:00Z',
+        period_end_at: '2026-04-30T00:00:00Z',
+        filters: {
+          window: url.searchParams.get('window') || 'period',
+          site_id: url.searchParams.get('site_id') || '',
+          feature: url.searchParams.get('feature') || '',
+        },
+        summary: { event_count: 1, consumed_credits: 18 },
+        pagination: { limit: 20, offset: 0, total: 1, has_more: false },
+        items: [{
+          event_id: 'run:run_portal_001',
+          support_reference: 'run_portal_001',
+          site_id: 'site_attention',
+          feature_key: 'content_generation',
+          feature_label: 'Content writing',
+          feature_detail: 'The site used AI to draft, revise, or organize content.',
+          created_at: '2026-04-07T10:00:00Z',
+          net_credit_delta: -18,
+          consumed_credits: 18,
+          direction: 'consumed',
+          component_count: 2,
+          components: [
+            { key: 'request', credits: 3 },
+            { key: 'model_processing', credits: 15 },
+          ],
+        }],
+      });
+      return;
+    }
+
+    if (pathname === '/account/credit-event-buckets') {
+      await fulfillJson(route, {
+        contract_version: 'portal-credit-event-buckets-v1',
+        account_id: 'acct_portal',
+        generated_at: '2026-04-07T10:00:00Z',
+        period_start_at: '2026-04-01T00:00:00Z',
+        period_end_at: '2026-04-30T00:00:00Z',
+        bucket: url.searchParams.get('bucket') || '30m',
+        bucket_seconds: 1800,
+        timezone: 'UTC',
+        filters: {
+          window: url.searchParams.get('window') || '7d',
+          site_id: url.searchParams.get('site_id') || '',
+          feature: url.searchParams.get('feature') || '',
+        },
+        summary: { bucket_count: 1, consumed_credits: 18 },
+        pagination: { limit: 20, offset: 0, total: 1, has_more: false },
+        items: [{
+          bucket_id: '30m:986594',
+          start_at: '2026-04-07T09:30:00Z',
+          end_at: '2026-04-07T10:00:00Z',
+          consumed_credits: 18,
+          event_count: 1,
+          site_count: 1,
+          top_feature_key: 'content_generation',
+          feature_totals: [{ feature_key: 'content_generation', consumed_credits: 18, event_count: 1 }],
+        }],
+      });
+      return;
+    }
+
     if (pathname === '/account/credit-packs') {
       await fulfillJson(route, {
         site_id: '',
@@ -1411,9 +1477,21 @@ test('portal workspace interaction path: account overview to site drawer and ser
   }
   await usageViewTabs.getByRole('tab', { name: /Point records|点数记录/i }).click();
   await expect(page).toHaveURL(/\/portal\/usage\?view=records$/);
-  await expect(page.getByRole('heading', { level: 2, name: /Point record details|点数记录明细|點數記錄明細/i })).toBeVisible();
-  await expect(page.getByText(/AI service usage|内容生成|AI 服务|AI 服務/i).first()).toBeVisible();
-  await expect(page.locator('main').getByRole('combobox', { name: /Usage scope|用量范围/i })).toBeVisible();
+  await expect(page.getByRole('heading', { level: 2, name: /^Point records$|^点数记录$/i })).toBeVisible();
+  await expect(page.locator('main').getByRole('combobox')).toHaveCount(4);
+  await expect(page.getByRole('combobox', { name: /Summary interval|汇总粒度/i })).toHaveValue('30m');
+  const creditBucketRow = page.getByRole('button', { name: /18.*Content writing|18.*内容生成/i }).first();
+  await expect(creditBucketRow).toBeVisible();
+  await creditBucketRow.click();
+  const creditBucketDialog = page.getByRole('dialog', { name: /Apr 7|4\/7/i });
+  await expect(creditBucketDialog).toBeVisible();
+  const creditEventRow = creditBucketDialog.getByRole('button', { name: /Content writing|内容生成/i });
+  await creditEventRow.click();
+  const creditEventDialog = page.getByRole('dialog', { name: /Content writing|内容生成/i });
+  await expect(creditEventDialog.getByText(/Point breakdown|点数构成/i)).toBeVisible();
+  await creditEventDialog.getByText(/Support information|支持信息/i).click();
+  await expect(creditEventDialog.getByText(/run_portal_001/i)).toBeVisible();
+  await creditEventDialog.getByRole('button', { name: /Close|关闭/i }).click();
   await page.reload();
   const reloadedRecordsTab = page.locator('[data-portal-usage="view-tabs"]').getByRole('tab', { name: /Point records|点数记录/i });
   await expect(reloadedRecordsTab).toHaveAttribute('aria-selected', 'true');
@@ -1571,5 +1649,5 @@ test('portal usage and workspace stay usable on mobile viewport', async ({ page 
   await page.goto('/portal/usage');
   await expect(page.getByRole('heading', { level: 1, name: /^Usage$|^用量$/i })).toBeVisible();
   await page.locator('[data-portal-usage="view-tabs"]').getByRole('tab', { name: /Point records|点数记录/i }).click();
-  await expect(page.getByRole('heading', { level: 2, name: /Point record details|点数记录明细|點數記錄明細/i })).toBeVisible();
+  await expect(page.getByRole('heading', { level: 2, name: /^Point records$|^点数记录$/i })).toBeVisible();
 });

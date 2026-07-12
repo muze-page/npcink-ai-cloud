@@ -1959,6 +1959,100 @@ async def get_portal_account_credit_trend(
     )
 
 
+@router.get("/account/credit-events")
+async def get_portal_account_credit_events(
+    request: Request,
+    window: Literal["24h", "7d", "30d", "period"] = Query(default="period"),  # noqa: B008
+    site_id: str = Query(default="", max_length=191),  # noqa: B008
+    feature: str = Query(default="", max_length=64),  # noqa: B008
+    start_at: datetime | None = Query(default=None),  # noqa: B008
+    end_at: datetime | None = Query(default=None),  # noqa: B008
+    limit: int = Query(default=20, ge=1, le=50),
+    offset: int = Query(default=0, ge=0),
+) -> Any:
+    auth = await resolve_portal_request_context(
+        request,
+        require_idempotency=False,
+        allow_session_cookies=True,
+    )
+    if isinstance(auth, JSONResponse):
+        return auth
+    account_id = _resolve_primary_portal_account_id(
+        request,
+        principal_id=auth.principal_id,
+    )
+    if isinstance(account_id, JSONResponse):
+        return account_id
+    try:
+        events = _get_commercial_service(request).get_portal_account_credit_events(
+            account_id,
+            window=window,
+            site_id=site_id,
+            feature=feature,
+            range_start_at=start_at,
+            range_end_at=end_at,
+            limit=limit,
+            offset=offset,
+        )
+    except CommercialServiceError as error:
+        return _service_error_response(error, request=request)
+    return _portal_route_envelope(
+        message="portal account credit events loaded",
+        data={
+            "principal_id": auth.principal_id,
+            "identity_type": "user",
+            "role": "user",
+            **events,
+        },
+    )
+
+
+@router.get("/account/credit-event-buckets")
+async def get_portal_account_credit_event_buckets(
+    request: Request,
+    bucket: Literal["10m", "30m", "60m"] = Query(default="30m"),  # noqa: B008
+    window: Literal["24h", "7d", "30d", "period"] = Query(default="7d"),  # noqa: B008
+    site_id: str = Query(default="", max_length=191),  # noqa: B008
+    feature: str = Query(default="", max_length=64),  # noqa: B008
+    limit: int = Query(default=20, ge=1, le=50),
+    offset: int = Query(default=0, ge=0),
+) -> Any:
+    auth = await resolve_portal_request_context(
+        request,
+        require_idempotency=False,
+        allow_session_cookies=True,
+    )
+    if isinstance(auth, JSONResponse):
+        return auth
+    account_id = _resolve_primary_portal_account_id(
+        request,
+        principal_id=auth.principal_id,
+    )
+    if isinstance(account_id, JSONResponse):
+        return account_id
+    try:
+        buckets = _get_commercial_service(request).get_portal_account_credit_event_buckets(
+            account_id,
+            bucket=bucket,
+            window=window,
+            site_id=site_id,
+            feature=feature,
+            limit=limit,
+            offset=offset,
+        )
+    except CommercialServiceError as error:
+        return _service_error_response(error, request=request)
+    return _portal_route_envelope(
+        message="portal account credit event buckets loaded",
+        data={
+            "principal_id": auth.principal_id,
+            "identity_type": "user",
+            "role": "user",
+            **buckets,
+        },
+    )
+
+
 @router.get("/account/credit-packs")
 async def list_portal_account_credit_packs(request: Request) -> Any:
     auth = await resolve_portal_request_context(

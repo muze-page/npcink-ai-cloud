@@ -58,7 +58,7 @@ assert.match(paymentOrderHistory, /<details[\s\S]*portal\.usage\.payment_orders_
 assert.match(paymentOrderHistory, /open=\{Number\(counts\.pending \|\| 0\) > 0\}/);
 
 assert.match(support, /<h2[^>]*>[\s\S]*portal\.support_request_list_title[\s\S]*<\/h2>/);
-assert.match(usage, /const creditLedgerPageSize = 10/);
+assert.match(usage, /const creditEventPageSize = 20/);
 assert.doesNotMatch(usage, /setCreditLedger\(bundle\.creditLedger\)/);
 
 console.log('portal_usability_closeout_contract: ok');
