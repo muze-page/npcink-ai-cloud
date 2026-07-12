@@ -46,6 +46,7 @@ from app.domain.site_knowledge.service import (
     _apply_evidence_policy,
     _coerce_post_ids,
     _collapse_search_results_by_document,
+    _embedding_space_id,
     _embedding_space_readiness,
     _filter_string_list,
     _normalize_public_taxonomies,
@@ -282,16 +283,20 @@ def test_site_knowledge_search_input_helpers_bound_user_controlled_lists() -> No
     assert _normalize_result_granularity(None) == "chunk"
     assert _normalize_result_granularity("document") == "document"
     assert _embedding_space_readiness(
-        indexed_embedding_models=["BAAI/bge-m3"],
-        query_embedding_model="BAAI/bge-m3",
+        indexed_embedding_models=["tei:BAAI/bge-m3"],
+        query_embedding_model="tei:BAAI/bge-m3",
     )["status"] == "ready"
+    assert (
+        _embedding_space_id(provider_id="TEI", model_id="BAAI/bge-m3")
+        == "tei:BAAI/bge-m3"
+    )
     assert _embedding_space_readiness(
-        indexed_embedding_models=["BAAI/bge-m3"],
-        query_embedding_model="BAAI/bge-large-en-v1.5",
+        indexed_embedding_models=["tei:BAAI/bge-m3"],
+        query_embedding_model="openai:BAAI/bge-m3",
     ) == {
         "status": "embedding_space_mismatch",
-        "query_embedding_model": "BAAI/bge-large-en-v1.5",
-        "indexed_embedding_models": ["BAAI/bge-m3"],
+        "query_embedding_model": "openai:BAAI/bge-m3",
+        "indexed_embedding_models": ["tei:BAAI/bge-m3"],
         "action": "rebuild_index_with_current_embedding_model",
     }
 
@@ -572,7 +577,7 @@ def test_document_search_returns_each_post_once_with_bounded_chunk_refs(
     assert result["result_grouping"]["returned_count"] == 1
 
 
-def test_search_fails_closed_when_index_and_query_embedding_models_differ(
+def test_search_fails_closed_when_index_and_query_embedding_spaces_differ(
     tmp_path: Path,
 ) -> None:
     database_url, settings, runtime_queue, client = _build_client(tmp_path)
@@ -582,7 +587,7 @@ def test_search_fails_closed_when_index_and_query_embedding_models_differ(
         settings=settings,
         runtime_queue=runtime_queue,
     ).process_next_queued_run(timeout_seconds=0)
-    settings.site_knowledge_embedding_model = "BAAI/bge-large-en-v1.5"
+    settings.site_knowledge_embedding_provider = "openai"
 
     result = _execute(
         client,
@@ -604,8 +609,8 @@ def test_search_fails_closed_when_index_and_query_embedding_models_differ(
     }
     assert result["retrieval_readiness"] == {
         "status": "embedding_space_mismatch",
-        "query_embedding_model": "BAAI/bge-large-en-v1.5",
-        "indexed_embedding_models": ["BAAI/bge-m3"],
+        "query_embedding_model": "openai:BAAI/bge-m3",
+        "indexed_embedding_models": ["deterministic:BAAI/bge-m3"],
         "action": "rebuild_index_with_current_embedding_model",
     }
     assert result["result_grouping"]["returned_count"] == 0
@@ -1640,7 +1645,7 @@ def test_sync_uses_cloud_managed_tei_embedding_provider(tmp_path: Path) -> None:
                 .order_by(UsageMeterEvent.id.asc())
             )
         )
-    assert chunk.embedding_model == "BAAI/bge-m3"
+    assert chunk.embedding_model == "tei:BAAI/bge-m3"
     assert chunk.embedding_json == [0.25] * 1024
     assert provider_calls
     assert provider_calls[0].provider_id == "tei"
@@ -1684,5 +1689,5 @@ def test_sync_uses_cloud_managed_siliconflow_embedding_provider(tmp_path: Path) 
     assert provider.requests[0].input_payload["text"]
     with get_session(database_url) as session:
         chunk = session.query(SiteKnowledgeChunk).one()
-    assert chunk.embedding_model == "BAAI/bge-m3"
+    assert chunk.embedding_model == "siliconflow:BAAI/bge-m3"
     assert chunk.embedding_json == [0.25] * 1024

@@ -103,6 +103,10 @@ class SiteKnowledgeService:
             self.settings.site_knowledge_embedding_provider or "deterministic"
         )
         self.embedding_model = str(self.settings.site_knowledge_embedding_model or "BAAI/bge-m3")
+        self.embedding_space_id = _embedding_space_id(
+            provider_id=self.embedding_provider_id,
+            model_id=self.embedding_model,
+        )
         self.embedding_dimensions = int(self.settings.site_knowledge_embedding_dimensions)
 
     def execute(
@@ -582,7 +586,7 @@ class SiteKnowledgeService:
         indexed_embedding_models = self.repository.list_embedding_models(site_id)
         retrieval_readiness = _embedding_space_readiness(
             indexed_embedding_models=indexed_embedding_models,
-            query_embedding_model=self.embedding_model,
+            query_embedding_model=self.embedding_space_id,
         )
         if retrieval_readiness["status"] == "embedding_space_mismatch":
             workflow_support = _workflow_support_for_intent(intent)
@@ -778,7 +782,7 @@ class SiteKnowledgeService:
                             run_id=run_id,
                             ability_name=ability_name,
                         ),
-                        "embedding_model": self.embedding_model,
+                        "embedding_model": self.embedding_space_id,
                         "metadata": {
                             "source": "wordpress_public_excerpt",
                             "content_hash": str(document.get("content_hash") or ""),
@@ -1545,6 +1549,12 @@ def _embedding_space_readiness(
         "indexed_embedding_models": indexed_models,
         "action": "none" if indexed_models else "index_public_content",
     }
+
+
+def _embedding_space_id(*, provider_id: str, model_id: str) -> str:
+    provider = str(provider_id or "").strip().lower()
+    model = str(model_id or "").strip()
+    return f"{provider}:{model}"[:191]
 
 
 def _collapse_search_results_by_document(

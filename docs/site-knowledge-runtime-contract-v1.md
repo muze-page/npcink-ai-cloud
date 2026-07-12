@@ -224,12 +224,15 @@ not implement independent semantic dedupe or relevance scoring. Existing
 callers that omit the field continue to receive chunk-level results.
 
 Search also verifies that indexed chunks and the current query use the same
-embedding model. Embeddings produced by different models are different vector
-spaces and must not be compared, even when their dimensions happen to match.
-When the index contains another embedding model, search fails closed with
+embedding space, identified as `provider_id:model_id`. Embeddings produced by
+different models are different vector spaces and must not be compared, even
+when their dimensions happen to match. Different providers may also apply
+different pooling or normalization for the same advertised model ID, so a
+matching model name alone is not sufficient. When the index contains another
+embedding space, search fails closed with
 `status=not_ready`, an empty `results` list, and additive
 `retrieval_readiness.status=embedding_space_mismatch` diagnostics. The operator
-action is to rebuild the Cloud-owned index with the current embedding model;
+action is to rebuild the Cloud-owned index with the current embedding space;
 Cloud must not return low-confidence candidates from incompatible vectors.
 
 ## Product Workflows
