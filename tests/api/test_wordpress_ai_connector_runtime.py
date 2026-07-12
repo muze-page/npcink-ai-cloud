@@ -21,6 +21,7 @@ from app.core.db import get_session, init_schema
 from app.core.models import ProviderConnection, RunRecord
 from app.core.services import CloudServices
 from app.domain.catalog.service import CatalogService
+from app.domain.site_knowledge.repository import SiteKnowledgeRepository
 from app.domain.site_knowledge.service import SiteKnowledgeService
 from app.domain.wordpress_ai_connector.routing_profiles import (
     WP_AI_CONNECTOR_ALT_TEXT_VISION_PROFILE_ID,
@@ -651,6 +652,98 @@ def test_wordpress_ai_connector_title_generation_silently_falls_back_when_site_k
     assert "site_knowledge_reference" not in provider_input["metadata"]
 
 
+@pytest.mark.parametrize(
+    ("task", "mode", "expected_marker"),
+    [
+        ("excerpt_generation", "site_excerpt_style", "Site excerpt style references"),
+        ("meta_description", "site_meta_style", "Site meta description style references"),
+        ("content_summary", "site_summary_style", "Site summary style references"),
+        (
+            "content_classification",
+            "site_taxonomy_history",
+            "Related-site taxonomy history",
+        ),
+    ],
+)
+def test_wordpress_ai_connector_uses_task_bound_hidden_site_reference(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    task: str,
+    mode: str,
+    expected_marker: str,
+) -> None:
+    _, client, provider = _build_client(tmp_path)
+
+    def fake_site_knowledge_execute(
+        self: SiteKnowledgeService,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        del self, kwargs
+        return {
+            "status": "ready",
+            "evidence_gate": {"status": "passed"},
+            "results": [
+                {
+                    "post_id": 11,
+                    "title": "Historical title",
+                    "chunk": "Historical facts must remain hidden.",
+                    "score": 0.91,
+                }
+            ],
+        }
+
+    def fake_reference_metadata(
+        self: SiteKnowledgeRepository,
+        *,
+        site_id: str,
+        post_ids: list[int],
+    ) -> dict[int, dict[str, Any]]:
+        del self
+        assert site_id == "site_alpha"
+        assert post_ids == [11]
+        return {
+            11: {
+                "excerpt": "A concise site excerpt with the established editorial rhythm.",
+                "taxonomies": {
+                    "category": ["WordPress AI"],
+                    "post_tag": ["Site Knowledge", "Cloud Runtime"],
+                },
+            }
+        }
+
+    monkeypatch.setattr(SiteKnowledgeService, "execute", fake_site_knowledge_execute)
+    monkeypatch.setattr(
+        SiteKnowledgeRepository,
+        "reference_metadata_for_post_ids",
+        fake_reference_metadata,
+    )
+    payload = _payload(
+        {
+            "task": task,
+            "request": {
+                "prompt": "Run the current WordPress editor task.",
+                "site_knowledge_reference": {"enabled": True, "mode": mode},
+            },
+        }
+    )
+
+    response = _execute(client, payload, idempotency_key=f"wp-ai-{mode}")
+
+    assert response.status_code == 200
+    provider_input = provider.requests[0].input_payload
+    assert expected_marker in provider_input["input"]
+    assert "Historical facts must remain hidden." not in provider_input["input"]
+    assert "0.91" not in provider_input["input"]
+    assert provider_input["metadata"]["site_knowledge_reference"] == "applied"
+    assert provider_input["metadata"]["site_knowledge_reference_mode"] == mode
+    if task == "content_summary":
+        assert "only factual source" in provider_input["input"]
+    if task == "content_classification":
+        assert "WordPress AI" in provider_input["input"]
+        assert "Site Knowledge" in provider_input["input"]
+        assert "term IDs" in provider_input["input"]
+
+
 def test_wordpress_ai_connector_title_generation_ignores_non_list_site_knowledge_results(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -703,6 +796,11 @@ def test_wordpress_ai_connector_title_generation_ignores_non_list_site_knowledge
         ),
         (
             "content_summary",
+            {"enabled": True, "mode": "site_title_style"},
+            "wp_ai_connector.site_knowledge_reference_mode_invalid",
+        ),
+        (
+            "content_rewrite",
             {"enabled": True, "mode": "site_title_style"},
             "wp_ai_connector.site_knowledge_reference_task_not_allowed",
         ),

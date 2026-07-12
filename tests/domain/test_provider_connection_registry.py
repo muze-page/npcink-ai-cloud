@@ -145,6 +145,40 @@ def test_provider_model_allowlist_uses_declared_models_without_decrypting_secret
     dispose_engine(database_url)
 
 
+def test_provider_model_allowlist_matches_custom_openai_catalog_namespace(
+    tmp_path: Path,
+) -> None:
+    database_url = _sqlite_url(tmp_path)
+    init_schema(database_url)
+    with get_session(database_url) as session:
+        session.add(
+            ProviderConnection(
+                connection_id="kimi",
+                provider_type="openai_compatible",
+                display_name="Kimi",
+                enabled=True,
+                base_url="https://api.moonshot.test/v1",
+                config_json={
+                    "provider_id": "kimi",
+                    "kind": "openai_compatible",
+                    "model_ids": ["kimi-k2.6"],
+                },
+                secret_ciphertext="configured-in-test",
+                status="ready",
+                source_role="execution_source",
+                metadata_json={},
+            )
+        )
+        session.commit()
+
+    allowlist = build_provider_model_allowlist(database_url, settings=_settings(database_url))
+
+    assert allowlist.allows(provider_id="kimi", model_id="kimi/kimi-k2.6") is True
+    assert allowlist.allows(provider_id="kimi", model_id="kimi-k2.6") is False
+
+    dispose_engine(database_url)
+
+
 def test_provider_registry_uses_enabled_provider_connections_instead_of_env_fallback(
     tmp_path: Path,
 ) -> None:

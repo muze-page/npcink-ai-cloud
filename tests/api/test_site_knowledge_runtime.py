@@ -21,6 +21,7 @@ from app.core.db import get_session, init_schema
 from app.core.models import (
     ProviderCallRecord,
     SiteKnowledgeChunk,
+    SiteKnowledgeDocument,
     SiteKnowledgeIndexJobMetric,
     SiteKnowledgeIndexSnapshot,
     SiteKnowledgeSearchMetric,
@@ -41,6 +42,7 @@ from app.domain.site_knowledge.service import (
     _apply_evidence_policy,
     _coerce_post_ids,
     _filter_string_list,
+    _normalize_public_taxonomies,
     _normalize_search_query,
     _rank_search_results_for_query,
     _resolve_evidence_policy,
@@ -52,6 +54,25 @@ from tests.conftest import (
     merge_json_headers,
     seed_site_auth,
 )
+
+
+def test_public_taxonomy_metadata_is_bounded_and_allowlisted() -> None:
+    normalized = _normalize_public_taxonomies(
+        {
+            "category": [
+                " <b>Cloud AI</b> ",
+                "cloud ai",
+                *[f"Category {i}" for i in range(30)],
+            ],
+            "post_tag": ["x" * 120],
+            "private_taxonomy": ["Must not pass"],
+        }
+    )
+
+    assert set(normalized) == {"category", "post_tag"}
+    assert normalized["category"][0] == "Cloud AI"
+    assert len(normalized["category"]) == 20
+    assert normalized["post_tag"] == ["x" * 80]
 
 
 def _sqlite_url(tmp_path: Path) -> str:
@@ -187,6 +208,10 @@ def _sync_payload() -> dict[str, object]:
                         "for semantic search and internal link suggestions."
                     ),
                     "content_hash": "hash-cloud-vector-launch",
+                    "taxonomies": {
+                        "category": ["Cloud Runtime", "WordPress AI"],
+                        "post_tag": ["Site Knowledge", "Writing"],
+                    },
                 }
             ],
             "write_posture": "suggestion_only",
@@ -321,6 +346,22 @@ def test_sync_then_search_and_status_coverage(tmp_path: Path) -> None:
     assert worker_result["result"]["truth_boundaries"]["cloud_owns_workflow_registry"] is False
     assert worker_result["result"]["progress"]["stage"] == "completed"
     assert worker_result["result"]["progress"]["percent"] == 100
+
+    with get_session(database_url) as session:
+        document = session.scalar(
+            select(SiteKnowledgeDocument).where(
+                SiteKnowledgeDocument.site_id == "site_alpha",
+                SiteKnowledgeDocument.post_id == 123,
+            )
+        )
+        assert document is not None
+        assert document.metadata_json["excerpt"] == (
+            "Notes about Cloud managed site knowledge."
+        )
+        assert document.metadata_json["taxonomies"] == {
+            "category": ["Cloud Runtime", "WordPress AI"],
+            "post_tag": ["Site Knowledge", "Writing"],
+        }
 
     search_result = _execute(
         client,

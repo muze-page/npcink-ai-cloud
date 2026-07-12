@@ -1615,7 +1615,7 @@ def test_admin_provider_connection_test_syncs_catalog_for_openai_compatible_supp
             adapter_type="openai",
             models=[
                 CatalogModelSeed(
-                    model_id="deepseek-chat",
+                    model_id="deepseek/deepseek-chat",
                     family="deepseek",
                     feature="text",
                     status="available",
@@ -1688,7 +1688,7 @@ def test_admin_provider_connection_test_syncs_catalog_for_openai_compatible_supp
     assert deepseek_instances
     assert deepseek_instances[0]["provider_display_name"] == "DeepSeek"
     assert deepseek_instances[0]["adapter_type"] == "openai"
-    assert deepseek_instances[0]["model_id"] == "deepseek-chat"
+    assert deepseek_instances[0]["model_id"] == "deepseek/deepseek-chat"
 
 
 def test_admin_provider_connection_catalog_preview_returns_all_upstream_models(

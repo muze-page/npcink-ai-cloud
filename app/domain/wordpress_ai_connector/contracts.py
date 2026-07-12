@@ -18,7 +18,13 @@ WP_AI_CONNECTOR_MAX_PROMPT_CHARS = 12000
 WP_AI_CONNECTOR_MAX_TIMEOUT_SECONDS = 60
 WP_AI_CONNECTOR_MAX_IMAGE_URL_CHARS = 2048
 WP_AI_CONNECTOR_MAX_IMAGE_DATA_URL_CHARS = 900_000
-WP_AI_CONNECTOR_SITE_KNOWLEDGE_REFERENCE_MODE = "site_title_style"
+WP_AI_CONNECTOR_SITE_KNOWLEDGE_REFERENCE_MODES_BY_TASK = {
+    "title_generation": "site_title_style",
+    "excerpt_generation": "site_excerpt_style",
+    "meta_description": "site_meta_style",
+    "content_summary": "site_summary_style",
+    "content_classification": "site_taxonomy_history",
+}
 WP_AI_CONNECTOR_IMAGE_DATA_URL_PATTERN = re.compile(
     r"^data:(image/(?:gif|jpeg|png|webp))(?:;[^,]*)?;base64,([A-Za-z0-9+/=\r\n]+)$",
     re.IGNORECASE,
@@ -205,17 +211,19 @@ def validate_site_knowledge_reference(request: dict[str, Any], *, task: str) -> 
             "wp_ai_connector.site_knowledge_reference_enabled_invalid",
             "WordPress AI connector site_knowledge_reference.enabled must be boolean",
         )
-    mode = str(reference.get("mode") or WP_AI_CONNECTOR_SITE_KNOWLEDGE_REFERENCE_MODE)
-    if mode != WP_AI_CONNECTOR_SITE_KNOWLEDGE_REFERENCE_MODE:
+    expected_mode = WP_AI_CONNECTOR_SITE_KNOWLEDGE_REFERENCE_MODES_BY_TASK.get(task, "")
+    mode = str(reference.get("mode") or expected_mode or "site_title_style")
+    if enabled and not expected_mode:
+        raise WordPressAIConnectorContractViolation(
+            "wp_ai_connector.site_knowledge_reference_task_not_allowed",
+            "WordPress AI connector Site Knowledge reference is not supported for this task",
+        )
+    if (expected_mode and mode != expected_mode) or (
+        not expected_mode and mode != "site_title_style"
+    ):
         raise WordPressAIConnectorContractViolation(
             "wp_ai_connector.site_knowledge_reference_mode_invalid",
             "WordPress AI connector site_knowledge_reference.mode is not supported",
-        )
-    if enabled and task != "title_generation":
-        raise WordPressAIConnectorContractViolation(
-            "wp_ai_connector.site_knowledge_reference_task_not_allowed",
-            "WordPress AI connector Site Knowledge reference currently supports "
-            "title_generation only",
         )
 
 

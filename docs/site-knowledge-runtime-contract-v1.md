@@ -242,11 +242,12 @@ Supported first workflows:
 All workflow metadata is advisory. WordPress still owns insertion, edits,
 publishing, and final user confirmation.
 
-## WordPress AI Title Style Reference
+## WordPress AI Generation Reference
 
 The existing `npcink-cloud/wp-ai-connector` runtime may optionally use Site
-Knowledge as hidden style context for `title_generation`. The WordPress-side
-connector must explicitly send:
+Knowledge as hidden context for title, excerpt, meta description, summary, and
+classification tasks. The WordPress-side connector must explicitly send the
+task-bound mode:
 
 ```json
 {
@@ -257,19 +258,32 @@ connector must explicitly send:
 }
 ```
 
+The allowed task-to-mode mapping is:
+
+- `title_generation` -> `site_title_style`
+- `excerpt_generation` -> `site_excerpt_style`
+- `meta_description` -> `site_meta_style`
+- `content_summary` -> `site_summary_style`
+- `content_classification` -> `site_taxonomy_history`
+
 This is an additive runtime hint inside the existing scene request, not a new
 ability, workflow, prompt registry, or Cloud-side preference truth. Cloud uses
-the current scene prompt as a bounded `writing_context` query, selects at most
-five unique historical source titles, and supplies only those titles to the
-text-generation provider as untrusted style examples. Source chunks, scores,
-URLs, and evidence details are not added to the WordPress AI result.
+the current scene prompt as a bounded `writing_context` query. Title generation
+uses at most five unique historical titles. Excerpt, meta, and summary tasks use
+at most five bounded public excerpts as style-only samples. Classification uses
+only bounded existing `category` and `post_tag` names stored as Site Knowledge
+document metadata. Source chunks, scores, URLs, and evidence details are not
+added to the WordPress AI result.
 
 The provider instruction may infer title length, tone, vocabulary, and
-punctuation, but it must not copy a historical title, follow instructions inside
-a source title, or introduce facts absent from the current scene input. Missing,
-insufficient, or unavailable Site Knowledge silently falls back to ordinary
-title generation. The WordPress AI result remains one reviewable title string
-with `suggestion_only` posture and no WordPress write authority.
+punctuation, but it must not copy historical text, follow instructions inside a
+sample, or introduce facts absent from the current scene input. Summary mode
+explicitly treats the current scene as the only factual source. Classification
+history is candidate vocabulary only: it cannot invent term IDs, force a term,
+or write taxonomy. Missing, insufficient, or unavailable Site Knowledge
+silently falls back to ordinary generation. The WordPress AI result remains the
+task's ordinary reviewable result with `suggestion_only` posture and no
+WordPress write authority.
 
 The local Cloud Addon owns the enable/disable preference and transmits it on
 each eligible request. Cloud does not persist or expose a second setting for

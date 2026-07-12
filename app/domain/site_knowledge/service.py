@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import html
+import json
 import re
 from collections.abc import Callable
 from datetime import UTC, datetime
@@ -409,6 +410,10 @@ class SiteKnowledgeService:
                     "max_chunks": MAX_CHUNKS_PER_DOCUMENT,
                     "effective_max_chunks": allowed_chunks,
                     "quota_limited": bool(quota_limited),
+                    "excerpt": str(normalized.get("excerpt") or "")[:1000],
+                    "taxonomies": normalized.get("taxonomies")
+                    if isinstance(normalized.get("taxonomies"), dict)
+                    else {"category": [], "post_tag": []},
                 },
                 chunks=chunks,
             )
@@ -1170,9 +1175,13 @@ def _normalize_public_document(document: dict[str, Any]) -> dict[str, object] | 
         remove_markup_noise=True,
     )
     indexed_content_chars = len(content_excerpt)
+    taxonomies = _normalize_public_taxonomies(document.get("taxonomies"))
     content_hash = str(document.get("content_hash") or "").strip()
     if not content_hash:
-        content_hash = hashlib.sha256(f"{title}|{excerpt}|{content_excerpt}".encode()).hexdigest()
+        taxonomy_hash_input = json.dumps(taxonomies, ensure_ascii=False, sort_keys=True)
+        content_hash = hashlib.sha256(
+            f"{title}|{excerpt}|{content_excerpt}|{taxonomy_hash_input}".encode()
+        ).hexdigest()
 
     return {
         "post_id": post_id,
@@ -1189,8 +1198,33 @@ def _normalize_public_document(document: dict[str, Any]) -> dict[str, object] | 
         "source_content_chars": source_content_chars,
         "indexed_content_chars": indexed_content_chars,
         "content_truncated": source_content_chars > indexed_content_chars,
+        "taxonomies": taxonomies,
         "content_hash": content_hash[:128],
     }
+
+
+def _normalize_public_taxonomies(value: Any) -> dict[str, list[str]]:
+    raw_taxonomies = value if isinstance(value, dict) else {}
+    normalized: dict[str, list[str]] = {"category": [], "post_tag": []}
+    for taxonomy in normalized:
+        raw_terms = raw_taxonomies.get(taxonomy)
+        if not isinstance(raw_terms, list):
+            continue
+        seen: set[str] = set()
+        for raw_term in raw_terms:
+            term = _normalize_site_knowledge_text(
+                raw_term,
+                max_chars=80,
+                remove_markup_noise=True,
+            )
+            key = term.casefold()
+            if not term or key in seen:
+                continue
+            normalized[taxonomy].append(term)
+            seen.add(key)
+            if len(normalized[taxonomy]) >= 20:
+                break
+    return normalized
 
 
 def _normalize_public_comment(document: dict[str, Any]) -> dict[str, object] | None:

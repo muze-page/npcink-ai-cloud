@@ -452,6 +452,105 @@ def test_openai_adapter_retries_responses_without_unsupported_metadata() -> None
     assert len(seen_payloads) == 2
 
 
+def test_openai_adapter_normalizes_request_metadata_for_compatible_providers() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content.decode("utf-8"))
+        assert payload["metadata"] == {
+            "source_surface": "wordpress_ai_connector",
+            "suggestion_only": "true",
+            "reference_count": "2",
+        }
+        return httpx.Response(
+            200,
+            json={
+                "model": "kimi-k2.6",
+                "choices": [
+                    {
+                        "finish_reason": "stop",
+                        "message": {"role": "assistant", "content": "normalized"},
+                    }
+                ],
+                "usage": {"prompt_tokens": 8, "completion_tokens": 2},
+            },
+        )
+
+    adapter = OpenAIProviderAdapter(
+        api_key="test-api-key",
+        transport=httpx.MockTransport(handler),
+    )
+
+    result = adapter.execute(
+        _build_request(
+            execution_kind="text",
+            endpoint_variant="chat_completions",
+            model_id="kimi-k2.6",
+            input_payload={
+                "messages": [{"role": "user", "content": "hello"}],
+                "metadata": {
+                    "source_surface": " wordpress_ai_connector ",
+                    "suggestion_only": True,
+                    "reference_count": 2,
+                    "nested": {"omit": True},
+                },
+            },
+        )
+    )
+
+    assert result.output["output_text"] == "normalized"
+
+
+def test_openai_adapter_retries_when_compatible_provider_requires_temperature_one() -> None:
+    seen_temperatures: list[object] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content.decode("utf-8"))
+        seen_temperatures.append(payload.get("temperature"))
+        if len(seen_temperatures) == 1:
+            return httpx.Response(
+                400,
+                json={
+                    "error": {
+                        "message": "invalid temperature: only 1 is allowed for this model",
+                        "type": "invalid_request_error",
+                    }
+                },
+            )
+        assert payload["temperature"] == 1
+        return httpx.Response(
+            200,
+            json={
+                "model": "kimi-k2.6",
+                "choices": [
+                    {
+                        "finish_reason": "stop",
+                        "message": {"role": "assistant", "content": "compatible"},
+                    }
+                ],
+                "usage": {"prompt_tokens": 8, "completion_tokens": 2},
+            },
+        )
+
+    adapter = OpenAIProviderAdapter(
+        api_key="test-api-key",
+        transport=httpx.MockTransport(handler),
+    )
+
+    result = adapter.execute(
+        _build_request(
+            execution_kind="text",
+            endpoint_variant="chat_completions",
+            model_id="kimi-k2.6",
+            input_payload={
+                "messages": [{"role": "user", "content": "hello"}],
+                "temperature": 0.2,
+            },
+        )
+    )
+
+    assert result.output["output_text"] == "compatible"
+    assert seen_temperatures == [0.2, 1]
+
+
 def test_openai_adapter_retries_responses_404_with_chat_completions_messages() -> None:
     seen_paths: list[str] = []
 
