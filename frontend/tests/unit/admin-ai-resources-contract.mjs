@@ -1306,7 +1306,7 @@ assert.match(
 
 assert.match(
   pageSource,
-  /providerId\.includes\('kimi'\)[\s\S]*providerId\.includes\('moonshot'\)[\s\S]*baseUrl\.includes\('moonshot'\)[\s\S]*return 'kimi'/,
+  /providerId\.includes\('kimi'\)[\s\S]*providerId\.includes\('moonshot'\)[\s\S]*matchesProviderHostname\(hostname, \['moonshot\.cn'\]\)[\s\S]*return 'kimi'/,
   'Provider channel edit form must infer existing Kimi and Moonshot connections back to the Kimi preset'
 );
 
@@ -1324,7 +1324,7 @@ assert.match(
 
 assert.match(
   pageSource,
-  /providerId\.includes\('doubao'\)[\s\S]*providerId\.includes\('volcengine'\)[\s\S]*baseUrl\.includes\('volces\.com'\)[\s\S]*return 'doubao'/,
+  /providerId\.includes\('doubao'\)[\s\S]*providerId\.includes\('volcengine'\)[\s\S]*matchesProviderHostname\(hostname, \['volces\.com'\]\)[\s\S]*return 'doubao'/,
   'Provider channel edit form must infer existing Doubao and Volcengine connections back to the Doubao preset'
 );
 
@@ -1342,7 +1342,7 @@ assert.match(
 
 assert.match(
   pageSource,
-  /providerId\.includes\('xiaomi_mimo'\)[\s\S]*providerId === 'mimo'[\s\S]*baseUrl\.includes\('xiaomimimo\.com'\)[\s\S]*return 'xiaomi_mimo'/,
+  /providerId\.includes\('xiaomi_mimo'\)[\s\S]*providerId === 'mimo'[\s\S]*matchesProviderHostname\(hostname, \['xiaomimimo\.com'\]\)[\s\S]*return 'xiaomi_mimo'/,
   'Provider channel edit form must infer existing Xiaomi MiMo connections back to the Xiaomi MiMo preset'
 );
 
@@ -1360,7 +1360,7 @@ assert.match(
 
 assert.match(
   pageSource,
-  /providerId\.includes\('longcat'\)[\s\S]*providerId\.includes\('meituan'\)[\s\S]*baseUrl\.includes\('longcat\.chat'\)[\s\S]*return 'longcat'/,
+  /providerId\.includes\('longcat'\)[\s\S]*providerId\.includes\('meituan'\)[\s\S]*matchesProviderHostname\(hostname, \['longcat\.chat'\]\)[\s\S]*return 'longcat'/,
   'Provider channel edit form must infer existing LongCat and Meituan connections back to the LongCat preset'
 );
 
@@ -1378,7 +1378,7 @@ assert.match(
 
 assert.match(
   pageSource,
-  /providerId\.includes\('qwen'\)[\s\S]*providerId\.includes\('dashscope'\)[\s\S]*baseUrl\.includes\('dashscope'\)[\s\S]*baseUrl\.includes\('maas\.aliyuncs\.com'\)[\s\S]*return 'qwen'/,
+  /providerId\.includes\('qwen'\)[\s\S]*providerId\.includes\('dashscope'\)[\s\S]*matchesProviderHostname\(hostname, \['dashscope\.aliyuncs\.com', 'maas\.aliyuncs\.com'\]\)[\s\S]*return 'qwen'/,
   'Provider channel edit form must infer existing Qwen and Model Studio connections back to the Qwen preset'
 );
 
@@ -1396,7 +1396,7 @@ assert.match(
 
 assert.match(
   pageSource,
-  /providerId\.includes\('hunyuan'\)[\s\S]*providerId\.includes\('tencent'\)[\s\S]*baseUrl\.includes\('tencentmaas\.com'\)[\s\S]*baseUrl\.includes\('hunyuan\.cloud\.tencent\.com'\)[\s\S]*return 'hunyuan'/,
+  /providerId\.includes\('hunyuan'\)[\s\S]*providerId\.includes\('tencent'\)[\s\S]*matchesProviderHostname\(hostname, \['tencentmaas\.com', 'hunyuan\.cloud\.tencent\.com'\]\)[\s\S]*return 'hunyuan'/,
   'Provider channel edit form must infer existing Hunyuan connections across TokenHub and legacy endpoints'
 );
 
@@ -1414,8 +1414,24 @@ assert.match(
 
 assert.match(
   pageSource,
-  /providerId\.includes\('zhipu'\)[\s\S]*providerId\.includes\('glm'\)[\s\S]*baseUrl\.includes\('bigmodel\.cn'\)[\s\S]*return 'zhipu_glm'/,
+  /providerId\.includes\('zhipu'\)[\s\S]*providerId\.includes\('glm'\)[\s\S]*matchesProviderHostname\(hostname, \['bigmodel\.cn'\]\)[\s\S]*return 'zhipu_glm'/,
   'Provider channel edit form must infer existing Zhipu and GLM connections back to the Zhipu GLM preset'
+);
+
+assert.match(
+  pageSource,
+  /new URL\(baseUrl\)\.hostname\.toLowerCase\(\)/,
+  'Provider preset inference must parse the base URL before matching trusted provider hosts'
+);
+assert.match(
+  pageSource,
+  /hostname === domain \|\| hostname\.endsWith\(`\.\$\{domain\}`\)/,
+  'Provider preset inference must accept only exact provider domains or their subdomains'
+);
+assert.doesNotMatch(
+  pageSource,
+  /baseUrl\.includes\(/,
+  'Provider preset inference must not trust provider-domain substrings in arbitrary URLs'
 );
 
 assert.match(

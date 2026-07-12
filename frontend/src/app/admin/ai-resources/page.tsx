@@ -969,19 +969,31 @@ function providerPresetById(presetId: string): ProviderPreset {
   return PROVIDER_PRESETS.find((preset) => preset.id === presetId) || PROVIDER_PRESETS[0];
 }
 
+function providerHostname(baseUrl: string): string {
+  try {
+    return new URL(baseUrl).hostname.toLowerCase().replace(/\.$/, '');
+  } catch {
+    return '';
+  }
+}
+
+function matchesProviderHostname(hostname: string, allowedDomains: string[]): boolean {
+  return allowedDomains.some((domain) => hostname === domain || hostname.endsWith(`.${domain}`));
+}
+
 function inferProviderPreset(connection: Connection): string {
   const kind = connection.kind.toLowerCase();
   const providerId = connection.provider_id.toLowerCase();
-  const baseUrl = connection.base_url.toLowerCase();
-  if (providerId.includes('newapi') || baseUrl.includes('newapi')) return 'newapi';
-  if (providerId.includes('deepseek') || baseUrl.includes('deepseek')) return 'deepseek';
-  if (providerId.includes('kimi') || providerId.includes('moonshot') || baseUrl.includes('moonshot')) return 'kimi';
-  if (providerId.includes('doubao') || providerId.includes('volcengine') || baseUrl.includes('volces.com')) return 'doubao';
-  if (providerId.includes('xiaomi_mimo') || providerId === 'mimo' || baseUrl.includes('xiaomimimo.com')) return 'xiaomi_mimo';
-  if (providerId.includes('longcat') || providerId.includes('meituan') || baseUrl.includes('longcat.chat')) return 'longcat';
-  if (providerId.includes('qwen') || providerId.includes('dashscope') || baseUrl.includes('dashscope') || baseUrl.includes('maas.aliyuncs.com')) return 'qwen';
-  if (providerId.includes('hunyuan') || providerId.includes('tencent') || baseUrl.includes('tencentmaas.com') || baseUrl.includes('hunyuan.cloud.tencent.com')) return 'hunyuan';
-  if (providerId.includes('zhipu') || providerId.includes('glm') || baseUrl.includes('bigmodel.cn')) return 'zhipu_glm';
+  const hostname = providerHostname(connection.base_url);
+  if (providerId.includes('newapi')) return 'newapi';
+  if (providerId.includes('deepseek') || matchesProviderHostname(hostname, ['deepseek.com'])) return 'deepseek';
+  if (providerId.includes('kimi') || providerId.includes('moonshot') || matchesProviderHostname(hostname, ['moonshot.cn'])) return 'kimi';
+  if (providerId.includes('doubao') || providerId.includes('volcengine') || matchesProviderHostname(hostname, ['volces.com'])) return 'doubao';
+  if (providerId.includes('xiaomi_mimo') || providerId === 'mimo' || matchesProviderHostname(hostname, ['xiaomimimo.com'])) return 'xiaomi_mimo';
+  if (providerId.includes('longcat') || providerId.includes('meituan') || matchesProviderHostname(hostname, ['longcat.chat'])) return 'longcat';
+  if (providerId.includes('qwen') || providerId.includes('dashscope') || matchesProviderHostname(hostname, ['dashscope.aliyuncs.com', 'maas.aliyuncs.com'])) return 'qwen';
+  if (providerId.includes('hunyuan') || providerId.includes('tencent') || matchesProviderHostname(hostname, ['tencentmaas.com', 'hunyuan.cloud.tencent.com'])) return 'hunyuan';
+  if (providerId.includes('zhipu') || providerId.includes('glm') || matchesProviderHostname(hostname, ['bigmodel.cn'])) return 'zhipu_glm';
   if (kind === 'anthropic') return 'anthropic';
   if (kind === 'openrouter') return 'openrouter';
   if (kind === 'siliconflow') return 'siliconflow';
