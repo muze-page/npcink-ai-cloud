@@ -73,6 +73,7 @@ Operational references:
 - [docs/text-model-provider-integration-decision-2026-07-11.md](docs/text-model-provider-integration-decision-2026-07-11.md)
 - [docs/cloud-runtime-reference-notes-2026-07.md](docs/cloud-runtime-reference-notes-2026-07.md)
 - [docs/wordpress-ai-editor-runtime-closeout-2026-07-07.md](docs/wordpress-ai-editor-runtime-closeout-2026-07-07.md)
+- [docs/wordpress-ai-generation-reference-stage-closeout-2026-07-12.md](docs/wordpress-ai-generation-reference-stage-closeout-2026-07-12.md)
 
 ## Test Entry For Agents
 
