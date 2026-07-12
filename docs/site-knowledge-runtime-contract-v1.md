@@ -245,9 +245,8 @@ publishing, and final user confirmation.
 ## WordPress AI Generation Reference
 
 The existing `npcink-cloud/wp-ai-connector` runtime may optionally use Site
-Knowledge as hidden context for title, excerpt, meta description, summary, and
-classification tasks. The WordPress-side connector must explicitly send the
-task-bound mode:
+Knowledge as hidden context for title and summary tasks. The local Cloud Addon
+owns this product eligibility and must explicitly send the task-bound mode:
 
 ```json
 {
@@ -258,13 +257,15 @@ task-bound mode:
 }
 ```
 
-The allowed task-to-mode mapping is:
+The currently enabled task-to-mode mapping is:
 
 - `title_generation` -> `site_title_style`
-- `excerpt_generation` -> `site_excerpt_style`
-- `meta_description` -> `site_meta_style`
 - `content_summary` -> `site_summary_style`
-- `content_classification` -> `site_taxonomy_history`
+
+Cloud retains bounded compatibility validation and assembly policies for older
+excerpt, meta-description, and classification modes, but the current Addon does
+not send those modes. Compatibility support is not a quality claim and must not
+be treated as product enablement or inferred from generic task metadata.
 
 This is an additive runtime hint inside the existing scene request, not a new
 ability, workflow, prompt registry, or Cloud-side preference truth. Cloud uses
@@ -277,38 +278,26 @@ The internal task policies are deliberately bounded:
 | Task | Minimum score | Source posts | References | Context characters |
 | --- | ---: | ---: | ---: | ---: |
 | title | 0.35 | 6 | 1 aggregate profile | 400 |
-| excerpt | 0.35 | 5 | 1 aggregate profile | 400 |
-| meta description | deferred | 0 | 0 | 0 |
-| summary | deferred | 0 | 0 | 0 |
-| classification | 0.35 | 8 | 20 terms | 1,200 |
+| summary | 0.35 | 5 | 1 aggregate profile | 400 |
 
 Results are relevance-filtered, deduplicated by post, and checked for a strong
-content-fingerprint overlap with the current scene before projection. Title and
-excerpt generation receive only an aggregate profile calculated from related
-historical samples: a qualitative short/medium/long preference, sentence shape,
-and qualitative question-mark and colon usage. Exact sample counts, lengths,
-and rates are not sent because models may mistake profile numbers for article
-facts. The historical titles and excerpts
-themselves are not placed in provider input. Classification receives only
-bounded existing `category` and `post_tag` names stored as Site Knowledge
-document metadata; repeated terms across related posts rank first. Source
-chunks, raw style samples, scores, URLs, and evidence details are never placed
-in the generation context or WordPress AI result.
+content-fingerprint overlap with the current scene before projection. Title
+generation derives its aggregate profile from related historical titles;
+summary generation currently derives its aggregate profile from the stored
+excerpts of related public posts. Both profiles contain only qualitative
+short/medium/long preference, sentence shape, and qualitative question-mark and
+colon usage. Exact sample counts, lengths, rates, historical text, source
+chunks, scores, URLs, and evidence details are not placed in provider input or
+the WordPress AI result.
 
-Meta description and summary hints remain contract-valid for forward
-compatibility but currently skip vector retrieval and fall back to ordinary
-generation. Real A/B evidence showed that substituting ordinary post excerpts
-for accepted SEO descriptions or accepted summaries distracts the model and is
-not task-appropriate background. These tasks may be activated only after Site
-Knowledge indexes a dedicated, provenance-safe source for that exact task and a
-new paired quality gate passes.
-
-The provider instruction may use aggregate title/excerpt length and punctuation
-preferences, but it must not introduce facts absent from the current scene
-input. Classification
-history is candidate vocabulary only: it cannot invent term IDs, force a term,
-or write taxonomy. Missing, insufficient, filtered, or unavailable Site
-Knowledge silently falls back to ordinary generation. Bounded provider metadata
+The provider instruction treats the profile only as a soft style preference.
+It must not introduce facts absent from the current scene input. Summary
+reference remains a controlled opt-in trial: limited local paired evaluation
+supported enabling it, but that evidence is not a general quality guarantee.
+Any additional task must have task-appropriate source evidence and pass a new
+paired quality gate before the local Addon enables it. Missing, insufficient,
+filtered, or unavailable Site Knowledge silently falls back to ordinary
+generation. Bounded provider metadata
 records only the context contract, status, reason, mode, reference count, and
 character count for runtime quality diagnosis; it does not contain source text,
 scores, URLs, or taxonomy details. The WordPress AI result remains the task's
