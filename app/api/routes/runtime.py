@@ -102,6 +102,7 @@ from app.domain.wordpress_ai_connector.routing_profiles import (
 router = APIRouter(prefix="/v1/runtime", tags=["runtime"])
 
 MAX_RUNTIME_JSON_DEPTH = 8
+MAX_RUNTIME_SCHEMA_JSON_DEPTH = 12
 MAX_RUNTIME_DICT_KEYS = 100
 MAX_RUNTIME_LIST_ITEMS = 200
 # Keep per-field shape validation above the total request limit so public
@@ -189,13 +190,31 @@ class RuntimePayload(BaseModel):
                 "execution_pattern=step_offload is only supported for managed "
                 "image-source runtime abilities"
             )
-        _validate_runtime_json_shape(self.input, field_name="input")
+        _validate_runtime_json_shape(
+            self.input,
+            field_name="input",
+            allow_wordpress_ai_output_schema=(self.ability_name in WP_AI_CONNECTOR_ABILITIES),
+        )
         _validate_runtime_json_shape(self.task_backend, field_name="task_backend")
         return self
 
 
-def _validate_runtime_json_shape(value: Any, *, field_name: str, depth: int = 0) -> None:
-    if depth >= MAX_RUNTIME_JSON_DEPTH:
+def _validate_runtime_json_shape(
+    value: Any,
+    *,
+    field_name: str,
+    depth: int = 0,
+    path: tuple[str, ...] = (),
+    allow_wordpress_ai_output_schema: bool = False,
+) -> None:
+    depth_limit = MAX_RUNTIME_JSON_DEPTH
+    if allow_wordpress_ai_output_schema and path[:3] == (
+        "request",
+        "task_contract",
+        "output_schema",
+    ):
+        depth_limit = MAX_RUNTIME_SCHEMA_JSON_DEPTH
+    if depth >= depth_limit:
         raise ValueError(f"{field_name} exceeds the accepted nesting depth")
     if isinstance(value, dict):
         if len(value) > MAX_RUNTIME_DICT_KEYS:
@@ -203,13 +222,25 @@ def _validate_runtime_json_shape(value: Any, *, field_name: str, depth: int = 0)
         for key, item in value.items():
             if len(str(key)) > MAX_RUNTIME_DICT_KEY_CHARS:
                 raise ValueError(f"{field_name} contains an oversized key")
-            _validate_runtime_json_shape(item, field_name=field_name, depth=depth + 1)
+            _validate_runtime_json_shape(
+                item,
+                field_name=field_name,
+                depth=depth + 1,
+                path=(*path, str(key)),
+                allow_wordpress_ai_output_schema=allow_wordpress_ai_output_schema,
+            )
         return
     if isinstance(value, list):
         if len(value) > MAX_RUNTIME_LIST_ITEMS:
             raise ValueError(f"{field_name} contains too many items")
         for item in value:
-            _validate_runtime_json_shape(item, field_name=field_name, depth=depth + 1)
+            _validate_runtime_json_shape(
+                item,
+                field_name=field_name,
+                depth=depth + 1,
+                path=(*path, "[]"),
+                allow_wordpress_ai_output_schema=allow_wordpress_ai_output_schema,
+            )
         return
     if isinstance(value, str) and len(value) > MAX_RUNTIME_STRING_CHARS:
         raise ValueError(f"{field_name} contains an oversized string")

@@ -44,8 +44,11 @@ from tests.conftest import (
 )
 
 
-def test_wordpress_ai_connector_text_profiles_prefer_balanced_defaults() -> None:
+def test_wordpress_ai_connector_text_profiles_prefer_gpt55_with_fallbacks() -> None:
     short_text_spec = WP_AI_CONNECTOR_PROFILE_SPECS_BY_ID[WP_AI_CONNECTOR_SHORT_TEXT_PROFILE_ID]
+    editorial_spec = WP_AI_CONNECTOR_PROFILE_SPECS_BY_ID[
+        WP_AI_CONNECTOR_EDITORIAL_PROFILE_ID
+    ]
     alt_text_vision_spec = WP_AI_CONNECTOR_PROFILE_SPECS_BY_ID[
         WP_AI_CONNECTOR_ALT_TEXT_VISION_PROFILE_ID
     ]
@@ -53,10 +56,14 @@ def test_wordpress_ai_connector_text_profiles_prefer_balanced_defaults() -> None
         WP_AI_CONNECTOR_CLASSIFICATION_PROFILE_ID
     ]
 
-    assert short_text_spec.ordered_tiers[0] == "balanced"
+    assert short_text_spec.ordered_tiers[:2] == ("free-gpt55", "hosted-free")
+    assert "balanced" in short_text_spec.ordered_tiers
+    assert editorial_spec.ordered_tiers[:2] == ("free-gpt55", "hosted-free")
+    assert "balanced" in editorial_spec.ordered_tiers
     assert alt_text_vision_spec.execution_kind == "vision"
     assert alt_text_vision_spec.tasks == ("alt_text_suggest",)
-    assert classification_spec.ordered_tiers[0] == "balanced"
+    assert classification_spec.ordered_tiers[:2] == ("free-gpt55", "hosted-free")
+    assert "balanced" in classification_spec.ordered_tiers
 
 
 class WordPressAIConnectorTextProvider:
@@ -235,7 +242,12 @@ class WordPressAIConnectorTextProvider:
                 "WordPress是一款能让您建立出色网站、博客或应用的开源软件"
             )
         if task == "content_classification":
-            output_text = "- WordPress AI\n- Cloud connector\n- Scene runtime"
+            output_text = (
+                '{"suggestions":[{"term":"经验教程","confidence":0.8,'
+                '"is_new":false}]}'
+                if "<available-terms>" in source_text
+                else "- WordPress AI\n- Cloud connector\n- Scene runtime"
+            )
         elif task == "content_rewrite" and "rewrite variants" in source_text:
             output_text = (
                 "可以优化为更自然、专业一点的表达，例如：\n\n"
@@ -1329,6 +1341,41 @@ def test_wordpress_ai_connector_runtime_projects_classification_json_scene(
     assert any(
         suggestion["term"] in {"WordPress", "WordPress AI"} for suggestion in result["suggestions"]
     )
+
+
+def test_wordpress_ai_connector_runtime_preserves_existing_only_taxonomy_terms(
+    tmp_path: Path,
+) -> None:
+    _, client, provider = _build_client(tmp_path)
+    payload = _payload(
+        {
+            "task": "content_classification",
+            "request": {
+                "prompt": (
+                    "<taxonomy>category</taxonomy>\n"
+                    "<content>介绍 WordPress AI 写作辅助。</content>\n"
+                    "<available-terms>经验教程, 资源</available-terms>"
+                ),
+                "response_format": "json",
+            },
+        }
+    )
+
+    response = _execute(
+        client,
+        payload,
+        idempotency_key="wp-ai-connector-classification-existing-only",
+    )
+
+    assert response.status_code == 200
+    provider_input = provider.requests[0].input_payload
+    assert "Choose only exact term names" in provider_input["input"]
+    result = json.loads(response.json()["data"]["result"]["output_text"])
+    assert result == {
+        "suggestions": [
+            {"term": "经验教程", "confidence": 0.8, "is_new": False},
+        ]
+    }
 
 
 def test_wordpress_ai_connector_runtime_normalizes_meta_description_scene(
