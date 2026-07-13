@@ -27,7 +27,7 @@ for (const [name, source] of [
 
 assert.match(dialogHook, /event\.key === 'Escape'[\s\S]*event\.key !== 'Tab'[\s\S]*previouslyFocused\?\.focus\(\)/, 'custom admin dialogs must share Escape, focus containment, and trigger restoration');
 assert.match(abilityModels, /abilityModelDialogRef = useDialogKeyboard[\s\S]*cloudBindingDialogRef = useDialogKeyboard[\s\S]*ref=\{abilityModelDialogRef\}[\s\S]*ref=\{cloudBindingDialogRef\}/, 'both ability-model dialogs must use shared keyboard behavior');
-assert.match(aiResources, /capabilityAddDialogRef = useDialogKeyboard[\s\S]*ref=\{capabilityAddDialogRef\}/, 'capability supplier selection must use shared keyboard behavior');
+assert.doesNotMatch(aiResources, /capabilityAddDialogRef|capabilityAddDialogOpen/, 'model supplier management must not keep the retired capability supplier dialog');
 assert.match(planDetail, /editorDialogRef = useDialogKeyboard[\s\S]*ref=\{editorDialogRef\}/, 'package editor must use shared keyboard behavior');
 assert.match(serviceSettings, /emailPreviewDialogRef = useDialogKeyboard[\s\S]*ref=\{emailPreviewDialogRef\}/, 'email preview drawer must use shared keyboard behavior');
 assert.match(layout, /commandDialogRef = useDialogKeyboard[\s\S]*ref=\{commandDialogRef\}/, 'quick switcher must use shared keyboard behavior');

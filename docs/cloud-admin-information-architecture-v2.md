@@ -79,7 +79,8 @@ must share their parent workspace navigation and visual model.
 
 ### 4.3 Runtime Operations
 
-- Providers (`/admin/ai-resources`)
+- Model suppliers (`/admin/ai-resources`)
+- Search and images (`/admin/external-services`)
 - Vector settings (`/admin/vector-settings`)
 - Model routing (`/admin/ability-models`)
 - Runtime diagnostics (`/admin/troubleshooting`)
@@ -217,7 +218,8 @@ consolidation.
 | `/admin/plans/[planId]` | Customer Operations | `detail` | Packages and credits | Keep; edit in contextual drawer |
 | `/admin/credit-packs` | Customer Operations | `configuration` | Packages and credits | Keep route; edit one pack at a time |
 | `/admin/portal-users` | Customer Operations | `queue` | Portal users | Add as stable secondary navigation entry |
-| `/admin/ai-resources` | Runtime Operations | `queue` | Providers | Keep; provider list remains primary |
+| `/admin/ai-resources` | Runtime Operations | `queue` | Model suppliers | Keep model-provider connections and model visibility together |
+| `/admin/external-services` | Runtime Operations | `configuration` | Search and images | Fixed Cloud runtime service directory for web search and stock-image sources |
 | `/admin/vector-settings` | Runtime Operations | `configuration` | Providers | Keep vector embedding, storage, and rerank configuration separate from provider queues and diagnostics |
 | `/admin/ability-models` | Runtime Operations | `configuration` | Model routing | Keep; candidates load only inside edit flow |
 | `/admin/troubleshooting` | Runtime Operations | `diagnostic` | Runtime diagnostics | Canonical diagnostic index |

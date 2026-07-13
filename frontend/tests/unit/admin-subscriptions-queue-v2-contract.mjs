@@ -15,7 +15,7 @@ for (const parameter of ['status', 'account_id', 'plan_id', 'expires_before', 's
 
 assert.match(source, /activeRequestKeyRef[\s\S]*requestSequenceRef/, 'subscription reads must deduplicate Strict Mode requests and reject stale responses');
 assert.doesNotMatch(source, /window\.location\.reload/, 'refresh recovery must preserve the current queue instead of reloading the page');
-assert.match(source, /error && !hasLoadedRef\.current[\s\S]*error \?/, 'initial load failure and retained-data refresh failure must have distinct UI states');
+assert.match(source, /error && !hasLoaded[\s\S]*error \?/, 'initial load failure and retained-data refresh failure must have distinct UI states');
 assert.match(source, /loadedRequestKey[\s\S]*isShowingRetainedResults[\s\S]*last successfully loaded page/, 'failed filter loads must identify retained results as belonging to the last successful request');
 
 assert.match(source, /subscriptionRiskLevel[\s\S]*snapshotStatus === 'stale'[\s\S]*snapshotStatus === 'missing'/, 'risk classification must include stale and missing billing statistics');

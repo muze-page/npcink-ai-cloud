@@ -36,7 +36,7 @@ function routeForPage(path) {
 }
 
 const actualRoutes = listPageFiles(adminRoot).map(routeForPage).sort();
-assert.equal(actualRoutes.length, 24, 'admin route inventory must be reviewed when its size changes');
+assert.equal(actualRoutes.length, 25, 'admin route inventory must be reviewed when its size changes');
 
 for (const route of actualRoutes) {
   assert.ok(

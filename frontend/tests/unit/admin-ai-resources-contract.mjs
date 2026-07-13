@@ -3,6 +3,7 @@ import { resolve } from 'node:path';
 import assert from 'node:assert/strict';
 
 const pagePath = resolve(process.cwd(), 'src/app/admin/ai-resources/page.tsx');
+const externalServicesPath = resolve(process.cwd(), 'src/app/admin/external-services/page.tsx');
 const abilityModelsPath = resolve(process.cwd(), 'src/app/admin/ability-models/page.tsx');
 const aiAdvisorPath = resolve(process.cwd(), 'src/app/admin/ai-advisor/page.tsx');
 const layoutPath = resolve(process.cwd(), 'src/app/admin/layout.tsx');
@@ -22,6 +23,7 @@ const supplierSummaryCardsPath = resolve(process.cwd(), 'src/components/admin/Su
 const supplierToolbarPath = resolve(process.cwd(), 'src/components/admin/SupplierToolbar.tsx');
 const supplierConnectionTablesPath = resolve(process.cwd(), 'src/components/admin/SupplierConnectionTables.tsx');
 const pageSource = readFileSync(pagePath, 'utf8');
+const externalServicesSource = readFileSync(externalServicesPath, 'utf8');
 const abilityModelsSource = readFileSync(abilityModelsPath, 'utf8');
 const aiAdvisorSource = readFileSync(aiAdvisorPath, 'utf8');
 const layoutSource = readFileSync(layoutPath, 'utf8');
@@ -363,10 +365,10 @@ assert.match(
   'AI resources page must default directly to the supplier workflow'
 );
 
-assert.match(
+assert.doesNotMatch(
   pageSource,
-  /useState<SupplierTypeFilter>\('model'\)/,
-  'AI resources page must default to the shorter model-supplier work surface'
+  /SupplierTypeFilter|supplierTypeFilter/,
+  'AI resources page must stay a model-supplier-only work surface'
 );
 
 assert.doesNotMatch(
@@ -382,9 +384,9 @@ assert.match(
 );
 
 assert.match(
-  supplierToolbarSource,
-  /role="tablist"[\s\S]*supplier_filter_model[\s\S]*supplier_filter_capability/,
-  'Supplier type switching must be a compact same-object tab row instead of a long dropdown'
+  externalServicesSource,
+  /useState<ServiceCategory>\('search'\)[\s\S]*role="tablist"[\s\S]*\['search', 'image'\]/,
+  'Search and image service switching must live on the dedicated external-services surface'
 );
 
 assert.doesNotMatch(
@@ -605,8 +607,8 @@ assert.match(
 
 assert.match(
   supplierToolbarSource,
-  /<span className="sr-only">\{translate\('field_search_connections'[\s\S]*action_add_model_supplier[\s\S]*action_add_capability_supplier/,
-  'Provider channel toolbar must keep search and the active supplier add action without duplicate filter controls'
+  /<span className="sr-only">\{translate\('field_search_connections'[\s\S]*action_add_model_supplier/,
+  'Provider channel toolbar must keep search and the model supplier add action without duplicate filter controls'
 );
 
 assert.match(
@@ -629,8 +631,8 @@ assert.doesNotMatch(
 
 assert.match(
   pageSource,
-  /supplierTypeFilter === 'model' \|\| providerFormOpen/,
-  'Provider channel form must render when opened from capability suppliers as well as model suppliers'
+  /<ProviderConnectionDialog[\s\S]*<ModelSupplierTable/,
+  'Model supplier workspace must render the provider channel form and directory together'
 );
 
 assert.doesNotMatch(
@@ -658,9 +660,9 @@ assert.doesNotMatch(
 );
 
 assert.match(
-  pageSource,
-  /function configureCapabilityConnection[\s\S]*editProviderConnection\(connection\)[\s\S]*<CapabilitySupplierTable[\s\S]*onConfigure=\{configureCapabilityConnection\}/,
-  'Capability supplier Configure action must open the shared provider connection form'
+  externalServicesSource,
+  /async function saveOption[\s\S]*\/api\/admin\/provider-connections[\s\S]*method: existing \? 'PATCH' : 'POST'/,
+  'External service configuration must use the bounded provider-connection endpoint'
 );
 
 assert.match(
@@ -688,9 +690,9 @@ assert.match(
 );
 
 assert.match(
-  pageSource,
-  /connectionSearch[\s\S]*connection\.base_url/,
-  'Capability supplier endpoints must remain searchable even when hidden from the main table'
+  externalServicesSource,
+  /service_url[\s\S]*readOnly value=\{option\.baseUrl\}/,
+  'External service endpoints must remain visible as read-only fixed configuration'
 );
 
 assert.doesNotMatch(
@@ -905,14 +907,14 @@ assert.doesNotMatch(
 
 assert.match(
   supplierSummaryCardsSource,
-  /overview_model_suppliers[\s\S]*overview_capability_suppliers[\s\S]*overview_attention_suppliers/,
-  'AI resources overview must use a compact supplier status strip'
+  /overview_model_suppliers[\s\S]*overview_attention_suppliers/,
+  'AI resources overview must use a compact model supplier status strip'
 );
 
 assert.match(
   pageSource,
-  /SupplierSummaryCards[\s\S]*readyModelSupplierCount=\{readyModelSupplierCount\}[\s\S]*capabilitySupplierCount=\{capabilitySupplierCount\}[\s\S]*translate=\{aiText\}/,
-  'AI resources page must render the compact supplier status strip through the shared component'
+  /SupplierSummaryCards[\s\S]*readyModelSupplierCount=\{readyModelSupplierCount\}[\s\S]*modelSupplierCount=\{modelSupplierCount\}[\s\S]*attentionSupplierCount=\{attentionSupplierCount\}[\s\S]*translate=\{aiText\}/,
+  'AI resources page must render the compact model supplier status strip through the shared component'
 );
 
 assert.doesNotMatch(
@@ -1910,14 +1912,20 @@ assert.doesNotMatch(
 
 assert.match(
   supplierToolbarSource,
-  /field_supplier_type_filter[\s\S]*role="tablist"[\s\S]*supplier_filter_model[\s\S]*supplier_filter_capability[\s\S]*field_search_connections[\s\S]*action_add_model_supplier[\s\S]*action_add_capability_supplier/,
-  'Supplier type tabs and add actions must live in the top supplier toolbar'
+  /field_search_connections[\s\S]*action_add_model_supplier/,
+  'Model supplier search and add actions must live in the top supplier toolbar'
+);
+
+assert.doesNotMatch(
+  supplierToolbarSource,
+  /supplier_filter_capability|action_add_capability_supplier/,
+  'Model supplier toolbar must not duplicate the dedicated external-services surface'
 );
 
 assert.match(
   pageSource,
-  /SupplierToolbar[\s\S]*supplierTypeFilter=\{supplierTypeFilter\}[\s\S]*onSupplierTypeFilterChange=\{handleSupplierTypeFilterChange\}[\s\S]*onAddModelSupplier=\{openNewProviderConnection\}[\s\S]*translate=\{aiText\}/,
-  'AI resources page must render the URL-aware supplier toolbar through the shared component'
+  /SupplierToolbar[\s\S]*connectionSearch=\{connectionSearch\}[\s\S]*onAddModelSupplier=\{openNewProviderConnection\}[\s\S]*translate=\{aiText\}/,
+  'AI resources page must render the URL-aware model supplier toolbar through the shared component'
 );
 
 assert.doesNotMatch(
@@ -1992,70 +2000,70 @@ assert.doesNotMatch(
   'Provider management must use a supplier type filter instead of operator tabs'
 );
 
-assert.match(
+assert.doesNotMatch(
   pageSource,
-  /SupplierTypeFilter[\s\S]*supplierTypeFilter/,
-  'Provider management must keep model and capability suppliers as a single filtered supplier workspace'
+  /SupplierTypeFilter|supplierTypeFilter/,
+  'Provider management must not keep capability suppliers in the model supplier workspace'
 );
 
 assert.match(
-  pageSource,
-  /CapabilityProviderCategory/,
-  'Capability supplier management must model search, image, and vector categories explicitly'
+  externalServicesSource,
+  /type ServiceCategory = 'search' \| 'image'/,
+  'External service management must model search and image categories explicitly'
 );
 
 assert.match(
-  pageSource,
-  /capabilityProviderCategory/,
-  'Capability supplier rows must be classified before display'
+  externalServicesSource,
+  /function connectionFor\(option: ServiceOption, connections: ProviderConnection\[\]\)/,
+  'External service options must resolve their persisted provider connection before display'
 );
 
 assert.match(
-  pageSource,
-  /capabilityConnectionsByCategory/,
-  'Capability suppliers must be grouped by category for operator scanning'
+  externalServicesSource,
+  /visibleOptions = useMemo\(\(\) => SERVICE_OPTIONS\.filter\(\(option\) => option\.category === category\)/,
+  'External services must be grouped by category for operator scanning'
 );
 
 assert.match(
-  pageSource,
-  /CAPABILITY_PROVIDER_TEMPLATES/,
-  'Capability supplier add flow must use built-in provider templates'
+  externalServicesSource,
+  /const SERVICE_OPTIONS: ServiceOption\[\]/,
+  'External service configuration must use a fixed built-in directory'
 );
 
-assert.match(
+assert.doesNotMatch(
   pageSource,
   /capabilityAddDialogOpen/,
-  'Capability supplier add flow must open an explicit template dialog'
+  'Model supplier management must not keep the retired capability template dialog'
 );
 
 assert.match(
-  pageSource,
-  /role="tablist"[\s\S]*capability_add_category_tabs[\s\S]*role="tab"/,
-  'Capability supplier add dialog must separate built-in templates by category tabs'
+  externalServicesSource,
+  /role="tablist"[\s\S]*\['search', 'image'\][\s\S]*role="tab"/,
+  'External services must separate fixed service options by category tabs'
 );
 
 assert.match(
-  pageSource,
-  /visibleCapabilityTemplates[\s\S]*capability_add_active_category_count/,
-  'Capability supplier add dialog must render only the active category template list'
+  externalServicesSource,
+  /visibleOptions[\s\S]*data-external-category=\{category\}[\s\S]*visibleOptions\.map/,
+  'External services must render only the active category list'
 );
 
 assert.match(
-  pageSource,
-  /openCapabilityProviderTemplate/,
-  'Choosing a capability supplier template must route to provider configuration'
+  externalServicesSource,
+  /async function saveOption\(option: ServiceOption, enabled: boolean/,
+  'Choosing an external service must route to bounded provider configuration'
 );
 
 assert.match(
-  pageSource,
-  /setProviderConnectionForm\(\{/,
-  'Capability supplier templates must prefill the DB-managed provider connection form'
+  externalServicesSource,
+  /body: JSON\.stringify\(\{[\s\S]*connection_id:[\s\S]*provider_id:[\s\S]*capability_ids:/,
+  'External service directory must prefill the DB-managed provider connection payload'
 );
 
 assert.match(
-  pageSource,
-  /kind: template\.kind/,
-  'Capability supplier templates must preserve provider kind for runtime DB projection'
+  externalServicesSource,
+  /kind: option\.kind/,
+  'External service options must preserve provider kind for runtime DB projection'
 );
 
 assert.doesNotMatch(
@@ -2065,33 +2073,33 @@ assert.doesNotMatch(
 );
 
 assert.match(
-  pageSource,
+  externalServicesSource,
   /id: 'apify'/,
-  'Capability supplier templates must include Apify as a built-in search supplier'
+  'External service directory must include Apify as a built-in search service'
 );
 
 assert.match(
-  pageSource,
+  externalServicesSource,
   /id: 'zhihu'/,
-  'Capability supplier templates must include Zhihu as a built-in search supplier'
+  'External service directory must include Zhihu as a built-in search service'
 );
 
 assert.doesNotMatch(
-  pageSource,
+  externalServicesSource,
   /label: 'TEI Embedding'/,
-  'Capability supplier templates must not default-expose embedding model providers as capability suppliers'
+  'External service directory must not expose embedding model providers'
 );
 
 assert.doesNotMatch(
-  pageSource,
+  externalServicesSource,
   /label: 'OpenAI Embedding'/,
-  'Capability supplier templates must not default-expose model-platform embedding as a separate capability supplier'
+  'External service directory must not expose model-platform embedding'
 );
 
 assert.doesNotMatch(
-  pageSource,
+  externalServicesSource,
   /label: 'SiliconFlow Embedding'/,
-  'Capability supplier templates must not duplicate SiliconFlow from model suppliers as a separate embedding capability supplier'
+  'External service directory must not duplicate SiliconFlow from model suppliers'
 );
 
 assert.match(
@@ -2100,10 +2108,10 @@ assert.match(
   'SiliconFlow must stay represented as a model supplier with embedding capability metadata'
 );
 
-assert.doesNotMatch(
-  openCapabilityTemplateSource,
-  /fetch|provider-connections/,
-  'Capability supplier add flow must not create dynamic provider connection rows'
+assert.match(
+  externalServicesSource,
+  /existing \? `\/api\/admin\/provider-connections\/[\s\S]*: '\/api\/admin\/provider-connections'/,
+  'External service save flow must create or update one bounded provider connection row'
 );
 
 assert.doesNotMatch(
@@ -2184,10 +2192,10 @@ assert.match(
   'AI resources provider channel list must render AI suppliers separately'
 );
 
-assert.match(
+assert.doesNotMatch(
   pageSource,
   /capabilitySupplierConnections/,
-  'AI resources provider channel list must render capability suppliers separately'
+  'AI resources provider channel list must leave capability services to the dedicated external-services surface'
 );
 
 assert.match(
@@ -2215,39 +2223,39 @@ assert.match(
 );
 
 assert.match(
-  pageSource,
-  /href="\/admin\/vector-settings"[\s\S]*action_open_vector_settings/,
-  'Provider workspace must hand vector configuration to its dedicated page'
+  layoutSource,
+  /href: '\/admin\/vector-settings'/,
+  'Admin navigation must hand vector configuration to its dedicated page'
 );
 
 assert.match(
-  pageSource,
+  externalServicesSource,
   /\['search', 'image'\]/,
-  'Provider workspace must keep capability settings to fixed search and image-source categories'
+  'External service workspace must stay limited to fixed search and image-source categories'
 );
 
 assert.match(
-  i18nSource,
-  /'admin\.ai_resources\.action_add_capability_supplier': '添加能力供应商'/,
-  'Capability supplier add action must provide Simplified Chinese copy'
+  externalServicesSource,
+  /'admin\.external_services\.title', '搜索与图片'/,
+  'External service surface must provide compact Simplified Chinese title copy'
 );
 
 assert.match(
-  i18nSource,
-  /'admin\.ai_resources\.capability_add_dialog_desc': '已存在的供应商不会重复新增/,
-  'Capability supplier add dialog must explain built-in suppliers are not duplicated'
+  externalServicesSource,
+  /'admin\.external_services\.description'[\s\S]*固定服务清单/,
+  'External service surface must explain its fixed service directory'
 );
 
 assert.match(
-  i18nSource,
-  /'admin\.ai_resources\.capability_add_category_tabs': '能力供应商分类'[\s\S]*'admin\.ai_resources\.capability_add_active_category_count': '\{\{count\}\} 个模板'/,
-  'Capability supplier add dialog tab labels must provide Simplified Chinese copy'
+  externalServicesSource,
+  /'admin\.external_services\.search', '网页搜索'[\s\S]*'admin\.external_services\.images', '图库来源'/,
+  'External service category tabs must provide Simplified Chinese copy'
 );
 
 assert.match(
-  i18nSource,
-  /'admin\.ai_resources\.message_capability_provider_template_existing': '\{\{name\}\} 已存在/,
-  'Capability supplier template selection must explain it opens existing configuration'
+  externalServicesSource,
+  /'admin\.external_services\.saved', '外部服务设置已保存。'/,
+  'External service save flow must provide Simplified Chinese completion copy'
 );
 
 assert.match(

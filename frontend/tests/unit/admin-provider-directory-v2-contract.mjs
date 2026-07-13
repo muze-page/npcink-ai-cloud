@@ -11,7 +11,7 @@ const toolbarSource = readFileSync(resolve(root, 'src/components/admin/SupplierT
 
 assert.match(
   summarySource,
-  /data-ui="supplier-summary-strip"[\s\S]*grid-cols-3[\s\S]*divide-x/,
+  /data-ui="supplier-summary-strip"[\s\S]*grid-cols-2[\s\S]*divide-x/,
   'Provider readiness must use one compact summary strip at every viewport'
 );
 
@@ -39,7 +39,7 @@ assert.match(
   'Provider workspace focus must be URL-backed'
 );
 
-for (const key of ['supplier', 'q', 'status', 'category', 'focus']) {
+for (const key of ['q', 'status', 'focus']) {
   assert.match(pageSource, new RegExp(`${key}:`), `Provider workspace must persist ${key} state in the URL`);
 }
 
@@ -51,8 +51,14 @@ assert.match(
 
 assert.match(
   toolbarSource,
-  /supplierTypeFilter === 'model'[\s\S]*action_add_model_supplier[\s\S]*action_add_capability_supplier/,
-  'The toolbar must expose only the add action for the active supplier type'
+  /field_search_connections[\s\S]*action_add_model_supplier/,
+  'The toolbar must expose model supplier search and its bounded add action'
+);
+
+assert.doesNotMatch(
+  toolbarSource,
+  /supplierTypeFilter|action_add_capability_supplier/,
+  'The model supplier toolbar must not duplicate capability-service controls'
 );
 
 assert.match(

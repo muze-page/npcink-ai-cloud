@@ -25,7 +25,7 @@ assert.match(
 
 assert.match(
   source,
-  /savedFormsRef = useRef<SavedServiceSettingsForms[\s\S]*activeGroupDirty = useMemo[\s\S]*restoreActiveGroup/,
+  /savedForms, setSavedForms] = useState<SavedServiceSettingsForms[\s\S]*activeGroupDirty = \(\(\) =>[\s\S]*restoreActiveGroup/,
   'configuration groups must compare against saved state and support explicit discard'
 );
 
@@ -44,7 +44,7 @@ assert.doesNotMatch(source, /window\.confirm/, 'service settings must not use a 
 
 assert.match(
   source,
-  /activeValidationIssues = useMemo[\s\S]*validation_public_url[\s\S]*validation_qq_app_id[\s\S]*validation_email_host[\s\S]*validation_payment_app_id/,
+  /activeValidationIssues = \(\(\) =>[\s\S]*validation_public_url[\s\S]*validation_qq_app_id[\s\S]*validation_email_host[\s\S]*validation_payment_app_id/,
   'each configuration group must expose contextual client validation'
 );
 

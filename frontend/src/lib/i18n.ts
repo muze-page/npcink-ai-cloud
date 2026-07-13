@@ -5923,7 +5923,7 @@ export const translations: Record<Locale, TranslationMap> = {
     'admin.nav_ai_advisor': '运营诊断助手',
     'admin.nav_web_search': 'Web Search',
     'admin.nav_image_sources': '图片来源',
-    'admin.nav_ai_resources': '模型供应商',
+    'admin.nav_ai_resources': '供应商',
     'admin.nav_external_services': '搜索与图片',
     'admin.nav_vector_settings': '向量设置',
     'admin.vector_settings.eyebrow': '运行设置',
