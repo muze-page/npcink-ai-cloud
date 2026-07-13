@@ -4,8 +4,6 @@ import { formatDate } from '@/lib/utils';
 
 export type ResourceStatus = 'ready' | 'missing_secret' | 'missing_provider' | 'disabled' | string;
 export type ConnectionStatusFilter = 'all' | 'ready' | 'missing_secret' | 'disabled';
-export type CapabilityProviderCategory = 'search' | 'image' | 'vector';
-export type CapabilityProviderCategoryFilter = 'all' | CapabilityProviderCategory;
 
 export type SupplierConnection = {
   connection_id: string;
@@ -297,80 +295,6 @@ export function ModelSupplierTable({
           ) : <p className="mt-3 text-sm text-slate-500 dark:text-slate-400">{translate('inspector_empty', 'No supplier is visible in this view.')}</p>}
         </div>
       </aside>
-    </div>
-  );
-}
-
-type CapabilitySupplierTableProps = SharedTableProps & {
-  connections: SupplierConnection[];
-  connectionsByCategory: Record<CapabilityProviderCategory, SupplierConnection[]>;
-  categoryFilter: CapabilityProviderCategoryFilter;
-  onCategoryFilterChange: (value: CapabilityProviderCategoryFilter) => void;
-  categoryForConnection: (connection: SupplierConnection) => CapabilityProviderCategory;
-  categoryLabel: (category: CapabilityProviderCategory) => string;
-  purposeLabel: (connection: SupplierConnection) => string;
-  onConfigure: (connection: SupplierConnection) => void;
-};
-
-export function CapabilitySupplierTable({
-  connections,
-  connectionsByCategory,
-  categoryFilter,
-  onCategoryFilterChange,
-  statusFilter,
-  onStatusFilterChange,
-  selectedConnectionId,
-  onSelectConnection,
-  testResults,
-  testingConnectionId,
-  deletingConnectionId,
-  confirmingDeleteConnectionId,
-  categoryForConnection,
-  categoryLabel,
-  purposeLabel,
-  providerTestStageLabel,
-  providerTestMessage,
-  onTest,
-  onConfigure,
-  onDelete,
-  onRequestDelete,
-  onCancelDelete,
-  translate,
-}: CapabilitySupplierTableProps) {
-  const selectedConnection = connections.find((connection) => connection.connection_id === selectedConnectionId) || connections[0] || null;
-  const selectedCategory = selectedConnection ? categoryForConnection(selectedConnection) : null;
-  const selectedTestResult = selectedConnection ? testResults[selectedConnection.connection_id] : undefined;
-  const selectedIsTesting = selectedConnection ? testingConnectionId === selectedConnection.connection_id : false;
-  const selectedIsDeleting = selectedConnection ? deletingConnectionId === selectedConnection.connection_id : false;
-  const selectedIsConfirmingDelete = selectedConnection ? confirmingDeleteConnectionId === selectedConnection.connection_id : false;
-  return (
-    <div data-ui="capability-supplier-directory" className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_20rem]">
-      <section className="min-w-0 overflow-hidden rounded-xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-950">
-        <div className="flex flex-col gap-2 border-b border-slate-200 bg-slate-50/80 px-4 py-3 dark:border-slate-800 dark:bg-slate-900/40 sm:flex-row sm:items-center sm:justify-between">
-          <div><h2 className="text-sm font-semibold text-slate-950 dark:text-white">{translate('capability_directory_title', 'Capability supplier queue')}</h2><p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">{translate('directory_result_count', '{{count}} suppliers', { count: String(connections.length) })}</p></div>
-          <div className="flex flex-wrap gap-2">
-            <select className="h-8 w-36 rounded-md border border-slate-200 bg-white px-2 text-xs font-semibold text-slate-700 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-200" value={categoryFilter} onChange={(event) => onCategoryFilterChange(event.target.value as CapabilityProviderCategoryFilter)} aria-label={translate('capability_category_filter', 'Capability category')}>
-              <option value="all">{translate('filter_all_categories', 'All categories')}</option>
-              {(['search', 'image'] as CapabilityProviderCategory[]).map((category) => <option key={category} value={category}>{categoryLabel(category)} · {connectionsByCategory[category].length}</option>)}
-            </select>
-            <StatusFilter value={statusFilter} onChange={onStatusFilterChange} translate={translate} className="w-36" />
-          </div>
-        </div>
-        <div className="divide-y divide-slate-200 dark:divide-slate-800">
-          {connections.map((connection) => {
-            const category = categoryForConnection(connection);
-            const testResult = testResults[connection.connection_id];
-            const isSelected = selectedConnection?.connection_id === connection.connection_id;
-            return <button key={connection.connection_id} type="button" data-connection-id={connection.connection_id} aria-pressed={isSelected} className={`grid w-full gap-3 px-4 py-3 text-left transition sm:grid-cols-[minmax(0,1fr)_7rem_8rem] sm:items-center ${isSelected ? 'bg-blue-50/80 dark:bg-blue-950/20' : 'hover:bg-slate-50 dark:hover:bg-slate-900/40'}`} onClick={() => onSelectConnection(connection.connection_id)}>
-              <div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><span className="truncate font-semibold text-slate-950 dark:text-white">{connection.display_name}</span><BackofficeStatusBadge label={resourceStatusLabel(connection.status, translate)} status={statusTone(connection.status)} className={connection.status === 'ready' ? QUIET_STATUS_BADGE_CLASS : undefined} /></div><p className="mt-1 text-xs text-slate-500 dark:text-slate-400">{purposeLabel(connection)}</p></div>
-              <div className="text-xs font-semibold text-slate-600 dark:text-slate-300">{categoryLabel(category)}</div>
-              <div className="text-xs text-slate-500 dark:text-slate-400">{testResult ? (testResult.ok ? translate('test_passed', 'Passed') : resourceStatusLabel(testResult.status, translate)) : connection.last_tested_at ? formatDate(connection.last_tested_at) : '-'}</div>
-            </button>;
-          })}
-          {connections.length === 0 ? <p className="px-4 py-10 text-center text-sm text-slate-500 dark:text-slate-400">{translate('capability_category_empty', 'No suppliers match the current category and filters.')}</p> : null}
-        </div>
-      </section>
-      <aside data-ui="supplier-inspector" className="xl:sticky xl:top-24 xl:self-start"><div className="rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-950"><p className="text-[0.68rem] font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">{translate('inspector_eyebrow', 'Inspector')}</p>{selectedConnection ? <div className="mt-3 space-y-4"><div><h2 className="text-lg font-semibold text-slate-950 dark:text-white">{selectedConnection.display_name}</h2><p className="mt-1 text-xs text-slate-500 dark:text-slate-400">{purposeLabel(selectedConnection)} · {selectedCategory ? categoryLabel(selectedCategory) : ''}</p></div><dl className="grid gap-2 text-sm">{[[translate('status_filter_label', 'Status'), resourceStatusLabel(selectedConnection.status, translate)],[translate('column_connection', 'Connection'), selectedConnection.configured ? translate('status_configured_label', 'Configured') : translate('status_missing_secret_label', 'Missing secret')],[translate('last_test', 'Last test'), selectedConnection.last_tested_at ? formatDate(selectedConnection.last_tested_at) : '-']].map(([label,value]) => <div key={label} className="flex justify-between gap-4 border-b border-slate-200/70 pb-2 last:border-0 dark:border-slate-800"><dt className="text-slate-500 dark:text-slate-400">{label}</dt><dd className="text-right font-semibold text-slate-900 dark:text-white">{value}</dd></div>)}</dl>{selectedTestResult && !selectedTestResult.ok ? <p role="alert" className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-800 dark:border-amber-900 dark:bg-amber-950/25 dark:text-amber-200">{providerTestStageLabel(selectedTestResult.stage)} · {providerTestMessage(selectedTestResult)}</p> : selectedTestResult?.ok ? <p role="status" className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs leading-5 text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950/25 dark:text-emerald-200">{translate('test_result_passed_inline', 'Test passed')} · {providerTestMessage(selectedTestResult)}</p> : null}<div className="flex flex-wrap gap-2">{selectedConnection.managed_by === 'cloud_provider_connections' ? <button type="button" className="btn btn-secondary btn-sm" disabled={selectedIsTesting || selectedIsDeleting} onClick={() => onTest(selectedConnection.connection_id)}>{selectedIsTesting ? translate('testing', 'Testing...') : translate('action_test', 'Test')}</button> : null}<button type="button" className="btn btn-primary btn-sm" disabled={selectedIsDeleting} onClick={() => onConfigure(selectedConnection)}>{translate('action_configure', 'Configure')}</button>{selectedConnection.managed_by === 'cloud_provider_connections' ? selectedIsConfirmingDelete ? <><button type="button" className={TABLE_CONFIRM_DELETE_BUTTON_CLASS} disabled={selectedIsDeleting} onClick={() => onDelete(selectedConnection)}>{selectedIsDeleting ? translate('deleting', 'Deleting...') : translate('action_confirm_delete', 'Confirm delete')}</button><button type="button" className={TABLE_ACTION_BUTTON_CLASS} disabled={selectedIsDeleting} onClick={onCancelDelete}>{translate('action_cancel', 'Cancel')}</button></> : <button type="button" className={TABLE_DELETE_BUTTON_CLASS} disabled={selectedIsDeleting} onClick={() => onRequestDelete(selectedConnection.connection_id)}>{translate('action_delete', 'Delete')}</button> : null}</div>{selectedIsConfirmingDelete ? <p role="alert" className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs leading-5 text-rose-800 dark:border-rose-900 dark:bg-rose-950/25 dark:text-rose-200">{translate('delete_confirmation_notice', 'Deleting {{name}} removes this runtime connection. Existing capability routes may stop resolving.', { name: selectedConnection.display_name })}</p> : null}<p className="border-t border-slate-200 pt-3 text-xs leading-5 text-slate-500 dark:border-slate-800 dark:text-slate-400">{translate('inspector_boundary', 'This inspector reads Cloud runtime provider detail. Model routing and WordPress control remain in their owning surfaces.')}</p></div> : <p className="mt-3 text-sm text-slate-500 dark:text-slate-400">{translate('inspector_empty', 'No supplier is visible in this view.')}</p>}</div></aside>
     </div>
   );
 }

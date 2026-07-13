@@ -27,10 +27,10 @@ assert.match(
   'Model suppliers must render as a selectable queue with a contextual inspector'
 );
 
-assert.match(
+assert.doesNotMatch(
   directorySource,
-  /data-ui="capability-supplier-directory"[\s\S]*capability_category_filter[\s\S]*aria-pressed=\{isSelected\}[\s\S]*data-ui="supplier-inspector"/,
-  'Capability suppliers must reuse the selectable queue and inspector pattern'
+  /capability-supplier-directory|CapabilitySupplierTable|capability_category_filter/,
+  'The model supplier directory must not retain the retired capability supplier queue'
 );
 
 assert.match(

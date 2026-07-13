@@ -78,6 +78,20 @@ const connections = [
     managed_by: 'cloud_provider_connections',
     metadata: {},
   },
+  {
+    connection_id: 'embedding_ready',
+    provider_id: 'siliconflow',
+    display_name: 'SiliconFlow Embedding',
+    kind: 'embedding_provider',
+    enabled: true,
+    configured: true,
+    status: 'ready',
+    base_url: 'https://api.siliconflow.cn/v1',
+    capability_ids: ['embedding'],
+    runtime_profile_ids: ['embed.default'],
+    managed_by: 'cloud_provider_connections',
+    metadata: {},
+  },
 ];
 
 async function installProviderDirectoryHarness(page: Page) {
@@ -174,6 +188,7 @@ test('model supplier queue keeps URL-backed focus and removes fixed-width table 
 
   await expect(page.locator('[data-ui="supplier-summary-strip"]')).toBeVisible();
   await expect(page.locator('[data-ui="model-supplier-directory"] [data-connection-id]')).toHaveCount(3);
+  await expect(page.locator('[data-connection-id="embedding_ready"]')).toHaveCount(0);
   await expect(page.locator('table')).toHaveCount(0);
   expect(harness.getRequestCount()).toBe(1);
 
@@ -193,23 +208,16 @@ test('model supplier queue keeps URL-backed focus and removes fixed-width table 
   expect(await page.locator('[data-ui="model-supplier-directory"]').evaluate((element) => element.getBoundingClientRect().top)).toBeLessThan(700);
 });
 
-test('capability suppliers reuse the queue and inspector with one active add action', async ({ page }) => {
+test('model supplier workspace does not expose capability-service controls', async ({ page }) => {
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await installProviderDirectoryHarness(page);
   await page.goto('/admin/ai-resources');
 
-  await page.getByRole('tab', { name: /Capability suppliers|能力供应商/i }).click();
-  await expect(page).toHaveURL(/supplier=capability/);
-  await expect(page.getByRole('button', { name: /Add capability supplier|添加能力供应商/i })).toBeVisible();
-  await expect(page.getByRole('button', { name: /Add model supplier|添加模型供应商/i })).toHaveCount(0);
-  await expect(page.locator('[data-ui="capability-supplier-directory"] [data-connection-id]')).toHaveCount(1);
-
-  await page.locator('[data-connection-id="search_ready"]').click();
-  await expect(page).toHaveURL(/focus=search_ready/);
-  const inspector = page.locator('[data-ui="supplier-inspector"]');
-  await expect(inspector).toContainText('Tavily Search');
-  await expect(inspector.getByRole('button', { name: /^Test$|^测试$/i })).toBeVisible();
-  await expect(inspector.getByRole('button', { name: /^Configure$|^配置$/i })).toBeVisible();
+  await expect(page.getByRole('button', { name: /Add model supplier|添加模型供应商/i })).toBeVisible();
+  await expect(page.getByRole('button', { name: /Add capability supplier|添加能力供应商/i })).toHaveCount(0);
+  await expect(page.getByRole('tab', { name: /Capability suppliers|能力供应商/i })).toHaveCount(0);
+  await expect(page.locator('[data-ui="capability-supplier-directory"]')).toHaveCount(0);
+  await expect(page.locator('[data-connection-id="search_ready"]')).toHaveCount(0);
 });
 
 test('supplier inspector keeps test feedback and destructive confirmation beside the selected supplier', async ({ page }) => {
@@ -249,14 +257,6 @@ test('provider configuration dialog supports PC keyboard entry, focus loop, and 
   await expect(dialog).toHaveCount(0);
   await expect(addButton).toBeFocused();
 
-  await page.getByRole('tab', { name: /Capability suppliers|能力供应商/i }).click();
-  const addCapabilityButton = page.getByRole('button', { name: /Add capability supplier|添加能力供应商/i });
-  await addCapabilityButton.click();
-  const capabilityDialog = page.getByRole('dialog', { name: /Choose built-in capability supplier|选择内置能力供应商/i });
-  await expect(capabilityDialog).toBeVisible();
-  await page.keyboard.press('Escape');
-  await expect(capabilityDialog).toHaveCount(0);
-  await expect(addCapabilityButton).toBeFocused();
 });
 
 test('save and test closes the dialog, uses a compact toast, and keeps the receipt near the toolbar', async ({ page }) => {

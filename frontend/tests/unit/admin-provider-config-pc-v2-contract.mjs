@@ -7,7 +7,7 @@ const directory = readFileSync(resolve(process.cwd(), 'src/components/admin/Supp
 const dialog = readFileSync(resolve(process.cwd(), 'src/components/admin/ProviderConnectionDialog.tsx'), 'utf8');
 const i18n = readFileSync(resolve(process.cwd(), 'src/lib/i18n.ts'), 'utf8');
 
-assert.match(page, /<ModelSupplierTable[\s\S]*testingConnectionId=\{testingConnectionId\}[\s\S]*onTest=\{\(connectionId\) => void runProviderConnectionTest\(connectionId\)\}/, 'model suppliers must expose the same bounded test flow as capability suppliers');
+assert.match(page, /<ModelSupplierTable[\s\S]*testingConnectionId=\{testingConnectionId\}[\s\S]*onTest=\{\(connectionId\) => void runProviderConnectionTest\(connectionId\)\}/, 'model suppliers must expose a bounded connection test flow');
 assert.match(directory, /selectedTestResult\?\.ok[\s\S]*role="status"[\s\S]*test_result_passed_inline/, 'successful supplier tests must render beside the selected supplier');
 assert.match(directory, /selectedTestResult && !selectedTestResult\.ok[\s\S]*role="alert"/, 'failed supplier tests must render beside the selected supplier');
 assert.match(directory, /selectedIsConfirmingDelete[\s\S]*role="alert"[\s\S]*delete_confirmation_notice/, 'delete confirmation must state impact in the selected supplier inspector');

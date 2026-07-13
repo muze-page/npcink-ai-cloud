@@ -18,12 +18,10 @@ import {
   ModelSupplierTable,
   type ConnectionStatusFilter,
   type ProviderConnectionTestResult,
-  type ResourceStatus,
   type SupplierConnection as Connection,
 } from '@/components/admin/SupplierConnectionTables';
 import { SupplierSummaryCards } from '@/components/admin/SupplierSummaryCards';
 import { SupplierToolbar } from '@/components/admin/SupplierToolbar';
-import { BackofficeStatusBadge } from '@/components/backoffice/BackofficeStatusBadge';
 import { LoadingFallback } from '@/components/ui/LoadingFallback';
 import { Modal } from '@/components/ui/Modal';
 import { useToast } from '@/components/ui/Toast';
@@ -33,63 +31,7 @@ import { generateIdempotencyKey } from '@/lib/idempotency';
 import { useDialogKeyboard } from '@/hooks/useDialogKeyboard';
 import { formatDate } from '@/lib/utils';
 
-type AIResourceView = 'connections';
 type SupplierCategory = 'ai' | 'capability';
-type CapabilityProviderCategory = 'search' | 'image' | 'vector';
-
-type Capability = {
-  capability_id: string;
-  label: string;
-  status: ResourceStatus;
-  default_profile_id: string;
-  connection_ids: string[];
-  used_by: string[];
-  write_posture: string;
-};
-
-type RuntimeProfile = {
-  profile_id: string;
-  kind: string;
-  capability_id: string;
-  selected_connection_id: string;
-  selected_provider_id: string;
-  selected_model_id: string;
-  status: ResourceStatus;
-  selection_owner: string;
-  used_by: string[];
-  selected_for?: string[];
-  last_run?: RuntimeEvidence | PipelineRuntimeEvidence;
-};
-
-type CapabilityMatrixRow = {
-  capability_id: string;
-  label: string;
-  status: ResourceStatus;
-  used_by: string[];
-  write_posture: string;
-  default_profile_id: string;
-  connection_ids: string[];
-  profiles: RuntimeProfile[];
-  selection_owner: string;
-  direct_wordpress_write: boolean;
-};
-
-type RuntimeResolutionRow = {
-  capability_id: string;
-  label: string;
-  status: ResourceStatus;
-  selected_profile_id: string;
-  selected_provider_id: string;
-  selected_model_id: string;
-  selected_connection_ids: string[];
-  ready_connection_ids: string[];
-  runtime_provider_available: boolean;
-  runtime_provider_ids: string[];
-  write_posture: string;
-  selection_owner: string;
-  direct_wordpress_write: boolean;
-};
-
 
 type ProviderCatalogPreview = {
   provider_id: string;
@@ -182,196 +124,8 @@ type ModelVisibilityRow = {
   catalog?: ProviderCatalogPreviewModel;
 };
 
-type FeatureModelUsageRow = {
-  feature_id: string;
-  label: string;
-  surface: string;
-  capability_id: string;
-  profile_id: string;
-  status: ResourceStatus;
-  provider_id: string;
-  model_id: string;
-  connection_ids: string[];
-  connection_sources: string[];
-  write_posture: string;
-  selection_owner: string;
-  last_run?: RuntimeEvidence;
-  last_provider_call?: {
-    provider_id?: string;
-    model_id?: string;
-    instance_id?: string;
-    latency_ms?: number;
-    tokens_in?: number;
-    tokens_out?: number;
-    cost?: number;
-    retry_count?: number;
-    fallback_used?: boolean;
-    error_code?: string;
-    created_at?: string;
-  };
-  evidence?: {
-    run_metadata_only?: boolean;
-    content_exposed?: boolean;
-    source?: string;
-  };
-};
-
-type ProviderModelHealthRow = {
-  provider_id: string;
-  model_id: string;
-  status: ResourceStatus;
-  call_count: number;
-  success_count: number;
-  error_count: number;
-  success_rate: number;
-  avg_latency_ms?: number;
-  p95_latency_ms?: number;
-  tokens_in: number;
-  tokens_out: number;
-  cost: number;
-  retry_count: number;
-  fallback_count: number;
-  last_error_code: string;
-  last_observed_at: string;
-  evidence?: {
-    source?: string;
-    content_exposed?: boolean;
-    recent_call_limit?: number;
-  };
-};
-
-type ProviderModelHealthAlert = {
-  code: string;
-  severity: ResourceStatus;
-  provider_id: string;
-  model_id: string;
-  message: string;
-  evidence?: {
-    status?: string;
-    call_count?: number;
-    success_rate?: number;
-    p95_latency_ms?: number;
-    cost?: number;
-    fallback_count?: number;
-    content_exposed?: boolean;
-  };
-};
-
-type ProviderModelHealthAlertSummary = {
-  window_id: string;
-  alert_count: number;
-  severity_counts: {
-    error?: number;
-    warning?: number;
-    info?: number;
-  };
-  thresholds: {
-    minimum_success_rate?: number;
-    p95_latency_ms?: number;
-    cost?: number;
-  };
-  alerts: ProviderModelHealthAlert[];
-};
-
-type ProviderModelHealthWindow = {
-  window_id: string;
-  label: string;
-  hours: number;
-  started_at: string;
-  ended_at: string;
-  rows: ProviderModelHealthRow[];
-  alert_summary?: ProviderModelHealthAlertSummary;
-};
-
-type ProviderModelHealth = {
-  source: string;
-  content_exposed: boolean;
-  recent_call_limit: number;
-  default_window_id?: string;
-  rows: ProviderModelHealthRow[];
-  windows?: ProviderModelHealthWindow[];
-  alert_summary?: ProviderModelHealthAlertSummary;
-};
-
-type RuntimeTelemetryAlert = {
-  code: string;
-  severity: string;
-  title: string;
-  summary: string;
-  count: number;
-  capabilities: string[];
-  suggestedAction: string;
-};
-
-type RuntimeTelemetrySummary = {
-  generatedAt: string;
-  totals: {
-    runs: number;
-    providerCalls: number;
-    usageMeterEvents: number;
-    providerCallRunCoverageRate: number;
-    meteredRunCoverageRate: number;
-  };
-  governanceGaps: {
-    unmeteredCapabilities: string[];
-    missingProviderCallCapabilities: string[];
-    unmeteredRunCount: number;
-    runsWithoutProviderCallCount: number;
-    reviewGuidance: string;
-  };
-  boundary: {
-    directWordpressWrite: boolean;
-    containsPromptOrResultPayloads: boolean;
-  };
-  alertSummary: {
-    status: string;
-    summary: string;
-    nextAction: string;
-    alertCount: number;
-    alerts: RuntimeTelemetryAlert[];
-  };
-};
-
-type RuntimeEvidence = {
-  run_id?: string;
-  site_id?: string;
-  status?: string;
-  profile_id?: string;
-  provider_id?: string;
-  model_id?: string;
-  instance_id?: string;
-  trace_id?: string;
-  error_code?: string;
-  started_at?: string;
-  finished_at?: string;
-};
-
-type PipelineRuntimeEvidence = {
-  text?: RuntimeEvidence;
-  audio?: RuntimeEvidence;
-  status?: string;
-};
-
 type AiResources = {
-  surface: string;
   connections: Connection[];
-  capabilities: Capability[];
-  capability_matrix?: CapabilityMatrixRow[];
-  runtime_resolution?: RuntimeResolutionRow[];
-  feature_model_usage?: FeatureModelUsageRow[];
-  provider_model_health?: ProviderModelHealth;
-  runtime_profiles: RuntimeProfile[];
-  recent_runtime_evidence?: {
-    source: string;
-    content_exposed: boolean;
-    profiles: Record<string, RuntimeEvidence>;
-  };
-  boundary: {
-    direct_wordpress_write: boolean;
-    final_writes: string;
-    secret_exposure: string;
-    not_a_control_plane: boolean;
-  };
 };
 
 type ProviderConnectionForm = {
@@ -424,22 +178,6 @@ type ProviderExternalLinkItem = {
   labelKey: string;
   fallback: string;
   href: string;
-};
-
-type CapabilityProviderTemplate = {
-  id: string;
-  label: string;
-  category: CapabilityProviderCategory;
-  kind: string;
-  baseUrl: string;
-  websiteUrl?: string;
-  statusUrl?: string;
-  docsUrl?: string;
-  capabilityIds: string;
-  runtimeProfileIds: string;
-  modelIds: string;
-  descriptionKey: string;
-  descriptionFallback: string;
 };
 
 const PROVIDER_PRESETS: ProviderPreset[] = [
@@ -643,126 +381,6 @@ const PROVIDER_PRESETS: ProviderPreset[] = [
   },
 ];
 
-const CAPABILITY_PROVIDER_TEMPLATES: CapabilityProviderTemplate[] = [
-  {
-    id: 'tavily',
-    label: 'Tavily',
-    category: 'search',
-    kind: 'web_search_provider',
-    baseUrl: 'https://api.tavily.com',
-    websiteUrl: 'https://www.tavily.com/',
-    statusUrl: 'https://status.tavily.com/',
-    docsUrl: 'https://docs.tavily.com/welcome',
-    capabilityIds: 'web_search',
-    runtimeProfileIds: 'web-search.managed',
-    modelIds: '',
-    descriptionKey: 'web_search_help_tavily',
-    descriptionFallback: 'General web search provider. Used directly or as the first auto fallback source.',
-  },
-  {
-    id: 'bocha',
-    label: 'Bocha',
-    category: 'search',
-    kind: 'web_search_provider',
-    baseUrl: 'https://api.bochaai.com/v1',
-    websiteUrl: 'https://open.bochaai.com/',
-    docsUrl: 'https://open.bochaai.com/',
-    capabilityIds: 'web_search',
-    runtimeProfileIds: 'web-search.managed',
-    modelIds: '',
-    descriptionKey: 'web_search_help_bocha',
-    descriptionFallback: 'Search provider useful for Chinese and broader public source lookup.',
-  },
-  {
-    id: 'jina_reader',
-    label: 'Jina Reader',
-    category: 'search',
-    kind: 'web_search_provider',
-    baseUrl: 'https://r.jina.ai',
-    websiteUrl: 'https://jina.ai/',
-    statusUrl: 'https://status.jina.ai/',
-    docsUrl: 'https://jina.ai/reader/',
-    capabilityIds: 'web_search',
-    runtimeProfileIds: 'web-search.reader',
-    modelIds: '',
-    descriptionKey: 'web_search_help_jina_reader',
-    descriptionFallback: 'Reader enhancement for selected result URLs. It enriches search results but is not the primary search provider.',
-  },
-  {
-    id: 'apify',
-    label: 'Apify',
-    category: 'search',
-    kind: 'web_search_provider',
-    baseUrl: 'https://api.apify.com/v2',
-    websiteUrl: 'https://apify.com/',
-    statusUrl: 'https://status.apify.com/',
-    docsUrl: 'https://docs.apify.com/api/v2',
-    capabilityIds: 'web_search',
-    runtimeProfileIds: 'web-search.managed',
-    modelIds: '',
-    descriptionKey: 'web_search_help_apify',
-    descriptionFallback: 'Apify actor-backed search. Configure an actor that returns dataset items with title, URL, and snippet-like fields.',
-  },
-  {
-    id: 'zhihu',
-    label: 'Zhihu Search',
-    category: 'search',
-    kind: 'web_search_provider',
-    baseUrl: 'https://developer.zhihu.com',
-    websiteUrl: 'https://developer.zhihu.com/',
-    docsUrl: 'https://developer.zhihu.com/',
-    capabilityIds: 'web_search',
-    runtimeProfileIds: 'web-search.managed',
-    modelIds: '',
-    descriptionKey: 'web_search_help_zhihu',
-    descriptionFallback: 'Zhihu Open Platform search, hot list, global search, and direct-answer evidence lanes.',
-  },
-  {
-    id: 'unsplash',
-    label: 'Unsplash',
-    category: 'image',
-    kind: 'image_source_provider',
-    baseUrl: 'https://api.unsplash.com',
-    websiteUrl: 'https://unsplash.com/',
-    statusUrl: 'https://status.unsplash.com/',
-    docsUrl: 'https://unsplash.com/documentation',
-    capabilityIds: 'image_source',
-    runtimeProfileIds: 'image-source.managed',
-    modelIds: '',
-    descriptionKey: 'image_source_help_unsplash',
-    descriptionFallback: 'Stock image reference source for editorial and product imagery.',
-  },
-  {
-    id: 'pixabay',
-    label: 'Pixabay',
-    category: 'image',
-    kind: 'image_source_provider',
-    baseUrl: 'https://pixabay.com/api/',
-    websiteUrl: 'https://pixabay.com/',
-    docsUrl: 'https://pixabay.com/api/docs/',
-    capabilityIds: 'image_source',
-    runtimeProfileIds: 'image-source.managed',
-    modelIds: '',
-    descriptionKey: 'image_source_help_pixabay',
-    descriptionFallback: 'Stock image reference source with broad public image coverage.',
-  },
-  {
-    id: 'pexels',
-    label: 'Pexels',
-    category: 'image',
-    kind: 'image_source_provider',
-    baseUrl: 'https://api.pexels.com/v1',
-    websiteUrl: 'https://www.pexels.com/',
-    statusUrl: 'https://status.pexels.com/',
-    docsUrl: 'https://www.pexels.com/api/documentation/',
-    capabilityIds: 'image_source',
-    runtimeProfileIds: 'image-source.managed',
-    modelIds: '',
-    descriptionKey: 'image_source_help_pexels',
-    descriptionFallback: 'Stock image reference source for photography and visual references.',
-  },
-];
-
 function connectionHost(value: string): string {
   const trimmed = value.trim();
   if (!trimmed) return '-';
@@ -812,19 +430,11 @@ function providerExternalLinkItems(values: {
   ].filter((item) => item.href);
 }
 
-function capabilityTemplateByProvider(kind: string, providerId: string): CapabilityProviderTemplate | undefined {
-  return CAPABILITY_PROVIDER_TEMPLATES.find(
-    (template) => template.kind === kind && template.id === providerId
-  );
-}
-
 function providerReferenceLinksForForm(form: ProviderConnectionForm): {
   websiteUrl?: unknown;
   statusUrl?: unknown;
   docsUrl?: unknown;
 } {
-  const template = capabilityTemplateByProvider(form.kind, form.providerId);
-  if (template) return template;
   const preset = providerPresetById(form.providerPreset);
   return preset.id === 'custom' ? {} : preset;
 }
@@ -834,8 +444,6 @@ function providerReferenceLinksForConnection(connection: Connection): {
   statusUrl?: unknown;
   docsUrl?: unknown;
 } {
-  const template = capabilityTemplateByProvider(connection.kind, connection.provider_id);
-  if (template) return template;
   const preset = providerPresetById(inferProviderPreset(connection));
   if (preset.id === 'custom') return {};
   if (
@@ -864,6 +472,7 @@ function supplierCategory(connection: Connection): SupplierCategory {
   if (
     connection.kind === 'web_search_provider' ||
     connection.kind === 'image_source_provider' ||
+    connection.kind === 'embedding_provider' ||
     connection.kind === 'rerank_provider' ||
     connection.kind === 'vector_store_provider' ||
     connection.capability_ids.includes('web_search') ||
@@ -874,31 +483,6 @@ function supplierCategory(connection: Connection): SupplierCategory {
     return 'capability';
   }
   return 'ai';
-}
-
-function capabilityProviderCategory(connection: Connection): CapabilityProviderCategory {
-  if (connection.kind === 'web_search_provider' || connection.capability_ids.includes('web_search')) return 'search';
-  if (connection.kind === 'image_source_provider' || connection.capability_ids.includes('image_source')) return 'image';
-  return 'vector';
-}
-
-function isCapabilityProviderDescriptor(kind: string, capabilityIds: string[]): boolean {
-  return (
-    kind === 'web_search_provider' ||
-    kind === 'image_source_provider' ||
-    kind === 'rerank_provider' ||
-    kind === 'vector_store_provider' ||
-    capabilityIds.includes('web_search') ||
-    capabilityIds.includes('image_source') ||
-    capabilityIds.includes('site_knowledge_rerank') ||
-    capabilityIds.includes('vector_store')
-  );
-}
-
-function capabilityProviderDescriptorCategory(kind: string, capabilityIds: string[]): CapabilityProviderCategory {
-  if (kind === 'web_search_provider' || capabilityIds.includes('web_search')) return 'search';
-  if (kind === 'image_source_provider' || capabilityIds.includes('image_source')) return 'image';
-  return 'vector';
 }
 
 function splitList(value: string): string[] {
@@ -969,104 +553,10 @@ function inferProviderPreset(connection: Connection): string {
   return 'custom';
 }
 
-function formatCost(value: number | undefined): string {
-  if (typeof value !== 'number') return '-';
-  if (value === 0) return '0';
-  return value < 0.0001 ? '<0.0001' : value.toFixed(4);
-}
-
-function formatRate(value: number | undefined): string {
-  if (typeof value !== 'number') return '-';
-  return `${Math.round(value * 100)}%`;
-}
-
-function formatPreciseRate(value: number | undefined): string {
-  if (typeof value !== 'number') return '-';
-  return `${(value * 100).toFixed(1)}%`;
-}
-
-function formatInteger(value: number | undefined): string {
-  return new Intl.NumberFormat().format(Number(value ?? 0));
-}
-
-function asNumber(value: unknown): number {
-  return Number(value ?? 0) || 0;
-}
-
-function normalizeRuntimeTelemetry(raw: any): RuntimeTelemetrySummary {
-  const totals = raw?.totals ?? {};
-  const gaps = raw?.governance_gaps ?? {};
-  const boundary = raw?.boundary ?? {};
-  const alertSummary = raw?.alert_summary ?? {};
-  return {
-    generatedAt: String(raw?.generated_at ?? ''),
-    totals: {
-      runs: asNumber(totals.runs),
-      providerCalls: asNumber(totals.provider_calls),
-      usageMeterEvents: asNumber(totals.usage_meter_events),
-      providerCallRunCoverageRate: asNumber(totals.provider_call_run_coverage_rate),
-      meteredRunCoverageRate: asNumber(totals.metered_run_coverage_rate),
-    },
-    governanceGaps: {
-      unmeteredCapabilities: Array.isArray(gaps.unmetered_capabilities)
-        ? gaps.unmetered_capabilities.map(String)
-        : [],
-      missingProviderCallCapabilities: Array.isArray(gaps.missing_provider_call_capabilities)
-        ? gaps.missing_provider_call_capabilities.map(String)
-        : [],
-      unmeteredRunCount: asNumber(gaps.unmetered_run_count),
-      runsWithoutProviderCallCount: asNumber(gaps.runs_without_provider_call_count),
-      reviewGuidance: String(gaps.review_guidance ?? ''),
-    },
-    boundary: {
-      directWordpressWrite: Boolean(boundary.direct_wordpress_write),
-      containsPromptOrResultPayloads: Boolean(boundary.contains_prompt_or_result_payloads),
-    },
-    alertSummary: {
-      status: String(alertSummary.status ?? 'inactive'),
-      summary: String(alertSummary.summary ?? ''),
-      nextAction: String(alertSummary.next_action ?? ''),
-      alertCount: asNumber(alertSummary.alert_count),
-      alerts: Array.isArray(alertSummary.alerts)
-        ? alertSummary.alerts.map((item: any) => ({
-            code: String(item?.code ?? ''),
-            severity: String(item?.severity ?? ''),
-            title: String(item?.title ?? ''),
-            summary: String(item?.summary ?? ''),
-            count: asNumber(item?.count),
-            capabilities: Array.isArray(item?.capabilities) ? item.capabilities.map(String) : [],
-            suggestedAction: String(item?.suggested_action ?? ''),
-          }))
-        : [],
-    },
-  };
-}
-
 function normalizeAiResources(raw: any): AiResources {
   const value = raw && typeof raw === 'object' ? raw : {};
-  const boundary = value.boundary && typeof value.boundary === 'object' ? value.boundary : {};
   return {
-    surface: String(value.surface ?? 'admin_ai_resources'),
     connections: Array.isArray(value.connections) ? value.connections : [],
-    capabilities: Array.isArray(value.capabilities) ? value.capabilities : [],
-    capability_matrix: Array.isArray(value.capability_matrix) ? value.capability_matrix : [],
-    runtime_resolution: Array.isArray(value.runtime_resolution) ? value.runtime_resolution : [],
-    feature_model_usage: Array.isArray(value.feature_model_usage) ? value.feature_model_usage : [],
-    provider_model_health:
-      value.provider_model_health && typeof value.provider_model_health === 'object'
-        ? value.provider_model_health
-        : undefined,
-    runtime_profiles: Array.isArray(value.runtime_profiles) ? value.runtime_profiles : [],
-    recent_runtime_evidence:
-      value.recent_runtime_evidence && typeof value.recent_runtime_evidence === 'object'
-        ? value.recent_runtime_evidence
-        : undefined,
-    boundary: {
-      direct_wordpress_write: Boolean(boundary.direct_wordpress_write),
-      final_writes: String(boundary.final_writes ?? 'excluded'),
-      secret_exposure: String(boundary.secret_exposure ?? 'masked'),
-      not_a_control_plane: Boolean(boundary.not_a_control_plane),
-    },
   };
 }
 
@@ -1301,36 +791,6 @@ function catalogPreviewFromConnection(connection: Connection): ProviderCatalogPr
   );
 }
 
-function resolveAdminApiPayloadMessage(payload: any, fallback: string): string {
-  if (payload && typeof payload === 'object') {
-    const message = typeof payload.message === 'string' ? payload.message : '';
-    if (message.trim()) {
-      return resolveUiErrorMessage(message, fallback);
-    }
-    const detail = payload.detail;
-    if (Array.isArray(detail)) {
-      const detailMessage = detail
-        .map((item) => {
-          if (typeof item === 'string') return item;
-          if (item && typeof item === 'object' && typeof item.msg === 'string') return item.msg;
-          return '';
-        })
-        .filter(Boolean)
-        .join('; ');
-      if (detailMessage) {
-        return resolveUiErrorMessage(detailMessage, fallback);
-      }
-    }
-    if (typeof detail === 'string' && detail.trim()) {
-      return resolveUiErrorMessage(detail, fallback);
-    }
-    if (typeof payload.error_code === 'string' && payload.error_code.trim()) {
-      return resolveUiErrorMessage(payload.error_code, fallback);
-    }
-  }
-  return resolveUiErrorMessage(payload, fallback);
-}
-
 function AiResourcesContent() {
   const { t } = useLocale();
   const toast = useToast();
@@ -1343,7 +803,6 @@ function AiResourcesContent() {
     [t]
   );
   const [data, setData] = useState<AiResources | null>(null);
-  const [activeView, setActiveView] = useState<AIResourceView>('connections');
   const [connectionStatusFilter, setConnectionStatusFilter] = useState<ConnectionStatusFilter>('all');
   const [connectionSearch, setConnectionSearch] = useState('');
   const [loading, setLoading] = useState(true);
@@ -1378,21 +837,10 @@ function AiResourcesContent() {
   const [message, setMessage] = useState('');
   const [lastReceipt, setLastReceipt] = useState<AdminMutationReceiptPayload | null>(null);
   const [receiptDetailsOpen, setReceiptDetailsOpen] = useState(false);
-  const [runtimeTelemetry, setRuntimeTelemetry] = useState<RuntimeTelemetrySummary | null>(null);
   const autoSyncedReferenceProviders = useRef<Set<string>>(new Set());
   const resourcesRequestActiveRef = useRef(false);
   const resourcesRequestSequenceRef = useRef(0);
   const resourcesLoadedRef = useRef(false);
-  const providerFormCapabilityIds = splitList(providerConnectionForm.capabilityIds);
-  const isCapabilityProviderForm = isCapabilityProviderDescriptor(providerConnectionForm.kind, providerFormCapabilityIds);
-  const providerFormCapabilityCategory = capabilityProviderDescriptorCategory(
-    providerConnectionForm.kind,
-    providerFormCapabilityIds
-  );
-  const knownCapabilityProviderTemplate = CAPABILITY_PROVIDER_TEMPLATES.find(
-    (template) => template.id === providerConnectionForm.providerId && template.kind === providerConnectionForm.kind
-  );
-  const shouldLockCapabilityBaseUrl = isCapabilityProviderForm && Boolean(knownCapabilityProviderTemplate);
   const updateWorkspaceParams = useCallback((updates: Record<string, string | null>) => {
     const params = new URLSearchParams(searchParams.toString());
     Object.entries(updates).forEach(([key, value]) => {
@@ -1445,25 +893,6 @@ function AiResourcesContent() {
     }
   }, [aiText]);
 
-  const loadRuntimeTelemetry = useCallback(async () => {
-    try {
-      const params = new URLSearchParams({
-        recent_minutes: '1440',
-        limit: '25',
-      });
-      const response = await fetch(`/api/admin/runtime-telemetry?${params.toString()}`, {
-        credentials: 'include',
-      });
-      const payload = await response.json().catch(() => ({}));
-      if (!response.ok || payload?.status === 'error') {
-        throw new Error(resolveAdminApiPayloadMessage(payload, aiText('runtime_telemetry_error_load', 'Failed to load runtime telemetry.')));
-      }
-      setRuntimeTelemetry(normalizeRuntimeTelemetry(payload?.data ?? {}));
-    } catch {
-      setRuntimeTelemetry(null);
-    }
-  }, [aiText]);
-
   const loadModelReferences = useCallback(async (providerId: string) => {
     const normalizedProviderId = providerId.trim().toLowerCase();
     if (!normalizedProviderId || normalizedProviderId === 'custom') {
@@ -1508,33 +937,11 @@ function AiResourcesContent() {
   }, [loadResources]);
 
   useEffect(() => {
-    void loadRuntimeTelemetry();
-  }, [loadRuntimeTelemetry]);
-
-  useEffect(() => {
     if (!providerFormOpen) return;
-    if (isCapabilityProviderForm) {
-      setModelReferences([]);
-      setProviderCatalogPreview(null);
-      return;
-    }
     void loadModelReferences(modelReferenceProviderId);
-  }, [isCapabilityProviderForm, loadModelReferences, modelReferenceProviderId, providerFormOpen]);
+  }, [loadModelReferences, modelReferenceProviderId, providerFormOpen]);
 
   useEffect(() => {
-    const requestedView = searchParams.get('view');
-    if (requestedView === 'connections') {
-      setActiveView(requestedView);
-    }
-    if (
-      requestedView === 'overview' ||
-      requestedView === 'diagnostics' ||
-      requestedView === 'matrix' ||
-      requestedView === 'usage' ||
-      requestedView === 'health'
-    ) {
-      setActiveView('connections');
-    }
     const requestedStatus = searchParams.get('status');
     if (requestedStatus === 'ready' || requestedStatus === 'missing_secret' || requestedStatus === 'disabled') {
       setConnectionStatusFilter(requestedStatus);
@@ -1548,7 +955,7 @@ function AiResourcesContent() {
     const normalizedConnectionId = providerConnectionForm.connectionId || slugifyProviderValue(providerConnectionForm.displayName || providerConnectionForm.providerId);
     const normalizedProviderId = providerConnectionForm.providerId || slugifyProviderValue(providerConnectionForm.displayName || providerConnectionForm.connectionId);
     const modelIds = splitList(providerConnectionForm.modelIds);
-    const modelConfig = !isCapabilityProviderForm && modelIds.length ? { model_ids: modelIds, model_id: modelIds[0] } : {};
+    const modelConfig = modelIds.length ? { model_ids: modelIds, model_id: modelIds[0] } : {};
     const referenceLinks = providerReferenceLinksForForm(providerConnectionForm);
     const websiteUrl = externalUrlValue(referenceLinks.websiteUrl);
     const statusUrl = externalUrlValue(referenceLinks.statusUrl);
@@ -1579,10 +986,8 @@ function AiResourcesContent() {
             website_url: websiteUrl || undefined,
             status_url: statusUrl || undefined,
             docs_url: docsUrl || undefined,
-            model_ids: isCapabilityProviderForm ? [] : modelIds,
-            model_catalog_preview: isCapabilityProviderForm
-              ? undefined
-              : catalogPreviewForMetadata(providerCatalogPreview),
+            model_ids: modelIds,
+            model_catalog_preview: catalogPreviewForMetadata(providerCatalogPreview),
           },
           credential: providerConnectionForm.credential || undefined,
         }),
@@ -1937,7 +1342,6 @@ function AiResourcesContent() {
       credential: '',
       enabled: connection.enabled,
     });
-    setActiveView('connections');
     setProviderFormOpen(true);
   }
 
@@ -2087,12 +1491,8 @@ function AiResourcesContent() {
 
   const providerDialogName = providerConnectionForm.displayName || providerKindLabel(providerConnectionForm.kind);
   const providerDialogTitle = providerFormMode === 'edit'
-    ? isCapabilityProviderForm
-      ? aiText('capability_channel_form_edit_named_title', 'Edit {{name}}', { name: providerDialogName })
-      : aiText('channel_form_edit_named_title', 'Edit {{name}}', { name: providerDialogName })
-    : isCapabilityProviderForm
-      ? aiText('capability_channel_form_title', 'Add capability supplier')
-      : aiText('channel_form_title', 'Add provider channel');
+    ? aiText('channel_form_edit_named_title', 'Edit {{name}}', { name: providerDialogName })
+    : aiText('channel_form_title', 'Add provider channel');
 
   const filteredConnections = useMemo(() => {
     const query = connectionSearch.trim().toLowerCase();
@@ -2121,31 +1521,6 @@ function AiResourcesContent() {
     () => filteredConnections.filter((connection) => supplierCategory(connection) === 'ai'),
     [filteredConnections]
   );
-
-  const capabilityCategoryLabel = useCallback((category: CapabilityProviderCategory): string => {
-    if (category === 'search') return aiText('capability_category_search', 'Search');
-    if (category === 'image') return aiText('capability_category_image', 'Images');
-    return aiText('capability_category_vector', 'Vector');
-  }, [aiText]);
-
-  const capabilityProviderPurposeLabel = useCallback((connection: Connection): string => {
-    if (connection.kind === 'web_search_provider' || connection.capability_ids.includes('web_search')) {
-      return aiText('capability_provider_purpose_search', 'Web search source');
-    }
-    if (connection.kind === 'image_source_provider' || connection.capability_ids.includes('image_source')) {
-      return aiText('capability_provider_purpose_image', 'Image source');
-    }
-    if (connection.kind === 'embedding_provider' || connection.capability_ids.includes('embedding')) {
-      return aiText('capability_provider_purpose_embedding', 'Embedding model');
-    }
-    if (connection.kind === 'rerank_provider' || connection.capability_ids.includes('site_knowledge_rerank')) {
-      return aiText('capability_provider_purpose_rerank', 'Rerank model');
-    }
-    if (connection.kind === 'vector_store_provider' || connection.capability_ids.includes('vector_store')) {
-      return aiText('capability_provider_purpose_vector_store', 'Vector store');
-    }
-    return providerKindLabel(connection.kind);
-  }, [aiText, providerKindLabel]);
 
   const abilityModelFeatureLabel = useCallback((feature: string): string => {
     const normalized = feature.trim();
@@ -2196,7 +1571,7 @@ function AiResourcesContent() {
   }, [modelReferences, providerConnectionForm.providerId, providerConnectionForm.providerPreset]);
 
   const referenceProviderCanBeChanged = canChooseReferenceProvider(providerConnectionForm.providerPreset);
-  const providerUsesCustomRuntimeFields = !isCapabilityProviderForm && providerConnectionForm.providerPreset === 'custom';
+  const providerUsesCustomRuntimeFields = providerConnectionForm.providerPreset === 'custom';
   const providerFormExternalLinkItems = providerExternalLinkItems(
     providerReferenceLinksForForm(providerConnectionForm)
   );
@@ -2230,7 +1605,7 @@ function AiResourcesContent() {
 
   useEffect(() => {
     const normalizedProviderId = modelReferenceProviderId.trim().toLowerCase();
-    if (!providerFormOpen || isCapabilityProviderForm) return;
+    if (!providerFormOpen) return;
     if (!normalizedProviderId || normalizedProviderId === 'custom') return;
     if (loadedModelReferenceProviderId !== normalizedProviderId) return;
     if (loadingModelReferences || syncingModelReferences || autoSyncingModelReferences) return;
@@ -2241,7 +1616,6 @@ function AiResourcesContent() {
   }, [
     autoSyncModelReferences,
     autoSyncingModelReferences,
-    isCapabilityProviderForm,
     loadedModelReferenceProviderId,
     loadingModelReferences,
     modelReferenceProviderId,
@@ -2485,9 +1859,7 @@ function AiResourcesContent() {
         </p>
       </BackofficePrimaryPanel>
 
-      {activeView === 'connections' ? (
-        <>
-          <BackofficeSectionPanel>
+      <BackofficeSectionPanel>
         <SupplierToolbar
           connectionSearch={connectionSearch}
           onConnectionSearchChange={handleConnectionSearchChange}
@@ -2497,21 +1869,10 @@ function AiResourcesContent() {
           translate={aiText}
         />
 
-        <>
         <ProviderConnectionDialog
           open={providerFormOpen}
           title={providerDialogTitle}
           titleId="provider-channel-dialog-title"
-          headerAccessory={(
-            isCapabilityProviderForm ? (
-              <BackofficeStatusBadge
-                label={aiText('capability_supplier_badge', '{{category}} supplier', {
-                  category: capabilityCategoryLabel(providerFormCapabilityCategory),
-                })}
-                status="info"
-              />
-            ) : null
-          )}
           message={message}
           error={error}
           saving={savingConnection}
@@ -2554,27 +1915,23 @@ function AiResourcesContent() {
                   </summary>
                   <div className="mt-3 grid gap-3 px-1">
                     <p className="text-xs leading-5 text-slate-500 dark:text-slate-400">
-                      {isCapabilityProviderForm
-                        ? aiText('capability_connection_section_desc', 'Configure service identity, base URL, credential, and runtime enablement for this capability supplier.')
-                        : aiText('connection_section_desc', 'Choose the service, name, base URL, and credential for this runtime channel.')}
+                      {aiText('connection_section_desc', 'Choose the service, name, base URL, and credential for this runtime channel.')}
                     </p>
                     <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-                      {!isCapabilityProviderForm ? (
-                        <label className="grid gap-2 text-sm font-medium text-slate-700 dark:text-slate-200">
-                          {aiText('field_provider_type', 'Provider type')}
-                          <select
-                            className="h-11 rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-white"
-                            value={providerConnectionForm.providerPreset}
-                            onChange={(event) => applyProviderPreset(event.target.value)}
-                          >
-                            {PROVIDER_PRESETS.map((preset) => (
-                              <option key={preset.id} value={preset.id}>
-                                {preset.label}
-                              </option>
-                            ))}
-                          </select>
-                        </label>
-                      ) : null}
+                      <label className="grid gap-2 text-sm font-medium text-slate-700 dark:text-slate-200">
+                        {aiText('field_provider_type', 'Provider type')}
+                        <select
+                          className="h-11 rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-white"
+                          value={providerConnectionForm.providerPreset}
+                          onChange={(event) => applyProviderPreset(event.target.value)}
+                        >
+                          {PROVIDER_PRESETS.map((preset) => (
+                            <option key={preset.id} value={preset.id}>
+                              {preset.label}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
                       <label className="grid gap-2 text-sm font-medium text-slate-700 dark:text-slate-200">
                         {aiText('field_display_name', 'Display name')}
                         <input
@@ -2588,7 +1945,6 @@ function AiResourcesContent() {
                             });
                           }}
                           placeholder="GPT-5.5 via NewAPI"
-                          readOnly={isCapabilityProviderForm}
                           required
                         />
                       </label>
@@ -2608,21 +1964,11 @@ function AiResourcesContent() {
                       <label className="grid gap-2 text-sm font-medium text-slate-700 dark:text-slate-200">
                         {aiText('field_base_url', 'Base URL')}
                         <input
-                          className={`h-11 rounded-lg border px-3 text-sm ${
-                            shouldLockCapabilityBaseUrl
-                              ? 'border-slate-200 bg-slate-50 text-slate-700 dark:border-slate-800 dark:bg-slate-900/50 dark:text-slate-200'
-                              : 'border-slate-300 bg-white text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-white'
-                          }`}
+                          className="h-11 rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-white"
                           value={providerConnectionForm.baseUrl}
                           onChange={(event) => updateProviderConnectionForm({ baseUrl: event.target.value })}
                           placeholder="https://api.example.com/v1"
-                          readOnly={shouldLockCapabilityBaseUrl}
                         />
-                        {shouldLockCapabilityBaseUrl ? (
-                          <span className="text-xs font-normal leading-5 text-slate-500 dark:text-slate-400">
-                            {aiText('capability_base_url_template_notice', 'Template value for this known supplier. Override only from diagnostics.')}
-                          </span>
-                        ) : null}
                       </label>
                       <label className="inline-flex min-h-11 items-center gap-2 text-sm text-slate-600 dark:text-slate-300">
                         <input
@@ -2630,11 +1976,7 @@ function AiResourcesContent() {
                           checked={providerConnectionForm.enabled}
                           onChange={(event) => updateProviderConnectionForm({ enabled: event.target.checked })}
                         />
-                        {providerFormCapabilityCategory === 'search'
-                          ? aiText('field_use_primary_search', 'Use as primary search service')
-                          : providerFormCapabilityCategory === 'image'
-                            ? aiText('field_include_parallel_image_source', 'Include in parallel image search')
-                            : aiText('field_enabled_runtime', 'Enabled for runtime use')}
+                        {aiText('field_enabled_runtime', 'Enabled for runtime use')}
                       </label>
                     </div>
 
@@ -2646,7 +1988,6 @@ function AiResourcesContent() {
                   </div>
                 </details>
 
-                {isCapabilityProviderForm ? null : (
                 <section className="grid gap-3 border-t border-slate-200 pt-4 dark:border-slate-800">
                   <div className="grid gap-3">
                     <div className="flex flex-col gap-3 xl:flex-row xl:items-end xl:justify-between">
@@ -2973,36 +2314,6 @@ function AiResourcesContent() {
                     )}
                   </div>
                 </section>
-                )}
-
-                {isCapabilityProviderForm ? (
-                  <details className="rounded-lg border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-950">
-                    <summary className="cursor-pointer text-sm font-semibold text-slate-900 dark:text-white">
-                      {aiText('capability_diagnostics_title', 'Technical information')}
-                    </summary>
-                    <p className="mt-2 text-xs leading-5 text-slate-500 dark:text-slate-400">
-                      {aiText('capability_diagnostics_desc', 'Read-only runtime metadata for support and migration. These values are not normal setup fields.')}
-                    </p>
-                    <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-                      {[
-                        [aiText('field_base_url', 'Base URL'), providerConnectionForm.baseUrl],
-                        [aiText('field_capabilities', 'Capabilities'), providerConnectionForm.capabilityIds],
-                        [aiText('field_profiles', 'Runtime configurations'), providerConnectionForm.runtimeProfileIds],
-                        [aiText('field_connection_id', 'Connection ID'), providerConnectionForm.connectionId],
-                        [aiText('field_provider_id', 'Provider ID'), providerConnectionForm.providerId],
-                        [aiText('field_kind', 'Kind'), providerConnectionForm.kind],
-                        [aiText('field_source_role', 'Source role'), providerConnectionForm.sourceRole],
-                      ].map(([label, value]) => (
-                        <div key={label} className="rounded-lg border border-slate-200 bg-slate-50 p-3 dark:border-slate-800 dark:bg-slate-900/40">
-                          <div className="text-xs font-semibold text-slate-500 dark:text-slate-400">{label}</div>
-                          <code className="mt-2 block break-all text-sm font-semibold text-slate-800 dark:text-slate-100">
-                            {value || '-'}
-                          </code>
-                        </div>
-                      ))}
-                    </div>
-                  </details>
-                ) : null}
 
                 {providerUsesCustomRuntimeFields ? (
                   <details className="rounded-lg border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-950">
@@ -3109,10 +2420,7 @@ function AiResourcesContent() {
           onCancelDelete={() => setConfirmingDeleteConnectionId('')}
           translate={aiText}
         />
-        </>
-          </BackofficeSectionPanel>
-        </>
-      ) : null}
+      </BackofficeSectionPanel>
 
       <Modal
         isOpen={receiptDetailsOpen && Boolean(lastReceipt)}
