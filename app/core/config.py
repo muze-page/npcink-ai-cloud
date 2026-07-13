@@ -113,7 +113,7 @@ class Settings(BaseSettings):
     openai_base_url: str = Field(default="https://api.openai.com/v1")
     openai_api_key: str | None = Field(default=None)
     openai_organization: str | None = Field(default=None)
-    openai_timeout_seconds: float = Field(default=30.0)
+    openai_timeout_seconds: float = Field(default=60.0)
     openai_sample_catalog_profile: str = Field(default="")
     openai_provider_label: str = Field(default="")
     minimax_provider_enabled: bool = Field(default=False)

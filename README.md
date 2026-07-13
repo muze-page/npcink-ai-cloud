@@ -997,6 +997,9 @@ Provider execution modes:
 - default: sample mode, no external provider calls
 - configure model provider channels in `/admin/ai-resources`;
   provider keys are stored as DB provider connections, not `.env.local` values
+- the OpenAI provider ceiling defaults to 60 seconds so an explicitly bounded
+  long-form runtime request can complete; each runtime request still supplies
+  its own timeout and shorter tasks remain constrained by the smaller value
 
 Provider integration boundary:
 
