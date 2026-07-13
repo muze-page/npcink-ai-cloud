@@ -21,9 +21,10 @@ assert.ok(primaryStart >= 0 && primaryEnd > primaryStart, 'portal navbar must de
 const primaryHrefs = Array.from(primarySource.matchAll(/href:\s*'([^']+)'/g), (match) => match[1]);
 assert.deepEqual(
   primaryHrefs,
-  ['/portal', '/portal/billing', '/portal/usage', '/portal/sites', '/portal/support', '/portal/account'],
-  'portal primary nav must stay focused on overview, package, usage, site domain, support requests, and contact/account'
+  ['/portal', '/portal/billing', '/portal/usage', '/portal/support', '/portal/account'],
+  'portal primary nav must merge overview and sites into service while keeping package, usage, tickets, and account'
 );
+assert.doesNotMatch(primarySource, /\/portal\/sites/, 'sites must not remain a separate primary navigation entry');
 
 assert.doesNotMatch(
   primarySource,
@@ -43,8 +44,8 @@ assert.equal(
 );
 assert.match(
   monitoringSource,
-  /data-portal-support-deeplink="monitoring"/,
-  'monitoring may remain only as a support-request deep link'
+  /router\.replace\(`\/portal\/sites\/\$\{encodeURIComponent\(selectedSite\.site_id\)\}#service-status`\)/,
+  'legacy monitoring links must resolve to the canonical site service-status section'
 );
 assert.match(
   auditSource,
@@ -73,15 +74,15 @@ assert.match(
 );
 
 assert.match(i18nSource, /'portal\.nav_package': 'Package'/, 'English nav copy must expose package as its own entry');
+assert.match(i18nSource, /'portal\.nav_service': 'Service'/, 'English nav copy must expose the merged service entry');
 assert.match(i18nSource, /'portal\.nav_usage': 'Usage'/, 'English nav copy must expose usage as its own entry');
 assert.match(i18nSource, /'portal\.workspace_label': 'Overview'/, 'English overview copy must name the user summary surface');
-assert.match(i18nSource, /'portal\.nav_sites': 'Sites'/, 'English nav copy must keep the site entry short');
 assert.match(i18nSource, /'portal\.nav_support_requests': 'Tickets'/, 'English nav copy must expose support tickets as their own entry');
 assert.match(i18nSource, /'portal\.nav_account': 'Account'/, 'English nav copy must expose account and sign-in settings');
 assert.match(i18nSource, /'portal\.nav_package': '套餐'/, 'Chinese nav copy must expose package as its own entry');
+assert.match(i18nSource, /'portal\.nav_service': '服务'/, 'Chinese nav copy must expose the merged service entry');
 assert.match(i18nSource, /'portal\.nav_usage': '用量'/, 'Chinese nav copy must expose usage as its own entry');
 assert.match(i18nSource, /'portal\.workspace_label': '概览'/, 'Chinese overview copy must name the user summary surface');
-assert.match(i18nSource, /'portal\.nav_sites': '站点'/, 'Chinese nav copy must keep the site entry short');
 assert.match(i18nSource, /'portal\.nav_support_requests': '工单'/, 'Chinese nav copy must expose support tickets as their own entry');
 assert.match(i18nSource, /'portal\.nav_account': '账号'/, 'Chinese nav copy must expose account and sign-in settings');
 

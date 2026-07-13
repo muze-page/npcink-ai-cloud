@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useCallback } from 'react';
+import React, { useEffect, useCallback, useId, useRef } from 'react';
 import { cn } from '@/lib/utils';
 import { Button } from './Button';
 
@@ -37,27 +37,82 @@ export function Modal({
   showCloseButton = true,
   className,
 }: ModalProps) {
-  // 处理 ESC 键关闭
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const previousActiveElementRef = useRef<HTMLElement | null>(null);
+  const titleId = useId();
+  const descriptionId = useId();
+
+  // Keep keyboard focus inside the active dialog and return it to the trigger.
   useEffect(() => {
     if (!isOpen) return;
 
-    const handleEscape = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
+    previousActiveElementRef.current = document.activeElement instanceof HTMLElement
+      ? document.activeElement
+      : null;
+
+    const focusableSelector = [
+      'a[href]',
+      'button:not([disabled])',
+      'input:not([disabled])',
+      'select:not([disabled])',
+      'textarea:not([disabled])',
+      '[tabindex]:not([tabindex="-1"])',
+    ].join(',');
+    const visibleFocusableElements = () => Array.from(
+      dialogRef.current?.querySelectorAll<HTMLElement>(focusableSelector) || []
+    ).filter((element) => element.getClientRects().length > 0 && element.getAttribute('aria-hidden') !== 'true');
+
+    const focusFrame = window.requestAnimationFrame(() => {
+      const focusableElements = visibleFocusableElements();
+      (focusableElements[0] || dialogRef.current)?.focus();
+    });
+
+    const handleDialogKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
         onClose();
+        return;
+      }
+
+      if (event.key !== 'Tab') {
+        return;
+      }
+
+      const focusableElements = visibleFocusableElements();
+      if (focusableElements.length === 0) {
+        event.preventDefault();
+        dialogRef.current?.focus();
+        return;
+      }
+
+      const firstElement = focusableElements[0];
+      const lastElement = focusableElements[focusableElements.length - 1];
+      if (event.shiftKey && document.activeElement === firstElement) {
+        event.preventDefault();
+        lastElement.focus();
+      } else if (!event.shiftKey && document.activeElement === lastElement) {
+        event.preventDefault();
+        firstElement.focus();
       }
     };
 
-    document.addEventListener('keydown', handleEscape);
-    return () => document.removeEventListener('keydown', handleEscape);
+    document.addEventListener('keydown', handleDialogKeyDown);
+    return () => {
+      window.cancelAnimationFrame(focusFrame);
+      document.removeEventListener('keydown', handleDialogKeyDown);
+      previousActiveElementRef.current?.focus();
+      previousActiveElementRef.current = null;
+    };
   }, [isOpen, onClose]);
 
-  // 阻止背景滚动
+  // Preserve the previous body scroll state while the dialog is active.
   useEffect(() => {
     if (!isOpen) return;
 
+    const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
     return () => {
-      document.body.style.overflow = 'unset';
+      document.body.style.overflow = previousOverflow;
     };
   }, [isOpen]);
 
@@ -79,10 +134,13 @@ export function Modal({
 
   return (
     <div
+      ref={dialogRef}
       className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6"
       role="dialog"
       aria-modal="true"
-      aria-labelledby={title ? 'modal-title' : undefined}
+      aria-labelledby={title ? titleId : undefined}
+      aria-describedby={description ? descriptionId : undefined}
+      tabIndex={-1}
     >
       {/* 遮罩层 */}
       <div
@@ -107,14 +165,14 @@ export function Modal({
             <div className="flex-1 min-w-0">
               {title && (
                 <h2
-                  id="modal-title"
+                  id={titleId}
                   className="text-lg font-semibold text-gray-900 dark:text-gray-100"
                 >
                   {title}
                 </h2>
               )}
               {description && (
-                <p className="mt-1 text-sm text-gray-600 dark:text-gray-400">
+                <p id={descriptionId} className="mt-1 text-sm text-gray-600 dark:text-gray-400">
                   {description}
                 </p>
               )}

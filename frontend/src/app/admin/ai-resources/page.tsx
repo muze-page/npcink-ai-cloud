@@ -1,29 +1,28 @@
 'use client';
 
 import Link from 'next/link';
-import { useSearchParams } from 'next/navigation';
+import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import React, { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  BackofficeDiagnosticNotice,
   BackofficePageStack,
   BackofficePrimaryPanel,
   BackofficeSectionPanel,
   BackofficeStackCard,
 } from '@/components/backoffice/BackofficeScaffold';
+import { AdminRouteSkeleton } from '@/components/admin/AdminRouteSkeleton';
 import { AdminMutationReceipt, type AdminMutationReceiptPayload } from '@/components/admin/AdminMutationReceipt';
 import { ProviderConnectionDialog } from '@/components/admin/ProviderConnectionDialog';
 import { ProviderReferenceLinks } from '@/components/admin/ProviderReferenceLinks';
 import {
-  CapabilitySupplierTable,
   ModelSupplierTable,
-  type CapabilityProviderCategory,
-  type CapabilityProviderCategoryFilter,
   type ConnectionStatusFilter,
   type ProviderConnectionTestResult,
   type ResourceStatus,
   type SupplierConnection as Connection,
 } from '@/components/admin/SupplierConnectionTables';
 import { SupplierSummaryCards } from '@/components/admin/SupplierSummaryCards';
-import { SupplierToolbar, type SupplierTypeFilter } from '@/components/admin/SupplierToolbar';
+import { SupplierToolbar } from '@/components/admin/SupplierToolbar';
 import { BackofficeStatusBadge } from '@/components/backoffice/BackofficeStatusBadge';
 import { LoadingFallback } from '@/components/ui/LoadingFallback';
 import { Modal } from '@/components/ui/Modal';
@@ -31,10 +30,12 @@ import { useToast } from '@/components/ui/Toast';
 import { useLocale } from '@/contexts/LocaleContext';
 import { resolveUiErrorMessage } from '@/lib/errors';
 import { generateIdempotencyKey } from '@/lib/idempotency';
+import { useDialogKeyboard } from '@/hooks/useDialogKeyboard';
 import { formatDate } from '@/lib/utils';
 
 type AIResourceView = 'connections';
 type SupplierCategory = 'ai' | 'capability';
+type CapabilityProviderCategory = 'search' | 'image' | 'vector';
 
 type Capability = {
   capability_id: string;
@@ -380,8 +381,6 @@ type ProviderConnectionForm = {
   displayName: string;
   kind: string;
   baseUrl: string;
-  note: string;
-  priority: string;
   sourceRole: string;
   capabilityIds: string;
   runtimeProfileIds: string;
@@ -397,8 +396,6 @@ const EMPTY_PROVIDER_CONNECTION_FORM: ProviderConnectionForm = {
   displayName: 'OpenAI Compatible',
   kind: 'openai_compatible',
   baseUrl: 'https://api.openai.com/v1',
-  note: '',
-  priority: '100',
   sourceRole: 'execution_source',
   capabilityIds: 'text_generation, image_generation',
   runtimeProfileIds: 'text.ai, text.free-gpt55, grok-imagine-image-quality',
@@ -763,36 +760,6 @@ const CAPABILITY_PROVIDER_TEMPLATES: CapabilityProviderTemplate[] = [
     modelIds: '',
     descriptionKey: 'image_source_help_pexels',
     descriptionFallback: 'Stock image reference source for photography and visual references.',
-  },
-  {
-    id: 'jina',
-    label: 'Jina Rerank',
-    category: 'vector',
-    kind: 'rerank_provider',
-    baseUrl: 'https://api.jina.ai',
-    websiteUrl: 'https://jina.ai/',
-    statusUrl: 'https://status.jina.ai/',
-    docsUrl: 'https://api.jina.ai/docs',
-    capabilityIds: 'site_knowledge_rerank',
-    runtimeProfileIds: 'site-knowledge.rerank',
-    modelIds: 'jina-reranker-v3',
-    descriptionKey: 'vector_help_jina_rerank',
-    descriptionFallback: 'Rerank provider for Site Knowledge search results.',
-  },
-  {
-    id: 'zilliz',
-    label: 'Zilliz',
-    category: 'vector',
-    kind: 'vector_store_provider',
-    baseUrl: '',
-    websiteUrl: 'https://zilliz.com/',
-    statusUrl: 'https://status.zilliz.com/',
-    docsUrl: 'https://docs.zilliz.com/docs',
-    capabilityIds: 'vector_store',
-    runtimeProfileIds: 'site-knowledge.vector-store',
-    modelIds: '',
-    descriptionKey: 'vector_help_zilliz',
-    descriptionFallback: 'Vector database provider for Site Knowledge storage and search.',
   },
 ];
 
@@ -1367,17 +1334,16 @@ function resolveAdminApiPayloadMessage(payload: any, fallback: string): string {
 function AiResourcesContent() {
   const { t } = useLocale();
   const toast = useToast();
+  const pathname = usePathname();
+  const router = useRouter();
   const searchParams = useSearchParams();
+  const selectedConnectionId = searchParams.get('focus') || '';
   const aiText = useCallback(
     (key: string, fallback: string, params?: Record<string, string>) => t(`admin.ai_resources.${key}`, params, fallback),
     [t]
   );
   const [data, setData] = useState<AiResources | null>(null);
   const [activeView, setActiveView] = useState<AIResourceView>('connections');
-  const [supplierTypeFilter, setSupplierTypeFilter] = useState<SupplierTypeFilter>('model');
-  const [activeCapabilityCategory, setActiveCapabilityCategory] = useState<CapabilityProviderCategory>('search');
-  const [capabilityCategoryFilter, setCapabilityCategoryFilter] = useState<CapabilityProviderCategoryFilter>('all');
-  const [capabilityAddDialogOpen, setCapabilityAddDialogOpen] = useState(false);
   const [connectionStatusFilter, setConnectionStatusFilter] = useState<ConnectionStatusFilter>('all');
   const [connectionSearch, setConnectionSearch] = useState('');
   const [loading, setLoading] = useState(true);
@@ -1414,6 +1380,9 @@ function AiResourcesContent() {
   const [receiptDetailsOpen, setReceiptDetailsOpen] = useState(false);
   const [runtimeTelemetry, setRuntimeTelemetry] = useState<RuntimeTelemetrySummary | null>(null);
   const autoSyncedReferenceProviders = useRef<Set<string>>(new Set());
+  const resourcesRequestActiveRef = useRef(false);
+  const resourcesRequestSequenceRef = useRef(0);
+  const resourcesLoadedRef = useRef(false);
   const providerFormCapabilityIds = splitList(providerConnectionForm.capabilityIds);
   const isCapabilityProviderForm = isCapabilityProviderDescriptor(providerConnectionForm.kind, providerFormCapabilityIds);
   const providerFormCapabilityCategory = capabilityProviderDescriptorCategory(
@@ -1424,11 +1393,34 @@ function AiResourcesContent() {
     (template) => template.id === providerConnectionForm.providerId && template.kind === providerConnectionForm.kind
   );
   const shouldLockCapabilityBaseUrl = isCapabilityProviderForm && Boolean(knownCapabilityProviderTemplate);
-  const visibleCapabilityTemplates = CAPABILITY_PROVIDER_TEMPLATES.filter(
-    (template) => template.category === activeCapabilityCategory
-  );
+  const updateWorkspaceParams = useCallback((updates: Record<string, string | null>) => {
+    const params = new URLSearchParams(searchParams.toString());
+    Object.entries(updates).forEach(([key, value]) => {
+      if (value) params.set(key, value);
+      else params.delete(key);
+    });
+    const query = params.toString();
+    router.replace(query ? `${pathname}?${query}` : pathname, { scroll: false });
+  }, [pathname, router, searchParams]);
+
+  const handleConnectionSearchChange = useCallback((value: string) => {
+    setConnectionSearch(value);
+    updateWorkspaceParams({ q: value.trim() || null, focus: null });
+  }, [updateWorkspaceParams]);
+
+  const handleConnectionStatusFilterChange = useCallback((value: ConnectionStatusFilter) => {
+    setConnectionStatusFilter(value);
+    updateWorkspaceParams({ status: value === 'all' ? null : value, focus: null });
+  }, [updateWorkspaceParams]);
+
+  const handleSelectConnection = useCallback((connectionId: string) => {
+    updateWorkspaceParams({ focus: connectionId });
+  }, [updateWorkspaceParams]);
   const loadResources = useCallback(async (options: { showLoading?: boolean } = {}) => {
-    if (options.showLoading !== false) {
+    if (resourcesRequestActiveRef.current) return;
+    resourcesRequestActiveRef.current = true;
+    const sequence = ++resourcesRequestSequenceRef.current;
+    if (options.showLoading !== false && !resourcesLoadedRef.current) {
       setLoading(true);
     }
     setError('');
@@ -1438,12 +1430,18 @@ function AiResourcesContent() {
       if (!response.ok) {
         throw new Error(resolveUiErrorMessage(payload, aiText('error_load', 'Failed to load provider management.')));
       }
+      if (sequence !== resourcesRequestSequenceRef.current) return;
       const normalized = normalizeAiResources(payload.data);
       setData(normalized);
+      resourcesLoadedRef.current = true;
     } catch (loadError) {
+      if (sequence !== resourcesRequestSequenceRef.current) return;
       setError(loadError instanceof Error ? loadError.message : aiText('error_load', 'Failed to load provider management.'));
     } finally {
-      setLoading(false);
+      if (sequence === resourcesRequestSequenceRef.current) {
+        resourcesRequestActiveRef.current = false;
+        setLoading(false);
+      }
     }
   }, [aiText]);
 
@@ -1537,20 +1535,13 @@ function AiResourcesContent() {
     ) {
       setActiveView('connections');
     }
-    const requestedSupplier = searchParams.get('supplier');
-    if (requestedSupplier === 'capability') {
-      setActiveView('connections');
-      setSupplierTypeFilter('capability');
+    const requestedStatus = searchParams.get('status');
+    if (requestedStatus === 'ready' || requestedStatus === 'missing_secret' || requestedStatus === 'disabled') {
+      setConnectionStatusFilter(requestedStatus);
+    } else {
+      setConnectionStatusFilter('all');
     }
-    if (requestedSupplier === 'model') {
-      setActiveView('connections');
-      setSupplierTypeFilter('model');
-    }
-    const requestedCategory = searchParams.get('category');
-    if (requestedCategory === 'search' || requestedCategory === 'image' || requestedCategory === 'vector') {
-      setActiveCapabilityCategory(requestedCategory);
-      setCapabilityCategoryFilter(requestedCategory);
-    }
+    setConnectionSearch(searchParams.get('q') || '');
   }, [searchParams]);
 
   async function saveProviderConnection() {
@@ -1578,8 +1569,6 @@ function AiResourcesContent() {
           display_name: providerConnectionForm.displayName,
           enabled: providerConnectionForm.enabled,
           base_url: providerConnectionForm.baseUrl,
-          note: providerConnectionForm.note,
-          priority: Number(providerConnectionForm.priority) || 100,
           source_role: providerConnectionForm.sourceRole,
           capability_ids: splitList(providerConnectionForm.capabilityIds),
           runtime_profile_ids: splitList(providerConnectionForm.runtimeProfileIds),
@@ -1587,8 +1576,6 @@ function AiResourcesContent() {
           metadata: {
             ui_source: 'ai_resources_channel_form',
             provider_preset: providerConnectionForm.providerPreset,
-            note: providerConnectionForm.note,
-            priority: Number(providerConnectionForm.priority) || 100,
             website_url: websiteUrl || undefined,
             status_url: statusUrl || undefined,
             docs_url: docsUrl || undefined,
@@ -1943,8 +1930,6 @@ function AiResourcesContent() {
       displayName: connection.display_name,
       kind: connection.kind,
       baseUrl: connection.base_url || '',
-      note: connection.note || '',
-      priority: String(connection.priority ?? 100),
       sourceRole: 'execution_source',
       capabilityIds: connection.capability_ids.join(', '),
       runtimeProfileIds: connection.runtime_profile_ids.join(', '),
@@ -1959,24 +1944,6 @@ function AiResourcesContent() {
   function closeProviderForm() {
     setProviderFormOpen(false);
     setMessage('');
-    setError('');
-  }
-
-  function addProviderCredentialChannel() {
-    const sourceConnectionId = providerConnectionForm.connectionId || slugifyProviderValue(providerConnectionForm.displayName || providerConnectionForm.providerId);
-    const nextConnectionId = `${sourceConnectionId}_backup`;
-    setProviderFormMode('create');
-    setConnectionDetailsOpen(true);
-    setProviderConnectionForm((current) => ({
-      ...current,
-      connectionId: nextConnectionId,
-      displayName: `${current.displayName || current.providerId} ${aiText('channel_backup_suffix', 'backup')}`,
-      credential: '',
-      note: current.note || aiText('channel_backup_note_default', 'Backup channel'),
-      priority: String(Math.min(999, (Number(current.priority) || 100) + 10)),
-      enabled: true,
-    }));
-    setMessage(aiText('message_creating_credential_channel', 'Adding a credential channel. Enter a credential, then save and test.'));
     setError('');
   }
 
@@ -2037,61 +2004,6 @@ function AiResourcesContent() {
         connectionId: current.connectionId || slugifyProviderValue(displayName || preset.providerId),
       };
     });
-  }
-
-  function openCapabilityProviderTemplate(template: CapabilityProviderTemplate) {
-    setConfirmingDeleteConnectionId('');
-    setActiveCapabilityCategory(template.category);
-    setCapabilityAddDialogOpen(false);
-    setProviderFormMode('create');
-    setConnectionDetailsOpen(true);
-    setProviderCatalogPreview(null);
-    setModelReferenceProviderId(defaultReferenceProviderId(template.id, 'custom'));
-    setModelReferenceSearch('');
-    setModelReferenceFeatureFilter('all');
-    setModelReferenceVisibilityFilter('all');
-    setModelReferenceShowDeprecated(true);
-    setCustomModelInput('');
-    setProviderConnectionForm({
-      providerPreset: 'custom',
-      connectionId: `${template.category}_${template.id}`,
-      providerId: template.id,
-      displayName: template.label,
-      kind: template.kind,
-      baseUrl: template.baseUrl,
-      note: '',
-      priority: '100',
-      sourceRole: 'execution_source',
-      capabilityIds: template.capabilityIds,
-      runtimeProfileIds: template.runtimeProfileIds,
-      modelIds: template.modelIds,
-      credential: '',
-      enabled: true,
-    });
-    setProviderFormOpen(true);
-    setMessage(
-      aiText('message_capability_provider_template_existing', '{{name}} already exists. Opening its configuration instead of creating a duplicate row.', {
-        name: template.label,
-      })
-    );
-    setError('');
-  }
-
-  function configureCapabilityConnection(connection: Connection) {
-    const category = capabilityProviderCategory(connection);
-    setActiveCapabilityCategory(category);
-    if (connection.managed_by === 'cloud_provider_connections') {
-      editProviderConnection(connection);
-      return;
-    }
-    const template = CAPABILITY_PROVIDER_TEMPLATES.find(
-      (item) => item.category === category && item.id === connection.provider_id
-    );
-    if (template) {
-      openCapabilityProviderTemplate(template);
-      return;
-    }
-    editProviderConnection(connection);
   }
 
   const providerTestStageLabel = useCallback((stage: string): string => {
@@ -2209,30 +2121,6 @@ function AiResourcesContent() {
     () => filteredConnections.filter((connection) => supplierCategory(connection) === 'ai'),
     [filteredConnections]
   );
-
-  const capabilitySupplierConnections = useMemo(
-    () => filteredConnections.filter((connection) => supplierCategory(connection) === 'capability'),
-    [filteredConnections]
-  );
-
-  const capabilityConnectionsByCategory = useMemo(() => ({
-    search: capabilitySupplierConnections.filter((connection) => capabilityProviderCategory(connection) === 'search'),
-    image: capabilitySupplierConnections.filter((connection) => capabilityProviderCategory(connection) === 'image'),
-    vector: capabilitySupplierConnections.filter((connection) => capabilityProviderCategory(connection) === 'vector'),
-  }), [capabilitySupplierConnections]);
-
-  const activeCapabilityConnections = capabilityCategoryFilter === 'all'
-    ? capabilitySupplierConnections
-    : capabilityConnectionsByCategory[capabilityCategoryFilter];
-
-  const capabilityChannelCounts = useMemo(() => {
-    const counts = new Map<string, number>();
-    activeCapabilityConnections.forEach((connection) => {
-      const key = `${connection.kind}:${connection.provider_id}`;
-      counts.set(key, (counts.get(key) || 0) + 1);
-    });
-    return counts;
-  }, [activeCapabilityConnections]);
 
   const capabilityCategoryLabel = useCallback((category: CapabilityProviderCategory): string => {
     if (category === 'search') return aiText('capability_category_search', 'Search');
@@ -2535,9 +2423,8 @@ function AiResourcesContent() {
     modelVisibilityRows.length,
     selectedProviderModelIds.length
   );
-
   if (loading) {
-    return <LoadingFallback />;
+    return <AdminRouteSkeleton />;
   }
 
   if (!data) {
@@ -2545,12 +2432,14 @@ function AiResourcesContent() {
       <BackofficePageStack>
         <BackofficePrimaryPanel
           eyebrow={aiText('eyebrow', 'Runtime plane')}
-          title={aiText('title', 'Suppliers')}
+          title={aiText('title', 'Model suppliers')}
           description={aiText('unavailable_desc', 'Cloud runtime provider resources are unavailable.')}
         >
-          <BackofficeStackCard className="border-rose-200 bg-rose-50 text-sm text-rose-800 dark:border-rose-900 dark:bg-rose-950/25 dark:text-rose-200">
-            {error || aiText('unavailable_message', 'Provider management is unavailable.')}
-          </BackofficeStackCard>
+          <BackofficeDiagnosticNotice
+            message={error || aiText('unavailable_message', 'Provider management is unavailable.')}
+            retryLabel={t('common.retry')}
+            onRetry={() => void loadResources()}
+          />
         </BackofficePrimaryPanel>
       </BackofficePageStack>
     );
@@ -2562,21 +2451,15 @@ function AiResourcesContent() {
   const modelSupplierCount = data.connections.filter(
     (connection) => supplierCategory(connection) === 'ai'
   ).length;
-  const readyCapabilitySupplierCount = data.connections.filter(
-    (connection) => supplierCategory(connection) === 'capability' && connection.status === 'ready'
-  ).length;
-  const capabilitySupplierCount = data.connections.filter(
-    (connection) => supplierCategory(connection) === 'capability'
-  ).length;
   const attentionSupplierCount = data.connections.filter(
-    (connection) => connection.status !== 'ready'
+    (connection) => supplierCategory(connection) === 'ai' && connection.status !== 'ready'
   ).length;
   return (
     <BackofficePageStack>
       <BackofficePrimaryPanel
         eyebrow={aiText('eyebrow', 'Runtime plane')}
-        title={aiText('title', 'Suppliers')}
-        description={aiText('description', 'Manage Cloud runtime provider connections, model visibility, and capability sources. Runtime diagnostics stay in the Runtime Diagnostics page.')}
+        title={aiText('title', 'Model suppliers')}
+        description={aiText('description', 'Manage Cloud runtime model-provider connections and model visibility. Search, image, and vector services use their dedicated fixed-configuration pages.')}
         descriptionDisplay="hint"
         aside={(
           <div className="flex flex-col gap-2 sm:flex-row">
@@ -2594,8 +2477,6 @@ function AiResourcesContent() {
         <SupplierSummaryCards
           readyModelSupplierCount={readyModelSupplierCount}
           modelSupplierCount={modelSupplierCount}
-          readyCapabilitySupplierCount={readyCapabilitySupplierCount}
-          capabilitySupplierCount={capabilitySupplierCount}
           attentionSupplierCount={attentionSupplierCount}
           translate={aiText}
         />
@@ -2608,44 +2489,28 @@ function AiResourcesContent() {
         <>
           <BackofficeSectionPanel>
         <SupplierToolbar
-          supplierTypeFilter={supplierTypeFilter}
-          onSupplierTypeFilterChange={setSupplierTypeFilter}
           connectionSearch={connectionSearch}
-          onConnectionSearchChange={setConnectionSearch}
+          onConnectionSearchChange={handleConnectionSearchChange}
           hasLatestOperation={Boolean(lastReceipt)}
           onOpenLatestOperation={() => setReceiptDetailsOpen(true)}
           onAddModelSupplier={openNewProviderConnection}
-          onAddCapabilitySupplier={() => setCapabilityAddDialogOpen(true)}
           translate={aiText}
         />
 
-        {supplierTypeFilter === 'model' || providerFormOpen ? (
-          <>
+        <>
         <ProviderConnectionDialog
           open={providerFormOpen}
           title={providerDialogTitle}
           titleId="provider-channel-dialog-title"
           headerAccessory={(
-            <>
-              {isCapabilityProviderForm ? (
-                <BackofficeStatusBadge
-                  label={aiText('capability_supplier_badge', '{{category}} supplier', {
-                    category: capabilityCategoryLabel(providerFormCapabilityCategory),
-                  })}
-                  status="info"
-                />
-              ) : null}
-              {providerFormMode === 'edit' ? (
-                <button
-                  type="button"
-                  className="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-semibold text-slate-600 transition hover:border-slate-300 hover:bg-slate-50 hover:text-slate-900 disabled:cursor-not-allowed disabled:opacity-60 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-300 dark:hover:border-slate-700 dark:hover:text-white"
-                  disabled={savingConnection}
-                  onClick={addProviderCredentialChannel}
-                >
-                  {aiText('action_add_credential_channel', 'Add credential')}
-                </button>
-              ) : null}
-            </>
+            isCapabilityProviderForm ? (
+              <BackofficeStatusBadge
+                label={aiText('capability_supplier_badge', '{{category}} supplier', {
+                  category: capabilityCategoryLabel(providerFormCapabilityCategory),
+                })}
+                status="info"
+              />
+            ) : null
           )}
           message={message}
           error={error}
@@ -2723,6 +2588,7 @@ function AiResourcesContent() {
                             });
                           }}
                           placeholder="GPT-5.5 via NewAPI"
+                          readOnly={isCapabilityProviderForm}
                           required
                         />
                       </label>
@@ -2736,34 +2602,7 @@ function AiResourcesContent() {
                           placeholder={aiText('placeholder_keep_current_credential', 'leave blank to keep current')}
                         />
                       </label>
-                      {isCapabilityProviderForm ? (
-                        <label className="grid gap-2 text-sm font-medium text-slate-700 dark:text-slate-200">
-                          {aiText('field_channel_priority', 'Priority')}
-                          <input
-                            className="h-11 rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-white"
-                            type="number"
-                            min={0}
-                            max={999}
-                            value={providerConnectionForm.priority}
-                            onChange={(event) => updateProviderConnectionForm({ priority: event.target.value })}
-                          />
-                          <span className="text-xs font-normal leading-5 text-slate-500 dark:text-slate-400">
-                            {aiText('field_channel_priority_help', 'Lower numbers are used first. Default is 100.')}
-                          </span>
-                        </label>
-                      ) : null}
                     </div>
-
-                    <label className="grid gap-2 text-sm font-medium text-slate-700 dark:text-slate-200">
-                      {aiText('field_channel_note', 'Channel note')}
-                      <textarea
-                        className="min-h-20 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-white"
-                        value={providerConnectionForm.note}
-                        onChange={(event) => updateProviderConnectionForm({ note: event.target.value })}
-                        placeholder={aiText('placeholder_channel_note', 'Primary account, backup key, customer account, quota note')}
-                        maxLength={512}
-                      />
-                    </label>
 
                     <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_auto] md:items-end">
                       <label className="grid gap-2 text-sm font-medium text-slate-700 dark:text-slate-200">
@@ -2791,7 +2630,11 @@ function AiResourcesContent() {
                           checked={providerConnectionForm.enabled}
                           onChange={(event) => updateProviderConnectionForm({ enabled: event.target.checked })}
                         />
-                        {aiText('field_enabled_runtime', 'Enabled for runtime use')}
+                        {providerFormCapabilityCategory === 'search'
+                          ? aiText('field_use_primary_search', 'Use as primary search service')
+                          : providerFormCapabilityCategory === 'image'
+                            ? aiText('field_include_parallel_image_source', 'Include in parallel image search')
+                            : aiText('field_enabled_runtime', 'Enabled for runtime use')}
                       </label>
                     </div>
 
@@ -3248,8 +3091,11 @@ function AiResourcesContent() {
         <ModelSupplierTable
           connections={aiSupplierConnections}
           statusFilter={connectionStatusFilter}
-          onStatusFilterChange={setConnectionStatusFilter}
+          onStatusFilterChange={handleConnectionStatusFilterChange}
+          selectedConnectionId={selectedConnectionId}
+          onSelectConnection={handleSelectConnection}
           testResults={connectionTestResults}
+          testingConnectionId={testingConnectionId}
           deletingConnectionId={deletingConnectionId}
           confirmingDeleteConnectionId={confirmingDeleteConnectionId}
           providerKindLabel={providerKindLabel}
@@ -3257,128 +3103,13 @@ function AiResourcesContent() {
           providerTestMessage={providerTestMessage}
           referenceLinksForConnection={connectionExternalLinkItems}
           onConfigure={editProviderConnection}
+          onTest={(connectionId) => void runProviderConnectionTest(connectionId)}
           onDelete={(connection) => void deleteProviderConnection(connection)}
           onRequestDelete={setConfirmingDeleteConnectionId}
           onCancelDelete={() => setConfirmingDeleteConnectionId('')}
           translate={aiText}
         />
-          </>
-        ) : null}
-
-        {supplierTypeFilter === 'capability' ? (
-          <div className="mt-4 space-y-4">
-            <CapabilitySupplierTable
-              connections={activeCapabilityConnections}
-              connectionsByCategory={capabilityConnectionsByCategory}
-              categoryFilter={capabilityCategoryFilter}
-              onCategoryFilterChange={setCapabilityCategoryFilter}
-              statusFilter={connectionStatusFilter}
-              onStatusFilterChange={setConnectionStatusFilter}
-              testResults={connectionTestResults}
-              channelCounts={capabilityChannelCounts}
-              testingConnectionId={testingConnectionId}
-              deletingConnectionId={deletingConnectionId}
-              confirmingDeleteConnectionId={confirmingDeleteConnectionId}
-              categoryForConnection={capabilityProviderCategory}
-              categoryLabel={capabilityCategoryLabel}
-              purposeLabel={capabilityProviderPurposeLabel}
-              providerTestStageLabel={providerTestStageLabel}
-              providerTestMessage={providerTestMessage}
-              onTest={(connectionId) => void runProviderConnectionTest(connectionId)}
-              onConfigure={configureCapabilityConnection}
-              onDelete={(connection) => void deleteProviderConnection(connection)}
-              onRequestDelete={setConfirmingDeleteConnectionId}
-              onCancelDelete={() => setConfirmingDeleteConnectionId('')}
-              translate={aiText}
-            />
-            {capabilityAddDialogOpen ? (
-              <div
-                className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-slate-950/45 px-4 py-6 backdrop-blur-sm sm:py-10"
-                role="dialog"
-                aria-modal="true"
-                aria-labelledby="capability-provider-dialog-title"
-              >
-                <div className="max-h-[calc(100vh-4rem)] w-full max-w-4xl overflow-y-auto rounded-2xl border border-slate-200 bg-white p-5 shadow-2xl dark:border-slate-800 dark:bg-slate-950">
-                  <div className="flex flex-col gap-3 border-b border-slate-200 pb-4 dark:border-slate-800 sm:flex-row sm:items-start sm:justify-between">
-                    <div>
-                      <div className="flex flex-wrap items-center gap-2">
-                        <h3 id="capability-provider-dialog-title" className="text-base font-semibold text-slate-950 dark:text-white">
-                          {aiText('capability_add_dialog_title', 'Choose built-in capability supplier')}
-                        </h3>
-                        <BackofficeStatusBadge label={aiText('badge_builtin_template', 'Built-in template')} status="info" />
-                      </div>
-                      <p className="mt-1 text-sm leading-6 text-slate-600 dark:text-slate-300">
-                        {aiText('capability_add_dialog_desc', 'Existing suppliers are not duplicated. Choosing a template opens its current configuration.')}
-                      </p>
-                    </div>
-                    <button
-                      type="button"
-                      className="btn btn-secondary justify-center"
-                      onClick={() => setCapabilityAddDialogOpen(false)}
-                    >
-                      {aiText('action_close_dialog', 'Close')}
-                    </button>
-                  </div>
-                  <div
-                    className="mt-4 flex flex-wrap gap-2"
-                    role="tablist"
-                    aria-label={aiText('capability_add_category_tabs', 'Capability supplier categories')}
-                  >
-                    {(['search', 'image', 'vector'] as Array<CapabilityProviderTemplate['category']>).map((category) => (
-                      <button
-                        key={category}
-                        type="button"
-                        role="tab"
-                        aria-selected={activeCapabilityCategory === category}
-                        className={`rounded-full border px-4 py-2 text-sm font-semibold transition ${
-                          activeCapabilityCategory === category
-                            ? 'border-slate-950 bg-slate-950 text-white dark:border-white dark:bg-white dark:text-slate-950'
-                            : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300 hover:bg-slate-50 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-300 dark:hover:border-slate-700'
-                        }`}
-                        onClick={() => setActiveCapabilityCategory(category)}
-                      >
-                        {capabilityCategoryLabel(category)} · {CAPABILITY_PROVIDER_TEMPLATES.filter((template) => template.category === category).length}
-                      </button>
-                    ))}
-                  </div>
-                  <div className="mt-4 rounded-xl border border-slate-200 p-4 dark:border-slate-800">
-                    <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                      <h4 className="text-sm font-semibold text-slate-950 dark:text-white">
-                        {capabilityCategoryLabel(activeCapabilityCategory)}
-                      </h4>
-                      <BackofficeStatusBadge
-                        label={aiText('capability_add_active_category_count', '{{count}} templates', {
-                          count: String(visibleCapabilityTemplates.length),
-                        })}
-                        status="info"
-                      />
-                    </div>
-                    <div className="mt-3 grid gap-2 md:grid-cols-2">
-                      {visibleCapabilityTemplates.map((template) => (
-                        <button
-                          key={template.id}
-                          type="button"
-                          className="rounded-lg border border-slate-200 p-3 text-left transition hover:border-slate-300 hover:bg-slate-50 dark:border-slate-800 dark:hover:border-slate-700 dark:hover:bg-slate-900/45"
-                          onClick={() => openCapabilityProviderTemplate(template)}
-                        >
-                          <div className="font-semibold text-slate-950 dark:text-white">{template.label}</div>
-                          <div className="mt-1 text-sm leading-5 text-slate-600 dark:text-slate-300">
-                            {aiText(template.descriptionKey, template.descriptionFallback)}
-                          </div>
-                        </button>
-                      ))}
-                      {visibleCapabilityTemplates.length === 0 ? (
-                        <div className="rounded-lg border border-dashed border-slate-200 p-4 text-sm text-slate-500 dark:border-slate-800 dark:text-slate-400">
-                          {aiText('capability_add_empty_category', 'No built-in templates in this category.')}
-                        </div>
-                      ) : null}
-                    </div>
-                  </div>
-                </div>
-              </div>
-            ) : null}
-          </div>
-        ) : null}
+        </>
           </BackofficeSectionPanel>
         </>
       ) : null}

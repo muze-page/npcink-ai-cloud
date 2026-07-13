@@ -455,11 +455,8 @@ def test_runtime_settings_project_capability_provider_connections(
 
     projection = apply_provider_connection_runtime_settings(settings)
 
-    assert projection.applied_count == 7
+    assert projection.applied_count == 5
     assert settings.web_search_provider == "auto"
-    assert settings.web_search_tavily_base_url == "https://api.tavily.example"
-    assert settings.web_search_tavily_api_key == "tavily-secret"
-    assert settings.web_search_tavily_api_key_labels == "primary"
     assert settings.web_search_zhihu_base_url == "https://developer.zhihu.example"
     assert settings.web_search_zhihu_access_secret == "zhihu-secret"
     assert settings.web_search_zhihu_hot_list_cache_ttl_seconds == 120
@@ -477,6 +474,13 @@ def test_runtime_settings_project_capability_provider_connections(
     assert settings.site_knowledge_zilliz_token == "zilliz-token"
 
     serialized = service.list_connections()
+    serialized_connections = {
+        item["connection_id"]: item for item in serialized["connections"]
+    }
+    assert serialized_connections["search_tavily"]["enabled"] is False
+    assert serialized_connections["search_zhihu"]["enabled"] is True
+    assert serialized_connections["embedding_siliconflow"]["enabled"] is False
+    assert serialized_connections["embedding_tei"]["enabled"] is True
     serialized_text = str(serialized)
     assert "tavily-secret" not in serialized_text
     assert "zhihu-secret" not in serialized_text
@@ -488,7 +492,83 @@ def test_runtime_settings_project_capability_provider_connections(
     dispose_engine(database_url)
 
 
-def test_provider_connection_priority_selects_primary_capability_channel(
+def test_runtime_settings_use_dedicated_allowlisted_site_knowledge_model(
+    tmp_path: Path,
+) -> None:
+    database_url = _sqlite_url(tmp_path)
+    init_schema(database_url)
+    settings = _settings(database_url)
+    settings.site_knowledge_embedding_provider = "deterministic"
+    service = ProviderConnectionAdminService(database_url, settings)
+    service.save_connection(
+        {
+            "connection_id": "openai_embedding",
+            "provider_id": "openai",
+            "provider_type": "openai_compatible",
+            "kind": "openai_compatible",
+            "display_name": "OpenAI-compatible embedding",
+            "enabled": True,
+            "base_url": "https://embedding.example/v1",
+            "capability_ids": ["embedding"],
+            "runtime_profile_ids": ["embed.default"],
+            "config": {
+                "model_id": "BAAI/bge-large-en-v1.5",
+                "model_ids": ["BAAI/bge-large-en-v1.5", "BAAI/bge-m3"],
+                "site_knowledge_model_id": "BAAI/bge-m3",
+                "dimensions": 1024,
+            },
+            "credential": "embedding-secret",
+        }
+    )
+
+    projection = apply_provider_connection_runtime_settings(settings)
+
+    assert projection.embedding_count == 1
+    assert settings.site_knowledge_embedding_provider == "openai"
+    assert settings.site_knowledge_embedding_model == "BAAI/bge-m3"
+    assert settings.site_knowledge_embedding_dimensions == 1024
+
+    dispose_engine(database_url)
+
+
+def test_runtime_settings_reject_undeclared_site_knowledge_model(
+    tmp_path: Path,
+) -> None:
+    database_url = _sqlite_url(tmp_path)
+    init_schema(database_url)
+    settings = _settings(database_url)
+    settings.site_knowledge_embedding_provider = "deterministic"
+    service = ProviderConnectionAdminService(database_url, settings)
+    service.save_connection(
+        {
+            "connection_id": "openai_embedding",
+            "provider_id": "openai",
+            "provider_type": "openai_compatible",
+            "kind": "openai_compatible",
+            "display_name": "OpenAI-compatible embedding",
+            "enabled": True,
+            "base_url": "https://embedding.example/v1",
+            "capability_ids": ["embedding"],
+            "runtime_profile_ids": ["embed.default"],
+            "config": {
+                "model_id": "BAAI/bge-large-en-v1.5",
+                "model_ids": ["BAAI/bge-large-en-v1.5"],
+                "site_knowledge_model_id": "BAAI/bge-m3",
+                "dimensions": 1024,
+            },
+            "credential": "embedding-secret",
+        }
+    )
+
+    projection = apply_provider_connection_runtime_settings(settings)
+
+    assert projection.embedding_count == 0
+    assert settings.site_knowledge_embedding_provider == "deterministic"
+
+    dispose_engine(database_url)
+
+
+def test_provider_connection_runtime_selection_uses_fixed_slots_without_priority(
     tmp_path: Path,
 ) -> None:
     database_url = _sqlite_url(tmp_path)
@@ -498,54 +578,166 @@ def test_provider_connection_priority_selects_primary_capability_channel(
 
     service.save_connection(
         {
-            "connection_id": "image_pexels_backup",
-            "provider_id": "pexels",
-            "provider_type": "image_source_provider",
-            "kind": "image_source_provider",
-            "display_name": "Pexels backup",
+            "connection_id": "search_tavily",
+            "provider_id": "tavily",
+            "provider_type": "web_search_provider",
+            "kind": "web_search_provider",
+            "display_name": "Tavily",
             "enabled": True,
-            "base_url": "https://api.pexels.com/v1",
-            "capability_ids": ["image_source"],
-            "runtime_profile_ids": ["image-source.managed"],
-            "credential": "pexels-backup-key",
-            "note": "Backup key",
-            "priority": 200,
+            "base_url": "https://api.tavily.com",
+            "capability_ids": ["web_search"],
+            "runtime_profile_ids": ["web-search.managed"],
+            "credential": "tavily-key",
         }
     )
-    service.save_connection(
-        {
-            "connection_id": "image_pexels_primary",
-            "provider_id": "pexels",
-            "provider_type": "image_source_provider",
-            "kind": "image_source_provider",
-            "display_name": "Pexels primary",
-            "enabled": True,
-            "base_url": "https://api.pexels.com/v1",
-            "capability_ids": ["image_source"],
-            "runtime_profile_ids": ["image-source.managed"],
-            "credential": "pexels-primary-key",
-            "note": "Primary key",
-            "priority": 10,
-        }
-    )
+    bocha_payload = {
+        "connection_id": "search_bocha",
+        "provider_id": "bocha",
+        "provider_type": "web_search_provider",
+        "kind": "web_search_provider",
+        "display_name": "Bocha",
+        "enabled": True,
+        "base_url": "https://api.bochaai.com/v1",
+        "capability_ids": ["web_search"],
+        "runtime_profile_ids": ["web-search.managed"],
+    }
+    service.save_connection(bocha_payload)
 
-    connections = [
-        item
-        for item in service.list_connections()["connections"]
-        if item["provider_id"] == "pexels"
-    ]
-    assert [item["connection_id"] for item in connections] == [
-        "image_pexels_primary",
-        "image_pexels_backup",
-    ]
-    assert connections[0]["note"] == "Primary key"
-    assert connections[0]["priority"] == 10
-    assert connections[1]["priority"] == 200
+    pending_connections = {
+        item["connection_id"]: item for item in service.list_connections()["connections"]
+    }
+    assert pending_connections["search_tavily"]["enabled"] is True
+    assert pending_connections["search_bocha"]["status"] == "missing_secret"
+
+    service.save_connection({**bocha_payload, "credential": "bocha-key"})
+
+    connections = {
+        item["connection_id"]: item for item in service.list_connections()["connections"]
+    }
+    assert connections["search_tavily"]["enabled"] is False
+    assert connections["search_bocha"]["enabled"] is True
+    assert "note" not in connections["search_bocha"]
+    assert "priority" not in connections["search_bocha"]
 
     projection = apply_provider_connection_runtime_settings(settings)
 
-    assert projection.image_source_count == 1
-    assert settings.image_source_pexels_api_key == "pexels-primary-key"
+    assert projection.web_search_count == 1
+    assert settings.web_search_bocha_api_key == "bocha-key"
+
+    dispose_engine(database_url)
+
+
+def test_image_source_connections_remain_parallel_without_priority(
+    tmp_path: Path,
+) -> None:
+    database_url = _sqlite_url(tmp_path)
+    init_schema(database_url)
+    settings = _settings(database_url)
+    settings.image_source_provider = "disabled"
+    service = ProviderConnectionAdminService(database_url, settings)
+
+    for provider_id, base_url, credential in (
+        ("unsplash", "https://api.unsplash.com", "unsplash-key"),
+        ("pexels", "https://api.pexels.com/v1", "pexels-key"),
+    ):
+        service.save_connection(
+            {
+                "connection_id": f"image_{provider_id}",
+                "provider_id": provider_id,
+                "provider_type": "image_source_provider",
+                "kind": "image_source_provider",
+                "display_name": provider_id.title(),
+                "enabled": True,
+                "base_url": base_url,
+                "capability_ids": ["image_source"],
+                "runtime_profile_ids": ["image-source.managed"],
+                "credential": credential,
+            }
+        )
+
+    connections = {
+        item["connection_id"]: item for item in service.list_connections()["connections"]
+    }
+    assert connections["image_unsplash"]["enabled"] is True
+    assert connections["image_pexels"]["enabled"] is True
+
+    projection = apply_provider_connection_runtime_settings(settings)
+
+    assert projection.image_source_count == 2
+    assert settings.image_source_provider == "auto"
+    assert settings.image_source_unsplash_access_key == "unsplash-key"
+    assert settings.image_source_pexels_api_key == "pexels-key"
+
+    dispose_engine(database_url)
+
+
+def test_disabling_vector_connections_restores_builtin_runtime_defaults(
+    tmp_path: Path,
+) -> None:
+    database_url = _sqlite_url(tmp_path)
+    init_schema(database_url)
+    settings = _settings(database_url)
+    service = ProviderConnectionAdminService(database_url, settings)
+
+    vector_payload = {
+        "connection_id": "vector_zilliz",
+        "provider_id": "zilliz",
+        "provider_type": "vector_store_provider",
+        "kind": "vector_store_provider",
+        "display_name": "Zilliz",
+        "enabled": True,
+        "base_url": "https://zilliz.example",
+        "capability_ids": ["vector_store"],
+        "runtime_profile_ids": ["site-knowledge.vector-store"],
+        "config": {"database": "npcink", "collection": "site_chunks"},
+        "credential": "zilliz-token",
+    }
+    rerank_payload = {
+        "connection_id": "rerank_jina",
+        "provider_id": "jina",
+        "provider_type": "rerank_provider",
+        "kind": "rerank_provider",
+        "display_name": "Jina Rerank",
+        "enabled": True,
+        "base_url": "https://api.jina.ai",
+        "capability_ids": ["site_knowledge_rerank"],
+        "runtime_profile_ids": ["site-knowledge.rerank"],
+        "config": {"model_id": "jina-reranker-v3"},
+        "credential": "jina-token",
+    }
+    service.save_connection(vector_payload)
+    service.save_connection(rerank_payload)
+
+    apply_provider_connection_runtime_settings(settings)
+    assert settings.site_knowledge_vector_backend == "zilliz_cloud"
+    assert settings.site_knowledge_rerank_provider == "jina"
+
+    service.save_connection({**vector_payload, "enabled": False}, connection_id="vector_zilliz")
+    service.save_connection({**rerank_payload, "enabled": False}, connection_id="rerank_jina")
+    apply_provider_connection_runtime_settings(settings)
+
+    assert settings.site_knowledge_vector_backend == "postgres_json"
+    assert settings.site_knowledge_rerank_provider == "disabled"
+
+    dispose_engine(database_url)
+
+
+def test_empty_provider_connection_registry_preserves_explicit_runtime_settings(
+    tmp_path: Path,
+) -> None:
+    database_url = _sqlite_url(tmp_path)
+    init_schema(database_url)
+    settings = _settings(database_url)
+    settings.image_source_provider = "unsplash"
+    settings.site_knowledge_embedding_provider = "tei"
+    settings.site_knowledge_embedding_model = "tei/BAAI/bge-m3"
+
+    projection = apply_provider_connection_runtime_settings(settings)
+
+    assert projection.applied_count == 0
+    assert settings.image_source_provider == "unsplash"
+    assert settings.site_knowledge_embedding_provider == "tei"
+    assert settings.site_knowledge_embedding_model == "tei/BAAI/bge-m3"
 
     dispose_engine(database_url)
 

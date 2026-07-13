@@ -33,6 +33,7 @@ import { ADMIN_CURRENCY } from '@/lib/currency';
 import { readResponsePayload } from '@/lib/safe-response';
 import { formatCurrency, formatDate, formatNumber as formatInteger } from '@/lib/utils';
 import { resolveUiErrorMessage } from '@/lib/errors';
+import { useDialogKeyboard } from '@/hooks/useDialogKeyboard';
 
 type PlanRecord = {
   plan_id: string;
@@ -305,6 +306,13 @@ function PlanDetailContent() {
   const [isEditorOpen, setIsEditorOpen] = useState(false);
   const [advancedInfoTab, setAdvancedInfoTab] = useState<'diagnostics' | 'history'>('diagnostics');
   const [form, setForm] = useState<PlanVersionFormState>(() => buildInitialForm(null));
+  const editorDialogRef = useDialogKeyboard<HTMLElement>({
+    open: isEditorOpen,
+    onClose: () => {
+      if (!isSaving) setIsEditorOpen(false);
+    },
+    closeDisabled: isSaving,
+  });
 
   const loadDetail = useCallback(async (options: { showLoading?: boolean } = {}) => {
     const showLoading = options.showLoading ?? true;
@@ -836,10 +844,12 @@ function PlanDetailContent() {
             aria-label={t('common.close')}
           />
           <aside
+            ref={editorDialogRef}
             className="absolute right-0 top-0 flex h-full w-full max-w-3xl flex-col border-l border-slate-200 bg-white shadow-2xl dark:border-slate-800 dark:bg-slate-950"
             role="dialog"
             aria-modal="true"
             aria-labelledby="package-editor-title"
+            tabIndex={-1}
           >
             <div className="flex items-start justify-between gap-4 border-b border-slate-200 px-4 py-4 dark:border-slate-800 sm:px-6">
               <div className="min-w-0">

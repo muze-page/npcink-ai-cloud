@@ -3,11 +3,8 @@
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import React, { Suspense, useEffect, useState } from 'react';
-import {
-  BackofficePageStack,
-  BackofficeSectionPanel,
-  BackofficeStackCard,
-} from '@/components/backoffice/BackofficeScaffold';
+import { PortalAuthShell } from '@/components/portal/PortalAuthShell';
+import { PortalCard } from '@/components/portal/PortalScaffold';
 import { LoadingFallback } from '@/components/ui/LoadingFallback';
 import { useLocale } from '@/contexts/LocaleContext';
 import { useSession } from '@/hooks/useSession';
@@ -187,30 +184,48 @@ function RegisterFormContent() {
   };
 
   return (
-    <div className="mx-auto flex min-h-[72vh] w-full max-w-5xl items-center px-4 py-10">
-      <BackofficePageStack>
-        <BackofficeSectionPanel className="w-full overflow-hidden p-0" variant="portal">
-          <div className="grid gap-0 lg:grid-cols-[minmax(0,1.05fr)_minmax(18rem,0.75fr)]">
-            <div className="space-y-6 p-5 md:p-7">
-              <div>
-                <p className="text-xs font-semibold uppercase tracking-[0.22em] text-blue-700 dark:text-blue-300">
-                  {t('portal.register.chip', undefined, 'Free signup')}
-                </p>
-                <h1 className="mt-3 text-2xl font-semibold tracking-tight text-gray-950 dark:text-white md:text-[2rem]">
-                  {t('portal.register.title', undefined, 'Create your Portal account')}
-                </h1>
-                <p className="mt-3 max-w-xl text-sm leading-6 text-gray-600 dark:text-gray-300">
-                  {t(
-                    form.step === 'request' ? 'portal.register.request_desc' : 'portal.register.verify_desc',
-                    undefined,
-                    form.step === 'request'
-                      ? 'Enter your email address to create a Free account.'
-                      : 'Enter the code from your email to finish registration.'
-                  )}
-                </p>
-              </div>
-
-              <form
+    <PortalAuthShell
+      eyebrow={t('portal.register.chip', undefined, 'Free signup')}
+      title={t('portal.register.title', undefined, 'Create your Portal account')}
+      description={t(
+        form.step === 'request' ? 'portal.register.request_desc' : 'portal.register.verify_desc',
+        undefined,
+        form.step === 'request'
+          ? 'Enter your email address to create a Free account.'
+          : 'Enter the code from your email to finish registration.'
+      )}
+      aside={(
+        <>
+          <PortalCard className="bg-white/70 dark:bg-slate-950/35">
+            <p className="text-[0.68rem] font-bold uppercase tracking-[0.24em] text-blue-600 dark:text-blue-300">
+              {t('portal.register.free_label', undefined, 'Free')}
+            </p>
+            <h2 className="mt-3 text-lg font-semibold text-slate-950 dark:text-white">
+              {t('portal.register.free_title', undefined, 'Start with one WordPress site')}
+            </h2>
+            <p className="mt-2 text-sm leading-6 text-slate-600 dark:text-slate-300">
+              {t(
+                'portal.register.desc',
+                undefined,
+                'Use email verification to open a Free account for one WordPress site. QQ quick login can be bound after you sign in.'
+              )}
+            </p>
+          </PortalCard>
+          <PortalCard className="mt-4 bg-white/70 dark:bg-slate-950/35">
+            <p className="text-sm font-semibold text-slate-950 dark:text-white">
+              {t('portal.register.already_title', undefined, 'Already have an account?')}
+            </p>
+            <p className="mt-2 text-sm leading-6 text-slate-600 dark:text-slate-300">
+              {t('portal.register.already_desc', undefined, 'Use your email verification code to log in.')}
+            </p>
+            <Link href="/portal/login" className="btn btn-secondary mt-4 w-full justify-center">
+              {t('nav.sign_in')}
+            </Link>
+          </PortalCard>
+        </>
+      )}
+    >
+      <form
                 onSubmit={form.step === 'request' ? handleRequestCode : handleVerifyCode}
                 className="space-y-5"
               >
@@ -303,42 +318,8 @@ function RegisterFormContent() {
                     </>
                   ) : null}
                 </div>
-              </form>
-            </div>
-
-            <aside className="border-t border-slate-200/80 bg-slate-50/70 p-5 dark:border-slate-800 dark:bg-slate-950/35 md:p-7 lg:border-l lg:border-t-0">
-              <BackofficeStackCard className="bg-white/70 dark:bg-slate-950/35" variant="portal">
-                <p className="text-[0.68rem] font-bold uppercase tracking-[0.24em] text-blue-600 dark:text-blue-300">
-                  {t('portal.register.free_label', undefined, 'Free')}
-                </p>
-                <h2 className="mt-3 text-lg font-semibold text-slate-950 dark:text-white">
-                  {t('portal.register.free_title', undefined, 'Start with one WordPress site')}
-                </h2>
-                <p className="mt-2 text-sm leading-6 text-slate-600 dark:text-slate-300">
-                  {t(
-                    'portal.register.desc',
-                    undefined,
-                    'Use email verification to open a Free account for one WordPress site. QQ quick login can be bound after you sign in.'
-                  )}
-                </p>
-              </BackofficeStackCard>
-
-              <BackofficeStackCard className="mt-4 bg-white/70 dark:bg-slate-950/35" variant="portal">
-                <p className="text-sm font-semibold text-slate-950 dark:text-white">
-                  {t('portal.register.already_title', undefined, 'Already have an account?')}
-                </p>
-                <p className="mt-2 text-sm leading-6 text-slate-600 dark:text-slate-300">
-                  {t('portal.register.already_desc', undefined, 'Use your email verification code to log in.')}
-                </p>
-                <Link href="/portal/login" className="btn btn-secondary mt-4 w-full justify-center">
-                  {t('nav.sign_in')}
-                </Link>
-              </BackofficeStackCard>
-            </aside>
-          </div>
-        </BackofficeSectionPanel>
-      </BackofficePageStack>
-    </div>
+      </form>
+    </PortalAuthShell>
   );
 }
 

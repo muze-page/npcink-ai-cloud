@@ -1,7 +1,7 @@
 'use client';
 
 import React from 'react';
-import { BackofficeMetricStrip } from '@/components/backoffice/BackofficeScaffold';
+import { PortalMetricStrip } from '@/components/portal/PortalScaffold';
 import { useLocale } from '@/contexts/LocaleContext';
 import {
   getPortalSiteDisplayName,
@@ -111,7 +111,7 @@ export function PortalWorkspaceHeader({
         {description ? <p className="mt-2 max-w-2xl text-sm leading-6 text-gray-600 dark:text-gray-300">{description}</p> : null}
       </div>
       {metrics.length ? (
-        <BackofficeMetricStrip items={metrics} columnsClassName={metricsColumnsClassName} variant="portal" />
+        <PortalMetricStrip items={metrics} columnsClassName={metricsColumnsClassName} variant="portal" />
       ) : null}
       {resolvedActions ? <div className="flex flex-wrap gap-2 xl:justify-end">{resolvedActions}</div> : null}
     </div>

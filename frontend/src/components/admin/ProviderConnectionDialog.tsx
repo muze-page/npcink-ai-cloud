@@ -1,6 +1,6 @@
 'use client';
 
-import type { FormEvent, ReactNode } from 'react';
+import { useEffect, useRef, type FormEvent, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 
 type ProviderConnectionDialogProps = {
@@ -38,6 +38,59 @@ export function ProviderConnectionDialog({
   onSubmit,
   children,
 }: ProviderConnectionDialogProps) {
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const closeButtonRef = useRef<HTMLButtonElement>(null);
+  const onCloseRef = useRef(onClose);
+  const savingRef = useRef(saving);
+
+  useEffect(() => {
+    onCloseRef.current = onClose;
+  }, [onClose]);
+
+  useEffect(() => {
+    savingRef.current = saving;
+  }, [saving]);
+
+  useEffect(() => {
+    if (!open) return;
+    const previouslyFocused = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    const focusFrame = window.requestAnimationFrame(() => closeButtonRef.current?.focus());
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' && !savingRef.current) {
+        event.preventDefault();
+        onCloseRef.current();
+        return;
+      }
+      if (event.key !== 'Tab' || !dialogRef.current) return;
+      const focusable = Array.from(
+        dialogRef.current.querySelectorAll<HTMLElement>(
+          'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), summary, a[href]'
+        )
+      ).filter((element) => element.getClientRects().length > 0);
+      if (!focusable.length) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      window.cancelAnimationFrame(focusFrame);
+      document.removeEventListener('keydown', handleKeyDown);
+      document.body.style.overflow = previousOverflow;
+      previouslyFocused?.focus();
+    };
+  }, [open]);
+
   if (!open) return null;
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
@@ -51,8 +104,12 @@ export function ProviderConnectionDialog({
       role="dialog"
       aria-modal="true"
       aria-labelledby={titleId}
+      aria-describedby={`${titleId}-workflow-notice`}
     >
-      <div className="flex max-h-[calc(100vh-3rem)] w-full max-w-5xl flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl dark:border-slate-800 dark:bg-slate-950">
+      <div
+        ref={dialogRef}
+        className="flex max-h-[calc(100vh-3rem)] w-full max-w-5xl flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl dark:border-slate-800 dark:bg-slate-950"
+      >
         <div className="flex items-center justify-between gap-3 border-b border-slate-200 px-5 py-3 dark:border-slate-800">
           <div className="flex min-w-0 flex-wrap items-center gap-2">
             <h3 id={titleId} className="text-base font-semibold text-slate-950 dark:text-white">
@@ -61,6 +118,7 @@ export function ProviderConnectionDialog({
             {headerAccessory}
           </div>
           <button
+            ref={closeButtonRef}
             type="button"
             className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-slate-200 bg-white text-sm font-semibold text-slate-500 transition hover:border-slate-300 hover:bg-slate-50 hover:text-slate-900 disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-400 dark:hover:border-slate-700 dark:hover:text-white"
             disabled={saving}
@@ -98,7 +156,7 @@ export function ProviderConnectionDialog({
             {children}
           </div>
           <div className="flex flex-col gap-3 border-t border-slate-200 bg-white px-5 py-3 text-sm text-slate-600 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-300 sm:flex-row sm:items-center sm:justify-between">
-            <span>{footerNotice}</span>
+            <span id={`${titleId}-workflow-notice`}>{footerNotice}</span>
             <div className="flex flex-wrap gap-2">
               <button type="button" className="btn btn-secondary" disabled={saving} onClick={onClose}>
                 {cancelLabel}

@@ -5,6 +5,11 @@ import { resolve } from 'node:path';
 const root = process.cwd();
 const packageDisplayPath = resolve(root, 'src/lib/customer-package-display.ts');
 const billingPagePath = resolve(root, 'src/app/portal/billing/page.tsx');
+const creditPackDialogPath = resolve(root, 'src/components/portal/PortalCreditPackDialog.tsx');
+const packagePanelPath = resolve(root, 'src/components/portal/PortalPackageChangePanel.tsx');
+const paymentOrderHistoryPath = resolve(root, 'src/components/portal/PortalPaymentOrderHistory.tsx');
+const paymentReturnNoticePath = resolve(root, 'src/components/portal/PortalPaymentReturnNotice.tsx');
+const paymentOrdersHookPath = resolve(root, 'src/hooks/usePortalPaymentOrders.ts');
 const portalClientPath = resolve(root, 'src/lib/portal-client.ts');
 const siteRecordPath = resolve(root, 'src/app/portal/sites/[siteId]/page.tsx');
 
@@ -31,13 +36,18 @@ assert.match(
 );
 
 const billingPageSource = readFileSync(billingPagePath, 'utf8');
+const creditPackDialogSource = readFileSync(creditPackDialogPath, 'utf8');
+const packagePanelSource = readFileSync(packagePanelPath, 'utf8');
+const paymentOrderHistorySource = readFileSync(paymentOrderHistoryPath, 'utf8');
+const paymentReturnNoticeSource = readFileSync(paymentReturnNoticePath, 'utf8');
+const paymentOrdersHookSource = readFileSync(paymentOrdersHookPath, 'utf8');
 const portalClientSource = readFileSync(portalClientPath, 'utf8');
 const entitlementComponentPath = resolve(root, 'src/components/portal/PortalEntitlementUsage.tsx');
 const entitlementComponentSource = readFileSync(entitlementComponentPath, 'utf8');
-const billingMetricStart = billingPageSource.indexOf('<BackofficeMetricStrip');
+const billingMetricStart = billingPageSource.indexOf('<PortalMetricStrip');
 const billingMetricStrip = billingPageSource.slice(
   billingMetricStart,
-  billingPageSource.indexOf('<BackofficeStackCard', billingMetricStart)
+  billingPageSource.indexOf('<PortalCard', billingMetricStart)
 );
 assert.doesNotMatch(
   billingPageSource,
@@ -55,7 +65,7 @@ assert.doesNotMatch(
   'Portal package page must not derive the account package label from the selected site'
 );
 assert.doesNotMatch(
-  billingPageSource,
+  packagePanelSource,
   /href=\{`\/portal\/sites\/\$\{selectedSiteId\}`\}|portal\.site_record/,
   'Portal package page must not send users to a site record to understand the account package'
 );
@@ -65,19 +75,19 @@ assert.match(
   'Portal package page must own package upgrade entry points'
 );
 assert.match(
-  billingPageSource,
+  creditPackDialogSource,
   /portal\.usage\.credit_packs_title/,
   'Portal package page must own credit pack purchase entry points'
 );
 assert.match(
-  billingPageSource,
+  paymentOrderHistorySource,
   /portal\.usage\.payment_orders_title/,
   'Portal package page must own recent payment order visibility'
 );
 assert.match(
-  billingPageSource,
-  /<section className="overflow-hidden[\s\S]*portal\.usage\.payment_orders_title/,
-  'Portal package page must keep payment order actions directly visible'
+  paymentOrderHistorySource,
+  /<details[\s\S]*<summary[\s\S]*portal\.usage\.payment_orders_title[\s\S]*role="tablist"[\s\S]*<\/details>/,
+  'Portal package page must keep the payment summary visible and fold lower-priority order actions behind disclosure'
 );
 assert.equal(
   (billingPageSource.match(/const paymentOrdersCard =/g) || []).length,
@@ -90,27 +100,27 @@ assert.equal(
   'Portal package page must render the folded payment order card once in the account package view'
 );
 assert.match(
-  billingPageSource,
-  /payment_return[\s\S]*alipay_return_title[\s\S]*handleRefreshPaymentReturn/,
+  paymentReturnNoticeSource,
+  /provider === 'alipay'[\s\S]*alipay_return_title[\s\S]*handleRefresh/,
   'Portal package page must show a read-only Alipay return notice with refresh'
 );
 assert.match(
-  billingPageSource,
+  paymentReturnNoticeSource,
   /getAccountPaymentOrder[\s\S]*setTimeout[\s\S]*alipay_return_paid_title/,
   'Portal package page must poll the canonical order and render confirmed payment state'
 );
 assert.match(
-  billingPageSource,
-  /paymentReturnReconciled[\s\S]*data-payment-return-metric="credited"[\s\S]*data-payment-return-metric="total-available"[\s\S]*data-payment-return-metric="next-expiry"/,
+  paymentReturnNoticeSource,
+  /reconciled[\s\S]*data-payment-return-metric="credited"[\s\S]*data-payment-return-metric="total-available"[\s\S]*data-payment-return-metric="next-expiry"/,
   'Confirmed credit-pack payment notice must show credited amount, total available, and expiry after reconciliation'
 );
 assert.match(
-  billingPageSource,
-  /shouldPollAlipayReturn[\s\S]*hasAlipayReturn[\s\S]*paymentReturnOrderState/,
+  paymentReturnNoticeSource,
+  /shouldPoll[\s\S]*visible[\s\S]*order/,
   'Payment success notice must remain visible after return query parameters are cleaned'
 );
 assert.match(
-  billingPageSource,
+  packagePanelSource,
   /paid_offer_desc[\s\S]*formatPortalCurrency\(plusOffer\.amount\)[\s\S]*formatPortalCurrency\(proOffer\.amount\)/,
   'Portal paid package copy must render live offer prices instead of hard-coded amounts'
 );
@@ -120,8 +130,8 @@ assert.doesNotMatch(
   'Portal package implementation must not keep hard-coded paid prices'
 );
 assert.match(
-  billingPageSource,
-  /loadPaymentOrders[\s\S]*listAccountPaymentOrders[\s\S]*statusGroup[\s\S]*PAYMENT_ORDER_PAGE_SIZE/,
+  paymentOrdersHookSource,
+  /const load[\s\S]*listAccountPaymentOrders[\s\S]*statusGroup[\s\S]*PORTAL_PAYMENT_ORDER_PAGE_SIZE/,
   'Portal package page must load payment orders through the dedicated status-group request'
 );
 assert.match(
@@ -145,7 +155,7 @@ assert.match(
   'Portal usage bundle must use account-level payment orders so Pro checkout orders are visible without a site'
 );
 assert.doesNotMatch(
-  billingPageSource,
+  paymentReturnNoticeSource,
   /payment_return[\s\S]*(markPaid|mark_payment|paid_at|subscription_id\s*=)/,
   'Portal package page must not treat browser payment return as payment truth'
 );
@@ -175,18 +185,18 @@ assert.match(
   'Shared entitlement summary must show the three primary package rights on one desktop row'
 );
 assert.match(
-  billingPageSource,
+  paymentOrderHistorySource,
   /resolvePaymentOrderTitle[\s\S]*pack_small[\s\S]*pack_medium[\s\S]*pack_large[\s\S]*portal\.usage\.credit_pack_\$\{packKey\}/,
   'Portal package page must localize credit pack order titles instead of rendering raw provider labels'
 );
 assert.match(
-  billingPageSource,
+  paymentOrderHistorySource,
   /resolvePaymentOrderStatusLabel[\s\S]*payment_order_status_waiting_confirmation/,
   'Portal package page must localize payment order status labels'
 );
 assert.match(
-  billingPageSource,
-  /paymentOrderTabs[\s\S]*payment_orders_tab_all[\s\S]*payment_orders_tab_pending[\s\S]*payment_orders_tab_paid[\s\S]*payment_orders_tab_closed/,
+  paymentOrderHistorySource,
+  /const tabs[\s\S]*payment_orders_tab_all[\s\S]*payment_orders_tab_pending[\s\S]*payment_orders_tab_paid[\s\S]*payment_orders_tab_closed/,
   'Portal package page must separate payment orders with compact status tabs'
 );
 assert.match(
@@ -195,34 +205,34 @@ assert.match(
   'Portal package purchases must pre-open a separate payment tab before the async order request completes'
 );
 assert.match(
-  billingPageSource,
+  paymentOrderHistorySource,
   /paymentOrderAllowsAction\(order, 'continue_payment'\)[\s\S]*target="_blank"[\s\S]*rel="noopener noreferrer"/,
   'Portal continue-payment actions must keep the billing workspace open'
 );
 assert.match(
-  billingPageSource,
-  /window\.addEventListener\('focus', refreshPaymentOrders\)[\s\S]*visibilitychange/,
+  paymentOrdersHookSource,
+  /window\.addEventListener\('focus', refresh\)[\s\S]*visibilitychange/,
   'Portal package page must refresh payment status when the customer returns from the payment tab'
 );
 assert.match(
-  billingPageSource,
+  paymentOrderHistorySource,
   /paymentOrderAllowsAction\(order, 'continue_payment'\)[\s\S]*paymentOrderAllowsAction\(order, 'cancel'\)[\s\S]*payment_order_confirm_cancel/,
   'Portal package page must render server-authorized payment actions with cancel confirmation'
 );
 assert.doesNotMatch(
-  billingPageSource,
-  /<BackofficeStatusBadge[\s\S]{0,500}<p[^>]*>[\s\S]{0,120}\{resolvePaymentOrderStatusLabel\(order, t\)\}/,
+  paymentOrderHistorySource,
+  /<PortalStatusBadge[\s\S]{0,500}<p[^>]*>[\s\S]{0,120}\{resolvePaymentOrderStatusLabel\(order, t\)\}/,
   'Portal package page must not repeat the same payment status below its badge'
 );
 assert.doesNotMatch(
-  billingPageSource,
+  paymentOrderHistorySource,
   /order\.status_detail\?\.label|order\.status_detail\?\.detail/,
   'Portal package page must not render backend payment-order English labels directly'
 );
-assert.doesNotMatch(
-  billingPageSource,
-  /portal\.usage\.credit_pack_validity_days/,
-  'Portal package page must not repeat per-card credit pack validity when the section already shows one-year validity'
+assert.match(
+  creditPackDialogSource,
+  /portal\.usage\.credit_pack_validity_days[\s\S]*formatValidityLabel\(t, pack\.validity_days\)/,
+  'Portal package page must disclose each credit pack validity before purchase confirmation'
 );
 assert.doesNotMatch(
   billingPageSource,

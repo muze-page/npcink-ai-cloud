@@ -6,7 +6,7 @@ const root = process.cwd();
 const portalAppDir = resolve(root, 'src/app/portal');
 const portalComponentsDir = resolve(root, 'src/components/portal');
 const workspaceHeaderPath = resolve(root, 'src/components/portal/PortalWorkspaceHeader.tsx');
-const sitesPagePath = resolve(root, 'src/app/portal/sites/page.tsx');
+const sitesPagePath = resolve(root, 'src/components/portal/PortalSitesWorkspace.tsx');
 
 function listFiles(dir) {
   const entries = readdirSync(dir, { withFileTypes: true });
@@ -59,18 +59,18 @@ const sitesPageSource = readFileSync(sitesPagePath, 'utf8');
 assert.doesNotMatch(
   sitesPageSource,
   /\/portal\/settings/,
-  '/portal/sites must not link users back into the retired Settings surface'
+  'the merged site workspace must not link users back into the retired Settings surface'
 );
 assert.doesNotMatch(
   sitesPageSource,
   /\/portal\/preferences/,
-  '/portal/sites must not promote Preferences as a site workflow'
+  'the merged site workspace must not promote Preferences as a site workflow'
 );
 assert.doesNotMatch(
   sitesPageSource,
   /admin\.quick_actions/,
-  '/portal/sites must not drift back into an admin-style quick actions dashboard'
+  'the merged site workspace must not drift back into an admin-style quick actions dashboard'
 );
 
 const sitesPageStats = statSync(sitesPagePath);
-assert.ok(sitesPageStats.isFile(), '/portal/sites route must remain implemented as a real page file');
+assert.ok(sitesPageStats.isFile(), 'the merged site workspace must remain implemented as a real component file');

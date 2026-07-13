@@ -1,15 +1,19 @@
 'use client';
 
-import React, { useCallback, useEffect, useState, Suspense } from 'react';
+import React, { useCallback, useEffect, useRef, useState, Suspense } from 'react';
 import Link from 'next/link';
 import { AdminMutationReceipt, type AdminMutationReceiptPayload } from '@/components/admin/AdminMutationReceipt';
+import { AdminAuditSummaryPanel } from '@/components/admin/AdminAuditSummaryPanel';
+import { AdminRouteSkeleton } from '@/components/admin/AdminRouteSkeleton';
 import { LoadingFallback } from '@/components/ui/LoadingFallback';
 import { useParams } from 'next/navigation';
 import { BackofficeIdentifier } from '@/components/backoffice/BackofficeIdentifier';
 import { BackofficeStatusBadge } from '@/components/backoffice/BackofficeStatusBadge';
 import { ConfirmModal } from '@/components/ui/Modal';
+import { useToast } from '@/components/ui/Toast';
 import {
   BackofficeEmptyState,
+  BackofficeDiagnosticNotice,
   BackofficeMetricStrip,
   BackofficePageStack,
   BackofficePrimaryPanel,
@@ -267,7 +271,7 @@ type PendingConfirmation = {
   onConfirm: () => void;
 };
 
-type AccountDetailTab = 'coverage' | 'quota' | 'sites' | 'advanced';
+type AccountDetailTab = 'overview' | 'commercial' | 'credits' | 'sites' | 'audit';
 
 function selectPrimarySubscription(account: AccountDetail | null): AccountDetail['subscriptions'][number] | null {
   if (!account?.subscriptions.length) {
@@ -461,6 +465,7 @@ function formatSignedCreditDelta(value: number): string {
 function AccountDetailContent() {
   const params = useParams();
   const { t } = useLocale();
+  const { success: showSuccessToast } = useToast();
   const { accountId } = params as { accountId: string };
   
   const [account, setAccount] = useState<AccountDetail | null>(null);
@@ -513,28 +518,45 @@ function AccountDetailContent() {
   const [quotaSummary, setQuotaSummary] = useState<AccountQuotaSummary | null>(null);
   const [creditLedger, setCreditLedger] = useState<AccountCreditLedger | null>(null);
   const [nowMs] = useState(() => Date.now());
-  const [activeDetailTab, setActiveDetailTab] = useState<AccountDetailTab>('coverage');
+  const [activeDetailTab, setActiveDetailTab] = useState<AccountDetailTab>('overview');
+  const accountRequestedRef = useRef(false);
+  const packagePlansRequestedRef = useRef(false);
+  const quotaSummaryRequestedRef = useRef(false);
+  const creditLedgerRequestedRef = useRef(false);
+  const siteRuntimeRequestKeyRef = useRef('');
 
-  const loadPackagePlans = useCallback(async () => {
+  const loadPackagePlans = useCallback(async (force = false) => {
+    if (!force && packagePlansRequestedRef.current) {
+      return;
+    }
+    packagePlansRequestedRef.current = true;
     try {
       const response = await fetch('/api/admin/plans', {
         credentials: 'include',
       });
       if (!response.ok) {
+        packagePlansRequestedRef.current = false;
         return;
       }
       const data = await response.json();
       setPackagePlans(Array.isArray(data.data?.items) ? (data.data.items as PackagePlanListItem[]) : []);
     } catch {
+      packagePlansRequestedRef.current = false;
       setPackagePlans([]);
     }
   }, []);
 
-  const loadSiteRuntimeData = useCallback(async (siteIds: string[]) => {
+  const loadSiteRuntimeData = useCallback(async (siteIds: string[], force = false) => {
     if (siteIds.length === 0) {
       setSiteRuntimeData({});
+      siteRuntimeRequestKeyRef.current = '';
       return;
     }
+    const requestKey = [...siteIds].sort().join('|');
+    if (!force && siteRuntimeRequestKeyRef.current === requestKey) {
+      return;
+    }
+    siteRuntimeRequestKeyRef.current = requestKey;
     const results: Record<string, SiteRuntimeData> = {};
     await Promise.all(
       siteIds.map(async (siteId) => {
@@ -601,18 +623,24 @@ function AccountDetailContent() {
     setSiteRuntimeData(results);
   }, []);
 
-  const loadQuotaSummary = useCallback(async () => {
+  const loadQuotaSummary = useCallback(async (force = false) => {
+    if (!force && quotaSummaryRequestedRef.current) {
+      return;
+    }
+    quotaSummaryRequestedRef.current = true;
     try {
       const response = await fetch(`/api/admin/accounts/${encodeURIComponent(accountId)}/quota-summary`, {
         credentials: 'include',
       });
       if (!response.ok) {
+        quotaSummaryRequestedRef.current = false;
         setQuotaSummary(null);
         return;
       }
       const data = await response.json();
       const payload = data.data || {};
       if (!payload.credit) {
+        quotaSummaryRequestedRef.current = false;
         setQuotaSummary(null);
         return;
       }
@@ -641,16 +669,22 @@ function AccountDetailContent() {
             : {},
       });
     } catch {
+      quotaSummaryRequestedRef.current = false;
       setQuotaSummary(null);
     }
   }, [accountId]);
 
-  const loadCreditLedger = useCallback(async () => {
+  const loadCreditLedger = useCallback(async (force = false) => {
+    if (!force && creditLedgerRequestedRef.current) {
+      return;
+    }
+    creditLedgerRequestedRef.current = true;
     try {
       const response = await fetch(`/api/admin/accounts/${encodeURIComponent(accountId)}/credit-ledger?limit=12`, {
         credentials: 'include',
       });
       if (!response.ok) {
+        creditLedgerRequestedRef.current = false;
         setCreditLedger(null);
         return;
       }
@@ -667,11 +701,16 @@ function AccountDetailContent() {
         items: Array.isArray(payload.items) ? (payload.items as AccountCreditLedgerEntry[]) : [],
       });
     } catch {
+      creditLedgerRequestedRef.current = false;
       setCreditLedger(null);
     }
   }, [accountId]);
 
-  const loadAccount = useCallback(async (preferredSiteId = '') => {
+  const loadAccount = useCallback(async (preferredSiteId = '', force = false) => {
+    if (!force && accountRequestedRef.current) {
+      return;
+    }
+    accountRequestedRef.current = true;
     setIsLoading(true);
     setError(null);
 
@@ -778,18 +817,13 @@ function AccountDetailContent() {
 
       setSelectedSiteId(nextSiteId);
 
-      const nextSiteIds = nextAccount?.sites?.map((s) => s.site_id).filter(Boolean) || [];
-      if (nextSiteIds.length > 0) {
-        void loadSiteRuntimeData(nextSiteIds);
-      }
-      void loadQuotaSummary();
-      void loadCreditLedger();
     } catch (err) {
+      accountRequestedRef.current = false;
       setError(resolveUiErrorMessage(err instanceof Error ? err.message : null, t('error.failed_load')));
     } finally {
       setIsLoading(false);
     }
-  }, [accountId, loadCreditLedger, loadQuotaSummary, loadSiteRuntimeData, t]);
+  }, [accountId, t]);
 
   const handleSaveAccountMeta = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -914,7 +948,12 @@ function AccountDetailContent() {
             : 'Customer package coverage has been updated.'
         )
       );
-      await loadAccount(selectedSiteId);
+      siteRuntimeRequestKeyRef.current = '';
+      await Promise.all([
+        loadAccount(selectedSiteId, true),
+        loadQuotaSummary(true),
+        loadCreditLedger(true),
+      ]);
     } catch (err) {
       setPackageActionError(
         resolveUiErrorMessage(err instanceof Error ? err.message : null, t('error.failed_save'))
@@ -957,7 +996,12 @@ function AccountDetailContent() {
               'Customer coverage has been canceled.'
             )
       );
-      await loadAccount(selectedSiteId);
+      siteRuntimeRequestKeyRef.current = '';
+      await Promise.all([
+        loadAccount(selectedSiteId, true),
+        loadQuotaSummary(true),
+        loadCreditLedger(true),
+      ]);
     } catch (err) {
       setPackageActionError(
         resolveUiErrorMessage(err instanceof Error ? err.message : null, t('error.failed_save'))
@@ -1001,7 +1045,12 @@ function AccountDetailContent() {
           ? t('admin.account_detail.agency_quote_created', undefined, 'Agency quote is ready in the customer Portal.')
           : t('admin.account_detail.agency_trial_approved', undefined, 'Agency trial has been approved for 14 days.')
       );
-      await loadAccount(selectedSiteId);
+      siteRuntimeRequestKeyRef.current = '';
+      await Promise.all([
+        loadAccount(selectedSiteId, true),
+        loadQuotaSummary(true),
+        loadCreditLedger(true),
+      ]);
     } catch (err) {
       setAgencyActionError(
         resolveUiErrorMessage(err instanceof Error ? err.message : null, t('error.failed_save'))
@@ -1052,7 +1101,7 @@ function AccountDetailContent() {
           ? t('admin.accounts.account_restored_notice', { account: accountTitle }, `${accountTitle} has been restored.`)
           : t('admin.accounts.account_suspended_notice', { account: accountTitle }, `${accountTitle} has been suspended.`)
       );
-      await loadAccount(selectedSiteId);
+      await loadAccount(selectedSiteId, true);
     } catch (err) {
       setAccountStatusError(resolveUiErrorMessage(err instanceof Error ? err.message : null, t('error.failed_save')));
     } finally {
@@ -1107,7 +1156,12 @@ function AccountDetailContent() {
           `${pack.fallback_label} has been applied to the current period.`
         )
       );
-      await loadAccount(selectedSiteId);
+      siteRuntimeRequestKeyRef.current = '';
+      await Promise.all([
+        loadAccount(selectedSiteId, true),
+        loadQuotaSummary(true),
+        loadCreditLedger(true),
+      ]);
     } catch (err) {
       setPackageActionError(
         resolveUiErrorMessage(err instanceof Error ? err.message : null, t('error.failed_save'))
@@ -1182,7 +1236,12 @@ function AccountDetailContent() {
         reason: '',
         note: '',
       }));
-      await Promise.all([loadAccount(selectedSiteId), loadQuotaSummary(), loadCreditLedger()]);
+      siteRuntimeRequestKeyRef.current = '';
+      await Promise.all([
+        loadAccount(selectedSiteId, true),
+        loadQuotaSummary(true),
+        loadCreditLedger(true),
+      ]);
     } catch (err) {
       setPackageActionError(
         resolveUiErrorMessage(err instanceof Error ? err.message : null, t('error.failed_save'))
@@ -1194,8 +1253,44 @@ function AccountDetailContent() {
 
   useEffect(() => {
     void loadAccount();
-    void loadPackagePlans();
-  }, [loadAccount, loadPackagePlans]);
+  }, [loadAccount]);
+
+  useEffect(() => {
+    if (activeDetailTab === 'commercial') {
+      void loadPackagePlans();
+      return;
+    }
+    if (activeDetailTab === 'credits') {
+      void Promise.all([loadQuotaSummary(), loadCreditLedger()]);
+      return;
+    }
+    if (activeDetailTab === 'audit' && account) {
+      const siteIds = account.sites?.map((site) => site.site_id).filter(Boolean) || [];
+      void loadSiteRuntimeData(siteIds);
+    }
+  }, [account, activeDetailTab, loadCreditLedger, loadPackagePlans, loadQuotaSummary, loadSiteRuntimeData]);
+
+  useEffect(() => {
+    if (!accountStatusNotice) {
+      return;
+    }
+    showSuccessToast(
+      accountStatusNotice,
+      t('admin.account_detail.account_status_updated_title', {}, 'Account status updated')
+    );
+    setAccountStatusNotice(null);
+  }, [accountStatusNotice, showSuccessToast, t]);
+
+  useEffect(() => {
+    if (!packageActionNotice) {
+      return;
+    }
+    showSuccessToast(
+      packageActionNotice,
+      t('admin.account_detail.commercial_operation_completed_title', {}, 'Commercial operation completed')
+    );
+    setPackageActionNotice(null);
+  }, [packageActionNotice, showSuccessToast, t]);
 
   useEffect(() => {
     const activateTabFromHash = () => {
@@ -1204,15 +1299,19 @@ function AccountDetailContent() {
         return;
       }
       if (window.location.hash === '#quota-posture') {
-        setActiveDetailTab('quota');
+        setActiveDetailTab('credits');
         return;
       }
       if (window.location.hash === '#advanced-checks') {
-        setActiveDetailTab('advanced');
+        setActiveDetailTab('audit');
+        return;
+      }
+      if (window.location.hash === '#account-audit') {
+        setActiveDetailTab('audit');
         return;
       }
       if (window.location.hash === '#coverage-actions') {
-        setActiveDetailTab('coverage');
+        setActiveDetailTab('commercial');
       }
     };
 
@@ -1222,25 +1321,24 @@ function AccountDetailContent() {
   }, []);
 
   if (isLoading) {
-    return (
-      <div className="flex min-h-[60vh] items-center justify-center">
-        <div className="text-center">
-          <div className="animate-spin text-4xl mb-4">⏳</div>
-          <p className="text-gray-600 dark:text-gray-400">{t('common.loading')}</p>
-        </div>
-      </div>
-    );
+    return <AdminRouteSkeleton />;
   }
 
   if (error) {
     return (
-      <div className="flex min-h-[60vh] items-center justify-center">
-        <div className="text-center max-w-md">
-          <h2 className="text-2xl font-bold mb-4 text-red-600">{t('common.error')}</h2>
-          <p className="text-gray-600 dark:text-gray-400 mb-6">{error}</p>
-          <button onClick={() => window.location.reload()} className="btn btn-primary">{t('common.retry')}</button>
-        </div>
-      </div>
+      <BackofficePageStack>
+        <BackofficePrimaryPanel
+          eyebrow={t('admin.account_detail.primary_title', undefined, 'Current customer posture')}
+          title={t('admin.account_detail.load_error_title', undefined, 'Customer detail is temporarily unavailable')}
+          description={t('admin.account_detail.load_error_desc', undefined, 'Retry this bounded customer read without leaving the current operator route.')}
+        >
+          <BackofficeDiagnosticNotice
+            message={error}
+            retryLabel={t('common.retry')}
+            onRetry={() => void loadAccount('', true)}
+          />
+        </BackofficePrimaryPanel>
+      </BackofficePageStack>
     );
   }
 
@@ -1505,14 +1603,20 @@ function AccountDetailContent() {
   const hasAdvancedChecks = Object.keys(siteRuntimeData).length > 0;
   const detailTabs: Array<{ id: AccountDetailTab; label: string; detail: string; href: string }> = [
     {
-      id: 'coverage',
-      label: t('admin.account_detail.coverage_tab', undefined, 'Package'),
+      id: 'overview',
+      label: t('admin.account_detail.overview_tab', undefined, 'Overview'),
+      detail: translateStatusLabel(postureTone, t),
+      href: '#account-overview',
+    },
+    {
+      id: 'commercial',
+      label: t('admin.account_detail.commercial_tab', undefined, 'Commercial'),
       detail: primaryPackage.display_package_label,
       href: '#coverage-actions',
     },
     {
-      id: 'quota',
-      label: t('admin.account_detail.quota_tab', undefined, 'Usage'),
+      id: 'credits',
+      label: t('admin.account_detail.credits_tab', undefined, 'Credits and usage'),
       detail: quotaNeedsAttention ? translateStatusLabel('warning', t) : translateStatusLabel('ok', t),
       href: '#quota-posture',
     },
@@ -1522,16 +1626,14 @@ function AccountDetailContent() {
       detail: formatInteger(account.site_count),
       href: '#site-footprint',
     },
-    ...(hasAdvancedChecks
-      ? [
-          {
-            id: 'advanced' as const,
-            label: t('admin.account_detail.advanced_tab', undefined, 'Checks'),
-            detail: formatInteger(Object.keys(siteRuntimeData).length),
-            href: '#advanced-checks',
-          },
-        ]
-      : []),
+    {
+      id: 'audit',
+      label: t('admin.account_detail.audit_tab', undefined, 'Audit'),
+      detail: hasAdvancedChecks
+        ? formatInteger(Object.keys(siteRuntimeData).length)
+        : t('common.read_only', {}, 'Read only'),
+      href: '#account-audit',
+    },
   ];
   return (
     <BackofficePageStack>
@@ -1544,7 +1646,7 @@ function AccountDetailContent() {
 	            <a
                 href="#coverage-actions"
                 className="btn btn-primary"
-                onClick={() => setActiveDetailTab('coverage')}
+                onClick={() => setActiveDetailTab('commercial')}
               >
 	              {t('admin.account_detail.manage_package_action', undefined, 'Manage package')}
 	            </a>
@@ -1618,56 +1720,59 @@ function AccountDetailContent() {
 	              </span>
 	            </div>
 	          </div>
-	          <button
-	            type="button"
-	            onClick={() => {
-	              setSuspendReason('');
-	              setPendingConfirmation({
-	                title:
-	                  account.status === 'suspended'
-	                    ? t('admin.accounts.confirm_restore_title', {}, 'Confirm account restore')
-	                    : t('admin.accounts.confirm_suspend_title', {}, 'Confirm account suspension'),
-	                message:
-	                  account.status === 'suspended'
-	                    ? t(
-	                        'admin.accounts.confirm_restore_desc',
-	                        { account: accountTitle },
-	                        `Restore ${accountTitle} to active access?`
-	                      )
-	                    : t(
-	                        'admin.accounts.confirm_suspend_desc',
-	                        { account: accountTitle },
-	                        `Suspend ${accountTitle}? Customer portal access and site actions will be blocked by account status.`
-	                      ),
-	                confirmLabel:
-	                  account.status === 'suspended'
+	          <details className="self-start lg:self-auto">
+	            <summary className="btn btn-secondary cursor-pointer list-none">
+	              {t('admin.account_detail.more_account_actions', {}, 'More account actions')}
+	            </summary>
+	            <div className="mt-2 rounded-xl border border-slate-200 bg-white p-3 shadow-lg dark:border-slate-800 dark:bg-slate-950">
+	              <button
+	                type="button"
+	                onClick={() => {
+	                  setSuspendReason('');
+	                  setPendingConfirmation({
+	                    title:
+	                      account.status === 'suspended'
+	                        ? t('admin.accounts.confirm_restore_title', {}, 'Confirm account restore')
+	                        : t('admin.accounts.confirm_suspend_title', {}, 'Confirm account suspension'),
+	                    message:
+	                      account.status === 'suspended'
+	                        ? t(
+	                            'admin.accounts.confirm_restore_desc',
+	                            { account: accountTitle },
+	                            `Restore ${accountTitle} to active access?`
+	                          )
+	                        : t(
+	                            'admin.accounts.confirm_suspend_desc',
+	                            { account: accountTitle },
+	                            `Suspend ${accountTitle}? Customer portal access and site actions will be blocked by account status.`
+	                          ),
+	                    confirmLabel:
+	                      account.status === 'suspended'
+	                        ? t('admin.accounts.restore_account_action', {}, 'Restore account')
+	                        : t('admin.accounts.suspend_account_action', {}, 'Suspend account'),
+	                    showSuspendReason: account.status !== 'suspended',
+	                    variant: account.status === 'suspended' ? 'default' : 'danger',
+	                    onConfirm: () => void handleAccountStatusMutation(account.status === 'suspended' ? 'restore' : 'suspend'),
+	                  });
+	                }}
+	                className={cn(
+	                  'btn btn-secondary w-full whitespace-nowrap',
+	                  account.status !== 'suspended' && 'border-red-200 text-red-700 hover:border-red-300 dark:border-red-900/60 dark:text-red-200'
+	                )}
+	                disabled={accountStatusPending !== null}
+	              >
+	                {accountStatusPending
+	                  ? t('common.saving', {}, 'Saving...')
+	                  : account.status === 'suspended'
 	                    ? t('admin.accounts.restore_account_action', {}, 'Restore account')
-	                    : t('admin.accounts.suspend_account_action', {}, 'Suspend account'),
-	                showSuspendReason: account.status !== 'suspended',
-	                variant: account.status === 'suspended' ? 'default' : 'danger',
-	                onConfirm: () => void handleAccountStatusMutation(account.status === 'suspended' ? 'restore' : 'suspend'),
-	              });
-	            }}
-	            className={cn(
-	              'btn btn-secondary self-start lg:self-auto',
-	              account.status !== 'suspended' && 'border-amber-200 text-amber-700 hover:border-amber-300 dark:border-amber-900/60 dark:text-amber-200'
-	            )}
-	            disabled={accountStatusPending !== null}
-	          >
-	            {accountStatusPending
-	              ? t('common.saving', {}, 'Saving...')
-	              : account.status === 'suspended'
-	                ? t('admin.accounts.restore_account_action', {}, 'Restore account')
-	                : t('admin.accounts.suspend_account_action', {}, 'Suspend account')}
-	          </button>
+	                    : t('admin.accounts.suspend_account_action', {}, 'Suspend account')}
+	              </button>
+	            </div>
+	          </details>
 	        </BackofficeStackCard>
-	        {accountStatusNotice ? (
-	          <p className="text-sm text-emerald-700 dark:text-emerald-300">{accountStatusNotice}</p>
-	        ) : null}
         {accountStatusError ? (
           <p className="text-sm text-red-600 dark:text-red-300">{accountStatusError}</p>
         ) : null}
-        <AdminMutationReceipt receipt={accountStatusReceipt} />
         {account.account_status_note ? (
           <p className="text-sm text-amber-700 dark:text-amber-300">
             {t('admin.accounts.suspend_reason_label', {}, 'Suspension reason')}: {account.account_status_note}
@@ -1731,7 +1836,7 @@ function AccountDetailContent() {
         <div
           role="tablist"
           aria-label={t('admin.account_detail.tabs_label', undefined, 'Customer detail sections')}
-          className="grid gap-2 rounded-[1rem] border border-slate-200/80 bg-white/75 p-2 dark:border-slate-800 dark:bg-slate-950/40 md:grid-cols-4"
+          className="grid gap-2 rounded-[1rem] border border-slate-200/80 bg-white/75 p-2 dark:border-slate-800 dark:bg-slate-950/40 md:grid-cols-5"
         >
           {detailTabs.map((tab) => {
             const isActive = activeDetailTab === tab.id;
@@ -1755,7 +1860,7 @@ function AccountDetailContent() {
             );
           })}
         </div>
-        {activeDetailTab === 'coverage' ? (
+        {activeDetailTab === 'commercial' || activeDetailTab === 'credits' ? (
         <div className="grid gap-4 xl:grid-cols-[0.9fr_1.1fr]">
           <div id="coverage-actions">
           <BackofficeStackCard className="bg-white/80 dark:bg-slate-950/55">
@@ -1820,15 +1925,25 @@ function AccountDetailContent() {
               {t('admin.account_detail.package_actions_eyebrow', undefined, 'Package actions')}
             </p>
             <h3 className="mt-3 text-lg font-semibold text-gray-950 dark:text-white">
-              {t('admin.account_detail.package_actions_title', undefined, 'Package and top-up')}
+              {activeDetailTab === 'commercial'
+                ? t('admin.account_detail.commercial_actions_title', undefined, 'Package and Agency operations')
+                : t('admin.account_detail.credit_actions_title', undefined, 'Top-up and credit adjustment')}
             </h3>
             <p className="mt-2 text-sm text-gray-600 dark:text-gray-300">
-              {t(
-                'admin.account_detail.package_actions_desc',
-                undefined,
-                'Change the customer package or add current-period headroom from this primary operation area.'
-              )}
+              {activeDetailTab === 'commercial'
+                ? t(
+                    'admin.account_detail.commercial_actions_desc',
+                    undefined,
+                    'Change the customer package or manage account-bound Agency quote and trial decisions.'
+                  )
+                : t(
+                    'admin.account_detail.credit_actions_desc',
+                    undefined,
+                    'Add current-period headroom or write an audited adjustment without changing the package.'
+                  )}
             </p>
+            {activeDetailTab === 'commercial' ? (
+            <>
             <div className="mt-5 rounded-2xl border border-slate-200 bg-slate-50/70 p-4 dark:border-slate-800 dark:bg-slate-950/30">
               <div className="flex flex-col gap-2 lg:flex-row lg:items-start lg:justify-between">
                 <div>
@@ -1974,6 +2089,10 @@ function AccountDetailContent() {
                 <p className="mt-3 text-sm text-red-700 dark:text-red-300">{agencyActionError}</p>
               ) : null}
             </div>
+            </>
+            ) : null}
+            {activeDetailTab === 'credits' ? (
+            <>
             <div className="mt-5 rounded-2xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-950/45">
               <div className="flex flex-col gap-2 lg:flex-row lg:items-start lg:justify-between">
                 <div>
@@ -2118,13 +2237,7 @@ function AccountDetailContent() {
                 </button>
               </div>
             </div>
-            {packageActionNotice ? (
-              <BackofficeStackCard
-                data-ui="account-package-action-notice"
-                className="mt-4 border-green-200 bg-green-50 text-green-700 dark:border-green-900 dark:bg-green-950/30 dark:text-green-300"
-              >
-                {packageActionNotice}
-              </BackofficeStackCard>
+            </>
             ) : null}
             {packageActionError ? (
               <BackofficeStackCard
@@ -2134,12 +2247,12 @@ function AccountDetailContent() {
                 {packageActionError}
               </BackofficeStackCard>
             ) : null}
-            <AdminMutationReceipt receipt={packageActionReceipt} />
             <div className="mt-4 flex flex-wrap gap-3">
               <a href="#site-footprint" className="btn btn-secondary" onClick={() => setActiveDetailTab('sites')}>
                 {t('admin.account_detail.view_sites_action', undefined, 'View sites')}
               </a>
             </div>
+            {activeDetailTab === 'commercial' ? (
             <details
               data-ui="advanced-coverage-controls"
               className="mt-5 rounded-2xl border border-dashed border-gray-200 px-4 py-4 dark:border-gray-800"
@@ -2340,12 +2453,13 @@ function AccountDetailContent() {
               ))}
             </div>
             </details>
+            ) : null}
           </BackofficeStackCard>
         </div>
         ) : null}
       </BackofficePrimaryPanel>
 
-      {activeDetailTab === 'quota' ? (
+      {activeDetailTab === 'credits' ? (
       <BackofficeSectionPanel id="quota-posture" className="space-y-5">
         <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
           <div>
@@ -2714,7 +2828,30 @@ function AccountDetailContent() {
       </div>
       ) : null}
 
-      {activeDetailTab === 'advanced' && hasAdvancedChecks ? (
+      {activeDetailTab === 'audit' ? (
+        <div id="account-audit" className="space-y-6">
+          <BackofficeSectionPanel className="space-y-4">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-gray-500 dark:text-gray-400">
+                {t('admin.account_detail.audit_eyebrow', undefined, 'Audit')}
+              </p>
+              <h2 className="mt-2 text-xl font-semibold text-gray-950 dark:text-white">
+                {t('admin.account_detail.audit_title', undefined, 'Recent customer operations')}
+              </h2>
+              <p className="mt-1 text-sm text-gray-600 dark:text-gray-400">
+                {t('admin.account_detail.audit_desc', undefined, 'Review the latest governed customer and commercial operations before opening deeper evidence.')}
+              </p>
+            </div>
+            <div className="grid gap-4 xl:grid-cols-2">
+              <AdminMutationReceipt receipt={accountStatusReceipt} />
+              <AdminMutationReceipt receipt={packageActionReceipt} />
+            </div>
+            <AdminAuditSummaryPanel
+              title={t('admin.audit_summary.account_title', {}, 'Recent audit summary for this customer')}
+              accountId={account.account_id}
+            />
+          </BackofficeSectionPanel>
+        {hasAdvancedChecks ? (
         <BackofficeSectionPanel id="advanced-checks">
           <details className="group">
             <summary className="flex cursor-pointer list-none items-center justify-between gap-4">
@@ -2794,6 +2931,8 @@ function AccountDetailContent() {
           </div>
           </details>
         </BackofficeSectionPanel>
+        ) : null}
+        </div>
       ) : null}
 
       <ConfirmModal

@@ -162,6 +162,37 @@ export async function installAdminMocks(page: Page) {
         plan_id: primaryAccountSubscription.plan_id,
         plan_version_id: primaryAccountSubscription.plan_version_id,
         status: primaryAccountSubscription.status,
+        receipt: {
+          event_kind: 'account.subscription.change',
+          scope_kind: 'account',
+          scope_id: LONG_ACCOUNT_ID,
+          outcome: 'succeeded',
+          effective_summary: `Customer package changed to ${nextPackageAlias}.`,
+        },
+      });
+      return;
+    }
+
+    if (
+      pathname === `/api/admin/accounts/${LONG_ACCOUNT_ID}/credit-ledger/adjustments` &&
+      route.request().method() === 'POST'
+    ) {
+      const payload = route.request().postDataJSON() as Record<string, unknown>;
+      await fulfillJson(route, {
+        account_id: LONG_ACCOUNT_ID,
+        entry: {
+          event_type: String(payload.event_type || 'grant'),
+          credit_delta: Number(payload.credit_delta || 0),
+          reason: String(payload.reason || ''),
+          note: String(payload.note || ''),
+        },
+        receipt: {
+          event_kind: 'account.credit.adjustment',
+          scope_kind: 'account',
+          scope_id: LONG_ACCOUNT_ID,
+          outcome: 'succeeded',
+          effective_summary: `Credit adjustment ${Number(payload.credit_delta || 0)} recorded.`,
+        },
       });
       return;
     }

@@ -157,6 +157,22 @@ def test_env_example_production_payload_validates_with_canonical_names(
     assert settings.openai_base_url == "https://api.openai.com/v1"
 
 
+def test_openai_provider_ceiling_supports_bounded_long_form_runtime(monkeypatch) -> None:
+    monkeypatch.delenv("NPCINK_CLOUD_OPENAI_TIMEOUT_SECONDS", raising=False)
+
+    cloud_root = _cloud_root()
+    settings = Settings(_env_file=None)
+    compose_text = (cloud_root / "docker-compose.prod.yml").read_text()
+    readme_text = (cloud_root / "README.md").read_text()
+
+    assert settings.openai_timeout_seconds == 60.0
+    assert compose_text.count(
+        "NPCINK_CLOUD_OPENAI_TIMEOUT_SECONDS: ${NPCINK_CLOUD_OPENAI_TIMEOUT_SECONDS:-60}"
+    ) == 3
+    assert "OpenAI provider ceiling defaults to 60 seconds" in readme_text
+    assert "shorter tasks remain constrained by the smaller value" in readme_text
+
+
 def test_settings_ignore_retired_admin_and_openai_aliases(monkeypatch) -> None:
     monkeypatch.setenv("NPCINK_CLOUD_ENVIRONMENT", "production")
     monkeypatch.setenv("NPCINK_CLOUD_DATABASE_URL", "sqlite+pysqlite:///:memory:")

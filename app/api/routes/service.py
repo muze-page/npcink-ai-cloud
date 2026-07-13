@@ -5,7 +5,7 @@ from typing import Any
 
 from fastapi import APIRouter, BackgroundTasks, Query, Request
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
 
 from app.adapters.notifications.base import PortalEmailDeliveryError
@@ -307,6 +307,8 @@ class AudioWorkbenchCreatePayload(BaseModel):
 
 
 class ProviderConnectionPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     connection_id: str | None = Field(default=None, max_length=64)
     provider_id: str | None = Field(default=None, max_length=64)
     provider_type: str | None = Field(default=None, max_length=64)
@@ -314,8 +316,6 @@ class ProviderConnectionPayload(BaseModel):
     display_name: str = Field(default="", max_length=191)
     enabled: bool = True
     base_url: str = Field(default="", max_length=500)
-    note: str = Field(default="", max_length=512)
-    priority: int = Field(default=100, ge=0, le=999)
     source_role: str = Field(default="execution_source", max_length=32)
     capability_ids: list[str] = Field(default_factory=list)
     runtime_profile_ids: list[str] = Field(default_factory=list)
@@ -2647,7 +2647,7 @@ async def list_admin_accounts(
     package_kind: str | None = Query(default=None),
     top_plan_id: str | None = Query(default=None),
     exclude_internal: bool = Query(default=False),
-    sort: str = Query(default="created_at", pattern="^(created_at|display_name)$"),
+    sort: str = Query(default="created_at", pattern="^(created_at|display_name|risk)$"),
     offset: int = Query(default=0, ge=0),
     limit: int = Query(default=100, ge=1, le=500),
 ) -> Any:

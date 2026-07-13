@@ -6,17 +6,23 @@ const billingSource = readFileSync(resolve('src/app/portal/billing/page.tsx'), '
 const clientSource = readFileSync(resolve('src/lib/portal-client.ts'), 'utf8');
 const i18nSource = readFileSync(resolve('src/lib/i18n.ts'), 'utf8');
 
-assert.match(billingSource, /portal-trial-eligibility-title/);
+assert.match(billingSource, /activeCommercialDialog === 'trial'/);
+assert.match(billingSource, /portal\.package\.trial_dialog_title/);
 assert.match(billingSource, /trial\?\.allowed_tiers/);
 assert.match(billingSource, /trialState === 'eligible'/);
 assert.match(billingSource, /trialState === 'active'/);
 assert.match(billingSource, /trialState === 'used'/);
 assert.match(billingSource, /trialState === 'blocked'/);
+assert.match(
+  billingSource,
+  /trial\?\.available === true[\s\S]*'eligible'[\s\S]*'unavailable'/,
+  'missing trial evidence must not be presented as an eligible trial'
+);
 assert.doesNotMatch(billingSource, /canTrialTier/);
 assert.equal(
   (billingSource.match(/handleStartPlanTrial\(/g) || []).length,
   1,
-  'trial mutation should be invoked only from the shared eligibility panel'
+  'trial mutation should be invoked only from the trial dialog'
 );
 
 assert.match(clientSource, /state\?: 'eligible' \| 'active' \| 'used' \| 'blocked' \| 'unavailable'/);

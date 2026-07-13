@@ -8,7 +8,13 @@ const source = readFileSync(routePath, 'utf8');
 assert.match(
   source,
   /return normalized \? `\/internal\/service\/admin\/\$\{normalized\}` : '\/internal\/service\/admin';/,
-  'admin GET proxy must read from /internal/service/admin'
+  'default admin GET proxy must read from /internal/service/admin'
+);
+
+assert.match(
+  source,
+  /normalized === 'audit-events' \|\| normalized === 'audit-events\/summary'[\s\S]*?return `\/internal\/service\/\$\{normalized\}`;/,
+  'audit event reads must use the backend service-plane evidence endpoint'
 );
 
 assert.doesNotMatch(

@@ -1,13 +1,13 @@
 'use client';
 
 import {
-  BackofficeEmptyState,
-  BackofficeMetricStrip,
-  BackofficeSectionPanel,
-  BackofficeStackCard,
-} from '@/components/backoffice/BackofficeScaffold';
-import { BackofficeStatusBadge } from '@/components/backoffice/BackofficeStatusBadge';
-import { BackofficeTag } from '@/components/backoffice/BackofficeTag';
+  PortalScaffoldEmptyState,
+  PortalMetricStrip,
+  PortalSection,
+  PortalCard,
+} from '@/components/portal/PortalScaffold';
+import { PortalStatusBadge } from '@/components/portal/PortalStatusBadge';
+import { PortalTag } from '@/components/portal/PortalTag';
 import { AnalyticsBarChart, AnalyticsLineChart } from '@/components/ui/EChartsWrapper';
 import { useLocale } from '@/contexts/LocaleContext';
 import type { PortalVectorObservabilitySummary } from '@/lib/portal-client';
@@ -59,7 +59,7 @@ export function PortalSiteKnowledgePanel({
   const snapshot = summary?.index_snapshots?.[0] || null;
 
   return (
-    <BackofficeSectionPanel className="space-y-4">
+    <PortalSection className="space-y-4">
       <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
         <div>
           <p className="text-xs font-semibold uppercase tracking-[0.18em] text-gray-500 dark:text-gray-400">
@@ -78,7 +78,7 @@ export function PortalSiteKnowledgePanel({
         </div>
         <div className="flex flex-wrap items-center gap-2">
           {summary?.health ? (
-            <BackofficeStatusBadge
+            <PortalStatusBadge
 	              status={summary.health.status}
 	              label={t(`status.${summary.health.status}`, {}, summary.health.status)}
             />
@@ -92,15 +92,15 @@ export function PortalSiteKnowledgePanel({
       </div>
 
       {isLoading ? (
-        <BackofficeStackCard className="text-sm text-slate-600 dark:text-slate-300">
+        <PortalCard className="text-sm text-slate-600 dark:text-slate-300">
           {t('common.loading')}
-        </BackofficeStackCard>
+        </PortalCard>
       ) : error ? (
-        <BackofficeStackCard className="border-red-200 bg-red-50/70 text-sm text-red-700 dark:border-red-900/60 dark:bg-red-950/20 dark:text-red-200">
+        <PortalCard className="border-red-200 bg-red-50/70 text-sm text-red-700 dark:border-red-900/60 dark:bg-red-950/20 dark:text-red-200">
           {error}
-        </BackofficeStackCard>
+        </PortalCard>
       ) : !hasActivity ? (
-        <BackofficeEmptyState
+        <PortalScaffoldEmptyState
 	          title={t('portal.vector_obs.empty_title', {}, 'No site knowledge activity yet')}
           description={t(
             'portal.vector_obs.empty_desc',
@@ -110,7 +110,7 @@ export function PortalSiteKnowledgePanel({
         />
       ) : (
         <>
-          <BackofficeMetricStrip
+          <PortalMetricStrip
             columnsClassName="md:grid-cols-4"
             items={[
               {
@@ -142,7 +142,7 @@ export function PortalSiteKnowledgePanel({
           />
 
           <div className="grid gap-5 xl:grid-cols-2">
-            <BackofficeStackCard className="space-y-3">
+            <PortalCard className="space-y-3">
               <h3 className="text-sm font-semibold text-slate-950 dark:text-white">
 	                {t('portal.vector_obs.trend', {}, 'Searches and no answers')}
               </h3>
@@ -154,17 +154,17 @@ export function PortalSiteKnowledgePanel({
                 primaryColor="#2563eb"
                 secondaryColor="#f59e0b"
               />
-            </BackofficeStackCard>
-            <BackofficeStackCard className="space-y-3">
+            </PortalCard>
+            <PortalCard className="space-y-3">
               <h3 className="text-sm font-semibold text-slate-950 dark:text-white">
 	                  {t('portal.vector_obs.intents', {}, 'Search topics')}
               </h3>
               <AnalyticsBarChart data={intentData} height={240} barColor="#2563eb" />
-            </BackofficeStackCard>
+            </PortalCard>
           </div>
 
           <div className="grid gap-5 xl:grid-cols-2">
-            <BackofficeStackCard className="space-y-3">
+            <PortalCard className="space-y-3">
               <div className="flex items-center justify-between gap-3">
                 <h3 className="text-sm font-semibold text-slate-950 dark:text-white">
 	                  {t('portal.vector_obs.coverage', {}, 'Knowledge coverage')}
@@ -179,15 +179,15 @@ export function PortalSiteKnowledgePanel({
                 </div>
                 <div className="flex flex-wrap gap-2 pt-1">
                   {Object.entries(snapshot?.source_type_counts || {}).map(([key, value]) => (
-                    <BackofficeTag key={key} tone="info">
+                    <PortalTag key={key} tone="info">
                       {key}: {formatNumber(Number(value || 0))}
-                    </BackofficeTag>
+                    </PortalTag>
                   ))}
                 </div>
               </div>
-            </BackofficeStackCard>
+            </PortalCard>
 
-            <BackofficeStackCard className="space-y-3">
+            <PortalCard className="space-y-3">
               <h3 className="text-sm font-semibold text-slate-950 dark:text-white">
 	                  {t('portal.vector_obs.failures', {}, 'Issues')}
               </h3>
@@ -206,7 +206,7 @@ export function PortalSiteKnowledgePanel({
                           {item.last_seen_at ? formatDate(item.last_seen_at) : t('common.not_found')}
                         </p>
                       </div>
-                      <BackofficeTag tone="warning">{formatNumber(item.count)}</BackofficeTag>
+                      <PortalTag tone="warning">{formatNumber(item.count)}</PortalTag>
                     </div>
                   ))}
                 </div>
@@ -215,10 +215,10 @@ export function PortalSiteKnowledgePanel({
 	                  {t('portal.vector_obs.no_failures', {}, 'No issues in this period.')}
                 </p>
               )}
-            </BackofficeStackCard>
+            </PortalCard>
           </div>
         </>
       )}
-    </BackofficeSectionPanel>
+    </PortalSection>
   );
 }

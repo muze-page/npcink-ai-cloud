@@ -1,21 +1,23 @@
 'use client';
 
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { createPortal } from 'react-dom';
 import {
   BackofficeEmptyState,
+  BackofficeLayer,
   BackofficePageStack,
-  BackofficePrimaryPanel,
   BackofficeSectionPanel,
-  BackofficeStackCard,
+  BackofficeSummaryStrip,
 } from '@/components/backoffice/BackofficeScaffold';
 import { AdminMutationReceipt, type AdminMutationReceiptPayload } from '@/components/admin/AdminMutationReceipt';
-import { BackofficeFilterPill } from '@/components/backoffice/BackofficeFilterPill';
 import { BackofficeStatusBadge } from '@/components/backoffice/BackofficeStatusBadge';
 import { LoadingFallback } from '@/components/ui/LoadingFallback';
 import { useLocale } from '@/contexts/LocaleContext';
 import { resolveUiErrorMessage } from '@/lib/errors';
 import { generateIdempotencyKey } from '@/lib/idempotency';
+import { useDialogKeyboard } from '@/hooks/useDialogKeyboard';
+import { cn } from '@/lib/utils';
 
 type ProviderConnectionProjection = {
   provider_id: string;
@@ -339,6 +341,9 @@ function audioPreviewSource(job: AudioPreviewJob | null): string {
 
 export default function AbilityModelsPage() {
   const { t } = useLocale();
+  const pathname = usePathname();
+  const router = useRouter();
+  const searchParams = useSearchParams();
   const text = useCallback(
     (key: string, fallback: string, params?: Record<string, string>) => t(`admin.ability_models.${key}`, params, fallback),
     [t]
@@ -347,13 +352,30 @@ export default function AbilityModelsPage() {
     (key: string, fallback: string, params?: Record<string, string>) => t(`admin.ai_resources.${key}`, params, fallback),
     [t]
   );
+  const updateWorkspaceUrl = useCallback((updates: {
+    surface?: AbilityModelTab | null;
+    media?: CloudAbilityMediaFilter | null;
+    focus?: string | null;
+  }) => {
+    const params = new URLSearchParams(searchParams.toString());
+    Object.entries(updates).forEach(([key, value]) => {
+      if (value && value !== 'wordpress' && value !== 'all') params.set(key, value);
+      else params.delete(key);
+    });
+    const query = params.toString();
+    router.replace(query ? `${pathname}?${query}` : pathname, { scroll: false });
+  }, [pathname, router, searchParams]);
 
   const [providerDisplayNames, setProviderDisplayNames] = useState<Record<string, string>>({});
   const [routingData, setRoutingData] = useState<RoutingData | null>(null);
   const [routingDrafts, setRoutingDrafts] = useState<EditableRoutingProfile[]>([]);
   const [cloudAbilityRows, setCloudAbilityRows] = useState<CloudAbilityRuntimeRow[]>([]);
-  const [activeAbilityTab, setActiveAbilityTab] = useState<AbilityModelTab>('wordpress');
-  const [activeCloudMediaFilter, setActiveCloudMediaFilter] = useState<CloudAbilityMediaFilter>('all');
+  const activeAbilityTab: AbilityModelTab = searchParams.get('surface') === 'cloud' ? 'cloud' : 'wordpress';
+  const requestedCloudMedia = searchParams.get('media');
+  const activeCloudMediaFilter: CloudAbilityMediaFilter = requestedCloudMedia && CLOUD_MEDIA_ORDER.includes(requestedCloudMedia as CloudAbilityMediaTab)
+    ? requestedCloudMedia as CloudAbilityMediaTab
+    : 'all';
+  const focusedRowId = searchParams.get('focus') || '';
   const [activeProfileId, setActiveProfileId] = useState('');
   const [loading, setLoading] = useState(true);
   const [loadingRouting, setLoadingRouting] = useState(true);
@@ -928,17 +950,6 @@ export default function AbilityModelsPage() {
     [routingDrafts]
   );
   const routeCount = routingDrafts.length;
-  const modelCandidateCount =
-    (routingData?.available_text_instances.length || 0) +
-    (routingData?.available_vision_instances.length || 0) +
-    (routingData?.available_image_instances.length || 0) +
-    (routingData?.available_audio_instances.length || 0) +
-    (routingData?.available_embedding_instances.length || 0);
-  const headerSummary = text('header_summary', '{{abilities}} ability scenarios / {{routes}} routes / {{models}} model candidates', {
-    abilities: String(abilityScenarioCount),
-    routes: String(routeCount),
-    models: String(modelCandidateCount),
-  });
 
   function updateRoutingDraft(profileId: string, patch: Partial<EditableRoutingProfile>) {
     setRoutingDrafts((current) =>
@@ -1183,6 +1194,17 @@ export default function AbilityModelsPage() {
     setDialogReceipt(null);
   }
 
+  const abilityModelDialogRef = useDialogKeyboard<HTMLDivElement>({
+    open: Boolean(activeProfile),
+    onClose: closeAbilityModelDialog,
+    closeDisabled: savingRouting || audioPreviewCreating,
+  });
+  const cloudBindingDialogRef = useDialogKeyboard<HTMLDivElement>({
+    open: Boolean(cloudBindingDialogRow),
+    onClose: closeCloudBindingDialog,
+    closeDisabled: savingCloudBinding,
+  });
+
   const availableCloudMediaTabs = useMemo(
     () => CLOUD_MEDIA_ORDER.filter((media) => cloudAbilityRows.some((row) => row.media === media)),
     [cloudAbilityRows]
@@ -1190,12 +1212,14 @@ export default function AbilityModelsPage() {
   const activeCloudNativeAbilityRows = activeCloudMediaFilter === 'all'
     ? cloudAbilityRows
     : cloudAbilityRows.filter((row) => row.media === activeCloudMediaFilter);
-
-  useEffect(() => {
-    if (activeCloudMediaFilter !== 'all' && !availableCloudMediaTabs.includes(activeCloudMediaFilter)) {
-      setActiveCloudMediaFilter('all');
-    }
-  }, [activeCloudMediaFilter, availableCloudMediaTabs]);
+  const selectedAbilityModelRow = abilityModelRows.find((row) => row.profile.profile_id === focusedRowId)
+    || abilityModelRows[0]
+    || null;
+  const selectedCloudAbilityRow = activeCloudNativeAbilityRows.find((row) => row.ability_id === focusedRowId)
+    || activeCloudNativeAbilityRows[0]
+    || null;
+  const attentionRouteCount = abilityModelRows.filter((row) => abilityRouteStatus(row.profile, row.primaryInstance).status !== 'success').length;
+  const configurableCloudCount = cloudAbilityRows.filter((row) => row.can_configure).length;
 
   if (loading) {
     return <LoadingFallback />;
@@ -1203,301 +1227,182 @@ export default function AbilityModelsPage() {
 
   return (
     <BackofficePageStack>
-      <BackofficePrimaryPanel
+      <BackofficeLayer
         eyebrow={text('eyebrow', 'Runtime model routing')}
         title={text('title', 'Ability-model routing')}
         description={text('description', 'Configure shared plugin ability-to-model routing and Cloud-native runtime model bindings.')}
-        descriptionDisplay="hint"
         aside={(
-          <div className="flex flex-col items-start gap-2 xl:items-end">
-            <BackofficeStatusBadge label={text('badge_runtime_binding', 'Runtime binding')} status="success" />
-            <p className="text-sm font-medium text-slate-600 dark:text-slate-300">
-              {headerSummary}
-            </p>
-          </div>
+          <BackofficeStatusBadge label={text('badge_runtime_binding', 'Runtime binding')} status="success" />
         )}
-        contentClassName="py-5 md:py-5"
-      >
-        {pageMessage ? (
-          <BackofficeStackCard className="border-emerald-200 bg-emerald-50 text-sm text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950/25 dark:text-emerald-200">
-            {pageMessage}
-          </BackofficeStackCard>
-        ) : null}
-        {pageError ? (
-          <BackofficeStackCard className="border-rose-200 bg-rose-50 text-sm text-rose-800 dark:border-rose-900 dark:bg-rose-950/25 dark:text-rose-200">
-            {pageError}
-          </BackofficeStackCard>
-        ) : null}
-      </BackofficePrimaryPanel>
+      />
 
-      <div className="flex flex-wrap gap-2">
-        <BackofficeFilterPill
-          active={activeAbilityTab === 'wordpress'}
-          onClick={() => setActiveAbilityTab('wordpress')}
+      <BackofficeSummaryStrip items={[
+        { label: text('summary_shared_routes', 'Shared routes'), value: routeCount },
+        { label: text('summary_ability_scenarios', 'Ability scenarios'), value: abilityScenarioCount },
+        {
+          label: text('summary_attention', 'Needs attention'),
+          value: attentionRouteCount,
+          toneClassName: attentionRouteCount > 0 ? 'text-amber-700 dark:text-amber-300' : undefined,
+        },
+        { label: text('summary_cloud_dependencies', 'Cloud dependencies'), value: cloudAbilityRows.length },
+      ]} />
+
+      {pageMessage ? (
+        <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950/25 dark:text-emerald-200">
+          {pageMessage}
+        </div>
+      ) : null}
+      {pageError ? (
+        <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800 dark:border-rose-900 dark:bg-rose-950/25 dark:text-rose-200">
+          {pageError}
+        </div>
+      ) : null}
+
+      <div className="inline-flex w-fit rounded-xl border border-slate-200 bg-white p-1 dark:border-slate-800 dark:bg-slate-950" aria-label={text('surface_switcher', 'Runtime surface')}>
+        <button
+          type="button"
+          aria-pressed={activeAbilityTab === 'wordpress'}
+          className={cn('cursor-pointer rounded-lg px-3 py-2 text-sm font-semibold transition', activeAbilityTab === 'wordpress' ? 'bg-slate-950 text-white dark:bg-white dark:text-slate-950' : 'text-slate-600 hover:bg-slate-50 dark:text-slate-300 dark:hover:bg-slate-900')}
+          onClick={() => updateWorkspaceUrl({ surface: 'wordpress', media: null, focus: null })}
         >
           {text('tab_wordpress', 'Plugin ability routing')}
-        </BackofficeFilterPill>
-        <BackofficeFilterPill
-          active={activeAbilityTab === 'cloud'}
-          onClick={() => setActiveAbilityTab('cloud')}
+        </button>
+        <button
+          type="button"
+          aria-pressed={activeAbilityTab === 'cloud'}
+          className={cn('cursor-pointer rounded-lg px-3 py-2 text-sm font-semibold transition', activeAbilityTab === 'cloud' ? 'bg-slate-950 text-white dark:bg-white dark:text-slate-950' : 'text-slate-600 hover:bg-slate-50 dark:text-slate-300 dark:hover:bg-slate-900')}
+          onClick={() => updateWorkspaceUrl({ surface: 'cloud', focus: null })}
         >
           {text('tab_cloud', 'Cloud-native abilities')}
-        </BackofficeFilterPill>
+        </button>
       </div>
 
       {activeAbilityTab === 'wordpress' ? (
-        <BackofficeSectionPanel>
-        <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-          <div>
-            <h2 className="text-lg font-semibold text-slate-950 dark:text-white">
-              {text('wordpress_title', 'WordPress plugin AI ability-model routes')}
-            </h2>
-            <p className="mt-1 text-sm leading-6 text-slate-600 dark:text-slate-300">
-              {aiText('ability_models_desc', 'WordPress plugin AI ability scenarios mapped to Cloud runtime model configurations. Plugin-specific overrides can be added later when a plugin needs a different model.')}
-            </p>
-          </div>
-          <button
-            type="button"
-            className="btn btn-secondary justify-center"
-            disabled={loadingRouting}
-            onClick={() => void loadRouting()}
-          >
-            {loadingRouting ? aiText('loading', 'Loading...') : aiText('action_refresh', 'Refresh')}
-          </button>
-        </div>
-        <div className="mt-4 overflow-hidden rounded-lg border border-slate-200 dark:border-slate-800">
-          <div className="hidden grid-cols-[7rem_1.7fr_6rem_1.45fr_1.15fr_7rem] gap-3 border-b border-slate-200 bg-slate-50 px-4 py-3 text-xs font-semibold uppercase tracking-[0.16em] text-slate-500 dark:border-slate-800 dark:bg-slate-900/70 dark:text-slate-400 md:grid">
-            <span>{aiText('column_status', 'Status')}</span>
-            <span>{text('column_route_group', 'Ability scenario')}</span>
-            <span>{text('column_route_type', 'Type')}</span>
-            <span>{text('column_current_model', 'Current model')}</span>
-            <span>{text('column_runtime_policy', 'Runtime policy')}</span>
-            <span className="text-right">{aiText('column_actions', 'Actions')}</span>
-          </div>
-          {abilityModelRows.map((row) => (
-            <div
-              key={row.profile.profile_id}
-              className="grid gap-3 border-b border-slate-200 px-4 py-4 text-sm last:border-b-0 dark:border-slate-800 md:grid-cols-[7rem_1.7fr_6rem_1.45fr_1.15fr_7rem] md:items-center"
-            >
-              {(() => {
+        <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_22rem]">
+          <BackofficeSectionPanel className="overflow-hidden p-0 md:p-0">
+            <div className="flex flex-col gap-3 border-b border-slate-200 px-5 py-4 dark:border-slate-800 md:flex-row md:items-start md:justify-between md:px-6">
+              <div>
+                <h2 className="text-lg font-semibold text-slate-950 dark:text-white">{text('wordpress_title', 'WordPress plugin AI ability-model routes')}</h2>
+                <p className="mt-1 text-sm leading-6 text-slate-600 dark:text-slate-300">{text('wordpress_queue_desc', 'Select a shared route to inspect its active model and runtime policy. Plugin-specific overrides can be added later when a plugin needs a different model.')}</p>
+              </div>
+              <button type="button" className="btn btn-secondary btn-sm justify-center" disabled={loadingRouting} onClick={() => void loadRouting()}>
+                {loadingRouting ? aiText('loading', 'Loading...') : aiText('action_refresh', 'Refresh')}
+              </button>
+            </div>
+            <div className="max-h-[36rem] divide-y divide-slate-200 overflow-y-auto dark:divide-slate-800 xl:max-h-[42rem]">
+              {abilityModelRows.map((row) => {
                 const routeStatus = abilityRouteStatus(row.profile, row.primaryInstance);
-                return renderRouteStatus(routeStatus);
-              })()}
-              <div>
-                <div className="font-medium text-slate-950 dark:text-white">{abilityRouteTitle(row.profile)}</div>
-                <div className="mt-2 flex flex-wrap gap-1.5">
-                  {row.taskLabels.map((label) => (
-                    <span
-                      key={`${row.profile.profile_id}-${label}`}
-                      className="rounded-full border border-slate-200 px-2 py-0.5 text-xs text-slate-600 dark:border-slate-800 dark:text-slate-300"
-                    >
-                      {label}
-                    </span>
-                  ))}
-                </div>
-              </div>
-              <div>
-                <div className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500 dark:text-slate-400 md:hidden">
-                  {text('column_route_type', 'Type')}
-                </div>
-                <span className="mt-1 inline-flex rounded-full border border-slate-200 px-2 py-0.5 text-xs text-slate-600 dark:border-slate-800 dark:text-slate-300 md:mt-0">
-                  {row.routeTypeLabel}
-                </span>
-              </div>
-              <div className="text-slate-600 dark:text-slate-300">
-                <div className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500 dark:text-slate-400 md:hidden">
-                  {text('column_current_model', 'Current model')}
-                </div>
-                <div className="mt-1 text-sm font-medium text-slate-800 dark:text-slate-100 md:mt-0">
-                  {runtimeModelRouteLabel(row.primaryInstance)}
-                </div>
-              </div>
-              <div className="text-slate-600 dark:text-slate-300">
-                <div className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500 dark:text-slate-400 md:hidden">
-                  {text('column_runtime_policy', 'Runtime policy')}
-                </div>
-                <div className="mt-1 md:mt-0">{abilityRoutePolicySummary(row.profile)}</div>
-              </div>
-              <div className="md:text-right">
-                <button
-                  type="button"
-                  className="btn btn-secondary w-full justify-center md:w-auto"
-                  onClick={() => openAbilityModelDialog(row.profile.profile_id)}
-                >
-                  {aiText('action_configure', 'Configure')}
-                </button>
-              </div>
+                const selected = selectedAbilityModelRow?.profile.profile_id === row.profile.profile_id;
+                return (
+                  <button
+                    key={row.profile.profile_id}
+                    type="button"
+                    aria-pressed={selected}
+                    aria-controls="ability-route-inspector"
+                    className={cn('grid w-full cursor-pointer gap-3 px-5 py-4 text-left transition hover:bg-slate-50 dark:hover:bg-slate-900/45 md:grid-cols-[minmax(12rem,1.2fr)_minmax(10rem,1fr)_8rem] md:items-center md:px-6', selected && 'bg-blue-50/65 dark:bg-blue-950/20')}
+                    onClick={() => updateWorkspaceUrl({ focus: row.profile.profile_id })}
+                  >
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="font-semibold text-slate-950 dark:text-white">{abilityRouteTitle(row.profile)}</span>
+                        <span className="rounded-full border border-slate-200 px-2 py-0.5 text-xs text-slate-500 dark:border-slate-800 dark:text-slate-400">{row.routeTypeLabel}</span>
+                      </div>
+                      <p className="mt-1 truncate text-xs text-slate-500 dark:text-slate-400">{row.taskLabels.join(' · ')}</p>
+                    </div>
+                    <div className="min-w-0">
+                      <div className="text-xs font-medium text-slate-500 dark:text-slate-400">{text('column_current_model', 'Current model')}</div>
+                      <div className="mt-1 truncate text-sm font-medium text-slate-800 dark:text-slate-100">{runtimeModelRouteLabel(row.primaryInstance)}</div>
+                    </div>
+                    <div className="md:text-right">{renderRouteStatus(routeStatus)}</div>
+                  </button>
+                );
+              })}
+              {abilityModelRows.length ? null : (
+                <BackofficeEmptyState className="m-5 md:m-6" title={aiText('ability_models_empty', 'No plugin ability-model routing is available.')} description={aiText('ability_models_boundary_notice', 'This changes Cloud runtime model routing only. It does not enable plugin abilities, edit prompts, or write to WordPress.')} />
+              )}
             </div>
-          ))}
-          {abilityModelRows.length ? null : (
-            <div className="px-4 py-6 text-sm text-slate-500 dark:text-slate-400">
-              {loadingRouting
-                ? aiText('ability_models_loading', 'Loading ability-model routing...')
-                : aiText('ability_models_empty', 'No plugin ability-model routing is available.')}
-            </div>
-          )}
+          </BackofficeSectionPanel>
+
+          <BackofficeSectionPanel id="ability-route-inspector" className="h-fit xl:sticky xl:top-4">
+            {selectedAbilityModelRow ? (
+              <div className="space-y-5">
+                <div>
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">{text('inspector_shared_route', 'Shared route')}</p>
+                      <h2 className="mt-2 text-lg font-semibold text-slate-950 dark:text-white">{abilityRouteTitle(selectedAbilityModelRow.profile)}</h2>
+                    </div>
+                    {renderRouteStatus(abilityRouteStatus(selectedAbilityModelRow.profile, selectedAbilityModelRow.primaryInstance))}
+                  </div>
+                  <p className="mt-2 text-sm leading-6 text-slate-600 dark:text-slate-300">{selectedAbilityModelRow.profile.description || text('inspector_route_desc', 'Cloud runtime default shared by the listed plugin scenarios.')}</p>
+                </div>
+                <dl className="grid gap-3 text-sm">
+                  <div><dt className="text-xs font-medium text-slate-500 dark:text-slate-400">{text('column_current_model', 'Current model')}</dt><dd className="mt-1 font-semibold text-slate-950 dark:text-white">{runtimeModelRouteLabel(selectedAbilityModelRow.primaryInstance)}</dd></div>
+                  <div><dt className="text-xs font-medium text-slate-500 dark:text-slate-400">{text('column_runtime_policy', 'Runtime policy')}</dt><dd className="mt-1 text-slate-700 dark:text-slate-200">{abilityRoutePolicySummary(selectedAbilityModelRow.profile)}</dd></div>
+                  <div><dt className="text-xs font-medium text-slate-500 dark:text-slate-400">{text('inspector_used_by', 'Used by')}</dt><dd className="mt-2 flex flex-wrap gap-1.5">{selectedAbilityModelRow.taskLabels.map((label) => <span key={label} className="rounded-full border border-slate-200 px-2 py-1 text-xs text-slate-600 dark:border-slate-800 dark:text-slate-300">{label}</span>)}</dd></div>
+                </dl>
+                <button type="button" className="btn btn-primary w-full justify-center" onClick={() => openAbilityModelDialog(selectedAbilityModelRow.profile.profile_id)}>{aiText('action_configure', 'Configure')}</button>
+                <div className="rounded-xl bg-slate-50 p-3 text-xs leading-5 text-slate-500 dark:bg-slate-900/45 dark:text-slate-400">{text('plugin_default_notice', 'These are common defaults for plugin abilities. Plugin switches, prompts, approvals, and final WordPress writes stay in the local plugin path.')}</div>
+              </div>
+            ) : <BackofficeEmptyState title={text('inspector_empty_title', 'Select a shared route')} description={text('inspector_empty_desc', 'Choose a route from the directory to inspect its current model and runtime policy.')} />}
+          </BackofficeSectionPanel>
         </div>
-          <div className="mt-3 text-xs leading-5 text-slate-500 dark:text-slate-400">
-            {aiText('ability_models_boundary_notice', 'This changes Cloud runtime model routing only. It does not enable plugin abilities, edit prompts, or write to WordPress.')}
-          </div>
-        <div className="mt-2 text-xs leading-5 text-slate-500 dark:text-slate-400">
-          {text('plugin_default_notice', 'These are common defaults for plugin abilities. Plugin switches, prompts, approvals, and final WordPress writes stay in the local plugin path.')}
-        </div>
-        </BackofficeSectionPanel>
       ) : null}
 
       {activeAbilityTab === 'cloud' ? (
-        <BackofficeSectionPanel>
-          <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-            <div>
-              <h2 className="text-lg font-semibold text-slate-950 dark:text-white">
-                {text('cloud_native_title', 'Cloud runtime dependencies')}
-              </h2>
-              <p className="mt-1 text-sm leading-6 text-slate-600 dark:text-slate-300">
-                {text('cloud_native_desc', 'Read-only projection for Cloud-owned services. It shows runtime dependencies and only exposes bounded model binding where Cloud supports it.')}
-              </p>
-            </div>
-            <BackofficeStatusBadge label={text('cloud_native_badge_runtime_binding', 'Runtime binding')} status="success" />
-          </div>
-
-          {cloudAbilityRows.length > 0 ? (
-            <>
-              <div className="mt-4 overflow-hidden rounded-lg border border-slate-200 dark:border-slate-800">
-              <div className="hidden grid-cols-[7rem_8rem_1.55fr_1.05fr_1.3fr_9rem] gap-3 border-b border-slate-200 bg-slate-50 px-4 py-3 text-xs font-semibold uppercase tracking-[0.16em] text-slate-500 dark:border-slate-800 dark:bg-slate-900/70 dark:text-slate-400 md:grid md:items-center">
-                <span>{aiText('column_status', 'Status')}</span>
-                <span>
-                  <select
-                    className="h-8 w-full rounded-md border border-slate-200 bg-white px-2 text-xs font-semibold normal-case tracking-normal text-slate-700 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-200"
-                    value={activeCloudMediaFilter}
-                    onChange={(event) => setActiveCloudMediaFilter(event.target.value as CloudAbilityMediaFilter)}
-                    aria-label={text('field_category_filter', 'Category filter')}
-                  >
-                    <option value="all">{text('filter_category_all', 'All categories')}</option>
-                    {availableCloudMediaTabs.map((tab) => (
-                      <option key={tab} value={tab}>
-                        {text(`cloud_media_tab_${tab}`, tab)}
-                      </option>
-                    ))}
-                  </select>
-                </span>
-                <span>{aiText('column_ability', 'Ability')}</span>
-                <span>{text('column_runtime_dependency', 'Runtime dependency')}</span>
-                <span>{text('column_current_runtime', 'Current runtime')}</span>
-                <span className="text-right">{aiText('column_actions', 'Actions')}</span>
+        <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_22rem]">
+          <BackofficeSectionPanel className="overflow-hidden p-0 md:p-0">
+            <div className="border-b border-slate-200 px-5 py-4 dark:border-slate-800 md:px-6">
+              <h2 className="text-lg font-semibold text-slate-950 dark:text-white">{text('cloud_native_title', 'Cloud runtime dependencies')}</h2>
+              <p className="mt-1 text-sm leading-6 text-slate-600 dark:text-slate-300">{text('cloud_native_desc', 'Read-only projection for Cloud-owned services. It shows runtime dependencies and only exposes bounded model binding where Cloud supports it.')}</p>
+              <div className="mt-3 flex flex-wrap gap-2" aria-label={text('field_category_filter', 'Category filter')}>
+                {(['all', ...availableCloudMediaTabs] as CloudAbilityMediaFilter[]).map((media) => (
+                  <button key={media} type="button" aria-pressed={activeCloudMediaFilter === media} className={cn('cursor-pointer rounded-full border px-3 py-1.5 text-xs font-medium transition', activeCloudMediaFilter === media ? 'border-blue-300 bg-blue-50 text-blue-700 dark:border-blue-800 dark:bg-blue-950/30 dark:text-blue-200' : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-300')} onClick={() => updateWorkspaceUrl({ media, focus: null })}>
+                    {media === 'all' ? text('filter_category_all', 'All categories') : text(`cloud_media_tab_${media}`, media)}
+                  </button>
+                ))}
               </div>
-              {activeCloudNativeAbilityRows.length > 0 ? (
-                activeCloudNativeAbilityRows.map((row) => (
-                  <div
-                    key={row.ability_id}
-                    className="grid gap-3 border-b border-slate-200 px-4 py-4 text-sm last:border-b-0 dark:border-slate-800 md:grid-cols-[7rem_8rem_1.55fr_1.05fr_1.3fr_9rem] md:items-center"
-                  >
-                    <div>
-                      <div className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500 dark:text-slate-400 md:hidden">
-                        {aiText('column_status', 'Status')}
-                      </div>
-                      <div className={`mt-1 text-sm font-medium md:mt-0 ${cloudAbilityStatusClassName(row.status)}`}>
-                        {cloudAbilityStatusLabel(row.status)}
-                      </div>
-                    </div>
-                    <div>
-                      <div className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500 dark:text-slate-400 md:hidden">
-                        {text('column_category', 'Category')}
-                      </div>
-                      <span className="mt-1 inline-flex rounded-full border border-slate-200 px-2 py-0.5 text-xs text-slate-600 dark:border-slate-800 dark:text-slate-300 md:mt-0">
-                        {text(`cloud_media_tab_${row.media}`, row.media)}
-                      </span>
-                    </div>
-                    <div>
-                      <div className="font-medium text-slate-950 dark:text-white">{cloudAbilityLabel(row)}</div>
-                      <div className="mt-1 text-xs leading-5 text-slate-500 dark:text-slate-400">{cloudAbilityDescription(row)}</div>
-                      <details className="mt-2 text-xs text-slate-500 dark:text-slate-400">
-                        <summary className="cursor-pointer select-none font-medium text-slate-600 hover:text-slate-900 dark:text-slate-300 dark:hover:text-white">
-                          {text('cloud_native_internal_details', 'Internal details')}
-                        </summary>
-                        <dl className="mt-2 grid gap-1 rounded-lg bg-slate-50 p-2 dark:bg-slate-900/45">
-                          <div className="grid gap-1 sm:grid-cols-[6rem_1fr]">
-                            <dt>{text('cloud_native_internal_config_id', 'Config ID')}</dt>
-                            <dd className="font-mono text-slate-700 dark:text-slate-200">
-                              {row.profile_id || text('cloud_native_internal_none', 'None')}
-                            </dd>
-                          </div>
-                          <div className="grid gap-1 sm:grid-cols-[6rem_1fr]">
-                            <dt>{text('cloud_native_internal_supplier', 'Supplier')}</dt>
-                            <dd>{row.provider_id ? providerDisplayName(row.provider_id) : text('cloud_native_internal_managed', 'Cloud managed')}</dd>
-                          </div>
-                          <div className="grid gap-1 sm:grid-cols-[6rem_1fr]">
-                            <dt>{text('cloud_native_internal_model', 'Model')}</dt>
-                            <dd>{row.model_id || text('cloud_native_internal_no_model', 'No model binding required')}</dd>
-                          </div>
-                        </dl>
-                      </details>
-                    </div>
-                    <div className="text-slate-600 dark:text-slate-300">
-                      <div className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500 dark:text-slate-400 md:hidden">
-                        {text('column_runtime_dependency', 'Runtime dependency')}
-                      </div>
-                      <div className="mt-1 md:mt-0">{cloudAbilityModelKindLabel(row.model_kind)}</div>
-                    </div>
-                    <div className="text-slate-600 dark:text-slate-300">
-                      <div className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500 dark:text-slate-400 md:hidden">
-                        {text('column_current_runtime', 'Current runtime')}
-                      </div>
-                      <div className="mt-1 font-medium text-slate-800 dark:text-slate-100 md:mt-0">
-                        {cloudAbilityRuntimeLabel(row)}
-                      </div>
-                      {!row.provider_id && !row.model_id ? (
-                        <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                          {text('cloud_native_no_model_note', 'No separate provider/model choice is required for this row.')}
-                        </div>
-                      ) : null}
-                    </div>
-                    <div className="text-right">
-                      {row.can_configure ? (
-                        <button
-                          type="button"
-                          className="btn btn-secondary justify-center"
-                          onClick={() => openCloudBindingDialog(row)}
-                        >
-                          {text('cloud_native_action_configure_model', 'Configure model')}
-                        </button>
-                      ) : (
-                        <span className="inline-flex max-w-full justify-end text-xs font-medium leading-5 text-slate-500 dark:text-slate-400">
-                          {cloudManagedDependencyLabel(row)}
-                        </span>
-                      )}
-                    </div>
-                  </div>
-                ))
-              ) : (
-                <div className="px-4 py-6 text-sm text-slate-500 dark:text-slate-400">
-                  {text('cloud_category_filter_empty', 'No Cloud runtime abilities match this category.')}
-                </div>
-              )}
-              </div>
-            </>
-          ) : null}
-
-          {cloudAbilityRows.length === 0 ? (
-            <div className="mt-4">
-              <BackofficeEmptyState
-                title={text('cloud_all_empty_title', 'No Cloud runtime abilities')}
-                description={text('cloud_all_empty_desc', 'No read-only runtime projection is available yet.')}
-              />
             </div>
-          ) : null}
+            <div className="max-h-[36rem] divide-y divide-slate-200 overflow-y-auto dark:divide-slate-800 xl:max-h-[42rem]">
+              {activeCloudNativeAbilityRows.map((row) => {
+                const selected = selectedCloudAbilityRow?.ability_id === row.ability_id;
+                return (
+                  <button key={row.ability_id} type="button" aria-pressed={selected} aria-controls="cloud-dependency-inspector" className={cn('grid w-full cursor-pointer gap-3 px-5 py-4 text-left transition hover:bg-slate-50 dark:hover:bg-slate-900/45 md:grid-cols-[minmax(12rem,1.2fr)_minmax(9rem,0.8fr)_8rem] md:items-center md:px-6', selected && 'bg-blue-50/65 dark:bg-blue-950/20')} onClick={() => updateWorkspaceUrl({ focus: row.ability_id })}>
+                    <div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><span className="font-semibold text-slate-950 dark:text-white">{cloudAbilityLabel(row)}</span><span className="rounded-full border border-slate-200 px-2 py-0.5 text-xs text-slate-500 dark:border-slate-800 dark:text-slate-400">{text(`cloud_media_tab_${row.media}`, row.media)}</span></div><p className="mt-1 truncate text-xs text-slate-500 dark:text-slate-400">{cloudAbilityDescription(row)}</p></div>
+                    <div className="min-w-0"><div className="text-xs font-medium text-slate-500 dark:text-slate-400">{text('column_current_runtime', 'Current runtime')}</div><div className="mt-1 truncate text-sm font-medium text-slate-800 dark:text-slate-100">{cloudAbilityRuntimeLabel(row)}</div></div>
+                    <div className={cn('text-sm font-medium md:text-right', cloudAbilityStatusClassName(row.status))}>{cloudAbilityStatusLabel(row.status)}</div>
+                  </button>
+                );
+              })}
+              {activeCloudNativeAbilityRows.length ? null : <BackofficeEmptyState className="m-5 md:m-6" title={text('cloud_all_empty_title', 'No Cloud runtime abilities')} description={activeCloudMediaFilter === 'all' ? text('cloud_all_empty_desc', 'No read-only runtime projection is available yet.') : text('cloud_category_filter_empty', 'No Cloud runtime abilities match this category.')} />}
+            </div>
+          </BackofficeSectionPanel>
 
-          <div className="mt-3 text-xs leading-5 text-slate-500 dark:text-slate-400">
-            {text('cloud_native_boundary_notice', 'This surface only binds supported Cloud runtime models. It does not define abilities, edit prompts or routers, or write to WordPress.')}
-          </div>
-        </BackofficeSectionPanel>
+          <BackofficeSectionPanel id="cloud-dependency-inspector" className="h-fit xl:sticky xl:top-4">
+            {selectedCloudAbilityRow ? (
+              <div className="space-y-5">
+                <div><div className="flex items-start justify-between gap-3"><div><p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">{text('inspector_cloud_dependency', 'Cloud dependency')}</p><h2 className="mt-2 text-lg font-semibold text-slate-950 dark:text-white">{cloudAbilityLabel(selectedCloudAbilityRow)}</h2></div><span className={cn('text-xs font-semibold', cloudAbilityStatusClassName(selectedCloudAbilityRow.status))}>{cloudAbilityStatusLabel(selectedCloudAbilityRow.status)}</span></div><p className="mt-2 text-sm leading-6 text-slate-600 dark:text-slate-300">{cloudAbilityDescription(selectedCloudAbilityRow)}</p></div>
+                <dl className="grid gap-3 text-sm">
+                  <div><dt className="text-xs font-medium text-slate-500 dark:text-slate-400">{text('column_runtime_dependency', 'Runtime dependency')}</dt><dd className="mt-1 font-medium text-slate-950 dark:text-white">{cloudAbilityModelKindLabel(selectedCloudAbilityRow.model_kind)}</dd></div>
+                  <div><dt className="text-xs font-medium text-slate-500 dark:text-slate-400">{text('column_current_runtime', 'Current runtime')}</dt><dd className="mt-1 font-medium text-slate-950 dark:text-white">{cloudAbilityRuntimeLabel(selectedCloudAbilityRow)}</dd></div>
+                  <div><dt className="text-xs font-medium text-slate-500 dark:text-slate-400">{text('cloud_native_internal_config_id', 'Config ID')}</dt><dd className="mt-1 break-all font-mono text-xs text-slate-700 dark:text-slate-200">{selectedCloudAbilityRow.profile_id || text('cloud_native_internal_none', 'None')}</dd></div>
+                </dl>
+                {selectedCloudAbilityRow.can_configure ? <button type="button" className="btn btn-primary w-full justify-center" onClick={() => openCloudBindingDialog(selectedCloudAbilityRow)}>{text('cloud_native_action_configure_model', 'Configure model')}</button> : <div className="rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-600 dark:border-slate-800 dark:text-slate-300">{cloudManagedDependencyLabel(selectedCloudAbilityRow)}</div>}
+                <div className="rounded-xl bg-slate-50 p-3 text-xs leading-5 text-slate-500 dark:bg-slate-900/45 dark:text-slate-400">{text('cloud_native_boundary_notice', 'This surface only binds supported Cloud runtime models. It does not define abilities, edit prompts or routers, or write to WordPress.')}</div>
+              </div>
+            ) : <BackofficeEmptyState title={text('cloud_inspector_empty_title', 'Select a runtime dependency')} description={text('cloud_inspector_empty_desc', 'Choose a Cloud dependency to inspect its current runtime binding.')} />}
+          </BackofficeSectionPanel>
+        </div>
       ) : null}
 
       {activeProfile && typeof document !== 'undefined' ? createPortal((
         <div
+          ref={abilityModelDialogRef}
           className="fixed inset-0 z-[2147483647] flex items-center justify-center p-4"
           role="dialog"
           aria-modal="true"
           aria-labelledby="ability-model-dialog-title"
+          tabIndex={-1}
         >
           <div className="absolute inset-0 bg-slate-950/55" />
           <div className="relative z-10 max-h-[90vh] w-full max-w-6xl overflow-y-auto rounded-2xl bg-white p-6 shadow-2xl dark:bg-slate-950">
@@ -1954,10 +1859,12 @@ export default function AbilityModelsPage() {
 
       {cloudBindingDialogRow && typeof document !== 'undefined' ? createPortal((
         <div
+          ref={cloudBindingDialogRef}
           className="fixed inset-0 z-[2147483647] flex items-center justify-center p-4"
           role="dialog"
           aria-modal="true"
           aria-labelledby="cloud-binding-dialog-title"
+          tabIndex={-1}
         >
           <div className="absolute inset-0 bg-slate-950/55" />
           <div className="relative z-10 max-h-[90vh] w-full max-w-3xl overflow-y-auto rounded-2xl bg-white p-6 shadow-2xl dark:bg-slate-950">

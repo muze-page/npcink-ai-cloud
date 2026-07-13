@@ -65,6 +65,14 @@ separate purchasable consumption budget. Vector chunks and sync-per-run limits
 remain implementation detail unless a future contract explicitly promotes them
 to visible package capacity.
 
+Site Knowledge index maintenance is measured separately from ordinary AI
+inference credits. The canonical `npcink-cloud/site-knowledge-sync` ability
+records run/provider/token/cost and vector-volume evidence with
+`metering_class=site_knowledge_index_maintenance`, but those events do not write
+AI-credit consume entries. Cloud derives this class from the ability name; a
+caller-provided payload cannot request it. Site Knowledge search and downstream
+writing or generation remain ordinary AI-credit consumers.
+
 ## Feature Rule Fields
 
 Feature charge rules use `AI_CREDIT_FEATURE_CHARGE_RULES_VERSION=ai-credit-feature-charge-rules-v1`.

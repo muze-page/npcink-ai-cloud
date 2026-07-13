@@ -3,8 +3,10 @@ import { resolve } from 'node:path';
 import assert from 'node:assert/strict';
 
 const usagePagePath = resolve(process.cwd(), 'src/app/portal/usage/page.tsx');
+const creditTrendPath = resolve(process.cwd(), 'src/components/portal/PortalCreditTrendPanel.tsx');
 const i18nPath = resolve(process.cwd(), 'src/lib/i18n.ts');
 const source = readFileSync(usagePagePath, 'utf8');
+const creditTrendSource = readFileSync(creditTrendPath, 'utf8');
 const i18nSource = readFileSync(i18nPath, 'utf8');
 const headerBeforeSummary = source.slice(
   source.indexOf('<PortalWorkspaceHeader'),
@@ -23,7 +25,7 @@ assert.match(
 assert.match(
   source,
   /data-portal-usage="usage-records"/,
-  'portal usage page must expose usage records as the primary surface'
+  'portal usage page must expose customer-readable usage records'
 );
 assert.doesNotMatch(
   source,
@@ -37,20 +39,27 @@ assert.doesNotMatch(
 );
 assert.match(
   headerMetricDefinition,
-  /header_period_detail[\s\S]*header_updated_detail/,
-  'portal usage header must stay at status, period, and update context'
+  /period_end_detail/,
+  'portal usage header must show the exact period end as secondary context'
 );
-
 assert.doesNotMatch(
-  source,
-  /data-portal-usage="ledger-detail"/,
-  'point records must be visible by default, not hidden behind a ledger disclosure'
+  headerMetricDefinition,
+  /context_generated|header_updated_detail/,
+  'portal usage header must not render a standalone generated-time metric'
 );
+assert.match(source, /updated_at_inline/, 'latest update time must remain as subtle inline context');
 
 assert.match(
   source,
-  /data-portal-usage="usage-detail"/,
-  'usage trends, provider cost, and entitlement detail must be grouped behind an explicit detail disclosure'
+  /view_tab_trend[\s\S]*view_tab_records/,
+  'trend and point records must be available as task tabs'
+);
+assert.doesNotMatch(source, /view_tab_details|PortalUsageAdvancedDetails|usage-detail/);
+assert.doesNotMatch(source, /<details[\s\S]*data-portal-usage="ledger-detail"/);
+assert.match(
+  source,
+  /searchParams\.get\('view'\)[\s\S]*window\.history\.replaceState[\s\S]*`\/portal\/usage/,
+  'usage tabs and retired view links must keep the URL canonical'
 );
 
 assert.doesNotMatch(
@@ -64,16 +73,19 @@ assert.match(
   'portal usage page must load the account-level usage bundle'
 );
 
-const summaryIndex = source.indexOf('data-portal-usage="usage-records"');
-const detailIndex = source.indexOf('data-portal-usage="usage-detail"');
-const trendsIndex = source.indexOf("t('portal.usage.trends_title'");
-const costIndex = source.indexOf("t('portal.usage.cost_summary_title'");
+const summaryIndex = source.indexOf('data-portal-usage="current-summary"');
+const viewTabsIndex = source.indexOf('data-portal-usage="view-tabs"');
+const trendIndex = source.indexOf('<PortalCreditTrendPanel');
+const ledgerIndex = source.indexOf('data-portal-usage="ledger-detail"');
+const recordsIndex = source.indexOf('data-portal-usage="usage-records"');
 
-assert.ok(summaryIndex >= 0, 'usage records marker must exist');
+assert.ok(summaryIndex >= 0, 'current-period summary marker must exist');
+assert.ok(viewTabsIndex > summaryIndex, 'usage task tabs must follow the persistent current-period summary');
 assert.equal(source.indexOf('data-portal-usage="current-package"'), -1, 'current package card must move to package page');
-assert.ok(detailIndex > summaryIndex, 'usage details must stay after the usage summary');
-assert.ok(trendsIndex > detailIndex, 'usage trends must be inside the detail disclosure');
-assert.ok(costIndex > detailIndex, 'provider cost summary must be inside the detail disclosure');
+assert.ok(trendIndex > viewTabsIndex, 'point trend must follow the usage task tabs');
+assert.match(creditTrendSource, /data-portal-usage="primary-trend"/);
+assert.ok(ledgerIndex > trendIndex, 'point-record tab panel must follow the trend panel');
+assert.ok(recordsIndex > ledgerIndex, 'usage records must stay inside their tab panel');
 assert.equal(source.indexOf("t('portal.usage.entitlement_title'"), -1, 'package entitlement detail must move to package page');
 assert.equal(source.indexOf("t('portal.usage.quota_headroom_title'"), -1, 'package quota headroom must move to package page');
 assert.doesNotMatch(
@@ -81,11 +93,9 @@ assert.doesNotMatch(
   /credit_packs_title|payment_orders_title|handleCreateCreditPackOrder|createCreditPackOrder/,
   'package purchase and payment order actions must live on the package page, not usage'
 );
-assert.match(
-  source,
-  /chartTotals[\s\S]*trend_service_detail[\s\S]*trend_points_detail[\s\S]*trend_budget_detail[\s\S]*trend_empty/,
-  'usage trend cards must show totals and an explicit empty state instead of blank chart panels'
-);
+assert.match(source, /formatUsagePeriodRange[\s\S]*month:[\s\S]*day:/);
+assert.match(source, /formatUsagePeriodEnd[\s\S]*year:[\s\S]*hour:/);
+assert.match(source, /PORTAL_USAGE_VIEWS[^=]*= \['trend', 'records'\]/);
 assert.doesNotMatch(
   source,
   /entry\.explanation|entry\.unit|formatSignedCreditDelta/,
@@ -93,13 +103,31 @@ assert.doesNotMatch(
 );
 assert.match(
   source,
-  /feature_key[\s\S]*credit_ledger_feature_[\s\S]*credit_ledger_service_used_suffix[\s\S]*credit_ledger_credit_deducted/,
-  'customer point ledger must show the concrete backend-provided feature and point deduction copy'
+  /top_feature_key[\s\S]*credit_ledger_feature_[\s\S]*formatCreditPoints/,
+  'customer point summaries must show the main feature and total points'
 );
 assert.match(
   source,
-  /getAccountCreditLedger\([\s\S]*offset: nextOffset[\s\S]*<ListPagination[\s\S]*total=\{creditLedgerCount\}/,
-  'customer point ledger must expose older records through pagination'
+  /getAccountCreditEventBuckets\([\s\S]*offset: nextOffset[\s\S]*<ListPagination[\s\S]*total=\{creditEventCount\}/,
+  'customer point summaries must expose filtered history through pagination'
+);
+assert.match(source, /creditEventBucketSize[\s\S]*'30m'[\s\S]*selectedCreditBucket/);
+assert.match(source, /startAt: bucket\.start_at[\s\S]*endAt: bucket\.end_at/);
+assert.match(source, /component_count[\s\S]*support_reference/);
+assert.match(
+  source,
+  /getAccountCreditTrend\([\s\S]*creditTrendWindow[\s\S]*creditLedgerSiteId/,
+  'point trend must use the account credit ledger projection and follow the selected site scope'
+);
+assert.match(
+  creditTrendSource,
+  /'1h'[\s\S]*'24h'[\s\S]*'7d'[\s\S]*'30d'[\s\S]*trend_empty_title[\s\S]*trend_empty_desc/,
+  'point trend must provide four ranges and an explicit zero-usage state'
+);
+assert.doesNotMatch(
+  creditTrendSource,
+  /UsageBarChart[\s\S]*type="tokens"/,
+  'customer point trend must not render provider token totals as points'
 );
 assert.doesNotMatch(
   source,
@@ -117,12 +145,30 @@ for (const key of [
   'portal.usage.summary_title',
   'portal.usage.summary_desc',
   'portal.usage.header_period_detail',
-  'portal.usage.header_updated_detail',
-  'portal.usage.detail_toggle',
-  'portal.usage.trend_empty',
-  'portal.usage.trend_service_detail',
+  'portal.usage.period_end_detail',
+  'portal.usage.updated_at_inline',
+  'portal.usage.overview_title',
+  'portal.usage.overview_desc',
+  'portal.usage.overview_available_detail',
+  'portal.usage.period_used_label',
+  'portal.usage.overview_paid_detail',
+  'portal.usage.next_expiry_label',
+  'portal.usage.overview_no_expiry_detail',
+  'portal.usage.primary_trend_title',
+  'portal.usage.primary_trend_desc',
+  'portal.usage.view_tabs_label',
+  'portal.usage.view_tab_trend',
+  'portal.usage.view_tab_records',
+  'portal.usage.trend_window_label',
+  'portal.usage.trend_window_1h',
+  'portal.usage.trend_window_24h',
+  'portal.usage.trend_window_7d',
+  'portal.usage.trend_window_30d',
+  'portal.usage.trend_empty_title',
+  'portal.usage.trend_empty_desc',
+  'portal.usage.trend_total',
+  'portal.usage.trend_chart_label',
   'portal.usage.trend_points_detail',
-  'portal.usage.trend_budget_detail',
   'portal.usage.period_label',
   'portal.usage.used_label',
   'portal.usage.included_label',

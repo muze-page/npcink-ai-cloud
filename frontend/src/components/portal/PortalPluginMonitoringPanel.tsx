@@ -1,13 +1,13 @@
 'use client';
 
 import {
-  BackofficeEmptyState,
-  BackofficeMetricStrip,
-  BackofficeSectionPanel,
-  BackofficeStackCard,
-} from '@/components/backoffice/BackofficeScaffold';
-import { BackofficeStatusBadge } from '@/components/backoffice/BackofficeStatusBadge';
-import { BackofficeTag } from '@/components/backoffice/BackofficeTag';
+  PortalScaffoldEmptyState,
+  PortalMetricStrip,
+  PortalSection,
+  PortalCard,
+} from '@/components/portal/PortalScaffold';
+import { PortalStatusBadge } from '@/components/portal/PortalStatusBadge';
+import { PortalTag } from '@/components/portal/PortalTag';
 import { AnalyticsBarChart, AnalyticsLineChart } from '@/components/ui/EChartsWrapper';
 import { useLocale } from '@/contexts/LocaleContext';
 import type { PortalPluginObservabilitySummary } from '@/lib/portal-client';
@@ -183,7 +183,7 @@ export function PortalPluginMonitoringPanel({
   ];
 
   return (
-    <BackofficeSectionPanel className="space-y-4">
+    <PortalSection className="space-y-4">
       <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
         <div>
 	          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-gray-500 dark:text-gray-400">
@@ -210,15 +210,15 @@ export function PortalPluginMonitoringPanel({
       </div>
 
       {isLoading ? (
-        <BackofficeStackCard className="text-sm text-slate-600 dark:text-slate-300">
+        <PortalCard className="text-sm text-slate-600 dark:text-slate-300">
           {t('common.loading')}
-        </BackofficeStackCard>
+        </PortalCard>
       ) : error ? (
-        <BackofficeStackCard className="border-red-200 bg-red-50/70 text-sm text-red-700 dark:border-red-900/60 dark:bg-red-950/20 dark:text-red-200">
+        <PortalCard className="border-red-200 bg-red-50/70 text-sm text-red-700 dark:border-red-900/60 dark:bg-red-950/20 dark:text-red-200">
           {error}
-        </BackofficeStackCard>
+        </PortalCard>
       ) : !hasEvents ? (
-	        <BackofficeEmptyState
+	        <PortalScaffoldEmptyState
 	          title={t('portal.monitoring.empty_title', {}, 'No connection activity yet')}
 	          description={t(
 	            'portal.monitoring.empty_desc',
@@ -228,7 +228,7 @@ export function PortalPluginMonitoringPanel({
 	        />
       ) : (
         <>
-          <BackofficeMetricStrip
+          <PortalMetricStrip
             columnsClassName="md:grid-cols-4"
             items={[
 	              {
@@ -256,7 +256,7 @@ export function PortalPluginMonitoringPanel({
           />
 
           {health || attention.length ? (
-            <BackofficeStackCard className="space-y-3">
+            <PortalCard className="space-y-3">
               <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
                 <div>
                   <p className="text-xs font-semibold uppercase tracking-[0.16em] text-gray-500 dark:text-gray-400">
@@ -267,7 +267,7 @@ export function PortalPluginMonitoringPanel({
                   </h3>
                 </div>
                 {health ? (
-                  <BackofficeStatusBadge
+                  <PortalStatusBadge
 	                    status={health.status}
 	                    label={t(`status.${health.status}`, {}, health.status)}
                     className="shrink-0"
@@ -285,7 +285,7 @@ export function PortalPluginMonitoringPanel({
                     >
 	                      <div className="flex items-start justify-between gap-2">
 	                        <p className="font-semibold text-slate-950 dark:text-white">{copy.title}</p>
-	                        <BackofficeTag tone={attentionTone(item.severity)}>{t(`status.${item.severity}`, {}, item.severity)}</BackofficeTag>
+	                        <PortalTag tone={attentionTone(item.severity)}>{t(`status.${item.severity}`, {}, item.severity)}</PortalTag>
 	                      </div>
 	                      <p className="mt-2 text-xs leading-5 text-slate-600 dark:text-slate-300">{copy.detail}</p>
 	                      {copy.action ? (
@@ -298,11 +298,11 @@ export function PortalPluginMonitoringPanel({
                   })}
                 </div>
               ) : null}
-            </BackofficeStackCard>
+            </PortalCard>
           ) : null}
 
           {digest && !compact ? (
-            <BackofficeStackCard className="space-y-3">
+            <PortalCard className="space-y-3">
               <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
                 <div>
                   <p className="text-xs font-semibold uppercase tracking-[0.16em] text-gray-500 dark:text-gray-400">
@@ -312,7 +312,7 @@ export function PortalPluginMonitoringPanel({
                     {digestHeadline}
                   </h3>
                 </div>
-                <BackofficeTag tone="info">{`${digest.window_hours || summary?.window?.hours || 24}h`}</BackofficeTag>
+                <PortalTag tone="info">{`${digest.window_hours || summary?.window?.hours || 24}h`}</PortalTag>
               </div>
               {digestBullets.length ? (
                 <div className="grid gap-2 md:grid-cols-2">
@@ -326,12 +326,12 @@ export function PortalPluginMonitoringPanel({
                   ))}
                 </div>
               ) : null}
-            </BackofficeStackCard>
+            </PortalCard>
           ) : null}
 
           {!compact ? (
             <div className="grid gap-3 lg:grid-cols-2">
-              <BackofficeStackCard className="space-y-3">
+              <PortalCard className="space-y-3">
                 <div>
                   <p className="text-xs font-semibold uppercase tracking-[0.16em] text-gray-500 dark:text-gray-400">
                     {t('portal.monitoring.trend_label', {}, 'Trend')}
@@ -348,8 +348,8 @@ export function PortalPluginMonitoringPanel({
                   primaryColor="#2563eb"
                   secondaryColor="#f59e0b"
                 />
-              </BackofficeStackCard>
-              <BackofficeStackCard className="space-y-3">
+              </PortalCard>
+              <PortalCard className="space-y-3">
                 <div>
                   <p className="text-xs font-semibold uppercase tracking-[0.16em] text-gray-500 dark:text-gray-400">
 	                    {t('portal.monitoring.plugin_compare_label', {}, 'Connection parts')}
@@ -365,31 +365,31 @@ export function PortalPluginMonitoringPanel({
                   height={220}
                   barColor={hasPluginErrors ? '#f59e0b' : '#2563eb'}
                 />
-              </BackofficeStackCard>
+              </PortalCard>
             </div>
           ) : null}
 
           <div className={cn('grid gap-3', compact ? 'lg:grid-cols-3' : 'lg:grid-cols-3')}>
             {plugins.map((plugin) => (
-              <BackofficeStackCard key={plugin.plugin_slug} className="space-y-3">
+              <PortalCard key={plugin.plugin_slug} className="space-y-3">
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
 	                    <p className="truncate text-sm font-semibold text-slate-950 dark:text-white">
 	                      {pluginLabel(plugin.plugin_slug)}
 	                    </p>
                   </div>
-                  <BackofficeStatusBadge
+                  <PortalStatusBadge
                     status={successStatus(plugin.success_rate, plugin.error_total)}
                     label={plugin.error_total > 0 ? t('common.warning', {}, 'Warning') : t('common.ok', {}, 'OK')}
                     className="shrink-0 text-[0.68rem]"
                   />
                 </div>
                 <div className="flex flex-wrap gap-2 text-xs text-slate-600 dark:text-slate-300">
-	                  <BackofficeTag>{formatNumber(plugin.events_total)} {t('portal.monitoring.events', {}, 'Activity')}</BackofficeTag>
-	                  <BackofficeTag tone={plugin.error_total > 0 ? 'warning' : 'success'}>
+	                  <PortalTag>{formatNumber(plugin.events_total)} {t('portal.monitoring.events', {}, 'Activity')}</PortalTag>
+	                  <PortalTag tone={plugin.error_total > 0 ? 'warning' : 'success'}>
 	                    {formatNumber(plugin.error_total)} {t('portal.monitoring.errors', {}, 'Issues')}
-	                  </BackofficeTag>
-                  <BackofficeTag>{formatSuccessRate(plugin.success_rate)}</BackofficeTag>
+	                  </PortalTag>
+                  <PortalTag>{formatSuccessRate(plugin.success_rate)}</PortalTag>
                 </div>
                 {!compact && plugin.event_kinds.length ? (
                   <details className="border-t border-slate-200/80 pt-3 text-xs dark:border-slate-800">
@@ -410,12 +410,12 @@ export function PortalPluginMonitoringPanel({
                     </div>
                   </details>
                 ) : null}
-              </BackofficeStackCard>
+              </PortalCard>
             ))}
           </div>
 
           {!compact && recentErrors.length ? (
-            <BackofficeStackCard className="space-y-3">
+            <PortalCard className="space-y-3">
               <div>
                 <p className="text-sm font-semibold text-slate-950 dark:text-white">
 	                  {t('portal.monitoring.recent_errors', {}, 'Recent issues')}
@@ -437,10 +437,10 @@ export function PortalPluginMonitoringPanel({
                   </div>
                 ))}
               </div>
-            </BackofficeStackCard>
+            </PortalCard>
           ) : null}
         </>
       )}
-    </BackofficeSectionPanel>
+    </PortalSection>
   );
 }

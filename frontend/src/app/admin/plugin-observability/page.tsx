@@ -1,15 +1,17 @@
 'use client';
 
-import React, { Suspense, useCallback, useEffect, useMemo, useState } from 'react';
+import React, { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { LoadingFallback } from '@/components/ui/LoadingFallback';
+import { useToast } from '@/components/ui/Toast';
 import { useLocale } from '@/contexts/LocaleContext';
 import {
   BackofficeEmptyState,
-  BackofficeMetricStrip,
+  BackofficeLayer,
   BackofficePageStack,
-  BackofficePrimaryPanel,
   BackofficeSectionPanel,
   BackofficeStackCard,
+  BackofficeSummaryStrip,
 } from '@/components/backoffice/BackofficeScaffold';
 import { BackofficeStatusBadge } from '@/components/backoffice/BackofficeStatusBadge';
 import { BackofficeFilterPill } from '@/components/backoffice/BackofficeFilterPill';
@@ -479,14 +481,28 @@ function attentionActionLabel(t: TranslationFn, action: AttentionStateAction): s
   );
 }
 
+function normalizeWindowOption(value: string | null): WindowOption {
+  const parsed = Number(value);
+  return parsed === 72 || parsed === 168 ? parsed : 24;
+}
+
+function normalizePluginFilter(value: string | null): PluginFilter {
+  return PLUGIN_FILTER_OPTIONS.some((option) => option.value === value) ? value as PluginFilter : 'all';
+}
+
 function AdminPluginObservabilityContent() {
   const { t } = useLocale();
+  const toast = useToast();
+  const pathname = usePathname();
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const windowHours = normalizeWindowOption(searchParams.get('window'));
+  const pluginFilter = normalizePluginFilter(searchParams.get('plugin'));
+  const siteIdFilter = searchParams.get('site') || '';
+  const focusedAttentionKey = searchParams.get('focus') || '';
   const [data, setData] = useState<PluginObservabilityData | null>(null);
   const [error, setError] = useState('');
-  const [windowHours, setWindowHours] = useState<WindowOption>(24);
-  const [pluginFilter, setPluginFilter] = useState<PluginFilter>('all');
-  const [siteIdFilter, setSiteIdFilter] = useState('');
-  const [siteIdInput, setSiteIdInput] = useState('');
+  const [siteIdInput, setSiteIdInput] = useState(siteIdFilter);
   const [loading, setLoading] = useState(true);
   const [siteSort, setSiteSort] = useState<SiteSortKey>('errors');
   const [attentionWorkflowFilter, setAttentionWorkflowFilter] =
@@ -495,9 +511,30 @@ function AdminPluginObservabilityContent() {
     useState<AttentionSeverityFilter>('all');
   const [attentionCodeFilter, setAttentionCodeFilter] = useState('all');
   const [attentionActionKey, setAttentionActionKey] = useState('');
+  const requestActiveRef = useRef(false);
+  const requestSequenceRef = useRef(0);
+  const hasLoadedRef = useRef(false);
 
-  const loadData = useCallback(async () => {
-    setLoading(true);
+  const updateUrl = useCallback((updates: {
+    window?: WindowOption | null;
+    plugin?: PluginFilter | null;
+    site?: string | null;
+    focus?: string | null;
+  }) => {
+    const params = new URLSearchParams(searchParams.toString());
+    Object.entries(updates).forEach(([key, value]) => {
+      if (value && !(key === 'window' && value === 24) && !(key === 'plugin' && value === 'all')) params.set(key, String(value));
+      else params.delete(key);
+    });
+    const query = params.toString();
+    router.replace(query ? `${pathname}?${query}` : pathname, { scroll: false });
+  }, [pathname, router, searchParams]);
+
+  const loadData = useCallback(async (refresh = false) => {
+    if (requestActiveRef.current) return;
+    requestActiveRef.current = true;
+    const sequence = ++requestSequenceRef.current;
+    if (!hasLoadedRef.current || !refresh) setLoading(true);
     setError('');
     try {
       const params = new URLSearchParams({ window_hours: String(windowHours) });
@@ -506,11 +543,17 @@ function AdminPluginObservabilityContent() {
       const response = await fetch(`/api/admin/plugin-observability?${params}`, { credentials: 'include' });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const payload = await response.json();
+      if (sequence !== requestSequenceRef.current) return;
       setData(normalizePluginObservability(payload.data));
+      hasLoadedRef.current = true;
     } catch (err) {
+      if (sequence !== requestSequenceRef.current) return;
       setError(resolveUiErrorMessage(err instanceof Error ? err.message : null, t('error.failed_load')));
     } finally {
-      setLoading(false);
+      if (sequence === requestSequenceRef.current) {
+        requestActiveRef.current = false;
+        setLoading(false);
+      }
     }
   }, [windowHours, pluginFilter, siteIdFilter, t]);
 
@@ -518,8 +561,12 @@ function AdminPluginObservabilityContent() {
     void loadData();
   }, [loadData]);
 
+  useEffect(() => {
+    setSiteIdInput(siteIdFilter);
+  }, [siteIdFilter]);
+
   const handleSiteIdSubmit = () => {
-    setSiteIdFilter(siteIdInput.trim());
+    updateUrl({ site: siteIdInput.trim() || null, focus: null });
   };
 
   const handleSiteIdKeyDown = (e: React.KeyboardEvent) => {
@@ -551,13 +598,19 @@ function AdminPluginObservabilityContent() {
         });
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         await loadData();
+        toast.success(
+          t('admin.plugin_obs_attention_state_updated', {}, 'Watch item state updated.'),
+          t('common.success')
+        );
       } catch (err) {
-        setError(resolveUiErrorMessage(err instanceof Error ? err.message : null, t('error.failed_load')));
+        const message = resolveUiErrorMessage(err instanceof Error ? err.message : null, t('error.failed_load'));
+        setError(message);
+        toast.error(message, t('common.error'));
       } finally {
         setAttentionActionKey('');
       }
     },
-    [loadData, t]
+    [loadData, t, toast]
   );
 
   const timelineData = useMemo(
@@ -614,6 +667,9 @@ function AdminPluginObservabilityContent() {
       return true;
     });
   }, [attentionCodeFilter, attentionSeverityFilter, attentionWorkflowFilter, data]);
+  const selectedAttention = filteredAttention.find((item) => item.attentionKey === focusedAttentionKey)
+    || filteredAttention[0]
+    || null;
 
   const sortedSites = useMemo(() => {
     const sites = [...(data?.sites || [])];
@@ -640,29 +696,21 @@ function AdminPluginObservabilityContent() {
 
   const digestCopy = useMemo(() => (data ? pluginDigestCopy(t, data) : null), [data, t]);
 
-  if (error) {
-    return (
-      <div className="flex min-h-[60vh] items-center justify-center">
-        <div className="max-w-md text-center">
-          <h2 className="mb-4 text-2xl font-bold text-red-600">{t('common.error')}</h2>
-          <p className="mb-6 text-gray-600 dark:text-gray-400">{error}</p>
-          <button onClick={() => window.location.reload()} className="btn btn-primary">
-            {t('common.retry')}
-          </button>
-        </div>
-      </div>
-    );
-  }
-
   if (loading && !data) {
     return <LoadingFallback />;
   }
 
-  const isEmpty = data !== null && data.totals.eventsTotal === 0;
+  const isEmpty = data !== null && data.totals.eventsTotal === 0 && data.attention.length === 0;
+  const effectiveHealthStatus = data && data.attentionWorkflow.needsAttention > 0
+    ? data.attention.some((item) => item.severity === 'error') ? 'error' : 'warning'
+    : data?.health.status || 'inactive';
+  const effectiveHealthLabel = data && data.attentionWorkflow.needsAttention > 0
+    ? t('admin.plugin_obs_health_needs_attention', {}, 'Needs attention')
+    : data ? `${statusLabel(t, data.health.status)} · ${data.health.score}` : '';
 
   return (
     <BackofficePageStack>
-      <BackofficePrimaryPanel
+      <BackofficeLayer
         eyebrow={t('admin.operator_surface', {}, 'Operator surface')}
         title={t('admin.plugin_observability_title', {}, 'Plugin Observability')}
         description={t(
@@ -670,107 +718,54 @@ function AdminPluginObservabilityContent() {
           {},
           'Cross-site plugin event volume, error rates, latency, and recent errors for npcink-abilities-toolkit, npcink-governance-core, npcink-ai-client-adapter, and npcink-cloud-addon.'
         )}
-        aside={
-          data ? (
-            <div className="w-full xl:w-[48rem]">
-              <BackofficeMetricStrip
-                columnsClassName="md:grid-cols-2 xl:grid-cols-5"
-                items={[
-                  {
-                    label: t('admin.plugin_obs_health', {}, 'Health'),
-                    value: `${statusLabel(t, data.health.status)} · ${data.health.score}`,
-                    detail: pluginHealthSummary(t, data),
-                    toneClassName: data.health.status === 'error' ? 'text-rose-600 dark:text-rose-400' : data.health.status === 'warning' ? 'text-amber-600 dark:text-amber-400' : undefined,
-                    size: 'compact',
-                  },
-                  {
-                    label: t('admin.plugin_obs_events', {}, 'Events'),
-                    value: formatInteger(data.totals.eventsTotal),
-                    detail: t(
-                      'admin.plugin_obs_events_detail',
-                      {
-                        ok: formatInteger(data.totals.okTotal),
-                        error: formatInteger(data.totals.errorTotal),
-                      },
-                      '{{ok}} ok / {{error}} error'
-                    ),
-                  },
-                  {
-                    label: t('admin.plugin_obs_success_rate', {}, 'Success rate'),
-                    value: formatSuccessRate(data.totals.successRate),
-                    toneClassName: successRateStatus(data.totals.successRate) === 'error' ? 'text-rose-600 dark:text-rose-400' : successRateStatus(data.totals.successRate) === 'warning' ? 'text-amber-600 dark:text-amber-400' : undefined,
-                  },
-                  {
-                    label: t('admin.plugin_obs_avg_latency', {}, 'Avg latency'),
-                    value: `${data.totals.avgLatencyMs}ms`,
-                    size: 'compact',
-                  },
-                  {
-                    label: t('admin.plugin_obs_active', {}, 'Active'),
-                    value: `${formatInteger(data.totals.activeSiteCount)} / ${formatInteger(data.totals.activePluginCount)}`,
-                    detail: t('admin.plugin_obs_active_detail', {}, 'sites / plugins'),
-                    size: 'compact',
-                  },
-                ]}
-              />
-            </div>
-          ) : undefined
-        }
-      >
-        <div className="flex flex-wrap items-center gap-3">
+        aside={data ? <BackofficeStatusBadge status={effectiveHealthStatus} label={effectiveHealthLabel} /> : undefined}
+        actions={<button type="button" className="btn btn-secondary btn-sm" onClick={() => void loadData(true)} disabled={loading}>{t('common.refresh', {}, 'Refresh')}</button>}
+      />
+
+      <BackofficeSectionPanel className="p-4 md:p-5">
+        <div className="flex flex-col gap-4">
+          <div className="flex flex-wrap items-center gap-2">
           {WINDOW_OPTIONS.map((opt) => (
             <BackofficeFilterPill
               key={opt.value}
               active={windowHours === opt.value}
               tone="info"
-              onClick={() => setWindowHours(opt.value)}
+              onClick={() => updateUrl({ window: opt.value, focus: null })}
             >
               {opt.label}
             </BackofficeFilterPill>
           ))}
-          <span className="mx-1 h-5 w-px bg-slate-200 dark:bg-slate-700" />
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
           {PLUGIN_FILTER_OPTIONS.map((opt) => (
             <BackofficeFilterPill
               key={opt.value}
               active={pluginFilter === opt.value}
               tone="accent"
-              onClick={() => setPluginFilter(opt.value)}
+              onClick={() => updateUrl({ plugin: opt.value, focus: null })}
             >
               {t(opt.labelKey, {}, opt.fallback)}
             </BackofficeFilterPill>
           ))}
-          <span className="mx-1 h-5 w-px bg-slate-200 dark:bg-slate-700" />
-          <input
-            type="text"
-            value={siteIdInput}
-            aria-label={t('admin.plugin_obs_site_filter_label', {}, 'Filter by site ID')}
-            onChange={(e) => setSiteIdInput(e.target.value)}
-            onKeyDown={handleSiteIdKeyDown}
-            placeholder={t('admin.plugin_obs_site_filter', {}, 'Site ID')}
-            className="h-8 rounded-full border border-slate-200/80 bg-white/80 px-3 text-xs text-slate-700 placeholder:text-slate-400 dark:border-slate-700 dark:bg-slate-900/60 dark:text-slate-200 dark:placeholder:text-slate-500"
-          />
-          <button
-            type="button"
-            onClick={handleSiteIdSubmit}
-            className="h-8 rounded-full border border-slate-200/80 bg-white/80 px-3 text-xs font-medium text-slate-700 transition hover:border-slate-300 hover:text-slate-950 dark:border-slate-700 dark:bg-slate-900/60 dark:text-slate-200 dark:hover:border-slate-600 dark:hover:text-white"
-          >
-            {t('common.apply', {}, 'Apply')}
-          </button>
-          <button
-            type="button"
-            onClick={loadData}
-            disabled={loading}
-            className="h-8 rounded-full border border-slate-200/80 bg-white/80 px-3 text-xs font-medium text-slate-700 transition hover:border-slate-300 hover:text-slate-950 dark:border-slate-700 dark:bg-slate-900/60 dark:text-slate-200 dark:hover:border-slate-600 dark:hover:text-white"
-          >
-            {t('common.refresh', {}, 'Refresh')}
-          </button>
+          </div>
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+            <input type="text" value={siteIdInput} aria-label={t('admin.plugin_obs_site_filter_label', {}, 'Filter by site ID')} onChange={(e) => setSiteIdInput(e.target.value)} onKeyDown={handleSiteIdKeyDown} placeholder={t('admin.plugin_obs_site_filter', {}, 'Site ID')} className="input h-9 min-w-0 flex-1 sm:max-w-xs" />
+            <button type="button" onClick={handleSiteIdSubmit} className="btn btn-secondary btn-sm justify-center">{t('common.apply', {}, 'Apply')}</button>
+            {siteIdFilter ? <button type="button" className="btn btn-ghost btn-sm justify-center" onClick={() => { setSiteIdInput(''); updateUrl({ site: null, focus: null }); }}>{t('common.clear_filters', {}, 'Clear filters')}</button> : null}
+            {data?.generatedAt ? <p className="text-xs text-slate-500 sm:ml-auto dark:text-slate-400">{t('common.updated_at', {}, 'Updated')}: {formatDate(data.generatedAt)}</p> : null}
+          </div>
         </div>
-        {data?.generatedAt ? (
-          <p className="mt-3 text-sm text-slate-600 dark:text-slate-300">
-            {t('common.updated_at', {}, 'Updated')}: {formatDate(data.generatedAt)}
-          </p>
-        ) : null}
-      </BackofficePrimaryPanel>
+      </BackofficeSectionPanel>
+
+      {data ? <BackofficeSummaryStrip items={[
+        { label: t('admin.plugin_obs_events', {}, 'Events'), value: formatInteger(data.totals.eventsTotal) },
+        { label: t('admin.plugin_obs_success_rate', {}, 'Success rate'), value: formatSuccessRate(data.totals.successRate), toneClassName: successRateStatus(data.totals.successRate) === 'error' ? 'text-rose-600 dark:text-rose-400' : successRateStatus(data.totals.successRate) === 'warning' ? 'text-amber-600 dark:text-amber-400' : undefined },
+        { label: t('admin.plugin_obs_avg_latency', {}, 'Avg latency'), value: `${data.totals.avgLatencyMs}ms` },
+        { label: t('admin.plugin_obs_active_sites', {}, 'Active sites'), value: formatInteger(data.totals.activeSiteCount) },
+        { label: t('admin.plugin_obs_attention_open', {}, 'Open watch items'), value: formatInteger(data.attentionWorkflow.needsAttention), toneClassName: data.attentionWorkflow.needsAttention > 0 ? 'text-amber-700 dark:text-amber-300' : undefined },
+      ]} /> : null}
+
+      {error ? <div role="alert" className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800 dark:border-rose-900 dark:bg-rose-950/25 dark:text-rose-200"><div className="font-semibold">{error}</div>{data ? <div className="mt-1 text-xs">{t('admin.plugin_obs_stale_notice', {}, 'The last successfully loaded plugin snapshot remains visible.')}</div> : null}</div> : null}
 
       {isEmpty ? (
         <BackofficeEmptyState
@@ -812,142 +807,42 @@ function AdminPluginObservabilityContent() {
           ) : null}
 
           {data?.attention.length ? (
-            <BackofficeSectionPanel className="space-y-4">
-              <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
-                <div>
-                  <p className="text-xs font-semibold uppercase tracking-[0.18em] text-gray-500 dark:text-gray-400">
-                    {t('admin.plugin_obs_attention_label', {}, 'Attention')}
-                  </p>
-                  <h2 className="mt-2 text-xl font-semibold text-gray-950 dark:text-white">
-                    {t('admin.plugin_obs_attention_title', {}, 'Current watch items')}
-                  </h2>
-                  <p className="mt-2 text-sm text-slate-600 dark:text-slate-300">
-                    {t(
-                      'admin.plugin_obs_attention_count_detail',
-                      {
-                        open: formatInteger(data.attentionWorkflow.needsAttention),
-                        total: formatInteger(data.attentionWorkflow.total),
-                      },
-                      '{{open}} open / {{total}} total'
-                    )}
-                  </p>
-                  <p className="mt-2 text-xs leading-5 text-slate-500 dark:text-slate-400">
-                    {t(
-                      'admin.plugin_obs_attention_scope_notice',
-                      {},
-                      'Attention state is Cloud display state only. It does not mutate local plugin settings, approvals, ability definitions, routing, or WordPress content.'
-                    )}
-                  </p>
+            <BackofficeSectionPanel className="overflow-hidden p-0 md:p-0">
+              <div className="border-b border-slate-200 px-5 py-4 dark:border-slate-800 md:px-6">
+                <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                  <div><p className="text-xs font-semibold uppercase tracking-[0.18em] text-gray-500 dark:text-gray-400">{t('admin.plugin_obs_attention_label', {}, 'Attention')}</p><h2 className="mt-2 text-xl font-semibold text-gray-950 dark:text-white">{t('admin.plugin_obs_attention_title', {}, 'Current watch items')}</h2><p className="mt-1 text-sm text-slate-600 dark:text-slate-300">{t('admin.plugin_obs_attention_count_detail', { open: formatInteger(data.attentionWorkflow.needsAttention), total: formatInteger(data.attentionWorkflow.total) }, '{{open}} open / {{total}} total')}</p></div>
+                  <BackofficeStatusBadge status={effectiveHealthStatus} label={effectiveHealthLabel} />
                 </div>
-                <BackofficeStatusBadge
-                  status={data.health.status}
-                  label={`${statusLabel(t, data.health.status)} · ${data.health.score}`}
-                />
+                <div className="mt-4 flex flex-wrap gap-2">
+                  {ATTENTION_WORKFLOW_OPTIONS.map((option) => <BackofficeFilterPill key={option.value} active={attentionWorkflowFilter === option.value} tone="info" onClick={() => { setAttentionWorkflowFilter(option.value); updateUrl({ focus: null }); }}>{t(option.labelKey, {}, option.fallback)}</BackofficeFilterPill>)}
+                  {ATTENTION_SEVERITY_OPTIONS.map((option) => <BackofficeFilterPill key={option.value} active={attentionSeverityFilter === option.value} tone="accent" onClick={() => { setAttentionSeverityFilter(option.value); updateUrl({ focus: null }); }}>{t(option.labelKey, {}, option.fallback)}</BackofficeFilterPill>)}
+                  <select value={attentionCodeFilter} aria-label={t('admin.plugin_obs_attention_code_filter', {}, 'Watch item code')} onChange={(event) => { setAttentionCodeFilter(event.target.value); updateUrl({ focus: null }); }} className="h-8 rounded-full border border-slate-200/80 bg-white/80 px-3 text-xs text-slate-700 dark:border-slate-700 dark:bg-slate-900/60 dark:text-slate-200">{attentionCodeOptions.map((code) => <option key={code} value={code}>{code === 'all' ? t('admin.plugin_obs_attention_all_codes', {}, 'All codes') : code}</option>)}</select>
+                </div>
               </div>
-              <div className="flex flex-wrap gap-2">
-                {ATTENTION_WORKFLOW_OPTIONS.map((option) => (
-                  <BackofficeFilterPill
-                    key={option.value}
-                    active={attentionWorkflowFilter === option.value}
-                    tone="info"
-                    onClick={() => setAttentionWorkflowFilter(option.value)}
-                  >
-                    {t(option.labelKey, {}, option.fallback)}
-                  </BackofficeFilterPill>
-                ))}
-                <span className="mx-1 h-5 w-px bg-slate-200 dark:bg-slate-700" />
-                {ATTENTION_SEVERITY_OPTIONS.map((option) => (
-                  <BackofficeFilterPill
-                    key={option.value}
-                    active={attentionSeverityFilter === option.value}
-                    tone="accent"
-                    onClick={() => setAttentionSeverityFilter(option.value)}
-                  >
-                    {t(option.labelKey, {}, option.fallback)}
-                  </BackofficeFilterPill>
-                ))}
-                <select
-                  value={attentionCodeFilter}
-                  onChange={(event) => setAttentionCodeFilter(event.target.value)}
-                  className="h-8 rounded-full border border-slate-200/80 bg-white/80 px-3 text-xs text-slate-700 dark:border-slate-700 dark:bg-slate-900/60 dark:text-slate-200"
-                >
-                  {attentionCodeOptions.map((code) => (
-                    <option key={code} value={code}>
-                      {code === 'all' ? t('admin.plugin_obs_attention_all_codes', {}, 'All codes') : code}
-                    </option>
-                  ))}
-                </select>
+              <div className="grid xl:grid-cols-[minmax(0,1fr)_22rem]">
+                <div className="max-h-[38rem] divide-y divide-slate-200 overflow-y-auto dark:divide-slate-800">
+                  {filteredAttention.slice(0, 12).map((item) => {
+                    const selected = selectedAttention?.attentionKey === item.attentionKey;
+                    return <button key={item.attentionKey || `${item.code}-${item.siteId}`} type="button" data-ui="plugin-attention-item" aria-pressed={selected} aria-controls="plugin-attention-inspector" className={`grid w-full cursor-pointer gap-3 px-5 py-4 text-left transition hover:bg-slate-50 dark:hover:bg-slate-900/45 md:grid-cols-[minmax(0,1fr)_8rem] md:items-center md:px-6 ${selected ? 'bg-blue-50/65 dark:bg-blue-950/20' : ''}`} onClick={() => updateUrl({ focus: item.attentionKey })}>
+                      <div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><span className="font-semibold text-slate-950 dark:text-white">{attentionCopy(t, item, 'title')}</span><BackofficeTag tone={attentionTone(item.severity)}>{t(`admin.plugin_obs_severity_${item.severity}`, {}, item.severity)}</BackofficeTag></div><p className="mt-1 text-sm leading-6 text-slate-600 dark:text-slate-300">{attentionCopy(t, item, 'detail')}</p><p className="mt-2 truncate text-xs text-slate-500 dark:text-slate-400">{[item.siteId, item.pluginSlug, item.errorCode].filter(Boolean).join(' · ')}</p></div>
+                      <div className="text-sm font-medium text-slate-500 md:text-right dark:text-slate-400">{t(`admin.plugin_obs_workflow_${item.workflowStatus}`, {}, item.workflowStatus)}</div>
+                    </button>;
+                  })}
+                  {!filteredAttention.length ? <BackofficeEmptyState className="m-5 md:m-6" title={t('admin.plugin_obs_attention_filtered_empty', {}, 'No watch items match the selected filters.')} description={t('admin.plugin_obs_attention_filtered_empty_desc', {}, 'Clear a workflow, severity, or code filter to return to the active watch queue.')} /> : null}
+                </div>
+                <div id="plugin-attention-inspector" className="border-t border-slate-200 p-5 dark:border-slate-800 xl:border-l xl:border-t-0 xl:p-6">
+                  {selectedAttention ? <div className="space-y-5"><div><p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">{t('admin.plugin_obs_selected_watch_item', {}, 'Selected watch item')}</p><div className="mt-2 flex items-start justify-between gap-3"><h3 className="text-lg font-semibold text-slate-950 dark:text-white">{attentionCopy(t, selectedAttention, 'title')}</h3><BackofficeTag tone={attentionTone(selectedAttention.severity)}>{t(`admin.plugin_obs_severity_${selectedAttention.severity}`, {}, selectedAttention.severity)}</BackofficeTag></div><p className="mt-2 text-sm leading-6 text-slate-600 dark:text-slate-300">{attentionCopy(t, selectedAttention, 'detail')}</p></div>
+                    <dl className="grid gap-3 text-sm"><div><dt className="text-xs text-slate-500 dark:text-slate-400">{t('admin.plugin_obs_suggested_step', {}, 'Suggested review step')}</dt><dd className="mt-1 text-slate-800 dark:text-slate-100">{attentionCopy(t, selectedAttention, 'action')}</dd></div>{selectedAttention.siteId ? <div><dt className="text-xs text-slate-500 dark:text-slate-400">{t('common.site', {}, 'Site')}</dt><dd className="mt-1"><BackofficeIdentifier value={selectedAttention.siteId} /></dd></div> : null}{selectedAttention.pluginSlug ? <div><dt className="text-xs text-slate-500 dark:text-slate-400">{t('admin.plugin_obs_plugins', {}, 'Plugin')}</dt><dd className="mt-1 text-slate-800 dark:text-slate-100">{selectedAttention.pluginSlug}</dd></div> : null}{selectedAttention.errorCode ? <div><dt className="text-xs text-slate-500 dark:text-slate-400">{t('admin.plugin_obs_error_codes', {}, 'Error code')}</dt><dd className="mt-1 break-all font-mono text-xs text-rose-700 dark:text-rose-300">{selectedAttention.errorCode}</dd></div> : null}</dl>
+                    <div className="grid gap-2 sm:grid-cols-3 xl:grid-cols-1">{(['acknowledge', 'mute', 'resolve'] as AttentionStateAction[]).map((action) => <button key={action} type="button" className={action === 'resolve' ? 'btn btn-primary justify-center' : 'btn btn-secondary justify-center'} disabled={Boolean(attentionActionKey)} onClick={() => void handleAttentionStateAction(selectedAttention, action)}>{attentionActionLabel(t, action)}</button>)}</div>
+                    {selectedAttention.workflowStatus !== 'active' ? <button type="button" className="btn btn-ghost w-full justify-center" disabled={Boolean(attentionActionKey)} onClick={() => void handleAttentionStateAction(selectedAttention, 'clear')}>{attentionActionLabel(t, 'clear')}</button> : null}
+                    <p className="rounded-xl bg-slate-50 p-3 text-xs leading-5 text-slate-500 dark:bg-slate-900/45 dark:text-slate-400">{t('admin.plugin_obs_attention_scope_notice', {}, 'Attention state is Cloud display state only. It does not mutate local plugin settings, approvals, ability definitions, routing, or WordPress content.')}</p>
+                  </div> : <BackofficeEmptyState title={t('admin.plugin_obs_attention_filtered_empty', {}, 'No watch items match the selected filters.')} description={t('admin.plugin_obs_attention_filtered_empty_desc', {}, 'Clear a workflow, severity, or code filter to return to the active watch queue.')} />}
+                </div>
               </div>
-              <div className="grid gap-3 lg:grid-cols-2">
-                {filteredAttention.slice(0, 8).map((item) => (
-                  <BackofficeStackCard key={item.attentionKey || `${item.code}-${item.siteId}`}>
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="min-w-0">
-                        <p className="font-semibold text-slate-950 dark:text-white">
-                          {attentionCopy(t, item, 'title')}
-                        </p>
-                        <p className="mt-1 text-sm leading-6 text-slate-600 dark:text-slate-300">
-                          {attentionCopy(t, item, 'detail')}
-                        </p>
-                        <p className="mt-2 text-xs leading-5 text-slate-500 dark:text-slate-400">
-                          {attentionCopy(t, item, 'action')}
-                        </p>
-                        <div className="mt-2 flex flex-wrap gap-1.5">
-                          {item.siteId ? <BackofficeTag>{item.siteId}</BackofficeTag> : null}
-                          {item.pluginSlug ? <BackofficeTag tone="info">{item.pluginSlug}</BackofficeTag> : null}
-                          {item.errorCode ? <BackofficeTag tone="danger">{item.errorCode}</BackofficeTag> : null}
-                          <BackofficeTag tone={item.workflowStatus === 'active' ? 'warning' : 'info'}>
-                            {t(`admin.plugin_obs_workflow_${item.workflowStatus}`, {}, item.workflowStatus)}
-                          </BackofficeTag>
-                          {item.state?.mutedUntil ? (
-                            <BackofficeTag tone="info">
-                              {t(
-                                'admin.plugin_obs_muted_until',
-                                { date: formatDate(item.state.mutedUntil) },
-                                'Muted until {{date}}'
-                              )}
-                            </BackofficeTag>
-                          ) : null}
-                        </div>
-                        <div className="mt-3 flex flex-wrap gap-2">
-                          {(['acknowledge', 'mute', 'resolve'] as AttentionStateAction[]).map((action) => (
-                            <button
-                              key={action}
-                              type="button"
-                              className="h-7 rounded-full border border-slate-200/80 bg-white px-2.5 text-xs font-medium text-slate-700 transition hover:border-slate-300 hover:text-slate-950 disabled:opacity-60 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:border-slate-600"
-                              disabled={attentionActionKey === `${item.attentionKey}-${action}`}
-                              onClick={() => void handleAttentionStateAction(item, action)}
-                            >
-                              {attentionActionLabel(t, action)}
-                            </button>
-                          ))}
-                          {item.workflowStatus !== 'active' ? (
-                            <button
-                              type="button"
-                              className="h-7 rounded-full border border-slate-200/80 bg-white px-2.5 text-xs font-medium text-slate-500 transition hover:border-slate-300 hover:text-slate-900 disabled:opacity-60 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300 dark:hover:border-slate-600"
-                              disabled={attentionActionKey === `${item.attentionKey}-clear`}
-                              onClick={() => void handleAttentionStateAction(item, 'clear')}
-                            >
-                              {attentionActionLabel(t, 'clear')}
-                            </button>
-                          ) : null}
-                        </div>
-                      </div>
-                      <BackofficeTag tone={attentionTone(item.severity)}>
-                        {t(`admin.plugin_obs_severity_${item.severity}`, {}, item.severity)}
-                      </BackofficeTag>
-                    </div>
-                  </BackofficeStackCard>
-                ))}
-              </div>
-              {!filteredAttention.length ? (
-                <BackofficeStackCard className="text-sm text-slate-600 dark:text-slate-300">
-                  {t('admin.plugin_obs_attention_filtered_empty', {}, 'No watch items match the selected filters.')}
-                </BackofficeStackCard>
-              ) : null}
             </BackofficeSectionPanel>
           ) : null}
 
+          {(data?.totals.eventsTotal || 0) > 0 ? <>
           <div className="grid gap-5 xl:grid-cols-2">
             <BackofficeSectionPanel className="space-y-4">
               <div>
@@ -1241,6 +1136,7 @@ function AdminPluginObservabilityContent() {
               </div>
             </BackofficeSectionPanel>
           </div>
+          </> : null}
         </>
       )}
     </BackofficePageStack>

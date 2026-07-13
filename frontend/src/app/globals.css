@@ -643,6 +643,96 @@ h4,
 
   .portal-shell .btn {
     min-height: 2.75rem;
+    border-radius: 9999px;
+    box-shadow: none;
+    font-weight: 600;
+    transform: none;
+    transition:
+      background-color 160ms ease,
+      border-color 160ms ease,
+      color 160ms ease,
+      transform 120ms ease;
+  }
+
+  .portal-shell {
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Hiragino Sans GB", "Noto Sans SC", sans-serif;
+  }
+
+  .portal-shell .btn:hover {
+    transform: none;
+  }
+
+  .portal-shell .btn:active:not(:disabled) {
+    transform: scale(0.98);
+  }
+
+  .portal-shell .btn-primary {
+    border-color: #0066cc;
+    background: #0066cc;
+    box-shadow: none;
+  }
+
+  .portal-shell .btn-primary:hover {
+    border-color: #0071e3;
+    background: #0071e3;
+  }
+
+  .portal-shell .btn-primary:focus-visible {
+    --tw-ring-color: #0071e3;
+  }
+
+  .portal-shell .btn-secondary {
+    border-color: #d2d2d7;
+    background: #ffffff;
+    color: #1d1d1f;
+    box-shadow: none;
+  }
+
+  .portal-shell .btn-secondary:hover {
+    border-color: #b8b8bd;
+    background: #fafafc;
+  }
+
+  .portal-shell h1,
+  .portal-shell h2,
+  .portal-shell h3,
+  .portal-shell h4,
+  .portal-shell [data-display="true"] {
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "PingFang SC", "Hiragino Sans GB", "Noto Sans SC", sans-serif;
+    letter-spacing: -0.01em;
+  }
+
+  .portal-shell .portal-commercial-dialog {
+    border-radius: 18px;
+    box-shadow: 0 16px 44px rgba(15, 23, 42, 0.14);
+  }
+
+  .dark .portal-shell .btn-primary {
+    border-color: #2997ff;
+    background: #2997ff;
+    color: #07111f;
+  }
+
+  .dark .portal-shell .btn-primary:hover {
+    border-color: #5ab0ff;
+    background: #5ab0ff;
+  }
+
+  .dark .portal-shell .btn-secondary {
+    border-color: #334155;
+    background: #111827;
+    color: #f8fafc;
+  }
+
+  .dark .portal-shell .btn-secondary:hover {
+    border-color: #475569;
+    background: #1f2937;
+  }
+
+  @media (max-width: 639px) {
+    .portal-shell .input {
+      font-size: 1rem;
+    }
   }
   
   /* Input styles */

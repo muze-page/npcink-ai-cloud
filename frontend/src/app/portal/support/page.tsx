@@ -4,11 +4,11 @@ import { Suspense, useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import {
-  BackofficePageStack,
-  BackofficeSectionPanel,
-  BackofficeStackCard,
-} from '@/components/backoffice/BackofficeScaffold';
-import { BackofficeStatusBadge } from '@/components/backoffice/BackofficeStatusBadge';
+  PortalPageStack,
+  PortalSection,
+  PortalCard,
+} from '@/components/portal/PortalScaffold';
+import { PortalStatusBadge } from '@/components/portal/PortalStatusBadge';
 import {
   PortalEmptyState,
   PortalErrorState,
@@ -18,6 +18,7 @@ import {
 import { PortalWorkspaceHeader } from '@/components/portal/PortalWorkspaceHeader';
 import { LoadingFallback } from '@/components/ui/LoadingFallback';
 import { ListPagination } from '@/components/ui/ListPagination';
+import { Modal } from '@/components/ui/Modal';
 import { useLocale } from '@/contexts/LocaleContext';
 import { useSession } from '@/hooks/useSession';
 import {
@@ -152,6 +153,7 @@ function PortalSupportContent() {
         },
       });
       setItems((current) => [response.data.request, ...current]);
+      setTotal((current) => current + 1);
       setNotice(t('portal.support_request_created', {}, 'Ticket submitted.'));
       setTitle('');
       setDescription('');
@@ -164,7 +166,7 @@ function PortalSupportContent() {
   };
 
   return (
-    <BackofficePageStack>
+    <PortalPageStack>
       <PortalWorkspaceHeader
         eyebrow={t('portal.workspace_label', {}, 'Portal')}
         title={t('portal.support_requests_title', {}, 'Tickets')}
@@ -176,43 +178,11 @@ function PortalSupportContent() {
         currentPage="support"
         sites={visibleSites}
         actions={
-          <button type="button" className="btn btn-primary" onClick={() => setShowForm((current) => !current)}>
-            {showForm
-              ? t('common.cancel', {}, 'Cancel')
-              : t('portal.support_request_new_action', {}, 'Submit ticket')}
+          <button type="button" className="btn btn-primary" onClick={() => setShowForm(true)}>
+            {t('portal.support_request_new_action', {}, 'Submit ticket')}
           </button>
         }
       />
-
-      <details className="rounded-[1rem] border border-slate-200/80 bg-white/70 dark:border-slate-800 dark:bg-slate-950/35" data-portal-support="status-rules">
-        <summary className="cursor-pointer px-4 py-3 text-sm font-semibold text-slate-950 dark:text-white">
-          {t('portal.support_status_rules_title', {}, 'Ticket status')}
-        </summary>
-        <div className="space-y-3 border-t border-slate-200/80 p-4 dark:border-slate-800">
-          <div>
-          <p className="text-sm font-semibold text-slate-950 dark:text-white">
-            {t('portal.support_status_rules_title', {}, 'Ticket status')}
-          </p>
-          <p className="mt-1 text-sm leading-6 text-slate-600 dark:text-slate-300">
-            {t(
-              'portal.support_status_rules_desc',
-              {},
-              'Use tickets for package, payment, site, usage, or account issues; support updates the status as the issue moves.'
-            )}
-          </p>
-        </div>
-        <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-4">
-          {supportStatusRules.map((rule) => (
-            <div key={rule.key} className="rounded-xl border border-slate-200 bg-white/70 px-3 py-3 text-sm text-slate-600 dark:border-slate-800 dark:bg-slate-950/35 dark:text-slate-300">
-              <p className="font-semibold text-slate-950 dark:text-white">
-                {t(`portal.support_status_${rule.key}`, {}, rule.key)}
-              </p>
-              <p className="mt-1 text-xs leading-5">{rule.label}</p>
-            </div>
-          ))}
-          </div>
-        </div>
-      </details>
 
       {notice ? (
         <div className="rounded-[1rem] border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800 dark:border-emerald-900/60 dark:bg-emerald-950/25 dark:text-emerald-200">
@@ -220,20 +190,23 @@ function PortalSupportContent() {
         </div>
       ) : null}
 
-      {showForm ? (
-        <BackofficeSectionPanel>
-          <div className="mb-5">
-            <p className="text-sm font-semibold text-slate-950 dark:text-white">
-              {t('portal.support_request_form_title', {}, 'Submit ticket')}
+      <Modal
+        isOpen={showForm}
+        onClose={() => setShowForm(false)}
+        size="lg"
+        title={t('portal.support_request_form_title', {}, 'Submit ticket')}
+        description={t(
+          'portal.support_request_form_desc',
+          {},
+          'Include the affected page, order, or site so support can inspect the right Cloud record.'
+        )}
+      >
+        <div data-portal-support="new-ticket-dialog">
+          {error ? (
+            <p className="mb-4 rounded-xl bg-rose-50 px-3 py-2 text-sm text-rose-700 dark:bg-rose-950/30 dark:text-rose-200" role="alert">
+              {error}
             </p>
-            <p className="mt-1 text-sm leading-6 text-slate-600 dark:text-slate-300">
-              {t(
-                'portal.support_request_form_desc',
-                {},
-                'Include the affected page, order, or site so support can inspect the right Cloud record.'
-              )}
-            </p>
-          </div>
+          ) : null}
           <div className="grid gap-4 md:grid-cols-2">
             <label className="text-sm font-medium text-slate-700 dark:text-slate-200">
               {t('portal.support_request_topic', {}, 'Topic')}
@@ -285,7 +258,7 @@ function PortalSupportContent() {
               'Enter at least 10 characters. Current length: {{count}}.'
             )}
           </p>
-          <div className="mt-5 flex flex-wrap gap-2">
+          <div className="mt-5 flex flex-wrap justify-end gap-2">
             <button
               type="button"
               className="btn btn-primary"
@@ -298,8 +271,8 @@ function PortalSupportContent() {
               {t('common.cancel', {}, 'Cancel')}
             </button>
           </div>
-        </BackofficeSectionPanel>
-      ) : null}
+        </div>
+      </Modal>
 
       {error ? (
         <PortalErrorState
@@ -310,11 +283,11 @@ function PortalSupportContent() {
         />
       ) : null}
 
-      <BackofficeSectionPanel>
+      <PortalSection>
         <div className="mb-5">
-          <p className="text-sm font-semibold text-slate-950 dark:text-white">
+          <h2 className="text-lg font-semibold text-slate-950 dark:text-white">
             {t('portal.support_request_list_title', {}, 'Recent tickets')}
-          </p>
+          </h2>
           <p className="mt-1 text-sm leading-6 text-slate-600 dark:text-slate-300">
             {t('portal.support_request_list_desc', {}, 'Open and in-progress tickets stay visible until support resolves them.')}
           </p>
@@ -341,12 +314,12 @@ function PortalSupportContent() {
         ) : items.length ? (
           <div className="space-y-3">
             {items.map((item) => (
-              <BackofficeStackCard key={item.request_id} variant="portal" className="bg-white/70 dark:bg-slate-950/35">
+              <PortalCard key={item.request_id} variant="portal" className="bg-white/70 dark:bg-slate-950/35">
                 <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
                   <div className="min-w-0">
                     <div className="flex flex-wrap items-center gap-2">
                       <p className="text-sm font-semibold text-slate-950 dark:text-white">{item.title}</p>
-                      <BackofficeStatusBadge
+                      <PortalStatusBadge
                         status={statusTone(item.status)}
                         label={t(`portal.support_status_${item.status}`, {}, item.status)}
                       />
@@ -366,7 +339,7 @@ function PortalSupportContent() {
                     <p className="mt-1">{item.updated_at ? formatDate(item.updated_at) : item.request_id}</p>
                   </div>
                 </div>
-              </BackofficeStackCard>
+              </PortalCard>
             ))}
           </div>
         ) : (
@@ -388,8 +361,33 @@ function PortalSupportContent() {
           onOffsetChange={setOffset}
           className="mt-4 px-0 pb-0"
         />
-      </BackofficeSectionPanel>
-    </BackofficePageStack>
+      </PortalSection>
+
+      <details className="rounded-[1rem] border border-slate-200/80 bg-white/70 dark:border-slate-800 dark:bg-slate-950/35" data-portal-support="status-rules">
+        <summary className="cursor-pointer px-4 py-3 text-sm font-semibold text-slate-950 dark:text-white">
+          {t('portal.support_status_rules_title', {}, 'Ticket status')}
+        </summary>
+        <div className="space-y-3 border-t border-slate-200/80 p-4 dark:border-slate-800">
+          <p className="text-sm leading-6 text-slate-600 dark:text-slate-300">
+            {t(
+              'portal.support_status_rules_desc',
+              {},
+              'Use tickets for package, payment, site, usage, or account issues; support updates the status as the issue moves.'
+            )}
+          </p>
+          <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-4">
+            {supportStatusRules.map((rule) => (
+              <div key={rule.key} className="rounded-xl border border-slate-200 bg-white/70 px-3 py-3 text-sm text-slate-600 dark:border-slate-800 dark:bg-slate-950/35 dark:text-slate-300">
+                <p className="font-semibold text-slate-950 dark:text-white">
+                  {t(`portal.support_status_${rule.key}`, {}, rule.key)}
+                </p>
+                <p className="mt-1 text-xs leading-5">{rule.label}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      </details>
+    </PortalPageStack>
   );
 }
 

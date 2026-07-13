@@ -4,11 +4,8 @@ import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import React, { Suspense, useEffect, useState } from 'react';
 import { LoadingFallback } from '@/components/ui/LoadingFallback';
-import {
-  BackofficePageStack,
-  BackofficeSectionPanel,
-  BackofficeStackCard,
-} from '@/components/backoffice/BackofficeScaffold';
+import { PortalAuthShell } from '@/components/portal/PortalAuthShell';
+import { PortalCard } from '@/components/portal/PortalScaffold';
 import { useLocale } from '@/contexts/LocaleContext';
 import { formatPortalErrorMessage } from '@/lib/portal-error';
 import { useSession } from '@/hooks/useSession';
@@ -202,30 +199,47 @@ function LoginFormContent() {
   };
 
   return (
-    <div className="mx-auto flex min-h-[72vh] w-full max-w-5xl items-center px-4 py-10">
-      <BackofficePageStack>
-        <BackofficeSectionPanel className="w-full overflow-hidden p-0" variant="portal">
-          <div className="grid gap-0 lg:grid-cols-[minmax(0,1.05fr)_minmax(18rem,0.75fr)]">
-            <div className="space-y-6 p-5 md:p-7">
-              <div>
-                <p className="text-xs font-semibold uppercase tracking-[0.22em] text-blue-700 dark:text-blue-300">
-                  {t('portal.login.existing_label', undefined, 'Existing account')}
-                </p>
-                <h1 className="mt-3 text-2xl font-semibold tracking-tight text-gray-950 dark:text-white md:text-[2rem]">
-                  {t('portal.login.title', undefined, 'Log in to user service center')}
-                </h1>
-                <p className="mt-3 max-w-xl text-sm leading-6 text-gray-600 dark:text-gray-300">
-                  {t(
-                    form.step === 'request' ? 'auth.sign_in_desc' : 'auth.verify_code_desc',
-                    undefined,
-                    form.step === 'request'
-                      ? 'Use your Portal email address to receive a one-time verification code.'
-                      : 'Enter the code you received to create your portal session.'
-                  )}
-                </p>
-              </div>
-
-              <form
+    <PortalAuthShell
+      eyebrow={t('portal.login.existing_label', undefined, 'Existing account')}
+      title={t('portal.login.title', undefined, 'Log in to user service center')}
+      description={t(
+        form.step === 'request' ? 'auth.sign_in_desc' : 'auth.verify_code_desc',
+        undefined,
+        form.step === 'request'
+          ? 'Use your Portal email address to receive a one-time verification code.'
+          : 'Enter the code you received to create your portal session.'
+      )}
+      aside={(
+        <>
+          <PortalCard className="bg-white/70 dark:bg-slate-950/35">
+            <p className="text-[0.68rem] font-bold uppercase tracking-[0.24em] text-blue-600 dark:text-blue-300">
+              {t('portal.register.free_label', undefined, 'Free')}
+            </p>
+            <h2 className="mt-3 text-lg font-semibold text-slate-950 dark:text-white">
+              {t('portal.login.new_title', undefined, 'No account yet?')}
+            </h2>
+            <p className="mt-2 text-sm leading-6 text-slate-600 dark:text-slate-300">
+              {t(
+                'portal.login.new_desc',
+                undefined,
+                'Create a Free account for one WordPress site, then come back to sign in with email.'
+              )}
+            </p>
+            <Link href="/portal/register" className="btn btn-secondary mt-4 w-full justify-center">
+              {t('auth.create_free_account', undefined, 'Create a Free account')}
+            </Link>
+          </PortalCard>
+          <p className="mt-4 text-xs leading-5 text-slate-500 dark:text-slate-400">
+            {t(
+              'auth.no_password',
+              undefined,
+              'Portal sign-in is passwordless. New users can create a Free account and bind QQ quick login after signing in.'
+            )}
+          </p>
+        </>
+      )}
+    >
+      <form
                 onSubmit={form.step === 'request' ? handleRequestCode : handleVerifyCode}
                 className="space-y-5"
               >
@@ -355,41 +369,8 @@ function LoginFormContent() {
                     </>
                   ) : null}
                 </div>
-              </form>
-            </div>
-
-            <aside className="border-t border-slate-200/80 bg-slate-50/70 p-5 dark:border-slate-800 dark:bg-slate-950/35 md:p-7 lg:border-l lg:border-t-0">
-              <BackofficeStackCard className="bg-white/70 dark:bg-slate-950/35" variant="portal">
-                <p className="text-[0.68rem] font-bold uppercase tracking-[0.24em] text-blue-600 dark:text-blue-300">
-                  {t('portal.register.free_label', undefined, 'Free')}
-                </p>
-                <h2 className="mt-3 text-lg font-semibold text-slate-950 dark:text-white">
-                  {t('portal.login.new_title', undefined, 'No account yet?')}
-                </h2>
-                <p className="mt-2 text-sm leading-6 text-slate-600 dark:text-slate-300">
-                  {t(
-                    'portal.login.new_desc',
-                    undefined,
-                    'Create a Free account for one WordPress site, then come back to sign in with email.'
-                  )}
-                </p>
-                <Link href="/portal/register" className="btn btn-secondary mt-4 w-full justify-center">
-                  {t('auth.create_free_account', undefined, 'Create a Free account')}
-                </Link>
-              </BackofficeStackCard>
-
-              <p className="mt-4 text-xs leading-5 text-slate-500 dark:text-slate-400">
-                {t(
-                  'auth.no_password',
-                  undefined,
-                  'Portal sign-in is passwordless. New users can create a Free account and bind QQ quick login after signing in.'
-                )}
-              </p>
-            </aside>
-          </div>
-        </BackofficeSectionPanel>
-      </BackofficePageStack>
-    </div>
+      </form>
+    </PortalAuthShell>
   );
 }
 

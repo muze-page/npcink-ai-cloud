@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
-const sitesPagePath = resolve(process.cwd(), 'src/app/portal/sites/page.tsx');
+const sitesPagePath = resolve(process.cwd(), 'src/components/portal/PortalSitesWorkspace.tsx');
 const siteRecordPagePath = resolve(process.cwd(), 'src/app/portal/sites/[siteId]/page.tsx');
 const portalClientPath = resolve(process.cwd(), 'src/lib/portal-client.ts');
 
@@ -19,19 +19,19 @@ assert.match(
 assert.match(
   sitesPageSource,
   /remove_sites[\s\S]*portalClient\.removeSite/,
-  '/portal/sites must show a permission-gated remove action wired to the backend remove endpoint'
+  'the merged service page must show a permission-gated remove action wired to the backend remove endpoint'
 );
 
 assert.match(
   sitesPageSource,
   /portal\.remove_site_confirm/,
-  '/portal/sites must explain that removal stops service, revokes active keys, and keeps history before confirming'
+  'the merged service page must explain that removal stops service, revokes active keys, and keeps history before confirming'
 );
 
 assert.match(
   sitesPageSource,
   /portal\.site_remove_success/,
-  '/portal/sites must show the service stopped, keys revoked, history kept success state'
+  'the merged service page must show the service stopped, keys revoked, history kept success state'
 );
 
 assert.match(

@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { cn } from '@/lib/utils';
@@ -9,6 +9,7 @@ import { ThemeToggle } from '@/components/ui/ThemeToggle';
 import { LocaleSwitcher } from '@/components/ui/LocaleSwitcher';
 import { AdminRouteTransition } from '@/components/admin/AdminRouteTransition';
 import { LoadingFallback } from '@/components/ui/LoadingFallback';
+import { useDialogKeyboard } from '@/hooks/useDialogKeyboard';
 
 interface AdminLayoutProps {
   children: React.ReactNode;
@@ -63,7 +64,10 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
   const [commandOpen, setCommandOpen] = useState(false);
   const [commandQuery, setCommandQuery] = useState('');
   const [adminSessionReady, setAdminSessionReady] = useState(isLoginPage);
-  const commandInputRef = useRef<HTMLInputElement>(null);
+  const commandDialogRef = useDialogKeyboard<HTMLDivElement>({
+    open: commandOpen,
+    onClose: () => setCommandOpen(false),
+  });
 
   useEffect(() => {
     if (isLoginPage) {
@@ -161,23 +165,7 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
   }, []);
 
   useEffect(() => {
-    if (!commandOpen) {
-      setCommandQuery('');
-      return;
-    }
-
-    const focusTimer = window.setTimeout(() => commandInputRef.current?.focus(), 0);
-    const handleCommandEscape = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        setCommandOpen(false);
-      }
-    };
-
-    document.addEventListener('keydown', handleCommandEscape);
-    return () => {
-      window.clearTimeout(focusTimer);
-      document.removeEventListener('keydown', handleCommandEscape);
-    };
+    if (!commandOpen) setCommandQuery('');
   }, [commandOpen]);
 
   const toggleMobileNav = useCallback(() => {
@@ -234,8 +222,20 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
         {
           href: '/admin/ai-resources',
           labelKey: 'admin.nav_ai_resources',
-          fallback: 'Providers',
+          fallback: 'Model Suppliers',
           activePrefixes: ['/admin/ai-resources', '/admin/ability-models'],
+        },
+        {
+          href: '/admin/external-services',
+          labelKey: 'admin.nav_external_services',
+          fallback: 'Search & Images',
+          activePrefixes: ['/admin/external-services'],
+        },
+        {
+          href: '/admin/vector-settings',
+          labelKey: 'admin.nav_vector_settings',
+          fallback: 'Vector Settings',
+          activePrefixes: ['/admin/vector-settings'],
         },
         {
           href: '/admin/troubleshooting',
@@ -278,10 +278,13 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
     return (item.activePrefixes || [href]).some(isPathMatch);
   };
   const activePrimaryItem = primaryNavItems.find((item) => isActive(item)) ?? primaryNavItems[0];
-  const activePrimaryLabel = t(activePrimaryItem.labelKey, {}, activePrimaryItem.fallback);
+  const secondaryRouteLabel = pathname.startsWith('/admin/portal-users')
+    ? t('admin.nav_portal_users', {}, 'Portal Users')
+    : '';
+  const activePrimaryLabel = secondaryRouteLabel || t(activePrimaryItem.labelKey, {}, activePrimaryItem.fallback);
   const commandItems = useMemo<AdminCommandItem[]>(
-    () =>
-      navGroups.flatMap((group) => {
+    () => {
+      const primaryItems = navGroups.flatMap((group) => {
         const groupLabel = t(group.groupKey, {}, group.fallback);
         return group.items.map((item) => ({
           ...item,
@@ -290,7 +293,22 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
           groupFallback: group.fallback,
           label: t(item.labelKey, {}, item.fallback),
         }));
-      }),
+      });
+      const diagnosticsGroupLabel = t('admin.nav_group_diagnostics', {}, 'Diagnostics');
+      const contextualItems: AdminCommandItem[] = [
+        { href: '/admin/plugin-observability', labelKey: 'admin.plugin_observability_title', fallback: 'Plugin Observability' },
+        { href: '/admin/media-observability', labelKey: 'admin.media_obs.title', fallback: 'Media Processing Observability' },
+        { href: '/admin/vector-observability', labelKey: 'admin.vector_obs.title', fallback: 'Vector Observability' },
+        { href: '/admin/agent-feedback', labelKey: 'admin.agent_feedback.title', fallback: 'Agent Feedback Quality' },
+        { href: '/admin/ai-advisor', labelKey: 'admin.ai_advisor.title', fallback: 'Operations Advisor' },
+      ].map((item) => ({
+        ...item,
+        groupLabel: diagnosticsGroupLabel,
+        groupFallback: 'Diagnostics',
+        label: t(item.labelKey, {}, item.fallback),
+      }));
+      return [...primaryItems, ...contextualItems];
+    },
     [navGroups, t]
   );
   const normalizedCommandQuery = commandQuery.trim().toLowerCase();
@@ -586,10 +604,12 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
 
         {commandOpen ? (
           <div
+            ref={commandDialogRef}
             className="fixed inset-0 z-[70] bg-slate-950/24 px-3 py-16 backdrop-blur-sm dark:bg-slate-950/55"
             role="dialog"
             aria-modal="true"
             aria-label={t('admin.command_title', {}, 'Quick switcher')}
+            tabIndex={-1}
             onMouseDown={(event) => {
               if (event.target === event.currentTarget) {
                 setCommandOpen(false);
@@ -603,7 +623,6 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
                     <path d="m21 21-4.2-4.2m1.2-5.3a6.5 6.5 0 1 1-13 0 6.5 6.5 0 0 1 13 0Z" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
                   </svg>
                   <input
-                    ref={commandInputRef}
                     className="min-w-0 flex-1 bg-transparent text-sm text-slate-950 outline-none placeholder:text-slate-400 dark:text-slate-100"
                     value={commandQuery}
                     placeholder={t('admin.command_placeholder', {}, 'Search admin pages')}

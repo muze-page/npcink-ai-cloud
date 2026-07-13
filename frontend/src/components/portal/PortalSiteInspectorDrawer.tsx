@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { BackofficeStatusBadge } from '@/components/backoffice/BackofficeStatusBadge';
+import { PortalStatusBadge } from '@/components/portal/PortalStatusBadge';
 import type { PortalSiteSummaryRecord, Site } from '@/lib/portal-client';
 import {
   getPortalSiteDisplayName,
@@ -103,7 +103,7 @@ export function PortalSiteInspectorDrawer({
               <h2 id="portal-site-inspector-title" className="truncate text-xl font-semibold text-slate-950 dark:text-white">
                 {getPortalSiteDisplayName(detailSite)}
               </h2>
-              <BackofficeStatusBadge
+              <PortalStatusBadge
                 status={detailSite.status}
                 label={translateStatusLabel(detailSite.status, t)}
                 className="text-[0.68rem]"

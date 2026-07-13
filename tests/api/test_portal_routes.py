@@ -3460,6 +3460,16 @@ def test_portal_user_can_start_pro_trial_and_create_monthly_order(
         "plus",
         "pro",
     ]
+    comparison_tiers = offers_response.json()["data"]["comparison_tiers"]
+    assert [item["tier_id"] for item in comparison_tiers] == ["free", "plus", "pro"]
+    assert comparison_tiers[0]["monthly_points"] == 300
+    assert comparison_tiers[1]["site_limit"] == 3
+    assert comparison_tiers[2]["knowledge_article_limit"] == 2000
+    assert comparison_tiers[0]["comparison_rights"]["monthly_points"]["state"] == "limited"
+    assert comparison_tiers[1]["comparison_rights"]["site_limit"] == {
+        "state": "limited",
+        "value": 3,
+    }
     eligible_trial = offers_response.json()["data"]["trial"]
     assert eligible_trial["available"] is True
     assert eligible_trial["trial_days"] == 14
@@ -4916,6 +4926,139 @@ def test_portal_summary_usage_entitlements_and_audit_routes(tmp_path: Path) -> N
         "site_other_portal_reads",
     }
 
+    with get_session(database_url) as session:
+        CommercialRepository(session).record_credit_ledger_entry(
+            account_id="acct_portal_reads",
+            site_id="site_other_portal_reads",
+            subscription_id=None,
+            plan_version_id=None,
+            run_id=None,
+            provider_call_id=None,
+            source_type="runs",
+            source_id="historical-other-site-run",
+            credit_delta=-2,
+            quantity=1,
+            unit="run",
+            rate=2,
+            rate_unit=None,
+            rate_version="ai-credit-ledger-v2",
+            idempotency_key="portal-credit-ledger-historical-001",
+            created_at=datetime.now(UTC) - timedelta(days=2),
+        )
+        session.commit()
+
+    expected_trends = {
+        "1h": {"points": 12, "credits": 5.0, "entries": 4},
+        "24h": {"points": 24, "credits": 5.0, "entries": 4},
+        "7d": {"points": 7, "credits": 7.0, "entries": 5},
+        "30d": {"points": 30, "credits": 7.0, "entries": 5},
+    }
+    for trend_window, expectation in expected_trends.items():
+        trend_response = client.get(
+            f"/portal/v1/account/credit-trend?window={trend_window}",
+            headers=build_portal_headers(principal_id="principal:portal-reads@example.com"),
+        )
+        assert trend_response.status_code == 200
+        trend_data = trend_response.json()["data"]
+        assert trend_data["contract_version"] == "portal-credit-trend-v1"
+        assert trend_data["window"] == trend_window
+        assert len(trend_data["points"]) == expectation["points"]
+        assert trend_data["total_credits"] == expectation["credits"]
+        assert trend_data["entry_count"] == expectation["entries"]
+
+    site_trend_response = client.get(
+        "/portal/v1/account/credit-trend?window=24h&site_id=site_portal_reads",
+        headers=build_portal_headers(principal_id="principal:portal-reads@example.com"),
+    )
+    assert site_trend_response.status_code == 200
+    site_trend_data = site_trend_response.json()["data"]
+    assert site_trend_data["site_id"] == "site_portal_reads"
+    assert site_trend_data["total_credits"] == 4.0
+    assert site_trend_data["entry_count"] == 3
+
+    invalid_trend_response = client.get(
+        "/portal/v1/account/credit-trend?window=90d",
+        headers=build_portal_headers(principal_id="principal:portal-reads@example.com"),
+    )
+    assert invalid_trend_response.status_code == 422
+
+    with get_session(database_url) as session:
+        CommercialRepository(session).record_credit_ledger_entry(
+            account_id="acct_portal_reads",
+            site_id="site_portal_reads",
+            subscription_id=subscription.subscription_id,
+            plan_version_id=subscription.plan_version_id,
+            run_id="run-portal-ledger-1",
+            provider_call_id=None,
+            source_type="runs",
+            source_id="run-portal-ledger-1:request",
+            credit_delta=-3,
+            quantity=1,
+            unit="run",
+            rate=3,
+            rate_unit=None,
+            rate_version="ai-credit-ledger-v2",
+            idempotency_key="portal-credit-ledger-grouped-event-001",
+        )
+        session.commit()
+
+    credit_events_response = client.get(
+        "/portal/v1/account/credit-events?window=period&limit=20",
+        headers=build_portal_headers(principal_id="principal:portal-reads@example.com"),
+    )
+    assert credit_events_response.status_code == 200
+    credit_events_data = credit_events_response.json()["data"]
+    assert credit_events_data["contract_version"] == "portal-credit-events-v1"
+    assert credit_events_data["pagination"]["total"] == 4
+    grouped_event = next(
+        item
+        for item in credit_events_data["items"]
+        if item["support_reference"] == "run-portal-ledger-1"
+    )
+    assert grouped_event["component_count"] == 2
+    assert grouped_event["consumed_credits"] == 5.0
+    assert {item["key"] for item in grouped_event["components"]} == {
+        "model_processing",
+        "request",
+    }
+
+    topic_events_response = client.get(
+        "/portal/v1/account/credit-events?window=period&feature=topic_research",
+        headers=build_portal_headers(principal_id="principal:portal-reads@example.com"),
+    )
+    assert topic_events_response.status_code == 200
+    topic_events_data = topic_events_response.json()["data"]
+    assert topic_events_data["pagination"]["total"] == 1
+    assert topic_events_data["items"][0]["feature_key"] == "topic_research"
+
+    bucket_response = client.get(
+        "/portal/v1/account/credit-event-buckets",
+        params={"bucket": "30m", "window": "period"},
+        headers=build_portal_headers(principal_id="principal:portal-reads@example.com"),
+    )
+    assert bucket_response.status_code == 200
+    bucket_data = bucket_response.json()["data"]
+    assert bucket_data["contract_version"] == "portal-credit-event-buckets-v1"
+    assert bucket_data["bucket"] == "30m"
+    assert bucket_data["bucket_seconds"] == 1800
+    assert bucket_data["pagination"]["total"] >= 1
+    latest_bucket = bucket_data["items"][0]
+    assert latest_bucket["event_count"] >= 1
+    assert latest_bucket["consumed_credits"] >= 1
+    assert latest_bucket["top_feature_key"]
+
+    bucket_detail_response = client.get(
+        "/portal/v1/account/credit-events",
+        params={
+            "window": "period",
+            "start_at": latest_bucket["start_at"],
+            "end_at": latest_bucket["end_at"],
+        },
+        headers=build_portal_headers(principal_id="principal:portal-reads@example.com"),
+    )
+    assert bucket_detail_response.status_code == 200
+    assert bucket_detail_response.json()["data"]["pagination"]["total"] >= 1
+
     credit_packs_response = client.get(
         "/portal/v1/sites/site_portal_reads/credit-packs",
         headers=build_portal_headers(principal_id="principal:portal-reads@example.com"),
@@ -4928,6 +5071,7 @@ def test_portal_summary_usage_entitlements_and_audit_routes(tmp_path: Path) -> N
         "pack_medium",
         "pack_large",
     }
+    assert all(int(item["validity_days"]) > 0 for item in credit_packs_data["items"])
 
     account_credit_packs_response = client.get(
         "/portal/v1/account/credit-packs",
@@ -4942,6 +5086,7 @@ def test_portal_summary_usage_entitlements_and_audit_routes(tmp_path: Path) -> N
         "pack_medium",
         "pack_large",
     }
+    assert all(int(item["validity_days"]) > 0 for item in account_credit_packs_data["items"])
 
     credit_pack_order_response = client.post(
         "/portal/v1/sites/site_portal_reads/credit-pack-orders",
@@ -5051,15 +5196,14 @@ def test_portal_summary_usage_entitlements_and_audit_routes(tmp_path: Path) -> N
         ),
     )
     assert cancel_account_credit_pack_order_response.status_code == 200
-    canceled_account_credit_pack_order = cancel_account_credit_pack_order_response.json()[
-        "data"
-    ]["order"]
+    canceled_account_credit_pack_order = cancel_account_credit_pack_order_response.json()["data"][
+        "order"
+    ]
     assert canceled_account_credit_pack_order["status"] == "canceled"
     assert canceled_account_credit_pack_order["available_actions"] == []
     assert canceled_account_credit_pack_order["checkout_url"] == ""
     assert (
-        canceled_account_credit_pack_order["metadata"]["cancellation_reason"]
-        == "customer_canceled"
+        canceled_account_credit_pack_order["metadata"]["cancellation_reason"] == "customer_canceled"
     )
 
     audit_response = client.get(

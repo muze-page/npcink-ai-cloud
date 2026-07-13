@@ -1,14 +1,18 @@
 'use client';
 
-import React, { Suspense, useCallback, useEffect, useMemo, useState } from 'react';
+import React, { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import {
   BackofficeEmptyState,
-  BackofficeMetricStrip,
+  BackofficeDiagnosticNotice,
+  BackofficeDisclosure,
+  BackofficeLayer,
   BackofficePageStack,
-  BackofficePrimaryPanel,
   BackofficeSectionPanel,
   BackofficeStackCard,
+  BackofficeSummaryStrip,
 } from '@/components/backoffice/BackofficeScaffold';
+import { BackofficeFilterPill } from '@/components/backoffice/BackofficeFilterPill';
 import { BackofficeIdentifier } from '@/components/backoffice/BackofficeIdentifier';
 import { BackofficeStatusBadge } from '@/components/backoffice/BackofficeStatusBadge';
 import { BackofficeTag } from '@/components/backoffice/BackofficeTag';
@@ -208,42 +212,51 @@ function vectorStatusLabel(
   return t(`status.${status || 'unknown'}`, {}, status || 'unknown');
 }
 
-function vectorHealthSummary(
-  t: (key: string, params?: Record<string, string>, fallback?: string) => string,
-  data: VectorObservabilityData
-): string {
-  if (data.health.status === 'inactive') {
-    return t('admin.vector_obs.health_summary_inactive', {}, 'No Site Knowledge activity in this window.');
-  }
-  return t(
-    'admin.vector_obs.health_summary_active',
-    {
-      searches: formatNumber(data.totals.searchQueriesTotal),
-      noHitRate: formatPercent(data.totals.noHitRate),
-      p95: formatNumber(data.totals.p95SearchLatencyMs),
-    },
-    '{{searches}} searches · {{noHitRate}} no-hit · P95 {{p95}}ms'
-  );
-}
-
 function timelineLabel(value: string): string {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return '';
   return `${String(date.getHours()).padStart(2, '0')}:00`;
 }
 
+function normalizeVectorWindow(value: string | null): number {
+  const parsed = Number(value);
+  return parsed === 72 || parsed === 168 ? parsed : 24;
+}
+
 function AdminVectorObservabilityContent() {
   const { t } = useLocale();
+  const pathname = usePathname();
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const windowHours = normalizeVectorWindow(searchParams.get('window'));
+  const siteIdFilter = searchParams.get('site') || '';
+  const focusedErrorCode = searchParams.get('focus') || '';
   const [data, setData] = useState<VectorObservabilityData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const [windowHours, setWindowHours] = useState(24);
-  const [siteIdInput, setSiteIdInput] = useState('');
-  const [siteIdFilter, setSiteIdFilter] = useState('');
+  const [siteIdInput, setSiteIdInput] = useState(siteIdFilter);
+  const requestControllerRef = useRef<AbortController | null>(null);
+  const requestSequenceRef = useRef(0);
+  const hasLoadedRef = useRef(false);
 
-  const loadData = useCallback(async () => {
-    setLoading(true);
+  const updateUrl = useCallback((updates: { window?: number | null; site?: string | null; focus?: string | null }) => {
+    const params = new URLSearchParams(searchParams.toString());
+    Object.entries(updates).forEach(([key, value]) => {
+      if (value && !(key === 'window' && value === 24)) params.set(key, String(value));
+      else params.delete(key);
+    });
+    const query = params.toString();
+    router.replace(query ? `${pathname}?${query}` : pathname, { scroll: false });
+  }, [pathname, router, searchParams]);
+
+  const loadData = useCallback(async (refresh = false) => {
+    requestControllerRef.current?.abort();
+    const sequence = ++requestSequenceRef.current;
+    if (!hasLoadedRef.current || !refresh) setLoading(true);
     setError('');
+    const controller = new AbortController();
+    requestControllerRef.current = controller;
+    const timeout = globalThis.setTimeout(() => controller.abort(), 8000);
     try {
       const params = new URLSearchParams();
       params.set('window_hours', String(windowHours));
@@ -252,23 +265,37 @@ function AdminVectorObservabilityContent() {
       }
       const response = await fetch(`/api/admin/vector-observability?${params.toString()}`, {
         credentials: 'include',
+        cache: 'no-store',
+        signal: controller.signal,
       });
       const payload = await response.json();
       if (!response.ok || payload?.status === 'error') {
         throw payload;
       }
-      setData(normalizeVectorObservability(payload?.data ?? {}));
+      if (sequence === requestSequenceRef.current) {
+        setData(normalizeVectorObservability(payload?.data ?? {}));
+        hasLoadedRef.current = true;
+      }
     } catch (err) {
-      setError(resolveUiErrorMessage(err, t('error.failed_load')));
-      setData(null);
+      if (sequence === requestSequenceRef.current) {
+        setError(resolveUiErrorMessage(err, t('admin.vector_obs.load_error', {}, 'Failed to load vector diagnostics.')));
+      }
     } finally {
-      setLoading(false);
+      globalThis.clearTimeout(timeout);
+      if (sequence === requestSequenceRef.current) {
+        requestControllerRef.current = null;
+        setLoading(false);
+      }
     }
   }, [siteIdFilter, t, windowHours]);
 
   useEffect(() => {
     void loadData();
   }, [loadData]);
+
+  useEffect(() => {
+    setSiteIdInput(siteIdFilter);
+  }, [siteIdFilter]);
 
   const searchTimelineData = useMemo(
     () =>
@@ -297,6 +324,9 @@ function AdminVectorObservabilityContent() {
       })),
     [data, t]
   );
+  const selectedError = data?.errors.find((item) => item.errorCode === focusedErrorCode)
+    || data?.errors[0]
+    || null;
   const isEmpty =
     data !== null &&
     data.totals.indexJobsTotal === 0 &&
@@ -329,23 +359,9 @@ function AdminVectorObservabilityContent() {
     return <LoadingFallback />;
   }
 
-  if (error) {
-    return (
-      <div className="flex min-h-[60vh] items-center justify-center">
-        <div className="max-w-md text-center">
-          <h2 className="mb-4 text-2xl font-bold text-red-600">{t('common.error')}</h2>
-          <p className="mb-6 text-gray-600 dark:text-gray-400">{error}</p>
-          <button onClick={() => void loadData()} className="btn btn-primary">
-            {t('common.retry')}
-          </button>
-        </div>
-      </div>
-    );
-  }
-
   return (
     <BackofficePageStack>
-      <BackofficePrimaryPanel
+      <BackofficeLayer
         eyebrow={t('admin.operator_surface', {}, 'Operator surface')}
         title={t('admin.vector_obs.title', {}, 'Vector Observability')}
         description={t(
@@ -353,69 +369,12 @@ function AdminVectorObservabilityContent() {
           {},
           'Cross-site runtime metrics for Cloud site knowledge indexing and semantic search. This view exposes coverage, hit quality, latency, and errors without showing chunk text, embeddings, or query text.'
         )}
-        aside={
-          data ? (
-            <div className="w-full xl:w-[48rem]">
-              <BackofficeMetricStrip
-                columnsClassName="md:grid-cols-2 xl:grid-cols-5"
-                items={[
-                  {
-                    label: t('admin.vector_obs.health', {}, 'Health'),
-                    value: `${vectorStatusLabel(t, data.health.status)} · ${data.health.score}`,
-                    detail: vectorHealthSummary(t, data),
-                    toneClassName:
-                      data.health.status === 'error'
-                        ? 'text-rose-600 dark:text-rose-400'
-                        : data.health.status === 'warning'
-                          ? 'text-amber-600 dark:text-amber-400'
-                          : undefined,
-                    size: 'compact',
-                  },
-                  {
-                    label: t('admin.vector_obs.indexed', {}, 'Indexed'),
-                    value: formatNumber(data.totals.currentDocumentCount),
-                    detail: t(
-                      'admin.vector_obs.detail_chunks',
-                      { count: formatNumber(data.totals.currentChunkCount) },
-                      '{{count}} chunks'
-                    ),
-                  },
-                  {
-                    label: t('admin.vector_obs.searches', {}, 'Searches'),
-                    value: formatNumber(data.totals.searchQueriesTotal),
-                    detail: t(
-                      'admin.vector_obs.detail_no_hit',
-                      { count: formatNumber(data.totals.noHitTotal) },
-                      '{{count}} no-hit'
-                    ),
-                  },
-                  {
-                    label: t('admin.vector_obs.no_hit_rate', {}, 'No-hit rate'),
-                    value: formatPercent(data.totals.noHitRate),
-                    toneClassName:
-                      data.totals.noHitRate >= 0.25
-                        ? 'text-amber-600 dark:text-amber-400'
-                        : undefined,
-                  },
-                  {
-                    label: t('admin.vector_obs.p95', {}, 'P95 search'),
-                    value: `${formatNumber(data.totals.p95SearchLatencyMs)}ms`,
-                    detail: t(
-                      'admin.vector_obs.detail_top1',
-                      { score: formatScore(data.totals.avgTop1Score) },
-                      'top1 {{score}}'
-                    ),
-                    size: 'compact',
-                  },
-                ]}
-              />
-            </div>
-          ) : null
-        }
+        aside={data ? <BackofficeStatusBadge status={data.health.status} label={`${vectorStatusLabel(t, data.health.status)} · ${data.health.score}`} /> : undefined}
+        actions={<button type="button" className="btn btn-secondary btn-sm" onClick={() => void loadData(true)} disabled={loading}>{t('common.refresh', {}, 'Refresh')}</button>}
       />
 
-      <BackofficeSectionPanel>
-        <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+      <BackofficeSectionPanel className="p-4 md:p-5">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
           <div>
             <h2 className="text-lg font-semibold text-slate-950 dark:text-white">
               {t('admin.vector_obs.filters', {}, 'Filters')}
@@ -424,21 +383,17 @@ function AdminVectorObservabilityContent() {
               {t('admin.vector_obs.filters_desc', {}, 'Inspect one site or compare all sites in the selected window.')}
             </p>
           </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <div className="flex rounded-lg border border-slate-200 bg-white p-1 dark:border-slate-800 dark:bg-slate-950">
+          <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
+            <div className="flex flex-wrap items-center gap-2">
               {WINDOW_OPTIONS.map((option) => (
-                <button
+                <BackofficeFilterPill
                   key={option.value}
-                  type="button"
-                  onClick={() => setWindowHours(option.value)}
-                  className={`rounded-md px-3 py-1.5 text-sm font-medium ${
-                    windowHours === option.value
-                      ? 'bg-slate-950 text-white dark:bg-white dark:text-slate-950'
-                      : 'text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-900'
-                  }`}
+                  active={windowHours === option.value}
+                  tone="info"
+                  onClick={() => updateUrl({ window: option.value, focus: null })}
                 >
                   {option.label}
-                </button>
+                </BackofficeFilterPill>
               ))}
             </div>
             <input
@@ -446,24 +401,33 @@ function AdminVectorObservabilityContent() {
               value={siteIdInput}
               aria-label={t('admin.vector_obs.site_filter_label', {}, 'Filter by site ID')}
               onChange={(event) => setSiteIdInput(event.target.value)}
+              onKeyDown={(event) => { if (event.key === 'Enter') updateUrl({ site: siteIdInput.trim() || null, focus: null }); }}
               placeholder={t('admin.vector_obs.site_filter', {}, 'Site ID')}
-              className="input input-bordered input-sm w-56"
+              className="input h-9 min-w-0 sm:w-56"
             />
             <button
               type="button"
               className="btn btn-secondary btn-sm"
-              onClick={() => setSiteIdFilter(siteIdInput.trim())}
+              onClick={() => updateUrl({ site: siteIdInput.trim() || null, focus: null })}
             >
               {t('common.apply', {}, 'Apply')}
             </button>
-            <button type="button" className="btn btn-secondary btn-sm" onClick={() => void loadData()}>
-              {t('common.refresh', {}, 'Refresh')}
-            </button>
+            {siteIdFilter ? <button type="button" className="btn btn-ghost btn-sm" onClick={() => { setSiteIdInput(''); updateUrl({ site: null, focus: null }); }}>{t('common.clear_filters', {}, 'Clear filters')}</button> : null}
           </div>
         </div>
       </BackofficeSectionPanel>
 
-      {isEmpty ? (
+      {data ? <BackofficeSummaryStrip items={[
+        { label: t('admin.vector_obs.indexed', {}, 'Indexed'), value: formatNumber(data.totals.currentDocumentCount), detail: t('admin.vector_obs.detail_chunks', { count: formatNumber(data.totals.currentChunkCount) }, '{{count}} chunks') },
+        { label: t('admin.vector_obs.searches', {}, 'Searches'), value: formatNumber(data.totals.searchQueriesTotal), detail: t('admin.vector_obs.detail_no_hit', { count: formatNumber(data.totals.noHitTotal) }, '{{count}} no-hit') },
+        { label: t('admin.vector_obs.no_hit_rate', {}, 'No-hit rate'), value: formatPercent(data.totals.noHitRate), toneClassName: data.totals.noHitRate >= 0.25 ? 'text-amber-600 dark:text-amber-400' : undefined },
+        { label: t('admin.vector_obs.p95', {}, 'P95 search'), value: `${formatNumber(data.totals.p95SearchLatencyMs)}ms`, detail: t('admin.vector_obs.detail_top1', { score: formatScore(data.totals.avgTop1Score) }, 'top1 {{score}}') },
+        { label: t('admin.vector_obs.errors', {}, 'Errors'), value: formatNumber(data.errors.reduce((total, item) => total + item.count, 0)), toneClassName: data.errors.length ? 'text-rose-600 dark:text-rose-400' : undefined },
+      ]} /> : null}
+
+      {error ? <BackofficeDiagnosticNotice message={error} staleDescription={data ? t('admin.vector_obs.stale_notice', {}, 'The last successfully loaded vector snapshot remains visible.') : undefined} retryLabel={t('common.retry')} onRetry={() => void loadData(true)} /> : null}
+
+      {!data ? null : isEmpty ? (
         <>
           <BackofficeEmptyState
             title={t('admin.vector_obs.empty_title', {}, 'No vector activity yet')}
@@ -490,7 +454,7 @@ function AdminVectorObservabilityContent() {
       ) : (
         <>
           <div className="grid gap-5 xl:grid-cols-2">
-            <BackofficeStackCard className="space-y-3">
+            <BackofficeStackCard className="min-w-0 space-y-3 overflow-hidden">
               <h3 className="text-sm font-semibold text-slate-950 dark:text-white">
                 {t('admin.vector_obs.search_trend', {}, 'Searches and no-hit')}
               </h3>
@@ -503,7 +467,7 @@ function AdminVectorObservabilityContent() {
                 secondaryColor="#f59e0b"
               />
             </BackofficeStackCard>
-            <BackofficeStackCard className="space-y-3">
+            <BackofficeStackCard className="min-w-0 space-y-3 overflow-hidden">
               <h3 className="text-sm font-semibold text-slate-950 dark:text-white">
                 {t('admin.vector_obs.index_trend', {}, 'Indexed chunks and failures')}
               </h3>
@@ -519,7 +483,7 @@ function AdminVectorObservabilityContent() {
           </div>
 
           <div className="grid gap-5 xl:grid-cols-3">
-            <BackofficeStackCard className="space-y-3 xl:col-span-2">
+            <BackofficeStackCard className="min-w-0 space-y-3 overflow-hidden xl:col-span-2">
               <h3 className="text-sm font-semibold text-slate-950 dark:text-white">
                 {t('admin.vector_obs.sites', {}, 'Sites')}
               </h3>
@@ -564,7 +528,7 @@ function AdminVectorObservabilityContent() {
               </div>
             </BackofficeStackCard>
 
-            <BackofficeStackCard className="space-y-3">
+            <BackofficeStackCard className="min-w-0 space-y-3 overflow-hidden">
               <h3 className="text-sm font-semibold text-slate-950 dark:text-white">
                 {t('admin.vector_obs.intents', {}, 'Search intents')}
               </h3>
@@ -582,80 +546,20 @@ function AdminVectorObservabilityContent() {
             </BackofficeStackCard>
           </div>
 
-          <div className="grid gap-5 xl:grid-cols-2">
-            <BackofficeStackCard className="space-y-3">
-              <h3 className="text-sm font-semibold text-slate-950 dark:text-white">
-                {t('admin.vector_obs.snapshots', {}, 'Latest index snapshots')}
-              </h3>
-              <div className="space-y-2">
-                {(data?.indexSnapshots || []).slice(0, 8).map((snapshot) => (
-                  <div
-                    key={`${snapshot.siteId}-${snapshot.capturedAt}`}
-                    className="rounded-lg border border-slate-200/80 bg-white/70 p-3 text-sm dark:border-slate-800 dark:bg-slate-900/40"
-                  >
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <BackofficeIdentifier value={snapshot.siteId} />
-                      <BackofficeTag tone="info">
-                        {snapshot.vectorBackend || t('admin.vector_obs.backend_local', {}, 'local')}
-                      </BackofficeTag>
-                    </div>
-                    <div className="mt-2 text-slate-600 dark:text-slate-300">
-                      {t(
-                        'admin.vector_obs.coverage_value',
-                        {
-                          docs: formatNumber(snapshot.documentCount),
-                          chunks: formatNumber(snapshot.chunkCount),
-                        },
-                        '{{docs}} docs · {{chunks}} chunks'
-                      )}{' '}
-                      ·{' '}
-                      {snapshot.embeddingProvider ||
-                        t('admin.vector_obs.embedding_deterministic', {}, 'deterministic')}{' '}
-                      {snapshot.embeddingDimensions}d
-                    </div>
-                  </div>
-                ))}
+          <BackofficeSectionPanel className="overflow-hidden p-0 md:p-0">
+            <div className="border-b border-slate-200 px-5 py-4 dark:border-slate-800 md:px-6"><p className="text-xs font-semibold uppercase tracking-[0.18em] text-gray-500 dark:text-gray-400">{t('admin.vector_obs.attention_label', {}, 'Attention')}</p><h2 className="mt-2 text-xl font-semibold text-gray-950 dark:text-white">{t('admin.vector_obs.error_queue_title', {}, 'Vector error queue')}</h2><p className="mt-1 text-sm text-slate-600 dark:text-slate-300">{t('admin.vector_obs.error_queue_desc', {}, 'Select an error code to inspect its count, last-seen time, current scope, and read-only boundary.')}</p></div>
+            <div className={data.errors.length ? 'grid xl:grid-cols-[minmax(0,1fr)_22rem]' : ''}>
+              <div className="max-h-[32rem] divide-y divide-slate-200 overflow-y-auto dark:divide-slate-800">
+                {data.errors.map((item) => { const selected = selectedError?.errorCode === item.errorCode; return <button key={`${item.errorCode}-${item.lastSeenAt}`} type="button" data-ui="vector-error-item" aria-pressed={selected} aria-controls="vector-error-inspector" className={`grid w-full cursor-pointer gap-3 px-5 py-4 text-left transition hover:bg-slate-50 dark:hover:bg-slate-900/45 md:grid-cols-[minmax(0,1fr)_8rem] md:items-center md:px-6 ${selected ? 'bg-blue-50/65 dark:bg-blue-950/20' : ''}`} onClick={() => updateUrl({ focus: item.errorCode })}><div className="min-w-0"><p className="truncate font-semibold text-slate-950 dark:text-white">{item.errorCode}</p><p className="mt-1 text-sm text-slate-500 dark:text-slate-400">{item.lastSeenAt ? formatDate(item.lastSeenAt) : t('common.not_found')}</p></div><div className="md:text-right"><BackofficeTag tone="warning">{formatNumber(item.count)}</BackofficeTag></div></button>; })}
+                {data.errors.length ? null : <BackofficeEmptyState className="m-5 md:m-6" title={t('admin.vector_obs.no_errors', {}, 'No search failures in this window.')} description={t('admin.vector_obs.no_errors_desc', {}, 'The selected scope has no vector errors that require evidence review.')} />}
               </div>
-            </BackofficeStackCard>
+              {data.errors.length ? <div id="vector-error-inspector" className="border-t border-slate-200 p-5 dark:border-slate-800 xl:border-l xl:border-t-0 xl:p-6">
+                {selectedError ? <div className="space-y-5"><div><p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">{t('admin.vector_obs.selected_error', {}, 'Selected error')}</p><h3 className="mt-2 break-words text-lg font-semibold text-slate-950 dark:text-white">{selectedError.errorCode}</h3></div><dl className="grid gap-3 text-sm"><div><dt className="text-xs text-slate-500 dark:text-slate-400">{t('admin.vector_obs.occurrences', {}, 'Occurrences')}</dt><dd className="mt-1 text-slate-800 dark:text-slate-100">{formatNumber(selectedError.count)}</dd></div><div><dt className="text-xs text-slate-500 dark:text-slate-400">{t('admin.vector_obs.last_seen', {}, 'Last seen')}</dt><dd className="mt-1 text-slate-800 dark:text-slate-100">{selectedError.lastSeenAt ? formatDate(selectedError.lastSeenAt) : t('common.not_found')}</dd></div><div><dt className="text-xs text-slate-500 dark:text-slate-400">{t('admin.vector_obs.scope', {}, 'Current scope')}</dt><dd className="mt-1 text-slate-800 dark:text-slate-100">{siteIdFilter || t('admin.vector_obs.all_sites', {}, 'All sites')} · {windowHours}h</dd></div></dl><p className="rounded-xl bg-slate-50 p-3 text-xs leading-5 text-slate-500 dark:bg-slate-900/45 dark:text-slate-400">{t('admin.vector_obs.error_boundary', {}, 'This surface exposes aggregate runtime evidence only. Chunk text, embeddings, and query text remain hidden.')}</p></div> : null}
+              </div> : null}
+            </div>
+          </BackofficeSectionPanel>
 
-            <BackofficeStackCard className="space-y-3">
-              <div className="flex items-center justify-between gap-3">
-                <h3 className="text-sm font-semibold text-slate-950 dark:text-white">
-                  {t('admin.vector_obs.errors', {}, 'Errors')}
-                </h3>
-                <BackofficeStatusBadge
-                  status={(data?.errors || []).length ? 'warning' : 'ok'}
-                  label={
-                    (data?.errors || []).length
-                      ? t('admin.vector_obs.needs_attention', {}, 'Needs attention')
-                      : t('status.ok', {}, 'OK')
-                  }
-                />
-              </div>
-              {(data?.errors || []).length ? (
-                <div className="space-y-2">
-                  {(data?.errors || []).map((item) => (
-                    <div
-                      key={`${item.errorCode}-${item.lastSeenAt}`}
-                      className="flex items-center justify-between gap-3 rounded-lg border border-slate-200/80 bg-white/70 px-3 py-2 text-sm dark:border-slate-800 dark:bg-slate-900/40"
-                    >
-                      <div className="min-w-0">
-                        <p className="truncate font-semibold text-slate-950 dark:text-white">{item.errorCode}</p>
-                        <p className="text-xs text-slate-500 dark:text-slate-400">
-                          {item.lastSeenAt ? formatDate(item.lastSeenAt) : '-'}
-                        </p>
-                      </div>
-                      <BackofficeTag tone="warning">{formatNumber(item.count)}</BackofficeTag>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <p className="text-sm text-slate-600 dark:text-slate-300">
-                  {t('admin.vector_obs.no_errors', {}, 'No search failures in this window.')}
-                </p>
-              )}
-            </BackofficeStackCard>
-          </div>
+          <BackofficeDisclosure summary={t('admin.vector_obs.advanced_snapshots', {}, 'Advanced index snapshots')} contentClassName="grid gap-3 md:grid-cols-2">{data.indexSnapshots.slice(0, 8).map((snapshot) => <div key={`${snapshot.siteId}-${snapshot.capturedAt}`} className="min-w-0 rounded-xl border border-slate-200/80 p-3 text-sm dark:border-slate-800"><div className="flex flex-wrap items-center justify-between gap-2"><BackofficeIdentifier value={snapshot.siteId} /><BackofficeTag tone="info">{snapshot.vectorBackend || t('admin.vector_obs.backend_local', {}, 'local')}</BackofficeTag></div><div className="mt-2 text-slate-600 dark:text-slate-300">{t('admin.vector_obs.coverage_value', { docs: formatNumber(snapshot.documentCount), chunks: formatNumber(snapshot.chunkCount) }, '{{docs}} docs · {{chunks}} chunks')} · {snapshot.embeddingProvider || t('admin.vector_obs.embedding_deterministic', {}, 'deterministic')} {snapshot.embeddingDimensions}d</div></div>)}</BackofficeDisclosure>
         </>
       )}
     </BackofficePageStack>

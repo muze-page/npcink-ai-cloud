@@ -145,9 +145,17 @@ Embedding:
 ```json
 {
   "model_id": "BAAI/bge-m3",
+  "site_knowledge_model_id": "BAAI/bge-m3",
   "dimensions": 1024
 }
 ```
+
+`site_knowledge_model_id` is optional and separates the Site Knowledge
+embedding model from a connection's general default model. When `model_ids` is
+present, the selected Site Knowledge model must be included in that declared
+allowlist or the runtime projection fails closed. For Chinese-first and
+Chinese-English cross-language retrieval, use `BAAI/bge-m3`; do not use an
+English-only embedding model for Site Knowledge.
 
 TEI embedding:
 

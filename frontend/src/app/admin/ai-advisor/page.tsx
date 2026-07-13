@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import React, { Suspense, useCallback, useEffect, useMemo, useState } from 'react';
 import {
+  BackofficeDiagnosticNotice,
   BackofficeMetricStrip,
   BackofficePageStack,
   BackofficePrimaryPanel,
@@ -539,6 +540,43 @@ function humanizeKey(value: string): string {
     .replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
+function advisorHeadlineText(value: string, t: Translator): string {
+  const known: Record<string, [string, string]> = {
+    'Operations posture is stable': ['admin.ai_advisor.diagnosis_operations_stable', 'Operations posture is stable'],
+    'Runtime failures need operations review': ['admin.ai_advisor.diagnosis_runtime_failures', 'Runtime failures need operations review'],
+    'Provider reliability needs review': ['admin.ai_advisor.diagnosis_provider_reliability', 'Provider reliability needs review'],
+    'Knowledge search value may be low': ['admin.ai_advisor.diagnosis_knowledge_value', 'Knowledge search value may be low'],
+    'Commercial follow-up is visible': ['admin.ai_advisor.diagnosis_commercial_followup', 'Commercial follow-up is visible'],
+    'Runtime delivery needs operator review': ['admin.ai_advisor.diagnosis_runtime_delivery', 'Runtime delivery needs operator review'],
+  };
+  const copy = known[value];
+  return copy ? t(copy[0], {}, copy[1]) : value || t('admin.ai_advisor.no_active_issue', {}, 'No active operator issue');
+}
+
+function advisorSummaryText(value: string, t: Translator): string {
+  const known: Record<string, [string, string]> = {
+    'Recent usage, runtime, provider, and knowledge signals do not show a high-priority operator action.': ['admin.ai_advisor.diagnosis_operations_stable_desc', 'Recent usage, runtime, provider, and knowledge signals do not show a high-priority operator action.'],
+    'Recent run failures are visible in the selected operations window.': ['admin.ai_advisor.diagnosis_runtime_failures_desc', 'Recent run failures are visible in the selected operations window.'],
+    'Provider errors or fallback pressure are present in recent traffic.': ['admin.ai_advisor.diagnosis_provider_reliability_desc', 'Provider errors or fallback pressure are present in recent traffic.'],
+    'Knowledge searches show elevated no-hit pressure in the selected window.': ['admin.ai_advisor.diagnosis_knowledge_value_desc', 'Knowledge searches show elevated no-hit pressure in the selected window.'],
+    'Subscription attention or near-term expiry signals are present.': ['admin.ai_advisor.diagnosis_commercial_followup_desc', 'Subscription attention or near-term expiry signals are present.'],
+    'Queue or callback pressure is present in recent runtime diagnostics.': ['admin.ai_advisor.diagnosis_runtime_delivery_desc', 'Queue or callback pressure is present in recent runtime diagnostics.'],
+  };
+  const copy = known[value];
+  return copy ? t(copy[0], {}, copy[1]) : value || t('admin.ai_advisor.no_summary', {}, 'Review the linked operational evidence.');
+}
+
+function advisorEvidenceLabel(kind: string, fallback: string, t: Translator): string {
+  const known: Record<string, [string, string]> = {
+    admin_overview: ['admin.ai_advisor.evidence_admin_overview', 'Commercial coverage and usage summary'],
+    runtime_diagnostics: ['admin.ai_advisor.evidence_runtime_diagnostics', 'Runtime queue, callback, and guard summary'],
+    site_knowledge_observability: ['admin.ai_advisor.evidence_site_knowledge', 'Knowledge search and index health summary'],
+    provider_call_records: ['admin.ai_advisor.evidence_provider_calls', 'Provider call metrics aggregated from run telemetry'],
+  };
+  const copy = known[kind];
+  return copy ? t(copy[0], {}, copy[1]) : fallback || humanizeKey(kind);
+}
+
 function getSignal(branch: SummaryBranch, code: string): Record<string, string | number | boolean | null> {
   return branch.source_context.advisor.signals.find((signal) => signal.code === code) ?? {};
 }
@@ -905,17 +943,17 @@ function OperationsWorkPanel({ data }: { data: AdvisorPreviewData }) {
   const severity = advisor.severity || branch.severity || 'info';
 
   return (
-    <BackofficeSectionPanel className="space-y-5">
+    <BackofficeSectionPanel className="space-y-5" data-ui="advisor-current-diagnosis">
       <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
         <div>
           <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
             {t('admin.ai_advisor.current_diagnosis', {}, 'Current diagnosis')}
           </p>
           <h2 className="mt-2 text-xl font-semibold text-slate-950 dark:text-white">
-            {branch.headline || t('admin.ai_advisor.no_active_issue', {}, 'No active operator issue')}
+            {advisorHeadlineText(branch.headline, t)}
           </h2>
           <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-600 dark:text-slate-300">
-            {advisor.summary || branch.operator_summary || t('admin.ai_advisor.no_summary', {}, 'Review the linked operational evidence.')}
+            {advisorSummaryText(advisor.summary || branch.operator_summary, t)}
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -1012,7 +1050,7 @@ function OperationsWorkPanel({ data }: { data: AdvisorPreviewData }) {
             {advisor.evidence.length ? (
               advisor.evidence.slice(0, 5).map((item) => (
                 <div key={`${item.kind}-${item.ref}`} className="rounded-lg border border-slate-200/80 bg-slate-50/80 px-3 py-2 dark:border-slate-800 dark:bg-slate-900/45">
-                  <p className="text-sm font-medium text-slate-900 dark:text-slate-100">{item.label || humanizeKey(item.kind)}</p>
+                  <p className="text-sm font-medium text-slate-900 dark:text-slate-100">{advisorEvidenceLabel(item.kind, item.label, t)}</p>
                   <p className="mt-1 truncate font-mono text-[0.7rem] text-slate-500 dark:text-slate-400">{item.ref || item.kind}</p>
                 </div>
               ))
@@ -1954,15 +1992,14 @@ function AdminAiAdvisorContent() {
 
   if (error && !valueMetrics) {
     return (
-      <div className="flex min-h-[60vh] items-center justify-center">
-        <div className="max-w-md text-center">
-          <h2 className="mb-4 text-2xl font-bold text-red-600">{t('common.error')}</h2>
-          <p className="mb-6 text-gray-600 dark:text-gray-400">{error}</p>
-          <button onClick={() => void loadPreview()} className="btn btn-primary">
-            {t('common.retry')}
-          </button>
-        </div>
-      </div>
+      <BackofficePageStack>
+        <BackofficePrimaryPanel
+          eyebrow={t('admin.ai_advisor.eyebrow', {}, 'Internal operations')}
+          title={t('admin.ai_advisor.title', {}, 'Operations Advisor')}
+          description={t('admin.ai_advisor.load_error_desc', {}, 'The current diagnostic summary could not be loaded. No provider, routing, package, or WordPress state was changed.')}
+        />
+        <BackofficeDiagnosticNotice message={error} retryLabel={t('common.retry')} onRetry={() => void loadPreview()} />
+      </BackofficePageStack>
     );
   }
 
@@ -1976,13 +2013,7 @@ function AdminAiAdvisorContent() {
           {},
           'Generate read-only diagnostic summaries from Cloud operational evidence and compare rule baseline output with AI output.'
         )}
-        aside={
-          data ? (
-            <div className="w-full xl:w-[42rem]">
-              <BackofficeMetricStrip columnsClassName="md:grid-cols-2 xl:grid-cols-4" items={metricItems} />
-            </div>
-          ) : undefined
-        }
+        aside={data ? <BackofficeStatusBadge label={data.comparison.aiUsed ? t('admin.ai_advisor.ai_used', {}, 'AI used') : t('admin.ai_advisor.rules_only', {}, 'Rules only')} status={data.comparison.aiUsed ? 'success' : 'inactive'} /> : undefined}
       >
         <div className="flex flex-wrap items-center gap-3">
           {SCOPE_OPTIONS.map((option) => (
@@ -2032,7 +2063,9 @@ function AdminAiAdvisorContent() {
           <summary className="cursor-pointer px-4 py-3 text-sm font-semibold text-slate-800 hover:bg-slate-50 dark:text-slate-100 dark:hover:bg-slate-900/60">
             {t('admin.ai_advisor.advanced_params', {}, 'Advanced evaluation parameters')}
           </summary>
-          <div className="flex flex-wrap items-center gap-3 border-t border-slate-200/80 px-4 py-3 dark:border-slate-800">
+          <div className="space-y-4 border-t border-slate-200/80 px-4 py-3 dark:border-slate-800">
+            <BackofficeMetricStrip columnsClassName="md:grid-cols-2 xl:grid-cols-4" items={metricItems} />
+            <div className="flex flex-wrap items-center gap-3">
             <input
               type="text"
               value={providerIdInput}
@@ -2080,6 +2113,7 @@ function AdminAiAdvisorContent() {
                 'These parameters are only for internal AI summary evaluation. They do not change routing, packages, WordPress content, or customer state.'
               )}
             </p>
+            </div>
           </div>
         </details>
         {copyMessage ? (

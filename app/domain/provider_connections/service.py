@@ -73,7 +73,6 @@ class ProviderConnectionAdminService:
                 not bool(item.get("enabled")),
                 str(item.get("provider_type") or ""),
                 str(item.get("provider_id") or ""),
-                int(item.get("priority") or 100),
                 str(item.get("connection_id") or ""),
             )
         )
@@ -142,6 +141,13 @@ class ProviderConnectionAdminService:
                 configured=configured,
                 credential_error=credential_error,
             )
+            if row.enabled and configured:
+                _disable_competing_runtime_connections(
+                    session,
+                    selected=row,
+                    selected_config=normalized["config_json"],
+                    selected_provider_id=normalized["provider_id"],
+                )
             session.commit()
             session.refresh(row)
             return self._serialize(row)
@@ -570,15 +576,9 @@ class ProviderConnectionAdminService:
         capability_ids = _normalize_id_list(payload.get("capability_ids"))
         runtime_profile_ids = _normalize_id_list(payload.get("runtime_profile_ids"))
         metadata = _sanitize_config(_dict(payload.get("metadata")))
-        note = _string(payload.get("note") or metadata.get("note") or metadata.get("operator_note"))
-        if len(note) > 512:
-            raise ProviderConnectionAdminError(
-                "provider_connection.note_invalid",
-                "note must be 512 characters or less",
-            )
-        priority = _priority_value(payload.get("priority", metadata.get("priority", 100)))
-        metadata["note"] = note
-        metadata["priority"] = priority
+        metadata.pop("note", None)
+        metadata.pop("operator_note", None)
+        metadata.pop("priority", None)
         secretless = bool(payload.get("secretless") or config.get("secretless"))
         if (
             normalized_provider_type == "web_search_provider"
@@ -615,8 +615,9 @@ class ProviderConnectionAdminService:
         capability_ids = _normalize_id_list(config.get("capability_ids"))
         runtime_profile_ids = _normalize_id_list(config.get("runtime_profile_ids"))
         metadata = _dict(row.metadata_json)
-        priority = _priority_value(metadata.get("priority", 100))
-        note = _string(metadata.get("note") or metadata.get("operator_note"))
+        metadata.pop("note", None)
+        metadata.pop("operator_note", None)
+        metadata.pop("priority", None)
         model_ids = _normalize_id_list(config.get("model_ids"))
         if not model_ids:
             model_ids = _normalize_id_list(metadata.get("model_ids"))
@@ -643,8 +644,6 @@ class ProviderConnectionAdminService:
             "status": status,
             "source_role": row.source_role,
             "base_url": row.base_url or "",
-            "note": note,
-            "priority": priority,
             "capability_ids": capability_ids,
             "runtime_profile_ids": runtime_profile_ids,
             "model_ids": model_ids,
@@ -825,12 +824,46 @@ def _normalize_id_list(value: object) -> list[str]:
     return normalized
 
 
-def _priority_value(value: object) -> int:
-    try:
-        priority = int(str(value).strip())
-    except (TypeError, ValueError):
-        priority = 100
-    return min(999, max(0, priority))
+def _disable_competing_runtime_connections(
+    session: Any,
+    *,
+    selected: ProviderConnection,
+    selected_config: dict[str, Any],
+    selected_provider_id: str,
+) -> None:
+    selected_slot = _runtime_selection_slot(
+        kind=_string(selected_config.get("kind") or selected.provider_type),
+        provider_id=selected_provider_id,
+    )
+    if not selected_slot:
+        return
+    rows = list(
+        session.scalars(
+            select(ProviderConnection).where(
+                ProviderConnection.enabled.is_(True),
+                ProviderConnection.connection_id != selected.connection_id,
+            )
+        )
+    )
+    for row in rows:
+        config = _dict(row.config_json)
+        slot = _runtime_selection_slot(
+            kind=_string(config.get("kind") or row.provider_type),
+            provider_id=_string(config.get("provider_id") or row.connection_id),
+        )
+        if slot == selected_slot:
+            row.enabled = False
+            row.status = "disabled"
+
+
+def _runtime_selection_slot(*, kind: str, provider_id: str) -> str:
+    normalized_kind = _string(kind).lower()
+    normalized_provider_id = _string(provider_id).lower()
+    if normalized_kind == "web_search_provider" and normalized_provider_id != "jina_reader":
+        return "web_search_primary"
+    if normalized_kind in {"embedding_provider", "rerank_provider", "vector_store_provider"}:
+        return normalized_kind
+    return ""
 
 
 def _public_config(config: dict[str, Any]) -> dict[str, Any]:

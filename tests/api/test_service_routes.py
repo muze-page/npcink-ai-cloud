@@ -1466,6 +1466,8 @@ def test_admin_provider_connections_store_encrypted_credentials_and_project_to_a
     assert data["connection_id"] == "openai_primary"
     assert data["status"] == "ready"
     assert data["configured"] is True
+    assert "priority" not in data
+    assert "note" not in data
     assert data["receipt"]["event_kind"] == "provider_connection.save"
     assert data["receipt"]["scope_kind"] == "provider_connection"
     assert data["receipt"]["scope_id"] == "openai_primary"
@@ -1474,6 +1476,20 @@ def test_admin_provider_connections_store_encrypted_credentials_and_project_to_a
     assert data["secrets"]["credential"]["display"] == "configured"
     serialized = json.dumps(response.json())
     assert "provider-connection-test-secret" not in serialized
+
+    retired_fields_response = client.post(
+        "/internal/service/admin/provider-connections",
+        headers=build_internal_headers(idempotency_key="provider-connection-retired-fields"),
+        json={
+            "connection_id": "legacy_provider_fields",
+            "provider_id": "openai",
+            "provider_type": "openai_compatible",
+            "display_name": "Legacy provider fields",
+            "priority": 10,
+            "note": "retired",
+        },
+    )
+    assert retired_fields_response.status_code == 422
 
     with get_session(database_url) as session:
         row = session.get(ProviderConnection, "openai_primary")

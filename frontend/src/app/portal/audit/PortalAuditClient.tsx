@@ -2,12 +2,12 @@
 
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  BackofficePageStack,
-  BackofficeSectionPanel,
-  BackofficeStackCard,
-} from '@/components/backoffice/BackofficeScaffold';
-import { BackofficeIdentifier } from '@/components/backoffice/BackofficeIdentifier';
-import { BackofficeStatusBadge } from '@/components/backoffice/BackofficeStatusBadge';
+  PortalPageStack,
+  PortalSection,
+  PortalCard,
+} from '@/components/portal/PortalScaffold';
+import { PortalIdentifier } from '@/components/portal/PortalIdentifier';
+import { PortalStatusBadge } from '@/components/portal/PortalStatusBadge';
 import { PortalWorkspaceHeader } from '@/components/portal/PortalWorkspaceHeader';
 import {
   PortalEmptyState,
@@ -131,7 +131,7 @@ export function PortalAuditClient() {
   }
 
   return (
-    <BackofficePageStack data-portal-support-deeplink="audit">
+    <PortalPageStack data-portal-support-deeplink="audit">
       <PortalWorkspaceHeader
         eyebrow={t('portal.workspace_label', {}, 'Portal')}
         title={t('portal.audit.nav_label', {}, 'Recent activity')}
@@ -162,9 +162,9 @@ export function PortalAuditClient() {
         }
       />
 
-      <BackofficeSectionPanel className="overflow-hidden p-0">
+      <PortalSection className="overflow-hidden p-0">
         <div className="border-b border-gray-200 px-6 py-5 dark:border-gray-800">
-          <h2 className="text-xl font-semibold text-gray-950 dark:text-white">{t('portal.audit.nav_label', {}, 'Recent activity')}</h2>
+          <h2 className="text-xl font-semibold text-gray-950 dark:text-white">{t('portal.audit.records_title', {}, 'Activity records')}</h2>
           <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">
             {t('portal.audit.recent_desc', {}, 'Only recent customer-readable activity is shown here.')}
           </p>
@@ -190,7 +190,7 @@ export function PortalAuditClient() {
                   <div className="min-w-0">
                     <div className="mb-1 flex flex-wrap items-center gap-2">
                       <span className="font-medium">{translateEventKind(event.event_kind)}</span>
-                      <BackofficeStatusBadge status={event.outcome} label={translateOutcome(event.outcome)} />
+                      <PortalStatusBadge status={event.outcome} label={translateOutcome(event.outcome)} />
                     </div>
                     <p className="text-sm text-gray-500">{formatDate(event.created_at)}</p>
                     <details className="mt-3 rounded-xl bg-slate-50 px-3 py-2 text-xs text-gray-500 dark:bg-slate-900/60 dark:text-gray-400">
@@ -200,30 +200,30 @@ export function PortalAuditClient() {
                       <div className="mt-2 grid gap-2 sm:grid-cols-2">
                         <div>
                           <span className="block font-medium text-gray-600 dark:text-gray-300">Event ID</span>
-                          <BackofficeIdentifier value={event.event_id} full />
+                          <PortalIdentifier value={event.event_id} full />
                         </div>
                         {getAuditTraceId(event) ? (
                           <div>
                             <span className="block font-medium text-gray-600 dark:text-gray-300">
                               {t('audit.trace_id', {}, 'Trace ID')}
                             </span>
-                            <BackofficeIdentifier value={getAuditTraceId(event)} full />
+                            <PortalIdentifier value={getAuditTraceId(event)} full />
                           </div>
                         ) : null}
                       </div>
                     </details>
                   </div>
                   {!isSuccessfulAuditOutcome(event.outcome) ? (
-                    <BackofficeStackCard className="max-w-md border-amber-200 bg-amber-50/70 text-sm text-amber-800 dark:border-amber-900/60 dark:bg-amber-950/20 dark:text-amber-200">
+                    <PortalCard className="max-w-md border-amber-200 bg-amber-50/70 text-sm text-amber-800 dark:border-amber-900/60 dark:bg-amber-950/20 dark:text-amber-200">
                       {t('portal.audit.support_hint', {}, 'Contact support with the site name and activity time.')}
-                    </BackofficeStackCard>
+                    </PortalCard>
                   ) : null}
                 </div>
               </article>
             ))}
           </div>
         )}
-      </BackofficeSectionPanel>
-    </BackofficePageStack>
+      </PortalSection>
+    </PortalPageStack>
   );
 }

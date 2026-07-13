@@ -5,10 +5,12 @@ import assert from 'node:assert/strict';
 const root = process.cwd();
 const billingSource = readFileSync(resolve(root, 'src/app/portal/billing/page.tsx'), 'utf8');
 const usageSource = readFileSync(resolve(root, 'src/app/portal/usage/page.tsx'), 'utf8');
+const creditTrendSource = readFileSync(resolve(root, 'src/components/portal/PortalCreditTrendPanel.tsx'), 'utf8');
 const aiInsightsPagePath = resolve(root, 'src/app/portal/ai-insights/page.tsx');
 const monitoringSource = readFileSync(resolve(root, 'src/app/portal/monitoring/page.tsx'), 'utf8');
+const siteServiceStatusSource = readFileSync(resolve(root, 'src/components/portal/PortalSiteServiceStatus.tsx'), 'utf8');
 const siteRecordSource = readFileSync(resolve(root, 'src/app/portal/sites/[siteId]/page.tsx'), 'utf8');
-const sitesSource = readFileSync(resolve(root, 'src/app/portal/sites/page.tsx'), 'utf8');
+const sitesSource = readFileSync(resolve(root, 'src/components/portal/PortalSitesWorkspace.tsx'), 'utf8');
 const portalHomeSource = readFileSync(resolve(root, 'src/app/portal/page.tsx'), 'utf8');
 const auditSource = readFileSync(resolve(root, 'src/app/portal/audit/PortalAuditClient.tsx'), 'utf8');
 const pluginMonitoringSource = readFileSync(resolve(root, 'src/components/portal/PortalPluginMonitoringPanel.tsx'), 'utf8');
@@ -26,28 +28,28 @@ assert.doesNotMatch(
   'Portal package page must not expose package record IDs on the customer surface'
 );
 
-const usageDetailIndex = usageSource.indexOf('data-portal-usage="usage-detail"');
-const usageBeforeDetail = usageSource.slice(0, usageDetailIndex);
 assert.doesNotMatch(
-  usageBeforeDetail,
+  usageSource,
   /usage\.tokens_month|common\.cost|remaining_tokens_test_label|remaining_cost_test_label/,
-  'Portal usage summary must not expose token or cost counters before the detail disclosure'
+  'Portal usage must not expose token or cost counters'
 );
 assert.match(
-  usageBeforeDetail,
-  /summary_label[\s\S]*credit_ledger_title[\s\S]*credit_ledger_desc/,
-  'Portal usage summary should show customer-readable point records first'
+  usageSource,
+  /overview_title[\s\S]*view_tabs_label[\s\S]*PortalCreditTrendPanel[\s\S]*credit_events_title/,
+  'Portal usage should lead with current-period totals and task tabs before their panels'
 );
+assert.match(
+  creditTrendSource,
+  /primary_trend_title[\s\S]*trend_empty_title/,
+  'Portal usage trend must remain customer-facing and range based'
+);
+assert.match(creditTrendSource, /trend_window_1h[\s\S]*trend_window_30d/);
 assert.doesNotMatch(
   usageSource,
   /Model tokens|Other provider calls|Vector articles|Vector chunks|Provider cost breakdown|Input tokens|Output tokens|usage\.tokens_month|ai-credit-ledger-v2|Rate version/,
-  'Portal usage detail must use customer-facing point, budget, and knowledge labels instead of technical metering labels'
+  'Portal usage must not expose technical metering labels'
 );
-assert.match(
-  usageSource,
-  /package_service_uses_label[\s\S]*breakdown_tokens[\s\S]*package_budget_label/,
-  'Portal usage detail should keep service uses, points, and budget as the visible usage vocabulary'
-);
+assert.doesNotMatch(usageSource, /PortalUsageAdvancedDetails|view_tab_details|usage-detail/);
 
 assert.equal(
   existsSync(aiInsightsPagePath),
@@ -56,7 +58,7 @@ assert.equal(
 );
 
 assert.doesNotMatch(
-  monitoringSource,
+  siteServiceStatusSource,
   /Plugin monitoring|Installed plugin health|Vector observability|P95|top1|MonitoringTabs|PortalPluginMonitoringPanel|PortalMediaProcessingPanel|PortalSiteKnowledgePanel|workflow_status|evidence_summary|likely_cause|next_step|DiagnosticAdvisor|diagnosticAdvisor|suggestion_only|direct_wordpress_write|automatic_repair_allowed/,
   'Portal service status must avoid plugin/vector observability and diagnostic-advisor labels in the customer page'
 );
@@ -185,8 +187,13 @@ assert.match(
 );
 assert.match(
   monitoringSource,
-  /data-portal-support-deeplink="monitoring"/,
-  'Portal monitoring must stay available only as a support deep link'
+  /router\.replace\(`\/portal\/sites\/\$\{encodeURIComponent\(selectedSite\.site_id\)\}#service-status`\)/,
+  'Portal monitoring compatibility route must open the canonical site service-status section'
+);
+assert.match(
+  siteRecordSource,
+  /<PortalSiteServiceStatus[\s\S]*overview=\{siteMonitoring\.overview\}/,
+  'Portal site record must own the customer-readable service status'
 );
 assert.match(
   auditSource,
@@ -195,8 +202,8 @@ assert.match(
 );
 
 for (const expectedCopy of [
-  "'portal.billing.customer_title': 'Package'",
-  "'portal.billing.customer_title': '套餐'",
+  "'portal.billing.customer_title': 'Package and rights'",
+  "'portal.billing.customer_title': '套餐与权益'",
   "'portal.site_record_current_label': 'Site record'",
   "'portal.site_record_current_label': '站点记录'",
   "'portal.audit.recent_desc': 'Only recent customer-readable activity is shown here.'",

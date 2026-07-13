@@ -4,13 +4,13 @@ import Link from 'next/link';
 import { Suspense, useCallback, useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import {
-  BackofficeMetricStrip,
-  BackofficePageStack,
-  BackofficePrimaryPanel,
-  BackofficeSectionPanel,
-  BackofficeStackCard,
-} from '@/components/backoffice/BackofficeScaffold';
-import { BackofficeStatusBadge } from '@/components/backoffice/BackofficeStatusBadge';
+  PortalPageStack,
+  PortalPrimaryPanel,
+  PortalSection,
+  PortalCard,
+} from '@/components/portal/PortalScaffold';
+import { PortalStatusBadge } from '@/components/portal/PortalStatusBadge';
+import { Modal } from '@/components/ui/Modal';
 import {
   PortalLoadingState,
   PortalSignedOutState,
@@ -23,7 +23,6 @@ import {
   type PortalIdentityProviderStatus,
 } from '@/lib/portal-client';
 import { formatPortalErrorMessage } from '@/lib/portal-error';
-import { getVisiblePortalSites } from '@/lib/portal-site-display';
 import { cn, formatDate } from '@/lib/utils';
 
 type AccountActionState =
@@ -73,6 +72,7 @@ function AccountPageContent() {
   const [emailChangeNewEmail, setEmailChangeNewEmail] = useState('');
   const [emailChangeCode, setEmailChangeCode] = useState('');
   const [emailChangePendingEmail, setEmailChangePendingEmail] = useState('');
+  const [showEmailChange, setShowEmailChange] = useState(false);
 
   const qqProvider = useMemo(
     () => providers.find((provider) => provider.provider === 'qq') || null,
@@ -239,6 +239,7 @@ function AccountPageContent() {
       );
       await refresh();
       setStatus('idle');
+      setShowEmailChange(false);
     } catch (error) {
       setStatus('error');
       setMessage(
@@ -270,47 +271,14 @@ function AccountPageContent() {
   }
 
   return (
-    <BackofficePageStack>
-      <BackofficePrimaryPanel
-        eyebrow={t('portal.account.eyebrow', undefined, 'Account')}
+    <PortalPageStack>
+      <PortalPrimaryPanel
+        eyebrow={t('portal.account.settings_eyebrow', undefined, 'Account settings')}
         title={t('portal.account.title', undefined, 'Contact')}
         description={t(
           'portal.account.description',
           undefined,
           'Manage the email used for verification codes and optional quick login.'
-        )}
-        aside={(
-          <BackofficeStatusBadge
-            label={qqProvider?.bound ? t('portal.account.qq_bound_label', undefined, 'QQ bound') : t('portal.account.qq_unbound_label', undefined, 'QQ not bound')}
-            status={qqProvider?.bound ? 'active' : 'inactive'}
-          />
-        )}
-        summary={(
-          <BackofficeMetricStrip
-            columnsClassName="md:grid-cols-3"
-            items={[
-              {
-                label: t('portal.account.login_security_label', undefined, 'Sign-in'),
-                value: t('portal.account.login_security_value', undefined, 'Email code'),
-                detail: t('portal.account.login_security_detail', undefined, 'Primary login method'),
-                size: 'compact',
-              },
-              {
-                label: t('portal.account.qq_status_label', undefined, 'QQ login'),
-                value: qqProvider?.bound
-                  ? t('portal.account.bound', undefined, 'Bound')
-                  : t('portal.account.unbound', undefined, 'Not bound'),
-                detail: qqProvider?.bound
-                  ? t('portal.account.qq_status_detail_bound', undefined, 'Available for quick login')
-                  : t('portal.account.qq_status_detail_unbound', undefined, 'Optional quick login'),
-                size: 'compact',
-              },
-              {
-                label: t('portal.account.site_count_label', undefined, 'Sites'),
-                value: String(getVisiblePortalSites(session.sites).length),
-              },
-            ]}
-          />
         )}
       />
 
@@ -328,7 +296,7 @@ function AccountPageContent() {
       ) : null}
 
       <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(20rem,0.8fr)]">
-        <BackofficeSectionPanel className="space-y-5">
+        <PortalSection className="space-y-5">
           <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
             <div>
               <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
@@ -340,14 +308,14 @@ function AccountPageContent() {
             </div>
           </div>
 
-          <BackofficeStackCard className="space-y-4 bg-white/80 dark:bg-slate-950/55">
+          <PortalCard className="space-y-4 bg-white/80 dark:bg-slate-950/55">
             <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
               <div>
                 <div className="flex flex-wrap items-center gap-2">
                   <h3 className="text-base font-semibold text-slate-950 dark:text-white">
                     {t('portal.account.email_login_title', undefined, 'Email verification code')}
                   </h3>
-                  <BackofficeStatusBadge
+                  <PortalStatusBadge
                     label={t('portal.account.primary_identity', undefined, 'Primary identity')}
                     status="active"
                   />
@@ -356,20 +324,20 @@ function AccountPageContent() {
                   {contactEmail || t('portal.account.contact_missing_desc', undefined, 'Email contact is not visible in this local session.')}
                 </p>
               </div>
-              <Link href="/portal/login" className="btn btn-secondary">
-                {t('portal.account.login_page', undefined, 'Login page')}
+              <Link href="/portal/audit" className="btn btn-secondary">
+                {t('portal.audit.nav_label', undefined, 'Recent activity')}
               </Link>
             </div>
-          </BackofficeStackCard>
+          </PortalCard>
 
-          <BackofficeStackCard className="space-y-4 bg-white/80 dark:bg-slate-950/55">
+          <PortalCard className="space-y-4 bg-white/80 dark:bg-slate-950/55">
             <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
               <div>
                 <div className="flex flex-wrap items-center gap-2">
                   <h3 className="text-base font-semibold text-slate-950 dark:text-white">
                     {t('portal.account.qq_login_title', undefined, 'QQ quick login')}
                   </h3>
-                  <BackofficeStatusBadge
+                  <PortalStatusBadge
                     label={
                       qqProvider?.bound
                         ? t('portal.account.bound', undefined, 'Bound')
@@ -378,7 +346,7 @@ function AccountPageContent() {
                     status={qqProvider?.bound ? 'active' : 'inactive'}
                   />
                   {!qqProvider?.configured ? (
-                    <BackofficeStatusBadge
+                    <PortalStatusBadge
                       label={t('portal.account.not_configured', undefined, 'Not configured')}
                       status="warning"
                     />
@@ -427,11 +395,11 @@ function AccountPageContent() {
                 )}
               </div>
             </div>
-          </BackofficeStackCard>
-        </BackofficeSectionPanel>
+          </PortalCard>
+        </PortalSection>
 
         <div data-portal-account="contact-info">
-          <BackofficeSectionPanel className="space-y-4">
+          <PortalSection className="space-y-4">
             <div>
               <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
                 {t('portal.account.contact_label', undefined, 'Contact')}
@@ -448,9 +416,9 @@ function AccountPageContent() {
               </p>
             </div>
 
-            <BackofficeStackCard className="space-y-2 bg-white/80 dark:bg-slate-950/55">
+            <PortalCard className="space-y-4 bg-white/80 dark:bg-slate-950/55">
               <p className="text-base font-semibold text-slate-950 dark:text-white">
-                {t('portal.account.contact_change_title', undefined, 'Need to change contact?')}
+                {contactEmail || t('portal.account.contact_missing_desc', undefined, 'Email contact is not visible in this local session.')}
               </p>
               <p className="text-sm leading-6 text-slate-600 dark:text-slate-300">
                 {t(
@@ -459,69 +427,95 @@ function AccountPageContent() {
                   'Enter a new email and verify the code sent there. Your current email remains active until verification succeeds.'
                 )}
               </p>
-              <div className="grid gap-3 pt-2">
-                <label className="grid gap-1 text-sm font-medium text-slate-700 dark:text-slate-200">
-                  {t('portal.account.email_change_new_email', undefined, 'New email')}
-                  <input
-                    type="email"
-                    value={emailChangeNewEmail}
-                    onChange={(event) => setEmailChangeNewEmail(event.target.value)}
-                    placeholder={t('auth.email_placeholder', undefined, 'you@example.com')}
-                    className="input"
-                    autoComplete="email"
-                  />
-                </label>
-                <div className="flex flex-wrap gap-2">
-                  <button
-                    type="button"
-                    className="btn btn-secondary"
-                    onClick={() => void handleRequestEmailChange()}
-                    disabled={status === 'requesting_email_change'}
-                  >
-                    {status === 'requesting_email_change'
-                      ? t('portal.account.email_change_sending', undefined, 'Sending')
-                      : t('portal.account.email_change_send_code', undefined, 'Send verification code')}
-                  </button>
-                </div>
-                {emailChangePendingEmail ? (
-                  <div className="grid gap-3 rounded-xl border border-slate-200 bg-slate-50 p-3 dark:border-slate-800 dark:bg-slate-900/40">
-                    <p className="text-xs leading-5 text-slate-500 dark:text-slate-400">
-                      {t(
-                        'portal.account.email_change_pending_desc',
-                        { email: emailChangePendingEmail },
-                        'Enter the code sent to {{email}} to switch the login email.'
-                      )}
-                    </p>
-                    <label className="grid gap-1 text-sm font-medium text-slate-700 dark:text-slate-200">
-                      {t('portal.account.email_change_code', undefined, 'Verification code')}
-                      <input
-                        type="text"
-                        inputMode="numeric"
-                        value={emailChangeCode}
-                        onChange={(event) => setEmailChangeCode(event.target.value)}
-                        placeholder="000000"
-                        className="input"
-                        autoComplete="one-time-code"
-                      />
-                    </label>
-                    <button
-                      type="button"
-                      className="btn btn-primary justify-center"
-                      onClick={() => void handleVerifyEmailChange()}
-                      disabled={status === 'verifying_email_change'}
-                    >
-                      {status === 'verifying_email_change'
-                        ? t('portal.account.email_change_verifying', undefined, 'Verifying')
-                        : t('portal.account.email_change_confirm', undefined, 'Confirm email change')}
-                    </button>
-                  </div>
-                ) : null}
-              </div>
-            </BackofficeStackCard>
-          </BackofficeSectionPanel>
+              <button type="button" className="btn btn-secondary" onClick={() => setShowEmailChange(true)}>
+                {t('portal.account.contact_change_title', undefined, 'Change email')}
+              </button>
+            </PortalCard>
+          </PortalSection>
         </div>
       </div>
-    </BackofficePageStack>
+
+      <Modal
+        isOpen={showEmailChange}
+        onClose={() => setShowEmailChange(false)}
+        title={t('portal.account.contact_change_title', undefined, 'Change email')}
+        description={t(
+          'portal.account.contact_change_desc',
+          undefined,
+          'Enter a new email and verify the code sent there. Your current email remains active until verification succeeds.'
+        )}
+      >
+        <div className="grid gap-3" data-portal-account="email-change-dialog">
+          {message ? (
+            <p
+              className={cn(
+                'rounded-xl px-3 py-2 text-sm',
+                status === 'error'
+                  ? 'bg-rose-50 text-rose-700 dark:bg-rose-950/30 dark:text-rose-200'
+                  : 'bg-blue-50 text-blue-700 dark:bg-blue-950/30 dark:text-blue-200'
+              )}
+              role="status"
+            >
+              {message}
+            </p>
+          ) : null}
+          <label className="grid gap-1 text-sm font-medium text-slate-700 dark:text-slate-200">
+            {t('portal.account.email_change_new_email', undefined, 'New email')}
+            <input
+              type="email"
+              value={emailChangeNewEmail}
+              onChange={(event) => setEmailChangeNewEmail(event.target.value)}
+              placeholder={t('auth.email_placeholder', undefined, 'you@example.com')}
+              className="input"
+              autoComplete="email"
+            />
+          </label>
+          <button
+            type="button"
+            className="btn btn-secondary justify-center"
+            onClick={() => void handleRequestEmailChange()}
+            disabled={status === 'requesting_email_change'}
+          >
+            {status === 'requesting_email_change'
+              ? t('portal.account.email_change_sending', undefined, 'Sending')
+              : t('portal.account.email_change_send_code', undefined, 'Send verification code')}
+          </button>
+          {emailChangePendingEmail ? (
+            <div className="grid gap-3 rounded-xl border border-slate-200 bg-slate-50 p-3 dark:border-slate-800 dark:bg-slate-900/40">
+              <p className="text-xs leading-5 text-slate-500 dark:text-slate-400">
+                {t(
+                  'portal.account.email_change_pending_desc',
+                  { email: emailChangePendingEmail },
+                  'Enter the code sent to {{email}} to switch the login email.'
+                )}
+              </p>
+              <label className="grid gap-1 text-sm font-medium text-slate-700 dark:text-slate-200">
+                {t('portal.account.email_change_code', undefined, 'Verification code')}
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  value={emailChangeCode}
+                  onChange={(event) => setEmailChangeCode(event.target.value)}
+                  placeholder="000000"
+                  className="input"
+                  autoComplete="one-time-code"
+                />
+              </label>
+              <button
+                type="button"
+                className="btn btn-primary justify-center"
+                onClick={() => void handleVerifyEmailChange()}
+                disabled={status === 'verifying_email_change'}
+              >
+                {status === 'verifying_email_change'
+                  ? t('portal.account.email_change_verifying', undefined, 'Verifying')
+                  : t('portal.account.email_change_confirm', undefined, 'Confirm email change')}
+              </button>
+            </div>
+          ) : null}
+        </div>
+      </Modal>
+    </PortalPageStack>
   );
 }
 

@@ -1,18 +1,20 @@
 'use client';
 
-import React, { Suspense, useCallback, useEffect, useState } from 'react';
+import React, { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
+import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { BackofficeStatusBadge } from '@/components/backoffice/BackofficeStatusBadge';
 import {
   BackofficeInfoHint,
+  BackofficeEmptyState,
   BackofficeLayer,
-  BackofficeMetricStrip,
   BackofficePageStack,
-  BackofficePrimaryPanel,
   BackofficeSectionPanel,
   BackofficeStackCard,
+  BackofficeSummaryStrip,
 } from '@/components/backoffice/BackofficeScaffold';
 import { LoadingFallback } from '@/components/ui/LoadingFallback';
+import { useToast } from '@/components/ui/Toast';
 import { useLocale } from '@/contexts/LocaleContext';
 import {
   localizeFeatureGroup,
@@ -24,7 +26,7 @@ import {
 } from '@/lib/admin-plan-copy';
 import { ADMIN_CURRENCY } from '@/lib/currency';
 import { readResponsePayload } from '@/lib/safe-response';
-import { formatCurrency, formatNumber as formatInteger } from '@/lib/utils';
+import { cn, formatDate, formatNumber as formatInteger } from '@/lib/utils';
 import { resolveUiErrorMessage } from '@/lib/errors';
 
 type PlanVersionRecord = {
@@ -86,14 +88,45 @@ type CanonicalTierCoverageItem = {
 };
 
 const PLAN_CATALOG_LOAD_TIMEOUT_MS = 10_000;
+type PlanCatalogState = 'missing' | 'unpublished' | 'ready';
+type PlanCatalogSort = 'attention' | 'tier' | 'subscriptions';
+const PLAN_SORTS = new Set<PlanCatalogSort>(['attention', 'tier', 'subscriptions']);
+const TIER_ORDER = new Map([['free', 0], ['plus', 1], ['pro', 2], ['agency', 3]]);
+
+function normalizePlanSort(value: string | null): PlanCatalogSort {
+  return value && PLAN_SORTS.has(value as PlanCatalogSort) ? (value as PlanCatalogSort) : 'attention';
+}
+
+function catalogState(entry: CanonicalTierCoverageItem): PlanCatalogState {
+  if (!entry.item) return 'missing';
+  if (!entry.isPresent) return 'unpublished';
+  return 'ready';
+}
+
+function catalogStateRank(entry: CanonicalTierCoverageItem): number {
+  return { missing: 0, unpublished: 1, ready: 2 }[catalogState(entry)];
+}
+
+function sortCatalog(entries: CanonicalTierCoverageItem[], sort: PlanCatalogSort): CanonicalTierCoverageItem[] {
+  return [...entries].sort((left, right) => {
+    if (sort === 'subscriptions') {
+      return Number(right.item?.subscription_counts?.active || 0) - Number(left.item?.subscription_counts?.active || 0);
+    }
+    const tierDifference = (TIER_ORDER.get(left.shell.tier_id) ?? 99) - (TIER_ORDER.get(right.shell.tier_id) ?? 99);
+    if (sort === 'tier') return tierDifference;
+    return catalogStateRank(left) - catalogStateRank(right) || tierDifference;
+  });
+}
+
+function catalogStateToneClassName(state: PlanCatalogState): string {
+  if (state === 'missing') return 'border-rose-200 bg-rose-50 text-rose-700 dark:border-rose-900/60 dark:bg-rose-950/25 dark:text-rose-200';
+  if (state === 'unpublished') return 'border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-900/60 dark:bg-amber-950/25 dark:text-amber-200';
+  return 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900/60 dark:bg-emerald-950/25 dark:text-emerald-200';
+}
 
 function numericValue(value: unknown): number {
   const numeric = Number(value ?? 0);
   return Number.isFinite(numeric) ? numeric : 0;
-}
-
-function formatBudgetCurrency(value: unknown): string {
-  return formatCurrency(numericValue(value), ADMIN_CURRENCY);
 }
 
 function latestMetadataValue(
@@ -136,13 +169,27 @@ function findCanonicalShellPlan(plans: PlanListItem[], tierId: string): PlanList
 
 function PlansContent() {
   const { t } = useLocale();
+  const toast = useToast();
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const searchParamsKey = searchParams.toString();
+  const appliedQuery = searchParams.get('q') || '';
+  const appliedState = searchParams.get('state') || '';
+  const sort = normalizePlanSort(searchParams.get('sort'));
+  const focusedTierId = searchParams.get('focus') || '';
   const [plans, setPlans] = useState<PlanListItem[]>([]);
   const [tierTemplates, setTierTemplates] = useState<TierSummary[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [isRefreshing, setIsRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
+  const [queryDraft, setQueryDraft] = useState(appliedQuery);
+  const [loadedAt, setLoadedAt] = useState<Date | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [isBootstrapping, setIsBootstrapping] = useState(false);
+  const activeRequestRef = useRef(false);
+  const requestSequenceRef = useRef(0);
+  const hasLoadedRef = useRef(false);
   const [form, setForm] = useState({
     plan_id: '',
     name: '',
@@ -150,8 +197,22 @@ function PlansContent() {
     description: '',
   });
 
-  const loadPlans = useCallback(async () => {
-    setIsLoading(true);
+  const updateCatalogUrl = useCallback((changes: Record<string, string | null>) => {
+    const params = new URLSearchParams(searchParamsKey);
+    Object.entries(changes).forEach(([key, value]) => {
+      if (!value || (key === 'sort' && value === 'attention')) params.delete(key);
+      else params.set(key, value);
+    });
+    const next = params.toString();
+    router.replace(next ? `${pathname}?${next}` : pathname, { scroll: false });
+  }, [pathname, router, searchParamsKey]);
+
+  const loadPlans = useCallback(async (force = false) => {
+    if (!force && activeRequestRef.current) return;
+    activeRequestRef.current = true;
+    const sequence = ++requestSequenceRef.current;
+    if (hasLoadedRef.current) setIsRefreshing(true);
+    else setIsLoading(true);
     setError(null);
     try {
       const response = await fetchPlanCatalog();
@@ -159,9 +220,13 @@ function PlansContent() {
       if (!response.ok) {
         throw new Error(resolveUiErrorMessage('message' in payload ? payload.message : null, t('error.failed_load')));
       }
+      if (sequence !== requestSequenceRef.current) return;
       setPlans((('data' in payload ? payload.data?.items : []) || []) as PlanListItem[]);
       setTierTemplates((('data' in payload ? payload.data?.tier_templates : []) || []) as TierSummary[]);
+      setLoadedAt(new Date());
+      hasLoadedRef.current = true;
     } catch (err) {
+      if (sequence !== requestSequenceRef.current) return;
       const isAbort = err instanceof DOMException && err.name === 'AbortError';
       setError(
         isAbort
@@ -169,7 +234,11 @@ function PlansContent() {
           : resolveUiErrorMessage(err instanceof Error ? err.message : null, t('error.failed_load'))
       );
     } finally {
-      setIsLoading(false);
+      if (sequence === requestSequenceRef.current) {
+        activeRequestRef.current = false;
+        setIsLoading(false);
+        setIsRefreshing(false);
+      }
     }
   }, [t]);
 
@@ -177,11 +246,14 @@ function PlansContent() {
     void loadPlans();
   }, [loadPlans]);
 
+  useEffect(() => {
+    setQueryDraft(appliedQuery);
+  }, [appliedQuery]);
+
   const handleCreatePlan = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     setIsSaving(true);
     setError(null);
-    setNotice(null);
     try {
       const response = await fetch('/api/admin/plans', {
         method: 'POST',
@@ -193,11 +265,12 @@ function PlansContent() {
       if (!response.ok) {
         throw new Error(resolveUiErrorMessage('message' in payload ? payload.message : null, t('error.failed_save', {}, 'Failed to save.')));
       }
-      setNotice(
-        t('admin.plan_saved_notice', {}, 'Plan saved. Publish a plan version next to make it selectable for subscriptions.')
+      toast.success(
+        t('admin.plan_saved_notice', {}, 'Plan saved. Publish a plan version next to make it selectable for subscriptions.'),
+        t('admin.plans.plan_saved_title', {}, 'Package record saved')
       );
       setForm({ plan_id: '', name: '', status: 'active', description: '' });
-      await loadPlans();
+      await loadPlans(true);
     } catch (err) {
       setError(
         resolveUiErrorMessage(err instanceof Error ? err.message : null, t('error.failed_save', {}, 'Failed to save.'))
@@ -210,7 +283,6 @@ function PlansContent() {
   const handleBootstrapShell = useCallback(async (shell: TierSummary) => {
     setIsBootstrapping(true);
     setError(null);
-    setNotice(null);
     try {
       const localizedAlias = localizePackageAlias(t, shell.tier_id, shell.package_alias);
       const localizedPositioning = localizePositioning(t, shell.tier_id, shell.positioning);
@@ -279,14 +351,15 @@ function PlansContent() {
         );
       }
 
-      setNotice(
+      toast.success(
         t(
           'admin.package_shell_bootstrap_notice',
           {},
           `${localizedAlias} package is now available for customer assignment.`
-        )
+        ),
+        t('admin.plans.package_initialized_title', {}, 'Package initialized')
       );
-      await loadPlans();
+      await loadPlans(true);
     } catch (err) {
       setError(
         resolveUiErrorMessage(err instanceof Error ? err.message : null, t('error.failed_save', {}, 'Failed to save.'))
@@ -294,7 +367,7 @@ function PlansContent() {
     } finally {
       setIsBootstrapping(false);
     }
-  }, [loadPlans, t]);
+  }, [loadPlans, t, toast]);
 
   const handleBootstrapMissingShells = useCallback(async () => {
     const missingShells = tierTemplates.filter((shell) => {
@@ -302,14 +375,17 @@ function PlansContent() {
       return !existing || Number(existing.published_version_count || 0) === 0;
     });
     if (missingShells.length === 0) {
-      setNotice(t('admin.package_shells_present', {}, 'All standard packages are already available.'));
+      toast.success(
+        t('admin.package_shells_present', {}, 'All standard packages are already available.'),
+        t('admin.plans.catalog_ready_title', {}, 'Catalog ready')
+      );
       return;
     }
     for (const shell of missingShells) {
       // Sequential bootstrap keeps notices and server-side upserts predictable.
       await handleBootstrapShell(shell);
     }
-  }, [handleBootstrapShell, plans, t, tierTemplates]);
+  }, [handleBootstrapShell, plans, t, tierTemplates, toast]);
 
   if (isLoading) {
     return <LoadingFallback />;
@@ -338,19 +414,32 @@ function PlansContent() {
     };
   });
   const visibleCanonicalPlans = canonicalTierCoverage.filter((entry) => entry.item).length;
-  const totalPublishedVersions = canonicalTierCoverage.reduce(
-    (sum, entry) => sum + Number(entry.item?.published_version_count || 0),
-    0
-  );
   const activeSubscriptions = canonicalTierCoverage.reduce(
     (sum, entry) => sum + Number(entry.item?.subscription_counts?.active || 0),
     0
   );
   const missingShellCount = canonicalTierCoverage.filter((entry) => !entry.isPresent).length;
+  const filteredCatalog = sortCatalog(
+    canonicalTierCoverage.filter((entry) => {
+      const state = catalogState(entry);
+      const queryBlob = [
+        entry.shell.tier_id,
+        entry.shell.label,
+        entry.shell.package_alias,
+        entry.item?.plan?.plan_id,
+        entry.item?.plan?.name,
+        entry.item?.plan?.description,
+      ].join(' ').toLowerCase();
+      return (!appliedState || state === appliedState) && (!appliedQuery || queryBlob.includes(appliedQuery.toLowerCase()));
+    }),
+    sort
+  );
+  const selectedEntry = filteredCatalog.find((entry) => entry.shell.tier_id === focusedTierId) || filteredCatalog[0] || null;
+  const hasFilters = Boolean(appliedQuery || appliedState || sort !== 'attention');
 
   return (
-    <BackofficePageStack>
-      <BackofficePrimaryPanel
+    <BackofficePageStack className="space-y-5">
+      <BackofficeLayer
         eyebrow={t('admin.nav_plan_catalog', {}, 'Package Catalog')}
         title={t('admin.coverage_package_catalog_title', {}, 'Coverage package catalog')}
         description={t(
@@ -358,147 +447,59 @@ function PlansContent() {
           {},
           'Read the active Free, Plus, Pro, and Agency package posture first. Open detail only when price, limits, or release state needs maintenance.'
         )}
-        descriptionDisplay="hint"
-        aside={
-          <div className="flex w-full flex-col gap-3 xl:w-[44rem]">
-            <BackofficeMetricStrip
-              items={[
-                {
-                  label: t('admin.managed_packages', {}, 'Managed packages'),
-                  value: formatInteger(tierTemplates.length),
-                  detail: t('admin.managed_packages_detail', {}, 'Free / Plus / Pro / Agency are the main packages exposed to account coverage.'),
-                  detailDisplay: 'hint',
-                  size: 'compact',
-                },
-                {
-                  label: t('admin.ready_packages', {}, 'Ready packages'),
-                  value: formatInteger(visibleCanonicalPlans),
-                  detail: missingShellCount > 0
-                    ? t('admin.plans.missing_packages_detail', {}, 'Some packages need advanced setup.')
-                    : t('admin.plans.ready_packages_detail', {}, 'All public packages have a published record.'),
-                  detailDisplay: 'hint',
-                  size: 'compact',
-                },
-                { label: t('admin.active_subscriptions'), value: formatInteger(activeSubscriptions), size: 'compact' },
-              ]}
-              columnsClassName="md:grid-cols-3 xl:grid-cols-3"
-            />
-            <div className="flex justify-end">
-              <Link href="/admin/credit-packs" className="btn btn-secondary w-fit">
-                {t('admin.plans.open_credit_packs', {}, 'Open credit packs')}
-              </Link>
-            </div>
-          </div>
-        }
-      >
-        {null}
-      </BackofficePrimaryPanel>
-
-      <BackofficeLayer
-        eyebrow={t('admin.package_tiers', {}, 'Package tiers')}
-        title={t('admin.package_price_features_title', {}, 'Packages')}
-        description={t(
-          'admin.package_price_features_desc',
-          {},
-          'Compare the public package limits. Maintenance and migration controls stay under Advanced maintenance.'
+        actions={(
+          <>
+            <button type="button" className="btn btn-secondary" disabled={isRefreshing} onClick={() => void loadPlans(true)}>{isRefreshing ? t('common.loading', {}, 'Loading...') : t('admin.plans.refresh_action', {}, 'Refresh catalog')}</button>
+            <Link href="/admin/credit-packs" className="btn btn-secondary">{t('admin.plans.open_credit_packs', {}, 'Open credit packs')}</Link>
+          </>
         )}
-        descriptionDisplay="hint"
       />
-      <BackofficeSectionPanel className="space-y-4">
-        {error ? (
-          <div role="alert" className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-200">
-            {error}
+
+      {error ? <div role="alert" className="flex flex-col gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-200 sm:flex-row sm:items-center sm:justify-between"><span>{error}{plans.length > 0 ? <span className="mt-1 block text-xs">{t('admin.plans.retained_notice', {}, 'Showing the last successfully loaded catalog.')}</span> : null}</span><button type="button" className="btn btn-secondary btn-sm" onClick={() => void loadPlans(true)}>{t('common.retry')}</button></div> : null}
+
+      <BackofficeSummaryStrip items={[
+        { label: t('admin.managed_packages', {}, 'Managed packages'), value: formatInteger(tierTemplates.length) },
+        { label: t('admin.ready_packages', {}, 'Ready packages'), value: formatInteger(visibleCanonicalPlans), toneClassName: visibleCanonicalPlans === tierTemplates.length ? 'text-emerald-600 dark:text-emerald-300' : undefined },
+        { label: t('admin.plans.needs_attention_metric', {}, 'Needs attention'), value: formatInteger(missingShellCount), toneClassName: missingShellCount ? 'text-rose-600 dark:text-rose-300' : undefined },
+        { label: t('admin.active_subscriptions'), value: formatInteger(activeSubscriptions) },
+        { label: t('common.updated_at', {}, 'Updated'), value: loadedAt ? formatDate(loadedAt.toISOString()) : t('common.unknown', {}, 'Unknown') },
+      ]} />
+
+      <div className="grid items-start gap-5 xl:grid-cols-[minmax(0,1.65fr)_minmax(20rem,0.72fr)]">
+        <BackofficeSectionPanel className="overflow-hidden p-0">
+          <div className="space-y-4 border-b border-slate-200/80 px-5 py-5 dark:border-slate-800 md:px-6">
+            <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between"><div><h2 className="text-xl font-semibold text-slate-950 dark:text-white">{t('admin.plans.directory_title', {}, 'Standard package catalog')}</h2><p className="mt-1 text-sm text-slate-600 dark:text-slate-300">{t('admin.plans.directory_desc', {}, 'Compare current publication and subscription posture, then inspect one package before opening maintenance detail.')}</p></div><p className="text-sm font-medium text-slate-500 dark:text-slate-400" role="status">{t('admin.plans.result_count', { visible: formatInteger(filteredCatalog.length), total: formatInteger(canonicalTierCoverage.length) }, `${formatInteger(filteredCatalog.length)} visible · ${formatInteger(canonicalTierCoverage.length)} standard packages`)}</p></div>
+            <div className="flex flex-wrap gap-2" aria-label={t('admin.plans.state_filter_label', {}, 'Package readiness')}>{['', 'ready', 'unpublished', 'missing'].map((state) => <button key={state || 'all'} type="button" aria-pressed={appliedState === state} onClick={() => updateCatalogUrl({ state: state || null, focus: null })} className={cn('cursor-pointer rounded-full border px-3 py-1.5 text-xs font-medium transition', appliedState === state ? 'border-blue-300 bg-blue-50 text-blue-700 dark:border-blue-800 dark:bg-blue-950/30 dark:text-blue-200' : 'border-slate-200/80 bg-white/80 text-slate-700 hover:border-slate-300 dark:border-slate-700 dark:bg-slate-900/60 dark:text-slate-200 dark:hover:border-slate-600')}>{state ? t(`admin.plans.state_${state}`, {}, state) : t('common.all', {}, 'All')}</button>)}</div>
+            <form className="grid gap-3 md:grid-cols-[minmax(13rem,1fr)_minmax(10rem,0.65fr)_auto]" onSubmit={(event) => { event.preventDefault(); updateCatalogUrl({ q: queryDraft.trim() || null, focus: null }); }}>
+              <label className="text-sm text-slate-700 dark:text-slate-200"><span className="mb-1.5 block text-xs font-medium text-slate-500 dark:text-slate-400">{t('admin.plans.search_label', {}, 'Search packages')}</span><input type="search" className="input w-full" value={queryDraft} onChange={(event) => setQueryDraft(event.target.value)} placeholder={t('admin.plans.search_placeholder', {}, 'Package name or ID')} /></label>
+              <label className="text-sm text-slate-700 dark:text-slate-200"><span className="mb-1.5 block text-xs font-medium text-slate-500 dark:text-slate-400">{t('admin.plans.sort_label', {}, 'Sort')}</span><select className="input w-full" value={sort} onChange={(event) => updateCatalogUrl({ sort: normalizePlanSort(event.target.value), focus: null })}><option value="attention">{t('admin.plans.sort_attention', {}, 'Needs attention')}</option><option value="tier">{t('admin.plans.sort_tier', {}, 'Tier order')}</option><option value="subscriptions">{t('admin.plans.sort_subscriptions', {}, 'Active subscriptions')}</option></select></label>
+              <div className="flex items-end gap-2 md:flex-col md:justify-end lg:flex-row"><button type="submit" className="btn btn-primary flex-1 md:flex-none">{t('common.apply', {}, 'Apply')}</button><button type="button" className="btn btn-secondary flex-1 md:flex-none" disabled={!hasFilters && !queryDraft} onClick={() => { setQueryDraft(''); updateCatalogUrl({ q: null, state: null, sort: null, focus: null }); }}>{t('common.clear_filters', {}, 'Clear filters')}</button></div>
+            </form>
           </div>
-        ) : null}
-        <div className="grid gap-4 lg:grid-cols-2 xl:grid-cols-4">
-          {canonicalTierCoverage.map(({ shell, item, isPresent }) => {
+
+          {filteredCatalog.length ? <div role="list" aria-label={t('admin.plans.list_label', {}, 'Package list')}>{filteredCatalog.map((entry) => {
+            const { shell, item } = entry;
+            const state = catalogState(entry);
             const latestVersion = item?.latest_version || item?.versions?.[0] || null;
             const budgets = (latestVersion?.budgets || shell.budgets_template || {}) as Record<string, unknown>;
             const concurrency = (latestVersion?.concurrency || shell.concurrency_template || {}) as Record<string, unknown>;
             const sourceTier = item?.tier_summary || shell;
-            const monthlyIncludedPoints = latestMetadataValue(
-              latestVersion,
-              sourceTier.monthly_included_points,
-              'monthly_included_points'
-            );
-            const siteLimit = latestMetadataValue(latestVersion, sourceTier.site_limit, 'site_limit');
-            const batchCeiling = latestMetadataValue(latestVersion, sourceTier.max_batch_items, 'max_batch_items');
-            const runCeiling = numericValue(budgets.max_runs_per_period);
-            const activeSubscriptionCount = Number(item?.subscription_counts?.active || 0);
             const packageAlias = localizePackageAlias(t, shell.tier_id, sourceTier.package_alias);
-            return (
-              <BackofficeStackCard
-                key={`price-features-${shell.tier_id}`}
-                className="flex min-h-[24rem] flex-col"
-                role="group"
-                aria-label={t(
-                  'admin.package_card_label',
-                  { package: packageAlias },
-                  `${packageAlias} package`
-                )}
-              >
-                <div className="flex items-start justify-between gap-3">
-                  <div>
-                    <p className="text-xs font-medium uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
-                      {localizeTierLabel(t, shell.tier_id, sourceTier.label)}
-                    </p>
-                    <h2 className="mt-2 text-xl font-semibold text-slate-950 dark:text-white">
-                      {packageAlias}
-                    </h2>
-                  </div>
-                  <BackofficeStatusBadge
-                    status={isPresent ? 'published' : 'draft'}
-                    label={isPresent ? t('status.published', {}, 'published') : t('status.draft', {}, 'missing')}
-                  />
-                </div>
-                <PackageStatRows
-                  className="mt-7"
-                  items={[
-                    {
-                      label: t('admin.site_limit', {}, 'Site limit'),
-                      value: formatInteger(siteLimit),
-                    },
-                    {
-                      label: t('admin.run_ceiling', {}, 'Run ceiling'),
-                      value: formatInteger(runCeiling),
-                    },
-                    {
-                      label: t('admin.concurrency', {}, 'Concurrency'),
-                      value: formatInteger(numericValue(concurrency.max_active_runs)),
-                    },
-                    {
-                      label: t('admin.batch_ceiling', {}, 'Batch ceiling'),
-                      value: formatInteger(batchCeiling),
-                    },
-                    {
-                      label: t('admin.active_subscriptions'),
-                      value: formatInteger(activeSubscriptionCount),
-                    },
-                  ]}
-                />
-                <div className="mt-5 flex flex-1 flex-col justify-end gap-4">
-                  <p className="text-sm leading-6 text-slate-500 dark:text-slate-400">
-                    {t(
-                      'admin.package_monthly_credits_summary',
-                      { points: formatInteger(monthlyIncludedPoints) },
-                      `${formatInteger(monthlyIncludedPoints)} AI credits per month.`
-                    )}
-                  </p>
-                  {item?.plan?.plan_id ? (
-                    <Link href={`/admin/plans/${item.plan.plan_id}`} className="btn btn-secondary w-fit">
-                      {t('common.manage', {}, 'Manage')}
-                    </Link>
-                  ) : (
-                    <a href="#package-maintenance" className="btn btn-secondary w-fit">
-                      {t('admin.plans.open_advanced_setup', {}, 'Advanced setup')}
-                    </a>
-                  )}
-                </div>
-              </BackofficeStackCard>
-            );
-          })}
-        </div>
-      </BackofficeSectionPanel>
+            const selected = selectedEntry?.shell.tier_id === shell.tier_id;
+            const reason = state === 'missing' ? t('admin.plans.reason_missing', {}, 'The standard package record does not exist and cannot be assigned.') : state === 'unpublished' ? t('admin.plans.reason_unpublished', {}, 'The package exists but has no published version for subscription assignment.') : t('admin.plans.reason_ready', {}, 'The package has a published version and can carry customer subscriptions.');
+            return <article key={shell.tier_id} role="listitem" data-ui="plan-catalog-item" className={cn('grid gap-4 border-b border-slate-200/80 px-5 py-5 transition last:border-b-0 dark:border-slate-800 md:grid-cols-[minmax(11rem,0.9fr)_minmax(13rem,1.1fr)] md:items-center md:px-6 2xl:grid-cols-[minmax(12rem,1fr)_minmax(14rem,1.2fr)_minmax(9rem,0.75fr)_auto]', selected ? 'bg-blue-50/65 dark:bg-blue-950/15' : 'hover:bg-slate-50/70 dark:hover:bg-slate-950/35')}>
+              <div><p className="text-xs font-medium uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">{localizeTierLabel(t, shell.tier_id, sourceTier.label)}</p><h3 className="mt-2 text-lg font-semibold text-slate-950 dark:text-white">{packageAlias}</h3><p className="mt-1 text-xs text-slate-500 dark:text-slate-400">{item?.plan?.plan_id || shell.tier_id}</p></div>
+              <div><div className="flex flex-wrap items-center gap-2"><span className={cn('inline-flex rounded-full border px-2.5 py-1 text-xs font-semibold', catalogStateToneClassName(state))}>{t(`admin.plans.state_${state}`, {}, state)}</span><span className="text-xs text-slate-500 dark:text-slate-400">{formatInteger(item?.published_version_count || 0)} {t('admin.plans.published_versions_short', {}, 'published')}</span></div><p className="mt-2 text-sm leading-6 text-slate-600 dark:text-slate-300">{reason}</p></div>
+              <dl className="grid gap-2 text-xs text-slate-600 dark:text-slate-300"><div className="flex justify-between gap-3"><dt>{t('admin.active_subscriptions')}</dt><dd className="font-semibold text-slate-950 dark:text-white">{formatInteger(item?.subscription_counts?.active || 0)}</dd></div><div className="flex justify-between gap-3"><dt>{t('admin.site_limit', {}, 'Site limit')}</dt><dd className="font-semibold text-slate-950 dark:text-white">{formatInteger(latestMetadataValue(latestVersion, sourceTier.site_limit, 'site_limit'))}</dd></div><div className="flex justify-between gap-3"><dt>{t('admin.concurrency', {}, 'Concurrency')}</dt><dd className="font-semibold text-slate-950 dark:text-white">{formatInteger(numericValue(concurrency.max_active_runs))}</dd></div><div className="flex justify-between gap-3"><dt>{t('admin.run_ceiling', {}, 'Run ceiling')}</dt><dd className="font-semibold text-slate-950 dark:text-white">{formatInteger(numericValue(budgets.max_runs_per_period))}</dd></div></dl>
+              <div className="flex flex-wrap gap-2 md:justify-end"><button type="button" className="btn btn-secondary btn-sm" aria-pressed={selected} aria-controls="plan-catalog-inspector" onClick={() => updateCatalogUrl({ focus: shell.tier_id })}>{t('admin.plans.inspect_action', {}, 'Inspect')}</button>{item?.plan?.plan_id ? <Link href={`/admin/plans/${item.plan.plan_id}`} className="btn btn-primary btn-sm">{t('common.details', {}, 'Details')}</Link> : null}</div>
+            </article>;
+          })}</div> : <BackofficeEmptyState className="m-5 md:m-6" title={t('admin.plans.empty_title', {}, 'No packages match these filters')} description={t('admin.plans.empty_desc', {}, 'Clear the package name, readiness, or sort filters. No package record has been changed.')} action={hasFilters ? <button type="button" className="btn btn-secondary btn-sm" onClick={() => { setQueryDraft(''); updateCatalogUrl({ q: null, state: null, sort: null, focus: null }); }}>{t('common.clear_filters', {}, 'Clear filters')}</button> : null} />}
+        </BackofficeSectionPanel>
+
+        <aside id="plan-catalog-inspector" className="xl:sticky xl:top-24" aria-live="polite"><BackofficeSectionPanel className="space-y-5"><div className="flex items-start justify-between gap-3"><div><p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">{t('admin.plans.inspector_eyebrow', {}, 'Inspector')}</p><h2 className="mt-2 text-xl font-semibold text-slate-950 dark:text-white">{t('admin.plans.inspector_title', {}, 'Current package')}</h2></div>{selectedEntry ? <span className={cn('inline-flex rounded-full border px-2.5 py-1 text-xs font-semibold', catalogStateToneClassName(catalogState(selectedEntry)))}>{t(`admin.plans.state_${catalogState(selectedEntry)}`, {}, catalogState(selectedEntry))}</span> : null}</div>
+          {selectedEntry ? (() => { const shell = selectedEntry.shell; const item = selectedEntry.item; const latestVersion = item?.latest_version || item?.versions?.[0] || null; const sourceTier = item?.tier_summary || shell; const alias = localizePackageAlias(t, shell.tier_id, sourceTier.package_alias); return <div className="space-y-5"><div><p className="text-base font-semibold text-slate-950 dark:text-white">{alias}</p><p className="mt-1 text-xs text-slate-500 dark:text-slate-400">{item?.plan?.plan_id || shell.tier_id}</p></div><dl className="grid gap-2 text-sm text-slate-600 dark:text-slate-300">{[[t('common.status'), item?.plan?.status || t('common.not_available', {}, 'N/A')],[t('admin.plans.latest_version_label', {}, 'Latest version'), latestVersion?.version_label || t('common.not_available', {}, 'N/A')],[t('admin.plans.published_versions_label', {}, 'Published versions'), formatInteger(item?.published_version_count || 0)],[t('admin.active_subscriptions'), formatInteger(item?.subscription_counts?.active || 0)],[t('admin.site_limit', {}, 'Site limit'), formatInteger(latestMetadataValue(latestVersion, sourceTier.site_limit, 'site_limit'))],[t('admin.included_points', {}, 'Included points'), formatInteger(latestMetadataValue(latestVersion, sourceTier.monthly_included_points, 'monthly_included_points'))],[t('common.currency', {}, 'Currency'), latestVersion?.currency || ADMIN_CURRENCY]].map(([label, value]) => <div key={label} className="flex justify-between gap-4 border-b border-slate-200/70 pb-2 last:border-b-0 dark:border-slate-800"><dt>{label}</dt><dd className="text-right font-semibold text-slate-950 dark:text-white">{value}</dd></div>)}</dl><div className="flex flex-wrap gap-2">{item?.plan?.plan_id ? <Link href={`/admin/plans/${item.plan.plan_id}`} className="btn btn-primary btn-sm">{t('common.details', {}, 'Details')}</Link> : <a href="#package-maintenance" className="btn btn-primary btn-sm">{t('admin.plans.open_advanced_setup', {}, 'Advanced setup')}</a>}<Link href={`/admin/subscriptions?plan_id=${encodeURIComponent(item?.plan?.plan_id || shell.tier_id)}`} className="btn btn-secondary btn-sm">{t('admin.plans.open_subscriptions_action', {}, 'Open subscriptions')}</Link></div><details className="border-t border-slate-200/80 pt-4 text-sm dark:border-slate-800"><summary className="cursor-pointer font-semibold text-slate-800 dark:text-slate-100">{t('admin.plans.package_context_title', {}, 'Package context')}</summary><div className="mt-3 space-y-2 text-slate-600 dark:text-slate-300"><p>{localizePositioning(t, shell.tier_id, sourceTier.positioning)}</p><p>{localizeUsageBand(t, shell.tier_id, sourceTier.usage_band)}</p><p>{sourceTier.feature_groups.map((group) => localizeFeatureGroup(t, group)).join(' · ') || t('common.not_available', {}, 'N/A')}</p></div></details><p className="text-xs leading-5 text-slate-500 dark:text-slate-400">{t('admin.plans.inspector_boundary', {}, 'This catalog reads plans and published plan versions as Cloud commercial truth. Price, limits, release state, and exceptional creation remain in package detail or advanced maintenance; no WordPress control is created.')}</p></div>; })() : <p className="text-sm text-slate-600 dark:text-slate-300">{t('admin.plans.inspector_empty', {}, 'No package is visible in this catalog view.')}</p>}
+        </BackofficeSectionPanel></aside>
+      </div>
 
       {missingShellCount > 0 ? (
       <details id="package-maintenance" className="rounded-2xl border border-dashed border-slate-200 bg-white/70 px-4 py-4 dark:border-slate-800 dark:bg-slate-950/40">
@@ -523,11 +524,6 @@ function PlansContent() {
             </span>
           </div>
         </summary>
-        {notice ? (
-          <div role="status" aria-live="polite" className="mt-4 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700 dark:border-emerald-900/60 dark:bg-emerald-950/30 dark:text-emerald-300">
-            {notice}
-          </div>
-        ) : null}
         {error ? (
           <div role="alert" className="mt-4 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-900/60 dark:bg-red-950/30 dark:text-red-300">
             {error}
@@ -696,31 +692,6 @@ function PlansContent() {
       </details>
       ) : null}
     </BackofficePageStack>
-  );
-}
-
-function PackageStatRows({
-  items,
-  className,
-}: {
-  items: Array<{ label: string; value: string }>;
-  className?: string;
-}) {
-  return (
-    <div className={className}>
-      <dl>
-        {items.map((item) => (
-          <div
-            key={item.label}
-            className="flex items-baseline justify-between gap-4 border-b border-slate-200/70 py-2.5 first:pt-0 last:border-b-0 dark:border-slate-800"
-            aria-label={`${item.label}: ${item.value}`}
-          >
-            <dt className="min-w-0 text-sm text-slate-500 dark:text-slate-400">{item.label}</dt>
-            <dd className="shrink-0 text-sm font-semibold tabular-nums text-slate-950 dark:text-white">{item.value}</dd>
-          </div>
-        ))}
-      </dl>
-    </div>
   );
 }
 

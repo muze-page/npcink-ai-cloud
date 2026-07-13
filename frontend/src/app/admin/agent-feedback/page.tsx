@@ -1,7 +1,8 @@
 'use client';
 
-import React, { Suspense, useCallback, useEffect, useMemo, useState } from 'react';
-import { BackofficeEmptyState, BackofficeMetricStrip, BackofficePageStack, BackofficePrimaryPanel, BackofficeSectionPanel, BackofficeStackCard } from '@/components/backoffice/BackofficeScaffold';
+import React, { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { usePathname, useRouter, useSearchParams } from 'next/navigation';
+import { BackofficeDiagnosticNotice, BackofficeDisclosure, BackofficeEmptyState, BackofficeLayer, BackofficeMetricStrip, BackofficePageStack, BackofficeSectionPanel, BackofficeStackCard, BackofficeSummaryStrip } from '@/components/backoffice/BackofficeScaffold';
 import { BackofficeFilterPill } from '@/components/backoffice/BackofficeFilterPill';
 import { BackofficeIdentifier } from '@/components/backoffice/BackofficeIdentifier';
 import { BackofficeStatusBadge } from '@/components/backoffice/BackofficeStatusBadge';
@@ -254,18 +255,44 @@ function metricWindowDetail(t: TranslationFn, data: AgentFeedbackSummary): strin
   );
 }
 
+function normalizeFeedbackWindow(value: string | null): number {
+  return Number(value) === 168 ? 168 : 24;
+}
+
 function AgentFeedbackQualityDashboard() {
   const { t } = useLocale();
+  const pathname = usePathname();
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const windowHours = normalizeFeedbackWindow(searchParams.get('window'));
+  const siteIdFilter = searchParams.get('site') || '';
+  const focusedLabel = searchParams.get('focus') || '';
   const [data, setData] = useState<AgentFeedbackSummary | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const [windowHours, setWindowHours] = useState(24);
-  const [siteIdInput, setSiteIdInput] = useState('');
-  const [siteIdFilter, setSiteIdFilter] = useState('');
+  const [siteIdInput, setSiteIdInput] = useState(siteIdFilter);
+  const requestControllerRef = useRef<AbortController | null>(null);
+  const requestSequenceRef = useRef(0);
+  const hasLoadedRef = useRef(false);
 
-  const loadData = useCallback(async () => {
-    setLoading(true);
+  const updateUrl = useCallback((updates: { window?: number | null; site?: string | null; focus?: string | null }) => {
+    const params = new URLSearchParams(searchParams.toString());
+    Object.entries(updates).forEach(([key, value]) => {
+      if (value && !(key === 'window' && value === 24)) params.set(key, String(value));
+      else params.delete(key);
+    });
+    const query = params.toString();
+    router.replace(query ? `${pathname}?${query}` : pathname, { scroll: false });
+  }, [pathname, router, searchParams]);
+
+  const loadData = useCallback(async (refresh = false) => {
+    requestControllerRef.current?.abort();
+    const sequence = ++requestSequenceRef.current;
+    if (!hasLoadedRef.current || !refresh) setLoading(true);
     setError('');
+    const controller = new AbortController();
+    requestControllerRef.current = controller;
+    const timeout = globalThis.setTimeout(() => controller.abort(), 8000);
     try {
       const params = new URLSearchParams();
       params.set('window_hours', String(windowHours));
@@ -274,17 +301,27 @@ function AgentFeedbackQualityDashboard() {
       }
       const response = await fetch(`/api/admin/agent-feedback?${params.toString()}`, {
         credentials: 'include',
+        cache: 'no-store',
+        signal: controller.signal,
       });
       const payload = await response.json();
       if (!response.ok || payload?.status === 'error') {
         throw payload;
       }
-      setData(normalizeAgentFeedbackSummary(payload?.data ?? {}));
+      if (sequence === requestSequenceRef.current) {
+        setData(normalizeAgentFeedbackSummary(payload?.data ?? {}));
+        hasLoadedRef.current = true;
+      }
     } catch (err) {
-      setError(resolveUiErrorMessage(err, t('error.failed_load')));
-      setData(null);
+      if (sequence === requestSequenceRef.current) {
+        setError(resolveUiErrorMessage(err, t('admin.agent_feedback.load_error', {}, 'Failed to load Agent feedback diagnostics.')));
+      }
     } finally {
-      setLoading(false);
+      globalThis.clearTimeout(timeout);
+      if (sequence === requestSequenceRef.current) {
+        requestControllerRef.current = null;
+        setLoading(false);
+      }
     }
   }, [siteIdFilter, t, windowHours]);
 
@@ -292,32 +329,29 @@ function AgentFeedbackQualityDashboard() {
     void loadData();
   }, [loadData]);
 
+  useEffect(() => {
+    setSiteIdInput(siteIdFilter);
+  }, [siteIdFilter]);
+
   const labelCounts = useMemo(() => sortedCounts(data?.labels || {}), [data]);
   const runtimeCounts = useMemo(() => sortedCounts(data?.sourceRuntimes || {}), [data]);
   const surfaceCounts = useMemo(() => sortedCounts(data?.localSurfaces || {}), [data]);
+  const qualityIssues = useMemo(() => {
+    if (data?.lowQualityLabels.length) return data.lowQualityLabels;
+    return labelCounts.filter((item) => LOW_QUALITY_LABELS.has(item.label));
+  }, [data, labelCounts]);
+  const selectedQualityIssue = qualityIssues.find((item) => item.label === focusedLabel)
+    || qualityIssues[0]
+    || null;
   const isEmpty = data !== null && data.eventsTotal === 0;
 
   if (loading && !data) {
     return <LoadingFallback />;
   }
 
-  if (error) {
-    return (
-      <div className="flex min-h-[60vh] items-center justify-center">
-        <div className="max-w-md text-center">
-          <h2 className="mb-4 text-2xl font-bold text-red-600">{t('common.error')}</h2>
-          <p className="mb-6 text-gray-600 dark:text-gray-400">{error}</p>
-          <button onClick={() => void loadData()} className="btn btn-primary">
-            {t('common.retry')}
-          </button>
-        </div>
-      </div>
-    );
-  }
-
   return (
     <BackofficePageStack>
-      <BackofficePrimaryPanel
+      <BackofficeLayer
         eyebrow={t('admin.operator_surface', {}, 'Operator surface')}
         title={t('admin.agent_feedback.title', {}, 'Agent Feedback Quality')}
         description={t(
@@ -325,48 +359,22 @@ function AgentFeedbackQualityDashboard() {
           {},
           'Read-only quality signals from local operator feedback. Cloud summarizes feedback for evaluation; WordPress approval, preflight, and final writes stay local.'
         )}
-        aside={data ? (
-          <div className="w-full xl:w-[44rem]">
-            <BackofficeMetricStrip
-              columnsClassName="md:grid-cols-2 xl:grid-cols-4"
-              items={[
-                {
-                  label: t('admin.agent_feedback.events', {}, 'Events'),
-                  value: formatNumber(data.eventsTotal),
-                  detail: metricWindowDetail(t, data),
-                },
-                {
-                  label: t('admin.agent_feedback.accepted_rate', {}, 'Accepted'),
-                  value: formatPercent(data.rates.acceptedRate),
-                  toneClassName: data.rates.acceptedRate < 0.5 && data.eventsTotal > 0 ? 'text-amber-600 dark:text-amber-400' : undefined,
-                },
-                {
-                  label: t('admin.agent_feedback.evidence_weak', {}, 'Evidence weak'),
-                  value: formatPercent(data.rates.evidenceWeakRate),
-                  toneClassName: data.rates.evidenceWeakRate > 0.2 ? 'text-amber-600 dark:text-amber-400' : undefined,
-                },
-                {
-                  label: t('admin.agent_feedback.wrong_next_step', {}, 'Wrong next step'),
-                  value: formatPercent(data.rates.wrongNextStepRate),
-                  toneClassName: data.rates.wrongNextStepRate > 0 ? 'text-rose-600 dark:text-rose-400' : undefined,
-                },
-              ]}
-            />
-          </div>
-        ) : undefined}
-      >
-        <div className="flex flex-wrap items-center gap-3">
+        aside={data ? <BackofficeStatusBadge status="read_only" label={t('admin.read_only', {}, 'Read-only')} /> : undefined}
+        actions={<button type="button" onClick={() => void loadData(true)} disabled={loading} className="btn btn-secondary btn-sm">{t('common.refresh', {}, 'Refresh')}</button>}
+      />
+
+      <BackofficeSectionPanel className="p-4 md:p-5">
+        <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center">
           {WINDOW_OPTIONS.map((opt) => (
             <BackofficeFilterPill
               key={opt.value}
               active={windowHours === opt.value}
               tone="info"
-              onClick={() => setWindowHours(opt.value)}
+              onClick={() => updateUrl({ window: opt.value, focus: null })}
             >
               {opt.label}
             </BackofficeFilterPill>
           ))}
-          <span className="mx-1 h-5 w-px bg-slate-200 dark:bg-slate-700" />
           <input
             type="text"
             value={siteIdInput}
@@ -374,31 +382,23 @@ function AgentFeedbackQualityDashboard() {
             onChange={(event) => setSiteIdInput(event.target.value)}
             onKeyDown={(event) => {
               if (event.key === 'Enter') {
-                setSiteIdFilter(siteIdInput.trim());
+                updateUrl({ site: siteIdInput.trim() || null, focus: null });
               }
             }}
             placeholder={t('admin.agent_feedback.site_filter', {}, 'Site ID')}
-            className="h-8 rounded-full border border-slate-200/80 bg-white/80 px-3 text-xs text-slate-700 placeholder:text-slate-400 dark:border-slate-700 dark:bg-slate-900/60 dark:text-slate-200 dark:placeholder:text-slate-500"
+            className="input h-9 min-w-0 sm:w-56"
           />
           <button
             type="button"
-            onClick={() => setSiteIdFilter(siteIdInput.trim())}
-            className="h-8 rounded-full border border-slate-200/80 bg-white/80 px-3 text-xs font-medium text-slate-700 transition hover:border-slate-300 hover:text-slate-950 dark:border-slate-700 dark:bg-slate-900/60 dark:text-slate-200 dark:hover:border-slate-600 dark:hover:text-white"
+            onClick={() => updateUrl({ site: siteIdInput.trim() || null, focus: null })}
+            className="btn btn-secondary btn-sm"
           >
             {t('admin.agent_feedback.filter_action', {}, 'Filter')}
           </button>
-          <button
-            type="button"
-            onClick={() => void loadData()}
-            disabled={loading}
-            className="h-8 rounded-full border border-slate-200/80 bg-white/80 px-3 text-xs font-medium text-slate-700 transition hover:border-slate-300 hover:text-slate-950 disabled:opacity-60 dark:border-slate-700 dark:bg-slate-900/60 dark:text-slate-200 dark:hover:border-slate-600 dark:hover:text-white"
-          >
-            {t('common.refresh', {}, 'Refresh')}
-          </button>
+          {siteIdFilter ? <button type="button" className="btn btn-ghost btn-sm" onClick={() => { setSiteIdInput(''); updateUrl({ site: null, focus: null }); }}>{t('common.clear_filters', {}, 'Clear filters')}</button> : null}
         </div>
         {data ? (
-          <div className="mt-4 flex flex-wrap items-center gap-2 text-sm text-slate-600 dark:text-slate-300">
-            <BackofficeStatusBadge status="read_only" label={t('admin.read_only', {}, 'Read-only')} />
+          <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
             <BackofficeStatusBadge
               status="inactive"
               label={
@@ -413,57 +413,17 @@ function AgentFeedbackQualityDashboard() {
             {data.lastEventAt ? <span>{t('admin.agent_feedback.last_event', {}, 'Last feedback')}: {formatDate(data.lastEventAt)}</span> : null}
           </div>
         ) : null}
-      </BackofficePrimaryPanel>
+      </BackofficeSectionPanel>
 
-      {data ? (
-        <BackofficeSectionPanel className="space-y-4">
-          <div>
-            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-gray-500 dark:text-gray-400">
-              {t('admin.agent_feedback.boundary_label', {}, 'Boundary')}
-            </p>
-            <h2 className="mt-2 text-xl font-semibold text-gray-950 dark:text-white">
-              {t('admin.agent_feedback.boundary_title', {}, 'Quality detail only')}
-            </h2>
-            <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-600 dark:text-slate-300">
-              {t(
-                'admin.agent_feedback.boundary_desc',
-                {},
-                'This surface summarizes metadata-only feedback. It does not configure prompts, router profiles, approvals, publication, or WordPress writes.'
-              )}
-            </p>
-          </div>
-          <BackofficeMetricStrip
-            columnsClassName="md:grid-cols-2 xl:grid-cols-5"
-            items={[
-              {
-                label: t('admin.agent_feedback.contract', {}, 'Contract'),
-                value: data.contractVersion || data.artifactType,
-                size: 'compact',
-              },
-              {
-                label: t('admin.agent_feedback.control_plane', {}, 'Control plane'),
-                value: data.boundary.controlPlane || 'wordpress_local',
-                size: 'compact',
-              },
-              {
-                label: t('admin.agent_feedback.approval', {}, 'Approval'),
-                value: data.approvalTruth || data.boundary.approvalTruth,
-                size: 'compact',
-              },
-              {
-                label: t('admin.agent_feedback.preflight', {}, 'Preflight'),
-                value: data.preflightTruth || data.boundary.preflightTruth,
-                size: 'compact',
-              },
-              {
-                label: t('admin.agent_feedback.final_write', {}, 'Final write'),
-                value: data.finalWriteTruth || data.boundary.finalWriteTruth,
-                size: 'compact',
-              },
-            ]}
-          />
-        </BackofficeSectionPanel>
-      ) : null}
+      {data ? <BackofficeSummaryStrip items={[
+        { label: t('admin.agent_feedback.events', {}, 'Events'), value: formatNumber(data.eventsTotal), detail: metricWindowDetail(t, data) },
+        { label: t('admin.agent_feedback.accepted_rate', {}, 'Accepted'), value: formatPercent(data.rates.acceptedRate), toneClassName: data.rates.acceptedRate < 0.5 && data.eventsTotal > 0 ? 'text-amber-600 dark:text-amber-400' : undefined },
+        { label: t('admin.agent_feedback.evidence_weak', {}, 'Evidence weak'), value: formatPercent(data.rates.evidenceWeakRate), toneClassName: data.rates.evidenceWeakRate > 0.2 ? 'text-amber-600 dark:text-amber-400' : undefined },
+        { label: t('admin.agent_feedback.wrong_next_step', {}, 'Wrong next step'), value: formatPercent(data.rates.wrongNextStepRate), toneClassName: data.rates.wrongNextStepRate > 0 ? 'text-rose-600 dark:text-rose-400' : undefined },
+        { label: t('admin.agent_feedback.quality_issues', {}, 'Quality issues'), value: formatNumber(qualityIssues.reduce((total, item) => total + item.count, 0)), toneClassName: qualityIssues.length ? 'text-rose-600 dark:text-rose-400' : undefined },
+      ]} /> : null}
+
+      {error ? <BackofficeDiagnosticNotice message={error} staleDescription={data ? t('admin.agent_feedback.stale_notice', {}, 'The last successfully loaded feedback snapshot remains visible.') : undefined} retryLabel={t('common.retry')} onRetry={() => void loadData(true)} /> : null}
 
       {isEmpty ? (
         <BackofficeEmptyState
@@ -476,6 +436,19 @@ function AgentFeedbackQualityDashboard() {
         />
       ) : data ? (
         <>
+          <BackofficeSectionPanel className="overflow-hidden p-0 md:p-0">
+            <div className="border-b border-slate-200 px-5 py-4 dark:border-slate-800 md:px-6"><p className="text-xs font-semibold uppercase tracking-[0.18em] text-gray-500 dark:text-gray-400">{t('admin.agent_feedback.attention_label', {}, 'Attention')}</p><h2 className="mt-2 text-xl font-semibold text-gray-950 dark:text-white">{t('admin.agent_feedback.issue_queue_title', {}, 'Quality issue queue')}</h2><p className="mt-1 text-sm text-slate-600 dark:text-slate-300">{t('admin.agent_feedback.issue_queue_desc', {}, 'Select a low-quality feedback label to inspect its volume, rate, scope, and governance boundary.')}</p></div>
+            <div className={qualityIssues.length ? 'grid xl:grid-cols-[minmax(0,1fr)_22rem]' : ''}>
+              <div className="max-h-[32rem] divide-y divide-slate-200 overflow-y-auto dark:divide-slate-800">
+                {qualityIssues.map((item) => { const selected = selectedQualityIssue?.label === item.label; return <button key={item.label} type="button" data-ui="feedback-quality-item" aria-pressed={selected} aria-controls="feedback-quality-inspector" className={`grid w-full cursor-pointer gap-3 px-5 py-4 text-left transition hover:bg-slate-50 dark:hover:bg-slate-900/45 md:grid-cols-[minmax(0,1fr)_8rem] md:items-center md:px-6 ${selected ? 'bg-blue-50/65 dark:bg-blue-950/20' : ''}`} onClick={() => updateUrl({ focus: item.label })}><div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><BackofficeTag tone={labelTone(item.label)}>{labelText(t, item.label)}</BackofficeTag><span className="font-mono text-xs text-slate-500 dark:text-slate-400">{item.label}</span></div></div><div className="text-sm font-semibold text-slate-700 md:text-right dark:text-slate-200">{formatNumber(item.count)}</div></button>; })}
+                {qualityIssues.length ? null : <BackofficeEmptyState className="m-5 md:m-6" title={t('admin.agent_feedback.no_quality_issues', {}, 'No quality issues in this window.')} description={t('admin.agent_feedback.no_quality_issues_desc', {}, 'The selected scope has no low-quality feedback labels that require evidence review.')} />}
+              </div>
+              {qualityIssues.length ? <div id="feedback-quality-inspector" className="border-t border-slate-200 p-5 dark:border-slate-800 xl:border-l xl:border-t-0 xl:p-6">
+                {selectedQualityIssue ? <div className="space-y-5"><div><p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">{t('admin.agent_feedback.selected_issue', {}, 'Selected issue')}</p><h3 className="mt-2 text-lg font-semibold text-slate-950 dark:text-white">{labelText(t, selectedQualityIssue.label)}</h3><p className="mt-1 font-mono text-xs text-slate-500 dark:text-slate-400">{selectedQualityIssue.label}</p></div><dl className="grid gap-3 text-sm"><div><dt className="text-xs text-slate-500 dark:text-slate-400">{t('admin.agent_feedback.events', {}, 'Events')}</dt><dd className="mt-1 text-slate-800 dark:text-slate-100">{formatNumber(selectedQualityIssue.count)}</dd></div><div><dt className="text-xs text-slate-500 dark:text-slate-400">{t('admin.agent_feedback.issue_rate', {}, 'Share of feedback')}</dt><dd className="mt-1 text-slate-800 dark:text-slate-100">{formatPercent(data.eventsTotal ? selectedQualityIssue.count / data.eventsTotal : 0)}</dd></div><div><dt className="text-xs text-slate-500 dark:text-slate-400">{t('admin.agent_feedback.issue_scope', {}, 'Current scope')}</dt><dd className="mt-1 text-slate-800 dark:text-slate-100">{siteIdFilter || t('admin.agent_feedback.all_sites', {}, 'All sites')} · {windowHours}h</dd></div></dl><p className="rounded-xl bg-slate-50 p-3 text-xs leading-5 text-slate-500 dark:bg-slate-900/45 dark:text-slate-400">{t('admin.agent_feedback.issue_boundary', {}, 'Cloud summarizes this metadata for evaluation only. Approval, preflight, and final writes remain local to WordPress.')}</p></div> : null}
+              </div> : null}
+            </div>
+          </BackofficeSectionPanel>
+
           <BackofficeSectionPanel className="overflow-hidden p-0">
             <div className="border-b border-slate-200/80 px-5 py-4 dark:border-slate-800 md:px-6">
               <p className="text-xs font-semibold uppercase tracking-[0.18em] text-gray-500 dark:text-gray-400">
@@ -608,7 +581,7 @@ function AgentFeedbackQualityDashboard() {
                         )}
                       </span>
                     </div>
-                    <div className="mt-2 grid grid-cols-4 gap-2 text-xs text-slate-500 dark:text-slate-400">
+                    <div className="mt-2 grid grid-cols-2 gap-2 text-xs text-slate-500 dark:text-slate-400 sm:grid-cols-4">
                       <span>
                         {t('admin.agent_feedback.trend_accepted', { count: formatNumber(point.accepted) }, 'Accepted {{count}}')}
                       </span>
@@ -629,6 +602,14 @@ function AgentFeedbackQualityDashboard() {
           </div>
         </>
       ) : null}
+
+      {data ? <BackofficeDisclosure summary={t('admin.agent_feedback.advanced_boundary', {}, 'Advanced contract and governance boundary')} contentClassName="space-y-4"><div><p className="text-xs font-semibold uppercase tracking-[0.18em] text-gray-500 dark:text-gray-400">{t('admin.agent_feedback.boundary_label', {}, 'Boundary')}</p><h2 className="mt-2 text-xl font-semibold text-gray-950 dark:text-white">{t('admin.agent_feedback.boundary_title', {}, 'Quality detail only')}</h2><p className="mt-2 max-w-3xl text-sm leading-6 text-slate-600 dark:text-slate-300">{t('admin.agent_feedback.boundary_desc', {}, 'This surface summarizes metadata-only feedback. It does not configure prompts, router profiles, approvals, publication, or WordPress writes.')}</p></div><BackofficeMetricStrip columnsClassName="md:grid-cols-2 xl:grid-cols-5" items={[
+        { label: t('admin.agent_feedback.contract', {}, 'Contract'), value: data.contractVersion || data.artifactType, size: 'compact' },
+        { label: t('admin.agent_feedback.control_plane', {}, 'Control plane'), value: data.boundary.controlPlane || 'wordpress_local', size: 'compact' },
+        { label: t('admin.agent_feedback.approval', {}, 'Approval'), value: data.approvalTruth || data.boundary.approvalTruth, size: 'compact' },
+        { label: t('admin.agent_feedback.preflight', {}, 'Preflight'), value: data.preflightTruth || data.boundary.preflightTruth, size: 'compact' },
+        { label: t('admin.agent_feedback.final_write', {}, 'Final write'), value: data.finalWriteTruth || data.boundary.finalWriteTruth, size: 'compact' },
+      ]} /></BackofficeDisclosure> : null}
     </BackofficePageStack>
   );
 }

@@ -4116,6 +4116,7 @@ class RuntimeService:
         payload_json: dict[str, object] | None = None,
     ) -> float:
         return estimate_runtime_request_ai_credits(
+            ability_name=request.ability_name,
             ability_family=request.ability_family,
             execution_kind=request.execution_kind,
             payload_json=payload_json if payload_json is not None else request.input_payload,

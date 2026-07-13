@@ -3,7 +3,8 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 const root = process.cwd();
-const sitesSource = readFileSync(resolve(root, 'src/app/portal/sites/page.tsx'), 'utf8');
+const sitesSource = readFileSync(resolve(root, 'src/components/portal/PortalSitesWorkspace.tsx'), 'utf8');
+const sitesRedirectSource = readFileSync(resolve(root, 'src/app/portal/sites/page.tsx'), 'utf8');
 const accountSource = readFileSync(resolve(root, 'src/app/portal/account/page.tsx'), 'utf8');
 const homeSource = readFileSync(resolve(root, 'src/app/portal/page.tsx'), 'utf8');
 const usageSource = readFileSync(resolve(root, 'src/app/portal/usage/page.tsx'), 'utf8');
@@ -15,16 +16,25 @@ const paginationSource = readFileSync(resolve(root, 'src/components/ui/ListPagin
 const loadingSource = readFileSync(resolve(root, 'src/components/portal/PortalPageState.tsx'), 'utf8');
 
 assert.match(sitesSource, /const visibleSites = getVisiblePortalSites\(sites\)/);
-assert.match(sitesSource, /value: visibleSites\.length/);
-assert.match(sitesSource, /htmlFor="portal-site-search"[\s\S]*id="portal-site-search"/);
-assert.match(accountSource, /getVisiblePortalSites\(session\.sites\)\.length/);
+assert.match(sitesSource, /visibleSites\.length/);
+assert.match(sitesSource, /htmlFor="portal-service-site-search"[\s\S]*id="portal-service-site-search"/);
+assert.match(sitesRedirectSource, /router\.replace\(`\/portal\$\{query[\s\S]*#sites`\)/);
+assert.match(sitesRedirectSource, /encodeURIComponent\(currentPath\)/);
+assert.match(homeSource, /<PortalSitesWorkspace \/>/);
+assert.doesNotMatch(
+  accountSource,
+  /PortalMetricStrip|getVisiblePortalSites\(session\.sites\)\.length/,
+  'account header must not repeat login, QQ, and site details already shown below'
+);
 assert.doesNotMatch(homeSource, /role="button"[\s\S]{0,900}href=\{`\/portal\/sites\/\$\{site\.site_id\}`\}/);
 
-assert.match(usageSource, /portalClient\.getCreditLedger\(creditLedgerSiteId/);
+assert.match(usageSource, /portalClient\.getAccountCreditEvents\([\s\S]*siteId: creditLedgerSiteId/);
+assert.match(usageSource, /creditEventWindow[\s\S]*creditEventFeature/);
 assert.match(usageSource, /portal\.usage\.site_filter_label/);
-assert.match(billingSource, /id="package-options"[\s\S]*href="#package-options"/);
+assert.match(billingSource, /id="package-options"[\s\S]*setActiveCommercialDialog\('package'\)/);
+assert.doesNotMatch(billingSource, /href="#package-options"/);
 assert.match(auditSource, /SUCCESSFUL_AUDIT_OUTCOMES[\s\S]*succeeded[\s\S]*completed/);
-assert.match(monitoringSource, /router\.replace\(`\/portal\/monitoring\?site=/);
+assert.match(monitoringSource, /router\.replace\(`\/portal\/sites\/\$\{encodeURIComponent\(selectedSite\.site_id\)\}#service-status`\)/);
 assert.match(headerSource, /onSiteChange[\s\S]*<select[\s\S]*onSiteChange\(event\.target\.value\)/);
 
 assert.match(paginationSource, /common\.next_page/);

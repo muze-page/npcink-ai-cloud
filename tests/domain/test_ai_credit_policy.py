@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
 from app.adapters.repositories.commercial_repository import CommercialRepository
 from app.core.db import dispose_engine, get_session, init_schema
@@ -18,8 +19,8 @@ from app.domain.commercial.credits import (
     estimate_runtime_request_ai_credits,
     list_ai_credit_feature_charge_rules,
     record_credit_ledger_component,
-    vector_credit_component,
 )
+from app.domain.commercial.service import CommercialService
 
 
 def _sqlite_url(tmp_path: Path) -> str:
@@ -116,13 +117,28 @@ def test_ai_credit_estimates_match_declared_provider_components() -> None:
         ability_family="vision",
         execution_kind="image_source",
     ) == 4.0
+    assert estimate_runtime_request_ai_credits(
+        ability_name="npcink-cloud/site-knowledge-sync",
+        ability_family="knowledge",
+        execution_kind="site_knowledge",
+        payload_json={"billing_mode": "consume_ai_credits"},
+    ) == 0.0
+    assert estimate_runtime_request_ai_credits(
+        ability_name="npcink-cloud/site-knowledge-search",
+        ability_family="knowledge",
+        execution_kind="site_knowledge",
+        payload_json={"billing_mode": "meter_only"},
+    ) == 1.0
 
 
 def test_record_credit_ledger_component_is_idempotent(tmp_path: Path) -> None:
     database_url = _sqlite_url(tmp_path)
     init_schema(database_url)
-    component = vector_credit_component(source_type="vector_chunks", quantity=11)
-    assert component is not None
+    component = {
+        **AI_CREDIT_COMPONENT_POLICY_REGISTRY["runs"],
+        "quantity": 2.0,
+        "credits": 2.0,
+    }
     with get_session(database_url) as session:
         repository = CommercialRepository(session)
         first = record_credit_ledger_component(
@@ -159,3 +175,48 @@ def test_record_credit_ledger_component_is_idempotent(tmp_path: Path) -> None:
     assert first.credit_delta == -2.0
     assert first.rate_version == AI_CREDIT_RATE_VERSION
     dispose_engine(database_url)
+
+
+def test_site_knowledge_index_volume_is_meter_only() -> None:
+    documents = AI_CREDIT_COMPONENT_POLICY_REGISTRY["vector_documents"]
+    chunks = AI_CREDIT_COMPONENT_POLICY_REGISTRY["vector_chunks"]
+
+    assert documents["charge_mode"] == "meter_only"
+    assert documents["rate"] == 0.0
+    assert chunks["charge_mode"] == "meter_only"
+    assert chunks["rate"] == 0.0
+
+
+def test_admin_credit_estimate_excludes_site_knowledge_index_maintenance(
+    tmp_path: Path,
+) -> None:
+    service = CommercialService(_sqlite_url(tmp_path))
+    maintenance = {"metering_class": "site_knowledge_index_maintenance"}
+    meter_events = [
+        SimpleNamespace(meter_key="runs", quantity=1, payload_json=maintenance),
+        SimpleNamespace(meter_key="tokens_total", quantity=2000, payload_json=maintenance),
+        SimpleNamespace(
+            meter_key="provider_calls",
+            quantity=1,
+            execution_kind="site_knowledge",
+            ability_family="knowledge",
+            payload_json=maintenance,
+        ),
+        SimpleNamespace(meter_key="runs", quantity=1, payload_json={}),
+        SimpleNamespace(meter_key="tokens_total", quantity=500, payload_json={}),
+    ]
+
+    breakdown = service._build_admin_account_credit_breakdown(
+        meter_events=meter_events,
+        totals={"runs": 2.0, "tokens_total": 2500.0},
+        indexed_document_count=10,
+        indexed_chunk_count=101,
+    )
+    by_key = {str(item["key"]): item for item in breakdown}
+
+    assert by_key["runs"]["credits"] == 1.0
+    assert by_key["tokens_total"]["quantity"] == 500.0
+    assert by_key["tokens_total"]["credits"] == 1
+    assert by_key["vector_documents"]["credits"] == 0.0
+    assert by_key["vector_chunks"]["credits"] == 0.0
+    assert "provider_calls_other" not in by_key

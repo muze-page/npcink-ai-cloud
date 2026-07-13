@@ -5,8 +5,11 @@ from datetime import datetime
 from math import ceil
 from typing import Any, cast
 
+from app.domain.site_knowledge.contracts import SITE_KNOWLEDGE_SYNC_ABILITY
+
 AI_CREDIT_RATE_VERSION = "ai-credit-ledger-v2"
 AI_CREDIT_CHARGE_CONTRACT_VERSION = "ai-credit-charge-contract-v1"
+SITE_KNOWLEDGE_INDEX_METERING_CLASS = "site_knowledge_index_maintenance"
 PAID_CREDIT_BALANCE_SOURCE_TYPES = frozenset(
     {"credit_pack_purchase", "credit_pack_refund"}
 )
@@ -201,18 +204,18 @@ AI_CREDIT_COMPONENT_POLICY_REGISTRY: dict[str, dict[str, object]] = {
     "vector_documents": {
         "source_type": "vector_documents",
         "label": AI_CREDIT_COMPONENT_LABELS["vector_documents"],
-        "charge_mode": "consume",
+        "charge_mode": "meter_only",
         "unit": "document",
-        "rate": 2.0,
+        "rate": 0.0,
         "rate_unit": None,
         "rounding": "none",
     },
     "vector_chunks": {
         "source_type": "vector_chunks",
         "label": AI_CREDIT_COMPONENT_LABELS["vector_chunks"],
-        "charge_mode": "consume",
+        "charge_mode": "meter_only",
         "unit": "chunk",
-        "rate": 1.0,
+        "rate": 0.0,
         "rate_unit": "10_chunks",
         "rounding": "ceil_per_10",
     },
@@ -269,9 +272,9 @@ AI_CREDIT_CAPABILITY_POLICY_REGISTRY: dict[str, dict[str, object]] = {
         "capability_key": "runtime:site_knowledge",
         "ability_families": ["knowledge"],
         "execution_kinds": ["embedding", "site_knowledge"],
-        "charge_mode": "run_and_index_usage",
+        "charge_mode": "run_and_query_embedding_usage",
         "request_base_credits": 1.0,
-        "ledger_components": ["runs", "tokens_total", "vector_documents", "vector_chunks"],
+        "ledger_components": ["runs", "tokens_total"],
     },
     "runtime:batch": {
         "capability_key": "runtime:batch",
@@ -326,15 +329,6 @@ AI_CREDIT_FEATURE_CHARGE_RULES: dict[str, dict[str, object]] = {
         "capability_key": "runtime:audio",
         "charge_policy": "charge_base_run_tokens_and_audio_provider_usage",
         "ledger_components": ["runs", "tokens_total", "audio_generation"],
-        "limit_policy": "ai_credits_required_before_execute",
-        "budget_key": "ai_credits",
-        "contract_version": AI_CREDIT_FEATURE_CHARGE_RULES_VERSION,
-    },
-    "site_knowledge_indexing": {
-        "feature_key": "site_knowledge_indexing",
-        "capability_key": "runtime:site_knowledge",
-        "charge_policy": "charge_base_run_tokens_and_vector_index_usage",
-        "ledger_components": ["runs", "tokens_total", "vector_documents", "vector_chunks"],
         "limit_policy": "ai_credits_required_before_execute",
         "budget_key": "ai_credits",
         "contract_version": AI_CREDIT_FEATURE_CHARGE_RULES_VERSION,
@@ -429,7 +423,13 @@ def classify_zhihu_provider_credit_component(
     return None
 
 
+def is_site_knowledge_index_meter_event(event: object) -> bool:
+    return _event_payload(event).get("metering_class") == SITE_KNOWLEDGE_INDEX_METERING_CLASS
+
+
 def usage_meter_credit_component(event: object) -> dict[str, object] | None:
+    if is_site_knowledge_index_meter_event(event):
+        return None
     meter_key = str(getattr(event, "meter_key", "") or "").strip()
     quantity = _coerce_float(getattr(event, "quantity", 0.0))
     if meter_key == "runs":
@@ -454,29 +454,6 @@ def usage_meter_credit_component(event: object) -> dict[str, object] | None:
             **component,
             "quantity": quantity,
             "credits": quantity * _coerce_float(component.get("rate")),
-        }
-    return None
-
-
-def vector_credit_component(
-    *,
-    source_type: str,
-    quantity: int | float,
-) -> dict[str, object] | None:
-    quantity_value = _coerce_float(quantity)
-    if quantity_value <= 0:
-        return None
-    if source_type == "vector_documents":
-        return {
-            **AI_CREDIT_COMPONENT_POLICY_REGISTRY["vector_documents"],
-            "quantity": quantity_value,
-            "credits": quantity_value * 2.0,
-        }
-    if source_type == "vector_chunks":
-        return {
-            **AI_CREDIT_COMPONENT_POLICY_REGISTRY["vector_chunks"],
-            "quantity": quantity_value,
-            "credits": rounded_vector_chunk_credits(quantity_value),
         }
     return None
 
@@ -512,8 +489,11 @@ def estimate_runtime_request_ai_credits(
     *,
     ability_family: str | None,
     execution_kind: str | None,
+    ability_name: str | None = None,
     payload_json: dict[str, object] | None = None,
 ) -> float:
+    if str(ability_name or "").strip() == SITE_KNOWLEDGE_SYNC_ABILITY:
+        return 0.0
     capability = resolve_ai_credit_capability_policy(
         ability_family=ability_family,
         execution_kind=execution_kind,
@@ -586,10 +566,6 @@ def record_credit_ledger_component(
 
 def rounded_token_credits(quantity: int | float) -> int:
     return _ceil_positive(_coerce_float(quantity) / 1000.0)
-
-
-def rounded_vector_chunk_credits(quantity: int | float) -> int:
-    return _ceil_positive(_coerce_float(quantity) / 10.0)
 
 
 def build_credit_breakdown_from_ledger(entries: Iterable[object]) -> list[dict[str, object]]:

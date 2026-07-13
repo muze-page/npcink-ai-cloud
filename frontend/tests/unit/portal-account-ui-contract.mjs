@@ -75,6 +75,11 @@ assert.match(
   /portalClient\.requestEmailChangeCode[\s\S]*portalClient\.verifyEmailChangeCode/,
   'account center must support self-service verified email changes'
 );
+assert.match(
+  accountSource,
+  /<Modal[\s\S]*data-portal-account="email-change-dialog"/,
+  'account center must keep verified email changes in a focused dialog'
+);
 
 assert.doesNotMatch(
   accountSource,

@@ -91,7 +91,7 @@ export function ToastContainer() {
 
   return (
     <div
-      className="pointer-events-none fixed left-1/2 top-16 z-[70] w-[calc(100%-2rem)] max-w-sm -translate-x-1/2 space-y-2"
+      className="pointer-events-none fixed inset-x-4 top-16 z-[70] w-auto space-y-2 sm:left-1/2 sm:right-auto sm:w-full sm:max-w-sm sm:-translate-x-1/2"
       aria-label="Notifications"
     >
       {toasts.map((toast) => (

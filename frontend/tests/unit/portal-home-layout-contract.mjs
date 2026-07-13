@@ -4,6 +4,10 @@ import assert from 'node:assert/strict';
 
 const portalHomePath = resolve(process.cwd(), 'src/app/portal/page.tsx');
 const source = readFileSync(portalHomePath, 'utf8');
+const sitesWorkspaceSource = readFileSync(
+  resolve(process.cwd(), 'src/components/portal/PortalSitesWorkspace.tsx'),
+  'utf8'
+);
 
 assert.match(
   source,
@@ -13,7 +17,7 @@ assert.match(
 
 assert.match(
   source,
-  /<BackofficeMetricStrip items=\{operationSummaryItems\}/,
+  /<PortalMetricStrip items=\{operationSummaryItems\}/,
   'portal home must render the account operation summary as a compact metric strip'
 );
 assert.match(
@@ -70,9 +74,10 @@ assert.doesNotMatch(
   'portal home must not repeat global navigation as local quick links'
 );
 
-const siteRegisterIndex = source.indexOf('portal.site_register');
-assert.ok(siteRegisterIndex >= 0, 'portal home must render a connected-site register section');
-const siteRegisterSource = source.slice(siteRegisterIndex);
+assert.match(source, /<PortalSitesWorkspace \/>/, 'portal home must render the merged site workspace');
+const siteRegisterIndex = sitesWorkspaceSource.indexOf('portal.site_register');
+assert.ok(siteRegisterIndex >= 0, 'merged site workspace must render a connected-site register section');
+const siteRegisterSource = sitesWorkspaceSource.slice(siteRegisterIndex);
 assert.doesNotMatch(
   siteRegisterSource,
   /package_card_label|sitePackageDisplay|resolveSitePackageDisplay|hasCachedSiteCoverage/,
@@ -80,13 +85,13 @@ assert.doesNotMatch(
 );
 
 assert.doesNotMatch(
-  source.slice(source.indexOf('data-portal-home="operation-overview"'), source.indexOf('portal.site_register')),
+  source.slice(source.indexOf('data-portal-home="operation-overview"'), source.indexOf('<PortalSitesWorkspace')),
   /href="\/portal\/sites"|href="\/portal\/billing"/,
   'portal home summary cards must stay informational instead of duplicating primary navigation'
 );
 
 const overviewIndex = source.indexOf('data-portal-home="operation-overview"');
-const summaryIndex = source.indexOf('<BackofficeMetricStrip items={operationSummaryItems}');
+const summaryIndex = source.indexOf('<PortalMetricStrip items={operationSummaryItems}');
 const focusIndex = source.indexOf('data-portal-home="current-focus"');
 const checklistIndex = source.indexOf('data-portal-home="setup-checklist"');
 

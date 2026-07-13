@@ -14,9 +14,15 @@ const proxySource = readFileSync(proxyPath, 'utf8');
 
 assert.match(
   pageSource,
-  /fetch\(`\/api\/admin\/portal-users\?\$\{buildQuery\(filters, offset\)\}`/,
+  /fetch\(`\/api\/admin\/portal-users\?\$\{requestKey\}`/,
   'portal users page must load users through the admin proxy'
 );
+
+assert.match(pageSource, /id="portal-user-inspector"/, 'portal users page must use a persistent user inspector');
+assert.match(pageSource, /data-ui="portal-user-directory-item"/, 'portal users must render as a responsive directory list');
+assert.doesNotMatch(pageSource, /<table|overflow-x-auto/, 'portal users must not depend on a wide horizontal table');
+assert.match(pageSource, /activeRequestKeyRef[\s\S]*requestSequenceRef[\s\S]*hasLoadedRef/, 'portal user reads must dedupe and reject stale responses');
+assert.match(pageSource, /searchParams\.get\('focus'\)/, 'the inspected user must persist in the URL');
 
 assert.match(
   pageSource,
@@ -88,6 +94,12 @@ assert.doesNotMatch(
   layoutSource,
   /admin\.nav_group_customer_service[\s\S]*href: '\/admin\/portal-users'/,
   'portal users must not return as a top-level customer-ops sidebar entry'
+);
+
+assert.match(
+  layoutSource,
+  /pathname\.startsWith\('\/admin\/portal-users'\)[\s\S]*admin\.nav_portal_users/,
+  'portal users must still have an accurate secondary-route breadcrumb label'
 );
 
 assert.match(

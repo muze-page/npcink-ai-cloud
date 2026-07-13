@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, type FormEvent } from 'react';
-import { BackofficeStackCard } from '@/components/backoffice/BackofficeScaffold';
+import { PortalCard } from '@/components/portal/PortalScaffold';
 import { useLocale } from '@/contexts/LocaleContext';
 import { portalClient, type Site } from '@/lib/portal-client';
 import { formatPortalErrorMessage } from '@/lib/portal-error';
@@ -82,7 +82,7 @@ export function PortalSiteConnectPanel({
   };
 
   return (
-    <BackofficeStackCard className="space-y-4">
+    <PortalCard className="space-y-4">
       <div>
         <p className="text-xs font-semibold uppercase tracking-[0.18em] text-gray-500 dark:text-gray-400">
           {t('portal.connect_site_title', undefined, 'Site connection')}
@@ -165,7 +165,7 @@ export function PortalSiteConnectPanel({
           ) : null}
         </div>
       </form>
-    </BackofficeStackCard>
+    </PortalCard>
   );
 }
 

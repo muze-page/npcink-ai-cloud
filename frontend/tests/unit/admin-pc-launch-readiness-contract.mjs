@@ -14,8 +14,8 @@ const toastSource = readFileSync(resolve(root, 'src/components/ui/Toast.tsx'), '
 
 assert.match(
   plansSource,
-  /grid gap-4 lg:grid-cols-2 xl:grid-cols-4/,
-  'The four canonical packages must fit on one row at the primary PC breakpoint'
+  /grid gap-4 lg:grid-cols-2 2xl:grid-cols-4/,
+  'The collapsed package-initialization utility must fit the four canonical packages on one row at wide PC breakpoints'
 );
 
 assert.match(
@@ -50,11 +50,21 @@ for (const [surface, source] of [
 for (const [surface, source] of [
   ['packages', plansSource],
   ['credit packs', creditPacksSource],
-  ['service settings', serviceSettingsSource],
 ]) {
   assert.match(source, /role="alert"/, `${surface} errors must expose alert semantics`);
   assert.match(source, /role="status"[\s\S]*aria-live="polite"/, `${surface} success messages must expose polite status semantics`);
 }
+
+assert.match(
+  serviceSettingsSource,
+  /role=\{error \|\| activeValidationIssues\.length > 0 \? 'alert' : 'status'\}/,
+  'service settings validation and request errors must expose alert semantics'
+);
+assert.match(
+  serviceSettingsSource,
+  /useToast\(\)[\s\S]*showSuccessToast/,
+  'service settings success feedback must use the global Toast live region without shifting the form layout'
+);
 
 assert.match(
   providerDialogSource,

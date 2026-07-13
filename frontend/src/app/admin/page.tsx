@@ -1,6 +1,6 @@
 'use client';
 
-import React, { Suspense, useEffect, useState } from 'react';
+import React, { Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { LoadingFallback } from '@/components/ui/LoadingFallback';
@@ -11,11 +11,13 @@ import { buildAdminOperatorWatchItems, operatorSeverityClasses } from '@/lib/adm
 import { resolveUiErrorMessage } from '@/lib/errors';
 import {
   BackofficeMetricStrip,
+  BackofficeDiagnosticNotice,
+  BackofficeLayer,
   BackofficePrimaryPanel,
   BackofficeSectionPanel,
   BackofficeStackCard,
 } from '@/components/backoffice/BackofficeScaffold';
-import { AdminWorkspacePage, AdminWorkspaceSplit } from '@/components/admin/AdminWorkspace';
+import { AdminWorkspacePage } from '@/components/admin/AdminWorkspace';
 
 interface AdminOverview {
   generatedAt: string;
@@ -421,6 +423,34 @@ function buildAdminLookupHref(path: string, query: string): string {
   return `${path}?${params.toString()}`;
 }
 
+function overviewRuntimeAlertTitle(
+  alert: AdminOverview['runtimeTelemetry']['alerts'][number] | undefined,
+  t: (key: string, vars?: Record<string, string>, fallback?: string) => string
+): string {
+  if (!alert) return '';
+  const known: Record<string, [string, string]> = {
+    'hosted_model.provider_errors': ['admin.troubleshooting.issue_provider_errors', 'Provider call errors'],
+    'hosted_model.failed_runs': ['admin.troubleshooting.issue_runtime_failed', 'Runtime runs failed'],
+    'hosted_model.provider_call_gap': ['admin.troubleshooting.issue_provider_gap', 'Provider call coverage gap'],
+  };
+  const copy = known[alert.code];
+  return copy ? t(copy[0], {}, copy[1]) : alert.title || alert.code;
+}
+
+function overviewRuntimeAlertSummary(
+  alert: AdminOverview['runtimeTelemetry']['alerts'][number] | undefined,
+  t: (key: string, vars?: Record<string, string>, fallback?: string) => string
+): string {
+  if (!alert) return '';
+  const known: Record<string, [string, string]> = {
+    'hosted_model.provider_errors': ['admin.troubleshooting.issue_provider_errors_desc', 'Provider calls are returning errors in the current telemetry window.'],
+    'hosted_model.failed_runs': ['admin.troubleshooting.issue_runtime_failed_desc', 'Runtime runs are failing before or during provider execution.'],
+    'hosted_model.provider_call_gap': ['admin.troubleshooting.issue_provider_gap_desc', 'Some runtime runs do not have matching provider-call telemetry.'],
+  };
+  const copy = known[alert.code];
+  return copy ? t(copy[0], {}, copy[1]) : alert.summary;
+}
+
 function AdminOverviewContent() {
   const { t } = useLocale();
   const router = useRouter();
@@ -428,46 +458,74 @@ function AdminOverviewContent() {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [supportQuery, setSupportQuery] = useState('');
+  const requestControllerRef = useRef<AbortController | null>(null);
+  const requestSequenceRef = useRef(0);
 
-  useEffect(() => {
-    const loadOverview = async () => {
-      setIsLoading(true);
-      setError(null);
+  const loadOverview = useCallback(async () => {
+    requestControllerRef.current?.abort();
+    const controller = new AbortController();
+    requestControllerRef.current = controller;
+    const sequence = ++requestSequenceRef.current;
+    setIsLoading(true);
+    setError(null);
+    const timeout = globalThis.setTimeout(() => controller.abort(), 12000);
 
-      try {
-        const overviewResponse = await fetch('/api/admin/overview', { credentials: 'include' });
+    try {
+      const overviewResponse = await fetch('/api/admin/overview', {
+        credentials: 'include',
+        cache: 'no-store',
+        signal: controller.signal,
+      });
 
-        if (!overviewResponse.ok) {
-          throw new Error(t('error.failed_load'));
-        }
+      if (!overviewResponse.ok) {
+        throw new Error(t('error.failed_load'));
+      }
 
-        const overviewPayload = await overviewResponse.json();
+      const overviewPayload = await overviewResponse.json();
+      if (sequence === requestSequenceRef.current) {
         setOverview(normalizeOverview(overviewPayload.data));
-      } catch (err) {
+      }
+    } catch (err) {
+      if (sequence === requestSequenceRef.current) {
         setError(resolveUiErrorMessage(err instanceof Error ? err.message : null, t('error.failed_load')));
-      } finally {
+      }
+    } finally {
+      globalThis.clearTimeout(timeout);
+      if (sequence === requestSequenceRef.current) {
+        requestControllerRef.current = null;
         setIsLoading(false);
       }
-    };
-
-    void loadOverview();
+    }
   }, [t]);
 
-  if (isLoading) {
-    return <LoadingFallback />;
+  useEffect(() => {
+    void loadOverview();
+    return () => requestControllerRef.current?.abort();
+  }, [loadOverview]);
+
+  if (isLoading && !overview) {
+    return (
+      <AdminWorkspacePage>
+        <BackofficeLayer
+          eyebrow={t('admin.operator_surface', {}, 'Operator surface')}
+          title={t('admin.home_title', {}, 'Platform state comes first')}
+          description={t('admin.home_loading_desc', {}, 'Loading the current platform conclusion and operator queues.')}
+        />
+        <LoadingFallback />
+      </AdminWorkspacePage>
+    );
   }
 
-  if (error) {
+  if (error && !overview) {
     return (
-      <div className="flex min-h-[60vh] items-center justify-center">
-        <div className="max-w-md text-center">
-          <h2 className="mb-4 text-2xl font-bold text-red-600">{t('common.error')}</h2>
-          <p className="mb-6 text-gray-600 dark:text-gray-400">{error}</p>
-          <button onClick={() => window.location.reload()} className="btn btn-primary">
-            {t('common.retry')}
-          </button>
-        </div>
-      </div>
+      <AdminWorkspacePage>
+        <BackofficeLayer
+          eyebrow={t('admin.operator_surface', {}, 'Operator surface')}
+          title={t('admin.home_title', {}, 'Platform state comes first')}
+          description={t('admin.home_error_desc', {}, 'The platform overview could not be loaded. No operator action has been performed.')}
+        />
+        <BackofficeDiagnosticNotice message={error} retryLabel={t('common.retry')} onRetry={() => void loadOverview()} />
+      </AdminWorkspacePage>
     );
   }
 
@@ -483,8 +541,8 @@ function AdminOverviewContent() {
     runtimeTelemetry: {
       status: overview.runtimeTelemetry.status,
       alertCount: overview.runtimeTelemetry.alertCount,
-      firstAlertTitle: overview.runtimeTelemetry.alerts[0]?.title || '',
-      firstAlertSummary: overview.runtimeTelemetry.alerts[0]?.summary || '',
+      firstAlertTitle: overviewRuntimeAlertTitle(overview.runtimeTelemetry.alerts[0], t),
+      firstAlertSummary: overviewRuntimeAlertSummary(overview.runtimeTelemetry.alerts[0], t),
       summary: overview.runtimeTelemetry.summary,
     },
     formatValue: formatInteger,
@@ -619,10 +677,6 @@ function AdminOverviewContent() {
       : primaryActionHref === '/admin/coverage'
       ? t('admin.home_primary_action_coverage', {}, 'Review service status')
       : t('admin.home_primary_action_accounts', {}, 'Review customers');
-  const secondaryActionHref =
-    '/admin/accounts';
-  const secondaryActionLabel =
-    t('admin.home_secondary_action_accounts', {}, 'Inspect accounts');
   const supportLookupAccountHref = buildAdminLookupHref('/admin/accounts', supportQuery);
   const supportLookupPortalUserHref = buildAdminLookupHref('/admin/portal-users', supportQuery);
   const quickLinks = [
@@ -649,16 +703,6 @@ function AdminOverviewContent() {
         {},
         'Runtime, plugin, media, vector, and feedback evidence.'
       ),
-    },
-    {
-      href: '/admin/ai-resources',
-      label: t('admin.home_quick_providers', {}, 'Providers'),
-      detail: t('admin.home_quick_providers_desc', {}, 'Cloud runtime suppliers and credential readiness.'),
-    },
-    {
-      href: '/admin/service-settings',
-      label: t('admin.home_quick_service_settings', {}, 'Service settings'),
-      detail: t('admin.home_quick_service_settings_desc', {}, 'Portal login, delivery, and Cloud-owned service configuration.'),
     },
   ];
   const evidenceWindowMetrics = [
@@ -789,14 +833,9 @@ function AdminOverviewContent() {
         className="rounded-[1.2rem] shadow-none"
         contentClassName="px-5 py-5 md:px-6 md:py-5"
         actions={(
-          <>
-            <Link href={primaryActionHref} className="btn btn-primary">
-              {primaryActionLabel}
-            </Link>
-            <Link href={secondaryActionHref} className="btn btn-secondary">
-              {secondaryActionLabel}
-            </Link>
-          </>
+          <Link href={primaryActionHref} className="btn btn-primary">
+            {primaryActionLabel}
+          </Link>
         )}
         aside={(
           <div className="w-full xl:w-[44rem]">
@@ -848,9 +887,7 @@ function AdminOverviewContent() {
         </div>
       </BackofficePrimaryPanel>
 
-      <AdminWorkspaceSplit
-        primary={(
-          <>
+      <BackofficeSectionPanel className="space-y-4" data-ui="admin-overview-destinations">
             <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
               <div>
                 <p className="text-xs font-semibold uppercase tracking-[0.18em] text-gray-500 dark:text-gray-400">
@@ -868,11 +905,12 @@ function AdminOverviewContent() {
                 </p>
               </div>
             </div>
-            <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+            <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
               {quickLinks.map((item) => (
                 <Link
                   key={item.href}
                   href={item.href}
+                  data-ui="admin-overview-destination"
                   className="group block rounded-2xl border border-slate-200/80 bg-white/80 px-4 py-3.5 text-sm transition hover:-translate-y-0.5 hover:border-blue-200 hover:bg-blue-50/70 hover:shadow-sm dark:border-slate-800 dark:bg-slate-950/45 dark:hover:border-blue-900/70 dark:hover:bg-blue-950/25"
                 >
                   <div className="flex items-start justify-between gap-3">
@@ -949,56 +987,7 @@ function AdminOverviewContent() {
                 </Link>
               </div>
             </BackofficeStackCard>
-          </>
-        )}
-        inspector={(
-          <>
-            <div className="flex items-start justify-between gap-3">
-              <div>
-                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-gray-500 dark:text-gray-400">
-                  {t('admin.home_evidence_window_eyebrow', {}, 'Evidence window')}
-                </p>
-                <h2 className="mt-2 text-xl font-semibold text-gray-950 dark:text-white">
-                  {t('admin.home_evidence_window_title', {}, 'Runtime and usage snapshot')}
-                </h2>
-                <p className="mt-1 text-sm leading-6 text-gray-600 dark:text-gray-400">
-                  {t(
-                    'admin.home_evidence_window_desc',
-                    { days: String(overview.recentUsage.windowDays) },
-                    `Current ${overview.recentUsage.windowDays}-day overview signals from existing runtime and metering evidence.`
-                  )}
-                </p>
-              </div>
-              <span
-                className={cn(
-                  'rounded-full border px-2.5 py-1 text-[0.68rem] font-semibold uppercase tracking-[0.18em]',
-                  statusClasses
-                )}
-              >
-                {statusLabel}
-              </span>
-            </div>
-            <BackofficeMetricStrip
-              items={evidenceWindowMetrics}
-              columnsClassName="mt-4 grid-cols-2 md:grid-cols-2 xl:grid-cols-2"
-            />
-            <div className="mt-4 grid gap-2 sm:grid-cols-2">
-              {runtimeStatusItems.map((item) => (
-                <div
-                  key={item.label}
-                  className="rounded-xl border border-slate-200/80 bg-slate-50/70 px-3 py-2.5 dark:border-slate-800 dark:bg-slate-950/35"
-                  title={item.detail}
-                >
-                  <div className="flex items-center justify-between gap-3">
-                    <span className="text-xs font-medium text-slate-500 dark:text-slate-400">{item.label}</span>
-                    <span className="text-sm font-semibold text-slate-950 dark:text-white">{item.value}</span>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </>
-        )}
-      />
+      </BackofficeSectionPanel>
 
       <details className="rounded-2xl border border-slate-200/80 bg-white/60 dark:border-slate-800 dark:bg-slate-950/30">
         <summary className="cursor-pointer px-5 py-4 text-sm font-semibold text-slate-800 hover:bg-slate-50 dark:text-slate-100 dark:hover:bg-slate-900/60">
@@ -1008,6 +997,39 @@ function AdminOverviewContent() {
           </span>
         </summary>
         <div className="space-y-5 border-t border-slate-200/80 p-4 dark:border-slate-800">
+      <BackofficeSectionPanel className="space-y-4">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-gray-500 dark:text-gray-400">
+              {t('admin.home_evidence_window_eyebrow', {}, 'Evidence window')}
+            </p>
+            <h2 className="mt-2 text-xl font-semibold text-gray-950 dark:text-white">
+              {t('admin.home_evidence_window_title', {}, 'Runtime and usage snapshot')}
+            </h2>
+            <p className="mt-1 text-sm leading-6 text-gray-600 dark:text-gray-400">
+              {t(
+                'admin.home_evidence_window_desc',
+                { days: String(overview.recentUsage.windowDays) },
+                `Current ${overview.recentUsage.windowDays}-day overview signals from existing runtime and metering evidence.`
+              )}
+            </p>
+          </div>
+          <span className={cn('rounded-full border px-2.5 py-1 text-[0.68rem] font-semibold uppercase tracking-[0.18em]', statusClasses)}>
+            {statusLabel}
+          </span>
+        </div>
+        <BackofficeMetricStrip items={evidenceWindowMetrics} columnsClassName="grid-cols-2 md:grid-cols-4" />
+        <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+          {runtimeStatusItems.map((item) => (
+            <div key={item.label} className="rounded-xl border border-slate-200/80 bg-slate-50/70 px-3 py-2.5 dark:border-slate-800 dark:bg-slate-950/35" title={item.detail}>
+              <div className="flex items-center justify-between gap-3">
+                <span className="text-xs font-medium text-slate-500 dark:text-slate-400">{item.label}</span>
+                <span className="text-sm font-semibold text-slate-950 dark:text-white">{item.value}</span>
+              </div>
+            </div>
+          ))}
+        </div>
+      </BackofficeSectionPanel>
       <BackofficeSectionPanel className="space-y-5">
         <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
           <div>
@@ -1330,10 +1352,10 @@ function AdminOverviewContent() {
                 <div className="flex items-start justify-between gap-3">
                   <div>
                     <p className="text-sm font-semibold text-slate-900 dark:text-slate-100">
-                      {alert.title}
+                      {overviewRuntimeAlertTitle(alert, t)}
                     </p>
                     <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">
-                      {alert.summary}
+                      {overviewRuntimeAlertSummary(alert, t)}
                     </p>
                     {alert.capabilities.length > 0 ? (
                       <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">

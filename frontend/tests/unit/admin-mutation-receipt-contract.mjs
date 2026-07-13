@@ -124,8 +124,8 @@ assert.match(
 
 assert.match(
   toastSource,
-  /left-1\/2 top-16[\s\S]*-translate-x-1\/2/,
-  'Global Toast feedback must stay out of document flow in a stable top-center layer'
+  /fixed inset-x-4 top-16[\s\S]*sm:left-1\/2[\s\S]*sm:-translate-x-1\/2/,
+  'Global Toast feedback must stay out of document flow, stay inset on mobile, and center on wider screens'
 );
 
 assert.match(
@@ -148,7 +148,6 @@ assert.match(
 
 for (const [source, label] of [
   [aiResourcesSource, 'AI resources'],
-  [abilityModelsSource, 'Ability-model routing'],
   [serviceSettingsSource, 'Service settings'],
 ]) {
   assert.match(
@@ -157,6 +156,12 @@ for (const [source, label] of [
     `${label} must collect low-frequency top-level descriptions behind an info hint`
   );
 }
+
+assert.match(
+  abilityModelsSource,
+  /<BackofficeLayer[\s\S]*description=\{text\('description'/,
+  'Ability-model routing must keep its control-plane boundary visible in the compact workspace header'
+);
 
 const requiredKeys = [
   'admin.receipt_latest',

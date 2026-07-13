@@ -15,28 +15,13 @@ const enSource = i18nSource.slice(0, zhStart);
 const zhSource = i18nSource.slice(zhStart);
 
 const troubleshootingKeys = Array.from(
-  pageSource.matchAll(/(?:titleKey|descKey|actionKey|groupKey):\s*['`](admin\.[a-z0-9_.]+)['`]/g)
+  pageSource.matchAll(/(?:titleKey|descKey):\s*['`](admin\.[a-z0-9_.]+)['`]|t\(['`](admin\.troubleshooting\.[a-z0-9_.]+)['`]/g)
 )
-  .map((match) => match[1])
+  .map((match) => match[1] || match[2])
   .filter((key, index, keys) => keys.indexOf(key) === index)
   .sort();
 
 const workspaceKeys = [
-  'admin.advanced.mode',
-  'admin.advanced.read_only',
-  'admin.advanced.catalog_eyebrow',
-  'admin.advanced.catalog_title',
-  'admin.advanced.group_filter_label',
-  'admin.advanced.all_groups',
-  'admin.advanced.all_groups_desc',
-  'admin.advanced.visible_entries',
-  'admin.advanced.inspector_eyebrow',
-  'admin.advanced.inspector_title',
-  'admin.advanced.inspector_desc',
-  'admin.advanced.suggested_first_step',
-  'admin.advanced.boundary_note',
-  'admin.advanced.runtime_evidence_eyebrow',
-  'admin.advanced.runtime_evidence_scope',
   'admin.advanced.runtime_resolution_title',
   'admin.advanced.runtime_resolution_desc',
   'admin.advanced.capability_matrix_title',
@@ -47,15 +32,13 @@ const workspaceKeys = [
   'admin.advanced.recent_runtime_evidence_desc',
   'admin.advanced.runtime_evidence_boundary',
   'admin.advanced.action_open_model_binding',
-  'admin.advanced.group_runtime_desc',
-  'admin.advanced.group_governance_desc',
 ];
 
 const requiredKeys = [...new Set([...troubleshootingKeys, ...workspaceKeys])].sort();
 
 assert.ok(
-  troubleshootingKeys.length >= 17,
-  'Advanced troubleshooting cards must declare i18n keys for title, description, action, and group copy'
+  troubleshootingKeys.length >= 35,
+  'Runtime diagnostics workspace must declare localized copy for health, anomaly, inspector, and evidence states'
 );
 
 for (const key of requiredKeys) {
@@ -73,20 +56,32 @@ for (const key of requiredKeys) {
 
 assert.match(
   pageSource,
-  /useState<string>\('all'\)[\s\S]*role="tablist"[\s\S]*aria-selected=\{activeGroupKey === 'all'\}/,
-  'Advanced troubleshooting should present a compact diagnostic group filter'
+  /searchParams\.get\('window'\)[\s\S]*searchParams\.get\('focus'\)[\s\S]*recent_minutes: String\(windowHours \* 60\)/,
+  'Runtime diagnostics must keep its time window and focused anomaly URL-addressable'
 );
 
 assert.match(
   pageSource,
-  /admin\.advanced\.inspector_title[\s\S]*admin\.advanced\.suggested_first_step[\s\S]*admin\.advanced\.boundary_note/,
-  'Advanced troubleshooting should keep a right-side read-only focus inspector'
+  /runtime-diagnostic-issue[\s\S]*runtime-diagnostic-inspector[\s\S]*admin\.troubleshooting\.suggested_action[\s\S]*admin\.troubleshooting\.open_evidence/,
+  'Runtime diagnostics must connect the anomaly queue to a focused read-only evidence inspector'
 );
 
 assert.match(
   pageSource,
-  /runtimeEvidenceItems[\s\S]*id="runtime-evidence"[\s\S]*admin\.advanced\.runtime_evidence_boundary/,
-  'Runtime resolution, capability matrix, runtime configurations, and recent evidence must live under Runtime Diagnostics'
+  /evidenceLanes[\s\S]*id="evidence-lanes"[\s\S]*id="runtime-evidence"[\s\S]*admin\.advanced\.runtime_evidence_boundary/,
+  'Narrow observability lanes and advanced runtime metadata must live under Runtime Diagnostics'
+);
+
+assert.match(
+  pageSource,
+  /fetch\(`\/api\/admin\/runtime-telemetry\?\$\{params\.toString\(\)\}`[\s\S]*BackofficeSummaryStrip[\s\S]*providerCallRunCoverageRate[\s\S]*meteredRunCoverageRate/,
+  'Runtime diagnostics must derive its conclusion and core metrics from the runtime telemetry source'
+);
+
+assert.doesNotMatch(
+  pageSource,
+  /advancedGroups|activeGroupKey|group_filter_label|Choose an evidence lane/,
+  'Runtime diagnostics must not keep a fake one-group catalog filter or static first-entry focus'
 );
 
 assert.doesNotMatch(

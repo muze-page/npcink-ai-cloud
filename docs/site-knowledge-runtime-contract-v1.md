@@ -52,6 +52,25 @@ ability registry.
 - Long `site-knowledge-sync` runs use the existing runtime worker path and
   `run_records`; no second queue, scheduler, or workflow engine is introduced.
 
+## Metering Boundary
+
+`npcink-cloud/site-knowledge-sync` is server-classified index maintenance. It
+must remain entitlement-, capacity-, concurrency-, and provider-cost-governed,
+but it does not consume the customer's ordinary `ai_credits` allowance.
+
+Cloud still records its run, embedding provider calls, tokens, provider cost,
+indexed `vector_documents`, and indexed `vector_chunks` as usage evidence. All
+of those events carry `metering_class=site_knowledge_index_maintenance`; they
+must not create consume entries in `credit_ledger_entries`. The classification
+comes only from the canonical managed ability name. Request payload fields
+cannot select or override it.
+
+`site-knowledge-search`, writing-context retrieval, writing-package generation,
+article generation, and other user-initiated inference continue through their
+ordinary AI-credit policy. Index maintenance therefore cannot become an
+unmetered provider-cost bypass, and an exhausted AI-credit balance cannot block
+the maintenance needed to keep an already-entitled Site Knowledge index fresh.
+
 ## Vector Backend
 
 The default MVP backend stores one Cloud-owned read model in PostgreSQL:
@@ -85,6 +104,13 @@ Supported built-in vector-related provider IDs:
 - `tei` embedding provider
 - `jina` rerank provider, commonly with `jina-reranker-v3`
 - `zilliz` vector store provider
+
+An embedding provider connection may declare additive
+`config.site_knowledge_model_id` when its general default model is used by
+other capabilities. The selected model must be present in the connection's
+`model_ids` allowlist when one exists. Chinese-first sites should use
+`BAAI/bge-m3` consistently for both indexing and queries; English-only BGE
+variants are not valid defaults for Chinese Site Knowledge.
 
 The following remain environment-controlled runtime guardrails, because they
 bound workload shape rather than identify a provider secret:
@@ -195,6 +221,38 @@ Stored chunks include:
 Search defaults to `source_types=["post","page"]`. Callers must explicitly pass
 `filters.source_types=["comment"]` or include `comment` in the list when a
 workflow should use comments, such as FAQ or user-feedback analysis.
+
+## Search Result Granularity
+
+`site_knowledge_search.v1` accepts the optional additive input
+`result_granularity`:
+
+- `chunk` is the compatibility default and preserves ranked chunk results;
+- `document` returns each public source document once after evidence filtering
+  and reranking, then applies `max_results`.
+
+Document results keep the best-ranked chunk as the primary evidence and add a
+bounded `matched_chunks` list containing only `source_type`, `source_id`,
+`chunk_index`, and `score`. They do not duplicate chunk text. The response also
+returns `result_granularity` and `result_grouping` metadata, including
+`duplicate_chunks_collapsed`, so consumers can verify that grouping occurred.
+
+Cloud owns this grouping because it owns Site Knowledge search quality and
+ranking. Toolbox and other consumers may request a granularity, but they must
+not implement independent semantic dedupe or relevance scoring. Existing
+callers that omit the field continue to receive chunk-level results.
+
+Search also verifies that indexed chunks and the current query use the same
+embedding space, identified as `provider_id:model_id`. Embeddings produced by
+different models are different vector spaces and must not be compared, even
+when their dimensions happen to match. Different providers may also apply
+different pooling or normalization for the same advertised model ID, so a
+matching model name alone is not sufficient. When the index contains another
+embedding space, search fails closed with
+`status=not_ready`, an empty `results` list, and additive
+`retrieval_readiness.status=embedding_space_mismatch` diagnostics. The operator
+action is to rebuild the Cloud-owned index with the current embedding space;
+Cloud must not return low-confidence candidates from incompatible vectors.
 
 ## Product Workflows
 

@@ -52,8 +52,12 @@ function buildAdminBackendPath(pathSegments: string[], method: string): string {
 
   const upperMethod = method.toUpperCase();
 
-  // GET routes always go through /internal/service/admin/
+  // Audit evidence is exposed by the bounded service-plane read endpoint,
+  // while the remaining admin reads use the admin projection namespace.
   if (upperMethod === 'GET') {
+    if (normalized === 'audit-events' || normalized === 'audit-events/summary') {
+      return `/internal/service/${normalized}`;
+    }
     return normalized ? `/internal/service/admin/${normalized}` : '/internal/service/admin';
   }
 

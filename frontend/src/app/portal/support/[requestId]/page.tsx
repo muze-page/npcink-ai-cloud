@@ -4,11 +4,11 @@ import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import { useCallback, useEffect, useState } from 'react';
 import {
-  BackofficePageStack,
-  BackofficeSectionPanel,
-  BackofficeStackCard,
-} from '@/components/backoffice/BackofficeScaffold';
-import { BackofficeStatusBadge } from '@/components/backoffice/BackofficeStatusBadge';
+  PortalPageStack,
+  PortalSection,
+  PortalCard,
+} from '@/components/portal/PortalScaffold';
+import { PortalStatusBadge } from '@/components/portal/PortalStatusBadge';
 import {
   PortalErrorState,
   PortalLoadingState,
@@ -210,7 +210,7 @@ export default function PortalSupportRequestDetailPage() {
   }
 
   return (
-    <BackofficePageStack>
+    <PortalPageStack>
       <PortalWorkspaceHeader
         eyebrow={t('portal.workspace_label', {}, 'Portal')}
         title={supportRequest?.title || t('portal.support_request_detail_title', {}, 'Ticket detail')}
@@ -236,10 +236,10 @@ export default function PortalSupportRequestDetailPage() {
       ) : null}
 
       {supportRequest ? (
-        <BackofficeSectionPanel>
+        <PortalSection>
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="flex flex-wrap items-center gap-2">
-              <BackofficeStatusBadge
+              <PortalStatusBadge
                 status={statusTone(supportRequest.status)}
                 label={t(`portal.support_status_${supportRequest.status}`, {}, supportRequest.status)}
               />
@@ -251,13 +251,13 @@ export default function PortalSupportRequestDetailPage() {
               {supportRequest.updated_at ? formatDate(supportRequest.updated_at) : supportRequest.request_id}
             </span>
           </div>
-        </BackofficeSectionPanel>
+        </PortalSection>
       ) : null}
 
-      <BackofficeSectionPanel>
+      <PortalSection>
         <div className="space-y-3">
           {messages.map((message) => (
-            <BackofficeStackCard
+            <PortalCard
               key={message.message_id}
               variant="portal"
               className={message.author_kind === 'operator' ? 'bg-blue-50/70 dark:bg-blue-950/20' : 'bg-white/70 dark:bg-slate-950/35'}
@@ -273,12 +273,12 @@ export default function PortalSupportRequestDetailPage() {
               <p className="mt-3 whitespace-pre-wrap text-sm leading-6 text-slate-700 dark:text-slate-200">
                 {message.body}
               </p>
-            </BackofficeStackCard>
+            </PortalCard>
           ))}
         </div>
-      </BackofficeSectionPanel>
+      </PortalSection>
 
-      <BackofficeSectionPanel>
+      <PortalSection>
         <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
           <p className="text-sm font-semibold text-slate-950 dark:text-white">
             {t('portal.support_attachments_title', {}, 'Attachments')}
@@ -325,9 +325,9 @@ export default function PortalSupportRequestDetailPage() {
               : t('portal.support_attachment_upload_action', {}, 'Upload attachment')}
           </button>
         </div>
-      </BackofficeSectionPanel>
+      </PortalSection>
 
-      <BackofficeSectionPanel>
+      <PortalSection>
         <label className="block text-sm font-medium text-slate-700 dark:text-slate-200">
           {t('portal.support_message_reply_label', {}, 'Reply')}
           <textarea
@@ -351,10 +351,10 @@ export default function PortalSupportRequestDetailPage() {
             {t('common.refresh', {}, 'Refresh')}
           </button>
         </div>
-      </BackofficeSectionPanel>
+      </PortalSection>
 
       {supportRequest?.status === 'resolved' || supportRequest?.status === 'closed' ? (
-        <BackofficeSectionPanel>
+        <PortalSection>
           <div className="mb-4">
             <p className="text-sm font-semibold text-slate-950 dark:text-white">
               {t('portal.support_feedback_title', {}, 'Close evaluation')}
@@ -412,8 +412,8 @@ export default function PortalSupportRequestDetailPage() {
               ? t('common.saving', {}, 'Saving...')
               : t('portal.support_feedback_submit_action', {}, 'Submit evaluation')}
           </button>
-        </BackofficeSectionPanel>
+        </PortalSection>
       ) : null}
-    </BackofficePageStack>
+    </PortalPageStack>
   );
 }

@@ -191,6 +191,29 @@ def test_published_sales_price_updates_offer_and_new_checkout_snapshot(
     plus_initial = next(item for item in initial["items"] if item["tier_id"] == "plus")
     assert plus_initial["amount"] == 15.0
     assert plus_initial["plan_version_id"] == "plus_v1"
+    assert [item["tier_id"] for item in initial["comparison_tiers"]] == [
+        "free",
+        "plus",
+        "pro",
+    ]
+    free_comparison = initial["comparison_tiers"][0]
+    plus_comparison = initial["comparison_tiers"][1]
+    pro_comparison = initial["comparison_tiers"][2]
+    assert free_comparison["monthly_points"] == 300
+    assert plus_comparison["monthly_points"] == 3000
+    assert pro_comparison["monthly_points"] == 10000
+    assert free_comparison["site_limit"] == 1
+    assert plus_comparison["knowledge_article_limit"] == 800
+    assert pro_comparison["concurrency_limit"] == 3
+    assert plus_comparison["amount"] == 15.0
+    assert plus_comparison["comparison_rights"]["monthly_points"] == {
+        "state": "limited",
+        "value": 3000,
+    }
+    assert plus_comparison["comparison_rights"]["knowledge_article_limit"] == {
+        "state": "limited",
+        "value": 800,
+    }
 
     service.publish_plan_version(
         plan_id="plus",
@@ -203,8 +226,19 @@ def test_published_sales_price_updates_offer_and_new_checkout_snapshot(
 
     refreshed = service.list_account_plan_offers(account_id="acct_sales_price")
     plus_offer = next(item for item in refreshed["items"] if item["tier_id"] == "plus")
+    refreshed_plus_comparison = next(
+        item for item in refreshed["comparison_tiers"] if item["tier_id"] == "plus"
+    )
     assert plus_offer["amount"] == 19.0
     assert plus_offer["plan_version_id"] == "plus_v2"
+    assert refreshed_plus_comparison["plan_version_id"] == "plus_v2"
+    assert refreshed_plus_comparison["monthly_points"] == 3500
+    assert refreshed_plus_comparison["knowledge_article_limit"] is None
+    assert refreshed_plus_comparison["comparison_rights"]["knowledge_article_limit"] == {
+        "state": "unconfigured",
+        "value": None,
+    }
+    assert refreshed_plus_comparison["amount"] == 19.0
 
     checkout = service.create_account_subscription_payment_order(
         account_id="acct_sales_price",

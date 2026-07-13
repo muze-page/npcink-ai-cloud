@@ -58,6 +58,8 @@ Operational references:
 - [docs/cloud-ai-data-handling-standard-v1.md](docs/cloud-ai-data-handling-standard-v1.md)
 - [docs/cloud-production-release-policy-v1.md](docs/cloud-production-release-policy-v1.md)
 - [docs/cloud-content-generation-boundary-v1.md](docs/cloud-content-generation-boundary-v1.md)
+- [docs/cloud-admin-information-architecture-v2.md](docs/cloud-admin-information-architecture-v2.md)
+- [docs/decisions/002-cloud-admin-task-oriented-information-architecture.md](docs/decisions/002-cloud-admin-task-oriented-information-architecture.md)
 - [docs/source-extraction-preview-v1.md](docs/source-extraction-preview-v1.md)
 - [docs/cloud-open-callback-boundary-v1.md](docs/cloud-open-callback-boundary-v1.md)
 - [docs/cloud-bulk-article-run-v1.md](docs/cloud-bulk-article-run-v1.md)
@@ -73,6 +75,7 @@ Operational references:
 - [docs/text-model-provider-integration-decision-2026-07-11.md](docs/text-model-provider-integration-decision-2026-07-11.md)
 - [docs/cloud-runtime-reference-notes-2026-07.md](docs/cloud-runtime-reference-notes-2026-07.md)
 - [docs/wordpress-ai-editor-runtime-closeout-2026-07-07.md](docs/wordpress-ai-editor-runtime-closeout-2026-07-07.md)
+- [docs/wordpress-ai-generation-reference-stage-closeout-2026-07-12.md](docs/wordpress-ai-generation-reference-stage-closeout-2026-07-12.md)
 
 ## Test Entry For Agents
 
@@ -996,6 +999,9 @@ Provider execution modes:
 - default: sample mode, no external provider calls
 - configure model provider channels in `/admin/ai-resources`;
   provider keys are stored as DB provider connections, not `.env.local` values
+- the OpenAI provider ceiling defaults to 60 seconds so an explicitly bounded
+  long-form runtime request can complete; each runtime request still supplies
+  its own timeout and shorter tasks remain constrained by the smaller value
 
 Provider integration boundary:
 

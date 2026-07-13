@@ -29,6 +29,7 @@ from app.core.models import (
 from app.core.secrets import encrypt_site_api_signing_secret
 from app.core.security import build_secret_hash
 from app.domain.commercial.credits import (
+    SITE_KNOWLEDGE_INDEX_METERING_CLASS,
     package_credit_net_delta,
     package_credit_used,
     record_credit_ledger_component,
@@ -53,6 +54,7 @@ from app.domain.runtime.errors import (
     RuntimeSiteNotProvisionedError,
     RuntimeSubscriptionInactiveError,
 )
+from app.domain.site_knowledge.contracts import SITE_KNOWLEDGE_SYNC_ABILITY
 
 
 class CommercialServiceRuntimeMixin(CommercialServiceAuditMixin):
@@ -670,7 +672,7 @@ class CommercialServiceRuntimeMixin(CommercialServiceAuditMixin):
             data_classification=run.data_classification,
             currency="USD",
             dedupe_key=f"run:{run.run_id}:runs",
-            payload_json={"status": run.status},
+            payload_json=self._runtime_usage_meter_context(run, {"status": run.status}),
         )
         self._record_credit_for_usage_meter_event(repository=repository, event=event)
 
@@ -683,15 +685,20 @@ class CommercialServiceRuntimeMixin(CommercialServiceAuditMixin):
         usage_context: dict[str, object] | None = None,
     ) -> None:
         repository = CommercialRepository(session)
-        base_payload = {
-            "provider_id": provider_call.provider_id,
-            "model_id": provider_call.model_id,
-            "instance_id": provider_call.instance_id,
-            "retry_count": provider_call.retry_count,
-            "error_code": provider_call.error_code,
-        }
+        base_payload = self._runtime_usage_meter_context(
+            run,
+            {
+                "provider_id": provider_call.provider_id,
+                "model_id": provider_call.model_id,
+                "instance_id": provider_call.instance_id,
+                "retry_count": provider_call.retry_count,
+                "error_code": provider_call.error_code,
+            },
+        )
         if isinstance(usage_context, dict):
             for key, value in usage_context.items():
+                if key in {"ability_name", "metering_class"}:
+                    continue
                 if value is None or value == "" or value == [] or value == {}:
                     continue
                 if isinstance(value, str | int | float | bool):
@@ -745,6 +752,16 @@ class CommercialServiceRuntimeMixin(CommercialServiceAuditMixin):
                 payload_json=base_payload,
             )
             self._record_credit_for_usage_meter_event(repository=repository, event=event)
+
+    @staticmethod
+    def _runtime_usage_meter_context(
+        run: RunRecord,
+        payload: dict[str, object],
+    ) -> dict[str, object]:
+        context = {**payload, "ability_name": run.ability_name}
+        if run.ability_name == SITE_KNOWLEDGE_SYNC_ABILITY:
+            context["metering_class"] = SITE_KNOWLEDGE_INDEX_METERING_CLASS
+        return context
 
     def _record_credit_for_usage_meter_event(
         self,

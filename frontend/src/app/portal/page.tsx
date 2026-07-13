@@ -6,30 +6,28 @@ import { useLocale } from '@/contexts/LocaleContext';
 import { useSession } from '@/hooks/useSession';
 import { resolveCustomerPackageDisplay } from '@/lib/customer-package-display';
 import {
-  getPortalSiteDisplayName,
   getPortalSiteWordPressUrl,
   getVisiblePortalSites,
   portalSiteNeedsAttention,
 } from '@/lib/portal-site-display';
-import { cn, formatDate, formatNumber } from '@/lib/utils';
+import { cn, formatNumber } from '@/lib/utils';
 import {
   portalClient,
   type Entitlements,
   type PortalIdentityProviderStatus,
   type PortalSiteDiagnostics,
   type PortalSiteSummaryRecord,
-  type Site,
 } from '@/lib/portal-client';
 import {
-  BackofficeMetricStrip,
-  BackofficePageStack,
-  BackofficeSectionPanel,
-  BackofficeStackCard,
-} from '@/components/backoffice/BackofficeScaffold';
-import { BackofficeStatusBadge } from '@/components/backoffice/BackofficeStatusBadge';
-import { BackofficeTag } from '@/components/backoffice/BackofficeTag';
-import { PortalEmptyState } from '@/components/portal/PortalPageState';
+  PortalMetricStrip,
+  PortalPageStack,
+  PortalSection,
+  PortalCard,
+} from '@/components/portal/PortalScaffold';
+import { PortalStatusBadge } from '@/components/portal/PortalStatusBadge';
+import { PortalTag } from '@/components/portal/PortalTag';
 import { PortalSiteInspectorDrawer } from '@/components/portal/PortalSiteInspectorDrawer';
+import { PortalSitesWorkspace } from '@/components/portal/PortalSitesWorkspace';
 
 type RestrictionItem = {
   tone: 'warn' | 'info';
@@ -389,25 +387,9 @@ export default function PortalPage() {
   };
 
   const restrictedCount = visibleSites.filter(portalSiteNeedsAttention).length;
-  const clearCount = visibleSites.length - restrictedCount;
-  const missingUrlCount = visibleSites.filter((site) => !getPortalSiteWordPressUrl(site)).length;
-  const sitePreviewLimit = 3;
-  const previewSites = [...visibleSites]
-    .sort((left, right) => {
-      const leftPriority =
-        portalSiteNeedsAttention(left) ? 0 : 1;
-      const rightPriority =
-        portalSiteNeedsAttention(right) ? 0 : 1;
-      if (leftPriority !== rightPriority) {
-        return leftPriority - rightPriority;
-      }
-      return new Date(right.created_at).getTime() - new Date(left.created_at).getTime();
-    })
-    .slice(0, sitePreviewLimit);
-  const hasHiddenSites = visibleSites.length > previewSites.length;
   const qqProvider = identityProviders.find((provider) => provider.provider === 'qq') || null;
   const hasPackageLabel = Boolean(currentPackageDisplay.display_package_label);
-  const selectedSiteRecordHref = selectedSite ? `/portal/sites/${selectedSite.site_id}` : '/portal/sites';
+  const selectedSiteRecordHref = selectedSite ? `/portal/sites/${selectedSite.site_id}` : '/portal#sites';
   const isSelectedSiteConnected =
     Boolean(selectedSite) &&
     selectedSite?.status === 'active' &&
@@ -510,7 +492,7 @@ export default function PortalPage() {
     operationFocusItems.length > 0 || shouldShowOnboardingChecklist;
 
   return (
-    <BackofficePageStack>
+    <PortalPageStack>
       <PortalSiteInspectorDrawer
         isOpen={isInspectorOpen}
         onClose={closeInspector}
@@ -525,7 +507,7 @@ export default function PortalPage() {
         t={t}
       />
       <section className="space-y-5" data-portal-home="operation-overview">
-        <BackofficeSectionPanel className="space-y-5" variant="portal">
+        <PortalSection className="space-y-5" variant="portal">
           <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
             <div className="min-w-0">
               <p className="text-[0.68rem] font-semibold uppercase tracking-[0.18em] text-gray-500 dark:text-gray-400">
@@ -535,7 +517,7 @@ export default function PortalPage() {
                 <h1 className="text-2xl font-semibold text-gray-950 dark:text-white">
                   {t('portal.home.title', {}, 'My service')}
                 </h1>
-                <BackofficeStatusBadge
+                <PortalStatusBadge
                   status={currentServiceStatusToken}
                   label={currentServiceStatusLabel}
                   className="shrink-0 text-[0.68rem]"
@@ -549,12 +531,12 @@ export default function PortalPage() {
             </div>
           </div>
 
-          <BackofficeMetricStrip items={operationSummaryItems} columnsClassName="md:grid-cols-2 xl:grid-cols-4" variant="portal" />
+          <PortalMetricStrip items={operationSummaryItems} columnsClassName="md:grid-cols-2 xl:grid-cols-4" variant="portal" />
 
           {shouldShowFollowUpSection ? (
             <div className="grid items-start gap-4 xl:grid-cols-[1.1fr_0.9fr]">
               {operationFocusItems.length > 0 ? (
-                <BackofficeStackCard className="bg-white/70 dark:bg-slate-950/35" variant="portal" data-portal-home="current-focus">
+                <PortalCard className="bg-white/70 dark:bg-slate-950/35" variant="portal" data-portal-home="current-focus">
                   <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                     <div>
                       <p className="text-[0.68rem] font-semibold uppercase tracking-[0.18em] text-gray-500 dark:text-gray-400">
@@ -564,9 +546,9 @@ export default function PortalPage() {
                         {t('portal.home.current_status_title', {}, 'Service status')}
                       </h2>
                     </div>
-                    <BackofficeTag tone={currentServiceStatusToken === 'active' ? 'success' : 'warning'}>
+                    <PortalTag tone={currentServiceStatusToken === 'active' ? 'success' : 'warning'}>
                       {currentServiceStatusLabel}
-                    </BackofficeTag>
+                    </PortalTag>
                   </div>
                   <div className="mt-4 space-y-3">
                     {operationFocusItems.slice(0, 3).map((item) => (
@@ -584,11 +566,11 @@ export default function PortalPage() {
                       </div>
                     ))}
                   </div>
-                </BackofficeStackCard>
+                </PortalCard>
               ) : null}
 
               {shouldShowOnboardingChecklist ? (
-                <BackofficeStackCard className="bg-white/70 dark:bg-slate-950/35" variant="portal" data-portal-home="setup-checklist">
+                <PortalCard className="bg-white/70 dark:bg-slate-950/35" variant="portal" data-portal-home="setup-checklist">
                   <div className="flex items-start justify-between gap-4">
                     <div>
                       <p className="text-[0.68rem] font-semibold uppercase tracking-[0.18em] text-gray-500 dark:text-gray-400">
@@ -598,9 +580,9 @@ export default function PortalPage() {
                         {t('portal.home.onboarding_title', {}, 'Before you continue')}
                       </h2>
                     </div>
-                    <BackofficeTag tone="warning">
+                    <PortalTag tone="warning">
                       {requiredAttentionItems.length} {t('portal.home.filter_attention_only', {}, 'Needs attention')}
-                    </BackofficeTag>
+                    </PortalTag>
                   </div>
                   <div className="mt-4 divide-y divide-slate-200/80 dark:divide-slate-800">
                     {requiredAttentionItems.map((item, index) => (
@@ -626,135 +608,14 @@ export default function PortalPage() {
                       </Link>
                     ))}
                   </div>
-                </BackofficeStackCard>
+                </PortalCard>
               ) : null}
             </div>
           ) : null}
-        </BackofficeSectionPanel>
+        </PortalSection>
       </section>
 
-      <div className="space-y-5">
-        <BackofficeSectionPanel className="space-y-4" variant="portal">
-          <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
-            <div>
-              <p className="text-xs font-medium text-gray-500 dark:text-gray-400">
-                {t('portal.site_register', {}, 'Sites')}
-              </p>
-              <h2 className="mt-1 text-xl font-semibold text-gray-950 dark:text-white">
-                {t('portal.home.my_sites_title', {}, 'My sites')}
-              </h2>
-            </div>
-              <div className="flex flex-wrap items-center gap-2 text-sm text-gray-600 dark:text-gray-300">
-                <BackofficeTag>
-                {previewSites.length} / {visibleSites.length} {t('common.site')}
-                </BackofficeTag>
-                <BackofficeTag tone="warning">
-                  {restrictedCount} {t('portal.home.filter_attention_only', {}, 'Needs attention')}
-                </BackofficeTag>
-                <BackofficeTag tone="success">
-                  {clearCount} {t('portal.home.filter_clear', {}, 'Clear')}
-                </BackofficeTag>
-              </div>
-            </div>
-
-          <div className={cn(
-            'overflow-hidden rounded-[1.4rem] border border-slate-200/80 transition-shadow dark:border-slate-800'
-          )}>
-            <div className="hidden grid-cols-[minmax(0,1.8fr)_120px_240px] gap-4 border-b border-slate-200/80 bg-slate-50/70 px-4 py-3 text-[0.68rem] font-semibold uppercase tracking-[0.18em] text-gray-500 dark:border-slate-800 dark:bg-slate-950/45 dark:text-gray-400 lg:grid">
-              <span>{t('common.site')}</span>
-              <span>{t('portal.home.service_state_label', {}, 'Service status')}</span>
-              <span>{t('portal.home.view_label', {}, 'View')}</span>
-            </div>
-
-            <div className="divide-y divide-slate-200/80 dark:divide-slate-800">
-              {previewSites.length > 0 ? previewSites.map((site) => {
-                const hasAttention = portalSiteNeedsAttention(site);
-                return (
-                  <div
-                    key={site.site_id}
-                    className={cn(
-                      'group grid gap-3 px-4 py-4 transition-colors lg:grid-cols-[minmax(0,1.8fr)_120px_240px] lg:items-center',
-                      hasAttention
-                          ? 'border-l-4 border-amber-300 bg-amber-50/40 hover:bg-amber-50/70 dark:border-amber-900/60 dark:bg-amber-950/10 dark:hover:bg-amber-950/20'
-                          : 'border-l-4 border-transparent bg-white/80 hover:bg-slate-50/90 dark:bg-slate-950/35 dark:hover:bg-slate-900/60'
-                    )}
-                  >
-                    <div className="min-w-0 text-left">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <p className="truncate font-semibold text-gray-950 dark:text-white">
-                          {getPortalSiteDisplayName(site)}
-                        </p>
-                        {hasAttention ? (
-                          <BackofficeTag tone="warning" className="uppercase tracking-[0.16em]">
-                            {t('portal.home.filter_attention_only', {}, 'Needs attention')}
-                          </BackofficeTag>
-                        ) : null}
-                      </div>
-                      <p className="mt-1 text-sm text-gray-600 dark:text-gray-400">
-                        {getPortalSiteWordPressUrl(site) ||
-                          t('portal.site_url_missing', {}, 'WordPress URL not configured')}
-                      </p>
-                      <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-gray-500 dark:text-gray-400 lg:hidden">
-                        <span>{t('portal.home.service_state_label', {}, 'Service status')}: {hasAttention ? t('portal.home.service_status_attention', {}, 'Needs attention') : t('portal.home.risk_level_normal', {}, 'Normal')}</span>
-                        <span>{t('common.connected_on', { date: formatDate(site.created_at) })}</span>
-                      </div>
-                      <p className="mt-2 hidden text-xs text-gray-500 dark:text-gray-400 lg:block">
-                        {t('common.connected_on', { date: formatDate(site.created_at) })}
-                      </p>
-                    </div>
-
-                    <div className="hidden lg:block">
-                      <BackofficeStatusBadge
-                        status={site.status}
-                        label={hasAttention ? t('portal.home.service_status_attention', {}, 'Needs attention') : t('portal.home.risk_level_normal', {}, 'Normal')}
-                        className="text-[0.68rem]"
-                      />
-                    </div>
-
-                    <div className="flex flex-wrap gap-2 lg:justify-end">
-                      <Link
-                        href={`/portal/sites/${site.site_id}`}
-                        className="btn btn-secondary btn-sm"
-                      >
-                        {t('portal.home.view_site_record_action', {}, 'View site')}
-                      </Link>
-                    </div>
-                  </div>
-                );
-              }) : (
-                <div className="px-4 py-6">
-                  <PortalEmptyState
-                    title={t('portal.no_sites', {}, 'No sites')}
-                    description={t(
-                      'portal.home.no_sites_empty_desc',
-                      {},
-                      'Open npcink-cloud-addon in WordPress and start the connection there. After binding, this page will show your package, usage, and site status.'
-                    )}
-                    actionLabel={t('portal.nav_sites', {}, 'Sites')}
-                    actionHref="/portal/sites"
-                  />
-                </div>
-              )}
-            </div>
-            {hasHiddenSites ? (
-              <div className="border-t border-slate-200/80 bg-slate-50/60 px-4 py-3 dark:border-slate-800 dark:bg-slate-950/35">
-                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                  <p className="text-sm text-gray-600 dark:text-gray-300">
-                    {t(
-                      'portal.home.view_all_sites_desc',
-                      { count: String(visibleSites.length - previewSites.length) },
-                      `There are ${visibleSites.length - previewSites.length} more sites in the full register.`
-                    )}
-                  </p>
-                  <Link href="/portal/sites" className="btn btn-secondary btn-sm">
-                    {t('portal.home.view_all_sites', {}, 'View all sites')}
-                  </Link>
-                </div>
-              </div>
-            ) : null}
-          </div>
-        </BackofficeSectionPanel>
-      </div>
-    </BackofficePageStack>
+      <PortalSitesWorkspace />
+    </PortalPageStack>
   );
 }

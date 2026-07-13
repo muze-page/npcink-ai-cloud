@@ -4,6 +4,8 @@ import React, { useState, useEffect, Suspense } from 'react';
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import {
+  BackofficeDiagnosticNotice,
+  BackofficeDisclosure,
   BackofficeLayer,
   BackofficeMetricStrip,
   BackofficePageStack,
@@ -105,6 +107,28 @@ interface SiteDetail {
   }>;
 }
 
+function siteRuntimeExplanationText(
+  value: string,
+  t: (key: string, params?: Record<string, string>, fallback?: string) => string
+): string {
+  const known: Record<string, [string, string]> = {
+    'Current runtime summary does not surface an immediate operator-critical blocker.': ['admin.site_detail.runtime_explanation_ok', 'Current runtime summary does not surface an immediate operator-critical blocker.'],
+    'Queued or backlogged runs are accumulating.': ['admin.site_detail.runtime_explanation_queued_short', 'Queued or backlogged runs are accumulating.'],
+  };
+  const copy = known[value];
+  if (copy) return t(copy[0], {}, copy[1]);
+  if (value.startsWith('Callback delivery is already degraded.')) {
+    return t('admin.site_detail.runtime_explanation_callback', {}, 'Callback delivery is degraded. Start from site runtime posture before widening provider or customer support work.');
+  }
+  if (value.startsWith('Queued or backlogged runs are accumulating.')) {
+    return t('admin.site_detail.runtime_explanation_queued', {}, 'Queued or backlogged runs are accumulating. Confirm the affected site before widening provider or model checks.');
+  }
+  if (value.startsWith('Recent guard events suggest')) {
+    return t('admin.site_detail.runtime_explanation_guard', {}, 'Recent guard events indicate policy or throttling pressure. Check commercial entitlement and support visibility before treating this as a pure runtime failure.');
+  }
+  return value;
+}
+
 function SiteDetailContent() {
   const params = useParams();
   const { t } = useLocale();
@@ -115,6 +139,7 @@ function SiteDetailContent() {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [siteActionError, setSiteActionError] = useState<string | null>(null);
+  const [reloadKey, setReloadKey] = useState(0);
   const [isActivatingSite, setIsActivatingSite] = useState(false);
 
   const handleActivateSite = async () => {
@@ -265,7 +290,7 @@ function SiteDetailContent() {
     };
 
     loadSite();
-  }, [siteId, t]);
+  }, [reloadKey, siteId, t]);
 
   if (isLoading) {
     return <AdminRouteSkeleton />;
@@ -273,13 +298,19 @@ function SiteDetailContent() {
 
   if (error) {
     return (
-      <div className="flex min-h-[60vh] items-center justify-center">
-        <div className="text-center max-w-md">
-          <h2 className="text-2xl font-bold mb-4 text-red-600">{t('common.error')}</h2>
-          <p className="text-gray-600 dark:text-gray-400 mb-6">{error}</p>
-          <button onClick={() => window.location.reload()} className="btn btn-primary">{t('common.retry')}</button>
-        </div>
-      </div>
+      <BackofficePageStack>
+        <BackofficePrimaryPanel
+          eyebrow={t('admin.site_health')}
+          title={t('admin.site_detail.load_error_title', undefined, 'Site detail is temporarily unavailable')}
+          description={t('admin.site_detail.load_error_desc', undefined, 'Retry this bounded site read without leaving the current operator route.')}
+        >
+          <BackofficeDiagnosticNotice
+            message={error}
+            retryLabel={t('common.retry')}
+            onRetry={() => setReloadKey((value) => value + 1)}
+          />
+        </BackofficePrimaryPanel>
+      </BackofficePageStack>
     );
   }
 
@@ -444,12 +475,7 @@ function SiteDetailContent() {
         eyebrow={t('admin.site_health')}
         title={site.site_name || site.site_id}
         description={postureDescription}
-        actions={(
-          <>
-            <Link href={`/admin/accounts/${site.account_id}`} className="btn btn-secondary">
-              {t('common.account')}
-            </Link>
-            {site.status === 'provisioning' ? (
+        actions={site.status === 'provisioning' ? (
               <button
                 type="button"
                 onClick={handleActivateSite}
@@ -460,9 +486,7 @@ function SiteDetailContent() {
                   ? t('common.saving')
                   : t('admin.site_detail.activate_action', undefined, 'Activate site')}
               </button>
-            ) : null}
-          </>
-        )}
+            ) : undefined}
         summary={(
           <div className="grid gap-4 lg:grid-cols-[minmax(0,1.05fr)_1.45fr]">
             <div>
@@ -480,8 +504,6 @@ function SiteDetailContent() {
                   />
                 ) : null}
               </div>
-              <h2 className="mt-4 text-xl font-semibold text-gray-950 dark:text-white">{postureTitle}</h2>
-              <p className="mt-2 text-sm text-gray-600 dark:text-gray-300">{t('admin.site_detail.summary_desc')}</p>
               {site.status === 'provisioning' ? (
                 <p className="mt-3 rounded-2xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-200">
                   {t(
@@ -531,15 +553,6 @@ function SiteDetailContent() {
               <Link href={nextStep.href} className="btn btn-primary">
                 {nextStep.label}
               </Link>
-              {site.related_surfaces?.audit_href ? (
-                <Link
-                  href={site.related_surfaces.audit_href}
-                  className="text-sm font-medium text-slate-600 underline decoration-dotted underline-offset-4 transition hover:text-slate-950 dark:text-slate-300 dark:hover:text-white"
-                  target="_blank"
-                >
-                  {t('admin.view_audit_trail', {}, 'View audit trail')}
-                </Link>
-              ) : null}
             </div>
           </BackofficeStackCard>
           <BackofficeStackCard>
@@ -573,9 +586,6 @@ function SiteDetailContent() {
                   {t('common.account', {}, 'Customer')}
                 </Link>
               ) : null}
-              <Link href="/admin/subscriptions" className="btn btn-secondary">
-                {t('admin.coverage_title', {}, 'Coverage')}
-              </Link>
               {site.related_surfaces?.subscription_href ? (
                 <Link href={site.related_surfaces.subscription_href} className="text-sm font-medium text-slate-600 underline decoration-dotted underline-offset-4 transition hover:text-slate-950 dark:text-slate-300 dark:hover:text-white">
                   {t('admin.inspect_subscription_detail', {}, 'Inspect subscription detail')}
@@ -601,7 +611,7 @@ function SiteDetailContent() {
                   <p className="text-sm font-semibold text-slate-950 dark:text-white">
                     {translateStatusLabel(item.state || 'ok', t)}
                   </p>
-                  <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">{item.explain_text || t('common.not_available', {}, 'N/A')}</p>
+                  <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">{item.explain_text ? siteRuntimeExplanationText(item.explain_text, t) : t('common.not_available', {}, 'N/A')}</p>
                 </div>
               ))}
             </div>
@@ -623,6 +633,10 @@ function SiteDetailContent() {
         </details>
       </BackofficePrimaryPanel>
 
+      <BackofficeDisclosure
+        summary={t('admin.site_detail.advanced_operational_evidence', undefined, 'Advanced site operational evidence')}
+        contentClassName="space-y-6"
+      >
       <BackofficeLayer
         eyebrow={t('admin.site_detail.operational_detail_eyebrow', undefined, 'Operational detail')}
         title={t('admin.site_detail.operational_detail_title', undefined, 'Inspect linked records before deeper support actions')}
@@ -858,6 +872,7 @@ function SiteDetailContent() {
           </div>
         </BackofficeSectionPanel>
       </div>
+      </BackofficeDisclosure>
     </BackofficePageStack>
   );
 }

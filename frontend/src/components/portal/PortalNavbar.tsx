@@ -18,10 +18,9 @@ export function PortalNavbar() {
 
   const primaryNavItems = useMemo(
     () => [
-      { href: '/portal', label: t('portal.workspace_label', {}, 'Overview') },
+      { href: '/portal', label: t('portal.nav_service', {}, 'Service') },
       { href: '/portal/billing', label: t('portal.nav_package', {}, 'Package') },
       { href: '/portal/usage', label: t('portal.nav_usage', {}, 'Usage') },
-      { href: '/portal/sites', label: t('portal.nav_sites', {}, 'Sites') },
       { href: '/portal/support', label: t('portal.nav_support_requests', {}, 'Tickets') },
       { href: '/portal/account', label: t('portal.nav_account', {}, 'Account') },
     ],
@@ -31,7 +30,7 @@ export function PortalNavbar() {
     (href: string) => {
       const baseHref = href.split('?')[0] || href;
       if (baseHref === '/portal') {
-        return pathname === '/portal';
+        return pathname === '/portal' || pathname.startsWith('/portal/sites');
       }
 
       return pathname === baseHref || pathname.startsWith(`${baseHref}/`);

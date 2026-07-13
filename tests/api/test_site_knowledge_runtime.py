@@ -19,6 +19,7 @@ from app.api.main import create_app
 from app.core.config import Settings
 from app.core.db import get_session, init_schema
 from app.core.models import (
+    CreditLedgerEntry,
     ProviderCallRecord,
     SiteKnowledgeChunk,
     SiteKnowledgeDocument,
@@ -29,6 +30,10 @@ from app.core.models import (
 )
 from app.core.services import CloudServices
 from app.domain.runtime.service import RuntimeService
+from app.domain.site_knowledge.contracts import (
+    SiteKnowledgeContractViolation,
+    validate_site_knowledge_runtime_contract,
+)
 from app.domain.site_knowledge.rerankers import (
     MAX_RERANK_DOCUMENT_CHARS,
     JinaSiteKnowledgeReranker,
@@ -41,8 +46,12 @@ from app.domain.site_knowledge.service import (
     SiteKnowledgeService,
     _apply_evidence_policy,
     _coerce_post_ids,
+    _collapse_search_results_by_document,
+    _embedding_space_id,
+    _embedding_space_readiness,
     _filter_string_list,
     _normalize_public_taxonomies,
+    _normalize_result_granularity,
     _normalize_search_query,
     _rank_search_results_for_query,
     _resolve_evidence_policy,
@@ -225,6 +234,7 @@ def _search_payload(
     current_post_id: int = 0,
     intent: str = "internal_links",
     source_types: list[str] | None = None,
+    result_granularity: str | None = None,
 ) -> dict[str, object]:
     filters: dict[str, object] = {
         "post_types": ["post", "page"],
@@ -233,6 +243,17 @@ def _search_payload(
     }
     if source_types is not None:
         filters["source_types"] = source_types
+    input_payload: dict[str, object] = {
+        "contract_version": "site_knowledge_search.v1",
+        "query": query,
+        "intent": intent,
+        "current_post_id": current_post_id,
+        "max_results": 8,
+        "filters": filters,
+        "write_posture": "suggestion_only",
+    }
+    if result_granularity is not None:
+        input_payload["result_granularity"] = result_granularity
     return {
         "ability_name": "npcink-cloud/site-knowledge-search",
         "contract_version": "site_knowledge_search.v1",
@@ -243,15 +264,7 @@ def _search_payload(
         "timeout_seconds": 20,
         "retry_max": 0,
         "policy": {"allow_fallback": True},
-        "input": {
-            "contract_version": "site_knowledge_search.v1",
-            "query": query,
-            "intent": intent,
-            "current_post_id": current_post_id,
-            "max_results": 8,
-            "filters": filters,
-            "write_posture": "suggestion_only",
-        },
+        "input": input_payload,
     }
 
 
@@ -268,6 +281,80 @@ def test_site_knowledge_search_input_helpers_bound_user_controlled_lists() -> No
         ["post", "page", "post", "attachment", "comment", "page"],
         allowed=frozenset({"post", "page", "comment"}),
     ) == ["post", "page", "comment"]
+    assert _normalize_result_granularity(None) == "chunk"
+    assert _normalize_result_granularity("document") == "document"
+    assert _embedding_space_readiness(
+        indexed_embedding_models=["tei:BAAI/bge-m3"],
+        query_embedding_model="tei:BAAI/bge-m3",
+    )["status"] == "ready"
+    assert (
+        _embedding_space_id(provider_id="TEI", model_id="BAAI/bge-m3")
+        == "tei:BAAI/bge-m3"
+    )
+    assert _embedding_space_readiness(
+        indexed_embedding_models=["tei:BAAI/bge-m3"],
+        query_embedding_model="openai:BAAI/bge-m3",
+    ) == {
+        "status": "embedding_space_mismatch",
+        "query_embedding_model": "openai:BAAI/bge-m3",
+        "indexed_embedding_models": ["tei:BAAI/bge-m3"],
+        "action": "rebuild_index_with_current_embedding_model",
+    }
+
+
+def test_document_result_granularity_keeps_best_chunk_and_collapses_duplicates() -> None:
+    results, collapsed_count = _collapse_search_results_by_document(
+        [
+            {
+                "post_id": 123,
+                "source_type": "post",
+                "source_id": 123,
+                "chunk_index": 2,
+                "score": 0.91,
+                "chunk_text": "Best evidence chunk",
+            },
+            {
+                "post_id": 123,
+                "source_type": "post",
+                "source_id": 123,
+                "chunk_index": 0,
+                "score": 0.82,
+                "chunk_text": "Earlier chunk from the same post",
+            },
+            {
+                "post_id": 456,
+                "source_type": "page",
+                "source_id": 456,
+                "chunk_index": 0,
+                "score": 0.78,
+                "chunk_text": "Another document",
+            },
+        ]
+    )
+
+    assert [result["post_id"] for result in results] == [123, 456]
+    assert results[0]["chunk_text"] == "Best evidence chunk"
+    assert results[0]["document_key"] == "post:123"
+    assert results[0]["matched_chunk_count"] == 2
+    assert [chunk["chunk_index"] for chunk in results[0]["matched_chunks"]] == [2, 0]
+    assert collapsed_count == 1
+
+
+def test_site_knowledge_contract_rejects_unknown_result_granularity() -> None:
+    with pytest.raises(
+        SiteKnowledgeContractViolation,
+        match="result_granularity must be chunk or document",
+    ):
+        validate_site_knowledge_runtime_contract(
+            ability_name="npcink-cloud/site-knowledge-search",
+            contract_version="site_knowledge_search.v1",
+            input_payload={
+                "contract_version": "site_knowledge_search.v1",
+                "query": "document grouping",
+                "result_granularity": "article",
+                "write_posture": "suggestion_only",
+            },
+        )
 
 
 def test_toolbox_exact_sync_payload_queues_without_routing_fields(tmp_path: Path) -> None:
@@ -284,6 +371,41 @@ def test_toolbox_exact_sync_payload_queues_without_routing_fields(tmp_path: Path
     assert data["execution_context"]["data_classification"] == "public_site_content"
     assert data["profile_id"] == "site-knowledge.managed"
     assert data["result"] == {}
+
+
+def test_sync_remains_available_after_ordinary_ai_credits_are_exhausted(
+    tmp_path: Path,
+) -> None:
+    database_url, _, _, client = _build_client(tmp_path)
+    seed_site_auth(
+        database_url,
+        site_id="site_alpha",
+        scopes=["runtime:execute", "runtime:read"],
+        budgets={"max_ai_credits_per_period": 1},
+    )
+
+    search_result = _execute(
+        client,
+        _search_payload("consume the only ordinary credit"),
+        idempotency_key="exhaust-credit-search",
+    )
+    sync_result = _execute(
+        client,
+        _sync_payload(),
+        idempotency_key="sync-after-credit-exhaustion",
+    )
+
+    assert search_result["status_code"] == 200
+    assert sync_result["status_code"] == 200
+    assert sync_result["json"]["data"]["status"] == "queued"
+    sync_run_id = sync_result["json"]["data"]["run_id"]
+    with get_session(database_url) as session:
+        sync_credit_entries = list(
+            session.scalars(
+                select(CreditLedgerEntry).where(CreditLedgerEntry.run_id == sync_run_id)
+            )
+        )
+    assert sync_credit_entries == []
 
 
 def test_sync_then_search_and_status_coverage(tmp_path: Path) -> None:
@@ -374,6 +496,9 @@ def test_sync_then_search_and_status_coverage(tmp_path: Path) -> None:
     assert search_data["write_posture"] == "suggestion_only"
     assert search_data["direct_wordpress_write"] is False
     assert search_data["rerank"]["status"] == "disabled"
+    assert search_data["result_granularity"] == "chunk"
+    assert search_data["result_grouping"]["strategy"] == "ranked_chunks"
+    assert search_data["result_grouping"]["duplicate_chunks_collapsed"] == 0
     assert search_data["evidence_gate"]["status"] == "passed"
     assert search_data["evidence_gate"]["allows_site_grounded_assertion"] is True
     assert search_data["results"][0]["post_id"] == 123
@@ -426,6 +551,105 @@ def test_sync_then_search_and_status_coverage(tmp_path: Path) -> None:
     assert snapshots
     assert snapshots[-1].document_count == 1
     assert snapshots[-1].chunk_count >= 1
+
+
+def test_document_search_returns_each_post_once_with_bounded_chunk_refs(
+    tmp_path: Path,
+) -> None:
+    embedding_provider = _FakeEmbeddingProvider()
+    database_url, settings, runtime_queue, client = _build_client(
+        tmp_path,
+        settings_overrides={
+            "site_knowledge_embedding_provider": "tei",
+            "tei_provider_enabled": True,
+            "tei_base_url": "http://tei.local",
+            "tei_model_ids": "BAAI/bge-m3",
+        },
+        providers={"tei": embedding_provider},
+    )
+    sync_payload = _sync_payload()
+    sync_input = sync_payload["input"]
+    assert isinstance(sync_input, dict)
+    documents = sync_input["documents"]
+    assert isinstance(documents, list)
+    document = documents[0]
+    assert isinstance(document, dict)
+    document["content_excerpt"] = " ".join(
+        f"Document-level dedupe evidence section {index}." for index in range(240)
+    )
+    document["content_hash"] = "hash-document-level-dedupe"
+
+    _execute(client, sync_payload, idempotency_key="document-granularity-sync")
+    RuntimeService(
+        database_url,
+        settings=settings,
+        providers={"tei": embedding_provider},
+        runtime_queue=runtime_queue,
+    ).process_next_queued_run(timeout_seconds=0)
+
+    search_payload = _search_payload(
+        "Document-level dedupe evidence",
+        intent="writing_support_plan",
+        result_granularity="document",
+    )
+    search_input = search_payload["input"]
+    assert isinstance(search_input, dict)
+    search_input["evidence_policy"] = {"min_score": 0, "required_sources": 1}
+    result = _execute(
+        client,
+        search_payload,
+        idempotency_key="document-granularity-search",
+    )["json"]["data"]["result"]
+
+    assert result["result_granularity"] == "document"
+    assert len(result["results"]) == 1
+    assert result["results"][0]["post_id"] == 123
+    assert result["results"][0]["matched_chunk_count"] > 1
+    assert len(result["results"][0]["matched_chunks"]) == (
+        result["results"][0]["matched_chunk_count"]
+    )
+    assert result["result_grouping"]["strategy"] == "best_ranked_chunk_per_document"
+    assert result["result_grouping"]["duplicate_chunks_collapsed"] > 0
+    assert result["result_grouping"]["returned_count"] == 1
+
+
+def test_search_fails_closed_when_index_and_query_embedding_spaces_differ(
+    tmp_path: Path,
+) -> None:
+    database_url, settings, runtime_queue, client = _build_client(tmp_path)
+    _execute(client, _sync_payload(), idempotency_key="embedding-space-sync")
+    RuntimeService(
+        database_url,
+        settings=settings,
+        runtime_queue=runtime_queue,
+    ).process_next_queued_run(timeout_seconds=0)
+    settings.site_knowledge_embedding_provider = "openai"
+
+    result = _execute(
+        client,
+        _search_payload(
+            "WordPress embedding compatibility",
+            intent="writing_support_plan",
+            result_granularity="document",
+        ),
+        idempotency_key="embedding-space-search",
+    )["json"]["data"]["result"]
+
+    assert result["status"] == "not_ready"
+    assert result["results"] == []
+    assert result["evidence_gate"]["status"] == "insufficient_evidence"
+    assert result["rerank"] == {
+        "status": "skipped",
+        "reason": "embedding_space_mismatch",
+        "candidate_count": 0,
+    }
+    assert result["retrieval_readiness"] == {
+        "status": "embedding_space_mismatch",
+        "query_embedding_model": "openai:BAAI/bge-m3",
+        "indexed_embedding_models": ["deterministic:BAAI/bge-m3"],
+        "action": "rebuild_index_with_current_embedding_model",
+    }
+    assert result["result_grouping"]["returned_count"] == 0
 
 
 def test_site_knowledge_postgres_fallback_search_uses_chunk_limit(
@@ -1430,7 +1654,11 @@ def test_sync_uses_cloud_managed_tei_embedding_provider(tmp_path: Path) -> None:
         },
         providers={"tei": provider},
     )
-    sync_result = _execute(client, _sync_payload(), idempotency_key="tei-sync")
+    sync_payload = _sync_payload()
+    sync_input = sync_payload["input"]
+    assert isinstance(sync_input, dict)
+    sync_input["metering_class"] = "ordinary_ai_inference"
+    sync_result = _execute(client, sync_payload, idempotency_key="tei-sync")
 
     RuntimeService(
         database_url,
@@ -1457,7 +1685,10 @@ def test_sync_uses_cloud_managed_tei_embedding_provider(tmp_path: Path) -> None:
                 .order_by(UsageMeterEvent.id.asc())
             )
         )
-    assert chunk.embedding_model == "BAAI/bge-m3"
+        credit_entries = list(
+            session.scalars(select(CreditLedgerEntry).where(CreditLedgerEntry.run_id == run_id))
+        )
+    assert chunk.embedding_model == "tei:BAAI/bge-m3"
     assert chunk.embedding_json == [0.25] * 1024
     assert provider_calls
     assert provider_calls[0].provider_id == "tei"
@@ -1468,8 +1699,15 @@ def test_sync_uses_cloud_managed_tei_embedding_provider(tmp_path: Path) -> None:
         "provider_calls",
         "tokens_in",
         "tokens_total",
+        "vector_documents",
+        "vector_chunks",
     ]
     assert all(event.ability_family == "knowledge" for event in meter_events)
+    assert all(
+        event.payload_json["metering_class"] == "site_knowledge_index_maintenance"
+        for event in meter_events
+    )
+    assert credit_entries == []
 
 
 def test_sync_uses_cloud_managed_siliconflow_embedding_provider(tmp_path: Path) -> None:
@@ -1501,5 +1739,5 @@ def test_sync_uses_cloud_managed_siliconflow_embedding_provider(tmp_path: Path) 
     assert provider.requests[0].input_payload["text"]
     with get_session(database_url) as session:
         chunk = session.query(SiteKnowledgeChunk).one()
-    assert chunk.embedding_model == "BAAI/bge-m3"
+    assert chunk.embedding_model == "siliconflow:BAAI/bge-m3"
     assert chunk.embedding_json == [0.25] * 1024

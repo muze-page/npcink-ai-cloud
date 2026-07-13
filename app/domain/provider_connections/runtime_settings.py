@@ -39,19 +39,25 @@ def apply_provider_connection_runtime_settings(
 
     try:
         with get_session(database_url) as session:
-            rows = list(
+            all_rows = list(
                 session.scalars(
                     select(ProviderConnection)
-                    .where(ProviderConnection.enabled.is_(True))
                     .order_by(ProviderConnection.connection_id.asc())
                 )
             )
-            rows.sort(key=lambda row: (_connection_priority(row), row.connection_id))
     except SQLAlchemyError:
         return projection
 
+    if not all_rows:
+        return projection
+
+    rows = [row for row in all_rows if row.enabled]
+    _reset_managed_runtime_selections(settings)
     web_search_primary_seen = False
     image_source_seen = False
+    embedding_seen = False
+    rerank_seen = False
+    vector_store_seen = False
     applied_provider_channels: set[tuple[str, str]] = set()
     for row in rows:
         config = _dict(row.config_json)
@@ -78,7 +84,7 @@ def apply_provider_connection_runtime_settings(
                 projection.web_search_count += 1
                 projection.applied_count += 1
                 applied_provider_channels.add(provider_channel_key)
-                if provider_id in {"tavily", "bocha", "apify"}:
+                if provider_id in {"tavily", "bocha", "apify", "zhihu"}:
                     web_search_primary_seen = True
             continue
         if kind == "image_source_provider":
@@ -101,6 +107,8 @@ def apply_provider_connection_runtime_settings(
             and "embedding" in capability_ids
             and "embed.default" in runtime_profile_ids
         ):
+            if embedding_seen:
+                continue
             if _apply_embedding_connection(
                 settings,
                 row=row,
@@ -111,8 +119,11 @@ def apply_provider_connection_runtime_settings(
                 projection.embedding_count += 1
                 projection.applied_count += 1
                 applied_provider_channels.add(provider_channel_key)
+                embedding_seen = True
             continue
         if kind == "rerank_provider":
+            if rerank_seen:
+                continue
             if _apply_rerank_connection(
                 settings,
                 row=row,
@@ -123,8 +134,11 @@ def apply_provider_connection_runtime_settings(
                 projection.rerank_count += 1
                 projection.applied_count += 1
                 applied_provider_channels.add(provider_channel_key)
+                rerank_seen = True
             continue
         if kind == "vector_store_provider":
+            if vector_store_seen:
+                continue
             if _apply_vector_store_connection(
                 settings,
                 row=row,
@@ -135,7 +149,21 @@ def apply_provider_connection_runtime_settings(
                 projection.vector_store_count += 1
                 projection.applied_count += 1
                 applied_provider_channels.add(provider_channel_key)
+                vector_store_seen = True
     return projection
+
+
+def _reset_managed_runtime_selections(settings: Settings) -> None:
+    """Reset DB-owned selections so disabling a connection takes effect immediately."""
+
+    settings.web_search_provider = "disabled"
+    settings.web_search_jina_reader_enabled = False
+    settings.image_source_provider = "disabled"
+    settings.site_knowledge_embedding_provider = "deterministic"
+    settings.site_knowledge_embedding_model = "BAAI/bge-m3"
+    settings.site_knowledge_embedding_dimensions = 1024
+    settings.site_knowledge_rerank_provider = "disabled"
+    settings.site_knowledge_vector_backend = "postgres_json"
 
 
 def _apply_web_search_connection(
@@ -290,10 +318,14 @@ def _apply_embedding_connection(
 ) -> bool:
     if provider_id not in {"siliconflow", "openai", "tei"}:
         return False
-    settings.site_knowledge_embedding_provider = provider_id
-    settings.site_knowledge_embedding_model = _string(
-        config.get("model_id") or config.get("model") or settings.site_knowledge_embedding_model
+    embedding_model = _site_knowledge_embedding_model(
+        config,
+        fallback=settings.site_knowledge_embedding_model,
     )
+    if not embedding_model:
+        return False
+    settings.site_knowledge_embedding_provider = provider_id
+    settings.site_knowledge_embedding_model = embedding_model
     settings.site_knowledge_embedding_dimensions = _int(
         config.get("dimensions"), settings.site_knowledge_embedding_dimensions
     )
@@ -323,6 +355,16 @@ def _apply_embedding_connection(
         if model_ids:
             settings.tei_model_ids = model_ids
     return True
+
+
+def _site_knowledge_embedding_model(config: dict[str, Any], *, fallback: object) -> str:
+    requested = _string(config.get("site_knowledge_model_id"))
+    declared_models = _string_list(config.get("model_ids"))
+    if requested:
+        if declared_models and requested not in declared_models:
+            return ""
+        return requested
+    return _string(config.get("model_id") or config.get("model") or fallback)
 
 
 def _apply_rerank_connection(
@@ -398,15 +440,6 @@ def _connection_configured(
     if provider_id == "jina_reader":
         return True
     return bool(_string(credential)) or bool(config.get("secretless"))
-
-
-def _connection_priority(row: ProviderConnection) -> int:
-    metadata = _dict(row.metadata_json)
-    try:
-        priority = int(str(metadata.get("priority", 100)).strip())
-    except (TypeError, ValueError):
-        priority = 100
-    return min(999, max(0, priority))
 
 
 def _dict(value: object) -> dict[str, Any]:
