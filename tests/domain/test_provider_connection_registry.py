@@ -722,6 +722,26 @@ def test_disabling_vector_connections_restores_builtin_runtime_defaults(
     dispose_engine(database_url)
 
 
+def test_empty_provider_connection_registry_preserves_explicit_runtime_settings(
+    tmp_path: Path,
+) -> None:
+    database_url = _sqlite_url(tmp_path)
+    init_schema(database_url)
+    settings = _settings(database_url)
+    settings.image_source_provider = "unsplash"
+    settings.site_knowledge_embedding_provider = "tei"
+    settings.site_knowledge_embedding_model = "tei/BAAI/bge-m3"
+
+    projection = apply_provider_connection_runtime_settings(settings)
+
+    assert projection.applied_count == 0
+    assert settings.image_source_provider == "unsplash"
+    assert settings.site_knowledge_embedding_provider == "tei"
+    assert settings.site_knowledge_embedding_model == "tei/BAAI/bge-m3"
+
+    dispose_engine(database_url)
+
+
 def test_runtime_projection_skips_unreadable_provider_connection_secret(
     tmp_path: Path,
 ) -> None:

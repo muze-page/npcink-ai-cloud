@@ -39,16 +39,19 @@ def apply_provider_connection_runtime_settings(
 
     try:
         with get_session(database_url) as session:
-            rows = list(
+            all_rows = list(
                 session.scalars(
                     select(ProviderConnection)
-                    .where(ProviderConnection.enabled.is_(True))
                     .order_by(ProviderConnection.connection_id.asc())
                 )
             )
     except SQLAlchemyError:
         return projection
 
+    if not all_rows:
+        return projection
+
+    rows = [row for row in all_rows if row.enabled]
     _reset_managed_runtime_selections(settings)
     web_search_primary_seen = False
     image_source_seen = False
