@@ -142,12 +142,45 @@ def validate_maintenance_batch(
 
     batch_index = _bounded_int(value.get("batch_index"), minimum=0, maximum=9999)
     batch_count = _bounded_int(value.get("batch_count"), minimum=1, maximum=10000)
-    is_final = bool(value.get("is_final"))
+    is_final_value = value.get("is_final")
+    if not isinstance(is_final_value, bool):
+        raise SiteKnowledgeContractViolation(
+            "site_knowledge.maintenance_batch_invalid",
+            "site knowledge maintenance is_final must be a boolean",
+        )
+    is_final = is_final_value
     if batch_index >= batch_count or is_final != (batch_index == batch_count - 1):
         raise SiteKnowledgeContractViolation(
             "site_knowledge.maintenance_batch_invalid",
             "site knowledge maintenance batch position is invalid",
         )
+
+    state = _site_maintenance_state(session, site_id)
+    state_matches = (
+        str(state.get("request_id") or "") == expected_request_id
+        and str(state.get("target_embedding_space_id") or "")
+        == target_embedding_space_id()
+    )
+    expected_batch_index = 0
+    if state_matches:
+        if str(state.get("status") or "") == "ready":
+            raise SiteKnowledgeContractViolation(
+                "site_knowledge.maintenance_not_active",
+                "site knowledge maintenance is already complete for this site",
+            )
+        recorded_batch_count = _positive_or_zero(state.get("total_batches"))
+        if recorded_batch_count and recorded_batch_count != batch_count:
+            raise SiteKnowledgeContractViolation(
+                "site_knowledge.maintenance_batch_invalid",
+                "site knowledge maintenance batch count changed during delivery",
+            )
+        expected_batch_index = _positive_or_zero(state.get("completed_batches"))
+    if batch_index != expected_batch_index:
+        raise SiteKnowledgeContractViolation(
+            "site_knowledge.maintenance_batch_invalid",
+            "site knowledge maintenance batches must be delivered in order",
+        )
+
     expected_mode = "rebuild" if batch_index == 0 else "refresh"
     if sync_mode != expected_mode:
         raise SiteKnowledgeContractViolation(

@@ -135,3 +135,86 @@ def test_recorded_delivery_progress_remains_visible_after_first_batch() -> None:
     assert projected["status"] == "delivering"
     assert projected["completed_batches"] == 1
     assert projected["total_batches"] == 3
+
+
+def test_maintenance_rejects_a_final_batch_before_earlier_batches() -> None:
+    with pytest.raises(SiteKnowledgeContractViolation) as caught:
+        validate_maintenance_batch(
+            session=FakeSession(),  # type: ignore[arg-type]
+            site_id="site-1",
+            sync_mode="refresh",
+            input_payload={
+                "maintenance": {
+                    "action": "full_sync",
+                    "request_id": maintenance_request_id("site-1"),
+                    "batch_index": 2,
+                    "batch_count": 3,
+                    "is_final": True,
+                }
+            },
+        )
+
+    assert caught.value.error_code == "site_knowledge.maintenance_batch_invalid"
+
+
+def test_maintenance_rejects_skipped_and_recounted_batches() -> None:
+    session = FakeSession()
+    first_batch = validate_maintenance_batch(
+        session=session,  # type: ignore[arg-type]
+        site_id="site-1",
+        sync_mode="rebuild",
+        input_payload={
+            "maintenance": {
+                "action": "full_sync",
+                "request_id": maintenance_request_id("site-1"),
+                "batch_index": 0,
+                "batch_count": 3,
+                "is_final": False,
+            }
+        },
+    )
+    assert first_batch is not None
+    record_maintenance_batch(
+        session,  # type: ignore[arg-type]
+        site_id="site-1",
+        maintenance=first_batch,
+        status="delivering",
+    )
+
+    for batch_index, batch_count in ((2, 3), (1, 4)):
+        with pytest.raises(SiteKnowledgeContractViolation) as caught:
+            validate_maintenance_batch(
+                session=session,  # type: ignore[arg-type]
+                site_id="site-1",
+                sync_mode="refresh",
+                input_payload={
+                    "maintenance": {
+                        "action": "full_sync",
+                        "request_id": maintenance_request_id("site-1"),
+                        "batch_index": batch_index,
+                        "batch_count": batch_count,
+                        "is_final": False,
+                    }
+                },
+            )
+        assert caught.value.error_code == "site_knowledge.maintenance_batch_invalid"
+
+
+def test_maintenance_requires_a_json_boolean_for_final_marker() -> None:
+    with pytest.raises(SiteKnowledgeContractViolation) as caught:
+        validate_maintenance_batch(
+            session=FakeSession(),  # type: ignore[arg-type]
+            site_id="site-1",
+            sync_mode="rebuild",
+            input_payload={
+                "maintenance": {
+                    "action": "full_sync",
+                    "request_id": maintenance_request_id("site-1"),
+                    "batch_index": 0,
+                    "batch_count": 2,
+                    "is_final": "false",
+                }
+            },
+        )
+
+    assert caught.value.error_code == "site_knowledge.maintenance_batch_invalid"
