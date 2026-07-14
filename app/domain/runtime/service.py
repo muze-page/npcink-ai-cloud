@@ -77,6 +77,14 @@ from app.domain.commercial.credits import (
     estimate_runtime_request_ai_credits,
 )
 from app.domain.commercial.service import CommercialService, ServiceAuditContext
+from app.domain.connector_runtime.contracts import (
+    CONNECTOR_RUNTIME_ABILITIES,
+    CONNECTOR_RUNTIME_CHANNEL,
+    ConnectorRuntimeContractViolation,
+    build_connector_result_envelope,
+    validate_connector_runtime_envelope,
+    validate_connector_site_binding,
+)
 from app.domain.hosted_model_defaults import FREE_GPT55_TEXT_PROFILE_ID
 from app.domain.image_context_evidence.contracts import (
     IMAGE_CONTEXT_EVIDENCE_ABILITIES,
@@ -197,11 +205,10 @@ from app.domain.web_search.contracts import (
 )
 from app.domain.web_search.service import WebSearchProviderError, WebSearchService
 from app.domain.wordpress_ai_connector.contracts import (
-    WP_AI_CONNECTOR_ABILITIES,
     WP_AI_CONNECTOR_MAX_TIMEOUT_SECONDS,
-    WordPressAIConnectorContractViolation,
+    WordPressOperationContractViolation,
     resolve_site_knowledge_reference_mode,
-    validate_wordpress_ai_connector_runtime_contract,
+    validate_wordpress_operation_contract,
 )
 from app.domain.wordpress_ai_connector.generation_context import (
     GENERATION_CONTEXT_CONTRACT,
@@ -261,12 +268,14 @@ class RuntimeService:
 
     def resolve(self, request: RuntimeRequest) -> dict[str, object]:
         self._validate_runtime_data_handling_contract(request)
+        connector_envelope: dict[str, Any] | None = None
         if self._is_audio_generation_request(request):
             self._validate_audio_generation_contract(request)
         if self._is_image_generation_request(request):
             self._validate_image_generation_contract(request)
         if self._is_wordpress_ai_connector_request(request):
-            self._validate_wordpress_ai_connector_contract(request)
+            connector_envelope = self._validate_wordpress_ai_connector_contract(request)
+            request.input_payload = connector_envelope
 
         resolution = self.routing_service.resolve(
             profile_id=request.profile_id,
@@ -276,6 +285,11 @@ class RuntimeService:
         with get_session(self.database_url) as session:
             repository = RuntimeRepository(session)
             site = self._require_active_site(repository, request.site_id)
+            if connector_envelope is not None:
+                self._validate_connector_runtime_site_binding(
+                    connector_envelope,
+                    site=site,
+                )
             commercial_decision = self.commercial_service.authorize_runtime_request(
                 session=session,
                 site_id=request.site_id,
@@ -342,6 +356,7 @@ class RuntimeService:
 
     def execute(self, request: RuntimeRequest) -> RuntimeExecutionResponse:
         self._validate_runtime_data_handling_contract(request)
+        connector_envelope: dict[str, Any] | None = None
         if self._is_cloud_batch_runtime_request(request):
             return self._execute_cloud_batch_runtime_request(request)
         if self._is_site_ops_analysis_request(request):
@@ -361,7 +376,8 @@ class RuntimeService:
         if self._is_image_generation_request(request):
             self._validate_image_generation_contract(request)
         if self._is_wordpress_ai_connector_request(request):
-            self._validate_wordpress_ai_connector_contract(request)
+            connector_envelope = self._validate_wordpress_ai_connector_contract(request)
+            request.input_payload = connector_envelope
 
         resolution = self.routing_service.resolve(
             profile_id=request.profile_id,
@@ -379,6 +395,11 @@ class RuntimeService:
         with get_session(self.database_url) as session:
             repository = RuntimeRepository(session)
             site = self._require_active_site(repository, request.site_id)
+            if connector_envelope is not None:
+                self._validate_connector_runtime_site_binding(
+                    connector_envelope,
+                    site=site,
+                )
             execution_contract = self._build_execution_contract(
                 request=request,
                 resolution=resolution,
@@ -491,12 +512,12 @@ class RuntimeService:
             provider_input_payload = request.input_payload
             if self._is_wordpress_ai_connector_request(request):
                 provider_input_payload = self._build_wordpress_ai_connector_provider_input(
-                    request.input_payload
+                    connector_envelope or {}
                 )
                 provider_input_payload = self._apply_wordpress_ai_site_knowledge_reference(
                     run,
                     repository=repository,
-                    input_payload=request.input_payload,
+                    input_payload=connector_envelope or {},
                     provider_input=provider_input_payload,
                 )
 
@@ -505,6 +526,7 @@ class RuntimeService:
                 repository=repository,
                 candidates=resolution.candidates,
                 input_payload=provider_input_payload,
+                connector_envelope=connector_envelope,
             )
             session.commit()
             return self._build_execution_response(
@@ -3325,14 +3347,45 @@ class RuntimeService:
             run.policy_json = policy
             candidates = resolution.candidates
 
-        input_payload = self._get_execution_input_payload(run)
+        try:
+            input_payload = self._get_execution_input_payload(run)
+        except RuntimeError:
+            if not self._is_wordpress_ai_connector_run(run):
+                raise
+            repository.mark_run_failed(
+                run,
+                error_code="connector_runtime.execution_input_invalid",
+                error_message="connector runtime execution input could not be decoded",
+            )
+            return
+        connector_envelope: dict[str, Any] | None = None
         if self._is_wordpress_ai_connector_run(run):
-            raw_input_payload = input_payload
-            input_payload = self._build_wordpress_ai_connector_provider_input(raw_input_payload)
+            try:
+                connector_envelope = self._normalize_wordpress_ai_connector_envelope(
+                    ability_name=str(run.ability_name or ""),
+                    contract_version=str(run.contract_version or ""),
+                    channel=str(run.channel or ""),
+                    input_payload=input_payload,
+                )
+                site = self._require_active_site(repository, run.site_id)
+                self._validate_connector_runtime_site_binding(
+                    connector_envelope,
+                    site=site,
+                )
+            except RuntimeErrorBase as error:
+                repository.mark_run_failed(
+                    run,
+                    error_code=error.error_code,
+                    error_message=error.message,
+                )
+                return
+            input_payload = self._build_wordpress_ai_connector_provider_input(
+                connector_envelope
+            )
             input_payload = self._apply_wordpress_ai_site_knowledge_reference(
                 run,
                 repository=repository,
-                input_payload=raw_input_payload,
+                input_payload=connector_envelope,
                 provider_input=input_payload,
             )
 
@@ -3341,6 +3394,7 @@ class RuntimeService:
             repository=repository,
             candidates=candidates,
             input_payload=input_payload,
+            connector_envelope=connector_envelope,
         )
 
     def _execute_candidate_chain(
@@ -3350,6 +3404,7 @@ class RuntimeService:
         repository: RuntimeRepository,
         candidates: list[RoutingCandidate],
         input_payload: dict[str, Any],
+        connector_envelope: dict[str, Any] | None = None,
     ) -> None:
         policy = run.policy_json if isinstance(run.policy_json, dict) else {}
         input_payload = self._apply_automatic_web_search(
@@ -3573,17 +3628,44 @@ class RuntimeService:
                         )
                         return
 
+                automatic_web_search = policy.get("automatic_web_search")
+                if connector_envelope is not None and isinstance(
+                    automatic_web_search, dict
+                ):
+                    provider_output = dict(provider_output)
+                    provider_output["automatic_web_search"] = automatic_web_search
+
+                response_output = provider_output
+                if connector_envelope is not None:
+                    response_output = build_connector_result_envelope(
+                        site_id=run.site_id,
+                        connector_envelope=connector_envelope,
+                        output=provider_output,
+                    )
+
                 storage_mode = self._get_storage_mode(
                     run.policy_json if isinstance(run.policy_json, dict) else {}
                 )
-                prepared_result = self._prepare_result_for_storage(
-                    provider_output,
-                    storage_mode=storage_mode,
-                )
+                if connector_envelope is not None:
+                    prepared_output = self._prepare_result_for_storage(
+                        provider_output,
+                        storage_mode=storage_mode,
+                    )
+                    prepared_result = build_connector_result_envelope(
+                        site_id=run.site_id,
+                        connector_envelope=connector_envelope,
+                        output=prepared_output,
+                    )
+                else:
+                    prepared_result = self._prepare_result_for_storage(
+                        response_output,
+                        storage_mode=storage_mode,
+                    )
                 if storage_mode == RUNTIME_STORAGE_MODE_NO_STORE:
-                    _set_transient_result_json(run, provider_output)
-                automatic_web_search = policy.get("automatic_web_search")
-                if isinstance(automatic_web_search, dict):
+                    _set_transient_result_json(run, response_output)
+                if connector_envelope is None and isinstance(
+                    automatic_web_search, dict
+                ):
                     prepared_result = dict(prepared_result)
                     prepared_result["automatic_web_search"] = automatic_web_search
                 wrapped_result = build_analysis_result_envelope(
@@ -5506,7 +5588,7 @@ class RuntimeService:
         return request.ability_name in WEB_SEARCH_ABILITIES
 
     def _is_wordpress_ai_connector_request(self, request: RuntimeRequest) -> bool:
-        return request.ability_name in WP_AI_CONNECTOR_ABILITIES
+        return request.ability_name in CONNECTOR_RUNTIME_ABILITIES
 
     def _is_wordpress_ai_connector_managed_request(self, request: RuntimeRequest) -> bool:
         if self._is_wordpress_ai_connector_request(request):
@@ -5575,7 +5657,7 @@ class RuntimeService:
         return str(run.ability_name or "") in WEB_SEARCH_ABILITIES
 
     def _is_wordpress_ai_connector_run(self, run: RunRecord) -> bool:
-        return str(run.ability_name or "") in WP_AI_CONNECTOR_ABILITIES
+        return str(run.ability_name or "") in CONNECTOR_RUNTIME_ABILITIES
 
     def _is_wordpress_ai_connector_image_generation_run(
         self,
@@ -5596,16 +5678,16 @@ class RuntimeService:
         self,
         input_payload: dict[str, Any],
     ) -> dict[str, Any]:
-        scene_request = input_payload.get("request")
+        operation_contract = self._dict_or_empty(input_payload.get("operation_contract"))
+        scene_request = operation_contract.get("request")
         scene_request = scene_request if isinstance(scene_request, dict) else {}
-        task = str(input_payload.get("task") or "").strip()
+        task = str(operation_contract.get("task") or "").strip()
         if task == "alt_text_suggest":
             return self._build_wordpress_ai_connector_alt_text_provider_input(
-                input_payload,
                 scene_request=scene_request,
             )
 
-        prompt = str(scene_request.get("prompt") or input_payload.get("prompt") or "").strip()
+        prompt = str(scene_request.get("prompt") or "").strip()
         system_instruction = str(scene_request.get("system_instruction") or "").strip()
         task_contract = self._dict_or_empty(scene_request.get("task_contract"))
         task_family = str(task_contract.get("task_family") or "").strip()
@@ -5748,9 +5830,10 @@ class RuntimeService:
         input_payload: dict[str, Any],
         provider_input: dict[str, Any],
     ) -> dict[str, Any]:
-        scene_request = self._dict_or_empty(input_payload.get("request"))
+        operation_contract = self._dict_or_empty(input_payload.get("operation_contract"))
+        scene_request = self._dict_or_empty(operation_contract.get("request"))
         reference = self._dict_or_empty(scene_request.get("site_knowledge_reference"))
-        task = str(input_payload.get("task") or "").strip()
+        task = str(operation_contract.get("task") or "").strip()
         task_contract = self._dict_or_empty(scene_request.get("task_contract"))
         expected_mode = resolve_site_knowledge_reference_mode(
             task=task,
@@ -5774,7 +5857,7 @@ class RuntimeService:
                 reason="task_policy_unavailable",
             )
 
-        prompt = str(scene_request.get("prompt") or input_payload.get("prompt") or "").strip()
+        prompt = str(scene_request.get("prompt") or "").strip()
         if not prompt:
             return self._wordpress_ai_generation_context_status(
                 provider_input,
@@ -5931,11 +6014,10 @@ class RuntimeService:
 
     def _build_wordpress_ai_connector_alt_text_provider_input(
         self,
-        input_payload: dict[str, Any],
         *,
         scene_request: dict[str, Any],
     ) -> dict[str, Any]:
-        prompt = str(scene_request.get("prompt") or input_payload.get("prompt") or "").strip()
+        prompt = str(scene_request.get("prompt") or "").strip()
         image_url = str(scene_request.get("image_url") or "").strip()
         thumbnail_url = str(scene_request.get("thumbnail_url") or "").strip()
         selected_image_url = image_url or thumbnail_url
@@ -6910,36 +6992,78 @@ class RuntimeService:
         }
         return policy
 
-    def _validate_wordpress_ai_connector_contract(self, request: RuntimeRequest) -> None:
+    def _normalize_wordpress_ai_connector_envelope(
+        self,
+        *,
+        ability_name: str,
+        contract_version: str,
+        channel: str,
+        input_payload: dict[str, Any],
+    ) -> dict[str, Any]:
         try:
-            validate_wordpress_ai_connector_runtime_contract(
-                ability_name=request.ability_name,
-                contract_version=request.contract_version,
-                input_payload=request.input_payload,
+            envelope = validate_connector_runtime_envelope(
+                ability_name=ability_name,
+                contract_version=contract_version,
+                input_payload=input_payload,
             )
-        except WordPressAIConnectorContractViolation as error:
+        except ConnectorRuntimeContractViolation as error:
             raise RuntimeExecutionContractError(error.error_code, error.message) from error
-        if request.execution_pattern != "inline":
-            raise RuntimeExecutionContractError(
-                "wp_ai_connector.inline_required",
-                "WordPress AI connector currently supports inline execution only",
+        try:
+            operation_contract = validate_wordpress_operation_contract(
+                envelope["operation_contract"]
             )
+        except WordPressOperationContractViolation as error:
+            raise RuntimeExecutionContractError(error.error_code, error.message) from error
+        envelope["operation_contract"] = operation_contract
+        if channel != CONNECTOR_RUNTIME_CHANNEL:
+            raise RuntimeExecutionContractError(
+                "connector_runtime.channel_invalid",
+                f"connector runtime requires channel={CONNECTOR_RUNTIME_CHANNEL}",
+            )
+        return envelope
+
+    def _validate_wordpress_ai_connector_contract(
+        self,
+        request: RuntimeRequest,
+    ) -> dict[str, Any]:
+        envelope = self._normalize_wordpress_ai_connector_envelope(
+            ability_name=request.ability_name,
+            contract_version=request.contract_version,
+            channel=request.channel,
+            input_payload=request.input_payload,
+        )
         if request.timeout_seconds > WP_AI_CONNECTOR_MAX_TIMEOUT_SECONDS:
             raise RuntimeExecutionContractError(
-                "wp_ai_connector.timeout_exceeded",
-                "WordPress AI connector timeout_seconds exceeds max allowed value "
+                "connector_runtime.timeout_exceeded",
+                "connector runtime timeout_seconds exceeds max allowed value "
                 f"{WP_AI_CONNECTOR_MAX_TIMEOUT_SECONDS}",
             )
         if request.retry_max > 1:
             raise RuntimeExecutionContractError(
-                "wp_ai_connector.retry_exceeded",
-                "WordPress AI connector retry_max exceeds max allowed value 1",
+                "connector_runtime.retry_exceeded",
+                "connector runtime retry_max exceeds max allowed value 1",
             )
         if request.retention_ttl > 86400:
             raise RuntimeExecutionContractError(
-                "wp_ai_connector.retention_exceeded",
-                "WordPress AI connector retention_ttl exceeds max allowed value 86400",
+                "connector_runtime.retention_exceeded",
+                "connector runtime retention_ttl exceeds max allowed value 86400",
             )
+        return envelope
+
+    def _validate_connector_runtime_site_binding(
+        self,
+        envelope: dict[str, Any],
+        *,
+        site: Any,
+    ) -> None:
+        try:
+            validate_connector_site_binding(
+                envelope,
+                site_url=str(site.site_url or ""),
+                platform_kind=str(site.platform_kind or ""),
+            )
+        except ConnectorRuntimeContractViolation as error:
+            raise RuntimeExecutionContractError(error.error_code, error.message) from error
 
     def _validate_web_search_contract(self, request: RuntimeRequest) -> None:
         try:

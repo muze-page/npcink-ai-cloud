@@ -106,12 +106,18 @@ def redact_report(value: object) -> object:
     return value
 
 
-def build_title_execute_payload() -> dict[str, object]:
+def build_title_execute_payload(
+    *,
+    site_id: str,
+    site_url: str,
+    connector_version: str,
+) -> dict[str, object]:
     return {
-        "ability_name": "npcink-cloud/wp-ai-connector",
-        "contract_version": "wp_ai_connector_runtime.v1",
-        "channel": "wordpress_ai_connector",
-        "execution_kind": "wordpress_ai_connector",
+        "site_id": site_id,
+        "ability_name": "npcink-cloud/connector-runtime",
+        "contract_version": "cloud_connector_runtime.v1",
+        "channel": "editor",
+        "execution_kind": "text",
         "profile_id": "text.balanced",
         "execution_pattern": "inline",
         "storage_mode": "result_only",
@@ -120,21 +126,22 @@ def build_title_execute_payload() -> dict[str, object]:
         "retry_max": 0,
         "retention_ttl": 86400,
         "input": {
-            "contract_version": "wp_ai_connector_runtime.v1",
-            "source_surface": "wordpress_ai_connector",
-            "connector_id": "npcink-cloud",
-            "task": "title_generation",
-            "write_posture": "suggestion_only",
-            "direct_wordpress_write": False,
-            "no_conversation": True,
-            "expected_response_contract": "wp_ai_connector_result.v1",
-            "request": {
-                "post_title": "Production Cloud ability-model routing verification",
-                "post_excerpt": (
-                    "Verify production Cloud WordPress AI Connector title generation "
-                    "uses the managed ability-model route."
-                ),
-                "prompt": "Suggest one concise title for this WordPress post.",
+            "site_url": site_url,
+            "platform_kind": "wordpress",
+            "connector_id": "npcink-cloud-addon",
+            "connector_version": connector_version,
+            "suggestion_only": True,
+            "operation_contract": {
+                "contract_version": "wordpress_operation.v1",
+                "task": "title_generation",
+                "request": {
+                    "post_title": "Production Cloud ability-model routing verification",
+                    "post_excerpt": (
+                        "Verify production Cloud WordPress AI Connector title generation "
+                        "uses the managed ability-model route."
+                    ),
+                    "prompt": "Suggest one concise title for this WordPress post.",
+                },
             },
         },
         "policy": {"allow_fallback": False},
@@ -176,6 +183,8 @@ def build_smoke_report(
     timeout_seconds: int,
     execute_title: bool,
     approval_text: str,
+    site_url: str,
+    connector_version: str,
     resolve_image: bool = True,
     http_get: HttpGet = get_json,
     http_post: HttpPost = post_json,
@@ -217,7 +226,11 @@ def build_smoke_report(
         title_result = _signed_post(
             base_url=base_url,
             path="/v1/runtime/execute",
-            payload=build_title_execute_payload(),
+            payload=build_title_execute_payload(
+                site_id=secret_payload["site_id"],
+                site_url=site_url,
+                connector_version=connector_version,
+            ),
             secret_payload=secret_payload,
             trace_id="prodtitle" + trace_seed[:23],
             idempotency_key=f"prod-wp-ai-title-execute-{trace_seed[:16]}",
@@ -319,12 +332,14 @@ def _build_title_execute_check(result: dict[str, object]) -> dict[str, object]:
     response = _dict(result.get("response"))
     data = _dict(response.get("data"))
     result_payload = _dict(data.get("result"))
+    output = _dict(result_payload.get("output"))
     ok = (
         bool(result.get("ok"))
         and response.get("status") == "ok"
         and data.get("status") == "succeeded"
         and data.get("profile_id") == "wp-ai.short-text"
-        and bool(_text(result_payload.get("output_text")))
+        and result_payload.get("contract_version") == "cloud_connector_result.v1"
+        and bool(_text(output.get("output_text")))
     )
     return {
         "name": "wordpress_ai_title_execute",
@@ -332,7 +347,7 @@ def _build_title_execute_check(result: dict[str, object]) -> dict[str, object]:
         "run_id": data.get("run_id"),
         "profile_id": data.get("profile_id"),
         "status": data.get("status"),
-        "output_text_present": bool(_text(result_payload.get("output_text"))),
+        "output_text_present": bool(_text(output.get("output_text"))),
         "error_code": response.get("error_code"),
     }
 
@@ -344,6 +359,7 @@ def _summarize_runtime_response(result: dict[str, object]) -> dict[str, object]:
     data = _dict(response.get("data"))
     selected = _dict(data.get("selected_candidate"))
     result_payload = _dict(data.get("result"))
+    output = _dict(result_payload.get("output"))
     policy = _dict(data.get("policy"))
     return {
         "ok": bool(result.get("ok")),
@@ -361,7 +377,7 @@ def _summarize_runtime_response(result: dict[str, object]) -> dict[str, object]:
         "selected_model_id": selected.get("model_id") or data.get("selected_model_id"),
         "selected_instance_id": selected.get("instance_id") or data.get("selected_instance_id"),
         "routing_intent": policy.get("routing_intent"),
-        "output_text_preview": _text(result_payload.get("output_text"))[:200],
+        "output_text_preview": _text(output.get("output_text"))[:200],
     }
 
 
@@ -408,6 +424,8 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--timeout-seconds", type=int, default=90)
     parser.add_argument("--skip-image-resolve", action="store_true")
     parser.add_argument("--execute-title", action="store_true")
+    parser.add_argument("--site-url", required=True)
+    parser.add_argument("--connector-version", required=True)
     parser.add_argument("--approval-text", default="")
     parser.add_argument("--approval-file", type=Path, default=None)
     return parser
@@ -428,6 +446,8 @@ def main(argv: list[str] | None = None) -> int:
             timeout_seconds=max(1, int(args.timeout_seconds)),
             execute_title=bool(args.execute_title),
             approval_text=approval_text,
+            site_url=str(args.site_url),
+            connector_version=str(args.connector_version),
             resolve_image=not bool(args.skip_image_resolve),
         )
     except (SmokeError, ValueError) as exc:

@@ -35,16 +35,27 @@ def test_approval_text_requires_exact_match() -> None:
 
 
 def test_payloads_preserve_wordpress_ai_connector_boundary() -> None:
-    title_payload = build_title_execute_payload()
-    assert title_payload["ability_name"] == "npcink-cloud/wp-ai-connector"
-    assert title_payload["channel"] == "wordpress_ai_connector"
-    assert title_payload["execution_kind"] == "wordpress_ai_connector"
+    title_payload = build_title_execute_payload(
+        site_id="site_prod",
+        site_url="https://wordpress.example.test",
+        connector_version="1.0.0-test",
+    )
+    assert title_payload["site_id"] == "site_prod"
+    assert title_payload["ability_name"] == "npcink-cloud/connector-runtime"
+    assert title_payload["contract_version"] == "cloud_connector_runtime.v1"
+    assert title_payload["channel"] == "editor"
+    assert title_payload["execution_kind"] == "text"
     assert title_payload["policy"] == {"allow_fallback": False}
     title_input = title_payload["input"]
     assert isinstance(title_input, dict)
-    assert title_input["write_posture"] == "suggestion_only"
-    assert title_input["direct_wordpress_write"] is False
-    assert title_input["no_conversation"] is True
+    assert title_input["site_url"] == "https://wordpress.example.test"
+    assert title_input["platform_kind"] == "wordpress"
+    assert title_input["connector_id"] == "npcink-cloud-addon"
+    assert title_input["connector_version"] == "1.0.0-test"
+    assert title_input["suggestion_only"] is True
+    assert title_input["operation_contract"]["contract_version"] == (  # type: ignore[index]
+        "wordpress_operation.v1"
+    )
 
     image_payload = build_image_resolve_payload()
     assert image_payload["ability_name"] == "npcink-cloud/generate-image"
@@ -66,6 +77,8 @@ def test_execute_title_requires_exact_approval_before_http(tmp_path: Path) -> No
             timeout_seconds=1,
             execute_title=True,
             approval_text="同意",
+            site_url="https://wordpress.example.test",
+            connector_version="1.0.0-test",
             http_get=lambda *_: {"ok": True, "status_code": 200, "response": {"status": "ok"}},
             http_post=lambda *_: calls.append("post") or {"ok": True},
         )
@@ -103,6 +116,8 @@ def test_resolve_only_writes_redacted_report(tmp_path: Path) -> None:
         timeout_seconds=1,
         execute_title=False,
         approval_text="",
+        site_url="https://wordpress.example.test",
+        connector_version="1.0.0-test",
         http_get=lambda *_: {"ok": True, "status_code": 200, "response": {"status": "ok"}},
         http_post=fake_post,
     )
@@ -148,7 +163,10 @@ def test_execute_title_summarizes_run_without_leaking_secret(tmp_path: Path) -> 
                     "profile_id": "wp-ai.short-text",
                     "selected_model_id": "gpt-5.5",
                     "selected_instance_id": "openai-global-gpt-5-5",
-                    "result": {"output_text": "Production title"},
+                    "result": {
+                        "contract_version": "cloud_connector_result.v1",
+                        "output": {"output_text": "Production title"},
+                    },
                 },
             },
         }
@@ -160,6 +178,8 @@ def test_execute_title_summarizes_run_without_leaking_secret(tmp_path: Path) -> 
         timeout_seconds=1,
         execute_title=True,
         approval_text=APPROVAL_TEXT,
+        site_url="https://wordpress.example.test",
+        connector_version="1.0.0-test",
         http_get=lambda *_: {"ok": True, "status_code": 200, "response": {"status": "ok"}},
         http_post=fake_post,
     )

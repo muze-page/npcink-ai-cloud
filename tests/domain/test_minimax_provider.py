@@ -248,7 +248,7 @@ def test_minimax_adapter_executes_text_over_openai_compatible_chat() -> None:
         ProviderExecutionRequest(
             run_id="run_minimax_text_provider_test",
             site_id="site_alpha",
-            ability_name="npcink-cloud/wp-ai-connector",
+            ability_name="npcink-cloud/connector-runtime",
             profile_id="wp-ai.short-text",
             execution_kind="text",
             model_id="MiniMax-M3",
@@ -310,7 +310,7 @@ def test_minimax_adapter_does_not_forward_chat_metadata() -> None:
         ProviderExecutionRequest(
             run_id="run_minimax_metadata_test",
             site_id="site_alpha",
-            ability_name="npcink-cloud/wp-ai-connector",
+            ability_name="npcink-cloud/connector-runtime",
             profile_id="wp-ai.short-text",
             execution_kind="text",
             model_id="MiniMax-M2.1",

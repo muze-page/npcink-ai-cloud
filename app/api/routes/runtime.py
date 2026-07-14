@@ -26,6 +26,7 @@ from app.domain.cloud_batch_runtime.contracts import (
     CLOUD_BATCH_RUNTIME_EXECUTION_KIND,
     CLOUD_BATCH_RUNTIME_PROFILE_ID,
 )
+from app.domain.connector_runtime.contracts import CONNECTOR_RUNTIME_ABILITIES
 from app.domain.hosted_model_defaults import FREE_GPT55_TEXT_PROFILE_ID
 from app.domain.image_context_evidence.contracts import (
     IMAGE_CONTEXT_EVIDENCE_ABILITIES,
@@ -86,7 +87,6 @@ from app.domain.web_search.contracts import (
     WEB_SEARCH_PROFILE_ID,
 )
 from app.domain.wordpress_ai_connector.contracts import (
-    WP_AI_CONNECTOR_ABILITIES,
     WP_AI_CONNECTOR_ABILITY_FAMILY,
     WP_AI_CONNECTOR_DATA_CLASSIFICATION,
     WP_AI_CONNECTOR_EXECUTION_KIND,
@@ -138,6 +138,8 @@ class RuntimePolicyPayload(BaseModel):
 
 
 class RuntimePayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     site_id: str | None = Field(default=None, max_length=191)
     ability_name: str = Field(min_length=1, max_length=191)
     ability_family: Literal[
@@ -182,6 +184,10 @@ class RuntimePayload(BaseModel):
 
     @model_validator(mode="after")
     def validate_runtime_payload_bounds(self) -> RuntimePayload:
+        if self.ability_name in CONNECTOR_RUNTIME_ABILITIES and not str(
+            self.site_id or ""
+        ).strip():
+            raise ValueError("connector runtime requires an explicit site_id")
         if (
             self.execution_pattern == "step_offload"
             and self.ability_name not in IMAGE_SOURCE_ABILITIES
@@ -193,7 +199,9 @@ class RuntimePayload(BaseModel):
         _validate_runtime_json_shape(
             self.input,
             field_name="input",
-            allow_wordpress_ai_output_schema=(self.ability_name in WP_AI_CONNECTOR_ABILITIES),
+            allow_wordpress_ai_output_schema=(
+                self.ability_name in CONNECTOR_RUNTIME_ABILITIES
+            ),
         )
         _validate_runtime_json_shape(self.task_backend, field_name="task_backend")
         return self
@@ -208,7 +216,8 @@ def _validate_runtime_json_shape(
     allow_wordpress_ai_output_schema: bool = False,
 ) -> None:
     depth_limit = MAX_RUNTIME_JSON_DEPTH
-    if allow_wordpress_ai_output_schema and path[:3] == (
+    if allow_wordpress_ai_output_schema and path[:4] == (
+        "operation_contract",
         "request",
         "task_contract",
         "output_schema",
@@ -306,7 +315,7 @@ def _is_web_search_payload(payload: RuntimePayload) -> bool:
 
 
 def _is_wordpress_ai_connector_payload(payload: RuntimePayload) -> bool:
-    return payload.ability_name in WP_AI_CONNECTOR_ABILITIES
+    return payload.ability_name in CONNECTOR_RUNTIME_ABILITIES
 
 
 def _is_wordpress_ai_image_generation_payload(payload: RuntimePayload) -> bool:
@@ -449,7 +458,11 @@ def _resolve_profile_id(payload: RuntimePayload) -> str:
         return WEB_SEARCH_PROFILE_ID
     if _is_wordpress_ai_connector_payload(payload):
         input_payload = payload.input if isinstance(payload.input, dict) else {}
-        return resolve_wordpress_ai_connector_profile_id(input_payload)
+        operation_contract = input_payload.get("operation_contract")
+        operation_contract = (
+            operation_contract if isinstance(operation_contract, dict) else {}
+        )
+        return resolve_wordpress_ai_connector_profile_id(operation_contract)
     if not payload.profile_id and payload.ability_family in {
         "text",
         "openclaw",
@@ -503,7 +516,11 @@ def _is_wordpress_ai_alt_text_payload(payload: RuntimePayload) -> bool:
     if not _is_wordpress_ai_connector_payload(payload):
         return False
     input_payload = payload.input if isinstance(payload.input, dict) else {}
-    return str(input_payload.get("task") or "").strip() == "alt_text_suggest"
+    operation_contract = input_payload.get("operation_contract")
+    operation_contract = (
+        operation_contract if isinstance(operation_contract, dict) else {}
+    )
+    return str(operation_contract.get("task") or "").strip() == "alt_text_suggest"
 
 
 def _resolve_task_backend(payload: RuntimePayload) -> dict[str, Any]:

@@ -18,9 +18,10 @@ from app.adapters.providers.base import (
 from app.api.main import create_app
 from app.core.config import Settings
 from app.core.db import get_session, init_schema
-from app.core.models import ProviderConnection, RunRecord
+from app.core.models import ProviderConnection, RunRecord, Site
 from app.core.services import CloudServices
 from app.domain.catalog.service import CatalogService
+from app.domain.runtime.service import RuntimeService
 from app.domain.site_knowledge.repository import SiteKnowledgeRepository
 from app.domain.site_knowledge.service import SiteKnowledgeService
 from app.domain.wordpress_ai_connector.routing_profiles import (
@@ -42,6 +43,9 @@ from tests.conftest import (
     merge_json_headers,
     seed_site_auth,
 )
+
+CONNECTOR_SITE_URL = "https://alpha.example.test"
+CONNECTOR_VERSION = "1.0.0-test"
 
 
 def test_wordpress_ai_connector_text_profiles_prefer_gpt55_with_fallbacks() -> None:
@@ -338,6 +342,9 @@ def _build_client(tmp_path: Path) -> tuple[str, TestClient, WordPressAIConnector
     provider = WordPressAIConnectorTextProvider()
     CatalogService(database_url, providers={"openai": provider}).refresh_catalog()
     with get_session(database_url) as session:
+        site = session.get(Site, "site_alpha")
+        assert site is not None
+        site.site_url = CONNECTOR_SITE_URL
         session.add(
             ProviderConnection(
                 connection_id="openai",
@@ -396,27 +403,35 @@ def _build_client(tmp_path: Path) -> tuple[str, TestClient, WordPressAIConnector
 
 
 def _payload(input_overrides: dict[str, Any] | None = None) -> dict[str, Any]:
-    input_payload: dict[str, Any] = {
-        "contract_version": "wp_ai_connector_runtime.v1",
-        "source_surface": "wordpress_ai_connector",
-        "connector_id": "npcink-cloud",
+    operation_contract: dict[str, Any] = {
+        "contract_version": "wordpress_operation.v1",
         "task": "title_generation",
-        "write_posture": "suggestion_only",
-        "direct_wordpress_write": False,
-        "no_conversation": True,
-        "expected_response_contract": "wp_ai_connector_result.v1",
         "request": {
             "post_title": "Existing title",
             "post_excerpt": "Public excerpt",
             "prompt": "Suggest a concise title for this WordPress post.",
         },
     }
-    input_payload.update(input_overrides or {})
+    input_payload: dict[str, Any] = {
+        "site_url": CONNECTOR_SITE_URL,
+        "platform_kind": "wordpress",
+        "connector_id": "npcink-cloud-addon",
+        "connector_version": CONNECTOR_VERSION,
+        "suggestion_only": True,
+        "operation_contract": operation_contract,
+    }
+    overrides = dict(input_overrides or {})
+    if "task" in overrides:
+        operation_contract["task"] = overrides.pop("task")
+    if "request" in overrides:
+        operation_contract["request"] = overrides.pop("request")
+    input_payload.update(overrides)
     return {
-        "ability_name": "npcink-cloud/wp-ai-connector",
-        "contract_version": "wp_ai_connector_runtime.v1",
-        "channel": "wordpress_ai_connector",
-        "execution_kind": "wordpress_ai_connector",
+        "site_id": "site_alpha",
+        "ability_name": "npcink-cloud/connector-runtime",
+        "contract_version": "cloud_connector_runtime.v1",
+        "channel": "editor",
+        "execution_kind": "text",
         "profile_id": "text.balanced",
         "execution_pattern": "inline",
         "storage_mode": "result_only",
@@ -459,15 +474,9 @@ def _image_payload(input_overrides: dict[str, Any] | None = None) -> dict[str, A
 
 
 def _alt_text_payload(input_overrides: dict[str, Any] | None = None) -> dict[str, Any]:
-    input_payload: dict[str, Any] = {
-        "contract_version": "wp_ai_connector_runtime.v1",
-        "source_surface": "wordpress_ai_connector",
-        "connector_id": "npcink-cloud",
+    operation_contract: dict[str, Any] = {
+        "contract_version": "wordpress_operation.v1",
         "task": "alt_text_suggest",
-        "write_posture": "suggestion_only",
-        "direct_wordpress_write": False,
-        "no_conversation": True,
-        "expected_response_contract": "wp_ai_connector_result.v1",
         "request": {
             "prompt": "Generate accessible alt text for this media item.",
             "image_url": "https://example.test/uploads/blue-mug.jpg",
@@ -479,12 +488,24 @@ def _alt_text_payload(input_overrides: dict[str, Any] | None = None) -> dict[str
             "locale": "en_US",
         },
     }
-    input_payload.update(input_overrides or {})
+    input_payload: dict[str, Any] = {
+        "site_url": CONNECTOR_SITE_URL,
+        "platform_kind": "wordpress",
+        "connector_id": "npcink-cloud-addon",
+        "connector_version": CONNECTOR_VERSION,
+        "suggestion_only": True,
+        "operation_contract": operation_contract,
+    }
+    overrides = dict(input_overrides or {})
+    if "request" in overrides:
+        operation_contract["request"] = overrides.pop("request")
+    input_payload.update(overrides)
     return {
-        "ability_name": "npcink-cloud/wp-ai-connector",
-        "contract_version": "wp_ai_connector_runtime.v1",
-        "channel": "wordpress_ai_connector",
-        "execution_kind": "wordpress_ai_connector",
+        "site_id": "site_alpha",
+        "ability_name": "npcink-cloud/connector-runtime",
+        "contract_version": "cloud_connector_runtime.v1",
+        "channel": "editor",
+        "execution_kind": "vision",
         "profile_id": "text.balanced",
         "execution_pattern": "inline",
         "storage_mode": "result_only",
@@ -502,6 +523,7 @@ def _execute(
     payload: dict[str, Any],
     *,
     idempotency_key: str = "wp-ai-connector-idem",
+    trace_id: str = "tracewpai000000000000000000000001",
 ) -> Any:
     body = json.dumps(payload).encode("utf-8")
     headers = merge_json_headers(
@@ -513,10 +535,30 @@ def _execute(
             key_id=TEST_KEY_ID,
             secret=TEST_SECRET,
             idempotency_key=idempotency_key,
-            trace_id="tracewpai000000000000000000000001",
+            trace_id=trace_id,
         )
     )
     return client.post("/v1/runtime/execute", content=body, headers=headers)
+
+
+def _get_result(
+    client: TestClient,
+    run_id: str,
+    *,
+    site_id: str = "site_alpha",
+    key_id: str = TEST_KEY_ID,
+    secret: str = TEST_SECRET,
+) -> Any:
+    path = f"/v1/runs/{run_id}/result"
+    headers = build_auth_headers(
+        "GET",
+        path,
+        site_id=site_id,
+        key_id=key_id,
+        secret=secret,
+        trace_id="tracewpairesult0000000000000001",
+    )
+    return client.get(path, headers=headers)
 
 
 def test_wordpress_ai_connector_runtime_executes_scene_bound_text(tmp_path: Path) -> None:
@@ -527,11 +569,37 @@ def test_wordpress_ai_connector_runtime_executes_scene_bound_text(tmp_path: Path
     assert response.status_code == 200
     data = response.json()["data"]
     assert data["status"] == "succeeded"
-    assert data["result"]["output_text"] == "Npcink Cloud Addon: WordPress AI scene helper"
-    assert data["execution_context"]["contract_version"] == "wp_ai_connector_runtime.v1"
+    result = data["result"]
+    assert set(result) == {
+        "contract_version",
+        "site_id",
+        "site_url",
+        "platform_kind",
+        "connector_id",
+        "connector_version",
+        "suggestion_only",
+        "operation_contract",
+        "output",
+    }
+    assert result["contract_version"] == "cloud_connector_result.v1"
+    assert result["site_id"] == "site_alpha"
+    assert result["site_url"] == CONNECTOR_SITE_URL
+    assert result["platform_kind"] == "wordpress"
+    assert result["connector_id"] == "npcink-cloud-addon"
+    assert result["connector_version"] == CONNECTOR_VERSION
+    assert result["suggestion_only"] is True
+    assert result["operation_contract"] == {
+        "contract_version": "wordpress_operation.v1",
+        "task": "title_generation",
+    }
+    assert "request" not in result["operation_contract"]
+    assert result["output"]["output_text"] == (
+        "Npcink Cloud Addon: WordPress AI scene helper"
+    )
+    assert data["execution_context"]["contract_version"] == "cloud_connector_runtime.v1"
     assert data["execution_context"]["ability_family"] == "text"
     assert data["execution_context"]["data_classification"] == "public_site_content"
-    assert provider.requests[0].ability_name == "npcink-cloud/wp-ai-connector"
+    assert provider.requests[0].ability_name == "npcink-cloud/connector-runtime"
     assert provider.requests[0].execution_kind == "text"
     assert provider.requests[0].profile_id == WP_AI_CONNECTOR_SHORT_TEXT_PROFILE_ID
     assert provider.requests[0].timeout_ms == 45000
@@ -544,11 +612,14 @@ def test_wordpress_ai_connector_runtime_executes_scene_bound_text(tmp_path: Path
     assert provider_input["max_output_tokens"] == 48
     assert provider_input["metadata"]["source_surface"] == "wordpress_ai_connector"
     assert provider_input["metadata"]["suggestion_only"] is True
+    assert "site_url" not in provider_input
+    assert "connector_id" not in provider_input
+    assert "operation_contract" not in provider_input
 
     with get_session(database_url) as session:
         run = session.execute(select(RunRecord)).scalar_one()
-        assert run.ability_name == "npcink-cloud/wp-ai-connector"
-        assert run.channel == "wordpress_ai_connector"
+        assert run.ability_name == "npcink-cloud/connector-runtime"
+        assert run.channel == "editor"
         assert run.execution_kind == "text"
         assert run.profile_id == WP_AI_CONNECTOR_SHORT_TEXT_PROFILE_ID
         assert run.policy_json["managed_surface"] == "wordpress_ai_connector"
@@ -556,11 +627,528 @@ def test_wordpress_ai_connector_runtime_executes_scene_bound_text(tmp_path: Path
         assert run.policy_json["routing_intent"] == "content.short_text"
         assert run.policy_json["timeout_ms"] == 45000
         assert run.policy_json["execution_contract"]["contract_version"] == (
-            "wp_ai_connector_runtime.v1"
+            "cloud_connector_runtime.v1"
         )
         assert run.policy_json["execution_contract"]["managed_surface"] == "wordpress_ai_connector"
         assert run.policy_json["execution_contract"]["task_group"] == "short_text"
         assert run.policy_json["execution_contract"]["routing_intent"] == "content.short_text"
+        assert run.result_json == result
+
+
+def test_connector_runtime_uses_only_normalized_envelope_values(tmp_path: Path) -> None:
+    database_url, client, provider = _build_client(tmp_path)
+    payload = _payload(
+        {
+            "site_url": f"  {CONNECTOR_SITE_URL}  ",
+            "connector_version": "  1.2.3-test  ",
+            "task": "  title_generation  ",
+            "object_ref": {
+                "object_type": "  post  ",
+                "object_id": "  42  ",
+                "object_revision": "  7  ",
+            },
+        }
+    )
+
+    response = _execute(
+        client,
+        payload,
+        idempotency_key="connector-normalized-envelope",
+    )
+
+    assert response.status_code == 200
+    result = response.json()["data"]["result"]
+    assert result["site_url"] == CONNECTOR_SITE_URL
+    assert result["connector_version"] == "1.2.3-test"
+    assert result["object_ref"] == {
+        "object_type": "post",
+        "object_id": "42",
+        "object_revision": "7",
+    }
+    assert result["operation_contract"] == {
+        "contract_version": "wordpress_operation.v1",
+        "task": "title_generation",
+    }
+    assert provider.requests[0].profile_id == WP_AI_CONNECTOR_SHORT_TEXT_PROFILE_ID
+    assert provider.requests[0].input_payload["metadata"]["task"] == "title_generation"
+    assert "site_url" not in provider.requests[0].input_payload
+    assert "connector_version" not in provider.requests[0].input_payload
+    with get_session(database_url) as session:
+        run = session.execute(select(RunRecord)).scalar_one()
+        assert run.result_json == result
+
+
+@pytest.mark.parametrize(
+    ("case", "expected_error"),
+    [
+        ("unknown_outer", "connector_runtime.fields_forbidden"),
+        ("old_outer_shape", "connector_runtime.fields_required"),
+        ("connector_id", "connector_runtime.connector_id_invalid"),
+        ("connector_version", "connector_runtime.string_field_invalid"),
+        ("suggestion_only", "connector_runtime.suggestion_only_required"),
+        ("platform_kind", "connector_runtime.platform_kind_invalid"),
+        ("site_url", "connector_runtime.site_url_mismatch"),
+        ("channel", "connector_runtime.channel_invalid"),
+        ("envelope_version", "connector_runtime.contract_mismatch"),
+        ("operation_fields", "wordpress_operation.fields_invalid"),
+        ("operation_version", "wordpress_operation.contract_mismatch"),
+        ("object_ref_fields", "connector_runtime.object_ref_fields_invalid"),
+        ("object_ref_empty", "connector_runtime.string_field_invalid"),
+    ],
+)
+def test_connector_runtime_contract_fails_closed(
+    tmp_path: Path,
+    case: str,
+    expected_error: str,
+) -> None:
+    _, client, provider = _build_client(tmp_path)
+    payload = _payload()
+    input_payload = payload["input"]
+    assert isinstance(input_payload, dict)
+    operation_contract = input_payload["operation_contract"]
+    assert isinstance(operation_contract, dict)
+
+    if case == "unknown_outer":
+        input_payload["unexpected"] = True
+    elif case == "old_outer_shape":
+        input_payload.pop("operation_contract")
+        input_payload["task"] = "title_generation"
+        input_payload["request"] = {"prompt": "Suggest a title."}
+    elif case == "connector_id":
+        input_payload["connector_id"] = "unknown-connector"
+    elif case == "connector_version":
+        input_payload["connector_version"] = ""
+    elif case == "suggestion_only":
+        input_payload["suggestion_only"] = False
+    elif case == "platform_kind":
+        input_payload["platform_kind"] = "typecho"
+    elif case == "site_url":
+        input_payload["site_url"] = "https://other.example.test"
+    elif case == "channel":
+        payload["channel"] = "api"
+    elif case == "envelope_version":
+        payload["contract_version"] = "cloud_connector_runtime.v2"
+    elif case == "operation_fields":
+        operation_contract["unknown"] = True
+    elif case == "operation_version":
+        operation_contract["contract_version"] = "wordpress_operation.v2"
+    elif case == "object_ref_fields":
+        input_payload["object_ref"] = {"object_type": "post", "object_id": "42"}
+    elif case == "object_ref_empty":
+        input_payload["object_ref"] = {
+            "object_type": "post",
+            "object_id": "",
+            "object_revision": "7",
+        }
+
+    response = _execute(
+        client,
+        payload,
+        idempotency_key=f"connector-contract-{case}",
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error_code"] == expected_error
+    assert provider.requests == []
+
+
+def test_connector_runtime_requires_and_binds_explicit_site_id(tmp_path: Path) -> None:
+    _, client, provider = _build_client(tmp_path)
+    missing_site_payload = _payload()
+    missing_site_payload.pop("site_id")
+
+    missing_response = _execute(
+        client,
+        missing_site_payload,
+        idempotency_key="connector-site-missing",
+    )
+
+    assert missing_response.status_code == 422
+    assert provider.requests == []
+
+    mismatched_site_payload = _payload()
+    mismatched_site_payload["site_id"] = "site_other"
+    mismatch_response = _execute(
+        client,
+        mismatched_site_payload,
+        idempotency_key="connector-site-mismatch",
+    )
+
+    assert mismatch_response.status_code == 400
+    assert mismatch_response.json()["error_code"] == "auth.site_mismatch"
+    assert provider.requests == []
+
+
+def test_connector_runtime_rejects_unknown_public_payload_field(tmp_path: Path) -> None:
+    _, client, provider = _build_client(tmp_path)
+    payload = _payload()
+    payload["unexpected_top_level_field"] = True
+
+    response = _execute(
+        client,
+        payload,
+        idempotency_key="connector-top-level-extra",
+    )
+
+    assert response.status_code == 422
+    assert provider.requests == []
+
+
+@pytest.mark.parametrize(
+    ("field_name", "field_value"),
+    [
+        ("source_surface", "wordpress_ai_connector"),
+        ("connector_id", "npcink-cloud-addon"),
+        ("connector_version", "1.2.3"),
+        ("site_url", CONNECTOR_SITE_URL),
+        ("platform_kind", "wordpress"),
+        ("object_ref", {"object_type": "post"}),
+        ("operation_contract", {"task": "title_generation"}),
+        ("expected_response_contract", "cloud_connector_result.v1"),
+        ("suggestion_only", False),
+        ("write_posture", "suggestion_only"),
+        ("no_conversation", True),
+        ("direct_wordpress_write", True),
+        ("nested_direct_wordpress_write", True),
+    ],
+)
+def test_wordpress_operation_rejects_request_control_fields(
+    tmp_path: Path,
+    field_name: str,
+    field_value: object,
+) -> None:
+    _, client, provider = _build_client(tmp_path)
+    request_payload: dict[str, object] = {"prompt": "Suggest a title."}
+    if field_name == "nested_direct_wordpress_write":
+        request_payload["nested"] = {"direct_wordpress_write": field_value}
+    else:
+        request_payload[field_name] = field_value
+    payload = _payload({"request": request_payload})
+
+    response = _execute(
+        client,
+        payload,
+        idempotency_key=f"connector-request-control-{field_name}",
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error_code"] == (
+        "wordpress_operation.control_field_forbidden"
+    )
+    assert provider.requests == []
+
+
+def test_connector_runtime_rejects_image_generation_operation(tmp_path: Path) -> None:
+    _, client, provider = _build_client(tmp_path)
+    payload = _payload(
+        {
+            "task": "image_generation",
+            "request": {"prompt": "Generate an image."},
+        }
+    )
+
+    response = _execute(
+        client,
+        payload,
+        idempotency_key="connector-unreachable-image-generation",
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error_code"] == "wordpress_operation.task_not_allowed"
+    assert provider.requests == []
+
+
+def test_connector_runtime_rejects_authenticated_site_platform_drift(
+    tmp_path: Path,
+) -> None:
+    database_url, client, provider = _build_client(tmp_path)
+    with get_session(database_url) as session:
+        site = session.get(Site, "site_alpha")
+        assert site is not None
+        site.platform_kind = "typecho"
+        session.commit()
+
+    response = _execute(
+        client,
+        _payload(),
+        idempotency_key="connector-platform-drift",
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error_code"] == "connector_runtime.platform_kind_mismatch"
+    assert provider.requests == []
+
+
+def test_connector_runtime_preserves_exact_object_reference(tmp_path: Path) -> None:
+    database_url, client, _ = _build_client(tmp_path)
+    object_ref = {
+        "object_type": "post",
+        "object_id": "42",
+        "object_revision": "7",
+    }
+    response = _execute(
+        client,
+        _payload({"object_ref": object_ref}),
+        idempotency_key="connector-object-ref",
+    )
+
+    assert response.status_code == 200
+    result = response.json()["data"]["result"]
+    assert result["object_ref"] == object_ref
+    assert set(result["object_ref"]) == {
+        "object_type",
+        "object_id",
+        "object_revision",
+    }
+    with get_session(database_url) as session:
+        run = session.execute(select(RunRecord)).scalar_one()
+        assert run.result_json == result
+
+
+def test_connector_runtime_replay_returns_identical_persisted_result(
+    tmp_path: Path,
+) -> None:
+    _, client, provider = _build_client(tmp_path)
+    payload = _payload()
+
+    first = _execute(
+        client,
+        payload,
+        idempotency_key="connector-replay",
+        trace_id="tracewpaireplayone00000000000001",
+    )
+    replay = _execute(
+        client,
+        payload,
+        idempotency_key="connector-replay",
+        trace_id="tracewpaireplaytwo00000000000002",
+    )
+
+    assert first.status_code == 200
+    assert replay.status_code == 200
+    assert replay.json()["data"]["idempotent_replay"] is True
+    assert replay.json()["data"]["result"] == first.json()["data"]["result"]
+    assert len(provider.requests) == 1
+
+
+def test_connector_runtime_no_store_uses_normalized_transient_and_durable_envelopes(
+    tmp_path: Path,
+) -> None:
+    database_url, client, provider = _build_client(tmp_path)
+    payload = _payload(
+        {
+            "connector_version": "  3.0.0-no-store  ",
+            "task": "  title_generation  ",
+        }
+    )
+    payload["storage_mode"] = "no_store"
+
+    first = _execute(
+        client,
+        payload,
+        idempotency_key="connector-no-store",
+        trace_id="tracewpainostoreone000000000001",
+    )
+
+    assert first.status_code == 200
+    transient_result = first.json()["data"]["result"]
+    assert transient_result["connector_version"] == "3.0.0-no-store"
+    assert transient_result["operation_contract"]["task"] == "title_generation"
+    assert transient_result["output"]["output_text"] == (
+        "Npcink Cloud Addon: WordPress AI scene helper"
+    )
+
+    run_id = first.json()["data"]["run_id"]
+    polled = _get_result(client, run_id)
+    assert polled.status_code == 200
+    durable_result = polled.json()["data"]["result"]
+    assert durable_result["connector_version"] == "3.0.0-no-store"
+    assert durable_result["operation_contract"]["task"] == "title_generation"
+    assert durable_result["output"] == {"stored": False, "status": "omitted"}
+
+    replay = _execute(
+        client,
+        payload,
+        idempotency_key="connector-no-store",
+        trace_id="tracewpainostoretwo000000000002",
+    )
+    assert replay.status_code == 200
+    assert replay.json()["data"]["idempotent_replay"] is True
+    assert replay.json()["data"]["result"] == durable_result
+    assert len(provider.requests) == 1
+    with get_session(database_url) as session:
+        run = session.get(RunRecord, run_id)
+        assert run is not None
+        assert run.result_json == durable_result
+
+
+def test_connector_runtime_queued_worker_persists_pollable_result(tmp_path: Path) -> None:
+    database_url, client, provider = _build_client(tmp_path)
+    payload = _payload(
+        {
+            "site_url": f"  {CONNECTOR_SITE_URL}  ",
+            "connector_version": "  2.0.0-worker  ",
+            "task": "  title_generation  ",
+            "object_ref": {
+                "object_type": "  post  ",
+                "object_id": "  84  ",
+                "object_revision": "  9  ",
+            },
+        }
+    )
+    payload["execution_pattern"] = "whole_run_offload"
+    payload["task_backend"] = {
+        "enabled": True,
+        "mode": "queue",
+        "callback_mode": "polling_preferred",
+        "polling_interval_sec": 1,
+    }
+
+    queued_response = _execute(
+        client,
+        payload,
+        idempotency_key="connector-queued",
+    )
+
+    assert queued_response.status_code == 200
+    queued_data = queued_response.json()["data"]
+    assert queued_data["status"] == "queued"
+    assert queued_data["result"] == {}
+    assert provider.requests == []
+
+    settings = Settings(
+        _env_file=None,
+        project_name="Npcink AI Cloud Connector Worker Test",
+        environment="test",
+        database_url=database_url,
+        redis_url="redis://localhost:6379/0",
+        admin_session_secret=TEST_ADMIN_SESSION_SECRET,
+        portal_jwt_secret=TEST_PORTAL_JWT_SECRET,
+    )
+    worker = RuntimeService(
+        database_url,
+        settings=settings,
+        providers={"openai": provider},
+    )
+    processed = worker.process_queued_runs(max_runs=1, timeout_seconds=0)
+
+    assert processed == [
+        {
+            "run_id": queued_data["run_id"],
+            "status": "succeeded",
+            "trace_id": queued_data["trace_id"],
+        }
+    ]
+    result_response = _get_result(client, queued_data["run_id"])
+    assert result_response.status_code == 200
+    result = result_response.json()["data"]["result"]
+    assert result["contract_version"] == "cloud_connector_result.v1"
+    assert result["site_id"] == "site_alpha"
+    assert result["site_url"] == CONNECTOR_SITE_URL
+    assert result["connector_version"] == "2.0.0-worker"
+    assert result["object_ref"] == {
+        "object_type": "post",
+        "object_id": "84",
+        "object_revision": "9",
+    }
+    assert result["operation_contract"] == {
+        "contract_version": "wordpress_operation.v1",
+        "task": "title_generation",
+    }
+    assert result["output"]["output_text"] == (
+        "Npcink Cloud Addon: WordPress AI scene helper"
+    )
+    assert provider.requests[0].profile_id == WP_AI_CONNECTOR_SHORT_TEXT_PROFILE_ID
+    assert provider.requests[0].input_payload["metadata"]["task"] == "title_generation"
+    assert "site_url" not in provider.requests[0].input_payload
+    with get_session(database_url) as session:
+        run = session.get(RunRecord, queued_data["run_id"])
+        assert run is not None
+        assert run.input_json == {}
+        assert run.execution_input_ciphertext is None
+        assert run.result_json == result
+
+
+def test_connector_runtime_worker_fails_closed_on_damaged_execution_input(
+    tmp_path: Path,
+) -> None:
+    database_url, client, provider = _build_client(tmp_path)
+    payload = _payload()
+    payload["execution_pattern"] = "whole_run_offload"
+    payload["task_backend"] = {
+        "enabled": True,
+        "mode": "queue",
+        "callback_mode": "polling_preferred",
+        "polling_interval_sec": 1,
+    }
+    queued_response = _execute(
+        client,
+        payload,
+        idempotency_key="connector-damaged-worker-input",
+    )
+    assert queued_response.status_code == 200
+    run_id = queued_response.json()["data"]["run_id"]
+    with get_session(database_url) as session:
+        run = session.get(RunRecord, run_id)
+        assert run is not None
+        run.execution_input_ciphertext = "damaged-ciphertext"
+        session.commit()
+
+    worker = RuntimeService(
+        database_url,
+        settings=Settings(
+            _env_file=None,
+            project_name="Npcink AI Cloud Damaged Connector Worker Test",
+            environment="test",
+            database_url=database_url,
+            redis_url="redis://localhost:6379/0",
+            admin_session_secret=TEST_ADMIN_SESSION_SECRET,
+            portal_jwt_secret=TEST_PORTAL_JWT_SECRET,
+        ),
+        providers={"openai": provider},
+    )
+    processed = worker.process_queued_runs(max_runs=1, timeout_seconds=0)
+
+    assert processed[0]["run_id"] == run_id
+    assert processed[0]["status"] == "failed"
+    assert provider.requests == []
+    with get_session(database_url) as session:
+        run = session.get(RunRecord, run_id)
+        assert run is not None
+        assert run.status == "failed"
+        assert run.error_code == "connector_runtime.execution_input_invalid"
+        assert run.input_json == {}
+        assert run.execution_input_ciphertext is None
+
+
+def test_connector_runtime_result_is_site_isolated(tmp_path: Path) -> None:
+    database_url, client, _ = _build_client(tmp_path)
+    response = _execute(
+        client,
+        _payload(),
+        idempotency_key="connector-site-isolation",
+    )
+    assert response.status_code == 200
+    run_id = response.json()["data"]["run_id"]
+
+    beta_secret = "npcink-cloud-beta-secret-for-hmac-sha256-32b"
+    seed_site_auth(
+        database_url,
+        site_id="site_beta",
+        key_id="key_beta",
+        secret=beta_secret,
+        scopes=["runtime:read"],
+    )
+    isolated_response = _get_result(
+        client,
+        run_id,
+        site_id="site_beta",
+        key_id="key_beta",
+        secret=beta_secret,
+    )
+
+    assert isolated_response.status_code == 404
+    assert isolated_response.json()["error_code"] == "runtime.run_not_found"
 
 
 def test_wordpress_ai_connector_runtime_accepts_registered_task_projection(
@@ -635,7 +1223,7 @@ def test_wordpress_ai_connector_runtime_rejects_open_ended_task_projection(
     response = _execute(client, payload, idempotency_key="wp-ai-open-task")
 
     assert response.status_code == 400
-    assert response.json()["error_code"] == "wp_ai_connector.ai_task_contract_identity_invalid"
+    assert response.json()["error_code"] == "wordpress_operation.ai_task_contract_identity_invalid"
     assert provider.requests == []
 
 
@@ -694,7 +1282,7 @@ def test_wordpress_ai_connector_title_generation_uses_hidden_site_title_style(
     response = _execute(client, payload, idempotency_key="wp-ai-title-site-style")
 
     assert response.status_code == 200
-    assert response.json()["data"]["result"]["output_text"] == (
+    assert response.json()["data"]["result"]["output"]["output_text"] == (
         "Npcink Cloud Addon: WordPress AI scene helper"
     )
     assert captured_input["intent"] == "writing_context"
@@ -937,22 +1525,22 @@ def test_wordpress_ai_connector_title_generation_ignores_non_list_site_knowledge
         (
             "title_generation",
             {"enabled": True, "mode": "site_title_style", "titles": ["Injected"]},
-            "wp_ai_connector.site_knowledge_reference_fields_forbidden",
+            "wordpress_operation.site_knowledge_reference_fields_forbidden",
         ),
         (
             "content_summary",
             {"enabled": True, "mode": "site_title_style"},
-            "wp_ai_connector.site_knowledge_reference_mode_invalid",
+            "wordpress_operation.site_knowledge_reference_mode_invalid",
         ),
         (
             "content_rewrite",
             {"enabled": True, "mode": "site_title_style"},
-            "wp_ai_connector.site_knowledge_reference_task_not_allowed",
+            "wordpress_operation.site_knowledge_reference_task_not_allowed",
         ),
         (
             "title_generation",
             {"enabled": "yes", "mode": "site_title_style"},
-            "wp_ai_connector.site_knowledge_reference_enabled_invalid",
+            "wordpress_operation.site_knowledge_reference_enabled_invalid",
         ),
     ],
 )
@@ -994,7 +1582,7 @@ def test_wordpress_ai_connector_runtime_executes_alt_text_as_vision(
     assert response.status_code == 200
     data = response.json()["data"]
     assert data["status"] == "succeeded"
-    assert data["result"]["output_text"] == "Blue ceramic mug on a white table"
+    assert data["result"]["output"]["output_text"] == "Blue ceramic mug on a white table"
     assert data["execution_context"]["ability_family"] == "vision"
     assert data["execution_context"]["data_classification"] == "public_reference_media"
     assert provider.requests[0].execution_kind == "vision"
@@ -1014,8 +1602,8 @@ def test_wordpress_ai_connector_runtime_executes_alt_text_as_vision(
 
     with get_session(database_url) as session:
         run = session.execute(select(RunRecord)).scalar_one()
-        assert run.ability_name == "npcink-cloud/wp-ai-connector"
-        assert run.channel == "wordpress_ai_connector"
+        assert run.ability_name == "npcink-cloud/connector-runtime"
+        assert run.channel == "editor"
         assert run.execution_kind == "vision"
         assert run.ability_family == "vision"
         assert run.profile_id == WP_AI_CONNECTOR_ALT_TEXT_VISION_PROFILE_ID
@@ -1054,11 +1642,11 @@ def test_wordpress_ai_connector_runtime_accepts_bounded_alt_text_data_url(
     [
         (
             {"request": {"prompt": "Generate alt text."}},
-            "wp_ai_connector.alt_text_image_required",
+            "wordpress_operation.alt_text_image_required",
         ),
         (
             {"request": {"prompt": "Generate alt text.", "image_url": "notaurl"}},
-            "wp_ai_connector.alt_text_image_url_invalid",
+            "wordpress_operation.alt_text_image_url_invalid",
         ),
         (
             {
@@ -1068,7 +1656,7 @@ def test_wordpress_ai_connector_runtime_accepts_bounded_alt_text_data_url(
                     "mime_type": "image/svg+xml",
                 }
             },
-            "wp_ai_connector.alt_text_mime_type_not_allowed",
+            "wordpress_operation.alt_text_mime_type_not_allowed",
         ),
         (
             {
@@ -1078,7 +1666,7 @@ def test_wordpress_ai_connector_runtime_accepts_bounded_alt_text_data_url(
                     "image_base64": "abc",
                 }
             },
-            "wp_ai_connector.chat_or_secret_field_forbidden",
+            "wordpress_operation.chat_or_secret_field_forbidden",
         ),
         (
             {
@@ -1088,7 +1676,7 @@ def test_wordpress_ai_connector_runtime_accepts_bounded_alt_text_data_url(
                     "update_attachment_metadata": True,
                 }
             },
-            "wp_ai_connector.chat_or_secret_field_forbidden",
+            "wordpress_operation.chat_or_secret_field_forbidden",
         ),
         (
             {
@@ -1098,7 +1686,7 @@ def test_wordpress_ai_connector_runtime_accepts_bounded_alt_text_data_url(
                     "messages": [{"role": "user", "content": "chat"}],
                 }
             },
-            "wp_ai_connector.chat_or_secret_field_forbidden",
+            "wordpress_operation.chat_or_secret_field_forbidden",
         ),
     ],
 )
@@ -1136,7 +1724,7 @@ def test_wordpress_ai_connector_runtime_strips_reasoning_noise_from_title(
     response = _execute(client, payload, idempotency_key="wp-ai-connector-think-strip")
 
     assert response.status_code == 200
-    result_text = response.json()["data"]["result"]["output_text"]
+    result_text = response.json()["data"]["result"]["output"]["output_text"]
     assert result_text == "Cloud Runtime Connector Verified"
     assert "<think>" not in result_text
     assert "reasoning" not in result_text.lower()
@@ -1164,7 +1752,7 @@ def test_wordpress_ai_connector_runtime_falls_back_on_reasoning_only_title(
     data = response.json()["data"]
     assert data["status"] == "succeeded"
     assert data["fallback_used"] is True
-    assert data["result"]["output_text"] == "Hosted Runtime Connector Verified"
+    assert data["result"]["output"]["output_text"] == "Hosted Runtime Connector Verified"
     assert len(provider.requests) == 2
     assert provider.requests[0].model_id == "gpt-wp-ai-connector-test"
     assert provider.requests[1].model_id == "gpt-wp-ai-connector-fallback-test"
@@ -1197,7 +1785,7 @@ def test_wordpress_ai_connector_runtime_falls_back_on_incomplete_title_fragment(
     data = response.json()["data"]
     assert data["status"] == "succeeded"
     assert data["fallback_used"] is True
-    assert data["result"]["output_text"] == "Hosted Runtime Connector Verified"
+    assert data["result"]["output"]["output_text"] == "Hosted Runtime Connector Verified"
     assert len(provider.requests) == 2
     assert provider.requests[0].model_id == "gpt-wp-ai-connector-test"
     assert provider.requests[1].model_id == "gpt-wp-ai-connector-fallback-test"
@@ -1225,7 +1813,7 @@ def test_wordpress_ai_connector_runtime_strips_title_explanation_tail(
     data = response.json()["data"]
     assert data["status"] == "succeeded"
     assert (
-        data["result"]["output_text"]
+        data["result"]["output"]["output_text"]
         == "How to Verify a Hosted AI Runtime Connector: Essential Steps"
     )
 
@@ -1249,7 +1837,7 @@ def test_wordpress_ai_connector_runtime_extracts_single_title_from_title_bundle(
     assert "multiple options" in provider_input["input"]
     assert "numbered lists" in provider_input["input"]
     assert (
-        response.json()["data"]["result"]["output_text"]
+        response.json()["data"]["result"]["output"]["output_text"]
         == "WordPress AI 连接器测试：云端生成，本地审核"
     )
 
@@ -1282,7 +1870,7 @@ def test_wordpress_ai_connector_runtime_extracts_title_from_article_shaped_outpu
     )
 
     assert response.status_code == 200
-    assert response.json()["data"]["result"]["output_text"] == expected
+    assert response.json()["data"]["result"]["output"]["output_text"] == expected
 
 
 def test_wordpress_ai_connector_runtime_normalizes_rewrite_variant_bundle(
@@ -1303,7 +1891,7 @@ def test_wordpress_ai_connector_runtime_normalizes_rewrite_variant_bundle(
     assert response.status_code == 200
     provider_input = provider.requests[0].input_payload
     assert "Return exactly one rewritten version" in provider_input["input"]
-    result_text = response.json()["data"]["result"]["output_text"]
+    result_text = response.json()["data"]["result"]["output"]["output_text"]
     assert result_text == "这个插件非常实用，能够帮助站长高效完成大量内容相关工作。"
     assert "如果你愿意" not in result_text
 
@@ -1335,7 +1923,7 @@ def test_wordpress_ai_connector_runtime_projects_classification_json_scene(
     assert provider_input["max_tokens"] == 220
     assert provider_input["max_output_tokens"] == 220
     assert provider.requests[0].profile_id == WP_AI_CONNECTOR_CLASSIFICATION_PROFILE_ID
-    result = json.loads(response.json()["data"]["result"]["output_text"])
+    result = json.loads(response.json()["data"]["result"]["output"]["output_text"])
     assert result["suggestions"]
     assert all("term" in suggestion for suggestion in result["suggestions"])
     assert any(
@@ -1370,7 +1958,7 @@ def test_wordpress_ai_connector_runtime_preserves_existing_only_taxonomy_terms(
     assert response.status_code == 200
     provider_input = provider.requests[0].input_payload
     assert "Choose only exact term names" in provider_input["input"]
-    result = json.loads(response.json()["data"]["result"]["output_text"])
+    result = json.loads(response.json()["data"]["result"]["output"]["output_text"])
     assert result == {
         "suggestions": [
             {"term": "经验教程", "confidence": 0.8, "is_new": False},
@@ -1400,7 +1988,7 @@ def test_wordpress_ai_connector_runtime_normalizes_meta_description_scene(
     provider_input = provider.requests[0].input_payload
     assert "120 to 155 characters" in provider_input["input"]
     assert provider_input["max_tokens"] == 80
-    result_text = response.json()["data"]["result"]["output_text"]
+    result_text = response.json()["data"]["result"]["output"]["output_text"]
     assert "**" not in result_text
     assert "###" not in result_text
     assert len(result_text) <= 155
@@ -1427,7 +2015,7 @@ def test_wordpress_ai_connector_runtime_falls_back_on_meta_boilerplate(
     response = _execute(client, payload, idempotency_key="wp-ai-connector-meta-boilerplate")
 
     assert response.status_code == 200
-    result_text = response.json()["data"]["result"]["output_text"]
+    result_text = response.json()["data"]["result"]["output"]["output_text"]
     assert "以下是基于" not in result_text
     assert "建议式输出" in result_text
 
@@ -1452,7 +2040,7 @@ def test_wordpress_ai_connector_runtime_normalizes_summary_text_scene(
     assert "Return only the summary" in provider_input["input"]
     assert provider_input["max_tokens"] == 160
     assert provider.requests[0].profile_id == WP_AI_CONNECTOR_EDITORIAL_PROFILE_ID
-    result_text = response.json()["data"]["result"]["output_text"]
+    result_text = response.json()["data"]["result"]["output"]["output_text"]
     assert "**" not in result_text
     assert "###" not in result_text
     assert not result_text.endswith("2.")
@@ -1527,7 +2115,7 @@ def test_wordpress_ai_connector_runtime_rejects_timeout_above_scene_limit(
 
     assert response.status_code == 400
     payload = response.json()
-    assert payload["error_code"] == "wp_ai_connector.timeout_exceeded"
+    assert payload["error_code"] == "connector_runtime.timeout_exceeded"
     assert provider.requests == []
 
 
@@ -1550,7 +2138,7 @@ def test_wordpress_ai_connector_runtime_rejects_generic_chat_shape(tmp_path: Pat
 
     assert response.status_code == 400
     payload = response.json()
-    assert payload["error_code"] == "wp_ai_connector.chat_or_secret_field_forbidden"
+    assert payload["error_code"] == "wordpress_operation.chat_or_secret_field_forbidden"
     assert provider.requests == []
 
 
