@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 from app.api.main import create_app
 from app.core.config import Settings
 from app.core.db import dispose_engine, get_session, init_schema
-from app.core.models import MediaDerivativeArtifact, MediaDerivativeJobMetric, RunRecord
+from app.core.models import MediaArtifact, MediaDerivativeJobMetric, RunRecord
 from app.core.services import CloudServices
 from tests.conftest import TEST_INTERNAL_AUTH_TOKEN, build_internal_headers, seed_site_auth
 
@@ -103,36 +103,56 @@ def _seed_media_metrics(database_url: str) -> None:
         session.flush()
         session.add_all(
             [
-                MediaDerivativeArtifact(
+                MediaArtifact(
                     artifact_id="art-media-001",
                     run_id="run-media-001",
                     site_id="site-media-001",
-                    storage_ref="blob://media_derivative/art-media-001",
-                    blob_data=b"1234",
-                    mime_type="image/webp",
+                    storage_key="obj_11111111111111111111111111111111",
+                    media_kind="image",
+                    operation="media_derivative",
+                    status="available",
+                    content_type="image/webp",
                     format="webp",
                     width=100,
                     height=80,
-                    filesize_bytes=400,
+                    byte_size=400,
                     checksum="sha256:abc",
-                    source_media_type="image",
                     processing_warnings_json={"warnings": []},
                     expires_at=now + timedelta(minutes=30),
                     created_at=now,
                 ),
-                MediaDerivativeArtifact(
+                MediaArtifact(
                     artifact_id="art-media-003",
                     run_id="run-media-003",
                     site_id="site-media-002",
-                    storage_ref="blob://media_derivative/art-media-003",
-                    blob_data=b"12345",
-                    mime_type="image/jpeg",
+                    storage_key="obj_33333333333333333333333333333333",
+                    media_kind="image",
+                    operation="media_derivative",
+                    status="available",
+                    content_type="image/jpeg",
                     format="jpeg",
                     width=200,
                     height=100,
-                    filesize_bytes=800,
+                    byte_size=800,
                     checksum="sha256:def",
-                    source_media_type="image",
+                    processing_warnings_json={"warnings": []},
+                    expires_at=now + timedelta(minutes=30),
+                    created_at=now,
+                ),
+                MediaArtifact(
+                    artifact_id="art-audio-ignored",
+                    run_id="run-media-001",
+                    site_id="site-media-001",
+                    storage_key="obj_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                    media_kind="audio",
+                    operation="audio_generation",
+                    status="available",
+                    content_type="audio/mpeg",
+                    format="mp3",
+                    width=0,
+                    height=0,
+                    byte_size=9999,
+                    checksum="sha256:audio",
                     processing_warnings_json={"warnings": []},
                     expires_at=now + timedelta(minutes=30),
                     created_at=now,
@@ -255,7 +275,7 @@ def test_admin_media_observability_returns_cross_site_summary(tmp_path: Path) ->
         assert len(data["sites"]) == 2
         assert data["errors"][0]["error_code"] == "media_derivative.source_decode_failed"
         assert "source_bytes" in data["recent_failures"][0]
-        assert "blob_data" not in data["recent_failures"][0]
+        assert "storage_key" not in data["recent_failures"][0]
     finally:
         dispose_engine(database_url)
 

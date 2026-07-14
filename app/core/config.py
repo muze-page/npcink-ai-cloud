@@ -10,6 +10,8 @@ from app.core.models import PLATFORM_ADMIN_ROLE_PLATFORM_ADMIN
 
 
 class Settings(BaseSettings):
+    artifact_store_root: str = Field(default="/tmp/npcink-ai-cloud-artifacts")
+    artifact_store_chunk_bytes: int = Field(default=64 * 1024, ge=4096, le=1024 * 1024)
     model_config = SettingsConfigDict(
         env_prefix="NPCINK_CLOUD_",
         env_file=(".env", ".env.local"),
@@ -281,8 +283,7 @@ class Settings(BaseSettings):
 
     def trusted_hosts(self) -> set[str]:
         hosts = {
-            self._normalize_host(item)
-            for item in str(self.trusted_host_allowlist or "").split(",")
+            self._normalize_host(item) for item in str(self.trusted_host_allowlist or "").split(",")
         }
         hosts = {host for host in hosts if host}
         environment = str(self.environment or "").strip().lower()

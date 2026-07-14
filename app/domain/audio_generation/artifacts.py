@@ -5,13 +5,15 @@ import hashlib
 import secrets
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from io import BytesIO
 from typing import Any
 from uuid import uuid4
 
 import httpx
 from sqlalchemy.orm import Session
 
-from app.core.models import MediaDerivativeArtifact, RunRecord
+from app.core.models import MediaArtifact, RunRecord
+from app.domain.media_artifacts import ArtifactStore
 
 AUDIO_ARTIFACT_DEFAULT_TTL_MINUTES = 60
 AUDIO_ARTIFACT_DEFAULT_MAX_BYTES = 24 * 1024 * 1024
@@ -47,6 +49,7 @@ def materialize_audio_generation_candidates(
     session: Session,
     run: RunRecord,
     result_json: dict[str, Any],
+    artifact_store: ArtifactStore,
     config: AudioArtifactMaterializationConfig | None = None,
 ) -> dict[str, Any]:
     if not _is_audio_generation_result(result_json):
@@ -82,6 +85,7 @@ def materialize_audio_generation_candidates(
             ttl_minutes=materialize_config.ttl_minutes,
             source_kind=source_kind,
             source_url_present=bool(source_url),
+            artifact_store=artifact_store,
         )
         audio.update(
             {
@@ -96,19 +100,17 @@ def materialize_audio_generation_candidates(
                     "authenticated_download_url": (
                         f"/v1/runtime/artifacts/{artifact.artifact_id}/download"
                     ),
-                    "expires_at": artifact.expires_at.isoformat()
-                    if artifact.expires_at
-                    else None,
-                    "mime_type": artifact.mime_type,
+                    "expires_at": artifact.expires_at.isoformat() if artifact.expires_at else None,
+                    "mime_type": artifact.content_type,
                     "format": artifact.format,
-                    "filesize_bytes": artifact.filesize_bytes,
+                    "filesize_bytes": artifact.byte_size,
                     "checksum": artifact.checksum,
                     "source_media_type": "audio",
                 },
                 "b64_json": "",
                 "mime_type": mime_type,
                 "format": audio_format,
-                "size_bytes": artifact.filesize_bytes,
+                "size_bytes": artifact.byte_size,
                 "provider_url_status": "materialized",
             }
         )
@@ -204,24 +206,28 @@ def _create_audio_artifact(
     ttl_minutes: int,
     source_kind: str,
     source_url_present: bool,
-) -> tuple[MediaDerivativeArtifact, str]:
+    artifact_store: ArtifactStore,
+) -> tuple[MediaArtifact, str]:
     artifact_id = f"art_{uuid4().hex}"
     public_download_token = secrets.token_urlsafe(24)
-    checksum = "sha256:" + hashlib.sha256(audio_bytes).hexdigest()
+    stored = artifact_store.put(
+        BytesIO(audio_bytes), max_bytes=len(audio_bytes), metadata={"media_kind": "audio"}
+    )
     now = datetime.now(UTC)
-    artifact = MediaDerivativeArtifact(
+    artifact = MediaArtifact(
         artifact_id=artifact_id,
         run_id=run.run_id,
         site_id=run.site_id,
-        storage_ref=f"blob://audio_generation/{artifact_id}",
-        blob_data=audio_bytes,
-        mime_type=mime_type,
+        storage_key=stored.storage_key,
+        media_kind="audio",
+        operation="audio_generation",
+        content_type=mime_type,
+        byte_size=stored.byte_size,
+        status="available",
         format=audio_format,
         width=0,
         height=0,
-        filesize_bytes=len(audio_bytes),
-        checksum=checksum,
-        source_media_type="audio",
+        checksum=stored.checksum,
         processing_warnings_json={
             "warnings": [],
             "source_kind": source_kind,
@@ -232,8 +238,12 @@ def _create_audio_artifact(
         },
         expires_at=now + timedelta(minutes=max(1, int(ttl_minutes))),
     )
-    session.add(artifact)
-    session.flush()
+    try:
+        session.add(artifact)
+        session.flush()
+    except Exception:
+        artifact_store.delete(stored.storage_key)
+        raise
     return (
         artifact,
         f"/v1/runtime/artifacts/{artifact.artifact_id}/public-download"

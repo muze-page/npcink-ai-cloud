@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import Settings
 from app.core.models import AudioAsset, RunRecord
+from app.domain.media_artifacts import ArtifactStore, ArtifactStoreError
 from app.domain.media_derivatives.artifacts import get_artifact, is_artifact_expired
 
 AUDIO_ASSET_STATUS_ACTIVE = "active"
@@ -54,6 +55,11 @@ class AudioAssetSigningNotConfiguredError(AudioAssetError):
     error_code = "audio_asset.signing_not_configured"
 
 
+class AudioAssetStorageUnavailableError(AudioAssetError):
+    status_code = 503
+    error_code = "audio_asset.storage_unavailable"
+
+
 @dataclass(frozen=True)
 class PlaybackUrl:
     url: str
@@ -66,6 +72,7 @@ def promote_audio_asset_from_artifact(
     session: Session,
     site_id: str,
     artifact_id: str,
+    artifact_store: ArtifactStore,
     source_content_hash: str = "",
     metadata: dict[str, Any] | None = None,
 ) -> AudioAsset:
@@ -74,10 +81,8 @@ def promote_audio_asset_from_artifact(
         raise AudioAssetNotFoundError("audio source artifact was not found")
     if is_artifact_expired(artifact):
         raise AudioAssetArtifactInvalidError("audio source artifact has expired")
-    if artifact.source_media_type != "audio":
+    if artifact.media_kind != "audio":
         raise AudioAssetArtifactInvalidError("source artifact is not an audio artifact")
-    if not artifact.blob_data:
-        raise AudioAssetArtifactInvalidError("source artifact has no audio payload")
 
     existing = session.scalar(
         select(AudioAsset).where(
@@ -89,6 +94,19 @@ def promote_audio_asset_from_artifact(
     if existing is not None:
         return existing
 
+    try:
+        with artifact_store.open(artifact.storage_key) as source:
+            stored = artifact_store.put(
+                source,
+                max_bytes=max(1, artifact.byte_size),
+                metadata={"media_kind": "audio_asset"},
+            )
+    except ArtifactStoreError as error:
+        raise AudioAssetArtifactInvalidError("source artifact has no audio payload") from error
+    if stored.checksum != artifact.checksum:
+        artifact_store.delete(stored.storage_key)
+        raise AudioAssetArtifactInvalidError("source artifact checksum mismatch")
+
     run = session.get(RunRecord, artifact.run_id)
     candidate = _candidate_for_artifact(run.result_json if run is not None else None, artifact_id)
     asset_id = f"aud_{uuid4().hex}"
@@ -98,12 +116,11 @@ def promote_audio_asset_from_artifact(
         source_artifact_id=artifact.artifact_id,
         source_run_id=artifact.run_id,
         status=AUDIO_ASSET_STATUS_ACTIVE,
-        storage_ref=f"blob://audio_asset/{asset_id}",
-        blob_data=artifact.blob_data,
-        mime_type=artifact.mime_type,
+        storage_key=stored.storage_key,
+        content_type=artifact.content_type,
         format=artifact.format,
         duration_seconds=_coerce_float(candidate.get("duration_seconds"), default=0.0),
-        filesize_bytes=artifact.filesize_bytes,
+        byte_size=stored.byte_size,
         checksum=artifact.checksum,
         source_content_hash=_normalize_source_content_hash(source_content_hash),
         provider_id=str(run.selected_provider_id or "") if run is not None else None,
@@ -127,8 +144,12 @@ def promote_audio_asset_from_artifact(
             "adoption_metadata": _safe_metadata(metadata or {}),
         },
     )
-    session.add(asset)
-    session.flush()
+    try:
+        session.add(asset)
+        session.flush()
+    except Exception:
+        artifact_store.delete(stored.storage_key)
+        raise
     return asset
 
 
@@ -172,9 +193,9 @@ def build_audio_asset_projection(
         "source_artifact_id": asset.source_artifact_id,
         "source_run_id": asset.source_run_id,
         "duration_seconds": asset.duration_seconds,
-        "mime_type": asset.mime_type,
+        "mime_type": asset.content_type,
         "format": asset.format,
-        "filesize_bytes": asset.filesize_bytes,
+        "filesize_bytes": asset.byte_size,
         "checksum": asset.checksum,
         "source_content_hash": asset.source_content_hash,
         "provider_id": asset.provider_id,

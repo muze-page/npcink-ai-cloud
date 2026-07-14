@@ -25,6 +25,7 @@ from app.domain.image_generation.inline_images import (
     InlineImageMaterializationConfig,
     materialize_inline_image_candidates_from_urls,
 )
+from app.domain.media_artifacts import ArtifactStore
 from app.domain.media_derivatives.artifacts import (
     build_artifact_result_json,
     create_artifact,
@@ -122,6 +123,7 @@ class AudioCandidateMaterializer(Protocol):
         run: RunRecord,
         result_json: dict[str, Any],
         config: AudioArtifactMaterializationConfig,
+        artifact_store: ArtifactStore,
     ) -> dict[str, Any]: ...
 
 
@@ -203,6 +205,7 @@ class RuntimeArtifactCoordinationDependencies:
     credit_estimator: RuntimeCreditEstimator
     execution_input_encryptor: RuntimeExecutionInputEncryptor
     execution_response_builder: RuntimeExecutionResponseBuilder
+    artifact_store: ArtifactStore
 
 
 class RuntimeArtifactCoordinationService:
@@ -500,6 +503,7 @@ class RuntimeArtifactCoordinationService:
 
         artifact = create_artifact(
             session=repository.session,
+            artifact_store=self.dependencies.artifact_store,
             run_id=run.run_id,
             site_id=run.site_id,
             result=result,
@@ -547,6 +551,7 @@ class RuntimeArtifactCoordinationService:
                     float(self.config.audio_artifact_download_timeout_seconds),
                 ),
             ),
+            artifact_store=self.dependencies.artifact_store,
         )
 
     def materialize_inline_image_output(

@@ -87,6 +87,7 @@ from app.domain.image_sources.contracts import (
     ImageSourceContractViolation,
 )
 from app.domain.image_sources.service import ImageSourceProviderError, ImageSourceService
+from app.domain.media_artifacts import ArtifactStore, build_artifact_store
 from app.domain.media_batch_plans.contracts import (
     MEDIA_BATCH_PLAN_ABILITIES,
     MEDIA_BATCH_PLAN_PROFILE_ID,
@@ -209,9 +210,11 @@ class RuntimeService:
         callback_dispatcher: RuntimeCallbackDispatcher | None = None,
         callback_max_attempts: int = 3,
         callback_retry_backoff_seconds: int = 30,
+        artifact_store: ArtifactStore | None = None,
     ) -> None:
         self.database_url = database_url
         self.settings = settings or get_settings()
+        self.artifact_store = artifact_store or build_artifact_store(self.settings)
         self.commercial_service = CommercialService(database_url, settings=self.settings)
         self.result_normalization_service = RuntimeResultNormalizationService()
         self.providers = (
@@ -277,6 +280,7 @@ class RuntimeService:
                     input_payload, settings=self.settings
                 ),
                 execution_response_builder=self._build_execution_response,
+                artifact_store=self.artifact_store,
             ),
             run_controller=self.run_lifecycle_service,
             execution_input_loader=self._get_execution_input_payload,

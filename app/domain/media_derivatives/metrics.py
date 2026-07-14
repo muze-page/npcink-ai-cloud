@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.core.db import get_session
 from app.core.models import (
-    MediaDerivativeArtifact,
+    MediaArtifact,
     MediaDerivativeJobMetric,
     RunRecord,
 )
@@ -25,7 +25,7 @@ def record_media_derivative_job_metric(
     source_bytes: int,
     processing_started_at: datetime,
     result: MediaDerivativeResult | None = None,
-    artifact: MediaDerivativeArtifact | None = None,
+    artifact: MediaArtifact | None = None,
     error_code: str = "",
     watermark_applied: bool = False,
 ) -> MediaDerivativeJobMetric:
@@ -119,13 +119,14 @@ class MediaDerivativeObservabilityService:
                 MediaDerivativeJobMetric.created_at <= current_time,
             ]
             artifact_conditions = [
-                MediaDerivativeArtifact.created_at <= current_time,
-                MediaDerivativeArtifact.expires_at > current_time,
-                MediaDerivativeArtifact.purged_at.is_(None),
+                MediaArtifact.operation == "media_derivative",
+                MediaArtifact.created_at <= current_time,
+                MediaArtifact.expires_at > current_time,
+                MediaArtifact.purged_at.is_(None),
             ]
             if site_id:
                 base_conditions.append(MediaDerivativeJobMetric.site_id == site_id)
-                artifact_conditions.append(MediaDerivativeArtifact.site_id == site_id)
+                artifact_conditions.append(MediaArtifact.site_id == site_id)
             if target_format:
                 base_conditions.append(MediaDerivativeJobMetric.target_format == target_format)
 
@@ -149,13 +150,13 @@ class MediaDerivativeObservabilityService:
             ).one()
 
             storage_statement = select(
-                func.count(MediaDerivativeArtifact.artifact_id),
-                func.sum(MediaDerivativeArtifact.filesize_bytes),
+                func.count(MediaArtifact.artifact_id),
+                func.sum(MediaArtifact.byte_size),
             ).where(*artifact_conditions)
             if target_format:
                 storage_statement = storage_statement.join(
                     MediaDerivativeJobMetric,
-                    MediaDerivativeJobMetric.artifact_id == MediaDerivativeArtifact.artifact_id,
+                    MediaDerivativeJobMetric.artifact_id == MediaArtifact.artifact_id,
                 ).where(MediaDerivativeJobMetric.target_format == target_format)
             storage_row = session.execute(storage_statement).one()
 

@@ -9,7 +9,7 @@ from app.api.main import create_app
 from app.core.config import Settings
 from app.core.db import get_session, init_schema
 from app.core.models import (
-    MediaDerivativeArtifact,
+    MediaArtifact,
     MediaDerivativeJobMetric,
     RunRecord,
 )
@@ -117,19 +117,20 @@ def _seed_media_metrics(database_url: str) -> None:
         )
         session.flush()
         session.add(
-            MediaDerivativeArtifact(
+            MediaArtifact(
                 artifact_id="art-media-portal-001",
                 run_id="run-media-portal-001",
                 site_id="site-media-portal-001",
-                storage_ref="blob://media_derivative/art-media-portal-001",
-                blob_data=b"1234",
-                mime_type="image/webp",
+                storage_key="obj_11111111111111111111111111111111",
+                media_kind="image",
+                operation="media_derivative",
+                status="available",
+                content_type="image/webp",
                 format="webp",
                 width=100,
                 height=80,
-                filesize_bytes=400,
+                byte_size=400,
                 checksum="sha256:abc",
-                source_media_type="image",
                 processing_warnings_json={"warnings": []},
                 expires_at=now + timedelta(minutes=30),
                 created_at=now,
@@ -215,7 +216,7 @@ def test_portal_media_observability_returns_current_site_summary(tmp_path: Path)
     assert data["formats"][0]["target_format"] == "webp"
     assert data["errors"] == []
     assert "sites" not in data
-    assert "blob_data" not in str(data)
+    assert "storage_key" not in str(data)
 
 
 def test_portal_media_observability_rejects_other_site(tmp_path: Path) -> None:

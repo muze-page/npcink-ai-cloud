@@ -120,9 +120,13 @@ def _run_provider_health_scan(settings: Settings) -> dict[str, object]:
 
 
 def _run_artifact_cleanup(settings: Settings) -> dict[str, object]:
+    from app.domain.media_artifacts import build_artifact_store
     from app.domain.media_derivatives.artifacts import cleanup_expired_artifacts
 
-    purged = cleanup_expired_artifacts(database_url=settings.database_url)
+    purged = cleanup_expired_artifacts(
+        database_url=settings.database_url,
+        artifact_store=build_artifact_store(settings),
+    )
     return {"purged_artifacts": purged}
 
 

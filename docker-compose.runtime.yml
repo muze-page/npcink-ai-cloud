@@ -50,6 +50,7 @@ services:
     env_file:
       - .env.deploy
     environment:
+      NPCINK_CLOUD_ARTIFACT_STORE_ROOT: /var/lib/npcink-ai-cloud/artifacts
       NPCINK_CLOUD_OTEL_EXPORTER_OTLP_ENDPOINT: ${NPCINK_CLOUD_OTEL_EXPORTER_OTLP_ENDPOINT:-http://otel-collector:4318/v1/traces}
       NPCINK_CLOUD_OTEL_TRACE_SINK_OTLP_ENDPOINT: ${NPCINK_CLOUD_OTEL_TRACE_SINK_OTLP_ENDPOINT:-jaeger:4317}
       NPCINK_CLOUD_OTEL_TRACE_QUERY_URL: ${NPCINK_CLOUD_OTEL_TRACE_QUERY_URL:-http://127.0.0.1:${NPCINK_CLOUD_JAEGER_UI_PORT:-16686}}
@@ -64,6 +65,8 @@ services:
         condition: service_started
     expose:
       - "8000"
+    volumes:
+      - cloud-artifacts-prod:/var/lib/npcink-ai-cloud/artifacts
 
   frontend:
     image: npcink-ai-cloud-frontend:prod
@@ -84,6 +87,7 @@ services:
     env_file:
       - .env.deploy
     environment:
+      NPCINK_CLOUD_ARTIFACT_STORE_ROOT: /var/lib/npcink-ai-cloud/artifacts
       NPCINK_CLOUD_OTEL_EXPORTER_OTLP_ENDPOINT: ${NPCINK_CLOUD_OTEL_EXPORTER_OTLP_ENDPOINT:-http://otel-collector:4318/v1/traces}
       NPCINK_CLOUD_OTEL_TRACE_SINK_OTLP_ENDPOINT: ${NPCINK_CLOUD_OTEL_TRACE_SINK_OTLP_ENDPOINT:-jaeger:4317}
       NPCINK_CLOUD_OTEL_TRACE_QUERY_URL: ${NPCINK_CLOUD_OTEL_TRACE_QUERY_URL:-http://127.0.0.1:${NPCINK_CLOUD_JAEGER_UI_PORT:-16686}}
@@ -96,6 +100,8 @@ services:
         condition: service_started
       jaeger:
         condition: service_started
+    volumes:
+      - cloud-artifacts-prod:/var/lib/npcink-ai-cloud/artifacts
 
   callback-worker:
     image: npcink-ai-cloud-worker:prod
@@ -124,6 +130,7 @@ services:
     env_file:
       - .env.deploy
     environment:
+      NPCINK_CLOUD_ARTIFACT_STORE_ROOT: /var/lib/npcink-ai-cloud/artifacts
       NPCINK_CLOUD_OTEL_EXPORTER_OTLP_ENDPOINT: ${NPCINK_CLOUD_OTEL_EXPORTER_OTLP_ENDPOINT:-http://otel-collector:4318/v1/traces}
       NPCINK_CLOUD_OTEL_TRACE_SINK_OTLP_ENDPOINT: ${NPCINK_CLOUD_OTEL_TRACE_SINK_OTLP_ENDPOINT:-jaeger:4317}
       NPCINK_CLOUD_OTEL_TRACE_QUERY_URL: ${NPCINK_CLOUD_OTEL_TRACE_QUERY_URL:-http://127.0.0.1:${NPCINK_CLOUD_JAEGER_UI_PORT:-16686}}
@@ -136,6 +143,8 @@ services:
         condition: service_started
       jaeger:
         condition: service_started
+    volumes:
+      - cloud-artifacts-prod:/var/lib/npcink-ai-cloud/artifacts
 
   proxy:
     image: nginx:1.27-alpine
@@ -166,6 +175,7 @@ services:
       - caddy-config:/config
 
 volumes:
+  cloud-artifacts-prod:
   cloud-postgres-prod:
   cloud-redis-prod:
   caddy-data:

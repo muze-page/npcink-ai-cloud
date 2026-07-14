@@ -79,8 +79,8 @@ Before enabling the feature:
 
 3. Confirm these migrations are present:
 
-   - `20260602_0034_media_derivative_artifacts`
    - `20260603_0036_media_derivative_job_metrics`
+   - `20260714_0061_local_volume_artifact_store`
 
 4. Restart the runtime worker after migration:
 
@@ -105,7 +105,9 @@ Expected smoke evidence:
 - option/theme-mod reference repair succeeds;
 - rollback history is present;
 - `media_derivative_job_metrics` contains the succeeded run;
-- `media_derivative_artifacts` contains the short-lived artifact.
+- `media_artifacts` contains an available short-lived artifact with
+  `operation = 'media_derivative'`; bytes live in the shared ArtifactStore
+  volume rather than PostgreSQL.
 
 ## Observability
 

@@ -46,8 +46,8 @@ WORKDIR /app
 
 RUN groupadd --system app \
     && useradd --system --gid app --create-home --home-dir /home/app app \
-    && mkdir -p /app/.runtime \
-    && chown -R app:app /app /home/app
+    && mkdir -p /app/.runtime /var/lib/npcink-ai-cloud/artifacts \
+    && chown -R app:app /app /home/app /var/lib/npcink-ai-cloud/artifacts
 
 COPY --from=builder /tmp/wheels /tmp/wheels
 COPY pyproject.toml README.md alembic.ini ./

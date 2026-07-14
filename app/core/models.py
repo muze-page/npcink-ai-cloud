@@ -1716,24 +1716,31 @@ class CommercialDecisionEvent(Base):
     )
 
 
-class MediaDerivativeArtifact(Base):
-    __tablename__ = "media_derivative_artifacts"
+class MediaArtifact(Base):
+    __tablename__ = "media_artifacts"
 
     artifact_id: Mapped[str] = mapped_column(String(191), primary_key=True)
     run_id: Mapped[str] = mapped_column(ForeignKey("run_records.run_id"), index=True)
     site_id: Mapped[str] = mapped_column(String(191), index=True)
-    storage_ref: Mapped[str] = mapped_column(String(512))
-    blob_data: Mapped[bytes] = mapped_column(LargeBinary)
-    mime_type: Mapped[str] = mapped_column(String(64))
+    media_kind: Mapped[str] = mapped_column(String(16), default="image")
+    operation: Mapped[str] = mapped_column(String(64), default="media_derivative")
+    content_type: Mapped[str] = mapped_column(String(64))
+    byte_size: Mapped[int] = mapped_column(Integer, default=0)
+    storage_key: Mapped[str] = mapped_column(String(191))
+    status: Mapped[str] = mapped_column(String(32), default="available", index=True)
     format: Mapped[str] = mapped_column(String(16))
     width: Mapped[int] = mapped_column(Integer, default=0)
     height: Mapped[int] = mapped_column(Integer, default=0)
-    filesize_bytes: Mapped[int] = mapped_column(Integer, default=0)
     checksum: Mapped[str] = mapped_column(String(128))
-    source_media_type: Mapped[str] = mapped_column(String(16), default="image")
     processing_warnings_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
-    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     purged_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    purge_attempt_count: Mapped[int] = mapped_column(Integer, default=0)
+    purge_last_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    purge_next_attempt_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), index=True
+    )
+    purge_last_error_code: Mapped[str | None] = mapped_column(String(64))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
@@ -1748,12 +1755,11 @@ class AudioAsset(Base):
     source_artifact_id: Mapped[str | None] = mapped_column(String(191), index=True)
     source_run_id: Mapped[str | None] = mapped_column(String(191), index=True)
     status: Mapped[str] = mapped_column(String(32), default="active", index=True)
-    storage_ref: Mapped[str] = mapped_column(String(512))
-    blob_data: Mapped[bytes] = mapped_column(LargeBinary)
-    mime_type: Mapped[str] = mapped_column(String(64))
+    storage_key: Mapped[str] = mapped_column(String(191))
+    content_type: Mapped[str] = mapped_column(String(64))
     format: Mapped[str] = mapped_column(String(16))
     duration_seconds: Mapped[float] = mapped_column(Float, default=0.0)
-    filesize_bytes: Mapped[int] = mapped_column(Integer, default=0)
+    byte_size: Mapped[int] = mapped_column(Integer, default=0)
     checksum: Mapped[str] = mapped_column(String(128), index=True)
     source_content_hash: Mapped[str | None] = mapped_column(String(128), index=True)
     provider_id: Mapped[str | None] = mapped_column(String(64), index=True)

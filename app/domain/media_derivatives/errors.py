@@ -100,7 +100,7 @@ class MediaDerivativeSourceArtifactNotFoundError(MediaDerivativeErrorBase):
         )
 
 
-class MediaDerivativeArtifactExpiredError(MediaDerivativeErrorBase):
+class MediaArtifactExpiredError(MediaDerivativeErrorBase):
     def __init__(self, artifact_id: str) -> None:
         super().__init__(
             410,

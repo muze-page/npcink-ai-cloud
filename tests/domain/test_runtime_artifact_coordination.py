@@ -15,13 +15,14 @@ from sqlalchemy import select
 from app.adapters.repositories.runtime_repository import RuntimeRepository
 from app.core.db import dispose_engine, get_session, init_schema
 from app.core.models import (
-    MediaDerivativeArtifact,
+    MediaArtifact,
     MediaDerivativeJobMetric,
     RunRecord,
     Site,
 )
 from app.domain.audio_generation.artifacts import AudioArtifactMaterializationConfig
 from app.domain.image_generation.inline_images import InlineImageMaterializationConfig
+from app.domain.media_artifacts import LocalVolumeArtifactStore
 from app.domain.media_derivatives.errors import MediaDerivativeSourceDecodeFailedError
 from app.domain.media_derivatives.processor import MediaDerivativeResult
 from app.domain.runtime import artifact_coordination
@@ -248,6 +249,9 @@ class RecordingCoordinationDependencies:
             credit_estimator=self.credit_estimator,
             execution_input_encryptor=self.execution_input_encryptor,
             execution_response_builder=self.execution_response_builder,
+            artifact_store=LocalVolumeArtifactStore(
+                Path(self.database_url.removeprefix("sqlite+pysqlite:///")).parent / "artifacts"
+            ),
         )
 
 
@@ -566,9 +570,7 @@ def test_execute_media_derivative_success_records_artifact_metric_and_terminal_e
         run = _create_run(repository, run_id="run_artifact_success")
         service.execute_media_derivative_run(run, repository=repository)
 
-        artifact = session.scalar(
-            select(MediaDerivativeArtifact).where(MediaDerivativeArtifact.run_id == run.run_id)
-        )
+        artifact = session.scalar(select(MediaArtifact).where(MediaArtifact.run_id == run.run_id))
         metric = session.scalar(
             select(MediaDerivativeJobMetric).where(MediaDerivativeJobMetric.run_id == run.run_id)
         )
@@ -644,11 +646,13 @@ def test_audio_and_inline_image_wrappers_delegate_with_frozen_config(
         run: RunRecord,
         result_json: dict[str, Any],
         config: AudioArtifactMaterializationConfig,
+        artifact_store: Any,
     ) -> dict[str, Any]:
         captured["audio_session"] = session
         captured["audio_run"] = run
         captured["audio_input"] = result_json
         captured["audio_config"] = config
+        captured["artifact_store"] = artifact_store
         return {"audio": "materialized"}
 
     def fake_inline_materialization(

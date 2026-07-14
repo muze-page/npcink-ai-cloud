@@ -16,6 +16,12 @@ from app.api.auth import authorize_public_request, get_cloud_services
 from app.api.envelope import build_envelope
 from app.core.db import get_session
 from app.core.logging import get_logger
+from app.domain.media_artifacts import (
+    ArtifactStoreError,
+    build_artifact_store,
+    iter_open_artifact_chunks,
+    read_artifact_bytes,
+)
 from app.domain.media_derivatives.artifacts import (
     get_artifact,
     is_artifact_expired,
@@ -85,19 +91,18 @@ def _remaining_artifact_seconds(artifact: Any) -> int:
     return max(0, int(remaining.total_seconds()))
 
 
-def _stream_artifact_response(artifact: Any, *, cache_control: str) -> StreamingResponse:
+def _stream_artifact_response(
+    artifact: Any, *, cache_control: str, stream: Any, chunk_size: int
+) -> StreamingResponse:
     format_ext = artifact.format
     if format_ext == "jpeg":
         format_ext = "jpg"
-    blob_data = artifact.blob_data or b""
-    content_length = int(artifact.filesize_bytes or len(blob_data))
-
     return StreamingResponse(
-        iter([blob_data]),
-        media_type=artifact.mime_type,
+        iter_open_artifact_chunks(stream, chunk_size=chunk_size),
+        media_type=artifact.content_type,
         headers={
             "Content-Disposition": f'inline; filename="{artifact.artifact_id}.{format_ext}"',
-            "Content-Length": str(content_length),
+            "Content-Length": str(artifact.byte_size),
             "X-Content-Type-Options": "nosniff",
             "Cache-Control": cache_control,
         },
@@ -105,7 +110,7 @@ def _stream_artifact_response(artifact: Any, *, cache_control: str) -> Streaming
 
 
 def _public_download_token_valid(artifact: Any, token: str) -> bool:
-    if artifact.source_media_type != "audio":
+    if artifact.media_kind != "audio":
         return False
     if not token:
         return False
@@ -122,6 +127,7 @@ def _public_download_token_valid(artifact: Any, token: str) -> bool:
 @router.post("/media-derivatives")
 async def create_media_derivative(request: Request) -> Any:
     services = get_cloud_services(request)
+    artifact_store = build_artifact_store(services.settings)
     auth = await authorize_public_request(
         request,
         require_idempotency=True,
@@ -293,7 +299,15 @@ async def create_media_derivative(request: Request) -> Any:
                     message="referenced source artifact not found",
                     trace_id=auth.trace_id,
                 )
-            source_bytes = artifact.blob_data
+            try:
+                source_bytes = read_artifact_bytes(artifact_store, artifact.storage_key)
+            except ArtifactStoreError:
+                return _media_error_response(
+                    status_code=503,
+                    error_code="media_derivative.source_artifact_unavailable",
+                    message="referenced source artifact bytes are unavailable",
+                    trace_id=auth.trace_id,
+                )
             session.commit()
 
     if watermark_artifact_id:
@@ -310,7 +324,15 @@ async def create_media_derivative(request: Request) -> Any:
                     message="referenced watermark artifact not found",
                     trace_id=auth.trace_id,
                 )
-            watermark_bytes = artifact.blob_data
+            try:
+                watermark_bytes = read_artifact_bytes(artifact_store, artifact.storage_key)
+            except ArtifactStoreError:
+                return _media_error_response(
+                    status_code=503,
+                    error_code="media_derivative.watermark_artifact_unavailable",
+                    message="referenced watermark artifact bytes are unavailable",
+                    trace_id=auth.trace_id,
+                )
             session.commit()
 
     if not source_bytes:
@@ -428,6 +450,7 @@ async def download_artifact(
         return auth
 
     services = get_cloud_services(request)
+    artifact_store = build_artifact_store(services.settings)
     with get_session(services.settings.database_url) as session:
         artifact = get_artifact(session, artifact_id, site_id=auth.site_id)
         if artifact is None:
@@ -447,15 +470,30 @@ async def download_artifact(
             )
 
         remaining_seconds = _remaining_artifact_seconds(artifact)
-        record_media_derivative_artifact_download(
-            session=session,
-            artifact_id=artifact.artifact_id,
-        )
-        session.commit()
+        try:
+            stream = artifact_store.open(artifact.storage_key)
+        except ArtifactStoreError:
+            return _media_error_response(
+                status_code=503,
+                error_code="media_derivative.artifact_unavailable",
+                message="artifact bytes are unavailable",
+                trace_id=auth.trace_id,
+            )
+        try:
+            record_media_derivative_artifact_download(
+                session=session,
+                artifact_id=artifact.artifact_id,
+            )
+            session.commit()
+        except Exception:
+            stream.close()
+            raise
 
     return _stream_artifact_response(
         artifact,
         cache_control=f"private, max-age={remaining_seconds}",
+        stream=stream,
+        chunk_size=artifact_store.chunk_size,
     )
 
 
@@ -466,6 +504,7 @@ async def public_download_artifact(
     token: str = "",
 ) -> Any:
     services = get_cloud_services(request)
+    artifact_store = build_artifact_store(services.settings)
     with get_session(services.settings.database_url) as session:
         artifact = get_artifact(session, artifact_id)
         if artifact is None:
@@ -490,13 +529,27 @@ async def public_download_artifact(
             )
 
         remaining_seconds = _remaining_artifact_seconds(artifact)
-        record_media_derivative_artifact_download(
-            session=session,
-            artifact_id=artifact.artifact_id,
-        )
-        session.commit()
+        try:
+            stream = artifact_store.open(artifact.storage_key)
+        except ArtifactStoreError:
+            return _media_error_response(
+                status_code=503,
+                error_code="media_derivative.artifact_unavailable",
+                message="artifact bytes are unavailable",
+            )
+        try:
+            record_media_derivative_artifact_download(
+                session=session,
+                artifact_id=artifact.artifact_id,
+            )
+            session.commit()
+        except Exception:
+            stream.close()
+            raise
 
     return _stream_artifact_response(
         artifact,
         cache_control=f"public, max-age={remaining_seconds}",
+        stream=stream,
+        chunk_size=artifact_store.chunk_size,
     )

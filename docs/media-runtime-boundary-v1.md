@@ -1,6 +1,6 @@
 # Media Runtime Boundary v1
 
-Status: Accepted target contract; not yet implemented.
+Status: P3-B1 byte-store foundation implemented; B2-B5 remain target work.
 
 ## 1. Purpose
 
@@ -12,8 +12,9 @@ artifact, and expose a signed pull. WordPress remains the owner of local
 permissions, verification, review, approval, media-library writes, object
 assignment, publication, and local audit.
 
-This is a target contract for P0. It does not claim that its routes, data model,
-storage abstraction, processors, or lifecycle are present in current code.
+This document began as the P0 target contract. Section 3 records the implemented
+P3-B1 foundation; the unified routes, streamed ingest, signed pull/ack, and the
+remaining lifecycle described for B2-B5 are still target work.
 
 ## 2. Stable Markers
 
@@ -34,9 +35,9 @@ scope, durable run evidence, queue workers, provider routing, usage and
 entitlement checks, diagnostics, and existing media-oriented work. That
 evidence supports the direction but does not prove this target contract.
 
-The current refactor plan identifies remaining media debt: storage needs one
-artifact envelope, byte transfer needs streaming, and relational runtime truth
-must be separated from binary storage. Existing database blob paths,
+The current refactor plan identifies remaining media debt: source/provider byte
+transfer still needs streaming, and the existing operation-specific paths still
+need to converge on one media lifecycle. Historical database blob paths, current
 request/result Base64 media payloads, and an audio-specific download-token
 special case are migration inputs, not contracts to preserve.
 
@@ -45,9 +46,11 @@ through the existing Cloud runtime foundation. It uses one metadata envelope,
 one pluggable byte store, one site-isolated delivery model, and no second
 runtime or WordPress control plane.
 
-All target API resources in this document are intentionally marked as not yet
-implemented. A later implementation batch must switch producers, consumers,
-schema, tests, and obsolete paths atomically.
+P3-B1 now provides the metadata-only `MediaArtifact`, a local-volume
+`ArtifactStore`, bounded artifact downloads, independent AudioAsset objects,
+and byte-first purge. It deliberately preserves the existing artifact routes.
+Streaming ingest, the unified media API, signed pull/ack, and broader media
+operations remain B2, B3, B4, and B5 work respectively.
 
 ## 4. End-to-End Lifecycle
 

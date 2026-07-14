@@ -13,12 +13,13 @@ from app.api.main import create_app
 from app.core.config import Settings
 from app.core.db import dispose_engine, get_session, init_schema
 from app.core.models import (
-    MediaDerivativeArtifact,
+    MediaArtifact,
     MediaDerivativeJobMetric,
     ProviderCallRecord,
     RunRecord,
 )
 from app.core.services import CloudServices
+from app.domain.media_artifacts import build_artifact_store
 from app.domain.media_derivatives.contracts import BLOCKED_RESPONSE_FIELDS, MAX_UPLOAD_BYTES_IMAGE
 from app.domain.runtime.service import RuntimeService
 from tests.conftest import (
@@ -58,6 +59,7 @@ def _build_client(
         environment="test",
         database_url=database_url,
         redis_url="redis://localhost:6379/0",
+        artifact_store_root=str(tmp_path / "artifacts"),
         internal_auth_token=TEST_INTERNAL_AUTH_TOKEN,
         admin_session_secret=TEST_ADMIN_SESSION_SECRET,
         portal_jwt_secret=TEST_PORTAL_JWT_SECRET,
@@ -139,6 +141,9 @@ def _process_queued_runs(database_url: str) -> None:
             internal_auth_token=TEST_INTERNAL_AUTH_TOKEN,
             admin_session_secret=TEST_ADMIN_SESSION_SECRET,
             portal_jwt_secret=TEST_PORTAL_JWT_SECRET,
+            artifact_store_root=str(
+                Path(database_url.removeprefix("sqlite+pysqlite:///")).parent / "artifacts"
+            ),
         ),
     )
     service.process_queued_runs(max_runs=10, timeout_seconds=0)
@@ -562,6 +567,17 @@ def test_watermark_file_success_path(tmp_path: Path) -> None:
             assert metric.watermark_applied is True
             assert metric.artifact_download_count == 1
             assert metric.artifact_last_downloaded_at is not None
+            stored = session.get(MediaArtifact, artifact_id)
+            assert stored is not None
+            build_artifact_store(client.app.state.services.settings).delete(stored.storage_key)
+        unavailable = client.get(
+            f"/v1/runtime/artifacts/{artifact_id}/download", headers=dl_headers
+        )
+        assert unavailable.status_code == 503
+        assert unavailable.json()["error_code"] == "media_derivative.artifact_unavailable"
+        with get_session(database_url) as session:
+            metric = session.query(MediaDerivativeJobMetric).filter_by(run_id=run_id).one()
+            assert metric.artifact_download_count == 1
     finally:
         dispose_engine(database_url)
 
@@ -720,7 +736,7 @@ def test_watermark_artifact_must_be_same_site(tmp_path: Path) -> None:
         _process_queued_runs(database_url)
 
         with get_session(database_url) as session:
-            artifact = session.query(MediaDerivativeArtifact).first()
+            artifact = session.query(MediaArtifact).first()
             assert artifact is not None
             artifact_id = artifact.artifact_id
 
@@ -797,7 +813,7 @@ def test_expired_watermark_artifact_is_rejected(tmp_path: Path) -> None:
         _process_queued_runs(database_url)
 
         with get_session(database_url) as session:
-            artifact = session.query(MediaDerivativeArtifact).first()
+            artifact = session.query(MediaArtifact).first()
             assert artifact is not None
             artifact.expires_at = datetime.now(UTC) - timedelta(minutes=1)
             session.commit()
@@ -835,6 +851,80 @@ def test_expired_watermark_artifact_is_rejected(tmp_path: Path) -> None:
         response = client.post("/v1/runtime/media-derivatives", content=body, headers=headers)
         assert response.status_code == 404
         assert response.json()["error_code"] == "media_derivative.watermark_artifact_not_found"
+    finally:
+        dispose_engine(database_url)
+
+
+def test_missing_watermark_artifact_bytes_fail_closed(tmp_path: Path) -> None:
+    database_url, client = _build_client(tmp_path)
+    try:
+        logo_request = {
+            "request_contract_version": "media_derivative_cloud_request.v1",
+            "cloud_job_payload": {
+                "job_type": "generate_optimized_media_derivative",
+                "target_format": "png",
+                "max_width": 10,
+                "quality": 80,
+                "source_media_type": "image",
+            },
+        }
+        logo_body, logo_content_type = _build_multipart_body(
+            logo_request,
+            _make_png_bytes(10, 10, color="red"),
+            boundary="boundary-watermark-missing-logo",
+        )
+        logo_headers = build_auth_headers(
+            "POST",
+            "/v1/runtime/media-derivatives",
+            site_id="site_alpha",
+            body=logo_body,
+            idempotency_key="idem-watermark-missing-logo-001",
+            nonce="nonce-watermark-missing-logo-001",
+        )
+        logo_headers["content-type"] = logo_content_type
+        assert client.post(
+            "/v1/runtime/media-derivatives", content=logo_body, headers=logo_headers
+        ).status_code == 200
+        _process_queued_runs(database_url)
+
+        with get_session(database_url) as session:
+            artifact = session.query(MediaArtifact).first()
+            assert artifact is not None
+            artifact_id = artifact.artifact_id
+            build_artifact_store(client.app.state.services.settings).delete(artifact.storage_key)
+
+        request_dict = {
+            "request_contract_version": "media_derivative_cloud_request.v1",
+            "cloud_job_payload": {
+                "job_type": "generate_optimized_media_derivative",
+                "target_format": "png",
+                "max_width": 100,
+                "quality": 80,
+                "source_media_type": "image",
+                "watermark": {
+                    "type": "image",
+                    "artifact_id": artifact_id,
+                    "position": "bottom_right",
+                },
+            },
+        }
+        body, content_type = _build_multipart_body(
+            request_dict,
+            _make_png_bytes(100, 100, color="white"),
+            boundary="boundary-watermark-missing",
+        )
+        headers = build_auth_headers(
+            "POST",
+            "/v1/runtime/media-derivatives",
+            site_id="site_alpha",
+            body=body,
+            idempotency_key="idem-watermark-missing-001",
+            nonce="nonce-watermark-missing-001",
+        )
+        headers["content-type"] = content_type
+        response = client.post("/v1/runtime/media-derivatives", content=body, headers=headers)
+        assert response.status_code == 503
+        assert response.json()["error_code"] == "media_derivative.watermark_artifact_unavailable"
     finally:
         dispose_engine(database_url)
 
@@ -1177,7 +1267,7 @@ def test_expired_artifact_download_returns_410(tmp_path: Path) -> None:
         _process_queued_runs(database_url)
 
         with get_session(database_url) as session:
-            artifact = session.query(MediaDerivativeArtifact).first()
+            artifact = session.query(MediaArtifact).first()
             assert artifact is not None
             artifact.expires_at = datetime.now(UTC) - timedelta(minutes=1)
             session.commit()
@@ -1226,7 +1316,7 @@ def test_artifact_reference_must_be_same_site(tmp_path: Path) -> None:
         _process_queued_runs(database_url)
 
         with get_session(database_url) as session:
-            artifact = session.query(MediaDerivativeArtifact).first()
+            artifact = session.query(MediaArtifact).first()
             assert artifact is not None
             artifact_id = artifact.artifact_id
 
@@ -1258,6 +1348,27 @@ def test_artifact_reference_must_be_same_site(tmp_path: Path) -> None:
             headers=ref_headers,
         )
         assert ref_response.status_code == 404
+
+        with get_session(database_url) as session:
+            stored = session.get(MediaArtifact, artifact_id)
+            assert stored is not None
+            build_artifact_store(client.app.state.services.settings).delete(stored.storage_key)
+        unavailable_headers = build_auth_headers(
+            "POST",
+            "/v1/runtime/media-derivatives",
+            site_id="site_alpha",
+            body=ref_body,
+            idempotency_key="idem-source-unavailable-001",
+            nonce="nonce-source-unavailable-001",
+        )
+        unavailable_headers["content-type"] = "application/json"
+        unavailable = client.post(
+            "/v1/runtime/media-derivatives",
+            content=ref_body,
+            headers=unavailable_headers,
+        )
+        assert unavailable.status_code == 503
+        assert unavailable.json()["error_code"] == "media_derivative.source_artifact_unavailable"
     finally:
         dispose_engine(database_url)
 
@@ -1380,7 +1491,7 @@ def test_artifact_expires_at_is_short_ttl(tmp_path: Path) -> None:
         _process_queued_runs(database_url)
 
         with get_session(database_url) as session:
-            artifact = session.query(MediaDerivativeArtifact).first()
+            artifact = session.query(MediaArtifact).first()
             assert artifact is not None
             created_at = artifact.created_at
             expires_at = artifact.expires_at
@@ -1454,7 +1565,7 @@ def test_purged_artifact_reference_is_rejected(tmp_path: Path) -> None:
         _process_queued_runs(database_url)
 
         with get_session(database_url) as session:
-            artifact = session.query(MediaDerivativeArtifact).first()
+            artifact = session.query(MediaArtifact).first()
             assert artifact is not None
             artifact.purged_at = datetime.now(UTC)
             session.commit()

@@ -48,6 +48,9 @@ BLOCKED_RESPONSE_FIELDS = frozenset(
         "apply_decision",
         "approval_decision",
         "target_attachment_id",
+        "storage_key",
+        "storage_ref",
+        "blob" + "_data",
     }
 )
 

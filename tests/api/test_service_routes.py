@@ -134,6 +134,7 @@ def _build_client(
         "environment": "test",
         "database_url": database_url,
         "redis_url": "redis://localhost:6379/0",
+        "artifact_store_root": str(tmp_path / "artifacts"),
         "internal_auth_token": TEST_INTERNAL_AUTH_TOKEN,
         "admin_session_secret": TEST_ADMIN_SESSION_SECRET,
         "portal_jwt_secret": TEST_PORTAL_JWT_SECRET,
@@ -176,6 +177,9 @@ def _runtime_service_settings(database_url: str) -> Settings:
         environment="test",
         database_url=database_url,
         redis_url="redis://localhost:6379/0",
+        artifact_store_root=str(
+            Path(database_url.removeprefix("sqlite+pysqlite:///")).parent / "artifacts"
+        ),
         internal_auth_token=TEST_INTERNAL_AUTH_TOKEN,
         admin_session_secret=TEST_ADMIN_SESSION_SECRET,
         portal_jwt_secret=TEST_PORTAL_JWT_SECRET,

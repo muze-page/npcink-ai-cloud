@@ -622,12 +622,12 @@ PY
 )"
 	echo "== Cloud media derivative telemetry =="
 	METRIC_COUNT="$(docker exec "${POSTGRES_CONTAINER}" psql -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" -At -c "select count(*) from media_derivative_job_metrics where run_id='${RUN_ID}' and status='succeeded' and artifact_id='${ARTIFACT_ID}' and artifact_download_count >= 1;")"
-	ARTIFACT_COUNT="$(docker exec "${POSTGRES_CONTAINER}" psql -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" -At -c "select count(*) from media_derivative_artifacts where run_id='${RUN_ID}' and artifact_id='${ARTIFACT_ID}' and purged_at is null and expires_at > now() and expires_at <= now() + interval '60 minutes';")"
+	ARTIFACT_COUNT="$(docker exec "${POSTGRES_CONTAINER}" psql -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" -At -c "select count(*) from media_artifacts where run_id='${RUN_ID}' and artifact_id='${ARTIFACT_ID}' and operation='media_derivative' and status='available' and purged_at is null and expires_at > now() and expires_at <= now() + interval '60 minutes';")"
 	if [ "${METRIC_COUNT}" != "1" ]; then
 		fail "Expected one succeeded media_derivative_job_metrics row for ${RUN_ID}/${ARTIFACT_ID}; got ${METRIC_COUNT}"
 	fi
 	if [ "${ARTIFACT_COUNT}" != "1" ]; then
-		fail "Expected one live short-TTL media_derivative_artifacts row for ${RUN_ID}/${ARTIFACT_ID}; got ${ARTIFACT_COUNT}"
+		fail "Expected one available short-TTL media_artifacts row for ${RUN_ID}/${ARTIFACT_ID}; got ${ARTIFACT_COUNT}"
 	fi
 	echo "[ok] Cloud artifact and bounded telemetry rows are present"
 	echo "[ok] Artifact TTL is short and still live"

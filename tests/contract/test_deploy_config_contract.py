@@ -690,3 +690,20 @@ def test_lightweight_release_policy_gate_is_documented() -> None:
         "pnpm run check:release-policy",
     ):
         assert marker in agents_text
+
+
+def test_runtime_image_prepares_writable_shared_artifact_volume() -> None:
+    cloud_root = Path(__file__).resolve().parents[2]
+    dockerfile = (cloud_root / "Dockerfile").read_text()
+    assert "mkdir -p /app/.runtime /var/lib/npcink-ai-cloud/artifacts" in dockerfile
+    assert "chown -R app:app /app /home/app /var/lib/npcink-ai-cloud/artifacts" in dockerfile
+    assert dockerfile.index("chown -R app:app") < dockerfile.index("USER app")
+
+    for compose_name in (
+        "docker-compose.dev.yml",
+        "docker-compose.prod.yml",
+        "docker-compose.runtime.yml",
+    ):
+        compose = (cloud_root / compose_name).read_text()
+        assert "NPCINK_CLOUD_ARTIFACT_STORE_ROOT: /var/lib/npcink-ai-cloud/artifacts" in compose
+        assert "cloud-artifacts-" in compose

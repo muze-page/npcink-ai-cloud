@@ -12,11 +12,17 @@ from app.api.envelope import build_envelope
 from app.core.db import get_session
 from app.domain.audio_generation.assets import (
     AudioAssetError,
+    AudioAssetStorageUnavailableError,
     build_audio_asset_playback_url,
     build_audio_asset_projection,
     promote_audio_asset_from_artifact,
     require_active_audio_asset,
     validate_audio_asset_playback_token,
+)
+from app.domain.media_artifacts import (
+    ArtifactStoreError,
+    build_artifact_store,
+    iter_open_artifact_chunks,
 )
 
 router = APIRouter(prefix="/v1/runtime/audio-assets", tags=["audio-assets"])
@@ -43,17 +49,20 @@ def _audio_asset_error_response(error: AudioAssetError, *, trace_id: str = "") -
     )
 
 
-def _stream_audio_asset(asset: Any, *, cache_control: str) -> StreamingResponse:
+def _stream_audio_asset(
+    asset: Any, *, cache_control: str, stream: Any, chunk_size: int
+) -> StreamingResponse:
     extension = str(asset.format or "mp3").lower()
     if extension == "mpeg":
         extension = "mp3"
     return StreamingResponse(
-        iter([asset.blob_data or b""]),
-        media_type=asset.mime_type,
+        iter_open_artifact_chunks(stream, chunk_size=chunk_size),
+        media_type=asset.content_type,
         headers={
             "Content-Disposition": f'inline; filename="{asset.asset_id}.{extension}"',
             "X-Content-Type-Options": "nosniff",
             "Cache-Control": cache_control,
+            "Content-Length": str(asset.byte_size),
         },
     )
 
@@ -61,6 +70,7 @@ def _stream_audio_asset(asset: Any, *, cache_control: str) -> StreamingResponse:
 @router.post("")
 async def promote_audio_asset(request: Request) -> Any:
     services = get_cloud_services(request)
+    artifact_store = build_artifact_store(services.settings)
     auth = await authorize_public_request(
         request,
         require_idempotency=True,
@@ -91,6 +101,7 @@ async def promote_audio_asset(request: Request) -> Any:
                 session=session,
                 site_id=auth.site_id,
                 artifact_id=payload.artifact_id,
+                artifact_store=artifact_store,
                 source_content_hash=payload.source_content_hash,
                 metadata=payload.metadata,
             )
@@ -158,6 +169,7 @@ async def play_audio_asset(
     token: str = Query(default=""),
 ) -> Any:
     services = get_cloud_services(request)
+    artifact_store = build_artifact_store(services.settings)
     try:
         with get_session(services.settings.database_url) as session:
             asset = require_active_audio_asset(session, asset_id)
@@ -169,11 +181,23 @@ async def play_audio_asset(
             )
             expires_at = datetime.fromtimestamp(expires, tz=UTC)
             remaining_seconds = max(0, int((expires_at - datetime.now(UTC)).total_seconds()))
-            session.commit()
+            try:
+                stream = artifact_store.open(asset.storage_key)
+            except ArtifactStoreError as error:
+                raise AudioAssetStorageUnavailableError(
+                    "audio asset bytes are unavailable"
+                ) from error
+            try:
+                session.commit()
+            except Exception:
+                stream.close()
+                raise
     except AudioAssetError as error:
         return _audio_asset_error_response(error)
 
     return _stream_audio_asset(
         asset,
         cache_control=f"private, max-age={remaining_seconds}",
+        stream=stream,
+        chunk_size=artifact_store.chunk_size,
     )

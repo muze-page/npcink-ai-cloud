@@ -31,7 +31,7 @@ from app.core.models import (
     SITE_API_KEY_STATUS_REVOKED,
     AccountSubscription,
     AudioAsset,
-    MediaDerivativeArtifact,
+    MediaArtifact,
     PlanVersion,
     RunRecord,
     RuntimeGuardEvent,
@@ -56,6 +56,7 @@ from app.domain.hosted_model_defaults import (
     GROK_IMAGINE_IMAGE_PROFILE_ID,
     TEXT_AI_PROFILE_ID,
 )
+from app.domain.media_artifacts import build_artifact_store
 from app.domain.runtime.models import RuntimeRequest
 from app.domain.runtime.service import RuntimeService
 from app.domain.web_search.service import (
@@ -105,6 +106,7 @@ def _build_client(
         environment="test",
         database_url=database_url,
         redis_url="redis://localhost:6379/0",
+        artifact_store_root=str(tmp_path / "artifacts"),
         **(settings_overrides or {}),
     )
     return database_url, TestClient(
@@ -954,10 +956,10 @@ def test_execute_route_defaults_audio_generation_to_minimax_narration(
     assert data["result"]["audio_materialization"]["status"] == "materialized"
 
     with get_session(database_url) as session:
-        artifact = session.query(MediaDerivativeArtifact).filter_by(site_id="site_alpha").one()
-        assert artifact.source_media_type == "audio"
-        assert artifact.blob_data
-        assert artifact.mime_type == "audio/mpeg"
+        artifact = session.query(MediaArtifact).filter_by(site_id="site_alpha").one()
+        assert artifact.media_kind == "audio"
+        assert artifact.byte_size > 0
+        assert artifact.content_type == "audio/mpeg"
         artifact_id = artifact.artifact_id
 
     download_headers = build_auth_headers(
@@ -1016,6 +1018,7 @@ def test_execute_route_defaults_audio_generation_to_minimax_narration(
     assert promoted["direct_wordpress_write"] is False
     assert promoted["source_artifact_id"] == artifact_id
     assert promoted["source_content_hash"] == "sha256:" + ("a" * 64)
+    assert "storage_key" not in promoted
     assert promoted["playback_url"].startswith(
         f"/v1/runtime/audio-assets/{promoted['asset_id']}/playback?"
     )
@@ -1063,8 +1066,22 @@ def test_execute_route_defaults_audio_generation_to_minimax_narration(
         assert asset.asset_id == promoted["asset_id"]
         assert asset.source_artifact_id == artifact_id
         assert asset.source_run_id
-        assert asset.blob_data.startswith(b"ID3")
+        assert asset.byte_size > 0
         assert asset.metadata_json["playback_mode"] == "cloud_hosted"
+        assert asset.storage_key != artifact.storage_key
+        store = build_artifact_store(client.app.state.services.settings)
+        store.delete(artifact.storage_key)
+        asset_storage_key = asset.storage_key
+
+    still_playable = client.get(promoted["playback_url"])
+    assert still_playable.status_code == 200
+    assert still_playable.content.startswith(b"ID3")
+
+    store.delete(asset_storage_key)
+
+    unavailable_playback = client.get(promoted["playback_url"])
+    assert unavailable_playback.status_code == 503
+    assert unavailable_playback.json()["error_code"] == "audio_asset.storage_unavailable"
 
     dispose_engine(database_url)
 
@@ -1153,7 +1170,7 @@ def test_execute_route_fails_audio_generation_when_provider_url_cannot_materiali
     assert data["error_code"] == "audio_generation.artifact_materialization_failed"
     assert "HTTP 403" in data["error_message"]
     with get_session(database_url) as session:
-        assert session.query(MediaDerivativeArtifact).count() == 0
+        assert session.query(MediaArtifact).count() == 0
 
     dispose_engine(database_url)
 

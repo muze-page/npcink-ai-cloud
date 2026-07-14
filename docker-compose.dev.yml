@@ -67,6 +67,7 @@ services:
       NPCINK_CLOUD_LOG_LEVEL: DEBUG
       NPCINK_CLOUD_DATABASE_URL: postgresql+psycopg://npcink:npcink@postgres:5432/npcink_ai_cloud
       NPCINK_CLOUD_REDIS_URL: redis://redis:6379/0
+      NPCINK_CLOUD_ARTIFACT_STORE_ROOT: /var/lib/npcink-ai-cloud/artifacts
       NPCINK_CLOUD_PORTAL_JWT_SECRET: ${NPCINK_CLOUD_PORTAL_JWT_SECRET:-dev-portal-preview-token-32-bytes}
       NPCINK_CLOUD_OTEL_EXPORTER_OTLP_ENDPOINT: ${NPCINK_CLOUD_DEV_OTEL_EXPORTER_OTLP_ENDPOINT:-}
     expose:
@@ -79,6 +80,7 @@ services:
     volumes:
       - .:/app
       - ../scripts:/scripts:ro
+      - cloud-artifacts-dev:/var/lib/npcink-ai-cloud/artifacts
 
   worker:
     profiles:
@@ -99,6 +101,7 @@ services:
       NPCINK_CLOUD_LOG_LEVEL: DEBUG
       NPCINK_CLOUD_DATABASE_URL: postgresql+psycopg://npcink:npcink@postgres:5432/npcink_ai_cloud
       NPCINK_CLOUD_REDIS_URL: redis://redis:6379/0
+      NPCINK_CLOUD_ARTIFACT_STORE_ROOT: /var/lib/npcink-ai-cloud/artifacts
       NPCINK_CLOUD_OTEL_EXPORTER_OTLP_ENDPOINT: ${NPCINK_CLOUD_DEV_OTEL_EXPORTER_OTLP_ENDPOINT:-}
     depends_on:
       postgres:
@@ -107,6 +110,7 @@ services:
         condition: service_healthy
     volumes:
       - .:/app
+      - cloud-artifacts-dev:/var/lib/npcink-ai-cloud/artifacts
 
   callback-worker:
     profiles:
@@ -156,6 +160,7 @@ services:
       NPCINK_CLOUD_DATABASE_URL: postgresql+psycopg://npcink:npcink@postgres:5432/npcink_ai_cloud
       NPCINK_CLOUD_REDIS_URL: redis://redis:6379/0
       NPCINK_CLOUD_WORKER_HEARTBEAT_INTERVAL_SECONDS: ${NPCINK_CLOUD_WORKER_HEARTBEAT_INTERVAL_SECONDS:-60}
+      NPCINK_CLOUD_ARTIFACT_STORE_ROOT: /var/lib/npcink-ai-cloud/artifacts
       NPCINK_CLOUD_OTEL_EXPORTER_OTLP_ENDPOINT: ${NPCINK_CLOUD_DEV_OTEL_EXPORTER_OTLP_ENDPOINT:-}
     depends_on:
       postgres:
@@ -164,6 +169,7 @@ services:
         condition: service_healthy
     volumes:
       - .:/app
+      - cloud-artifacts-dev:/var/lib/npcink-ai-cloud/artifacts
 
   frontend:
     build:
@@ -192,6 +198,7 @@ services:
       - api
 
 volumes:
+  cloud-artifacts-dev:
   cloud-postgres-dev:
   cloud-redis-dev:
   cloud-frontend-node-modules-dev:

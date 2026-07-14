@@ -73,6 +73,7 @@ services:
       NPCINK_CLOUD_LOG_LEVEL: ${NPCINK_CLOUD_LOG_LEVEL:-INFO}
       NPCINK_CLOUD_DATABASE_URL: ${NPCINK_CLOUD_DATABASE_URL?NPCINK_CLOUD_DATABASE_URL is required}
       NPCINK_CLOUD_REDIS_URL: ${NPCINK_CLOUD_REDIS_URL:-redis://redis:6379/0}
+      NPCINK_CLOUD_ARTIFACT_STORE_ROOT: /var/lib/npcink-ai-cloud/artifacts
       NPCINK_CLOUD_INTERNAL_AUTH_TOKEN: ${NPCINK_CLOUD_INTERNAL_AUTH_TOKEN:-}
       NPCINK_CLOUD_ADMIN_BOOTSTRAP_TOKEN: ${NPCINK_CLOUD_ADMIN_BOOTSTRAP_TOKEN:-}
       NPCINK_CLOUD_ADMIN_SESSION_SECRET: ${NPCINK_CLOUD_ADMIN_SESSION_SECRET:-}
@@ -157,6 +158,8 @@ services:
         condition: service_started
     expose:
       - "8000"
+    volumes:
+      - cloud-artifacts-prod:/var/lib/npcink-ai-cloud/artifacts
 
   frontend:
     build:
@@ -189,6 +192,7 @@ services:
       NPCINK_CLOUD_DATABASE_URL: ${NPCINK_CLOUD_DATABASE_URL?NPCINK_CLOUD_DATABASE_URL is required}
       NPCINK_CLOUD_REDIS_URL: ${NPCINK_CLOUD_REDIS_URL:-redis://redis:6379/0}
       NPCINK_CLOUD_RUNTIME_WORKER_POLL_SECONDS: ${NPCINK_CLOUD_RUNTIME_WORKER_POLL_SECONDS:-5}
+      NPCINK_CLOUD_ARTIFACT_STORE_ROOT: /var/lib/npcink-ai-cloud/artifacts
       NPCINK_CLOUD_WORKER_HEARTBEAT_INTERVAL_SECONDS: ${NPCINK_CLOUD_WORKER_HEARTBEAT_INTERVAL_SECONDS:-60}
       NPCINK_CLOUD_INTERNAL_AUTH_TOKEN: ${NPCINK_CLOUD_INTERNAL_AUTH_TOKEN:-}
       NPCINK_CLOUD_ADMIN_BOOTSTRAP_TOKEN: ${NPCINK_CLOUD_ADMIN_BOOTSTRAP_TOKEN:-}
@@ -258,6 +262,8 @@ services:
         condition: service_started
       jaeger:
         condition: service_started
+    volumes:
+      - cloud-artifacts-prod:/var/lib/npcink-ai-cloud/artifacts
 
   callback-worker:
     build:
@@ -321,6 +327,7 @@ services:
       NPCINK_CLOUD_TRUSTED_HOST_ALLOWLIST: ${NPCINK_CLOUD_TRUSTED_HOST_ALLOWLIST:-}
       NPCINK_CLOUD_WORKER_HEARTBEAT_INTERVAL_SECONDS: ${NPCINK_CLOUD_WORKER_HEARTBEAT_INTERVAL_SECONDS:-60}
       NPCINK_CLOUD_OPS_CADENCE_POLL_SECONDS: ${NPCINK_CLOUD_OPS_CADENCE_POLL_SECONDS:-30}
+      NPCINK_CLOUD_ARTIFACT_STORE_ROOT: /var/lib/npcink-ai-cloud/artifacts
       NPCINK_CLOUD_RETENTION_CLEANUP_INTERVAL_SECONDS: ${NPCINK_CLOUD_RETENTION_CLEANUP_INTERVAL_SECONDS:-3600}
       NPCINK_CLOUD_USAGE_ROLLUP_INTERVAL_SECONDS: ${NPCINK_CLOUD_USAGE_ROLLUP_INTERVAL_SECONDS:-3600}
       NPCINK_CLOUD_ROUTER_DIAGNOSTICS_INTERVAL_SECONDS: ${NPCINK_CLOUD_ROUTER_DIAGNOSTICS_INTERVAL_SECONDS:-900}
@@ -398,7 +405,10 @@ services:
         condition: service_started
       jaeger:
         condition: service_started
+    volumes:
+      - cloud-artifacts-prod:/var/lib/npcink-ai-cloud/artifacts
 
 volumes:
+  cloud-artifacts-prod:
   cloud-postgres-prod:
   cloud-redis-prod:
