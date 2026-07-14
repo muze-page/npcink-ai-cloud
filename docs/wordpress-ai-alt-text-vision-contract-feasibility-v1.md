@@ -1,187 +1,105 @@
 # WordPress AI Alt Text Vision Contract Feasibility v1
 
-Status: accepted, Cloud runtime implemented.
-Date: 2026-07-07.
+Status: Cloud runtime implemented; addon real-attachment advertisement and
+smoke pending.
+Updated: 2026-07-14.
 
-## Context
+## Current State
 
-The WordPress AI plugin exposes `ai/alt-text-generation` as a vision-capable
-text generation ability. The current Cloud addon correctly does not advertise a
-vision-capable text model because the WordPress AI Connector path only exposes
-the Cloud scene text model and the Cloud scene image generation model.
+Cloud implements `alt_text_suggest` as a WordPress typed operation carried by
+the one neutral connector runtime. The implemented outer request is:
 
-Cloud already has enough runtime foundation to make the capability feasible:
+- `site_id`: authenticated Cloud site identity;
+- `ability_name`: `npcink-cloud/connector-runtime`;
+- `contract_version`: `cloud_connector_runtime.v1`;
+- `channel`: `editor`;
+- `execution_kind`: `vision`;
+- request profile alias: `text.balanced`;
+- `execution_pattern`: `inline`;
+- `storage_mode`: `result_only`;
+- `data_classification`: `public_reference_media` by default.
 
-- content generation boundaries allow media alt text and caption suggestions as
-  reviewable suggestions;
-- generic hosted vision data handling is documented as allowed when the caller
-  sends only the smallest image reference or visual context needed;
-- provider adapters already support `vision` execution through the Responses
-  style payload shape;
-- Image Context Evidence already builds bounded `input_image` / `image_url`
-  provider payloads for visual inspection;
-- WordPress AI Connector routing already has managed runtime profiles for text,
-  classification, image generation, and audio generation.
+The neutral `input` envelope contains:
 
-The remaining integration risk is addon-side evidence quality: WordPress must
-send Cloud a fetchable image reference and bounded media context without making
-the addon a write owner or a second control plane.
+- `site_url`;
+- `platform_kind=wordpress`;
+- `connector_id=npcink-cloud-addon`;
+- `connector_version`;
+- `suggestion_only=true`;
+- a `wordpress_operation.v1` operation contract whose task is
+  `alt_text_suggest`.
 
-## Decision
+The request-time `text.balanced` profile is an admitted connector alias, not
+the execution truth for the operation. Managed routing projects the durable
+run and provider request to `wp-ai.alt-text-vision`, with routing intent
+`media.alt_text_vision` and vision execution semantics.
 
-Support for WordPress AI alt text should be implemented as a dedicated
-WordPress AI Connector vision runtime contract, not as a fake text-model
-capability and not as an addon-side workaround.
+## Ownership Boundary
 
-The intended routing shape is:
+The WordPress/plugin side owns Ability exposure, attachment selection,
+permissions, review, approval, audit, and the final attachment metadata write.
+Cloud owns only hosted vision execution, provider routing, bounded result
+normalization, and run/provider/usage evidence.
 
-| Routing intent | Profile ID | Execution kind | Plugin tasks |
-| --- | --- | --- | --- |
-| `media.alt_text_vision` | `wp-ai.alt-text-vision` | `vision` | `alt_text_suggest` |
+Cloud returns a text suggestion through `cloud_connector_result.v1`. It does
+not update attachment metadata, import media, set captions, set featured
+images, or claim that a local write occurred.
 
-This profile is a Cloud runtime binding only. It is not a Cloud ability
-registry, prompt editor, approval policy, media-library writer, or model
-selection control plane.
+## Bounded Operation Request
 
-## Minimum Runtime Contract
+The `wordpress_operation.v1` scene request requires at least one bounded visual
+reference plus display context. When both URL fields are present, `image_url`
+is selected; `thumbnail_url` is used only when `image_url` is absent:
 
-The first implementation should extend the existing WordPress AI Connector
-runtime input rather than adding a separate public API.
+- `prompt`;
+- `image_url` or `thumbnail_url`;
+- `mime_type` from the image allowlist;
+- `filename`, `title`, `existing_alt`, and `existing_caption`;
+- `locale`;
+- bounded output parameters accepted by the typed operation.
 
-Required public runtime posture:
+Cloud accepts an allowlisted HTTP(S) URL or a bounded image data URL in the
+typed URL field. A data URL is validated for total size, media type, and
+encoding before provider preparation. This does not make raw Base64 a public
+field: `base64`, `b64`, `b64_json`, `image_base64`, and `image_data` remain
+forbidden in the WordPress operation contract.
 
-- `ability_name`: `npcink-cloud/wp-ai-connector`
-- `contract_version`: `wp_ai_connector_runtime.v1`
-- `channel`: `wordpress_ai_connector`
-- `execution_pattern`: `inline`
-- `storage_mode`: `result_only` or stricter
-- `data_classification`: `public_reference_media` by default, or `pii` with
-  `no_store` when the image may identify a person
-- `source_surface`: `wordpress_ai_connector`
-- `connector_id`: `npcink-cloud`
-- `task`: `alt_text_suggest`
-- `write_posture`: `suggestion_only`
-- `direct_wordpress_write`: `false`
-- `no_conversation`: `true`
+The public operation also rejects:
 
-The `request` object may include only bounded visual reference fields:
-
-- `prompt`: short local ability prompt or textual media context
-- `image_url`: public or short-lived signed image URL
-- `thumbnail_url`: optional smaller public or short-lived signed image URL
-- `mime_type`: allowlisted image MIME type
-- `filename`: bounded display context
-- `title`: bounded display context
-- `existing_alt`: bounded display context
-- `existing_caption`: bounded display context
-- `locale`: optional output locale
-
-The implementation must reject:
-
-- provider keys, WordPress credentials, cookies, nonces, auth headers, callback
-  secrets, or signed header fields;
-- private admin media URLs that the upstream provider cannot fetch safely;
-- arbitrary base64 image payloads in the WordPress AI Connector public runtime
-  path for the first implementation;
-- multiple image inputs for one alt-text suggestion;
-- final write controls such as `update_attachment_metadata`,
-  `wordpress_write_policy`, `final_write_target`, or `apply_policy`;
-- generic chat `messages`, tools, web search, function calling, streaming, and
+- provider keys, WordPress credentials, cookies, nonces, auth headers,
+  callback secrets, and signed header fields;
+- unbounded visual references and raw byte fields;
+- connector-envelope or final-write controls inside the scene request;
+- generic chat `messages`, tools, function calls, streams, and
   conversation/thread identifiers.
 
-## Provider Payload Shape
+Provider adapters may translate the validated typed operation into their
+provider-specific image input shape. That private adapter translation does not
+expand the public operation contract.
 
-Cloud should reuse the existing vision provider pattern instead of inventing a
-new adapter shape.
+## Provider And Result Shape
 
-For Responses-style providers, build:
-
-```json
-{
-  "input": [
-    {
-      "role": "user",
-      "content": [
-        {
-          "type": "input_text",
-          "text": "Generate concise WordPress image alt text. Return only the alt text."
-        },
-        {
-          "type": "input_image",
-          "image_url": "https://example.test/path/image.jpg"
-        }
-      ]
-    }
-  ],
-  "params": {
-    "temperature": 0,
-    "max_tokens": 48,
-    "max_output_tokens": 48
-  },
-  "metadata": {
-    "source_surface": "wordpress_ai_connector",
-    "task": "alt_text_suggest",
-    "suggestion_only": true
-  }
-}
-```
-
-Chat-style provider fallback may use the existing `messages` image URL shape
-only inside Cloud's provider adapter boundary. The public runtime input should
-stay scene-contract based and must not accept generic `messages`.
-
-## Output Contract
-
-The Cloud result should remain text-only and suggestion-only:
-
-```json
-{
-  "contract_version": "wp_ai_connector_result.v1",
-  "task": "alt_text_suggest",
-  "output_text": "Concise alt text suggestion.",
-  "suggestion_only": true,
-  "direct_wordpress_write": false,
-  "provider": "openai",
-  "model_id": "vision-capable-model",
-  "run_id": "run_..."
-}
-```
+For a Responses-style provider, Cloud builds bounded `input_text` and
+`input_image` parts, applies the alt-text token limit, and records
+`suggestion_only=true` in provider metadata. The normalized connector result
+contains the WordPress operation identity and output text under
+`cloud_connector_result.v1`, plus ordinary run/provider evidence.
 
 No attachment metadata update, media import, caption write, or featured-image
-write may happen in Cloud.
+write occurs in Cloud.
 
-## Required Implementation Steps
+## Verified Cloud Evidence
 
-1. Move `alt_text_suggest` out of `wp-ai.short-text` and into a dedicated
-   `wp-ai.alt-text-vision` profile with `execution_kind=vision`.
-2. Extend `validate_wordpress_ai_connector_runtime_contract()` so
-   `alt_text_suggest` requires one safe image reference and rejects generic chat
-   or write-control fields.
-3. Extend the WordPress AI Connector provider input builder so
-   `alt_text_suggest` emits bounded vision input instead of text-only input.
-4. Ensure provider connection routing can select only configured provider
-   connections whose model allowlist includes a callable vision-capable model.
-5. Update addon-side WordPress AI model exposure only after Cloud contract and
-   tests pass. The addon should then advertise a real vision-capable model
-   rather than reusing the text model.
-6. Extend the addon smoke gate to run `ai/alt-text-generation` only when a real
-   attachment and vision profile are available.
+Current Cloud tests prove:
 
-## Verification Gate
-
-The implementation is not done until these checks exist and pass:
-
-- unit or domain tests that `alt_text_suggest` routes to
-  `wp-ai.alt-text-vision`;
-- contract tests that missing image reference fails closed;
-- contract tests that `messages`, credentials, write controls, and base64
-  image payloads are rejected;
-- provider-input tests that Cloud sends `input_image` or the provider-specific
-  equivalent;
-- runtime tests that the result remains `suggestion_only` and
-  `direct_wordpress_write=false`;
-- addon smoke that proves `ai/alt-text-generation` succeeds with a real
-  attachment and does not update attachment metadata.
+- `alt_text_suggest` resolves to `wp-ai.alt-text-vision`;
+- missing or invalid visual references fail closed;
+- bounded HTTP(S) and image data URLs reach typed provider image input;
+- raw Base64 fields, generic chat, credentials, and write controls are
+  rejected;
+- the run remains vision-scoped and the result remains suggestion-only;
+- RuntimeService delegates WordPress-specific preparation and normalization to
+  the WordPress operation module.
 
 Recommended narrow Cloud gate:
 
@@ -189,24 +107,26 @@ Recommended narrow Cloud gate:
 .venv/bin/python -m pytest tests/api/test_wordpress_ai_connector_runtime.py
 ```
 
-Before cross-repo closeout:
+## Pending Addon Evidence
 
-```bash
-pnpm run check:fast
-```
+The Cloud runtime implementation does not complete the end-user feature by
+itself. The addon and WordPress AI consumer still need operator-observed
+evidence that:
+
+- a real attachment is projected through the current connector envelope;
+- the addon advertises the vision capability only when the complete local and
+  Cloud path is available;
+- `ai/alt-text-generation` returns a reviewable suggestion;
+- no attachment metadata changes before local review and approval.
+
+Until that real-attachment advertisement and smoke evidence exists, this
+document must not be cited as cross-repository or production closeout.
 
 ## Non-Goals
 
 - No Cloud media-library write.
 - No Cloud attachment metadata update.
-- No prompt, preset, router, approval, or ability enablement UI in Cloud.
+- No prompt, preset, router, approval, or Ability enablement UI in Cloud.
 - No new public endpoint.
-- No arbitrary base64 upload in the WordPress AI Connector path.
+- No raw Base64 request field or generic chat proxy.
 - No second WordPress control plane.
-
-## Current Recommendation
-
-Proceed only after the addon and WordPress AI plugin can supply a safe image
-reference for the ability run. Until then, keep `ai/alt-text-generation`
-discoverable but do not advertise Cloud as a vision-capable WordPress AI text
-model.

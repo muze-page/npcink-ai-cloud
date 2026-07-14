@@ -171,3 +171,64 @@ def test_deletion_inventory_freezes_items_and_phase_exit_proof() -> None:
 
     assert "NO_COMPATIBILITY_LAYER" in inventory
     assert "## Phase Exit Proof" in inventory
+
+
+def test_active_connector_docs_match_the_p1_runtime_contract() -> None:
+    ai_task = _read("docs/ai-task-runtime-contract-v1.md")
+    alt_text = _read("docs/wordpress-ai-alt-text-vision-contract-feasibility-v1.md")
+    smoke = _read("docs/production-wordpress-ai-connector-smoke-runbook-v1.md")
+
+    for required in (
+        "Status: active; aligned with the P1 connector reset.",
+        "`ai_task_contract.v1`",
+        "`wordpress_operation.v1`",
+        "`cloud_connector_runtime.v1`",
+        "`npcink-cloud/connector-runtime`",
+        "`cloud_connector_result.v1`",
+        "There is one active connector envelope.",
+    ):
+        assert required in ai_task
+
+    for required in (
+        "Status: Cloud runtime implemented; addon real-attachment advertisement and",
+        "smoke pending.",
+        "`npcink-cloud/connector-runtime`",
+        "`cloud_connector_runtime.v1`",
+        "`wordpress_operation.v1`",
+        "`wp-ai.alt-text-vision`",
+        "`cloud_connector_result.v1`",
+        "bounded image data URL",
+        "must not be cited as cross-repository or production closeout",
+    ):
+        assert required in alt_text
+
+    for required in (
+        "Status: active.",
+        "P1-E05 status: operator-only pending.",
+        "P1-E06 status: operator-only pending.",
+        "ability_name=npcink-cloud/connector-runtime",
+        "contract_version=cloud_connector_runtime.v1",
+        "channel=editor",
+        "profile_id=wp-ai.short-text",
+        "result.contract_version=cloud_connector_result.v1",
+        "result.operation_contract.contract_version=wordpress_operation.v1",
+        "Do not mark P1-E05 complete from local pytest output.",
+    ):
+        assert required in smoke
+
+    superseded_connector_markers = (
+        "wp_ai_connector_runtime.v1",
+        "wp_ai_connector_result.v1",
+        "validate_wordpress_ai_connector_runtime_contract",
+    )
+    for document in (ai_task, alt_text):
+        assert not any(marker in document for marker in superseded_connector_markers)
+
+    title_section = smoke.split("## Title Execute Smoke", maxsplit=1)[1]
+    title_section = title_section.split("## Local Test Gate", maxsplit=1)[0]
+    for marker in (
+        "ability_name=npcink-cloud/wp-ai-connector",
+        "contract_version=wp_ai_connector_runtime.v1",
+        "channel=wordpress_ai_connector",
+    ):
+        assert marker not in title_section

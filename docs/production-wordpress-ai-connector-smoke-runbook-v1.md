@@ -1,7 +1,14 @@
 # Production WordPress AI Connector Smoke Runbook v1
 
 Status: active.
-Date: 2026-06-29.
+Updated: 2026-07-14.
+
+P1-E05 status: operator-only pending. This runbook and its local builder tests
+are preparation, not evidence that the production title smoke passed.
+
+P1-E06 status: operator-only pending. The pre-cutover inventory, backup, and
+restore rehearsal are separate operator evidence and are not produced by this
+smoke.
 
 ## Purpose
 
@@ -13,7 +20,9 @@ The smoke proves:
 - production Cloud health is reachable;
 - WordPress AI Connector image-generation routing can resolve without executing
   image generation;
-- optional title generation execute can run through `wp-ai.short-text`;
+- optional title generation execute can enter through
+  `npcink-cloud/connector-runtime` and resolve to managed profile
+  `wp-ai.short-text`;
 - runtime evidence includes the expected profile and routing intent.
 
 ## Boundary
@@ -96,10 +105,15 @@ cd /Users/muze/gitee/npcink-ai-cloud
 This does:
 
 - health check;
-- signed image-generation `resolve`;
+- signed image-generation `resolve` through the independent
+  `image_generation_request.v1` contract;
 - no title execute;
 - no image execute;
 - no WordPress write.
+
+The safe image resolve intentionally remains separate from the neutral
+connector title contract. It must not be rewritten to look like a WordPress
+typed text operation.
 
 Expected signals:
 
@@ -153,15 +167,32 @@ Then inspect production Cloud run evidence and confirm:
 
 ```text
 site_id=<expected site>
-ability_name=npcink-cloud/wp-ai-connector
-channel=wordpress_ai_connector
+ability_name=npcink-cloud/connector-runtime
+contract_version=cloud_connector_runtime.v1
+channel=editor
 execution_kind=text
 profile_id=wp-ai.short-text
 selected_model_id=<production text model>
 selected_instance_id=<production text instance>
 policy_json.routing_intent=content.short_text
 policy_json.execution_contract.routing_intent=content.short_text
+result.contract_version=cloud_connector_result.v1
+result.suggestion_only=true
+result.operation_contract.contract_version=wordpress_operation.v1
+result.operation_contract.task=title_generation
+result.output.output_text=<non-empty reviewable suggestion>
 ```
+
+Also confirm that the request input used the canonical site and connector
+fields (`site_url`, `platform_kind=wordpress`,
+`connector_id=npcink-cloud-addon`, `connector_version`, and
+`suggestion_only=true`) and that no WordPress write or approval event was
+created by Cloud.
+
+The report must retain the returned run/provider evidence without secrets. A
+real P1-E05 record must additionally attach operator-reviewed idempotency
+evidence; one successful builder or execute test does not prove replay
+behavior. Do not mark P1-E05 complete from local pytest output.
 
 ## Local Test Gate
 
