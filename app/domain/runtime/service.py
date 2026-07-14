@@ -10,11 +10,7 @@ from uuid import uuid4
 from sqlalchemy import select
 from sqlalchemy.orm.attributes import flag_modified
 
-from app.adapters.callbacks.base import (
-    RuntimeCallbackDispatcher,
-    RuntimeCallbackDispatchError,
-    RuntimeCallbackDispatchRequest,
-)
+from app.adapters.callbacks.base import RuntimeCallbackDispatcher
 from app.adapters.providers.base import (
     ProviderAdapter,
     ProviderExecutionError,
@@ -39,7 +35,6 @@ from app.core.models import (
 )
 from app.core.secrets import (
     decrypt_runtime_execution_input,
-    decrypt_runtime_terminal_callback_secret,
     encrypt_runtime_execution_input,
 )
 from app.core.security import (
@@ -120,10 +115,10 @@ from app.domain.routing.errors import RoutingError
 from app.domain.routing.models import RoutingCandidate, RoutingResolution
 from app.domain.routing.service import RoutingService
 from app.domain.runtime.analysis_result import build_analysis_result_envelope
+from app.domain.runtime.callback_delivery import RuntimeCallbackDeliveryService
 from app.domain.runtime.data_guard import find_runtime_data_guard_finding
 from app.domain.runtime.errors import (
     RuntimeBatchLimitExceededError,
-    RuntimeCallbackConfigurationError,
     RuntimeCancelNotAllowedError,
     RuntimeErrorBase,
     RuntimeExecutionContractError,
@@ -142,7 +137,6 @@ from app.domain.runtime.models import (
     RUNTIME_BACKLOG_RUNNING_AGING_AFTER_SECONDS,
     RUNTIME_CALLBACK_DISPATCH_LEASE_RECOVERY_AFTER_SECONDS,
     RUNTIME_CALLBACK_DISPATCH_LEASE_RECOVERY_ERROR_CODE,
-    RUNTIME_CALLBACK_EVENT,
     RUNTIME_DIAGNOSTIC_CALLBACK_DISPATCHING_STALE_AFTER_SECONDS,
     RUNTIME_DIAGNOSTIC_CALLBACK_OVERDUE_AFTER_SECONDS,
     RUNTIME_DIAGNOSTIC_CANCEL_STUCK_AFTER_SECONDS,
@@ -245,15 +239,21 @@ class RuntimeService:
             providers=self.providers,
         )
         self.run_projector = RuntimeRunProjector()
+        self.callback_delivery_service = RuntimeCallbackDeliveryService(
+            database_url=self.database_url,
+            settings=self.settings,
+            dispatcher=callback_dispatcher,
+            max_attempts=callback_max_attempts,
+            retry_backoff_seconds=callback_retry_backoff_seconds,
+            run_projector=self.run_projector,
+            recovery_audit_callback=self._record_callback_dispatch_recovery,
+        )
         self.routing_service = RoutingService(
             database_url,
             settings=self.settings,
             execution_provider_ids=set(self.providers),
         )
         self.runtime_queue = runtime_queue
-        self.callback_dispatcher = callback_dispatcher
-        self.callback_max_attempts = max(1, callback_max_attempts)
-        self.callback_retry_backoff_seconds = max(0, callback_retry_backoff_seconds)
 
     def resolve(self, request: RuntimeRequest) -> dict[str, object]:
         self._validate_runtime_data_handling_contract(request)
@@ -3285,17 +3285,9 @@ class RuntimeService:
         *,
         max_callbacks: int = 1,
     ) -> list[dict[str, object]]:
-        if self.callback_dispatcher is None:
-            return []
-
-        self._recover_stale_callback_dispatches(limit=max(1, max_callbacks))
-        dispatched: list[dict[str, object]] = []
-        for _ in range(max(1, max_callbacks)):
-            result = self._dispatch_single_pending_callback()
-            if result is None:
-                break
-            dispatched.append(result)
-        return dispatched
+        return self.callback_delivery_service.dispatch_pending_callbacks(
+            max_callbacks=max_callbacks
+        )
 
     def _execute_existing_run(
         self,
@@ -6348,7 +6340,7 @@ class RuntimeService:
 
         task_backend = normalize_runtime_task_backend(request.task_backend)
         callback_mode = str(task_backend.get("callback_mode") or "")
-        callback_target = self._resolve_callback_target(
+        callback_target = self.callback_delivery_service.resolve_callback_target(
             site=site,
             request=request,
             callback_mode=callback_mode,
@@ -6432,104 +6424,6 @@ class RuntimeService:
             return "media_nightly_image_optimize"
         return ""
 
-    def _resolve_callback_target(
-        self,
-        *,
-        site: Any,
-        request: RuntimeRequest,
-        callback_mode: str,
-    ) -> dict[str, object]:
-        registered = self._resolve_registered_callback_config(site)
-        requires_callback = callback_mode in {"polling_preferred", "terminal_callback_required"}
-        if request.callback_url:
-            raise RuntimeCallbackConfigurationError(
-                request.site_id,
-                "runtime callback_url overrides are not accepted; "
-                "register runtime_callbacks.terminal on the site instead",
-            )
-        if not requires_callback:
-            return {}
-        if not bool(registered.get("enabled")):
-            if callback_mode == "terminal_callback_required":
-                raise RuntimeCallbackConfigurationError(
-                    request.site_id,
-                    "terminal callback is disabled for the site",
-                )
-            return {}
-        callback_url = str(registered.get("callback_url") or "").strip()
-        key_id = str(registered.get("key_id") or "").strip()
-        secret = str(registered.get("secret") or "").strip()
-        secret_error = str(registered.get("secret_error") or "").strip()
-        if secret_error:
-            raise RuntimeCallbackConfigurationError(
-                request.site_id,
-                secret_error,
-            )
-        if not callback_url or not key_id or not secret:
-            if callback_mode == "terminal_callback_required":
-                raise RuntimeCallbackConfigurationError(
-                    request.site_id,
-                    "terminal callback requires registered callback_url, key_id, and secret",
-                )
-            return {}
-        return {
-            "source": "site_registered",
-            "callback_url": callback_url,
-            "key_id": key_id,
-            "callback_id": str(registered.get("callback_id") or "runtime_terminal"),
-            "registered": True,
-        }
-
-    def _resolve_registered_callback_config(self, site: Any) -> dict[str, object]:
-        metadata = getattr(site, "metadata_json", None) or {}
-        callbacks = metadata.get("runtime_callbacks")
-        callback = callbacks.get("terminal") if isinstance(callbacks, dict) else {}
-        callback = callback if isinstance(callback, dict) else {}
-
-        enabled_raw = callback.get("enabled")
-        if enabled_raw is None:
-            enabled_raw = metadata.get("runtime_terminal_callback_enabled")
-
-        secret_ciphertext = str(callback.get("secret_ciphertext") or "").strip()
-        legacy_secret = str(
-            callback.get("secret") or metadata.get("runtime_terminal_callback_secret") or ""
-        ).strip()
-        secret = ""
-        secret_error = ""
-        if secret_ciphertext:
-            try:
-                secret = decrypt_runtime_terminal_callback_secret(
-                    secret_ciphertext,
-                    settings=self.settings,
-                )
-            except RuntimeError as error:
-                secret_error = str(error)
-        elif legacy_secret:
-            secret_error = (
-                "terminal callback secret must be re-saved as ciphertext before hosted callbacks "
-                "can run"
-            )
-
-        return {
-            "enabled": True if enabled_raw is None else bool(enabled_raw),
-            "callback_url": str(
-                callback.get("callback_url")
-                or callback.get("url")
-                or metadata.get("runtime_terminal_callback_url")
-                or ""
-            ).strip(),
-            "key_id": str(
-                callback.get("key_id") or metadata.get("runtime_terminal_callback_key_id") or ""
-            ).strip(),
-            "secret": secret.strip(),
-            "secret_error": secret_error.strip(),
-            "callback_id": str(
-                callback.get("callback_id")
-                or metadata.get("runtime_terminal_callback_id")
-                or "runtime_terminal"
-            ).strip()
-            or "runtime_terminal",
-        }
 
     def _apply_execution_contract(
         self,
@@ -6848,56 +6742,6 @@ class RuntimeService:
             session.commit()
             return purged
 
-    def _dispatch_single_pending_callback(self) -> dict[str, object] | None:
-        callback_request = self._claim_next_pending_callback()
-        if callback_request is None:
-            return None
-
-        attempted_at = datetime.now(UTC)
-        dispatcher = self.callback_dispatcher
-        if dispatcher is None:
-            return None
-        try:
-            result = dispatcher.dispatch(callback_request)
-        except RuntimeCallbackDispatchError as error:
-            retry_at = self._resolve_callback_retry_at(
-                callback_request.run_id,
-                retryable=error.retryable,
-                attempted_at=attempted_at,
-            )
-            with get_session(self.database_url) as session:
-                repository = RuntimeRepository(session)
-                run = repository.get_run(callback_request.run_id)
-                if run is None:
-                    session.commit()
-                    return None
-                repository.mark_callback_delivery_failed(
-                    run,
-                    error_code=error.error_code,
-                    error_message=error.message,
-                    retry_at=retry_at,
-                )
-                session.commit()
-                return {
-                    "run_id": run.run_id,
-                    "callback_status": run.callback_status,
-                    "trace_id": run.trace_id,
-                }
-
-        with get_session(self.database_url) as session:
-            repository = RuntimeRepository(session)
-            run = repository.get_run(callback_request.run_id)
-            if run is None:
-                session.commit()
-                return None
-            repository.mark_callback_delivered(run, delivered_at=attempted_at)
-            session.commit()
-            return {
-                "run_id": run.run_id,
-                "callback_status": run.callback_status,
-                "trace_id": run.trace_id,
-                "status_code": result.status_code,
-            }
 
     def _build_request_fingerprint(
         self,
@@ -7358,68 +7202,6 @@ class RuntimeService:
             "created_at": self.run_projector.serialize_timestamp(event.created_at),
         }
 
-    def _claim_next_pending_callback(self) -> RuntimeCallbackDispatchRequest | None:
-        with get_session(self.database_url) as session:
-            repository = RuntimeRepository(session)
-            due_run_ids = repository.list_due_callback_run_ids(limit=1, now=datetime.now(UTC))
-            if not due_run_ids:
-                session.commit()
-                return None
-
-            run = repository.claim_callback_dispatch(due_run_ids[0], now=datetime.now(UTC))
-            if run is None:
-                session.commit()
-                return None
-
-            callback_policy = run.policy_json if isinstance(run.policy_json, dict) else {}
-            callback_target = self.run_projector.get_callback_target(callback_policy)
-            if not callback_target:
-                session.commit()
-                return None
-            callback_secret = ""
-            if str(callback_target.get("source") or "") == "site_registered":
-                site = repository.get_site(run.site_id)
-                if site is None:
-                    session.commit()
-                    return None
-                registered = self._resolve_registered_callback_config(site)
-                secret_error = str(registered.get("secret_error") or "").strip()
-                if secret_error:
-                    repository.mark_callback_delivery_failed(
-                        run,
-                        error_code="runtime.callback_config_invalid",
-                        error_message=secret_error,
-                        retry_at=None,
-                    )
-                    session.commit()
-                    return None
-                callback_secret = str(registered.get("secret") or "").strip()
-            payload = self._build_callback_payload(run)
-            session.commit()
-            return RuntimeCallbackDispatchRequest(
-                run_id=run.run_id,
-                trace_id=run.trace_id,
-                callback_url=str(callback_target.get("callback_url") or ""),
-                payload=payload,
-                site_id=run.site_id,
-                event=RUNTIME_CALLBACK_EVENT,
-                key_id=str(callback_target.get("key_id") or ""),
-                secret=callback_secret,
-                callback_id=str(callback_target.get("callback_id") or run.run_id),
-            )
-
-    def _recover_stale_callback_dispatches(self, *, limit: int) -> None:
-        current_time = datetime.now(UTC)
-        with get_session(self.database_url) as session:
-            repository = RuntimeRepository(session)
-            recovered_runs = repository.reclaim_stale_callback_dispatches(
-                limit=limit,
-                now=current_time,
-            )
-            session.commit()
-
-        for run in recovered_runs:
-            self._record_callback_dispatch_recovery(run, recovered_at=current_time)
 
     def _record_callback_dispatch_recovery(
         self,
@@ -7480,24 +7262,6 @@ class RuntimeService:
                 run.callback_last_error_code or RUNTIME_CALLBACK_DISPATCH_LEASE_RECOVERY_ERROR_CODE,
             )
 
-    def _build_callback_payload(self, run: RunRecord) -> dict[str, object]:
-        return {
-            "event": "runtime.run.terminal",
-            "run_id": run.run_id,
-            "canonical_run_id": run.canonical_run_id or "",
-            "site_id": run.site_id,
-            "trace_id": run.trace_id,
-            "status": run.status,
-            "error_code": run.error_code or "",
-            "error_message": run.error_message or "",
-            "execution_context": self.run_projector.build_execution_context_payload(run),
-            "task_backend": self.run_projector.build_task_backend_payload(run),
-            "run_lifecycle": self.run_projector.build_run_lifecycle(run),
-            "result": self._build_callback_result_payload(run),
-        }
-
-    def _build_callback_result_payload(self, run: RunRecord) -> dict[str, object]:
-        return run.result_json if isinstance(run.result_json, dict) else {}
 
     def _prepare_input_for_storage(
         self,
@@ -7531,25 +7295,6 @@ class RuntimeService:
             }
         return result_json if isinstance(result_json, dict) else {}
 
-    def _resolve_callback_retry_at(
-        self,
-        run_id: str,
-        *,
-        retryable: bool,
-        attempted_at: datetime,
-    ) -> datetime | None:
-        with get_session(self.database_url) as session:
-            repository = RuntimeRepository(session)
-            run = repository.get_run(run_id)
-            session.commit()
-
-        if run is None:
-            return None
-
-        if not retryable or run.callback_attempt_count >= self.callback_max_attempts:
-            return None
-
-        return attempted_at + timedelta(seconds=self.callback_retry_backoff_seconds)
 
     def _cancel_requested_before_attempt(
         self,

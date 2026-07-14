@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 
@@ -13,7 +13,7 @@ class RuntimeCallbackDispatchRequest:
     site_id: str = ""
     event: str = "runtime.run.terminal"
     key_id: str = ""
-    secret: str = ""
+    secret: str = field(default="", repr=False)
     callback_id: str = ""
     timestamp: str = ""
     traceparent: str = ""
