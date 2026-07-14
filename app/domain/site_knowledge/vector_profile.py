@@ -5,8 +5,10 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
+from uuid import uuid4
 
 from sqlalchemy import func, select
+from sqlalchemy.orm import Session
 
 from app.adapters.providers.base import ProviderExecutionError, ProviderExecutionRequest
 from app.adapters.providers.siliconflow import SiliconFlowProviderAdapter
@@ -361,7 +363,7 @@ class SiteKnowledgeVectorProfileAdminService:
             for chunk in chunks:
                 if str(chunk.embedding_model or "") != expected_space:
                     self._persist_lifecycle(
-                        status="reindex_required",
+                        status="awaiting_site_sync",
                         reason="embedding_space_mismatch",
                         source_document_count=document_count,
                         source_chunk_count=chunk_count,
@@ -371,11 +373,14 @@ class SiteKnowledgeVectorProfileAdminService:
                         ),
                     )
                     apply_provider_connection_runtime_settings(self.settings)
-                    raise SiteKnowledgeVectorProfileAdminError(
-                        "site_knowledge_vector_profile.embedding_space_mismatch",
-                        "Stored chunks do not belong to the active embedding space",
-                        status_code=409,
-                    )
+                    result = self.get_profile()
+                    result["maintenance"] = {
+                        "status": "awaiting_site",
+                        "action": "full_sync",
+                        "automatic": True,
+                        "site_count": len(site_ids),
+                    }
+                    return result
                 try:
                     _validated_embedding(chunk.embedding_json)
                 except SiteKnowledgeVectorProfileAdminError as error:
@@ -474,6 +479,128 @@ class SiteKnowledgeVectorProfileAdminService:
         )
         apply_provider_connection_runtime_settings(self.settings)
         return self.get_profile()
+
+    def publish_site_index(
+        self,
+        site_id: str,
+        *,
+        source_session: Session,
+    ) -> dict[str, Any]:
+        """Publish one fully refreshed site's fixed-space chunks to Zilliz."""
+        provider_connection = self._load_connection()
+        vector_store_connection = self._load_vector_store_connection()
+        provider = self._provider_state(provider_connection)
+        vector_store = self._vector_store_state(vector_store_connection)
+        if not provider["verified"] or not vector_store["verified"]:
+            raise SiteKnowledgeVectorProfileAdminError(
+                "site_knowledge_vector_profile.rebuild_not_ready",
+                "Embedding provider and Zilliz must be verified before publishing",
+                status_code=409,
+            )
+
+        expected_space = self._embedding_space_id()
+        remaining_mismatch = any(
+            str(model or "") != expected_space
+            for model in source_session.scalars(
+                select(SiteKnowledgeChunk.embedding_model).distinct()
+            )
+        )
+        site_ids = [site_id]
+        if not remaining_mismatch:
+            site_ids = list(
+                source_session.scalars(
+                    select(SiteKnowledgeChunk.site_id)
+                    .distinct()
+                    .order_by(SiteKnowledgeChunk.site_id.asc())
+                )
+            ) or [site_id]
+
+        backend_settings = self.settings.model_copy(deep=True)
+        self._apply_verified_vector_store(backend_settings, vector_store_connection)
+        backend = ZillizCloudSiteKnowledgeBackend(backend_settings)
+        try:
+            first_site_id = ""
+            first_embedding: list[float] = []
+            indexed = 0
+            for publish_site_id in site_ids:
+                chunks = list(
+                    source_session.scalars(
+                        select(SiteKnowledgeChunk)
+                        .where(SiteKnowledgeChunk.site_id == publish_site_id)
+                        .order_by(SiteKnowledgeChunk.id.asc())
+                    )
+                )
+                backend.delete_site_index(publish_site_id)
+                for offset in range(0, len(chunks), 500):
+                    batch = []
+                    for chunk in chunks[offset : offset + 500]:
+                        if str(chunk.embedding_model or "") != expected_space:
+                            raise SiteKnowledgeVectorProfileAdminError(
+                                "site_knowledge_vector_profile.embedding_space_mismatch",
+                                "Refreshed site chunks do not belong to the active embedding space",
+                                status_code=409,
+                            )
+                        embedding = _validated_embedding(chunk.embedding_json)
+                        if not first_embedding:
+                            first_site_id = publish_site_id
+                            first_embedding = embedding
+                        batch.append(self._zilliz_chunk_payload(chunk, embedding))
+                    if batch:
+                        backend.upsert_chunks(site_id=publish_site_id, chunks=batch)
+                        indexed += len(batch)
+            roundtrip_status = "not_applicable"
+            if first_embedding:
+                hits = backend.search(
+                    site_id=first_site_id,
+                    query_embedding=first_embedding,
+                    post_types=[],
+                    statuses=[],
+                    source_types=[],
+                    current_post_id=0,
+                    limit=1,
+                )
+                if not hits:
+                    raise SiteKnowledgeBackendError(
+                        "site_knowledge.zilliz_roundtrip_failed",
+                        "Zilliz round-trip validation returned no indexed chunk",
+                    )
+                roundtrip_status = "passed"
+        except SiteKnowledgeBackendError as error:
+            raise SiteKnowledgeVectorProfileAdminError(
+                "site_knowledge_vector_profile.rebuild_failed",
+                "Zilliz site index publish failed",
+                status_code=502,
+            ) from error
+
+        source_document_count = int(
+            source_session.scalar(select(func.count()).select_from(SiteKnowledgeDocument)) or 0
+        )
+        source_chunk_count = int(
+            source_session.scalar(select(func.count()).select_from(SiteKnowledgeChunk)) or 0
+        )
+        lifecycle_status = (
+            "awaiting_site_sync"
+            if remaining_mismatch
+            else ("ready" if source_chunk_count else "empty")
+        )
+        self._persist_lifecycle(
+            status=lifecycle_status,
+            reason=(
+                "sites_pending_full_sync" if remaining_mismatch else "automatic_site_sync_completed"
+            ),
+            source_document_count=source_document_count,
+            source_chunk_count=source_chunk_count,
+            indexed_chunk_count=source_chunk_count if not remaining_mismatch else 0,
+            roundtrip_status=roundtrip_status,
+            last_reindexed_at=datetime.now(UTC) if not remaining_mismatch else None,
+        )
+        apply_provider_connection_runtime_settings(self.settings)
+        return {
+            "site_id": site_id,
+            "status": lifecycle_status,
+            "indexed_chunk_count": indexed,
+            "roundtrip_status": roundtrip_status,
+        }
 
     def _load_connection(self) -> ProviderConnection | None:
         with get_session(self.database_url) as session:
@@ -770,6 +897,7 @@ class SiteKnowledgeVectorProfileAdminService:
             "roundtrip_status": "pending",
             "last_reindexed_at": "",
             "last_error_code": "",
+            "maintenance_revision": uuid4().hex,
         }
 
     def _mark_reindex_required(self, session: Any, *, reason: str) -> None:
@@ -795,6 +923,7 @@ class SiteKnowledgeVectorProfileAdminService:
             "roundtrip_status": "pending",
             "last_reindexed_at": "",
             "last_error_code": "",
+            "maintenance_revision": uuid4().hex,
         }
         row.config_json = config
         row.updated_at = datetime.now(UTC)
@@ -820,6 +949,8 @@ class SiteKnowledgeVectorProfileAdminService:
                     status_code=409,
                 )
             config = dict(row.config_json) if isinstance(row.config_json, dict) else {}
+            existing_value = config.get("site_knowledge_index_lifecycle")
+            existing = existing_value if isinstance(existing_value, dict) else {}
             config["site_knowledge_index_lifecycle"] = {
                 "status": status,
                 "reason": reason,
@@ -830,6 +961,9 @@ class SiteKnowledgeVectorProfileAdminService:
                 "roundtrip_status": roundtrip_status,
                 "last_reindexed_at": _iso(last_reindexed_at),
                 "last_error_code": last_error_code,
+                "maintenance_revision": str(
+                    existing.get("maintenance_revision") or uuid4().hex
+                ),
             }
             row.config_json = config
             row.updated_at = datetime.now(UTC)

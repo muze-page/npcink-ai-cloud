@@ -148,21 +148,37 @@ three distinct evidence levels:
 Connection success must not be presented as proof that content is searchable.
 When a verified vector store is first attached while PostgreSQL contains
 Cloud-owned chunks, or a supplied embedding credential changes, the index state
-becomes `reindex_required`. Other states are `empty`, `rebuilding`, `ready`,
-and `failed`. Search evidence remains `pending`, `passed`, `no_hit`, or
+becomes `reindex_required`. Other states are `awaiting_site_sync`, `empty`,
+`rebuilding`, `ready`, and `failed`. Search evidence remains `pending`, `passed`, `no_hit`, or
 `failed`.
 
 `POST /internal/service/admin/site-knowledge-vector-profile/index-rebuilds`
 accepts only the fixed confirmation literal
 `rebuild_site_knowledge_index`. Provider, model, dimensions, metric,
 collection, backend, site identifiers, and metering class are server-owned and
-cannot be supplied by the caller. The current MVP operation is synchronous and
-reuses the existing Cloud-owned PostgreSQL read model. It preflights every
-stored chunk before any Zilliz delete or upsert, rejects mixed embedding
-spaces or invalid vectors, then replaces each site's Zilliz rows in bounded
-batches. It does not call an embedding provider, consume ordinary AI credits,
-introduce another queue, or write WordPress. The operation requires internal
-auth, idempotency evidence, and a service audit event.
+cannot be supplied by the caller. Compatible stored chunks are copied directly
+in bounded batches. If Cloud detects an older embedding space, the operation
+instead enters `awaiting_site_sync`; `site_knowledge_status.v1` projects a
+server-generated `maintenance` request for that authenticated site. The
+request contains only `full_sync`, an opaque request id, the fixed target
+embedding space, and bounded progress fields.
+
+The Cloud Addon consumes that projection only while local Site Knowledge
+delivery consent remains enabled. It enumerates public posts/pages, persists a
+bounded delivery cursor, submits one `site_knowledge_sync.v1` batch, waits for
+the existing Cloud run to succeed, and only then submits the next batch. The
+first batch uses `rebuild`; later batches use `refresh`. Each batch carries the
+server-generated request id and position. Cloud rejects forged request ids,
+out-of-order modes, and inconsistent final markers. The last successful batch
+publishes that site's fixed-space chunks to Zilliz and closes the lifecycle
+when no old spaces remain.
+
+This automation does not add a Cloud-to-WordPress write path, a second queue,
+or a second scheduler. WordPress remains the public content source; WP-Cron is
+only local delivery durability; Cloud remains index lifecycle truth. Index
+maintenance continues to call the embedding provider and record provider cost
+without consuming ordinary AI credits. The admin action remains an explicit
+retry/expedite surface, not a required site-admin task.
 
 The verified profile connection is stored as a DB-managed Provider Connection
 so the existing provider adapter, encrypted secret storage, runtime projection,

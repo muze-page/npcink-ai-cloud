@@ -4120,9 +4120,17 @@ async def rebuild_admin_site_knowledge_vector_index(
         credential_present=False,
         result=result,
     )
+    awaiting_site_sync = (
+        str(((result.get("validation") or {}).get("index") or {}).get("status") or "")
+        == "awaiting_site_sync"
+    )
     return build_envelope(
         status="ok",
-        message="Site Knowledge vector index rebuilt",
+        message=(
+            "Site Knowledge automatic site refresh requested"
+            if awaiting_site_sync
+            else "Site Knowledge vector index rebuilt"
+        ),
         data=_merge_receipt(
             result,
             _build_operator_receipt(
@@ -4130,7 +4138,11 @@ async def rebuild_admin_site_knowledge_vector_index(
                 scope_kind="runtime_profile",
                 scope_id=SITE_KNOWLEDGE_VECTOR_PROFILE_ID,
                 outcome="succeeded",
-                effective_summary="Compatible Cloud index chunks were rebuilt in Zilliz Cloud.",
+                effective_summary=(
+                    "Sites will automatically resend public content for the fixed vector space."
+                    if awaiting_site_sync
+                    else "Compatible Cloud index chunks were rebuilt in Zilliz Cloud."
+                ),
                 audit_event=audit_event,
             ),
         ),

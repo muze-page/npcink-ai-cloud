@@ -47,6 +47,11 @@ from app.domain.site_knowledge.embedding import (
     cosine_similarity,
     embed_text_deterministic,
 )
+from app.domain.site_knowledge.maintenance import (
+    project_site_maintenance,
+    record_maintenance_batch,
+    validate_maintenance_batch,
+)
 from app.domain.site_knowledge.repository import SiteKnowledgeRepository
 from app.domain.site_knowledge.rerankers import (
     SiteKnowledgeReranker,
@@ -147,6 +152,12 @@ class SiteKnowledgeService:
                 "site_knowledge.invalid_sync_mode",
                 "site knowledge sync_mode must be refresh, rebuild, or delete",
             )
+        maintenance = validate_maintenance_batch(
+            session=self.repository.session,
+            site_id=site_id,
+            input_payload=input_payload,
+            sync_mode=sync_mode,
+        )
         post_ids = _coerce_post_ids(input_payload.get("post_ids"))
         documents = input_payload.get("documents")
         documents = documents if isinstance(documents, list) else []
@@ -466,6 +477,42 @@ class SiteKnowledgeService:
             deleted_entries=deleted_entries,
             percent=100,
         )
+        if maintenance is not None:
+            maintenance_status = "delivering"
+            if bool(maintenance["is_final"]):
+                try:
+                    from app.domain.site_knowledge.vector_profile import (
+                        SiteKnowledgeVectorProfileAdminError,
+                        SiteKnowledgeVectorProfileAdminService,
+                    )
+
+                    SiteKnowledgeVectorProfileAdminService(
+                        self.settings.database_url,
+                        self.settings,
+                    ).publish_site_index(
+                        site_id,
+                        source_session=self.repository.session,
+                    )
+                    maintenance_status = "ready"
+                except SiteKnowledgeVectorProfileAdminError as error:
+                    record_maintenance_batch(
+                        self.repository.session,
+                        site_id=site_id,
+                        maintenance=maintenance,
+                        status="blocked",
+                        last_error_code=error.error_code,
+                    )
+                    raise SiteKnowledgeContractViolation(
+                        "site_knowledge.maintenance_publish_failed",
+                        "site knowledge maintenance could not publish the rebuilt index",
+                    ) from error
+            record_maintenance_batch(
+                self.repository.session,
+                site_id=site_id,
+                maintenance=maintenance,
+                status=maintenance_status,
+            )
+
         self._emit_sync_progress(**progress)
 
         return self._sync_response(
@@ -495,6 +542,12 @@ class SiteKnowledgeService:
         indexed_chunks = self.repository.count_chunks(site_id)
         last_sync_at = self.repository.last_sync_at(site_id)
         active_run = self.repository.latest_active_sync(site_id)
+        indexed_embedding_models = self.repository.list_embedding_models(site_id)
+        maintenance = project_site_maintenance(
+            self.repository.session,
+            site_id=site_id,
+            indexed_embedding_models=indexed_embedding_models,
+        )
 
         status = "ready" if indexed_chunks > 0 else "empty"
         if active_run is not None:
@@ -538,6 +591,7 @@ class SiteKnowledgeService:
             "status": status,
             "coverage": coverage,
             "progress": progress,
+            "maintenance": maintenance,
             "active_run": _serialize_active_run(active_run) if active_run is not None else {},
             "ownership": _site_knowledge_ownership_contract(),
             "truth_boundaries": _site_knowledge_truth_boundaries(),

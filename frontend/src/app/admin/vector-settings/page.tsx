@@ -128,6 +128,14 @@ export default function VectorSettingsPage() {
     void loadProfile();
   }, [loadProfile]);
 
+  useEffect(() => {
+    if (!['awaiting_site_sync', 'rebuilding'].includes(String(profile?.status || ''))) return;
+    const timer = window.setInterval(() => {
+      void loadProfile();
+    }, 15000);
+    return () => window.clearInterval(timer);
+  }, [loadProfile, profile?.status]);
+
   async function saveAndVerify() {
     if (!credential.trim() && !profile?.provider.configured) {
       setError(copy(
@@ -297,12 +305,19 @@ export default function VectorSettingsPage() {
           )
         ));
       }
-      setProfile(payload?.data as VectorProfile);
-      setMessage(copy(
-        'admin.vector_settings.rebuild_complete',
-        'Zilliz 索引已重建并通过往返自检。请执行一次正常的站点知识搜索，完成真实检索验收。',
-        'The Zilliz index was rebuilt and passed its round-trip check. Run a normal Site Knowledge search to complete retrieval validation.'
-      ));
+      const nextProfile = payload?.data as VectorProfile;
+      setProfile(nextProfile);
+      setMessage(nextProfile?.validation?.index?.status === 'awaiting_site_sync'
+        ? copy(
+          'admin.vector_settings.site_sync_requested',
+          '已通知各站点在后台自动重送公开内容；无需站点管理员手动操作。',
+          'Sites will automatically resend public content in the background. No site-admin action is required.'
+        )
+        : copy(
+          'admin.vector_settings.rebuild_complete',
+          'Zilliz 索引已重建并通过往返自检。请执行一次正常的站点知识搜索，完成真实检索验收。',
+          'The Zilliz index was rebuilt and passed its round-trip check. Run a normal Site Knowledge search to complete retrieval validation.'
+        ));
     } catch (rebuildError) {
       setError(rebuildError instanceof Error
         ? rebuildError.message
@@ -356,6 +371,16 @@ export default function VectorSettingsPage() {
             'admin.vector_settings.status_rebuilding_desc',
             '正在把 Cloud 已保存的站点资料迁入 Zilliz。',
             'Cloud-owned Site Knowledge is being moved into Zilliz.'
+          ),
+        };
+      case 'awaiting_site_sync':
+        return {
+          label: copy('admin.vector_settings.status_awaiting_site_sync', '站点自动更新中', 'Refreshing sites'),
+          tone: 'warning',
+          description: copy(
+            'admin.vector_settings.status_awaiting_site_sync_desc',
+            '站点正在后台分批重送公开内容；无需站点管理员手动执行全量同步。',
+            'Sites are resending public content in bounded background batches; no site-admin full sync is required.'
           ),
         };
       case 'failed':
@@ -483,8 +508,8 @@ export default function VectorSettingsPage() {
                 {profile?.validation.index.reason === 'embedding_space_mismatch'
                   ? copy(
                     'admin.vector_settings.index_space_mismatch',
-                    '现有资料属于旧向量空间，必须从站点端执行全量 Site Knowledge 同步，不能直接混入当前索引。',
-                    'Existing content belongs to an older vector space. Run a full Site Knowledge sync from the site; it cannot be mixed into the active index.'
+                    '现有资料属于旧向量空间。启动后，各站点会在后台自动重送公开内容，不会混入旧索引。',
+                    'Existing content belongs to an older vector space. Once started, sites resend public content in the background without mixing it into the old index.'
                   )
                   : copy(
                     'admin.vector_settings.index_counts',
@@ -496,6 +521,8 @@ export default function VectorSettingsPage() {
             <BackofficeStatusBadge
               label={profile?.validation.index.status === 'ready'
                 ? copy('common.ready', '已通过', 'Passed')
+                : profile?.validation.index.status === 'awaiting_site_sync'
+                  ? copy('admin.vector_settings.awaiting_site_sync', '站点更新中', 'Refreshing sites')
                 : profile?.validation.index.status === 'empty'
                   ? copy('admin.vector_settings.index_empty', '暂无资料', 'No content')
                   : copy('admin.vector_settings.reindex_needed', '需要重建', 'Rebuild needed')}
@@ -531,8 +558,9 @@ export default function VectorSettingsPage() {
             />
           </div>
         </div>
-        {(profile?.validation.index.status === 'reindex_required' || profile?.validation.index.status === 'failed')
-          && profile?.validation.index.reason !== 'embedding_space_mismatch' ? (
+        {(profile?.validation.index.status === 'reindex_required'
+          || profile?.validation.index.status === 'awaiting_site_sync'
+          || profile?.validation.index.status === 'failed') ? (
           <div className="flex flex-col gap-3 border-t border-slate-200 pt-4 dark:border-slate-800 sm:flex-row sm:items-center sm:justify-between">
             <p className="text-xs leading-5 text-slate-500 dark:text-slate-400">
               {copy(
@@ -549,7 +577,10 @@ export default function VectorSettingsPage() {
             >
               {rebuilding
                 ? copy('admin.vector_settings.rebuilding', '重建中…', 'Rebuilding…')
-                : copy('admin.vector_settings.rebuild_index', '重建向量索引', 'Rebuild vector index')}
+                : profile?.validation.index.reason === 'embedding_space_mismatch'
+                  || profile?.validation.index.status === 'awaiting_site_sync'
+                  ? copy('admin.vector_settings.start_automatic_sync', '启动自动更新', 'Start automatic refresh')
+                  : copy('admin.vector_settings.rebuild_index', '重建向量索引', 'Rebuild vector index')}
             </button>
           </div>
         ) : null}
