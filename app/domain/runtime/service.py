@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import json
 from datetime import UTC, datetime, timedelta
 from time import perf_counter
@@ -100,6 +99,7 @@ from app.domain.routing.service import RoutingService
 from app.domain.runtime.analysis_result import build_analysis_result_envelope
 from app.domain.runtime.artifact_coordination import (
     RuntimeArtifactCoordinationConfig,
+    RuntimeArtifactCoordinationDependencies,
     RuntimeArtifactCoordinationService,
 )
 from app.domain.runtime.callback_delivery import RuntimeCallbackDeliveryService
@@ -254,6 +254,29 @@ class RuntimeService:
                 audio_artifact_download_timeout_seconds=(
                     self.settings.audio_generation_artifact_download_timeout_seconds
                 ),
+                media_derivative_batch_default_chunk_size=(
+                    self.settings.media_derivative_batch_default_chunk_size
+                ),
+                media_derivative_batch_max_chunk_size=(
+                    self.settings.media_derivative_batch_max_chunk_size
+                ),
+                media_derivative_site_queued_limit=(
+                    self.settings.media_derivative_site_queued_limit
+                ),
+                media_derivative_site_running_limit=(
+                    self.settings.media_derivative_site_running_limit
+                ),
+            ),
+            dependencies=RuntimeArtifactCoordinationDependencies(
+                database_url=self.database_url,
+                active_site_guard=self._require_active_site,
+                commercial_authorizer=self.commercial_service.authorize_runtime_request,
+                commercial_acceptance_recorder=(self.commercial_service.record_run_acceptance),
+                credit_estimator=estimate_runtime_request_ai_credits,
+                execution_input_encryptor=lambda input_payload: encrypt_runtime_execution_input(
+                    input_payload, settings=self.settings
+                ),
+                execution_response_builder=self._build_execution_response,
             ),
             run_controller=self.run_lifecycle_service,
             execution_input_loader=self._get_execution_input_payload,
@@ -795,127 +818,15 @@ class RuntimeService:
         idempotency_key: str | None = None,
         trace_id: str | None = None,
     ) -> RuntimeExecutionResponse:
-        import base64
-
-        resolved_trace_id = trace_id or uuid4().hex
-        run_id = f"run_{uuid4().hex}"
-        resolved_idempotency_key = idempotency_key or f"auto_{uuid4().hex}"
-        source_checksum = hashlib.sha256(source_bytes).hexdigest()
-        watermark_checksum = hashlib.sha256(watermark_bytes).hexdigest() if watermark_bytes else ""
-        media_derivative_policy = self._build_media_derivative_policy(input_payload)
-        request_fingerprint = self.run_lifecycle_service.build_media_derivative_request_fingerprint(
-            site_id,
-            input_payload,
-            source_checksum=source_checksum,
-            watermark_checksum=watermark_checksum,
+        return self.artifact_coordination_service.enqueue_media_derivative_run(
+            site_id=site_id,
+            input_payload=input_payload,
+            source_bytes=source_bytes,
+            watermark_bytes=watermark_bytes,
+            ttl_minutes=ttl_minutes,
+            idempotency_key=idempotency_key,
+            trace_id=trace_id,
         )
-
-        with get_session(self.database_url) as session:
-            repository = RuntimeRepository(session)
-            self._require_active_site(repository, site_id)
-
-            existing = self.run_lifecycle_service.get_idempotent_replay(
-                repository=repository,
-                site_id=site_id,
-                idempotency_key=resolved_idempotency_key,
-                request_fingerprint=request_fingerprint,
-            )
-            if existing is not None:
-                session.commit()
-                return self._build_execution_response(
-                    existing,
-                    repository=repository,
-                    idempotent_replay=True,
-                )
-
-            commercial_decision = self.commercial_service.authorize_runtime_request(
-                session=session,
-                site_id=site_id,
-                ability_family="vision",
-                channel="openapi",
-                execution_kind="media_derivative",
-                execution_tier="cloud",
-                data_classification="internal",
-                trace_id=resolved_trace_id,
-                idempotency_key=resolved_idempotency_key,
-                request_kind="execute",
-                run_id=run_id,
-                estimated_ai_credits=estimate_runtime_request_ai_credits(
-                    ability_family="vision",
-                    execution_kind="media_derivative",
-                    payload_json=input_payload,
-                ),
-            )
-
-            media_input = {
-                **input_payload,
-                "_source_bytes_b64": base64.b64encode(source_bytes).decode("ascii"),
-            }
-            if watermark_bytes:
-                media_input["_watermark_bytes_b64"] = base64.b64encode(watermark_bytes).decode(
-                    "ascii"
-                )
-
-            policy = {
-                "storage_mode": "result_only",
-                "media_derivative": media_derivative_policy,
-                "execution_contract": {
-                    "ability_name": "generate_optimized_media_derivative",
-                    "contract_version": "media_derivative_cloud_request.v1",
-                    "profile_id": "media_derivative.worker",
-                    "execution_pattern": "whole_run_offload",
-                    "data_classification": "internal",
-                    "storage_mode": "result_only",
-                    "timeout_seconds": 300,
-                    "retry_max": 0,
-                    "retention_ttl": 3600,
-                    "task_backend": {"enabled": True},
-                },
-            }
-
-            run = self.run_lifecycle_service.create_durable_run(
-                repository=repository,
-                command=RuntimeRunCreationCommand(
-                    run_id=run_id,
-                    site_id=site_id,
-                    account_id=str(commercial_decision.get("account_id") or "") or None,
-                    subscription_id=str(commercial_decision.get("subscription_id") or "") or None,
-                    plan_version_id=str(commercial_decision.get("plan_version_id") or "") or None,
-                    ability_name="generate_optimized_media_derivative",
-                    ability_family="vision",
-                    skill_id="",
-                    workflow_id="",
-                    contract_version="media_derivative_cloud_request.v1",
-                    channel="openapi",
-                    execution_kind="media_derivative",
-                    execution_tier="cloud",
-                    execution_pattern="whole_run_offload",
-                    data_classification="internal",
-                    profile_id="media_derivative.worker",
-                    canonical_run_id=None,
-                    status="queued",
-                    idempotency_key=resolved_idempotency_key,
-                    request_fingerprint=request_fingerprint,
-                    trace_id=resolved_trace_id,
-                    input_json={},
-                    execution_input_ciphertext=encrypt_runtime_execution_input(
-                        media_input,
-                        settings=self.settings,
-                    ),
-                    policy_json=policy,
-                    selected_provider_id="media_derivative",
-                    selected_model_id="pillow",
-                    selected_instance_id="cloud-worker",
-                ),
-            )
-            self.commercial_service.record_run_acceptance(session=session, run=run)
-            self.run_lifecycle_service.publish_queue_signal(run.run_id)
-            session.commit()
-            return self._build_execution_response(
-                run,
-                repository=repository,
-                idempotent_replay=False,
-            )
 
     def get_media_derivative_queue_pressure(self, *, site_id: str) -> dict[str, object]:
         queued_limit = max(1, int(self.settings.media_derivative_site_queued_limit))
@@ -964,33 +875,6 @@ class RuntimeService:
             "pressure_state": pressure_state,
             "pressure_reasons": pressure_reasons,
             "recommended_chunk_size": max(1, min(default_chunk_size, queue_remaining or 1)),
-        }
-
-    def _build_media_derivative_policy(self, input_payload: dict[str, Any]) -> dict[str, object]:
-        cloud_job_payload = self._dict_or_empty(input_payload.get("cloud_job_payload"))
-        batch_context = self._dict_or_empty(input_payload.get("batch_context"))
-        return {
-            "target_format": str(cloud_job_payload.get("target_format") or "webp"),
-            "source_media_type": str(cloud_job_payload.get("source_media_type") or "image"),
-            "batch_context": {
-                "batch_id": str(batch_context.get("batch_id") or ""),
-                "item_index": self._coerce_int(batch_context.get("item_index"), default=1),
-                "item_count": self._coerce_int(batch_context.get("item_count"), default=1),
-                "chunk_size": self._coerce_int(
-                    batch_context.get("chunk_size"),
-                    default=int(self.settings.media_derivative_batch_default_chunk_size),
-                ),
-                "explicit_avif": bool(batch_context.get("explicit_avif")),
-            }
-            if batch_context
-            else {},
-            "limits": {
-                "site_queued": int(self.settings.media_derivative_site_queued_limit),
-                "site_running": int(self.settings.media_derivative_site_running_limit),
-                "batch_max_chunk_size": int(self.settings.media_derivative_batch_max_chunk_size),
-            },
-            "write_posture": "artifact_only",
-            "direct_wordpress_write": False,
         }
 
     def _execute_media_derivative_run(

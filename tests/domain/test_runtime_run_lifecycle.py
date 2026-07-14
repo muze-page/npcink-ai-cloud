@@ -599,8 +599,10 @@ def test_lifecycle_dependency_boundary_and_runtime_service_facades() -> None:
     repository_root = Path(__file__).parents[2]
     lifecycle_path = repository_root / "app/domain/runtime/run_lifecycle.py"
     service_path = repository_root / "app/domain/runtime/service.py"
+    artifact_coordination_path = repository_root / "app/domain/runtime/artifact_coordination.py"
     lifecycle_source = lifecycle_path.read_text(encoding="utf-8")
     service_source = service_path.read_text(encoding="utf-8")
+    artifact_coordination_source = artifact_coordination_path.read_text(encoding="utf-8")
     lifecycle_tree = ast.parse(lifecycle_source)
     service_tree = ast.parse(service_source)
 
@@ -668,10 +670,24 @@ def test_lifecycle_dependency_boundary_and_runtime_service_facades() -> None:
         assert ast.unparse(statement.value.func).startswith("self.run_lifecycle_service.")
 
     assert ".get_run_by_idempotency(" not in service_source
-    assert service_source.count(".get_idempotent_replay(") == 9
+    assert ".get_run_by_idempotency(" not in artifact_coordination_source
+    service_idempotent_replay_calls = service_source.count(".get_idempotent_replay(")
+    artifact_idempotent_replay_calls = artifact_coordination_source.count(".get_idempotent_replay(")
+    assert (service_idempotent_replay_calls, artifact_idempotent_replay_calls) == (8, 1)
+    assert service_idempotent_replay_calls + artifact_idempotent_replay_calls == 9
     assert service_source.count(".build_request_fingerprint(") == 8
-    assert service_source.count(".build_media_derivative_request_fingerprint(") == 1
-    assert service_source.count(".publish_queue_signal(") == 6
+    service_media_fingerprint_calls = service_source.count(
+        ".build_media_derivative_request_fingerprint("
+    )
+    artifact_media_fingerprint_calls = artifact_coordination_source.count(
+        ".build_media_derivative_request_fingerprint("
+    )
+    assert (service_media_fingerprint_calls, artifact_media_fingerprint_calls) == (0, 1)
+    assert service_media_fingerprint_calls + artifact_media_fingerprint_calls == 1
+    service_publish_queue_calls = service_source.count(".publish_queue_signal(")
+    artifact_publish_queue_calls = artifact_coordination_source.count(".publish_queue_signal(")
+    assert (service_publish_queue_calls, artifact_publish_queue_calls) == (5, 1)
+    assert service_publish_queue_calls + artifact_publish_queue_calls == 6
     for forbidden_repository_transition in (
         ".create_run(",
         ".mark_run_succeeded(",

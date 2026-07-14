@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import ast
 import base64
+import hashlib
 from collections.abc import Iterator
-from dataclasses import FrozenInstanceError
+from dataclasses import FrozenInstanceError, asdict, dataclass, field
 from pathlib import Path
-from typing import Any
+from types import SimpleNamespace
+from typing import Any, cast
 
 import pytest
 from sqlalchemy import select
@@ -25,11 +27,64 @@ from app.domain.media_derivatives.processor import MediaDerivativeResult
 from app.domain.runtime import artifact_coordination
 from app.domain.runtime.artifact_coordination import (
     RuntimeArtifactCoordinationConfig,
+    RuntimeArtifactCoordinationDependencies,
     RuntimeArtifactCoordinationService,
 )
+from app.domain.runtime.models import RuntimeExecutionResponse
+from app.domain.runtime.run_lifecycle import RuntimeRunCreationCommand
 
 
+@dataclass
 class RecordingRunController:
+    fingerprint_calls: list[dict[str, object]] = field(default_factory=list)
+    creation_commands: list[RuntimeRunCreationCommand] = field(default_factory=list)
+    published_run_ids: list[str] = field(default_factory=list)
+
+    def build_media_derivative_request_fingerprint(
+        self,
+        site_id: str,
+        input_payload: dict[str, Any],
+        *,
+        source_checksum: str,
+        watermark_checksum: str = "",
+    ) -> str:
+        self.fingerprint_calls.append(
+            {
+                "site_id": site_id,
+                "input_payload": input_payload,
+                "source_checksum": source_checksum,
+                "watermark_checksum": watermark_checksum,
+            }
+        )
+        return f"fingerprint:{site_id}:{source_checksum}:{watermark_checksum}"
+
+    def get_idempotent_replay(
+        self,
+        *,
+        repository: RuntimeRepository,
+        site_id: str,
+        idempotency_key: str | None,
+        request_fingerprint: str,
+    ) -> RunRecord | None:
+        if not idempotency_key:
+            return None
+        existing = repository.get_run_by_idempotency(site_id, idempotency_key)
+        if existing is not None:
+            assert existing.request_fingerprint == request_fingerprint
+        return existing
+
+    def create_durable_run(
+        self,
+        *,
+        repository: RuntimeRepository,
+        command: RuntimeRunCreationCommand,
+    ) -> RunRecord:
+        self.creation_commands.append(command)
+        return repository.create_run(**asdict(command))
+
+    def publish_queue_signal(self, run_id: str) -> None:
+        self.published_run_ids.append(run_id)
+
     def fail_run(
         self,
         repository: RuntimeRepository,
@@ -70,6 +125,129 @@ class RecordingRunController:
             model_id=model_id,
             instance_id=instance_id,
             fallback_used=fallback_used,
+        )
+
+
+@dataclass
+class RecordingCoordinationDependencies:
+    database_url: str
+    active_site_calls: list[str] = field(default_factory=list)
+    authorization_calls: list[dict[str, object]] = field(default_factory=list)
+    acceptance_run_ids: list[str] = field(default_factory=list)
+    credit_calls: list[dict[str, object]] = field(default_factory=list)
+    encrypted_inputs: list[dict[str, object]] = field(default_factory=list)
+    response_calls: list[dict[str, object]] = field(default_factory=list)
+
+    def active_site_guard(
+        self,
+        repository: RuntimeRepository,
+        site_id: str,
+    ) -> object:
+        self.active_site_calls.append(site_id)
+        site = repository.get_site(site_id)
+        assert site is not None
+        assert site.status == "active"
+        return site
+
+    def commercial_authorizer(
+        self,
+        *,
+        session: Any,
+        site_id: str,
+        ability_family: str,
+        channel: str,
+        execution_kind: str,
+        execution_tier: str,
+        data_classification: str,
+        trace_id: str,
+        idempotency_key: str | None,
+        request_kind: str,
+        run_id: str | None,
+        estimated_ai_credits: float,
+    ) -> dict[str, object]:
+        self.authorization_calls.append(
+            {
+                "session": session,
+                "site_id": site_id,
+                "ability_family": ability_family,
+                "channel": channel,
+                "execution_kind": execution_kind,
+                "execution_tier": execution_tier,
+                "data_classification": data_classification,
+                "trace_id": trace_id,
+                "idempotency_key": idempotency_key,
+                "request_kind": request_kind,
+                "run_id": run_id,
+                "estimated_ai_credits": estimated_ai_credits,
+            }
+        )
+        return {
+            "account_id": "account_alpha",
+            "subscription_id": "subscription_alpha",
+            "plan_version_id": "plan_version_alpha",
+        }
+
+    def commercial_acceptance_recorder(
+        self,
+        *,
+        session: Any,
+        run: RunRecord,
+    ) -> None:
+        assert session is not None
+        self.acceptance_run_ids.append(run.run_id)
+
+    def credit_estimator(
+        self,
+        *,
+        ability_family: str | None,
+        execution_kind: str | None,
+        payload_json: dict[str, object] | None = None,
+    ) -> float:
+        self.credit_calls.append(
+            {
+                "ability_family": ability_family or "",
+                "execution_kind": execution_kind or "",
+                "payload_json": payload_json or {},
+            }
+        )
+        return 2.5
+
+    def execution_input_encryptor(self, input_payload: dict[str, object]) -> str:
+        self.encrypted_inputs.append(dict(input_payload))
+        return "encrypted-media-input"
+
+    def execution_response_builder(
+        self,
+        run: RunRecord,
+        *,
+        repository: RuntimeRepository,
+        idempotent_replay: bool,
+    ) -> RuntimeExecutionResponse:
+        self.response_calls.append(
+            {
+                "run_id": run.run_id,
+                "idempotent_replay": idempotent_replay,
+                "session_in_transaction": repository.session.in_transaction(),
+            }
+        )
+        return cast(
+            RuntimeExecutionResponse,
+            SimpleNamespace(
+                run_id=run.run_id,
+                status=run.status,
+                idempotent_replay=idempotent_replay,
+            ),
+        )
+
+    def build(self) -> RuntimeArtifactCoordinationDependencies:
+        return RuntimeArtifactCoordinationDependencies(
+            database_url=self.database_url,
+            active_site_guard=self.active_site_guard,
+            commercial_authorizer=self.commercial_authorizer,
+            commercial_acceptance_recorder=self.commercial_acceptance_recorder,
+            credit_estimator=self.credit_estimator,
+            execution_input_encryptor=self.execution_input_encryptor,
+            execution_response_builder=self.execution_response_builder,
         )
 
 
@@ -115,11 +293,13 @@ def _create_run(repository: RuntimeRepository, *, run_id: str) -> RunRecord:
 
 def _service(
     *,
+    database_url: str,
     input_payload: dict[str, Any] | None = None,
     config: RuntimeArtifactCoordinationConfig | None = None,
 ) -> RuntimeArtifactCoordinationService:
     return RuntimeArtifactCoordinationService(
         config=config or RuntimeArtifactCoordinationConfig(),
+        dependencies=RecordingCoordinationDependencies(database_url).build(),
         run_controller=RecordingRunController(),
         execution_input_loader=lambda run: input_payload or {},
     )
@@ -130,6 +310,211 @@ def test_artifact_coordination_config_is_frozen() -> None:
 
     with pytest.raises(FrozenInstanceError):
         config.audio_artifact_ttl_minutes = 10  # type: ignore[misc]
+
+
+def test_enqueue_media_derivative_run_uses_injected_dependencies_and_exact_command(
+    database_url: str,
+) -> None:
+    controller = RecordingRunController()
+    dependencies = RecordingCoordinationDependencies(database_url)
+    config = RuntimeArtifactCoordinationConfig(
+        media_derivative_batch_default_chunk_size=6,
+        media_derivative_batch_max_chunk_size=12,
+        media_derivative_site_queued_limit=20,
+        media_derivative_site_running_limit=2,
+    )
+    service = RuntimeArtifactCoordinationService(
+        config=config,
+        dependencies=dependencies.build(),
+        run_controller=controller,
+        execution_input_loader=lambda run: {},
+    )
+    input_payload: dict[str, Any] = {
+        "cloud_job_payload": {
+            "target_format": "avif",
+            "source_media_type": "image",
+        },
+        "batch_context": {
+            "batch_id": "batch-alpha",
+            "item_index": "2",
+            "item_count": "invalid",
+            "explicit_avif": True,
+        },
+    }
+    source_bytes = b"source-image"
+    watermark_bytes = b"watermark-image"
+
+    response = service.enqueue_media_derivative_run(
+        site_id="site_alpha",
+        input_payload=input_payload,
+        source_bytes=source_bytes,
+        watermark_bytes=watermark_bytes,
+        ttl_minutes=13,
+        idempotency_key="idem-direct-enqueue",
+        trace_id="trace-direct-enqueue",
+    )
+
+    assert response.status == "queued"
+    assert response.idempotent_replay is False
+    assert dependencies.active_site_calls == ["site_alpha"]
+    assert dependencies.credit_calls == [
+        {
+            "ability_family": "vision",
+            "execution_kind": "media_derivative",
+            "payload_json": input_payload,
+        }
+    ]
+    assert len(dependencies.authorization_calls) == 1
+    authorization_call = dependencies.authorization_calls[0]
+    assert {key: value for key, value in authorization_call.items() if key != "session"} == {
+        "site_id": "site_alpha",
+        "ability_family": "vision",
+        "channel": "openapi",
+        "execution_kind": "media_derivative",
+        "execution_tier": "cloud",
+        "data_classification": "internal",
+        "trace_id": "trace-direct-enqueue",
+        "idempotency_key": "idem-direct-enqueue",
+        "request_kind": "execute",
+        "run_id": response.run_id,
+        "estimated_ai_credits": 2.5,
+    }
+    assert controller.fingerprint_calls == [
+        {
+            "site_id": "site_alpha",
+            "input_payload": input_payload,
+            "source_checksum": hashlib.sha256(source_bytes).hexdigest(),
+            "watermark_checksum": hashlib.sha256(watermark_bytes).hexdigest(),
+        }
+    ]
+    assert len(controller.creation_commands) == 1
+    command = controller.creation_commands[0]
+    assert command.run_id == response.run_id
+    assert command.run_id.startswith("run_")
+    assert command.site_id == "site_alpha"
+    assert command.account_id == "account_alpha"
+    assert command.subscription_id == "subscription_alpha"
+    assert command.plan_version_id == "plan_version_alpha"
+    assert command.idempotency_key == "idem-direct-enqueue"
+    assert command.trace_id == "trace-direct-enqueue"
+    assert command.request_fingerprint.startswith("fingerprint:site_alpha:")
+    assert command.status == "queued"
+    assert command.execution_input_ciphertext == "encrypted-media-input"
+    assert command.input_json == {}
+    assert command.selected_provider_id == "media_derivative"
+    assert command.selected_model_id == "pillow"
+    assert command.selected_instance_id == "cloud-worker"
+    assert command.policy_json == {
+        "storage_mode": "result_only",
+        "media_derivative": {
+            "target_format": "avif",
+            "source_media_type": "image",
+            "batch_context": {
+                "batch_id": "batch-alpha",
+                "item_index": 2,
+                "item_count": 1,
+                "chunk_size": 6,
+                "explicit_avif": True,
+            },
+            "limits": {
+                "site_queued": 20,
+                "site_running": 2,
+                "batch_max_chunk_size": 12,
+            },
+            "write_posture": "artifact_only",
+            "direct_wordpress_write": False,
+        },
+        "execution_contract": {
+            "ability_name": "generate_optimized_media_derivative",
+            "contract_version": "media_derivative_cloud_request.v1",
+            "profile_id": "media_derivative.worker",
+            "execution_pattern": "whole_run_offload",
+            "data_classification": "internal",
+            "storage_mode": "result_only",
+            "timeout_seconds": 300,
+            "retry_max": 0,
+            "retention_ttl": 3600,
+            "task_backend": {"enabled": True},
+        },
+    }
+    assert dependencies.encrypted_inputs == [
+        {
+            **input_payload,
+            "_source_bytes_b64": base64.b64encode(source_bytes).decode("ascii"),
+            "_watermark_bytes_b64": base64.b64encode(watermark_bytes).decode("ascii"),
+        }
+    ]
+    assert "ttl_minutes" not in dependencies.encrypted_inputs[0]
+    assert dependencies.acceptance_run_ids == [response.run_id]
+    assert controller.published_run_ids == [response.run_id]
+    assert dependencies.response_calls == [
+        {
+            "run_id": response.run_id,
+            "idempotent_replay": False,
+            "session_in_transaction": False,
+        }
+    ]
+    with get_session(database_url) as session:
+        persisted = session.get(RunRecord, response.run_id)
+        assert persisted is not None
+        assert persisted.status == "queued"
+
+
+def test_enqueue_media_derivative_replay_skips_side_effect_dependencies(
+    database_url: str,
+) -> None:
+    controller = RecordingRunController()
+    dependencies = RecordingCoordinationDependencies(database_url)
+    service = RuntimeArtifactCoordinationService(
+        config=RuntimeArtifactCoordinationConfig(),
+        dependencies=dependencies.build(),
+        run_controller=controller,
+        execution_input_loader=lambda run: {},
+    )
+    input_payload = {
+        "cloud_job_payload": {
+            "target_format": "webp",
+            "source_media_type": "image",
+        }
+    }
+
+    first = service.enqueue_media_derivative_run(
+        site_id="site_alpha",
+        input_payload=input_payload,
+        source_bytes=b"same-source",
+        idempotency_key="idem-direct-replay",
+        trace_id="trace-direct-replay",
+    )
+    replay = service.enqueue_media_derivative_run(
+        site_id="site_alpha",
+        input_payload=input_payload,
+        source_bytes=b"same-source",
+        idempotency_key="idem-direct-replay",
+        trace_id="trace-direct-replay",
+    )
+
+    assert replay.run_id == first.run_id
+    assert replay.idempotent_replay is True
+    assert len(controller.fingerprint_calls) == 2
+    assert len(controller.creation_commands) == 1
+    assert controller.published_run_ids == [first.run_id]
+    assert dependencies.active_site_calls == ["site_alpha", "site_alpha"]
+    assert len(dependencies.authorization_calls) == 1
+    assert len(dependencies.credit_calls) == 1
+    assert len(dependencies.encrypted_inputs) == 1
+    assert dependencies.acceptance_run_ids == [first.run_id]
+    assert dependencies.response_calls == [
+        {
+            "run_id": first.run_id,
+            "idempotent_replay": False,
+            "session_in_transaction": False,
+        },
+        {
+            "run_id": first.run_id,
+            "idempotent_replay": True,
+            "session_in_transaction": False,
+        },
+    ]
 
 
 def test_execute_media_derivative_success_records_artifact_metric_and_terminal_evidence(
@@ -163,6 +548,7 @@ def test_execute_media_derivative_success_records_artifact_metric_and_terminal_e
 
     monkeypatch.setattr(artifact_coordination, "process_media_derivative", fake_process)
     service = _service(
+        database_url=database_url,
         input_payload={
             "cloud_job_payload": {
                 "source_media_type": "image",
@@ -172,7 +558,7 @@ def test_execute_media_derivative_success_records_artifact_metric_and_terminal_e
             },
             "ttl_minutes": 11,
             "_source_bytes_b64": base64.b64encode(source_bytes).decode("ascii"),
-        }
+        },
     )
 
     with get_session(database_url) as session:
@@ -213,13 +599,14 @@ def test_execute_media_derivative_domain_failure_preserves_result_and_metric(
 
     monkeypatch.setattr(artifact_coordination, "process_media_derivative", fail_process)
     service = _service(
+        database_url=database_url,
         input_payload={
             "cloud_job_payload": {
                 "source_media_type": "image",
                 "target_format": "webp",
             },
             "_source_bytes_b64": base64.b64encode(source_bytes).decode("ascii"),
-        }
+        },
     )
 
     with get_session(database_url) as session:
@@ -290,7 +677,7 @@ def test_audio_and_inline_image_wrappers_delegate_with_frozen_config(
         inline_image_max_bytes=5678,
         inline_image_timeout_seconds=3.5,
     )
-    service = _service(config=config)
+    service = _service(database_url=database_url, config=config)
 
     with get_session(database_url) as session:
         repository = RuntimeRepository(session)

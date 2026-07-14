@@ -355,7 +355,9 @@ def test_runtime_facade_retains_run_04_entrypoints_with_extracted_delegation() -
         if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)
     }
     expected_calls = {
-        "enqueue_media_derivative_run": "run_lifecycle_service.create_durable_run",
+        "enqueue_media_derivative_run": (
+            "artifact_coordination_service.enqueue_media_derivative_run"
+        ),
         "_execute_media_derivative_run": (
             "artifact_coordination_service.execute_media_derivative_run"
         ),
@@ -371,5 +373,5 @@ def test_runtime_facade_retains_run_04_entrypoints_with_extracted_delegation() -
     for method_name, expected_call in expected_calls.items():
         assert source.count(f"def {method_name}(") == 1
         assert expected_call in ast.unparse(methods[method_name])
-    for method_name in expected_calls.keys() - {"enqueue_media_derivative_run"}:
+    for method_name in expected_calls:
         assert len(methods[method_name].body) == 1
