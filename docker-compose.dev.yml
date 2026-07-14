@@ -47,7 +47,7 @@ services:
       context: .
       dockerfile: Dockerfile
       args:
-        PACKAGE_EXTRAS: "[dev]"
+        PACKAGE_EXTRAS: "[dev,zilliz]"
     image: npcink-ai-cloud-api:dev
     restart: unless-stopped
     command: >-
@@ -87,7 +87,7 @@ services:
       context: .
       dockerfile: Dockerfile
       args:
-        PACKAGE_EXTRAS: "[dev]"
+        PACKAGE_EXTRAS: "[dev,zilliz]"
     image: npcink-ai-cloud-worker:dev
     restart: unless-stopped
     command: python -m app.workers.runtime_queue
@@ -115,7 +115,7 @@ services:
       context: .
       dockerfile: Dockerfile
       args:
-        PACKAGE_EXTRAS: "[dev]"
+        PACKAGE_EXTRAS: "[dev,zilliz]"
     image: npcink-ai-cloud-callback-worker:dev
     restart: unless-stopped
     command: python -m app.workers.callback_dispatch
@@ -143,7 +143,7 @@ services:
       context: .
       dockerfile: Dockerfile
       args:
-        PACKAGE_EXTRAS: "[dev]"
+        PACKAGE_EXTRAS: "[dev,zilliz]"
     image: npcink-ai-cloud-ops-worker:dev
     restart: unless-stopped
     command: python -m app.workers.ops_cadence

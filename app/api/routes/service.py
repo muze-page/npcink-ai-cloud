@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, BackgroundTasks, Query, Request
 from fastapi.responses import JSONResponse
@@ -339,6 +339,12 @@ class SiteKnowledgeVectorStorePayload(BaseModel):
 
     endpoint: str | None = Field(default=None, max_length=500)
     token: str | None = Field(default=None, max_length=1000)
+
+
+class SiteKnowledgeIndexRebuildPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    confirmation: Literal["rebuild_site_knowledge_index"]
 
 
 class PortalPublicServiceSettingsPayload(BaseModel):
@@ -4066,6 +4072,65 @@ async def update_admin_site_knowledge_vector_store(
                 effective_summary=(
                     "Zilliz Cloud was verified for the fixed 1024-dimension COSINE profile."
                 ),
+                audit_event=audit_event,
+            ),
+        ),
+        revision="m6",
+    )
+
+
+@router.post("/admin/site-knowledge-vector-profile/index-rebuilds")
+async def rebuild_admin_site_knowledge_vector_index(
+    request: Request,
+    payload: SiteKnowledgeIndexRebuildPayload,
+) -> Any:
+    auth = await authorize_internal_request(request, require_idempotency=True)
+    if auth is not None:
+        return auth
+    del payload
+    services = get_cloud_services(request)
+    event_kind = "site_knowledge_vector_profile.index.rebuild"
+    try:
+        result = SiteKnowledgeVectorProfileAdminService(
+            services.settings.database_url,
+            services.settings,
+        ).rebuild_index()
+    except SiteKnowledgeVectorProfileAdminError as error:
+        _record_site_knowledge_vector_profile_audit(
+            request,
+            event_kind=event_kind,
+            outcome="error",
+            credential_present=False,
+            error_code=error.error_code,
+            message=error.message,
+        )
+        return JSONResponse(
+            status_code=error.status_code,
+            content=build_envelope(
+                status="error",
+                error_code=error.error_code,
+                message=error.message,
+                revision="m6",
+            ),
+        )
+    audit_event = _record_site_knowledge_vector_profile_audit(
+        request,
+        event_kind=event_kind,
+        outcome="succeeded",
+        credential_present=False,
+        result=result,
+    )
+    return build_envelope(
+        status="ok",
+        message="Site Knowledge vector index rebuilt",
+        data=_merge_receipt(
+            result,
+            _build_operator_receipt(
+                event_kind=event_kind,
+                scope_kind="runtime_profile",
+                scope_id=SITE_KNOWLEDGE_VECTOR_PROFILE_ID,
+                outcome="succeeded",
+                effective_summary="Compatible Cloud index chunks were rebuilt in Zilliz Cloud.",
                 audit_event=audit_event,
             ),
         ),

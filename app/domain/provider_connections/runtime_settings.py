@@ -425,6 +425,11 @@ def _apply_vector_store_connection(
         return False
     if _string(config.get("collection")) != SITE_KNOWLEDGE_VECTOR_STORE_COLLECTION:
         return False
+    lifecycle_value = config.get("site_knowledge_index_lifecycle")
+    if isinstance(lifecycle_value, dict):
+        lifecycle_status = _string(lifecycle_value.get("status"))
+        if lifecycle_status not in {"ready", "empty"}:
+            return False
     settings.site_knowledge_vector_backend = "zilliz_cloud"
     settings.site_knowledge_zilliz_uri = _string(config.get("uri") or row.base_url)
     if credential:

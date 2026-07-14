@@ -115,6 +115,12 @@ function buildAdminBackendPath(pathSegments: string[], method: string): string {
     return `/internal/service/admin/${normalized}`;
   }
   if (
+    upperMethod === 'POST' &&
+    normalized === 'site-knowledge-vector-profile/index-rebuilds'
+  ) {
+    return `/internal/service/admin/${normalized}`;
+  }
+  if (
     (upperMethod === 'PATCH' || upperMethod === 'POST') &&
     /^service-settings(?:\/.+)?$/.test(normalized)
   ) {

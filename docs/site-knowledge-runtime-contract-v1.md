@@ -109,6 +109,13 @@ dimension is fixed to `1024`, its metric is fixed to `COSINE`, and no database
 selector is exposed. The WordPress side only sends bounded `publish` public
 content and executes the managed Cloud abilities.
 
+The accepted public endpoint families cover Zilliz Cloud international
+real-time endpoints under `*.zillizcloud.com`, mainland China Dedicated
+real-time endpoints under `*.vectordb.zilliz.com.cn`, and mainland China
+Free/Serverless endpoints matching `*.serverless.*.cloud.zilliz.com.cn`.
+Console, control-plane, arbitrary HTTPS, path-bearing, and query-bearing URLs
+are rejected before connection.
+
 Saving the Zilliz endpoint and token constructs the production backend before
 persisting the new secret. A missing fixed collection is created with the
 canonical schema and index. An existing collection is validated for required
@@ -128,6 +135,34 @@ accepts only optional `endpoint` and `token` fields so an already saved token
 can be reverified. It does not accept collection, database, dimensions, metric,
 backend, or migration fields. Both secrets remain encrypted and are represented
 only as configured/readiness state in responses and audit evidence.
+
+The profile response also exposes an Admin-only validation projection with
+three distinct evidence levels:
+
+- `connection`: live embedding and Zilliz probes passed;
+- `index`: Cloud-owned chunks were copied to the fixed Zilliz collection and a
+  same-vector round trip returned an indexed chunk;
+- `retrieval`: a normal metered Site Knowledge search completed against
+  `zilliz_cloud` after the most recent rebuild.
+
+Connection success must not be presented as proof that content is searchable.
+When a verified vector store is first attached while PostgreSQL contains
+Cloud-owned chunks, or a supplied embedding credential changes, the index state
+becomes `reindex_required`. Other states are `empty`, `rebuilding`, `ready`,
+and `failed`. Search evidence remains `pending`, `passed`, `no_hit`, or
+`failed`.
+
+`POST /internal/service/admin/site-knowledge-vector-profile/index-rebuilds`
+accepts only the fixed confirmation literal
+`rebuild_site_knowledge_index`. Provider, model, dimensions, metric,
+collection, backend, site identifiers, and metering class are server-owned and
+cannot be supplied by the caller. The current MVP operation is synchronous and
+reuses the existing Cloud-owned PostgreSQL read model. It preflights every
+stored chunk before any Zilliz delete or upsert, rejects mixed embedding
+spaces or invalid vectors, then replaces each site's Zilliz rows in bounded
+batches. It does not call an embedding provider, consume ordinary AI credits,
+introduce another queue, or write WordPress. The operation requires internal
+auth, idempotency evidence, and a service audit event.
 
 The verified profile connection is stored as a DB-managed Provider Connection
 so the existing provider adapter, encrypted secret storage, runtime projection,

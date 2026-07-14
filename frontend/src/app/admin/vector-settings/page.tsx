@@ -48,6 +48,31 @@ type VectorProfile = {
     collection: string;
     last_tested_at: string;
   };
+  validation: {
+    connection: {
+      status: string;
+      provider_verified: boolean;
+      vector_store_verified: boolean;
+    };
+    index: {
+      status: string;
+      reason: string;
+      embedding_space_id: string;
+      source_document_count: number;
+      source_chunk_count: number;
+      indexed_chunk_count: number;
+      roundtrip_status: string;
+      last_reindexed_at: string;
+      last_error_code: string;
+    };
+    retrieval: {
+      status: string;
+      last_verified_at: string;
+      result_count: number;
+      top1_score: number;
+      evidence_source: string;
+    };
+  };
 };
 
 function formatBackend(value: string): string {
@@ -69,6 +94,7 @@ export default function VectorSettingsPage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [savingVectorStore, setSavingVectorStore] = useState(false);
+  const [rebuilding, setRebuilding] = useState(false);
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
 
@@ -176,8 +202,34 @@ export default function VectorSettingsPage() {
       });
       const payload = await response.json().catch(() => ({}));
       if (!response.ok || payload?.status === 'error') {
-        throw new Error(resolveUiErrorMessage(
-          payload,
+        const errorCode = String(payload?.error_code || '');
+        const knownMessage = errorCode === 'site_knowledge_vector_profile.zilliz_endpoint_invalid'
+          ? copy(
+            'admin.vector_settings.zilliz_endpoint_invalid',
+            'Endpoint 格式不正确，请粘贴 Zilliz 集群详情中的公共 Endpoint。',
+            'The endpoint is invalid. Paste the public endpoint from the Zilliz cluster details.'
+          )
+          : errorCode === 'site_knowledge_vector_profile.zilliz_sdk_unavailable'
+            ? copy(
+              'admin.vector_settings.zilliz_sdk_unavailable',
+              '当前 Cloud 服务缺少 Zilliz 运行组件，请联系部署管理员重建服务镜像后重试。',
+              'This Cloud instance is missing the Zilliz runtime component. Ask the deployment operator to rebuild the service image, then retry.'
+            )
+          : errorCode === 'site_knowledge_vector_profile.zilliz_schema_incompatible'
+            ? copy(
+              'admin.vector_settings.zilliz_schema_incompatible',
+              '固定 Collection 的结构、1024 维或 COSINE 索引不兼容，请更换空集群或删除冲突 Collection 后重试。',
+              'The fixed collection has an incompatible schema, dimension, or metric. Use an empty cluster or remove the conflicting collection before retrying.'
+            )
+            : errorCode === 'site_knowledge_vector_profile.zilliz_probe_failed'
+              ? copy(
+                'admin.vector_settings.zilliz_probe_failed',
+                '无法连接 Zilliz，请检查公共 Endpoint、Token 权限和集群运行状态。',
+                'Could not connect to Zilliz. Check the public endpoint, token permissions, and cluster status.'
+              )
+              : '';
+        throw new Error(knownMessage || resolveUiErrorMessage(
+          payload?.message,
           copy(
             'admin.vector_settings.zilliz_save_error',
             'Zilliz 保存并检测失败。',
@@ -207,6 +259,63 @@ export default function VectorSettingsPage() {
     }
   }
 
+  async function rebuildIndex() {
+    setRebuilding(true);
+    setError('');
+    setMessage('');
+    try {
+      const response = await fetch('/api/admin/site-knowledge-vector-profile/index-rebuilds', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ confirmation: 'rebuild_site_knowledge_index' }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok || payload?.status === 'error') {
+        const errorCode = String(payload?.error_code || '');
+        const knownMessage = errorCode === 'site_knowledge_vector_profile.embedding_space_mismatch'
+          ? copy(
+            'admin.vector_settings.embedding_space_mismatch',
+            '现有资料来自旧向量来源，不能直接迁移。请从站点端执行一次全量 Site Knowledge 同步。',
+            'Existing content belongs to an older vector source and cannot be copied. Run a full Site Knowledge sync from the site.'
+          )
+          : errorCode === 'site_knowledge_vector_profile.embedding_invalid'
+            || errorCode === 'site_knowledge_vector_profile.dimension_mismatch'
+            ? copy(
+              'admin.vector_settings.stored_embedding_invalid',
+              '现有资料的向量不符合固定档案，请从站点端执行一次全量 Site Knowledge 同步。',
+              'Existing vectors do not match the fixed profile. Run a full Site Knowledge sync from the site.'
+            )
+            : '';
+        await loadProfile();
+        throw new Error(knownMessage || resolveUiErrorMessage(
+          payload,
+          copy(
+            'admin.vector_settings.rebuild_error',
+            '索引重建失败，请查看向量诊断后重试。',
+            'Index rebuild failed. Review vector diagnostics and retry.'
+          )
+        ));
+      }
+      setProfile(payload?.data as VectorProfile);
+      setMessage(copy(
+        'admin.vector_settings.rebuild_complete',
+        'Zilliz 索引已重建并通过往返自检。请执行一次正常的站点知识搜索，完成真实检索验收。',
+        'The Zilliz index was rebuilt and passed its round-trip check. Run a normal Site Knowledge search to complete retrieval validation.'
+      ));
+    } catch (rebuildError) {
+      setError(rebuildError instanceof Error
+        ? rebuildError.message
+        : copy(
+          'admin.vector_settings.rebuild_error',
+          '索引重建失败，请查看向量诊断后重试。',
+          'Index rebuild failed. Review vector diagnostics and retry.'
+        ));
+    } finally {
+      setRebuilding(false);
+    }
+  }
+
   const status = useMemo(() => {
     switch (profile?.status) {
       case 'ready':
@@ -227,6 +336,36 @@ export default function VectorSettingsPage() {
             'admin.vector_settings.status_vector_pending_desc',
             'Embedding 已验证；生产部署仍需准备 Zilliz Cloud。',
             'Embedding is verified; the production deployment still needs Zilliz Cloud.'
+          ),
+        };
+      case 'reindex_required':
+        return {
+          label: copy('admin.vector_settings.status_reindex_required', '需要重建索引', 'Reindex required'),
+          tone: 'warning',
+          description: copy(
+            'admin.vector_settings.status_reindex_required_desc',
+            '连接已经就绪，但现有站点资料尚未迁入当前 Zilliz 向量空间。',
+            'Connections are ready, but existing Site Knowledge has not been moved into the active Zilliz space.'
+          ),
+        };
+      case 'rebuilding':
+        return {
+          label: copy('admin.vector_settings.status_rebuilding', '正在重建', 'Rebuilding'),
+          tone: 'warning',
+          description: copy(
+            'admin.vector_settings.status_rebuilding_desc',
+            '正在把 Cloud 已保存的站点资料迁入 Zilliz。',
+            'Cloud-owned Site Knowledge is being moved into Zilliz.'
+          ),
+        };
+      case 'failed':
+        return {
+          label: copy('admin.vector_settings.status_rebuild_failed', '重建失败', 'Rebuild failed'),
+          tone: 'failed',
+          description: copy(
+            'admin.vector_settings.status_rebuild_failed_desc',
+            '索引尚不可用，请查看诊断后重试。',
+            'The index is not usable yet. Review diagnostics and retry.'
           ),
         };
       case 'probe_required':
@@ -261,8 +400,8 @@ export default function VectorSettingsPage() {
         title={copy('admin.vector_settings.title', '站点向量服务', 'Site vector service')}
         description={copy(
           'admin.vector_settings.description',
-          '使用平台固定的中文站点向量档案。管理员只需提供供应商密钥。',
-          'Use the platform-defined Chinese Site Knowledge vector profile. The provider key is the only editable setting.'
+          '使用平台固定的中文站点向量档案。管理员只需提供供应商密钥和 Zilliz 连接凭证。',
+          'Use the platform-defined Chinese Site Knowledge vector profile. Admins only provide the provider key and Zilliz connection credentials.'
         )}
         actions={(
           <Link href="/admin/vector-observability" className="btn btn-secondary">
@@ -307,6 +446,113 @@ export default function VectorSettingsPage() {
           </div>
           <BackofficeStatusBadge label={status.label} status={status.tone} />
         </div>
+      </BackofficeSectionPanel>
+
+      <BackofficeSectionPanel data-vector-section="validation">
+        <div className="border-b border-slate-200 pb-4 dark:border-slate-800">
+          <h2 className="text-base font-semibold text-slate-950 dark:text-white">
+            {copy('admin.vector_settings.validation_title', '生效验收', 'Validation')}
+          </h2>
+          <p className="mt-1 text-sm leading-6 text-slate-600 dark:text-slate-300">
+            {copy(
+              'admin.vector_settings.validation_desc',
+              '保存成功只代表连接可用；还需要确认资料已建索引，并通过一次正常搜索证明真实检索生效。',
+              'A successful save proves connectivity only. The content must also be indexed and verified by a normal search.'
+            )}
+          </p>
+        </div>
+        <div className="divide-y divide-slate-200 dark:divide-slate-800">
+          <div className="flex items-start justify-between gap-4 py-4">
+            <div>
+              <p className="text-sm font-semibold text-slate-950 dark:text-white">1. {copy('admin.vector_settings.connection_check', '连接检测', 'Connection check')}</p>
+              <p className="mt-1 text-xs leading-5 text-slate-500 dark:text-slate-400">
+                {copy('admin.vector_settings.connection_check_desc', 'Embedding 与 Zilliz 均需通过真实探测。', 'Both embedding and Zilliz must pass live probes.')}
+              </p>
+            </div>
+            <BackofficeStatusBadge
+              label={profile?.validation.connection.status === 'ready'
+                ? copy('common.ready', '已通过', 'Passed')
+                : copy('admin.vector_settings.not_ready', '未完成', 'Not ready')}
+              status={profile?.validation.connection.status === 'ready' ? 'success' : 'inactive'}
+            />
+          </div>
+          <div className="flex items-start justify-between gap-4 py-4">
+            <div>
+              <p className="text-sm font-semibold text-slate-950 dark:text-white">2. {copy('admin.vector_settings.index_check', '索引检测', 'Index check')}</p>
+              <p className="mt-1 text-xs leading-5 text-slate-500 dark:text-slate-400">
+                {profile?.validation.index.reason === 'embedding_space_mismatch'
+                  ? copy(
+                    'admin.vector_settings.index_space_mismatch',
+                    '现有资料属于旧向量空间，必须从站点端执行全量 Site Knowledge 同步，不能直接混入当前索引。',
+                    'Existing content belongs to an older vector space. Run a full Site Knowledge sync from the site; it cannot be mixed into the active index.'
+                  )
+                  : copy(
+                    'admin.vector_settings.index_counts',
+                    `Cloud 已有 ${profile?.validation.index.source_document_count || 0} 篇资料、${profile?.validation.index.source_chunk_count || 0} 个分块；Zilliz 已确认 ${profile?.validation.index.indexed_chunk_count || 0} 个分块。`,
+                    `Cloud has ${profile?.validation.index.source_document_count || 0} documents and ${profile?.validation.index.source_chunk_count || 0} chunks; ${profile?.validation.index.indexed_chunk_count || 0} Zilliz chunks are confirmed.`
+                  )}
+              </p>
+            </div>
+            <BackofficeStatusBadge
+              label={profile?.validation.index.status === 'ready'
+                ? copy('common.ready', '已通过', 'Passed')
+                : profile?.validation.index.status === 'empty'
+                  ? copy('admin.vector_settings.index_empty', '暂无资料', 'No content')
+                  : copy('admin.vector_settings.reindex_needed', '需要重建', 'Rebuild needed')}
+              status={profile?.validation.index.status === 'ready' ? 'success' : 'warning'}
+            />
+          </div>
+          <div className="flex items-start justify-between gap-4 py-4">
+            <div>
+              <p className="text-sm font-semibold text-slate-950 dark:text-white">3. {copy('admin.vector_settings.retrieval_check', '真实检索', 'Live retrieval')}</p>
+              <p className="mt-1 text-xs leading-5 text-slate-500 dark:text-slate-400">
+                {profile?.validation.retrieval.status === 'passed'
+                  ? copy(
+                    'admin.vector_settings.retrieval_passed',
+                    `最近一次 Zilliz 搜索返回 ${profile.validation.retrieval.result_count} 条结果。`,
+                    `The latest Zilliz search returned ${profile.validation.retrieval.result_count} results.`
+                  )
+                  : copy(
+                    'admin.vector_settings.retrieval_pending',
+                    '重建后执行一次正常的 Site Knowledge 搜索；这里会自动记录结果，不另设测试入口。',
+                    'After rebuilding, run a normal Site Knowledge search. Its evidence appears here automatically.'
+                  )}
+              </p>
+            </div>
+            <BackofficeStatusBadge
+              label={profile?.validation.retrieval.status === 'passed'
+                ? copy('common.ready', '已通过', 'Passed')
+                : profile?.validation.retrieval.status === 'failed'
+                  ? copy('common.failed', '失败', 'Failed')
+                  : copy('admin.vector_settings.pending_validation', '等待验证', 'Pending')}
+              status={profile?.validation.retrieval.status === 'passed'
+                ? 'success'
+                : profile?.validation.retrieval.status === 'failed' ? 'failed' : 'inactive'}
+            />
+          </div>
+        </div>
+        {(profile?.validation.index.status === 'reindex_required' || profile?.validation.index.status === 'failed')
+          && profile?.validation.index.reason !== 'embedding_space_mismatch' ? (
+          <div className="flex flex-col gap-3 border-t border-slate-200 pt-4 dark:border-slate-800 sm:flex-row sm:items-center sm:justify-between">
+            <p className="text-xs leading-5 text-slate-500 dark:text-slate-400">
+              {copy(
+                'admin.vector_settings.rebuild_boundary',
+                '仅迁移 Cloud 已接收的公开站点资料；不会写入 WordPress，也不会重新消耗普通 AI 积分。',
+                'Only public content already received by Cloud is moved. WordPress is not written and ordinary AI credits are not consumed.'
+              )}
+            </p>
+            <button
+              type="button"
+              className="btn btn-primary shrink-0"
+              disabled={rebuilding}
+              onClick={() => void rebuildIndex()}
+            >
+              {rebuilding
+                ? copy('admin.vector_settings.rebuilding', '重建中…', 'Rebuilding…')
+                : copy('admin.vector_settings.rebuild_index', '重建向量索引', 'Rebuild vector index')}
+            </button>
+          </div>
+        ) : null}
       </BackofficeSectionPanel>
 
       <BackofficeSectionPanel data-vector-section="fixed-profile">
@@ -414,7 +660,7 @@ export default function VectorSettingsPage() {
               className="h-11 rounded-lg border border-slate-300 bg-white px-3 dark:border-slate-700 dark:bg-slate-950"
               value={zillizEndpoint}
               onChange={(event) => setZillizEndpoint(event.target.value)}
-              placeholder="https://…zillizcloud.com"
+              placeholder="https://…vectordb.zilliz…"
             />
           </label>
           <label className="grid gap-2 text-sm font-medium text-slate-700 dark:text-slate-200">
@@ -438,8 +684,8 @@ export default function VectorSettingsPage() {
           <p className="text-xs leading-5 text-slate-500 dark:text-slate-400">
             {copy(
               'admin.vector_settings.zilliz_probe_notice',
-              'Collection 不存在时会自动创建；已存在但结构不兼容时不会修改，将直接提示错误。Token 不会回显。',
-              'A missing collection is created automatically. An incompatible existing collection is left unchanged and reported as an error. The token is never returned.'
+              '请粘贴集群详情中的公共 Endpoint。Collection 不存在时会自动创建；结构不兼容时不会修改。Token 不会回显。',
+              'Paste the public endpoint from the cluster details. A missing collection is created automatically; an incompatible collection is left unchanged. The token is never returned.'
             )}
           </p>
           <div className="flex justify-end">

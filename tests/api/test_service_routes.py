@@ -70,6 +70,7 @@ from app.domain.hosted_model_defaults import (
 from app.domain.provider_connections.service import ProviderConnectionAdminService
 from app.domain.runtime.service import RuntimeService
 from app.domain.site_knowledge import vector_profile as vector_profile_module
+from app.domain.site_knowledge.vector_profile import SiteKnowledgeVectorProfileAdminService
 from app.domain.site_knowledge.vector_profile_contract import (
     SITE_KNOWLEDGE_VECTOR_CONNECTION_ID,
     SITE_KNOWLEDGE_VECTOR_DIMENSIONS,
@@ -1540,6 +1541,62 @@ def test_admin_site_knowledge_vector_store_verifies_before_saving(
         )
         assert audit is not None
         assert "zilliz-secret" not in json.dumps(audit.payload_json)
+
+
+def test_admin_site_knowledge_vector_rebuild_uses_fixed_server_contract(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database_url, client = _build_client(tmp_path)
+    result = {
+        "status": "ready",
+        "profile_id": "site-knowledge.zh.v1",
+        "model_id": SITE_KNOWLEDGE_VECTOR_MODEL_ID,
+        "dimensions": SITE_KNOWLEDGE_VECTOR_DIMENSIONS,
+        "vector_store": {"provider_id": "zilliz"},
+        "validation": {
+            "index": {"status": "ready", "indexed_chunk_count": 1},
+            "retrieval": {"status": "pending"},
+        },
+    }
+    monkeypatch.setattr(
+        SiteKnowledgeVectorProfileAdminService,
+        "rebuild_index",
+        lambda _service: result,
+    )
+
+    forged = client.post(
+        "/internal/service/admin/site-knowledge-vector-profile/index-rebuilds",
+        headers=build_internal_headers(idempotency_key="site-knowledge-index-forged"),
+        json={
+            "confirmation": "rebuild_site_knowledge_index",
+            "dimensions": 1536,
+            "collection": "caller_owned_collection",
+        },
+    )
+    assert forged.status_code == 422, forged.text
+
+    response = client.post(
+        "/internal/service/admin/site-knowledge-vector-profile/index-rebuilds",
+        headers=build_internal_headers(idempotency_key="site-knowledge-index-rebuild"),
+        json={"confirmation": "rebuild_site_knowledge_index"},
+    )
+
+    assert response.status_code == 200, response.text
+    data = response.json()["data"]
+    assert data["validation"]["index"]["status"] == "ready"
+    assert data["receipt"]["event_kind"] == (
+        "site_knowledge_vector_profile.index.rebuild"
+    )
+    with get_session(database_url) as session:
+        audit = session.scalar(
+            select(ServiceAuditEvent).where(
+                ServiceAuditEvent.event_kind
+                == "site_knowledge_vector_profile.index.rebuild"
+            )
+        )
+        assert audit is not None
+        assert audit.payload_json["direct_wordpress_write"] is False
 
 
 def test_admin_provider_connections_store_encrypted_credentials_and_project_to_ai_resources(

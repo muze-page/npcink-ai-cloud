@@ -6,13 +6,18 @@ from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from app.adapters.providers.base import ProviderExecutionError, ProviderExecutionRequest
 from app.adapters.providers.siliconflow import SiliconFlowProviderAdapter
 from app.core.config import Settings
 from app.core.db import get_session
-from app.core.models import ProviderConnection
+from app.core.models import (
+    ProviderConnection,
+    SiteKnowledgeChunk,
+    SiteKnowledgeDocument,
+    SiteKnowledgeSearchMetric,
+)
 from app.core.secrets import decrypt_provider_connection_secret, encrypt_provider_connection_secret
 from app.domain.provider_connections.runtime_settings import (
     apply_provider_connection_runtime_settings,
@@ -61,15 +66,39 @@ class SiteKnowledgeVectorProfileAdminService:
                 ProviderConnection,
                 SITE_KNOWLEDGE_VECTOR_STORE_CONNECTION_ID,
             )
+            document_count = int(
+                session.scalar(select(func.count()).select_from(SiteKnowledgeDocument)) or 0
+            )
+            chunk_count = int(
+                session.scalar(select(func.count()).select_from(SiteKnowledgeChunk)) or 0
+            )
+            latest_search = session.scalar(
+                select(SiteKnowledgeSearchMetric)
+                .where(
+                    SiteKnowledgeSearchMetric.vector_backend
+                    == SITE_KNOWLEDGE_VECTOR_PRODUCTION_BACKEND
+                )
+                .order_by(SiteKnowledgeSearchMetric.created_at.desc())
+                .limit(1)
+            )
 
         provider = self._provider_state(connection)
         vector_store = self._vector_store_state(vector_store_connection)
         environment = str(self.settings.environment or "development").strip().lower()
         local_or_test = environment in {"development", "dev", "test"}
+        validation = self._validation_state(
+            vector_store_connection,
+            provider=provider,
+            vector_store=vector_store,
+            document_count=document_count,
+            chunk_count=chunk_count,
+            latest_search=latest_search,
+        )
         active_backend = (
-            SITE_KNOWLEDGE_VECTOR_LOCAL_TEST_BACKEND
-            if local_or_test
-            else SITE_KNOWLEDGE_VECTOR_PRODUCTION_BACKEND
+            SITE_KNOWLEDGE_VECTOR_PRODUCTION_BACKEND
+            if vector_store["verified"]
+            and validation["index"]["status"] in {"ready", "empty"}
+            else SITE_KNOWLEDGE_VECTOR_LOCAL_TEST_BACKEND
         )
         if not provider["configured"]:
             status = "not_configured"
@@ -77,6 +106,12 @@ class SiteKnowledgeVectorProfileAdminService:
             status = "probe_required"
         elif not local_or_test and not vector_store["verified"]:
             status = "vector_store_pending"
+        elif validation["index"]["status"] in {
+            "reindex_required",
+            "rebuilding",
+            "failed",
+        }:
+            status = validation["index"]["status"]
         else:
             status = "ready"
 
@@ -92,6 +127,7 @@ class SiteKnowledgeVectorProfileAdminService:
             "status": status,
             "provider": provider,
             "vector_store": vector_store,
+            "validation": validation,
             "editable_fields": ["credential", "zilliz_endpoint", "zilliz_token"],
             "reindex_policy": "profile_change_requires_reindex",
             "boundary": {
@@ -177,6 +213,11 @@ class SiteKnowledgeVectorProfileAdminService:
                 )
 
             self._disable_legacy_embedding_slots(session)
+            if credential is not None and str(credential).strip():
+                self._mark_reindex_required(
+                    session,
+                    reason="embedding_provider_changed",
+                )
             session.commit()
 
         apply_provider_connection_runtime_settings(self.settings)
@@ -209,6 +250,7 @@ class SiteKnowledgeVectorProfileAdminService:
 
         probe = self._probe_vector_store(resolved_endpoint, resolved_token)
         now = datetime.now(UTC)
+        lifecycle = self._next_vector_store_lifecycle(current, resolved_endpoint)
         fixed_config = {
             "provider_id": SITE_KNOWLEDGE_VECTOR_STORE_PROVIDER_ID,
             "kind": "vector_store_provider",
@@ -224,6 +266,7 @@ class SiteKnowledgeVectorProfileAdminService:
             ),
             "site_knowledge_vector_store_dimensions": SITE_KNOWLEDGE_VECTOR_DIMENSIONS,
             "site_knowledge_vector_store_metric": SITE_KNOWLEDGE_VECTOR_METRIC,
+            "site_knowledge_index_lifecycle": lifecycle,
         }
         with get_session(self.database_url) as session:
             row = session.get(ProviderConnection, SITE_KNOWLEDGE_VECTOR_STORE_CONNECTION_ID)
@@ -279,6 +322,158 @@ class SiteKnowledgeVectorProfileAdminService:
         result = self.get_profile()
         result["vector_store_probe"] = probe
         return result
+
+    def rebuild_index(self) -> dict[str, Any]:
+        """Copy the Cloud-owned compatible index into the verified fixed Zilliz space."""
+        provider_connection = self._load_connection()
+        vector_store_connection = self._load_vector_store_connection()
+        provider = self._provider_state(provider_connection)
+        vector_store = self._vector_store_state(vector_store_connection)
+        if not provider["verified"] or not vector_store["verified"]:
+            raise SiteKnowledgeVectorProfileAdminError(
+                "site_knowledge_vector_profile.rebuild_not_ready",
+                "Embedding provider and Zilliz must be verified before rebuilding",
+                status_code=409,
+            )
+
+        expected_space = self._embedding_space_id()
+        with get_session(self.database_url) as session:
+            chunk_count = int(
+                session.scalar(select(func.count()).select_from(SiteKnowledgeChunk)) or 0
+            )
+            document_count = int(
+                session.scalar(select(func.count()).select_from(SiteKnowledgeDocument)) or 0
+            )
+            site_ids = list(
+                session.scalars(
+                    select(SiteKnowledgeChunk.site_id)
+                    .distinct()
+                    .order_by(SiteKnowledgeChunk.site_id.asc())
+                )
+            )
+            chunks = session.scalars(
+                select(SiteKnowledgeChunk).order_by(
+                    SiteKnowledgeChunk.site_id.asc(),
+                    SiteKnowledgeChunk.id.asc(),
+                )
+            ).yield_per(500)
+
+            for chunk in chunks:
+                if str(chunk.embedding_model or "") != expected_space:
+                    self._persist_lifecycle(
+                        status="reindex_required",
+                        reason="embedding_space_mismatch",
+                        source_document_count=document_count,
+                        source_chunk_count=chunk_count,
+                        indexed_chunk_count=0,
+                        last_error_code=(
+                            "site_knowledge_vector_profile.embedding_space_mismatch"
+                        ),
+                    )
+                    apply_provider_connection_runtime_settings(self.settings)
+                    raise SiteKnowledgeVectorProfileAdminError(
+                        "site_knowledge_vector_profile.embedding_space_mismatch",
+                        "Stored chunks do not belong to the active embedding space",
+                        status_code=409,
+                    )
+                try:
+                    _validated_embedding(chunk.embedding_json)
+                except SiteKnowledgeVectorProfileAdminError as error:
+                    self._persist_lifecycle(
+                        status="reindex_required",
+                        reason="stored_embedding_invalid",
+                        source_document_count=document_count,
+                        source_chunk_count=chunk_count,
+                        indexed_chunk_count=0,
+                        last_error_code=error.error_code,
+                    )
+                    apply_provider_connection_runtime_settings(self.settings)
+                    raise SiteKnowledgeVectorProfileAdminError(
+                        error.error_code,
+                        "Stored chunks are incompatible with the fixed vector profile",
+                        status_code=409,
+                    ) from error
+
+        self._persist_lifecycle(
+            status="rebuilding",
+            reason="operator_requested",
+            source_document_count=document_count,
+            source_chunk_count=chunk_count,
+            indexed_chunk_count=0,
+        )
+        try:
+            backend_settings = self.settings.model_copy(deep=True)
+            self._apply_verified_vector_store(backend_settings, vector_store_connection)
+            backend = ZillizCloudSiteKnowledgeBackend(backend_settings)
+            indexed = 0
+            first_site_id = ""
+            first_embedding: list[float] = []
+            for site_id in site_ids:
+                backend.delete_site_index(site_id)
+                with get_session(self.database_url) as session:
+                    site_chunks = session.scalars(
+                        select(SiteKnowledgeChunk)
+                        .where(SiteKnowledgeChunk.site_id == site_id)
+                        .order_by(SiteKnowledgeChunk.id.asc())
+                    ).yield_per(500)
+                    batch: list[dict[str, Any]] = []
+                    for chunk in site_chunks:
+                        embedding = _validated_embedding(chunk.embedding_json)
+                        if not first_embedding:
+                            first_site_id = site_id
+                            first_embedding = embedding
+                        batch.append(self._zilliz_chunk_payload(chunk, embedding))
+                        if len(batch) == 500:
+                            backend.upsert_chunks(site_id=site_id, chunks=batch)
+                            indexed += len(batch)
+                            batch = []
+                    if batch:
+                        backend.upsert_chunks(site_id=site_id, chunks=batch)
+                        indexed += len(batch)
+            roundtrip_status = "not_applicable"
+            if first_embedding:
+                hits = backend.search(
+                    site_id=first_site_id,
+                    query_embedding=first_embedding,
+                    post_types=[],
+                    statuses=[],
+                    source_types=[],
+                    current_post_id=0,
+                    limit=1,
+                )
+                if not hits:
+                    raise SiteKnowledgeBackendError(
+                        "site_knowledge.zilliz_roundtrip_failed",
+                        "Zilliz round-trip validation returned no indexed chunk",
+                    )
+                roundtrip_status = "passed"
+        except (SiteKnowledgeBackendError, SiteKnowledgeVectorProfileAdminError) as error:
+            self._persist_lifecycle(
+                status="failed",
+                reason="zilliz_rebuild_failed",
+                source_document_count=document_count,
+                source_chunk_count=chunk_count,
+                indexed_chunk_count=0,
+                last_error_code=error.error_code,
+            )
+            apply_provider_connection_runtime_settings(self.settings)
+            raise SiteKnowledgeVectorProfileAdminError(
+                "site_knowledge_vector_profile.rebuild_failed",
+                "Zilliz index rebuild failed",
+                status_code=502,
+            ) from error
+
+        self._persist_lifecycle(
+            status="ready" if chunk_count else "empty",
+            reason="rebuild_completed" if chunk_count else "no_source_chunks",
+            source_document_count=document_count,
+            source_chunk_count=chunk_count,
+            indexed_chunk_count=indexed,
+            roundtrip_status=roundtrip_status,
+            last_reindexed_at=datetime.now(UTC),
+        )
+        apply_provider_connection_runtime_settings(self.settings)
+        return self.get_profile()
 
     def _load_connection(self) -> ProviderConnection | None:
         with get_session(self.database_url) as session:
@@ -361,6 +556,12 @@ class SiteKnowledgeVectorProfileAdminService:
         try:
             ZillizCloudSiteKnowledgeBackend(probe_settings)
         except SiteKnowledgeBackendError as error:
+            if error.error_code == "site_knowledge.zilliz_sdk_missing":
+                raise SiteKnowledgeVectorProfileAdminError(
+                    "site_knowledge_vector_profile.zilliz_sdk_unavailable",
+                    "Zilliz runtime SDK is unavailable on this Cloud instance",
+                    status_code=503,
+                ) from error
             if error.error_code == "site_knowledge.zilliz_schema_incompatible":
                 raise SiteKnowledgeVectorProfileAdminError(
                     "site_knowledge_vector_profile.zilliz_schema_incompatible",
@@ -457,6 +658,228 @@ class SiteKnowledgeVectorProfileAdminService:
             "last_tested_at": _iso(row.last_tested_at if row is not None else None),
         }
 
+    def _validation_state(
+        self,
+        row: ProviderConnection | None,
+        *,
+        provider: dict[str, Any],
+        vector_store: dict[str, Any],
+        document_count: int,
+        chunk_count: int,
+        latest_search: SiteKnowledgeSearchMetric | None,
+    ) -> dict[str, Any]:
+        config = row.config_json if row is not None and isinstance(row.config_json, dict) else {}
+        lifecycle_value = config.get("site_knowledge_index_lifecycle")
+        lifecycle = lifecycle_value if isinstance(lifecycle_value, dict) else {}
+        index_status = str(lifecycle.get("status") or "")
+        if not index_status:
+            if not vector_store["verified"]:
+                index_status = "not_ready"
+            elif chunk_count:
+                index_status = "reindex_required"
+            else:
+                index_status = "empty"
+
+        last_reindexed_at = str(lifecycle.get("last_reindexed_at") or "")
+        retrieval_status = "pending"
+        if latest_search is not None and last_reindexed_at:
+            reindexed_at = _parse_iso(last_reindexed_at)
+            searched_at = latest_search.finished_at or latest_search.created_at
+            if reindexed_at is not None and searched_at is not None:
+                if searched_at.tzinfo is None:
+                    searched_at = searched_at.replace(tzinfo=UTC)
+                if searched_at >= reindexed_at:
+                    if latest_search.status != "succeeded":
+                        retrieval_status = "failed"
+                    elif latest_search.no_hit or latest_search.result_count <= 0:
+                        retrieval_status = "no_hit"
+                    else:
+                        retrieval_status = "passed"
+
+        return {
+            "connection": {
+                "status": (
+                    "ready"
+                    if provider["verified"] and vector_store["verified"]
+                    else "not_ready"
+                ),
+                "provider_verified": bool(provider["verified"]),
+                "vector_store_verified": bool(vector_store["verified"]),
+            },
+            "index": {
+                "status": index_status,
+                "reason": str(lifecycle.get("reason") or ""),
+                "embedding_space_id": self._embedding_space_id(),
+                "source_document_count": document_count,
+                "source_chunk_count": chunk_count,
+                "indexed_chunk_count": int(lifecycle.get("indexed_chunk_count") or 0),
+                "roundtrip_status": str(lifecycle.get("roundtrip_status") or "pending"),
+                "last_reindexed_at": last_reindexed_at,
+                "last_error_code": str(lifecycle.get("last_error_code") or ""),
+            },
+            "retrieval": {
+                "status": retrieval_status,
+                "last_verified_at": (
+                    _iso(latest_search.finished_at or latest_search.created_at)
+                    if latest_search is not None and retrieval_status != "pending"
+                    else ""
+                ),
+                "result_count": (
+                    int(latest_search.result_count)
+                    if latest_search is not None and retrieval_status != "pending"
+                    else 0
+                ),
+                "top1_score": (
+                    float(latest_search.top1_score)
+                    if latest_search is not None and retrieval_status != "pending"
+                    else 0.0
+                ),
+                "evidence_source": "site_knowledge_search_metric",
+            },
+        }
+
+    def _next_vector_store_lifecycle(
+        self,
+        current: ProviderConnection | None,
+        resolved_endpoint: str,
+    ) -> dict[str, Any]:
+        with get_session(self.database_url) as session:
+            document_count = int(
+                session.scalar(select(func.count()).select_from(SiteKnowledgeDocument)) or 0
+            )
+            chunk_count = int(
+                session.scalar(select(func.count()).select_from(SiteKnowledgeChunk)) or 0
+            )
+        current_config = (
+            current.config_json
+            if current is not None and isinstance(current.config_json, dict)
+            else {}
+        )
+        existing_value = current_config.get("site_knowledge_index_lifecycle")
+        existing = existing_value if isinstance(existing_value, dict) else {}
+        endpoint_changed = bool(current is not None and current.base_url != resolved_endpoint)
+        if existing and not endpoint_changed:
+            return existing
+        return {
+            "status": "reindex_required" if chunk_count else "empty",
+            "reason": "vector_store_changed" if chunk_count else "no_source_chunks",
+            "embedding_space_id": self._embedding_space_id(),
+            "source_document_count": document_count,
+            "source_chunk_count": chunk_count,
+            "indexed_chunk_count": 0,
+            "roundtrip_status": "pending",
+            "last_reindexed_at": "",
+            "last_error_code": "",
+        }
+
+    def _mark_reindex_required(self, session: Any, *, reason: str) -> None:
+        row = session.get(ProviderConnection, SITE_KNOWLEDGE_VECTOR_STORE_CONNECTION_ID)
+        if row is None:
+            return
+        chunk_count = int(
+            session.scalar(select(func.count()).select_from(SiteKnowledgeChunk)) or 0
+        )
+        if not chunk_count:
+            return
+        document_count = int(
+            session.scalar(select(func.count()).select_from(SiteKnowledgeDocument)) or 0
+        )
+        config = dict(row.config_json) if isinstance(row.config_json, dict) else {}
+        config["site_knowledge_index_lifecycle"] = {
+            "status": "reindex_required",
+            "reason": reason,
+            "embedding_space_id": self._embedding_space_id(),
+            "source_document_count": document_count,
+            "source_chunk_count": chunk_count,
+            "indexed_chunk_count": 0,
+            "roundtrip_status": "pending",
+            "last_reindexed_at": "",
+            "last_error_code": "",
+        }
+        row.config_json = config
+        row.updated_at = datetime.now(UTC)
+
+    def _persist_lifecycle(
+        self,
+        *,
+        status: str,
+        reason: str,
+        source_document_count: int,
+        source_chunk_count: int,
+        indexed_chunk_count: int,
+        roundtrip_status: str = "pending",
+        last_reindexed_at: datetime | None = None,
+        last_error_code: str = "",
+    ) -> None:
+        with get_session(self.database_url) as session:
+            row = session.get(ProviderConnection, SITE_KNOWLEDGE_VECTOR_STORE_CONNECTION_ID)
+            if row is None:
+                raise SiteKnowledgeVectorProfileAdminError(
+                    "site_knowledge_vector_profile.vector_store_not_configured",
+                    "Zilliz is not configured",
+                    status_code=409,
+                )
+            config = dict(row.config_json) if isinstance(row.config_json, dict) else {}
+            config["site_knowledge_index_lifecycle"] = {
+                "status": status,
+                "reason": reason,
+                "embedding_space_id": self._embedding_space_id(),
+                "source_document_count": source_document_count,
+                "source_chunk_count": source_chunk_count,
+                "indexed_chunk_count": indexed_chunk_count,
+                "roundtrip_status": roundtrip_status,
+                "last_reindexed_at": _iso(last_reindexed_at),
+                "last_error_code": last_error_code,
+            }
+            row.config_json = config
+            row.updated_at = datetime.now(UTC)
+            session.commit()
+
+    @staticmethod
+    def _embedding_space_id() -> str:
+        return f"{SITE_KNOWLEDGE_VECTOR_PROVIDER_ID}:{SITE_KNOWLEDGE_VECTOR_MODEL_ID}"
+
+    def _apply_verified_vector_store(
+        self,
+        settings: Settings,
+        row: ProviderConnection | None,
+    ) -> None:
+        if row is None:
+            raise SiteKnowledgeVectorProfileAdminError(
+                "site_knowledge_vector_profile.vector_store_not_configured",
+                "Zilliz is not configured",
+                status_code=409,
+            )
+        config = row.config_json if isinstance(row.config_json, dict) else {}
+        settings.site_knowledge_vector_backend = SITE_KNOWLEDGE_VECTOR_PRODUCTION_BACKEND
+        settings.site_knowledge_zilliz_uri = str(config.get("uri") or row.base_url or "")
+        settings.site_knowledge_zilliz_token = self._decrypt_credential(row)
+        settings.site_knowledge_zilliz_database = None
+        settings.site_knowledge_zilliz_collection = SITE_KNOWLEDGE_VECTOR_STORE_COLLECTION
+        settings.site_knowledge_embedding_dimensions = SITE_KNOWLEDGE_VECTOR_DIMENSIONS
+        settings.site_knowledge_vector_metric_type = SITE_KNOWLEDGE_VECTOR_METRIC
+
+    @staticmethod
+    def _zilliz_chunk_payload(
+        chunk: SiteKnowledgeChunk,
+        embedding: list[float],
+    ) -> dict[str, Any]:
+        return {
+            "post_id": chunk.post_id,
+            "source_type": chunk.source_type,
+            "source_id": chunk.source_id,
+            "parent_post_id": chunk.parent_post_id,
+            "chunk_index": chunk.chunk_index,
+            "post_type": chunk.post_type,
+            "post_status": chunk.post_status,
+            "title": chunk.title,
+            "url": chunk.url,
+            "chunk_text": chunk.chunk_text,
+            "embedding": embedding,
+            "content_hash": chunk.content_hash,
+            "indexed_at": _iso(chunk.indexed_at),
+        }
+
     def _decrypt_credential(self, row: ProviderConnection) -> str:
         ciphertext = str(row.secret_ciphertext or "").strip()
         if not ciphertext:
@@ -544,10 +967,19 @@ def _normalized_zilliz_endpoint(value: object) -> str:
     if not candidate:
         return ""
     parsed = urlsplit(candidate)
+    hostname = str(parsed.hostname or "").lower()
+    china_serverless_hostname = (
+        ".serverless." in hostname
+        and hostname.endswith(".cloud.zilliz.com.cn")
+    )
+    supported_hostname = (
+        hostname.endswith(".zillizcloud.com")
+        or hostname.endswith(".vectordb.zilliz.com.cn")
+        or china_serverless_hostname
+    )
     if (
         parsed.scheme.lower() != "https"
-        or not parsed.hostname
-        or not parsed.hostname.lower().endswith(".zillizcloud.com")
+        or not supported_hostname
         or parsed.username
         or parsed.password
         or parsed.path.rstrip("/")
@@ -563,3 +995,11 @@ def _normalized_zilliz_endpoint(value: object) -> str:
 
 def _iso(value: datetime | None) -> str:
     return value.isoformat() if value is not None else ""
+
+
+def _parse_iso(value: str) -> datetime | None:
+    try:
+        parsed = datetime.fromisoformat(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)

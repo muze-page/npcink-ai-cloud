@@ -25,6 +25,12 @@ def test_production_compose_allows_optional_python_package_extras() -> None:
     assert compose_text.count("PACKAGE_EXTRAS: ${NPCINK_CLOUD_PACKAGE_EXTRAS:-}") == 4
 
 
+def test_development_runtime_images_include_zilliz_sdk() -> None:
+    compose_text = (ROOT / "docker-compose.dev.yml").read_text()
+
+    assert compose_text.count('PACKAGE_EXTRAS: "[dev,zilliz]"') == 4
+
+
 def test_production_image_packages_runtime_performance_scripts() -> None:
     dockerfile_text = (ROOT / "Dockerfile").read_text()
 

@@ -62,9 +62,11 @@ assert.match(externalServicesSource, /\/api\/admin\/provider-connections/);
 assert.match(externalServicesSource, /metadata: \{ ui_source: 'external_services', service_role: option\.role \}/);
 assert.doesNotMatch(externalServicesSource, /priority|channel_note|Add capability supplier|Delete supplier/);
 
-assert.match(vectorSettingsSource, /Embedding model/);
-assert.match(vectorSettingsSource, /Vector database/);
-assert.match(vectorSettingsSource, /Result reranking/);
+assert.match(vectorSettingsSource, /admin\.vector_settings\.provider_title/);
+assert.match(vectorSettingsSource, /admin\.vector_settings\.store_title/);
+assert.match(vectorSettingsSource, /site-knowledge-vector-profile\/vector-store/);
+assert.match(vectorSettingsSource, /site_knowledge_zh_v1/);
+assert.doesNotMatch(vectorSettingsSource, /rerank_provider|Result reranking|结果重排/);
 assert.doesNotMatch(vectorSettingsSource, /field_channel_priority|field_channel_note/);
 
 for (const retiredKey of [
