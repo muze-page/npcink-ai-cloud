@@ -59,6 +59,7 @@ Operational references:
 - [docs/cloud-production-release-policy-v1.md](docs/cloud-production-release-policy-v1.md)
 - [docs/cloud-content-generation-boundary-v1.md](docs/cloud-content-generation-boundary-v1.md)
 - [docs/cloud-admin-information-architecture-v2.md](docs/cloud-admin-information-architecture-v2.md)
+- [docs/cloud-admin-site-knowledge-development-summary-2026-07-14.md](docs/cloud-admin-site-knowledge-development-summary-2026-07-14.md)
 - [docs/decisions/002-cloud-admin-task-oriented-information-architecture.md](docs/decisions/002-cloud-admin-task-oriented-information-architecture.md)
 - [docs/source-extraction-preview-v1.md](docs/source-extraction-preview-v1.md)
 - [docs/cloud-open-callback-boundary-v1.md](docs/cloud-open-callback-boundary-v1.md)
