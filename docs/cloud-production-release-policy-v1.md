@@ -25,6 +25,31 @@ Do not directly edit production application code on the server. Server-side
 changes are limited to runtime secrets in `.env.deploy` and emergency
 break-glass fixes that must be backported to Git immediately.
 
+Branch divergence is expected: `production` records the deployed release while
+`master` continues development. A production-only patch must not remain an
+unexplained long-term fork. Before the next promotion, classify it as already
+equivalent on `master`, forward-port it to `master`, or document why the old
+deployment behavior is obsolete. Do not merge the accumulated `production`
+history back into `master` merely to make the branch graph look aligned.
+
+## Pre-refactor Production Reconciliation
+
+The production-only patches below were reconciled against development
+`master` on 2026-07-14. Their behavior is present in the current development
+line with contract coverage, so no reverse merge or duplicate cherry-pick is
+required:
+
+- `9aca0dc0`: deployment workflows call the SSH deploy script directly;
+- `9c160ed5`: remote deploy arguments are shell-quoted;
+- `5a2cf130`: production proxy preserves forwarded host/protocol headers;
+- `6dff10a5`: ready probes derive the required host/origin headers;
+- `559e032f`: `/terms` resolves the static terms entrypoint and is smoke-tested;
+- `4e532f0c`: admin bootstrap is routed directly to the API with forwarded origin;
+- `c9f3036b`: frontend runtime backend variables are not frozen into the build.
+
+This is a semantic reconciliation record, not a claim that the two branch
+histories or trees should be identical.
+
 ## Required Gates Before `master`
 
 For normal feature and fix PRs:

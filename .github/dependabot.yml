@@ -1,4 +1,6 @@
 version: 2
+# Pre-refactor freeze: keep security updates available while pausing scheduled
+# version-update pull requests. Restore a positive limit after the refactor.
 updates:
   - package-ecosystem: github-actions
     directory: /
@@ -7,7 +9,7 @@ updates:
       day: monday
       time: "09:00"
       timezone: Asia/Shanghai
-    open-pull-requests-limit: 5
+    open-pull-requests-limit: 0
     labels:
       - dependencies
       - github-actions
@@ -19,7 +21,7 @@ updates:
       day: monday
       time: "09:30"
       timezone: Asia/Shanghai
-    open-pull-requests-limit: 5
+    open-pull-requests-limit: 0
     labels:
       - dependencies
       - npm
@@ -31,7 +33,7 @@ updates:
       day: monday
       time: "10:00"
       timezone: Asia/Shanghai
-    open-pull-requests-limit: 5
+    open-pull-requests-limit: 0
     labels:
       - dependencies
       - npm
@@ -43,7 +45,7 @@ updates:
       day: monday
       time: "10:30"
       timezone: Asia/Shanghai
-    open-pull-requests-limit: 5
+    open-pull-requests-limit: 0
     labels:
       - dependencies
       - python

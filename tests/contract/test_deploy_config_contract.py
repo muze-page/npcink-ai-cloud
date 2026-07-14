@@ -649,6 +649,7 @@ def test_lightweight_release_policy_gate_is_documented() -> None:
     policy_text = (cloud_root / "docs" / "cloud-production-release-policy-v1.md").read_text()
     deploy_text = (cloud_root / "deploy" / "PRODUCTION_GITHUB_DEPLOY.md").read_text()
     pr_template_text = (cloud_root / ".github" / "pull_request_template.md").read_text()
+    dependabot_text = (cloud_root / ".github" / "dependabot.yml").read_text()
     package_text = (cloud_root / "package.json").read_text()
     script_text = (cloud_root / "scripts" / "check-release-policy.sh").read_text()
 
@@ -658,8 +659,14 @@ def test_lightweight_release_policy_gate_is_documented() -> None:
         "Do not directly edit production application code on the server.",
         "Approved for production validation by operator.",
         "Cloud is not becoming a WordPress write owner",
+        "Branch divergence is expected",
+        "9aca0dc0",
+        "c9f3036b",
     ):
         assert marker in policy_text
+
+    assert dependabot_text.count("open-pull-requests-limit: 0") == 4
+    assert "open-pull-requests-limit: 5" not in dependabot_text
 
     assert "docs/cloud-production-release-policy-v1.md" in deploy_text
     assert "pnpm run check:release-policy" in deploy_text
