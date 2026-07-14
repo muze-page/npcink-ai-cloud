@@ -643,7 +643,7 @@ def test_vector_store_requires_reindex_and_rebuilds_compatible_cloud_chunks(
     dispose_engine(database_url)
 
 
-def test_vector_rebuild_fails_before_zilliz_write_for_wrong_embedding_space(
+def test_vector_rebuild_requests_automatic_site_sync_for_wrong_embedding_space(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -699,15 +699,18 @@ def test_vector_rebuild_fails_before_zilliz_write_for_wrong_embedding_space(
         "zilliz-secret",
     )
 
-    with pytest.raises(SiteKnowledgeVectorProfileAdminError) as caught:
-        service.rebuild_index()
+    requested = service.rebuild_index()
 
-    assert caught.value.error_code == (
-        "site_knowledge_vector_profile.embedding_space_mismatch"
-    )
+    assert requested["validation"]["index"]["status"] == "awaiting_site_sync"
+    assert requested["maintenance"] == {
+        "status": "awaiting_site",
+        "action": "full_sync",
+        "automatic": True,
+        "site_count": 1,
+    }
     assert backend_calls == []
     assert service.get_profile()["validation"]["index"]["status"] == (
-        "reindex_required"
+        "awaiting_site_sync"
     )
     dispose_engine(database_url)
 
